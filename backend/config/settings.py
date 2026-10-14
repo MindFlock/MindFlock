@@ -1175,8 +1175,18 @@ class GeneralSettings:
     ``revive_on_start``: whether the server relaunches, in the background
     after it boots, every session whose agent was running when it stopped
     (:mod:`backend.web.core.revive`), instead of leaving them Offline until
-    someone opens them. ``None`` (never set) reads as ON; ``False`` turns it
-    off (``POST /api/server/revive-all`` still runs the sweep on demand).
+    someone opens them — and brings back an agent the OOM killer took once
+    memory recovers (the auto-revive, rate-limited per session). ``None``
+    (never set) reads as ON; ``False`` turns both off (``POST
+    /api/server/revive-all`` still runs the sweep on demand).
+
+    ``sleep_idle_minutes``: put an agent to sleep (:mod:`backend.web.core.sleep`
+    — its CLI and MCP servers stopped to give their memory back, the session,
+    worktree and conversation kept) once its turn has ended and it has sat
+    idle, unwatched and with nothing waiting for it this many minutes; it
+    wakes, resuming its conversation, as soon as it is opened or sent
+    anything. ``None`` (never set) = 45; ``0`` turns sleeping off. While
+    memory reads low the wait drops to 5 minutes (never above this value).
 
     ``agent_mcp``: whether every session's agent CLI is launched with the
     MindFlock MCP server attached (:mod:`backend.providers.mcp_attach`), so
@@ -1190,6 +1200,13 @@ class GeneralSettings:
     and messaging are not gated by it beyond ``readonly``. Unknown values read
     as ``""``.
 
+    ``mcp_shared_servers``: names of the user's own stdio MCP servers (from
+    their Claude config) that run ONCE per machine in the shared-MCP bridge
+    instead of once per agent window (:mod:`backend.providers.mcp_share`).
+    ``[]`` (the default) shares nothing. Per device. MindFlock's own server is
+    never shareable (it carries each session's identity); the
+    ``MINDFLOCK_MCP_SHARE=0`` env var turns sharing off. Read at launch.
+
     ``agent_max_children`` / ``agent_max_spawn_depth`` / ``agent_max_spawned``:
     the spawn guard-rails (``backend.web.core.lineage``) — live sub-sessions
     per orchestrator, how deep spawns may nest, and agent-spawned sessions
@@ -1197,6 +1214,12 @@ class GeneralSettings:
     value reads as unset. The ``MINDFLOCK_MAX_CHILDREN`` /
     ``MINDFLOCK_MAX_SPAWN_DEPTH`` / ``MINDFLOCK_MAX_SPAWNED`` env vars, when
     set, still win over these (an operator's override).
+
+    ``heavy_slots``: how many heavy commands wrapped in ``mindflock slot``
+    (:mod:`backend.slot`) run at once on this machine. ``None`` = by RAM (1
+    below ~32 GB, else 2); ``MINDFLOCK_HEAVY_SLOTS`` and ``--max`` win. Per
+    device (RAM is), so settings sync leaves it alone. ``backend.slot`` reads
+    the file directly, never through this layer — it wraps every commit.
     """
 
     session_budget_usd: Optional[float] = None
@@ -1214,11 +1237,14 @@ class GeneralSettings:
     setup_devices: str = ""  # "" (not asked) | "first" | "join"
     resume_on_usage_reset: Optional[bool] = None  # None = on (see docstring)
     revive_on_start: Optional[bool] = None  # None = on (see docstring)
+    sleep_idle_minutes: Optional[int] = None  # None = 45; 0 = off (see docstring)
     agent_mcp: Optional[bool] = None  # None = on (see docstring)
     agent_mcp_scope: str = ""  # "" (= children) | "readonly" | "children" | "all"
     agent_max_children: Optional[int] = None  # None = lineage default (8)
     agent_max_spawn_depth: Optional[int] = None  # None = lineage default (3)
     agent_max_spawned: Optional[int] = None  # None = lineage default (24)
+    heavy_slots: Optional[int] = None  # None = by RAM (see docstring)
+    mcp_shared_servers: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -1253,6 +1279,8 @@ class GeneralSettings:
             d["resume_on_usage_reset"] = self.resume_on_usage_reset
         if self.revive_on_start is not None:
             d["revive_on_start"] = self.revive_on_start
+        if self.sleep_idle_minutes is not None:
+            d["sleep_idle_minutes"] = self.sleep_idle_minutes
         if self.agent_mcp is not None:
             d["agent_mcp"] = self.agent_mcp
         if self.agent_mcp_scope:
@@ -1261,6 +1289,10 @@ class GeneralSettings:
             value = getattr(self, key)
             if value is not None:
                 d[key] = value
+        if self.heavy_slots is not None:
+            d["heavy_slots"] = self.heavy_slots
+        if self.mcp_shared_servers:
+            d["mcp_shared_servers"] = list(self.mcp_shared_servers)
         return d
 
     @classmethod
@@ -1288,11 +1320,14 @@ class GeneralSettings:
             setup_devices=_setup_devices(d.get("setup_devices")),
             resume_on_usage_reset=_opt_bool(d.get("resume_on_usage_reset")),
             revive_on_start=_opt_bool(d.get("revive_on_start")),
+            sleep_idle_minutes=_opt_nonneg_int(d.get("sleep_idle_minutes")),
             agent_mcp=_opt_bool(d.get("agent_mcp")),
             agent_mcp_scope=_agent_mcp_scope(d.get("agent_mcp_scope")),
             agent_max_children=_opt_nonneg_int(d.get("agent_max_children")),
             agent_max_spawn_depth=_opt_nonneg_int(d.get("agent_max_spawn_depth")),
             agent_max_spawned=_opt_nonneg_int(d.get("agent_max_spawned")),
+            heavy_slots=_opt_pos_int(d.get("heavy_slots")),
+            mcp_shared_servers=_mcp_server_names(d.get("mcp_shared_servers")),
         )
 
 
@@ -1854,6 +1889,12 @@ def _opt_nonneg_int(v: Any) -> Optional[int]:
     return n if n is not None and n >= 0 else None
 
 
+def _opt_pos_int(v: Any) -> Optional[int]:
+    """:func:`_opt_int`, with anything below 1 read as unset."""
+    n = _opt_int(v)
+    return n if n is not None and n >= 1 else None
+
+
 def _opt_float(v: Any) -> Optional[float]:
     if v is None or isinstance(v, bool):
         return None
@@ -2010,6 +2051,19 @@ def _str_list(v: Any) -> List[str]:
     else:
         return []
     return [s for s in (str(x).strip() for x in items) if s]
+
+
+_MCP_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def _mcp_server_names(v: Any) -> List[str]:
+    """``general.mcp_shared_servers``: de-duplicated MCP server names, never
+    ``mindflock`` (MindFlock's own server is per-session by design)."""
+    out: List[str] = []
+    for name in _str_list(v):
+        if _MCP_NAME_RE.match(name) and name != "mindflock" and name not in out:
+            out.append(name)
+    return out
 
 
 def _group(d: dict, key: str) -> dict:

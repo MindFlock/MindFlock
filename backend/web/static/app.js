@@ -24409,6 +24409,15 @@ function useMemory() {
 		retry: false
 	});
 }
+function useSlots(enabled) {
+	return useQuery({
+		queryKey: ["system-slots"],
+		queryFn: () => api("/api/system/slots"),
+		refetchInterval: 15e3,
+		retry: false,
+		enabled
+	});
+}
 function refreshMindflockStatus() {
 	return queryClient.invalidateQueries({ queryKey: ["mindflock-status"] });
 }
@@ -24727,6 +24736,10 @@ var actShown = /* @__PURE__ */ new Map();
 var actPending = /* @__PURE__ */ new Map();
 function noteActivity(inst) {
 	const title = inst.title;
+	if (inst.sleeping) {
+		dropActivity(title);
+		return;
+	}
 	const raw = inst.activity || "idle";
 	if (!actShown.has(title)) {
 		actShown.set(title, raw);
@@ -24819,6 +24832,24 @@ function needsYou(reason, hint) {
 		hint
 	};
 }
+var SLEEPING_LABEL = "Sleeping";
+function sleepingState(info, now) {
+	const since = Number(info.since) || 0;
+	const freed = Number(info.freed_mb) || 0;
+	let hint = "Asleep";
+	if (since > 0) hint += " since " + fmtClock(since) + " (" + spanWord(now / 1e3 - since) + ")";
+	hint += info.reason === "memory" ? " — memory was low" : info.reason === "manual" ? "" : " — it was idle";
+	if (freed > 0) hint += "; freed ~" + (freed >= 1024 ? (freed / 1024).toFixed(1) + " GB" : freed + " MB");
+	hint += ". Opening it or sending it anything wakes it, resuming the conversation.";
+	return {
+		state: "idle",
+		label: SLEEPING_LABEL,
+		tone: "muted",
+		inBell: false,
+		restartable: false,
+		hint
+	};
+}
 function deriveSessionState(inst, extras) {
 	const now = extras?.now ?? Date.now();
 	if (inst.workspace_missing) return {
@@ -24845,6 +24876,7 @@ function deriveSessionState(inst, extras) {
 		restartable: false,
 		hint: "Provisioning workspace"
 	};
+	if (inst.sleeping) return sleepingState(inst.sleeping, now);
 	if (inst.setup && inst.setup.state === "running") return {
 		state: "starting",
 		label: STATE_LABEL.starting,
@@ -24878,14 +24910,17 @@ function deriveSessionState(inst, extras) {
 			hint: "Usage limit reached — the queue waits out the window and auto-resumes when it resets"
 		};
 	}
-	if (act === "offline") return {
-		state: "offline",
-		label: STATE_LABEL.offline,
-		tone: "broken",
-		inBell: true,
-		restartable: !inst.device,
-		hint: "The agent's terminal is gone — Restart relaunches it (resuming the conversation)"
-	};
+	if (act === "offline") {
+		const revive = inst.auto_revive;
+		return {
+			state: "offline",
+			label: STATE_LABEL.offline,
+			tone: "broken",
+			inBell: revive?.state !== "pending",
+			restartable: !inst.device,
+			hint: revive?.reason || "The agent's terminal is gone — Restart relaunches it (resuming the conversation)"
+		};
+	}
 	if (inst.stage === "interrupt") {
 		const step = (inst.failed_step || "").trim();
 		return needsYou("precommit_failed", step ? "Pre-commit failed at: " + step : "Pre-commit failed");
@@ -25373,7 +25408,7 @@ function shipLine(row, opts = {}) {
 	} else if (act === "limit") {
 		rest = " · usage limit — waiting";
 		state = "limit";
-	} else if (act === "offline") rest = " · offline";
+	} else if (act === "offline") rest = row.sleeping ? " · sleeping" : " · offline";
 	else rest = " · idle";
 	return line(head, rest, "rep-lane", state);
 }
@@ -28856,6 +28891,7 @@ var STATE_CLS = {
 function stateChip(ss) {
 	let cls = STATE_CLS[ss.state];
 	if (ss.label === "Paused") cls = "s-paused";
+	else if (ss.label === SLEEPING_LABEL) cls = "s-sleeping";
 	else if (ss.label === "Missing") cls = "s-missing";
 	return {
 		label: ss.label,
@@ -35799,12 +35835,31 @@ function memoryDetail(m) {
 	if (stall >= 5) bits.push("stalled on memory " + Math.round(stall) + "% of the last minute");
 	return bits.join(" · ");
 }
+function jobName(j) {
+	if (j.session) return j.session;
+	return (j.cwd || "").replace(/\/+$/, "").split("/").pop() || (j.pid ? "pid " + j.pid : "a job");
+}
+function slotsLine(s) {
+	if (!s || !s.running && !s.waiting) return "";
+	const holders = s.pools.flatMap((p) => p.holders);
+	const bits = [];
+	if (holders.length) {
+		const names = holders.slice(0, 2).map(jobName).join(", ");
+		const more = holders.length > 2 ? " +" + (holders.length - 2) : "";
+		bits.push(names + more + " running");
+	}
+	if (s.waiting) bits.push(s.waiting + " waiting for a slot");
+	return "Heavy jobs: " + bits.join(" · ");
+}
 function MemoryNotice() {
 	const { data, isError } = useMemory();
 	const [hiddenAt, setHiddenAt] = (0, import_react.useState)(0);
 	const rank = RANK$1[data?.level || "ok"] ?? 0;
+	const shown = !!data && !isError && rank > 0 && !(hiddenAt && rank <= hiddenAt);
+	const { data: slots } = useSlots(shown);
 	if (hiddenAt && (rank === 0 || rank > hiddenAt)) setHiddenAt(0);
-	if (!data || isError || rank === 0 || hiddenAt && rank <= hiddenAt) return null;
+	if (!data || !shown) return null;
+	const heavy = slotsLine(slots);
 	const critical = data.level === "critical";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "memory-notice",
@@ -35818,6 +35873,10 @@ function MemoryNotice() {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "mn-detail",
 				children: memoryDetail(data)
+			}),
+			heavy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "mn-detail mn-slots",
+				children: heavy
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "mn-detail mn-what",
@@ -36061,6 +36120,20 @@ function rowDndProps(key, cbs, draggable = true) {
 			cbs.onDropCue(key, null);
 		}
 	};
+}
+//#endregion
+//#region src/lib/wake.ts
+async function wakeSession(title) {
+	try {
+		await instApi(title, "/wake", { method: "POST" });
+	} catch (e) {
+		toast("Couldn't wake " + displayName(title) + " — " + errMsg(e));
+		return false;
+	}
+	forceActivity(title, "idle");
+	toast("Waking " + displayName(title) + "…");
+	refreshInstances();
+	return true;
 }
 //#endregion
 //#region src/lib/stopBackgroundJob.ts
@@ -36732,6 +36805,18 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 						"aria-hidden": "true",
 						children: "↻ Restart"
 					})]
+				}) : inst.sleeping && !inst.device && !paused ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "stagechip chip-restart chip-wake " + chip.cls,
+					title: chip.title,
+					"aria-label": "Sleeping — wake the agent",
+					onClick: (e) => act(() => void wakeSession(title), e),
+					onDoubleClick: (e) => e.stopPropagation(),
+					children: [chip.label, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "chip-act",
+						"aria-hidden": "true",
+						children: "Wake"
+					})]
 				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "stagechip " + chip.cls,
 					title: chip.title,
@@ -37373,15 +37458,18 @@ function sweepToast(r, offline) {
 	}
 	return line;
 }
+function offlineRows(instances) {
+	return instances.filter((i) => {
+		if (i.device || i.pending || i.sleeping) return false;
+		const ss = deriveSessionState(i);
+		return ss.state === "offline" && ss.restartable && i.status !== "paused";
+	});
+}
 function OfflineBar() {
 	const { data: instances = [] } = useInstances();
 	const memory = useMemory().data;
 	const [busy, setBusy] = (0, import_react.useState)(false);
-	const offline = instances.filter((i) => {
-		if (i.device || i.pending) return false;
-		const ss = deriveSessionState(i);
-		return ss.state === "offline" && ss.restartable && i.status !== "paused";
-	});
+	const offline = offlineRows(instances);
 	if (offline.length < 2 && !busy) return null;
 	const titles = offline.map((i) => i.title);
 	const low = memory?.level === "low" || memory?.level === "critical";
@@ -71408,6 +71496,7 @@ function General(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResumeOnUsageResetRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReviveOnStartRow, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SleepIdleRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReduceMotionRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TakeABreakRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(IdleFlockRow, {}),
@@ -71476,7 +71565,7 @@ function ReviveOnStartRow() {
 				children: "Revive sessions after a restart"
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-hint notif-rule-desc",
-				children: "When MindFlock restarts, sessions whose agent was running come back on their own, in the background, instead of waiting Offline for a click. Paused and usage-limited sessions are left alone."
+				children: "When MindFlock restarts, sessions whose agent was running come back on their own, in the background, instead of waiting Offline for a click. So does an agent the system killed for running out of memory, once memory recovers (at most 3 times an hour). Paused and usage-limited sessions are left alone."
 			})]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 			className: "ca-switch",
@@ -71489,6 +71578,29 @@ function ReviveOnStartRow() {
 				}
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 		})]
+	});
+}
+function SleepIdleRow() {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row",
+		id: "general-sleep-idle",
+		title: "0 turns sleeping off. Empty = 45 minutes. While memory is low, idle agents sleep after 5 minutes.",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Put idle agents to sleep after (minutes, 0 = never)"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+				group: "general",
+				field: "sleep_idle_minutes",
+				type: "number",
+				placeholder: "45"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: "An agent that finished its turn and sits unwatched, with nothing queued, stops its CLI and MCP servers to free their memory and shows Sleeping. Opening it or sending it anything wakes it, back in the same conversation. While memory is low this happens after 5 minutes."
+			})
+		]
 	});
 }
 function GettingStarted() {
@@ -74738,6 +74850,129 @@ function LocalModel(_) {
 	] });
 }
 //#endregion
+//#region src/components/settings/screens/SharedMcpServers.tsx
+function SharedMcpServers() {
+	const s = useSettings();
+	const [info, setInfo] = (0, import_react.useState)(null);
+	const [failed, setFailed] = (0, import_react.useState)(false);
+	const stored = s.get("general", "mcp_shared_servers");
+	const shared = Array.isArray(stored) ? stored : [];
+	const load = (0, import_react.useCallback)(() => {
+		api("/api/settings/mcp-shared").then((r) => {
+			setInfo(r || null);
+			setFailed(false);
+		}).catch(() => setFailed(true));
+	}, []);
+	(0, import_react.useEffect)(load, [load]);
+	const toggle = async (name, on) => {
+		const next = shared.filter((n) => n !== name);
+		if (on) next.push(name);
+		await s.saveField("general", "mcp_shared_servers", next);
+		toast(on ? `${name} shared — from each session's next launch` : `${name} back to one copy per window — from each session's next launch`);
+		load();
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SharedMcpServersView, {
+		info,
+		failed,
+		shared,
+		onToggle: toggle
+	});
+}
+function SharedMcpServersView({ info, failed, shared, onToggle }) {
+	const upstream = (name) => info?.bridge?.upstreams?.find((u) => u.name === name);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Shared MCP servers"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint orch-intro",
+			children: "Every agent window starts its own copy of each MCP server in your Claude config — often hundreds of MB per window. A server switched on here runs once on this machine and every session connects to that copy. Applies on each session's next launch; needs the MindFlock MCP switch above to be on."
+		}),
+		failed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "muted",
+			children: "Couldn't read your MCP servers."
+		}),
+		!failed && info === null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "muted",
+			children: "Reading your MCP servers…"
+		}),
+		info && !info.available && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "set-hint mcp-share-unavailable",
+			children: "Off on this machine: the server was started with MINDFLOCK_MCP_SHARE=0 (or this OS has no bridge)."
+		}),
+		info && info.servers.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "muted mcp-share-empty",
+			children: "No MCP servers in your Claude config."
+		}),
+		info && info.servers.map((row) => {
+			const on = shared.includes(row.name);
+			const up = upstream(row.name);
+			const refused = Object.keys(up?.refused_requests || {});
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row set-switch-row mcp-share-row",
+				"data-mcp-server": row.name,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "notif-rule-text",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "set-label",
+						children: [
+							row.name,
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "muted mcp-share-cmd",
+								children: row.command
+							})
+						]
+					}), row.shareable ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "set-hint notif-rule-desc",
+						children: [
+							row.caution ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "mcp-share-caution",
+								children: row.caution
+							}) : "One copy for every session instead of one per window.",
+							on && up?.running && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "mcp-share-live",
+								children: [
+									" ",
+									"Running once (pid ",
+									up.pid,
+									") for ",
+									up.sessions,
+									" session",
+									up.sessions === 1 ? "" : "s",
+									"."
+								]
+							}),
+							on && refused.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "mcp-share-caution",
+								children: [
+									" ",
+									"It asked the client for ",
+									refused.join(", "),
+									", which a shared copy can't answer — switch it off."
+								]
+							})
+						]
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint notif-rule-desc",
+						children: row.reason
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "ca-switch",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						"aria-label": `Share ${row.name} across sessions`,
+						checked: on && row.shareable,
+						disabled: !row.shareable || !info.available,
+						onChange: (e) => onToggle(row.name, e.target.checked)
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+				})]
+			}, row.name);
+		})
+	] });
+}
+//#endregion
 //#region src/components/settings/screens/AgentOrchestration.tsx
 function AgentOrchestration(_) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -74775,7 +75010,8 @@ function AgentOrchestration(_) {
 			field: "agent_max_spawn_depth",
 			label: "Nesting depth",
 			hint: "How deep spawns may nest: 1 = only your sessions spawn, 2 = their sub-sessions may spawn too, and so on."
-		})
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SharedMcpServers, {})
 	] });
 }
 function CapRow({ cap, field, label, hint }) {

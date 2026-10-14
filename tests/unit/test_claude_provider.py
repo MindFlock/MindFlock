@@ -1547,6 +1547,63 @@ def test_last_turn_snippet_reads_only_tail_of_large_file(fake_home):
     assert _claude_last_turn_snippet(workdir) == "the tail"
 
 
+def _old_tail_lines(path, size, max_bytes):
+    """The read-the-whole-window shape _tail_lines replaced (the oracle)."""
+    import os
+
+    with open(path, "rb") as f:
+        if size > max_bytes:
+            f.seek(-max_bytes, os.SEEK_END)
+            return f.read().decode("utf-8", "replace").split("\n")[1:][::-1]
+        return f.read().decode("utf-8", "replace").split("\n")[::-1]
+
+
+@pytest.mark.parametrize("max_bytes", [10, 64, 1000, 10**6])
+def test_tail_lines_matches_whole_window_read(tmp_path, monkeypatch, max_bytes):
+    # Tiny blocks force lines to straddle (and fully contain) block edges; a
+    # multi-byte character split across two blocks must still decode whole.
+    monkeypatch.setattr(_claude_mod, "_TAIL_CHUNK", 7)
+    p = tmp_path / "t.jsonl"
+    body = ["a", "", "é" * 40, "x" * 300, '{"k": "ünï"}', "b", ""]
+    p.write_bytes("\n".join(body).encode())
+    size = p.stat().st_size
+    got = list(_claude_mod._tail_lines(str(p), size, max_bytes))
+    assert got == _old_tail_lines(str(p), size, max_bytes)
+
+
+def test_tail_lines_stops_reading_at_the_first_match(tmp_path, monkeypatch):
+    # The memory fix: a caller that stops at the newest match reads one block,
+    # not the whole 8 MB window (which held ~3x the window at once).
+    p = tmp_path / "t.jsonl"
+    p.write_bytes(b"x" * 100 + b"\n" + (b"y" * 99 + b"\n") * 20000 + b"newest\n")
+    reads = []
+    real_open = open
+
+    class Spy:
+        def __init__(self, fh):
+            self.fh = fh
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.fh.close()
+
+        def seek(self, n):
+            self.fh.seek(n)
+
+        def read(self, n):
+            reads.append(n)
+            return self.fh.read(n)
+
+    monkeypatch.setattr("builtins.open", lambda *a, **k: Spy(real_open(*a, **k)))
+    lines = _claude_mod._tail_lines(str(p), p.stat().st_size, 8 * 1024 * 1024)
+    assert next(lines) == ""  # the trailing newline
+    assert next(lines) == "newest"
+    lines.close()
+    assert reads == [_claude_mod._TAIL_CHUNK]
+
+
 def test_last_turn_cache_put_evicts_when_full():
     _claude_mod._LAST_TURN_CACHE.clear()
     maxn = _claude_mod._LAST_TURN_CACHE_MAX

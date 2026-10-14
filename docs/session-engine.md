@@ -330,8 +330,10 @@ server also runs a **background revive sweep** (`web/core/revive.py`):
   `still provisioning` (`Loading`), `peer-shared` (relaunched by the peer
   service), `workspace missing`, and `usage limit` (a hold the prompt queue
   armed, or the provider's own live meter reading a spent window — the queue
-  resumes those when the window reopens). A session whose agent tmux is still
-  alive (a server restart that left tmux up) is counted as *already running*.
+  resumes those when the window reopens), and `sleeping` (put to sleep on
+  purpose, see [Sleeping agents](#sleeping-agents): a reboot must not wake
+  every sleeper at once). A session whose agent tmux is still alive (a server
+  restart that left tmux up) is counted as *already running*.
 - **How.** Through `_ensure_agent_session` itself — the same path as the
   Restart chip, so there is one launch rule (resume after a crash, fresh after a
   clean quit). Oldest-first by last activity, at most **two** launches in
@@ -346,8 +348,9 @@ server also runs a **background revive sweep** (`web/core/revive.py`):
   skipped as `low memory` and those rows stay Offline for a later Restart.
 - **Continue.** A relaunch resumes the conversation, not the turn the agent was
   in: it comes back parked at its prompt. When the agent **died mid-turn** —
-  no live tmux, an unnatural exit (the same provider rule that makes the
-  relaunch resume), a CLI that can resume (`resume_flag`), not in place, and
+  not asleep, no live tmux, an unnatural exit (the same provider rule that
+  makes the relaunch resume), a CLI that can resume (`resume_flag`), not in
+  place, and
   its hook marker last said `working` (a turn began and no `Stop` /
   `SessionEnd` followed; a SIGKILL fires neither; over 6 h old reads as no
   signal) — `revive.relaunch` puts a short *continue where you left off* at the
@@ -361,6 +364,94 @@ server also runs a **background revive sweep** (`web/core/revive.py`):
   `… — died mid-turn, queued a continue`, or `not started (<reason>)`), one
   summary per sweep (`revive sweep (startup): revived 3, skipped 2: 1 paused,
   1 usage limit; 4 already running; told 1 to continue`).
+
+### Sleeping agents
+
+An open agent window holds its CLI and one copy of every MCP server the user
+configured — measured at ~250 MB of Claude plus ~500 MB of MCP servers per
+window — for as long as it is open, idle for hours included.
+`web/core/sleep.py` gives that memory back and brings the agent back when
+someone needs it.
+
+- **Sleep.** The session's *agent* tmux session is killed (the CLI, its MCP
+  servers, everything in that pane; the shell pane is left alone), and
+  whatever of that process tree outlives the hangup gets SIGTERM after 3 s,
+  then SIGKILL (a pid is signalled only while its start time still matches).
+  The row, worktree, branch and conversation stay. A sleep record —
+  `~/.mindflock/sleeping.json`, `title -> {since, reason: idle|memory|manual,
+  freed_mb}` (`freed_mb` = the tree's PSS just before the kill) — is written
+  *before* the kill, so no reader ever sees the dead agent unrecorded, and the
+  exit code the hangup left is cleared. Killing the whole tmux session (not
+  just the pane's process) makes the wake the ordinary path: a dead agent
+  session is what `_ensure_agent_session` already brings back.
+- **What the record changes.** `_ensure_agent_session` relaunches a sleeper
+  **resuming** (claude: `--resume <this window's id>` from thread markers —
+  never "the newest transcript in the folder", which a sibling window on the
+  same folder could own; a provisioned launcher's `--continue` in its own
+  worktree), whatever exit code is on disk, and its launch ends the sleep. The
+  revive sweep skips it (`sleeping`), `died_mid_turn` is False (no
+  *continue* prompt: it was not mid-turn), and the state emitter records its
+  `offline` reading as `sleeping` and announces neither the sleep nor the
+  wake back to an idle prompt (no "agent offline" bell row, toast or push);
+  any other move out of it (a dialog after the wake, a turn starting) is
+  announced with `old: "sleeping"`. The row's `sleeping` field carries the
+  record; its `activity` stays `offline`.
+- **When.** A background sweep every 60 s (after the boot quiet window; off
+  under pytest and with `MINDFLOCK_SLEEP=0`) sleeps up to three sessions per
+  pass, longest idle first. All of these must hold (each refusal has a name,
+  `sleep.V_*`):
+  - the CLI can resume (`launcher_spec().resume_flag`) and the session owns
+    its workspace (not in place, not peer-shared); started, not paused or
+    provisioning; its workspace exists; and when another window works in
+    the same folder, the wake can name *this* window's conversation (a
+    recorded thread id, and no provisioned launcher, whose resume is always
+    `--continue`) — otherwise it would resume the folder's newest
+    conversation, which may be the sibling's;
+  - its turn has **ended**: the row reads `idle`, the CLI's own hook marker
+    is not `working`/`clarify`, an uncached re-probe still reads `idle`, an
+    agent (not a bare shell) holds the pane and no dialog is on screen;
+  - no background job (the row's `background`, re-read live) — a job the
+    agent left running past its turn keeps it awake until the job ends,
+    however long that is, rather than killing the job;
+  - nothing waiting for it: an empty prompt queue (any items, even in a
+    paused queue), no pending mailbox message, setup not running;
+  - nothing depending on it: not a team-run member or lead, no fast-track
+    chain mid-flight, no child of it busy (working, on a prompt or a limit);
+  - nobody looking: no terminal websocket attached (`ownership.terminals`)
+    and no tmux client attached from outside this server (`tmux
+    list-clients`, minus the server's own children — its web terminals,
+    counted above, and the PTY the engine keeps attached to every session it
+    started — so `mindflock attach`, a raw `tmux attach`, SSH all count);
+  - quiet for the threshold, by every clock: since the activity reading last
+    changed, the last human keystroke (web or raw tmux client), the last
+    queue or mailbox send, and the last wake.
+
+  The threshold is `general.sleep_idle_minutes` (unset = 45; `0` turns
+  sleeping off entirely). **Under memory pressure** — `memory_pressure` low
+  or critical — it drops to 5 minutes (never above the setting), and those
+  sleeps record `reason: memory`; longest-idle first is what frees the most
+  stale memory soonest. `POST /api/instances/{title}/sleep` and `mindflock
+  sleep` sleep one now: every rule above except the timing ones.
+- **Wake.** `sleep.ensure_awake(inst, title, why)` is the one helper: it
+  relaunches through `_ensure_agent_session` and opens the prompt queue's
+  20 s post-boot grace, so nothing is typed into a CLI that has not drawn its
+  prompt yet. Every path that types into a session goes through it when the
+  session is asleep: the terminal websocket (opening the session — web,
+  phone, desktop), `/send` and MindFlock's own composed messages
+  (`_deliver_to_agent`: the text goes on the queue — at the front for a
+  person's send — instead of being typed; an unsubmitted paste, or a looping
+  queue, just wakes it and answers 409 `waking`), the queue's Send now (the
+  item moves to the front), the queue drain (a queued prompt reads `offline`
+  and is relaunched), the mailbox lane and `delivery: "now"` (the one boot
+  the lane does: an MCP `send_message` to a sleeper wakes it, and the lane
+  types it once the CLI is idle), `POST /api/instances/{title}/wake` (the
+  rail's **Wake**) and `mindflock wake` / `mindflock attach`. Each wake logs
+  `wake <title>: <why> (asleep 52m)`; each sleep `sleep <title>: idle after
+  47m idle — freed ~780 MB`.
+- **Keys.** Everything is keyed by session title, so duplicate windows on one
+  folder and branch (`foo`, `foo-copy`) sleep and wake independently, each
+  back into its own conversation. Remote `device::title` rows are never swept
+  from here; opening one wakes it on its own device.
 
 ### Memory guard
 
@@ -397,12 +488,101 @@ While the level is `low` or `critical`:
   misreading can never stall intake for good.
 - **The revive sweep waits**, as above. A person's single Restart is never
   held; its response carries `memory_warning` instead.
+- **Idle agents sleep sooner** — after 5 minutes idle instead of
+  `general.sleep_idle_minutes` ([Sleeping agents](#sleeping-agents)), longest
+  idle first, giving back their CLI's and MCP servers' memory.
 
 The server's memory watch polls every 10 s, logs each level change and emits
 `system.memory_changed`. It starts from `ok`, so a server that boots already
 low emits `ok → low` on its first reading; `unknown` never emits. The web UI
 polls `GET /api/system/memory` and shows a notice while the level is low.
 `MINDFLOCK_MEMORY_GUARD=0` forces `unknown`, which turns it all off.
+
+**The guard gates agents, not their work.** The OOM it was built for turned out
+(measured 2026-10) to come mostly from inside sessions that were already
+running: pre-commit hooks running `pytest -n auto` suites (~1.2-1.5 GB per
+xdist worker), a documentarian starting more agent CLIs, an indexer — ~8 GB per
+commit, with several agents committing at once. Nothing above holds those.
+[`mindflock slot`](cli.md#mindflock-slot---pool-name---max-n---timeout-secs---no-wait-memory----cmd-args)
+does: a repo prefixes its heavy hooks with it, and those commands take turns
+for N machine-wide slots (`general.heavy_slots`; 1 below ~32 GB of RAM) and,
+once holding one, wait (capped at 10 min) for this same reading to leave
+`low`. It is a flock-based semaphore in `~/.mindflock/run/slots/` that needs no
+server; `GET /api/system/slots` shows who holds and who waits, and the memory
+notice adds a line for them while it is up.
+#### When the OOM killer fires anyway: agents go first, and come back
+
+**Agents are the preferred victims.** On 2026-10-14 the kernel killed the
+MindFlock *server* (2.1 GB, the biggest single process, `oom_score_adj` 0)
+rather than the 1.3 GB pytest workers agents had started — and every agent
+went down with it. Every agent launch now raises its own `oom_score_adj` to
+`launch_script.OOM_SCORE_ADJ` (500) before it starts the CLI, with one
+statement (`launch_script.oom_score_line()`:
+`{ echo 500 >/proc/self/oom_score_adj; } 2>/dev/null || :` — silent where
+`/proc` is missing, i.e. macOS). The score is inherited across fork and exec,
+so the CLI, its MCP servers and everything the agent runs carry it. The kernel
+picks the process with the highest *badness* — its memory plus `adj/1000` of
+RAM+swap — so at 500 any agent-tree process outranks the server, and the
+largest of them (the runaway test run, usually) goes first; often the agent
+itself survives and just sees its tool call fail. Raising needs no privilege.
+Every launch path carries it: the exit-marker wrapper (`_wrap_launch_cmd`,
+every web relaunch and the Assistant), the engine's first start
+(`TmuxSession.start`), the provisioned launcher (before its `exec bash -ilc`),
+the ticket pipeline's standalone launch (`launch_script.launch_command`, used
+by `AgentCliRunner` and `PRClaudeRunner`), a session's shell tab, and the
+usage-refresh windows. `MINDFLOCK_OOM_SCORE_ADJ` overrides the value (`0`
+turns it off; the launch strings are then byte-identical to before). The tmux
+server keeps its own score. The server does **not** lower its own: going below
+0 needs `CAP_SYS_RESOURCE`, which a normal install never has, and if it did
+run privileged the lowered score would be inherited by everything it starts
+that doesn't raise its own (the tmux server, git, the pipeline child) —
+raising the agents already puts the server behind them.
+
+**A SIGKILL is not a failed resume.** A resume chain's fallbacks (`claude
+--continue || { sleep 3; retry } || fresh`, a generic CLI's `resume || fresh`,
+which re-seeds the task for a CLI that takes its prompt as an argument) used to
+fire on *any* non-zero exit — including an OOM kill an hour into the run, which
+relaunched the CLI three seconds later straight back into the squeeze, and on a
+second kill started a fresh conversation. Each fallback is now wrapped in
+`launch_script.unless_killed`, which passes exit 137 through (`(exit 137)`,
+so the wrapper still records it) and runs the fallback on any other failure.
+The provisioned launcher ends with 137 straight after the launch instead of
+falling to its in-session loop, so the pane closes and the server takes over.
+(That loop's `cs_code=$?` reads the status of `while true`, i.e. 0, so as
+written it always breaks to the shell — pinned as-is by the goldens.)
+
+**Auto-revive.** The other half (`revive.observe` / `revive.auto_tick`, driven
+by the 4 s instances tick — no loop of its own): an agent this server saw live
+that then reads Offline, and died to SIGKILL — exit marker 137, or no marker at
+all (the engine's first start runs without the wrapper) while its hooks last
+said `working` (a SIGKILL fires no Stop/SessionEnd hook; a quit does) — is
+queued, and relaunched through `revive.relaunch` (so a mid-turn death gets its
+*continue*) once memory reads `ok`:
+
+- one at a time, `GAP_SECONDS` apart, never while a sweep runs, on its own
+  thread (never blocking the tick); while memory is low it waits without
+  spending the agent's budget, logging the hold once;
+- at most `AUTO_MAX_PER_WINDOW` (3) per session per `AUTO_WINDOW_SECONDS`
+  (1 h) — an agent whose own work OOMs the box every time is not relaunched
+  into it forever; after that it stays Offline and its row's `auto_revive`
+  says why (`{state: "gave_up", reason}`, shown as the Offline chip's hint);
+- the sweep's skip rules are re-checked at launch (paused, provisioning, peer,
+  workspace missing, quit by user, usage limit); a session already Offline when
+  the server booted is the startup sweep's, never this;
+- switched by `general.revive_on_start` (the same "agents come back on their
+  own" switch) and `MINDFLOCK_REVIVE_ON_START=0`; off under pytest;
+- quiet: while an agent is queued (and for `AUTO_SETTLE_SECONDS` after its
+  relaunch) `_emit_state_changes` keeps announcing its previous activity, so
+  the trip through Offline rings no bell, toast, ntfy push or hook, and the
+  row (`auto_revive: {state: "pending"}`) keeps it out of the bell. One given
+  up on is announced like any Offline;
+- one log line per auto-revive (`auto-revive <title>: agent relaunched after
+  it was killed (exit 137; 1/3 this hour, 1.2s) — queued a continue`).
+
+Not covered: a CLI with no activity hooks that dies on its first start (no
+marker, no `working`) stays Offline as before, and an agent killed while idle
+on its first start likewise; the queue driver's own reboot of an Offline
+session with queued prompts is not memory-gated.
 
 **Nothing disappears silently.** The engine still drops, at load, a session
 whose worktree folder **and** tmux session are both gone (outside the 120 s

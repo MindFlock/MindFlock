@@ -181,7 +181,7 @@ def test_new_provider_launch_commands():
     assert ag.build_launch_command(LaunchContext(program="agy")) == "agy"
     assert (
         ag.build_launch_command(LaunchContext(program="agy", resume=True))
-        == "agy --continue || agy"
+        == "agy --continue || if [ $? -eq 137 ]; then (exit 137); else agy; fi"
     )
     assert (
         ag.build_launch_command(LaunchContext(program="agy", skip_permissions=True))
@@ -191,7 +191,7 @@ def test_new_provider_launch_commands():
     oc = providers.resolve("opencode")
     assert (
         oc.build_launch_command(LaunchContext(program="opencode", resume=True))
-        == "opencode --continue || opencode"
+        == "opencode --continue || if [ $? -eq 137 ]; then (exit 137); else opencode; fi"
     )
     assert (
         oc.build_launch_command(
@@ -211,7 +211,7 @@ def test_new_provider_launch_commands():
     assert gs.build_launch_command(LaunchContext(program="goose")) == "goose session"
     assert (
         gs.build_launch_command(LaunchContext(program="goose", resume=True))
-        == "goose session -r || goose session"
+        == "goose session -r || if [ $? -eq 137 ]; then (exit 137); else goose session; fi"
     )
 
 

@@ -59,17 +59,32 @@ _LAUNCH = [
     (
         "codex",
         "codex",
-        "codex resume --last || codex",
+        "codex resume --last || if [ $? -eq 137 ]; then (exit 137); else codex; fi",
         "codex --dangerously-bypass-approvals-and-sandbox",
     ),
-    ("agy", "agy", "agy --continue || agy", "agy --dangerously-skip-permissions"),
+    (
+        "agy",
+        "agy",
+        "agy --continue || if [ $? -eq 137 ]; then (exit 137); else agy; fi",
+        "agy --dangerously-skip-permissions",
+    ),
     # aider restores chat history opt-in, with NO fresh fallback.
     ("aider", "aider", "aider --restore-chat-history", "aider --yes-always"),
-    ("opencode", "opencode", "opencode --continue || opencode", "opencode --auto"),
+    (
+        "opencode",
+        "opencode",
+        "opencode --continue || if [ $? -eq 137 ]; then (exit 137); else opencode; fi",
+        "opencode --auto",
+    ),
     # cline resume needs a session id, so it relaunches fresh; no skip flag.
     ("cline", "cline -i", "cline -i", "cline -i"),
     # goose's chat lives under the `session` subcommand; resume is `-r`.
-    ("goose", "goose session", "goose session -r || goose session", "goose session"),
+    (
+        "goose",
+        "goose session",
+        "goose session -r || if [ $? -eq 137 ]; then (exit 137); else goose session; fi",
+        "goose session",
+    ),
 ]
 
 
@@ -101,8 +116,14 @@ def test_claude_launch_is_distinct_from_generic():
 @pytest.mark.parametrize(
     "program,expected",
     [
-        ("codex", "codex resume conv-7 || codex"),
-        ("agy", "agy --conversation conv-7 || agy"),
+        (
+            "codex",
+            "codex resume conv-7 || if [ $? -eq 137 ]; then (exit 137); else codex; fi",
+        ),
+        (
+            "agy",
+            "agy --conversation conv-7 || if [ $? -eq 137 ]; then (exit 137); else agy; fi",
+        ),
     ],
 )
 def test_resume_by_recorded_thread_id(program, expected, tmp_path, monkeypatch):
@@ -183,7 +204,7 @@ def test_user_toml_registers_and_launches(tmp_path):
     assert p.name == "mycli"
     assert (
         p.build_launch_command(LaunchContext(program="mycli", resume=True))
-        == "mycli --resume || mycli"
+        == "mycli --resume || if [ $? -eq 137 ]; then (exit 137); else mycli; fi"
     )
     assert (
         p.build_launch_command(LaunchContext(program="mycli", skip_permissions=True))
@@ -204,7 +225,7 @@ def test_user_toml_can_override_a_builtin_name(tmp_path):
     assert p.build_launch_command(LaunchContext(program="codex")) == "my-codex"
     assert (
         p.build_launch_command(LaunchContext(program="codex", resume=True))
-        == "my-codex --pick-up || my-codex"
+        == "my-codex --pick-up || if [ $? -eq 137 ]; then (exit 137); else my-codex; fi"
     )
 
 

@@ -6,13 +6,16 @@
  *   nest, and agent-spawned sessions alive at once. They are guard-rails the
  *   server applies at each spawn (backend.web.core.lineage), read per request,
  *   so a change applies to the next spawn — no relaunch. An env var
- *   (MINDFLOCK_MAX_*) set on the server still wins; the row says so. */
+ *   (MINDFLOCK_MAX_*) set on the server still wins; the row says so;
+ * - shared MCP servers: which of the user's own MCP servers run once per
+ *   machine instead of once per window (SharedMcpServers). */
 
 import { toast } from "../../../lib/toast";
 import { useConfig } from "../../../state/queries";
 import type { OrchestrationCap } from "../../../api/types";
 import { SettingField, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
+import { SharedMcpServers } from "./SharedMcpServers";
 
 export function AgentOrchestration(_: ScreenProps) {
   return (
@@ -46,6 +49,7 @@ export function AgentOrchestration(_: ScreenProps) {
         label="Nesting depth"
         hint="How deep spawns may nest: 1 = only your sessions spawn, 2 = their sub-sessions may spawn too, and so on."
       />
+      <SharedMcpServers />
     </>
   );
 }

@@ -560,19 +560,26 @@ def claude_tool_names() -> tuple:
     return tuple("mcp__%s__%s" % (SERVER_NAME, t) for t in AUTO_APPROVED_TOOLS)
 
 
-def claude_config(spec: McpSpec) -> dict:
-    """The ``--mcp-config`` document for one session."""
-    return {
-        "mcpServers": {
-            SERVER_NAME: {
-                "type": "stdio",
-                "command": spec.command(),
-                "args": list(spec.args()),
-                "env": spec.env(),
-                "timeout": TOOL_TIMEOUT_S * 1000,
-            }
-        }
+def claude_config(spec: McpSpec, shared: Optional[dict] = None) -> dict:
+    """The ``--mcp-config`` document for one session.
+
+    ``shared`` adds ``{name: http entry}`` for the user's servers that run once
+    per machine in the shared-MCP bridge (:mod:`backend.providers.mcp_share`):
+    a same-named ``--mcp-config`` entry replaces the user's own stdio entry for
+    this launch. It can never displace MindFlock's own server."""
+    servers = {
+        name: dict(entry)
+        for name, entry in (shared or {}).items()
+        if name != SERVER_NAME and isinstance(entry, dict)
     }
+    servers[SERVER_NAME] = {
+        "type": "stdio",
+        "command": spec.command(),
+        "args": list(spec.args()),
+        "env": spec.env(),
+        "timeout": TOOL_TIMEOUT_S * 1000,
+    }
+    return {"mcpServers": servers}
 
 
 def _write_json_0600(path: str, data: dict) -> None:
@@ -591,11 +598,12 @@ def _write_json_0600(path: str, data: dict) -> None:
     )
 
 
-def write_claude_config(spec: McpSpec) -> str:
+def write_claude_config(spec: McpSpec, shared: Optional[dict] = None) -> str:
     """(Re)write the session's Claude run file and return its path. Rewritten on
-    every launch so a changed port, interpreter or scope is picked up."""
+    every launch so a changed port, interpreter, scope or set of shared servers
+    is picked up."""
     path = run_file_path(spec.tmux_name)
-    _write_json_0600(path, claude_config(spec))
+    _write_json_0600(path, claude_config(spec, shared))
     return path
 
 

@@ -157,6 +157,16 @@ export interface BackgroundJob {
   quiet_s: number;
 }
 
+/** Why and since when a session's agent is asleep (Instance.sleeping). */
+export interface SleepInfo {
+  /** Epoch seconds it fell asleep. */
+  since: number;
+  /** "idle" (the sweep), "memory" (the sweep, sooner: memory was low), "manual". */
+  reason: string;
+  /** Roughly how much memory stopping it gave back, in MB (0 = unknown). */
+  freed_mb: number;
+}
+
 export interface Instance {
   title: string;
   branch: string;
@@ -174,6 +184,11 @@ export interface Instance {
   in_place: boolean;
   diff_stat: DiffStat | null;
   workspace_missing: boolean;
+  /** Asleep (backend core/sleep.py): the agent was stopped on purpose, idle,
+   * to give its memory back — its `activity` reads "offline" meanwhile. Opening
+   * it or sending it anything wakes it, resuming the conversation. Optional:
+   * an older server (or a remote device on one) never sends it. */
+  sleeping?: SleepInfo | null;
   has_origin: boolean;
   /** Auth profile: the stored pin ("" = inherit the global default,
    * "default" = the CLI's own login), its resolution, and the resolved
@@ -222,6 +237,11 @@ export interface Instance {
    * `name:` is free text and cannot be mapped back to an id). Keys the retry. */
   failed_hook?: string | null;
   autopilot?: AutopilotRun | null;
+  /** An agent the kernel killed (likely out of memory) coming back by itself
+   * ("pending"), or left Offline after too many kills ("gave_up") — the server's
+   * auto-revive (backend/web/core/revive.py). `reason` replaces the Offline
+   * chip's stock hint. */
+  auto_revive?: { state: "pending" | "gave_up"; reason: string } | null;
   queue: QueueSummary | null;
   tokens: number;
   tokens_in: number;
@@ -2043,4 +2063,28 @@ export interface MemoryReading {
   at?: number;
   /** One-line reason ("memory is low: 2.1 GB free of 24.0 GB (9%)"); "" when ok. */
   message?: string;
+}
+
+/** One holder or waiter of a heavy-job slot (`mindflock slot`). */
+export interface SlotJob {
+  slot?: number;
+  pid?: number | null;
+  cmd?: string;
+  cwd?: string;
+  since?: number;
+  max?: number;
+  /** The MindFlock session it runs in; "" when none. */
+  session?: string;
+  /** Waiters only: 1 = next in line. */
+  position?: number;
+}
+
+/** `GET /api/system/slots` — heavy commands gated by `mindflock slot`
+ * (backend/slot.py): who holds a slot, who is queued for one. */
+export interface SlotsReading {
+  slots: number;
+  source: "env" | "setting" | "default";
+  pools: { name: string; holders: SlotJob[]; waiters: SlotJob[] }[];
+  running: number;
+  waiting: number;
 }

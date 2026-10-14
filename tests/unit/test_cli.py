@@ -1251,6 +1251,81 @@ class TestPauseResumeCommands:
         assert "cannot be paused" in capsys.readouterr().err
 
 
+class TestSleepWakeCommands:
+    """``mindflock sleep|wake`` (core.sleep): the per-session verbs, like
+    pause/resume; ``attach`` wakes a sleeper before landing in its tmux."""
+
+    _LISTING = [{"title": "fix-auth"}, {"title": "docs"}]
+
+    @pytest.fixture()
+    def posted(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(client, "discover", lambda *a, **k: "http://127.0.0.1:8765")
+        monkeypatch.setattr(
+            client, "get", lambda base, path, timeout=None: self._LISTING
+        )
+
+        def _post(base, path, payload=None, timeout=None):
+            calls.append(path)
+            if path.endswith("/sleep"):
+                return {"sleeping": {"since": 1.0, "reason": "manual", "freed_mb": 780}}
+            return {"woke": "docs" in path}
+
+        monkeypatch.setattr(client, "post", _post)
+        return calls
+
+    def test_sleep_posts_the_sleep_route_and_says_what_it_freed(self, posted, capsys):
+        assert cli.main(["sleep", "fix", "docs"]) == 0
+        assert posted == ["/api/instances/fix-auth/sleep", "/api/instances/docs/sleep"]
+        assert "fix-auth is asleep (freed ~780 MB)" in capsys.readouterr().out
+
+    def test_wake_posts_the_wake_route(self, posted, capsys):
+        assert cli.main(["wake", "fix-auth", "docs"]) == 0
+        assert posted == ["/api/instances/fix-auth/wake", "/api/instances/docs/wake"]
+        out = capsys.readouterr().out
+        assert "fix-auth was not asleep" in out and "woke docs" in out
+
+    def test_a_refused_sleep_exits_1(self, monkeypatch, capsys):
+        monkeypatch.setattr(client, "discover", lambda *a, **k: "http://127.0.0.1:8765")
+        monkeypatch.setattr(
+            client, "get", lambda base, path, timeout=None: self._LISTING
+        )
+
+        def _post(base, path, payload=None, timeout=None):
+            raise client.ApiError(409, "can't sleep docs: not idle")
+
+        monkeypatch.setattr(client, "post", _post)
+        assert cli.main(["sleep", "docs"]) == 1
+        assert "not idle" in capsys.readouterr().err
+
+    def test_attach_wakes_a_sleeper_first(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(client, "discover", lambda *a, **k: "http://127.0.0.1:8765")
+        monkeypatch.setattr(
+            client,
+            "get",
+            lambda base, path, timeout=None: [
+                {
+                    "title": "docs",
+                    "tmux_name": "mindflock_docs",
+                    "sleeping": {"since": 1},
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            client,
+            "post",
+            lambda base, path, payload=None, timeout=None: calls.append(path) or {},
+        )
+        monkeypatch.setattr(cli, "_stdout_is_tty", lambda: True)
+        monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/tmux")
+        execd = []
+        monkeypatch.setattr(cli.os, "execvp", lambda f, argv: execd.append(argv))
+        cli.main(["attach", "docs"])
+        assert calls == ["/api/instances/docs/wake"]
+        assert execd == [["tmux", "attach-session", "-t", "mindflock_docs"]]
+
+
 class TestClientDelete:
     def test_delete_uses_http_delete(self, monkeypatch):
         seen = {}

@@ -47,6 +47,8 @@ Installed via ``[project.scripts]``::
     mindflock update --check      # …only say whether there is a newer one
     mindflock restart             # restart the running server (onto what is installed)
 
+    mindflock slot -- CMD ...     # run a heavy command once a machine-wide slot is free
+
     mindflock mcp                 # MCP stdio server (lets agents reach other sessions)
     mindflock mcp --print-config  # …the snippets to register it in Claude/Codex
 
@@ -313,6 +315,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="resume paused sessions: restart the agent in the same worktree",
     )
     resume.add_argument("title", metavar="TITLE", nargs="+")
+
+    sleep_ = sub.add_parser(
+        "sleep",
+        parents=[server_opts],
+        help="put sessions' agents to sleep now: stop the CLI and its MCP "
+        "servers to free memory (opening or messaging one wakes it)",
+        description="Put one or more sessions' agents to sleep on the running "
+        "server: the agent CLI and its MCP servers stop, giving their memory "
+        "back; the session, worktree and conversation stay. Refused while an "
+        "agent is mid-turn, on a dialog, running a background job, has "
+        "something queued or waiting for it, or has a terminal attached. "
+        "Opening it, sending it anything, or `wake` brings it back, resuming "
+        "its conversation. Idle agents also fall asleep on their own after "
+        "general.sleep_idle_minutes. TITLE may be any unambiguous prefix.",
+    )
+    sleep_.add_argument("title", metavar="TITLE", nargs="+")
+
+    wake = sub.add_parser(
+        "wake",
+        parents=[server_opts],
+        help="wake sleeping sessions: relaunch the agent, resuming its " "conversation",
+    )
+    wake.add_argument("title", metavar="TITLE", nargs="+")
 
     open_ = sub.add_parser(
         "open",
@@ -758,6 +783,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="print the Claude Code / Codex registration snippets and exit",
     )
 
+    slot_p = sub.add_parser(
+        "slot",
+        help="run a heavy command (tests, builds) once a machine-wide slot is free",
+        description=(
+            "mindflock slot [--pool NAME] [--max N] [--timeout SECS] "
+            "[--no-wait-memory] -- CMD [ARGS...]: run CMD once it holds one of N "
+            "machine-wide slots (and memory reads ok), so heavy jobs from many "
+            "sessions take turns. No server needed; `mindflock slot --help` "
+            "lists the options. MINDFLOCK_SLOT=0 bypasses it."
+        ),
+    )
+    # Dispatched before this parser runs (see main): listed here for --help.
+    slot_p.add_argument("args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+
     sub.add_parser(
         "token",
         help="print this machine's access token (what another device or the sign-in page asks for)",
@@ -1172,7 +1211,8 @@ def _cmd_ls(args: argparse.Namespace) -> int:
             str(i.get("title", "")),
             str(i.get("repo", "")),
             str(i.get("status", "")),
-            str(i.get("activity", "")),
+            # Asleep reads "offline" on the row; say what it is.
+            "sleeping" if i.get("sleeping") else str(i.get("activity", "")),
             str(i.get("stage", "")),
             _fmt_diff(i),
             _fmt_cost(i),
@@ -1213,6 +1253,12 @@ def _cmd_attach(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+    if inst.get("sleeping"):
+        # Asleep (its agent stopped to free memory): wake it first, so there
+        # is a tmux session to land in — the conversation resumes.
+        client.post(
+            base, "/api/instances/%s/wake" % _quote_title(str(inst.get("title", "")))
+        )
     # Replace this process with tmux so the user lands in the live session.
     os.execvp("tmux", ["tmux", "attach-session", "-t", tmux_name])
     return 0  # pragma: no cover — execvp does not return
@@ -1350,6 +1396,41 @@ def _cmd_pause_resume(args: argparse.Namespace) -> int:
             rc = 1
             continue
         print("%sd session %s" % (verb, title))
+    return rc
+
+
+def _cmd_sleep_wake(args: argparse.Namespace) -> int:
+    """``sleep`` / ``wake``: ``POST /api/instances/{title}/sleep|wake``.
+
+    Sleep stops the agent CLI (and its MCP servers) to free memory, keeping
+    the session; wake relaunches it, resuming the conversation. Exit 1 when
+    any title was refused."""
+    base = client.discover(args.host, args.port)
+    titles = _resolve_titles(client.get(base, "/api/instances") or [], args.title)
+    verb = args.command
+    rc = 0
+    for title in titles:
+        try:
+            res = (
+                client.post(base, "/api/instances/%s/%s" % (_quote_title(title), verb))
+                or {}
+            )
+        except client.ApiError as err:
+            print(
+                "error: could not %s %r: %s" % (verb, title, err.message),
+                file=sys.stderr,
+            )
+            rc = 1
+            continue
+        if verb == "sleep":
+            freed = int(((res.get("sleeping") or {}).get("freed_mb")) or 0)
+            print(
+                "%s is asleep%s" % (title, (" (freed ~%d MB)" % freed) if freed else "")
+            )
+        elif res.get("woke"):
+            print("woke %s" % title)
+        else:
+            print("%s was not asleep" % title)
     return rc
 
 
@@ -3097,6 +3178,8 @@ _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "rm": _cmd_rm,
     "pause": _cmd_pause_resume,
     "resume": _cmd_pause_resume,
+    "sleep": _cmd_sleep_wake,
+    "wake": _cmd_sleep_wake,
     "open": _cmd_open,
     "events": _cmd_events,
     "msg": _cmd_msg,
@@ -3120,14 +3203,24 @@ def _cli_update():
 def main(argv: Optional[List[str]] = None) -> int:
     """Parse ``argv`` and dispatch to the matching subcommand; return the exit code.
 
+    ``slot`` is dispatched before the parser is even built (it wraps commit
+    hooks: startup cost matters, and its command's flags must pass through).
     ``doctor``, ``mcp`` and the J1 session commands
-    (new/ls/attach/close/delete/rm/pause/resume/open/events/msg/inbox/run/
+    (new/ls/attach/close/delete/rm/pause/resume/sleep/wake/open/events/msg/inbox/run/
     templates) run in-process; any other invocation — including no subcommand at all — falls
     through to ``serve``. A session command that can't reach a server turns the
     :class:`client.ServerNotFound` / :class:`client.ClientError` into a one-line
     stderr message and exit 1, never a traceback.
     """
-    args = _build_parser().parse_args(sys.argv[1:] if argv is None else argv)
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["slot"]:
+        # Before the big parser on purpose: `slot` wraps every commit's test
+        # run, takes its own options and passes everything after `--` through
+        # verbatim (argparse would eat a wrapped command's own flags).
+        from backend import slot
+
+        return slot.main(argv[1:])
+    args = _build_parser().parse_args(argv)
     if args.command == "doctor":
         return _cmd_doctor(fix=args.fix)
     if args.command == "init":

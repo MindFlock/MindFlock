@@ -16,6 +16,7 @@ import { refreshInstances, useInstances, useMemory } from "../../state/queries";
 import { deriveSessionState, forceActivity } from "../../lib/sessionState";
 import { toast } from "../../lib/toast";
 import { errMsg } from "../../lib/format";
+import type { Instance } from "../../api/types";
 
 interface SweepResult {
   revived?: string[];
@@ -44,15 +45,24 @@ export function sweepToast(r: SweepResult, offline: string[]): string {
   return line;
 }
 
+/** The rows the bar counts and "Restart all" relaunches: this device's
+ * sessions whose chip offers Restart. A sleeping agent (backend
+ * core/sleep.py) reads "offline" but is not: it was stopped on purpose, and
+ * wakes when it is opened or sent anything — never counted. Exported for
+ * tests. */
+export function offlineRows(instances: Instance[]): Instance[] {
+  return instances.filter((i) => {
+    if (i.device || i.pending || i.sleeping) return false;
+    const ss = deriveSessionState(i);
+    return ss.state === "offline" && ss.restartable && i.status !== "paused";
+  });
+}
+
 export function OfflineBar() {
   const { data: instances = [] } = useInstances();
   const memory = useMemory().data;
   const [busy, setBusy] = useState(false);
-  const offline = instances.filter((i) => {
-    if (i.device || i.pending) return false;
-    const ss = deriveSessionState(i);
-    return ss.state === "offline" && ss.restartable && i.status !== "paused";
-  });
+  const offline = offlineRows(instances);
   if (offline.length < 2 && !busy) return null;
 
   const titles = offline.map((i) => i.title);

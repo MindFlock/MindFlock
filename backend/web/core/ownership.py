@@ -478,6 +478,14 @@ def viewers(title: str) -> Dict[str, dict]:
     return out
 
 
+def terminals(title: str) -> int:
+    """How many terminal websockets are attached to ``title`` right now, by
+    anyone (a connection with no person counts too) — what the sleep sweep
+    (:mod:`backend.web.core.sleep`) reads as "someone has it open"."""
+    with _LOCK:
+        return sum(1 for c in _CONNS.values() if c["title"] == title)
+
+
 def row_fields(title: str) -> dict:
     """``{owner, driver, driver_name, viewers}`` for an ``/api/instances``
     row (and the ``session.presence_changed`` event's data)."""

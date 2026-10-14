@@ -276,12 +276,16 @@ class BaseProvider:
     def build_launch_command(self, ctx: LaunchContext) -> Optional[str]:
         """The shell string tmux runs (before the exit-marker wrapper), or None
         to launch the bare program. Default: run the program, resuming it with
-        ``--continue`` (falling back to a fresh run) when ``ctx.resume``."""
+        ``--continue`` (falling back to a fresh run, except after a SIGKILL)
+        when ``ctx.resume``."""
         prog = ctx.program
         if not prog:
             return None
         if ctx.resume:
-            return "%s --continue || %s" % (prog, prog)
+            # Not after a SIGKILL (an OOM-killed CLI is not a failed resume).
+            from .launch_script import unless_killed
+
+            return "%s --continue || %s" % (prog, unless_killed(prog))
         return prog
 
     def mcp_launch_args(self, spec) -> tuple:
@@ -297,6 +301,13 @@ class BaseProvider:
         ``mindflock mcp`` by hand.
         """
         return ()
+
+    def mcp_servers(self) -> list:
+        """This CLI's user-configured MCP servers, for Settings → Shared MCP
+        servers: ``[{name, transport, command, shareable, caution, reason}]``
+        (:func:`backend.providers.claude_mcp.list_servers`). Default: ``[]`` —
+        the CLI's servers cannot be shared through the bridge (yet)."""
+        return []
 
     # --- peer shared sessions (backend/peer) ------------------------------ #
     def sandbox_profile(self) -> Optional[SandboxProfile]:

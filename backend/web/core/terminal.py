@@ -233,14 +233,26 @@ def _wrap_launch_cmd(cmd: str, session_name: str) -> str:
     """Wrap a shell launch command so the session records its exit code when the
     agent ends. Clears any stale marker first, so an old 'natural' marker can't
     make a later kill look natural. ``cmd`` is already a shell string (program
-    name, launcher path, or launch command); tmux runs the result via ``sh -c``."""
+    name, launcher path, or launch command); tmux runs the result via ``sh -c``.
+
+    The wrapper shell also raises its own ``oom_score_adj`` first
+    (:data:`backend.providers.launch_script.OOM_SCORE_ADJ`), so the agent and
+    everything it runs are the OOM killer's pick before the server. A CLI that
+    dies to it records 137, which the server's auto-revive keys on."""
+    from backend.providers import launch_script
+
     marker = _exit_marker_path(session_name)
     try:
         marker.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
     q = shlex.quote(str(marker))
-    return "rm -f %s; %s; echo $? > %s" % (q, cmd, q)
+    return "rm -f %s; %s%s; echo $? > %s" % (
+        q,
+        launch_script.oom_score_prefix(),
+        cmd,
+        q,
+    )
 
 
 def spawn_tmux_attach(session_name: str, dimensions=(24, 80)):
