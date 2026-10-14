@@ -21,6 +21,12 @@ says where their time went.
 The headline is **time to PR** (first recorded work → PR opened), with the
 phase breakdown of that span; what happens after (review, rework, merge) is
 reported separately.
+
+**Your own time is left out by default** (``include_me=False``): the phases
+in :data:`PERSON_PHASES` are cut out of the clock — every duration, median,
+p90, share and the weekly trend is computed as if the person had answered
+instantly, so the bottleneck ranking is about the agent, the tooling, the
+handoffs, limits and review. ``include_me=True`` is the full wall clock.
 """
 
 from __future__ import annotations
@@ -105,6 +111,15 @@ GROUPS: List[Tuple[str, str]] = [
 ]
 GROUP_OF = {p[0]: p[2] for p in PHASES}
 
+#: The person's own time: a question or permission waiting on an answer, the
+#: agent's turn ended with you at the keyboard, or with nobody around. Unless
+#: the person opts in (``include_me``), the analysis assumes they move at max
+#: speed — time waiting on them is not a process bottleneck — so these are
+#: cut out of the clock (the timeline compressed, not just the rows hidden).
+#: ``review`` (PR open, nothing working) stays: it waits on reviewers and CI,
+#: not on your turn in the terminal. ``untracked`` stays: it is nobody's.
+PERSON_PHASES = frozenset({"question", "your_turn", "away"})
+
 #: Which window speaks for a shared item at a moment (higher wins).
 _PRIORITY = {
     "agent": 13,
@@ -124,7 +139,8 @@ _PRIORITY = {
 #: Phases that start a new item after a merge (real work, not idle).
 _ACTIVE = frozenset({"agent", "rework", "setup", "precommit", "hook_fix", "question"})
 #: Time that isn't the workflow's: nobody was around, or nothing was recorded.
-#: "Active time to PR" leaves these out.
+#: "Active time to PR" leaves these out (``away`` is gone already unless the
+#: person's own time is counted — :data:`PERSON_PHASES`).
 INACTIVE = frozenset({"away", "untracked"})
 #: A heartbeat (or any row) proves the recorder was alive for this long after it.
 ALIVE_S = 480.0
@@ -344,11 +360,17 @@ def _totals(timeline: List[dict], a: float, b: float) -> Dict[str, float]:
 
 
 def build_items(
-    rows: List[dict], now: float, live_sessions: Optional[Iterable[str]] = None
+    rows: List[dict],
+    now: float,
+    live_sessions: Optional[Iterable[str]] = None,
+    include_me: bool = False,
 ) -> List[dict]:
     """Every work item in ``rows``, newest first (see the module docstring).
     ``live_sessions``: titles that still exist (an item none of whose
-    sessions does, and that never merged, is ``abandoned``)."""
+    sessions does, and that never merged, is ``abandoned``). ``include_me``
+    False cuts :data:`PERSON_PHASES` out of every item's clock; the items
+    themselves (ids, boundaries, status, epochs) are the same either way."""
+    skip = frozenset() if include_me else PERSON_PHASES
     segs, metas, merges = session_segments(rows, now)
     live = set(live_sessions or [])
     by_key: Dict[str, List[dict]] = {}
@@ -378,17 +400,50 @@ def build_items(
                 tl = tl[first:]
             if not tl:
                 continue
-            items.append(_item(key, idx, tl, merged_at, meta, sessions, live, now))
+            items.append(
+                _item(key, idx, tl, merged_at, meta, sessions, live, now, skip)
+            )
     items.sort(key=lambda it: it["end"], reverse=True)
     return items
 
 
-def _item(key, idx, tl, merged_at, meta, sessions, live, now) -> dict:
+def _compress(tl: List[dict], skip: frozenset) -> List[dict]:
+    """``tl`` with the ``skip`` phases cut out and everything after each cut
+    moved earlier by its length (so the strip has no holes where the person
+    was). ``at`` keeps each piece's real start, for its tooltip."""
+    out: List[dict] = []
+    shift = 0.0
+    for sg in tl:
+        if sg["ph"] in skip:
+            shift += sg["end"] - sg["start"]
+            continue
+        a, b = sg["start"] - shift, sg["end"] - shift
+        if out and out[-1]["ph"] == sg["ph"] and abs(out[-1]["end"] - a) < 1e-6:
+            out[-1]["end"] = b
+        else:
+            out.append({"ph": sg["ph"], "start": a, "end": b, "at": sg["start"]})
+    return out
+
+
+def _item(key, idx, tl, merged_at, meta, sessions, live, now, skip=frozenset()) -> dict:
     start = tl[0]["start"]
     end = merged_at if merged_at is not None else tl[-1]["end"]
     pr_at = next((sg["start"] for sg in tl if sg["ph"] in ("review", "rework")), None)
     to_pr = _totals(tl, start, pr_at if pr_at is not None else end)
     after = _totals(tl, pr_at, end) if pr_at is not None else {}
+
+    def span(a: float, b: float) -> float:
+        """Seconds from ``a`` to ``b``, less the ``skip`` time inside it."""
+        if not skip:
+            return b - a
+        cut = sum(v for k, v in _totals(tl, a, b).items() if k in skip)
+        return max(0.0, round(b - a - cut, 1))
+
+    mine = 0.0
+    if skip:
+        mine = sum(v for k, v in to_pr.items() if k in skip)
+        to_pr = {k: v for k, v in to_pr.items() if k not in skip}
+        after = {k: v for k, v in after.items() if k not in skip}
     commits = fails = 0
     prev = ""
     for sg in tl:
@@ -420,22 +475,39 @@ def _item(key, idx, tl, merged_at, meta, sessions, live, now) -> dict:
         "pr_at": pr_at,
         "merged_at": merged_at,
         "end": end,
-        "lead_to_pr": (pr_at - start) if pr_at is not None else None,
+        "lead_to_pr": span(start, pr_at) if pr_at is not None else None,
         "active_to_pr": (
             round(sum(v for k, v in to_pr.items() if k not in INACTIVE), 1)
             if pr_at is not None
             else None
         ),
-        "lead_to_merge": (merged_at - start) if merged_at is not None else None,
-        "elapsed": end - start,
+        "lead_to_merge": span(start, merged_at) if merged_at is not None else None,
+        "elapsed": span(start, end),
         "to_pr": {k: round(v, 1) for k, v in to_pr.items()},
         "after_pr": {k: round(v, 1) for k, v in after.items()},
         "commits": commits,
         "hook_failures": fails,
-        "timeline": [
-            {"ph": sg["ph"], "start": round(sg["start"], 1), "end": round(sg["end"], 1)}
-            for sg in tl[-400:]
-        ],
+        "timeline": (
+            [
+                {
+                    "ph": sg["ph"],
+                    "start": round(sg["start"], 1),
+                    "end": round(sg["end"], 1),
+                }
+                for sg in tl[-400:]
+            ]
+            if not skip
+            else [
+                {
+                    "ph": sg["ph"],
+                    "start": round(sg["start"], 1),
+                    "end": round(sg["end"], 1),
+                    "at": round(sg["at"], 1),
+                }
+                for sg in _compress(tl, skip)[-400:]
+            ]
+        ),
+        **({"your_time_s": round(mine, 1)} if skip else {}),
     }
 
 
@@ -514,11 +586,15 @@ def _fmt(sec: float) -> str:
     return "%dd %dh" % (d, rh) if rh else "%dd" % d
 
 
-def advice(items: List[dict], stats: List[dict]) -> List[dict]:
+def advice(
+    items: List[dict], stats: List[dict], skip: Iterable[str] = ()
+) -> List[dict]:
     """What to change, ranked by the time at stake: ``{phase, level, title,
     detail, at_stake_s}``. Only phases worth at least 5% of time to PR (or a
-    hook failure rate that matters) say anything."""
-    by = {r["phase"]: r for r in stats}
+    hook failure rate that matters) say anything; a ``skip`` phase (the
+    person's own time, when it isn't counted) never does."""
+    skip = frozenset(skip)
+    by = {r["phase"]: r for r in stats if r["phase"] not in skip}
     out: List[dict] = []
 
     def add(phase: str, title: str, detail: str, level: str = "warn") -> None:
@@ -678,11 +754,19 @@ def report(
     now: Optional[float] = None,
     period: float = 7 * 86400.0,
     live_sessions: Optional[Iterable[str]] = None,
+    include_me: bool = False,
 ) -> dict:
-    """The dashboard payload for the last ``period`` seconds."""
+    """The dashboard payload for the last ``period`` seconds.
+
+    ``include_me`` False (the default) leaves the person's own time
+    (:data:`PERSON_PHASES`) out of everything — durations, stats, groups,
+    advice, the trend and the ``phases`` / ``groups`` lists — and adds
+    ``excluded: {phases, total_s}`` (how much of it the basis items had
+    before their PR). True is the full wall clock, the report unchanged."""
     now = time.time() if now is None else now
     since = now - period
-    all_items = build_items(rows, now, live_sessions)
+    skip = frozenset() if include_me else PERSON_PHASES
+    all_items = build_items(rows, now, live_sessions, include_me)
     items = [it for it in all_items if it["end"] >= since]
     shipped = [
         it for it in items if it.get("pr_at") is not None and it["pr_at"] >= since
@@ -699,14 +783,19 @@ def report(
     actives = [it["active_to_pr"] for it in shipped]
     merges = [it["lead_to_merge"] for it in merged]
     first = min((_f(r.get("t")) for r in rows), default=None)
-    return {
+    kept_groups = {GROUP_OF[p] for p in PHASE_IDS if p not in skip}
+    out = {
         "now": now,
         "period_s": period,
         "tracking_since": first,
         "phases": [
-            {"id": p[0], "label": p[1], "group": p[2], "hint": p[3]} for p in PHASES
+            {"id": p[0], "label": p[1], "group": p[2], "hint": p[3]}
+            for p in PHASES
+            if p[0] not in skip
         ],
-        "groups": [{"id": g, "label": label} for g, label in GROUPS],
+        "groups": [
+            {"id": g, "label": label} for g, label in GROUPS if g in kept_groups
+        ],
         "kpi": {
             "items": len(items),
             "prs_opened": len(shipped),
@@ -723,9 +812,15 @@ def report(
         "to_pr": stats,
         "to_pr_groups": group_stats(stats),
         "after_pr": after_stats,
-        "advice": advice(basis, stats),
+        "advice": advice(basis, stats, skip),
         "trend": weekly_trend(
             all_items, now, max(1, min(13, int(round(period / (7 * 86400.0))) or 1))
         ),
         "items": items[:200],
     }
+    if skip:
+        out["excluded"] = {
+            "phases": [p for p in PHASE_IDS if p in skip],
+            "total_s": round(sum(it.get("your_time_s", 0.0) for it in basis), 1),
+        }
+    return out

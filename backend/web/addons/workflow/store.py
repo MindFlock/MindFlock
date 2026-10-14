@@ -19,6 +19,12 @@ Appending is the write path; a compaction (drop rows older than
 threshold. Reads parse the whole file behind a short mtime-checked cache.
 ``$MINDFLOCK_WORKFLOW_FILE`` redirects the file (tests point it at a tmp path;
 the home guard refuses the real one under pytest).
+
+The extension's one setting — ``include_me``, whether the person's own time
+counts toward bottlenecks (default off) — lives beside the store in
+``workflow_optimizer.settings.json`` (mode 0600, written atomically): an
+extension's state is its own file, never a group in settings.json, so it is
+this device's, like the timeline it reads.
 """
 
 from __future__ import annotations
@@ -33,9 +39,22 @@ from backend.config.config import GetConfigDir
 from backend.config.home_guard import guard
 from backend.fsutil import atomic_write_text
 
-__all__ = ["path", "append", "read", "compact", "RETENTION_S"]
+__all__ = [
+    "path",
+    "append",
+    "read",
+    "compact",
+    "RETENTION_S",
+    "settings_path",
+    "load_settings",
+    "save_settings",
+    "DEFAULT_SETTINGS",
+]
 
 _FILE = "workflow_optimizer.jsonl"
+_SETTINGS_FILE = "workflow_optimizer.settings.json"
+#: Every setting at its default; a missing / unreadable file means these.
+DEFAULT_SETTINGS = {"include_me": False}
 #: Rows older than this are dropped at compaction: a 90-day view plus the
 #: work items that straddle its edge.
 RETENTION_S = 100 * 86400.0
@@ -147,3 +166,48 @@ def compact() -> int:
         p = path()
         _compact_locked(p)
         return len(_parse(p))
+
+
+# --------------------------------------------------------------------------- #
+# Settings
+# --------------------------------------------------------------------------- #
+def settings_path() -> str:
+    """Beside the timeline (so ``$MINDFLOCK_WORKFLOW_FILE`` moves both)."""
+    return guard(
+        os.path.join(os.path.dirname(path()) or ".", _SETTINGS_FILE),
+        "workflow optimizer settings",
+    )
+
+
+def _clean(raw) -> dict:
+    out = dict(DEFAULT_SETTINGS)
+    if isinstance(raw, dict) and isinstance(raw.get("include_me"), bool):
+        out["include_me"] = raw["include_me"]
+    return out
+
+
+def load_settings() -> dict:
+    """The settings, every key present (defaults for missing or bad ones)."""
+    try:
+        with open(settings_path(), "r", encoding="utf-8") as f:
+            return _clean(json.load(f))
+    except (OSError, ValueError):
+        return dict(DEFAULT_SETTINGS)
+
+
+def save_settings(patch: dict) -> dict:
+    """Merge the known keys of ``patch`` into the settings, write them
+    atomically (0600) and return the result. Unknown keys and non-bool
+    values are ignored."""
+    with _LOCK:
+        cur = load_settings()
+        for k, default in DEFAULT_SETTINGS.items():
+            v = patch.get(k) if isinstance(patch, dict) else None
+            if isinstance(v, type(default)):
+                cur[k] = v
+        p = settings_path()
+        os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+        atomic_write_text(
+            p, json.dumps(cur, indent=2) + "\n", mode=0o600, prefix=".wfo-settings."
+        )
+        return cur

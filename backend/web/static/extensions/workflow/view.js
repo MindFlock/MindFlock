@@ -5,10 +5,20 @@
  * the weekly trend and every work item; a work item expands into its own
  * timeline (GET /api/workflow/item?id=). Refreshes every minute while mounted
  * and soon after a stage change or a merge. Range and the phase-table view
- * are remembered per browser in api.storage. */
+ * are remembered per browser in api.storage.
+ *
+ * "Include my time" (off by default) is the extension's one server-side
+ * setting (GET/POST /api/workflow/settings). Off, the server cuts the
+ * person's own phases — waiting on your answer, your turn, idle while away —
+ * out of every number, so only agent, tooling, handoff, limit and review
+ * time counts. Flipping it saves the setting and reloads at once with an
+ * explicit include_me= override, keeping the old numbers on screen until
+ * the new ones land (no blank flash, no layout jump). */
 
 const REFRESH_MS = 60000;
 const RANGES = ["7d", "30d", "90d"];
+const HINT_OFF = "Off: assumes you respond instantly — only agent, tooling, handoff and review time count.";
+const HINT_ON = "On: your answers, your turns and time away count too.";
 const STATUS_WORDS = {
   merged: "merged",
   pr_open: "PR open",
@@ -79,12 +89,14 @@ export function phaseBar(totals, labels, cls) {
 
 /** An item's real timeline: segments placed on a time axis. */
 export function timelineStrip(timeline, labels) {
+  // With your time left out the strip is compressed (no holes where you
+  // were): `at` is each piece's real start, `start` its place on the strip.
   const strip = el("div", { class: "wf-strip" });
   if (!timeline || !timeline.length) return strip;
   const a = timeline[0].start;
   const span = Math.max(1, timeline[timeline.length - 1].end - a);
   for (const sg of timeline) {
-    const piece = el("span", { class: "wf-seg ph-" + sg.ph, title: (labels[sg.ph] || sg.ph) + " — " + fmtDur(sg.end - sg.start) + " from " + fmtWhen(sg.start) });
+    const piece = el("span", { class: "wf-seg ph-" + sg.ph, title: (labels[sg.ph] || sg.ph) + " — " + fmtDur(sg.end - sg.start) + " from " + fmtWhen(sg.at !== undefined ? sg.at : sg.start) });
     piece.style.left = ((100 * (sg.start - a)) / span).toFixed(3) + "%";
     piece.style.width = Math.max(0.15, (100 * (sg.end - sg.start)) / span).toFixed(3) + "%";
     strip.appendChild(piece);
@@ -102,12 +114,13 @@ function legend(phases, present) {
 
 function kpis(data, rangeLabel) {
   const k = data.kpi || {};
+  const mine = data.include_me !== false;
   const tile = (num, label, sub) => el("div", { class: "wf-kpi" }, el("div", { class: "wf-kpi-num", text: num }), el("div", { class: "wf-kpi-label", text: label }), sub ? el("div", { class: "muted wf-kpi-sub", text: sub }) : null);
   return el(
     "div",
     { class: "wf-kpis" },
-    tile(fmtDur(k.median_to_pr), "median time to PR", k.p90_to_pr !== null && k.p90_to_pr !== undefined ? "p90 " + fmtDur(k.p90_to_pr) : "no PR opened in the last " + rangeLabel),
-    tile(fmtDur(k.median_active_to_pr), "median active time to PR", "without idle-while-away and untracked time"),
+    tile(fmtDur(k.median_to_pr), mine ? "median time to PR, including your time" : "median time to PR, excluding your time", k.p90_to_pr !== null && k.p90_to_pr !== undefined ? "p90 " + fmtDur(k.p90_to_pr) : "no PR opened in the last " + rangeLabel),
+    tile(fmtDur(k.median_active_to_pr), "median active time to PR", mine ? "without idle-while-away and untracked time" : "without untracked time"),
     tile(fmtDur(k.median_to_merge), "median time to merge", (k.merged || 0) + " merged"),
     tile(String(k.prs_opened || 0), "PRs opened", (k.items || 0) + " work items"),
     tile(String(k.in_progress || 0), "in progress", "not at a PR yet")
@@ -207,6 +220,8 @@ export function renderBoard(api, host, opts) {
   let range = api.storage.get("range", "7d");
   if (!RANGES.includes(range)) range = "7d";
   let view = api.storage.get("view", "to_pr");
+  // null until the server says (the saved setting); then what this view shows.
+  let includeMe = null;
   let data = null;
   let timer = null;
   let disposed = false;
@@ -218,7 +233,10 @@ export function renderBoard(api, host, opts) {
   const rangeBtns = RANGES.map((r) => el("button", { class: "wf-btn" + (r === range ? " on" : ""), type: "button", text: r, onClick: () => setRange(r) }));
   const refreshBtn = el("button", { class: "wf-btn", type: "button", text: "Refresh", onClick: () => load(true) });
   const windowBtn = opts && !opts.compact ? el("button", { class: "wf-btn", type: "button", text: "Open as window", onClick: () => api.ui.openPane("board", { title: "Workflow Optimizer" }) }) : null;
-  const top = el("div", { class: "wf-top" }, el("div", { class: "wf-head" }, el("div", { class: "wf-head-title", text: "Where your time goes, ticket → PR" }), el("div", { class: "muted", text: "Every work item (one branch's trip to a merged PR), split by what was holding it." })), el("div", { class: "wf-controls" }, ...rangeBtns, refreshBtn, windowBtn, status));
+  const meBox = el("input", { type: "checkbox", class: "wf-switch-input", disabled: true, onChange: () => setIncludeMe(meBox.checked) });
+  const meHint = el("div", { class: "muted wf-me-hint", text: HINT_OFF });
+  const meSwitch = el("label", { class: "wf-switch", title: HINT_OFF }, meBox, el("span", { class: "wf-switch-track", "aria-hidden": "true" }), el("span", { text: "Include my time" }));
+  const top = el("div", { class: "wf-top" }, el("div", { class: "wf-head" }, el("div", { class: "wf-head-title", text: "Where the time goes, ticket → PR" }), el("div", { class: "muted", text: "Every work item (one branch's trip to a merged PR), split by what was holding it." })), el("div", { class: "wf-controls" }, meSwitch, ...rangeBtns, refreshBtn, windowBtn, status), meHint);
   const body = el("div", { class: "wf-body" }, el("p", { class: "muted", text: "Loading the workflow timeline…" }));
   root.appendChild(el("div", { class: "wf-wrap" }, top, body));
 
@@ -227,6 +245,31 @@ export function renderBoard(api, host, opts) {
     api.storage.set("range", r);
     rangeBtns.forEach((b) => b.classList.toggle("on", b.textContent === r));
     load(true);
+  }
+
+  function showIncludeMe() {
+    meBox.disabled = includeMe === null;
+    meBox.checked = includeMe === true;
+    const hint = includeMe ? HINT_ON : HINT_OFF;
+    meHint.textContent = hint;
+    meSwitch.title = hint;
+  }
+
+  async function setIncludeMe(on) {
+    includeMe = !!on;
+    showIncludeMe();
+    details.clear();
+    void load(true);
+    try {
+      await api.request("/api/workflow/settings", { json: { include_me: includeMe } });
+    } catch (err) {
+      api.log.error("settings", err);
+      status.textContent = "could not save the setting";
+    }
+  }
+
+  function meParam() {
+    return includeMe === null ? "" : "&include_me=" + (includeMe ? "1" : "0");
   }
 
   function rangeLabel() {
@@ -265,7 +308,9 @@ export function renderBoard(api, host, opts) {
       it.merged_at ? "merged " + fmtWhen(it.merged_at) : null,
       it.commits ? it.commits + " commit" + (it.commits === 1 ? "" : "s") + (it.hook_failures ? ", " + it.hook_failures + " failed hooks" : "") : null,
       it.sessions && it.sessions.length ? "window" + (it.sessions.length === 1 ? "" : "s") + ": " + it.sessions.join(", ") : null,
+      it.your_time_s ? fmtDur(it.your_time_s) + " of your time left out" : null,
     ].filter(Boolean);
+    const compressed = !!(d && d.timeline.length && d.timeline[0].at !== undefined);
     const after = Object.keys(it.after_pr || {}).length
       ? el("div", { class: "wf-after" }, el("span", { class: "muted", text: "After the PR opened: " }), Object.entries(it.after_pr).map(([ph, s]) => el("span", { class: "wf-key" }, el("i", { class: "wf-swatch ph-" + ph }), (lab[ph] || ph) + " " + fmtDur(s))))
       : null;
@@ -274,7 +319,7 @@ export function renderBoard(api, host, opts) {
       { class: "wf-item-detail" },
       el("div", { class: "muted", text: facts.join(" · ") }),
       d ? timelineStrip(d.timeline, lab) : el("div", { class: "muted", text: "Loading timeline…" }),
-      d ? el("div", { class: "wf-axis muted" }, el("span", { text: fmtWhen(d.timeline.length ? d.timeline[0].start : it.start) }), el("span", { text: fmtWhen(d.timeline.length ? d.timeline[d.timeline.length - 1].end : it.end) })) : null,
+      d ? el("div", { class: "wf-axis muted" }, el("span", { text: fmtWhen(d.timeline.length ? d.timeline[0].start : it.start) }), compressed ? el("span", { text: "your time cut out" }) : null, el("span", { text: fmtWhen(compressed || !d.timeline.length ? it.end : d.timeline[d.timeline.length - 1].end) })) : null,
       el("div", { class: "wf-item-phases" }, Object.entries(it.to_pr || {}).sort((a, b) => b[1] - a[1]).map(([ph, s]) => el("span", { class: "wf-key" }, el("i", { class: "wf-swatch ph-" + ph }), (lab[ph] || ph) + " " + fmtDur(s)))),
       after,
       it.pr ? el("a", { class: "wf-link", href: it.pr, target: "_blank", rel: "noopener", text: "Open the PR ↗" }) : null
@@ -287,7 +332,7 @@ export function renderBoard(api, host, opts) {
     draw();
     if (open.has(id) && !details.has(id)) {
       try {
-        const d = await api.request("/api/workflow/item?id=" + encodeURIComponent(id));
+        const d = await api.request("/api/workflow/item?id=" + encodeURIComponent(id) + meParam());
         if (disposed) return;
         details.set(id, d && d.timeline ? d : { timeline: [] });
       } catch (err) {
@@ -310,7 +355,7 @@ export function renderBoard(api, host, opts) {
           el("h4", { text: "Nothing recorded yet" }),
           el(
             "p",
-            { class: "muted", text: "The optimizer records every session's phase from the moment it is installed" + (data.tracking_since ? " (recording since " + fmtWhen(data.tracking_since) + ")" : "") + ". Work a ticket through to a PR and the breakdown appears here: agent time, your turns, pre-commit hooks, handoffs and review." }
+            { class: "muted", text: "The optimizer records every session's phase from the moment it is installed" + (data.tracking_since ? " (recording since " + fmtWhen(data.tracking_since) + ")" : "") + ". Work a ticket through to a PR and the breakdown appears here: agent time, pre-commit hooks, handoffs and review" + (data.include_me === false ? "." : ", and your turns.") }
           )
         )
       );
@@ -321,6 +366,12 @@ export function renderBoard(api, host, opts) {
     for (const r of data.to_pr || []) totals[r.phase] = r.total_s;
     const present = new Set([...(data.to_pr || []), ...(data.after_pr || [])].map((r) => r.phase));
     const basisNote = data.basis === "shipped" ? "Over the " + (data.kpi.prs_opened || 0) + " PR" + (data.kpi.prs_opened === 1 ? "" : "s") + " opened in the last " + rangeLabel() + ", from first work to the PR." : "No PR opened in the last " + rangeLabel() + " — so far, across every item in progress.";
+    // Review (the PR open, nothing working) is reviewers and CI, not your
+    // turn in the terminal: it counts either way, and the copy says so.
+    const meNote =
+      data.include_me === false
+        ? "Your own time is left out" + (data.excluded && data.excluded.total_s ? " (" + fmtDur(data.excluded.total_s) + " of answers, turns and time away)" : "") + ", as if you answered instantly. Review — the PR open, waiting on reviewers — still counts."
+        : "Includes your own time: answering questions, your turns and time away.";
     const viewBtns = [
       ["to_pr", "Until the PR"],
       ["after_pr", "After the PR"],
@@ -338,7 +389,7 @@ export function renderBoard(api, host, opts) {
     );
     const parts = [
       kpis(data, rangeLabel()),
-      el("div", { class: "wf-card" }, el("h4", { text: "Where time to PR goes" }), el("p", { class: "muted", text: basisNote }), phaseBar(totals, lab, "wf-big-bar"), groupLine(data.to_pr_groups), legend(data.phases || [], present)),
+      el("div", { class: "wf-card" }, el("h4", { text: "Where time to PR goes" }), el("p", { class: "muted", text: basisNote + " " + meNote }), phaseBar(totals, lab, "wf-big-bar"), groupLine(data.to_pr_groups), legend(data.phases || [], present)),
       data.advice && data.advice.length ? el("div", { class: "wf-card" }, el("h4", { text: "Bottlenecks — what to change" }), adviceList(data.advice)) : null,
       el("div", { class: "wf-card" }, el("div", { class: "wf-card-head" }, el("h4", { text: "Phases" }), el("div", { class: "wf-seg-btns" }, ...viewBtns)), phaseTable(stats)),
       trendChart(data.trend || []),
@@ -352,10 +403,17 @@ export function renderBoard(api, host, opts) {
     if (disposed) return;
     status.textContent = manual ? "refreshing…" : "";
     try {
-      const r = await api.request("/api/workflow/summary?range=" + encodeURIComponent(range));
+      const asked = includeMe;
+      const r = await api.request("/api/workflow/summary?range=" + encodeURIComponent(range) + meParam());
       if (disposed) return;
       if (r && r.error) throw new Error(r.error);
+      // A flip while this was in flight: its own load is coming.
+      if (asked !== includeMe) return;
       data = r;
+      if (typeof r.include_me === "boolean" && includeMe === null) {
+        includeMe = r.include_me;
+        showIncludeMe();
+      }
       details.clear();
       draw();
       // Re-fetch the timelines of the items left open (a snapshot of the

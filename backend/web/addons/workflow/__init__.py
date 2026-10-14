@@ -6,6 +6,9 @@ your answer, your turn, pre-commit hooks, recovering from failed hooks,
 committed-not-pushed, pushed-no-PR, PR open, usage limit — and turns that
 into a per-work-item breakdown (one branch's trip to a merged PR), the
 median time to PR, which phase is the bottleneck and what to change about it.
+By default the person's own time (questions, your turn, idle while away) is
+left out of the clock — "Include my time" in the dashboard puts it back
+(:data:`analysis.PERSON_PHASES`; the setting is :func:`store.load_settings`).
 
 Three parts, the same shape as the Usage Optimizer: :mod:`recorder` samples
 the session rows (plus the bus's exact stage / merge moments) into
@@ -57,14 +60,39 @@ def _rows(period: float, now: float) -> List[dict]:
     return store.read(since=now - period - 30 * 86400.0)
 
 
-def build_summary(range_key: str = "7d", now: Optional[float] = None) -> dict:
+def _include_me(override: Optional[bool]) -> bool:
+    """The explicit override when given, else the saved setting."""
+    if override is not None:
+        return bool(override)
+    return bool(store.load_settings()["include_me"])
+
+
+def _flag(raw: Optional[str]) -> Optional[bool]:
+    """A query-string bool (``1``/``true``/``on``, ``0``/``false``/``off``);
+    anything else is no override."""
+    v = str(raw or "").strip().lower()
+    if v in ("1", "true", "on", "yes"):
+        return True
+    if v in ("0", "false", "off", "no"):
+        return False
+    return None
+
+
+def build_summary(
+    range_key: str = "7d",
+    now: Optional[float] = None,
+    include_me: Optional[bool] = None,
+) -> dict:
     """The dashboard payload (items without their timelines — those come one
-    at a time from :func:`build_item`)."""
+    at a time from :func:`build_item`). ``include_me`` ``None`` = the saved
+    setting; the answer says which it used."""
     now = time.time() if now is None else now
     range_key = range_key if range_key in RANGES else "7d"
     period = RANGES[range_key]
-    rep = analysis.report(_rows(period, now), now, period, _live_titles())
+    mine = _include_me(include_me)
+    rep = analysis.report(_rows(period, now), now, period, _live_titles(), mine)
     rep["range"] = range_key
+    rep["include_me"] = mine
     rep["items"] = [
         {k: v for k, v in it.items() if k != "timeline"} for it in rep["items"]
     ]
@@ -72,11 +100,15 @@ def build_summary(range_key: str = "7d", now: Optional[float] = None) -> dict:
     return rep
 
 
-def build_item(item_id: str, now: Optional[float] = None) -> Optional[dict]:
-    """One work item with its phase timeline (``None`` when unknown)."""
+def build_item(
+    item_id: str, now: Optional[float] = None, include_me: Optional[bool] = None
+) -> Optional[dict]:
+    """One work item with its phase timeline (``None`` when unknown) —
+    compressed, without the person's phases, unless their time counts."""
     now = time.time() if now is None else now
     rows = store.read(since=now - store.RETENTION_S)
-    for it in analysis.build_items(rows, now, _live_titles()):
+    mine = _include_me(include_me)
+    for it in analysis.build_items(rows, now, _live_titles(), mine):
         if it["id"] == item_id:
             return it
     return None
@@ -149,17 +181,39 @@ class WorkflowAddon(Addon):
         router = APIRouter(prefix="/api/workflow")
 
         @router.get("/summary")
-        async def summary(range: str = "7d") -> JSONResponse:  # noqa: A002
+        async def summary(
+            range: str = "7d",  # noqa: A002
+            include_me: Optional[str] = None,
+        ) -> JSONResponse:
             try:
-                return JSONResponse(await asyncio.to_thread(build_summary, range))
+                return JSONResponse(
+                    await asyncio.to_thread(
+                        build_summary, range, None, _flag(include_me)
+                    )
+                )
             except Exception as err:  # noqa: BLE001 — never 500 the dashboard
                 return JSONResponse({"error": str(err), "items": []}, status_code=200)
 
         @router.get("/item")
-        async def item(id: str = "") -> JSONResponse:  # noqa: A002
-            it = await asyncio.to_thread(build_item, id)
+        async def item(
+            id: str = "",  # noqa: A002
+            include_me: Optional[str] = None,
+        ) -> JSONResponse:
+            it = await asyncio.to_thread(build_item, id, None, _flag(include_me))
             if it is None:
                 return JSONResponse({"error": "no such work item"}, status_code=404)
             return JSONResponse(it)
+
+        @router.get("/settings")
+        async def get_settings() -> JSONResponse:
+            return JSONResponse(await asyncio.to_thread(store.load_settings))
+
+        @router.post("/settings")
+        async def post_settings(body: dict) -> JSONResponse:
+            """Merge ``{include_me: bool}``; other keys / types are ignored."""
+            try:
+                return JSONResponse(await asyncio.to_thread(store.save_settings, body))
+            except OSError as err:
+                return JSONResponse({"error": str(err)}, status_code=500)
 
         return router
