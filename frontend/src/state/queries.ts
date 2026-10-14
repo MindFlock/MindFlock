@@ -778,20 +778,22 @@ function bridgeTestPlanEvents() {
         " never wrote its answers. Run it again.",
     ),
   );
-  ev.subscribe("session.test_plan_checked", (env) =>
-    say(env, (d) => {
-      const failed = Number(d.failed) || 0;
-      const mine = Number(d.needs_you) || 0;
-      const bits = [
-        failed ? failed + (failed === 1 ? " step failed" : " steps failed") : "",
-        mine ? mine + (mine === 1 ? " step needs you" : " steps need you") : "",
-      ].filter(Boolean);
-      return (
-        String(d.title || d.plan || "A checklist") +
-        " checked" +
-        (bits.length ? " — " + bits.join(", ") : " — everything passed")
-      );
-    })
+  ev.subscribe("session.test_plan_checked", (env) => say(env, checkedToastText));
+}
+
+/** The toast for `session.test_plan_checked`. A check run before the merge
+ * (`before_merge: true`) ran on the branch, not on what shipped — it says so. */
+export function checkedToastText(d: Record<string, unknown>): string {
+  const failed = Number(d.failed) || 0;
+  const mine = Number(d.needs_you) || 0;
+  const bits = [
+    failed ? failed + (failed === 1 ? " step failed" : " steps failed") : "",
+    mine ? mine + (mine === 1 ? " step needs you" : " steps need you") : "",
+  ].filter(Boolean);
+  return (
+    String(d.title || d.plan || "A checklist") +
+    (d.before_merge === true ? " checked on the branch" : " checked") +
+    (bits.length ? " — " + bits.join(", ") : " — everything passed")
   );
 }
 

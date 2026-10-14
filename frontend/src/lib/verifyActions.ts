@@ -397,11 +397,11 @@ export async function writePlanFor(target: string): Promise<void> {
       r.existing
         ? (r.plan && r.plan !== target
             ? target + "'s branch already has a checklist — it's under " + r.plan
-            : target + " already has a checklist") + " — it is in the list below"
+            : target + " already has a checklist") + " — it's in Verify"
         // "up to three minutes", matching the row this press creates and the
         // server's own budget. It used to promise "a minute" 200px above a row
         // saying three, which makes the faster of the two promises a broken one.
-        : "Writing a checklist for " + target + " — up to three minutes"
+        : "Asked the agent for a checklist for " + target + " — it'll appear in Verify (up to three minutes)"
     );
     refreshTestPlans();
   } catch (err) {
