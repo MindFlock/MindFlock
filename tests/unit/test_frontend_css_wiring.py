@@ -45,9 +45,9 @@ def test_no_orphaned_component_stylesheet():
     orphans = sorted(
         str(p.relative_to(_FRONTEND_SRC))
         for p in sheets
-        if p.name not in index
-        and p.name not in _SELF_IMPORTED
-        and ('"./%s"' % p.name) not in modules
+        if p.name not in index and p.name not in _SELF_IMPORTED
+        # Imported from its own folder ("./x.css") or a sibling's ("../intake/x.css").
+        and ('/%s"' % p.name) not in modules
     )
     assert orphans == [], "stylesheets nothing imports: " + ", ".join(orphans)
 

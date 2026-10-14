@@ -118,11 +118,17 @@ def test_new_session(mf_server, page, open_app):
     skip = dialog.locator("#new-describe-skip")
     expect(skip).to_be_visible(timeout=10_000)
     skip.click()
+    folder = dialog.locator("#new-repo-path")
+    expect(folder).to_be_visible(timeout=10_000)
+    folder.fill(str(mf_server.repo))
+    # The name is optional (a blank one is named from the task), so it sits
+    # under More options: open it the way a user would to pick one.
+    advanced = dialog.locator("details#new-advanced")
+    if advanced.get_attribute("open") is None:
+        advanced.locator("summary").first.click()
     name = dialog.locator("#new-title")
     expect(name).to_be_visible(timeout=10_000)
     name.fill(title)
-    folder = dialog.locator("#new-repo-path")
-    folder.fill(str(mf_server.repo))
     expect(dialog.locator("#new-program")).to_have_value("claude")
 
     create = dialog.locator("#new-form button[type='submit']")

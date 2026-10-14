@@ -168,7 +168,7 @@ PROVIDER_META: list[dict] = [
         "id": "github_issues",
         "label": "GitHub Issues",
         "blurb": (
-            "Uses your GitHub connection (Settings → Connections → GitHub). "
+            "Uses your GitHub connection (Settings → Connections → GitHub → Connect). "
             "Starts a session for each issue assigned to you in the repo below."
         ),
         "fields": [

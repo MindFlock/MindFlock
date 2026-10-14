@@ -179,8 +179,10 @@ class TestFirstRun:
         # Both surfaces render the same component.
         assert "<SetupChecklist />" in _read("components/grid/TerminalGrid.tsx")
         assert "<SetupChecklist />" in _read("components/dialogs/SetupDialog.tsx")
-        # The phone extra: Install Tailscale OR the QR.
-        assert 'data-phone="install-tailscale"' in src and 'data-phone="qr"' in src
+        # The phone extra: Install Tailscale (or start it, when it's installed
+        # but not answering) OR the QR.
+        assert '"install-tailscale"' in src and '"fix-tailscale"' in src
+        assert 'data-phone="qr"' in src
 
     def test_grid_card_says_get_set_up(self):
         src = _read("components/grid/TerminalGrid.tsx")
