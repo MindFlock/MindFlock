@@ -95,16 +95,17 @@ def test_a_stored_agent_rung_reads_as_off():
     assert 'if (s === "agent" || s === "off" || s === "none") return "leave";' in ladder
     assert "laneLabel(configuredDepth)" in _code(_INTAKE / "kit.tsx")
     assert 'source.depth === "agent" ? ""' in _code(_INTAKE / "TicketsTab.tsx")
-    assert 'o?.depth === "agent" ? ""' in _code(_INTAKE / "RepoSources.tsx")
+    assert 'o.depth === "agent" ? ""' in _code(_INTAKE / "RepoSources.tsx")
 
 
 def test_ticket_fast_track_hint_is_one_sentence_pair():
     src = re.sub(r"\s+", " ", _read(_INTAKE / "TicketsTab.tsx"))
-    # Plain words (round 2): what happens, and why Merge isn't offered here.
-    assert (
-        "What happens after the agent finishes: commit, push, open a PR. Merge can only "
-        "be picked per ticket, so nothing merges unattended." in src
-    )
+    # Plain words (round 2): when it happens, and why Merge isn't offered here —
+    # one line, because Fast-track now sits beside Agent in a two-column row
+    # (edit in place), where a paragraph-length hint made the row ragged.
+    assert "After the agent finishes. Merge is per ticket only." in src
+    # The options themselves still say what it does (Commit / Push / Open PR).
+    assert "SOURCE_DEPTHS.map((d) =>" in src
 
 
 # --------------------------------------------------------------------------
@@ -151,23 +152,43 @@ def test_auto_start_chip_depends_on_the_section_state():
 # --------------------------------------------------------------------------
 
 
-def test_github_tabs_put_the_work_before_the_repositories_once_any_exist():
+def test_github_tabs_have_no_repository_cards_under_the_work():
+    # Add once, edit where it shows: no card list below the work. A watched
+    # repository's heading carries Edit; "+ Add source" opens the add flow at
+    # the top of the tab — which leads on its own while nothing is watched.
     for name in ("PullRequestsTab.tsx", "IssuesTab.tsx"):
         code = re.sub(r"\s+", " ", _code(_INTAKE / name))
-        assert "{n ? [workList, sourceList] : [sourceList, workList]}" in code, name
-        # KEYED, so saving the first repo (which flips the order) moves the two
-        # instead of remounting them — a remount collapsed the card mid-edit.
-        assert '<RepoSourceList key="sources"' in code, name
+        assert "RepoSourceList" not in code, name
+        assert "const showAdd = !!adding || (!n && !dismissed);" in code, name
         assert '<WorkListPanel key="work"' in code, name
+        # Order: the add flow, the switch, the GitHub line, the work, Advanced.
+        order = [
+            "{addFlow}",
+            "<AutomationSwitch",
+            "<GithubStatusLine",
+            "{workList}",
+            "<summary>Advanced options</summary>",
+        ]
+        idx = [code.index(o) for o in order]
+        assert idx == sorted(idx), (name, idx)
 
 
-def test_verify_swaps_its_two_halves_by_key():
+def test_verify_puts_its_repositories_on_one_line_above_the_work():
     code = re.sub(
         r"\s+", " ", _code(_SRC / "components" / "dialogs" / "VerifyDialog.tsx")
     )
-    assert "{workFirst ? [checklists, sources] : [sources, checklists]}" in code
-    assert '<VerifySources key="sources"' in code
+    assert "workFirst" not in code
+    order = [
+        "{addFlow}",
+        "<VerifySwitch",
+        "{sources}",
+        "{checklists}",
+        "<VerifyNewChecklist",
+    ]
+    idx = [code.index(o) for o in order]
+    assert idx == sorted(idx), idx
     assert '<WorkListPanel key="work"' in code
+    assert 'id="vf-repo-add-btn"' in code
 
 
 def test_tickets_put_the_work_before_the_sources():

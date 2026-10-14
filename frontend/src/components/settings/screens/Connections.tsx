@@ -282,7 +282,11 @@ export function actionHandler(a: ConnectionAction, deps: ActionDeps): (() => voi
       return () => window.open(a.target, "_blank", "noopener");
     case "dialog":
       if (a.target === "connect-github") return openConnectGitHub;
-      if (a.target === "intake") return () => deps.openDialogFor("intake", a.tab || "tickets");
+      // A source's own row lands on its heading with its editor open
+      // (`tickets:<source id>`), not on the top of the tab.
+      if (a.target === "intake")
+        return () =>
+          deps.openDialogFor("intake", (a.tab || "tickets") + (a.source_id ? ":" + a.source_id : ""));
       if (a.target === "db-explorer")
         return () => {
           // The explorer is its own dialog: Settings steps aside for it.

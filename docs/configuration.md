@@ -372,7 +372,7 @@ the pipeline on their own; they no longer need a ticketing source to exist.
 A source's `repo_url` names one repo. When its tickets span several (a backend,
 a frontend, a scanner), give it `repos` instead — a list of `{url, hint}`
 (settings.json, and config.toml, which also takes bare URL strings). In Intake →
-**Tickets** that is the source card's **+ Add repo**: a URL plus an optional
+**Tickets** that is the source's **+ Add repo** (Edit on its heading): a URL plus an optional
 hint per row.
 
 - **Back-compat both ways.** A source with one repo is stored exactly as before:

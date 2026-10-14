@@ -614,8 +614,11 @@ def test_intake_tabs_offer_connect_github_not_a_raw_token(rel):
     assert 'field="token"' not in src
     assert "Test GitHub" not in src
     assert "runGithubTest" not in src
-    assert "openConnectGitHub" in src
-    assert "Connect GitHub" in src
+    # The credential's one line, with its real state, opens the one dialog.
+    assert "<GithubStatusLine" in src
+    kit = (ROOT / "frontend/src/components/intake/kit.tsx").read_text()
+    assert "openConnectGitHub()" in kit
+    assert '"Connect GitHub"' in kit
 
 
 def test_connect_github_dialog_leads_with_the_token_without_a_device_flow():

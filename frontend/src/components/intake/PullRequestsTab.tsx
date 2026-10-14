@@ -7,22 +7,32 @@
  * keep their meaning (unset with repos = on — see pause.ts `prsOn`); a fresh
  * setup's first repository is saved with an explicit off.
  *
- * Same anatomy as the other two tabs (see ./kit.tsx): master switch, one card
- * per watched repository, then every open PR grouped by the repository it came
- * from with a chip saying why auto review has or hasn't taken it.
+ * Same anatomy as the other two tabs (see ./kit.tsx): master switch, the
+ * GitHub line, then every open PR grouped by the repository it came from, with
+ * a chip saying why auto-start has or hasn't taken it. Every watched
+ * repository has a heading, and that heading is where it is edited (Edit opens
+ * its editor attached under it); "+ Add source" in the dialog head adds one.
+ * There are no repository cards under the work any more.
  *
- * The GitHub credential is NOT here any more: it has one home, the Connect
- * GitHub dialog (Settings → Connections → GitHub → Connect), and this tab only
- * offers the button that opens it. */
+ * The GitHub credential has one home, the Connect GitHub dialog; this tab
+ * shows its real state on one line ("connected as @you · Manage…"). */
 
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
-import { refreshInstances, usePanelQuery, useTicketingSources } from "../../state/queries";
+import {
+  refreshInstances,
+  usePanelQuery,
+  useTicketingCatalog,
+  useTicketingSources,
+} from "../../state/queries";
 import { SettingField, useSettings } from "../settings/useSettings";
 import { AgentPicker, useAgentChoices } from "../settings/screens/AgentPicker";
-import { openConnectGitHub } from "../../lib/githubConnect";
 import {
   AutomationSwitch,
+  GithubStatusLine,
+  HeadAction,
+  repoGroupOrder,
+  useEditing,
   useListFilter,
   WorkGroup,
   WorkItemRow,
@@ -33,7 +43,7 @@ import {
   useToggleSet,
   type ItemWorkspace,
 } from "./kit";
-import { RepoSourceList, type RepoOverrides } from "./RepoSources";
+import { AddRepoFlow, RepoEditor, type RepoOverrides } from "./RepoSources";
 import { prsOn, useIntakePause } from "./pause";
 import { prMatches } from "./search";
 import type { TabProps } from "./IntakeDialog";
@@ -58,9 +68,10 @@ interface OpenPr {
  * fresh install writes nothing and every group starts open). */
 const PR_GROUPS_KEY = "mf_intake_pr_groups";
 
-export function PullRequestsTab({ gotoTab }: TabProps) {
+export function PullRequestsTab({ focus, adding, startAdd, endAdd }: TabProps) {
   const s = useSettings();
   const agentChoices = useAgentChoices();
+  const catalog = useTicketingCatalog(true).data || [];
   const groups = useToggleSet(PR_GROUPS_KEY, true);
   const filter = useListFilter(
     "gh-prs-filter",
@@ -86,6 +97,9 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
   const skipAuthors = Array.isArray(gh.skip_authors)
     ? gh.skip_authors.join(", ")
     : gh.skip_authors || "";
+  const edit = useEditing(focus);
+  // With nothing watched the add flow leads — until you cancel it.
+  const [dismissed, setDismissed] = useState(false);
 
   const [skipDraft, setSkipDraft] = useState(String(skipAuthors));
   useEffect(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
@@ -103,83 +117,56 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
   const relistPrs = prsQuery.refetch; // after a force start: cache is fine,
   // has_session is annotated live on every response, even a cached one
   const prs = prsQuery.data ? prsQuery.data.prs || [] : null;
-  const prsRepos = prsQuery.data?.repos || [];
   const prsError = prsQuery.error
     ? "Could not list PRs: " + (prsQuery.error.message || "error")
     : "";
+  // Who GitHub says you are is the status line's job now; the note keeps only
+  // the case it can't show — the listing couldn't read the login.
   const prsNote =
     panelNote({ error: prsError, fetching: prsQuery.isFetching, loaded: !!prs }) ||
-    (prsQuery.data?.login
-      ? "GitHub: " + prsQuery.data.login
-      : prsQuery.data?.login_error
-        ? "GitHub login unknown — force review may still work"
-        : "");
+    (prsQuery.data?.login_error ? "GitHub login unknown — force review may still work" : "");
 
   const saveGithub = (patch: Record<string, unknown>, okMsg: string) =>
     s.saveGroup("github", patch, okMsg);
 
   const n = repos.length;
-  // Group by the repo the PR came from. Card order is the user's own ordering
-  // of the list above, so the groups read in the same order as the cards; a
-  // repo that answered with rows but is no longer watched still gets a group
-  // rather than silently dropping its PRs.
-  // FILTERED BEFORE GROUPED, so a heading's count describes what is under it,
-  // and a repo with no match drops out instead of rendering an empty group.
+  // FILTERED BEFORE GROUPED, so a heading's count describes what is under it.
+  // Every WATCHED repository keeps its heading even when nothing in it matches
+  // (it reads 0): the heading is where the repository is edited, so it never
+  // drops out. Keyed lower-case — GitHub's owner/name is case-insensitive.
   const shownPrs = (prs || []).filter((p) => prMatches(p, filter.tokens));
   const byRepo = new Map<string, OpenPr[]>();
   for (const p of shownPrs) {
-    const key = p.repo || "unknown";
+    const key = (p.repo || "unknown").toLowerCase();
     if (!byRepo.has(key)) byRepo.set(key, []);
     byRepo.get(key)!.push(p);
   }
-  const groupOrder = filter.active
-    ? [...byRepo.keys()]
-    : [
-        ...repos.filter((r) => prsRepos.includes(r) || byRepo.has(r)),
-        ...[...byRepo.keys()].filter((r) => !repos.includes(r)),
-      ];
+  const extraNames = new Map(shownPrs.map((p) => [(p.repo || "unknown").toLowerCase(), p.repo || "unknown"]));
+  const groupOrder = repoGroupOrder(
+    repos.map((r) => r.toLowerCase()),
+    byRepo
+  ).map((k) => repos.find((r) => r.toLowerCase() === k) || extraNames.get(k) || k);
+  const watched = new Set(repos.map((r) => r.toLowerCase()));
+  const anyMatch = shownPrs.length > 0;
 
-  const sourceList = (
-    <RepoSourceList
-      key="sources"
-      surface="pr"
-      label="Repositories"
-      repos={repos}
-      overrides={overrides}
-      onSave={(list, next, msg) =>
-        saveGithub(
-          {
-            repos: list,
-            repo_settings: next,
-            // The first repository on a setup that never chose: saved OFF, so
-            // adding one never starts acting on comments by surprise.
-            ...(gh.enabled == null && !repos.length && list.length ? { enabled: false } : {}),
-          },
-          msg
-        )
-      }
-      defaults={{
-        agent: String(gh.agent || agentChoices.fallback || ""),
-        baseBranch: String(gh.base_branch || ""),
-        minAge: gh.min_age_minutes == null ? "" : String(gh.min_age_minutes),
-        skipAuthors: String(skipAuthors),
-        // Verify's field. Blank here for the same reason Issues passes a blank
-        // base branch: the bag is one shape for all three surfaces, and a
-        // surface that never renders a field has nothing to seed it with.
-        liveBranch: "",
+  const showAdd = !!adding || (!n && !dismissed);
+  const closeAdd = () => {
+    endAdd();
+    setDismissed(true);
+  };
+  const addFlow = showAdd ? (
+    <AddRepoFlow
+      key="add"
+      uses={adding?.uses?.length ? adding.uses : ["pr"]}
+      trackers={catalog.map((p) => ({ key: p.id, label: p.label }))}
+      onPickTracker={(provider) => startAdd({ kind: "tracker", provider }, "tickets")}
+      onCancel={closeAdd}
+      onDone={(repo) => {
+        closeAdd();
+        if (!groups.isOpen(repo)) groups.toggle(repo);
       }}
-      listId="gh-repos-list"
-      addId="gh-repo-add-btn"
-      addLabel="+ Add repository"
-      emptyText="No repositories yet — add one you open PRs on."
-      hint={
-        <>
-          Each card is one repository, with its own agent and filters. Blank fields use the
-          defaults under <strong>Advanced options</strong>.
-        </>
-      }
     />
-  );
+  ) : null;
 
   const workList = (
     <WorkListPanel
@@ -195,107 +182,139 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
       hint={
         <>
           Each row says whether auto-start will take it. <strong>Start</strong> addresses a
-          PR's comments now, whatever the filters say.
+          PR's comments now, whatever the filters say. <strong>Edit</strong> on a repository
+          changes how it is watched.
         </>
       }
     >
-      {prsError ? (
-        <div className="repo-empty">{prsError}</div>
-      ) : prs === null ? null : !prsRepos.length ? (
-        <div className="repo-empty">Add a repository to see its open PRs.</div>
-      ) : !prs.length ? (
-        <div className="repo-empty">No open pull requests on the watched repositories.</div>
-      ) : !groupOrder.length ? (
-        <div className="repo-empty">No open pull request matches “{filter.query}”.</div>
-      ) : (
-        groupOrder.map((repo) => {
-          const rows = byRepo.get(repo) || [];
-          const body = !rows.length ? (
+      {prsError ? <div className="repo-empty">{prsError}</div> : null}
+      {!n && !groupOrder.length ? (
+        <div className="repo-empty ik-empty-add">
+          <span>No repositories yet — add one you open PRs on.</span>
+          {!showAdd ? (
+            <button type="button" className="test-btn" onClick={() => startAdd({ kind: "repo", uses: ["pr"] })}>
+              + Add a repository
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {filter.active && !anyMatch && groupOrder.length ? (
+        <p className="ik-nomatch">No open pull request matches “{filter.query}”.</p>
+      ) : null}
+      {groupOrder.map((repo) => {
+        const key = repo.toLowerCase();
+        const rows = byRepo.get(key) || [];
+        const isWatched = watched.has(key);
+        const editing = isWatched && edit.isEditing(repo);
+        const loading = prs === null;
+        const body =
+          loading || (filter.active && !rows.length) ? null : !rows.length ? (
             <div className="repo-empty">No open pull requests in this repository.</div>
           ) : (
-                rows.map((p) => (
-                  <WorkItemRow
-                    key={(p.repo || "") + p.number}
-                    reference={"#" + p.number}
-                    url={p.url}
-                    title={p.title}
-                    tooltip={
-                      (p.repo || "") +
-                      "#" +
-                      p.number +
-                      " — " +
-                      (p.title || "") +
-                      "\nby " +
-                      (p.author || "?") +
-                      " · " +
-                      (p.head_ref || "?") +
-                      " → " +
-                      (p.base_ref || "?")
-                    }
-                    meta={`by ${p.author || "?"} · ${ageText(p.created_at)} · into ${p.base_ref || "?"}`}
-                    hasSession={p.has_session}
-                    eligible={p.eligible}
-                    eligibleLabel={
-                      enabled ? "will auto-start" : pausedOff ? "auto-start paused" : "auto-start off"
-                    }
-                    eligibleOn={enabled}
-                    reasons={p.reasons}
-                    actionLabel="Start"
-                    failPrefix="Start failed"
-                    workspace={p.workspace}
-                    onReopen={async () => {
-                      const title = await reopenIntakeItem({
-                        kind: "prs",
-                        repo: p.repo,
-                        number: p.number,
-                      });
-                      setTimeout(relistPrs, 5000);
-                      return title;
-                    }}
-                    agents={agentChoices.names}
-                    configuredAgent={
-                      overrides[repo]?.agent ||
-                      String(gh.agent || agentChoices.fallback || "")
-                    }
-                    configuredDepth={overrides[repo]?.depth || ""}
-                    onStart={async ({ agent, depth, effort }) => {
-                      const r = await api<{ title?: string }>("/api/github/prs/review", {
-                        json: {
-                          repo: p.repo,
-                          number: p.number,
-                          ...(agent ? { agent } : {}),
-                          ...(depth ? { depth } : {}),
-                          ...(effort ? { effort } : {}),
-                        },
-                      });
-                      // The server already has a provisioning row for it: pull it now
-                      // instead of leaving the sidebar blank through the PR clone.
-                      refreshInstances();
-                      setTimeout(relistPrs, 5000);
-                      return { message: "Session " + (r?.title || ""), title: r?.title };
-                    }}
-                  />
-                ))
+            rows.map((p) => (
+              <WorkItemRow
+                key={(p.repo || "") + p.number}
+                reference={"#" + p.number}
+                url={p.url}
+                title={p.title}
+                tooltip={
+                  (p.repo || "") +
+                  "#" +
+                  p.number +
+                  " — " +
+                  (p.title || "") +
+                  "\nby " +
+                  (p.author || "?") +
+                  " · " +
+                  (p.head_ref || "?") +
+                  " → " +
+                  (p.base_ref || "?")
+                }
+                meta={`by ${p.author || "?"} · ${ageText(p.created_at)} · into ${p.base_ref || "?"}`}
+                hasSession={p.has_session}
+                eligible={p.eligible}
+                eligibleLabel={
+                  enabled ? "will auto-start" : pausedOff ? "auto-start paused" : "auto-start off"
+                }
+                eligibleOn={enabled}
+                reasons={p.reasons}
+                actionLabel="Start"
+                failPrefix="Start failed"
+                workspace={p.workspace}
+                onReopen={async () => {
+                  const title = await reopenIntakeItem({
+                    kind: "prs",
+                    repo: p.repo,
+                    number: p.number,
+                  });
+                  setTimeout(relistPrs, 5000);
+                  return title;
+                }}
+                agents={agentChoices.names}
+                configuredAgent={
+                  overrides[repo]?.agent ||
+                  String(gh.agent || agentChoices.fallback || "")
+                }
+                configuredDepth={overrides[repo]?.depth || ""}
+                onStart={async ({ agent, depth, effort }) => {
+                  const r = await api<{ title?: string }>("/api/github/prs/review", {
+                    json: {
+                      repo: p.repo,
+                      number: p.number,
+                      ...(agent ? { agent } : {}),
+                      ...(depth ? { depth } : {}),
+                      ...(effort ? { effort } : {}),
+                    },
+                  });
+                  // The server already has a provisioning row for it: pull it now
+                  // instead of leaving the sidebar blank through the PR clone.
+                  refreshInstances();
+                  setTimeout(relistPrs, 5000);
+                  return { message: "Session " + (r?.title || ""), title: r?.title };
+                }}
+              />
+            ))
           );
-          return (
-            <WorkGroup
-              key={repo}
-              heading
-              name={repo}
-              count={rows.length}
-              open={groups.isOpen(repo)}
-              onToggle={() => groups.toggle(repo)}
-            >
-              {body}
-            </WorkGroup>
-          );
-        })
-      )}
+        return (
+          <WorkGroup
+            key={key}
+            groupKey={repo}
+            heading
+            name={repo}
+            count={loading ? undefined : rows.length}
+            detail={
+              filter.active && !rows.length
+                ? "no match"
+                : isWatched
+                  ? // Which CLI this repository's sessions run — always said, so
+                    // "on the default" never looks like "no agent set".
+                    overrides[repo]?.agent ||
+                    (gh.agent || agentChoices.fallback
+                      ? (gh.agent || agentChoices.fallback) + " (default)"
+                      : "app default")
+                  : "no longer watched"
+            }
+            onDetail={isWatched ? () => edit.open(repo) : undefined}
+            detailTitle={"Change how " + repo + " is watched"}
+            open={groups.isOpen(repo)}
+            onToggle={() => groups.toggle(repo)}
+            action={
+              isWatched ? (
+                <HeadAction editing={editing} name={repo} onClick={() => edit.toggle(repo)} />
+              ) : undefined
+            }
+            editor={editing ? <RepoEditor use="pr" repo={repo} /> : undefined}
+          >
+            {body}
+          </WorkGroup>
+        );
+      })}
     </WorkListPanel>
   );
 
   return (
     <>
+      {addFlow}
       <div className="caps-gate" data-caps-gate="git">
         <p>
           Install <strong>Git</strong> to use this — a session checks out your PR's branch.
@@ -325,27 +344,22 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
         }
         note={
           !n
-            ? "Add a repository below first"
+            ? "Add a repository first — + Add source"
             : pausedOff
               ? "Intake is paused — Resume intake at the top turns it back on"
               : undefined
         }
       />
+      <GithubStatusLine buttonId="gh-connect-btn" needFor="your PRs can't be listed or started" />
 
-      {/* WORK FIRST once a repository is watched: the PRs are the reason you
-          came, the cards are setup you revisit. With none, the empty card list
-          and its + Add come first — there is no work to show yet. */}
-      {/* A KEYED pair, not two fragments: the order flips the moment the
-          first repository is saved, and position-matched children would
-          remount both — collapsing the card you are still configuring and
-          dropping its focus mid-edit. Keys let React move them instead. */}
-      {n ? [workList, sourceList] : [sourceList, workList]}
+      {workList}
 
       <details className="pr-advanced">
         <summary>Advanced options</summary>
         <div className="pr-advanced-body">
           <p className="set-hint set-block-hint">
-            Defaults for every repository card. A card can override each one.
+            Defaults for every repository. A repository's own <strong>Edit</strong> can override
+            each one.
           </p>
           <AgentPicker
             label="Agent"
@@ -394,22 +408,6 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
               GitHub logins, comma-separated — e.g. bots whose comments you don't want acted on.
             </span>
           </label>
-          <div className="set-row">
-            <span className="set-label">GitHub connection</span>
-            <span className="test-row">
-              <button
-                type="button"
-                id="gh-connect-btn"
-                className="test-btn"
-                onClick={() => openConnectGitHub()}
-              >
-                Connect GitHub
-              </button>
-            </span>
-            <span className="set-hint">
-              One GitHub sign-in for PRs, issues and Open PR, shared with your devices.
-            </span>
-          </div>
         </div>
       </details>
     </>

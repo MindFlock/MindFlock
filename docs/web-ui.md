@@ -247,8 +247,8 @@ Merging keeps the absent ones where they were.
 **Command palette** — `Ctrl+P` or `Ctrl+Shift+P` (`Cmd` on Mac, or the top bar's
 magnifier icon) opens a fuzzy-filtered palette over everything. Commands come
 first and the jump rows last: **New session…**, then the dialog openers — Open
-Intake (plus **Intake: Tickets** / **Intake: Pull requests** / **Intake:
-Issues**, so typing "issues" lands on that queue instead of on a dialog you then
+Intake (plus **Intake: Tickets** / **Intake: GitHub PRs** / **Intake:
+GitHub issues** — the tabs' own names — so typing "issues" lands on that queue instead of on a dialog you then
 have to navigate), **Verify — check that pushed changes work**, **Customize…**, **Prompts…** (*manage saved prompts*),
 **Schedule…** (`Alt+S`; also on the short menu), **Templates…** (*saved setups — in
 Schedule*, the name it had, kept so the word still finds it), **Schedule a session…**
@@ -2666,11 +2666,14 @@ searches is the row's own words plus the two things the row shows as *shape*
 rather than text — the state/branch it is grouped under, and whether auto
 ingestion has queued it, so `queued` narrows a repo to what is about to start on
 its own and `already handled` finds what it skipped. **Filtering happens before
-grouping**, so every heading's count describes what is under it and a repo or a
-workflow state with no match drops out instead of leaving an empty group behind.
-The one number that ignores the filter is the **+ Show state…** menu's per-state
-count, because that menu is a standing choice about which states this panel
-shows at all (`intake/search.ts` holds the four rules, one per list).
+grouping**, so every heading's count describes what is under it and a workflow
+state with no match drops out instead of leaving an empty group behind. A
+**source** heading never drops out: it is where that source is edited (below), so
+a source with no match stays, reading **0** and *no match*, under one line saying
+*No ticket matches "…"*. The one number that ignores the filter is the **View**
+menu's per-state count, because that menu is a standing choice about which
+states this panel shows at all (`intake/search.ts` holds the four rules, one per
+list).
 
 **Tab strip with live counts** — **Tickets**, **GitHub PRs**, **GitHub issues**,
 **Auto-start** (keys `tickets` | `prs` | `issues` | `autostart`, unchanged — the
@@ -2682,7 +2685,7 @@ that are **ready to start** (what auto-start would take), not every row listed �
 and the **Auto-start** badge turns grey and says *N waiting* when nothing is
 switched on, since those rows are waiting rather than about to go. It is still never a total. That distinction is
 the whole of it: counting every ticket the provider ever assigned you read `1221`
-over a list of 52, because done states are parked behind **+ Show state…**, so
+over a list of 52, because done states are parked (hidden under **View**), so
 the badge and the panel go through one shared bucket filter (`intake/buckets.ts`)
 and cannot disagree. A tab with nothing (or an unconfigured integration, which
 502s) shows no badge at all rather than a `0` that turns into `12` a second
@@ -2734,7 +2737,11 @@ matching a repo's name or hint. The three retired Settings screen keys
 `IntakeDialog.tsx` maps them onto tabs, and the Settings dialog hands off to Intake
 when it is deep-linked one — so every old link keeps working, including the
 **Configure** button on a Connections card (the server's `settings_screen`
-values) and the welcome tour's setup slides.
+values) and the welcome tour's setup slides. A target may also name a source
+after a colon — `tickets:jira`, `prs:acme/api` (`parseIntakeTarget`) — and the
+tab then opens that source's heading with its editor open, scrolled into view:
+this is what a ticket source's **Open in Intake** on Settings → Connections does
+(the row's `source_id`), instead of landing on the top of the tab.
 
 **Running on another of your devices.** With [Your devices](#settings-)
 joined, every start path asks the other devices first (`GET
@@ -2806,25 +2813,91 @@ button, so waiting for the sweep is the default rather than the only option — 
 when auto-start is off, starting from here is the entire point of the tab.
 
 **One anatomy, three tabs** (`components/intake/kit.tsx`): an intro line → a
-master switch → a **work list grouped by source**, each row carrying why
-auto-pickup did or didn't take it → the list of collapsible **source cards**
-with **+ Add** → **Advanced options**. That is the **work-first** order, used
-once at least one source or repository is configured: you come here for the
-work, and the cards are what you set up once. With nothing configured the
-cards lead, since there is no work to show yet and adding a source is the next
-step. A ticket source's collapsed card reads *Jira — payments · claude
-(default)* — the provider once, the label, the CLI — without repeating the
-provider's key or name. Each of the
-three is a titled section, and the switch is a banded row; the switch used to be
-followed by a status sentence ("● Active — polling 1 source…", "‖ Paused — 1
-source kept…") and no longer is — with the toggle beside it and the sources it
-counted listed directly below, the line only restated what was on screen. Its one
-subtitle is the state a switch cannot show: nothing connected yet. They used to be three dialects of that shape; ticketing had the good one
-(add/remove cards, each with its own credentials, repo and agent), so the other
-two were rebuilt onto it — a ticketing source and a watched repo are both just
-*sources* now. What legitimately differs stays in the tabs: only tickets have
-workflow-state buckets inside a source, and only the two GitHub tabs share one
-credential.
+master switch → (on the GitHub tabs) the **GitHub line** → a **work list grouped
+by source**, each row carrying why auto-pickup did or didn't take it →
+**Advanced options** (the tab-wide defaults, on the GitHub tabs). Each of the
+three is a titled section, and the switch is a banded row; its one subtitle is
+the state a switch cannot show: nothing connected yet (*Add a ticket source first
+— + Add source*).
+
+**Add once, edit where it shows.** There are no source cards. A configured
+source — a tracker, a watched repository — is its **heading in the work list**,
+and that heading is where it is edited:
+
+- Every configured source has a heading, always — empty, unreachable, still
+  loading (no count yet) or filtered to nothing (**0**, *no match*). A
+  repository a stale listing still names but that is no longer watched gets a
+  heading without an Edit (*no longer watched*).
+- The heading's right edge is **Edit** — or a red **Fix** when the source is
+  broken (it can't be listed, its last Test failed, it has no credentials, a
+  Test-filled field is still empty, or a save was refused), or **Done** while
+  its editor is open. One editor is open at a time per list.
+- The editor opens **attached under the heading** (`.ik-editor`), where the
+  problem was read — the heading and its editor read as one object.
+- The heading's note is the source's setting, and pressing it opens the
+  editor: a ticket source reads *auto-starts Product Development · Ready for Dev*
+  (prefixed *anyone's ·* on an Anyone's source; *auto-starts nothing yet — pick a
+  state* in amber when none is picked; *can't connect — rejected the token* in
+  red with Fix), a repository names the CLI its sessions run (*codex*, or
+  *claude (default)*).
+- A source the listing could not reach says so once, under its heading, in
+  words — *Jira — payments rejected the token — press Fix on its heading* — never
+  raw JSON or an internal id.
+
+The editor has the same sections for every kind: **Connection** (the
+credentials, and the Test that proves them — a ticket source's pill sits beside
+the section title) → **What it takes** (whose tickets, which states) → **Where it
+goes, and who works it** (repo, agent, fast-track) → **Advanced options**. Its
+footer is the save line and **Remove**, which **arms** rather than fires: the
+first press turns it into a red *Confirm — remove Jira — payments* (it disarms
+on blur or after five seconds), the second removes it — inline, because these
+live inside an `aria-modal` dialog and the desktop app has no native confirm.
+
+**+ Add source** — the dialog head's one door (`#intake-add-source`), replacing
+the four "+ Add" buttons that sat under four card lists in two dialogs. It opens
+an inline three-step flow at the top of the tab that owns the kind
+(`AddFlowShell`): **What** (tiles: every tracker in the catalog, and
+**Repository** — *PRs · issues · Verify*) → **Connect** → **What it does**. On
+Tickets (and Auto-start) the tiles start with nothing picked; on GitHub PRs /
+GitHub issues the Repository tile is picked with *PR comments* / *New issues*
+ticked. A tracker tile pressed on a GitHub tab switches to Tickets with that
+tracker's draft open. With nothing configured on a tab, the flow **leads** the
+tab on its own until you Cancel it (then an empty line offers **+ Add a ticket
+source** / **+ Add a repository**). The tracker and repository halves:
+
+- **A tracker** — picking its tile starts a draft (`needs_filter: "on"`: it
+  auto-starts nothing until a state or label is picked). **Connect** is the
+  credentials; **Test & continue** saves the draft first (Test records its
+  verdict, member id and state list on a *saved* source) and then tests; a
+  failed Test stays on the step and offers *Continue anyway* (a state can still
+  be typed before a Test passes). **What it does** is whose tickets, the states
+  and labels, the repo(s), agent and fast-track, and the Advanced fold.
+  **Finish** refuses *Anyone's* without a state or label (the server refuses
+  that save too) and a source with no repo, and **never switches Auto-start
+  tickets on** — adding a source is not consent to start sessions from it.
+  Cancel removes the draft, saved or not. Picking **GitHub Issues** offers *Add it
+  as a Repository instead* for "every new issue in a repo".
+- **A repository** — the slug once (`owner/name`; the hint names repositories
+  already known — on any list, or a ticket source's GitHub repo), **Test
+  access** beside it, the GitHub line, and **Use it for** ticks: *Address review
+  comments on my PRs* · *Start on new issues* · *Verify what ships*. Lists the
+  repository is already on show ticked and locked (*already*). **Add & continue**
+  saves every ticked list in **one** `POST /api/settings` (`saveGroups`), then
+  shows each ticked use's own fields; **Finish with defaults** saves and closes.
+  Nothing here turns a switch on: the first PR repository of a setup that never
+  chose is saved with `github.enabled: false`, issue handling stays opt-in.
+
+**View, not settings.** On Tickets, *which states this panel shows* and *whose
+tickets it lists* are one **View** menu on the toolbar (`#tk-view`, reading *View:
+everyone's · 2 states hidden*): **Whose tickets** (*Everyone's* / *Only mine*,
+only when a source ingests anyone's) and **States shown** (one checkbox per
+workflow state, with its count). They used to be two selects (*Everyone's
+tickets*, *+ Show state…*) and a ✕ on each state heading, and they read as the
+source's own **Whose tickets** and **Auto-start states** — which they are not:
+the view is per browser, what auto-starts is on each source's heading.
+
+What legitimately differs stays in the tabs: only tickets have workflow-state
+buckets inside a source, and only the two GitHub tabs share one credential.
 
 - **Tickets** — the **Auto-start tickets** switch (the same
   `/api/mindflock/status` + `start`/`stop` contract, query key and 4 s interval as
@@ -2832,28 +2905,25 @@ credential.
   saved source can't connect (its last Test failed, or the listing couldn't reach
   it) asks first — *"Shortcut can't connect. Shortcut rejected the token…
   **Turn on anyway** / **Not now**"* — and while it is on, the switch row says
-  *Shortcut can't connect — nothing starts from it until fixed*. Then one card per
-  connected source, in the order a first-timer fills it: **Provider** → the
-  credentials (**API token** …) → **Test** (which also loads the workflow
-  states) → **Whose tickets** → **Auto-start states** / **Auto-start labels** →
-  **Repo URL** / **Repos** (required, with the same `*` marker as the token) →
-  **Agent**. A collapsed **Advanced options** fold holds the source's **Name**,
-  the per-queue tuning (**Thinking effort**, **Fast-track tickets to**) and the
-  catalog's optional extras (**Move to state on start**, **Comment when moved**,
-  **Claim label (on start)** — whose hint says it assigns the ticket to you,
-  except on an *Anyone's* source where it only labels it — the optional
-  Test-filled account ids, Jira's **Project key**). The card's footer is its save
-  line (*Saving…* / *Saved ✓* / *Not saved*) and **Remove**; its pill
-  reads *Can't connect* with the reason when the last Test failed or the listing
+  *Shortcut can't connect — nothing starts from it until fixed*. A ticket
+  source's editor (`TicketSourceEditor`) runs in the order a first-timer fills
+  it: **Connection** — the credentials (**API token** …) → **Test** (which also
+  loads the workflow states); **What it takes** — **Whose tickets** beside
+  **Auto-start states**, then **Auto-start labels**; **Where it goes, and who
+  works it** — **Repo URL** / **Repos**, then **Agent** beside **Fast-track to**.
+  A collapsed **Advanced options** fold holds the source's **Name**, **Thinking
+  effort** and the catalog's optional extras (**Move to state on start**,
+  **Comment when moved**, **Claim label (on start)** — whose hint says it assigns
+  the ticket to you, except on an *Anyone's* source where it only labels it — the
+  optional Test-filled account ids, Jira's **Project key**). The footer is its
+  save line (*Saving…* / *Saved ✓* / *Not saved*) and **Remove**; its pill reads
+  *Can't connect* with the reason when the last Test failed or the listing
   couldn't reach it. Text fields **save as you type** (on a short pause, on blur,
   on Enter, and when the dialog closes — `intake/autosave.ts`), and the save line
   reads *Saving…* while any field holds text not sent yet, never *Saved ✓*.
-  **+ Add ticket source** preselects no tracker (*Choose a tracker…*); the rest
-  of the card appears once one is picked, and picking **GitHub Issues** points at
-  the **GitHub issues** tab for "every new issue in a repo". **The safe
-  default:** a source added here auto-starts **nothing** until at least one
-  auto-start state (or label) is picked (`needs_filter` on the source; the card
-  says *None picked — nothing auto-starts from this source yet*, rows say *no
+  **The safe default:** a source added here auto-starts **nothing** until at
+  least one auto-start state (or label) is picked (`needs_filter` on the source;
+  the picker says *None picked — nothing auto-starts from this source yet*, rows say *no
   auto-start state picked yet*, and the pipeline's scan skips the source —
   `providers.base.auto_start_waiting`). **Any state — start every ticket assigned
   to me** stays in the state menu as an explicit choice; sources saved before
@@ -2868,9 +2938,9 @@ credential.
   auto-start filter from its **saved** settings, so a source the tracker can't
   reach still says *Auto-start only takes tickets in 1 saved state* — never "no
   filter is set". A source that can't be listed is said once, in its own group,
-  by its name, in words (*Shortcut rejected the token — open its card below to fix
-  it*) — no raw API JSON, no internal id like `sc`, and no group at all for a card
-  that hasn't been saved yet. Rows say **Start** — the quiet weight on a row that
+  by its name, in words (*Shortcut rejected the token — press Fix on its
+  heading*) — no raw API JSON, no internal id like `sc`, and no group at all for
+  a draft that hasn't been saved yet. Rows say **Start** — the quiet weight on a row that
   will auto-start anyway, so the *will auto-start* chip carries it — and every
   row names its repo (*→ payments-api*; on a several-repo source, which one and
   why, with a **Repo** pick under **Options**). **Combine with another ticket
@@ -2889,9 +2959,9 @@ credential.
   ([ingestion-pipeline.md](ingestion-pipeline.md#providers)). A source's **Agent CLI**
   lists `GET /api/providers` (so a provider you defined yourself is selectable
   too), its unset option names the app default rather than showing a blank, and
-  the collapsed card always states which CLI the queue runs — the difference
+  the source's heading always states which CLI the queue runs — the difference
   between a queue on a hosted CLI and one on a local model is worth seeing
-  without expanding. **Thinking effort** opens the Advanced fold, first thing
+  without opening anything. **Thinking effort** opens the Advanced fold, first thing
   in it, because it qualifies that CLI: a rung means different things on different CLIs (each spells
   it its own way and clamps its own ceiling), so the picker names *that* CLI's
   ceiling and is disabled outright for a CLI with no effort control. It applies
@@ -2926,33 +2996,44 @@ credential.
   reviews other people's PRs, and the tab never says "review" for it). Off until
   switched on, like Issues: a setup that never chose saves its first repository
   with `github.enabled: false`; saved settings from before keep their meaning
-  (unset with repos = on). **Your open pull requests** with **Start**, then the
-  repository cards; **Skip authors** is now **Ignore comments from**. The
-  credential is one **GitHub connection** row with a **Connect GitHub** button
-  (`#gh-connect-btn`) that opens the [Connect GitHub](#first-run-onboarding)
-  dialog — one sign-in, shared with your other devices; its **Test** checks
-  the token and your first repository, a card's **Test access** checks one
-  repo. There is no raw token field and no *Test GitHub* button any more.
+  (unset with repos = on). **Your open pull requests** with **Start**, one
+  heading per watched repository; **Skip authors** is now **Ignore comments
+  from**. Under the switch, the **GitHub line** says the credential's real state
+  — *GitHub — connected as @you — one sign-in for PRs, issues, Verify and Open
+  PR · Manage…*, or, amber, *GitHub — not connected — your PRs can't be listed
+  or started · Connect GitHub* (`#gh-connect-btn`, from `GET /api/github/status`,
+  re-read when the Connect GitHub dialog closes) — opening the [Connect
+  GitHub](#first-run-onboarding) dialog: one sign-in, shared with your other
+  devices; its **Test** checks the token and your first repository, a
+  repository's **Test access** checks one repo. It used to be a stateless
+  *Connect GitHub* button inside the Advanced fold that read *Connect* while
+  connected. There is no raw token field and no *Test GitHub* button.
 - **Issues** — **Auto-start new issues** (opt-in: absent = off), **Open issues**
-  with **Start**, then its own repository cards (`github.issue_repos`,
-  independent of review's). The same **GitHub connection** row and **Connect
-  GitHub** button (`#gh-issue-connect-btn`): one credential for both tabs.
+  with **Start**, one heading per watched repository (`github.issue_repos`,
+  independent of review's — the *Use it for* ticks put one repository on both).
+  The same **GitHub line** (`#gh-issue-connect-btn`): one credential for both
+  tabs.
 
 **Basic vs Advanced, and one rhythm.** Which provider fields are basic is the
 catalog's call, not the form's: a field marked `advanced` in
 `backend/ticket_ingestion/providers/__init__.py` (never a `required` one — a
-hidden field can't be filled) renders inside the card's **Advanced options**
-`<details>`, with the card's own effort and fast-track pickers. The fold starts
-closed on a fresh source and **opens on its own** when anything inside already
-holds a value someone chose, or when a save refused a field inside it
-(`advancedHasValues` in `intake/sourceForm.ts`; a Test-filled id doesn't count,
-or every connected card would open). Inside a card a field's own parts sit
-tight — label, control, hint 5px apart — and the next field starts 18px below,
-so a long hint can never read as the next field's; sections of the tab sit
-22px apart, a step bigger again. The work lists keep their own density.
+hidden field can't be filled) renders inside the editor's **Advanced options**
+`<details>`, with the source's name and thinking effort. Fast-track left the
+fold: it sits beside **Agent**, where a repository's editor puts it too. The
+fold starts closed on a fresh source and **opens on its own** when anything
+inside already holds a value someone chose, or when a save refused a field
+inside it (`advancedHasValues` in `intake/sourceForm.ts`; a Test-filled id
+doesn't count, or every connected source would open it). Inside an editor a
+field's own parts sit tight — label, control, hint 5px apart — and the next
+field starts 16px below, so a long hint can never read as the next field's.
+Fields that pair (Whose tickets / Auto-start states, Agent / Fast-track, a
+repository's Agent / Fast-track / Min age) sit side by side in an even grid —
+never an auto-fit one, which re-wraps a different number of columns at every
+width — and fold to one column below 700px. The work lists keep their own
+density.
 
-**A ticket source is connected only after a live test.** A source card's
-header carries a three-state pill — **Connected** (the last Test passed within
+**A ticket source is connected only after a live test.** A source's editor
+carries a three-state pill beside **Connection** — **Connected** (the last Test passed within
 a day and nothing Test fills in is missing), **Needs attention** (with why:
 *not tested yet — run Test*, the failed test's own message, *<fields> still to
 fill in (run Test)*, *last tested over a day ago — retest*) or **Off** (*no
@@ -2964,8 +3045,8 @@ provider catalog (required fields, URL / email / key / gid shapes, *Anyone's*
 needing an ingest state); what it refuses shows inline under each field, the
 pill reads **Not saved** — *fix the marked fields* — and the typed values stay
 for the next try. A save that passes runs Test on its own (only when it
-touched the provider or a credential field), and the footer's **Test
-connection** — **Retest** once a verdict exists — stores its verdict, member
+touched the provider or a credential field), and **Test** — **Test again**
+once a verdict exists — stores its verdict, member
 id and state list on the source, so the state pickers open filled and refresh
 from the tracker on focus. A stored secret reads *•••set (saved) — type to
 replace*; blank keeps it, and **Clear** forgets it (an explicit `null` on the
@@ -2974,33 +3055,50 @@ New → Ticket files, and Linear's bound on *Anyone's*). Asana's **Workspace**
 is looked up by Test from the token — one workspace fills it in, several offer
 **Pick a workspace…** — and it gains **Ingest sections**, *Anyone's — by
 section*, **Move to section on start** and **Comment when moved**. A GitHub
-Issues card has no token field; one saved before the single GitHub credential
+Issues source has no token field; one saved before the single GitHub credential
 still carries its own and says *This source still has its own token — move it
 to Settings → Connections → GitHub → Connect (read as a fallback this release,
 ignored from the next)*.
 
-The ticket source's **Fast-track tickets to** and a repository's **Fast-track
-them to** offer **Off** plus the same ladder minus Merge — *How far each ticket
+A ticket source's and a repository's **Fast-track to** offer **Off** plus the
+same ladder minus Merge — *How far each ticket
 goes after its agent finishes. Merge is per-ticket only — a source default runs
 with nobody watching.* A source that stored the old `agent` depth shows Off.
 
-**Per-repo cards, with inherited defaults** — the two GitHub tabs no longer show
-a flat `owner/name` chip list. Each watched repository is its own
-collapsible card carrying its **Agent CLI**, **base branch** (PR only — issue
-work always branches off the repo's own default), **min age**, **skip authors**,
-a **Test access** button and **Remove**; the collapsed header always names the
-CLI that repo's sessions will run. The chip list could not express what people
-actually want from a multi-repo setup — "watch this one too, but give it half an
-hour of grace and run it on codex" — because there was nowhere to hang a per-repo
-value. The tab-wide fields moved into an **Advanced options** fold and are now
-the **defaults a blank card field inherits** (the placeholder shows the inherited
-value, so empty reads as "inherit 15" rather than "no grace period"), alongside
-the genuinely one-per-app setting, the poll interval. The GitHub token is not
-here: it is the Connect GitHub dialog's.
+**Per-repo settings, with inherited defaults** — a watched repository's editor
+(`RepoEditor` in `intake/RepoSources.tsx`, attached under its heading) carries
+its **Agent CLI**, **Fast-track to**, **min age**, **base branch** (PR only —
+issue work always branches off the repo's own default), **ignore … from**,
+**Test access** and **Remove**; the heading always names the CLI that repo's
+sessions run. A per-repo value is what a multi-repo setup needs — "watch this
+one too, but give it half an hour of grace and run it on codex". The tab-wide
+fields are in the tab's **Advanced options** fold and are the **defaults a
+blank field inherits** (the placeholder shows the inherited value, so empty
+reads as "inherit 15" rather than "no grace period"), alongside the genuinely
+one-per-app setting, the poll interval. The GitHub token is not here: it is the
+Connect GitHub dialog's.
+
+**One repository, three uses.** The same repository can be watched for PR
+comments (`github.repos`), new issues (`github.issue_repos`) and by Verify
+(`repository.verify_repos`) — still three lists in settings.json (settings
+sync, the pipeline's restart signature and older devices read those keys), but
+on screen it is added once and its uses are ticks. Every editor starts with
+**Use it for: PR comments · New issues · Verify** — its own surface's tick shown
+on and locked (taking it off the list you are looking at is Remove's job, which
+asks first) — and ticking another puts it on that list. `intake/repoUses.ts`
+turns ticks into **one** `POST /api/settings` spanning both groups
+(`useSettings().saveGroups`: one echo, one settings-hook pass, one pipeline
+restart), and owns the rules each list carries: the first PR repository of a
+setup that never chose is saved with `github.enabled: false`; leaving an
+Intake list drops that repository's block (a couple of menu picks); leaving
+Verify **keeps** its block (the user's own words — live branch, where it runs,
+notes — and the backend reads an orphan block as nothing). It replaced a
+hint that admitted *Separate from the other GitHub tab's list*.
 Storage is `github.repo_settings` / `github.issue_repo_settings` — maps keyed by
-`owner/name` whose block may carry `agent`, `base_branch` (PR only),
-`min_age_minutes`, `skip_authors`; an absent key or blank value inherits.
-Renaming a card carries its settings across, and removing one drops them. See
+`owner/name` whose block may carry `agent`, `depth`, `base_branch` (PR only),
+`min_age_minutes`, `skip_authors`; an absent key or blank value inherits. A
+field's save is built on the editor's own copy of the map, so two quick edits
+compose (the map is written wholesale). See
 `backend/config/settings.py` (`REPO_OVERRIDE_KEYS`, `_repo_overrides`,
 `GithubSettings`) for the shape and `backend/ticket_ingestion/config.py`
 (`GithubConfig.min_age_for` / `base_branch_for` / `skip_authors_for` /
@@ -3043,26 +3141,28 @@ workflow becomes a level of its own and the qualifier is written once:
 Every heading in that tree is a press-target and is styled as one: a hit area, a
 hover fill, a caret that *rotates* rather than swapping ▸ for ▾, and — on the
 source, which is a section header as well as a control — a filled band. As plain
-text beside a small caret, sitting under a *bordered* source card, the top-level
-heading read as a stray line of copy and people did not find the tickets under it.
+text beside a small caret, the top-level heading read as a stray line of copy and
+people did not find the tickets under it. The source band also carries the
+source's **Edit** / **Fix** and its pressable note (see *Add once, edit where it
+shows* above).
 
 `GET /api/tickets` carries a `bucket_meta` map (`{bucket: {group, label}}`) so the
 UI nests without splitting strings: the provider reports the workflow (`group`)
 and the unqualified state (`label`) alongside the composite `name`, which stays
-the unique bucket key that `+ Show state…` / ✕ and `done_buckets` are indexed by
+the unique bucket key that the **View** menu's *States shown* and `done_buckets` are indexed by
 (see `TicketProvider.list_states`). A provider with one workflow — or none, like
 Jira and Linear — reports an empty `group`, the level doesn't render, and the
 bucket keeps its own name. The two GitHub tabs have no analogous middle level:
 their hierarchy is repository → rows.
 
 The
-source heading carries a count and what that source auto-ingests ("auto-ingests
-In Progress, Ready" / "auto-ingests every state" / "could not be reached"), which
+source heading carries a count and what that source auto-starts ("auto-starts
+In Progress, Ready" / "auto-starts every state" / "can't connect — …"), which
 is also why `GET /api/tickets` gained a top-level `source_labels` map covering
 **every** configured source — one that returned nothing, or errored, still needs
 a heading to say so under. Bucket **show/hide** is app-wide by name (choosing
 "I don't care about Completed" means it everywhere; done-type buckets start
-parked behind **+ Show state…**), while a bucket's **open/closed** state is per
+unticked under **View**), while a bucket's **open/closed** state is per
 source, keyed `source::bucket`. Both live in `localStorage`
 (`mf_ticket_buckets`, `mf_ticket_buckets_open`, `mf_work_ticket_sources`;
 `mf_work_pr_groups` / `mf_work_issue_groups` for the repo groups) rather than
@@ -3287,7 +3387,7 @@ per bar, built-in and extension, in sidebar order (the same `mf_hiddenbars` set
 the bars always used). Each built-in bar says when it has something to show —
 *What your sessions cost* (Usage); *Appears once a ticket source is connected*
 with an **Intake → Tickets** link (Tickets); *Appears once a repository is
-added* with **Intake → Pull requests** / **Intake → Issues** (Pull requests,
+added* with **Intake → GitHub PRs** / **Intake → GitHub issues** (Pull requests,
 Issues); *Appears once Verify tracks a repository or has a checklist* with
 **Open Verify** (the sidebar's Verify bar — the top bar's **Verify** button is
 always there); *Chat, a todo list, and its editable agent file* (Assistant);
@@ -3404,8 +3504,8 @@ plan has shipped.)
 **The chain, in order.** Nothing appears here until three things have happened,
 and every "why is nothing showing up?" is a question about which one hasn't:
 
-1. **Track a repository** (Verify → **Sources**, or the repo's own committed
-   `.mindflock.toml`). Membership *is* the opt-in; there is
+1. **Track a repository** (Verify → **+ Add repository**, a repository's *Use it
+   for → Verify* tick in Intake, or the repo's own committed `.mindflock.toml`). Membership *is* the opt-in; there is
    no second on/off per repo. Writing a checklist costs a real model call, so
    nothing happens in a repo nobody named.
 2. **Push a session branch in it.** The **first** push of each branch writes a
@@ -3434,7 +3534,7 @@ and every "why is nothing showing up?" is a question about which one hasn't:
    passed, and only then does it move into **Needs you**, raise the badge and (if ntfy is configured) push to
    your phone.
 
-   The window is **Wait after merge (minutes)** on the repo's Sources card, inheriting
+   The window is **Wait after merge (minutes)** in the repository's editor, inheriting
    the flock-wide `repository.deploy_delay_minutes`, which defaults to **5**. Set
    it to `0` where merging *is* shipping. It exists because checking too early is
    not merely early — you see the behaviour the change replaced and record a
@@ -3502,7 +3602,7 @@ answer and adds *· some repos differ* when any tracked repo overrides it; each 
 carries the branch it was actually measured against. A checkout with **no GitHub
 origin** cannot be named on the list (there is no slug to type) — its only opt-in
 is its own committed `.mindflock.toml`, which the **Repository without a GitHub
-remote?** fold under Sources hands over as a copyable snippet:
+remote?** fold in the add flow hands over as a copyable snippet:
 
 ```toml
 [workspace]
@@ -3513,13 +3613,27 @@ That is a team-wide, committed decision, it is OR'd with the tracked-repo list,
 and neither half can switch the other off.
 
 **The panel is Intake's anatomy, in Intake's order**: the intro (the two
-moments), the master switch, the **Checklists** work list, **Sources**, then the
-**New checklist** fold — the same work-first shape as Intake → Pull requests /
-Issues, using the same classes, because it is the fourth surface of that kind.
-Before any repository or checklist exists, **Sources** leads instead, since
-adding one is the only thing to do, and the master switch is not shown at all (it
-would govern nothing); with checklists but no repository it reads *"On — no
-repository to watch yet"*. The master switch
+moments), the master switch, the watched repositories on **one line**, the
+**Checklists** work list, then the **New checklist** fold — using Intake's
+classes, because it is the fourth surface of that kind.
+
+**Repositories: one line, edited from their own headings.** Checklists group by
+verdict, not by repository, so there is no repository heading in the work to
+hang an Edit on (as Intake's tabs do). The repositories get one quiet line
+instead — *Watching acme/api ships main · acme/web ships staging* (one line,
+truncated with an ellipsis, the full list on hover) — and **Edit repositories**
+opens one heading per repository (*ships staging · https://staging…*), each with
+the same editor Intake uses on the Verify use: **Use it for** ticks (putting the
+same repository on Intake's PR / issue lists in one save), **Branch that ships**,
+**Wait after merge (minutes)**, **Where it runs**, **Notes for the checklist
+writer**, **Test access** and an arm-then-confirm **Remove** (which keeps the
+repository's verify block — your own words — for a re-add). A line under it says
+when the repositories need GitHub connected. **+ Add repository** in the dialog
+head (`#vf-repo-add-btn`) opens the add flow with only the Verify use: the slug,
+Test access, the GitHub line and the no-remote snippet, then the Verify fields.
+Before any repository or checklist exists the add flow leads the dialog on its
+own (until cancelled), and the master switch is not shown at all (it would
+govern nothing). The master switch
 (`repository.verify_enabled`) pauses the **automatic** half only: no checklist
 written on a push, and nothing new moved into the list. Repositories, checklists
 and every recorded answer are kept, and asking for one, running one and
@@ -3748,8 +3862,8 @@ the repo's standing instructions name). And *"I could not reach the product"* is
 **blocked**, never **fail** — a fail recorded against working code is the one
 thing that makes a checklist stop being believed.
 
-**Where "it works" is checked** is the repo's **Where it runs** field on its
-Sources card. Set it to the deployment your users reach and both the checklist
+**Where "it works" is checked** is the repo's **Where it runs** field in its
+editor (Verify → **Edit repositories**). Set it to the deployment your users reach and both the checklist
 and the agent working it are aimed at that running system. Leave it blank — the
 right answer for a library, a CLI, or anything with no environment to point at —
 and the run exercises a fresh checkout of the live branch on this machine, which

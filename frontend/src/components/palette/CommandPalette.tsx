@@ -121,8 +121,8 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     // on a dialog you then have to navigate.
     acts.push({ label: "Open Intake", hint: "Alt+I", top: TOP.intake, run: () => ui.openDialogFor("intake") });
     acts.push({ label: "Intake: Tickets", run: () => ui.openDialogFor("intake", "tickets") });
-    acts.push({ label: "Intake: Pull requests", run: () => ui.openDialogFor("intake", "prs") });
-    acts.push({ label: "Intake: Issues", run: () => ui.openDialogFor("intake", "issues") });
+    acts.push({ label: "Intake: GitHub PRs", run: () => ui.openDialogFor("intake", "prs") });
+    acts.push({ label: "Intake: GitHub issues", run: () => ui.openDialogFor("intake", "issues") });
     acts.push({
       label: "Intake: Auto-start",
       hint: "what starts on its own",

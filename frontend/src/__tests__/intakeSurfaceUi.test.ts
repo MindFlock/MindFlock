@@ -28,7 +28,7 @@ import CAPS_CSS_RAW from "../components/capsGate.css?raw";
 import CONN_CSS_RAW from "../components/ConnBanner.css?raw";
 import SCREENS_CSS_RAW from "../components/settings/screens/screens.css?raw";
 
-const { LEGACY_SCREEN_TABS } = await import("../components/intake/IntakeDialog");
+const { LEGACY_SCREEN_TABS, parseIntakeTarget } = await import("../components/intake/IntakeDialog");
 const { visibleBuckets, countInBuckets } = await import("../components/intake/buckets");
 
 /** Source minus comments, layout-blind (`norm`), and a method chain's line
@@ -97,7 +97,15 @@ describe("the Intake dialog shell", () => {
     // the server's own `settings_screen` on a Connections card — must keep
     // working, so the retired keys map to the tab that replaced them.
     expect(LEGACY_SCREEN_TABS).toEqual({ ticketing: "tickets", repo: "prs", issues: "issues" });
-    expect(DIALOG).toContain("LEGACY_SCREEN_TABS[target] || target");
+    expect(DIALOG).toContain("LEGACY_SCREEN_TABS[head] || head");
+    expect(parseIntakeTarget("ticketing")).toEqual({ tab: "tickets", focus: "" });
+    expect(parseIntakeTarget("repo")).toEqual({ tab: "prs", focus: "" });
+    expect(parseIntakeTarget("issues")).toEqual({ tab: "issues", focus: "" });
+    // …and with a source after the colon (Connections' "Open in Intake").
+    expect(parseIntakeTarget("ticketing:jira")).toEqual({ tab: "tickets", focus: "jira" });
+    expect(parseIntakeTarget("prs:acme/api")).toEqual({ tab: "prs", focus: "acme/api" });
+    expect(parseIntakeTarget("nonsense")).toEqual({ tab: "tickets", focus: "" });
+    expect(parseIntakeTarget(null)).toEqual({ tab: "tickets", focus: "" });
   });
 
   it("the three screens left the Settings nav", () => {

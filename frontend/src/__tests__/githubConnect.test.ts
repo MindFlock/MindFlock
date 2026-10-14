@@ -8,6 +8,7 @@
 import { describe, it, expect } from "vitest";
 import prSrc from "../components/intake/PullRequestsTab.tsx?raw";
 import issuesSrc from "../components/intake/IssuesTab.tsx?raw";
+import kitSrc from "../components/intake/kit.tsx?raw";
 import dialogSrc from "../components/dialogs/ConnectGitHub.tsx?raw";
 import appSrc from "../App.tsx?raw";
 import connsSrc from "../components/settings/screens/Connections.tsx?raw";
@@ -32,10 +33,18 @@ describe("Intake tabs: one door to the credential", () => {
       expect(s).not.toContain('field="token"');
       expect(s).not.toContain("Test GitHub");
       expect(s).not.toContain("runGithubTest");
-      expect(s).toContain("openConnectGitHub");
-      expect(s).toContain("Connect GitHub");
+      // The credential's one line, with its real state ("connected as @you ·
+      // Manage…" / "not connected — Connect GitHub"), opening the one dialog.
+      expect(s).toContain("<GithubStatusLine");
     });
   }
+
+  it("the GitHub line opens the Connect GitHub dialog and says its state", () => {
+    const line = kitSrc.slice(kitSrc.indexOf("export function GithubStatusLine"));
+    expect(line).toContain("openConnectGitHub()");
+    expect(line).toContain('"Connect GitHub"');
+    expect(line).toContain('"connected as @" + st.login');
+  });
 
   it("the Issues tab no longer sends people to the Pull requests tab for the token", () => {
     expect(src("components/intake/IssuesTab.tsx")).not.toContain('gotoTab("prs")');

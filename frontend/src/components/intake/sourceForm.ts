@@ -244,11 +244,11 @@ export const TEST_STATE_LABELS: Record<SourceTestState, string> = {
  * error hidden behind a closed fold is a setting nobody can see. */
 
 /** The card's own (non-catalog) fields that live in the fold, each with the
- * stored values that mean "not set". `depth: "agent"` reads as Off. */
+ * stored values that mean "not set". Fast-track (`depth`) is not one of them
+ * any more: it sits with the agent, where a repository's editor puts it too. */
 export const CARD_ADVANCED_DEFAULTS: Record<string, readonly string[]> = {
   label: [""],
   effort: [""],
-  depth: ["", "agent"],
 };
 
 /** The catalog fields shown up front. */

@@ -2,18 +2,27 @@
  * repo list (github.issue_repos, independent of review's github.repos) and its
  * own opt-in toggle (github.issues_enabled — absent = OFF, unlike review).
  *
- * Same anatomy as the other two tabs (see ./kit.tsx). The GitHub credential is
- * shared with review and has one home, the Connect GitHub dialog (Settings →
- * Connections → GitHub → Connect); this tab only offers the button. */
+ * Same anatomy as the other two tabs (see ./kit.tsx): every watched repository
+ * has a heading, edited where it shows; "+ Add source" adds one, with "New
+ * issues" ticked. The GitHub credential is shared with review and has one home,
+ * the Connect GitHub dialog; this tab shows its state on one line. */
 
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
-import { refreshInstances, usePanelQuery, useTicketingSources } from "../../state/queries";
+import {
+  refreshInstances,
+  usePanelQuery,
+  useTicketingCatalog,
+  useTicketingSources,
+} from "../../state/queries";
 import { SettingField, useSettings } from "../settings/useSettings";
 import { AgentPicker, useAgentChoices } from "../settings/screens/AgentPicker";
-import { openConnectGitHub } from "../../lib/githubConnect";
 import {
   AutomationSwitch,
+  GithubStatusLine,
+  HeadAction,
+  repoGroupOrder,
+  useEditing,
   useListFilter,
   WorkGroup,
   WorkItemRow,
@@ -24,7 +33,7 @@ import {
   useToggleSet,
   type ItemWorkspace,
 } from "./kit";
-import { RepoSourceList, type RepoOverrides } from "./RepoSources";
+import { AddRepoFlow, RepoEditor, type RepoOverrides } from "./RepoSources";
 import { useIntakePause } from "./pause";
 import { issueMatches } from "./search";
 import type { TabProps } from "./IntakeDialog";
@@ -46,9 +55,10 @@ interface OpenIssue {
 /** Per-device: which repo groups are collapsed (membership = collapsed). */
 const ISSUE_GROUPS_KEY = "mf_intake_issue_groups";
 
-export function IssuesTab({ gotoTab }: TabProps) {
+export function IssuesTab({ focus, adding, startAdd, endAdd }: TabProps) {
   const s = useSettings();
   const agentChoices = useAgentChoices();
+  const catalog = useTicketingCatalog(true).data || [];
   const groups = useToggleSet(ISSUE_GROUPS_KEY, true);
   const filter = useListFilter(
     "gh-issues-filter",
@@ -72,6 +82,8 @@ export function IssuesTab({ gotoTab }: TabProps) {
   const skipAuthors = Array.isArray(gh.issue_skip_authors)
     ? gh.issue_skip_authors.join(", ")
     : gh.issue_skip_authors || "";
+  const edit = useEditing(focus);
+  const [dismissed, setDismissed] = useState(false);
 
   const [skipDraft, setSkipDraft] = useState(String(skipAuthors));
   useEffect(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
@@ -85,7 +97,6 @@ export function IssuesTab({ gotoTab }: TabProps) {
   const relistIssues = issuesQuery.refetch; // after a force start (has_session
   // is annotated live even on a cache hit, so no sweep is needed)
   const issues = issuesQuery.data ? issuesQuery.data.issues || [] : null;
-  const issuesRepos = issuesQuery.data?.repos || [];
   const issuesError = issuesQuery.error
     ? "Could not list issues: " + (issuesQuery.error.message || "error")
     : "";
@@ -100,56 +111,40 @@ export function IssuesTab({ gotoTab }: TabProps) {
 
   const n = repos.length;
   // FILTERED BEFORE GROUPED, so the counts on the headings describe what is
-  // under them. A repo whose issues are all filtered out drops off entirely
-  // rather than rendering an empty group with "no open issues in this
-  // repository" — which, with a filter on, would be an answer to a question
-  // nobody asked.
+  // under them — but every WATCHED repository keeps its heading (reading 0),
+  // because the heading is where it is edited.
   const shown = (issues || []).filter((i) => issueMatches(i, filter.tokens));
   const byRepo = new Map<string, OpenIssue[]>();
   for (const i of shown) {
-    const key = i.repo || "unknown";
+    const key = (i.repo || "unknown").toLowerCase();
     if (!byRepo.has(key)) byRepo.set(key, []);
     byRepo.get(key)!.push(i);
   }
-  const groupOrder = filter.active
-    ? [...byRepo.keys()]
-    : [
-        ...repos.filter((r) => issuesRepos.includes(r) || byRepo.has(r)),
-        ...[...byRepo.keys()].filter((r) => !repos.includes(r)),
-      ];
+  const extraNames = new Map(shown.map((i) => [(i.repo || "unknown").toLowerCase(), i.repo || "unknown"]));
+  const groupOrder = repoGroupOrder(
+    repos.map((r) => r.toLowerCase()),
+    byRepo
+  ).map((k) => repos.find((r) => r.toLowerCase() === k) || extraNames.get(k) || k);
+  const watched = new Set(repos.map((r) => r.toLowerCase()));
 
-  const sourceList = (
-    <RepoSourceList
-      key="sources"
-      surface="issue"
-      label="Repositories"
-      repos={repos}
-      overrides={overrides}
-      onSave={(list, next, msg) =>
-        saveGithub({ issue_repos: list, issue_repo_settings: next }, msg)
-      }
-      defaults={{
-        agent: String(gh.issue_agent || agentChoices.fallback || ""),
-        baseBranch: "",
-        minAge: gh.issue_min_age_minutes == null ? "" : String(gh.issue_min_age_minutes),
-        skipAuthors: String(skipAuthors),
-        // Verify's field, blank here for the same reason baseBranch is: this
-        // surface does not render it, so there is nothing to seed.
-        liveBranch: "",
+  const showAdd = !!adding || (!n && !dismissed);
+  const closeAdd = () => {
+    endAdd();
+    setDismissed(true);
+  };
+  const addFlow = showAdd ? (
+    <AddRepoFlow
+      key="add"
+      uses={adding?.uses?.length ? adding.uses : ["issue"]}
+      trackers={catalog.map((p) => ({ key: p.id, label: p.label }))}
+      onPickTracker={(provider) => startAdd({ kind: "tracker", provider }, "tickets")}
+      onCancel={closeAdd}
+      onDone={(repo) => {
+        closeAdd();
+        if (!groups.isOpen(repo)) groups.toggle(repo);
       }}
-      listId="gh-issue-repos-list"
-      addId="gh-issue-repo-add-btn"
-      addLabel="+ Add repository"
-      emptyText="No repositories yet — add one whose new issues you want worked on."
-      hint={
-        <>
-          Each card is one repository, with its own agent and filters. Blank fields use the
-          defaults under <strong>Advanced options</strong>. Separate from the GitHub PRs
-          tab's list.
-        </>
-      }
     />
-  );
+  ) : null;
 
   const workList = (
     <WorkListPanel
@@ -165,97 +160,127 @@ export function IssuesTab({ gotoTab }: TabProps) {
       hint={
         <>
           Each row says whether auto-start will take it. <strong>Start</strong> starts a
-          session for an issue now, whatever the filters say.
+          session for an issue now, whatever the filters say. <strong>Edit</strong> on a
+          repository changes how it is watched.
         </>
       }
     >
-      {issuesError ? (
-        <div className="repo-empty">{issuesError}</div>
-      ) : issues === null ? null : !issuesRepos.length ? (
-        <div className="repo-empty">Add a repository to see its open issues.</div>
-      ) : !issues.length ? (
-        <div className="repo-empty">No open issues on the watched repositories.</div>
-      ) : !groupOrder.length ? (
-        <div className="repo-empty">No open issue matches “{filter.query}”.</div>
-      ) : (
-        groupOrder.map((repo) => {
-          const rows = byRepo.get(repo) || [];
-          const body = !rows.length ? (
+      {issuesError ? <div className="repo-empty">{issuesError}</div> : null}
+      {!n && !groupOrder.length ? (
+        <div className="repo-empty ik-empty-add">
+          <span>No repositories yet — add one whose new issues you want worked on.</span>
+          {!showAdd ? (
+            <button type="button" className="test-btn" onClick={() => startAdd({ kind: "repo", uses: ["issue"] })}>
+              + Add a repository
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {filter.active && !shown.length && groupOrder.length ? (
+        <p className="ik-nomatch">No open issue matches “{filter.query}”.</p>
+      ) : null}
+      {groupOrder.map((repo) => {
+        const key = repo.toLowerCase();
+        const rows = byRepo.get(key) || [];
+        const isWatched = watched.has(key);
+        const editing = isWatched && edit.isEditing(repo);
+        const loading = issues === null;
+        const body =
+          loading || (filter.active && !rows.length) ? null : !rows.length ? (
             <div className="repo-empty">No open issues in this repository.</div>
           ) : (
-                rows.map((i) => (
-                  <WorkItemRow
-                    key={(i.repo || "") + i.number}
-                    reference={"#" + i.number}
-                    url={i.url}
-                    title={i.title}
-                    tooltip={
-                      (i.repo || "") + "#" + i.number + " — " + (i.title || "") + "\nby " + (i.author || "?")
-                    }
-                    meta={`by ${i.author || "?"} · ${ageText(i.created_at)}`}
-                    hasSession={i.has_session}
-                    eligible={i.eligible}
-                    eligibleLabel={
-                      enabled ? "will auto-start" : pausedOff ? "auto-start paused" : "auto-start off"
-                    }
-                    eligibleOn={enabled}
-                    reasons={i.reasons}
-                    actionLabel="Start"
-                    failPrefix="Start failed"
-                    workspace={i.workspace}
-                    onReopen={async () => {
-                      const title = await reopenIntakeItem({
-                        kind: "issues",
-                        repo: i.repo,
-                        number: i.number,
-                      });
-                      setTimeout(relistIssues, 5000);
-                      return title;
-                    }}
-                    agents={agentChoices.names}
-                    configuredAgent={
-                      overrides[repo]?.agent ||
-                      String(gh.issue_agent || agentChoices.fallback || "")
-                    }
-                    configuredDepth={overrides[repo]?.depth || ""}
-                    onStart={async ({ agent, depth, effort }) => {
-                      const r = await api<{ title?: string }>("/api/github/issues/start", {
-                        json: {
-                          repo: i.repo,
-                          number: i.number,
-                          ...(agent ? { agent } : {}),
-                          ...(depth ? { depth } : {}),
-                          ...(effort ? { effort } : {}),
-                        },
-                      });
-                      // The server already has a provisioning row for it: pull it now
-                      // instead of leaving the sidebar blank until the next poll.
-                      refreshInstances();
-                      setTimeout(relistIssues, 5000);
-                      return { message: "Session " + (r?.title || ""), title: r?.title };
-                    }}
-                  />
-                ))
+            rows.map((i) => (
+              <WorkItemRow
+                key={(i.repo || "") + i.number}
+                reference={"#" + i.number}
+                url={i.url}
+                title={i.title}
+                tooltip={
+                  (i.repo || "") + "#" + i.number + " — " + (i.title || "") + "\nby " + (i.author || "?")
+                }
+                meta={`by ${i.author || "?"} · ${ageText(i.created_at)}`}
+                hasSession={i.has_session}
+                eligible={i.eligible}
+                eligibleLabel={
+                  enabled ? "will auto-start" : pausedOff ? "auto-start paused" : "auto-start off"
+                }
+                eligibleOn={enabled}
+                reasons={i.reasons}
+                actionLabel="Start"
+                failPrefix="Start failed"
+                workspace={i.workspace}
+                onReopen={async () => {
+                  const title = await reopenIntakeItem({
+                    kind: "issues",
+                    repo: i.repo,
+                    number: i.number,
+                  });
+                  setTimeout(relistIssues, 5000);
+                  return title;
+                }}
+                agents={agentChoices.names}
+                configuredAgent={
+                  overrides[repo]?.agent ||
+                  String(gh.issue_agent || agentChoices.fallback || "")
+                }
+                configuredDepth={overrides[repo]?.depth || ""}
+                onStart={async ({ agent, depth, effort }) => {
+                  const r = await api<{ title?: string }>("/api/github/issues/start", {
+                    json: {
+                      repo: i.repo,
+                      number: i.number,
+                      ...(agent ? { agent } : {}),
+                      ...(depth ? { depth } : {}),
+                      ...(effort ? { effort } : {}),
+                    },
+                  });
+                  // The server already has a provisioning row for it: pull it now
+                  // instead of leaving the sidebar blank until the next poll.
+                  refreshInstances();
+                  setTimeout(relistIssues, 5000);
+                  return { message: "Session " + (r?.title || ""), title: r?.title };
+                }}
+              />
+            ))
           );
-          return (
-            <WorkGroup
-              key={repo}
-              heading
-              name={repo}
-              count={rows.length}
-              open={groups.isOpen(repo)}
-              onToggle={() => groups.toggle(repo)}
-            >
-              {body}
-            </WorkGroup>
-          );
-        })
-      )}
+        return (
+          <WorkGroup
+            key={key}
+            groupKey={repo}
+            heading
+            name={repo}
+            count={loading ? undefined : rows.length}
+            detail={
+              filter.active && !rows.length
+                ? "no match"
+                : isWatched
+                  ? overrides[repo]?.agent ||
+                    (gh.issue_agent || agentChoices.fallback
+                      ? (gh.issue_agent || agentChoices.fallback) + " (default)"
+                      : "app default")
+                  : "no longer watched"
+            }
+            onDetail={isWatched ? () => edit.open(repo) : undefined}
+            detailTitle={"Change how " + repo + " is watched"}
+            open={groups.isOpen(repo)}
+            onToggle={() => groups.toggle(repo)}
+            action={
+              isWatched ? (
+                <HeadAction editing={editing} name={repo} onClick={() => edit.toggle(repo)} />
+              ) : undefined
+            }
+            editor={editing ? <RepoEditor use="issue" repo={repo} /> : undefined}
+          >
+            {body}
+          </WorkGroup>
+        );
+      })}
     </WorkListPanel>
   );
 
   return (
     <>
+      {addFlow}
       <div className="caps-gate" data-caps-gate="git">
         <p>
           Install <strong>Git</strong> to use this — each issue is worked on in a fresh
@@ -285,26 +310,22 @@ export function IssuesTab({ gotoTab }: TabProps) {
         }
         note={
           !n
-            ? "Add a repository below first"
+            ? "Add a repository first — + Add source"
             : pausedOff
               ? "Intake is paused — Resume intake at the top turns it back on"
               : undefined
         }
       />
+      <GithubStatusLine buttonId="gh-issue-connect-btn" needFor="issues can't be listed or started" />
 
-      {/* WORK FIRST once a repository is watched — the same anatomy as the
-          Tickets and Pull requests tabs. */}
-      {/* A KEYED pair, not two fragments: the order flips the moment the
-          first repository is saved, and position-matched children would
-          remount both — collapsing the card you are still configuring and
-          dropping its focus mid-edit. Keys let React move them instead. */}
-      {n ? [workList, sourceList] : [sourceList, workList]}
+      {workList}
 
       <details className="pr-advanced">
         <summary>Advanced options</summary>
         <div className="pr-advanced-body">
           <p className="set-hint set-block-hint">
-            Defaults for every repository card. A card can override each one.
+            Defaults for every repository. A repository's own <strong>Edit</strong> can override
+            each one.
           </p>
           <AgentPicker
             label="Agent"
@@ -343,22 +364,6 @@ export function IssuesTab({ gotoTab }: TabProps) {
             />
             <span className="set-hint">GitHub logins, comma-separated.</span>
           </label>
-          <div className="set-row">
-            <span className="set-label">GitHub connection</span>
-            <span className="test-row">
-              <button
-                type="button"
-                id="gh-issue-connect-btn"
-                className="test-btn"
-                onClick={() => openConnectGitHub()}
-              >
-                Connect GitHub
-              </button>
-            </span>
-            <span className="set-hint">
-              The same GitHub sign-in the GitHub PRs tab uses.
-            </span>
-          </div>
         </div>
       </details>
     </>

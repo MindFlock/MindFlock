@@ -6,13 +6,17 @@
  *
  *   master switch  →  status line
  *   work           →  the items those sources yielded, grouped by source,
- *                     each row saying why auto-pickup did or didn't take it
- *   sources        →  one collapsible card per thing being watched, + Add
+ *                     each row saying why auto-pickup did or didn't take it;
+ *                     each SOURCE heading is that source's handle — Edit (or
+ *                     Fix) opens its editor attached under it
  *   advanced       →  the tab-wide defaults, folded
  *
- * Work comes before sources once any source exists — the rows are the reason
- * you open the tab, the cards are setup you revisit. With nothing configured
- * there is no work to show, so the cards (and their + Add) lead instead.
+ * Adding a source is "+ Add source" in the dialog head: one inline flow
+ * (`AddFlowShell`) — what, connect, what it does — for a tracker or a
+ * repository alike. With nothing configured that flow leads the tab. There
+ * are no source cards under the work any more ("add once, edit where it
+ * shows"): a card list sat below a list that grows without bound, collapsed,
+ * and the work list could only say "open its card below".
  *
  * They used to be three dialects of that shape. Ticketing had the good one —
  * add/remove cards, each carrying its own credentials, repo and agent — while
@@ -30,10 +34,11 @@
  * a single pixel. Read them as "work card" / "work item".
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api/client";
 import type { Instance } from "../../api/types";
-import { refreshInstances, useProviderEfforts } from "../../state/queries";
+import { refreshInstances, useGithubStatus, useProviderEfforts } from "../../state/queries";
+import { openConnectGitHub } from "../../lib/githubConnect";
 import { displayName } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
@@ -191,50 +196,6 @@ export function AutomationSwitch({
   );
 }
 
-/** One source card: a fold whose header is a one-line summary and whose body is
- * whatever that kind of source needs configured.
- *
- * Generic on purpose. A ticketing source's body is a provider picker plus
- * credentials; a watched repo's body is a slug, an agent and its filters. The
- * card, the fold, the summary and the footer action row are the same either
- * way, which is the whole point of the unification. */
-export function SourceCard({
-  sourceId,
-  summary,
-  badge,
-  collapsed,
-  onToggle,
-  children,
-  footer,
-}: {
-  /** Stable identifier, exposed for tests / addon CSS. */
-  sourceId: string;
-  summary: string;
-  /** Right-aligned on the fold header, visible collapsed or not (a status pill). */
-  badge?: React.ReactNode;
-  collapsed: boolean;
-  onToggle(): void;
-  children: React.ReactNode;
-  /** The Test / Remove row. */
-  footer: React.ReactNode;
-}) {
-  return (
-    <div className={"tk-source" + (collapsed ? " tk-collapsed" : "")} data-source-id={sourceId}>
-      <button type="button" className="tk-head" aria-expanded={!collapsed} onClick={onToggle}>
-        <span className="tk-caret">{collapsed ? "▸" : "▾"}</span>
-        <span className="tk-summary">{summary}</span>
-        {badge}
-      </button>
-      <div className="tk-body">
-        {children}
-        <div className="set-row">
-          <span className="test-row">{footer}</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /** What a Test is doing or last said — owned by the button itself, or by the
  * card when the test can also run without a click (after a save). */
 export interface TestResult {
@@ -312,11 +273,20 @@ export function SourcePill({
  *
  * Two levels use it: the source group (a ticketing source, a watched repo) and,
  * inside a ticket source, the workflow-state bucket. Same affordance both
- * times, so "click the heading to open it" only has to be learned once. */
+ * times, so "click the heading to open it" only has to be learned once.
+ *
+ * A SOURCE group is also where that source is edited ("add once, edit where it
+ * shows"): `action` is its Edit / Fix button, `editor` renders attached under
+ * the heading — right where a problem was read — and `onDetail` makes the
+ * heading's "auto-starts …" note itself a press that opens it. There are no
+ * source cards under the work any more; the heading IS the handle. */
 export function WorkGroup({
   name,
   count,
   detail,
+  detailTone,
+  onDetail,
+  detailTitle,
   open,
   onToggle,
   onHide,
@@ -324,12 +294,22 @@ export function WorkGroup({
   indent,
   heading,
   middle,
+  action,
+  editor,
+  groupKey,
   children,
 }: {
   name: string;
-  count: number;
+  /** The badge. Omitted while a source's rows are still loading. */
+  count?: number;
   /** Muted right-hand note on the heading (e.g. a source's error). */
   detail?: string;
+  /** "bad": the note is a problem (can't connect); "warn": a gap (nothing
+   * auto-starts yet). */
+  detailTone?: "bad" | "warn";
+  /** Present = the note is a setting, and pressing it opens the editor. */
+  onDetail?: () => void;
+  detailTitle?: string;
   open: boolean;
   onToggle(): void;
   /** Present = the group can be hidden from the panel entirely (✕). */
@@ -341,7 +321,13 @@ export function WorkGroup({
   heading?: boolean;
   /** The level between a source and its states (a workflow, a board). */
   middle?: boolean;
-  children: React.ReactNode;
+  /** Right-aligned on the heading: the source's Edit / Fix. */
+  action?: React.ReactNode;
+  /** The source's editor, attached under the heading while it is open. */
+  editor?: React.ReactNode;
+  /** `data-group-key`, so a deep link can scroll its heading into view. */
+  groupKey?: string;
+  children?: React.ReactNode;
 }) {
   return (
     <div
@@ -349,13 +335,15 @@ export function WorkGroup({
         "tk-bucket" +
         (indent ? " ik-nested" : "") +
         (heading ? " ik-source-group" : "") +
-        (middle ? " ik-workflow-group" : "")
+        (middle ? " ik-workflow-group" : "") +
+        (editor ? " ik-editing" : "")
       }
+      data-group-key={groupKey}
     >
       <div className="tk-bucket-head">
         <button
           type="button"
-          className="tk-bucket-toggle"
+          className={"tk-bucket-toggle" + (onDetail ? " ik-toggle-tight" : "")}
           aria-expanded={open}
           title={(open ? "Collapse" : "Expand") + " " + name}
           onClick={onToggle}
@@ -364,9 +352,24 @@ export function WorkGroup({
               eye catches, where swapping ▸ for ▾ is a shape you have to read. */}
           <span className="tk-caret">▸</span>
           <span className="tk-bucket-name">{name}</span>
-          <span className="tk-bucket-count">{count}</span>
-          {detail ? <span className="ik-group-detail">{detail}</span> : null}
+          {count !== undefined ? <span className="tk-bucket-count">{count}</span> : null}
+          {detail && !onDetail ? (
+            <span className={"ik-group-detail" + (detailTone ? " " + detailTone : "")}>{detail}</span>
+          ) : null}
         </button>
+        {detail && onDetail ? (
+          <button
+            type="button"
+            className={"ik-group-detail ik-detail-btn" + (detailTone ? " " + detailTone : "")}
+            title={detailTitle || "Change this"}
+            onClick={onDetail}
+          >
+            {detail}
+          </button>
+        ) : null}
+        {/* The rest of the heading still folds the group: only the note and
+            the action are their own targets. */}
+        {onDetail ? <span className="ik-head-fill" aria-hidden="true" onClick={onToggle} /> : null}
         {onHide && (
           <button
             type="button"
@@ -378,9 +381,288 @@ export function WorkGroup({
             ✕
           </button>
         )}
+        {action}
       </div>
-      {open && <div className="ik-group-body">{children}</div>}
+      {editor ? <div className="ik-editor">{editor}</div> : null}
+      {open && children ? <div className="ik-group-body">{children}</div> : null}
     </div>
+  );
+}
+
+/** Which source's editor is open (one at a time per list), seeded from a deep
+ * link — Settings → Connections → "Open in Intake", or a tab handing over with
+ * a source named — and scrolled into view when it is. */
+export function useEditing(focus: string | undefined) {
+  const [editing, setEditing] = useState<string | null>(focus || null);
+  useEffect(() => {
+    if (!focus) return;
+    setEditing(focus);
+    const t = window.setTimeout(() => scrollToGroup(focus), 60);
+    return () => window.clearTimeout(t);
+  }, [focus]);
+  return {
+    editing,
+    isEditing: (key: string) => editing === key,
+    toggle: (key: string) => setEditing((cur) => (cur === key ? null : key)),
+    open: (key: string) => {
+      setEditing(key);
+      window.setTimeout(() => scrollToGroup(key), 60);
+    },
+    close: () => setEditing(null),
+  };
+}
+
+/** Bring a source heading (`data-group-key`) to the top of its scroller. */
+export function scrollToGroup(key: string) {
+  const sel = "[data-group-key=\"" + (typeof CSS !== "undefined" && CSS.escape ? CSS.escape(key) : key) + "\"]";
+  const el = document.querySelector(sel);
+  if (el && "scrollIntoView" in el) (el as HTMLElement).scrollIntoView({ block: "start", behavior: "smooth" });
+}
+
+/** The repository groups a GitHub work list shows: EVERY watched repository —
+ * its heading is where it is edited, so it never drops out, not even while a
+ * Ctrl+F filter matches none of its rows (it reads "0" then) — followed by any
+ * repository that answered with rows but is no longer watched. */
+export function repoGroupOrder<T>(repos: string[], byRepo: Map<string, T[]>): string[] {
+  const watched = new Set(repos.map((r) => r.toLowerCase()));
+  return [...repos, ...[...byRepo.keys()].filter((r) => !watched.has(r.toLowerCase()))];
+}
+
+/** A source heading's action: quiet **Edit**, or **Fix** when the source is
+ * broken, or **Done** while its editor is open. */
+export function HeadAction({
+  editing,
+  broken,
+  name,
+  onClick,
+}: {
+  editing: boolean;
+  broken?: boolean;
+  name: string;
+  onClick(): void;
+}) {
+  return (
+    <button
+      type="button"
+      className={"ik-head-action" + (editing ? " done" : broken ? " fix" : "")}
+      aria-expanded={editing}
+      title={editing ? "Close " + name + "'s settings" : (broken ? "Fix " : "Edit ") + name}
+      onClick={onClick}
+    >
+      {editing ? "Done" : broken ? "Fix" : "Edit"}
+    </button>
+  );
+}
+
+/** A destructive button that ARMS rather than fires: the first press turns
+ * "Remove" into a red "Confirm — remove Jira — payments", the second does it.
+ * Inline, never `confirm()` — these live inside an `aria-modal` dialog, and the
+ * desktop app has no native confirm at all. Disarms on blur or after 5 s, so a
+ * stray earlier press can never be the first half of a later one. */
+export function ArmButton({
+  label,
+  armedLabel,
+  onConfirm,
+  title,
+  className,
+  id,
+}: {
+  label: string;
+  armedLabel: string;
+  onConfirm(): void;
+  title?: string;
+  className?: string;
+  id?: string;
+}) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = window.setTimeout(() => setArmed(false), 5000);
+    return () => window.clearTimeout(t);
+  }, [armed]);
+  return (
+    <button
+      type="button"
+      id={id}
+      className={"ik-arm" + (armed ? " armed" : "") + (className ? " " + className : "")}
+      title={armed ? "Press again to confirm" : title}
+      data-armed={armed || undefined}
+      onBlur={() => setArmed(false)}
+      onClick={() => {
+        if (!armed) return setArmed(true);
+        setArmed(false);
+        onConfirm();
+      }}
+    >
+      {armed ? armedLabel : label}
+    </button>
+  );
+}
+
+/** "GitHub — connected as @you · Manage…": the one GitHub credential, with its
+ * real state, where the tabs that need it are. It used to be a stateless
+ * "Connect GitHub" button inside two Advanced folds, reading Connect even
+ * while connected. */
+export function GithubStatusLine({ buttonId, needFor }: { buttonId?: string; needFor: string }) {
+  const q = useGithubStatus(true);
+  const st = q.data;
+  if (!st) {
+    return (
+      <div className="ik-ghline" data-gh="loading">
+        <span className="ik-dot off" />
+        <b>GitHub</b>
+        <span className="ik-ghline-text">checking…</span>
+      </div>
+    );
+  }
+  const on = !!st.connected;
+  const who = st.login ? "connected as @" + st.login : st.user_error ? "connected — " + st.user_error : "connected";
+  return (
+    <div className={"ik-ghline" + (on ? "" : " off")} data-gh={on ? "connected" : "off"}>
+      <span className={"ik-dot" + (on ? "" : " warn")} />
+      <b>GitHub</b>
+      <span className="ik-ghline-text">
+        {on ? who + " — one sign-in for PRs, issues, Verify and Open PR" : "not connected — " + needFor}
+      </span>
+      <button
+        type="button"
+        id={buttonId}
+        className={on ? "ik-quiet-btn" : "test-btn"}
+        onClick={() => openConnectGitHub()}
+      >
+        {on ? "Manage…" : "Connect GitHub"}
+      </button>
+    </div>
+  );
+}
+
+/** One kind of source the add flow can create: a tracker, or a repository. */
+export interface AddKind {
+  key: string;
+  label: string;
+  sub?: string;
+}
+
+/** The add flow's frame: title, the three steps, the kind tiles, the body and
+ * the footer. Shared by the tracker flow (TicketsTab) and the repository flow
+ * (RepoSources' AddRepoFlow), so "+ Add source" is one door whichever kind you
+ * pick behind it. Inline in the panel — never a second window. */
+export function AddFlowShell({
+  title = "Add a source",
+  step,
+  kinds,
+  picked,
+  onPick,
+  onCancel,
+  cancelLabel = "Cancel",
+  children,
+  footer,
+}: {
+  title?: string;
+  step: 1 | 2 | 3;
+  /** Tiles; none or one = no tile row (Verify only adds repositories). */
+  kinds: AddKind[];
+  picked: string;
+  onPick(key: string): void;
+  onCancel(): void;
+  cancelLabel?: string;
+  children?: React.ReactNode;
+  footer?: React.ReactNode;
+}) {
+  const steps = ["What", "Connect", "What it does"];
+  return (
+    <section className="ik-add" id="ik-add-flow" aria-label={title} data-step={step}>
+      <div className="ik-add-head">
+        <b className="ik-add-title">{title}</b>
+        <ol className="ik-steps" aria-label="Steps">
+          {steps.map((label, i) => {
+            const n = (i + 1) as 1 | 2 | 3;
+            const state = n < step ? "done" : n === step ? "cur" : "todo";
+            return (
+              <li key={label} className={"ik-step " + state} aria-current={state === "cur" ? "step" : undefined}>
+                <span className="ik-step-num">{state === "done" ? "✓" : n}</span>
+                {label}
+              </li>
+            );
+          })}
+        </ol>
+        <button type="button" className="ik-quiet-btn" id="ik-add-cancel" onClick={onCancel}>
+          {cancelLabel}
+        </button>
+      </div>
+      {kinds.length > 1 && step < 3 ? (
+        <div className="ik-kinds" role="radiogroup" aria-label="What to add">
+          {kinds.map((k) => (
+            <button
+              key={k.key}
+              type="button"
+              role="radio"
+              aria-checked={picked === k.key}
+              className={"ik-kind" + (picked === k.key ? " picked" : "")}
+              data-kind={k.key}
+              onClick={() => onPick(k.key)}
+            >
+              <span className="ik-kind-label">{k.label}</span>
+              {k.sub ? <span className="ik-kind-sub">{k.sub}</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {children}
+      {footer ? <div className="ik-add-foot">{footer}</div> : null}
+    </section>
+  );
+}
+
+/** A small popover menu on a toolbar, for view choices (whose tickets, which
+ * states) — kept apart from the source's settings so the two can't pass for
+ * each other. Same three duties as the ⋯ OverflowMenu: Escape closes it first
+ * (capture phase, before the dialog's own Escape), a press outside closes it,
+ * and the summary is a real focusable control. */
+export function ViewMenu({
+  id,
+  label,
+  title,
+  children,
+}: {
+  id?: string;
+  label: string;
+  title?: string;
+  children: React.ReactNode;
+}) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setOpen(false);
+      e.stopPropagation();
+      e.preventDefault();
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [open]);
+  return (
+    <details className="ik-view" id={id} open={open} ref={ref}>
+      <summary
+        title={title}
+        onClick={(e) => {
+          e.preventDefault();
+          setOpen((v) => !v);
+        }}
+      >
+        {label}
+      </summary>
+      <div className="ik-view-pop">{children}</div>
+    </details>
   );
 }
 
@@ -785,7 +1067,7 @@ export function WorkItemRow({
             data-route={route?.method || ""}
             title={
               route?.method === ONLY_REPO
-                ? "The repo this starts in — this source's only repo. Add more on its card."
+                ? "The repo this starts in — this source's only repo. Add more with Edit on its heading."
                 : (route?.method === "pending" || !(route?.repos || []).length
                     ? "Nothing on the ticket names one of this source's repos, so the agent reads the ticket and picks when it starts."
                     : "The repo this starts in, and why.") +

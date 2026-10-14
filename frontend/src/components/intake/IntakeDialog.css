@@ -1273,3 +1273,697 @@
   flex: 1 1 auto;
   min-width: 0;
 }
+
+/* ==========================================================================
+   Add once, edit where it shows
+   ==========================================================================
+   A source (a tracker, a watched repository) has no card under the work any
+   more. Its heading in the work list is its handle — Edit, or Fix when it is
+   broken — and its editor opens attached UNDER that heading, where the problem
+   was read. Adding is one inline flow ("+ Add source" in the dialog head).
+   Unscoped (`ik-`), because Verify renders the same heads and editor. */
+
+/* The heading's own targets: the "auto-starts …" note (a setting, so it is
+   pressable), a filler that still folds the group, and the action. */
+.tk-bucket-toggle.ik-toggle-tight {
+  flex: 0 1 auto;
+}
+.ik-head-fill {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 12px;
+  cursor: pointer;
+}
+.ik-detail-btn {
+  flex: 0 1 auto;
+  min-width: 0;
+  background: none;
+  border: 0;
+  padding: 3px 4px;
+  margin-left: -2px;
+  border-radius: 5px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+  text-decoration: underline dotted;
+  text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent);
+  text-underline-offset: 3px;
+}
+.ik-detail-btn:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.ik-group-detail.bad,
+.ik-detail-btn.bad {
+  color: var(--red);
+  text-decoration-color: color-mix(in srgb, var(--red) 50%, transparent);
+}
+.ik-group-detail.warn,
+.ik-detail-btn.warn {
+  color: color-mix(in srgb, var(--gold) 75%, var(--text));
+}
+
+.ik-head-action {
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 10px;
+  margin: 3px 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.ik-head-action:hover {
+  color: var(--text);
+  background: var(--panel);
+  border-color: var(--border);
+}
+.ik-head-action.fix {
+  color: var(--red);
+  font-weight: 600;
+  border-color: color-mix(in srgb, var(--red) 45%, var(--border));
+  background: color-mix(in srgb, var(--red) 8%, var(--panel));
+}
+.ik-head-action.done {
+  color: var(--accent);
+  font-weight: 600;
+}
+.ik-head-action:focus-visible,
+.ik-detail-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The editor, attached: the heading and its editor read as one object. */
+.ik-source-group.ik-editing > .tk-bucket-head {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.ik-editor {
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border));
+  border-top: none;
+  border-radius: 0 0 9px 9px;
+  background: var(--panel);
+  padding: 14px 16px 12px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06);
+}
+.ik-editor + .ik-group-body {
+  margin-top: 10px;
+}
+
+/* The editor's rhythm is the card's: a field's own parts tight, the next field
+   a clear step below, sections a step bigger again. */
+.ik-editor-body,
+.ik-add-body,
+.ik-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.ik-editor-body .tk-fields,
+.ik-add-body .tk-fields {
+  display: contents;
+}
+.ik-editor-body .set-row,
+.ik-add-body .set-row {
+  gap: 5px;
+  min-width: 0;
+}
+.ik-editor-body .set-row > .set-hint,
+.ik-editor-body .set-row > .ik-field-error,
+.ik-add-body .set-row > .set-hint,
+.ik-add-body .set-row > .ik-field-error {
+  line-height: 1.45;
+}
+.ik-editor-body .set-row > .repo-list,
+.ik-add-body .set-row > .repo-list {
+  margin-bottom: 2px;
+}
+.ik-editor-h {
+  margin: 4px 0 -6px;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.ik-editor-body > .ik-editor-h:first-child,
+.ik-editor-hrow:first-child .ik-editor-h {
+  margin-top: 0;
+}
+.ik-editor-hrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.ik-editor-hrow .ik-editor-h {
+  margin: 0;
+}
+.ik-editor-body .test-row,
+.ik-add-body .test-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.ik-editor-body .ik-source-message {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.ik-editor-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  margin-top: 2px;
+}
+.ik-editor-foot .test-row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ik-editor-foot .ik-save-line {
+  flex: 1 1 auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ik-editor-foot .ik-save-line.ok {
+  color: var(--green);
+}
+.ik-editor-body input.field-missing,
+.ik-add-body input.field-missing,
+.ik-add input.field-missing {
+  border-color: var(--danger, #e5534b);
+}
+.ik-editor-body input:disabled,
+.ik-editor-body select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ik-editor-body .tk-advanced {
+  border-top: 1px dashed var(--border);
+  padding-top: 12px;
+}
+
+/* Fields side by side — evenly, never auto-fit: an auto-fit grid re-wraps a
+   different number of columns at every width, which is the ragged look. Each
+   cell is one field; long hints stay out of grid cells. */
+.ik-grid {
+  display: grid;
+  gap: 14px 16px;
+  align-items: start;
+  min-width: 0;
+}
+.ik-grid-1 {
+  grid-template-columns: minmax(0, 1fr);
+}
+.ik-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.ik-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.ik-grid > .set-row > select,
+.ik-grid > .set-row > input:not(.num-sm) {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.ik-grid .num-sm {
+  width: 100%;
+  box-sizing: border-box;
+}
+@media (max-width: 700px) {
+  .ik-grid-2,
+  .ik-grid-3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* "Use it for: ☑ PR comments ☐ New issues ☑ Verify" */
+.ik-uses-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+}
+.ik-use {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ik-use input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+.ik-use.locked {
+  cursor: default;
+  color: var(--muted);
+}
+.ik-use-note {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+.ik-uses-hint {
+  margin-top: -8px;
+}
+
+/* Arm-then-confirm: the first press turns the button red and says exactly what
+   the second press destroys. */
+.ik-arm {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ik-arm:hover {
+  border-color: color-mix(in srgb, var(--red) 55%, var(--border));
+}
+.ik-arm.armed {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* A quiet text button (Cancel, Manage…, Edit repositories). */
+.ik-quiet-btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ik-quiet-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--panel-2);
+}
+.ik-quiet-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* GitHub: one line with its real state. */
+.ik-ghline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 0;
+  padding: 0 2px;
+}
+.ik-ghline b {
+  color: var(--text);
+  font-weight: 600;
+}
+.ik-ghline-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ik-ghline.off {
+  border: 1px solid color-mix(in srgb, var(--gold) 50%, var(--border));
+  background: color-mix(in srgb, var(--gold) 8%, transparent);
+  border-radius: 8px;
+  padding: 6px 8px 6px 10px;
+  color: var(--text);
+}
+.ik-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--green);
+}
+.ik-dot.warn {
+  background: var(--gold);
+}
+.ik-dot.off {
+  background: var(--border);
+}
+
+/* "+ Add source": one inline flow, set apart by the accent edge. */
+/* The one door for adding a source: accent-outlined, so it reads as the
+   dialog's action without shouting over the work below it. */
+.ws-head > #intake-add-source,
+.ws-head > #vf-repo-add-btn {
+  align-self: center;
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  font-weight: 600;
+}
+.ws-head > #intake-add-source:disabled,
+.ws-head > #vf-repo-add-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.ik-add {
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: var(--panel);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 9%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: none;
+}
+.ik-add-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.ik-add-title {
+  font-size: 13.5px;
+  white-space: nowrap;
+}
+.ik-steps {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ik-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.ik-step + .ik-step::before {
+  content: "";
+  display: inline-block;
+  width: 22px;
+  height: 1px;
+  background: var(--border);
+  margin: 0 8px;
+}
+.ik-step-num {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  background: var(--panel);
+}
+.ik-step.done .ik-step-num {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}
+.ik-step.cur {
+  color: var(--text);
+  font-weight: 600;
+}
+.ik-step.cur .ik-step-num {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.ik-kinds {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+@media (max-width: 700px) {
+  .ik-kinds {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+.ik-kind {
+  font: inherit;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 50px;
+  padding: 7px 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: center;
+}
+.ik-kind:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+}
+.ik-kind.picked {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+  font-weight: 600;
+}
+.ik-kind-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.ik-kind-sub {
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+/* The add flow's slug box with its Test access beside it; the answer wraps
+   to its own line under both, so a long verdict never squeezes the box. */
+.ik-repo-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+}
+.ik-repo-row > input {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+.ik-repo-row > .test-btn {
+  flex: none;
+}
+.ik-repo-row > .test-result {
+  flex-basis: 100%;
+}
+.ik-repo-row > .test-result:empty {
+  display: none;
+}
+.ik-add-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  min-width: 0;
+}
+.ik-add-error,
+.ik-add-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.ik-add-error {
+  color: var(--red);
+}
+.ik-add-hint {
+  color: var(--muted);
+}
+.ik-add-done {
+  margin: 0;
+}
+.ik-add-use {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ik-add .tk-blurb {
+  margin: 0;
+}
+
+/* Empty lists, and a filter that matched nothing (the headings stay). */
+.ik-empty-add {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+}
+.ik-nomatch {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* View: whose tickets and which states this panel shows. */
+.ik-view {
+  position: relative;
+  flex: none;
+}
+.ik-view > summary {
+  list-style: none;
+  cursor: pointer;
+  font-size: 12.5px;
+  padding: 6px 28px 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  white-space: nowrap;
+  position: relative;
+}
+.ik-view > summary::-webkit-details-marker {
+  display: none;
+}
+.ik-view > summary::after {
+  content: "▾";
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  color: var(--muted);
+}
+.ik-view[open] > summary,
+.ik-view > summary:hover {
+  border-color: var(--accent);
+}
+.ik-view-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+  min-width: 260px;
+  max-width: 380px;
+  max-height: 340px;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ik-view-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ik-view-h {
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+.ik-view-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  padding: 3px 2px;
+  cursor: pointer;
+  color: var(--text);
+}
+.ik-view-opt input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+.ik-view-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ik-view-n {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Verify: the watched repositories as one line, edited under "Edit
+   repositories" from the same heads and editor as Intake's. */
+.vf-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: none;
+}
+.ik-watching {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+  min-width: 0;
+  padding: 0 2px;
+}
+.ik-watching-list {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ik-watching-list b {
+  color: var(--text);
+  font-weight: 600;
+}
+.ik-watching-live {
+  color: var(--muted);
+}
+.vf-repo-heads {
+  gap: 8px;
+}

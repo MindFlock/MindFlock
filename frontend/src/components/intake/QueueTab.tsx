@@ -373,7 +373,7 @@ export function QueueTab({ gotoTab }: TabProps) {
   const ticketsBroken =
     configuredTickets && ticketErrors.length && !listedTickets
       ? ticketErrors
-          .map((e) => friendlySourceError(nameOfSource(e.source), e.error).replace(/ — open its card below to fix it\.$/, "."))
+          .map((e) => friendlySourceError(nameOfSource(e.source), e.error).replace(/ — press Fix on its heading\.$/, "."))
           .join(" ") + " Fix it on the Tickets tab."
       : "";
   const paused = pause.paused;

@@ -30,6 +30,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
+import { refreshGithubStatus } from "../../state/queries";
 import { copyText } from "../../lib/clipboard";
 import {
   flowFinished,
@@ -524,9 +525,15 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
  * lib/githubConnect.ts), so Intake's tabs, Settings → Connections and
  * extensions all reach the same step without props. */
 export function ConnectGitHubDialog() {
-  const [open, setOpen] = useState(false);
+  const [open, setOpenRaw] = useState(false);
+  // Closing is when a sign-in made here becomes true everywhere else: the
+  // GitHub status lines (Intake's GitHub tabs, the add flow) re-ask then.
+  const setOpen = (next: boolean) => {
+    setOpenRaw(next);
+    if (!next) void refreshGithubStatus();
+  };
   useEffect(() => {
-    const on = () => setOpen(true);
+    const on = () => setOpenRaw(true);
     window.addEventListener(OPEN_CONNECT_GITHUB_EVENT, on);
     return () => window.removeEventListener(OPEN_CONNECT_GITHUB_EVENT, on);
   }, []);

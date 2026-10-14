@@ -326,7 +326,9 @@ describe("Basic vs Advanced (the source form's fold)", () => {
     expect(advancedHasValues(jira, jsrc({ claim_label: "erik" }))).toBe(true);
     expect(advancedHasValues(jira, jsrc({ start_state: "3" }))).toBe(true);
     expect(advancedHasValues(jira, jsrc({ effort: "high" }))).toBe(true);
-    expect(advancedHasValues(jira, jsrc({ depth: "pr" }))).toBe(true);
+    // Fast-track is not in the fold any more (it sits with the agent), so a
+    // chosen depth no longer opens it.
+    expect(advancedHasValues(jira, jsrc({ depth: "pr" }))).toBe(false);
   });
 
   it("opens when the server refused a field inside it — an error is never hidden", () => {
@@ -339,8 +341,8 @@ describe("Basic vs Advanced (the source form's fold)", () => {
     // filters it unlocks (whose tickets, which states).
     expect(TICKETS_TAB).toContain("const basics = basicFields(meta);");
     expect(TICKETS_TAB).toContain("credFields.map(renderField)");
-    expect(TICKETS_TAB).toContain("filterFields.map(renderField)");
-    const order = ["credFields.map(renderField)", 'className="set-row tk-test-row"', "filterFields.map(renderField)", "<RepoListField", 'className="tk-agent"'];
+    expect(TICKETS_TAB).toContain("(paired ? filterFields.slice(2) : filterFields).map(renderField)");
+    const order = ["credFields.map(renderField)", 'className="set-row tk-test-row"', "renderField(filterFields[0])", "<RepoListField", 'className="tk-agent"', 'className="tk-depth"'];
     for (let i = 1; i < order.length; i++)
       expect(TICKETS_TAB.indexOf(order[i]), order[i]).toBeGreaterThan(TICKETS_TAB.indexOf(order[i - 1]));
     // The source's name is an advanced extra now.
@@ -348,13 +350,14 @@ describe("Basic vs Advanced (the source form's fold)", () => {
       TICKETS_TAB.indexOf("<summary>Advanced options</summary>")
     );
     expect(TICKETS_TAB).toContain("advancedFields(meta).map(renderField)");
-    expect(TICKETS_TAB).toContain('<details\n        className="tk-advanced"');
+    expect(TICKETS_TAB).toMatch(/<details\s+className="tk-advanced"/);
     expect(TICKETS_TAB).toContain("<summary>Advanced options</summary>");
     expect(TICKETS_TAB).toContain("advancedHasValues(meta, source, errs)");
-    // The per-queue tuning lives in the fold, after its summary.
+    // Thinking effort lives in the fold; Fast-track sits with the agent, up
+    // front — where a repository's editor puts it too.
     const fold = TICKETS_TAB.indexOf("<summary>Advanced options</summary>");
     expect(TICKETS_TAB.indexOf('className="tk-effort"')).toBeGreaterThan(fold);
-    expect(TICKETS_TAB.indexOf('className="tk-depth"')).toBeGreaterThan(fold);
+    expect(TICKETS_TAB.indexOf('className="tk-depth"')).toBeLessThan(fold);
     expect(TICKETS_TAB.indexOf('className="tk-agent"')).toBeLessThan(fold);
   });
 

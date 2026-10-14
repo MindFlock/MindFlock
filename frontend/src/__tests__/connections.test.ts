@@ -150,6 +150,12 @@ describe("actions and fixes", () => {
     expect(deps.gotoScreen).toHaveBeenCalledWith("devices");
     actionHandler({ label: "Open", kind: "dialog", target: "intake", tab: "tickets" }, deps)!();
     expect(deps.openDialogFor).toHaveBeenCalledWith("intake", "tickets");
+    // A source's own row lands on its heading, its editor open.
+    actionHandler(
+      { label: "Open in Intake", kind: "dialog", target: "intake", tab: "tickets", source_id: "jira" },
+      deps
+    )!();
+    expect(deps.openDialogFor).toHaveBeenCalledWith("intake", "tickets:jira");
     expect(actionHandler({ label: "?", kind: "dialog", target: "nope" }, deps)).toBeNull();
   });
 
