@@ -169,6 +169,8 @@ def test_post_to_an_unknown_session_is_404(env):
         ({"text": "x", "from": 3}, "from"),
         ({"text": "x", "delivery": "loud"}, "delivery"),
         ({"text": "x", "kind": "memo"}, "kind"),
+        # MindFlock's own note kind is server-only: no client can forge one.
+        ({"text": "x", "kind": "note"}, "kind"),
         ({"text": "x", "data": [1]}, "object"),
         ({"text": "x", "data": {"k": "v" * 9000}}, "too large"),
         ({"text": "x", "reply_to": 7}, "reply_to"),
@@ -420,11 +422,27 @@ def test_get_filters_by_sender_kind_and_after(env):
 
 
 @pytest.mark.parametrize(
-    "q", [{"limit": "many"}, {"wait": "soon"}, {"kind": "memo"}, {"after": "x"}]
+    "q",
+    [
+        {"limit": "many"},
+        {"wait": "soon"},
+        {"kind": "memo"},
+        {"kind": "note"},  # not a filter clients can ask for: see below
+        {"after": "x"},
+    ],
 )
 def test_get_rejects_bad_query(env, q):
     _, st = env
     assert _get(st, "w1", **q).status_code == 400
+
+
+def test_get_lists_a_server_note_as_a_note(env):
+    """``?kind=note`` is refused, but the unfiltered unread listing (what
+    check_inbox reads) carries MindFlock's notes with their own kind."""
+    _, st = env
+    m = mb.post("w1", "Fast-track stopped: x", kind=mb.NOTE_KIND)
+    (got,) = _get(st, "w1").json()["messages"]
+    assert (got["id"], got["kind"], got["from"]) == (m["id"], "note", "")
 
 
 def test_get_clamps_limit(env):
@@ -996,6 +1014,25 @@ def test_lane_recognises_the_agent_however_it_was_launched(lane, fg, procs):
     mb.post("w1", "hello", sender="orch", now=st.clock["now"])
     _settle(server, st)
     assert len(st.typed) == 1
+
+
+def test_a_fast_track_note_rides_the_lane_like_any_message(lane):
+    """A failure note types only into a settled, idle agent, framed as
+    MindFlock's own — never into a bare shell, never over a typing human."""
+    server, st = lane
+    st.fg["w1"] = "bash"
+    m = mb.post("w1", "Fast-track stopped: x", kind=mb.NOTE_KIND, now=st.clock["now"])
+    _settle(server, st, passes=3)
+    assert st.typed == [] and mb.get("w1", m["id"])["state"] == "pending"
+    st.fg["w1"] = "claude"
+    server._HUMAN_INPUT_AT["w1"] = st.clock["now"] - 1
+    _settle(server, st, passes=2)
+    assert st.typed == [] and mb.get("w1", m["id"])["state"] == "pending"
+    st.clock["now"] += server._HUMAN_HOLD_S
+    _settle(server, st)
+    ((_, line, submit),) = st.typed
+    assert line == "[MindFlock note %s] Fast-track stopped: x" % m["id"] and submit
+    assert mb.get("w1", m["id"])["state"] == "delivered"
 
 
 def test_now_never_types_into_a_bare_shell(env):

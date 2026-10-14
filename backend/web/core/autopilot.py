@@ -46,6 +46,7 @@ re-reads/writes the (tiny) file under it, and every write is atomic.
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from typing import Dict, List, Optional, Tuple
@@ -65,6 +66,7 @@ __all__ = [
     "reaches",
     "stage_achieved",
     "next_action",
+    "failure_note",
     "arm",
     "disarm",
     "get",
@@ -418,7 +420,10 @@ def next_action(rec: dict, snap: dict) -> Tuple[str, dict]:
     Returns ``(action, detail)`` where action is one of ``wait`` (nothing to do
     yet), ``commit``, ``push``, ``make_pr``, ``merge``, ``done`` (target
     reached), or ``stop`` (halt and tell the human). ``detail`` carries
-    ``reason`` for stop/wait and ``skip`` for commit.
+    ``reason`` for stop/wait and ``skip`` for commit; a stop the agent could
+    fix itself also carries ``fix`` — "precommit" (with ``hook`` / ``step``),
+    "check", "ci" or "conflict" — which the driver turns into a short note
+    typed into the agent (see :func:`failure_note`).
 
     Keeping this pure is the point: the whole ladder-and-retry policy is
     table-testable with no git, no tmux and no network, and the impure driver
@@ -489,7 +494,10 @@ def next_action(rec: dict, snap: dict) -> Tuple[str, dict]:
         check = snap.get("check")
         state = str((check or {}).get("state") or "")
         if state == "failed":
-            return "stop", {"reason": "checks failed — fix them and re-run"}
+            return "stop", {
+                "reason": "checks failed — fix them and re-run",
+                "fix": "check",
+            }
         if state == "running":
             return "wait", {"reason": "waiting for checks to finish"}
         # The push route SOFT-GATES on the verification check: in a repo that
@@ -523,9 +531,12 @@ def next_action(rec: dict, snap: dict) -> Tuple[str, dict]:
         if blockers:
             if ci == "pending":
                 return "wait", {"reason": "waiting for required checks: " + blockers[0]}
-            return "stop", {"reason": "cannot merge — " + "; ".join(blockers)}
+            return "stop", {
+                "reason": "cannot merge — " + "; ".join(blockers),
+                "fix": _blocker_fix(blockers),
+            }
         if ci == "failed":
-            return "stop", {"reason": "CI failed on the PR — not merging"}
+            return "stop", {"reason": "CI failed on the PR — not merging", "fix": "ci"}
         if ci in ("pending", "unknown"):
             return "wait", {"reason": "waiting for CI to pass before merging"}
         return "merge", {}
@@ -573,15 +584,19 @@ def _interrupt_action(rec: dict, snap: dict) -> Tuple[str, dict]:
         return "stop", {
             "reason": "git's index.lock is stuck — another git process holds it"
         }
+    failed = {"fix": "precommit", "hook": hook, "step": named}
     if not hook:
         # No parseable hook id (a raw git hook, or the pane scrolled away).
         # Guessing from the display name is not possible — pre-commit's `name:`
         # is free text and does not map back to an id.
-        return "stop", {"reason": "pre-commit failed at " + named}
+        return "stop", {"reason": "pre-commit failed at " + named, **failed}
     if hook in NEVER_SKIP or hook not in retryable:
-        return "stop", {"reason": "pre-commit failed at " + named}
+        return "stop", {"reason": "pre-commit failed at " + named, **failed}
     if int(rec.get("commits") or 0) >= MAX_COMMIT_ATTEMPTS:
-        return "stop", {"reason": "too many commit attempts; last failure: " + named}
+        return "stop", {
+            "reason": "too many commit attempts; last failure: " + named,
+            **failed,
+        }
 
     tries = int((rec.get("attempts") or {}).get(hook) or 0)
     if tries == 0:
@@ -591,7 +606,79 @@ def _interrupt_action(rec: dict, snap: dict) -> Tuple[str, dict]:
         if hook not in skip:
             skip.append(hook)
         return "commit", {"skip": skip, "hook": hook, "skipping": hook}
-    return "stop", {"reason": "pre-commit kept failing at " + named}
+    return "stop", {"reason": "pre-commit kept failing at " + named, **failed}
+
+
+#: The closing sentence every failure note shares: fixing is the default, but
+#: a failure that is really two pieces of work disagreeing is the user's call.
+_NOTE_ESCALATE = (
+    "If it is not yours to fix (it conflicts with a change someone else made, "
+    "or needs a decision), stop and tell the user what conflicts instead."
+)
+#: Stripped from every value a note interpolates (hook names and step names
+#: read off the pane, GitHub's blocker text, the repo's check command). The
+#: mailbox lane never types into a bare shell, but like its own framing the
+#: note keeps no backtick, ``$``, ``;``, backslash or single quote.
+_NOTE_UNSAFE = re.compile(r"[`$;\\']")
+
+
+def failure_note(detail: dict, check_command: str = "") -> str:
+    """The short note typed into the agent when its Fast-track run stops on
+    something the agent can fix — or ``""`` when the stop carries no ``fix``.
+    Pure, one line: what failed, where to look, what to do."""
+
+    def plain(value) -> str:
+        # split/join also folds a newline (a multi-line check_command) into
+        # one space: the note is a single line before the mailbox sees it.
+        return " ".join(_NOTE_UNSAFE.sub("", str(value or "")).split())
+
+    fix = str((detail or {}).get("fix") or "")
+    if fix == "precommit":
+        hook = plain(detail.get("hook"))
+        step = plain(detail.get("step")) or hook or "a hook"
+        rerun = (
+            '"pre-commit run %s" shows why' % hook
+            if hook
+            else 're-running "git commit" shows why'
+        )
+        what = "the pre-commit step %s failed, so nothing was committed (%s)." % (
+            step,
+            rerun,
+        )
+        todo = "Fix it and commit."
+    elif fix == "check":
+        cmd = ' ("%s")' % plain(check_command) if plain(check_command) else ""
+        what = (
+            "the verification check%s failed on your last commit, its output "
+            "is in .mindflock_check.log." % cmd
+        )
+        todo = "Fix what failed and commit."
+    elif fix == "ci":
+        what = "CI failed on the pull request for this branch, so it was not merged."
+        todo = "Find the failing check, fix it and commit."
+    elif fix == "conflict":
+        blockers = plain(
+            str(detail.get("reason") or "").replace("cannot merge — ", "", 1)
+        )
+        what = "the pull request cannot merge: %s." % (
+            blockers or "it conflicts with its base"
+        )
+        todo = "Bring the base branch in, resolve the conflicts and commit."
+    else:
+        return ""
+    return plain("Fast-track stopped: %s %s %s" % (what, todo, _NOTE_ESCALATE))
+
+
+def _blocker_fix(blockers) -> str:
+    """Which merge blockers the agent can fix on its own branch: a conflict or a
+    branch behind its base ("conflict"), a failing required check ("ci"). A
+    draft or a missing review is a person's call — ``""``, no note."""
+    text = " ".join(str(b) for b in blockers).lower()
+    if "conflict" in text or "behind" in text:
+        return "conflict"
+    if "check is failing" in text:
+        return "ci"
+    return ""
 
 
 def _agent_action(rec: dict, snap: dict, depth: str) -> Tuple[str, dict]:
@@ -836,17 +923,20 @@ def update(title: str, **fields) -> Optional[dict]:
     return dict(rec)
 
 
-def halt(title: str, reason: str) -> Optional[dict]:
+def halt(title: str, reason: str, note: str = "") -> Optional[dict]:
     """Stop a run and record why, so the UI can say what needs a human.
 
     A silently stopped chain is the one failure mode that destroys trust in the
     feature, so the reason is required and always surfaced.
 
-    Clears ``note`` — it holds what the run was WAITING on, which is history the
-    moment the run stops. Left behind, a finished record still read "pre-commit
-    hooks are running" next to its own completion.
+    Replaces ``note`` — it holds what the run was WAITING on, which is history
+    the moment the run stops. Left behind, a finished record still read
+    "pre-commit hooks are running" next to its own completion. A halt's own
+    ``note`` says what was done about it (the agent was told what failed).
     """
-    return update(title, state="halted", reason=str(reason or "stopped"), note="")
+    return update(
+        title, state="halted", reason=str(reason or "stopped"), note=str(note or "")
+    )
 
 
 def finish(title: str) -> Optional[dict]:

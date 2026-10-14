@@ -7277,6 +7277,44 @@ button.stagechip.bgchip.bg-stuck:hover {
 #bulk-bar .bulk-held-x:hover {
   color: var(--text);
 }
+
+/* --- "N agents offline · Restart all" (OfflineBar) --- */
+#offline-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 10px;
+  margin: 0 0 2px;
+  background: var(--panel-2);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+
+#offline-bar .ob-count {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+#offline-bar .ob-btn {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+
+#offline-bar .ob-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+#offline-bar .ob-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
 }
 
 /* 110 */
@@ -16114,6 +16152,58 @@ button.ct-chip:hover {
   border-color: var(--accent);
 }
 
+/* A cron schedule: the expression field, and the server's reading of it
+   ("Every 30 minutes — next today 10:30, …") or why it can't be saved. */
+#tpl-cron {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  min-width: 14ch;
+  flex: 1 1 14ch;
+  max-width: 28ch;
+}
+
+.tpl-cron-preview {
+  font-size: 11.5px;
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+}
+
+/* "When a run's turn ends [Open a PR] — Run now and scheduled runs": one row. */
+.tpl-editor label.tpl-autopilot {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  color: var(--text);
+}
+
+.tpl-run-skip {
+  font-size: 11.5px;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+/* "Recent runs (n)": the last runs, newest first. */
+.tpl-history {
+  font-size: 11.5px;
+  margin-top: 4px;
+}
+
+.tpl-history summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.tpl-history ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.tpl-history li {
+  overflow-wrap: anywhere;
+}
+
 .tpl-row-actions {
   display: flex;
   justify-content: flex-end;
@@ -17514,6 +17604,77 @@ body.conn-lost #cs-errors {
 }
 
 #state-notice .sn-btn:hover {
+  border-color: var(--accent);
+}
+}
+
+/* 200 */
+
+@layer components{
+/* --------------------------------------------------------------------------- *
+ * Memory-pressure notice. Bottom-right, the corner ConnBanner uses (both are
+ * the machine's status, not the grid's). The two never show together: a
+ * server that doesn't answer has no reading, and the notice hides on error.
+ * --------------------------------------------------------------------------- */
+#memory-notice {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 3990;
+  width: 330px;
+  max-width: calc(100vw - 32px);
+  padding: 11px 14px 10px;
+  text-align: left;
+  font-size: 12.5px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--yellow, #d6a53c);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+#memory-notice.critical {
+  border-left-color: var(--red);
+}
+
+#memory-notice .mn-head {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--yellow, #d6a53c);
+}
+
+#memory-notice.critical .mn-head {
+  color: var(--red);
+}
+
+#memory-notice .mn-detail {
+  margin-top: 4px;
+  line-height: 1.45;
+}
+
+#memory-notice .mn-what {
+  color: var(--muted);
+}
+
+#memory-notice .mn-foot {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+#memory-notice .mn-btn {
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#memory-notice .mn-btn:hover {
   border-color: var(--accent);
 }
 }

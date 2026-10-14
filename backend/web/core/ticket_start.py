@@ -665,6 +665,15 @@ async def launch(
     """
     srv = _server()
     lineage = dict(lineage or _NO_LINEAGE)
+    # Memory guard: an agent starting tickets as its workers waits for
+    # headroom, exactly like its spawn_session (core.session_create). A run's
+    # ticket tasks are held by the run's planner; the Intake panel never is.
+    if lineage.get("spawned") and not run_id:
+        from backend.web.core import session_create as _session_create
+
+        refusal = await asyncio.to_thread(_session_create.memory_refusal)
+        if refusal is not None:
+            raise LaunchError(409, refusal)
     agent_override = str(agent or "")
     effort_override = str(effort or "")
     depth_override = str(depth or "")
