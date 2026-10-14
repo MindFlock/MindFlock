@@ -14,8 +14,10 @@
  *
  * A deep link (palette, a Connections card, gotoScreen, lib/openSettings)
  * to an advanced screen still lands on it in basic mode: the active screen
- * is always in the nav, under an "Advanced" heading, without flipping the
- * saved mode. */
+ * is always in the nav — at the END, under an "Advanced" heading — without
+ * flipping the saved mode. At the end, because in its usual place the
+ * heading sat above it and every basic screen after it (Workspace and
+ * Appearance read as advanced ones). */
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { lsKeyFor, notePrefWrite, readLocal, writeLocal, type KV } from "../../lib/prefs";
@@ -44,10 +46,14 @@ export interface ModeScreen {
 }
 
 /** The screens the nav lists: every screen in advanced mode; in basic mode
- * the basic ones plus the active screen when it is advanced (a deep link
- * landed there — the nav must show where you are). Order never changes. */
+ * the basic ones, in order, then the active screen when it is advanced (a
+ * deep link landed there — the nav must show where you are) last, so its
+ * "Advanced" heading never sits over a basic screen. */
 export function navScreens<T extends ModeScreen>(screens: readonly T[], advanced: boolean, active: string): T[] {
-  return screens.filter((s) => advanced || !s.advanced || s.key === active);
+  if (advanced) return [...screens];
+  const basic = screens.filter((s) => !s.advanced);
+  const peek = screens.find((s) => s.advanced && s.key === active);
+  return peek ? [...basic, peek] : basic;
 }
 
 /** The heading to draw before nav item `i` of `shown`, or "" for none. In
@@ -93,6 +99,18 @@ export function AdvancedToggle({
       </button>
       {!advanced && hidden > 0 ? <span className="set-mode-more">{hidden} more screens</span> : null}
     </div>
+  );
+}
+
+/** A "Learn more" fold under a control: the one plain line stays on the
+ * screen, the rest of the explanation waits one click away (GLOSSARY: one
+ * plain line per control). */
+export function LearnMore({ children }: { children: ReactNode }) {
+  return (
+    <details className="set-learn-more">
+      <summary>Learn more</summary>
+      <div className="set-learn-more-body">{children}</div>
+    </details>
   );
 }
 

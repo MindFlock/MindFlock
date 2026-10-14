@@ -1,4 +1,4 @@
-/** Settings → Agent providers: one row per agent CLI MindFlock knows (built-in
+/** Settings → Custom agents (key "providers"; was "Agent providers"): one row per agent CLI MindFlock knows (built-in
  * and custom) — installed (with the resolved path), signed in (from the status
  * API's login evidence) with a **Sign in** button that opens the CLI's own
  * login in an in-app terminal (dialogs/AgentSignIn), the install command when
@@ -246,10 +246,10 @@ export function Providers(_: ScreenProps) {
 
   return (
     <>
-      <h3 className="set-section-title">Agent providers</h3>
+      <h3 className="set-section-title">Custom agents</h3>
       <p className="set-hint">
-        Agent CLIs new sessions can launch. Install a CLI to make it available,
-        then sign in here — or point MindFlock at a build that isn't on PATH.
+        Every agent new sessions can start. Install one, sign in, point MindFlock at a build it
+        can't find, or add an agent MindFlock doesn't ship.
       </p>
 
       <div className="prov-conn-list">

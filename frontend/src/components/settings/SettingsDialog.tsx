@@ -17,10 +17,14 @@
  * names and the moved controls' names onto them.
  *
  * Basic vs advanced (settingsMode.tsx): the nav lists the six screens a new
- * user needs — General, Connections, Notifications, Agent CLI, Workspace,
+ * user needs — General, Connections, Notifications, Agents, Workspace,
  * Appearance — until "Show advanced settings" at its foot reveals the rest
  * (a synced pref). Screens marked `advanced` below are the rest; a deep link
- * to one still opens it, listed under an "Advanced" heading. */
+ * to one still opens it, listed last under an "Advanced" heading.
+ *
+ * Labels follow the shared glossary ("Agents", "Custom agents"); the keys
+ * ("coding", "providers") never change — palette/settingsSearch.ts, deep
+ * links and the server's Connections rows use them. */
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useUi } from "../../state/store";
@@ -88,8 +92,8 @@ const SCREENS = [
   { key: "general", label: "General", el: (p) => <General {...p} /> },
   { key: "connections", label: "Connections", el: (p) => <Connections {...p} /> },
   { key: "notifications", label: "Notifications", el: (p) => <Notifications {...p} /> },
-  { key: "coding", label: "Agent CLI", group: "Agents", el: (p) => <CodingCli {...p} /> },
-  { key: "providers", label: "Agent providers", group: "Agents", advanced: true, el: (p) => <Providers {...p} /> },
+  { key: "coding", label: "Agents", group: "Agents", el: (p) => <CodingCli {...p} /> },
+  { key: "providers", label: "Custom agents", group: "Agents", advanced: true, el: (p) => <Providers {...p} /> },
   { key: "accounts", label: "Accounts", group: "Agents", advanced: true, el: (p) => <Accounts {...p} /> },
   { key: "localmodel", label: "Local model", group: "Agents", advanced: true, el: (p) => <LocalModel {...p} /> },
   { key: "orchestration", label: "Agent orchestration", group: "Agents", advanced: true, el: (p) => <AgentOrchestration {...p} /> },
@@ -106,7 +110,7 @@ const SCREENS = [
   { key: "extensions", label: "Extensions", group: "Extensions", advanced: true, el: (p) => <Extensions {...p} /> },
   { key: "doctor", label: "Doctor", group: "Troubleshooting", advanced: true, el: (p) => <Doctor {...p} /> },
   { key: "logs", label: "System logs", group: "Troubleshooting", advanced: true, el: (p) => <SystemLogs {...p} /> },
-  { key: "advanced", label: "Advanced", group: "Troubleshooting", advanced: true, el: (p) => <Advanced {...p} /> },
+  { key: "advanced", label: "Engine & updates", group: "Troubleshooting", advanced: true, el: (p) => <Advanced {...p} /> },
   // Maintainer-only: MindFlock's own reach (stars, downloads, tracked-link
   // clicks), not something an end user's build needs — filtered out below
   // unless this is a --mindflock-dev shell.

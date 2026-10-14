@@ -1,15 +1,40 @@
-/** Settings → Coding CLI (partial 106 + sections 21/22's pickers): default
- * provider, per-provider default launch flags (a name -> flags map re-sent
- * whole on every edit), agent test, and the window-refresh keepalive. */
+/** Settings → Agents (key "coding"; partial 106 + sections 21/22's pickers):
+ * the default agent and its sign-in state (the SAME row Connections shows,
+ * so the two screens can never disagree), per-agent default launch flags (a
+ * name -> flags map re-sent whole on every edit), how many sessions run at
+ * once, and — folded — a check for any other agent plus the window-refresh
+ * keepalive. */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../api/client";
+import type { ConnectionRow, ConnectionsResponse } from "../../../api/types";
+import { useUi } from "../../../state/store";
 import { toast } from "../../../lib/toast";
 import { pickerOptions } from "../../../lib/providerRows";
 import { FlagChips } from "../../dialogs/FlagChips";
-import { useSettings } from "../useSettings";
+import { SettingField, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 import { AdvancedFold } from "../settingsMode";
+import {
+  CONNECTIONS_CHANGED_EVENT,
+  ConnectionRowView,
+  runTest,
+  type TestOutcome,
+} from "./Connections";
+
+/** The flags field's example, per agent: a harmless flag that agent really
+ * takes — never a permission-skipping one, which as grey placeholder text
+ * read as if it were already set. */
+export const FLAG_EXAMPLES: Record<string, string> = {
+  claude: "e.g. --model opus",
+  codex: "e.g. --search",
+  antigravity: "e.g. --sandbox",
+  aider: "e.g. --no-auto-commits",
+};
+
+export function flagsPlaceholder(provider: string): string {
+  return FLAG_EXAMPLES[(provider || "").trim().toLowerCase()] || "";
+}
 
 interface Provider {
   name: string;
@@ -77,10 +102,12 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** Bumped after the default changes, so the sign-in row re-reads it. */
+  const [defaultSaved, setDefaultSaved] = useState(0);
   const pickProvider = (name: string) => {
     setSelected(name);
     setFlags(flagsMap.current[name] || "");
-    s.saveField("coding_cli", "default_provider", name);
+    void s.saveField("coding_cli", "default_provider", name).then(() => setDefaultSaved((n) => n + 1));
   };
 
   const saveFlags = useCallback(
@@ -125,13 +152,13 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
 
   return (
     <>
-      <h3 className="set-section-title">Agent CLI</h3>
+      <h3 className="set-section-title">Agents</h3>
       <label className="set-row">
-        <span className="set-label">Default provider</span>
+        <span className="set-label">Default agent</span>
         <select id="default-provider-select" value={selected} onChange={(e) => pickProvider(e.target.value)}>
-          {/* Every known CLI, the absent ones disabled with the reason — you
+          {/* Every known agent, the absent ones disabled with the reason — you
               can't launch what isn't there, but hiding them made "where's
-              codex?" a mystery (install it under Agent providers). */}
+              codex?" a mystery. */}
           {pickerOptions(providers).map((o) => (
             <option key={o.name} value={o.name} disabled={o.disabled}>
               {o.label}
@@ -147,21 +174,21 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
           readOnly
         />
         <span className="set-hint">
-          Program new sessions launch by default. A CLI that isn't installed can't be picked —
-          install or sign in to it under{" "}
-          <button type="button" className="linklike" data-goto-screen="providers" onClick={() => gotoScreen("providers")}>
-            Agent providers
+          New sessions start with this agent. To install or sign in to another, see{" "}
+          <button type="button" className="linklike" data-goto-screen="connections" onClick={() => gotoScreen("connections")}>
+            Connections
           </button>
           .
         </span>
       </label>
+      <DefaultAgentStatus provider={selected} refresh={defaultSaved} gotoScreen={gotoScreen} />
       <label className="set-row">
-        <span className="set-label">Default launch flags</span>
+        <span className="set-label">Extra flags for new sessions</span>
         <input
           type="text"
           id="default-launch-args-input"
           autoComplete="off"
-          placeholder="--dangerously-skip-permissions"
+          placeholder={flagsPlaceholder(selected)}
           value={flags}
           onChange={(e) => setFlags(e.target.value)}
           onBlur={() => saveFlags(flags)}
@@ -178,46 +205,152 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
           }}
         />
         <span className="set-hint">
-          Extra CLI flags added to every new session of the <b>Default provider</b> above —
-          flags are per-agent, so switch the provider to set another CLI's defaults.
+          Added every time the default agent starts. "Skip permissions", "Bypass approvals" and
+          "Yes to all" let the agent edit files and run commands without asking you first.
         </span>
       </label>
-      <div className="set-row">
-        <span className="set-label">Agent CLI check</span>
-        <span className="test-row">
-          <select
-            id="agent-test-provider"
-            aria-label="Provider to test"
-            value={testProvider || selected}
-            onChange={(e) => {
-              setTestProvider(e.target.value);
-              setAgentTest({ testing: false });
-            }}
-          >
-            {providers.map((p) => (
-              <option key={p.name} value={p.name}>
-                {p.name}
-                {p.name === selected ? " (default)" : ""}
-              </option>
-            ))}
-          </select>
-          <button type="button" id="agent-test-btn" className="test-btn" onClick={runAgentTest}>
-            Test agent CLI
-          </button>
-          <span
-            id="agent-test-result"
-            className={"test-result" + (agentTest.msg ? (agentTest.ok ? " ok" : " bad") : "")}
-          >
-            {agentTest.testing ? "testing…" : agentTest.msg ? (agentTest.ok ? "✓ " : "✗ ") + agentTest.msg : ""}
-          </span>
-        </span>
-        <span className="set-hint">
-          Probes that CLI's binary and its login state — any known provider, not just the default.
-        </span>
-      </div>
+      <SessionsAtOnce gotoScreen={gotoScreen} />
       <AdvancedFold id="coding-advanced">
         <WindowRefresh />
+        <div className="set-row">
+          <span className="set-label">Check another agent</span>
+          <span className="test-row">
+            <select
+              id="agent-test-provider"
+              aria-label="Agent to check"
+              value={testProvider || selected}
+              onChange={(e) => {
+                setTestProvider(e.target.value);
+                setAgentTest({ testing: false });
+              }}
+            >
+              {providers.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name}
+                  {p.name === selected ? " (default)" : ""}
+                </option>
+              ))}
+            </select>
+            <button type="button" id="agent-test-btn" className="test-btn" onClick={runAgentTest}>
+              Test
+            </button>
+            <span
+              id="agent-test-result"
+              className={"test-result" + (agentTest.msg ? (agentTest.ok ? " ok" : " bad") : "")}
+            >
+              {agentTest.testing ? "testing…" : agentTest.msg ? (agentTest.ok ? "✓ " : "✗ ") + agentTest.msg : ""}
+            </span>
+          </span>
+          <span className="set-hint">Is it installed, and can MindFlock see a sign-in?</span>
+        </div>
       </AdvancedFold>
+    </>
+  );
+}
+
+/** The default agent's own Connections row: the same status, Test and Sign
+ * in as Settings → Connections, read from the same endpoint — so "is my
+ * agent signed in?" has one answer wherever you look. */
+function DefaultAgentStatus({
+  provider,
+  refresh,
+  gotoScreen,
+}: {
+  provider: string;
+  refresh: number;
+  gotoScreen(name: string): void;
+}) {
+  const [row, setRow] = useState<ConnectionRow | null>(null);
+  const [result, setResult] = useState<TestOutcome | undefined>();
+  const [testing, setTesting] = useState(false);
+  const openDialogFor = useUi((st) => st.openDialogFor);
+  const closeDialog = useUi((st) => st.closeDialog);
+
+  const load = useCallback(async () => {
+    try {
+      const d = await api<ConnectionsResponse>("/api/connections?refresh=1");
+      const rows = d?.connections || [];
+      const want = (provider || "").toLowerCase();
+      const found =
+        rows.find((c) => c.kind === "agent" && (c as ConnectionRow & { provider?: string }).provider === want) ||
+        rows.find((c) => c.kind === "agent" && c.default) ||
+        null;
+      setRow(found);
+    } catch {
+      setRow(null);
+    }
+  }, [provider]);
+
+  useEffect(() => {
+    setResult(undefined);
+    void load();
+  }, [load, refresh]);
+
+  useEffect(() => {
+    const on = () => void load();
+    window.addEventListener(CONNECTIONS_CHANGED_EVENT, on);
+    return () => window.removeEventListener(CONNECTIONS_CHANGED_EVENT, on);
+  }, [load]);
+
+  if (!row) return null;
+  // "Manage" on this row leads HERE: drop it rather than offer a no-op.
+  const toHere = row.action?.kind === "screen" && row.action.target === "coding";
+  const shown: ConnectionRow = toHere ? { ...row, action: null, settings_screen: "" } : row;
+  return (
+    <div className="set-row coding-agent-status" id="coding-agent-status">
+      <span className="set-label">Sign-in</span>
+      <ConnectionRowView
+        c={shown}
+        deps={{ gotoScreen, openDialogFor, closeDialog }}
+        result={result}
+        testing={testing}
+        onTest={
+          row.test
+            ? async () => {
+                setTesting(true);
+                const out = await runTest(row.test!);
+                setTesting(false);
+                setResult(out);
+                void load();
+              }
+            : undefined
+        }
+        onChanged={() => void load()}
+      />
+    </div>
+  );
+}
+
+/** "How many sessions can run at once?" — answered plainly. There is no
+ * cap on the sessions you start; auto-started ticket sessions have one
+ * (engine.max_sessions, the same field as Intake → Queue), and sessions an
+ * agent starts have their own limits under Agent orchestration. */
+function SessionsAtOnce({ gotoScreen }: { gotoScreen(name: string): void }) {
+  return (
+    <>
+      <h3 className="set-section-title" id="coding-sessions-at-once">
+        Sessions running at once
+      </h3>
+      <p className="set-hint">Sessions you start yourself have no limit. Start as many as you like.</p>
+      <label className="set-row">
+        <span className="set-label">Ticket sessions at once</span>
+        <SettingField group="engine" field="max_sessions" type="number" placeholder="no limit" />
+        <span className="set-hint">
+          The most auto-started ticket sessions running together. Extra tickets wait their turn.
+        </span>
+      </label>
+      <p className="set-hint">
+        Sessions an agent starts for you have their own limits, under{" "}
+        <button
+          type="button"
+          className="linklike"
+          data-goto-screen="orchestration"
+          onClick={() => gotoScreen("orchestration")}
+        >
+          Agent orchestration
+        </button>
+        .
+      </p>
     </>
   );
 }
@@ -292,9 +425,8 @@ function WindowRefresh() {
         </label>
       </div>
       <p className="set-hint">
-        Sends a 1-token message (no MCPs/connections attached) to anchor the rolling usage
-        window. Pick the time you want a totally fresh window to begin — usually the start of
-        your work day.
+        Sends a tiny message on a schedule so a fresh usage window starts when you want it,
+        such as the start of your work day.
       </p>
       {cfg.enabled && (
         <div id="wr-opts">
@@ -307,10 +439,7 @@ function WindowRefresh() {
               defaultValue={cfg.anchor_time || ""}
               onChange={(e) => save({ anchor_time: e.target.value || "" })}
             />
-            <span className="set-hint">
-              A tiny ping fires daily at this local time, so your usage window resets right
-              then. Leave empty to use a fixed interval instead.
-            </span>
+            <span className="set-hint">Daily, at this local time. Leave empty to use a fixed interval.</span>
           </label>
           <label
             className={"set-row" + ((cfg.anchor_time || "").trim() ? " feature-off" : "")}
@@ -331,13 +460,10 @@ function WindowRefresh() {
               }}
             />{" "}
             <span className="muted">hours</span>
-            <span className="set-hint">
-              Fallback when no time is set — matches the provider's rolling window
-              (Claude/Codex: 5h).
-            </span>
+            <span className="set-hint">Used when no time is set (Claude and Codex: 5 hours).</span>
           </label>
           <div className="set-row">
-            <span className="set-label">Providers</span>
+            <span className="set-label">Agents</span>
             <div id="wr-providers" className="wr-providers">
               {opts.map((o) => (
                 <label className="wr-prov" key={o.name}>

@@ -58,9 +58,15 @@ describe("ConnectGitHub dialog", () => {
     expect(conns).toContain("openConnectGitHub");
   });
 
-  it("explains a missing device flow instead of showing a dead button", () => {
+  it("leads with the token (scopes named) instead of a build-internals sentence", () => {
     const dialog = src("components/dialogs/ConnectGitHub.tsx");
-    expect(dialog).toContain("DEVICE_FLOW_UNCONFIGURED");
+    // Round 2: the "not configured in this build" line is gone from the
+    // dialog; without a device flow the token path leads and names its scopes.
+    expect(dialog).not.toContain("DEVICE_FLOW_UNCONFIGURED");
+    expect(dialog).toContain('id="gh-token-lead"');
+    expect(dialog).toContain("<code>repo</code> and <code>read:org</code>");
+    // Test and the push check wait for a saved credential.
+    expect(dialog).toContain("disabled={!!busy || !st.connected}");
     expect(DEVICE_FLOW_UNCONFIGURED).toBe(
       "Device flow is not configured in this build; paste a token or use gh"
     );

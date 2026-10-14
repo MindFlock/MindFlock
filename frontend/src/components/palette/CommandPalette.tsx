@@ -23,6 +23,7 @@ import { routeCode } from "../../lib/fleet";
 import { openSettings } from "../../lib/openSettings";
 import { TEMPLATES_CHANGED, ensureTemplates, runProblem, templatesNow } from "../../lib/templates";
 import { runTemplateNow } from "../../lib/templateRun";
+import { settingsActions } from "./settingsSearch";
 
 interface PaletteAction {
   label: string;
@@ -241,6 +242,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       .filter((x) => x.s >= 0);
     scored.sort((x, y) => x.s - y.s || x.i - y.i);
     const out = scored.map((x) => x.a);
+    out.splice(scored.filter((x) => x.s < 1000).length, 0, ...settingsActions(query));
     // The query IS a code (pasted straight into the palette): joining with
     // it is the first thing offered, routed by its format.
     // Second, not first, when a command's own name contains the query: "run

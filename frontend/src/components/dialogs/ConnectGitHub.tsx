@@ -9,11 +9,14 @@
  * backend/web/core/github_auth.py) offers the best way this computer has:
  *  - GitHub's device flow when an OAuth App client id is configured (the
  *    build's constant, `github.oauth_client_id` or MINDFLOCK_GITHUB_CLIENT_ID):
- *    a code to type at github.com/login/device, nothing to copy — and a plain
- *    sentence, not a dead button, while no client id ships;
- *  - else `gh auth login --web` in a sign-in terminal, when gh is installed;
- *  - else a pre-filled "make a token" page and a paste box (always offered as
- *    the fallback).
+ *    a code to type at github.com/login/device, nothing to copy;
+ *  - else the token path LEADS — the exact scopes named, a link to GitHub's
+ *    token page with them ticked, and the paste box — with `gh auth login
+ *    --web` in a sign-in terminal as the second way when gh is installed.
+ *    No build-internals sentence ("device flow is not configured") and no
+ *    dead button: a person sees the way that works on this computer.
+ * Test and the push check stay disabled until a credential is saved — before
+ * that, all either could say is "no token".
  * **Test** is real: POST /api/settings/test/github does a GET /user with the
  * token the one chain resolves plus one repo-access check against the first
  * configured repository. Then git's name/email (pre-filled from the account,
@@ -33,7 +36,6 @@ import {
   type GithubStatus,
 } from "../../lib/onboarding";
 import {
-  DEVICE_FLOW_UNCONFIGURED,
   OPEN_CONNECT_GITHUB_EVENT,
   describeConnectionTest,
   type ConnectionTest,
@@ -171,6 +173,9 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
   if (!st) return <p className="muted">Checking GitHub…</p>;
 
   const method = primaryGithubMethod(st);
+  const hasDevice = method === "device";
+  /** gh can sign in here (installed, or offered by the server). */
+  const hasGh = (st.methods || []).includes("gh") || !!st.gh?.installed;
   const pasteBox = (
     <div className="setup-acct-row gh-token-row">
       <a href={st.token_url} target="_blank" rel="noopener noreferrer" className="gh-token-link">
@@ -179,6 +184,7 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
       <input
         type="password"
         className="gh-token-input"
+        aria-label="GitHub token"
         placeholder="…then paste it here"
         autoComplete="off"
         value={token}
@@ -257,37 +263,43 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
                 {flow && flow.error && <span className="error">{flow.error}</span>}
               </div>
             ))}
-          {!(st.methods || []).includes("device") && (
-            <p className="muted gh-device-unconfigured" id="gh-device-unconfigured">
-              {DEVICE_FLOW_UNCONFIGURED}
-            </p>
+          {!hasDevice && (
+            <div className="gh-token-lead" id="gh-token-lead">
+              <p className="set-hint gh-token-scopes" id="gh-token-scopes">
+                Paste a GitHub token with the <code>repo</code> and <code>read:org</code> scopes.
+                The link opens GitHub's token page with both ticked.
+              </p>
+              {pasteBox}
+            </div>
           )}
-          {method === "gh" && (
-            <div className="setup-actions">
+          {!hasDevice && hasGh && (
+            <div className="setup-actions gh-cli-alt">
               <button
                 type="button"
                 id="gh-cli-signin"
+                className="test-btn"
                 disabled={!!busy}
                 onClick={(e) => {
                   e.stopPropagation();
                   setGhOpen(true);
                 }}
               >
-                Sign in to GitHub
+                Or sign in with the GitHub CLI
               </button>
-              <span className="set-hint">opens GitHub in your browser (through the gh CLI)</span>
+              <span className="set-hint">opens GitHub in your browser</span>
             </div>
           )}
-          {method === "token" ? (
-            pasteBox
-          ) : (
+          {hasDevice && (
             <details className="gh-token-fold" onClick={(e) => e.stopPropagation()}>
               <summary>Or paste a token</summary>
+              <p className="set-hint gh-token-scopes">
+                Needs the <code>repo</code> and <code>read:org</code> scopes.
+              </p>
               {pasteBox}
             </details>
           )}
           <p className="muted setup-hint">
-            Recommended, not required: other forges push over your own remote as usual.
+            Lets agents open and review pull requests. Pushing works without it.
           </p>
         </>
       )}
@@ -338,7 +350,7 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
         <button
           type="button"
           id="gh-connection-test"
-          disabled={!!busy}
+          disabled={!!busy || !st.connected}
           onClick={(e) => {
             e.stopPropagation();
             void run("test", async () => {
@@ -355,7 +367,11 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
           </span>
         )}
         {!test && (
-          <span className="set-hint">asks GitHub who this token is, and whether it reaches your first repository</span>
+          <span className="set-hint">
+            {st.connected
+              ? "Asks GitHub who you are, and whether it reaches your first repository."
+              : "Save a token first."}
+          </span>
         )}
       </div>
 
@@ -363,7 +379,7 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
         <button
           type="button"
           id="gh-push-check"
-          disabled={!!busy}
+          disabled={!!busy || !st.connected}
           onClick={(e) => {
             e.stopPropagation();
             void run("push", async () => setPush(await api<PushCheck>("/api/github/push-check", { method: "POST" })));
@@ -444,7 +460,7 @@ export function ConnectGitHubDialog() {
       <div className="connect-github-panel">
         <div className="ws-head">
           <h2>Connect GitHub</h2>
-          <span className="muted">one sign-in for PR review, issue handling and Open PR</span>
+          <span className="muted">so agents can open and review pull requests</span>
           <button type="button" id="connect-github-close" onClick={() => setOpen(false)}>
             Close
           </button>

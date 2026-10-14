@@ -618,11 +618,14 @@ def test_intake_tabs_offer_connect_github_not_a_raw_token(rel):
     assert "Connect GitHub" in src
 
 
-def test_connect_github_dialog_explains_a_missing_device_flow():
+def test_connect_github_dialog_leads_with_the_token_without_a_device_flow():
     src = (ROOT / "frontend/src/components/dialogs/ConnectGitHub.tsx").read_text()
     lib = (ROOT / "frontend/src/lib/githubConnect.ts").read_text()
-    assert "Device flow is not configured in this build; paste a token or use gh" in lib
-    assert "DEVICE_FLOW_UNCONFIGURED" in src
+    # Round 2: the build-internals sentence no longer shows in the dialog; with
+    # no device flow the token path leads and names its scopes.
+    assert "DEVICE_FLOW_UNCONFIGURED" not in src
+    assert 'id="gh-token-lead"' in src
+    assert "<code>repo</code> and <code>read:org</code>" in src
     assert "mf:open-connect-github" in lib
     assert "export function ConnectGitHubDialog" in src
     assert '"/api/settings/test/github"' in src

@@ -189,6 +189,11 @@ have to navigate), **Verify — check what was pushed**, **Customize…**, **Pro
 <name>** (*fresh session, prompt sent*) per template that has a folder,
 **Assistant agent file…**,
 **Recently closed…**, Open Settings / Doctor / **Open Setup checklist**,
+**Settings → …** rows for what you typed (`palette/settingsSearch.ts`: one
+entry per screen plus a few controls, matched on the words people use —
+"github", "notification", "worktree", "parallel", "phone", "token", "theme"
+— each opening Settings on that screen, scrolled to the control; listed right
+after the commands whose names contain the text),
 **Tour** (*what MindFlock is, in five slides*), Toggle sidebar, Keyboard
 shortcuts — then the focused session's verbs (Commit / Push / **Open PR** /
 **Merge PR** once there is a PR / Open / focus IDE, Rename…, Queue prompt… *runs when idle*, Split…
@@ -1325,7 +1330,7 @@ the part that makes the claim trustworthy. `working`/`offline` flips remain
 chip colours and are still filtered out.
 
 **One rule list, two delivery channels.** Settings → Notifications is split that
-way on purpose: *What triggers a notification* (needs-input, PR approved, PR
+way on purpose: *What you're alerted about* (needs-input, PR approved, PR
 merged/closed, budget exceeded, pre-commit failed, ran out of usage / usage came
 back — plus the noisy opt-ins, among them "changes requested") governs **both**
 channels, and each channel decides only where an alert lands.
@@ -1725,7 +1730,7 @@ server refuses the start when it can't attach.
 
 **Launch flags** are extra CLI flags appended to the agent on every start/resume
 of the session. The field is pre-filled from the global per-provider default
-(`coding_cli.default_launch_args`, Settings → Agent CLI) and its value is
+(`coding_cli.default_launch_args`, Settings → Agents) and its value is
 *always sent* with the create request — so clearing it for one session creates
 that session with no flags rather than re-inheriting the default.
 
@@ -2067,7 +2072,7 @@ first load: the grid's first-run card *is* the welcome. UI store state
   itself.
 - **Sign in to <agent>** — on the doctor's *agent auth* rows (the card, Setup
   and Settings → Doctor), on step ②'s row for each installed agent CLI, and on
-  Settings → Agent providers, whenever no login was found for a CLI that
+  Settings → Custom agents, whenever no login was found for a CLI that
   declares a login flow. It opens the CLI's own login in a
   terminal window (`AgentSignIn.tsx`); closing it re-runs the check.
 - **Hints** (`onboarding/Hint.tsx`) — small dismissible 💡 inline callouts that
@@ -3181,7 +3186,7 @@ is running it**.
 
 **Basic first, advanced on request.** Out of the box the nav lists only the
 six screens a new user needs to point MindFlock at a repo and a tracker and
-run agents — **General**, **Connections**, **Notifications**, **Agent CLI**,
+run agents — **General**, **Connections**, **Notifications**, **Agents**,
 **Workspace** and **Appearance** — as one flat list with no headings. **Show
 advanced settings** at the foot of the nav (`#settings-advanced-toggle`, with
 "*N* more screens" under it) reveals every other screen; **Hide advanced
@@ -3190,26 +3195,32 @@ settings** puts them away again. The choice is the synced pref
 follows the person to all their devices, like the theme. The controls on a
 basic screen that only some people need sit in a collapsed **Advanced** fold
 on that screen (open by default in advanced mode): General's plan window
-budget and terminal scroll speed, Notifications' phone push (ntfy), Agent
-CLI's keep-usage-windows-warm schedule, Workspace's live branch, fast-track
-depth and retryable pre-commit hooks, and Connections' rows other than agent
-CLIs, GitHub and ticket trackers (devices and people, orchestration,
-databases, phone push, extensions, system — the summary count above covers
-only the rows shown unfolded in basic mode). A deep link to an advanced screen
-— the palette, a Connections card, an in-screen link, `openSettings(...)`, a
-legacy key — still opens it in basic mode: the open screen is always in the
-nav, under an **Advanced** heading, and the saved mode does not change. The
-rules live in `components/settings/settingsMode.tsx`.
+budget and terminal scroll speed, Notifications' phone alerts (ntfy) and its
+expert alerts, Agents' keep-usage-windows-warm schedule and **Check another
+agent**, Workspace's live branch, fast-track depth and retryable pre-commit
+hooks, and Connections' other agents and its rows beyond what you use
+(devices and people, orchestration, databases, phone push, extensions,
+system). A control's long explanation sits in a small **Learn more** fold
+under its one-line hint (`LearnMore` in settingsMode.tsx). A deep link to an
+advanced screen — the palette, a Connections card, an in-screen link,
+`openSettings(...)`, a legacy key — still opens it in basic mode: the open
+screen is added at the END of the nav under an **Advanced** heading (so the
+heading never sits over Workspace or Appearance), and the saved mode does not
+change. The rules live in `components/settings/settingsMode.tsx`.
+
+Labels follow the shared glossary; keys never change: **Agents** is key
+`coding` (was "Agent CLI"), **Custom agents** is `providers` (was "Agent
+providers"), **Engine & updates** is `advanced` (was "Advanced").
 
 In advanced mode the nav is grouped under non-clickable headings
 (`.set-nav-group`) so it scans: **General**, **Connections** and
-**Notifications** first, then **Agents** (Agent CLI, Agent providers, Accounts,
+**Notifications** first, then **Agents** (Agents, Custom agents, Accounts,
 Local model, Agent orchestration), **Code** (Workspace, IDE), **This device**
 (Security, Appearance), **Devices and people** (**Your devices**, **Your
 phone**, **People** — the two ways to trust another machine: yours, and
 someone else's), **Extensions** (its own group: loaded extensions and any
-that failed to load) and **Troubleshooting** (Doctor, System logs, Advanced,
-and Site traffic in a `--mindflock-dev` shell only). The list is
+that failed to load) and **Troubleshooting** (Doctor, System logs, Engine &
+updates, and Site traffic in a `--mindflock-dev` shell only). The list is
 `SCREENS` in `components/settings/SettingsDialog.tsx`. Every screen key is
 stable — Your devices is still `devices`, Your phone `mobile`, People `peer` —
 and the new names and the moved controls' names (`your-devices`,
@@ -3232,19 +3243,54 @@ A few screens got quieter:
   `confirm()`s, which do nothing in the desktop app.
 - Saving any screen toasts **Saved**, and the IDE toggle toasts *IDE
   auto-adopt on* / *off*.
-- **Notifications** holds the only desktop-notification on/off toggle; the
-  bell no longer carries a copy.
+- **Notifications** opens on **Where alerts go**: In MindFlock (the bell,
+  always on), **Desktop notifications** (the only desktop on/off toggle; the
+  bell carries no copy) and **Phone alerts** (**Set up** opens the ntfy fold),
+  with one plain line when only the bell is on — the reason the switches
+  below seem to do nothing. Then **What you're alerted about** in three
+  groups — **Needs you** (a question, a session finishing, a session
+  stopping, a computer asking to join), **Pull requests**, **Usage & cost** —
+  and **More alerts** (team runs, hooks, Verify, zones) folded with an "*N* of
+  *M* on" count. Each row's words come from `screens/notifyCopy.ts`, keyed by
+  rule id; the server's `title`/`body` are the alert's own templates
+  (`{session}`, `{detail}`) and are never shown as a description.
+- **General** keeps one plain line per control (no event ids); **Reduce
+  motion**, **Take a break** and **Idle flock** moved to **Appearance →
+  Comfort**.
+- **Agents** shows the default agent's own Connections row (status, Test,
+  Sign in) so the two screens give one answer; its flags field suggests a
+  harmless per-agent example (never a permission-skipping flag), and
+  **Sessions running at once** says it plainly: no limit on sessions you
+  start, **Ticket sessions at once** (`engine.max_sessions`, the same field
+  as Intake → Queue) for auto-started ticket sessions, and a link to Agent
+  orchestration's spawn limits for sessions an agent starts.
+- **Connections** leads with **What you use** — the default agent, GitHub
+  and the ticket tracker — and its header count covers exactly those rows in
+  both modes. Every other agent CLI on the machine is folded under **Other
+  agents on this computer** with neutral pills (**Not set up**, **Not
+  installed**, **Installed** when its sign-in can't be checked), never the
+  warning gold. Agent rows read "Agent · Claude Code" with no file paths;
+  GitHub's row is a plain status ("Not connected. Agents can't open pull
+  requests yet." / "Connected as @you"), with no `gh` output or Copy chip and
+  no Test until something is connected. A failing Test outranks an agent
+  row's stored Connected.
+- **Connect GitHub** never shows "device flow is not configured": without a
+  device flow the token path leads (the `repo` and `read:org` scopes named,
+  the link opening GitHub's token page with both ticked), with the gh CLI
+  sign-in as a second button when gh is installed. **Test** and **Check I
+  can push** stay disabled until a credential is saved.
 
 **Spacing.** Every screen runs on one rhythm (`--set-rhythm`, 24px, on
 `#settings-panel`): a field's label, control and hint sit 6px apart, the next
 field starts 24px below, so a hint always reads as part of the field above it.
 Section titles get 40px above and 16px below; cards and inline button rows
 use the same 4/8/12/16/24 scale. In a window narrower than 600px the nav
-becomes a scrolling row of tabs above the screen (group headings hidden) and
-the ntfy fields stack their labels above the inputs.
+wraps into a few short rows of tabs above the screen (group headings hidden;
+advanced mode's long list scrolls inside a capped height) and the ntfy fields
+stack their labels above the inputs.
 
 - **Cursor auto-adopt** — adopt Cursor-opened workspaces as sessions.
-- **Per-session budget (USD, 0 = off)** — cost guardrail: when a session's
+- **Per-session budget (USD, 0 = off)** (General) — cost guardrail: when a session's
   estimated cost crosses this figure the server emits a one-shot
   `session.budget_exceeded` event → warning toast (click focuses the session),
   a notification on every enabled channel (desktop and/or ntfy — see

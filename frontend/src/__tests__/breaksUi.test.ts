@@ -24,7 +24,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import BREAKS_SRC from "../components/breaks/Breaks.tsx?raw";
 import BREAKS_CSS from "../components/breaks/breaks.css?raw";
-import GENERAL_SRC from "../components/settings/screens/General.tsx?raw";
+// The comfort rows (Take a break, Idle flock, Reduce motion) moved from
+// General to Appearance in the round-2 Settings pass.
+import APPEARANCE_SRC from "../components/settings/screens/Appearance.tsx?raw";
 import TOPBAR_SRC from "../components/TopBar.tsx?raw";
 import BREAK_TIMER_SRC from "../lib/breakTimer.ts?raw";
 import FLOCK_SRC from "../lib/flock.ts?raw";
@@ -85,9 +87,9 @@ describe("Take a break", () => {
     expect(html).toContain("Resume Working");
   });
 
-  it("puts the row in General, as the sentence it configures, persisted under two keys", () => {
-    expect(GENERAL_SRC).toContain("Take a break");
-    expect(GENERAL_SRC).toContain("Reminder to take a break every");
+  it("puts the row in Appearance, as the sentence it configures, persisted under two keys", () => {
+    expect(APPEARANCE_SRC).toContain("Take a break");
+    expect(APPEARANCE_SRC).toContain("Reminder to take a break every");
     const store = squash(src("state/store.ts"));
     expect(store).toContain('load<boolean>("mf_break_on", false)');
     expect(store).toContain('load<number>("mf_break_every", BREAK_DEFAULT_MINUTES)');
@@ -139,7 +141,7 @@ describe("Take a break", () => {
   it("says the same thing in the Settings copy and on the button", () => {
     // A rename that lands in only one of the two describes a control that no
     // longer exists.
-    expect(GENERAL_SRC).toContain("Resume Working");
+    expect(APPEARANCE_SRC).toContain("Resume Working");
     for (const [path, text] of Object.entries(SRC)) {
       expect(text.includes("Resumed work"), path).toBe(false);
     }
@@ -286,8 +288,8 @@ describe("the idle flock", () => {
   });
 
   it("is a switch that ships on, with a delay", () => {
-    expect(GENERAL_SRC).toContain("Idle flock");
-    expect(GENERAL_SRC).toContain("Fly the flock over your grid after");
+    expect(APPEARANCE_SRC).toContain("Idle flock");
+    expect(APPEARANCE_SRC).toContain("Fly the flock over your grid after");
     const store = squash(src("state/store.ts"));
     expect(store).toContain('load<boolean>("mf_idle_flock", true)');
     expect(store).toContain('load<number>("mf_idle_after", IDLE_DEFAULT_MINUTES)');

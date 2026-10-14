@@ -274,9 +274,9 @@ def test_settings_nav_order_and_groups():
     assert groups["extensions"] == "Extensions"
     for k in ("doctor", "logs", "advanced", "traffic"):
         assert groups[k] == "Troubleshooting", k
-    # `group` comes AFTER label, so `{ key: "coding", label: "Agent CLI"` stays
-    # one contiguous phrase.
-    assert '{ key: "coding", label: "Agent CLI", group: "Agents"' in block
+    # `group` comes AFTER label, so `{ key: "coding", label: "Agents"` stays
+    # one contiguous phrase (round 2: "Agent CLI" became "Agents", GLOSSARY).
+    assert '{ key: "coding", label: "Agents", group: "Agents"' in block
 
 
 def test_settings_nav_draws_a_heading_per_group():
@@ -312,7 +312,8 @@ def test_settings_copy_fixes():
     assert '"IDE auto-adopt on"' in _read(screens / "Ide.tsx")
     assert "Cursor auto-adopt on" not in _read(screens / "Ide.tsx")
     ws = re.sub(r"\s+", " ", _read(screens / "Workspace.tsx"))
-    assert "ticket source (Intake → Tickets)" in ws
+    # Round 2: the intro says what the screen is for, not what isn't on it.
+    assert "nothing to set here per repo" not in ws
     assert "Ticketing source" not in ws
     assert 'toast("Saved");' in _read(_SETTINGS / "useSettings.tsx")
     ext = _read(screens / "Extensions.tsx")

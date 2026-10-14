@@ -70,7 +70,7 @@ function SignInWindow({
 
   const status =
     state === "streaming"
-      ? "sign in when it asks (a browser window may open) — then close this window"
+      ? "Finish signing in in your browser (it may open on its own, or copy the link below). Then close this window."
       : state;
 
   // Escape is caught in the capture phase: it must close this window before
