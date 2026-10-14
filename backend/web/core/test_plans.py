@@ -840,12 +840,60 @@ def _all_settled(plan: dict) -> bool:
     row that would fix it, because answering an answer again is a no-op.
 
     A plan with no steps, or no run at all, is never "settled": there is nothing
-    to have answered.
+    to have answered. Nor is a SHIPPED plan whose newest run was a check before
+    merge — see :func:`_current_run`.
     """
-    if not plan["steps"] or not plan["runs"]:
+    run = _current_run(plan)
+    if not plan["steps"] or run is None:
         return False
-    results = plan["runs"][-1].get("results") or {}
+    results = run.get("results") or {}
     return all(_settled(results.get(step["id"]) or {}) for step in plan["steps"])
+
+
+def _current_run(plan: dict) -> Optional[dict]:
+    """The run the plan's CURRENT state is about, or ``None``.
+
+    Normally the newest one. The exception is a check before merge: a run made
+    while the work was only on its branch (``prelive``) answers "does the
+    branch work?", and once the work has shipped the question is "does it work
+    where users are?" — which nobody has answered yet. So for a shipped plan a
+    pre-merge run is history, not the current answer, and the plan comes back
+    to be checked again instead of closing on the branch's result.
+    """
+    if not plan["runs"]:
+        return None
+    run = plan["runs"][-1]
+    if plan["live_at"] and run.get("prelive"):
+        return None
+    return run
+
+
+def _unshipped(plan: dict) -> bool:
+    """Whether this plan's work is still only on its branch.
+
+    Asked of the state as well as ``live_at``: ``mark_due`` always stamps
+    ``live_at``, but a plan can be ``due``/``done`` without one (written by an
+    older build, or by hand), and those have always behaved as shipped.
+    """
+    return not plan["live_at"] and plan["state"] in (
+        "generated",
+        "generating",
+        "failed",
+    )
+
+
+def _after_run_state(plan: dict) -> str:
+    """Where a plan goes when its in-flight run ends WITHOUT a report (the
+    session failed to start, or was deleted).
+
+    A run that was a check before merge goes back to waiting for the merge —
+    never to ``due``, which would claim the work is live. Anything else keeps
+    the rule these callers always used.
+    """
+    run = plan["runs"][-1] if plan["runs"] else {}
+    if not plan["live_at"] and run.get("prelive"):
+        return "generated"
+    return "done" if (plan["live_at"] and _all_settled(plan)) else "due"
 
 
 def _normalize_run(raw, steps: List[dict]) -> dict:
@@ -883,6 +931,10 @@ def _normalize_run(raw, steps: List[dict]) -> dict:
         # "" when the checkout itself was the system under test.
         "target": _text(raw.get("target"), 500),
         "results": results,
+        # Made while the work was only on its branch — a check before merge.
+        # Once the plan ships, such a run is history rather than the current
+        # answer (:func:`_current_run`), so it cannot close the plan.
+        "prelive": bool(raw.get("prelive")),
         # Always recomputed. The stored value is a convenience for the client;
         # recomputing keeps a half-written or hand-edited file honest, and
         # ``record_result`` would otherwise have to remember to refresh it.
@@ -1210,7 +1262,7 @@ def ensure_plan_for(
         return plan
 
 
-def _has_settled_answers(plan: dict) -> bool:
+def _has_settled_answers(plan: dict, after_merge_only: bool = False) -> bool:
     """Whether anybody has actually ANSWERED anything here.
 
     The fact the retarget and refresh gates care about, asked directly rather
@@ -1221,8 +1273,14 @@ def _has_settled_answers(plan: dict) -> bool:
     withdrawn answers, and the gates read that record of nothing as a claim
     somebody had made. A ``""`` result is an answer that no longer exists; only
     a settled one is part of anything's meaning.
+
+    ``after_merge_only`` skips checks made before merge: those were answers
+    about the BRANCH, so they say nothing about which live branch the plan
+    should be waiting for.
     """
     for run in plan.get("runs") or []:
+        if after_merge_only and run.get("prelive"):
+            continue
         for entry in (run.get("results") or {}).values():
             if str((entry or {}).get("result") or "").strip():
                 return True
@@ -1469,9 +1527,10 @@ def fail_run(plan_id: str, session_title: str, error: str) -> Optional[dict]:
             return
         plan["run_session"] = ""
         if plan["state"] == "running":
-            plan["state"] = (
-                "done" if (plan["live_at"] and _all_settled(plan)) else "due"
-            )
+            # Work that has not shipped goes back to waiting for it, not to
+            # ``due`` — a check before merge that could not start must not make
+            # the plan claim to be live.
+            plan["state"] = _after_run_state(plan)
         # An in-flight run with nothing in it is litter, not history.
         if plan["runs"] and not (plan["runs"][-1].get("results") or {}):
             plan["runs"].pop()
@@ -1552,6 +1611,7 @@ def start_run(plan_id: str, session_title: str) -> Optional[dict]:
     session_title = str(session_title or "")
 
     def apply(plan: dict) -> None:
+        prelive = _unshipped(plan)
         plan["state"] = "running"
         plan["run_session"] = session_title
         plan["error"] = ""
@@ -1566,9 +1626,14 @@ def start_run(plan_id: str, session_title: str) -> Optional[dict]:
         # The AGENT's previous answers are deliberately NOT carried: a run is it
         # re-checking them, and last time's result is exactly what is being
         # replaced. A person's is an observation nobody is going to make again.
+        #
+        # Not across a merge, though: what a person saw on the BRANCH before it
+        # shipped is not an answer about what shipped, so a shipped plan whose
+        # newest run was a pre-merge check starts clean (``_current_run``).
         carried = {}
-        if plan["runs"]:
-            for step_id, entry in (plan["runs"][-1].get("results") or {}).items():
+        current = _current_run(plan)
+        if current is not None:
+            for step_id, entry in (current.get("results") or {}).items():
                 if entry.get("by") == "human" and entry.get("result"):
                     carried[step_id] = dict(entry)
         plan["runs"].append(
@@ -1578,6 +1643,7 @@ def start_run(plan_id: str, session_title: str) -> Optional[dict]:
                 "session": session_title,
                 "results": carried,
                 "verdict": _verdict(plan["steps"], carried),
+                "prelive": prelive,
             }
         )
         del plan["runs"][:-MAX_RUNS]
@@ -1688,7 +1754,8 @@ def finish_run(
     report arrives last and would otherwise win, replacing an observation
     somebody made with a guess and restamping the author as ``agent``.
 
-    The plan lands in ``done`` even when human steps are still blocked; the UI
+    The plan lands in ``done`` (``generated`` when the work has not shipped —
+    a check before merge keeps the check after it) even when human steps are still blocked; the UI
     reads "ran, but human steps are unanswered" off the results and asks for
     confirmation separately, because a finished agent run and a fully answered
     plan are genuinely different things. It is also the ONLY closer while a run
@@ -1794,7 +1861,15 @@ def finish_run(
                     % (short, cell.get("note") or "")
                 ).strip()
         run["verdict"] = _verdict(plan["steps"], run["results"])
-        plan["state"] = "done"
+        # A CHECK BEFORE MERGE DOES NOT CLOSE THE PLAN. It used to: ``done``
+        # here unconditionally, and the liveness loop only re-asks plans in
+        # ``generated`` — so checking a branch before merging it cost you the
+        # check after it, which is backwards for anyone gating a merge on it.
+        # Unshipped work goes back to waiting; when it ships, ``mark_due``
+        # brings it back to be checked where users are.
+        plan["state"] = (
+            "generated" if (run.get("prelive") and not plan["live_at"]) else "done"
+        )
         plan["run_session"] = ""
 
     return _mutate(plan_id, apply)
@@ -1857,6 +1932,14 @@ def add_step(
         # never show.
         if plan["state"] == "done" and not _all_settled(plan):
             plan["state"] = "due" if plan["live_at"] else "generated"
+        # The model couldn't write steps and a person just wrote one: that is a
+        # working checklist now, not a failed one. Leaving it in ``failed`` kept
+        # it under "Couldn't be written" reading "Rewriting this failed — these
+        # are the steps from before" about a step written a second ago. The
+        # model's failure is answered by this, so its message goes too.
+        if plan["state"] == "failed":
+            plan["state"] = "due" if plan["live_at"] else "generated"
+            plan["error"] = ""
 
     plan = _mutate(plan_id, apply)
     if plan is None:
@@ -2044,9 +2127,11 @@ def record_result(
         if step_id not in {s["id"] for s in plan["steps"]}:
             outcome["missing_step"] = True
             return
-        if not plan["runs"]:
+        if _current_run(plan) is None:
             # A human can work a plan without ever launching a verify session;
-            # that is still a run, it just has no session behind it.
+            # that is still a run, it just has no session behind it. Also the
+            # first answer after a merge on a plan checked BEFORE it: that one
+            # is a new question, so it gets a new record (see _current_run).
             plan["runs"].append(
                 {
                     "at": now,
@@ -2054,6 +2139,7 @@ def record_result(
                     "session": "",
                     "results": {},
                     "verdict": "partial",
+                    "prelive": _unshipped(plan),
                 }
             )
         run = plan["runs"][-1]
@@ -2080,8 +2166,12 @@ def record_result(
         # feature exists to make. Reopening lands in ``due`` and not in whatever
         # it was before: the work is live (nothing else can be answered) and
         # something is outstanding, which is exactly what ``due`` means.
+        #
+        # Only SHIPPED work closes. Answering every step before merge is a
+        # check of the branch; the plan stays waiting, and comes back to be
+        # checked again once the work ships (see :func:`finish_run`).
         if _all_settled(plan):
-            if not running:
+            if not running and not _unshipped(plan):
                 plan["state"] = "done"
                 plan["run_session"] = ""
         elif plan["state"] == "done":
@@ -2136,9 +2226,7 @@ def prune(live_titles=None) -> None:
                     # Same deferred close as cancel_run / mark_due: the session
                     # is gone, so nothing else will ever ask whether the person
                     # already answered everything themselves.
-                    plan["state"] = (
-                        "done" if (plan["live_at"] and _all_settled(plan)) else "due"
-                    )
+                    plan["state"] = _after_run_state(plan)
                 plans[pid] = plan
                 changed = True
         before = len(plans)
@@ -2582,7 +2670,7 @@ def retarget_live_branch(plan_id: str, live_branch: str) -> Optional[dict]:
             return
         if plan["state"] not in ("generated", "due"):
             return
-        if _has_settled_answers(plan):
+        if _has_settled_answers(plan, after_merge_only=True):
             return
         # A due plan goes back to WAITING: its due-ness was a fact about the
         # old branch, and the next liveness pass asks origin about the one that

@@ -2795,6 +2795,22 @@ is `frontend/src/components/sidebar/VerifyBar.tsx` and the store is
 the store file and the settings keys — it never appears on screen, because to a
 developer it reads as pytest.
 
+**Two moments, one line each** — the dialog's intro says exactly this, and folds
+it into **How Verify works** once there are checklists to work:
+
+- **Before merge** — press **Check now** to check the branch.
+- **After merge** — it comes back here to be checked again on the live branch.
+
+Checking before merge never costs the check after it: a run (or a full set of
+answers) on work that has not shipped leaves the checklist waiting in **Not
+shipped yet**, and when the work ships it comes back to **Not checked yet** like
+any other. The branch's answers are kept as history — the expanded checklist
+says *"Checked before merge: every step passed, 2d ago. This is the check after
+merge."* — but they are not the current answer, and answers a person gave on the
+branch are not carried into the after-merge run. (Server side: a run made before
+merge is stamped `prelive`; `test_plans._current_run` ignores such a run once the
+plan has shipped.)
+
 **The chain, in order.** Nothing appears here until three things have happened,
 and every "why is nothing showing up?" is a question about which one hasn't:
 
@@ -2808,7 +2824,8 @@ and every "why is nothing showing up?" is a question about which one hasn't:
    same repo (a duplicated session, a repo adopted twice) share the checklist
    written under whichever pushed first, and a push from the other one refreshes
    *that* plan rather than writing a second. It sits in **Not shipped yet** while
-   the branch is reviewed and merged. A later push always records the newest
+   the branch is reviewed and merged — with **Check now** on it, for checking
+   the branch before you merge it. A later push always records the newest
    commit, and — *only while
    nobody has answered anything yet* — rewrites the checklist from the branch's
    whole diff at that commit, at most **three** times and never within five
@@ -2894,7 +2911,8 @@ Answers you clicked and clicked straight back off don't count as answers.
 answer and adds *· some repos differ* when any tracked repo overrides it; each row
 carries the branch it was actually measured against. A checkout with **no GitHub
 origin** cannot be named on the list (there is no slug to type) — its only opt-in
-is its own committed `.mindflock.toml`:
+is its own committed `.mindflock.toml`, which the **Repository without a GitHub
+remote?** fold under Sources hands over as a copyable snippet:
 
 ```toml
 [workspace]
@@ -2904,29 +2922,35 @@ verify_on_push = true
 That is a team-wide, committed decision, it is OR'd with the tracked-repo list,
 and neither half can switch the other off.
 
-**The panel is Intake's anatomy, in Intake's order**: an intro line, the master
-switch, the **Checklists** work list, **Sources**, then a fold for what you
-touch once — the same work-first shape as Intake → Pull requests / Issues, using
-the same classes, because it is the fourth surface of that kind. Before any
-repository or checklist exists, **Sources** leads instead, since adding one is
-the only thing to do. The master switch
+**The panel is Intake's anatomy, in Intake's order**: the intro (the two
+moments), the master switch, the **Checklists** work list, **Sources**, then the
+**New checklist** fold — the same work-first shape as Intake → Pull requests /
+Issues, using the same classes, because it is the fourth surface of that kind.
+Before any repository or checklist exists, **Sources** leads instead, since
+adding one is the only thing to do, and the master switch is not shown at all (it
+would govern nothing); with checklists but no repository it reads *"On — no
+repository to watch yet"*. The master switch
 (`repository.verify_enabled`) pauses the **automatic** half only: no checklist
 written on a push, and nothing new moved into the list. Repositories, checklists
-and every recorded answer are kept, and writing one by hand, running one and
+and every recorded answer are kept, and asking for one, running one and
 answering a step all keep working — exactly as a forced PR review still runs with
-automated review switched off. **Sources** is the repository list; **Write a
-checklist by hand** is the fold at the bottom, for asking for exactly one
-checklist by name with nothing configured.
+automated review switched off.
 
-**It offers only what has no checklist yet.** A live session whose repo and
-branch another plan already covers is left off the list, whichever session that
-plan was written under; a closed session carries no repo to match on, so it
-stays offered. Pressing the button for a session that turns out to be covered
-does not error — the toast names the checklist that covers it (*"foo-copy's
-branch already has a checklist — it's under foo"*) when that is a different
-session from the one you pressed.
+**New checklist** has two rows, each doing what it says:
 
-**It offers sessions you have already CLOSED**, labelled `(closed)`, alongside
+- **Ask the agent for a checklist** — pick a branch (listed as `branch — session`)
+  and the agent reads the branch's changes and writes the steps, about three
+  minutes, with nothing configured. **Every** session with a branch is listed,
+  open or closed: one that can't be picked stays in the list, greyed, saying why
+  — *has a checklist*, or *on main — nothing to compare* for a session sitting on
+  the branch its repo ships from — and the default is always one that can be.
+  Pressing it for a session that turns out to be covered does not error — the
+  toast names the checklist that covers it.
+- **Write steps yourself** — pick a checklist and **Add a step** opens it with its
+  **Add a step** form open and the caret in it. Steps live on a checklist, so with
+  none yet the row says to ask the agent for one first.
+
+**Closed sessions are listed too**, labelled `(closed)`, alongside
 the open ones. A checklist outlives its session everywhere else in this feature —
 the plan stores the main repo rather than the worktree, precisely so it can be
 run and rewritten months later — and creation was the one half that still
@@ -2961,7 +2985,7 @@ applies to what the filter is *showing*. The filter searches what the row shows
 because a checklist is remembered as "the one about the Grafana collage board"
 long after its number has stopped meaning anything.
 
-Selecting rows raises the bulk bar: **Run N** (only the ones a run would
+Selecting rows raises the bulk bar: **Check N** (only the ones a run would
 actually take — a checklist that is still generating, one an agent is already
 working, or one with no agent step in it is counted out in the label rather than
 discovered as a wall of 409s) and **Delete selected**, which asks first and lists
@@ -2972,10 +2996,11 @@ error card. Shift-click extends a range; a selection the filter is hiding is
 counted in the bar so a bulk delete can never quietly reach past the screen.
 
 **Where each checklist has got to, before you open it.** A row's sentence says
-whose turn it is; the **tally** beside its branch and sha says how far along it
-is — `✓5 ✗1 ●2 ○1`, the same glyphs and colours the step rows and the roll-up
-inside the plan use, so the three renderings cannot drift (and the whole thing
-is announced as a sentence: *"9 checks: 5 passed, 1 failed, 2 need you"*). The
+whose turn it is; the **tally** beside it says how far along it is, glyph and
+words — `✓ 5 passed ✗ 1 failed ● 2 for you ○ 1 not checked` — the same glyphs
+and colours the step rows and the roll-up inside the plan use, so the three
+renderings cannot drift (and the whole thing is announced as a sentence: *"9
+steps: 5 passed, 1 failed, 2 need you"*). The
 two groups that are an ask carry the same arithmetic on their **heading** —
 *"Not checked yet · 7 · 3 steps need you"* — because a collapsed group was a
 number of checklists and said nothing about how much work was in them, or
@@ -3018,7 +3043,7 @@ agent is still running the rest: your answers win, and the plan closes when the
 agent's run lands rather than stranding it.
 
 **A checklist reads like a checks panel.** Above the steps is one roll-up line —
-`8 checks · 5 passed · 1 failed · 2 need you` — and every step carries its state
+`8 steps · 5 passed · 1 failed · 2 need you` — and every step carries its state
 as a mark in a fixed column on the left (`✓` passed, `✗` failed, `●` waiting on
 you, `–` you couldn't check, `○` not checked yet). The roll-up is *counted from*
 the marks rather than computed beside them, so the summary and the column cannot
@@ -3030,9 +3055,10 @@ that is yours *and focuses it*; on a focused step, `1`/`p` pass, `2`/`f` fail,
 because none of it is discoverable. Keys typed inside the note box are left
 alone.
 
-**Running a checklist costs a real session.** **Run with an agent** provisions a
-worktree, checks out the live branch and works every step it can — minutes, not
-seconds. The row says the split before you press (`An agent can check 8 of 11;
+**Running a checklist costs a real session.** **Check now** (and **Check again**
+once one has run) provisions a worktree, checks out the live branch — or, before
+merge, the branch's own newest commit — and works every step it can, minutes,
+not seconds. The row says the split before you press (`An agent can check 8 of 11;
 the rest are yours`), and a checklist whose every step is yours offers **Answer**
 instead, because an agent is forbidden from settling one. **The run is watched
 inside the checklist**: its terminal streams into the expanded row, read-only, so
@@ -3097,11 +3123,34 @@ right answer for a library, a CLI, or anything with no environment to point at �
 and the run exercises a fresh checkout of the live branch on this machine, which
 is what a green checklist then means.
 
-**Two one-way doors**, both confirmed inline before they happen: running a
-checklist **before it ships** (⋯ → **Check it early**) checks out its own commit
-rather than what users have, and hand-answering every step of a checklist that
-has not shipped closes it. Either way it will not come back to **Not checked
-yet** when the branch does ship.
+**Checking before merge is the primary button**, not a menu item. A checklist in
+**Not shipped yet** reads *"Not merged yet — check the branch now, or it comes
+back here after it reaches main"* with **Check now** beside it (it used to be
+⋯ → **Check it early…**, behind a confirm warning that it closed the checklist
+for good — and, on a collapsed card, a press that did nothing at all). Running
+it, or answering every step by hand, keeps the checklist waiting; it comes back
+after merge (see *Two moments* above). A branch that passed reads *"Works on the
+branch — it comes back to be checked again after merge."*
+
+**A failed step has its next move beside it.** **Fix this…** on the step starts a
+session to fix it (the same route as ⋯ → **Fix what failed…**, scoped to that
+step); the session is told to reproduce the failure first.
+
+**Finishing a checklist doesn't make it vanish.** Answering the last step re-files
+it — usually under **Checked**, far down the list — so a notice stays where it
+was for a few seconds: *"✓ add-csv-export moved to Checked."* with **Show**,
+which scrolls to it.
+
+**A checklist that couldn't be written can still be used**: add a step to it and
+it becomes an ordinary checklist (it leaves **Couldn't be written**, and the
+generation error goes with it — it no longer describes the checklist).
+
+**Deep link for other surfaces.** `useUi.getState().openDialogFor("verify",
+<branch>)` opens Verify filtered to that branch with its checklist expanded and
+scrolled into view (a session title works too). When no checklist covers the
+branch, a line at the top says so with **Ask the agent for one** (for the session
+on that branch), and **New checklist** opens with that session picked.
+`verifyDeepLinkPlan` in `verify.ts` is the lookup.
 
 **The checklist is written for what the work was ASKED to do.** The ticket — its
 title, description and acceptance criteria — is snapshotted onto the checklist at

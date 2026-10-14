@@ -51,6 +51,11 @@ import {
   stepResult,
   unansweredCount,
   verdictOf,
+  beforeMergeRun,
+  beforeMergeSummary,
+  checklistTargets,
+  isBeforeMerge,
+  verifyDeepLinkPlan,
 } from "../components/dialogs/verify";
 import type {
   Instance,
@@ -639,7 +644,7 @@ describe("planStatus (the one sentence and the one button)", () => {
     const status = planStatus(short, "main");
     expect(status.tone).toBe("warn");
     expect(status.line).toBe("Checked — 2 steps with no answer.");
-    expect(status.actionLabel).toBe("Run again with an agent");
+    expect(status.actionLabel).toBe("Check again");
   });
 
   it("says it works only when every step has a real answer", () => {
@@ -665,18 +670,42 @@ describe("planStatus (the one sentence and the one button)", () => {
     // The label names the actor, because "Run" reads as "run the tests" —
     // seconds, local, free — and this provisions a workspace and minutes of a
     // billed session.
-    expect(status.actionLabel).toBe("Run with an agent");
+    expect(status.actionLabel).toBe("Check now");
   });
 
-  it("offers no button at all on a plan that has not shipped", () => {
-    // Deliberately unpressable: it turns up on its own when the commit lands,
-    // and running it early is a one-way door that lives in the ⋯ menu behind a
-    // confirm.
+  it("offers Check now on a plan that has not merged", () => {
+    // Checking before merge is first-class now: the server keeps the checklist
+    // open, so it comes back to be checked again after merge. It used to be a
+    // ⋯ item behind a confirm warning that it closed the checklist for good.
     const early = plan({ state: "generated", live_at: 0, steps: [step("s1")] });
     const status = planStatus(early, "main");
     expect(status.group).toBe("generated");
-    expect(status.action).toBe("none");
-    expect(status.line).toBe("Waiting for feature/p1 to reach main — it turns up here to check when it ships.");
+    expect(status.action).toBe("early");
+    expect(status.actionLabel).toBe("Check now");
+    expect(status.line).toBe(
+      "Not merged yet — check the branch now, or it comes back here after it reaches main.",
+    );
+  });
+
+  it("offers Check now even when every step is a person's", () => {
+    const early = plan({ state: "generated", live_at: 0, steps: [step("s1", "human")] });
+    const status = planStatus(early, "main");
+    expect(status.action).toBe("answer");
+    expect(status.actionLabel).toBe("Check now");
+  });
+
+  it("says a branch that passed before merge is checked again after it", () => {
+    const early = plan({
+      state: "generated",
+      live_at: 0,
+      steps: [step("s1")],
+      runs: [run({ results: results({ s1: "pass" }), prelive: true } as Partial<TestRun>)],
+    });
+    const status = planStatus(early, "main");
+    expect(status.tone).toBe("ok");
+    expect(status.line).toBe(
+      "Works on the branch — it comes back to be checked again after merge.",
+    );
   });
 
   it("names the plan's own live branch, not the flock-wide one", () => {
@@ -684,7 +713,7 @@ describe("planStatus (the one sentence and the one button)", () => {
     // wrong branch would be an assertion the reader cannot check.
     const early = plan({ state: "generated", live_branch: "staging", steps: [step("s1")] });
     expect(planStatus(early, "main").line).toBe(
-      "Waiting for feature/p1 to reach staging — it turns up here to check when it ships.",
+      "Not merged yet — check the branch now, or it comes back here after it reaches staging.",
     );
   });
 
@@ -1465,7 +1494,7 @@ describe("noTargetsReason", () => {
 
   it("points at the list when everything already has one", () => {
     expect(noTargetsReason([inst("a", "feature/a")], [plan({ id: "a" })])).toBe(
-      "Every session with a branch already has a checklist — they're in the list below.",
+      "Every session's branch already has a checklist.",
     );
   });
 });
@@ -1505,7 +1534,7 @@ describe("the gaps are named apart, and a run nobody ran is not \"a run\"", () =
     );
     expect(status.line).toBe("Part-answered — 1 step with no answer.");
     // ...and it offers to run it, not to run it AGAIN.
-    expect(status.actionLabel).toBe("Run with an agent");
+    expect(status.actionLabel).toBe("Check now");
   });
 
   it("never offers a run on a checklist the run route would refuse", () => {
@@ -1558,7 +1587,7 @@ describe("a running plan with no session left to watch", () => {
       "The agent that was checking this is gone — nothing is running now.",
     );
     // ...and it offers to start one, not to start one AGAIN.
-    expect(status.actionLabel).toBe("Run with an agent");
+    expect(status.actionLabel).toBe("Check now");
   });
 
   it("still offers Watch while the session is actually there", () => {
@@ -1709,8 +1738,8 @@ describe("what a bulk Run may actually start", () => {
     expect(canRunNow(shipped({ steps: [step("s1", "human"), step("s2", "human")] }))).toBe(
       false,
     );
-    // Not shipped yet: its only run is the deliberate early one.
-    expect(canRunNow(plan({ state: "generated", steps: [step("s1")] }))).toBe(false);
+    // Not merged yet: Check now checks the branch, so it can be run too.
+    expect(canRunNow(plan({ state: "generated", steps: [step("s1")] }))).toBe(true);
   });
 });
 
@@ -1870,7 +1899,7 @@ describe("a run that died says so on the row", () => {
 
   it("says nothing twice when the sentence is already about the failure", () => {
     const failed = plan({ state: "failed", steps: [], error: "boom. detail" });
-    expect(planStatus(failed).line).toBe("The model couldn't write a checklist for this.");
+    expect(planStatus(failed).line).toBe("The agent couldn't write a checklist for this.");
     // A rewrite in flight owns the row; the stored error is the attempt it is
     // replacing.
     const rewriting = plan({
@@ -1981,8 +2010,8 @@ describe("the tally on the collapsed row", () => {
         }),
       ],
     });
-    expect(tallySentence(p)).toBe("4 checks: 1 passed, 1 failed, 2 need you");
-    expect(tallySentence(plan({ steps: [step("s1")] }))).toBe("1 check: 1 not checked yet");
+    expect(tallySentence(p)).toBe("4 steps: 1 passed, 1 failed, 2 need you");
+    expect(tallySentence(plan({ steps: [step("s1")] }))).toBe("1 step: 1 not checked yet");
   });
 });
 
@@ -2117,9 +2146,9 @@ describe("a plan waiting on a branch that isn't there", () => {
     });
     const status = planStatus(stuck);
     expect(status.line).toContain("no branch called main");
-    // No button: this is fixed on the repo's card, not by pressing anything on
-    // the row — and a button that cannot help is worse than none.
-    expect(status.action).toBe("none");
+    // The WAIT is fixed on the repo's card; checking the branch before merge
+    // still works, so Check now stays.
+    expect(status.action).toBe("early");
     expect(status.tone).toBe("warn");
   });
 
@@ -2132,7 +2161,7 @@ describe("a plan waiting on a branch that isn't there", () => {
       live_problem: "",
       steps: [step("s1")],
     });
-    expect(planStatus(waiting).line).toContain("turns up here to check when it ships");
+    expect(planStatus(waiting).line).toContain("comes back here after it reaches main");
   });
 
   it("does not shout about it once the work has actually shipped", () => {
@@ -2145,5 +2174,92 @@ describe("a plan waiting on a branch that isn't there", () => {
       steps: [step("s1")],
     });
     expect(planStatus(shipped).line).not.toContain("can never come due");
+  });
+});
+
+
+describe("a check before merge, and the check after it", () => {
+  const before = (answers: Record<string, TestStepResult>) =>
+    run({ results: results(answers), prelive: true } as Partial<TestRun>);
+
+  it("is not the current answer once the work has shipped", () => {
+    const shipped = plan({
+      state: "due",
+      live_at: 500,
+      steps: [step("s1")],
+      runs: [before({ s1: "pass" })],
+    });
+    expect(latestRun(shipped)).toBeNull();
+    expect(verdictOf(shipped)).toBe("none");
+    const status = planStatus(shipped);
+    expect(status.action).toBe("run");
+    expect(status.line).toContain("nobody has checked it yet");
+  });
+
+  it("is still the answer while the work is only on its branch", () => {
+    const early = plan({
+      state: "generated",
+      live_at: 0,
+      steps: [step("s1")],
+      runs: [before({ s1: "fail" })],
+    });
+    expect(latestRun(early)).not.toBeNull();
+    expect(planGroup(early)).toBe("fail");
+  });
+
+  it("is named, with what it found, after merge", () => {
+    const shipped = plan({
+      state: "due",
+      live_at: 500,
+      steps: [step("s1"), step("s2")],
+      runs: [before({ s1: "pass", s2: "fail" })],
+    });
+    const earlier = beforeMergeRun(shipped);
+    expect(earlier).not.toBeNull();
+    expect(beforeMergeSummary(shipped, earlier!)).toBe("1 step failed");
+    expect(isBeforeMerge(earlier)).toBe(true);
+    expect(beforeMergeRun(plan({ state: "generated", live_at: 0, runs: [before({})] }))).toBeNull();
+  });
+
+  it("a run without the flag is an ordinary run", () => {
+    expect(isBeforeMerge(run())).toBe(false);
+  });
+});
+
+describe("checklistTargets (Ask the agent for a checklist)", () => {
+  const inst = (title: string, branch: string): Instance =>
+    ({ title, branch, repo: "", folder: "", folder_label: "" }) as unknown as Instance;
+  it("lists closed sessions, and says why one can't be picked instead of hiding it", () => {
+    const targets = checklistTargets(
+      [inst("open-a", "feature/a"), inst("on-main", "main")],
+      [plan({ id: "closed-b", branch: "feature/b" })],
+      [
+        { title: "closed-b", branch: "feature/b" },
+        { title: "closed-c", branch: "feature/c" },
+      ],
+      "main",
+    );
+    expect(targets.map((t) => [t.title, t.closed, t.reason])).toEqual([
+      ["open-a", false, ""],
+      ["closed-c", true, ""],
+      ["on-main", false, "on main — nothing to compare"],
+      ["closed-b", true, "has a checklist"],
+    ]);
+    expect(targets.find((t) => t.title === "closed-b")?.planId).toBe("closed-b");
+  });
+
+  it("skips sessions with no branch", () => {
+    expect(checklistTargets([inst("x", "")], [], [])).toEqual([]);
+  });
+});
+
+describe("the Verify deep link (openDialogFor(\"verify\", <branch>))", () => {
+  it("finds a checklist by its branch, or by its session title", () => {
+    const a = plan({ id: "sess-a", branch: "feature/a" });
+    const b = plan({ id: "sess-b", branch: "feature/b" });
+    expect(verifyDeepLinkPlan([a, b], "feature/b")?.id).toBe("sess-b");
+    expect(verifyDeepLinkPlan([a, b], "sess-a")?.id).toBe("sess-a");
+    expect(verifyDeepLinkPlan([a, b], "feature/zzz")).toBeNull();
+    expect(verifyDeepLinkPlan([a, b], "")).toBeNull();
   });
 });

@@ -184,11 +184,50 @@ function isPhantomRun(run: TestRun): boolean {
 export function latestRun(plan: TestPlan): TestRun | null {
   const runs = plan.runs || [];
   let best: TestRun | null = null;
+  // Once the work has shipped, a check made BEFORE merge is history rather than
+  // the answer — the server's `_current_run` is the same rule — so the plan
+  // reads as "nobody has checked it yet" after merge, which is the point.
+  const shipped = !!plan.live_at;
   for (const run of runs) {
     if (!run || isPhantomRun(run)) continue;
+    if (shipped && isBeforeMerge(run)) continue;
     if (!best || (run.at || 0) >= (best.at || 0)) best = run;
   }
   return best;
+}
+
+/** Whether a run was a check of the BRANCH, made before the work merged.
+ *
+ * The server stamps `prelive` on the run; the field is read off the record
+ * rather than added to `TestRun` because the API types live with the client.
+ * A run with no flag (an older store) is an ordinary run. */
+export function isBeforeMerge(run: TestRun | null | undefined): boolean {
+  return !!(run as (TestRun & { prelive?: boolean }) | null | undefined)?.prelive;
+}
+
+/** The newest check made before merge on a plan that has SINCE shipped, or
+ * null. What the expanded checklist names as "Checked before merge" — the
+ * answer it gave is kept, it just stops being the current one. */
+export function beforeMergeRun(plan: TestPlan): TestRun | null {
+  if (!plan.live_at) return null;
+  let best: TestRun | null = null;
+  for (const run of plan.runs || []) {
+    if (!run || isPhantomRun(run) || !isBeforeMerge(run)) continue;
+    if (!best || (run.at || 0) >= (best.at || 0)) best = run;
+  }
+  return best;
+}
+
+/** One line about a check before merge — "passed", "1 step failed", or how
+ * many were left open — for the note on a shipped checklist. */
+export function beforeMergeSummary(plan: TestPlan, run: TestRun): string {
+  const results = run.results || {};
+  const ids = (plan.steps || []).map((s) => s.id);
+  const failed = ids.filter((id) => results[id]?.result === "fail").length;
+  if (failed) return failed + (failed === 1 ? " step failed" : " steps failed");
+  const open = ids.filter((id) => !isFinal(results[id]?.result)).length;
+  if (!open) return "every step passed";
+  return ids.length - open + " of " + ids.length + " passed";
 }
 
 /** What the latest run recorded for one step, or null if it recorded nothing.
@@ -569,6 +608,89 @@ export function closedTargets(
   );
 }
 
+/** THE DEEP LINK, for other surfaces (a session row's or pane's "Checklist"):
+ *
+ *     useUi.getState().openDialogFor("verify", <branch>)
+ *
+ * `dialogTarget` is a BRANCH NAME (a session title is accepted too). The dialog
+ * opens filtered to that branch with its checklist expanded and scrolled into
+ * view; if no checklist covers it, a line at the top says so and offers "Ask
+ * the agent" for the session on that branch, with New checklist opened and that
+ * session picked. A null target is the plain Alt+V open. */
+export function verifyDeepLinkPlan(plans: TestPlan[], target: string): TestPlan | null {
+  const t = (target || "").trim();
+  if (!t) return null;
+  return plans.find((p) => p.branch === t) || plans.find((p) => p.id === t) || null;
+}
+
+/** One entry in "Ask the agent for a checklist": a branch, the session it
+ * belongs to, and why it can't be picked (or "").
+ *
+ * EVERY session with a branch is listed — open or closed — rather than only the
+ * ones that can be picked. The old picker silently dropped a closed session
+ * whose branch already had a checklist, under help text promising closed
+ * sessions were offered, and nothing said why it was missing. Now it is there,
+ * greyed, saying so. A session sitting on the branch its repo ships from has no
+ * diff to read, so it is listed last and disabled too. */
+export interface ChecklistTarget {
+  /** The session title — what the write route is addressed by. */
+  title: string;
+  branch: string;
+  closed: boolean;
+  /** Why it can't be picked, in a few words; "" when it can. */
+  reason: string;
+  /** The checklist that already covers this branch, when one does. */
+  planId: string;
+}
+
+export function checklistTargets(
+  instances: Instance[],
+  plans: TestPlan[],
+  closed: ClosedTarget[] = [],
+  liveBranch = "",
+): ChecklistTarget[] {
+  const byTitle = new Map((plans || []).map((p) => [p.id, p]));
+  const byBranch = new Map<string, TestPlan>();
+  for (const plan of plans || []) {
+    const key = coverageKey(repoName(plan.repo_root), plan.branch);
+    if (key && !byBranch.has(key)) byBranch.set(key, plan);
+  }
+  // A closed session carries no repo, so it is matched by branch alone — the
+  // server refuses a second checklist for a branch either way, and this only
+  // decides what the picker SAYS.
+  const plansByBranchOnly = new Map<string, TestPlan>();
+  for (const plan of plans || []) {
+    if (plan.branch && !plansByBranchOnly.has(plan.branch))
+      plansByBranchOnly.set(plan.branch, plan);
+  }
+  const shipsFrom = new Set(
+    [liveBranch, "main", "master"].map((b) => (b || "").trim()).filter(Boolean),
+  );
+  const out: ChecklistTarget[] = [];
+  const seen = new Set<string>();
+  const take = (title: string, branch: string | undefined, repo: string, isClosed: boolean) => {
+    const b = (branch || "").trim();
+    if (!title || !b || seen.has(title)) return;
+    seen.add(title);
+    const covering =
+      byTitle.get(title) ||
+      (repo ? byBranch.get(coverageKey(repo, b)) : plansByBranchOnly.get(b));
+    const reason = covering
+      ? "has a checklist"
+      : shipsFrom.has(b)
+        ? "on " + b + " — nothing to compare"
+        : "";
+    out.push({ title, branch: b, closed: isClosed, reason, planId: covering?.id || "" });
+  };
+  const live = new Set((instances || []).map((i) => i.title));
+  for (const inst of instances || []) take(inst.title, inst.branch, inst.repo, false);
+  for (const entry of closed || [])
+    take(entry.title, entry.branch, "", !live.has(entry.title));
+  // Pickable first, in the order they came (open sessions, then closed); the
+  // ones that can't be picked after them, so the default is always a real one.
+  return [...out.filter((t) => !t.reason), ...out.filter((t) => !!t.reason)];
+}
+
 /** Why :func:`planTargets` came back empty — one sentence, or "" when it didn't.
  *
  * Three unlike situations used to share one sentence ("Start a session first"),
@@ -589,7 +711,7 @@ export function noTargetsReason(
     return "Start a session first — a checklist is written from a branch's diff.";
   if (!list.some((inst) => inst.branch))
     return "No session has a branch yet — a checklist is written from a branch's diff.";
-  return "Every session with a branch already has a checklist — they're in the list below.";
+  return "Every session's branch already has a checklist.";
 }
 
 /** The groups, in the order the dialog draws them.
@@ -635,6 +757,13 @@ const GROUPS: Array<{ key: string; label: string }> = [
   // could not produce steps for it.
   { key: "failed", label: "Couldn't be written" },
 ];
+
+/** The groups' keys in drawing order, and one group's heading — for the list's
+ * "moved to Checked" notice, which has to draw a heading its plan just left. */
+export const GROUP_KEYS: readonly string[] = GROUPS.map((g) => g.key);
+export function groupLabel(key: string): string {
+  return GROUPS.find((g) => g.key === key)?.label || key;
+}
 
 /** Which group one plan belongs to.
  *
@@ -697,7 +826,7 @@ export function planMatches(plan: TestPlan, tokens: string[]): boolean {
   return matchesTokens(fields, tokens);
 }
 
-/** Whether "Run with an agent" would actually do something for this plan.
+/** Whether "Check now" / "Check again" would actually do something for this plan.
  *
  * The bulk bar asks it of every selected row, because the alternative is firing
  * a request per row and reading back a wall of 409s: the run route refuses a
@@ -707,7 +836,7 @@ export function planMatches(plan: TestPlan, tokens: string[]): boolean {
  */
 export function canRunNow(plan: TestPlan): boolean {
   const action = planStatus(plan).action;
-  return action === "run" || action === "rerun";
+  return action === "run" || action === "rerun" || action === "early";
 }
 
 /** Group plans for the list, dropping groups that would render empty.
@@ -800,6 +929,9 @@ export type PlanTone = "you" | "bad" | "warn" | "busy" | "ok" | "wait" | "broken
  * for a press, and a disabled button would be furniture explaining itself. */
 export type PlanAction =
   | "none"
+  // "Check now" on work that has not merged: an agent checks the branch, and
+  // the checklist still comes back to be checked again after merge.
+  | "early"
   | "run"
   | "rerun"
   | "answer"
@@ -971,7 +1103,7 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
    * agent ever ran it is a small lie about what has already happened here. */
   const again = (ran = true): [PlanAction, string] =>
     agentCan
-      ? ["rerun", ran ? "Run again with an agent" : "Run with an agent"]
+      ? ["rerun", ran ? "Check again" : "Check now"]
       : // No agent step to re-run, so there is nothing to run and the button is
         // just the way back into the list. It used to read "Check again", which
         // is the same phrase the can't-check branch below uses for an actual
@@ -1017,15 +1149,16 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
   if (plan.state === "failed" && !steps.length)
     return at(
       "broken",
-      "The model couldn't write a checklist for this.",
+      "The agent couldn't write a checklist for this.",
       "rewrite",
       "Rewrite the checklist",
     );
+  // Steps, and a recorded failure: an older store's rewrite that timed out.
+  // (The server files a checklist that gains a step out of `failed` now.)
   if (plan.state === "failed")
     return at(
       "warn",
-      "Rewriting this failed — these are the steps from before, and they still " +
-        "work.",
+      "Rewriting this didn't work — the steps below are unchanged.",
       "rewrite",
       "Try rewriting again",
     );
@@ -1087,6 +1220,12 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
     );
   }
 
+  // Not merged yet. Check now — the agent checks the branch — and the
+  // checklist still comes back to be checked again after merge.
+  const unshipped = !plan.live_at && plan.state === "generated";
+  const checkNow = (): [PlanAction, string] =>
+    agentCan ? ["early", "Check now"] : ["answer", "Check now"];
+
   if (!run) {
     // Shipped, and nobody has looked. The reason the surface exists.
     if (plan.live_at || plan.state === "due") {
@@ -1123,7 +1262,7 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
               steps.length +
               "; the rest are yours."),
         "run",
-        "Run with an agent",
+        "Check now",
       );
     }
     // MERGED, AND WAITING FOR THE DEPLOY. Its own sentence because it is its
@@ -1140,27 +1279,23 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
       );
 
     // ...unless the wait CANNOT END. A plan watching a branch origin does not
-    // have will never come due, and the sentence below — "it turns up here to
-    // check when it ships" — is then a promise the surface cannot keep. This is
-    // the one waiting state that is an ask, because it is the user's to fix.
-    if (plan.live_problem)
-      return at("warn", plan.live_problem, "none");
+    // have will never come due, and the sentence below — "it comes back here
+    // after it reaches main" — is then a promise the surface cannot keep. The
+    // wait is the user's to fix on the repo's card; checking the branch still
+    // works, so Check now stays.
+    if (plan.live_problem) return at("warn", plan.live_problem, ...checkNow());
 
-    // Written, but not out there yet. Explicitly NOT an ask: it turns up on its
-    // own when the commit lands, and a button here would invite the one-way
-    // door (see the ⋯ menu's "Check it early").
-    //
-    // It says what ENDS the wait rather than "nothing to do", which read as a
-    // dead end to the one person guaranteed to see this row: whoever just
-    // pressed "Write a checklist" and is looking at the result.
+    // Written, not merged. Not an ask — it comes back on its own when the
+    // commit lands — but CHECK NOW is offered: somebody gating a merge on this
+    // checklist wants the branch checked now, and the server keeps the
+    // checklist open so the check after merge still happens. (It used to be a
+    // ⋯ item behind a confirm warning that it closed the checklist for good.)
     return at(
       "wait",
-      "Waiting for " +
-        (plan.branch || "this branch") +
-        " to reach " +
+      "Not merged yet — check the branch now, or it comes back here after it reaches " +
         (plan.live_branch || liveBranch || "the live branch") +
-        " — it turns up here to check when it ships.",
-      "none",
+        ".",
+      ...checkNow(),
     );
   }
 
@@ -1217,7 +1352,7 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
         : "Nothing could be checked — " + cant +
           (cant === 1 ? " step you couldn't get to." : " steps you couldn't get to."),
       "answer",
-      "Check again",
+      "Open the steps",
     );
   }
 
@@ -1243,7 +1378,7 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
       (plan.state === "done"
         ? "Checked — "
         : ranByAgent
-          ? "The run stopped early — "
+          ? "The check stopped early — "
           : "Part-answered — ") +
         gaps +
         ".",
@@ -1256,6 +1391,15 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
   // session redoing it, which is the most expensive control on the surface
   // offered at the moment it is least useful. Running it again is still one
   // item away in the ⋯, where re-doing settled work belongs.
+  // ...on the BRANCH, when it has not merged yet: the same good news, plus the
+  // half that keeps it honest — it is checked again where users are.
+  if (unshipped)
+    return at(
+      "ok",
+      "Works on the branch — it comes back to be checked again after merge.",
+      "answer",
+      "See the answers",
+    );
   return at("ok", "Every step has an answer — it works.", "answer", "See the answers");
 }
 
@@ -1316,6 +1460,9 @@ export interface TallyBit {
   count: number;
   /** Already agreed with `count` — see `tallyBits`. */
   label: string;
+  /** The few-word version the COLLAPSED row prints beside the glyph, so
+   * "●2 ○2" reads "● 2 for you · ○ 2 not checked" without a hover. */
+  short: string;
 }
 
 /** The tally as a list to render — the non-zero states, in a fixed order.
@@ -1336,14 +1483,19 @@ export interface TallyBit {
 export function tallyBits(plan: TestPlan): TallyBit[] {
   const t = checkTally(plan);
   const bits: TallyBit[] = [
-    { state: "pass", count: t.passed, label: "passed" },
-    { state: "fail", count: t.failed, label: "failed" },
+    { state: "pass", count: t.passed, label: "passed", short: "passed" },
+    { state: "fail", count: t.failed, label: "failed", short: "failed" },
     // The one label with a verb in it, so the one that has to agree with its
     // number: this string is read out as the tally's whole aria-label, and "1
     // need you" is where a screen reader gives the surface away.
-    { state: "yours", count: t.yours, label: t.yours === 1 ? "needs you" : "need you" },
-    { state: "cant", count: t.cant, label: "you couldn't check" },
-    { state: "pending", count: t.pending, label: "not checked yet" },
+    {
+      state: "yours",
+      count: t.yours,
+      label: t.yours === 1 ? "needs you" : "need you",
+      short: "for you",
+    },
+    { state: "cant", count: t.cant, label: "you couldn't check", short: "couldn't check" },
+    { state: "pending", count: t.pending, label: "not checked yet", short: "not checked" },
   ];
   return bits.filter((b) => b.count > 0);
 }
@@ -1359,7 +1511,7 @@ export function tallySentence(plan: TestPlan): string {
   const t = checkTally(plan);
   if (!t.total) return "";
   const bits = tallyBits(plan);
-  const head = t.total + (t.total === 1 ? " check" : " checks");
+  const head = t.total + (t.total === 1 ? " step" : " steps");
   if (!bits.length) return head;
   return head + ": " + bits.map((b) => b.count + " " + b.label).join(", ");
 }
