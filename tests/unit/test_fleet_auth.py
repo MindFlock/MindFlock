@@ -959,7 +959,8 @@ def test_device_join_rule_shape_and_fill():
     rule = next(r for r in notify_addon.NOTIFY_RULES if r["id"] == "device_join")
     assert rule == {
         "id": "device_join",
-        "label": "A device asks to join your devices",
+        "label": "A computer asks to join your devices",
+        "description": "Approve it on this computer within 10 minutes.",
         "event": "device.join_requested",
         "old": None,
         "new": None,

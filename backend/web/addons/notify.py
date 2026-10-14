@@ -324,7 +324,7 @@ NOTIFY_RULES: List[dict] = [
         "event": "session.test_plan_ready",
         "old": None,
         "new": None,
-        "title": "{session}: verification plan ready",
+        "title": "{session}: checklist ready",
         "body": "The agent finished writing the checklist for this work.",
         "default_enabled": False,
         "priority": 2,
@@ -337,17 +337,63 @@ NOTIFY_RULES: List[dict] = [
         # Folded in, "tell me when the plan is written" would go silent in the
         # one case most worth telling a human about: the attempt that produced
         # no checklist at all.
+        #
+        # ON by default since round 4 (was opt-in): a push whose checklist
+        # silently failed was the one Verify outcome nobody heard about. Anyone
+        # who already saved a rule choice keeps it (``was_opt_in``).
         "id": "verify_plan_failed",
         "label": "A checklist couldn't be written",
         "description": "Open Verify to see why.",
         "event": "session.test_plan_failed",
         "old": None,
         "new": None,
-        "title": "{session}: verification plan failed",
+        "title": "{session}: couldn't write the checklist",
         "body": "No checklist was written — open Verify for the reason.",
-        "default_enabled": False,
+        "default_enabled": True,
+        "was_opt_in": True,
         "priority": 3,
         "tags": ["warning"],
+    },
+    {
+        # A checklist came DUE: the work shipped (merged, deploy wait over) and
+        # its steps are ready to check — "your turn". On by default: it is the
+        # moment the whole feature exists to deliver, and it lands minutes or
+        # days after the push, usually while nobody is looking.
+        #
+        # ``ntfy: False`` — the phone push for this moment is
+        # ``test_plans_driver._notify_test_plan_due``, which sends it at most
+        # once per checklist and says how many steps are yours; this rule's
+        # switch gates that push too, so one toggle governs both channels.
+        "id": "verify_plan_due",
+        "label": "A checklist is ready to check",
+        "description": "The work shipped and its steps are ready to check.",
+        "event": "session.test_plan_due",
+        "old": None,
+        "new": None,
+        "title": "{session} shipped — ready to check",
+        "body": "Its checklist is ready in Verify.",
+        "default_enabled": True,
+        "ntfy": False,
+        "priority": 3,
+        "tags": ["white_check_mark"],
+    },
+    {
+        # An agent's check FOUND A FAILURE — the most valuable outcome Verify
+        # has, and the one that must not wait for somebody to open the dialog.
+        # The emitter stamps ``new = "failed"`` on ``test_plan_checked`` when
+        # any step failed, so this matches only those; the opt-in rule below
+        # still hears every finished run.
+        "id": "verify_run_failed",
+        "label": "A checklist fails",
+        "description": "A step didn't do what was expected.",
+        "event": "session.test_plan_checked",
+        "old": None,
+        "new": "failed",
+        "title": "{session}: checklist failed",
+        "body": "A step didn't do what was expected — open Verify to see which.",
+        "default_enabled": True,
+        "priority": 4,
+        "tags": ["x"],
     },
     {
         # Verify, opt-in: an agent finished WORKING a checklist — the far end of
@@ -366,7 +412,7 @@ NOTIFY_RULES: List[dict] = [
         "event": "session.test_plan_checked",
         "old": None,
         "new": None,
-        "title": "{session}: verification run finished",
+        "title": "{session}: checklist run finished",
         "body": "The agent worked the checklist — open Verify for what it found.",
         "default_enabled": False,
         "priority": 3,
@@ -385,8 +431,8 @@ NOTIFY_RULES: List[dict] = [
         "event": "session.test_plan_gave_up",
         "old": None,
         "new": None,
-        "title": "{session}: verification run gave up",
-        "body": "The run recorded no answers — the plan is back to unchecked.",
+        "title": "{session}: checklist run gave up",
+        "body": "The run recorded no answers — the checklist is back to unchecked.",
         "default_enabled": False,
         "priority": 3,
         "tags": ["warning"],
@@ -472,7 +518,7 @@ NOTIFY_RULES: List[dict] = [
 
 #: Rule fields the client never needs: opt-in/opt-out semantics (it gets the
 #: resolved ``enabled``) and the ntfy-only presentation hints.
-_INTERNAL_RULE_FIELDS = ("default_enabled", "was_opt_in", "priority", "tags")
+_INTERNAL_RULE_FIELDS = ("default_enabled", "was_opt_in", "priority", "tags", "ntfy")
 
 #: At most one push per (session, RULE) per this many seconds — the key is the
 #: rule id, not the event name, because three rules ride
@@ -524,6 +570,12 @@ def _enabled_rules() -> List[dict]:
     except Exception:  # noqa: BLE001 — settings must never break dispatch
         muted, opted_in = set(), set()
     return [r for r in NOTIFY_RULES if _rule_enabled(r, muted, opted_in)]
+
+
+def rule_enabled(rule_id: str) -> bool:
+    """Whether one rule is switched on — for a sender outside this module that
+    owns a rule's push (``ntfy: False``) and must still honour its switch."""
+    return any(r["id"] == rule_id for r in _enabled_rules())
 
 
 def _rules_with_state() -> List[dict]:
@@ -663,7 +715,9 @@ class NotifyAddon(Addon):
                 # so it can be approved here): that member already pushed it.
                 return
             for rule in _enabled_rules():
-                if not _matches(rule, envelope):
+                # ``ntfy: False``: another sender owns this moment's phone push
+                # (see the rule), so the generic dispatch stays out of it.
+                if rule.get("ntfy") is False or not _matches(rule, envelope):
                     continue
                 key = (str(envelope.get("session") or ""), str(rule["id"]))
                 now = time.monotonic()

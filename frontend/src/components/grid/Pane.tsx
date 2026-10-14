@@ -42,6 +42,7 @@ import { useCalm } from "../../lib/useCalm";
 import { agentMissing } from "../../lib/sessionState";
 import { useSetup } from "../setup/useSetup";
 import { openChecklist } from "../../lib/checklistLink";
+import { VerdictChip } from "../dialogs/VerdictChip";
 import { familyOf, newestReportTs, threadBadge, threadTabShown } from "../../lib/thread";
 import { effectiveActivity } from "../../lib/stage";
 
@@ -870,6 +871,8 @@ export function Pane({
               {rs.label}
             </button>
           )}
+          {/* Verify's verdict, next to Open PR; opens its checklist. */}
+          <VerdictChip inst={inst} where="pane" />
           <span
             className={"stagechip " + chip.cls}
             title={inst.pr_url ? "Open PR" : chip.title}

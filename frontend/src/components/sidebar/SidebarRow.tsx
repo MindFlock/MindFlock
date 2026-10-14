@@ -70,6 +70,7 @@ import {
 } from "../../lib/sessionActionTable";
 import { openSettings } from "../../lib/openSettings";
 import { openChecklist } from "../../lib/checklistLink";
+import { VerdictChip } from "../dialogs/VerdictChip";
 
 /** The row menu's table-driven groups, in menu order. */
 const ROW_GIT: SessionActionId[] = ["commit", "push", "pr", "merge", "viewPr"];
@@ -736,6 +737,8 @@ export const SidebarRow = memo(function SidebarRow({
             {extra.check.label}
           </span>
         )}
+        {/* Verify's verdict for this branch; opens its checklist. */}
+        {!pending && <VerdictChip inst={inst} where="row" />}
         {bg &&
           (bg.stopPid ? (
             <button

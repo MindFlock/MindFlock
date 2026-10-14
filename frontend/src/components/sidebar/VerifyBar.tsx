@@ -30,7 +30,7 @@ import { errMsg } from "../../lib/format";
 import { useTestPlans } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
-import { dueCount, verdictOf } from "../dialogs/verify";
+import { dueCount, failingCount } from "../dialogs/verify";
 
 interface RepositorySettings {
   verify_enabled?: boolean;
@@ -78,12 +78,10 @@ export function VerifyBar() {
   const due = dueCount(plans);
   const running = plans.some((p) => p.state === "running");
   // SOMETHING PUSHED AND IS BROKEN — the most valuable thing this feature
-  // produces, and the only state of it that never left the dialog. `dueCount`
-  // deliberately excludes a recorded failure (a fail IS an answer, so the plan
-  // is not "not checked yet"), and the loud red group lives inside a modal
-  // nobody has open. So the bar said "on, nothing outstanding" over a checklist
-  // that had found a real defect.
-  const broken = plans.filter((p) => verdictOf(p) === "fail").length;
+  // produces. The top bar's badge counts it among "needs you or failed"; this
+  // red pill says how many of those are failures: failed steps AND checklists
+  // that couldn't be written — the "Failed" group, by the same rule.
+  const broken = failingCount(plans);
 
   if (!repo || (repos.length === 0 && plans.length === 0)) return null;
 
@@ -131,25 +129,24 @@ export function VerifyBar() {
           running
             ? "Verify: an agent is checking a checklist"
             : broken
-              ? "Verify: " + broken + " pushed " + (broken === 1 ? "change" : "changes") +
-                " failed its checklist"
+              ? "Verify: " + broken + (broken === 1 ? " checklist" : " checklists") + " failed"
               : !on
                 ? "Verify: switched off"
-                : "Verify: on, " + (due ? due + " not checked yet" : "nothing outstanding")
+                : "Verify: on, " + (due ? due + " need you" : "nothing outstanding")
         }
         title={
           running
             ? "An agent is working through a checklist right now"
             : broken
-              ? broken + (broken === 1 ? " checklist has" : " checklists have") +
-                " a failed step — open Verify to see which"
+              ? broken + (broken === 1 ? " checklist" : " checklists") +
+                " failed — open Verify to see which"
               : !on
                 ? // Deliberately not the word a removed status line used: a blunt
                   // bundle-wide guard in test_pr_review_settings.py watches for it
                   // coming back, and this tooltip is not what it is guarding.
                   "Paused: no new checklists on push"
                 : due
-                  ? due + (due === 1 ? " checklist needs" : " checklists need") + " checking"
+                  ? due + (due === 1 ? " checklist needs" : " checklists need") + " you"
                   : "On — nothing to check right now"
         }
       />
@@ -179,8 +176,8 @@ export function VerifyBar() {
           <span
             className="dc-count dc-count-bad"
             title={
-              broken + (broken === 1 ? " checklist has" : " checklists have") +
-              " a step that failed"
+              broken + (broken === 1 ? " checklist" : " checklists") +
+              " failed — a step failed, or it couldn't be written"
             }
           >
             {"\u2717" + broken}
