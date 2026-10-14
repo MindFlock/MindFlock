@@ -1215,7 +1215,12 @@ def write_launcher(
     Exit handling. The in-session loop inspects the agent's exit code: a clean
     quit (0 / 130 = Ctrl-C) is treated as deliberate and drops to a shell rather
     than re-running the ticket; any other (crash / kill) resumes after a short
-    pause.
+    pause — except a SIGKILL (137, the OOM killer), which ends the script with
+    that code so the server relaunches it once memory recovers.
+
+    Before anything else the script raises its own ``oom_score_adj``
+    (:data:`backend.providers.launch_script.OOM_SCORE_ADJ`), so under memory
+    pressure the kernel kills the agent's tree, not the server.
     """
     # Absolute: the launcher's own path and its `cd` must work from tmux's
     # server cwd (not ours), so a relative worktree path would make the script
@@ -1291,16 +1296,28 @@ def write_launcher(
     # than relaunch. The provider owns the policy (claude/most CLIs: 0 exit,
     # 130 Ctrl-C).
     natural = "|".join(str(int(c)) for c in (spec.natural_codes or (0, 130)))
+    # SIGKILL (137 — the OOM killer) ends the launcher with that code instead
+    # of resuming here: relaunching straight back into the memory squeeze that
+    # killed it is how a box OOMs in a loop. The pane closes, the launch
+    # wrapper records 137, and the server's auto-revive brings the agent back
+    # once memory has recovered, rate-limited, with a "continue" queued
+    # (backend.web.core.revive).
+    killed = launch_script.KILLED_EXIT_CODE
 
     # First launch (no marker) seeds the prompt into a fresh conversation.
     # A relaunch from scratch (marker present, e.g. a reboot after the tmux
     # server died = unnatural) resumes instead of re-typing the ticket; if the
     # resume fails twice it starts PLAIN — never re-seeded (see _resume_chain).
     #
+    # SIGKILL (137) -> exit with it (see ``killed`` above), checked straight
+    # after the launch while ``$?`` is still the CLI's.
+    #
     # In-session loop: after the agent exits, inspect its code. Clean quit
     # (0 = exit, 130 = Ctrl-C) is deliberate -> drop to a shell. Anything else
     # (crash / kill) -> resume after a 3s pause (Ctrl-C during the pause escapes
-    # to a shell).
+    # to a shell). NOTE: ``cs_code=$?`` reads the status of the loop condition
+    # (``true``, so 0) rather than the CLI's, so as written the loop always
+    # breaks to the shell — pinned as-is by the goldens.
     inner = (
         f"{exports}"
         f"{seed_fn}"
@@ -1310,6 +1327,7 @@ def write_launcher(
         f"  : > {STARTED_MARKER}\n"
         f"  {first}\n"
         "fi\n"
+        f"if [ $? -eq {killed} ]; then exit {killed}; fi\n"
         "while true; do\n"
         "  cs_code=$?\n"
         f'  case "$cs_code" in {natural}) break;; esac\n'
@@ -1321,11 +1339,19 @@ def write_launcher(
     )
 
     launch = directory / LAUNCHER_BASENAME
-    # bash -ilc: login+interactive so PATH/aliases are present.
+    # bash -ilc: login+interactive so PATH/aliases are present. The OOM score
+    # is raised before the exec, so the login shell, the CLI and everything the
+    # agent runs inherit it (launch_script.OOM_SCORE_ADJ).
+    oom = launch_script.oom_score_line()
     script = (
         "#!/usr/bin/env bash\n"
-        "cd " + _sh_quote(str(directory)) + "\n"
-        "exec bash -ilc " + _sh_quote(inner) + "\n"
+        "cd "
+        + _sh_quote(str(directory))
+        + "\n"
+        + (oom + "\n" if oom else "")
+        + "exec bash -ilc "
+        + _sh_quote(inner)
+        + "\n"
     )
     launch.write_text(script, encoding="utf-8")
     os.chmod(launch, 0o755)
@@ -1354,12 +1380,15 @@ def _resume_chain(prog: str, spec: LauncherSpec) -> str:
         return resume
     # Double quotes on the echo: the whole inner script is single-quote-wrapped
     # into `bash -ilc`, so single quotes here would turn into `'"'"'` soup.
-    return (
-        f"{resume} || {{ sleep 3; {resume}; }} || "
-        '{ echo "[mindflock] resume failed twice; starting a fresh session'
+    # Neither fallback runs after a SIGKILL (launch_script.unless_killed): an
+    # OOM-killed CLI is not a resume that failed.
+    retry = launch_script.unless_killed(f"sleep 3; {resume}")
+    fresh = launch_script.unless_killed(
+        'echo "[mindflock] resume failed twice; starting a fresh session'
         " WITHOUT re-sending the ticket prompt (kept in "
-        f'{PROMPT_BASENAME})"; {prog}; }}'
+        f'{PROMPT_BASENAME})"; {prog}'
     )
+    return f"{resume} || {retry} || {fresh}"
 
 
 def _sh_quote(s: str) -> str:

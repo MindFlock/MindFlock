@@ -192,6 +192,7 @@ def rows(engine=None) -> list:
                 "created_at": None,  # no session record exists yet
                 "diff_stat": None,
                 "workspace_missing": False,
+                "sleeping": None,  # nothing launched yet, so nothing asleep
                 "has_origin": False,
                 # No worktree yet, so no zones (red or green) to summarize.
                 "redzone": None,

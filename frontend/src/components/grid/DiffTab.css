@@ -69,6 +69,13 @@
   animation: none;
 }
 
+/* An agent put to sleep to free memory: as quiet as Paused, nothing broken. */
+.stagechip.s-sleeping {
+  color: var(--tone-muted);
+  background: color-mix(in srgb, var(--tone-muted) 12%, transparent);
+  animation: none;
+}
+
 @keyframes cs-pulse {
 
   0%,

@@ -125,7 +125,8 @@ _D_LIST = (
     "| limit = usage limit | offline), activity_since, stage, program, branch, "
     "folder, parent, spawned, last_turn, is_self, managed (you may steer it), "
     "plus autopilot, pr_url and background (jobs the agent left running after "
-    "its turn, each running | waiting | stuck) when set. "
+    "its turn, each running | waiting | stuck) when set, and sleeping when "
+    "its agent was put to sleep to free memory (send_message wakes it). "
     "filter: children (default when you have children), descendants, siblings, "
     "or all (default otherwise). repo narrows to one repository (name or path). "
     "Sessions you manage come first; limit caps the rows (default 50) and "
@@ -584,6 +585,8 @@ _COMPACT_KEYS = (
 #: ``behind``: commits that remote branch has that the session lacks.
 #: ``background``: jobs the agent backgrounded and left running past its turn
 #: (an idle session with a ``waiting`` job is not finished yet).
+#: ``sleeping``: its agent was put to sleep to free memory (its activity
+#: reads offline meanwhile); a message or a prompt wakes it.
 _COMPACT_OPTIONAL = (
     "autopilot",
     "pr_url",
@@ -594,6 +597,7 @@ _COMPACT_OPTIONAL = (
     "shared_branch",
     "behind",
     "background",
+    "sleeping",
 )
 _MESSAGE_KEYS = ("id", "kind", "from", "ts", "text", "data", "reply_to", "state")
 
@@ -1953,6 +1957,10 @@ class Toolbox(_ship.ShipTools, _runs.RunTools):
             return "gone"
         status = str(row.get("status") or "")
         activity = str(row.get("activity") or "")
+        if row.get("sleeping") and activity == "offline":
+            # Asleep (core.sleep): stopped only once its turn ended and it sat
+            # idle — finished, not dead.
+            activity = "idle"
         if status == "paused":
             return "paused"
         if activity in ("clarify", "limit"):

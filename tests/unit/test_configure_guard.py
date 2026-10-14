@@ -158,6 +158,8 @@ def test_serve_fronted_loopback_counts_as_remote(app, monkeypatch):
         {"peer": {"enabled": True}},
         {"github": {"token": "ghp_x"}},
         {"general": {"agent_mcp": False}},
+        # Stops this machine's agents: the owner's call, not a passer-by's.
+        {"general": {"sleep_idle_minutes": 1}},
         {"extensions": {"disabled": ["x"]}},
     ],
 )

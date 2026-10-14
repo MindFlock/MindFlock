@@ -14,6 +14,7 @@ them through the server namespace).
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import tempfile
 import threading
@@ -102,8 +103,21 @@ def _ensure_shell_session(title: str, wt: str):
     if live is not None:
         return live, None  # attach the existing session
     shell = os.environ.get("SHELL") or "/bin/bash"
+    # Run through sh so the shell starts with the agents' OOM score
+    # (launch_script.OOM_SCORE_ADJ): what a person runs here — a test suite, a
+    # build — is the OOM killer's pick before the server, like the agent's.
+    oom = providers.launch_script.oom_score_prefix()
     created = _proc.run_capped(
-        ["tmux", "new-session", "-d", "-s", name, "-c", wt, shell],
+        [
+            "tmux",
+            "new-session",
+            "-d",
+            "-s",
+            name,
+            "-c",
+            wt,
+            (oom + "exec " + shlex.quote(shell)) if oom else shell,
+        ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         timeout=10,
@@ -155,13 +169,22 @@ def _ensure_agent_session(inst, title: str):
     In-place sessions (copies, and any session running directly in an existing
     repo) are *borrowing* a worktree, so they never reuse a launcher left there
     by the worktree's owner — they always start the program fresh (a new thread,
-    not a --continue resume of someone else's conversation)."""
+    not a --continue resume of someone else's conversation).
+
+    A SLEEPING session (:mod:`backend.web.core.sleep`) always resumes —
+    its agent was stopped on purpose at the end of a turn, and the exit code
+    the hangup left says nothing — and its launch ends the sleep."""
+    from backend.web.core import sleep as _sleep
+
     srv = _server()
     name = tmux.to_mindflock_tmux_name(title)
+    asleep = _sleep.is_sleeping(title)
     # Attach an already-running session instead of spawning a duplicate agent
     # on the same worktree.
     live = srv._live_session_name(name)
     if live is not None:
+        if asleep:
+            _sleep.woke(title)  # someone relaunched it meanwhile
         return live, None
     wt = inst.GetWorktreePath()
     if not wt or not os.path.isdir(wt):
@@ -170,7 +193,7 @@ def _ensure_agent_session(inst, title: str):
     # How did it die? Natural (clean quit) -> restart fresh; unnatural (kill /
     # crash / no marker) -> resume the conversation. The provider owns the
     # exit-code policy (claude: 0/130 = clean).
-    resume = not provider.is_natural_exit(_read_exit_marker(name))
+    resume = asleep or not provider.is_natural_exit(_read_exit_marker(name))
     peer_share = getattr(inst, "PeerShare", "") or ""
     if not peer_share:
         try:
@@ -340,6 +363,8 @@ def _ensure_agent_session(inst, title: str):
         ):
             return name, None
         return name, created.stderr.decode("utf-8", "replace").strip()
+    if asleep:
+        _sleep.woke(title)  # the sleep ends with this launch
     # A new agent process: record whether it got the MindFlock tools (the
     # row's mcp_attached) — a relaunch with the feature off, or of a provider
     # that can't attach, has none, whatever the previous launch had.

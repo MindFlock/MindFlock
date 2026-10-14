@@ -2785,6 +2785,18 @@ p.set-hint {
 .orch-cap-row .orch-cap-env {
   color: var(--warn, #d9a33b);
 }
+
+/* Shared MCP servers: the command basename beside the name, and the caution
+   line (a server that may not behave when shared). */
+.mcp-share-cmd {
+  font-weight: 400;
+  font-size: 12px;
+  margin-left: 4px;
+}
+
+.mcp-share-caution {
+  color: var(--warn, #d9a33b);
+}
 }
 
 /* 040 */
@@ -5020,6 +5032,17 @@ p.set-hint {
 .inst .stagechip.chip-restart:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* Sleeping (backend core/sleep.py) is calm: the Wake remedy appears only
+   on hover / keyboard focus, never as a standing call to action. */
+.inst .stagechip.chip-wake .chip-act {
+  display: none;
+}
+
+.inst .stagechip.chip-wake:hover .chip-act,
+.inst .stagechip.chip-wake:focus-visible .chip-act {
+  display: inline;
 }
 
 .inst .chevron {
@@ -8828,6 +8851,13 @@ button.stagechip.bgchip.bg-stuck:hover {
 .stagechip.s-paused {
   color: var(--tone-muted);
   background: color-mix(in srgb, var(--tone-muted) 16%, transparent);
+  animation: none;
+}
+
+/* An agent put to sleep to free memory: as quiet as Paused, nothing broken. */
+.stagechip.s-sleeping {
+  color: var(--tone-muted);
+  background: color-mix(in srgb, var(--tone-muted) 12%, transparent);
   animation: none;
 }
 
@@ -17897,6 +17927,10 @@ body.conn-lost #cs-errors {
 #memory-notice .mn-detail {
   margin-top: 4px;
   line-height: 1.45;
+}
+
+#memory-notice .mn-slots {
+  font-variant-numeric: tabular-nums;
 }
 
 #memory-notice .mn-what {

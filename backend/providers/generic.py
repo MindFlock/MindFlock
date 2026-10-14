@@ -20,6 +20,7 @@ from .base import (
     seed_prompt_expr,
 )
 from .config import ProviderConfig
+from .launch_script import unless_killed
 
 
 class GenericProvider(BaseProvider):
@@ -77,11 +78,14 @@ class GenericProvider(BaseProvider):
                         base,
                         cfg.resume_id_flag.format(id=shlex.quote(tid)),
                     )
-                    return "%s || %s" % (by_id, fresh)
+                    return "%s || %s" % (by_id, unless_killed(fresh))
             if cfg.resume_flag:
                 resume_cmd = "%s %s" % (base, cfg.resume_flag)
                 if cfg.resume_fallback:
-                    return "%s || %s" % (resume_cmd, fresh)
+                    # Not after a SIGKILL: an OOM-killed CLI is not a resume
+                    # that failed, and ``fresh`` may re-seed the whole task
+                    # (see launch_script.unless_killed).
+                    return "%s || %s" % (resume_cmd, unless_killed(fresh))
                 return resume_cmd
             # No resume flag -> relaunch fresh.
             return fresh

@@ -27,6 +27,7 @@ from .base import (
 )
 from . import claude_background
 from ._timeparse import ts_epoch
+from .launch_script import unless_killed
 
 # Activity markers live in the shared, provider-agnostic module (Codex reuses
 # the same {state, ts} marker + hook-command machinery).
@@ -77,10 +78,15 @@ def claude_launch_command(
         else:
             rcmd = f"{base} --continue"
         plain = (
-            "{ echo '[mindflock] resume failed twice; starting a fresh session"
-            " WITHOUT re-sending the task prompt'; " + base + "; }"
+            "echo '[mindflock] resume failed twice; starting a fresh session"
+            " WITHOUT re-sending the task prompt'; " + base
         )
-        return f"{rcmd} || {{ sleep 3; {rcmd}; }} || {plain}"
+        # Neither fallback runs after a SIGKILL: a CLI the OOM killer took is
+        # not a resume that failed (see launch_script.unless_killed).
+        return (
+            f"{rcmd} || {unless_killed(f'sleep 3; {rcmd}')} || "
+            f"{unless_killed(plain)}"
+        )
     return fresh
 
 
@@ -351,14 +357,37 @@ class ClaudeProvider(BaseProvider):
         ``--mcp-config`` start without an approval dialog, and the allow list
         is additive to the user's own permission rules (both verified there).
         No ``--strict-mcp-config``: the user's own servers keep loading.
+
+        The run file also carries the user's SHARED servers
+        (:meth:`shared_mcp_entries`): same-named http entries pointing at the
+        one-per-machine bridge, which replace the stdio entries for this launch.
         """
         from . import mcp_attach
 
-        path = mcp_attach.write_claude_config(spec)
+        path = mcp_attach.write_claude_config(
+            spec, self.shared_mcp_entries(spec.workdir)
+        )
         return (
             "--mcp-config=" + path,
             "--allowedTools=" + ",".join(mcp_attach.claude_tool_names()),
         )
+
+    def shared_mcp_entries(self, workdir: str) -> dict:
+        """``{name: http entry}`` for the user's shared MCP servers
+        (:func:`backend.providers.claude_mcp.shared_mcp_entries`); ``{}`` when
+        none are shared or anything fails — the session then runs its own."""
+        try:
+            from . import claude_mcp
+
+            return claude_mcp.shared_mcp_entries(workdir)
+        except Exception:  # noqa: BLE001 — sharing is best-effort
+            return {}
+
+    def mcp_servers(self) -> list:
+        """The user's MCP servers for Settings → Shared MCP servers."""
+        from . import claude_mcp
+
+        return claude_mcp.list_servers()
 
     # --- worktree launcher ------------------------------------------------ #
     def owns_launcher(self, ctx: LaunchContext) -> bool:
@@ -1117,6 +1146,44 @@ _LAST_TURN_CACHE = (
 _LAST_TURN_CACHE_MAX = 512  # one entry per workdir
 
 
+#: Block size of :func:`_tail_lines`' backward read.
+_TAIL_CHUNK = 64 * 1024
+
+
+def _tail_lines(path: str, size: int, max_bytes: int):
+    """The lines of the last ``max_bytes`` of ``path`` (as of ``size``),
+    NEWEST FIRST, each decoded (utf-8, errors replaced). When the window starts
+    mid-file its first line is cut mid-entry and is dropped. Raises OSError.
+
+    Reads backward in :data:`_TAIL_CHUNK` blocks, so a caller that stops at the
+    first match (the usual case: the newest prompt sits near the end) holds
+    one block plus one line — not the whole window. The old shape (read the
+    window, decode it, ``splitlines()``) held ~3x the window at once: 40-56 MB
+    per call on real transcripts, every snapshot poll of every working
+    session, and those transient peaks in worker threads are what grew the
+    server's malloc arenas to ~1 GB RSS."""
+    with open(path, "rb") as f:
+        start = max(0, size - max_bytes)
+        pos = size
+        carry: list = []  # pieces of the line being assembled, newest first
+        while pos > start:
+            n = min(_TAIL_CHUNK, pos - start)
+            pos -= n
+            f.seek(pos)
+            buf = f.read(n)
+            parts = buf.split(b"\n")
+            if len(parts) == 1:
+                carry.append(buf)
+                continue
+            carry.append(parts[-1])
+            yield b"".join(reversed(carry)).decode("utf-8", "replace")
+            for part in reversed(parts[1:-1]):
+                yield part.decode("utf-8", "replace")
+            carry = [parts[0]]
+        if start == 0 and carry:
+            yield b"".join(reversed(carry)).decode("utf-8", "replace")
+
+
 def _last_turn_cache_put(workdir: str, entry: dict) -> None:
     """Store a snippet-cache entry, evicting the oldest half when full so a
     long-running server with high session/workdir churn doesn't leak one entry
@@ -1279,7 +1346,6 @@ def _snippet_from_transcript(
     entry either way, so the pin's one-liner and its expansion always agree.
     None when the file is unreadable or holds no matching turn."""
     import json
-    import os
 
     # A role-filtered scan (the pinned prompt) needs a much deeper window
     # than the any-role snippet: one busy agent turn writes megabytes of
@@ -1289,14 +1355,7 @@ def _snippet_from_transcript(
     tail_bytes = _LAST_TURN_TAIL_BYTES if role is None else _LAST_PROMPT_TAIL_BYTES
     snippet = None
     try:
-        with open(path, "rb") as f:
-            if size > tail_bytes:
-                f.seek(-tail_bytes, os.SEEK_END)
-                tail = f.read().decode("utf-8", "replace")
-                lines = tail.splitlines()[1:]  # drop the partial first line
-            else:
-                lines = f.read().decode("utf-8", "replace").splitlines()
-        for line in reversed(lines):
+        for line in _tail_lines(path, size, tail_bytes):
             line = line.strip()
             if not line:
                 continue
@@ -1376,15 +1435,7 @@ def _claude_last_assistant_text(
 
     result = None
     try:
-        with open(path, "rb") as f:
-            size = st.st_size
-            tail = 8 * 1024 * 1024
-            if size > tail:
-                f.seek(-tail, os.SEEK_END)
-                lines = f.read().decode("utf-8", "replace").splitlines()[1:]
-            else:
-                lines = f.read().decode("utf-8", "replace").splitlines()
-        for line in reversed(lines):
+        for line in _tail_lines(path, st.st_size, 8 * 1024 * 1024):
             if '"assistant"' not in line:
                 continue
             if contains and contains not in line:
@@ -1443,7 +1494,6 @@ def _claude_find_prompt_full(
     stripped). Backs the desktop prompt bar's expansion for OLDER prompts —
     the snapshot only carries the latest one. Never raises."""
     import json
-    import os
     import re
 
     def norm(s: str) -> str:
@@ -1457,13 +1507,7 @@ def _claude_find_prompt_full(
         if newest is None:
             return None
         path, size = newest[2], newest[1]
-        with open(path, "rb") as f:
-            if size > _LAST_PROMPT_TAIL_BYTES:
-                f.seek(-_LAST_PROMPT_TAIL_BYTES, os.SEEK_END)
-                lines = f.read().decode("utf-8", "replace").splitlines()[1:]
-            else:
-                lines = f.read().decode("utf-8", "replace").splitlines()
-        for line in reversed(lines):
+        for line in _tail_lines(path, size, _LAST_PROMPT_TAIL_BYTES):
             line = line.strip()
             if not line:
                 continue

@@ -224,6 +224,13 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         "setup_devices",
         # What THIS machine relaunches when its own server boots.
         "revive_on_start",
+        # Sized to THIS machine's RAM (backend.slot).
+        "heavy_slots",
+        # How soon THIS machine puts idle agents to sleep: it is about its
+        # own memory, which differs per device.
+        "sleep_idle_minutes",
+        # Names from THIS machine's Claude config, sharing THIS machine's RAM.
+        "mcp_shared_servers",
     ),
     "notifications": ("ntfy_click_url",),
     "peer": (

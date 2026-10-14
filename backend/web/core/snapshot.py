@@ -28,6 +28,7 @@ from backend.web.core import hidden_sessions as _hidden_sessions
 from backend.web.core import ownership as _ownership
 from backend.web.core import person_sessions as _person_sessions
 from backend.web.core import shared_branch as _shared_branch
+from backend.web.core import sleep as _sleep
 
 
 def _server():
@@ -476,6 +477,12 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         "diff_stat": None if cheap else srv._session_diff_stat(inst),
         # L1(c): true when the session's workspace dir no longer exists.
         "workspace_missing": workspace_missing,
+        # Asleep (core.sleep): its agent was stopped on purpose, idle, to give
+        # its memory back — {"since", "reason": idle|memory|manual,
+        # "freed_mb"} — or null. Its activity reads "offline" meanwhile; the
+        # UI paints it Sleeping, not Offline. Opening it or sending it
+        # anything wakes it.
+        "sleeping": _sleep.info(inst.Title),
         # L2: whether the workspace has an `origin` remote (cached ~30s) — the
         # guided Push step is a dead end without one.
         "has_origin": bool(
