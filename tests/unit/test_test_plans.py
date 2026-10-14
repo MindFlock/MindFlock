@@ -8143,3 +8143,139 @@ def test_older_runs_without_the_flag_read_as_after_merge(store):
     plan = tp.get("sc-1")
     assert plan["runs"][-1]["prelive"] is False
     assert tp.mark_due("sc-1")["state"] == "done"
+
+
+# --------------------------------------------------------------------------- #
+# A checklist for a BRANCH no session has been on (Verify → New checklist →
+# Another branch…): POST /api/test-plans/branch {repo, branch}
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def branch_repo(tmp_path, monkeypatch):
+    """A repo (shipping from main) with a branch nobody opened a session on,
+    known to Verify through a closed session in it. Generation is recorded,
+    never run."""
+    from backend.web import server
+
+    repo = tmp_path / "shop"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+    (repo / "a.py").write_text("x\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "init")
+    _git(repo, "checkout", "-q", "-b", "feature/teammate")
+    (repo / "a.py").write_text("y\n")
+    _git(repo, "commit", "-qam", "their work")
+    _git(repo, "checkout", "-q", "main")
+    entry = {
+        "id": "old-1",
+        "title": "old",
+        "branch": "feature/old",
+        "data": {"worktree": {"repo_path": str(repo)}},
+    }
+    monkeypatch.setattr(server, "_load_recently_closed", lambda: [entry])
+    monkeypatch.setattr(server.ENGINE, "instances", {})
+    started: list = []
+    monkeypatch.setattr(
+        server, "_start_test_plan_generation", lambda *a, **k: started.append(a)
+    )
+    return SimpleNamespace(root=os.path.realpath(repo), started=started)
+
+
+def test_the_repo_picker_lists_repos_verify_has_seen(client, branch_repo):
+    r = client.get("/api/test-plans/repos")
+    assert r.status_code == 200
+    assert r.json()["repos"] == [{"name": "shop", "root": branch_repo.root}]
+
+
+def test_a_checklist_for_a_branch_no_session_was_on(client, branch_repo):
+    r = client.post(
+        "/api/test-plans/branch",
+        json={"repo": branch_repo.root, "branch": "feature/teammate"},
+    )
+    assert r.status_code == 202
+    assert r.json() == {"ok": True, "plan": "shop@feature/teammate", "existing": False}
+    plan = tp.get("shop@feature/teammate")
+    assert plan["branch"] == "feature/teammate"
+    assert plan["repo_root"] == branch_repo.root
+    assert len(plan["sha"]) == 40 and plan["live_branch"] == "main"
+    # No session: the repo's default CLI, diffing in the repo's own checkout.
+    assert branch_repo.started == [("shop@feature/teammate", "", "")]
+
+    # Asking again points at the one it already wrote — by name, too.
+    again = client.post(
+        "/api/test-plans/branch", json={"repo": "shop", "branch": "feature/teammate"}
+    )
+    assert again.status_code == 200
+    assert again.json()["existing"] is True
+    assert again.json()["plan"] == "shop@feature/teammate"
+    assert len(branch_repo.started) == 1
+
+
+def test_a_branch_a_session_already_covers_names_that_checklist(client, branch_repo):
+    tp.ensure_plan_for("sc-7", "feature/teammate", "abc", branch_repo.root, "main")
+    r = client.post(
+        "/api/test-plans/branch",
+        json={"repo": branch_repo.root, "branch": "feature/teammate"},
+    )
+    assert r.status_code == 200
+    assert r.json()["existing"] is True and r.json()["plan"] == "sc-7"
+    assert branch_repo.started == []
+
+
+def test_a_branch_only_on_origin_is_fetched(client, branch_repo, tmp_path, monkeypatch):
+    from backend.web import server
+
+    clone = tmp_path / "clone"
+    _git(
+        tmp_path,
+        "clone",
+        "-q",
+        "--single-branch",
+        "-b",
+        "main",
+        branch_repo.root,
+        str(clone),
+    )
+    entry = {"title": "c", "data": {"worktree": {"repo_path": str(clone)}}}
+    monkeypatch.setattr(server, "_load_recently_closed", lambda: [entry])
+    r = client.post(
+        "/api/test-plans/branch", json={"repo": "clone", "branch": "feature/teammate"}
+    )
+    assert r.status_code == 202
+    assert tp.get("clone@feature/teammate")["sha"] == _head_of(
+        branch_repo.root, "feature/teammate"
+    )
+
+
+def _head_of(repo, ref) -> str:
+    out = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", ref], check=True, stdout=subprocess.PIPE
+    )
+    return out.stdout.decode().strip()
+
+
+@pytest.mark.parametrize(
+    "body, status, words",
+    [
+        ({"branch": "feature/teammate"}, 400, "pick a repo"),
+        ({"repo": "shop"}, 400, "type a branch"),
+        (
+            {"repo": "/nowhere", "branch": "feature/teammate"},
+            400,
+            "isn't one of your repos",
+        ),
+        ({"repo": "shop", "branch": "-x"}, 400, "isn't a branch name"),
+        ({"repo": "shop", "branch": "a..b"}, 400, "isn't a branch name"),
+        ({"repo": "shop", "branch": "main"}, 409, "ships from"),
+        ({"repo": "shop", "branch": "feature/nobody"}, 409, "no branch feature/nobody"),
+    ],
+)
+def test_a_branch_checklist_refuses_what_it_cannot_write(
+    client, branch_repo, body, status, words
+):
+    r = client.post("/api/test-plans/branch", json=body)
+    assert r.status_code == status
+    assert words in r.json()["error"]
+    assert branch_repo.started == []

@@ -197,12 +197,9 @@ export function latestRun(plan: TestPlan): TestRun | null {
 }
 
 /** Whether a run was a check of the BRANCH, made before the work merged.
- *
- * The server stamps `prelive` on the run; the field is read off the record
- * rather than added to `TestRun` because the API types live with the client.
  * A run with no flag (an older store) is an ordinary run. */
 export function isBeforeMerge(run: TestRun | null | undefined): boolean {
-  return !!(run as (TestRun & { prelive?: boolean }) | null | undefined)?.prelive;
+  return !!run?.prelive;
 }
 
 /** The newest check made before merge on a plan that has SINCE shipped, or

@@ -55,6 +55,12 @@ describe("screens and panels declare what they need, and say how to get it", () 
     }
   });
 
+  it("gates the sidebar PR-review / issue bars on git alone, matching those tabs", () => {
+    const hook = src("components/sidebar/useGithubToggleBar.ts");
+    expect(hook).toContain("const capsOk = !(config?.caps && !config.caps.git);");
+    expect(hook).not.toContain("caps.ticketing");
+  });
+
   it("tags the git-only entry points so they vanish without git", () => {
     const advanced = tagsWithId(src("components/dialogs/newSession/WorkspaceFold.tsx"), "new-advanced");
     expect(advanced.map((t) => attr(t, "data-caps"))).toEqual(["git"]);

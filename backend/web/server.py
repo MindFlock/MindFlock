@@ -8426,6 +8426,11 @@ async def ticket_force_start(payload: dict, request: Request) -> JSONResponse:
         effort_override = _start_effort_override(payload)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
+    # A multi-repo source's ticket, started in a repo picked on the row
+    # (validated against the source's repos by the launch).
+    repo = payload.get("repo") or ""
+    if not isinstance(repo, str):
+        return JSONResponse({"error": "repo must be a string"}, status_code=400)
     # An agent starting the ticket as its own worker (parent / spawned /
     # report_back / note); all-empty for the Intake panel.
     lineage, lin_err = await _intake_lineage(payload)
@@ -8452,6 +8457,7 @@ async def ticket_force_start(payload: dict, request: Request) -> JSONResponse:
             effort=effort_override,
             lineage=lineage,
             override_claim=override_claim,
+            repo=repo,
         )
     except _ticket_start.LaunchError as err:
         return JSONResponse(err.body, status_code=err.status)
@@ -8930,7 +8936,7 @@ async def intake_reopen(payload: dict) -> JSONResponse:
         return JSONResponse(
             {
                 "error": "no workspace for this item is left on this machine — "
-                "use Begin work to start it fresh"
+                "use Start to start it fresh"
             },
             status_code=410,
         )
@@ -9026,6 +9032,141 @@ def list_test_plans() -> JSONResponse:
             "plans": plans,
             "live_branch": _test_plans.resolve_live_branch(),
         }
+    )
+
+
+def _known_repo_roots() -> list[dict]:
+    """``[{name, root}]`` — the local repos Verify can write a checklist in by
+    branch: every checklist's repo, every open session's, every recently closed
+    one's. One entry per repo (``norm_repo``), only checkouts still on disk.
+    Blocking (a session's repo path may ask git)."""
+    roots: list[str] = [str(p.get("repo_root") or "") for p in _test_plans.list_plans()]
+    for inst in list(ENGINE.instances.values()):
+        try:
+            roots.append(inst.GetGitWorktree().GetRepoPath() or "")
+        except Exception:  # noqa: BLE001 — not a git session, or not started
+            continue
+    for entry in _load_recently_closed():
+        data = entry.get("data") or {}
+        wt = data.get("worktree") or {}
+        roots.append(str(wt.get("repo_path") or ""))
+    out: list[dict] = []
+    seen: set = set()
+    for raw in roots:
+        root = _test_plans.norm_repo(raw)
+        if not root or root in seen:
+            continue
+        seen.add(root)
+        if os.path.isdir(root) and os.path.exists(os.path.join(root, ".git")):
+            out.append({"name": os.path.basename(root.rstrip(os.sep)), "root": root})
+    out.sort(key=lambda r: (r["name"].lower(), r["root"]))
+    return out
+
+
+@app.get("/api/test-plans/repos")
+async def list_test_plan_repos() -> JSONResponse:
+    """The repos Verify → New checklist → *Another branch…* can pick from."""
+    return JSONResponse({"repos": await asyncio.to_thread(_known_repo_roots)})
+
+
+@app.post("/api/test-plans/branch")
+async def write_test_plan_for_branch(payload: dict) -> JSONResponse:
+    """Ask the agent for a checklist for a BRANCH no session has been on.
+
+    ``{repo, branch}``: ``repo`` is one of :func:`_known_repo_roots` (its root,
+    or its name when that is unambiguous). The same answers in the same shapes
+    as ``POST /api/instances/<title>/test-plan`` — 200 ``existing: true`` naming
+    the checklist that already covers the branch, else 202 while it is written —
+    so Verify's one button does not care which it asked. Written diff-only, from
+    the repo's own checkout (there is no session, so no ticket text): the
+    rewrite box is where to aim it. 400 a missing/unknown repo or a bad branch
+    name, 409 a branch the repo doesn't have or the branch it ships from."""
+    if not git_available():
+        return _no_git_response()
+    payload = payload or {}
+    repo = payload.get("repo")
+    branch = payload.get("branch")
+    if not isinstance(repo, str) or not repo.strip():
+        return JSONResponse({"error": "pick a repo"}, status_code=400)
+    if not isinstance(branch, str) or not branch.strip():
+        return JSONResponse({"error": "type a branch name"}, status_code=400)
+    repo, branch = repo.strip(), branch.strip()
+
+    def _prepare():
+        known = _known_repo_roots()
+        want = _test_plans.norm_repo(repo)
+        hits = [r for r in known if r["root"] == want] or [
+            r for r in known if r["name"].lower() == repo.lower()
+        ]
+        if len(hits) != 1:
+            return (
+                None,
+                "",
+                JSONResponse(
+                    {"error": "%s isn't one of your repos here" % repo}, status_code=400
+                ),
+            )
+        root = hits[0]["root"]
+        if not _test_plans.valid_branch_name(branch):
+            return (
+                None,
+                "",
+                JSONResponse(
+                    {"error": "%r isn't a branch name" % branch}, status_code=400
+                ),
+            )
+        live = _test_plans.resolve_live_branch(root)
+        if branch == live:
+            return (
+                None,
+                "",
+                JSONResponse(
+                    {
+                        "error": "%s is the branch this repo ships from — nothing to compare"
+                        % branch
+                    },
+                    status_code=409,
+                ),
+            )
+        sha = _test_plans.resolve_branch_sha(root, branch)
+        if not sha:
+            return (
+                None,
+                "",
+                JSONResponse(
+                    {
+                        "error": "no branch %s in %s (here or on origin)"
+                        % (branch, hits[0]["name"])
+                    },
+                    status_code=409,
+                ),
+            )
+        plan_id = _test_plans.branch_plan_id(root, branch)
+        plan = _test_plans.ensure_plan_for(plan_id, branch, sha, root, live, intent="")
+        owner = (
+            ""
+            if plan is not None
+            else _test_plans.owner_for_branch(plan_id, root, branch)
+        )
+        return plan, owner or plan_id, None
+
+    plan, plan_id, resp = await asyncio.to_thread(_prepare)
+    if resp is not None:
+        return resp
+    if plan is None:
+        existing = _test_plans.get(plan_id) or {}
+        return JSONResponse(
+            {
+                "ok": True,
+                "plan": plan_id,
+                "existing": True,
+                "state": existing.get("state", ""),
+            }
+        )
+    # No session: the repo's default CLI, reading the diff in its checkout.
+    _start_test_plan_generation(plan_id, "", "")
+    return JSONResponse(
+        {"ok": True, "plan": plan_id, "existing": False}, status_code=202
     )
 
 

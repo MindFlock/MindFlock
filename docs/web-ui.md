@@ -2287,17 +2287,21 @@ paused*, and every row chip reads *auto-start paused* (`intake/pause.ts`).
 **Chips follow the switches.** A row that passes every filter says
 **will auto-start** only while its kind's switch is on; otherwise it reads
 *auto-start off* (or *auto-start paused*) in a neutral chip. Skip reasons from
-the server are shown in the UI's words — *not in an auto-start state*, *already
-handled before*, *too new — waits 12 more min* — never "ingest" or "ledger"
-(`intake/vocab.ts` translates the pipeline's phrasings).
+the server are written in the UI's words — *not in an auto-start state*, *missing
+an auto-start label (…)*, *already started before*, *already queued to start*,
+*already handled before*, *too new — waits 12 more min* — never "ingest" or
+"ledger", so the rows show them as they come.
 
 **Where a ticket goes.** On a source with several repos every ticket row (and its
 Auto-start row) carries a line saying which repo it will start in and why —
 *→ billing-service · label 'billing'*, or *→ repo picked by the agent when it
-starts* when nothing on the ticket names one. The row's **Options** repeat it
-with how to change it (give the ticket a label matching another repo's name or
-hint); a per-row repo override needs a `repo` field on `POST /api/tickets/start`
-that does not exist yet. The three retired Settings screen keys
+starts* when nothing on the ticket names one. The row's **Options** add a
+**Repo** picker (`.ik-item-repo`, only on such a source): *Default (<routed
+repo>)* — or *Default (agent picks)* — then every repo of the source. A pick is
+sent as `repo` on `POST /api/tickets/start`, skips routing for that start, and is
+recorded as *picked on the row*, so the row keeps showing it and a later start
+of the same ticket keeps it. For a standing rule, give the ticket a label
+matching a repo's name or hint. The three retired Settings screen keys
 (`ticketing`, `repo`, `issues`) still route — `LEGACY_SCREEN_TABS` in
 `IntakeDialog.tsx` maps them onto tabs, and the Settings dialog hands off to Intake
 when it is deep-linked one — so every old link keeps working, including the
@@ -2328,7 +2332,7 @@ in (`intake/queue.ts` holds the rule, and the tab strip's badge shares it, so th
 count and the list cannot disagree).
 
 Two things are deliberately **not** here. Work the pipeline has already accepted:
-*"queued for ingestion (pending)"* is a skip reason, so those items are no longer
+*"already queued to start"* is a skip reason, so those items are no longer
 eligible — they have become sessions, which is where you watch them. (One
 exception: a pending ticket since moved out of the ingest state still shows this
 reason, but the pipeline re-checks before launch and drops it instead — see
@@ -2650,7 +2654,7 @@ to abandon, and **Begin work** still reclaims it when it holds no work.
 `POST /api/intake/reopen` takes the item's identity in the same shape its start
 route takes, never a path from the client, so a panel left open for an hour cannot
 name a directory that has since been deleted — the server re-resolves and answers
-**410** (*"no workspace for this item is left on this machine — use Begin work to
+**410** (*"no workspace for this item is left on this machine — use Start to
 start it fresh"*) when it is gone, **409** when the session is already open, and
 restores a closed entry in full or, for a workspace whose session is gone, opens a
 fresh **in-place** session on the directory. In-place because the directory is not
@@ -3064,7 +3068,8 @@ and every recorded answer are kept, and asking for one, running one and
 answering a step all keep working — exactly as a forced PR review still runs with
 automated review switched off.
 
-**New checklist** has two rows, each doing what it says:
+**New checklist** has two rows, each doing what it says (the first also takes
+a branch no session has been on):
 
 - **Ask the agent for a checklist** — pick a branch (listed as `branch — session`)
   and the agent reads the branch's changes and writes the steps, about three
@@ -3073,7 +3078,12 @@ automated review switched off.
   — *has a checklist*, or *on main — nothing to compare* for a session sitting on
   the branch its repo ships from — and the default is always one that can be.
   Pressing it for a session that turns out to be covered does not error — the
-  toast names the checklist that covers it.
+  toast names the checklist that covers it. The picker's last entry,
+  **Another branch…** (the default when there is no session to pick), swaps in
+  a repo picker (every repo a checklist, an open session or a closed one has been
+  in) and a branch box: for a teammate's branch, say. That checklist is keyed
+  `<repo>@<branch>`, read from the repo's own checkout (fetching the branch from
+  origin when it isn't local), and written from the diff alone.
 - **Write steps yourself** — pick a checklist and **Add a step** opens it with its
   **Add a step** form open and the caret in it. Steps live on a checklist, so with
   none yet the row says to ask the agent for one first.

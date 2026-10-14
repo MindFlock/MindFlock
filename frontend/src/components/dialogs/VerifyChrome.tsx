@@ -8,7 +8,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { TestPlan } from "../../api/types";
 import { copyText } from "../../lib/clipboard";
 import { toast } from "../../lib/toast";
-import { writePlanFor } from "../../lib/verifyActions";
+import {
+  fetchVerifyRepos,
+  type VerifyRepo,
+  writePlanFor,
+  writePlanForBranch,
+} from "../../lib/verifyActions";
 import { AutomationSwitch, WorkGroup, useToggleSet } from "../intake/kit";
 import { RepoSourceList, type RepoOverrides } from "../intake/RepoSources";
 import { useSettings } from "../settings/useSettings";
@@ -204,7 +209,13 @@ export function PlanList({
  * The picker lists EVERY session with a branch, open or closed. One that can't
  * be picked stays listed, greyed, saying why ("has a checklist", "on main —
  * nothing to compare"): the old picker dropped them silently under help text
- * promising closed sessions were offered. */
+ * promising closed sessions were offered.
+ *
+ * Its last entry, **Another branch…**, is for work no session of yours has
+ * been on (a teammate's branch): pick one of the repos you've worked in and
+ * type the branch. */
+export const ANOTHER_BRANCH = "__another_branch__";
+
 export function VerifyNewChecklist({
   targets,
   reason,
@@ -228,6 +239,25 @@ export function VerifyNewChecklist({
   const [picked, setPicked] = useState("");
   const [pickedPlan, setPickedPlan] = useState("");
   const pickable = targets.filter((t) => !t.reason);
+  // With no session to pick, Another branch… is the only way in.
+  const other = picked === ANOTHER_BRANCH || !pickable.length;
+  const [repos, setRepos] = useState<VerifyRepo[] | null>(null);
+  const [repoRoot, setRepoRoot] = useState("");
+  const [branch, setBranch] = useState("");
+  const repo = repos?.find((r) => r.root === repoRoot) || repos?.[0];
+
+  // Fetched only once Another branch… is chosen: most people never open it.
+  useEffect(() => {
+    if (!other || repos !== null) return;
+    let live = true;
+    fetchVerifyRepos().then(
+      (list) => live && setRepos(list),
+      () => live && setRepos([])
+    );
+    return () => {
+      live = false;
+    };
+  }, [other, repos]);
 
   useEffect(() => {
     if (preselect) setPicked(preselect);
@@ -241,10 +271,11 @@ export function VerifyNewChecklist({
   const planTarget = plans.some((p) => p.id === pickedPlan) ? pickedPlan : plans[0]?.id || "";
 
   async function ask() {
-    if (!target) return;
+    if (other ? !repo || !branch.trim() : !target) return;
     setBusy(true);
     try {
-      await writePlanFor(target);
+      if (!other) await writePlanFor(target);
+      else if (await writePlanForBranch(repo!, branch.trim())) setBranch("");
     } finally {
       setBusy(false);
     }
@@ -262,8 +293,8 @@ export function VerifyNewChecklist({
           <label htmlFor="vf-newplan-pick">Ask the agent for a checklist</label>
           <select
             id="vf-newplan-pick"
-            value={target}
-            disabled={busy || !pickable.length}
+            value={other ? ANOTHER_BRANCH : target}
+            disabled={busy}
             onChange={(e) => setPicked(e.target.value)}
           >
             {targets.map((t) => (
@@ -274,12 +305,54 @@ export function VerifyNewChecklist({
                 {t.reason ? " · " + t.reason : ""}
               </option>
             ))}
+            <option value={ANOTHER_BRANCH}>Another branch…</option>
           </select>
+          {other && (
+            // `.vf-addstep` for its field styling, minus its dashed frame: the
+            // two fields belong to the row, not to a box of their own.
+            <div
+              className="vf-addstep vf-newplan-branch"
+              style={{ border: "none", padding: 0, margin: 0, flex: "1 1 320px" }}
+            >
+              <select
+                id="vf-newplan-repo"
+                aria-label="Repo"
+                value={repo?.root || ""}
+                disabled={busy || !repos?.length}
+                onChange={(e) => setRepoRoot(e.target.value)}
+              >
+                {repos === null ? (
+                  <option value="">Loading repos…</option>
+                ) : !repos.length ? (
+                  <option value="">No repos yet</option>
+                ) : (
+                  repos.map((r) => (
+                    <option key={r.root} value={r.root} title={r.root}>
+                      {r.name}
+                    </option>
+                  ))
+                )}
+              </select>
+              <input
+                id="vf-newplan-branch"
+                type="text"
+                aria-label="Branch"
+                placeholder="branch, e.g. feature/login"
+                style={{ flex: "1 1 160px" }}
+                value={branch}
+                disabled={busy}
+                onChange={(e) => setBranch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void ask();
+                }}
+              />
+            </div>
+          )}
           <button
             type="button"
             id="vf-newplan-go"
             className="test-btn"
-            disabled={busy || !target}
+            disabled={busy || (other ? !repo || !branch.trim() : !target)}
             onClick={() => void ask()}
           >
             {busy ? (
@@ -291,8 +364,12 @@ export function VerifyNewChecklist({
             )}
           </button>
           <span className="set-hint">
-            {reason ||
-              "The agent reads the branch's changes and writes the steps — about three minutes. Closed sessions are listed too."}
+            {other
+              ? repos && !repos.length
+                ? reason || "No repos yet — open a session in one first."
+                : "For a branch no session has been on — the agent reads its changes in that repo."
+              : reason ||
+                "The agent reads the branch's changes and writes the steps — about three minutes. Closed sessions are listed too."}
           </span>
         </div>
         <div className="vf-newplan" id="vf-write">

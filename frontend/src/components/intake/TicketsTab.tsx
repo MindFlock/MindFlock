@@ -1421,7 +1421,7 @@ function AssignedTicketRow({
         setTimeout(onStarted, 5000);
         return title;
       }}
-      onStart={async ({ agent, depth, effort }) => {
+      onStart={async ({ agent, depth, effort, repo }) => {
         const start = (override: boolean) =>
           api<{ title?: string }>("/api/tickets/start", {
             json: {
@@ -1430,6 +1430,7 @@ function AssignedTicketRow({
               ...(agent ? { agent } : {}),
               ...(depth ? { depth } : {}),
               ...(effort ? { effort } : {}),
+              ...(repo ? { repo } : {}),
               ...(override ? { override_claim: true } : {}),
             },
           });

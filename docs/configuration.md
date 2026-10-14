@@ -288,7 +288,7 @@ labelled), so it is the opt-in for a board where every story sits in the same
 state for everyone and the label is how you hand one ticket to MindFlock. It
 also bounds `assignee_scope = "anyone"` on its own — "anyone's stories labelled
 `qa`" is as narrow as "anyone's stories in Ready for QA". The Assigned tickets
-panel still lists unlabelled stories, marked *missing an ingest label*, and they
+panel still lists unlabelled stories, marked *missing an auto-start label*, and they
 can still be started by hand. A story filed from MindFlock (New → **Ticket**)
 gets the first label, so the source can see it. Other providers reject the key
 at load time.

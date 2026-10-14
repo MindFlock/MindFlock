@@ -1413,6 +1413,9 @@ export interface TestRun {
    * what still needs a human. */
   results: Record<string, TestStepResultEntry>;
   verdict: "pass" | "fail" | "partial";
+  /** A check of the BRANCH, made before the work merged ("Check now" before
+   * merge). Absent on an older store: an ordinary run. */
+  prelive?: boolean;
 }
 
 export interface TestPlan {

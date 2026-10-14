@@ -504,6 +504,27 @@
   min-width: 104px;
 }
 
+/* The Repo picker (multi-repo ticket sources only): the same quiet control,
+   leading the pickers on a full line of its own — which repo a start lands in
+   is the biggest of the four choices, and repo names run long. */
+.ik-item-start .ik-item-repo {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  font-family: inherit;
+  flex: 1 1 100%;
+  min-width: 104px;
+}
+
+.ik-item-start .ik-item-repo:hover:not(:disabled),
+.ik-item-start .ik-item-repo[data-picked] {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 .ik-item-start .ik-item-effort:disabled {
   opacity: 0.55;
   cursor: not-allowed;
@@ -1086,6 +1107,9 @@
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+.ik-item-start .ik-item-pick-repo {
+  flex-basis: 100%;
 }
 .ik-item-start .ik-item-pick-label {
   font-size: 10.5px;

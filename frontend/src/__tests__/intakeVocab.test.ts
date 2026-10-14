@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 import {
   filterSummary,
   friendlySourceError,
-  reasonText,
   savedFilter,
   stateName,
 } from "../components/intake/vocab";
@@ -22,22 +21,6 @@ import type { TicketingSource } from "../api/types";
 
 const src = (extra: Record<string, string> = {}): TicketingSource =>
   ({ id: "sc", provider: "shortcut", ...extra }) as TicketingSource;
-
-describe("reason chips say auto-start, never ingest or ledger", () => {
-  it("translates the server's pipeline phrasings", () => {
-    expect(reasonText("not in an ingest state — won't auto-ingest")).toBe("not in an auto-start state");
-    expect(reasonText("missing an ingest label (brainflight) — won't auto-ingest")).toBe(
-      "missing an auto-start label (brainflight)"
-    );
-    expect(reasonText("already ingested (recorded completed in the ledger)")).toBe("already started before");
-    expect(reasonText("queued for ingestion (pending)")).toBe("already queued to start");
-    expect(reasonText("already reviewed (recorded in the processed ledger)")).toBe("already handled before");
-  });
-
-  it("passes anything else through untouched", () => {
-    expect(reasonText("Ada is on this")).toBe("Ada is on this");
-  });
-});
 
 describe("a source that can't be listed is one sentence, by name, without JSON", () => {
   it("a rejected token", () => {

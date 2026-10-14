@@ -44,7 +44,6 @@ import { LANE_LABEL, SESSION_DEPTHS, laneLabel } from "../../lib/autopilot";
 import { searchTokens } from "../../lib/rowSearch";
 import { useUi } from "../../state/store";
 import { DialogFilter } from "../dialogs/DialogFilter";
-import { reasonText } from "./vocab";
 import {
   EFFORTS,
   EFFORT_LABELS,
@@ -433,10 +432,14 @@ export function WorkListPanel({
  * `route` (backend/ticket_ingestion/repo_routing.py::preview). */
 export interface ItemRoute {
   repos?: string[];
+  /** The routed (primary) repo's URL; "" while pending. */
+  repo_url?: string;
   reason?: string;
-  /** label | title | model | pending | … */
+  /** label | title | llm | manual | pending | … */
   method?: string;
   summary?: string;
+  /** Every repo of the source, for the row's Repo picker. */
+  choices?: Array<{ name: string; url: string }>;
 }
 
 /** "→ billing-service · label 'billing'" / "→ repo picked when it starts". */
@@ -445,6 +448,50 @@ export function routeText(route: ItemRoute | null | undefined): string {
   const repos = (route.repos || []).filter(Boolean);
   if (!repos.length || route.method === "pending") return "→ repo picked by the agent when it starts";
   return "→ " + repos.join(" + ") + (route.reason ? " · " + route.reason : "");
+}
+
+/** A multi-repo ticket row's Repo picker: "" = where routing sends it (the
+ * default it names), else one of the source's repos, for just this start.
+ * Renders nothing unless the source has several repos. */
+export function RepoPick({
+  route,
+  value,
+  reference,
+  disabled,
+  onChange,
+}: {
+  route?: ItemRoute | null;
+  value: string;
+  reference: string;
+  disabled?: boolean;
+  onChange(url: string): void;
+}) {
+  const choices = route?.choices || [];
+  if (choices.length < 2) return null;
+  const routed = route?.method === "pending" ? [] : (route?.repos || []).filter(Boolean);
+  return (
+    <label className="ik-item-pick ik-item-pick-repo">
+      <span className="ik-item-pick-label">Repo</span>
+      <select
+        className="ik-item-repo"
+        value={value}
+        data-picked={value || undefined}
+        disabled={disabled}
+        title="Which repo to start this one in — just this start"
+        aria-label={"Repo for " + reference}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">
+          {routed.length ? "Default (" + routed.join(" + ") + ")" : "Default (agent picks)"}
+        </option>
+        {choices.map((c) => (
+          <option key={c.url} value={c.url}>
+            {c.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
 }
 
 /** What a start resolves with: the toast text, plus the new session's title
@@ -535,8 +582,9 @@ export function WorkItemRow({
   /** Starts the session on `agent` ("" = the configured chain); resolve with the
    * toast text, or with `{message, title}` so the button can open the new
    * session. `effort` is a neutral rung the server translates into the
-   * launching CLI's own flag ("" = that CLI's default). */
-  onStart(opts: { agent: string; depth: string; effort: string }): Promise<StartResult>;
+   * launching CLI's own flag ("" = that CLI's default). `repo` is a repo URL
+   * picked on a multi-repo row ("" = where it is routed). */
+  onStart(opts: { agent: string; depth: string; effort: string; repo: string }): Promise<StartResult>;
   /** e.g. "Begin review failed" */
   failPrefix: string;
   /** Tooltip on the reference link; defaults to GitHub's wording. */
@@ -601,6 +649,11 @@ export function WorkItemRow({
   // …and how hard the agent should think about it. "This ticket is gnarly, run
   // it on ultracode" is a property of the ticket, not of the queue.
   const [effort, setEffort] = useState("");
+  // …and, on a source with several repos, which one THIS start goes to.
+  // "" = wherever routing sends it (the default the picker names).
+  const [repo, setRepo] = useState("");
+  const repoChoices = route?.choices || [];
+  const canPickRepo = repoChoices.length > 1;
   // Which CLI this row would launch on, so the Effort picker can name that CLI's
   // ceiling. The cache is shared by every row (see useProviderEfforts).
   const effortCaps = useProviderEfforts().data;
@@ -613,7 +666,7 @@ export function WorkItemRow({
   // row of a long list were most of its noise. Folded behind "Options" until
   // asked for — but never while one holds a pick, so a choice is never hidden.
   const [optsOpen, setOptsOpen] = useState(false);
-  const picked = !!(agent || depth || (effortUsable && effort));
+  const picked = !!(agent || depth || (effortUsable && effort) || repo);
   const showPicks = optsOpen || picked;
   // What the empty choices resolve to, named once for the options and the
   // collapsed line alike.
@@ -624,7 +677,8 @@ export function WorkItemRow({
     : "";
   // "claude · Fast-track: Off · default effort" — what Start will use, said in
   // one line, with Fast-track named the way New's Options summary names it.
-  const where = routeText(route);
+  const pickedRepo = repo ? repoChoices.find((c) => c.url === repo) : undefined;
+  const where = pickedRepo ? "→ " + pickedRepo.name + " · your pick" : routeText(route);
   const uses = [
     agent || configuredAgent || (agents && agents.length > 0 ? "app default" : ""),
     "Fast-track: " + (depth ? laneLabel(depth) : defaultDepth),
@@ -672,7 +726,9 @@ export function WorkItemRow({
               (route?.method === "pending" || !(route?.repos || []).length
                 ? "Nothing on the ticket names one of this source's repos, so the agent reads the ticket and picks when it starts."
                 : "The repo this starts in, and why.") +
-              " To send it elsewhere, give the ticket a label that matches another repo's name or hint (on the source card)."
+              (canPickRepo
+                ? " To start it in another repo, pick one under Options."
+                : " To send it elsewhere, give the ticket a label that matches another repo's name or hint (on the source card).")
             }
           >
             {where}
@@ -683,7 +739,7 @@ export function WorkItemRow({
         ) : eligible ? (
           <span className={"pr-open-chip" + (eligibleOn ? " ok" : "")}>{eligibleLabel}</span>
         ) : (
-          (reasons || []).map(reasonText).map((reason) => {
+          (reasons || []).map((reason) => {
             // A recorded failure reason is a full sentence of git output whose
             // actionable half is at the END ("… is already checked out at
             // <path>. Kill that session first"). It used to WRAP inside the chip
@@ -792,7 +848,9 @@ export function WorkItemRow({
                 title={
                   showPicks
                     ? "Hide the per-start options"
-                    : "Pick a different CLI, Fast-track or effort for just this start"
+                    : canPickRepo
+                      ? "Pick a different repo, CLI, Fast-track or effort for just this start"
+                      : "Pick a different CLI, Fast-track or effort for just this start"
                 }
                 onClick={() => setOptsOpen(!optsOpen)}
               >
@@ -805,6 +863,13 @@ export function WorkItemRow({
               stacked control would make every row in the list taller. */}
           {showPicks && (
           <div className="ik-item-picks">
+            <RepoPick
+              route={route}
+              value={repo}
+              reference={reference}
+              disabled={state !== "idle"}
+              onChange={setRepo}
+            />
             {agents && agents.length > 0 && (
               <label className="ik-item-pick">
               <span className="ik-item-pick-label">Agent</span>
@@ -898,7 +963,7 @@ export function WorkItemRow({
                 ))}
             </select>
             </label>
-            {where ? (
+            {where && !canPickRepo ? (
               <span className="ik-item-pick-note">
                 Starts in {where.replace(/^→ /, "")}. To send it to another repo, give the
                 ticket a label matching that repo's name or hint.
@@ -934,6 +999,7 @@ export function WorkItemRow({
                   // "started at its own default" note on a start nobody asked
                   // an effort for.
                   effort: effortUsable ? effort : "",
+                  repo,
                 });
                 const msg = typeof created === "string" ? created : created.message;
                 const newTitle = typeof created === "string" ? "" : created.title || "";
