@@ -163,6 +163,11 @@ def _settings_serve_mode() -> str:
 
 
 def main(argv: Optional[List[str]] = None) -> None:
+    # Before any thread exists: two malloc arenas instead of one per worker
+    # thread (see core/malloc_arenas — the bulk of the server's RSS).
+    from backend.web.core.malloc_arenas import cap_arenas
+
+    cap_arenas()
     try:
         import uvicorn
         from backend.web.server import (

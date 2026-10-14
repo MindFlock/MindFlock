@@ -298,6 +298,14 @@ FastAPI app `backend.web.server:app`. Key pieces:
   while it reads low; the lifespan's `_memory_watch_loop` emits
   `system.memory_changed` on each level change. See
   [session-engine.md](session-engine.md#memory-guard).
+- **Malloc arena cap** (`web/core/malloc_arenas.py`) — `run.py`'s `main()` first
+  calls `mallopt(M_ARENA_MAX, 2)` (glibc only; an explicit `MALLOC_ARENA_MAX` /
+  `GLIBC_TUNABLES` wins). The server's blocking work runs on worker threads, and
+  glibc otherwise gives each its own arena whose freed memory stays mapped: a
+  busy server sat at ~1 GB RSS, ~700-900 MB of it in ~30 thread arenas, with a
+  Python heap under ~120 MB. Keep big transient buffers out of per-poll paths
+  too — the transcript tail readers (`providers/claude.py` `_tail_lines`) read
+  backward in 64 KB blocks and stop at the first match.
 - **Addons** (`web/addons/`) — self-registering feature modules with their own
   `APIRouter` and optional managed subprocess. Seven ship today: **mindflock**
   (start/stop/tail the ingestion pipeline), **assistant** (a long-lived
