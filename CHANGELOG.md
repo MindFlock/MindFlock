@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An intake source can span several repos.** Add more than one repo to a
+  ticket source (each with optional hint words) and every ticket is routed to
+  the repo(s) it needs: by its labels, then its title, then a one-shot ask to
+  the agent CLI when those can't decide, else the first repo. The ticket row
+  shows the choice and why ("→ vnext-frontend: label 'frontend'"). A ticket
+  that needs two repos starts in the first, and its prompt lists the other
+  repo's path with the steps to branch and open a separate PR there. A source
+  with one repo works exactly as before.
+- **Templates can run on their own.** Each template card, and a "Run template:
+  …" row in the command palette, has **Run now**: it starts a fresh session in
+  the template's folder with its prompt already sent. A template can also run
+  on a schedule (every day or weekdays, at a local time). Only the automation
+  device fires schedules, a slot never fires twice, and after downtime only the
+  most recent missed run fires.
+
+### Changed
+
+- **Settings opens on the basics.** Six screens (General, Connections,
+  Notifications, Agent CLI, Workspace, Appearance) by default; the other
+  thirteen — other devices, your phone, people, providers, accounts, security,
+  troubleshooting — sit behind "Show advanced settings", a preference that
+  syncs across your devices. Advanced controls on the basic screens (phone
+  push, usage-window warming, fast-track depth, …) moved into collapsed
+  "Advanced" folds. Deep links to an advanced screen still open it.
+- **Settings and Intake are easier to scan.** A field's hint sits close under
+  its own control and the next field starts clearly below it, so a hint can no
+  longer read as the label of the field after it. Sections, cards and button
+  rows got room to breathe, and on a narrow window the Settings nav becomes a
+  row of tabs.
+- **Ticket source cards show the essentials first.** The claim label, "move to
+  state on start", "comment when moved", Test-filled IDs, thinking effort and
+  fast-track depth moved into an "Advanced options" fold that opens by itself
+  when one of them holds a value you set.
+- **First-run setup is three steps.** Install the tools, sign in to your agent,
+  start your first agent; connecting GitHub and a tracker are two optional
+  steps, and the phone (Tailscale) moved to a closed "Optional, later" group
+  that no longer counts toward the setup chip. Optional tools (Tailscale,
+  bubblewrap, cloudflared, …) no longer hold the install step open.
+
 ## [0.8.5] - 2026-10-13
 
 ### Fixed
