@@ -19,6 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Cards show the last 20 runs; a scheduled run that can't start is a bell row
   and a push. `mindflock run <template>` starts one from a shell and
   `mindflock templates` lists them.
+- **Fast-track tells the agent what failed.** When a run stops on something
+  the agent can fix (a pre-commit step or the verification check failed, CI
+  went red, the PR conflicts with or is behind its base), the agent gets a
+  one-line `[MindFlock note …]`: what failed, where to look, and to fix it
+  and commit, or to stop and tell you when it clashes with someone else's
+  work. It is typed only once the agent is idle and never while you type. The
+  ✗ tooltip and the *fast-track stopped* toast say the agent was told. Team
+  run members are left to their run's own fix prompt. On by default; turn it
+  off in Settings → Workspace → Advanced.
+
+### Changed
+
+- **Workers always stay with their orchestrator on the rail.** A worker now
+  draws directly under its parent's family whatever the saved order says.
+  Dragging a worker elsewhere no longer un-nests it (it only reorders among
+  its siblings), dragging an orchestrator carries its workers, and the row
+  numbers, Alt+N and Ctrl+Tab follow the family order.
 
 ## [0.8.6] - 2026-10-13
 

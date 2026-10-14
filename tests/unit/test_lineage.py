@@ -814,6 +814,43 @@ def test_create_with_parent_and_spawned(create):
     assert ev[1]["data"]["parent"] == "orch" and ev[1]["data"]["spawned"] is True
 
 
+def _memory(monkeypatch, level):
+    from backend import memory_pressure
+
+    snap = {
+        "level": level,
+        "available": 1 << 30,
+        "total": 16 << 30,
+        "available_pct": 6.3,
+        "psi": None,
+        "at": 0.0,
+    }
+    monkeypatch.setattr(memory_pressure, "snapshot", lambda **kw: dict(snap))
+
+
+def test_low_memory_refuses_an_agents_spawn(create, monkeypatch):
+    """An orchestrator fanning out workers is how a big job runs the box out
+    of memory: its create is a 409 that names the reason (and carries the
+    reading, so a caller can wait rather than give up)."""
+    _memory(monkeypatch, "low")
+    create.reg.add("orch")
+    r = create.post(title="w1", parent="orch", spawned=True)
+    assert r.status_code == 409
+    assert r.json()["error"].startswith("memory is low: 1.0 GB free of 16.0 GB")
+    assert r.json()["memory"]["level"] == "low"
+    assert create.captured == [] and "w1" not in create.reg.instances
+
+
+def test_low_memory_never_refuses_a_person_or_a_run_member(create, monkeypatch):
+    """A person's New goes through (the notice says what they walk into); a
+    team run's own member is held by the run's planner, not failed here."""
+    _memory(monkeypatch, "critical")
+    assert create.post(title="mine").status_code == 202
+    create.reg.add("lead")
+    r = create.post(title="m1", parent="lead", spawned=True, run_member=True)
+    assert r.status_code == 202, r.text
+
+
 def test_create_without_lineage_keeps_the_event_shape(create):
     r = create.post(title="plain")
     assert r.status_code == 202

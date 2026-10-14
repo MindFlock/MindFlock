@@ -349,8 +349,25 @@ background job is still running: …*). A pending row draws no job chip.
 **Restart.** The Offline chip calls `POST /api/instances/{title}/revive`
 ([web-api.md](web-api.md)), the same lazy relaunch a terminal attach or a sent
 prompt does: the conversation resumes after a crash, a clean quit starts
-fresh. A click toasts *Restarting <name>…* (or *Couldn't restart <name> —
-<why>*). Rows proxied from another device are read-only and offer no Restart.
+fresh, and an agent that died mid-turn is queued a *continue where you left
+off*. A click toasts *Restarting <name>…* (*… — it will continue where it left
+off…* when it was mid-turn, with the memory reason appended when memory is low;
+or *Couldn't restart <name> — <why>*). Rows proxied from another device are
+read-only and offer no Restart.
+
+**Restart all.** From two Offline rows up, a strip above the list reads *N
+agents offline · ↻ Restart all*: `POST /api/server/revive-all` with exactly
+those titles — two at a time, waiting for memory between launches — and a toast
+of what happened (*Restarted 4 agents — 2 told to continue where they left off;
+1 held back: memory is low*). The toast counts only the rows the strip offered,
+not the paused or already-running sessions the sweep also reports. The button
+is disabled while the sweep runs, and the strip hides below two offline rows.
+
+**Memory notice.** While `GET /api/system/memory` reads low or critical, a card
+in the bottom-right corner gives the numbers (free memory, swap in use, the
+share of the last minute spent stalled) and what MindFlock is holding back
+(agent spawns, team-run lines, restarts). **Hide** lasts until the level worsens
+or clears and returns.
 
 **After a server restart, Offline fixes itself.** Once the server has booted
 (past its 30 s quiet window) it relaunches in the background every session
@@ -637,11 +654,13 @@ What it looks like in the app:
   pause or close a worker like any other session. A row whose parent is gone
   keeps a muted **`↳ agent`** line.
 - **Workers nest under their orchestrator on the rail.** A new worker lands
-  directly below its orchestrator's family, and while it sits there it is
-  indented (from the status dot onwards) with a thin accent connector. The
-  nesting is only drawn: the row numbers, Alt+N, Ctrl+Tab and drag-and-drop
-  keep working on the rail exactly as listed. Drag a worker somewhere else
-  and it stays there, un-indented.
+  directly below its orchestrator's family, indented (from the status dot
+  onwards) with a thin accent connector. The rail always keeps a family
+  together: whatever the saved order says (a duplicated window slotted in
+  under its source, a drag), a worker draws directly under its parent's
+  family, and the row numbers, Alt+N, Ctrl+Tab and drag-and-drop follow that
+  same order. Drag the orchestrator and its workers move with it; drag a
+  worker and it only reorders among its siblings.
 - **Fold a family away.** The orchestrator's roll-up line ends in a small
   **hide**; click it and every session below it (workers, their workers)
   leaves the rail, and it reads **show 3**. The roll-up stays, so a folded
@@ -799,6 +818,19 @@ turns red with **✗** (and the reason in its tooltip) when a run halts, and
 is never hidden while a run is armed — even while the workspace is still
 provisioning. To do *one* step yourself, use the guided button beside it;
 fast-track never takes that slot over.
+
+**When a run stops on something the agent can fix** — a pre-commit step or
+the repo's verification check failed, CI went red on the PR, or the PR
+conflicts with (or is behind) its base — MindFlock also leaves that agent a
+one-line **`[MindFlock note …]`**: what failed, where to look (`pre-commit run
+<hook>`, `.mindflock_check.log`), and to fix it and commit — or, when the
+failure is really a conflict with someone else's change, to stop and tell
+you. It rides the agent-message lane, so it is typed only once the agent is
+idle and never while you are typing in the pane. The halt reason is
+unchanged; the ✗ tooltip and the *fast-track stopped* toast add that the
+agent was told. A team run's members are left to their run, which sends its
+own fix prompt. **Settings → Workspace → Advanced → Tell the agent when
+fast-track stops** turns it off (on by default).
 
 A session that shares its branch with another (a copy session), a team run's
 lead (its team run ships it once) and a one-for-all member (its work merges
@@ -2759,8 +2791,12 @@ A header appears only for a team run of two or more, and **On their own** only
 under at least one header. A split or one-for-all team run never gets one: it is
 a family under its lead, and its lead's Thread tab holds what the header's ⋯
 would — **Start now** / **Take out of run** on a queued piece and, once finished,
-**Copy summary**. Queued lines are dim, with a hollow dot and no
-number. Headers and queued lines are never rail keys: Alt+N numbering skips
+**Copy summary**. While the team run waits, the header shows a badge: *usage*
+for a usage limit, or else *memory* while the [memory
+guard](session-engine.md#memory-guard) holds its queued lines (tooltip *Memory
+is low — queued lines start once it recovers*; the header's tooltip says
+*waiting for memory — queued lines start once it recovers*). Queued lines are
+dim, with a hollow dot and no number. Headers and queued lines are never rail keys: Alt+N numbering skips
 them, and a folded team run's rows leave the numbering like a folded device's.
 
 Every session with fast-track on leads its status line with the target, so a

@@ -119,6 +119,18 @@ class TestStarts:
         other = _plan(run, provider="codex", limited_providers=["claude"])
         assert _ops(other, "start")
 
+    def test_low_memory_holds_new_starts_until_it_recovers(self):
+        """Another agent now is how a big run tips the box into the OOM
+        killer: the line stays queued, and starts once memory is back."""
+        run = _run(_task("t1", "queued"))
+        assert _ops(_plan(run, memory_low=True), "start") == []
+        assert _ops(_plan(run, memory_low=False), "start")
+
+    def test_start_now_overrides_the_memory_hold(self):
+        """The user's own "start this one now" is theirs to make."""
+        run = _run(_task("t1", "queued", start_now=True))
+        assert _ops(_plan(run, memory_low=True), "start")
+
 
 # --------------------------------------------------------------------------- #
 # starting

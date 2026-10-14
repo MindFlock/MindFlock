@@ -290,6 +290,11 @@ EVENT_NAMES = (
     # "current", "here", "blocked", "behind": [{"key", "host", "version"}],
     # "count", "detail"}).
     "update.available",
+    # The machine's memory headroom changed level (backend.memory_pressure,
+    # the server's memory watch; ``session`` is ""). ``old``/``new`` are
+    # "ok" | "low" | "critical"; while low or critical, agent spawns, team-run
+    # starts and the revive sweep hold back (data: {"message", "memory"}).
+    "system.memory_changed",
 )
 
 _HISTORY = 100  # envelopes kept for ?since= replay

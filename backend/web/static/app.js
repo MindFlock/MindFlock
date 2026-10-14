@@ -24401,6 +24401,14 @@ function useMindflockStatus() {
 		retry: false
 	});
 }
+function useMemory() {
+	return useQuery({
+		queryKey: ["system-memory"],
+		queryFn: () => api("/api/system/memory"),
+		refetchInterval: 15e3,
+		retry: false
+	});
+}
 function refreshMindflockStatus() {
 	return queryClient.invalidateQueries({ queryKey: ["mindflock-status"] });
 }
@@ -25421,6 +25429,34 @@ function orderWithAfter(order, title, after) {
 	if (at < 0) return order;
 	next.splice(at + 1, 0, title);
 	return next;
+}
+function keepFamiliesTogether(keys, parentOf) {
+	const present = new Set(keys);
+	const up = (k) => {
+		const p = parentOf(k) || "";
+		return p && p !== k && present.has(p) ? p : "";
+	};
+	const kids = /* @__PURE__ */ new Map();
+	const roots = [];
+	for (const k of keys) {
+		const p = up(k);
+		let q = p;
+		for (let hops = 0; q && q !== k && hops <= keys.length; hops++) q = up(q);
+		if (!p || q === k) roots.push(k);
+		else kids.set(p, [...kids.get(p) || [], k]);
+	}
+	if (!kids.size) return keys;
+	const out = [];
+	const done = /* @__PURE__ */ new Set();
+	const emit = (k) => {
+		if (done.has(k)) return;
+		done.add(k);
+		out.push(k);
+		for (const c of kids.get(k) || []) emit(c);
+	};
+	roots.forEach(emit);
+	for (const k of keys) emit(k);
+	return out.every((k, i) => k === keys[i]) ? keys : out;
 }
 var NEST_MAX = 3;
 function railNesting(rows) {
@@ -28159,7 +28195,7 @@ function laneLabel(value) {
 }
 function autopilotChipTitle(run) {
 	const target = laneLabel(run.depth);
-	if (run.state === "halted") return "Fast-track stopped: " + (run.reason || "unknown reason");
+	if (run.state === "halted") return "Fast-track stopped: " + (run.reason || "unknown reason") + (run.note ? "\n" + run.note : "");
 	if (run.state === "done") return "Fast-track finished at " + target + " and switched itself off.";
 	const where = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waiting to start)";
 	const skipped = run.skipped?.length ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
@@ -28243,6 +28279,7 @@ function splitRail(entries, runs, opts = {}) {
 			done,
 			cancelled: info?.state === "cancelled",
 			waitingUsage: limited || info?.pause_reason === "limit" || !!info?.waiting_for_usage,
+			waitingMemory: !!info?.waiting_for_memory,
 			collapsed: !!opts.collapsed?.has(id),
 			entries: mine,
 			queued,
@@ -28305,6 +28342,7 @@ function groupTitle(g) {
 	if (g.cancelled) bits.push("cancelled — its sessions and branches were kept");
 	else if (g.paused) bits.push(g.pauseReason === "budget" ? "paused: the budget is used up" : g.pauseReason === "limit" ? "paused: waiting for usage to come back" : "paused — nothing new starts and nothing ships");
 	else if (g.waitingUsage) bits.push("waiting for usage to come back");
+	else if (g.waitingMemory) bits.push("waiting for memory — queued lines start once it recovers");
 	bits.push("Click to fold");
 	return bits.join("\n");
 }
@@ -34910,14 +34948,17 @@ function pushFailedNote(session, data) {
 //#endregion
 //#region src/lib/revive.ts
 async function reviveSession(title) {
+	let r;
 	try {
-		await instApi(title, "/revive", { method: "POST" });
+		r = await instApi(title, "/revive", { method: "POST" });
 	} catch (e) {
 		toast("Couldn't restart " + displayName(title) + " — " + errMsg(e));
 		return false;
 	}
 	forceActivity(title, "idle");
-	toast("Restarting " + displayName(title) + "…");
+	let line = "Restarting " + displayName(title) + (r?.continued ? " — it will continue where it left off" : "") + "…";
+	if (r?.memory_warning) line += " (" + r.memory_warning + ")";
+	toast(line);
 	refreshInstances();
 	return true;
 }
@@ -35249,7 +35290,7 @@ function EventToasts() {
 					item: String(d.item || "")
 				}
 			}, { live: true });
-			if (String(env.new || "") === "halted") notifyOnce(env.session, "ftstop", "fast-track stopped on " + namedSlot(env.session), { onClick: () => selectSession(env.session) });
+			if (String(env.new || "") === "halted") notifyOnce(env.session, "ftstop", "fast-track stopped on " + namedSlot(env.session) + (d.note ? " — the agent was told what failed" : ""), { onClick: () => selectSession(env.session) });
 		}));
 		unsubs.push(ev.subscribe("session.stage_changed", (env) => {
 			if (env.new) patchInstance(env.session, { stage: String(env.new) });
@@ -35731,6 +35772,65 @@ function ConnBanner() {
 					},
 					children: fixBusy ? "Restarting WSL…" : fixArmed ? "Really restart? (closes WSL apps)" : fixLabel
 				})]
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/MemoryNotice.tsx
+var GB = 1024 ** 3;
+var RANK$1 = {
+	ok: 0,
+	unknown: 0,
+	low: 1,
+	critical: 2
+};
+function gb(n) {
+	return ((n || 0) / GB).toFixed(1) + " GB";
+}
+function memoryDetail(m) {
+	const bits = [gb(m.available) + " free of " + gb(m.total) + " (" + Math.round(m.available_pct || 0) + "%)"];
+	const swapTotal = m.swap_total || 0;
+	if (swapTotal > 0) {
+		const used = 1 - (m.swap_free || 0) / swapTotal;
+		if (used >= .25) bits.push("swap " + Math.round(used * 100) + "% used");
+	}
+	const stall = m.psi?.some_avg60 || 0;
+	if (stall >= 5) bits.push("stalled on memory " + Math.round(stall) + "% of the last minute");
+	return bits.join(" · ");
+}
+function MemoryNotice() {
+	const { data, isError } = useMemory();
+	const [hiddenAt, setHiddenAt] = (0, import_react.useState)(0);
+	const rank = RANK$1[data?.level || "ok"] ?? 0;
+	if (hiddenAt && (rank === 0 || rank > hiddenAt)) setHiddenAt(0);
+	if (!data || isError || rank === 0 || hiddenAt && rank <= hiddenAt) return null;
+	const critical = data.level === "critical";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "memory-notice",
+		role: "status",
+		className: critical ? "critical" : "",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "mn-head",
+				children: ["⚠ Memory is ", critical ? "critically low" : "running low"]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "mn-detail",
+				children: memoryDetail(data)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "mn-detail mn-what",
+				children: ["MindFlock is holding new agent-spawned sessions, team-run lines and auto-restarts until it recovers. Closing idle sessions frees memory fastest", critical ? " — the system may start killing agents soon." : "."]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "mn-foot",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "mn-btn",
+					onClick: () => setHiddenAt(rank),
+					children: "Hide"
+				})
 			})
 		]
 	});
@@ -37256,6 +37356,70 @@ function BulkBar() {
 	});
 }
 //#endregion
+//#region src/components/sidebar/OfflineBar.tsx
+function sweepToast(r, offline) {
+	const revived = r.revived?.length || 0;
+	const continued = r.continued?.length || 0;
+	const skipped = r.skipped || {};
+	const mine = offline.filter((t) => skipped[t] !== void 0);
+	const memory = mine.filter((t) => skipped[t] === "low memory").length;
+	let line = revived ? "Restarted " + revived + (revived === 1 ? " agent" : " agents") : "No agents restarted";
+	if (continued) line += " — " + continued + " told to continue where " + (continued === 1 ? "it" : "they") + " left off";
+	if (memory) line += "; " + memory + " held back: memory is low";
+	const other = mine.filter((t) => skipped[t] !== "low memory");
+	if (other.length) {
+		const why = Array.from(new Set(other.map((t) => skipped[t]))).join(", ");
+		line += "; " + other.length + " couldn't restart (" + why + ")";
+	}
+	return line;
+}
+function OfflineBar() {
+	const { data: instances = [] } = useInstances();
+	const memory = useMemory().data;
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const offline = instances.filter((i) => {
+		if (i.device || i.pending) return false;
+		const ss = deriveSessionState(i);
+		return ss.state === "offline" && ss.restartable && i.status !== "paused";
+	});
+	if (offline.length < 2 && !busy) return null;
+	const titles = offline.map((i) => i.title);
+	const low = memory?.level === "low" || memory?.level === "critical";
+	const run = async () => {
+		if (busy) return;
+		setBusy(true);
+		try {
+			const r = await api("/api/server/revive-all", {
+				method: "POST",
+				json: { titles }
+			});
+			for (const t of r.revived || []) forceActivity(t, "idle");
+			toast(sweepToast(r, titles));
+		} catch (e) {
+			toast("Couldn't restart the offline agents — " + errMsg(e));
+		} finally {
+			setBusy(false);
+			refreshInstances();
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "offline-bar",
+		role: "group",
+		"aria-label": "Offline agents",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "ob-count",
+			children: busy ? "Restarting offline agents…" : offline.length + " agents offline"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "ob-btn",
+			disabled: busy,
+			title: "Relaunch every offline agent, two at a time, resuming its conversation; an agent that died mid-task is told to continue where it left off." + (low ? " Memory is low: restarts wait for headroom, and the rest are held back if none comes." : ""),
+			onClick: () => void run(),
+			children: "↻ Restart all"
+		})]
+	});
+}
+//#endregion
 //#region src/extensions/ExtensionBar.tsx
 function useExtensionBarDefs() {
 	const { data: extensions } = useExtensions();
@@ -38473,6 +38637,10 @@ function RunGroupHeader({ group, repoPath }) {
 			}) : group.waitingUsage && !group.done ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "dev-badge rg-usage",
 				children: "usage"
+			}) : group.waitingMemory && !group.done ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "dev-badge rg-usage",
+				title: "Memory is low — queued lines start once it recovers",
+				children: "memory"
 			}) : null,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "dev-badge rg-shipped" + (group.done && !group.cancelled ? " ok" : ""),
@@ -40224,7 +40392,10 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 		ui.extPanes
 	]);
 	const winFiltered = (0, import_react.useMemo)(() => windows.filter((w) => !ui.filter || w.title.toLowerCase().includes(ui.filter)), [windows, ui.filter]);
-	const railKeys = (0, import_react.useMemo)(() => orderedKeys([...allRows.map((i) => i.title), ...windows.map((w) => w.key)], order), [
+	const railKeys = (0, import_react.useMemo)(() => {
+		const parentOf = new Map(allRows.map((i) => [i.title, i.parent || ""]));
+		return keepFamiliesTogether(orderedKeys([...allRows.map((i) => i.title), ...windows.map((w) => w.key)], order), (k) => parentOf.get(k));
+	}, [
 		allRows,
 		windows,
 		order
@@ -40422,6 +40593,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 						}),
 						searchVisible && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionFilter, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BulkBar, {}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(OfflineBar, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
 							id: "instance-list",
 							children: [grouped ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -74953,10 +75125,39 @@ function Workspace({ gotoScreen }) {
 							]
 						})
 					]
-				})
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FailureNotesRow, {})
 			]
 		})
 	] });
+}
+function FailureNotesRow() {
+	const s = useSettings();
+	const on = s.get("repository", "fasttrack_failure_notes") !== false;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row set-switch-row",
+		id: "workspace-failure-notes",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "notif-rule-text",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Tell the agent when fast-track stops"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint notif-rule-desc",
+				children: "When a pre-commit step or the verification check fails, CI goes red or the PR conflicts with its base, fast-track stops and leaves the agent a one-line note: what failed and to fix it — or, when it is a conflict with someone else's change, to stop and tell you. You still get the usual \"fast-track stopped\" notice."
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "ca-switch",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				checked: on,
+				onChange: (e) => {
+					s.saveField("repository", "fasttrack_failure_notes", e.target.checked);
+					toast(e.target.checked ? "Fast-track will tell the agent what failed" : "Fast-track failure notes off");
+				}
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+		})]
+	});
 }
 //#endregion
 //#region src/components/settings/screens/Ide.tsx
@@ -85383,6 +85584,7 @@ function App() {
 	(0, import_react.useEffect)(() => installKeymap(host), [host]);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnBanner, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MemoryNotice, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateNotice, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TopBar, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sidebar, {

@@ -110,6 +110,165 @@ def _run(coro):
 
 
 # --------------------------------------------------------------------------- #
+# memory: the sweep waits for headroom, then holds the rest
+# --------------------------------------------------------------------------- #
+def test_low_memory_holds_the_sweep_instead_of_relaunching_into_it(wt, monkeypatch):
+    """Relaunching everything straight after the OOM killer took it down is
+    how it happens again: with no headroom coming, nothing launches and every
+    title says why."""
+    monkeypatch.setattr(revive.memory_pressure, "is_low", lambda **kw: True)
+    srv = _Srv({"a": _Inst(wt), "b": _Inst(wt)})
+    out = _run(revive.sweep(srv, gap=0, memory_wait=0))
+    assert srv.launched == []
+    assert out["skipped"] == {"a": revive.SKIP_MEMORY, "b": revive.SKIP_MEMORY}
+    assert "2 low memory" in out["summary"]
+
+
+def test_the_sweep_goes_on_once_memory_recovers(wt, monkeypatch):
+    readings = iter([True, True, False])
+    monkeypatch.setattr(
+        revive.memory_pressure, "is_low", lambda **kw: next(readings, False)
+    )
+    monkeypatch.setattr(revive, "MEMORY_POLL_SECONDS", 0.0)
+    srv = _Srv({"a": _Inst(wt)})
+    out = _run(revive.sweep(srv, gap=0, memory_wait=5))
+    assert out["revived"] == ["a"] and srv.launched == ["a"]
+
+
+# --------------------------------------------------------------------------- #
+# continue: an agent that died mid-turn is told to carry on
+# --------------------------------------------------------------------------- #
+class _ContSrv(_Srv):
+    """Adds the exit marker + queue-changed hooks :func:`revive.relaunch`
+    reads; ``codes`` maps title → the launch wrapper's recorded exit code."""
+
+    def __init__(self, instances, codes=None, **kw):
+        super().__init__(instances, **kw)
+        self._codes = codes or {}
+        self.queue_events = []
+
+    def _read_exit_marker(self, name):
+        return self._codes.get(name.replace("mindflock_", "", 1))
+
+    def _is_natural_exit(self, code):
+        return code in (0, 130)
+
+    def _emit_queue_changed(self, title):
+        self.queue_events.append(title)
+
+
+def _mark(title, state, age=5.0):
+    from backend.providers import activity_markers as am
+    from backend.session import tmux
+
+    path = am.marker_path(tmux.to_mindflock_tmux_name(title))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"state": state, "ts": time.time() - age}))
+
+
+def _queued(title):
+    from backend.web.core import prompt_queue
+
+    return [it["text"] for it in prompt_queue.list_queue(title)]
+
+
+def test_a_kill_mid_turn_queues_a_continue_at_the_front(wt):
+    from backend.web.core import prompt_queue
+
+    prompt_queue.enqueue("k", "the next task")
+    _mark("k", "working")
+    srv = _ContSrv({"k": _Inst(wt)}, codes={"k": 137})
+    name, err, continued = revive.relaunch(srv.ENGINE.instances["k"], "k", srv)
+    assert err is None and continued is True
+    assert _queued("k") == [revive.CONTINUE_PROMPT, "the next task"]
+    assert srv.queue_events == ["k"]
+
+
+@pytest.mark.parametrize(
+    "state, code, why",
+    [
+        ("idle", 137, "the turn had ended (Stop hook)"),
+        ("clarify", None, "it was waiting on a person, not working"),
+        ("working", 0, "a clean quit starts fresh: nothing to continue"),
+        ("working", 130, "Ctrl+C is a quit too"),
+    ],
+)
+def test_no_continue_unless_it_died_mid_turn(wt, state, code, why):
+    _mark("n", state)
+    srv = _ContSrv({"n": _Inst(wt)}, codes={"n": code})
+    _, err, continued = revive.relaunch(srv.ENGINE.instances["n"], "n", srv)
+    assert err is None
+    assert continued is False, why
+    assert _queued("n") == []
+
+
+def test_a_crash_without_an_exit_marker_still_counts(wt):
+    """SIGKILL of the whole tmux (the OOM killer's usual target) leaves no
+    exit marker at all: that is unnatural, so it resumes and continues."""
+    _mark("c", "working")
+    srv = _ContSrv({"c": _Inst(wt)})
+    assert revive.died_mid_turn(srv, srv.ENGINE.instances["c"], "c") is True
+
+
+def test_a_stale_working_marker_is_not_a_turn(wt):
+    """Over 6h old: whatever it was doing is long gone; don't prod it."""
+    _mark("s", "working", age=7 * 3600)
+    srv = _ContSrv({"s": _Inst(wt)})
+    assert revive.died_mid_turn(srv, srv.ENGINE.instances["s"], "s") is False
+
+
+def test_a_live_agent_or_a_cli_that_cannot_resume_gets_no_continue(wt):
+    _mark("live", "working")
+    srv = _ContSrv({"live": _Inst(wt)}, alive={"live"})
+    assert revive.died_mid_turn(srv, srv.ENGINE.instances["live"], "live") is False
+    # cline has no resume flag: its relaunch is a fresh conversation, which
+    # "continue where you left off" would only confuse.
+    _mark("cl", "working")
+    srv = _ContSrv({"cl": _Inst(wt, program="cline")})
+    assert revive.died_mid_turn(srv, srv.ENGINE.instances["cl"], "cl") is False
+
+
+def test_a_paused_queue_is_not_switched_back_on(wt):
+    """Enqueueing switches a queue on, which would release the prompts the
+    user paused: leave it alone."""
+    from backend.web.core import prompt_queue
+
+    prompt_queue.enqueue("p", "held task")
+    prompt_queue.set_flags("p", enabled=False)
+    _mark("p", "working")
+    srv = _ContSrv({"p": _Inst(wt)}, codes={"p": 137})
+    _, _, continued = revive.relaunch(srv.ENGINE.instances["p"], "p", srv)
+    assert continued is False
+    assert _queued("p") == ["held task"]
+    assert prompt_queue.get_state("p")["enabled"] is False
+
+
+def test_the_sweep_reports_who_was_told_to_continue(wt):
+    _mark("mid", "working")
+    _mark("done", "idle")
+    srv = _ContSrv({"mid": _Inst(wt), "done": _Inst(wt)})
+    out = _run(revive.sweep(srv, gap=0))
+    assert sorted(out["revived"]) == ["done", "mid"]
+    assert out["continued"] == ["mid"]
+    assert out["summary"].endswith("; told 1 to continue")
+
+
+def test_restart_all_sweeps_only_the_named_rows_quit_ones_included(wt):
+    """The rail's "Restart all" names the rows whose chip offers Restart — an
+    agent the user quit included — and nothing else (a hidden session's dead
+    agent stays dead)."""
+    srv = _ContSrv(
+        {"quit": _Inst(wt), "crashed": _Inst(wt), "hidden": _Inst(wt)},
+        codes={"quit": 0},
+    )
+    plain = revive.plan(srv)
+    assert plain[1] == {"quit": revive.SKIP_QUIT}
+    out = _run(revive.sweep(srv, gap=0, only=["quit", "crashed"]))
+    assert sorted(out["revived"]) == ["crashed", "quit"]
+    assert "hidden" not in srv.launched
+
+
+# --------------------------------------------------------------------------- #
 # the sweep
 # --------------------------------------------------------------------------- #
 def test_sweep_skips_with_reasons_and_revives_the_rest(wt, tmp_path):
@@ -194,6 +353,7 @@ def test_nothing_to_do_summary():
     out = _run(revive.sweep(_Srv({}), gap=0))
     assert out == {
         "revived": [],
+        "continued": [],
         "skipped": {},
         "already_running": 0,
         "summary": "revived 0, skipped 0",

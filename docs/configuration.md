@@ -670,6 +670,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Which peers' `X-Forwarded-*` headers rewrite the request's client address/scheme. `run.py` starts uvicorn with `proxy_headers=False` and the app applies the rewrite itself (`PeerCaptureMiddleware`, after recording the raw peer for Tailscale trust) |
 | `CS_CURSOR_AUTOADOPT` | on | `0` starts the Cursor auto-adopt loop disabled |
 | `MINDFLOCK_CODE_MAP_WARM` | on | `0` skips the boot warm-up that builds every open session's Code Map snapshot in the background (it is always off under pytest) |
+| `MINDFLOCK_MEMORY_GUARD` | on | `0` turns off the memory guard ([session-engine.md](session-engine.md#memory-guard)): the level reads `unknown`, so agent spawns, team-run starts, pipeline launches and the revive sweep are never held for memory |
 | `MINDFLOCK_REVIVE_ON_START` | on | `0` starts the server without the background revive sweep (sandboxed or scratch servers), whatever `general.revive_on_start` says |
 | `CLAUDE_CONFIG_DIR` | — | Extra Claude config root — scanned for token usage, and probed for login evidence (`.claude.json` / `.credentials.json`) by the provider auth probe (legacy/backend-only; see [providers.md](providers.md)) |
 | `GH_TOKEN` / `GITHUB_TOKEN` | — | GitHub auth fallback for the PR flow |
@@ -987,6 +988,16 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   `GET /api/config` reports each one's effective value, default and source
   (`env` / `settings` / `default`) as `caps.orchestration`, and a refusal
   names the limit and where to raise it.
+- **Fast-track** (`repository.*`, synced; Settings → Workspace):
+  `fasttrack_depth` is the rung new batches start on (`commit` · `push` ·
+  `pr` · `merge` · `off`; blank = the built-in default).
+  `precommit_retry_hooks` is a comma-separated list of pre-commit hook **ids**
+  whose failure fast-track may retry, then skip with `SKIP=` (test and
+  secret-scanning hooks are always refused). `fasttrack_failure_notes`
+  (Advanced → **Tell the agent when fast-track stops**, default on) leaves
+  the agent a `[MindFlock note …]` saying what failed when a run stops on
+  something it can fix (see [web-ui.md](web-ui.md)). Only `false` is
+  written, and anything other than an explicit `false` reads as on.
 - **Notification rules** (`notifications.muted_rules` / `enabled_rules`,
   Settings → Notifications) — which session events notify you. Default-on rules
   are opt-*out* (their id lands in `muted_rules`), noisier ones are opt-*in*

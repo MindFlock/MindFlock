@@ -501,6 +501,31 @@ class TestTicketStartLineage:
         r = ticket.post({"id": "1", "parent": "orch", "spawned": True})
         assert r.status_code == 409 and r.json()["budget_locked"] is True
 
+    def test_low_memory_refuses_an_agents_ticket_start(self, ticket, reg, monkeypatch):
+        """An agent starting tickets as workers waits for memory like its
+        spawn_session does; the Intake panel's own start is never held."""
+        from backend import memory_pressure
+
+        monkeypatch.setattr(
+            memory_pressure,
+            "snapshot",
+            lambda **kw: {
+                "level": "low",
+                "available": 1 << 30,
+                "total": 16 << 30,
+                "available_pct": 6.3,
+                "psi": None,
+                "at": 0.0,
+            },
+        )
+        reg["orch"] = _Inst("orch")
+        r = ticket.post({"id": "1", "parent": "orch", "spawned": True})
+        assert r.status_code == 409
+        assert r.json()["error"].startswith("memory is low")
+        assert r.json()["memory"]["level"] == "low"
+        assert ticket.tasks == []
+        assert ticket.post({"id": "1"}).status_code == 202
+
     def test_children_limit_is_409_before_the_202(self, ticket, reg, monkeypatch):
         monkeypatch.setenv("MINDFLOCK_MAX_CHILDREN", "1")
         reg["orch"] = _Inst("orch")
