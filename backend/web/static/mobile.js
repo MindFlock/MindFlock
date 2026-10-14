@@ -1891,7 +1891,7 @@
 
   // --- sessions, session actions, recently closed, questions ------------------
   // What the rail's row menu does, on a phone: open a session, Close it (keeps
-  // the worktree), Delete it (asked first, inline), Pause / Resume it, Restart
+  // the worktree), Delete it (asked first, inline), Resume it if paused, Restart
   // it when it is offline, and bring a closed one back. Every question is a
   // sheet on this page — confirm() and friends are a silent "no" in the
   // desktop app and in some phone shells.
@@ -2030,12 +2030,11 @@
       if (inst.sleeping && !inst.device && inst.status !== "paused")
         actListEl.appendChild(actRow("Wake", "relaunches the sleeping agent, resuming the conversation",
           function () { sessionCall(title, "wake", "Waking " + nameOf(title) + "…", "Wake failed"); }));
+      // No Pause here, as on the desktop's menus (the palette, the CLI and the
+      // API still pause); a paused session is resumed from this sheet.
       if (inst.status === "paused")
         actListEl.appendChild(actRow("Resume session", "starts the agent again in the same worktree",
           function () { sessionCall(title, "resume", "Resuming " + nameOf(title) + "…", "Resume failed"); }));
-      else if (inst.status !== "loading" && !inst.workspace_missing && !inst.peer_share)
-        actListEl.appendChild(actRow("Pause", "stops the agent; keeps it in the list to resume",
-          function () { sessionCall(title, "pause", "Paused " + nameOf(title) + " — the worktree is kept", "Pause failed"); }));
       actListEl.appendChild(actRow("Close", "stops the agent and moves it to Recently closed",
         function () { closeSession(title); }));
       // A peer (sandboxed shared-folder) session is unshared, never deleted —
@@ -2049,7 +2048,7 @@
       function () { closeActSheet(); openRecentSheet(); }));
   }
 
-  // Pause / Resume / Restart: one POST each, the sheet closes on success and
+  // Resume / Restart / Wake: one POST each, the sheet closes on success and
   // stays open (with the server's sentence) on a refusal.
   function sessionCall(title, route, okMsg, failWord) {
     actBusy = true;

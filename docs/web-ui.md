@@ -4819,8 +4819,10 @@ failed* / *Checks failing* / *Setup failed*, *Idle*, *Waiting on limit*
 a **Wake** action in its sheet) outside the table;
 CSS classes `tone-muted|working|attention|neutral|waiting|broken`. A row's
 **⋯** (or a long press on it), or the header's **⋯** for the current session,
-opens its actions: **Restart** (only when offline — `POST /revive`), **Pause**
-(stops the agent; keeps it in the list to resume) / **Resume session**, **Close**
+opens its actions: **Restart** (only when offline — `POST /revive`),
+**Resume session** (only on a paused session — the phone has no Pause, as the
+desktop's menus don't; the palette, `mindflock pause` and the API still
+pause), **Close**
 (stops the agent and moves it to Recently closed; toast *Closed — reopen from
 Recently closed*) and **Delete…**, which
 asks on an inline strip (*Removes the worktree and branch*, focus on Cancel) and
