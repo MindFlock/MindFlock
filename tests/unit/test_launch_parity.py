@@ -34,13 +34,18 @@ SEED = ' "$(cat .mindflock_prompt.md)"'
         (False, False, "", "claude"),
         (False, True, "", "claude --dangerously-skip-permissions"),
         (False, False, SEED, 'claude "$(cat .mindflock_prompt.md)"'),
+        # Neither fallback runs after a SIGKILL (137 — the OOM killer): that
+        # is not a resume that failed, and the server revives the agent once
+        # memory recovers (launch_script.unless_killed).
         (
             True,
             False,
             "",
-            "claude --continue || { sleep 3; claude --continue; } || "
-            "{ echo '[mindflock] resume failed twice; starting a fresh session"
-            " WITHOUT re-sending the task prompt'; claude; }",
+            "claude --continue || if [ $? -eq 137 ]; then (exit 137); "
+            "else sleep 3; claude --continue; fi || "
+            "if [ $? -eq 137 ]; then (exit 137); "
+            "else echo '[mindflock] resume failed twice; starting a fresh session"
+            " WITHOUT re-sending the task prompt'; claude; fi",
         ),
         # A resume NEVER re-sends the seed (a failed --continue can't be told
         # apart from a transient error; re-seeding restarts the whole task) —
@@ -50,10 +55,12 @@ SEED = ' "$(cat .mindflock_prompt.md)"'
             True,
             SEED,
             "claude --dangerously-skip-permissions --continue || "
-            "{ sleep 3; claude --dangerously-skip-permissions --continue; } || "
-            "{ echo '[mindflock] resume failed twice; starting a fresh session"
+            "if [ $? -eq 137 ]; then (exit 137); "
+            "else sleep 3; claude --dangerously-skip-permissions --continue; fi || "
+            "if [ $? -eq 137 ]; then (exit 137); "
+            "else echo '[mindflock] resume failed twice; starting a fresh session"
             " WITHOUT re-sending the task prompt'; "
-            "claude --dangerously-skip-permissions; }",
+            "claude --dangerously-skip-permissions; fi",
         ),
     ],
 )

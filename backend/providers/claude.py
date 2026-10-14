@@ -27,6 +27,7 @@ from .base import (
 )
 from . import claude_background
 from ._timeparse import ts_epoch
+from .launch_script import unless_killed
 
 # Activity markers live in the shared, provider-agnostic module (Codex reuses
 # the same {state, ts} marker + hook-command machinery).
@@ -77,10 +78,15 @@ def claude_launch_command(
         else:
             rcmd = f"{base} --continue"
         plain = (
-            "{ echo '[mindflock] resume failed twice; starting a fresh session"
-            " WITHOUT re-sending the task prompt'; " + base + "; }"
+            "echo '[mindflock] resume failed twice; starting a fresh session"
+            " WITHOUT re-sending the task prompt'; " + base
         )
-        return f"{rcmd} || {{ sleep 3; {rcmd}; }} || {plain}"
+        # Neither fallback runs after a SIGKILL: a CLI the OOM killer took is
+        # not a resume that failed (see launch_script.unless_killed).
+        return (
+            f"{rcmd} || {unless_killed(f'sleep 3; {rcmd}')} || "
+            f"{unless_killed(plain)}"
+        )
     return fresh
 
 

@@ -39,6 +39,17 @@ a reboot every session not on screen sat Offline until someone clicked it.
   person typing). It is an ordinary queue item: visible, and removable before
   it goes.
 
+* **After a kill** — :func:`observe` / :func:`auto_tick`, driven by the
+  server's 4s instances tick: an agent this server saw running that then dies
+  to SIGKILL (exit marker 137, or no marker and its hooks last said
+  ``working`` — a SIGKILL fires no Stop hook) is relaunched through
+  :func:`relaunch` (so a mid-turn death gets its continue) once memory reads
+  ok again — one at a time, :data:`GAP_SECONDS` apart, at most
+  :data:`AUTO_MAX_PER_WINDOW` times per session per hour; after that it stays
+  Offline with the reason on its row. The same skip rules apply, and
+  ``general.revive_on_start`` switches it too. Its trip through Offline is not
+  announced (:func:`holds_offline`), so a revived agent rings no bell.
+
 One log line per revive, one summary line per sweep.
 """
 
@@ -46,8 +57,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from backend import log, memory_pressure, providers, session
 
@@ -430,6 +442,301 @@ async def sweep(
         out = _summarize(revived, skipped, alive, continued)
         _info("revive sweep (%s): %s", trigger, out["summary"])
         return out
+
+
+# --------------------------------------------------------------------------- #
+# Auto-revive: an agent the kernel killed comes back by itself
+# --------------------------------------------------------------------------- #
+# Agents raise their own oom_score_adj at launch
+# (backend.providers.launch_script.OOM_SCORE_ADJ), so when the machine runs out
+# of memory the kernel kills an agent's tree rather than this server. This is
+# the other half: the agent it killed comes back once memory has recovered,
+# without a click. No loop of its own — the instances tick reports every
+# session's reading to observe() and calls auto_tick() once per pass.
+
+#: Auto-revives one session gets within :data:`AUTO_WINDOW_SECONDS` before it
+#: is left Offline: an agent whose own work runs the machine out of memory
+#: every time must not be relaunched into the same squeeze forever.
+AUTO_MAX_PER_WINDOW = 3
+AUTO_WINDOW_SECONDS = 3600.0
+#: How long a just-revived session's Offline reading is still not announced:
+#: the activity probe memoizes ~2.5s, so the tick after a relaunch can still
+#: serve the dead reading.
+AUTO_SETTLE_SECONDS = 15.0
+#: Force the auto-revive on/off (tests). ``None`` = automatic: on in a real
+#: server unless ``MINDFLOCK_REVIVE_ON_START=0``, OFF under pytest (ENGINE is
+#: the developer's real state there).
+AUTO_ENABLED: Optional[bool] = None
+
+#: ``auto_state()["state"]``: waiting for memory / its turn, or left Offline.
+AUTO_PENDING = "pending"
+AUTO_GAVE_UP = "gave_up"
+
+_AUTO_LOCK = threading.Lock()
+#: Titles this process has seen with a live agent — only their deaths count
+#: (a session already Offline at boot is the startup sweep's business).
+_AUTO_LIVE: Set[str] = set()
+#: Killed agents waiting to come back: title -> (epoch seen dead, exit code).
+_AUTO_PENDING: Dict[str, Tuple[float, Optional[int]]] = {}
+#: title -> epochs of its auto-revives (the rate limit's window).
+_AUTO_HISTORY: Dict[str, List[float]] = {}
+#: title -> why it was left Offline (shown on its row).
+_AUTO_GAVE_UP: Dict[str, str] = {}
+#: title -> epoch of its last auto-revive (see AUTO_SETTLE_SECONDS).
+_AUTO_REVIVED_AT: Dict[str, float] = {}
+_AUTO_RUN: Dict[str, object] = {"busy": False, "last": 0.0, "held": False}
+
+
+def _auto_on() -> bool:
+    if AUTO_ENABLED is not None:
+        return bool(AUTO_ENABLED)
+    if os.environ.get("MINDFLOCK_REVIVE_ON_START", "1") == "0":
+        return False
+    from backend.web.core import restart
+
+    return not restart._under_pytest()
+
+
+def killed_code(srv, inst, title: str) -> Tuple[bool, Optional[int]]:
+    """``(killed, exit_code)``: whether ``title``'s dead agent died to SIGKILL —
+    the OOM killer's signature, never a person's quit. Exit marker 137 says so
+    outright; no marker at all (a launch with no exit wrapper, the engine's
+    first start) counts only when the agent died mid-turn
+    (:func:`died_mid_turn`: a SIGKILL fires no Stop/SessionEnd hook, while a
+    quit does). Blocking (file + tmux reads). Never raises."""
+    from backend.providers import launch_script
+
+    try:
+        from backend.session import tmux
+
+        code = srv._read_exit_marker(tmux.to_mindflock_tmux_name(title))
+    except Exception:  # noqa: BLE001
+        code = None
+    if code == launch_script.KILLED_EXIT_CODE:
+        return True, code
+    if code is None and died_mid_turn(srv, inst, title):
+        return True, None
+    return False, code
+
+
+def _should_run(inst) -> bool:
+    """The session's own state says its agent belongs up (not paused, not
+    still provisioning, started)."""
+    if getattr(inst, "Status", None) in (session.Paused, session.Loading):
+        return False
+    try:
+        return bool(inst.Started())
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def observe(srv, title: str, inst, activity: str, now: Optional[float] = None):
+    """Report one session's activity reading (the instances tick, per row,
+    BEFORE it emits state changes). A live reading marks the agent seen; the
+    first Offline after one is a death, and a death by SIGKILL
+    (:func:`killed_code`) queues the agent for :func:`auto_tick`. Blocking
+    only on a death (marker + tmux reads). Never raises."""
+    if now is None:
+        now = time.time()
+    try:
+        if activity != "offline":
+            with _AUTO_LOCK:
+                _AUTO_LIVE.add(title)
+                _AUTO_PENDING.pop(title, None)
+                _AUTO_GAVE_UP.pop(title, None)
+            return
+        with _AUTO_LOCK:
+            if title not in _AUTO_LIVE:
+                return
+            _AUTO_LIVE.discard(title)
+        if not _auto_on() or not _should_run(inst):
+            return
+        killed, code = killed_code(srv, inst, title)
+        if not killed or not enabled():
+            return
+        with _AUTO_LOCK:
+            _AUTO_PENDING.setdefault(title, (now, code))
+            _AUTO_GAVE_UP.pop(title, None)
+    except Exception:  # noqa: BLE001 — a reading must never break the tick
+        pass
+
+
+def holds_offline(title: str, now: Optional[float] = None) -> bool:
+    """Whether ``title``'s Offline reading should NOT be announced: it is
+    queued to come back by itself, or just came back. The diff emitter keeps
+    the previous activity meanwhile, so a revive rings no bell, toast or push;
+    a session left Offline (:data:`AUTO_GAVE_UP`) is announced as usual."""
+    if now is None:
+        now = time.time()
+    with _AUTO_LOCK:
+        if title in _AUTO_PENDING:
+            return True
+        return now - _AUTO_REVIVED_AT.get(title, 0.0) < AUTO_SETTLE_SECONDS
+
+
+def auto_state(title: str) -> Optional[dict]:
+    """The row's ``auto_revive``: ``{"state": "pending"|"gave_up", "reason"}``
+    or ``None`` — what the Offline chip says instead of its stock hint."""
+    with _AUTO_LOCK:
+        if title in _AUTO_PENDING:
+            return {
+                "state": AUTO_PENDING,
+                "reason": "The agent was killed (likely out of memory) — it "
+                "restarts by itself once memory has recovered",
+            }
+        reason = _AUTO_GAVE_UP.get(title)
+    if reason:
+        return {"state": AUTO_GAVE_UP, "reason": reason}
+    return None
+
+
+def _sweep_running() -> bool:
+    lock = _LOCK
+    return lock is not None and lock[1].locked()
+
+
+def _start_thread(fn, *args) -> None:
+    threading.Thread(target=fn, args=args, daemon=True, name="auto-revive").start()
+
+
+def auto_tick(
+    srv=None,
+    now: Optional[float] = None,
+    start: Optional[Callable[..., None]] = None,
+) -> Optional[str]:
+    """Bring back at most one killed agent (once per instances tick). Returns
+    the title handed to a launch, else ``None``. Waits — without spending the
+    agent's budget — while a revive is in flight, a sweep runs, the last
+    launch was under :data:`GAP_SECONDS` ago, or memory reads low; gives up on
+    an agent revived :data:`AUTO_MAX_PER_WINDOW` times this hour. The launch
+    itself runs on its own thread (``start``), off the tick. Never raises."""
+    if srv is None:
+        srv = _server()
+    if now is None:
+        now = time.time()
+    start = start or _start_thread
+    try:
+        with _AUTO_LOCK:
+            if not _AUTO_PENDING:
+                return None
+            if not _auto_on():
+                _AUTO_PENDING.clear()
+                return None
+            if _AUTO_RUN["busy"] or now - float(_AUTO_RUN["last"]) < GAP_SECONDS:
+                return None
+            waiting = len(_AUTO_PENDING)
+        if _sweep_running():
+            return None
+        if memory_pressure.is_low():
+            if not _AUTO_RUN["held"]:
+                _AUTO_RUN["held"] = True
+                _info(
+                    "auto-revive: holding %d killed agent(s) — %s",
+                    waiting,
+                    memory_pressure.describe(),
+                )
+            return None
+        _AUTO_RUN["held"] = False
+        with _AUTO_LOCK:
+            title = min(_AUTO_PENDING, key=lambda t: _AUTO_PENDING[t][0])
+            recent = [
+                t for t in _AUTO_HISTORY.get(title, []) if now - t < AUTO_WINDOW_SECONDS
+            ]
+            if len(recent) >= AUTO_MAX_PER_WINDOW:
+                _AUTO_PENDING.pop(title, None)
+                _AUTO_HISTORY[title] = recent
+                _AUTO_GAVE_UP[title] = (
+                    "Killed %d times in the last hour (likely out of memory) — "
+                    "left Offline so it can't take the machine down again; "
+                    "Restart it when there is room" % (len(recent) + 1)
+                )
+                gave_up = True
+            else:
+                recent.append(now)
+                _AUTO_HISTORY[title] = recent
+                _AUTO_RUN["busy"] = True
+                _AUTO_RUN["last"] = now
+                gave_up = False
+        if gave_up:
+            _info(
+                "auto-revive %s: not restarted — killed %d times in the last "
+                "hour; left Offline",
+                title,
+                len(recent) + 1,
+            )
+            return None
+        try:
+            start(_auto_revive_one, srv, title, len(recent))
+        except Exception:  # noqa: BLE001 — no thread: free the slot
+            with _AUTO_LOCK:
+                _AUTO_RUN["busy"] = False
+            return None
+        return title
+    except Exception:  # noqa: BLE001 — housekeeping never breaks the tick
+        return None
+
+
+def _auto_revive_one(srv, title: str, nth: int = 1) -> None:
+    """Relaunch one killed agent via :func:`relaunch` (re-checking the skip
+    rules — paused, usage limit, quit, workspace — first). One log line.
+    Blocking; runs on its own thread."""
+    revived = attempted = False
+    try:
+        with _AUTO_LOCK:
+            code = (_AUTO_PENDING.get(title) or (0.0, None))[1]
+        inst = srv.ENGINE.instances.get(title)
+        reason = SKIP_GONE if inst is None else None
+        if reason is None:
+            reason = skip_reason(srv, inst, title, time.time())
+        if reason is None and _alive(srv, title):
+            reason = "already running"
+        if reason is not None:
+            _info("auto-revive %s: not restarted (%s)", title, reason)
+            return
+        t0 = time.monotonic()
+        attempted = True
+        _name, err, continued = relaunch(inst, title, srv)
+        if err is not None:
+            with _AUTO_LOCK:
+                _AUTO_GAVE_UP[title] = "Restart after it was killed failed: %s" % err
+            _info("auto-revive %s: not started (%s)", title, err)
+            return
+        revived = True
+        _info(
+            "auto-revive %s: agent relaunched after it was killed (%s; %d/%d this "
+            "hour, %.1fs)%s",
+            title,
+            "exit %d" % code if code is not None else "died mid-turn, no exit code",
+            nth,
+            AUTO_MAX_PER_WINDOW,
+            time.monotonic() - t0,
+            " — queued a continue" if continued else "",
+        )
+    except Exception as err:  # noqa: BLE001 — one bad session
+        _info("auto-revive %s: failed (%s)", title, err)
+    finally:
+        with _AUTO_LOCK:
+            _AUTO_PENDING.pop(title, None)
+            if revived:
+                _AUTO_REVIVED_AT[title] = time.time()
+            if not attempted and _AUTO_HISTORY.get(title):
+                # Nothing launched: give the reservation back.
+                _AUTO_HISTORY[title].pop()
+            _AUTO_RUN["busy"] = False
+        try:
+            srv._republish_session(title)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _auto_reset_for_tests() -> None:
+    with _AUTO_LOCK:
+        _AUTO_LIVE.clear()
+        _AUTO_PENDING.clear()
+        _AUTO_HISTORY.clear()
+        _AUTO_GAVE_UP.clear()
+        _AUTO_REVIVED_AT.clear()
+        _AUTO_RUN.update({"busy": False, "last": 0.0, "held": False})
 
 
 async def run_on_start(srv=None) -> Optional[dict]:

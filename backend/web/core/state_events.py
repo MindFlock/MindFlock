@@ -31,6 +31,7 @@ from backend.web.core import events as _events
 from backend.web.core import ownership as _ownership
 from backend.web.core import pane_scroll_find as _pane_scroll_find
 from backend.web.core import prompt_queue as _prompt_queue
+from backend.web.core import revive as _revive
 
 
 def _server():
@@ -149,6 +150,17 @@ def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> N
                 snap["pending_activity"] = pending
             # else: settled — snap keeps the new activity and the diff below
             # emits the transition.
+        # An agent the kernel killed that is coming back by itself
+        # (core.revive auto-revive): its trip through Offline is not news, so
+        # the snapshot keeps announcing what it was doing. The row still reads
+        # Offline. Given up on (rate limit, a skip rule), it is announced.
+        if (
+            prev is not None
+            and activity == "offline"
+            and prev.get("activity") != "offline"
+            and _revive.holds_offline(title)
+        ):
+            snap["activity"] = prev.get("activity")
         # A move INTO a transient stage parks like a settling activity; a
         # flicker back out of it (or on through it) within the window announces
         # only the net change. Suppressed HERE, at the one emitter, so the

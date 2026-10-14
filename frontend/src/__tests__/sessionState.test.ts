@@ -168,6 +168,28 @@ describe("offline", () => {
     expect(ss.state).toBe("offline");
     expect(ss.restartable).toBe(false);
   });
+
+  it("killed and coming back by itself: out of the bell, says why, still restartable", () => {
+    const reason = "The agent was killed (likely out of memory) — it restarts by itself once memory has recovered";
+    const ss = deriveSessionState(inst({ activity: "offline", auto_revive: { state: "pending", reason } }), {
+      now: NOW,
+      activity: "offline",
+    });
+    expect(ss.state).toBe("offline");
+    expect(ss.inBell).toBe(false);
+    expect(ss.restartable).toBe(true);
+    expect(ss.hint).toBe(reason);
+  });
+
+  it("left Offline after too many kills: back in the bell, with the reason", () => {
+    const reason = "Killed 4 times in the last hour (likely out of memory) — left Offline";
+    const ss = deriveSessionState(inst({ activity: "offline", auto_revive: { state: "gave_up", reason } }), {
+      now: NOW,
+      activity: "offline",
+    });
+    expect(ss.inBell).toBe(true);
+    expect(ss.hint).toBe(reason);
+  });
 });
 
 describe("outside the table", () => {

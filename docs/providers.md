@@ -141,7 +141,7 @@ spellings. `BaseProvider.launcher_spec()` supplies them:
 | `skip_perms_flag` | the CLI's skip-all-prompts flag | append nothing (goose, cline) |
 | `prompt_arg` | template passing the seed prompt (`{prompt}`) | the CLI takes no prompt argument |
 | `resume_flag` | how to continue the prior conversation | the CLI cannot resume; relaunch fresh |
-| `resume_fallback` | retry-once-then-plain-launch on a failed resume | use the bare resume (aider) |
+| `resume_fallback` | retry-once-then-plain-launch on a failed resume (never after a SIGKILL — exit 137 passes through for the server's [auto-revive](session-engine.md#when-the-oom-killer-fires-anyway-agents-go-first-and-come-back)) | use the bare resume (aider) |
 | `natural_codes` | exit codes meaning a deliberate quit | — |
 | `command` | the real entry command when it isn't the bare binary | launch the program verbatim |
 
@@ -300,7 +300,7 @@ command = "mycli"                # optional; defaults to name
 args = ["--dangerously-skip-permissions"] # saved flags, appended on every start/resume
 resume_flag = "--continue"       # omit if the CLI can't resume
 skip_perms_flag = "--yolo"       # appended when the session skips permissions
-resume_fallback = true           # emit "<cmd> --continue || <cmd>"
+resume_fallback = true           # emit "<cmd> --continue || <cmd>" (not after exit 137)
 effort_args = ["--brain", "{level}"]      # optional: reasoning-effort flag
 effort_levels = ["low", "high"]           # the level names it accepts, cheapest first
 effort_ultra_level = "galaxybrain"        # optional: flag value for the top rung
