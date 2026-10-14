@@ -321,7 +321,7 @@ def test_delete_only_fires_from_the_armed_state_and_closing_disarms():
     menu = _code("components/sidebar/SessionMenu.tsx")
     model = _code("lib/sessionMenu.ts")
     # Closing the menu unmounts it, and its armed state goes with it.
-    assert "{expanded && !pending && (" in row
+    assert "{menuAt && !pending && (" in row
     # The unarmed click only arms; the armed strip's Delete runs the item.
     fire = menu[menu.index("const fire = (it: MenuItem)") :]
     fire = fire[: fire.index("};")]

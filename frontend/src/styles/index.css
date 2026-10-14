@@ -44,9 +44,9 @@
 @import "../components/grid/HistoryOverlay.css" layer(components); /* 160 */
 @import "../components/grid/FastTrackMenu.css" layer(components); /* 165 — after
    Pane.css, whose .nextstep-fast the ⏩ button's marks extend, and after
-   SidebarRow.css, whose .inst-actions the row's session items extend */
+   SidebarRow.css, whose .row-menu the row's session items extend */
 @import "../components/sidebar/SessionMenu.css" layer(components); /* 165 — the
-   one per-session menu, in the row's .inst-actions and the pane's
+   one per-session menu, in the row's .row-menu and the pane's
    .pane-more-menu: after SidebarRow.css and Pane.css, whose hosts it fills */
 @import "../components/sidebar/MidName.css" layer(components); /* 165 */
 @import "../components/grid/ThreadTab.css" layer(components); /* 166 — after

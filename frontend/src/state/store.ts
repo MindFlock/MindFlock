@@ -23,8 +23,8 @@ export type ViewMode = "auto" | "2" | "4" | "9";
  *
  * The floor is the width the sidebar shipped at for its whole life, and it is a
  * floor rather than a suggestion because narrower genuinely breaks the row: the
- * intrinsic minimum of a row (number + dot + chevron + the title's 34px legible
- * floor + a 96px stage chip + ✕) is ~240px, so below that the chip and the ✕
+ * intrinsic minimum of a row (number + dot + the title's 34px legible floor +
+ * a 96px stage chip + the ⋮ + ✕) is ~240px, so below that the chip and the ✕
  * spill past the sidebar's edge and the name collapses to two characters.
  * Dragging can only make the sidebar WIDER — which is the direction anyone
  * reaches for the handle to go anyway.

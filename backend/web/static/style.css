@@ -5349,7 +5349,8 @@ p.set-hint {
   position: relative;
 }
 
-.inst-row:hover {
+.inst-row:hover,
+.inst.menu-open .inst-row {
   background: var(--panel-2);
 }
 
@@ -5490,25 +5491,72 @@ p.set-hint {
   display: inline;
 }
 
-.inst .chevron {
-  background: none;
+/* The session's actions (⋮), at the row's right end beside the ✕. Quiet
+   until it's wanted: drawn on hover, on keyboard focus anywhere in the row,
+   on the selected row and while its menu is open. Hidden by opacity, never
+   display — it always holds its slot, so the title never reflows when it
+   appears. A right-click on the row opens the same menu. */
+.inst .row-kebab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 20px;
+  /* Tucked in between the chips and the ✕ so the pair reads as one cluster
+     and the slot costs the title as little as it can: the row's ⋯ used to
+     cost it 19px on the left, the ⋮ costs 16px here. */
+  margin: 0 -3px 0 -2px;
+  padding: 0;
   border: none;
+  border-radius: 4px;
+  background: none;
   color: var(--muted);
   cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+/* A window row's empty stand-in (WindowList.tsx): the same slot, nothing in it. */
+.inst .row-kebab-slot {
   flex: none;
-  font-size: 14px;
-  line-height: 1;
-  padding: 0 2px;
-  transition: transform 0.12s ease;
+  width: 16px;
+  margin: 0 -3px 0 -2px;
 }
 
-.inst .chevron:hover {
+.inst .row-kebab svg {
+  display: block;
+}
+
+.inst-row:hover .row-kebab,
+.inst-row:has(:focus-visible) .row-kebab,
+.inst:focus-visible .row-kebab,
+.inst.active .row-kebab,
+.inst .row-kebab.open {
+  opacity: 1;
+}
+
+.inst .row-kebab:hover {
   color: var(--text);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
-/* ⋯ opens the session menu; open, it keeps the accent instead of turning. */
-.inst .chevron.open {
+.inst .row-kebab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* Open: the accent says which row the menu belongs to. */
+.inst .row-kebab.open {
   color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.14);
+}
+
+/* No hover to reveal it (touch): always drawn. */
+@media (hover: none) {
+  .inst .row-kebab {
+    opacity: 1;
+  }
 }
 
 /* The status dot of a flat row: the chip beside it already says the state. */
@@ -5532,7 +5580,7 @@ p.set-hint {
    branch is capped at 40% of the row with its own ellipsis. */
 .inst .title {
   /* 12px, not the 13px body size: the row has to fit a grip, a number, a
-     status dot, a chevron, the stage chip and the ✕ alongside the name, and
+     status dot, the stage chip, the ⋮ and the ✕ alongside the name, and
      ellipsizing the name is the thing that actually costs the user. */
   font-size: 12px;
   font-weight: 600;
@@ -5684,7 +5732,7 @@ p.set-hint {
   bottom: 0;
 }
 
-/* Whatever hangs under the row (the answer strip, the actions menu). The
+/* Whatever hangs under the row (the answer strip, the close confirm). The
    lines run on through it and across the 4px gap to the next row. */
 .inst-tail {
   position: relative;
@@ -5694,18 +5742,6 @@ p.set-hint {
 .inst-tail > .nl-v {
   top: 0;
   bottom: -4px;
-}
-
-.inst.nest-1 .inst-actions {
-  padding-left: 44px;
-}
-
-.inst.nest-2 .inst-actions {
-  padding-left: 58px;
-}
-
-.inst.nest-3 .inst-actions {
-  padding-left: 72px;
 }
 
 /* A nested row's strip starts one step right of its connector, which leaves
@@ -5863,13 +5899,22 @@ p.set-hint {
   background: rgba(222, 97, 62, 0.12);
 }
 
-/* The row's ⋯ menu hangs here; its items are SessionMenu.css's (the same
-   menu the pane header's ⋯ draws). */
-.inst-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 2px 10px 6px 30px;
+/* The row's session menu (RowMenu.tsx): a popover over the whole window,
+   placed by lib/menuPlace so all of it is on screen, scrolling only when the
+   window is shorter than the menu. Its items are SessionMenu.css's (the same
+   menu the pane header's ⋯ draws); the shell matches that popover's. */
+.row-menu {
+  position: fixed;
+  z-index: 70;
+  min-width: 220px;
+  max-width: calc(100vw - 12px);
+  box-sizing: border-box;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 /* "Folder in use by …" — the 409 a Delete gets while a Duplicate session runs
@@ -5991,7 +6036,7 @@ p.set-hint {
 }
 
 /* An orchestrator's roll-up line and its "hide" / "show N" fold toggle
-   (lib/familyFold). Words, not a chevron: the row's › is its actions menu. */
+   (lib/familyFold). Words, not a chevron: a chevron reads as "expand". */
 .inst .roll-line {
   display: flex;
   align-items: baseline;
@@ -13730,12 +13775,12 @@ button.ct-chip:hover {
 
 /* 165 — after
    Pane.css, whose .nextstep-fast the ⏩ button's marks extend, and after
-   SidebarRow.css, whose .inst-actions the row's session items extend */
+   SidebarRow.css, whose .row-menu the row's session items extend */
 
 @layer components{
 
 /* The one per-session menu (SessionMenu.tsx): the same items in the sidebar
-   row's accordion (.inst-actions) and the pane header's popover
+   row's popover (.row-menu) and the pane header's popover
    (.pane-more-menu). Everything here is scoped to .session-menu so the two
    hosts draw it identically. */
 
@@ -13890,7 +13935,7 @@ button.ct-chip:hover {
 }
 
 /* 165 — the
-   one per-session menu, in the row's .inst-actions and the pane's
+   one per-session menu, in the row's .row-menu and the pane's
    .pane-more-menu: after SidebarRow.css and Pane.css, whose hosts it fills */
 
 @layer components{
@@ -25496,11 +25541,6 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   cursor: default;
 }
 
-/* Holds the chevron's column so a queued title lines up with the rows above. */
-.inst.run-queued .chevron.q-spacer {
-  visibility: hidden;
-}
-
 .inst.run-queued .dot.queued {
   background: transparent;
   border: 1px solid var(--muted);
@@ -26782,7 +26822,6 @@ button.infotip-btn:focus-visible {
 /* Not the ACTIVE tab: this layer beats the component layer whatever the
    specificity, so a hover here used to wash the accent off the tab you had
    just clicked (it is still under the pointer). */
-.light .inst-actions button:hover,
 .light .pane-head .tabs button:not(.active):hover {
   background: rgba(0, 0, 0, 0.06);
 }

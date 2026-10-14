@@ -5,6 +5,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
   useSyncExternalStore,
@@ -53,6 +54,7 @@ import { leadChip, leadLine, railExtraChips } from "../../lib/splitRun";
 import { RUN_DONE_STATES, type RunInfo } from "../../lib/runs";
 import type { RunDTO } from "../../api/types";
 import { SessionMenu } from "./SessionMenu";
+import { RowMenu, type RowMenuOpen } from "./RowMenu";
 import { MidName } from "./MidName";
 import { TaskLine, taskLineOf } from "./TaskLine";
 import { sessionMenu } from "../../lib/sessionMenu";
@@ -147,7 +149,12 @@ export const SidebarRow = memo(function SidebarRow({
   runTask = null,
   leadRun = null,
 }: Props) {
-  const [expanded, setExpanded] = useState(false);
+  // The session menu, open: where it hangs (under the ⋮, or at the pointer of
+  // a right-click) — null while closed.
+  const [menuAt, setMenuAt] = useState<RowMenuOpen | null>(null);
+  const expanded = !!menuAt;
+  const kebab = useRef<HTMLButtonElement | null>(null);
+  const menuId = useId();
   // The row's ✕ on a session with uncommitted changes asks first, on a strip
   // under the row (never confirm(): the desktop app has none).
   const [closeArmed, setCloseArmed] = useState(false);
@@ -241,8 +248,8 @@ export const SidebarRow = memo(function SidebarRow({
   const lline = isLead ? leadLine(leadRun as RunDTO | null) : null;
   const roll = kids.length && !pending && !isLead ? rollup(kids, nameOf, effectiveActivity) : null;
   // Fold this session's sub-sessions out of the rail (lib/familyFold). A
-  // worded toggle beside the roll-up, never another chevron: the row's ›
-  // already means "actions". The roll-up stays, so a folded family still
+  // worded toggle beside the roll-up, never a chevron: a chevron reads as
+  // "expand", and the row's actions are its ⋮. The roll-up stays, so a folded family still
   // says what needs you.
   const folded = useUi((s) => s.collapsedFamilies.has(title));
   const foldBtn =
@@ -351,6 +358,33 @@ export const SidebarRow = memo(function SidebarRow({
   };
   useEffect(() => clearRenameTimer, []);
 
+  /** Hang the menu under the ⋮, right edges aligned (the pane header's ⋯
+   * popover does the same). */
+  const openAtKebab = (keyboard: boolean) => {
+    const b = kebab.current?.getBoundingClientRect();
+    if (!b) return;
+    clearRenameTimer();
+    setMenuAt({ x: b.right, y: b.bottom + 4, flipY: b.top - 4, align: "end", keyboard });
+  };
+  const closeMenu = (refocus = false) => {
+    setMenuAt(null);
+    if (refocus) kebab.current?.focus();
+  };
+  /** Right-click anywhere on the row: the same menu, at the pointer. The
+   * rename input and links keep the browser's own menu (copy / paste). */
+  const onRowContextMenu = (e: MouseEvent) => {
+    if (pending || editing) return;
+    const t = e.target as Element;
+    if (isEditingTarget(t) || t.closest?.("a[href]")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    clearRenameTimer();
+    // The Menu key / Shift+F10 also arrive as a contextmenu event, with no
+    // pointer behind them: those hang the menu from the ⋮.
+    if (e.button !== 2 && e.clientX === 0 && e.clientY === 0) return openAtKebab(true);
+    setMenuAt({ x: e.clientX, y: e.clientY, flipY: e.clientY, align: "start", keyboard: false });
+  };
+
   /** Click on the row that's ALREADY selected → edit the name in place. The
    * second click of a double-click also lands here, so the edit is held for
    * the double-click window and cancelled by onDoubleClick (open in IDE). */
@@ -393,474 +427,518 @@ export const SidebarRow = memo(function SidebarRow({
     (missing ? " ws-missing" : "") +
     (pending ? " is-pending" : "") +
     (picked ? " bulk-picked" : "") +
+    (menuAt ? " menu-open" : "") +
     (dropCue ? ` drop-${dropCue}` : "");
 
   return (
-    <li
-      className={rowCls}
-      data-title={title}
-      // Focusable only while it carries an answer strip, so Tab reaches a
-      // blocked worker and 1–9 answer it — never a bare digit typed elsewhere.
-      tabIndex={answering ? 0 : undefined}
-      onKeyDown={(e) => {
-        if (!answering || e.ctrlKey || e.metaKey || e.altKey || !/^[1-9]$/.test(e.key)) return;
-        if (isEditingTarget(e.target as Element)) return;
-        if (strip.current?.answerKey(e.key)) {
-          e.preventDefault();
-          e.stopPropagation();
-        }
-      }}
-      {...rowDndProps(
-        title,
-        { onDragState, onDropCue, onDropRow },
-        // Row drag would hijack text selection inside the rename input.
-        !editing
-      )}
-    >
-      <div
-        className="inst-row"
-        onMouseDown={(e) => {
-          // Shift-click picks a range; don't let it select text on the way.
-          if (e.shiftKey) e.preventDefault();
-        }}
-        onClick={(e) => {
-          if (editing || Date.now() - editEndedAt.current < DBLCLICK_MS + 100) return;
-          // Picking rows for the bulk bar: Ctrl/⌘ toggles one, Shift takes the
-          // range from the last pick, and in select mode a plain click toggles.
-          if (!pending && (e.ctrlKey || e.metaKey || e.shiftKey || picking)) {
-            clearRenameTimer();
-            useUi.getState().pickRow(title, e.shiftKey);
+    <>
+      <li
+        className={rowCls}
+        data-title={title}
+        // Focusable only while it carries an answer strip, so Tab reaches a
+        // blocked worker and 1–9 answer it — never a bare digit typed elsewhere.
+        tabIndex={answering ? 0 : undefined}
+        onKeyDown={(e) => {
+          // Shift+F10 / the Menu key on anything focused in the row (its ⋮, a
+          // chip, the answer strip): the row's menu, under the ⋮.
+          if (
+            !pending &&
+            !editing &&
+            (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey)) &&
+            !isEditingTarget(e.target as Element)
+          ) {
+            e.preventDefault();
+            e.stopPropagation();
+            openAtKebab(true);
             return;
           }
-          if (focused !== title) {
-            selectSession(title);
-            return;
+          if (!answering || e.ctrlKey || e.metaKey || e.altKey || !/^[1-9]$/.test(e.key)) return;
+          if (isEditingTarget(e.target as Element)) return;
+          if (strip.current?.answerKey(e.key)) {
+            e.preventDefault();
+            e.stopPropagation();
           }
-          if (!pending) armRename();
         }}
-        onDoubleClick={() => {
-          clearRenameTimer();
-          if (picking) return;
-          if (!missing && !pending) ideSession(title, true);
-        }}
-      >
-        {(nested || nest.stem) && <NestLines nest={nest} part="row" />}
-        <span className="grip" title="Drag to reorder">⠿</span>
-        <span className="idx" title={num ? `Ctrl+${num} / Alt+${num} to focus` : ""}>
-          {picking ? (picked ? "✓" : "") : num}
-        </span>
-        {/* The chip already says the state: the dot draws only where it says
-            something the chip doesn't — a dropped terminal socket, or a node
-            of a family tree (whose connector lines meet it). */}
-        <span
-          className={
-            "dot tone-" +
-            ss.tone +
-            " st-" +
-            ss.state +
-            (disconnected ? " disconnected" : "") +
-            (disconnected || nested || nest.stem || lchip || pchip ? "" : " dot-quiet")
-          }
-          title={disconnected ? "Terminal socket lost — reconnecting" : ss.label}
-        />
-        {!pending && (
-          // ⋯, not ›: a chevron reads as expand/collapse, and this opens the
-          // session's actions (the same menu as the pane header's ⋯).
-          <button
-            className={"chevron" + (expanded ? " open" : "")}
-            title="Actions for this session"
-            aria-label="Actions for this session"
-            aria-haspopup="menu"
-            aria-expanded={expanded}
-            onClick={(e) => act(() => setExpanded((v) => !v), e)}
-          >
-            ⋯
-          </button>
+        {...rowDndProps(
+          title,
+          { onDragState, onDropCue, onDropRow },
+          // Row drag would hijack text selection inside the rename input.
+          !editing
         )}
-        <span className={"meta" + (subline ? " has-lineage" : "")}>
-          {editing ? (
-            <input
-              className="title title-edit"
-              type="text"
-              defaultValue={shown}
-              autoFocus
-              autoComplete="off"
-              spellCheck={false}
-              onFocus={(e) => e.currentTarget.select()}
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={(e) => e.stopPropagation()}
-              onDoubleClick={(e) => e.stopPropagation()}
-              onBlur={(e) => commitRename(e.currentTarget.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  commitRename(e.currentTarget.value);
-                } else if (e.key === "Escape") {
-                  e.preventDefault();
-                  cancelled.current = true;
-                  editEndedAt.current = Date.now();
-                  setEditing(false);
-                }
-              }}
-            />
-          ) : (
-            <span
-              className="title"
-              title={[
-                shown,
-                // A ticket/PR label's slug, until the session is renamed: then
-                // the new name is the only name it goes by.
-                label.kind && !alias ? `session: ${displayTitle(inst)}` : "",
-                inst.branch ? `branch: ${inst.branch}` : "",
-                wline ? wline.title : lineage ? lineage.title : "",
-                focused === title && !picking ? "Click again to rename" : "",
-                picking ? "" : "Ctrl+click or Shift+click to select several",
-              ]
-                .filter(Boolean)
-                .join("\n")}
-            >
-              {/* Middle-truncated: a "-2" suffix is what tells two rows apart. */}
-              <MidName text={shown} />
-            </span>
-          )}
-          {!editing && ship && (
-            <span
-              className={"lineage ship-line " + ship.cls + (shipOpensBell ? " opens-bell" : "")}
-              title={[
-                ship.title,
-                wline ? wline.title : lineage ? lineage.title : "",
-                shipOpensBell ? "Click to open it in the bell" : "",
-              ]
-                .filter(Boolean)
-                .join("\n")}
-              {...(shipOpensBell
-                ? {
-                    role: "button",
-                    tabIndex: 0,
-                    // Like the lead line: the click is the line's, never the
-                    // row's select / rename, and a double-click never opens
-                    // the IDE. mousedown stays put so it can't start a drag.
-                    onMouseDown: (e: MouseEvent) => e.stopPropagation(),
-                    onClick: (e: MouseEvent) => act(openBell, e),
-                    onDoubleClick: (e: MouseEvent) => e.stopPropagation(),
-                    onKeyDown: (e: React.KeyboardEvent) => {
-                      if (e.key !== "Enter" && e.key !== " ") return;
-                      e.preventDefault();
-                      e.stopPropagation();
-                      openBell();
-                    },
-                  }
-                : {})}
-            >
-              <span className="sl-lead">{ship.lead}</span>
-              {ship.rest && (
-                <span className={"sl-rest" + (ship.restCls ? " " + ship.restCls : "")}>{ship.rest}</span>
-              )}
-            </span>
-          )}
-          {!editing && !ship && lline && (
-            <span className="roll-line">
-              <span
-                className={"lineage workers lead-line"}
-                title={"Its team run: " + (leadRun?.name || "") + "\nClick to open the Thread"}
-                role="button"
-                tabIndex={0}
-                onClick={(e) => act(() => openThread(title), e)}
+      >
+        <div
+          className="inst-row"
+          onMouseDown={(e) => {
+            // Shift-click picks a range; don't let it select text on the way.
+            if (e.shiftKey) e.preventDefault();
+          }}
+          onClick={(e) => {
+            if (editing || Date.now() - editEndedAt.current < DBLCLICK_MS + 100) return;
+            // Picking rows for the bulk bar: Ctrl/⌘ toggles one, Shift takes the
+            // range from the last pick, and in select mode a plain click toggles.
+            if (!pending && (e.ctrlKey || e.metaKey || e.shiftKey || picking)) {
+              clearRenameTimer();
+              useUi.getState().pickRow(title, e.shiftKey);
+              return;
+            }
+            if (focused !== title) {
+              selectSession(title);
+              return;
+            }
+            if (!pending) armRename();
+          }}
+          onDoubleClick={() => {
+            clearRenameTimer();
+            if (picking) return;
+            if (!missing && !pending) ideSession(title, true);
+          }}
+          onContextMenu={onRowContextMenu}
+        >
+          {(nested || nest.stem) && <NestLines nest={nest} part="row" />}
+          <span className="grip" title="Drag to reorder">⠿</span>
+          <span className="idx" title={num ? `Ctrl+${num} / Alt+${num} to focus` : ""}>
+            {picking ? (picked ? "✓" : "") : num}
+          </span>
+          {/* The chip already says the state: the dot draws only where it says
+              something the chip doesn't — a dropped terminal socket, or a node
+              of a family tree (whose connector lines meet it). */}
+          <span
+            className={
+              "dot tone-" +
+              ss.tone +
+              " st-" +
+              ss.state +
+              (disconnected ? " disconnected" : "") +
+              (disconnected || nested || nest.stem || lchip || pchip ? "" : " dot-quiet")
+            }
+            title={disconnected ? "Terminal socket lost — reconnecting" : ss.label}
+          />
+          <span className={"meta" + (subline ? " has-lineage" : "")}>
+            {editing ? (
+              <input
+                className="title title-edit"
+                type="text"
+                defaultValue={shown}
+                autoFocus
+                autoComplete="off"
+                spellCheck={false}
+                onFocus={(e) => e.currentTarget.select()}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
                 onDoubleClick={(e) => e.stopPropagation()}
+                onBlur={(e) => commitRename(e.currentTarget.value)}
                 onKeyDown={(e) => {
-                  if (e.key !== "Enter" && e.key !== " ") return;
-                  e.preventDefault();
-                  e.stopPropagation();
-                  openThread(title);
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    commitRename(e.currentTarget.value);
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    cancelled.current = true;
+                    editEndedAt.current = Date.now();
+                    setEditing(false);
+                  }
                 }}
+              />
+            ) : (
+              <span
+                className="title"
+                title={[
+                  shown,
+                  // A ticket/PR label's slug, until the session is renamed: then
+                  // the new name is the only name it goes by.
+                  label.kind && !alias ? `session: ${displayTitle(inst)}` : "",
+                  inst.branch ? `branch: ${inst.branch}` : "",
+                  wline ? wline.title : lineage ? lineage.title : "",
+                  focused === title && !picking ? "Click again to rename" : "",
+                  picking ? "" : "Ctrl+click or Shift+click to select several",
+                ]
+                  .filter(Boolean)
+                  .join("\n")}
               >
-                <span className={lline.cls || undefined}>{lline.text}</span>
-                {lline.url && (
-                  <a
-                    className="lead-link"
-                    href={lline.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    title={lline.url}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {" ↗"}
-                  </a>
+                {/* Middle-truncated: a "-2" suffix is what tells two rows apart. */}
+                <MidName text={shown} />
+              </span>
+            )}
+            {!editing && ship && (
+              <span
+                className={"lineage ship-line " + ship.cls + (shipOpensBell ? " opens-bell" : "")}
+                title={[
+                  ship.title,
+                  wline ? wline.title : lineage ? lineage.title : "",
+                  shipOpensBell ? "Click to open it in the bell" : "",
+                ]
+                  .filter(Boolean)
+                  .join("\n")}
+                {...(shipOpensBell
+                  ? {
+                      role: "button",
+                      tabIndex: 0,
+                      // Like the lead line: the click is the line's, never the
+                      // row's select / rename, and a double-click never opens
+                      // the IDE. mousedown stays put so it can't start a drag.
+                      onMouseDown: (e: MouseEvent) => e.stopPropagation(),
+                      onClick: (e: MouseEvent) => act(openBell, e),
+                      onDoubleClick: (e: MouseEvent) => e.stopPropagation(),
+                      onKeyDown: (e: React.KeyboardEvent) => {
+                        if (e.key !== "Enter" && e.key !== " ") return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        openBell();
+                      },
+                    }
+                  : {})}
+              >
+                <span className="sl-lead">{ship.lead}</span>
+                {ship.rest && (
+                  <span className={"sl-rest" + (ship.restCls ? " " + ship.restCls : "")}>{ship.rest}</span>
                 )}
               </span>
-              {foldBtn}
-            </span>
-          )}
-          {!editing && !ship && !lline && wline && (
-            <span className={"lineage " + wline.cls} title={wline.title}>
-              {wline.text}
-            </span>
-          )}
-          {!editing && noAgent && (
-            <span className="lineage noagent-line" title={ss.hint}>
-              {agentBlockedLine(noAgent)}
-            </span>
-          )}
-          {!editing && taskLine && <TaskLine inst={inst} />}
-          {!editing && !ship && !lline && !wline && lineage && (
-            <span
-              className={"lineage" + (lineage.spawned ? " spawned" : "")}
-              title={lineage.title}
-            >
-              {lineage.text}
-            </span>
-          )}
-          {!editing && roll && (
-            <span className="roll-line">
-              <span
-                className="lineage workers"
-                title={roll.title}
-                // Keyboard-reachable like a button (Tab, then Enter/Space):
-                // it opens the family's Thread.
-                role="button"
-                tabIndex={0}
-                aria-label={roll.parts.map((p) => p.text).join(" · ") + " — open the Thread"}
-                onClick={(e) => act(() => openThread(title), e)}
-                onDoubleClick={(e) => e.stopPropagation()}
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter" && e.key !== " ") return;
-                  e.preventDefault();
-                  e.stopPropagation();
-                  openThread(title);
-                }}
-              >
-                {roll.parts.map((p, i) => (
-                  <span key={i}>
-                    {i > 0 && " · "}
-                    <span className={p.cls || undefined}>{p.text}</span>
-                  </span>
-                ))}
+            )}
+            {!editing && !ship && lline && (
+              <span className="roll-line">
+                <span
+                  className={"lineage workers lead-line"}
+                  title={"Its team run: " + (leadRun?.name || "") + "\nClick to open the Thread"}
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => act(() => openThread(title), e)}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter" && e.key !== " ") return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    openThread(title);
+                  }}
+                >
+                  <span className={lline.cls || undefined}>{lline.text}</span>
+                  {lline.url && (
+                    <a
+                      className="lead-link"
+                      href={lline.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={lline.url}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {" ↗"}
+                    </a>
+                  )}
+                </span>
+                {foldBtn}
               </span>
-              {foldBtn}
-            </span>
-          )}
-        </span>
-        {lchip ? (
-          <button
-            type="button"
-            className="stagechip wrapchip leadchip"
-            title={lchip.title}
-            aria-label={lchip.title}
-            onClick={(e) => act(() => openThread(title), e)}
-            onDoubleClick={(e) => e.stopPropagation()}
-          >
-            {lchip.label}
-          </button>
-        ) : pchip?.kind === "wrap" ? (
-          <button
-            type="button"
-            className={"stagechip " + pchip.cls}
-            title={pchip.title}
-            aria-label={pchip.title}
-            onClick={(e) => act(() => void pasteWrapup(title), e)}
-            onDoubleClick={(e) => e.stopPropagation()}
-          >
-            {pchip.label}
-          </button>
-        ) : pchip ? (
-          <span className={"stagechip " + pchip.cls} title={pchip.title}>
-            {pchip.label}
+            )}
+            {!editing && !ship && !lline && wline && (
+              <span className={"lineage " + wline.cls} title={wline.title}>
+                {wline.text}
+              </span>
+            )}
+            {!editing && noAgent && (
+              <span className="lineage noagent-line" title={ss.hint}>
+                {agentBlockedLine(noAgent)}
+              </span>
+            )}
+            {!editing && taskLine && <TaskLine inst={inst} />}
+            {!editing && !ship && !lline && !wline && lineage && (
+              <span
+                className={"lineage" + (lineage.spawned ? " spawned" : "")}
+                title={lineage.title}
+              >
+                {lineage.text}
+              </span>
+            )}
+            {!editing && roll && (
+              <span className="roll-line">
+                <span
+                  className="lineage workers"
+                  title={roll.title}
+                  // Keyboard-reachable like a button (Tab, then Enter/Space):
+                  // it opens the family's Thread.
+                  role="button"
+                  tabIndex={0}
+                  aria-label={roll.parts.map((p) => p.text).join(" · ") + " — open the Thread"}
+                  onClick={(e) => act(() => openThread(title), e)}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter" && e.key !== " ") return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    openThread(title);
+                  }}
+                >
+                  {roll.parts.map((p, i) => (
+                    <span key={i}>
+                      {i > 0 && " · "}
+                      <span className={p.cls || undefined}>{p.text}</span>
+                    </span>
+                  ))}
+                </span>
+                {foldBtn}
+              </span>
+            )}
           </span>
-        ) : noAgent ? (
-          <AgentBlockedChip block={noAgent} title={title} className={"stagechip chip-restart " + chip.cls} hint={ss.hint} />
-        ) : ss.state === "offline" && ss.restartable && !paused ? (
-          // Offline carries its remedy: Restart relaunches the agent (the same
-          // lazy revive a terminal attach or a sent prompt does).
-          <button
-            type="button"
-            className={"stagechip chip-restart " + chip.cls}
-            title={chip.title}
-            aria-label={"Offline — restart the agent"}
-            onClick={(e) => act(() => void reviveSession(title), e)}
-            onDoubleClick={(e) => e.stopPropagation()}
-          >
-            {chip.label}
-            <span className="chip-act" aria-hidden="true">
-              ↻ Restart
-            </span>
-          </button>
-        ) : inst.sleeping && !inst.device && !paused ? (
-          // Asleep (backend core/sleep.py): a calm chip whose remedy shows on
-          // hover. Clicking the row wakes it too (opening its terminal does).
-          <button
-            type="button"
-            className={"stagechip chip-restart chip-wake " + chip.cls}
-            title={chip.title}
-            aria-label={"Sleeping — wake the agent"}
-            onClick={(e) => act(() => void wakeSession(title), e)}
-            onDoubleClick={(e) => e.stopPropagation()}
-          >
-            {chip.label}
-            <span className="chip-act" aria-hidden="true">
-              Wake
-            </span>
-          </button>
-        ) : (
-          <span className={"stagechip " + chip.cls} title={chip.title}>{chip.label}</span>
-        )}
-        {/* Who else is on this session (lib/presence): drawn only once
-            someone besides you watches or drives it. */}
-        {!pending && <PresenceDots inst={inst} me={me} />}
-        {inst.shared_branch && (
-          <span className="shared-branch-mark" title={"Shared branch " + (inst.branch || "") + " — others push to it too"} aria-label="shared branch">⑂</span>
-        )}
-        {extra.check && (
-          <span className={"stagechip checkchip " + extra.check.cls} title={extra.check.title}>
-            {extra.check.label}
-          </span>
-        )}
-        {/* Verify's verdict for this branch; opens its checklist. */}
-        {!pending && <VerdictChip inst={inst} where="row" />}
-        {bg &&
-          (bg.stopPid ? (
+          {lchip ? (
             <button
               type="button"
-              className={"stagechip " + bg.cls}
-              title={bg.title}
-              aria-label={bg.title}
-              onClick={(e) => act(() => void stopBackgroundJob(title, bg.stopPid as number), e)}
+              className="stagechip wrapchip leadchip"
+              title={lchip.title}
+              aria-label={lchip.title}
+              onClick={(e) => act(() => openThread(title), e)}
               onDoubleClick={(e) => e.stopPropagation()}
             >
-              {bg.label}
+              {lchip.label}
             </button>
-          ) : (
-            <span className={"stagechip " + bg.cls} title={bg.title}>
-              {bg.label}
-            </span>
-          ))}
-        {peer && (
-          // Rank 2 of the peer-link UX scan: a shared-folder session says so
-          // HERE, on the rail row (a pane-head chip renders 0x0 — see
-          // grid/DiffTab.css). Click: People, where its link is.
-          <button
-            type="button"
-            className={"stagechip peerchip" + (peer.connected === false ? " peer-offline" : "")}
-            title={peer.title}
-            aria-label={peer.title}
-            onClick={(e) => act(() => openSettings(PEER_SCREEN), e)}
-            onDoubleClick={(e) => e.stopPropagation()}
-          >
-            {peer.connected !== null && <span className="peerchip-dot" aria-hidden="true" />}
-            {peer.label}
-          </button>
-        )}
-        {rz && !pending && (
-          <button
-            type="button"
-            className={"stagechip rzchip " + rz.cls}
-            title={rz.title}
-            aria-label={rz.title}
-            onClick={(e) =>
-              act(() => {
-                selectSession(title);
-                useUi.getState().setLastTab(title, "map");
-              }, e)
-            }
-          >
-            {rz.label}
-          </button>
-        )}
-        {!pending && (
-          <button
-            className={"kill" + (missing ? " cleanup" : "")}
-            aria-label={missing ? "Delete session" : "Close session"}
-            title={
-              missing
-                ? "Delete — its workspace is gone; this removes the session"
-                : "Close session — stops the agent and moves it to Recently closed (Ctrl+W / Del; reopen with Ctrl+Shift+T)"
-            }
-            onClick={(e) =>
-              act(() => {
-                if (missing) return cleanupMissing(title);
-                // Uncommitted work: say so before the agent stops.
-                if (uncommitted > 0 && !closeArmed) return setCloseArmed(true);
-                setCloseArmed(false);
-                sessionAction("close").run(title);
-              }, e)
-            }
-          >
-            {missing ? "Delete" : "✕"}
-          </button>
-        )}
-      </div>
-      {/* Everything that hangs under the row. flow-root so the strip's margins
-          stay inside, where the family connector is drawn through them. */}
-      <div className="inst-tail">
-        {(nested || nest.stem) && <NestLines nest={nest} part="tail" />}
-        {closeArmed && !missing && (
-          <div className="close-confirm" role="group" aria-label={`Close ${shown}?`}>
-            <span className="del-q">
-              Close session? Its {uncommitted} uncommitted change{uncommitted === 1 ? "" : "s"} stay in its
-              folder — reopen it from Recently closed.
-            </span>
-            <span className="del-acts">
-              <button
-                type="button"
-                className="danger"
-                onClick={(e) =>
-                  act(() => {
-                    setCloseArmed(false);
-                    sessionAction("close").run(title);
-                  }, e)
-                }
-              >
-                Close session
-              </button>
-              <button type="button" autoFocus onClick={(e) => act(() => setCloseArmed(false), e)}>
-                Cancel
-              </button>
-            </span>
-          </div>
-        )}
-        {answering && (
-          <AnswerStrip
-            ref={strip}
-            title={title}
-            activity={activity}
-            variant="rail"
-            onOpen={() => selectSession(title)}
-            // "No…": the agent now wants to hear what to do instead — say it in
-            // the family's Thread, addressed to this session.
-            onRedirect={() => openThread(isWorker ? inst.parent! : title, title)}
-          />
-        )}
-        {expanded && !pending && (
-          // THE per-session menu (lib/sessionMenu) — the pane header's ⋯
-          // draws the same model.
-          <div className="inst-actions" role="menu" aria-label={"Actions for " + shown}>
-            <SessionMenu
-              model={sessionMenu(inst, ctx, {
-                onSelect: () => {
-                  useUi.getState().pickRow(title, false);
-                  setExpanded(false);
-                },
-                picked,
-              })}
-              onInUse={setInUse}
-              onDone={() => setExpanded(false)}
-            />
-          </div>
-        )}
-        {inUse && (
-          <div className="folder-in-use" role="status">
-            <span className="fiu-text">{folderInUseText(inUse)}</span>
+          ) : pchip?.kind === "wrap" ? (
             <button
               type="button"
-              className="fiu-x"
-              aria-label="Dismiss"
-              title="Dismiss"
-              onClick={(e) => act(() => setInUse(null), e)}
+              className={"stagechip " + pchip.cls}
+              title={pchip.title}
+              aria-label={pchip.title}
+              onClick={(e) => act(() => void pasteWrapup(title), e)}
+              onDoubleClick={(e) => e.stopPropagation()}
             >
-              ✕
+              {pchip.label}
             </button>
-          </div>
-        )}
-      </div>
-    </li>
+          ) : pchip ? (
+            <span className={"stagechip " + pchip.cls} title={pchip.title}>
+              {pchip.label}
+            </span>
+          ) : noAgent ? (
+            <AgentBlockedChip block={noAgent} title={title} className={"stagechip chip-restart " + chip.cls} hint={ss.hint} />
+          ) : ss.state === "offline" && ss.restartable && !paused ? (
+            // Offline carries its remedy: Restart relaunches the agent (the same
+            // lazy revive a terminal attach or a sent prompt does).
+            <button
+              type="button"
+              className={"stagechip chip-restart " + chip.cls}
+              title={chip.title}
+              aria-label={"Offline — restart the agent"}
+              onClick={(e) => act(() => void reviveSession(title), e)}
+              onDoubleClick={(e) => e.stopPropagation()}
+            >
+              {chip.label}
+              <span className="chip-act" aria-hidden="true">
+                ↻ Restart
+              </span>
+            </button>
+          ) : inst.sleeping && !inst.device && !paused ? (
+            // Asleep (backend core/sleep.py): a calm chip whose remedy shows on
+            // hover. Clicking the row wakes it too (opening its terminal does).
+            <button
+              type="button"
+              className={"stagechip chip-restart chip-wake " + chip.cls}
+              title={chip.title}
+              aria-label={"Sleeping — wake the agent"}
+              onClick={(e) => act(() => void wakeSession(title), e)}
+              onDoubleClick={(e) => e.stopPropagation()}
+            >
+              {chip.label}
+              <span className="chip-act" aria-hidden="true">
+                Wake
+              </span>
+            </button>
+          ) : (
+            <span className={"stagechip " + chip.cls} title={chip.title}>{chip.label}</span>
+          )}
+          {/* Who else is on this session (lib/presence): drawn only once
+              someone besides you watches or drives it. */}
+          {!pending && <PresenceDots inst={inst} me={me} />}
+          {inst.shared_branch && (
+            <span className="shared-branch-mark" title={"Shared branch " + (inst.branch || "") + " — others push to it too"} aria-label="shared branch">⑂</span>
+          )}
+          {extra.check && (
+            <span className={"stagechip checkchip " + extra.check.cls} title={extra.check.title}>
+              {extra.check.label}
+            </span>
+          )}
+          {/* Verify's verdict for this branch; opens its checklist. */}
+          {!pending && <VerdictChip inst={inst} where="row" />}
+          {bg &&
+            (bg.stopPid ? (
+              <button
+                type="button"
+                className={"stagechip " + bg.cls}
+                title={bg.title}
+                aria-label={bg.title}
+                onClick={(e) => act(() => void stopBackgroundJob(title, bg.stopPid as number), e)}
+                onDoubleClick={(e) => e.stopPropagation()}
+              >
+                {bg.label}
+              </button>
+            ) : (
+              <span className={"stagechip " + bg.cls} title={bg.title}>
+                {bg.label}
+              </span>
+            ))}
+          {peer && (
+            // Rank 2 of the peer-link UX scan: a shared-folder session says so
+            // HERE, on the rail row (a pane-head chip renders 0x0 — see
+            // grid/DiffTab.css). Click: People, where its link is.
+            <button
+              type="button"
+              className={"stagechip peerchip" + (peer.connected === false ? " peer-offline" : "")}
+              title={peer.title}
+              aria-label={peer.title}
+              onClick={(e) => act(() => openSettings(PEER_SCREEN), e)}
+              onDoubleClick={(e) => e.stopPropagation()}
+            >
+              {peer.connected !== null && <span className="peerchip-dot" aria-hidden="true" />}
+              {peer.label}
+            </button>
+          )}
+          {rz && !pending && (
+            <button
+              type="button"
+              className={"stagechip rzchip " + rz.cls}
+              title={rz.title}
+              aria-label={rz.title}
+              onClick={(e) =>
+                act(() => {
+                  selectSession(title);
+                  useUi.getState().setLastTab(title, "map");
+                }, e)
+              }
+            >
+              {rz.label}
+            </button>
+          )}
+          {!pending && (
+            // The session's actions: a ⋮ at the row's right end, beside the ✕,
+            // drawn on hover / keyboard focus / the selected row (SidebarRow.css)
+            // and always holding its slot, so nothing reflows when it appears.
+            // A right-click anywhere on the row opens the same menu.
+            <button
+              ref={kebab}
+              type="button"
+              className={"row-kebab" + (expanded ? " open" : "")}
+              title="Actions for this session (or right-click the row)"
+              aria-label="Actions for this session"
+              aria-haspopup="menu"
+              aria-expanded={expanded}
+              aria-controls={expanded ? menuId : undefined}
+              // A keyboard press (Enter / Space) has no click count: focus the
+              // first item then, the way a menu button does.
+              onClick={(e) => act(() => (expanded ? closeMenu() : openAtKebab(e.detail === 0)), e)}
+              onDoubleClick={(e) => e.stopPropagation()}
+            >
+              <KebabIcon />
+            </button>
+          )}
+          {!pending && (
+            <button
+              className={"kill" + (missing ? " cleanup" : "")}
+              aria-label={missing ? "Delete session" : "Close session"}
+              title={
+                missing
+                  ? "Delete — its workspace is gone; this removes the session"
+                  : "Close session — stops the agent and moves it to Recently closed (Ctrl+W / Del; reopen with Ctrl+Shift+T)"
+              }
+              onClick={(e) =>
+                act(() => {
+                  if (missing) return cleanupMissing(title);
+                  // Uncommitted work: say so before the agent stops.
+                  if (uncommitted > 0 && !closeArmed) return setCloseArmed(true);
+                  setCloseArmed(false);
+                  sessionAction("close").run(title);
+                }, e)
+              }
+            >
+              {missing ? "Delete" : "✕"}
+            </button>
+          )}
+        </div>
+        {/* Everything that hangs under the row. flow-root so the strip's margins
+            stay inside, where the family connector is drawn through them. */}
+        <div className="inst-tail">
+          {(nested || nest.stem) && <NestLines nest={nest} part="tail" />}
+          {closeArmed && !missing && (
+            <div className="close-confirm" role="group" aria-label={`Close ${shown}?`}>
+              <span className="del-q">
+                Close session? Its {uncommitted} uncommitted change{uncommitted === 1 ? "" : "s"} stay in its
+                folder — reopen it from Recently closed.
+              </span>
+              <span className="del-acts">
+                <button
+                  type="button"
+                  className="danger"
+                  onClick={(e) =>
+                    act(() => {
+                      setCloseArmed(false);
+                      sessionAction("close").run(title);
+                    }, e)
+                  }
+                >
+                  Close session
+                </button>
+                <button type="button" autoFocus onClick={(e) => act(() => setCloseArmed(false), e)}>
+                  Cancel
+                </button>
+              </span>
+            </div>
+          )}
+          {answering && (
+            <AnswerStrip
+              ref={strip}
+              title={title}
+              activity={activity}
+              variant="rail"
+              onOpen={() => selectSession(title)}
+              // "No…": the agent now wants to hear what to do instead — say it in
+              // the family's Thread, addressed to this session.
+              onRedirect={() => openThread(isWorker ? inst.parent! : title, title)}
+            />
+          )}
+          {inUse && (
+            <div className="folder-in-use" role="status">
+              <span className="fiu-text">{folderInUseText(inUse)}</span>
+              <button
+                type="button"
+                className="fiu-x"
+                aria-label="Dismiss"
+                title="Dismiss"
+                onClick={(e) => act(() => setInUse(null), e)}
+              >
+                ✕
+              </button>
+            </div>
+          )}
+        </div>
+      </li>
+      {menuAt && !pending && (
+        // THE per-session menu (lib/sessionMenu) — the pane header's ⋯ draws
+        // the same model. A popover over the whole window (RowMenu), outside the
+        // <li> even in React's tree so its keys and clicks never reach the row.
+        <RowMenu
+          id={menuId}
+          at={menuAt}
+          label={"Actions for " + shown}
+          opener={kebab.current}
+          onClose={closeMenu}
+        >
+          <SessionMenu
+            model={sessionMenu(inst, ctx, {
+              onSelect: () => {
+                useUi.getState().pickRow(title, false);
+                closeMenu();
+              },
+              picked,
+            })}
+            onInUse={setInUse}
+            onDone={() => closeMenu()}
+          />
+        </RowMenu>
+      )}
+    </>
   );
 });
+
+/** ⋮ — three dots on the 24-unit grid the app's other line icons use, filled
+ * at the weight of their 2-unit strokes. */
+function KebabIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="12" cy="5" r="2" />
+      <circle cx="12" cy="12" r="2" />
+      <circle cx="12" cy="19" r="2" />
+    </svg>
+  );
+}

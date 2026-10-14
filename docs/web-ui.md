@@ -525,7 +525,7 @@ workers or messages), the guided next-step button, ⏩
 session), **⋯**, **History**, **Copy** and **−**. There is no Pause button:
 pausing is the palette's *Pause session*, `mindflock pause` or
 `POST …/pause` (see *Pause keeps your work* under
-[Session row actions](#session-row-actions-expand-a-sidebar-row-with-)).
+[Session row actions](#session-row-actions-the-rows--or-a-right-click)).
 Under the header, a one-line **Task:** bar
 names what the session was asked to do — its newest prompt from the agent's
 transcript, or, until there is one (or for an agent MindFlock can't read a
@@ -548,8 +548,8 @@ Hover the line for the prompt
 that headline came from, as typed. This bar does not condense: it shows the
 newest thing you actually asked.
 
-- **⋯ is the session's one menu** — the same model as the sidebar row's ⋯
-  (see [Session row actions](#session-row-actions-expand-a-sidebar-row-with-)),
+- **⋯ is the session's one menu** — the same model as the sidebar row's ⋮
+  (see [Session row actions](#session-row-actions-the-rows--or-a-right-click)),
   less Terminal and Code map (every header shows those tabs), plus **Copy
   entire history** and, in a calm header, **Browse history** (both under its
   **More**). It opens over the whole window — a 2×2 grid's lower pane used to
@@ -577,7 +577,7 @@ newest thing you actually asked.
   the state chip says what the agent is doing. On hover: *Commit this
   session's changes — you check the message first. Next: Push, then Open PR.*
 - **⋯ → Checklist…** (any header, when the session has a branch) opens Verify
-  on that branch's checklist — also on the row's ⋯ menu. When a checklist
+  on that branch's checklist — also on the row's ⋮ menu. When a checklist
   exists, its verdict chip (*✓ Verified*, *✗ Failed*, *3/5 checked*) sits beside
   the PR chip and opens it in one click.
 - **An agent that isn't installed, or isn't signed in.** When the session's
@@ -698,12 +698,33 @@ session. That follow-up is the browser's (`submitMakePr` in
 `/make-pr` route's, so a PR opened from `/m` or by Fast-track at `pr` depth
 leaves the ladder still asking for **Merge** until someone presses ↺.
 
-## Session row actions (expand a sidebar row with ⋯)
+## Session row actions (the row's ⋮ or a right-click)
 
-A session has **one menu**, opened from the row's **⋯** (an accordion under
-the row) or the pane header's **⋯** (a popover) — one model
-(`lib/sessionMenu.ts`) drawn by one component (`sidebar/SessionMenu.tsx`), in
-groups:
+A session has **one menu**, opened from its sidebar row or the pane header's
+**⋯** — one model (`lib/sessionMenu.ts`) drawn by one component
+(`sidebar/SessionMenu.tsx`). On the row:
+
+- **⋮** at the row's right end, beside the **✕**. It is drawn on hover, on
+  keyboard focus anywhere in the row, on the selected row and while its menu
+  is open, and always on a touch screen (no hover); otherwise it is invisible
+  but keeps its 16px slot, so no title reflows when it appears. A window row
+  holds the same empty slot, so its chip lines up. Pending (force-started)
+  rows have no menu.
+- **Right-click** anywhere on the row opens the same menu at the pointer — except
+  in the inline rename box and on links, which keep the browser's own menu.
+- **Shift+F10** or the **Menu** key, with focus on anything in the row (its ⋮,
+  a chip, the answer strip), opens it under the ⋮ and focuses its first item;
+  **Enter**/**Space** on the ⋮ does the same. **↑/↓**, **Home**/**End** move
+  through the items; **Esc** closes it and returns focus to the ⋮.
+
+Both hosts draw it as a popover over the whole window (`sidebar/RowMenu.tsx`
+for the row, portalled to `<body>`), placed by `lib/menuPlace.ts` so all of
+it is on screen: under the ⋮ with right edges aligned, or at the pointer;
+flipped above when there is no room below (and to the pointer's left when
+there is none to its right), nudged — never flipped — when **More ▸** or an
+armed **Delete…** grows it, and scrolling only when the window is shorter than
+the menu. A click outside, scrolling the list or resizing the window closes
+it. The items, in groups:
 
 - **Work** — **Message…** (`Ctrl+K S`) · **Queue prompt…** *runs when idle*
 - **Ship** — **Commit…** (only once there is something to commit) · **Push** ·
@@ -737,7 +758,7 @@ A row whose workspace folder is gone offers only **Delete — remove session**.
 
 ### Branch session
 
-**Branch session** (`Ctrl+K B`, the row/pane ⋯ menu's **More ▸**, or the
+**Branch session** (`Ctrl+K B`, the row ⋮ / pane ⋯ menu's **More ▸**, or the
 palette) is Duplicate's sibling for work that must not collide. Duplicate opens
 a second agent in the *same* worktree on the *same* branch; Branch starts a new
 session `<title>-branch` (numbered `-branch-2`, `-branch-3`… past names or
@@ -933,8 +954,8 @@ What it looks like in the app:
   family still says **1 needs you**. Folded rows leave the numbering too
   (Alt+N skips them, as with a folded team run), a search shows every match
   regardless, and the session you are focused on is never hidden. Remembered
-  per browser (`mf_familycollapse`). It is a word, not a chevron: the row's
-  › is its actions menu.
+  per browser (`mf_familycollapse`). It is a word, not a chevron: a chevron
+  reads as "expand", and the row's actions are its ⋮.
 - **The orchestrator's Thread shows progress and finished workers.** A bar
   under its header counts every worker, live and finished — **3 of 5 done**,
   in runs of done, failed or blocked, needs you, working and idle — and each

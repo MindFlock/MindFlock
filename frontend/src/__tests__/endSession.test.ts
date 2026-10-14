@@ -424,8 +424,10 @@ describe("Delete that 409s: folder in use", () => {
     expect(row).toContain("onInUse={setInUse}");
     expect(read("components/sidebar/SessionMenu.tsx")).toContain("if (inUse) onInUse?.(inUse);");
     expect(row).toMatch(/<div className="folder-in-use" role="status">\s*<span className="fiu-text">\{folderInUseText\(inUse\)\}<\/span>/);
-    // Under the row's tail, after the (conditional) menu — not inside it.
-    expect(row.indexOf('className="folder-in-use"')).toBeGreaterThan(row.indexOf('className="inst-actions"'));
+    // In the row's tail — not inside the menu, which is a popover that
+    // closes (rendered after the row, outside it).
+    expect(row.indexOf('className="folder-in-use"')).toBeGreaterThan(row.indexOf('className="inst-tail"'));
+    expect(row.indexOf('className="folder-in-use"')).toBeLessThan(row.indexOf("<RowMenu\n"));
   });
 
   it("'N worker sessions kept running' comes from the response's children", () => {
