@@ -245,6 +245,11 @@ export interface Instance {
   /** The same prompt's whole body (capped ~4000 chars) — the pin's
    * hover/click expansion. */
   last_prompt_full?: string | null;
+  /** What the session was asked to do when it was created (the create
+   * prompt, trimmed; first line is what the UI shows) — the pane's "Task:"
+   * line until the transcript names a newer prompt. Null when it was started
+   * without one. Optional: an older server doesn't send it. */
+  task?: string | null;
   setup: SetupSummary | null;
   check: SetupSummary | null;
   ports: { base: number; count: number } | null;

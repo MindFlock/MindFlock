@@ -78,3 +78,13 @@ export function pathBasename(p: string): string {
   const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
   return i >= 0 ? s.slice(i + 1) : s;
 }
+
+/** The first non-empty line of a text, trimmed ("" for none) — how a
+ * session's create task reads on one line. */
+export function firstLine(text: string | null | undefined): string {
+  for (const l of String(text || "").split("\n")) {
+    const t = l.trim();
+    if (t) return t;
+  }
+  return "";
+}

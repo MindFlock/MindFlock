@@ -23,7 +23,7 @@ const { actionCtx } = await import("../lib/sessionActionTable");
 const { hashFor, parseHash, installSurfaceHash } = await import("../lib/surfaceHash");
 const { shortcutLabels } = await import("../lib/keymap");
 const { browserReserved } = await import("../components/palette/ShortcutsSheet");
-const { rememberTask, rememberedTask } = await import("../lib/sessionTask");
+const { firstLine } = await import("../lib/format");
 import type { Instance } from "../api/types";
 
 describe("calm before first paint", () => {
@@ -123,9 +123,13 @@ describe("the pane header", () => {
   const pane = code("components/grid/Pane.tsx");
   it("says what the session was asked to do", () => {
     expect(pane).toContain('<span className="prompt-pin-label">Task:</span>');
-    expect(pane).toContain("inst.last_prompt || rememberedTask(title)");
-    rememberTask("t1", "add a README section\nwith details");
-    expect(rememberedTask("t1")).toBe("add a README section");
+    // The transcript's newest prompt, else the task it was created with —
+    // the server's Instance.Task, the same on every browser.
+    expect(pane).toContain("const createTask = firstLine(inst.task);");
+    expect(pane).toContain("const task = inst.last_prompt || createTask || null;");
+    expect(code("components/sidebar/SidebarRow.tsx")).toContain("inst.last_prompt || firstLine(inst.task)");
+    expect(firstLine("\n  add a README section\nwith details")).toBe("add a README section");
+    expect(firstLine(null)).toBe("");
   });
 
   it("has a visible Pause / Resume, and no Commit… with nothing to commit", () => {

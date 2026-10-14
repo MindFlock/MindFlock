@@ -233,6 +233,11 @@ class Instance:
         # dialog's "Split across workers" — an orchestrator from its first
         # prompt, before it has a child). Set once at create time.
         self.Playbook: str = ""
+        # What the session was asked to do when it was created (the create
+        # prompt, trimmed and capped). Set once at create time and kept: the
+        # launch path clears ``Prompt`` once it is sent or queued, and the UI's
+        # "Task:" line must still have it. Persisted.
+        self.Task: str = ""
         # Peer links: the share_id of the shared folder this session runs in
         # ("" = an ordinary session). Set once at create time by the peer
         # service, persisted. A PeerShare session's agent only ever launches
@@ -295,6 +300,7 @@ class Instance:
             spawned=bool(getattr(self, "Spawned", False)),
             playbook=getattr(self, "Playbook", "") or "",
             peer_share=getattr(self, "PeerShare", "") or "",
+            task=getattr(self, "Task", "") or "",
         )
 
         if self._git_worktree is not None:
@@ -1163,6 +1169,15 @@ def _flag_groups(args) -> list:
     return [tuple(g) for g in groups]
 
 
+#: How much of the create prompt ``Task`` keeps (the UI shows its first line).
+TASK_MAX_CHARS = 2000
+
+
+def _task_text(prompt: str) -> str:
+    """The create prompt as the session's ``Task``: trimmed, capped."""
+    return (prompt or "").strip()[:TASK_MAX_CHARS]
+
+
 def _merge_launch_args(*groups) -> tuple[str, ...]:
     """Concatenate arg groups, dropping a repeated FLAG GROUP (a flag together
     with its value) while preserving first-seen order — so a flag set both
@@ -1236,6 +1251,7 @@ def new_instance(opts: InstanceOptions) -> Instance:
     inst.WorkspaceStrategy = opts.workspace_strategy or "worktree"
     inst._new_branch = opts.new_branch
     inst.Prompt = opts.prompt
+    inst.Task = _task_text(opts.prompt)
     inst._workspace_path = opts.workspace_path
     inst._provision_repo = opts.provision_repo
     inst._provision_repo_url = opts.provision_repo_url
@@ -1424,6 +1440,7 @@ def from_instance_data(data: InstanceData, attach: bool = True) -> Instance:
     inst.Spawned = bool(data.spawned)
     inst.Playbook = data.playbook or ""
     inst.PeerShare = getattr(data, "peer_share", "") or ""
+    inst.Task = getattr(data, "task", "") or ""
     inst._git_worktree = _worktree_from_data(data)
     inst._diff_stats = git.DiffStats(
         added=data.diff_stats.added,

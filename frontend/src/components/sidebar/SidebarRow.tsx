@@ -24,6 +24,7 @@ import { backgroundChip } from "../../lib/backgroundJobs";
 import { stopBackgroundJob } from "../../lib/stopBackgroundJob";
 import { sessionLabel } from "../../lib/sessionLabel";
 import { useNow } from "../../lib/useNow";
+import { firstLine } from "../../lib/format";
 import {
   cleanupMissing,
   folderInUseText,
@@ -52,7 +53,6 @@ import { RUN_DONE_STATES, type RunInfo } from "../../lib/runs";
 import type { RunDTO } from "../../api/types";
 import { SessionMenu } from "./SessionMenu";
 import { MidName } from "./MidName";
-import { rememberedTask } from "../../lib/sessionTask";
 import { sessionMenu } from "../../lib/sessionMenu";
 import { PresenceDots } from "../presence/Presence";
 import { useMe } from "../../lib/presence";
@@ -295,7 +295,7 @@ export const SidebarRow = memo(function SidebarRow({
   // What the session was asked to do, under its name — the first line of its
   // newest prompt — when nothing more pressing (a ship line, a family line)
   // has the slot. "untitled · Idle" said nothing about the work.
-  const task = String(inst.last_prompt || rememberedTask(title) || "").trim();
+  const task = String(inst.last_prompt || firstLine(inst.task) || "").trim();
   const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !!task;
   const subline = !editing && (ship || wline || roll || lline || lineage || taskLine || !!noAgent);
   // "working · 6m" counts up by itself: a busy worker's row data can sit

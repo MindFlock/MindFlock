@@ -231,11 +231,11 @@ magnifier icon) opens a fuzzy-filtered palette over everything. Commands come
 first and the jump rows last: **New session…**, then the dialog openers — Open
 Intake (plus **Intake: Tickets** / **Intake: Pull requests** / **Intake:
 Issues**, so typing "issues" lands on that queue instead of on a dialog you then
-have to navigate), **Verify — check what was pushed**, **Customize…**, **Prompts…** (*manage saved prompts*),
+have to navigate), **Verify — check that pushed changes work**, **Customize…**, **Prompts…** (*manage saved prompts*),
 **Templates…** (*manage saved New-session setups*), **Schedule a session…**
 (opens Templates on a new template with **Run on a schedule** ticked), one **Run template:
 <name>** (*fresh session, prompt sent*) per template that has a folder,
-**Assistant agent file…**,
+**Assistant instructions (agent file)…**,
 **Recently closed…**, Open Settings / Doctor / **Open Setup checklist**,
 **Settings → …** rows for what you typed (`palette/settingsSearch.ts`: one
 entry per screen plus a few controls, matched on the words people use —
@@ -458,8 +458,10 @@ workers or messages), the guided next-step button, ⏩
 **▶ Resume**), **⋯** and **−**. Under the header, a one-line **Task:** bar
 names what the session was asked to do — its newest prompt from the agent's
 transcript, or, until there is one (or for an agent MindFlock can't read a
-transcript of), the task this browser started it with; the ❯ arrow drops the
-whole prompt over the terminal.
+transcript of), the task it was created with (`task` on `/api/instances`:
+`Instance.Task`, the create prompt, set once and persisted in `state.json`);
+the ❯ arrow drops the whole prompt over the terminal. The sidebar row's
+muted sub-line reads the same.
 
 - **⋯ is the session's one menu** — the same model as the sidebar row's ⋯
   (see [Session row actions](#session-row-actions-expand-a-sidebar-row-with-)),

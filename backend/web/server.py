@@ -1537,6 +1537,10 @@ def _session_snapshot(i, queues: dict) -> dict:
     # terminal — and its whole body for the pin's hover/click expansion.
     d["last_prompt"] = _session_last_prompt_cached(i)
     d["last_prompt_full"] = _session_last_prompt_full_cached(i)
+    # What it was asked to do when it was created (Instance.Task) — the
+    # pane's "Task:" line until the transcript names a newer prompt, and the
+    # only one for an agent whose transcript MindFlock can't read.
+    d["task"] = getattr(i, "Task", "") or None
     # O2/O3/O4: worktree setup + verification-gate state and the port block.
     try:
         wt = i.GetWorktreePath()
@@ -1613,6 +1617,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["last_turn"] = None
     d["last_prompt"] = None
     d["last_prompt_full"] = None
+    d["task"] = getattr(i, "Task", "") or None
     d["setup"] = None
     d["check"] = None
     pb = _ports.get(i.Title)
