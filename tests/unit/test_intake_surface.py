@@ -912,9 +912,11 @@ class TestAutoStartTabIsDocumented:
             assert chip in text, chip
         # The difference between the switches belongs in the sentence under the
         # heading, which names the one to flip.
-        assert "Automated ingestion" in text
-        assert "Automated PR review" in text
-        assert "Automated issue handling" in text
+        # Each switch named as its tab names it (GLOSSARY: auto-start).
+        assert "Auto-start tickets" in text
+        assert "Auto-address review comments" in text
+        assert "Auto-start new issues" in text
+        assert "Pause intake" in text
 
     def test_the_modules_the_docs_cite_exist(self):
         text = (_ROOT / "docs" / "web-ui.md").read_text(encoding="utf-8")

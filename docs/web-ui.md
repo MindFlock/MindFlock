@@ -134,12 +134,14 @@ one feature has one name: **Tickets**, **Pull requests**, **Issues**. Each bar's
 label is its door — a button (`.dc-open`) that opens that Intake tab — so a bar
 is a status light, a switch and a door rather than the only way in; Intake is in
 the top bar whether or not its bar is showing. Each switch's tooltip names the
-Intake switch it mirrors (**Automated ingestion**, **Automated review**,
-**Automated handling**), and a switch that fails says why in a bottom-right
+Intake switch it mirrors (**Auto-start tickets**, **Auto-address review
+comments**, **Auto-start new issues**), and a switch that fails says why in a bottom-right
 card rather than a browser `alert()` (which the desktop app does not
 implement). The **Verify** bar's label opens Verify the same way. Turning a
 feature's bar on is still how you get an at-a-glance dot for PR review and
-issue handling once you've connected them.
+issue handling once you've connected them. The **Tickets** bar also carries
+Intake's **Pause intake** as a small ⏸ (▶ **Resume intake** while paused) —
+the same control as the band at the top of the Intake dialog.
 
 **Window rows** — every open non-session window (MindFlock logs, System
 logs, the Assistant chat, a verify watch window, an extension pane such as a
@@ -2187,16 +2189,47 @@ shows at all (`intake/search.ts` holds the four rules, one per list).
 **Tab strip with live counts** — **Tickets**, **Pull requests**, **Issues**,
 **Auto-start** (keys `tickets` | `prs` | `issues` | `autostart`), a horizontal
 strip rather than Settings' long left nav because they are peers you flip
-between while reading. Each badge is the
-number of rows that tab will actually show you — not a total. That distinction is
+between while reading. Each badge counts what needs you: the rows on that tab
+that are **ready to start** (what auto-start would take), not every row listed —
+and the **Auto-start** badge turns grey when nothing is switched on, since those
+rows are waiting rather than about to go. It is still never a total. That distinction is
 the whole of it: counting every ticket the provider ever assigned you read `1221`
 over a list of 52, because done states are parked behind **+ Add bucket…**, so
 the badge and the panel go through one shared bucket filter (`intake/buckets.ts`)
 and cannot disagree. A tab with nothing (or an unconfigured integration, which
 502s) shows no badge at all rather than a `0` that turns into `12` a second
 later. The
-two GitHub tabs are gated on the `git` + `ticketing` caps and explain themselves
-in place when either is missing. The three retired Settings screen keys
+two GitHub tabs are gated on the `git` cap only and explain themselves in place
+when it is missing: PR comments and issues run on their own switches and GitHub
+sign-in (the pipeline boots for them with no ticket source), so they are no
+longer locked behind connecting a tracker. The strip is a real `role="tablist"`
+(arrow keys move along it), and the dialog is anchored to the top of the window
+rather than centred, so switching to a taller tab grows it downward instead of
+moving the tab strip under the cursor.
+
+**Pause intake.** A band above the tabs says what auto-starts right now
+(*Auto-start is on for tickets and PR comments.*) with one **Pause intake**
+button that turns every switch that is on OFF — tickets, PR comments and issues
+at once — and remembers (per device) which were on; **Resume intake** turns
+exactly those back on. Paused is "Pause was pressed and nothing is on since",
+never just "everything is off": a setup that was never switched on is *off*, not
+paused. While paused the band is amber, the PR / Issues switches say *Intake is
+paused*, and every row chip reads *auto-start paused* (`intake/pause.ts`).
+
+**Chips follow the switches.** A row that passes every filter says
+**will auto-start** only while its kind's switch is on; otherwise it reads
+*auto-start off* (or *auto-start paused*) in a neutral chip. Skip reasons from
+the server are shown in the UI's words — *not in an auto-start state*, *already
+handled before*, *too new — waits 12 more min* — never "ingest" or "ledger"
+(`intake/vocab.ts` translates the pipeline's phrasings).
+
+**Where a ticket goes.** On a source with several repos every ticket row (and its
+Auto-start row) carries a line saying which repo it will start in and why —
+*→ billing-service · label 'billing'*, or *→ repo picked by the agent when it
+starts* when nothing on the ticket names one. The row's **Options** repeat it
+with how to change it (give the ticket a label matching another repo's name or
+hint); a per-row repo override needs a `repo` field on `POST /api/tickets/start`
+that does not exist yet. The three retired Settings screen keys
 (`ticketing`, `repo`, `issues`) still route — `LEGACY_SCREEN_TABS` in
 `IntakeDialog.tsx` maps them onto tabs, and the Settings dialog hands off to Intake
 when it is deep-linked one — so every old link keeps working, including the
@@ -2247,12 +2280,14 @@ you to think two different things are wrong. The difference is real, and it
 belongs in exactly one place: the sentence under the heading, which names the
 switch to flip — *"These are ready, but auto-start is off — they will not begin
 until **Automated ingestion** is switched on, on the Tickets tab (this runs inside
-it). You can still start any of them here, with **Start now**."* Which switch it
-names follows the same rule: a section whose own toggle is off names that toggle
-(**Automated PR review**, **Automated issue handling**, and no "on the Tickets
-tab" clause, because that toggle lives right there); a section stalled because the
-engine is down names the engine instead and points at the tab that owns it, since
-turning PR review on while the engine is stopped would still start nothing.
+it). You can still start any of them here, with **Start**."* — naming the switch as
+its tab names it: **Auto-start tickets**, **Auto-address review comments**,
+**Auto-start new issues**. The PR and issue sections follow their own switches
+only; they used to be read as stalled whenever the ticket switch was off, which
+was wrong — the pipeline runs whichever halves are on. While intake is paused the
+sentence says so and points at **Resume intake** instead. A ticket section whose
+sources are all saved but can't be reached says *can't connect* and names the
+source and why (*Shortcut rejected the token*) rather than *not set up*.
 
 A row carries the **will auto-start** chip only while its section is **auto-start
 on**. When the section is off or not set up the chip would be a promise the
@@ -2266,7 +2301,7 @@ rather than in the boxed empty state the other tabs use, because three empty box
 make a quiet queue look like a broken app.
 
 **It doesn't only watch.** Every row is the same `WorkItemRow` the other tabs
-use, with the same per-launch agent, depth and effort pickers and a **Start now**
+use, with the same per-launch agent, depth and effort pickers and a **Start**
 button, so waiting for the sweep is the default rather than the only option — and
 when auto-start is off, starting from here is the entire point of the tab.
 
@@ -2291,16 +2326,36 @@ two were rebuilt onto it — a ticketing source and a watched repo are both just
 workflow-state buckets inside a source, and only the two GitHub tabs share one
 credential.
 
-- **Tickets** — the master **Automated ingestion** switch (the same
+- **Tickets** — the **Auto-start tickets** switch (the same
   `/api/mindflock/status` + `start`/`stop` contract, query key and 4 s interval as
-  the sidebar's **Tickets** bar, so the two never disagree), one card per
-  connected source — up front only what a first setup needs (provider, optional
-  label, Repo URL, its own **Agent CLI**, credentials, **Whose tickets**, the
-  ingest states/labels), then a collapsed **Advanced options** fold holding the
-  per-queue tuning (**Thinking effort**, **Fast-track tickets to**) and the
+  the sidebar's **Tickets** bar, so the two never disagree). Turning it on while a
+  saved source can't connect (its last Test failed, or the listing couldn't reach
+  it) asks first — *"Shortcut can't connect. Shortcut rejected the token…
+  **Turn on anyway** / **Not now**"* — and while it is on, the switch row says
+  *Shortcut can't connect — nothing starts from it until fixed*. Then one card per
+  connected source, in the order a first-timer fills it: **Provider** → the
+  credentials (**API token** …) → **Test** (which also loads the workflow
+  states) → **Whose tickets** → **Auto-start states** / **Auto-start labels** →
+  **Repo URL** / **Repos** (required, with the same `*` marker as the token) →
+  **Agent**. A collapsed **Advanced options** fold holds the source's **Name**,
+  the per-queue tuning (**Thinking effort**, **Fast-track tickets to**) and the
   catalog's optional extras (**Move to state on start**, **Comment when moved**,
-  **Claim label**, the optional Test-filled account ids, Jira's **Project
-  key**), and the footer (**Test connection**, **Remove**) — then
+  **Claim label (on start)** — whose hint says it assigns the ticket to you,
+  except on an *Anyone's* source where it only labels it — the optional
+  Test-filled account ids, Jira's **Project key**). The card's footer is its save
+  line (*Saving…* / *Saved ✓* / *Not saved*, every edit) and **Remove**; its pill
+  reads *Can't connect* with the reason when the last Test failed or the listing
+  couldn't reach it. Until a Test has passed the state picker is disabled and says
+  *Run Test to load your workflow states*; a saved state whose name isn't known
+  yet shows as *Saved state*, and a chip's ✕ reads *Stop auto-starting
+  "Ready for MindFlock"*, never the state's id. The work list reads each source's
+  auto-start filter from its **saved** settings, so a source the tracker can't
+  reach still says *Auto-start only takes tickets in 1 saved state* — never "no
+  filter is set". A source that can't be listed is said once, in its own group,
+  by its name, in words (*Shortcut rejected the token — open its card below to fix
+  it*) — no raw API JSON, no internal id like `sc`, and no group at all for a card
+  that hasn't been saved yet. Rows say **Start**; **Merge into…** lives under the
+  row's **⋯**. Then
   **Assigned tickets** — the slowest of the three fan-outs (~3 s: a provider
   search per source plus a `git ls-remote` per repo). A **Shortcut** source
   lists what Shortcut's own boards show: archived stories, and stories under an
@@ -2343,15 +2398,20 @@ credential.
   only when the move actually changed the ticket's state — so **Run ticket** on
   a ticket already in that state doesn't comment twice. A refused comment is a
   warning; the session keeps running.
-- **Pull requests** — **Automated review** (absent = on once repos exist),
-  **Open pull requests** with **Begin review**, then the repository cards. The
+- **Pull requests** — **Auto-address review comments**: when a reviewer comments
+  on one of *your own* open PRs, a session addresses the comments (it never
+  reviews other people's PRs, and the tab never says "review" for it). Off until
+  switched on, like Issues: a setup that never chose saves its first repository
+  with `github.enabled: false`; saved settings from before keep their meaning
+  (unset with repos = on). **Your open pull requests** with **Start**, then the
+  repository cards; **Skip authors** is now **Ignore comments from**. The
   credential is one **GitHub connection** row with a **Connect GitHub** button
   (`#gh-connect-btn`) that opens the [Connect GitHub](#first-run-onboarding)
   dialog — one sign-in, shared with your other devices; its **Test** checks
   the token and your first repository, a card's **Test access** checks one
   repo. There is no raw token field and no *Test GitHub* button any more.
-- **Issues** — **Automated handling** (opt-in: absent = off), **Open issues**
-  with **Start work**, then its own repository cards (`github.issue_repos`,
+- **Issues** — **Auto-start new issues** (opt-in: absent = off), **Open issues**
+  with **Start**, then its own repository cards (`github.issue_repos`,
   independent of review's). The same **GitHub connection** row and **Connect
   GitHub** button (`#gh-issue-connect-btn`): one credential for both tabs.
 

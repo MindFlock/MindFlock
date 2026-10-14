@@ -1105,14 +1105,18 @@
   align-items: flex-end;
   gap: 4px;
 }
-.ik-row-more-btn {
-  font-size: 15px;
+.ik-item-start .ik-row-more-btn {
+  align-self: flex-end;
+  font-size: 13px;
   line-height: 1;
-  padding: 0 4px;
+  padding: 2px 7px 4px;
   color: var(--muted);
+  text-decoration: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
 }
-.ik-row-more-btn.on,
-.ik-row-more-btn:hover {
+.ik-item-start .ik-row-more-btn.on,
+.ik-item-start .ik-row-more-btn:hover {
   color: var(--text);
 }
 .ik-row-more-list {
@@ -1148,8 +1152,10 @@
     padding: 14px 12px 14px;
     max-width: 100vw;
   }
+  /* Clear the top bar, which stays drawn over the backdrop. */
   #intake-dialog > #intake-panel {
-    margin-top: 8px;
+    margin-top: 48px;
+    max-height: calc(100vh - 56px);
   }
   #intake-tabs {
     overflow-x: auto;
