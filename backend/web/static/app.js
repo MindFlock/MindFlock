@@ -27931,71 +27931,231 @@ function setTheme(light) {
 	} catch {}
 }
 //#endregion
-//#region src/components/settings/settingsMode.tsx
-var ADVANCED_LS = lsKeyFor("settings_advanced");
-function readAdvancedMode(kv) {
-	return readLocal("settings_advanced", kv) === true;
+//#region src/components/InfoTip.tsx
+var import_react_dom = require_react_dom();
+var TIP_CLOSED = {
+	hover: false,
+	focus: false,
+	pinned: false
+};
+var tipOpen = (s) => s.hover || s.focus || s.pinned;
+function tipReduce(s, e) {
+	switch (e) {
+		case "enter": return s.hover ? s : {
+			...s,
+			hover: true
+		};
+		case "leave": return s.hover ? {
+			...s,
+			hover: false
+		} : s;
+		case "focus": return s.focus ? s : {
+			...s,
+			focus: true
+		};
+		case "blur": return s.focus || s.pinned ? {
+			...s,
+			focus: false,
+			pinned: false
+		} : s;
+		case "tap":
+		case "activate": return tipOpen(s) ? TIP_CLOSED : {
+			...s,
+			pinned: true
+		};
+		case "escape":
+		case "outside": return tipOpen(s) ? TIP_CLOSED : s;
+	}
 }
-function writeAdvancedMode(on, kv) {
-	writeLocal("settings_advanced", on, kv);
-	notePrefWrite(ADVANCED_LS, kv);
+var TIP_OPEN_MS = 90;
+var TIP_CLOSE_MS = 100;
+function placeTip(anchor, size, view, gap = 8, margin = 8) {
+	const below = anchor.bottom + gap;
+	const above = anchor.top - gap - size.h;
+	const fitsBelow = below + size.h <= view.h - margin;
+	const fitsAbove = above >= margin;
+	let side;
+	if (fitsBelow) side = "below";
+	else if (fitsAbove) side = "above";
+	else side = anchor.top > view.h - anchor.bottom ? "above" : "below";
+	const maxTop = Math.max(margin, view.h - margin - size.h);
+	const top = Math.min(maxTop, Math.max(margin, side === "below" ? below : above));
+	const cx = (anchor.left + anchor.right) / 2;
+	const maxLeft = Math.max(margin, view.w - margin - size.w);
+	const left = Math.min(maxLeft, Math.max(margin, cx - size.w / 2));
+	const arrowX = Math.min(Math.max(12, cx - left), Math.max(12, size.w - 12));
+	return {
+		top: Math.round(top),
+		left: Math.round(left),
+		side,
+		arrowX: Math.round(arrowX)
+	};
 }
-function navScreens(screens, advanced, active) {
-	if (advanced) return [...screens];
-	const basic = screens.filter((s) => !s.advanced);
-	const peek = screens.find((s) => s.advanced && s.key === active);
-	return peek ? [...basic, peek] : basic;
-}
-function navHeading(shown, i, advanced) {
-	const s = shown[i];
-	if (!advanced) return s.advanced && !shown[i - 1]?.advanced ? "Advanced" : "";
-	return s.group && s.group !== shown[i - 1]?.group ? s.group : "";
-}
-var SettingsModeCtx = (0, import_react.createContext)(false);
-function useAdvancedSettings() {
-	return (0, import_react.useContext)(SettingsModeCtx);
-}
-function AdvancedToggle({ advanced, hidden, onChange }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "set-mode-foot",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+function InfoTip({ children, label = "More info", id, className }) {
+	const autoId = (0, import_react.useId)();
+	const tipId = (id || "infotip" + autoId.replace(/[^a-zA-Z0-9_-]/g, "")) + "-tip";
+	const [state, dispatch] = (0, import_react.useReducer)(tipReduce, TIP_CLOSED);
+	const open = tipOpen(state);
+	const btnRef = (0, import_react.useRef)(null);
+	const bubbleRef = (0, import_react.useRef)(null);
+	const timer = (0, import_react.useRef)(void 0);
+	const pressed = (0, import_react.useRef)(false);
+	const lastPointer = (0, import_react.useRef)("");
+	const [place, setPlace] = (0, import_react.useState)(null);
+	const later = (0, import_react.useCallback)((e, ms) => {
+		window.clearTimeout(timer.current);
+		timer.current = window.setTimeout(() => dispatch(e), ms);
+	}, []);
+	const now = (0, import_react.useCallback)((e) => {
+		window.clearTimeout(timer.current);
+		dispatch(e);
+	}, []);
+	(0, import_react.useEffect)(() => () => window.clearTimeout(timer.current), []);
+	const enter = (e) => {
+		if (e.pointerType === "touch") return;
+		if (state.hover) window.clearTimeout(timer.current);
+		else later("enter", TIP_OPEN_MS);
+	};
+	const leave = (e) => {
+		if (e.pointerType === "touch") return;
+		later("leave", TIP_CLOSE_MS);
+	};
+	(0, import_react.useLayoutEffect)(() => {
+		if (!open) {
+			setPlace(null);
+			return;
+		}
+		const measure = () => {
+			const a = btnRef.current;
+			const b = bubbleRef.current;
+			if (!a || !b) return;
+			const r = a.getBoundingClientRect();
+			setPlace(placeTip(r, {
+				w: b.offsetWidth,
+				h: b.offsetHeight
+			}, {
+				w: window.innerWidth,
+				h: window.innerHeight
+			}));
+		};
+		measure();
+		let raf = 0;
+		const again = () => {
+			cancelAnimationFrame(raf);
+			raf = requestAnimationFrame(measure);
+		};
+		window.addEventListener("scroll", again, true);
+		window.addEventListener("resize", again);
+		return () => {
+			cancelAnimationFrame(raf);
+			window.removeEventListener("scroll", again, true);
+			window.removeEventListener("resize", again);
+		};
+	}, [open]);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const onKey = (e) => {
+			if (e.key !== "Escape") return;
+			e.preventDefault();
+			e.stopPropagation();
+			now("escape");
+		};
+		const onDown = (e) => {
+			const t = e.target;
+			if (t && (btnRef.current?.contains(t) || bubbleRef.current?.contains(t))) return;
+			now("outside");
+		};
+		window.addEventListener("keydown", onKey, true);
+		document.addEventListener("pointerdown", onDown, true);
+		return () => {
+			window.removeEventListener("keydown", onKey, true);
+			document.removeEventListener("pointerdown", onDown, true);
+		};
+	}, [open, now]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			type: "button",
-			id: "settings-advanced-toggle",
-			className: "set-mode-toggle",
-			"aria-pressed": advanced,
-			onClick: () => onChange(!advanced),
-			children: advanced ? "Hide advanced settings" : "Show advanced settings"
-		}), !advanced && hidden > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "set-mode-more",
-			children: [hidden, " more screens"]
-		}) : null]
-	});
-}
-function LearnMore({ children }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-		className: "set-learn-more",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Learn more" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "set-learn-more-body",
+			ref: btnRef,
+			id,
+			className: "infotip-btn" + (open ? " open" : "") + (className ? " " + className : ""),
+			"aria-label": label,
+			"aria-describedby": tipId,
+			"aria-expanded": open,
+			onPointerEnter: enter,
+			onPointerLeave: leave,
+			onPointerDown: (e) => {
+				pressed.current = true;
+				lastPointer.current = e.pointerType;
+			},
+			onFocus: () => {
+				if (pressed.current) pressed.current = false;
+				else now("focus");
+			},
+			onBlur: (e) => {
+				pressed.current = false;
+				if (bubbleRef.current && e.relatedTarget && bubbleRef.current.contains(e.relatedTarget)) return;
+				now("blur");
+			},
+			onClick: (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				if (e.detail === 0) now("activate");
+				else if (lastPointer.current === "touch") now("tap");
+				else if (!state.hover) now("enter");
+				lastPointer.current = "";
+			},
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+				viewBox: "0 0 16 16",
+				width: "14",
+				height: "14",
+				"aria-hidden": "true",
+				focusable: "false",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+						cx: "8",
+						cy: "8",
+						r: "6.75",
+						fill: "none",
+						stroke: "currentColor",
+						strokeWidth: "1.4"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+						cx: "8",
+						cy: "5",
+						r: "0.95",
+						fill: "currentColor"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+						d: "M8 7.4v4.2",
+						stroke: "currentColor",
+						strokeWidth: "1.5",
+						strokeLinecap: "round"
+					})
+				]
+			})
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			id: tipId,
+			role: "tooltip",
+			className: "infotip-sr",
 			children
-		})]
-	});
-}
-function AdvancedFold({ id, summary = "Advanced", basic = false, children }) {
-	const advanced = useAdvancedSettings();
-	const [open, setOpen] = (0, import_react.useState)(advanced);
-	(0, import_react.useEffect)(() => setOpen(advanced), [advanced]);
-	if (!advanced && !basic) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-		className: "pr-advanced set-adv-fold",
-		id,
-		"data-advanced-fold": "",
-		open,
-		onToggle: (e) => setOpen(e.currentTarget.open),
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: summary }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "pr-advanced-body set-adv-fold-body",
+		}),
+		open && typeof document !== "undefined" && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			ref: bubbleRef,
+			className: "infotip",
+			"data-side": place?.side || "below",
+			"aria-hidden": "true",
+			style: {
+				top: place ? place.top : -9999,
+				left: place ? place.left : -9999,
+				visibility: place ? void 0 : "hidden",
+				["--infotip-arrow-x"]: (place?.arrowX ?? 16) + "px"
+			},
+			onPointerEnter: enter,
+			onPointerLeave: leave,
 			children
-		})]
-	});
+		}), document.body)
+	] });
 }
 //#endregion
 //#region src/components/settings/screens/Appearance.tsx
@@ -28351,17 +28511,13 @@ function ReduceMotionRow() {
 		className: "set-row set-switch-row",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			className: "notif-rule-text",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Reduce motion"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint notif-rule-desc",
-					children: "Hide a running agent's scrolling output behind a still panel."
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LearnMore, { children: "Clicking, scrolling or typing in that window brings the live output back; the panel returns after 10 seconds with no input. Only the Agent tab is covered." })
-			]
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Reduce motion"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint notif-rule-desc",
+				children: ["Hide a running agent's scrolling output behind a still panel.", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InfoTip, { children: "Clicking, scrolling or typing in that window brings the live output back; the panel returns after 10 seconds with no input. Only the Agent tab is covered." })]
+			})]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 			className: "ca-switch",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -32169,7 +32325,6 @@ function extActivationError(extId) {
 }
 //#endregion
 //#region src/components/Modal.tsx
-var import_react_dom = require_react_dom();
 var stack = [];
 function backdropPress(onClose) {
 	return (e) => {
@@ -37515,6 +37670,64 @@ async function skipSetupStep(step, undo = false) {
 		steps: r.steps,
 		summary: r.summary
 	} : old);
+}
+//#endregion
+//#region src/components/settings/settingsMode.tsx
+var ADVANCED_LS = lsKeyFor("settings_advanced");
+function readAdvancedMode(kv) {
+	return readLocal("settings_advanced", kv) === true;
+}
+function writeAdvancedMode(on, kv) {
+	writeLocal("settings_advanced", on, kv);
+	notePrefWrite(ADVANCED_LS, kv);
+}
+function navScreens(screens, advanced, active) {
+	if (advanced) return [...screens];
+	const basic = screens.filter((s) => !s.advanced);
+	const peek = screens.find((s) => s.advanced && s.key === active);
+	return peek ? [...basic, peek] : basic;
+}
+function navHeading(shown, i, advanced) {
+	const s = shown[i];
+	if (!advanced) return s.advanced && !shown[i - 1]?.advanced ? "Advanced" : "";
+	return s.group && s.group !== shown[i - 1]?.group ? s.group : "";
+}
+var SettingsModeCtx = (0, import_react.createContext)(false);
+function useAdvancedSettings() {
+	return (0, import_react.useContext)(SettingsModeCtx);
+}
+function AdvancedToggle({ advanced, hidden, onChange }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-mode-foot",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			id: "settings-advanced-toggle",
+			className: "set-mode-toggle",
+			"aria-pressed": advanced,
+			onClick: () => onChange(!advanced),
+			children: advanced ? "Hide advanced settings" : "Show advanced settings"
+		}), !advanced && hidden > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "set-mode-more",
+			children: [hidden, " more screens"]
+		}) : null]
+	});
+}
+function AdvancedFold({ id, summary = "Advanced", basic = false, children }) {
+	const advanced = useAdvancedSettings();
+	const [open, setOpen] = (0, import_react.useState)(advanced);
+	(0, import_react.useEffect)(() => setOpen(advanced), [advanced]);
+	if (!advanced && !basic) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		className: "pr-advanced set-adv-fold",
+		id,
+		"data-advanced-fold": "",
+		open,
+		onToggle: (e) => setOpen(e.currentTarget.open),
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: summary }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "pr-advanced-body set-adv-fold-body",
+			children
+		})]
+	});
 }
 //#endregion
 //#region src/components/settings/screens/Connections.tsx
@@ -65176,6 +65389,17 @@ function homeRelative(path, home) {
 function fitsWithin(childRight, rowRight) {
 	return childRight <= rowRight + .5;
 }
+function foldChipRow(kids, rowRight, moreWidth) {
+	if (kids.every((k) => fitsWithin(k.right, rowRight))) return kids.map(() => false);
+	const hidden = kids.map((k) => !fitsWithin(k.right, rowRight - moreWidth));
+	for (let i = 0; i < kids.length; i++) {
+		if (!kids[i].label || hidden[i]) continue;
+		let j = i + 1;
+		while (j < kids.length && !kids[j].label && hidden[j]) j++;
+		if (j === kids.length || kids[j].label) hidden[i] = true;
+	}
+	return hidden;
+}
 function leafName(path) {
 	return path.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || path;
 }
@@ -65520,19 +65744,27 @@ function useBaseBranches({ open, page, repoPath, dapi, setBaseBranch, setBranche
 		dapi
 	]);
 }
+function ModeText({ title, desc }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "nf-opt-text",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "nf-opt-title",
+			children: title
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "nf-opt-desc",
+			children: desc
+		})]
+	});
+}
+var WORKTREE_HINT = "Its own branch, so several sessions can run at once";
 function WorktreeText() {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		"Separate worktree ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModeText, {
+		title: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: ["Separate worktree ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "nf-rec",
 			children: "recommended"
-		}),
-		" ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "muted",
-			children: "— its own branch, so several sessions can run at once"
-		})
-	] });
+		})] }),
+		desc: WORKTREE_HINT
+	});
 }
 function ProvisionCheck({ id, rowId, checked, onChange }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
@@ -65587,7 +65819,19 @@ function InitRepoCheck({ id, checked, onChange }) {
 		]
 	});
 }
-var IN_PLACE_HINT = "— edits your checkout as it is, on its current branch";
+var IN_PLACE_HINT = "Edits your checkout as it is, on its current branch";
+function BranchLine({ parts, muted }) {
+	const full = parts.join("") + (muted ? " · " + muted : "");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "nf-opt-sub nf-branch-line",
+		id: "new-branch-preview",
+		title: full,
+		children: [parts.map((t, i) => !t ? null : i % 2 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: t }, i) : t), muted ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "muted",
+			children: [" · ", muted]
+		}) : null]
+	});
+}
 function WorksIn({ inPlace, setInPlace, setProvision, provisionOn, laneNeedsWorktree, draft, splitOn, setSplit, worktreeClamped, isGit, name, prefix, baseLabel, continueBranch, sharers, others }) {
 	const worktree = !inPlace || laneNeedsWorktree || provisionOn;
 	const warn = sharedCheckoutWarning(sharers);
@@ -65606,7 +65850,7 @@ function WorksIn({ inPlace, setInPlace, setProvision, provisionOn, laneNeedsWork
 			"aria-labelledby": "new-mode-label",
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "check",
+					className: "check nf-opt",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						type: "radio",
 						name: "new-workspace-mode",
@@ -65615,38 +65859,29 @@ function WorksIn({ inPlace, setInPlace, setProvision, provisionOn, laneNeedsWork
 						onChange: () => setInPlace(false)
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorktreeText, {})]
 				}),
-				worktree && isGit && !worktreeClamped && (name || continueBranch) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "nf-branch-line",
-					id: "new-branch-preview",
-					children: continueBranch ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				worktree && isGit && !worktreeClamped && (name || continueBranch) && (continueBranch ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BranchLine, {
+					parts: [
 						"Works on ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: continueBranch }),
-						" itself (shared with whoever pushed it)"
-					] }) : name && name.from === "none" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						continueBranch,
+						" itself"
+					],
+					muted: "shared with whoever pushed it"
+				}) : name && name.from === "none" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BranchLine, { parts: [
+					"New branch ",
+					prefix + "…",
+					" from your task" + (baseLabel ? " · cut from " : ""),
+					baseLabel
+				] }) : name ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BranchLine, {
+					parts: [
 						"New branch ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("code", { children: [prefix, "…"] }),
-						" named from your task",
-						baseLabel ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-							" (cut from ",
-							baseLabel,
-							")"
-						] }) : null
-					] }) : name ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-						"New branch ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: name.branch }),
-						baseLabel ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" from ", baseLabel] }) : null,
-						name.renumbered && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "muted",
-							children: [
-								" — “",
-								name.renumbered,
-								"” is taken, so this one is numbered"
-							]
-						})
-					] }) : null
-				}),
+						name.branch,
+						baseLabel ? " · cut from " : "",
+						baseLabel
+					],
+					muted: name.renumbered ? "“" + name.renumbered + "” is taken, so this one is numbered" : ""
+				}) : null),
 				name?.clash && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "nf-git-nudge",
+					className: "nf-opt-sub nf-git-nudge",
 					id: "new-name-clash",
 					role: "status",
 					children: [
@@ -65656,40 +65891,35 @@ function WorksIn({ inPlace, setInPlace, setProvision, provisionOn, laneNeedsWork
 					]
 				}),
 				othersLine && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "nf-branch-line nf-others",
+					className: "nf-opt-sub nf-branch-line nf-others",
 					id: "new-others",
 					role: "status",
 					children: othersLine
 				}),
 				worktree && worktreeClamped && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "nf-git-nudge",
+					className: "nf-opt-sub nf-git-nudge",
 					children: worktreeClamped
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "check",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: "radio",
-							name: "new-workspace-mode",
-							id: "new-in-place",
-							checked: !worktree,
-							onChange: () => {
-								if (laneNeedsWorktree) draft.setLane("leave");
-								setSplit(false);
-								setInPlace(true);
-								setProvision(false);
-							}
-						}),
-						"This folder directly",
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "muted",
-							children: splitOn ? "— turns auto-split off (a split works in its own worktree)" : laneNeedsWorktree ? "— turns fast-track off (it commits for this session, so it needs its own worktree)" : IN_PLACE_HINT
-						})
-					]
+					className: "check nf-opt",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "radio",
+						name: "new-workspace-mode",
+						id: "new-in-place",
+						checked: !worktree,
+						onChange: () => {
+							if (laneNeedsWorktree) draft.setLane("leave");
+							setSplit(false);
+							setInPlace(true);
+							setProvision(false);
+						}
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModeText, {
+						title: "This folder directly",
+						desc: splitOn ? "Turns auto-split off — a split works in its own worktree" : laneNeedsWorktree ? "Turns fast-track off (it commits for this session, so it needs its own worktree)" : IN_PLACE_HINT
+					})]
 				}),
 				warn && !worktree && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "nf-git-nudge nf-share-warn",
+					className: "nf-opt-sub nf-git-nudge nf-share-warn",
 					id: "new-share-warn",
 					role: "status",
 					children: warn
@@ -66093,14 +66323,14 @@ function TemplatesDialogView(p) {
 						children: "Works in"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "check",
+						className: "check nf-opt",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 							type: "radio",
 							name: "tpl-mode",
 							id: "tpl-worktree",
 							checked: form.mode !== "in_place",
 							onChange: () => p.onForm({ mode: "worktree" })
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorktreeText, {}) })]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorktreeText, {})]
 					}),
 					form.mode !== "in_place" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "tpl-mode-sub",
@@ -66115,7 +66345,7 @@ function TemplatesDialogView(p) {
 						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "check",
+						className: "check nf-opt",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 							type: "radio",
 							name: "tpl-mode",
@@ -66125,14 +66355,10 @@ function TemplatesDialogView(p) {
 								mode: "in_place",
 								autopilot: ""
 							})
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-							"This folder directly",
-							" ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "muted",
-								children: form.autopilot ? "— turns the autopilot off (it commits for this session, so it needs its own worktree)" : IN_PLACE_HINT
-							})
-						] })]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModeText, {
+							title: "This folder directly",
+							desc: form.autopilot ? "Turns the autopilot off (it commits for this session, so it needs its own worktree)" : IN_PLACE_HINT
+						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(InitRepoCheck, {
 						id: "tpl-init",
@@ -69018,27 +69244,88 @@ function matchPicker(folderDo, setSearchOpen) {
 		setSearchOpen(false);
 	};
 }
-function FitRow({ children }) {
+function SuggestRow({ suggestions, folderPath, folderDo }) {
+	const [open, setOpen] = (0, import_react.useState)(false);
 	const ref = (0, import_react.useRef)(null);
+	const moreRef = (0, import_react.useRef)(null);
+	const groups = SUGGEST_SOURCES.map((g) => ({
+		...g,
+		items: suggestions.filter((s) => s.source === g.key)
+	})).filter((g) => g.items.length > 0);
+	const total = groups.reduce((n, g) => n + g.items.length, 0);
 	(0, import_react.useLayoutEffect)(() => {
 		const el = ref.current;
-		if (!el) return;
+		const more = moreRef.current;
+		if (!el || !more) return;
+		const kids = Array.from(el.children).filter((k) => k !== more && !k.classList.contains("nf-suggest-break"));
 		const fit = () => {
-			const kids = Array.from(el.children);
 			for (const k of kids) k.classList.remove("nt-clipped");
+			more.classList.remove("nt-clipped");
+			if (open) {
+				more.textContent = "Fewer";
+				return;
+			}
 			const right = el.getBoundingClientRect().right;
 			if (!(right > 0)) return;
-			for (const k of kids) if (!fitsWithin(k.getBoundingClientRect().right, right)) k.classList.add("nt-clipped");
+			more.textContent = total + " more…";
+			const gap = parseFloat(getComputedStyle(el).columnGap) || 0;
+			const hidden = foldChipRow(kids.map((k) => ({
+				label: k.classList.contains("nf-suggest-label"),
+				right: k.getBoundingClientRect().right
+			})), right, more.getBoundingClientRect().width + gap);
+			kids.forEach((k, i) => k.classList.toggle("nt-clipped", hidden[i]));
+			const n = kids.filter((k, i) => hidden[i] && !k.classList.contains("nf-suggest-label")).length;
+			if (n) more.textContent = n + " more…";
+			else more.classList.add("nt-clipped");
 		};
 		fit();
 		const ro = new ResizeObserver(fit);
 		ro.observe(el);
 		return () => ro.disconnect();
 	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "nt-list",
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "new-suggest",
 		ref,
-		children
+		className: "nf-suggest nf-folders" + (open ? " open" : ""),
+		role: "group",
+		"aria-label": "Folders you might mean",
+		children: [groups.flatMap((g, gi) => [
+			...gi ? [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "nf-suggest-break",
+				"aria-hidden": "true"
+			}, "b:" + g.key)] : [],
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "nf-suggest-label",
+				title: g.hint,
+				children: g.label
+			}, "l:" + g.key),
+			...g.items.map((s) => {
+				const active = folderPath === s.path;
+				return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "nt-chip" + (s.is_git ? " is-git" : "") + (active ? " active" : ""),
+					"data-path": s.path,
+					"aria-pressed": active,
+					title: s.path + (s.is_git ? "" : "\nno git repo here yet"),
+					onClick: () => {
+						folderDo({
+							t: "user-set",
+							path: s.path
+						});
+						setOpen(false);
+					},
+					children: (s.is_git ? "📦 " : "📁 ") + s.name
+				}, s.path);
+			})
+		]), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			ref: moreRef,
+			className: "nt-chip nf-more",
+			id: "new-suggest-more",
+			"aria-expanded": open,
+			title: open ? "Back to one line" : "Show all " + total + " folders",
+			onClick: () => setOpen((o) => !o)
+		})]
 	});
 }
 function FolderField({ repoRef, repoPath, folderPath, folderDo, search, searchHits, searchSel, setSearchSel, setSearchOpen, selIndex, browserOpen, pickMatch }) {
@@ -69102,10 +69389,6 @@ function FolderField({ repoRef, repoPath, folderPath, folderDo, search, searchHi
 	});
 }
 function FolderAids({ searchHits, selIndex, searchListRef, setSearchSel, pickMatch, homePath, newFolderRow, plainFolder, initRepo, armInitRepo, suggestions, folderPath, folderDo, browserOpen, device }) {
-	const suggestRows = SUGGEST_SOURCES.map((g) => ({
-		...g,
-		items: suggestions.filter((s) => s.source === g.key)
-	})).filter((g) => g.items.length > 0);
 	const onlyCurrent = suggestions.length > 0 && suggestions.every((s) => s.path === folderPath);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		searchHits && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -69181,37 +69464,10 @@ function FolderAids({ searchHits, selIndex, searchListRef, setSearchSel, pickMat
 				})
 			] })
 		}),
-		suggestRows.length > 0 && !onlyCurrent && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			id: "new-suggest",
-			className: "new-templates nf-suggest",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "nt-head",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					title: "📦 a git repo · 📁 a plain folder",
-					children: "Folders you might mean — click one to use it"
-				})
-			}), suggestRows.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "nf-suggest-row",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "nf-suggest-label",
-					title: g.hint,
-					children: g.label
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FitRow, { children: g.items.map((s) => {
-					const active = folderPath === s.path;
-					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "nt-chip" + (s.is_git ? " is-git" : "") + (active ? " active" : ""),
-						"data-path": s.path,
-						"aria-pressed": active,
-						title: s.path + (s.is_git ? "" : "\nno git repo here yet"),
-						onClick: () => folderDo({
-							t: "user-set",
-							path: s.path
-						}),
-						children: (s.is_git ? "📦 " : "📁 ") + s.name
-					}, s.path);
-				}) })]
-			}, g.key))]
+		suggestions.length > 0 && !onlyCurrent && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SuggestRow, {
+			suggestions,
+			folderPath,
+			folderDo
 		}),
 		browserOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
 			device,
@@ -69379,7 +69635,16 @@ function ModelRow({ selectedProfile, profileId, profileModel, setProfileModel, p
 }
 //#endregion
 //#region src/components/dialogs/newSession/PromptFold.tsx
+var TASK_MAX_PX = 220;
 function TaskField({ prompt, setPrompt, presetValue, setPresetValue, savedPresets }) {
+	const ref = (0, import_react.useRef)(null);
+	(0, import_react.useLayoutEffect)(() => {
+		const ta = ref.current;
+		if (!ta) return;
+		ta.style.height = "auto";
+		const edge = ta.offsetHeight - ta.clientHeight;
+		ta.style.height = Math.min(TASK_MAX_PX, ta.scrollHeight + edge) + "px";
+	}, [prompt]);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "new-prompt-fold",
 		className: "nf-task",
@@ -69436,7 +69701,8 @@ function TaskField({ prompt, setPrompt, presetValue, setPresetValue, savedPreset
 			})]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
 			id: "new-prompt",
-			rows: 3,
+			ref,
+			rows: 2,
 			autoComplete: "off",
 			spellCheck: false,
 			placeholder: "e.g. add a section about setup to the README",
@@ -70429,7 +70695,7 @@ function NewSessionDialog() {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		id: "new-dialog",
-		className: "modal nf-landing" + (shownTab === "ticket" || page === 1 ? "" : " nf-form-page"),
+		className: "modal nf-landing",
 		ref: rootRef,
 		onClick: (e) => {
 			if (e.target === e.currentTarget) closeDialog();
@@ -70462,7 +70728,7 @@ function NewSessionDialog() {
 		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 			id: "new-form",
 			ref: dropZoneRef,
-			className: "ta-drop" + (page === 1 ? " nf-ask" : ""),
+			className: "ta-drop",
 			onSubmit: (e) => {
 				e.preventDefault();
 				submit();
@@ -75836,17 +76102,13 @@ function ResumeOnUsageResetRow() {
 		className: "set-row set-switch-row",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			className: "notif-rule-text",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Resume sessions when usage comes back"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint notif-rule-desc",
-					children: "Tell a session that ran out of usage to carry on once your usage resets."
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LearnMore, { children: "An agent that runs out of usage waits on its limit screen, even after the window resets. With this on, MindFlock tells it to continue the moment usage returns. Sessions with something queued resume either way." })
-			]
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Resume sessions when usage comes back"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint notif-rule-desc",
+				children: ["Tell a session that ran out of usage to carry on once your usage resets.", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InfoTip, { children: "An agent that runs out of usage waits on its limit screen, even after the window resets. With this on, MindFlock tells it to continue the moment usage returns. Sessions with something queued resume either way." })]
+			})]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 			className: "ca-switch",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -75867,17 +76129,13 @@ function ReviveOnStartRow() {
 		id: "general-revive-on-start",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			className: "notif-rule-text",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Revive sessions after a restart"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint notif-rule-desc",
-					children: "Restart running agents on their own after MindFlock restarts, or after the system kills one for memory."
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LearnMore, { children: "Without this, they wait as Offline until you click Restart. An agent killed for running out of memory comes back once memory recovers, at most 3 times an hour. Paused sessions and sessions out of usage are left alone." })
-			]
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Revive sessions after a restart"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint notif-rule-desc",
+				children: ["Restart running agents on their own after MindFlock restarts, or after the system kills one for memory.", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InfoTip, { children: "Without this, they wait as Offline until you click Restart. An agent killed for running out of memory comes back once memory recovers, at most 3 times an hour. Paused sessions and sessions out of usage are left alone." })]
+			})]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 			className: "ca-switch",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -79837,16 +80095,16 @@ function Workspace({ gotoScreen }) {
 								" ",
 								"Change one session any time with its ",
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "⏩" }),
-								" button."
+								" button.",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(InfoTip, { children: [
+									"A batch is a list in the New dialog or Intake's ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Start together" }),
+									". Fast-track waits for the agent to finish, then commits, pushes and carries on to this step. A ticket source keeps its own ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Fast-track tickets to" }),
+									" (Intake), which never merges."
+								] })
 							]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(LearnMore, { children: [
-							"A batch is a list in the New dialog or Intake's ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Start together" }),
-							". Fast-track waits for the agent to finish, then commits, pushes and carries on to this step. A ticket source keeps its own ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Fast-track tickets to" }),
-							" (Intake), which never merges."
-						] })
+						})
 					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
@@ -79861,22 +80119,21 @@ function Workspace({ gotoScreen }) {
 							field: "precommit_retry_hooks",
 							placeholder: "e.g. black"
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "set-hint",
-							children: "Hooks fast-track may skip when they fail without changing any files."
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(LearnMore, { children: [
-							"Comma-separated pre-commit hook ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "IDs" }),
-							" (not display names:",
-							" ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "Black format" }),
-							" is the hook ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "black" }),
-							"). Fast-track retries the commit once, then re-runs it with ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "SKIP=<id>" }),
-							" and says which hook it skipped. Test and secret-scanning hooks are refused here."
-						] })
+							children: ["Hooks fast-track may skip when they fail without changing any files.", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(InfoTip, { children: [
+								"Comma-separated pre-commit hook ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "IDs" }),
+								" (not display names:",
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "Black format" }),
+								" is the hook ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "black" }),
+								"). Fast-track retries the commit once, then re-runs it with ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "SKIP=<id>" }),
+								" and says which hook it skipped. Test and secret-scanning hooks are refused here."
+							] })]
+						})
 					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FailureNotesRow, {})
@@ -87456,9 +87713,16 @@ function VerifyDialog() {
 							id: "verify-title",
 							children: "Verify"
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "ik-subtitle",
-							children: "Does the change work?"
+							children: ["Does the change work?", plans.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InfoTip, {
+								id: "verify-how",
+								label: "How Verify works",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyMoments, {
+									liveBranch,
+									overridden
+								})
+							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
@@ -87470,13 +87734,7 @@ function VerifyDialog() {
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					id: "verify-body",
 					children: [
-						plans.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-							className: "vf-intro",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "How Verify works" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyMoments, {
-								liveBranch,
-								overridden
-							})]
-						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						plans.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "vf-intro",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 								className: "set-hint set-block-hint",

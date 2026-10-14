@@ -503,7 +503,7 @@ describe("the dialogs draw the same choice", () => {
     expect(dlg).not.toContain("config?.fasttrack_depth");
     expect(dlg).toContain("single: page !== 1");
     // The shared-folder radio turns fast-track off instead of being disabled.
-    expect(dlg).toContain("— turns fast-track off (it commits for this session");
+    expect(dlg).toContain("Turns fast-track off (it commits for this session");
     expect(dlg).toContain('if (laneNeedsWorktree) draft.setLane("leave");');
     expect(dlg).not.toContain("(not with a lane");
     const commit = mod("components/dialogs/CommitDialog.tsx");

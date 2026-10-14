@@ -207,3 +207,21 @@
   color: var(--accent-deep);
 }
 
+
+/* InfoTip (components/InfoTip.css): the deeper accent for the icon's lit
+   state, and a white bubble with a soft shadow — the dark theme's panel-2 and
+   heavy shadow read as a grey smudge on a light page. */
+.light button.infotip-btn:hover,
+.light button.infotip-btn.open,
+.light button.infotip-btn:focus-visible {
+  color: var(--accent-deep);
+}
+
+.light .infotip {
+  background: var(--app-panel, var(--panel));
+  box-shadow: 0 10px 28px rgba(20, 24, 34, 0.16), 0 1px 3px rgba(20, 24, 34, 0.1);
+}
+
+.light .infotip code {
+  background: var(--app-panel-2, var(--panel-2));
+}

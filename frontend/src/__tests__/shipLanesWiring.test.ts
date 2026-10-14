@@ -444,7 +444,7 @@ describe("phase 3: split and one for all", () => {
     // now turns fast-track off rather than sitting disabled.
     expect(has(normCode("lib/newSessionSubmit.ts"), "inPlace: inPlace && !laneNeedsWorktree")).toBe(true);
     expect(normCode("components/dialogs/newSession/WorkspaceFold.tsx")).toContain(
-      "turns fast-track off (it commits for this session"
+      "Turns fast-track off (it commits for this session"
     );
     expect(allCode()).not.toContain("not with a lane");
   });

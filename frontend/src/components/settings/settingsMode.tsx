@@ -103,18 +103,6 @@ export function AdvancedToggle({
   );
 }
 
-/** A "Learn more" fold under a control: the one plain line stays on the
- * screen, the rest of the explanation waits one click away (GLOSSARY: one
- * plain line per control). */
-export function LearnMore({ children }: { children: ReactNode }) {
-  return (
-    <details className="set-learn-more">
-      <summary>Learn more</summary>
-      <div className="set-learn-more-body">{children}</div>
-    </details>
-  );
-}
-
 /** An "Advanced" section on a basic screen: power-user rows that only exist
  * in advanced mode. Basic mode renders NOTHING for it — not a closed fold —
  * so a newcomer never meets "Merge when green" or pre-commit hook ids one

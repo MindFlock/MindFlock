@@ -20,7 +20,7 @@ import { toast } from "../../../lib/toast";
 import { setTheme } from "../../../lib/theme";
 import { useUi } from "../../../state/store";
 import type { ScreenProps } from "../SettingsDialog";
-import { LearnMore } from "../settingsMode";
+import { InfoTip } from "../../InfoTip";
 
 /* The aviary, in the order theme.css defines it: the three quiet neutrals, then
    round the color wheel by the hue the window wears. Where a name exists in both
@@ -247,11 +247,11 @@ function ReduceMotionRow() {
         <span className="set-label">Reduce motion</span>
         <span className="set-hint notif-rule-desc">
           Hide a running agent's scrolling output behind a still panel.
+          <InfoTip>
+            Clicking, scrolling or typing in that window brings the live output back; the panel
+            returns after 10 seconds with no input. Only the Agent tab is covered.
+          </InfoTip>
         </span>
-        <LearnMore>
-          Clicking, scrolling or typing in that window brings the live output back; the panel
-          returns after 10 seconds with no input. Only the Agent tab is covered.
-        </LearnMore>
       </span>
       {/* label wraps only the switch, so clicking the row text no longer flips it */}
       <label className="ca-switch">

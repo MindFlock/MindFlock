@@ -78,31 +78,6 @@
   margin-top: 0;
 }
 
-/* "Learn more" under a control (LearnMore): the long explanation, folded so
-   the screen reads one plain line per control. Sized like the hint it
-   extends — it is part of the hint, not a section. */
-.set-learn-more {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.set-learn-more > summary {
-  cursor: pointer;
-  width: fit-content;
-  list-style-position: inside;
-}
-
-.set-learn-more > summary:hover,
-.set-learn-more > summary:focus-visible {
-  color: var(--text);
-}
-
-.set-learn-more-body {
-  margin-top: 4px;
-  line-height: 1.45;
-  max-width: 62ch;
-}
-
 /* "✓ Saved" after the changed control's label (savedCue.ts) — every save in
    Settings, toggles included, says so right where you are. Inline, so it
    never moves the control. */

@@ -97,6 +97,7 @@ import { BulkRowBar, SelectAllCheck, useRowSelection } from "./rowSelect";
 import { WorkListPanel, panelNote } from "../intake/kit";
 import { SettingsCtx, useSettingsModel } from "../settings/useSettings";
 import { InlineConfirm } from "../InlineConfirm";
+import { InfoTip } from "../InfoTip";
 import { Modal } from "../Modal";
 import {
   type ClosedTarget,
@@ -532,7 +533,17 @@ export function VerifyDialog() {
         <div id="verify-panel">
           <div className="ws-head">
             <h2 id="verify-title">Verify</h2>
-            <span className="ik-subtitle">Does the change work?</span>
+            <span className="ik-subtitle">
+              Does the change work?
+              {/* Once there are checklists to work, the two-moment intro
+                  below steps aside into this tip: what a first visit needs
+                  and what the fiftieth scrolls past. */}
+              {plans.length > 0 && (
+                <InfoTip id="verify-how" label="How Verify works">
+                  <VerifyMoments liveBranch={liveBranch} overridden={overridden} />
+                </InfoTip>
+              )}
+            </span>
             <button type="button" id="verify-close" onClick={closeDialog}>
               Close
             </button>
@@ -545,15 +556,9 @@ export function VerifyDialog() {
                 show (a tracked repo or a checklist); before that Sources and its
                 + Add lead, as on the Tickets, Pull requests and Issues tabs.
 
-                The intro is two lines — before merge, after merge — and folds
-                away once there are checklists to work: it is what a first visit
-                needs and what the fiftieth scrolls past. */}
-            {plans.length ? (
-              <details className="vf-intro">
-                <summary>How Verify works</summary>
-                <VerifyMoments liveBranch={liveBranch} overridden={overridden} />
-              </details>
-            ) : (
+                The intro is two lines — before merge, after merge — and moves
+                into the ⓘ by the title once there are checklists to work. */}
+            {plans.length === 0 && (
               <div className="vf-intro">
                 <p className="set-hint set-block-hint">
                   Each pushed branch gets a checklist of real-world checks — the agent

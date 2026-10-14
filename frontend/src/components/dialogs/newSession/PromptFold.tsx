@@ -8,7 +8,7 @@
  * are added and removed in the Prompts dialog — Manage… opens it and hands
  * back to this form on Close. */
 
-import type { Dispatch, SetStateAction } from "react";
+import { useLayoutEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import { BUILTIN_PRESETS, findPreset, type Preset } from "../../../lib/presets";
 import { useUi } from "../../../state/store";
 
@@ -22,7 +22,21 @@ export interface TaskFieldProps {
   savedPresets: Preset[];
 }
 
+/** The tallest the Task box grows to by itself before it scrolls. */
+const TASK_MAX_PX = 220;
+
 export function TaskField({ prompt, setPrompt, presetValue, setPresetValue, savedPresets }: TaskFieldProps) {
+  // Two rows to start — most tasks are a sentence, and an empty four-row box
+  // was a third of the card — growing with what is typed (or inserted, or
+  // carried over from page 1) up to TASK_MAX_PX, then scrolling.
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+  useLayoutEffect(() => {
+    const ta = ref.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    const edge = ta.offsetHeight - ta.clientHeight; // the borders
+    ta.style.height = Math.min(TASK_MAX_PX, ta.scrollHeight + edge) + "px";
+  }, [prompt]);
   return (
     <div id="new-prompt-fold" className="nf-task">
       <div className="nf-task-head">
@@ -76,7 +90,8 @@ export function TaskField({ prompt, setPrompt, presetValue, setPresetValue, save
       </div>
       <textarea
         id="new-prompt"
-        rows={3}
+        ref={ref}
+        rows={2}
         autoComplete="off"
         spellCheck={false}
         placeholder="e.g. add a section about setup to the README"
