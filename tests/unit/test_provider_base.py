@@ -41,7 +41,7 @@ def test_build_launch_command_bare_and_resume(base):
     assert base.build_launch_command(LaunchContext(program="mycli")) == "mycli"
     assert (
         base.build_launch_command(LaunchContext(program="mycli", resume=True))
-        == "mycli --continue || mycli"
+        == "mycli --continue || if [ $? -eq 137 ]; then (exit 137); else mycli; fi"
     )
 
 

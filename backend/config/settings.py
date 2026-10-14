@@ -1175,8 +1175,10 @@ class GeneralSettings:
     ``revive_on_start``: whether the server relaunches, in the background
     after it boots, every session whose agent was running when it stopped
     (:mod:`backend.web.core.revive`), instead of leaving them Offline until
-    someone opens them. ``None`` (never set) reads as ON; ``False`` turns it
-    off (``POST /api/server/revive-all`` still runs the sweep on demand).
+    someone opens them — and brings back an agent the OOM killer took once
+    memory recovers (the auto-revive, rate-limited per session). ``None``
+    (never set) reads as ON; ``False`` turns both off (``POST
+    /api/server/revive-all`` still runs the sweep on demand).
 
     ``agent_mcp``: whether every session's agent CLI is launched with the
     MindFlock MCP server attached (:mod:`backend.providers.mcp_attach`), so

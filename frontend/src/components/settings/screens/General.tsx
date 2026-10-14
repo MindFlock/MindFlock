@@ -100,7 +100,9 @@ function ResumeOnUsageResetRow() {
 /** Revive after a restart: once the server has booted (past its quiet
  * window) it relaunches, two at a time, every session whose agent was running
  * when it went down — the Offline chip's Restart, for all of them
- * (backend/web/core/revive.py). Unset reads as on. */
+ * (backend/web/core/revive.py). The same switch covers an agent the system
+ * killed for memory: it comes back once memory recovers, a few times an hour
+ * at most. Unset reads as on. */
 function ReviveOnStartRow() {
   const s = useSettings();
   const on = s.get("general", "revive_on_start") !== false;
@@ -111,7 +113,9 @@ function ReviveOnStartRow() {
         <span className="set-hint notif-rule-desc">
           When MindFlock restarts, sessions whose agent was running come back on
           their own, in the background, instead of waiting Offline for a click.
-          Paused and usage-limited sessions are left alone.
+          So does an agent the system killed for running out of memory, once
+          memory recovers (at most 3 times an hour). Paused and usage-limited
+          sessions are left alone.
         </span>
       </span>
       {/* label wraps only the switch, so clicking the row text doesn't flip it */}

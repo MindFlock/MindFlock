@@ -96,14 +96,14 @@ def test_codex_resumes_own_thread_and_falls_back_fresh():
         cx.build_launch_command(
             LaunchContext(program="codex", resume=True, session_name="mindflock_w1")
         )
-        == "codex resume aaaa-1111 || codex"
+        == "codex resume aaaa-1111 || if [ $? -eq 137 ]; then (exit 137); else codex; fi"
     )
     # Without one: the pre-existing bulk-resume behaviour is unchanged.
     assert (
         cx.build_launch_command(
             LaunchContext(program="codex", resume=True, session_name="mindflock_w2")
         )
-        == "codex resume --last || codex"
+        == "codex resume --last || if [ $? -eq 137 ]; then (exit 137); else codex; fi"
     )
 
 
@@ -114,24 +114,27 @@ def test_antigravity_resumes_own_conversation():
         ag.build_launch_command(
             LaunchContext(program="agy", resume=True, session_name="mindflock_w1")
         )
-        == "agy --conversation cafe-beef || agy"
+        == "agy --conversation cafe-beef || if [ $? -eq 137 ]; then (exit 137); else agy; fi"
     )
 
 
 def test_claude_resume_targets_thread_id():
     # Claude resumes retry once (transient network failures exit non-zero
     # exactly like "nothing to continue"), then start plain — never re-seeded.
+    # Neither fallback runs after a SIGKILL (137 — the OOM killer).
     plain = (
-        "{ echo '[mindflock] resume failed twice; starting a fresh session"
-        " WITHOUT re-sending the task prompt'; claude; }"
+        "if [ $? -eq 137 ]; then (exit 137); "
+        "else echo '[mindflock] resume failed twice; starting a fresh session"
+        " WITHOUT re-sending the task prompt'; claude; fi"
     )
     assert claude_launch_command("claude", resume=True, thread_id="cccc-3333") == (
-        "claude --resume cccc-3333 || "
-        "{ sleep 3; claude --resume cccc-3333; } || " + plain
+        "claude --resume cccc-3333 || if [ $? -eq 137 ]; then (exit 137); "
+        "else sleep 3; claude --resume cccc-3333; fi || " + plain
     )
     # No recorded thread -> --continue, with the same retry-then-plain chain.
     assert claude_launch_command("claude", resume=True) == (
-        "claude --continue || { sleep 3; claude --continue; } || " + plain
+        "claude --continue || if [ $? -eq 137 ]; then (exit 137); "
+        "else sleep 3; claude --continue; fi || " + plain
     )
 
 

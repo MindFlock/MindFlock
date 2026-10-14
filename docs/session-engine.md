@@ -416,6 +416,79 @@ once holding one, wait (capped at 10 min) for this same reading to leave
 `low`. It is a flock-based semaphore in `~/.mindflock/run/slots/` that needs no
 server; `GET /api/system/slots` shows who holds and who waits, and the memory
 notice adds a line for them while it is up.
+#### When the OOM killer fires anyway: agents go first, and come back
+
+**Agents are the preferred victims.** On 2026-10-14 the kernel killed the
+MindFlock *server* (2.1 GB, the biggest single process, `oom_score_adj` 0)
+rather than the 1.3 GB pytest workers agents had started — and every agent
+went down with it. Every agent launch now raises its own `oom_score_adj` to
+`launch_script.OOM_SCORE_ADJ` (500) before it starts the CLI, with one
+statement (`launch_script.oom_score_line()`:
+`{ echo 500 >/proc/self/oom_score_adj; } 2>/dev/null || :` — silent where
+`/proc` is missing, i.e. macOS). The score is inherited across fork and exec,
+so the CLI, its MCP servers and everything the agent runs carry it. The kernel
+picks the process with the highest *badness* — its memory plus `adj/1000` of
+RAM+swap — so at 500 any agent-tree process outranks the server, and the
+largest of them (the runaway test run, usually) goes first; often the agent
+itself survives and just sees its tool call fail. Raising needs no privilege.
+Every launch path carries it: the exit-marker wrapper (`_wrap_launch_cmd`,
+every web relaunch and the Assistant), the engine's first start
+(`TmuxSession.start`), the provisioned launcher (before its `exec bash -ilc`),
+the ticket pipeline's standalone launch (`launch_script.launch_command`, used
+by `AgentCliRunner` and `PRClaudeRunner`), a session's shell tab, and the
+usage-refresh windows. `MINDFLOCK_OOM_SCORE_ADJ` overrides the value (`0`
+turns it off; the launch strings are then byte-identical to before). The tmux
+server keeps its own score. The server does **not** lower its own: going below
+0 needs `CAP_SYS_RESOURCE`, which a normal install never has, and if it did
+run privileged the lowered score would be inherited by everything it starts
+that doesn't raise its own (the tmux server, git, the pipeline child) —
+raising the agents already puts the server behind them.
+
+**A SIGKILL is not a failed resume.** A resume chain's fallbacks (`claude
+--continue || { sleep 3; retry } || fresh`, a generic CLI's `resume || fresh`,
+which re-seeds the task for a CLI that takes its prompt as an argument) used to
+fire on *any* non-zero exit — including an OOM kill an hour into the run, which
+relaunched the CLI three seconds later straight back into the squeeze, and on a
+second kill started a fresh conversation. Each fallback is now wrapped in
+`launch_script.unless_killed`, which passes exit 137 through (`(exit 137)`,
+so the wrapper still records it) and runs the fallback on any other failure.
+The provisioned launcher ends with 137 straight after the launch instead of
+falling to its in-session loop, so the pane closes and the server takes over.
+(That loop's `cs_code=$?` reads the status of `while true`, i.e. 0, so as
+written it always breaks to the shell — pinned as-is by the goldens.)
+
+**Auto-revive.** The other half (`revive.observe` / `revive.auto_tick`, driven
+by the 4 s instances tick — no loop of its own): an agent this server saw live
+that then reads Offline, and died to SIGKILL — exit marker 137, or no marker at
+all (the engine's first start runs without the wrapper) while its hooks last
+said `working` (a SIGKILL fires no Stop/SessionEnd hook; a quit does) — is
+queued, and relaunched through `revive.relaunch` (so a mid-turn death gets its
+*continue*) once memory reads `ok`:
+
+- one at a time, `GAP_SECONDS` apart, never while a sweep runs, on its own
+  thread (never blocking the tick); while memory is low it waits without
+  spending the agent's budget, logging the hold once;
+- at most `AUTO_MAX_PER_WINDOW` (3) per session per `AUTO_WINDOW_SECONDS`
+  (1 h) — an agent whose own work OOMs the box every time is not relaunched
+  into it forever; after that it stays Offline and its row's `auto_revive`
+  says why (`{state: "gave_up", reason}`, shown as the Offline chip's hint);
+- the sweep's skip rules are re-checked at launch (paused, provisioning, peer,
+  workspace missing, quit by user, usage limit); a session already Offline when
+  the server booted is the startup sweep's, never this;
+- switched by `general.revive_on_start` (the same "agents come back on their
+  own" switch) and `MINDFLOCK_REVIVE_ON_START=0`; off under pytest;
+- quiet: while an agent is queued (and for `AUTO_SETTLE_SECONDS` after its
+  relaunch) `_emit_state_changes` keeps announcing its previous activity, so
+  the trip through Offline rings no bell, toast, ntfy push or hook, and the
+  row (`auto_revive: {state: "pending"}`) keeps it out of the bell. One given
+  up on is announced like any Offline;
+- one log line per auto-revive (`auto-revive <title>: agent relaunched after
+  it was killed (exit 137; 1/3 this hour, 1.2s) — queued a continue`).
+
+Not covered: a CLI with no activity hooks that dies on its first start (no
+marker, no `working`) stays Offline as before, and an agent killed while idle
+on its first start likewise; the queue driver's own reboot of an Offline
+session with queued prompts is not memory-gated.
 
 **Nothing disappears silently.** The engine still drops, at load, a session
 whose worktree folder **and** tmux session are both gone (outside the 120 s

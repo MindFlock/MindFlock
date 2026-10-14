@@ -221,8 +221,12 @@ def test_wrap_launch_cmd_shape(marker_dir):
     wrapped = terminal._wrap_launch_cmd("claude --resume", "sess1")
     marker = terminal._exit_marker_path("sess1")
     q = str(marker)
-    # Clears stale marker first, runs cmd, then records $? -> marker.
-    assert wrapped == "rm -f %s; claude --resume; echo $? > %s" % (q, q)
+    # Clears stale marker first, raises the OOM score (so the agent's tree is
+    # the OOM killer's pick before the server), runs cmd, then records $?.
+    assert wrapped == (
+        "rm -f %s; { echo 500 >/proc/self/oom_score_adj; } 2>/dev/null || :; "
+        "claude --resume; echo $? > %s" % (q, q)
+    )
     # The marker's parent dir gets created as a side effect.
     assert marker.parent.exists()
 

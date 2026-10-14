@@ -222,6 +222,11 @@ export interface Instance {
    * `name:` is free text and cannot be mapped back to an id). Keys the retry. */
   failed_hook?: string | null;
   autopilot?: AutopilotRun | null;
+  /** An agent the kernel killed (likely out of memory) coming back by itself
+   * ("pending"), or left Offline after too many kills ("gave_up") — the server's
+   * auto-revive (backend/web/core/revive.py). `reason` replaces the Offline
+   * chip's stock hint. */
+  auto_revive?: { state: "pending" | "gave_up"; reason: string } | null;
   queue: QueueSummary | null;
   tokens: number;
   tokens_in: number;

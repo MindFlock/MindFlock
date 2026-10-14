@@ -24887,14 +24887,17 @@ function deriveSessionState(inst, extras) {
 			hint: "Usage limit reached — the queue waits out the window and auto-resumes when it resets"
 		};
 	}
-	if (act === "offline") return {
-		state: "offline",
-		label: STATE_LABEL.offline,
-		tone: "broken",
-		inBell: true,
-		restartable: !inst.device,
-		hint: "The agent's terminal is gone — Restart relaunches it (resuming the conversation)"
-	};
+	if (act === "offline") {
+		const revive = inst.auto_revive;
+		return {
+			state: "offline",
+			label: STATE_LABEL.offline,
+			tone: "broken",
+			inBell: revive?.state !== "pending",
+			restartable: !inst.device,
+			hint: revive?.reason || "The agent's terminal is gone — Restart relaunches it (resuming the conversation)"
+		};
+	}
 	if (inst.stage === "interrupt") {
 		const step = (inst.failed_step || "").trim();
 		return needsYou("precommit_failed", step ? "Pre-commit failed at: " + step : "Pre-commit failed");
@@ -71508,7 +71511,7 @@ function ReviveOnStartRow() {
 				children: "Revive sessions after a restart"
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-hint notif-rule-desc",
-				children: "When MindFlock restarts, sessions whose agent was running come back on their own, in the background, instead of waiting Offline for a click. Paused and usage-limited sessions are left alone."
+				children: "When MindFlock restarts, sessions whose agent was running come back on their own, in the background, instead of waiting Offline for a click. So does an agent the system killed for running out of memory, once memory recovers (at most 3 times an hour). Paused and usage-limited sessions are left alone."
 			})]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 			className: "ca-switch",

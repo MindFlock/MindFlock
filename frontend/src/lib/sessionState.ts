@@ -226,15 +226,19 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
       hint: "Usage limit reached — the queue waits out the window and auto-resumes when it resets",
     };
   }
-  if (act === "offline")
+  if (act === "offline") {
+    // Killed for memory and coming back by itself: nothing to wait on you for
+    // (out of the bell), and the hint says why it is down.
+    const revive = inst.auto_revive;
     return {
       state: "offline",
       label: STATE_LABEL.offline,
       tone: "broken",
-      inBell: true,
+      inBell: revive?.state !== "pending",
       restartable: !inst.device,
-      hint: "The agent's terminal is gone — Restart relaunches it (resuming the conversation)",
+      hint: revive?.reason || "The agent's terminal is gone — Restart relaunches it (resuming the conversation)",
     };
+  }
   if (inst.stage === "interrupt") {
     const step = (inst.failed_step || "").trim();
     return needsYou("precommit_failed", step ? "Pre-commit failed at: " + step : "Pre-commit failed");

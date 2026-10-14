@@ -188,6 +188,12 @@ class TmuxSession:
             secret_path = secret_env.write(self.sanitized_name, secret)
             if secret_path:
                 launch = secret_env.source_prefix(secret_path) + launch
+        # The agent's tree volunteers for the OOM killer ahead of the server
+        # (launch_script.OOM_SCORE_ADJ): the shell tmux runs this through
+        # raises its own score first, and the program inherits it.
+        from backend.providers import launch_script as _launch_script
+
+        launch = _launch_script.oom_score_prefix() + launch
         c = cmd_pkg.command(
             "tmux",
             "new-session",

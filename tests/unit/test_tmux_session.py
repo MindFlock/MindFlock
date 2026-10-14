@@ -450,7 +450,12 @@ def test_start_env_prefix_and_launch_command(monkeypatch):
     # string, prefixed with a shell-quoted env(1) block (sorted keys).
     new_session_cmd = factory.started_cmds[0]
     launch = new_session_cmd.args[-1]
-    assert launch == "env HOST='x y' PORT=8080 claude --continue"
+    # The shell tmux runs it through raises its OOM score first
+    # (launch_script.OOM_SCORE_ADJ), then the env(1) block + command.
+    assert launch == (
+        "{ echo 500 >/proc/self/oom_score_adj; } 2>/dev/null || :; "
+        "env HOST='x y' PORT=8080 claude --continue"
+    )
     assert new_session_cmd.args[:6] == [
         "tmux",
         "new-session",
@@ -719,8 +724,9 @@ def test_a_session_with_no_credentials_is_byte_identical(monkeypatch, tmp_path):
     _sess, factory, _ran = _started_session(
         monkeypatch, {"PORT": "8080", "HOST": "x y"}, tmp_path
     )
-    assert (
-        factory.started_cmds[0].args[-1] == "env HOST='x y' PORT=8080 claude --continue"
+    assert factory.started_cmds[0].args[-1] == (
+        "{ echo 500 >/proc/self/oom_score_adj; } 2>/dev/null || :; "
+        "env HOST='x y' PORT=8080 claude --continue"
     )
     # ...and nothing was written to the run dir.
     assert not (tmp_path / "run").exists() or not list((tmp_path / "run").iterdir())

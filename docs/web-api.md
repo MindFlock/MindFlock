@@ -2492,7 +2492,12 @@ at a time, oldest first, through the same `_ensure_agent_session` path as
 peer-shared, workspace-missing and usage-limited sessions (see
 [session-engine.md](session-engine.md#after-a-restart-background-revive-and-nothing-dropped-silently)).
 Each revive emits the usual `session.status_changed` / `session.activity_changed`
-as it lands. `general.revive_on_start` (default on) turns the startup sweep off.
+as it lands. `general.revive_on_start` (default on) turns the startup sweep off,
+and the auto-revive of an agent the OOM killer took: each session row carries
+`auto_revive` — `null`, `{state: "pending", reason}` (killed, coming back once
+memory recovers; its Offline is not announced meanwhile) or
+`{state: "gave_up", reason}` (killed too often this hour, or the relaunch
+failed; left Offline).
 
 | Method | Path | Returns / accepts |
 |---|---|---|

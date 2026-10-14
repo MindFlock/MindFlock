@@ -378,7 +378,13 @@ through the same path as Restart — so the rail comes back to Working / Idle
 without a click each. Paused, provisioning, peer-shared, workspace-missing and
 usage-limited sessions are left alone. Settings → General → **Revive sessions
 after a restart** (`general.revive_on_start`, on by default) turns it off;
-`POST /api/server/revive-all` runs it on demand.
+`POST /api/server/revive-all` runs it on demand. The same switch brings back
+an agent the system killed for memory, once memory recovers (at most 3 times
+an hour per session — see
+[session-engine.md](session-engine.md#when-the-oom-killer-fires-anyway-agents-go-first-and-come-back)):
+while it waits its Offline chip says so in its hint and stays out of the bell,
+and no Offline toast or push fires; given up on, the hint says why and the row
+is back in the bell.
 
 **Tones are tokens.** The six colours live once in `styles/tokens.css`
 (`--tone-muted`, `-working`, `-attention`, `-neutral`, `-waiting`, `-broken`,
@@ -3420,8 +3426,9 @@ the ntfy fields stack their labels above the inputs.
 - **General → Revive sessions after a restart** (`general.revive_on_start`,
   **default on**) — whether the server relaunches, in the background after it
   boots, every session whose agent was running when it went down (see
-  [One session state](#one-session-state)). Off leaves them **Offline** until
-  you press their **↻ Restart**.
+  [One session state](#one-session-state)), and an agent the system killed
+  for memory once memory recovers. Off leaves them **Offline** until you press
+  their **↻ Restart**.
 - **General → Take a break** (`mf_break_on` / `mf_break_every`, **off by
   default**) — one switch whose whole description is the sentence it configures:
   *Reminder to take a break every `[N]` minutes*, with N editable in place

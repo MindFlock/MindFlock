@@ -1349,6 +1349,8 @@ def _fire_window_refresh(program: str) -> bool:
         )
         if not exists:
             cmd = provider.minimal_launch_command(scratch, name) or prog
+            # An agent CLI like any other: the OOM killer's pick before us.
+            cmd = providers.launch_script.oom_score_prefix() + cmd
             r = subprocess.run(
                 ["tmux", "new-session", "-d", "-s", name, "-c", scratch, cmd],
                 capture_output=True,
@@ -1509,6 +1511,9 @@ def _session_snapshot(i, queues: dict) -> dict:
     # A dict read off an already-loaded store, so it is computed fresh on BOTH
     # snapshot paths and therefore never needs a _SNAPSHOT_PROBE_KEYS carry-over.
     d["autopilot"] = _autopilot_dto(i.Title)
+    # A killed agent coming back by itself, or left Offline and why
+    # (core.revive.auto_state) — a dict read, fresh on both snapshot paths.
+    d["auto_revive"] = _revive.auto_state(i.Title)
     tok = _session_tokens(i)
     d["tokens"] = tok.get("out", 0)  # output tokens
     d["tokens_in"] = tok.get("in", 0)  # real input only (no cache)
@@ -1605,6 +1610,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["merge_state"] = None
     d["queue"] = _queue_summary(i.Title, queues)
     d["autopilot"] = _autopilot_dto(i.Title)
+    d["auto_revive"] = _revive.auto_state(i.Title)
     d["tokens"] = d["tokens_in"] = 0
     d["tokens_cache_read"] = d["tokens_cache_write"] = 0
     d["tokens_ctx"] = d["tokens_ctx_window"] = 0
@@ -1829,6 +1835,11 @@ def _instances_tick() -> None:
                 if _cfg.check_command:
                     _wt_setup.start_check(title, wt, _cfg.check_command)
                     d["check"] = _wt_setup.check_summary(wt)
+            # Before the emit: an agent the kernel just killed is queued to
+            # come back by itself (core.revive), and its Offline goes
+            # unannounced while it does.
+            _revive.observe(sys.modules[__name__], title, inst, d["activity"])
+            d["auto_revive"] = _revive.auto_state(title)
             _emit_state_changes(title, d["status"], d["activity"], d["stage"])
         except Exception:  # noqa: BLE001 — one bad session can't stop the tick
             pass
@@ -1859,6 +1870,9 @@ def _instances_tick() -> None:
         _orphan_dangling_parents()
     except Exception:  # noqa: BLE001 — housekeeping can't fail the tick
         pass
+    # Relaunch (at most) one agent the kernel killed, once memory allows — on
+    # its own thread, so it never holds up this tick (core.revive.auto_tick).
+    _revive.auto_tick(sys.modules[__name__])
     # Publish the freshly computed state so AppContext.sessions() (Addon API
     # v2) and GET /api/instances can serve it without recomputing it.
     _events.set_sessions_snapshot(out)

@@ -14,6 +14,7 @@ them through the server namespace).
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import tempfile
 import threading
@@ -102,8 +103,21 @@ def _ensure_shell_session(title: str, wt: str):
     if live is not None:
         return live, None  # attach the existing session
     shell = os.environ.get("SHELL") or "/bin/bash"
+    # Run through sh so the shell starts with the agents' OOM score
+    # (launch_script.OOM_SCORE_ADJ): what a person runs here — a test suite, a
+    # build — is the OOM killer's pick before the server, like the agent's.
+    oom = providers.launch_script.oom_score_prefix()
     created = _proc.run_capped(
-        ["tmux", "new-session", "-d", "-s", name, "-c", wt, shell],
+        [
+            "tmux",
+            "new-session",
+            "-d",
+            "-s",
+            name,
+            "-c",
+            wt,
+            (oom + "exec " + shlex.quote(shell)) if oom else shell,
+        ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         timeout=10,

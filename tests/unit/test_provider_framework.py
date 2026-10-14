@@ -36,10 +36,14 @@ def test_build_launch_command_resume():
     ctx = LaunchContext(program="claude", resume=True, session_name="mindflock_x")
     got = providers.resolve("claude").build_launch_command(ctx)
     assert got == claude_launch_command("claude", resume=True)
+    # Neither fallback runs after a SIGKILL (137): the server revives an
+    # OOM-killed agent once memory recovers (launch_script.unless_killed).
     assert got == (
-        "claude --continue || { sleep 3; claude --continue; } || "
-        "{ echo '[mindflock] resume failed twice; starting a fresh session"
-        " WITHOUT re-sending the task prompt'; claude; }"
+        "claude --continue || if [ $? -eq 137 ]; then (exit 137); "
+        "else sleep 3; claude --continue; fi || "
+        "if [ $? -eq 137 ]; then (exit 137); "
+        "else echo '[mindflock] resume failed twice; starting a fresh session"
+        " WITHOUT re-sending the task prompt'; claude; fi"
     )
 
 
@@ -52,7 +56,7 @@ def test_custom_program_falls_through_to_generic():
     )
     assert (
         p.build_launch_command(LaunchContext(program="mycli --flag", resume=True))
-        == "mycli --flag --continue || mycli --flag"
+        == "mycli --flag --continue || if [ $? -eq 137 ]; then (exit 137); else mycli --flag; fi"
     )
 
 
@@ -107,7 +111,7 @@ def test_generic_launch_command():
     # codex resumes via its resume subcommand with a fresh fallback.
     assert (
         codex.build_launch_command(LaunchContext(program="codex", resume=True))
-        == "codex resume --last || codex"
+        == "codex resume --last || if [ $? -eq 137 ]; then (exit 137); else codex; fi"
     )
     # skip_permissions applies the configured flag.
     assert (
@@ -150,7 +154,10 @@ def test_antigravity_resume_by_recorded_id(tmp_path, monkeypatch):
     cmd = agy.build_launch_command(
         LaunchContext(program="agy", resume=True, session_name="mindflock_r")
     )
-    assert cmd == "agy --conversation conv-9 || agy"
+    assert (
+        cmd
+        == "agy --conversation conv-9 || if [ $? -eq 137 ]; then (exit 137); else agy; fi"
+    )
 
 
 def test_classification_per_provider():
