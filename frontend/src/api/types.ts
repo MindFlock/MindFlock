@@ -1427,6 +1427,10 @@ export interface TestRun {
 export interface TestPlan {
   id: string;
   title: string;
+  /** "manual": created empty on purpose (`POST /api/test-plans/branch` with
+   * `empty: true`) — a person writes its steps, no model call was made. ""
+   * for a generated checklist. Optional: an older server doesn't send it. */
+  origin?: "" | "manual";
   /** The MAIN repo, never the session's worktree: worktrees get reclaimed, and a
    * plan outlives the session that produced it. */
   repo_root: string;

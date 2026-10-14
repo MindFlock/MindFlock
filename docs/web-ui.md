@@ -41,7 +41,9 @@ red `-DEV` badge under a dev shell) sits centered, and the empty strip beside it
 is the drag region that moves the desktop shell's window.
 
 **Verify** is always on the bar. Its badge counts the checklists under **Needs
-you** and **Failed** (the dialog's first two groups) and says nothing at zero. Everywhere Verify is described in passing
+you** and **Failed** (the dialog's first two groups) and says nothing at zero;
+it turns **red** when any of them failed, and the tooltip's second line says
+what it counts (*3 checklists need you or failed — 1 failed*). Everywhere Verify is described in passing
 (this tooltip, the palette, the tour, the shortcut sheet) it is one sentence,
 `lib/vocab.ts`'s *check that pushed changes work*.
 
@@ -1419,7 +1421,12 @@ the events bus, **including the backlog replayed on connect** so it answers
 "what happened while I was away." Events since you last opened it are marked
 unread (keyed on timestamp so it survives server restarts); while nothing
 needs attention, unread history shows as a small neutral dot on the bell, never
-a number. Clicking an entry focuses that session. A session that ended reads
+a number. Clicking an entry focuses that session. Verify adds three rows,
+named **Verify · <checklist>** and opening that checklist in Verify: *ready to
+check* (`session.test_plan_due`), *couldn't write the checklist*
+(`session.test_plan_failed`) and *checklist failed — N steps*
+(`session.test_plan_checked` with `new: "failed"`), each gated by its own rule
+(`verify_plan_due`, `verify_plan_failed`, `verify_run_failed`). A session that ended reads
 **closed** when it was closed (✕, `Ctrl+W`, the palette — the worktree kept)
 and **deleted** only when it was deleted (worktree and branch removed), never
 the other way round. The rows read as sentences: a stage change says
@@ -3344,7 +3351,12 @@ a branch no session has been on):
   a repo picker (every repo a checklist, an open session or a closed one has been
   in) and a branch box: for a teammate's branch, say. That checklist is keyed
   `<repo>@<branch>`, read from the repo's own checkout (fetching the branch from
-  origin when it isn't local), and written from the diff alone.
+  origin when it isn't local), and written from the diff alone. Sent with
+  `empty: true` (`POST /api/test-plans/branch`) the checklist is created
+  **empty** instead — no model call, `origin: "manual"`, 201 — and its row
+  reads **Empty — add a step** under **Needs you** with **Add a step** as its
+  button, never *Couldn't be written* (a rewrite asked of it that fails reads as
+  the failure again).
 - **Write steps yourself** — pick a checklist and **Add a step** opens it with its
   **Add a step** form open and the caret in it. Steps live on a checklist, so with
   none yet the row says to ask the agent for one first.
@@ -3377,7 +3389,8 @@ and **Verified**. The badge counts the first two, by construction. Merged-or-not
 is never a heading; it is on the row.
 
 **Every row says its verdict first** — a pill before the sentence: **Verified on
-branch**, **Verified live**, **Failed**, **Couldn't be written**, **Agent
+branch**, **Verified live**, **Failed**, **Couldn't be written**, **Empty — add a
+step** (made empty on purpose), **Agent
 checking**, **Being written**, **Waiting to ship** (merged, waiting out the
 deploy) or **n of m checked** (`planVerdict` in `verify.ts`). Then one
 plain-English sentence saying whose turn it is — a failure names its step:

@@ -209,6 +209,12 @@ body #mf-winctl {
   color: #fff;
 }
 
+/* A checklist FAILED: the count is red, not the usual accent. */
+#topbar .tb-count.is-failing {
+  background: var(--red);
+  color: #fff;
+}
+
 /* Flock mark before the sidebar toggle. The PNG is used as a pure-alpha mask
    painted with the theme's text color, so it flips automatically between
    light/dark mode and recolors with every surface theme. */
