@@ -1162,7 +1162,7 @@ def test_a_cli_killed_mid_turn_answers_502_rather_than_hanging(route_home, monke
 
     A one-shot that is killed (OOM, a ``pkill claude``, the tab's own client
     going away) returns a NEGATIVE exit code immediately — it does not sit
-    there until the 75s budget expires. That has to read as a failed plan, not
+    there until the 30s budget expires. That has to read as a failed plan, not
     as an empty answer parsed into a form.
     """
     real = subprocess.run
@@ -1197,7 +1197,7 @@ def test_a_cli_that_never_answers_says_so_within_the_budget(route_home, monkeypa
     res = client.post("/api/session-plan", json={"text": "fix the auth bug in proj"})
 
     assert res.status_code == 502
-    assert "did not answer within 75s" in res.json()["error"]
+    assert "did not answer within 30s" in res.json()["error"]
 
 
 def test_a_cli_that_is_not_installed_is_a_sentence_not_a_crash(route_home, monkeypatch):

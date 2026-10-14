@@ -20,7 +20,7 @@ vi.mock("../state/queries", () => ({ refreshInstances: () => refreshInstances() 
 
 const { runTemplateNow } = await import("../lib/templateRun");
 const { runProblem, scheduleLabel, whenLabel } = await import("../lib/templates");
-const { TEMPLATES_UI_INIT, TemplatesDialogView, formFromTemplate, runLine, templateBody } = await import(
+const { TEMPLATES_UI_INIT, TemplatesDialogView, formFromTemplate, runLine, templateBody, templateMeta, templatesReducer } = await import(
   "../components/dialogs/TemplatesDialog"
 );
 
@@ -87,10 +87,50 @@ function view(over: Partial<Parameters<typeof TemplatesDialogView>[0]> = {}) {
 }
 
 describe("Templates cards", () => {
-  it("every card has Run now; a folder-less one is disabled with the reason", () => {
+  it("every card has Run now; a folder-less one is disabled with the reason ON the card", () => {
     const html = view();
     expect(html.match(/tpl-btn tpl-run"/g)?.length).toBe(2);
-    expect(html).toMatch(/disabled="" title="Pick a folder[^"]*"[^>]*>Run now/);
+    expect(html).toMatch(/disabled="" title="Run now needs a folder"[^>]*>▶ Run now/);
+    // Not only a hover title: a line on the card, with the way to fix it.
+    expect(html.match(/class="tpl-needs"/g)?.length).toBe(1);
+    expect(html).toContain("Run now and schedules need a folder.");
+    expect(html).toContain(">Add one<");
+  });
+  it("every card has Schedule… — the schedule is reachable from the list", () => {
+    const html = view();
+    expect(html.match(/tpl-btn tpl-sched"/g)?.length).toBe(2);
+    // A scheduled one says "Schedule" (change it), an unscheduled "Schedule…".
+    expect(html).toContain(">Schedule<");
+    expect(html).toContain(">Schedule…<");
+  });
+  it("Schedule… opens the editor with the schedule on", () => {
+    expect(templatesReducer(TEMPLATES_UI_INIT, { t: "schedule", name: "x" })).toEqual({
+      editing: "x",
+      confirming: null,
+      error: "",
+    });
+  });
+  it("names the time zone, and whether the last run was by hand or scheduled", () => {
+    const now = new Date(2026, 9, 13, 12, 0);
+    const next = new Date(2026, 9, 13, 21, 0).getTime() / 1000;
+    const last = new Date(2026, 9, 12, 21, 0).getTime() / 1000;
+    const st = { runs_here: true, runs_on: "" };
+    expect(
+      runLine(T[0], { next_at: next, last_at: last, last_trigger: "schedule", tz: "EDT" } as never, st, now)
+    ).toBe("Weekdays at 21:00 EDT · next today 21:00 · last yesterday 21:00 (scheduled)");
+    expect(runLine(T[1], { last_at: last, last_trigger: "manual" }, st, now)).toBe(
+      "last yesterday 21:00 (by hand)"
+    );
+  });
+  it("a template can carry a fast-track, stored only when on", () => {
+    const base = { ...formFromTemplate(null), name: "n", repo_path: "/r", prompt: "p" };
+    const on = templateBody({ ...base, fasttrack: "pr", ask_first: true });
+    expect("body" in on && on.body).toMatchObject({ fasttrack: "pr", ask_first: true });
+    const off = templateBody(base);
+    expect("body" in off && "fasttrack" in off.body).toBe(false);
+    expect(formFromTemplate({ name: "x", fasttrack: "merge" } as never).fasttrack).toBe("merge");
+    expect(formFromTemplate({ name: "x", fasttrack: "yolo" } as never).fasttrack).toBe("leave");
+    expect(templateMeta({ name: "x", repo_path: "/r", fasttrack: "pr" } as never)).toContain("fast-track → ");
   });
   it("shows the schedule, next and last run", () => {
     const now = new Date(2026, 9, 13, 12, 0);

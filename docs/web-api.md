@@ -206,7 +206,9 @@ appears as `loading` until ready.
 
 ```jsonc
 {
-  "title": "sc-19815",          // optional with story_id (defaults to sc-<id>)
+  "title": "sc-19815",          // optional: with story_id defaults to sc-<id>; else
+                                //   named from "prompt" (add-readme-section-about-setup,
+                                //   -2 when taken), else "untitled" / "untitled-N"
   "program": "claude",          // optional; default from ~/.mindflock/config.json
   "repo_path": "/path/to/repo", // base repo (plain sessions; optional for provisioned)
   "in_place": false,            // run directly in repo_path, no worktree
@@ -471,7 +473,7 @@ Errors carry one human sentence and leave the form untouched:
   derived from one list (`session_plan._CONTRACT_NAMES`), so a forged
   `<newticket>` block is dropped from both boxes by the same code.
 - **502** `{"error": "…"}` — no model to ask or an unreadable answer, e.g.
-  `claude is not installed`, `codex did not answer within 75s`, `no installed CLI
+  `claude is not installed`, `codex did not answer within 30s`, `no installed CLI
   (aider) has a headless mode MindFlock can ask for a session plan`, `the CLI
   answered without a <newsession> block — nothing to read`, `the CLI didn't pick
   one of the folders — name the project you mean`, `the CLI picked folder 7, and
@@ -662,8 +664,8 @@ can do here that the tracker cannot.
 The shape of the call:
 
 - **The draft is one headless model turn**, budgeted at **75 s**
-  (`ticket_draft.TIMEOUT_DRAFT`) — the same budget the Describe box uses, for
-  the same reason. It runs on `asyncio.to_thread`, off the loop serving the
+  (`ticket_draft.TIMEOUT_DRAFT`; the New dialog's Describe box gives up at
+  30 s, `session_plan.TIMEOUT_PLAN`, and offers its form instead). It runs on `asyncio.to_thread`, off the loop serving the
   grid's websockets, and typically takes ~10–25 s.
 - **`program` is not a parameter.** The server reads the flock's own default CLI
   (`ENGINE.default_program()`) per request and passes it in `pick_argv`'s FIRST
@@ -2208,8 +2210,8 @@ screen says as much in place when `clicks.totals` is `null`.
 
 **Templates** (addon id `templates`, prefix `/api/templates`) — saved
 new-session templates (`~/.mindflock/session_templates.json`), the ONE list
-behind the New dialog's Templates strip, its Prompt fold's "Saved prompt…"
-list and the sidebar Prompts bar (a template that is only a prompt is a saved
+behind the New dialog's Templates strip, its Task box's "Insert a saved
+prompt…" list and the sidebar Prompts bar (a template that is only a prompt is a saved
 prompt). Settings sync carries it between devices as the `store:templates`
 unit, keyed by name. Managed by the SPA's own Templates dialog (New →
 Templates → Manage…, or the palette's "Templates…"); the addon ships no
@@ -2220,10 +2222,10 @@ different-body clash is kept as `<name> (saved prompt)`):
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/templates` | `{templates: [{name, program, repo_path, prompt, provisioned, workspace_strategy, in_place, init_repo, schedule?}], runs: {<name lower>: {next_at, last_at, last_session, last_trigger, last_error}}, runs_here, runs_on}` — `runs` is THIS device's record of each template's runs (epoch seconds; only templates with a schedule or a past run appear); `runs_here` says whether schedules fire on this device, `runs_on` names the device that does when it isn't this one |
-| POST | `/api/templates` | Save/overwrite a template (upsert by name, ignoring case) → `{template, templates}`; owner-only (`may_configure`). `schedule` (optional): `{at: "HH:MM", days: "daily" \| "weekdays"}`, local time; 400 for a bad time/days, and for a scheduled template with no folder (`repo_path`, unless `provisioned`) or no prompt. A template without a schedule stores no `schedule` key |
+| GET | `/api/templates` | `{templates: [{name, program, repo_path, prompt, provisioned, workspace_strategy, in_place, init_repo, schedule?, fasttrack?, ask_first?}], runs: {<name lower>: {next_at, last_at, last_session, last_trigger, last_error, tz?}}, runs_here, runs_on, tz}` — `tz` is this device's time-zone abbreviation (`EDT`), which a schedule's `at` is in (on a scheduled template's row, as of its next run); `runs` is THIS device's record of each template's runs (epoch seconds; only templates with a schedule or a past run appear); `runs_here` says whether schedules fire on this device, `runs_on` names the device that does when it isn't this one |
+| POST | `/api/templates` | Save/overwrite a template (upsert by name, ignoring case) → `{template, templates}`; owner-only (`may_configure`). `schedule` (optional): `{at: "HH:MM", days: "daily" \| "weekdays"}`, local time; 400 for a bad time/days, and for a scheduled template with no folder (`repo_path`, unless `provisioned`) or no prompt. A template without a schedule stores no `schedule` key. `fasttrack` (optional): `commit` / `push` / `pr` / `merge` (`off` / `leave` / empty = none, stored as no key; anything else 400), with `ask_first: true` to hold before the first outward step — armed on every session the template starts |
 | DELETE | `/api/templates/{name}` | Remove a template → `{deleted: bool}` (false for a name that wasn't there); owner-only |
-| POST | `/api/templates/{name}/run` | **Run now**: create a fresh session from the template, its prompt already sent, through the same path as `POST /api/instances` → its **202** body (the new row + `prompt_delivery`). Titled `<template slug>-<mon><day>` (`rivian-update-oct13`; `-2`, `-3`… when taken). **404** unknown template, **400** for one with no folder (it would run in the server's own directory) or whatever the create refuses. Not owner-only — starting a session isn't configuring anything |
+| POST | `/api/templates/{name}/run` | **Run now**: create a fresh session from the template, its prompt already sent, through the same path as `POST /api/instances` → its **202** body (the new row + `prompt_delivery`). Titled `<template slug>-<mon><day>` (`rivian-update-oct13`; `-2`, `-3`… when taken). A template with a `fasttrack` has it armed on the new session (never in place: it gets its own worktree); a failure to arm is recorded as `last_error` and the session stands. **404** unknown template, **400** for one with no folder (it would run in the server's own directory) or whatever the create refuses. Not owner-only — starting a session isn't configuring anything |
 
 **Schedules** (`core/template_schedule.py`). A loop (registered by the addon's
 startup, every 30 s; off under pytest) starts each scheduled template's

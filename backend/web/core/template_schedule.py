@@ -11,6 +11,9 @@ New dialog live here:
 * **A schedule** — a template may carry ``schedule: {"at": "HH:MM", "days":
   "daily" | "weekdays"}`` (local time). :func:`run_loop` fires each due one.
 
+A template's ``fasttrack`` (``templates.py``) is armed on every session it
+starts, so a scheduled chore can end in a commit, a push, a PR or a merge.
+
 The rules a schedule keeps (all in the pure :func:`plan_tick`, tested with an
 injected clock):
 
@@ -234,11 +237,27 @@ def run_problem(tpl: dict) -> str:
 
 
 def session_title(name: str, when: float) -> str:
-    """``<template slug>-<mon><day>`` — "rivian-update-oct13"."""
+    """``<template slug>-<mon><day>`` — "rivian-update-oct13". Every run of a
+    template is named this way (a second run that day is ``-2``), so a
+    nightly template's sessions sort together and read by date."""
     slug = re.sub(r"[^a-z0-9]+", "-", str(name or "").lower()).strip("-")[:40]
     slug = slug.strip("-") or "template"
     day = _dt.datetime.fromtimestamp(when)
     return "%s-%s%d" % (slug, day.strftime("%b").lower(), day.day)
+
+
+def lane_name(raw) -> str:
+    """``raw`` as a ship lane (``leave`` / ``commit`` / ``push`` / ``pr`` /
+    ``merge``; "off" reads ``leave``), or "" for none of them."""
+    from backend.web.core import lanes as _lanes
+
+    return _lanes.normalize_lane(raw)
+
+
+def template_lane(tpl: dict) -> str:
+    """The fast-track a session from ``tpl`` arms ("" = off)."""
+    lane = lane_name((tpl or {}).get("fasttrack"))
+    return "" if lane in ("", "leave") else lane
 
 
 def _payload(tpl: dict, title: str) -> dict:
@@ -250,7 +269,19 @@ def _payload(tpl: dict, title: str) -> dict:
     for f in ("provisioned", "in_place", "init_repo"):
         if tpl.get(f):
             body[f] = True
+    # Fast-track commits for THIS session, so it never drives a checkout other
+    # sessions share — the New dialog's rule: with one, it gets a worktree.
+    if template_lane(tpl):
+        body.pop("in_place", None)
     return body
+
+
+def _arm_lane(title: str, lane: str, ask_first: bool) -> None:
+    """Arm ``title``'s fast-track the moment it is created. The intake shape
+    (``require_workspace=False``): the worktree is still being cut."""
+    from backend.web.core import lanes as _lanes
+
+    _lanes.arm_session(title, lane, ask_first=ask_first, require_workspace=False)
 
 
 async def _default_create(payload: dict) -> Tuple[int, dict]:
@@ -266,12 +297,15 @@ async def fire(
     now: Optional[float] = None,
     create=None,
     taken: Optional[Callable[[str], bool]] = None,
+    arm: Optional[Callable[[str, str, bool], None]] = None,
 ) -> Tuple[int, dict]:
     """Start a session from ``tpl`` and record it. ``(status, body)`` — the
     create's own answer (202 + the new row), or 400 for a template that
-    can't run. ``trigger`` is ``"manual"`` or ``"schedule"``."""
+    can't run. ``trigger`` is ``"manual"`` or ``"schedule"``. A template with
+    a fast-track has it armed on the new session (``arm``, injectable)."""
     now = time.time() if now is None else now
     create = create or _default_create
+    arm = arm or _arm_lane
     key = _key(tpl.get("name"))
     problem = run_problem(tpl)
     if problem:
@@ -290,12 +324,22 @@ async def fire(
         if status != 409:
             break
     if 200 <= status < 300:
+        made = str(body.get("title") or "")
+        lane = template_lane(tpl)
+        lane_error = ""
+        if lane and made:
+            try:
+                await asyncio.to_thread(arm, made, lane, tpl.get("ask_first") is True)
+            except Exception as err:  # noqa: BLE001 — the session is up; say so
+                lane_error = "started, but its fast-track wasn't set: %s" % (
+                    getattr(err, "message", "") or err
+                )
         update_run(
             key,
             last_run_at=now,
-            last_session=str(body.get("title") or ""),
+            last_session=made,
             last_trigger=trigger,
-            last_error="",
+            last_error=lane_error,
         )
     else:
         update_run(
@@ -419,17 +463,31 @@ def status_for(templates_list: List[dict], now: Optional[float] = None) -> dict:
             continue
         rec = runs.get(key) or {}
         sched = schedule_or_none(tpl.get("schedule"))
+        nxt = next_due(now, sched) if sched else None
         row = {
-            "next_at": next_due(now, sched) if sched else None,
+            "next_at": nxt,
             "last_at": rec.get("last_run_at"),
             "last_session": rec.get("last_session") or "",
             "last_trigger": rec.get("last_trigger") or "",
             "last_error": rec.get("last_error") or "",
         }
         if any(v for v in row.values()):
+            # The schedule's "at" is THIS device's local time: name the zone
+            # on the row the card reads (EDT, CET…), as of the next run.
+            if sched:
+                row["tz"] = time_zone(nxt or now)
             out[key] = row
     return {
         "runs": out,
         "runs_here": automation_here(),
         "runs_on": automation_elsewhere(),
+        "tz": time_zone(now),
     }
+
+
+def time_zone(at: float) -> str:
+    """This device's time-zone abbreviation at ``at`` ("EDT"), "" if unknown."""
+    try:
+        return time.strftime("%Z", time.localtime(at)) or ""
+    except (OverflowError, OSError, ValueError):
+        return ""

@@ -332,7 +332,7 @@ describe("the Zones dialog and Plan first", () => {
 
   it("disables Plan first on a CLI without plan support, and never sends it", () => {
     // It would leave the agent waiting on a Go the Map can't show.
-    expect(src("components/dialogs/newSession/PromptFold.tsx")).toContain("(needs a CLI with plan support — Claude)");
+    expect(src("components/dialogs/newSession/PromptFold.tsx")).toContain("(needs an agent with plan support — Claude)");
     expect(src("lib/newSessionSubmit.ts")).toContain("if (planFirst && planOk) body.plan_first = true");
     expect(src("components/dialogs/NewSessionDialog.tsx")).toContain("prov.plan_supported !== false");
   });

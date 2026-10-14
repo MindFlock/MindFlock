@@ -40,6 +40,19 @@ export type FolderSearch = {
 
 /** The Folder field's server lookups: the git probe for a path, the name
  * search for anything else, and keeping the highlighted match on screen. */
+/** What /api/repos/check said about the folder in the field, stamped with
+ * the text it answers (`asked`). */
+export interface FolderCheck {
+  asked: string;
+  /** A real folder with no git repo in it. */
+  plain: boolean;
+  isGit?: boolean;
+  /** The server's resolved path (symlinks, ~). */
+  resolved?: string;
+  /** What a new worktree's branch starts with ("me/"). */
+  branchPrefix?: string;
+}
+
 export function useFolderLookups({
   open,
   repoPath,
@@ -55,7 +68,7 @@ export function useFolderLookups({
   open: boolean;
   repoPath: string;
   dapi: ReturnType<typeof deviceApi>;
-  setFolderCheck: Set<{ asked: string; plain: boolean } | null>;
+  setFolderCheck: Set<FolderCheck | null>;
   setSearch: Set<FolderSearch>;
   setSearchSel: Set<number>;
   searchListRef: MutableRefObject<HTMLDivElement | null>;
@@ -85,10 +98,21 @@ export function useFolderLookups({
     let live = true;
     const timer = window.setTimeout(async () => {
       try {
-        const r = await dapi<{ exists?: boolean; is_dir?: boolean; is_git?: boolean }>(
-          "/api/repos/check?path=" + encodeURIComponent(asked)
-        );
-        if (live) setFolderCheck({ asked, plain: !!r.exists && !!r.is_dir && !r.is_git });
+        const r = await dapi<{
+          path?: string;
+          exists?: boolean;
+          is_dir?: boolean;
+          is_git?: boolean;
+          branch_prefix?: string;
+        }>("/api/repos/check?path=" + encodeURIComponent(asked));
+        if (live)
+          setFolderCheck({
+            asked,
+            plain: !!r.exists && !!r.is_dir && !r.is_git,
+            isGit: !!r.is_git,
+            resolved: r.path || "",
+            branchPrefix: r.branch_prefix || "",
+          });
       } catch {
         // A folder we can't probe simply gets no aside. Guessing "no git here"
         // from a failed request would nag people into initialising repos they
@@ -521,7 +545,7 @@ export function FolderAids({
               <button
                 type="button"
                 className="linklike"
-                title="Ticks “Create a git repo in this folder” under Git & workspace"
+                title="Ticks “Create a git repo in this folder” under More options"
                 onClick={armInitRepo}
               >
                 Create one
@@ -537,7 +561,7 @@ export function FolderAids({
            and sharing the class is what stops the two from drifting apart. */
         <div id="new-suggest" className="new-templates nf-suggest">
           <div className="nt-head">
-            <span>Folders</span>
+            <span>Folders you might mean — click one to use it</span>
             <span className="nf-suggest-legend">📦 git repo · 📁 plain folder</span>
           </div>
           {suggestRows.map((g) => (
