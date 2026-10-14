@@ -2229,7 +2229,9 @@ reload halfway through brings it back. UI store state
     agent** (the default agent's **agent card** — the same card Settings →
     Connections, Agents and Custom agents show, with its one next action:
     **Install** → **Sign in** → **Test**; *Using Claude Code · change*; *Using
-    an API key? Settings → Accounts*), ③ **Start your first agent** (*Pick a
+    an API key instead? Add an API key* — opens Settings → Accounts with its
+    add form on **API key** for the default agent, via the one-shot intent in
+    `setup/accountsIntent.ts`), ③ **Start your first agent** (*Pick a
     repo folder and say what to do.* **+ New session**, whose dialog has the
     folder browser). ③ ticks only once a session's agent has actually started
     on its task (the activity classifier's first corroborated *working*

@@ -34,6 +34,7 @@ import { toast } from "../../lib/toast";
 import { agentName } from "../../lib/agentNames";
 import { CONNECTIONS_CHANGED_EVENT } from "../settings/screens/Connections";
 import { AgentCard } from "./AgentCard";
+import { requestApiKeyForm } from "./accountsIntent";
 import { DoctorList } from "./DoctorList";
 import { openConnectGitHub } from "../../lib/githubConnect";
 import { refreshSetup, skipSetupStep, useSetup } from "./useSetup";
@@ -284,16 +285,18 @@ export function SetupChecklist() {
             </>
           )}
           <p className="muted setup-hint">
-            Using an API key?{" "}
+            Using an API key instead?{" "}
             <button
               type="button"
               className="linklike setup-open-accounts"
               onClick={(e) => {
                 e.stopPropagation();
+                // Land on Accounts' API-key form, not its "CLI account" default.
+                requestApiKeyForm(defaultAgent);
                 go("settings", "accounts");
               }}
             >
-              Settings → Accounts
+              Add an API key
             </button>
           </p>
         </Step>

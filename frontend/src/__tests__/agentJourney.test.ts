@@ -261,3 +261,21 @@ describe("orchestrator leftovers", () => {
     expect(coding).toContain("without asking you first.");
   });
 });
+
+describe("Setup's API-key link lands on the API-key form", () => {
+  it("leaves a one-shot intent for Accounts", async () => {
+    const { requestApiKeyForm, takeAccountsIntent } = await import("../components/setup/accountsIntent");
+    expect(takeAccountsIntent()).toBeNull();
+    requestApiKeyForm("codex");
+    expect(takeAccountsIntent()).toEqual({ kind: "api_key", provider: "codex" });
+    expect(takeAccountsIntent()).toBeNull(); // applies exactly once
+    requestApiKeyForm("");
+    expect(takeAccountsIntent()?.provider).toBe("claude");
+  });
+
+  it("the link sets the intent before opening Accounts", () => {
+    const s = code("components/setup/SetupChecklist.tsx");
+    expect(s).toMatch(/requestApiKeyForm\(defaultAgent\);\s*go\("settings", "accounts"\);/);
+    expect(s).toContain("Add an API key");
+  });
+});
