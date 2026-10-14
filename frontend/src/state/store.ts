@@ -15,6 +15,7 @@ import {
 } from "../lib/breakTimer";
 import { defaultHiddenBars } from "../components/sidebar/barDefs";
 import { notePrefWrite } from "../lib/prefs";
+import { asPaneHeaderPref, type PaneHeaderPref } from "../lib/paneHeader";
 import { toast } from "../lib/toast";
 
 export type ViewMode = "auto" | "2" | "4" | "9";
@@ -66,6 +67,17 @@ function firstRun(key: string): boolean {
 function save(key: string, value: unknown, stringify = true) {
   try {
     localStorage.setItem(key, stringify ? JSON.stringify(value) : String(value));
+  } catch {
+    /* storage unavailable */
+  }
+  notePrefWrite(key);
+}
+
+/** Forget one key — "back to the default"; a synced pref is cleared on the
+ * server too (an absent key is sent as null). */
+function drop(key: string) {
+  try {
+    localStorage.removeItem(key);
   } catch {
     /* storage unavailable */
   }
@@ -219,6 +231,18 @@ interface UiState {
   filterPeek: boolean;
   /** User drag order of the sidebar bars (keys; see barDefs.ts). Empty = default. */
   barOrder: string[];
+  /** Customize → Sidebar's "Reset to default": the starter bars, the default
+   * order and the filter box, as on a fresh install (the calm first hour
+   * may extend the defaults again). */
+  resetSidebarBars(): void;
+  /** What a session pane's header shows, in what order (lib/paneHeader,
+   * synced pref `pane_header`); null = the defaults. */
+  paneHeader: PaneHeaderPref | null;
+  /** Save a pane-header choice; null = back to the defaults. */
+  setPaneHeader(pref: PaneHeaderPref | null): void;
+  /** Customize's open page (this browser's own convenience, not a pref). */
+  customizePage: "sidebar" | "pane";
+  setCustomizePage(page: "sidebar" | "pane"): void;
   /** Reduce motion: while an agent is running, cover its terminal with a static
    * "running" panel instead of showing the live (flickering) output. Off by
    * default; the cover lifts on interaction and re-covers after a short idle. */
@@ -408,6 +432,8 @@ export const useUi = create<UiState>((set, get) => ({
     firstRun("mf_hiddenbars") ? defaultHiddenBars() : load<string[]>("mf_hiddenbars", [])
   ),
   barOrder: load<string[]>("mf_barorder", []),
+  paneHeader: asPaneHeaderPref(load<unknown>("mf_paneheader", null)),
+  customizePage: load<string>("mf_customize_page", "sidebar") === "pane" ? "pane" : "sidebar",
   showFilter: load<boolean>("mf_show_filter", true),
   filterPeek: false,
   reduceMotion: load<boolean>("mf_reduce_motion", false),
@@ -624,6 +650,21 @@ export const useUi = create<UiState>((set, get) => ({
   setBarOrder: (order) => {
     save("mf_barorder", order);
     set({ barOrder: order });
+  },
+  resetSidebarBars: () => {
+    drop("mf_hiddenbars");
+    drop("mf_barorder");
+    save("mf_show_filter", true);
+    set({ hiddenBars: new Set(defaultHiddenBars()), barsExplicit: false, barOrder: [], showFilter: true });
+  },
+  setPaneHeader: (pref) => {
+    if (pref) save("mf_paneheader", pref);
+    else drop("mf_paneheader");
+    set({ paneHeader: pref });
+  },
+  setCustomizePage: (page) => {
+    save("mf_customize_page", page);
+    set({ customizePage: page });
   },
   setReduceMotion: (on) => {
     save("mf_reduce_motion", on);

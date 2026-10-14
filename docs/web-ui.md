@@ -152,7 +152,7 @@ sees only what the first hour needs: the sessions, **+ New** and **Setup**.
 The usage strip, the **Assistant** bar and every extension's bar (Database,
 Usage optimizer…) join the *default* hidden set; the **View** presets, the
 filter box (`/` still summons it), the "more bars" 💡 hint and the rows'
-Alt+N numbers wait too; and pane headers are calm (see
+Alt+N numbers wait too; and pane headers are calm unless you customized them (see
 [The pane header](#the-pane-header)). Three sessions, or a week, brings the
 full screen back by itself. A choice the person made always wins: bars set in
 Customize (here or synced from another device) are never touched, and a View
@@ -516,11 +516,15 @@ buttons did nothing there.
 
 ### The pane header
 
-Left to right: the ⠿ grip, the session's name, the tabs (**Agent**,
-**Terminal**, **Diff**, **Map**, **Queue**, and **Thread** once the session has
-workers or messages), the guided next-step button, ⏩
-[Fast-track](#fast-track-), the cost chip, **▶ Resume** (only on a paused
-session), **⋯**, **History**, **Copy** and **−**. There is no Pause button:
+Left to right: the ⠿ grip, the session's name, the tabs, then the buttons,
+then **▶ Resume** (only on a paused session) and **⋯**, always the last thing
+in the row. Which tabs and buttons show, and in what order, is yours to
+choose in [Customize → Pane header](#customize) (`lib/paneHeader.ts`). Out of
+the box: **Agent · Terminal · Diff · Queue**, then ⏩
+[Fast-track](#fast-track-) and **Copy all** (copy entire history). Switched
+off until you want them: the **Map** and **Thread** tabs, the guided
+**Commit…** / next-step button, **History**, the cost chip, the diff stats and
+**−** (hide). Agent can't be switched off. There is no Pause button:
 pausing is the palette's *Pause session*, `mindflock pause` or
 `POST …/pause` (see *Pause keeps your work* under
 [Session row actions](#session-row-actions-the-rows--or-a-right-click)).
@@ -546,30 +550,38 @@ Hover the line for the prompt
 that headline came from, as typed. This bar does not condense: it shows the
 newest thing you actually asked.
 
-- **⋯ is the session's one menu** — the same model as the sidebar row's ⋮
-  (see [Session row actions](#session-row-actions-the-rows--or-a-right-click)),
-  less Terminal and Code map (every header shows those tabs), plus **Copy
-  entire history** and, in a calm header, **Browse history** (both under its
-  **More**). It opens over the whole window — a 2×2 grid's lower pane used to
-  paint over its lower half.
-- **Terminal and Map are always tabs.** Every header shows **Agent ·
-  Terminal · Diff · Map** — calm or narrow alike (Terminal is left out only
-  for a peer-shared folder, whose shell would run outside the sandbox; Map and
-  Diff only where the session is in a git repository). They used to fold into
-  ⋯ in a calm header, which also hid them in a full-width pane during the calm
-  first hour.
-- **Copy the whole history.** The clipboard button beside History copies the
+- **⋯ is the session's one menu, and nothing switched off is lost** — the
+  same model as the sidebar row's ⋮ (see
+  [Session row actions](#session-row-actions-the-rows--or-a-right-click)),
+  less the tabs this header already shows. Whatever the header leaves out is
+  in it: a hidden tab under **More** (Terminal, Diff, Code map, Thread),
+  **Browse history** and **Copy entire history** under **More**, the hidden
+  next step first under **Ship** (*Commit…*, *Push*, *Open PR*, *Re-commit*… —
+  once, if Ship already lists it), **Fast-track…** and **Hide window** always.
+  Read-outs the header leaves out — the cost (*Claude · ~$0.42 · 79k/200k*)
+  and the diff stats (*+19 −4 · 2 files*) — head the popover. It opens over
+  the whole window — a 2×2 grid's lower pane used to paint over its lower
+  half.
+- **What a session can't have never shows**, whatever the setting: Terminal
+  for a peer-shared folder (its shell would run outside the sandbox), Diff
+  and Map outside a git repository, Thread until the session has workers or
+  messages. **A hidden tab you are on still shows** while you are on it
+  (opened from ⋯, a shortcut, the commit dialog switching to the shell), so
+  the active tab always has its place.
+- **Copy the whole history.** **Copy all** copies the
   open terminal tab's entire scrollback (Agent or Terminal) — the same text as
   the History view's **Copy all**, through the same loader
   (`lib/paneHistory.ts`) — and says *Copied full agent history (N chars)*,
   *No history to copy* or *Copy failed*. On Diff, Map, Queue and Thread it is
   greyed (not hidden, so the controls don't shift as you change tabs).
-- **Calm header.** In the [calm first hour](#layout), or when a pane is
-  narrower than 560 px, the header leaves **Queue**, ⏩, the cost chip and
-  History to **⋯** (Queue prompt… and Fast-track… are in it always, Browse
-  history under its **More**). A tab you are on, a Queue with something in
-  it and a fast-track someone set stay in the row. A narrow pane draws
-  Resume as its glyph alone.
+- **Calm header.** In the [calm first hour](#layout) an *untouched* header
+  also leaves **Queue** and ⏩ to **⋯** (Queue prompt… and Fast-track… are in
+  it always) — a newcomer's header is name · Agent · Terminal · Diff · Copy
+  all. A tab you are on, a Queue with something in it and a fast-track
+  someone set stay in the row. Once you change anything in Customize → Pane
+  header, calm leaves the header alone: what you switched on is what you
+  see. A pane's width no longer folds anything — words turn to icons
+  instead (below).
 - **Commit…** shows only once there is something to commit (uncommitted
   files, untracked included); until then the header has no lead button and
   the state chip says what the agent is doing. On hover: *Commit this
@@ -609,16 +621,25 @@ newest thing you actually asked.
 - **− hides, ✕ closes.** The session pane's last button is **−** (*Hide window —
   the session keeps running*); ✕ is kept for closing a session (the rail row's
   ✕) and closing a non-session window.
-- **Narrow panes compact, in a measured order** (container queries on the
-  header, `grid/Pane.css`). Below 1000px the cost chip drops its provider and
-  context parts (the cost stays); below 760px the tabs become icons — a
-  sparkle, `>_`, `±`, a folded map, a list, two bubbles — each with a tooltip
-  naming it and the word kept for screen readers, the active one still
-  filled; below 700px the diff-stat line goes; below 640px and 440px the gaps
-  and pads tighten. At a 2×2 grid on a 1044px window (heads ~375px) every
-  control fits with the name's distinguishing tail whole
-  (`flaky-rol…st/sc-17455`), and from 350px to 1150px no header scrolls
-  sideways. A squeezed name gives way in its middle first, then — only past
+- **Words while they fit, icons once they don't.** The header measures
+  itself (`headNeed` in `grid/Pane.tsx`: every item at its drawn width, the
+  name at a reserved 110px — or its own width when shorter — plus gaps and
+  padding) before paint, on every resize (a ResizeObserver) and whenever what
+  it holds changes. When the words would overflow, the tabs become icons — a
+  sparkle, `>_`, `±`, a folded map, a list, two bubbles — and **History** /
+  **Copy all** their glyphs, each with a tooltip naming it and its word kept
+  for screen readers, the active tab still filled; ▶ Resume becomes ▶. The
+  words come back only once there is room for them **plus 24px**
+  (`fitDecision`'s hysteresis), so a header at the edge never flickers. With
+  the default set, two panes side by side at 1440px keep their words (heads
+  ~573px; the switch is at ~466px, back at ~490px); a 2×2 at 1044×904 (heads
+  ~375px) draws icons, and the same 2×2 with the sidebar hidden (heads
+  ~505px) keeps words. Each pane decides for itself, so a pane with a long
+  name or a Queue badge can be in icons beside one in words. The container
+  queries still trim the rest: below 1000px the cost chip drops its provider
+  and context parts (the cost stays); below 700px the diff-stat line goes;
+  below 640px and 440px the gaps and pads tighten; below 300px an Off ⏩
+  leaves (Fast-track… is in ⋯). A squeezed name gives way in its middle first, then — only past
   its tail — with an ellipsis at the end, never sliced mid-letter; a
   `(tix)` tag stays on the name's line.
 - **The live step doesn't repeat the target.** While fast-track is working,
@@ -3453,12 +3474,24 @@ Two consequences worth knowing:
 
 ## Customize
 
-**Which bars the sidebar shows.** The sidebar footer's **⚙ Customize** button
-(title *Choose which bars the sidebar shows — Prompts, Assistant, Tickets…*)
-opens `#customize-dialog` (`components/customize/CustomizeDialog.tsx`), headed
-*Customize — Choose what the sidebar shows*: *Show in the sidebar*, one checkbox
-per bar, built-in and extension, in sidebar order (the same `mf_hiddenbars` set
-the bars always used). Each built-in bar says when it has something to show —
+The sidebar footer's **⚙ Customize** button (title *Choose which bars the
+sidebar shows — Prompts, Assistant, Tickets…*) opens `#customize-dialog`
+(`components/customize/CustomizeDialog.tsx`): **two pages**, switched by the
+**Sidebar · Pane header** tabs at its top. It opens on the page you last
+looked at (this browser's `mf_customize_page` — a convenience, not a pref).
+Each page has one line saying what it changes and a **Reset to default** at
+the end of that line (greyed while the page is already the default). Every
+row on both pages is the same shape (`CustomizeRow.tsx`): a ⠿ grip to drag
+it, a switch, the item's name over one line saying what it is or when it
+shows, and **↑ ↓** to move it from the keyboard. Long explanations sit behind
+an ⓘ (InfoTip), not in the rows.
+
+**Sidebar** — *Choose which bars sit around your session list, and in what
+order.* *Show in the sidebar*: one row per bar, built-in and extension, in
+sidebar order (the same `hidden_bars` / `bar_order` prefs the bars always
+used), with the session list drawn as a fixed dashed divider — moving a bar
+past it moves it below (or above) your sessions, as dragging its grip in the
+sidebar does. Each built-in bar says when it has something to show —
 *What your sessions cost* (Usage); *Appears once a ticket source is connected*
 with an **Intake → Tickets** link (Tickets); *Appears once a repository is
 added* with **Intake → GitHub PRs** / **Intake → GitHub issues** (Pull requests,
@@ -3466,8 +3499,24 @@ Issues); *Appears once Verify tracks a repository or has a checklist* with
 **Open Verify** (the sidebar's Verify bar — the top bar's **Verify** button is
 always there); *Chat, a todo list, and its editable agent file* (Assistant);
 *Your saved prompts — pick one to paste it into the session you are in* with **Manage
-prompts** (Prompts); *From an extension* for an extension's bar. A last line
-says how to reorder: drag a bar's ⠿ grip in the sidebar.
+prompts** (Prompts); *From an extension* for an extension's bar. *Session list*
+→ **Filter box**. Reset brings back the starter bars (Usage, Tickets,
+Assistant), the default order and the filter box.
+
+**Pane header** — *Choose the tabs and buttons along the top of every session
+window. The rest stay in its ⋯ menu.* On top, a **live preview** (sticky, so
+it stays in view as you switch rows below it): a header drawn with the real
+header's classes, twice — *Room to spare* (words) and *Too narrow for words*
+(icons) — that changes as you switch or move a row. Then **Tabs** (Agent,
+Terminal, Diff, Queue, Map, Thread) and **Buttons** (Fast-track ⏩, Copy
+entire history, Next step (Commit…), History, Cost, Diff stats, Hide −), each
+ordered among its own kind. Agent's switch is locked on. ⋯ is not a row: it
+is always last, and holds everything switched off here (see
+[The pane header](#the-pane-header)). The choice is the synced pref
+`pane_header` (`{order, hidden}`, localStorage `mf_paneheader`), so it
+follows you to your other devices; `null` (Reset) is the default set. An item
+a newer build adds, which an older saved choice never mentioned, takes its
+own default rather than vanishing or appearing uninvited.
 
 The palette's **Customize…** opens it too. `Esc` or a click on the backdrop
 closes it.

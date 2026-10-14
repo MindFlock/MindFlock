@@ -9,7 +9,7 @@
  *            Merge PR, View PR, Fast-track…, Checklist…, Run checks now
  *   Session  Rename…, Resume (only on a paused session: there is no Pause
  *            here — the palette, `mindflock pause` and the API still pause)
- *   More ▸   the rare ones, folded: Terminal, Code map, Thread, Browse
+ *   More ▸   the rare ones, folded: Terminal, Diff, Code map, Thread, Browse
  *            history, Copy entire history (pane only), Split into parallel
  *            pieces…, Duplicate, Open in the IDE,
  *            Open preview, Select, Hide window, Move out of a group, Re-run
@@ -17,9 +17,11 @@
  *   Danger   Close, Delete…
  *
  * A group with nothing in it is left out. A pane passes what its own header
- * already shows (a visible tab is not repeated — every header shows Terminal
- * and Map, so only the row's menu offers them) and the actions only a pane
- * can do (Browse history, Copy entire history). */
+ * already shows (a visible tab is not repeated) and what only a pane has
+ * (Browse history, Copy entire history), and — when its header leaves the
+ * guided button out (Customize → Pane header) — that button's step, first
+ * under Ship unless Ship already offers it by name, so whatever the header
+ * hides is still here. */
 
 import type { Instance } from "../api/types";
 import { instApi } from "../api/client";
@@ -79,6 +81,9 @@ export interface SessionMenuOpts {
   /** Pane-only: copy the active terminal tab's whole history (absent on a
    * tab with no terminal). */
   onCopyHistory?: () => void;
+  /** Pane-only: the guided next step its header doesn't show (Commit…,
+   * Push, Open PR, Re-commit…), so it is one click away here instead. */
+  onNextStep?: { label: string; title?: string; disabled?: boolean; run(): unknown };
   /** Row-only: pick the row for the bulk bar. */
   onSelect?: () => void;
   picked?: boolean;
@@ -203,6 +208,21 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
       run: () => openSettings(PEER_SCREEN),
     },
   ]);
+  const next = opts.onNextStep;
+  const shipGroup =
+    next && !ship.some((i) => i.label === next.label)
+      ? [
+          {
+            key: "next-step",
+            label: next.label,
+            note: "next step",
+            title: next.title,
+            disabled: !!next.disabled,
+            run: () => void next.run(),
+          },
+          ...ship,
+        ]
+      : ship;
 
   // No Pause here (the owner found the button pointless; the palette, the
   // CLI and the API still pause). A session that IS paused — from those, or
@@ -214,6 +234,8 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
   const folder = inst.folder || inst.path || "";
   const more = keep([
     !peer && !tabs.has("shell") && { key: "terminal", label: "Terminal", title: "A shell in this session's folder", run: () => openTab(title, "shell") },
+    ctx.caps.git !== false &&
+      !tabs.has("diff") && { key: "diff", label: "Diff", title: "What this session changed", run: () => openTab(title, "diff") },
     ctx.caps.git !== false && !tabs.has("map") && fromTable("map"),
     fromTable("thread", { note: actionNote("thread", ctx) }),
     opts.onHistory && {
@@ -314,7 +336,7 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
 
   const groups: MenuGroup[] = [
     { id: "work" as const, label: "Work", items: work },
-    { id: "ship" as const, label: "Ship", items: ship },
+    { id: "ship" as const, label: "Ship", items: shipGroup },
     { id: "session" as const, label: "Session", items: session },
     { id: "danger" as const, label: "", items: danger },
   ].filter((g) => g.items.length);

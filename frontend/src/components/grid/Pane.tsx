@@ -1,13 +1,13 @@
 /** One session pane (port of app.js makePane, section 14): header with grip /
- * title / diff-stat context line / tabs / next-step / usage chip / state pill
- * / history + copy-whole-history + hide (−), the terminal hosts, Diff + Map +
- * Queue tabs, and the budget-lock overlay (Map is git-gated exactly like
- * Diff). Terminal and Map are in every header (narrow heads draw the tabs as
- * icons); there is no Pause button — only ▶ Resume, on a paused session.
- * Terminals are adopted from lib/terminals' registry so they never remount
- * with the pane. */
+ * title / the person's choice of tabs and buttons (lib/paneHeader — Customize
+ * → Pane header) / ⋯ always last, the terminal hosts, Diff + Map + Queue
+ * tabs, and the budget-lock overlay (Map is git-gated exactly like Diff). The
+ * header draws words while they fit and icons once they don't (measured —
+ * `fitDecision`); there is no Pause button — only ▶ Resume, on a paused
+ * session. Terminals are adopted from lib/terminals' registry so they never
+ * remount with the pane. */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Instance } from "../../api/types";
 import { instApi } from "../../api/client";
 import { refreshInstances, useConfig, useInstances } from "../../state/queries";
@@ -55,14 +55,20 @@ import { useSetup } from "../setup/useSetup";
 import { VerdictChip } from "../dialogs/VerdictChip";
 import { familyOf, newestReportTs, threadBadge, threadTabShown } from "../../lib/thread";
 import { effectiveActivity } from "../../lib/stage";
+import {
+  TITLE_ROOM_PX,
+  fitDecision,
+  headerItems,
+  type FitState,
+  type PaneButtonId,
+  type PaneTabId,
+} from "../../lib/paneHeader";
+import { usageHeadline } from "../usage/usageModel";
+import { TabIcon } from "./TabIcon";
 
 /** "thread" is the Thread tab (the session's workers and what was said
  * between them), opened by its own button or store.threadOpen. */
 type Tab = "agent" | "shell" | "diff" | "queue" | "map" | "thread";
-
-/** Below this pane width the header folds its secondary tabs and controls
- * into ⋯ — the Commit… button must never be the thing scrolled out of view. */
-const PANE_NARROW_PX = 560;
 
 /** Tabs that need git (the Map reads the worktree's files, diff and imports). */
 const GIT_TABS: ReadonlySet<string> = new Set(["diff", "map"]);
@@ -514,18 +520,44 @@ export function Pane({
     if (ftMenu && ftGone) useUi.getState().setFastTrackMenu(null);
   }, [ftMenu, ftGone]);
   const me = useMe(); // before the early returns: hooks run every render
-  // A calm header (lib/calm.ts's first hour, or a pane too narrow for the
-  // whole row): name · state · Agent / Diff · Commit…, the rest under ⋯.
+  // The calm first hour (lib/calm.ts) folds Queue and ⏩ from a header that
+  // is still the default; a customized one is left as chosen (headerItems).
   const calm = useCalm();
-  const [paneNarrow, setPaneNarrow] = useState(false);
+  const paneHeader = useUi((s) => s.paneHeader);
+  // Words while they fit, icons once they don't: measured on the header
+  // itself before paint (fitDecision), re-measured when it resizes and when
+  // what it holds changes (its data-fit-key).
+  const headRef = useRef<HTMLDivElement | null>(null);
+  const [fit, setFit] = useState<FitState>({ icons: false, textNeed: null });
+  const fitRef = useRef(fit);
+  fitRef.current = fit;
+  const fitKey = useRef("");
+  const measureFit = useCallback(() => {
+    const el = headRef.current;
+    if (!el) return;
+    let cur = fitRef.current;
+    // A render still on its way: the DOM isn't the state being judged yet.
+    if (el.classList.contains("head-icons") !== cur.icons) return;
+    const key = el.dataset.fitKey || "";
+    if (key !== fitKey.current) {
+      fitKey.current = key;
+      cur = { ...cur, textNeed: null };
+    }
+    const next = fitDecision(cur, el.clientWidth, headNeed(el));
+    if (next.icons !== fitRef.current.icons || next.textNeed !== fitRef.current.textNeed) {
+      fitRef.current = next;
+      setFit(next);
+    }
+  }, []);
+  useLayoutEffect(measureFit);
   useEffect(() => {
-    const el = paneRef.current;
+    const el = headRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => setPaneNarrow(el.clientWidth > 0 && el.clientWidth < PANE_NARROW_PX));
+    const ro = new ResizeObserver(() => measureFit());
     ro.observe(el);
     return () => ro.disconnect();
-  }, [missing, loading]);
-  const compact = calm || paneNarrow;
+  }, [missing, loading, measureFit]);
+  const icons = fit.icons;
   // An agent that isn't installed (the terminal says `claude: not found`) or
   // isn't signed in (it sits at its first-run questions): the pane says what
   // that means and where the fix is.
@@ -662,42 +694,319 @@ export function Pane({
   const quiet =
     !!ns && !ns.hint && !ns.disabled && (act === "working" || act === "clarify" || act === "limit");
 
-  // Terminal and Map are in every header — calm or narrow alike (a narrow
-  // head draws its tabs as icons, Pane.css). Terminal is refused for a shared
-  // folder (its shell would run outside the sandbox); Map needs git.
-  // What the calm header still folds under ⋯ (see PANE_NARROW_PX / useCalm):
-  // Queue, ⏩ and the cost chip. A Queue with something in it, or the tab you
-  // are ON, stays in the row, and so does a fast-track someone set: those
+  // What the header draws, in order: the person's choice (Customize → Pane
+  // header, lib/paneHeader), less what this session can't have — Terminal
+  // for a shared folder (its shell would run outside the sandbox), Diff and
+  // Map without git, Thread without workers — plus the tab you are ON, shown
+  // or not. The calm first hour folds Queue and ⏩ from a default header,
+  // except a Queue with something in it or a fast-track someone set: those
   // are state, not options.
-  const showShellTab = !sharedFolder;
-  const showMapTab = caps.git;
-  const showQueueTab = !compact || tab === "queue" || pending > 0 || holding;
-  const showFt = !!ft && (!compact || ft.lane !== "leave" || ft.halted || ft.active || !!ftMenu);
+  const items = headerItems(paneHeader, {
+    active: tab,
+    sharedFolder,
+    git: caps.git,
+    thread: threadShown,
+    calm,
+    queueBusy: pending > 0 || holding,
+    ftBusy: !!ft && (ft.lane !== "leave" || ft.halted || ft.active || !!ftMenu),
+  });
+  const shows = (id: PaneButtonId) => items.buttons.includes(id);
+  const ftShown = !!ft && shows("fasttrack");
   // The ⋯ menu: the session's one menu (lib/sessionMenu), less the tabs this
-  // header already shows, plus the history view only a pane has.
+  // header already shows, plus what only a pane has — and everything the
+  // header leaves out (History, the next step) is in it.
   const menuCtx = actionCtx(title, { inst, caps });
-  const visibleTabs = [showShellTab && "shell", showMapTab && "map"].filter(Boolean) as string[];
+  const visibleTabs: string[] = items.tabs;
   // The terminal whose history the copy button takes: the tab you are on, and
   // only a terminal tab (Diff, Map, Queue and Thread have no scrollback).
   const termTab: "agent" | "shell" | null = tab === "agent" || tab === "shell" ? tab : null;
   const copyHistory = () => {
     if (termTab) void copyPaneHistory(title, termTab);
   };
+  // "Commit…" only once there is something to commit; until then the header
+  // has no lead button (the agent's state chip says what it is doing).
+  const shownStep = ns && ns.label === "Commit…" && !hasUncommitted(inst) ? null : ns;
+  const openHistory = () => setHistPane({ kind: tab === "shell" ? "shell" : "agent", dragSel: null });
   const menu = () =>
     sessionMenu(inst, menuCtx, {
       visibleTabs,
-      onHistory: compact
-        ? () => setHistPane({ kind: tab === "shell" ? "shell" : "agent", dragSel: null })
-        : undefined,
+      onHistory: shows("history") ? undefined : openHistory,
       onCopyHistory: termTab ? copyHistory : undefined,
+      onNextStep: shows("next") ? undefined : shownStep ?? undefined,
     });
+  // The read-outs the header leaves out (the cost chip, the diff-stat), at
+  // the top of ⋯ so they are still one click away.
+  const menuSummary = [
+    !shows("cost") && usageHeadline(inst),
+    !shows("diffstat") && hasDiffStat && diffStatText(inst),
+  ].filter(Boolean) as string[];
   // No Pause button: pausing lives in the palette, the CLI and the API. A
   // session that IS paused (from there, or by an older build) shows ▶ Resume
   // here, next to ⋯, so the way back is never a menu away.
   const canResume = sessionAction("resume").enabled(menuCtx);
-  // "Commit…" only once there is something to commit; until then the header
-  // has no lead button (the agent's state chip says what it is doing).
-  const shownStep = ns && ns.label === "Commit…" && !hasUncommitted(inst) ? null : ns;
+  // What makes the header's width change: the words↔icons fit re-measures
+  // when this does (the cost ticking up doesn't count — words re-measure on
+  // every render anyway).
+  const fitKeyNow = [
+    items.tabs.join(","),
+    items.buttons.join(","),
+    displayName,
+    shownStep?.label ?? "",
+    ft?.label ?? "",
+    pending,
+    holding ? 1 : 0,
+    badge.count,
+    canResume ? 1 : 0,
+    deviceName,
+  ].join("|");
+
+  const tabEls: Record<PaneTabId, ReactNode> = {
+    agent: (
+      <button
+        key="agent"
+        data-tab="agent"
+        className={tab === "agent" ? "active" : ""}
+        title="Agent — the session's agent CLI"
+        onClick={(e) => { e.stopPropagation(); showTab("agent"); }}
+      >
+        <TabIcon name="agent" />
+        <span className="tab-label">Agent</span>
+      </button>
+    ),
+    shell: (
+      <button
+        key="shell"
+        data-tab="shell"
+        className={tab === "shell" ? "active" : ""}
+        title="Terminal — a shell in this session's folder"
+        onClick={(e) => { e.stopPropagation(); showTab("shell"); }}
+      >
+        <TabIcon name="shell" />
+        <span className="tab-label">Terminal</span>
+      </button>
+    ),
+    diff: (
+      <button
+        key="diff"
+        data-tab="diff"
+        className={tab === "diff" ? "active" : ""}
+        title="Diff — what this session changed"
+        onClick={(e) => { e.stopPropagation(); showTab("diff"); }}
+      >
+        <TabIcon name="diff" />
+        <span className="tab-label">Diff</span>
+      </button>
+    ),
+    map: (
+      <button
+        key="map"
+        data-tab="map"
+        className={tab === "map" ? "active" : ""}
+        title="Code map — the worktree as a tree: agents, zones, plan, blast radius"
+        onClick={(e) => { e.stopPropagation(); showTab("map"); }}
+      >
+        <TabIcon name="map" />
+        <span className="tab-label">Map</span>
+      </button>
+    ),
+    queue: (
+      <button
+        key="queue"
+        data-tab="queue"
+        className={
+          "queue-tab" +
+          (tab === "queue" ? " active" : "") +
+          (pending > 0 && q?.enabled === false ? " q-paused" : "") +
+          (q?.loop ? " q-loop" : "") +
+          (holding ? " q-limited" : "")
+        }
+        title={
+          holding
+            ? q?.wait_for_limit !== false
+              ? `Usage limit reached · auto-resumes in ${queueRelTime(limitedMs)} (${pending} queued)`
+              : `Usage limit reached · queue stopped (${pending} queued)`
+            : "Send a message now or queue prompts to auto-run — keeps the session going across usage limits"
+        }
+        onClick={(e) => { e.stopPropagation(); showTab("queue"); }}
+      >
+        <TabIcon name="queue" />
+        <span className="tab-label">Queue</span>
+        {(pending > 0 || holding) && (
+          <span className="queue-tab-badge">
+            {holding ? "⏳" : pending > 99 ? "99+" : String(pending)}
+          </span>
+        )}
+      </button>
+    ),
+    thread: (
+      <button
+        key="thread"
+        data-tab="thread"
+        className={"thread-tab" + (tab === "thread" ? " active" : "")}
+        title={
+          "Thread — this session's workers, what they reported and what passed between them; write to any of them as you (Ctrl+K T)" +
+          (badge.needs ? `\n${badge.needs} need${badge.needs === 1 ? "s" : ""} you` : "") +
+          (badge.fresh ? `\n${badge.fresh} new report${badge.fresh === 1 ? "" : "s"}` : "")
+        }
+        onClick={(e) => { e.stopPropagation(); showTab("thread"); }}
+      >
+        <TabIcon name="thread" />
+        <span className="tab-label">Thread</span>
+        {badge.count > 0 && (
+          <span className={"queue-tab-badge thread-badge" + (badge.needs ? " needs" : "")}>
+            {badge.count > 99 ? "99+" : String(badge.count)}
+          </span>
+        )}
+      </button>
+    ),
+  };
+
+  const buttonEls: Record<PaneButtonId, ReactNode> = {
+    next: shownStep ? (
+      <button
+        key="next"
+        className={
+          "nextstep" +
+          (shownStep.hint ? " nextstep-hint" : "") +
+          (shownStep.disabled ? " nextstep-blocked" : "") +
+          (quiet ? " nextstep-quiet" : "")
+        }
+        type="button"
+        disabled={!!shownStep.disabled}
+        title={shownStep.title || "The next step for this session: " + shownStep.label.replace(/…$/, "")}
+        onClick={(ev) => {
+          ev.stopPropagation();
+          if (!shownStep.disabled) shownStep.run();
+        }}
+      >
+        {shownStep.label}
+      </button>
+    ) : null,
+    fasttrack: ft ? (
+      // THE per-session fast-track control: it names the target and opens
+      // the picker. A control, not a status chip.
+      <button
+        key="fasttrack"
+        ref={setFtEl}
+        className={
+          "nextstep nextstep-fast" +
+          (ft.active ? " is-on" : "") +
+          (ft.halted ? " nextstep-fast-halted" : "") +
+          (ft.lane !== "leave" ? " is-set" : "") +
+          (ftMenu ? " open" : "")
+        }
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={!!ftMenu}
+        aria-label={
+          "Fast-track: " +
+          (ft.lane === "leave" ? "off" : ft.label.replace(/^⏩ /, "")) +
+          (ft.askFirst ? ", asks first" : "")
+        }
+        title={ft.title}
+        data-ft-lane={ft.lane}
+        onClick={(ev) => {
+          ev.stopPropagation();
+          useUi.getState().setFastTrackMenu(ftMenu ? null : { title });
+        }}
+      >
+        {/* Off is just the glyph: a word there read as a second
+            next step. The aria-label still says "Fast-track: off". */}
+        {ft.lane === "leave" && !ft.halted ? "⏩" : ft.label}
+        {ft.askFirst && (
+          <span className="ft-ask" aria-hidden="true">
+            ?
+          </span>
+        )}
+      </button>
+    ) : null,
+    history: (
+      <button
+        key="history"
+        className="act pane-hist"
+        type="button"
+        aria-label="Browse the full history"
+        title="Browse the full history — scroll & select like a page (or drag a selection past the top of the terminal)"
+        onClick={(e) => {
+          e.stopPropagation();
+          openHistory();
+        }}
+      >
+        <svg
+          className="btn-icon"
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M12 8v4l2 2" />
+          <path d="M3.05 11a9 9 0 1 1 .5 4" />
+          <path d="M3 22v-6h6" />
+        </svg>
+        <span className="btn-label" aria-hidden="true">History</span>
+      </button>
+    ),
+    // The active terminal's whole history to the clipboard, one click.
+    // Disabled, not hidden, on Diff / Map / Queue / Thread, so the row never
+    // shifts as you change tabs.
+    copy: (
+      <button
+        key="copy"
+        className="act copy-history"
+        type="button"
+        disabled={!termTab}
+        aria-label="Copy this pane's whole history"
+        title={
+          termTab
+            ? `Copy this pane's whole history — the ${termTab === "shell" ? "Terminal" : "Agent"} tab's full scrollback`
+            : "Copy this pane's whole history — open the Agent or Terminal tab first"
+        }
+        onClick={(e) => {
+          e.stopPropagation();
+          copyHistory();
+        }}
+      >
+        <svg
+          className="btn-icon"
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+          <rect x="8" y="2" width="8" height="4" rx="1" />
+        </svg>
+        <span className="btn-label" aria-hidden="true">Copy all</span>
+      </button>
+    ),
+    cost: <SessionUsageChip key="cost" inst={inst} />,
+    diffstat: hasDiffStat ? <CtxLine key="diffstat" inst={inst} /> : null,
+    hide: (
+      <button
+        key="hide"
+        className="act pane-close"
+        type="button"
+        aria-label="Hide window"
+        title={HIDE_TITLE}
+        onClick={(e) => {
+          e.stopPropagation();
+          useUi.getState().setHidden(title, true);
+        }}
+      >
+        −
+      </button>
+    ),
+  };
 
   return (
     <section
@@ -707,7 +1016,12 @@ export function Pane({
       onMouseDown={() => selectSession(title, { noKeyboard: true })}
       {...paneDrag}
     >
-      <div className="pane-head" {...headDrag}>
+      <div
+        ref={headRef}
+        className={"pane-head pane-head-fit" + (icons ? " head-icons" : "")}
+        data-fit-key={fitKeyNow}
+        {...headDrag}
+      >
         <span className="grip" title="Drag to move this window">⠿</span>
         <span className="title" title={nameTip}>
           {titleText}
@@ -723,161 +1037,10 @@ export function Pane({
             ↓{inst.behind} behind
           </span>
         )}
-        {hasDiffStat && <CtxLine inst={inst} />}
-        <div className="tabs">
-          <button
-            data-tab="agent"
-            className={tab === "agent" ? "active" : ""}
-            title="Agent — the session's agent CLI"
-            onClick={(e) => { e.stopPropagation(); showTab("agent"); }}
-          >
-            <TabIcon name="agent" />
-            <span className="tab-label">Agent</span>
-          </button>
-          {/* The companion shell would run outside the sandbox: refused for
-              a shared folder (peer_guard), so no tab. */}
-          {showShellTab && (
-            <button
-              data-tab="shell"
-              className={tab === "shell" ? "active" : ""}
-              title="Terminal — a shell in this session's folder"
-              onClick={(e) => { e.stopPropagation(); showTab("shell"); }}
-            >
-              <TabIcon name="shell" />
-              <span className="tab-label">Terminal</span>
-            </button>
-          )}
-          {caps.git && (
-            <button
-              data-tab="diff"
-              className={tab === "diff" ? "active" : ""}
-              title="Diff — what this session changed"
-              onClick={(e) => { e.stopPropagation(); showTab("diff"); }}
-            >
-              <TabIcon name="diff" />
-              <span className="tab-label">Diff</span>
-            </button>
-          )}
-          {showMapTab && (
-            <button
-              data-tab="map"
-              className={tab === "map" ? "active" : ""}
-              title="Code map — the worktree as a tree: agents, zones, plan, blast radius"
-              onClick={(e) => { e.stopPropagation(); showTab("map"); }}
-            >
-              <TabIcon name="map" />
-              <span className="tab-label">Map</span>
-            </button>
-          )}
-          {showQueueTab && (
-          <button
-            data-tab="queue"
-            className={
-              "queue-tab" +
-              (tab === "queue" ? " active" : "") +
-              (pending > 0 && q?.enabled === false ? " q-paused" : "") +
-              (q?.loop ? " q-loop" : "") +
-              (holding ? " q-limited" : "")
-            }
-            title={
-              holding
-                ? q?.wait_for_limit !== false
-                  ? `Usage limit reached · auto-resumes in ${queueRelTime(limitedMs)} (${pending} queued)`
-                  : `Usage limit reached · queue stopped (${pending} queued)`
-                : "Send a message now or queue prompts to auto-run — keeps the session going across usage limits"
-            }
-            onClick={(e) => { e.stopPropagation(); showTab("queue"); }}
-          >
-            <TabIcon name="queue" />
-            <span className="tab-label">Queue</span>
-            {(pending > 0 || holding) && (
-              <span className="queue-tab-badge">
-                {holding ? "⏳" : pending > 99 ? "99+" : String(pending)}
-              </span>
-            )}
-          </button>
-          )}
-          {threadShown && (
-            <button
-              data-tab="thread"
-              className={"thread-tab" + (tab === "thread" ? " active" : "")}
-              title={
-                "Thread — this session's workers, what they reported and what passed between them; write to any of them as you (Ctrl+K T)" +
-                (badge.needs ? `\n${badge.needs} need${badge.needs === 1 ? "s" : ""} you` : "") +
-                (badge.fresh ? `\n${badge.fresh} new report${badge.fresh === 1 ? "" : "s"}` : "")
-              }
-              onClick={(e) => { e.stopPropagation(); showTab("thread"); }}
-            >
-              <TabIcon name="thread" />
-              <span className="tab-label">Thread</span>
-              {badge.count > 0 && (
-                <span className={"queue-tab-badge thread-badge" + (badge.needs ? " needs" : "")}>
-                  {badge.count > 99 ? "99+" : String(badge.count)}
-                </span>
-              )}
-            </button>
-          )}
-        </div>
+        <div className="tabs">{items.tabs.map((id) => tabEls[id])}</div>
+        {/* Free room sits here, so the buttons and ⋯ hold the right edge. */}
+        <span className="head-spacer" aria-hidden="true" />
         <div className="actions">
-          {shownStep ? (
-            <button
-              className={
-                "nextstep" +
-                (shownStep.hint ? " nextstep-hint" : "") +
-                (shownStep.disabled ? " nextstep-blocked" : "") +
-                (quiet ? " nextstep-quiet" : "")
-              }
-              type="button"
-              disabled={!!shownStep.disabled}
-              title={shownStep.title || "The next step for this session: " + shownStep.label.replace(/…$/, "")}
-              onClick={(ev) => {
-                ev.stopPropagation();
-                if (!shownStep.disabled) shownStep.run();
-              }}
-            >
-              {shownStep.label}
-            </button>
-          ) : null}
-          {ft && showFt && (
-            // THE per-session fast-track control: it names the target and
-            // opens the picker. A control, not a status chip. Right after
-            // the guided button, ahead of the live step's free text, so a
-            // busy header that scrolls sideways never hides where the
-            // session is going.
-            <button
-              ref={setFtEl}
-              className={
-                "nextstep nextstep-fast" +
-                (ft.active ? " is-on" : "") +
-                (ft.halted ? " nextstep-fast-halted" : "") +
-                (ft.lane !== "leave" ? " is-set" : "") +
-                (ftMenu ? " open" : "")
-              }
-              type="button"
-              aria-haspopup="menu"
-              aria-expanded={!!ftMenu}
-              aria-label={
-                "Fast-track: " +
-                (ft.lane === "leave" ? "off" : ft.label.replace(/^⏩ /, "")) +
-                (ft.askFirst ? ", asks first" : "")
-              }
-              title={ft.title}
-              data-ft-lane={ft.lane}
-              onClick={(ev) => {
-                ev.stopPropagation();
-                useUi.getState().setFastTrackMenu(ftMenu ? null : { title });
-              }}
-            >
-              {/* Off is just the glyph: a word there read as a second
-                  next step. The aria-label still says "Fast-track: off". */}
-              {ft.lane === "leave" && !ft.halted ? "⏩" : ft.label}
-              {ft.askFirst && (
-                <span className="ft-ask" aria-hidden="true">
-                  ?
-                </span>
-              )}
-            </button>
-          )}
           {step && (
             <span
               className={"stepnow is-" + step.tone + (step.href ? " is-link" : "")}
@@ -926,15 +1089,16 @@ export function Pane({
           >
             {chip.label}
           </span>
+          <AccountChip inst={inst} />
+          {/* The keyboard is one person's at a time (lib/presence): "Driving"
+              / "Watching — take control", only once someone else is here. */}
+          <DriveButton inst={inst} me={me} />
+          {/* The person's buttons, in their order (Customize → Pane header). */}
+          {items.buttons.map((id) => buttonEls[id])}
         </div>
-        <AccountChip inst={inst} />
-        {!compact && <SessionUsageChip inst={inst} />}
-        {/* The keyboard is one person's at a time (lib/presence): "Driving"
-            / "Watching — take control", only once someone else is here. */}
-        <DriveButton inst={inst} me={me} />
         <span className={"state" + (wsState !== "connected" ? " state-bad" : "")}>{wsState}</span>
-        {/* Pinned right even when the header scrolls: history, copy and hide
-            stay reachable without scrolling to the end of a long header. */}
+        {/* Pinned right even when the header scrolls: ▶ Resume and ⋯ — always
+            the last thing in the row — stay reachable without scrolling. */}
         <div className="head-tail">
         {canResume && (
           <button
@@ -948,91 +1112,27 @@ export function Pane({
             }}
           >
             {/* Glyph only where the header is short of room. */}
-            {paneNarrow ? "▶" : "▶ Resume"}
+            {icons ? "▶" : "▶ Resume"}
           </button>
         )}
-        <PaneMoreMenu btnRef={ft && !showFt ? setFtEl : undefined}>
+        <PaneMoreMenu btnRef={ft && !ftShown ? setFtEl : undefined}>
           {(close) => (
-            <SessionMenu
-              model={menu()}
-              onDone={close}
-              onInUse={(t) => errorPop("Can't delete " + displayName, folderInUseText(t))}
-            />
+            <>
+              {menuSummary.length > 0 && (
+                <div className="pane-more-summary" role="note">
+                  {menuSummary.map((t) => (
+                    <span key={t}>{t}</span>
+                  ))}
+                </div>
+              )}
+              <SessionMenu
+                model={menu()}
+                onDone={close}
+                onInUse={(t) => errorPop("Can't delete " + displayName, folderInUseText(t))}
+              />
+            </>
           )}
         </PaneMoreMenu>
-        {!compact && (
-        <button
-          className="act pane-hist"
-          type="button"
-          aria-label="Browse the full history"
-          title="Browse the full history — scroll & select like a page (or drag a selection past the top of the terminal)"
-          onClick={(e) => {
-            e.stopPropagation();
-            setHistPane({ kind: tab === "shell" ? "shell" : "agent", dragSel: null });
-          }}
-        >
-          <svg
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M12 8v4l2 2" />
-            <path d="M3.05 11a9 9 0 1 1 .5 4" />
-            <path d="M3 22v-6h6" />
-          </svg>
-        </button>
-        )}
-        {/* The active terminal's whole history to the clipboard, one click.
-            Disabled, not hidden, on Diff / Map / Queue / Thread, so the tail
-            never shifts as you change tabs. */}
-        <button
-          className="act copy-history"
-          type="button"
-          disabled={!termTab}
-          aria-label="Copy this pane's whole history"
-          title={
-            termTab
-              ? `Copy this pane's whole history — the ${termTab === "shell" ? "Terminal" : "Agent"} tab's full scrollback`
-              : "Copy this pane's whole history — open the Agent or Terminal tab first"
-          }
-          onClick={(e) => {
-            e.stopPropagation();
-            copyHistory();
-          }}
-        >
-          <svg
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-            <rect x="8" y="2" width="8" height="4" rx="1" />
-          </svg>
-        </button>
-        <button
-          className="act pane-close"
-          type="button"
-          aria-label="Hide window"
-          title={HIDE_TITLE}
-          onClick={(e) => {
-            e.stopPropagation();
-            useUi.getState().setHidden(title, true);
-          }}
-        >
-          −
-        </button>
         </div>
       </div>
       <AgentBlockedBanner block={noAgent} title={title} />
@@ -1171,72 +1271,38 @@ export function Pane({
   );
 }
 
-/** A header tab's icon. Drawn only where the head is too narrow for the
- * words (Pane.css's container query swaps them); the label stays in the
- * button for screen readers and the title says what the tab is. */
-const TAB_ICONS: Record<Tab, React.ReactNode> = {
-  // A sparkle: the agent.
-  agent: <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" />,
-  // >_ : a shell prompt.
-  shell: (
-    <>
-      <polyline points="4 17 10 11 4 5" />
-      <line x1="12" y1="19" x2="20" y2="19" />
-    </>
-  ),
-  // ± : what changed.
-  diff: (
-    <>
-      <path d="M12 3v12" />
-      <path d="M6 9h12" />
-      <path d="M6 20h12" />
-    </>
-  ),
-  // A folded map.
-  map: (
-    <>
-      <polygon points="2 6 9 3 15 6 22 3 22 18 15 21 9 18 2 21" />
-      <line x1="9" y1="3" x2="9" y2="18" />
-      <line x1="15" y1="6" x2="15" y2="21" />
-    </>
-  ),
-  // A list: prompts waiting their turn.
-  queue: (
-    <>
-      <line x1="9" y1="6" x2="20" y2="6" />
-      <line x1="9" y1="12" x2="20" y2="12" />
-      <line x1="9" y1="18" x2="20" y2="18" />
-      <circle cx="4.5" cy="6" r="1" />
-      <circle cx="4.5" cy="12" r="1" />
-      <circle cx="4.5" cy="18" r="1" />
-    </>
-  ),
-  // Two speech bubbles: what passed between the workers.
-  thread: (
-    <>
-      <path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z" />
-      <path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1" />
-    </>
-  ),
-};
+/** The width a pane header's items take as they are drawn now, with the
+ * session's name at its reserved room (TITLE_ROOM_PX, or its own width when
+ * shorter): every in-flow child's box and margins, the gaps between them and
+ * the header's padding. The spacer is free room, so it counts as nothing but
+ * its gaps; children that aren't drawn (display: none) count as nothing at
+ * all. Read before paint by the words↔icons fit (fitDecision). */
+function headNeed(head: HTMLElement): number {
+  const cs = getComputedStyle(head);
+  const px = (v: string) => parseFloat(v) || 0;
+  let need = px(cs.paddingLeft) + px(cs.paddingRight);
+  let drawn = 0;
+  for (const el of Array.from(head.children) as HTMLElement[]) {
+    if (!el.getClientRects().length) continue;
+    const ecs = getComputedStyle(el);
+    if (ecs.position === "absolute" || ecs.position === "fixed") continue;
+    drawn++;
+    if (el.classList.contains("head-spacer")) continue;
+    need += px(ecs.marginLeft) + px(ecs.marginRight);
+    if (el.classList.contains("title")) need += Math.min(textWidth(el.textContent || "", ecs.font) + 2, TITLE_ROOM_PX);
+    else need += el.getBoundingClientRect().width;
+  }
+  return need + px(cs.columnGap) * Math.max(0, drawn - 1);
+}
 
-function TabIcon({ name }: { name: Tab }) {
-  return (
-    <svg
-      className="tab-icon"
-      width="13"
-      height="13"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {TAB_ICONS[name]}
-    </svg>
-  );
+let measureCtx: CanvasRenderingContext2D | null | undefined;
+/** A string's natural width in a font — the name's, which its own box can't
+ * say once it has been squeezed. */
+function textWidth(text: string, font: string): number {
+  if (measureCtx === undefined) measureCtx = document.createElement("canvas").getContext("2d");
+  if (!measureCtx) return text.length * 7;
+  measureCtx.font = font;
+  return measureCtx.measureText(text).width;
 }
 
 /** Reduce-motion cover (Settings → General): while the agent is running, an
@@ -1283,17 +1349,26 @@ function RunningCover({ paneRef }: { paneRef: React.RefObject<HTMLElement | null
   );
 }
 
+function ctxNum(n: number): string {
+  if (n < 1000) return String(n);
+  const k = n / 1000;
+  return (k < 10 ? k.toFixed(1) : String(Math.round(k))).replace(/\.0$/, "") + "k";
+}
+
+/** The diff-stat as one line ("+12 −3 · 2 files") — ⋯'s read-out when the
+ * header leaves the diff-stat out. */
+function diffStatText(inst: Instance): string {
+  const ds = inst.diff_stat;
+  const files = ds?.files || 0;
+  return `+${ctxNum(ds?.additions || 0)} −${ctxNum(ds?.deletions || 0)} · ${files}${files === 1 ? " file" : " files"}`;
+}
+
 function CtxLine({ inst }: { inst: Instance }) {
   const ds = inst.diff_stat!;
   const files = ds.files || 0,
     additions = ds.additions || 0,
     deletions = ds.deletions || 0;
   const plural = files === 1 ? " file" : " files";
-  const ctxNum = (n: number) => {
-    if (n < 1000) return String(n);
-    const k = n / 1000;
-    return (k < 10 ? k.toFixed(1) : String(Math.round(k))).replace(/\.0$/, "") + "k";
-  };
   let tip = `Total change vs base: +${additions} −${deletions} across ${files}${plural}`;
   const un = ds.uncommitted;
   if (un) tip += ` · uncommitted +${un.additions || 0} −${un.deletions || 0}`;

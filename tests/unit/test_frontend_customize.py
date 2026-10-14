@@ -1,4 +1,4 @@
-"""Customize (Sidebar · Prompts) and the bell as the one "needs you" list —
+"""Customize (Sidebar · Pane header) and the bell as the one "needs you" list —
 source-level pins, so they hold before the bundle is rebuilt.
 
 The owner's ask: Prompts stops being a top-bar destination and becomes a tab
@@ -27,15 +27,19 @@ def _code(rel: str) -> str:
     return re.sub(r"(?m)^\s*//[^\n]*|\s//[^\n]*", "", code)
 
 
-def test_customize_is_the_sidebar_picker_and_prompts_is_its_own_dialog():
-    """Prompts left Customize: it is a sidebar bar (switched on in Customize,
-    like the Assistant) with its own Prompts dialog behind "Manage"."""
+def test_customize_is_sidebar_and_pane_header_and_prompts_is_its_own_dialog():
+    """Customize is two pages — Sidebar and Pane header (the owner asked for a
+    customize tab for the top banner too). Prompts left Customize: it is a
+    sidebar bar (switched on in Customize, like the Assistant) with its own
+    Prompts dialog behind "Manage"."""
     src = _src("components/customize/CustomizeDialog.tsx")
     assert 'useUi((s) => s.openDialog === "customize")' in src
     assert 'id="customize-dialog"' in src
     assert 'id="customize-close"' in src
     assert "<SidebarBarsPicker />" in src
-    assert "customize-tabs" not in src
+    assert "<PaneHeaderPicker />" in src
+    assert 'className="customize-tabs" role="tablist"' in src
+    assert 'id="customize-reset"' in src
     assert "PromptsPanel" not in src
     code = _code("components/customize/CustomizeDialog.tsx")
     assert "Outbox" not in code and '"outbox"' not in code
@@ -212,6 +216,8 @@ def test_no_native_dialog_calls_in_the_new_or_edited_files():
     for rel in (
         "components/customize/CustomizeDialog.tsx",
         "components/customize/SidebarBarsPicker.tsx",
+        "components/customize/PaneHeaderPicker.tsx",
+        "components/customize/CustomizeRow.tsx",
         "components/sidebar/FooterCustomize.tsx",
         "components/dialogs/PromptsDialog.tsx",
         "components/outbox/WaitingRow.tsx",

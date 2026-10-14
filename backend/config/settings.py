@@ -1475,6 +1475,10 @@ class PrefsSettings:
     welcome_tour: Optional[bool] = None
     # Settings shows its advanced screens; unset = the basic set only.
     settings_advanced: Optional[bool] = None
+    # What a session pane's header shows and in what order (Customize → Pane
+    # header): ``{"order": [item id…], "hidden": [item id…]}``; None = never
+    # customized (the built-in default set).
+    pane_header: Optional[dict] = None
 
     _STRS = ("theme", "diff_mode", "diff_base")
     _BOOLS = (
@@ -1504,6 +1508,11 @@ class PrefsSettings:
         for f in self._BOOLS + self._INTS:
             if getattr(self, f) is not None:
                 d[f] = getattr(self, f)
+        if self.pane_header is not None:
+            d["pane_header"] = {
+                "order": list(self.pane_header["order"]),
+                "hidden": list(self.pane_header["hidden"]),
+            }
         return d
 
     @classmethod
@@ -1529,7 +1538,21 @@ class PrefsSettings:
             map_tour=_opt_bool(d.get("map_tour")),
             welcome_tour=_opt_bool(d.get("welcome_tour")),
             settings_advanced=_opt_bool(d.get("settings_advanced")),
+            pane_header=_pane_header(d.get("pane_header")),
         )
+
+
+def _pane_header(v: Any) -> Optional[dict]:
+    """``{"order": [str], "hidden": [str]}`` or None. Anything else — not a
+    dict, a missing or non-list half — is "never customized"; the ids are the
+    frontend's (lib/paneHeader.ts) and kept as given, so an item a newer
+    build adds survives an older server."""
+    if not isinstance(v, dict):
+        return None
+    order, hidden = v.get("order"), v.get("hidden")
+    if not isinstance(order, (list, tuple)) or not isinstance(hidden, (list, tuple)):
+        return None
+    return {"order": _str_list(order), "hidden": _str_list(hidden)}
 
 
 def _prompt_presets(v: Any) -> List[dict]:

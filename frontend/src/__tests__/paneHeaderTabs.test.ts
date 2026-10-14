@@ -1,10 +1,11 @@
 /** The pane header after "drop the pause button, bring Terminal and Map back,
  * and copy the entire channel" (owner, 2026-10-14):
  *
- *  - Terminal and Map are in EVERY header. They used to fold into ⋯ whenever
- *    the header was "compact" — and compact was `calm || paneNarrow`, so the
- *    calm first hour (a newcomer with < 3 sessions) hid them even in a
- *    1500px-wide pane. A narrow head draws the tabs as icons instead.
+ *  - Terminal and Map no longer fold into ⋯ whenever the header was
+ *    "compact" (`calm || paneNarrow`), which hid them even in a 1500px-wide
+ *    pane during the calm first hour. Since Customize → Pane header, the
+ *    person's choice decides (Terminal on by default, Map one switch away);
+ *    a header too narrow for the words draws the tabs as icons instead.
  *  - No ❚❚ Pause button and no Pause in the ⋯ menus; ▶ Resume only on a
  *    paused session. The palette, `mindflock pause` and the API still pause.
  *  - A copy-whole-history button in the header (and ⋯ → Copy entire history),
@@ -41,34 +42,40 @@ const allKeys = (m: ReturnType<typeof menu>) => [...m.groups.flatMap((g) => g.it
 
 const pane = code("components/grid/Pane.tsx");
 
-describe("Terminal and Map are in every pane header", () => {
-  it("no longer hang off `compact` (calm first hour or a narrow pane)", () => {
-    expect(pane).toContain("const showShellTab = !sharedFolder;");
-    expect(pane).toContain("const showMapTab = caps.git;");
-    expect(pane).not.toMatch(/showShellTab = [^;]*compact/);
-    expect(pane).not.toMatch(/showMapTab = [^;]*compact/);
-    // The pane hands both to its ⋯ as visible, so the menu doesn't repeat them.
-    expect(pane).toContain('const visibleTabs = [showShellTab && "shell", showMapTab && "map"]');
+describe("Terminal and Map hang off the person's choice, never `compact`", () => {
+  // Since Customize → Pane header (paneHeaderCustomize.test.ts) the header
+  // draws lib/paneHeader's items: Terminal is a default tab, Map is one
+  // switch away, and neither folds for a narrow pane.
+  it("no `compact` (calm first hour or a narrow pane) decides a tab", () => {
+    expect(pane).not.toMatch(/\bcompact\b/);
+    expect(pane).not.toContain("paneNarrow");
+    expect(pane).toContain("const items = headerItems(paneHeader, {");
+    expect(pane).toContain('<div className="tabs">{items.tabs.map((id) => tabEls[id])}</div>');
+    // The pane hands its drawn tabs to its ⋯ as visible, so the menu doesn't repeat them.
+    expect(pane).toContain("const visibleTabs: string[] = items.tabs;");
   });
 
-  it("every tab carries an icon and its word; a narrow head shows the icon", () => {
+  it("every tab carries an icon and its word; a header too narrow for the words shows the icon", () => {
     for (const t of ["agent", "shell", "diff", "map", "queue", "thread"]) expect(pane).toContain(`<TabIcon name="${t}" />`);
     for (const w of ["Agent", "Terminal", "Diff", "Map", "Queue", "Thread"])
       expect(pane).toContain(`<span className="tab-label">${w}</span>`);
     const css = CSS["components/grid/Pane.css"];
     expect(css).toMatch(/\.pane-head \.tabs \.tab-icon \{\s*display: none;/);
-    const narrow = css.slice(css.indexOf("@container (max-width: 760px)"));
-    expect(narrow).toMatch(/^@container \(max-width: 760px\) \{\s*\.pane-head \.tabs \.tab-icon \{\s*display: block;/);
+    // Measured, not a breakpoint: the 760px query is gone.
+    expect(css).not.toContain("@container (max-width: 760px)");
+    expect(css).toMatch(/\.pane-head\.head-icons \.tabs \.tab-icon \{\s*display: block;/);
     // The word stays for screen readers (visually hidden, not display:none).
-    expect(narrow.slice(0, narrow.indexOf("\n}\n"))).toMatch(/\.tab-label \{\s*position: absolute;[\s\S]*clip: rect\(0 0 0 0\);/);
+    expect(css).toMatch(/\.pane-head\.head-icons \.tabs \.tab-label \{\s*position: absolute;[\s\S]*?clip: rect\(0 0 0 0\);/);
   });
 
-  it("the pane ⋯ menu leaves Terminal / Code map to the header; the row menu keeps them", () => {
-    const paneMenu = allKeys(menu({}, { visibleTabs: ["shell", "map"] }));
+  it("the pane ⋯ menu leaves the header's tabs to the header; the row menu keeps them", () => {
+    const paneMenu = allKeys(menu({}, { visibleTabs: ["shell", "diff", "map"] }));
     expect(paneMenu).not.toContain("terminal");
+    expect(paneMenu).not.toContain("diff");
     expect(paneMenu).not.toContain("map");
     const rowMenu = allKeys(menu());
     expect(rowMenu).toContain("terminal");
+    expect(rowMenu).toContain("diff");
     expect(rowMenu).toContain("map");
   });
 });
@@ -122,9 +129,10 @@ describe("copy the entire history", () => {
     expect(btn).toContain("disabled={!termTab}");
     expect(btn).toContain('aria-label="Copy this pane\'s whole history"');
     expect(btn).toContain("copyHistory();");
-    // Not folded by the calm/narrow header: no `!compact &&` in front of it.
+    // A default button: the person's choice decides, not a calm/narrow fold.
     const before = pane.slice(pane.indexOf('className="act copy-history"') - 300, pane.indexOf('className="act copy-history"'));
     expect(before).not.toMatch(/!compact && \(\s*<button\s*$/);
+    expect(before).toContain("copy: (");
   });
 
   it("the pane ⋯ offers Copy entire history only on a terminal tab", () => {

@@ -289,3 +289,56 @@ def test_settings_advanced_over_the_prefs_route(client):
     assert got["settings_advanced"] is True
     store.invalidate()
     assert store.load_settings().prefs.settings_advanced is True
+
+
+# --------------------------------------------------------------------------- #
+# pane_header (Customize → Pane header)
+# --------------------------------------------------------------------------- #
+def test_pane_header_is_a_synced_object_with_two_lists():
+    choice = {"order": ["agent", "map", "copy"], "hidden": ["copy"]}
+    p = store.PrefsSettings.from_dict({"pane_header": choice})
+    assert p.pane_header == choice
+    assert p.to_dict() == {"pane_header": choice}
+    assert "pane_header" in settings_sync.SYNCED["prefs"]
+    assert settings_sync.LABELS["prefs.pane_header"] == "Pane header items"
+
+
+def test_pane_header_unset_or_malformed_is_never_customized():
+    assert "pane_header" not in store.PrefsSettings.from_dict({}).to_dict()
+    for bad in ("x", [], {"order": ["a"]}, {"order": "a", "hidden": []}, None):
+        assert (
+            store.PrefsSettings.from_dict({"pane_header": bad}).pane_header is None
+        ), bad
+    # Unknown ids (a newer build's) are kept, blanks dropped — the frontend
+    # ignores ids it doesn't know (lib/paneHeader.resolvePaneHeader).
+    p = store.PrefsSettings.from_dict(
+        {"pane_header": {"order": ["agent", " ", "zap"], "hidden": []}}
+    )
+    assert p.pane_header == {"order": ["agent", "zap"], "hidden": []}
+
+
+def test_pane_header_over_the_prefs_route(client):
+    assert client.get("/api/prefs").json()["pane_header"] is None
+    choice = {"order": ["agent", "shell"], "hidden": ["shell"]}
+    assert (
+        client.post("/api/prefs", json={"pane_header": choice}).json()["pane_header"]
+        == choice
+    )
+    store.invalidate()
+    assert store.load_settings().prefs.pane_header == choice
+    assert (
+        client.post("/api/prefs", json={"pane_header": None}).json()["pane_header"]
+        is None
+    )
+    store.invalidate()
+    assert store.load_settings().prefs.pane_header is None
+
+
+def test_pane_header_chosen_on_one_device_shows_on_the_others(tmp_path, monkeypatch):
+    devices = Devices(tmp_path, monkeypatch)
+    devices.all_on()
+    choice = {"order": ["agent", "map"], "hidden": []}
+    store.update_settings(prefs={"pane_header": choice})
+    devices.sync("rig")
+    with devices.on("rig"):
+        assert devices.get("prefs", "pane_header") == choice

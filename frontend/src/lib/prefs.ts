@@ -47,6 +47,9 @@ export interface Prefs {
   /** The welcome tour has been shown (true) — on any device; it opens by
    * itself once, on a first launch, until then. */
   welcome_tour: boolean | null;
+  /** What a session pane's header shows and in what order (lib/paneHeader:
+   * `{order, hidden}`); null = never customized, the defaults. */
+  pane_header: { order: string[]; hidden: string[] } | null;
 }
 
 export type PrefField = keyof Prefs;
@@ -69,6 +72,7 @@ export const PREF_DEFAULTS: Prefs = {
   map_tour: null,
   settings_advanced: null,
   welcome_tour: null,
+  pane_header: null,
 };
 
 type Kind = "json-object" | "json-list" | "json-bool" | "json-number" | "raw";
@@ -103,6 +107,7 @@ export const PREF_MAP: PrefKey[] = [
   { ls: "mf_map_tour", field: "map_tour", kind: "json-bool" },
   { ls: "mf_settings_advanced", field: "settings_advanced", kind: "json-bool" },
   { ls: "mf_welcome_tour", field: "welcome_tour", kind: "json-bool" },
+  { ls: "mf_paneheader", field: "pane_header", kind: "json-object" },
 ];
 
 const BY_LS = new Map(PREF_MAP.map((p) => [p.ls, p]));
