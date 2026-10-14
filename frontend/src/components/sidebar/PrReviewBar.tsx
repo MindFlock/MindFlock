@@ -10,14 +10,11 @@
  * can't run with an empty repo list. */
 
 import { useUi } from "../../state/store";
-import { useTicketingSources } from "../../state/queries";
 import { useGithubToggleBar } from "./useGithubToggleBar";
-import { useIntakePause } from "../intake/pause";
-import "../intake/pauseButton.css";
 
 export function PrReviewBar() {
   const openDialogFor = useUi((s) => s.openDialogFor);
-  // Absent => on (the default once repos exist); explicit false => paused.
+  // Absent => on (the default once repos exist); explicit false => off.
   const { visible, repos, on, active, starting, busy, toggle } = useGithubToggleBar({
     settingKey: "enabled",
     reposKey: "repos",
@@ -25,9 +22,6 @@ export function PrReviewBar() {
     activeFlag: "pr_active",
     toggleLabel: "Auto-address review comments",
   });
-  // Off because Pause intake turned it off: drawn striped amber, not plain off.
-  const pause = useIntakePause((useTicketingSources(true).data || []).length);
-  const paused = !on && pause.pausedKind("prs");
   if (!visible) return null;
 
   return (
@@ -64,7 +58,7 @@ export function PrReviewBar() {
       </button>
       <span className="dc-actions">
         <label
-          className={"dc-switch" + (paused ? " paused" : "")}
+          className="dc-switch"
           title="Auto-address review comments — the same switch as Intake → GitHub PRs (your repositories are kept either way)"
         >
           <input

@@ -4,7 +4,7 @@
  * never "review", because "Automated review" read as the opposite feature.
  *
  * Off until switched on, like Issues. Saved settings from before that default
- * keep their meaning (unset with repos = on — see pause.ts `prsOn`); a fresh
+ * keep their meaning (unset with repos = on — see switches.ts `prsOn`); a fresh
  * setup's first repository is saved with an explicit off.
  *
  * Same anatomy as the other two tabs (see ./kit.tsx): master switch, the
@@ -23,7 +23,6 @@ import {
   refreshInstances,
   usePanelQuery,
   useTicketingCatalog,
-  useTicketingSources,
 } from "../../state/queries";
 import { SettingField, useSettings } from "../settings/useSettings";
 import { AgentPicker, useAgentChoices } from "../settings/screens/AgentPicker";
@@ -45,7 +44,7 @@ import {
   type ItemWorkspace,
 } from "./kit";
 import { AddRepoFlow, RepoEditor, type RepoOverrides } from "./RepoSources";
-import { prsOn, useIntakePause } from "./pause";
+import { prsOn } from "./switches";
 import { prMatches } from "./search";
 import type { TabProps } from "./IntakeDialog";
 
@@ -91,9 +90,6 @@ export function PullRequestsTab({ focus, adding, startAdd, endAdd }: TabProps) {
   // Explicit true, or unset with repos already watched (settings from before
   // the off-by-default change); explicit false => off.
   const enabled = prsOn(gh);
-  // Off because Pause intake turned it off (it will come back on Resume).
-  const pause = useIntakePause((useTicketingSources(true).data || []).length);
-  const pausedOff = !enabled && repos.length > 0 && pause.pausedKind("prs");
   const overrides = (gh.repo_settings || {}) as RepoOverrides;
   const skipAuthors = Array.isArray(gh.skip_authors)
     ? gh.skip_authors.join(", ")
@@ -234,9 +230,7 @@ export function PullRequestsTab({ focus, adding, startAdd, endAdd }: TabProps) {
                 meta={`by ${p.author || "?"} · ${ageText(p.created_at)} · into ${p.base_ref || "?"}`}
                 hasSession={p.has_session}
                 eligible={p.eligible}
-                eligibleLabel={
-                  enabled ? "will auto-start" : pausedOff ? "auto-start paused" : "auto-start off"
-                }
+                eligibleLabel={enabled ? "will auto-start" : "auto-start off"}
                 eligibleOn={enabled}
                 reasons={p.reasons}
                 actionLabel="Start"
@@ -335,7 +329,6 @@ export function PullRequestsTab({ focus, adding, startAdd, endAdd }: TabProps) {
         inputId="gh-pr-enabled"
         statusId="gh-pr-status"
         checked={enabled}
-        paused={pausedOff}
         disabled={!n}
         onChange={(next) =>
           saveGithub(
@@ -343,13 +336,7 @@ export function PullRequestsTab({ focus, adding, startAdd, endAdd }: TabProps) {
             next ? "Auto-address review comments on" : "Auto-address review comments off"
           )
         }
-        note={
-          !n
-            ? "Add a repository first — + Add source"
-            : pausedOff
-              ? "Intake is paused — Resume intake at the top turns it back on"
-              : undefined
-        }
+        note={!n ? "Add a repository first — + Add source" : undefined}
       />
       <GithubStatusLine buttonId="gh-connect-btn" needFor="your PRs can't be listed or started" />
 

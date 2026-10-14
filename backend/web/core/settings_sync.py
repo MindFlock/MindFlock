@@ -222,7 +222,7 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         "serve_mode",
         "shared_link",
         "ingestion_autostart",
-        # What Pause intake turned off — pauses this device's ticket switch.
+        # LEGACY: what the former Pause intake turned off (no longer read).
         "intake_paused",
         "setup_devices",
         # What THIS machine relaunches when its own server boots.

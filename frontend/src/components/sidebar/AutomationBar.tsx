@@ -1,10 +1,8 @@
 /** The sidebar's Tickets bar — Intake → Tickets' door and quick switch (port of
  * the automation toggle, section 17). Hidden entirely without a connected
  * ticketing source. Its label opens Intake → Tickets; its switch is the same
- * "Auto-start tickets" switch that tab shows, and its ⏸ is Intake's "Pause
- * intake" (tickets + PR comments + issues at once, intake/pause.ts). The switch
- * reflects the
- * DESIRED state of the TICKET half of the pipeline (persisted server-side,
+ * "Auto-start tickets" switch that tab shows. The switch reflects the DESIRED
+ * state of the TICKET half of the pipeline (persisted server-side,
  * restored on reboot; the PR-review bar gates the other half of the same
  * process). The dot reflects reality — gold while starting or idle-waiting
  * for a ticket, green while one is actually being handled. Ingestion logs
@@ -14,15 +12,8 @@ import { useState, useSyncExternalStore } from "react";
 import { api } from "../../api/client";
 import { errorPop } from "../../lib/errorPop";
 import { errMsg } from "../../lib/format";
-import {
-  refreshInstances,
-  useConfig,
-  useMindflockStatus,
-  useTicketingSources,
-} from "../../state/queries";
+import { refreshInstances, useConfig, useMindflockStatus } from "../../state/queries";
 import { useUi } from "../../state/store";
-import { useIntakePause } from "../intake/pause";
-import "../intake/pauseButton.css";
 
 function subscribeOnline(cb: () => void) {
   window.addEventListener("online", cb);
@@ -44,8 +35,6 @@ export function AutomationBar() {
   const { data: status, refetch } = useMindflockStatus();
 
   const online = useSyncExternalStore(subscribeOnline, () => navigator.onLine);
-  const sources = useTicketingSources(true).data || [];
-  const pause = useIntakePause(sources.length);
 
   if (config?.caps && !config.caps.ticketing) return null;
   if (!status || !status.available) return null;
@@ -81,11 +70,7 @@ export function AutomationBar() {
   return (
     <div
       id="mindflock-bar"
-      title={
-        pause.paused
-          ? "Intake is paused — nothing new starts on its own"
-          : "Tickets — auto-start starts a session for each ticket in your auto-start states. Stays in this state across restarts. ⏸ pauses tickets, GitHub PRs and GitHub issues together."
-      }
+      title="Tickets — auto-start starts a session for each ticket in your auto-start states. Stays in this state across restarts."
     >
       <span
         id="mindflock-dot"
@@ -126,34 +111,7 @@ export function AutomationBar() {
         Tickets
       </button>
       <span className="dc-actions">
-        {/* Always here, so pausing is never a hunt: disabled (and saying
-            why) while nothing auto-starts, ▶ while paused. */}
-        <button
-          type="button"
-          id="intake-pause-btn"
-          className={"dc-pause" + (pause.paused ? " on" : "")}
-          disabled={pause.busy || (!pause.paused && !pause.onKinds.length)}
-          aria-pressed={pause.paused}
-          aria-label={pause.paused ? "Resume intake" : "Pause intake"}
-          title={
-            pause.paused
-              ? "Resume intake — turn back on what was on before the pause"
-              : pause.onKinds.length
-                ? "Pause intake — stop auto-start for tickets, GitHub PRs and GitHub issues at once"
-                : "Pause intake — nothing auto-starts right now"
-          }
-          onClick={() => void pause.toggle()}
-        >
-          {pause.paused ? "▶" : "⏸"}
-        </button>
-        <label
-          className={"dc-switch" + (!desired && pause.pausedKind("tickets") ? " paused" : "")}
-          title={
-            !desired && pause.pausedKind("tickets")
-              ? "Auto-start tickets — paused; ▶ resumes it"
-              : "Auto-start tickets — the same switch as Intake → Tickets"
-          }
-        >
+        <label className="dc-switch" title="Auto-start tickets — the same switch as Intake → Tickets">
           <input
             type="checkbox"
             id="mindflock-toggle"

@@ -40754,172 +40754,6 @@ function OverallUsage() {
 	})] });
 }
 //#endregion
-//#region src/components/intake/pause.ts
-function prsOn(gh) {
-	if (!(Array.isArray(gh?.repos) ? gh.repos.filter(Boolean) : []).length) return false;
-	return gh?.enabled === true || gh?.enabled == null;
-}
-function issuesOn(gh) {
-	return !!(Array.isArray(gh?.issue_repos) ? gh.issue_repos.filter(Boolean) : []).length && gh?.issues_enabled === true;
-}
-function intakeSwitches(opts) {
-	const gh = opts.gh || {};
-	return {
-		on: {
-			tickets: !!opts.ticketsDesired && opts.ticketSources > 0,
-			prs: prsOn(gh),
-			issues: issuesOn(gh)
-		},
-		configured: {
-			tickets: opts.ticketSources > 0,
-			prs: (gh.repos || []).filter(Boolean).length > 0,
-			issues: (gh.issue_repos || []).filter(Boolean).length > 0
-		}
-	};
-}
-function isPaused(sw, remembered) {
-	const any = (r) => r.tickets || r.prs || r.issues;
-	return remembered !== null && any(sw.configured) && !any(sw.on);
-}
-function resumeKinds(remembered, configured) {
-	const all = [
-		"tickets",
-		"prs",
-		"issues"
-	];
-	const base = remembered && remembered.length ? remembered : all;
-	return all.filter((k) => base.includes(k) && configured[k]);
-}
-var KIND_NAMES = {
-	tickets: "tickets",
-	prs: "PR comments",
-	issues: "issues"
-};
-function kindsText(kinds) {
-	const names = [
-		"tickets",
-		"prs",
-		"issues"
-	].filter((k) => kinds.includes(k)).map((k) => KIND_NAMES[k]);
-	if (names.length <= 1) return names.join("");
-	return names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
-}
-var LEGACY_REMEMBER_KEY = "mf_intake_paused_kinds";
-function cleanKinds(v) {
-	return Array.isArray(v) ? v.filter((k) => k === "tickets" || k === "prs" || k === "issues") : null;
-}
-function loadLegacyRemembered() {
-	try {
-		return cleanKinds(JSON.parse(localStorage.getItem(LEGACY_REMEMBER_KEY) || "null"));
-	} catch {
-		return null;
-	}
-}
-function dropLegacyRemembered() {
-	try {
-		localStorage.removeItem(LEGACY_REMEMBER_KEY);
-	} catch {}
-}
-function useIntakePaused() {
-	return useQuery({
-		queryKey: ["intake-paused"],
-		queryFn: async () => {
-			return cleanKinds((await api("/api/settings"))?.settings?.general?.intake_paused) ?? loadLegacyRemembered();
-		},
-		refetchInterval: 3e4,
-		retry: false
-	});
-}
-async function saveRemembered(kinds) {
-	await api("/api/settings", { json: { general: { intake_paused: kinds } } });
-	dropLegacyRemembered();
-}
-var lastPauseToggle = 0;
-function useGithubSettings() {
-	return useQuery({
-		queryKey: ["github-settings"],
-		queryFn: async () => {
-			return (await api("/api/settings"))?.settings?.github || {};
-		},
-		refetchInterval: 3e4,
-		retry: false
-	});
-}
-function useIntakePause(ticketSources, after) {
-	const statusQ = useMindflockStatus();
-	const status = statusQ.data;
-	const gh = useGithubSettings();
-	const pausedQ = useIntakePaused();
-	const remembered = pausedQ.data ?? null;
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const sw = intakeSwitches({
-		ticketsDesired: !!(status?.desired ?? status?.running),
-		ticketSources,
-		gh: gh.data
-	});
-	const paused = isPaused(sw, remembered);
-	const onKinds = [
-		"tickets",
-		"prs",
-		"issues"
-	].filter((k) => sw.on[k]);
-	const anyConfigured = sw.configured.tickets || sw.configured.prs || sw.configured.issues;
-	const fresh = !!status && !!gh.data && statusQ.dataUpdatedAt > lastPauseToggle && gh.dataUpdatedAt > lastPauseToggle && pausedQ.dataUpdatedAt > lastPauseToggle;
-	const stale = remembered !== null && onKinds.length > 0 && fresh && !busy;
-	(0, import_react.useEffect)(() => {
-		if (!stale) return;
-		lastPauseToggle = Date.now();
-		saveRemembered(null).catch(() => {}).finally(() => queryClient.invalidateQueries({ queryKey: ["intake-paused"] }));
-	}, [stale]);
-	const setKinds = async (kinds, on) => {
-		const github = {};
-		if (kinds.includes("prs")) github.enabled = on;
-		if (kinds.includes("issues")) github.issues_enabled = on;
-		if (Object.keys(github).length) await api("/api/settings", { json: { github } });
-		if (kinds.includes("tickets")) await api(`/api/mindflock/${on ? "start" : "stop"}`, { method: "POST" });
-	};
-	const toggle = async () => {
-		if (busy) return;
-		if (!paused && !onKinds.length) return;
-		setBusy(true);
-		lastPauseToggle = Date.now();
-		try {
-			if (paused) {
-				const kinds = resumeKinds(remembered, sw.configured);
-				await setKinds(kinds, true);
-				await saveRemembered(null);
-				toast("Intake resumed — auto-start is on for " + kindsText(kinds));
-			} else {
-				await saveRemembered(onKinds);
-				await setKinds(onKinds, false);
-				toast("Intake paused — nothing new starts on its own");
-			}
-		} catch (err) {
-			errorPop(paused ? "Resume intake failed" : "Pause intake failed", err.message || "error");
-		} finally {
-			lastPauseToggle = Date.now();
-			await Promise.all([
-				queryClient.invalidateQueries({ queryKey: ["github-settings"] }),
-				queryClient.invalidateQueries({ queryKey: ["intake-paused"] }),
-				refreshMindflockStatus()
-			]);
-			setBusy(false);
-			after?.();
-		}
-	};
-	const pausedKind = (kind) => paused && (remembered && remembered.length ? remembered.includes(kind) : sw.configured[kind]);
-	return {
-		status,
-		sw,
-		paused,
-		pausedKind,
-		onKinds,
-		anyConfigured,
-		busy,
-		toggle
-	};
-}
-//#endregion
 //#region src/components/sidebar/AutomationBar.tsx
 function subscribeOnline(cb) {
 	window.addEventListener("online", cb);
@@ -40936,7 +40770,6 @@ function AutomationBar() {
 	const [optimistic, setOptimistic] = (0, import_react.useState)(null);
 	const { data: status, refetch } = useMindflockStatus();
 	const online = (0, import_react.useSyncExternalStore)(subscribeOnline, () => navigator.onLine);
-	const pause = useIntakePause((useTicketingSources(true).data || []).length);
 	if (config?.caps && !config.caps.ticketing) return null;
 	if (!status || !status.available) return null;
 	const running = !!status.running;
@@ -40961,7 +40794,7 @@ function AutomationBar() {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "mindflock-bar",
-		title: pause.paused ? "Intake is paused — nothing new starts on its own" : "Tickets — auto-start starts a session for each ticket in your auto-start states. Stays in this state across restarts. ⏸ pauses tickets, GitHub PRs and GitHub issues together.",
+		title: "Tickets — auto-start starts a session for each ticket in your auto-start states. Stays in this state across restarts.",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				id: "mindflock-dot",
@@ -40976,21 +40809,11 @@ function AutomationBar() {
 				onClick: () => openDialogFor("intake", "tickets"),
 				children: "Tickets"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "dc-actions",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					id: "intake-pause-btn",
-					className: "dc-pause" + (pause.paused ? " on" : ""),
-					disabled: pause.busy || !pause.paused && !pause.onKinds.length,
-					"aria-pressed": pause.paused,
-					"aria-label": pause.paused ? "Resume intake" : "Pause intake",
-					title: pause.paused ? "Resume intake — turn back on what was on before the pause" : pause.onKinds.length ? "Pause intake — stop auto-start for tickets, GitHub PRs and GitHub issues at once" : "Pause intake — nothing auto-starts right now",
-					onClick: () => void pause.toggle(),
-					children: pause.paused ? "▶" : "⏸"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "dc-switch" + (!desired && pause.pausedKind("tickets") ? " paused" : ""),
-					title: !desired && pause.pausedKind("tickets") ? "Auto-start tickets — paused; ▶ resumes it" : "Auto-start tickets — the same switch as Intake → Tickets",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "dc-switch",
+					title: "Auto-start tickets — the same switch as Intake → Tickets",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						type: "checkbox",
 						id: "mindflock-toggle",
@@ -40998,7 +40821,7 @@ function AutomationBar() {
 						disabled: busy,
 						onChange: (e) => toggle(e.target.checked)
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dc-slider" })]
-				})]
+				})
 			})
 		]
 	});
@@ -41069,8 +40892,6 @@ function GitIssueBar() {
 		activeFlag: "issues_active",
 		toggleLabel: "Auto-start new issues"
 	});
-	const pause = useIntakePause((useTicketingSources(true).data || []).length);
-	const paused = !on && pause.pausedKind("issues");
 	if (!visible) return null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "git-issue-bar",
@@ -41092,7 +40913,7 @@ function GitIssueBar() {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "dc-actions",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "dc-switch" + (paused ? " paused" : ""),
+					className: "dc-switch",
 					title: "Auto-start new issues — the same switch as Intake → GitHub issues (your repositories are kept either way)",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						type: "checkbox",
@@ -41117,8 +40938,6 @@ function PrReviewBar() {
 		activeFlag: "pr_active",
 		toggleLabel: "Auto-address review comments"
 	});
-	const pause = useIntakePause((useTicketingSources(true).data || []).length);
-	const paused = !on && pause.pausedKind("prs");
 	if (!visible) return null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "pr-review-bar",
@@ -41140,7 +40959,7 @@ function PrReviewBar() {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "dc-actions",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "dc-switch" + (paused ? " paused" : ""),
+					className: "dc-switch",
 					title: "Auto-address review comments — the same switch as Intake → GitHub PRs (your repositories are kept either way)",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						type: "checkbox",
@@ -68456,8 +68275,7 @@ function NewTicketPane() {
 	const openDialogFor = useUi((s) => s.openDialogFor);
 	const [sources, setSources] = (0, import_react.useState)(null);
 	const { data: status } = useMindflockStatus();
-	const pause = useIntakePause((useTicketingSources(true).data || []).length);
-	const autoNote = !status?.available ? "" : status.desired ?? status.running ? "Auto-start is on for tickets: once this ticket is in one of its source's auto-start states, a session starts on its own." : pause.paused ? "Intake is paused, so nothing starts on its own. Start it from Intake → Tickets." : "Auto-start is off for tickets. Start it from Intake → Tickets.";
+	const autoNote = !status?.available ? "" : status.desired ?? status.running ? "Auto-start is on for tickets: once this ticket is in one of its source's auto-start states, a session starts on its own." : "Auto-start is off for tickets. Start it from Intake → Tickets.";
 	const [sourcesError, setSourcesError] = (0, import_react.useState)("");
 	const [source, setSource] = (0, import_react.useState)("");
 	const [brief, setBrief] = (0, import_react.useState)("");
@@ -71953,13 +71771,12 @@ function panelNote(opts) {
 	if (!opts.fetching) return "";
 	return opts.loaded ? "Refreshing…" : "Loading…";
 }
-function AutomationSwitch({ label, title, rowId, inputId, statusId, checked, onChange, note, disabled, paused }) {
+function AutomationSwitch({ label, title, rowId, inputId, statusId, checked, onChange, note, disabled }) {
 	const nameId = inputId ? inputId + "-name" : void 0;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "ik-switch" + (paused ? " paused" : ""),
+		className: "ik-switch",
 		id: rowId,
 		title,
-		"data-paused": paused || void 0,
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			className: "ik-switch-text",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -74076,11 +73893,9 @@ function IngestionToggle({ sourceCount, broken }) {
 	const [optimistic, setOptimistic] = (0, import_react.useState)(null);
 	const [asking, setAsking] = (0, import_react.useState)(false);
 	const { data: status, refetch } = useMindflockStatus();
-	const pause = useIntakePause(sourceCount);
 	if (!status || !status.available) return null;
 	const running = !!status.running;
 	const desired = optimistic ?? status.desired ?? running;
-	const paused = !desired && pause.pausedKind("tickets");
 	const toggle = async (start) => {
 		if (busy) return;
 		setBusy(true);
@@ -74105,13 +73920,12 @@ function IngestionToggle({ sourceCount, broken }) {
 		inputId: "tk-ingestion-enabled",
 		statusId: "tk-ingestion-status",
 		checked: desired,
-		paused,
 		onChange: (next) => {
 			if (busy) return;
 			if (next && broken.length) setAsking(true);
 			else toggle(next);
 		},
-		note: !sourceCount ? "Add a ticket source first — + Add source" : paused ? "Intake is paused — Resume intake at the top turns it back on" : desired && broken.length ? names + " can't connect — nothing starts from " + (one ? "it" : "them") + " until fixed" : void 0
+		note: !sourceCount ? "Add a ticket source first — + Add source" : desired && broken.length ? names + " can't connect — nothing starts from " + (one ? "it" : "them") + " until fixed" : void 0
 	}), asking && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 		id: "tk-ingestion-confirm",
 		title: names + " can't connect.",
@@ -74940,9 +74754,8 @@ function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent,
 		return server && server !== key ? server : key;
 	};
 	const { data: status } = useMindflockStatus();
-	const pause = useIntakePause(sources.length);
 	const autoOn = !!(status?.desired ?? status?.running);
-	const eligibleLabel = autoOn ? "will auto-start" : pause.paused ? "auto-start paused" : "auto-start off";
+	const eligibleLabel = autoOn ? "will auto-start" : "auto-start off";
 	const bucketMeta = ticketsQuery.data?.bucket_meta || {};
 	const groupOf = (b) => bucketMeta[b]?.group || "";
 	const labelOf = (b) => bucketMeta[b]?.label || b;
@@ -75814,6 +75627,73 @@ function AgentPicker({ label, hint, value, choices, fallbackLabel, onChange }) {
 	});
 }
 //#endregion
+//#region src/components/intake/switches.ts
+function prsOn(gh) {
+	if (!(Array.isArray(gh?.repos) ? gh.repos.filter(Boolean) : []).length) return false;
+	return gh?.enabled === true || gh?.enabled == null;
+}
+function issuesOn(gh) {
+	return !!(Array.isArray(gh?.issue_repos) ? gh.issue_repos.filter(Boolean) : []).length && gh?.issues_enabled === true;
+}
+function intakeSwitches(opts) {
+	const gh = opts.gh || {};
+	return {
+		on: {
+			tickets: !!opts.ticketsDesired && opts.ticketSources > 0,
+			prs: prsOn(gh),
+			issues: issuesOn(gh)
+		},
+		configured: {
+			tickets: opts.ticketSources > 0,
+			prs: (gh.repos || []).filter(Boolean).length > 0,
+			issues: (gh.issue_repos || []).filter(Boolean).length > 0
+		}
+	};
+}
+var KIND_NAMES = {
+	tickets: "tickets",
+	prs: "PR comments",
+	issues: "issues"
+};
+function kindsText(kinds) {
+	const names = [
+		"tickets",
+		"prs",
+		"issues"
+	].filter((k) => kinds.includes(k)).map((k) => KIND_NAMES[k]);
+	if (names.length <= 1) return names.join("");
+	return names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+}
+function useGithubSettings() {
+	return useQuery({
+		queryKey: ["github-settings"],
+		queryFn: async () => {
+			return (await api("/api/settings"))?.settings?.github || {};
+		},
+		refetchInterval: 3e4,
+		retry: false
+	});
+}
+function useIntakeSwitches(ticketSources) {
+	const status = useMindflockStatus().data;
+	const gh = useGithubSettings();
+	const sw = intakeSwitches({
+		ticketsDesired: !!(status?.desired ?? status?.running),
+		ticketSources,
+		gh: gh.data
+	});
+	return {
+		status,
+		sw,
+		onKinds: [
+			"tickets",
+			"prs",
+			"issues"
+		].filter((k) => sw.on[k]),
+		anyConfigured: sw.configured.tickets || sw.configured.prs || sw.configured.issues
+	};
+}
+//#endregion
 //#region src/components/intake/PullRequestsTab.tsx
 var PR_GROUPS_KEY = "mf_intake_pr_groups";
 function PullRequestsTab({ focus, adding, startAdd, endAdd }) {
@@ -75825,8 +75705,6 @@ function PullRequestsTab({ focus, adding, startAdd, endAdd }) {
 	const gh = s.settings.github || {};
 	const repos = Array.isArray(gh.repos) ? gh.repos : [];
 	const enabled = prsOn(gh);
-	const pause = useIntakePause((useTicketingSources(true).data || []).length);
-	const pausedOff = !enabled && repos.length > 0 && pause.pausedKind("prs");
 	const overrides = gh.repo_settings || {};
 	const skipAuthors = Array.isArray(gh.skip_authors) ? gh.skip_authors.join(", ") : gh.skip_authors || "";
 	const edit = useEditing(focus);
@@ -75932,7 +75810,7 @@ function PullRequestsTab({ focus, adding, startAdd, endAdd }) {
 					meta: `by ${p.author || "?"} · ${ageText(p.created_at)} · into ${p.base_ref || "?"}`,
 					hasSession: p.has_session,
 					eligible: p.eligible,
-					eligibleLabel: enabled ? "will auto-start" : pausedOff ? "auto-start paused" : "auto-start off",
+					eligibleLabel: enabled ? "will auto-start" : "auto-start off",
 					eligibleOn: enabled,
 					reasons: p.reasons,
 					actionLabel: "Start",
@@ -76020,10 +75898,9 @@ function PullRequestsTab({ focus, adding, startAdd, endAdd }) {
 			inputId: "gh-pr-enabled",
 			statusId: "gh-pr-status",
 			checked: enabled,
-			paused: pausedOff,
 			disabled: !n,
 			onChange: (next) => saveGithub({ enabled: next }, next ? "Auto-address review comments on" : "Auto-address review comments off"),
-			note: !n ? "Add a repository first — + Add source" : pausedOff ? "Intake is paused — Resume intake at the top turns it back on" : void 0
+			note: !n ? "Add a repository first — + Add source" : void 0
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GithubStatusLine, {
 			buttonId: "gh-connect-btn",
@@ -76148,8 +76025,6 @@ function IssuesTab({ focus, adding, startAdd, endAdd }) {
 	const gh = s.settings.github || {};
 	const enabled = gh.issues_enabled === true;
 	const repos = Array.isArray(gh.issue_repos) ? gh.issue_repos : [];
-	const pause = useIntakePause((useTicketingSources(true).data || []).length);
-	const pausedOff = !enabled && repos.length > 0 && pause.pausedKind("issues");
 	const overrides = gh.issue_repo_settings || {};
 	const skipAuthors = Array.isArray(gh.issue_skip_authors) ? gh.issue_skip_authors.join(", ") : gh.issue_skip_authors || "";
 	const edit = useEditing(focus);
@@ -76254,7 +76129,7 @@ function IssuesTab({ focus, adding, startAdd, endAdd }) {
 					meta: `by ${i.author || "?"} · ${ageText(i.created_at)}`,
 					hasSession: i.has_session,
 					eligible: i.eligible,
-					eligibleLabel: enabled ? "will auto-start" : pausedOff ? "auto-start paused" : "auto-start off",
+					eligibleLabel: enabled ? "will auto-start" : "auto-start off",
 					eligibleOn: enabled,
 					reasons: i.reasons,
 					actionLabel: "Start",
@@ -76339,10 +76214,9 @@ function IssuesTab({ focus, adding, startAdd, endAdd }) {
 			inputId: "gh-issues-enabled",
 			statusId: "gh-issues-status",
 			checked: enabled,
-			paused: pausedOff,
 			disabled: !n,
 			onChange: (next) => saveGithub({ issues_enabled: next }, next ? "Auto-start new issues on" : "Auto-start new issues off"),
-			note: !n ? "Add a repository first — + Add source" : pausedOff ? "Intake is paused — Resume intake at the top turns it back on" : void 0
+			note: !n ? "Add a repository first — + Add source" : void 0
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GithubStatusLine, {
 			buttonId: "gh-issue-connect-btn",
@@ -76613,7 +76487,7 @@ function byGroup(items) {
 }
 //#endregion
 //#region src/components/intake/QueueTab.tsx
-function StateChip({ state, device, paused }) {
+function StateChip({ state, device }) {
 	if (state === "unset") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "pr-open-chip",
 		children: "not set up"
@@ -76633,7 +76507,7 @@ function StateChip({ state, device, paused }) {
 	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "pr-open-chip",
-		children: paused ? "auto-start paused" : "auto-start off"
+		children: "auto-start off"
 	});
 }
 function StalledNote({ s }) {
@@ -76654,24 +76528,6 @@ function StalledNote({ s }) {
 			" in Settings → Your devices). You can still start ",
 			many ? "any of them" : "it",
 			" here, with ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start" }),
-			"."
-		]
-	});
-	if (s.paused) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "ik-queue-stalled",
-		children: [
-			"Intake is paused — ",
-			many ? "these" : "this one",
-			" won't start on ",
-			many ? "their" : "its",
-			" ",
-			"own until you ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Resume intake" }),
-			" (top of this dialog). You can still start",
-			" ",
-			many ? "any of them" : "it",
-			" with ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start" }),
 			"."
 		]
@@ -76717,8 +76573,7 @@ function SectionBlock({ s, gotoTab, agents, configuredFor, onStart }) {
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateChip, {
 						state: s.broken ? "broken" : s.state,
-						device: s.runsOn,
-						paused: s.paused
+						device: s.runsOn
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						type: "button",
@@ -76789,7 +76644,6 @@ function QueueTab({ gotoTab }) {
 	const s = useSettings();
 	const gh = s.settings.github || {};
 	const ticketSources = (s.settings.ticketing || {}).sources;
-	const pause = useIntakePause((ticketSources || []).length);
 	const configuredFor = (t) => {
 		if (t.kind === "tickets") {
 			const src = (ticketSources || []).find((x) => x.id === t.source);
@@ -76857,7 +76711,6 @@ function QueueTab({ gotoTab }) {
 		return src ? sourceDisplayName(src, catalog) : id;
 	};
 	const ticketsBroken = configuredTickets && ticketErrors.length && !listedTickets ? ticketErrors.map((e) => friendlySourceError(nameOfSource(e.source), e.error).replace(/ — press Fix on its heading\.$/, ".")).join(" ") + " Fix it on the Tickets tab." : "";
-	const paused = pause.paused;
 	const sections = [
 		{
 			kind: "tickets",
@@ -76870,7 +76723,6 @@ function QueueTab({ gotoTab }) {
 				switchOn: true
 			}),
 			blockedOn: "Auto-start tickets",
-			paused,
 			broken: ticketsBroken,
 			items: queuedOf("tickets", payloads),
 			note: noteFor(ticketsQ, "tickets")
@@ -76887,7 +76739,6 @@ function QueueTab({ gotoTab }) {
 				runsElsewhere: runsElsewhere && gh.enabled !== false
 			}),
 			blockedOn: "Auto-address review comments",
-			paused,
 			runsOn,
 			items: queuedOf("prs", payloads),
 			note: noteFor(prsQ, "PRs")
@@ -76904,7 +76755,6 @@ function QueueTab({ gotoTab }) {
 				runsElsewhere: runsElsewhere && gh.issues_enabled === true
 			}),
 			blockedOn: "Auto-start new issues",
-			paused,
 			runsOn,
 			items: queuedOf("issues", payloads),
 			note: noteFor(issuesQ, "issues")
@@ -77083,44 +76933,32 @@ function TabCount({ tab }) {
 		children: n
 	});
 }
-function PauseBar({ ticketSources, onDone, gotoTab }) {
-	const p = useIntakePause(ticketSources, onDone);
-	const line = p.paused ? "Intake is paused — nothing new starts on its own. Start still works on any row." : p.onKinds.length ? "Auto-start is on for " + kindsText(p.onKinds) + "." : p.anyConfigured ? "Auto-start is off everywhere." : "Nothing auto-starts yet — set up a tab below first.";
-	const offTab = p.paused || p.onKinds.length ? null : p.sw.configured.tickets ? "tickets" : p.sw.configured.prs ? "prs" : p.sw.configured.issues ? "issues" : null;
+function AutoStartLine({ ticketSources, gotoTab }) {
+	const p = useIntakeSwitches(ticketSources);
+	const line = p.onKinds.length ? "Auto-start is on for " + kindsText(p.onKinds) + "." : p.anyConfigured ? "Auto-start is off everywhere." : "Nothing auto-starts yet — set up a tab below first.";
+	const offTab = p.onKinds.length ? null : p.sw.configured.tickets ? "tickets" : p.sw.configured.prs ? "prs" : p.sw.configured.issues ? "issues" : null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "ik-pause" + (p.paused ? " paused" : ""),
-		id: "ik-pause-row",
+		className: "ik-autostart-line",
+		id: "ik-autostart-row",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "ik-pause-text",
-			id: "ik-pause-status",
+			className: "ik-autostart-text",
+			id: "ik-autostart-status",
 			role: "status",
 			"aria-live": "polite",
 			children: line
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "ik-pause-actions",
-			children: [offTab && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				id: "ik-turn-on-btn",
-				className: "linklike",
-				title: "Go to the switch that turns auto-start on",
-				onClick: () => gotoTab(offTab),
-				children: "Turn on…"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				id: "ik-pause-btn",
-				className: "test-btn ik-pause-btn" + (p.paused ? " on" : ""),
-				disabled: p.busy || !p.paused && !p.onKinds.length,
-				"aria-pressed": p.paused,
-				title: p.paused ? "Turn back on what was on before the pause" : p.onKinds.length ? "Stop auto-start for tickets, GitHub PRs and GitHub issues at once" : "Nothing auto-starts right now, so there is nothing to pause",
-				onClick: () => void p.toggle(),
-				children: p.busy ? "…" : p.paused ? "Resume intake" : "Pause intake"
-			})]
+		}), offTab && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			id: "ik-turn-on-btn",
+			className: "linklike",
+			title: "Go to the switch that turns auto-start on",
+			onClick: () => gotoTab(offTab),
+			children: "Turn on…"
 		})]
 	});
 }
 var panelId = (t) => t.legacyId || "intake-tabpanel-" + t.key;
 function AutoStartOn() {
-	const p = useIntakePause((useTicketingSources(true).data || []).length);
+	const p = useIntakeSwitches((useTicketingSources(true).data || []).length);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutoStartCount, { on: p.onKinds.length > 0 });
 }
 function IntakeDialog() {
@@ -77219,9 +77057,8 @@ function IntakeDialog() {
 							})
 						]
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PauseBar, {
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutoStartLine, {
 						ticketSources: savedSources.length,
-						onDone: () => void model.reload(),
 						gotoTab: switchTab
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {

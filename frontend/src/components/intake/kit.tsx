@@ -145,7 +145,6 @@ export function AutomationSwitch({
   onChange,
   note,
   disabled,
-  paused,
 }: {
   label: string;
   title: string;
@@ -155,19 +154,16 @@ export function AutomationSwitch({
   checked: boolean;
   onChange(next: boolean): void;
   /** Subtitle inside the row, for what the switch can't say itself: that there
-   * is nothing to turn on yet, or that intake is paused — never to narrate a
-   * plain on/off the switch already shows. */
+   * is nothing to turn on yet — never to narrate a plain on/off the switch
+   * already shows. */
   note?: string;
   disabled?: boolean;
-  /** Off because Pause intake turned it off: drawn amber and striped, not as
-   * a plain off — "paused" and "never switched on" are different answers. */
-  paused?: boolean;
 }) {
   // The switch's accessible name is the row's own words (aria-labelledby), so
   // a screen reader hears "Auto-start tickets, switch" rather than nothing.
   const nameId = inputId ? inputId + "-name" : undefined;
   return (
-    <div className={"ik-switch" + (paused ? " paused" : "")} id={rowId} title={title} data-paused={paused || undefined}>
+    <div className="ik-switch" id={rowId} title={title}>
       <span className="ik-switch-text">
         <span className="set-label" id={nameId}>
           {label}
@@ -895,7 +891,7 @@ export function WorkItemRow({
   /** e.g. "will auto-start" — or, with auto-start off, "auto-start off". */
   eligibleLabel: string;
   /** Whether the eligible chip is a promise (green) or only a fact (neutral):
-   * false when the kind's auto-start is off or paused, so the chip can never
+   * false when the kind's auto-start is off, so the chip can never
    * say "will start" next to a switch that says it won't. */
   eligibleOn?: boolean;
   /** Where this item will start and why, on a source with several repos. */

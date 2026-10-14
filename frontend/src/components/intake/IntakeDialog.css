@@ -193,20 +193,6 @@
   min-width: 0;
 }
 
-/* Off because Pause intake turned it off: amber and striped, never the plain
-   grey of "off" — a paused switch comes back on Resume, an off one doesn't. */
-.ik-switch.paused {
-  border-color: color-mix(in srgb, var(--gold) 55%, var(--border));
-  background: color-mix(in srgb, var(--gold) 7%, var(--panel-2));
-}
-.ik-switch.paused .ca-slider {
-  background: repeating-linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--gold) 45%, transparent) 0 4px,
-    color-mix(in srgb, var(--gold) 18%, transparent) 4px 8px
-  );
-}
-
 /* Source cards stack in their own column so the "+ Add" button below them is
    not mistaken for part of the last card. */
 .ik-cards {
@@ -615,7 +601,7 @@
 
 /* --- Queue tab -------------------------------------------------------------
    The roll-up of what the automations will start next. Sections per kind, each
-   with its own on/paused state, then the rows grouped by source or repo.
+   with its own on/off state, then the rows grouped by source or repo.
 
    Rows themselves are the shared WorkItemRow (.pr-open-item), the same as on the
    three source tabs — this tab can start them too, so there is no reason for
@@ -1069,11 +1055,8 @@
 
 /* ---- Round 2 (fresh-eyes pass) ------------------------------------------- */
 
-/* Pause intake: one band above the tabs saying what auto-starts right now,
-   with the one button that stops all of it. Amber while paused — it is the one
-   state where nothing happens on its own, and that should be visible from
-   across the room. */
-.ik-pause {
+/* One line above the tabs saying what auto-starts right now (AutoStartLine). */
+.ik-autostart-line {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1083,23 +1066,12 @@
   color: var(--muted);
   border: 1px solid var(--border);
   border-radius: 9px;
-  padding: 7px 8px 7px 12px;
+  padding: 7px 12px;
 }
-.ik-pause.paused {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--gold) 60%, var(--border));
-  background: color-mix(in srgb, var(--gold) 10%, transparent);
-}
-.ik-pause-text {
+.ik-autostart-text {
   min-width: 0;
 }
-.ik-pause-btn {
-  flex: none;
-}
-.ik-pause-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
+.ik-autostart-line .linklike {
   flex: none;
 }
 
@@ -1239,7 +1211,7 @@
   #intake-panel .pr-open-chip {
     white-space: normal;
   }
-  .ik-pause {
+  .ik-autostart-line {
     flex-wrap: wrap;
   }
 }

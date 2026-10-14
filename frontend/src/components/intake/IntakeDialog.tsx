@@ -3,7 +3,7 @@
  * Ticketing, PR review and issue handling used to be three screens in Settings.
  * They don't belong there: Settings is where you configure the app once and
  * forget it, while these three are somewhere you *visit* — you come to see what
- * came in, start something by hand, or pause a queue. Sitting in the same left
+ * came in, start something by hand, or switch a queue off. Sitting in the same left
  * nav as Appearance and System logs, they were both hard to find and mixed in
  * with things that never change.
  *
@@ -33,7 +33,7 @@ import { PullRequestsTab } from "./PullRequestsTab";
 import { IssuesTab } from "./IssuesTab";
 import { QueueTab } from "./QueueTab";
 import { collectQueued, isQueued } from "./queue";
-import { kindsText, useIntakePause } from "./pause";
+import { kindsText, useIntakeSwitches } from "./switches";
 import type { RepoUse } from "./repoUses";
 
 export type IntakeTabKey = "tickets" | "prs" | "issues" | "autostart";
@@ -126,7 +126,7 @@ const TABS: Array<{
 ];
 
 /** The Auto-start tab's badge: how many will start on their own — or, when
- * none will (auto-start off or paused), how many are waiting, in grey.
+ * none will (auto-start off), how many are waiting, in grey.
  *
  * Its own component because it needs all three panels, and because a hook call
  * cannot be conditional on which tab we are counting. Shares `collectQueued`
@@ -189,32 +189,25 @@ function TabCount({ tab }: { tab: Exclude<IntakeTabKey, "autostart"> }) {
   );
 }
 
-/** "Pause intake" — the one control that stops every auto-start at once
- * (tickets, GitHub PRs, GitHub issues), with a line saying what is on right
- * now. Always on screen: the button is how you find out pausing exists, so it
- * never appears only once something is on — it is disabled, saying why, when
- * there is nothing to pause. With everything off, "Turn on…" goes to the tab
- * whose switch does it. Logic in ./pause.ts (the paused state is kept on the
- * server); the sidebar's Tickets bar carries the same control. */
-function PauseBar({
+/** One line above the tabs saying what auto-starts right now, across all
+ * three switches (tickets, GitHub PRs, GitHub issues). With everything off,
+ * "Turn on…" goes to the tab whose switch does it. Read-only: each switch is
+ * flipped on its own tab (there is no "pause everything" — see ./switches.ts). */
+function AutoStartLine({
   ticketSources,
-  onDone,
   gotoTab,
 }: {
   ticketSources: number;
-  onDone(): void;
   gotoTab(key: IntakeTabKey): void;
 }) {
-  const p = useIntakePause(ticketSources, onDone);
-  const line = p.paused
-    ? "Intake is paused — nothing new starts on its own. Start still works on any row."
-    : p.onKinds.length
-      ? "Auto-start is on for " + kindsText(p.onKinds) + "."
-      : p.anyConfigured
-        ? "Auto-start is off everywhere."
-        : "Nothing auto-starts yet — set up a tab below first.";
+  const p = useIntakeSwitches(ticketSources);
+  const line = p.onKinds.length
+    ? "Auto-start is on for " + kindsText(p.onKinds) + "."
+    : p.anyConfigured
+      ? "Auto-start is off everywhere."
+      : "Nothing auto-starts yet — set up a tab below first.";
   // Where "Turn on…" goes: the first tab with something set up but off.
-  const offTab: IntakeTabKey | null = p.paused || p.onKinds.length
+  const offTab: IntakeTabKey | null = p.onKinds.length
     ? null
     : p.sw.configured.tickets
       ? "tickets"
@@ -224,40 +217,21 @@ function PauseBar({
           ? "issues"
           : null;
   return (
-    <div className={"ik-pause" + (p.paused ? " paused" : "")} id="ik-pause-row">
-      <span className="ik-pause-text" id="ik-pause-status" role="status" aria-live="polite">
+    <div className="ik-autostart-line" id="ik-autostart-row">
+      <span className="ik-autostart-text" id="ik-autostart-status" role="status" aria-live="polite">
         {line}
       </span>
-      <span className="ik-pause-actions">
-        {offTab && (
-          <button
-            type="button"
-            id="ik-turn-on-btn"
-            className="linklike"
-            title="Go to the switch that turns auto-start on"
-            onClick={() => gotoTab(offTab)}
-          >
-            Turn on…
-          </button>
-        )}
+      {offTab && (
         <button
           type="button"
-          id="ik-pause-btn"
-          className={"test-btn ik-pause-btn" + (p.paused ? " on" : "")}
-          disabled={p.busy || (!p.paused && !p.onKinds.length)}
-          aria-pressed={p.paused}
-          title={
-            p.paused
-              ? "Turn back on what was on before the pause"
-              : p.onKinds.length
-                ? "Stop auto-start for tickets, GitHub PRs and GitHub issues at once"
-                : "Nothing auto-starts right now, so there is nothing to pause"
-          }
-          onClick={() => void p.toggle()}
+          id="ik-turn-on-btn"
+          className="linklike"
+          title="Go to the switch that turns auto-start on"
+          onClick={() => gotoTab(offTab)}
         >
-          {p.busy ? "…" : p.paused ? "Resume intake" : "Pause intake"}
+          Turn on…
         </button>
-      </span>
+      )}
     </div>
   );
 }
@@ -267,7 +241,7 @@ const panelId = (t: (typeof TABS)[number]) => t.legacyId || "intake-tabpanel-" +
 /** The Auto-start badge, coloured by whether anything is switched on. */
 function AutoStartOn() {
   const sources = useTicketingSources(true).data || [];
-  const p = useIntakePause(sources.length);
+  const p = useIntakeSwitches(sources.length);
   return <AutoStartCount on={p.onKinds.length > 0} />;
 }
 
@@ -378,11 +352,7 @@ export function IntakeDialog() {
               Close
             </button>
           </div>
-          <PauseBar
-            ticketSources={savedSources.length}
-            onDone={() => void model.reload()}
-            gotoTab={switchTab}
-          />
+          <AutoStartLine ticketSources={savedSources.length} gotoTab={switchTab} />
           <div id="intake-tabs" role="tablist" aria-label="Intake">
             {TABS.map((t, i) => (
               <button

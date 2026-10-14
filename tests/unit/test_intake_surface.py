@@ -916,7 +916,9 @@ class TestAutoStartTabIsDocumented:
         assert "Auto-start tickets" in text
         assert "Auto-address review comments" in text
         assert "Auto-start new issues" in text
-        assert "Pause intake" in text
+        # "Pause intake" was removed; the docs say so rather than describe it.
+        assert "there is no **Pause intake** any more" in text
+        assert "intake/switches.ts" in text
 
     def test_the_modules_the_docs_cite_exist(self):
         text = (_ROOT / "docs" / "web-ui.md").read_text(encoding="utf-8")

@@ -1,5 +1,5 @@
-/** Intake's wording and its Pause control (round-2 fresh-eyes pass):
- * components/intake/vocab.ts and components/intake/pause.ts. */
+/** Intake's wording and its three switches read together (round-2 fresh-eyes
+ * pass): components/intake/vocab.ts and components/intake/switches.ts. */
 
 /// <reference types="vite/client" />
 import { describe, expect, it } from "vitest";
@@ -9,13 +9,7 @@ import {
   savedFilter,
   stateName,
 } from "../components/intake/vocab";
-import {
-  intakeSwitches,
-  isPaused,
-  kindsText,
-  prsOn,
-  resumeKinds,
-} from "../components/intake/pause";
+import { intakeSwitches, kindsText, prsOn } from "../components/intake/switches";
 import { routeText } from "../components/intake/kit";
 import type { TicketingSource } from "../api/types";
 
@@ -72,7 +66,7 @@ describe("the repo line on a several-repo ticket", () => {
   });
 });
 
-describe("Pause intake", () => {
+describe("the auto-start switches", () => {
   it("PR comments are off by default — but saved settings keep their meaning", () => {
     expect(prsOn({})).toBe(false);
     expect(prsOn({ repos: ["o/r"], enabled: false })).toBe(false);
@@ -81,23 +75,15 @@ describe("Pause intake", () => {
     expect(prsOn({ repos: ["o/r"] })).toBe(true);
   });
 
-  it("paused = Pause was pressed and nothing switched back on", () => {
+  it("reads the three switches together", () => {
     const off = intakeSwitches({ ticketsDesired: false, ticketSources: 1, gh: { repos: ["o/r"], enabled: false } });
-    expect(isPaused(off, ["tickets"])).toBe(true);
-    // Never switched on is OFF, not paused: there is nothing to resume.
-    expect(isPaused(off, null)).toBe(false);
+    expect(off.on).toEqual({ tickets: false, prs: false, issues: false });
+    expect(off.configured).toEqual({ tickets: true, prs: true, issues: false });
     const on = intakeSwitches({ ticketsDesired: true, ticketSources: 1, gh: {} });
-    expect(isPaused(on, ["tickets"])).toBe(false);
-    const nothing = intakeSwitches({ ticketsDesired: false, ticketSources: 0, gh: {} });
-    expect(isPaused(nothing, ["tickets"])).toBe(false);
-  });
-
-  it("resume restores what was on, else everything configured", () => {
-    const configured = { tickets: true, prs: true, issues: false };
-    expect(resumeKinds(["prs"], configured)).toEqual(["prs"]);
-    expect(resumeKinds(null, configured)).toEqual(["tickets", "prs"]);
-    // A kind no longer configured is not switched on.
-    expect(resumeKinds(["issues", "tickets"], configured)).toEqual(["tickets"]);
+    expect(on.on.tickets).toBe(true);
+    // No ticket source: the ticket switch can't be "on" whatever the engine says.
+    const nothing = intakeSwitches({ ticketsDesired: true, ticketSources: 0, gh: {} });
+    expect(nothing.on.tickets).toBe(false);
   });
 
   it("names the kinds in one phrase", () => {
