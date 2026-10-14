@@ -881,8 +881,8 @@
    (two side by side on anything short of a very wide screen) the provider
    name and the context fill leave the cost chip — at ~180px it was the
    widest thing in the head, and both parts are in its breakdown, one click
-   away. Below 760px the tabs turn to icons (see that rule). Below 700px the
-   diff-stat line goes (the rail row carries it), and below 640px the tabs
+   away. The tabs turn to icons when the words stop fitting — measured, not a
+   breakpoint (see .head-icons). Below 700px the diff-stat line goes (the rail row carries it), and below 640px the tabs
    and gaps pack tighter so the title keeps some room. */
 @container (max-width: 1000px) {
   .pane-head .tok .uh-prov,
@@ -1008,45 +1008,71 @@
   }
 }
 
-/* Every header carries Agent · Terminal · Diff · Map (and Queue / Thread when
-   they show), calm or not. Spelled out they take ~180px, which a 2×2 grid's
-   heads (~375px at 1044px wide) can't spare beside the name, Commit… and the
-   tail. So below this width the tabs are icons, each with a title naming it;
-   the word stays in the button, visually hidden, for screen readers. The
-   active tab keeps its accent fill, so where you are still reads at a glance.
-   760px is measured: a full head (Commit…, ⏩, the trimmed cost chip,
-   history, copy, ⋯, −) with worded tabs leaves the name under ~120px below
-   it; with icons the name keeps ~160px at 650px (two side by side on a 1600
-   screen). */
-@container (max-width: 760px) {
-  .pane-head .tabs .tab-icon {
-    display: block;
-  }
+/* Words while they fit, icons once they don't. Pane.tsx measures the header
+   (headNeed: every item at its drawn width, the name at its reserved room)
+   and sets .head-icons when the words would overflow, taking it off again
+   only once there is room plus a margin (fitDecision's hysteresis), so a
+   header at the edge doesn't flicker. Icon mode draws each tab as its icon,
+   with a title naming it and the word kept for screen readers (visually
+   hidden, not display:none); the active tab keeps its accent fill. History
+   and Copy all trade their words for their glyphs the same way. */
+.pane-head.head-icons .tabs .tab-icon {
+  display: block;
+}
 
-  .pane-head .tabs .tab-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-  }
+.pane-head.head-icons .tabs .tab-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
 
-  .pane-head .tabs button {
-    position: relative;
-    padding: 4px 5px;
-  }
+.pane-head.head-icons .tabs button {
+  position: relative;
+  padding: 4px 5px;
+}
 
-  .pane-head .tabs .queue-tab-badge {
-    margin-left: 3px;
-  }
+.pane-head.head-icons .tabs .queue-tab-badge {
+  margin-left: 3px;
+}
+
+/* History and Copy all: a word in a roomy header, the glyph in a tight one
+   (the aria-label names them either way). */
+.pane-head:not(.head-icons) .act .btn-icon {
+  display: none;
+}
+
+.pane-head.head-icons .act .btn-label {
+  display: none;
+}
+
+.pane-head:not(.head-icons) .act.pane-hist,
+.pane-head:not(.head-icons) .act.copy-history {
+  padding: 3px 8px;
+  font-size: 11px;
+  line-height: 14px;
+}
+
+/* A session header lays out by measure: the spacer takes the free room (so
+   the buttons and ⋯ hold the right edge) instead of auto margins, whose
+   used width would read as content to headNeed. */
+.pane-head .head-spacer {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.pane-head.pane-head-fit .head-tail,
+.pane-head.pane-head-fit .tok {
+  margin-left: 0;
 }
 
 /* A 2×2 on a 1044px window (heads ~375px): with icon tabs, a Queue badge and
    Commit… the name was a few pixels short of its tail ("ns/sc-17…"). The
    icons and ⋯ give back their spare padding so the name keeps its digits. */
 @container (max-width: 440px) {
-  .pane-head .tabs button {
+  .pane-head.head-icons .tabs button {
     padding: 4px 3px;
   }
 
@@ -1179,6 +1205,19 @@
 
 .pane-head .act.pane-more.open {
   border-color: var(--accent);
+}
+
+/* ⋯'s read-outs the header leaves out (cost, diff-stat), above its items. */
+.pane-more-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 4px 10px 7px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
 }
 
 .pane-more-menu {

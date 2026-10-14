@@ -69,6 +69,7 @@ describe("PREF_MAP", () => {
       mf_map_tour: "map_tour",
       mf_settings_advanced: "settings_advanced",
       mf_welcome_tour: "welcome_tour",
+      mf_paneheader: "pane_header",
     });
     // Every prefs field is mapped, and nothing else is.
     expect(PREF_MAP.map((p) => p.field).sort()).toEqual(Object.keys(PREF_DEFAULTS).sort());
@@ -77,7 +78,7 @@ describe("PREF_MAP", () => {
   it("looks up both ways, and per-browser keys are not prefs", () => {
     expect(prefFieldFor("mf_keymap")).toBe("keymap");
     expect(lsKeyFor("theme")).toBe("cs_theme");
-    for (const k of ["cs_order", "mf_aliases", "cs_sidebar", "mf_hints_seen", "cs_accent", "mf_prefs_seeded"])
+    for (const k of ["cs_order", "mf_aliases", "cs_sidebar", "mf_hints_seen", "cs_accent", "mf_prefs_seeded", "mf_customize_page"])
       expect(prefFieldFor(k)).toBeNull();
   });
 });

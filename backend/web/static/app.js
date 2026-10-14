@@ -26032,7 +26032,8 @@ var PREF_DEFAULTS = {
 	hints: null,
 	map_tour: null,
 	settings_advanced: null,
-	welcome_tour: null
+	welcome_tour: null,
+	pane_header: null
 };
 var PREF_MAP = [
 	{
@@ -26117,6 +26118,11 @@ var PREF_MAP = [
 		ls: "mf_welcome_tour",
 		field: "welcome_tour",
 		kind: "json-bool"
+	},
+	{
+		ls: "mf_paneheader",
+		field: "pane_header",
+		kind: "json-object"
 	}
 ];
 var BY_LS = new Map(PREF_MAP.map((p) => [p.ls, p]));
@@ -26449,6 +26455,211 @@ function flushPrefsOnHide(kv = storage$1()) {
 	});
 }
 //#endregion
+//#region src/lib/paneHeader.ts
+var PANE_TABS = [
+	{
+		id: "agent",
+		kind: "tab",
+		label: "Agent",
+		note: "The session's agent — always shown",
+		on: true,
+		locked: true
+	},
+	{
+		id: "shell",
+		kind: "tab",
+		label: "Terminal",
+		note: "A shell in the session's folder (not for a shared folder)",
+		on: true
+	},
+	{
+		id: "diff",
+		kind: "tab",
+		label: "Diff",
+		note: "What the session changed (git sessions)",
+		on: true
+	},
+	{
+		id: "queue",
+		kind: "tab",
+		label: "Queue",
+		note: "Send a message now or queue prompts to run when idle",
+		on: true
+	},
+	{
+		id: "map",
+		kind: "tab",
+		label: "Map",
+		note: "The worktree as a tree: agents, zones, blast radius (git sessions)",
+		on: false
+	},
+	{
+		id: "thread",
+		kind: "tab",
+		label: "Thread",
+		note: "Workers and what passed between them — only once a session has some",
+		on: false
+	}
+];
+var PANE_BUTTONS = [
+	{
+		id: "fasttrack",
+		kind: "button",
+		label: "Fast-track ⏩",
+		note: "Where the session goes when its turn ends: commit, push, PR…",
+		on: true
+	},
+	{
+		id: "copy",
+		kind: "button",
+		label: "Copy entire history",
+		note: "The open terminal tab's whole scrollback to the clipboard",
+		on: true
+	},
+	{
+		id: "next",
+		kind: "button",
+		label: "Next step (Commit…)",
+		note: "The guided button: Commit…, then Push, then Open PR",
+		on: false
+	},
+	{
+		id: "history",
+		kind: "button",
+		label: "History",
+		note: "Scroll and select the full history like a page",
+		on: false
+	},
+	{
+		id: "cost",
+		kind: "button",
+		label: "Cost",
+		note: "What the session has cost, click for its tokens",
+		on: false
+	},
+	{
+		id: "diffstat",
+		kind: "button",
+		label: "Diff stats",
+		note: "+added −removed · files, against the base branch",
+		on: false
+	},
+	{
+		id: "hide",
+		kind: "button",
+		label: "Hide −",
+		note: "Hide the window — the session keeps running",
+		on: false
+	}
+];
+var PANE_ITEMS = [...PANE_TABS, ...PANE_BUTTONS];
+var BY_ID = new Map(PANE_ITEMS.map((d) => [d.id, d]));
+function paneItemDef(id) {
+	return BY_ID.get(id);
+}
+function asPaneHeaderPref(v) {
+	if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+	const o = v;
+	const strs = (x) => Array.isArray(x) ? x.filter((s) => typeof s === "string") : null;
+	const order = strs(o.order);
+	const hidden = strs(o.hidden);
+	if (!order || !hidden) return null;
+	return {
+		order,
+		hidden
+	};
+}
+function orderedKind(defs, saved) {
+	const known = new Set(defs.map((d) => d.id));
+	const out = [];
+	for (const id of saved) if (known.has(id) && !out.includes(id)) out.push(id);
+	defs.forEach((d, i) => {
+		if (out.includes(d.id)) return;
+		let at = 0;
+		for (let j = i - 1; j >= 0; j--) {
+			const k = out.indexOf(defs[j].id);
+			if (k >= 0) {
+				at = k + 1;
+				break;
+			}
+		}
+		out.splice(at, 0, d.id);
+	});
+	return out;
+}
+function resolvePaneHeader(pref) {
+	const order = pref?.order ?? [];
+	const mentioned = new Set(order);
+	const hidden = new Set(pref?.hidden ?? []);
+	const shown = /* @__PURE__ */ new Set();
+	for (const d of PANE_ITEMS) if (d.locked || (mentioned.has(d.id) ? !hidden.has(d.id) : d.on)) shown.add(d.id);
+	return {
+		tabs: orderedKind(PANE_TABS, order),
+		buttons: orderedKind(PANE_BUTTONS, order),
+		shown
+	};
+}
+function toPref(r) {
+	const order = [...r.tabs, ...r.buttons];
+	return {
+		order,
+		hidden: order.filter((id) => !r.shown.has(id))
+	};
+}
+function togglePaneItem(pref, id) {
+	const r = resolvePaneHeader(pref);
+	if (!paneItemDef(id)?.locked) {
+		if (r.shown.has(id)) r.shown.delete(id);
+		else r.shown.add(id);
+	}
+	return toPref(r);
+}
+function movePaneItem(pref, id, dir) {
+	const r = resolvePaneHeader(pref);
+	const list = paneItemDef(id).kind === "tab" ? r.tabs : r.buttons;
+	const i = list.indexOf(id);
+	const j = i + dir;
+	if (i >= 0 && j >= 0 && j < list.length) [list[i], list[j]] = [list[j], list[i]];
+	return toPref(r);
+}
+function placePaneItem(pref, id, before) {
+	const r = resolvePaneHeader(pref);
+	const list = paneItemDef(id).kind === "tab" ? r.tabs : r.buttons;
+	if (before && paneItemDef(before).kind !== paneItemDef(id).kind) return toPref(r);
+	const from = list.indexOf(id);
+	if (from < 0 || id === before) return toPref(r);
+	list.splice(from, 1);
+	const to = before ? list.indexOf(before) : list.length;
+	list.splice(to < 0 ? list.length : to, 0, id);
+	return toPref(r);
+}
+function headerItems(pref, ctx) {
+	const r = resolvePaneHeader(pref);
+	const possible = (id) => !(id === "shell" && ctx.sharedFolder) && !((id === "diff" || id === "map") && !ctx.git) && !(id === "thread" && !ctx.thread);
+	const calmFolds = (id) => ctx.calm && pref === null && (id === "queue" && !ctx.queueBusy || id === "fasttrack" && !ctx.ftBusy);
+	return {
+		tabs: r.tabs.filter((id) => possible(id) && (id === ctx.active || r.shown.has(id) && !calmFolds(id))),
+		buttons: r.buttons.filter((id) => r.shown.has(id) && !calmFolds(id))
+	};
+}
+var TITLE_ROOM_PX = 110;
+var FIT_HYSTERESIS_PX = 24;
+function fitDecision(cur, avail, need, hyst = FIT_HYSTERESIS_PX) {
+	if (avail <= 0) return cur;
+	if (!cur.icons) return {
+		icons: need > avail,
+		textNeed: need
+	};
+	if (cur.textNeed === null) return {
+		icons: false,
+		textNeed: null
+	};
+	return {
+		icons: avail < cur.textNeed + hyst,
+		textNeed: cur.textNeed
+	};
+}
+//#endregion
 //#region src/state/store.ts
 var SIDEBAR_MIN_W = 260;
 var SIDEBAR_MAX_W = 560;
@@ -26476,6 +26687,12 @@ function firstRun(key) {
 function save(key, value, stringify = true) {
 	try {
 		localStorage.setItem(key, stringify ? JSON.stringify(value) : String(value));
+	} catch {}
+	notePrefWrite(key);
+}
+function drop(key) {
+	try {
+		localStorage.removeItem(key);
 	} catch {}
 	notePrefWrite(key);
 }
@@ -26512,6 +26729,8 @@ var useUi = create((set, get) => ({
 	narrow: false,
 	hiddenBars: new Set(firstRun("mf_hiddenbars") ? defaultHiddenBars() : load$1("mf_hiddenbars", [])),
 	barOrder: load$1("mf_barorder", []),
+	paneHeader: asPaneHeaderPref(load$1("mf_paneheader", null)),
+	customizePage: load$1("mf_customize_page", "sidebar") === "pane" ? "pane" : "sidebar",
 	showFilter: load$1("mf_show_filter", true),
 	filterPeek: false,
 	reduceMotion: load$1("mf_reduce_motion", false),
@@ -26741,6 +26960,26 @@ var useUi = create((set, get) => ({
 	setBarOrder: (order) => {
 		save("mf_barorder", order);
 		set({ barOrder: order });
+	},
+	resetSidebarBars: () => {
+		drop("mf_hiddenbars");
+		drop("mf_barorder");
+		save("mf_show_filter", true);
+		set({
+			hiddenBars: new Set(defaultHiddenBars()),
+			barsExplicit: false,
+			barOrder: [],
+			showFilter: true
+		});
+	},
+	setPaneHeader: (pref) => {
+		if (pref) save("mf_paneheader", pref);
+		else drop("mf_paneheader");
+		set({ paneHeader: pref });
+	},
+	setCustomizePage: (page) => {
+		save("mf_customize_page", page);
+		set({ customizePage: page });
 	},
 	setReduceMotion: (on) => {
 		save("mf_reduce_motion", on);
@@ -31568,6 +31807,9 @@ function applyLive(fields) {
 				break;
 			case "bar_order":
 				st.barOrder = Array.isArray(v) ? v : [];
+				break;
+			case "pane_header":
+				st.paneHeader = asPaneHeaderPref(v);
 				break;
 			case "reduce_motion":
 				st.reduceMotion = v === true;
@@ -37359,12 +37601,12 @@ function canDisconnect(d) {
 }
 //#endregion
 //#region src/components/sidebar/rowDnd.ts
-var ROW_MIME = "application/x-mf-row";
+var ROW_MIME$1 = "application/x-mf-row";
 function rowDndProps(key, cbs, draggable = true) {
 	return {
 		draggable,
 		onDragStart: (ev) => {
-			ev.dataTransfer.setData(ROW_MIME, key);
+			ev.dataTransfer.setData(ROW_MIME$1, key);
 			ev.dataTransfer.setData("text/plain", key);
 			ev.dataTransfer.effectAllowed = "move";
 			cbs.onDragState(key);
@@ -37374,7 +37616,7 @@ function rowDndProps(key, cbs, draggable = true) {
 			cbs.onDropCue(key, null);
 		},
 		onDragOver: (ev) => {
-			if (!ev.dataTransfer.types.includes(ROW_MIME)) return;
+			if (!ev.dataTransfer.types.includes(ROW_MIME$1)) return;
 			ev.preventDefault();
 			const rect = ev.currentTarget.getBoundingClientRect();
 			cbs.onDropCue(key, ev.clientY - rect.top < rect.height / 2 ? "above" : "below");
@@ -37383,10 +37625,10 @@ function rowDndProps(key, cbs, draggable = true) {
 			if (!ev.currentTarget.contains(ev.relatedTarget)) cbs.onDropCue(key, null);
 		},
 		onDrop: (ev) => {
-			if (!ev.dataTransfer.types.includes(ROW_MIME)) return;
+			if (!ev.dataTransfer.types.includes(ROW_MIME$1)) return;
 			ev.preventDefault();
 			const rect = ev.currentTarget.getBoundingClientRect();
-			cbs.onDropRow(ev.dataTransfer.getData(ROW_MIME), key, ev.clientY - rect.top < rect.height / 2);
+			cbs.onDropRow(ev.dataTransfer.getData(ROW_MIME$1), key, ev.clientY - rect.top < rect.height / 2);
 			cbs.onDropCue(key, null);
 		}
 	};
@@ -38932,6 +39174,15 @@ function sessionMenu(inst, ctx, opts = {}) {
 			run: () => openSettings(PEER_SCREEN)
 		}
 	]);
+	const next = opts.onNextStep;
+	const shipGroup = next && !ship.some((i) => i.label === next.label) ? [{
+		key: "next-step",
+		label: next.label,
+		note: "next step",
+		title: next.title,
+		disabled: !!next.disabled,
+		run: () => void next.run()
+	}, ...ship] : ship;
 	const session = keep([fromTable("rename"), fromTable("resume", { note: actionNote("resume", ctx) })]);
 	const splitWhy = remote ? "" : splitBlockReason(ctx.caps, inst);
 	const group = remote ? null : detachableGroup(inst);
@@ -38942,6 +39193,12 @@ function sessionMenu(inst, ctx, opts = {}) {
 			label: "Terminal",
 			title: "A shell in this session's folder",
 			run: () => openTab(title, "shell")
+		},
+		ctx.caps.git !== false && !tabs.has("diff") && {
+			key: "diff",
+			label: "Diff",
+			title: "What this session changed",
+			run: () => openTab(title, "diff")
 		},
 		ctx.caps.git !== false && !tabs.has("map") && fromTable("map"),
 		fromTable("thread", { note: actionNote("thread", ctx) }),
@@ -39031,7 +39288,7 @@ function sessionMenu(inst, ctx, opts = {}) {
 			{
 				id: "ship",
 				label: "Ship",
-				items: ship
+				items: shipGroup
 			},
 			{
 				id: "session",
@@ -40458,6 +40715,14 @@ function usageHeadParts(info) {
 		cost: "~" + fmtUsd(info.tokens_cost || 0),
 		ctx: win ? fmtTokens(info.tokens_ctx || 0) + "/" + fmtTokens(win) : ""
 	};
+}
+function usageHeadline(info) {
+	const { prov, cost, ctx } = usageHeadParts(info);
+	return [
+		prov,
+		cost,
+		ctx
+	].filter(Boolean).join(" · ");
 }
 function usageRows(info, plan = false) {
 	const rows = [[plan ? "≈ API-equiv. cost" : "Est. cost", "~" + fmtUsd(info.tokens_cost || 0)]];
@@ -63004,8 +63269,89 @@ function PaneMoreMenu({ children, btnRef }) {
 	}), document.body)] });
 }
 //#endregion
+//#region src/components/grid/TabIcon.tsx
+var TAB_ICONS = {
+	agent: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" }),
+	shell: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("polyline", { points: "4 17 10 11 4 5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+		x1: "12",
+		y1: "19",
+		x2: "20",
+		y2: "19"
+	})] }),
+	diff: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 3v12" }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M6 9h12" }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M6 20h12" })
+	] }),
+	map: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("polygon", { points: "2 6 9 3 15 6 22 3 22 18 15 21 9 18 2 21" }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+			x1: "9",
+			y1: "3",
+			x2: "9",
+			y2: "18"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+			x1: "15",
+			y1: "6",
+			x2: "15",
+			y2: "21"
+		})
+	] }),
+	queue: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+			x1: "9",
+			y1: "6",
+			x2: "20",
+			y2: "6"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+			x1: "9",
+			y1: "12",
+			x2: "20",
+			y2: "12"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+			x1: "9",
+			y1: "18",
+			x2: "20",
+			y2: "18"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+			cx: "4.5",
+			cy: "6",
+			r: "1"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+			cx: "4.5",
+			cy: "12",
+			r: "1"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+			cx: "4.5",
+			cy: "18",
+			r: "1"
+		})
+	] }),
+	thread: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1" })] })
+};
+function TabIcon({ name }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+		className: "tab-icon",
+		width: "13",
+		height: "13",
+		viewBox: "0 0 24 24",
+		fill: "none",
+		stroke: "currentColor",
+		strokeWidth: "2",
+		strokeLinecap: "round",
+		strokeLinejoin: "round",
+		"aria-hidden": "true",
+		children: TAB_ICONS[name]
+	});
+}
+//#endregion
 //#region src/components/grid/Pane.tsx
-var PANE_NARROW_PX = 560;
 var GIT_TABS = /* @__PURE__ */ new Set(["diff", "map"]);
 var MAP_PREFETCH_MS = 1500;
 var BODY_TABS = /* @__PURE__ */ new Set([
@@ -63310,15 +63656,47 @@ function Pane({ inst, drag, dragging }) {
 	}, [ftMenu, ftGone]);
 	const me = useMe();
 	const calm = useCalm();
-	const [paneNarrow, setPaneNarrow] = (0, import_react.useState)(false);
+	const paneHeader = useUi((s) => s.paneHeader);
+	const headRef = (0, import_react.useRef)(null);
+	const [fit, setFit] = (0, import_react.useState)({
+		icons: false,
+		textNeed: null
+	});
+	const fitRef = (0, import_react.useRef)(fit);
+	fitRef.current = fit;
+	const fitKey = (0, import_react.useRef)("");
+	const measureFit = (0, import_react.useCallback)(() => {
+		const el = headRef.current;
+		if (!el) return;
+		let cur = fitRef.current;
+		if (el.classList.contains("head-icons") !== cur.icons) return;
+		const key = el.dataset.fitKey || "";
+		if (key !== fitKey.current) {
+			fitKey.current = key;
+			cur = {
+				...cur,
+				textNeed: null
+			};
+		}
+		const next = fitDecision(cur, el.clientWidth, headNeed(el));
+		if (next.icons !== fitRef.current.icons || next.textNeed !== fitRef.current.textNeed) {
+			fitRef.current = next;
+			setFit(next);
+		}
+	}, []);
+	(0, import_react.useLayoutEffect)(measureFit);
 	(0, import_react.useEffect)(() => {
-		const el = paneRef.current;
+		const el = headRef.current;
 		if (!el || typeof ResizeObserver === "undefined") return;
-		const ro = new ResizeObserver(() => setPaneNarrow(el.clientWidth > 0 && el.clientWidth < PANE_NARROW_PX));
+		const ro = new ResizeObserver(() => measureFit());
 		ro.observe(el);
 		return () => ro.disconnect();
-	}, [missing, loading]);
-	const compact = calm || paneNarrow;
+	}, [
+		missing,
+		loading,
+		measureFit
+	]);
+	const icons = fit.icons;
 	const { data: setupStatus } = useSetup();
 	const noAgent = agentBlocked(inst, setupStatus?.logins);
 	if (missing) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
@@ -63459,29 +63837,255 @@ function Pane({ inst, drag, dragging }) {
 	const hasDiffStat = !!(ds && (ds.files || 0) + (ds.additions || 0) + (ds.deletions || 0) > 0);
 	const act = effectiveActivity(inst);
 	const quiet = !!ns && !ns.hint && !ns.disabled && (act === "working" || act === "clarify" || act === "limit");
-	const showShellTab = !sharedFolder;
-	const showMapTab = caps.git;
-	const showQueueTab = !compact || tab === "queue" || pending > 0 || holding;
-	const showFt = !!ft && (!compact || ft.lane !== "leave" || ft.halted || ft.active || !!ftMenu);
+	const items = headerItems(paneHeader, {
+		active: tab,
+		sharedFolder,
+		git: caps.git,
+		thread: threadShown,
+		calm,
+		queueBusy: pending > 0 || holding,
+		ftBusy: !!ft && (ft.lane !== "leave" || ft.halted || ft.active || !!ftMenu)
+	});
+	const shows = (id) => items.buttons.includes(id);
+	const ftShown = !!ft && shows("fasttrack");
 	const menuCtx = actionCtx(title, {
 		inst,
 		caps
 	});
-	const visibleTabs = [showShellTab && "shell", showMapTab && "map"].filter(Boolean);
+	const visibleTabs = items.tabs;
 	const termTab = tab === "agent" || tab === "shell" ? tab : null;
 	const copyHistory = () => {
 		if (termTab) copyPaneHistory(title, termTab);
 	};
+	const shownStep = ns && ns.label === "Commit…" && !hasUncommitted(inst) ? null : ns;
+	const openHistory = () => setHistPane({
+		kind: tab === "shell" ? "shell" : "agent",
+		dragSel: null
+	});
 	const menu = () => sessionMenu(inst, menuCtx, {
 		visibleTabs,
-		onHistory: compact ? () => setHistPane({
-			kind: tab === "shell" ? "shell" : "agent",
-			dragSel: null
-		}) : void 0,
-		onCopyHistory: termTab ? copyHistory : void 0
+		onHistory: shows("history") ? void 0 : openHistory,
+		onCopyHistory: termTab ? copyHistory : void 0,
+		onNextStep: shows("next") ? void 0 : shownStep ?? void 0
 	});
+	const menuSummary = [!shows("cost") && usageHeadline(inst), !shows("diffstat") && hasDiffStat && diffStatText(inst)].filter(Boolean);
 	const canResume = sessionAction("resume").enabled(menuCtx);
-	const shownStep = ns && ns.label === "Commit…" && !hasUncommitted(inst) ? null : ns;
+	const fitKeyNow = [
+		items.tabs.join(","),
+		items.buttons.join(","),
+		displayName,
+		shownStep?.label ?? "",
+		ft?.label ?? "",
+		pending,
+		holding ? 1 : 0,
+		badge.count,
+		canResume ? 1 : 0,
+		deviceName
+	].join("|");
+	const tabEls = {
+		agent: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			"data-tab": "agent",
+			className: tab === "agent" ? "active" : "",
+			title: "Agent — the session's agent CLI",
+			onClick: (e) => {
+				e.stopPropagation();
+				showTab("agent");
+			},
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "agent" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "tab-label",
+				children: "Agent"
+			})]
+		}, "agent"),
+		shell: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			"data-tab": "shell",
+			className: tab === "shell" ? "active" : "",
+			title: "Terminal — a shell in this session's folder",
+			onClick: (e) => {
+				e.stopPropagation();
+				showTab("shell");
+			},
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "shell" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "tab-label",
+				children: "Terminal"
+			})]
+		}, "shell"),
+		diff: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			"data-tab": "diff",
+			className: tab === "diff" ? "active" : "",
+			title: "Diff — what this session changed",
+			onClick: (e) => {
+				e.stopPropagation();
+				showTab("diff");
+			},
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "diff" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "tab-label",
+				children: "Diff"
+			})]
+		}, "diff"),
+		map: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			"data-tab": "map",
+			className: tab === "map" ? "active" : "",
+			title: "Code map — the worktree as a tree: agents, zones, plan, blast radius",
+			onClick: (e) => {
+				e.stopPropagation();
+				showTab("map");
+			},
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "map" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "tab-label",
+				children: "Map"
+			})]
+		}, "map"),
+		queue: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			"data-tab": "queue",
+			className: "queue-tab" + (tab === "queue" ? " active" : "") + (pending > 0 && q?.enabled === false ? " q-paused" : "") + (q?.loop ? " q-loop" : "") + (holding ? " q-limited" : ""),
+			title: holding ? q?.wait_for_limit !== false ? `Usage limit reached · auto-resumes in ${queueRelTime(limitedMs)} (${pending} queued)` : `Usage limit reached · queue stopped (${pending} queued)` : "Send a message now or queue prompts to auto-run — keeps the session going across usage limits",
+			onClick: (e) => {
+				e.stopPropagation();
+				showTab("queue");
+			},
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "queue" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "tab-label",
+					children: "Queue"
+				}),
+				(pending > 0 || holding) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "queue-tab-badge",
+					children: holding ? "⏳" : pending > 99 ? "99+" : String(pending)
+				})
+			]
+		}, "queue"),
+		thread: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			"data-tab": "thread",
+			className: "thread-tab" + (tab === "thread" ? " active" : ""),
+			title: "Thread — this session's workers, what they reported and what passed between them; write to any of them as you (Ctrl+K T)" + (badge.needs ? `\n${badge.needs} need${badge.needs === 1 ? "s" : ""} you` : "") + (badge.fresh ? `\n${badge.fresh} new report${badge.fresh === 1 ? "" : "s"}` : ""),
+			onClick: (e) => {
+				e.stopPropagation();
+				showTab("thread");
+			},
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "thread" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "tab-label",
+					children: "Thread"
+				}),
+				badge.count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "queue-tab-badge thread-badge" + (badge.needs ? " needs" : ""),
+					children: badge.count > 99 ? "99+" : String(badge.count)
+				})
+			]
+		}, "thread")
+	};
+	const buttonEls = {
+		next: shownStep ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			className: "nextstep" + (shownStep.hint ? " nextstep-hint" : "") + (shownStep.disabled ? " nextstep-blocked" : "") + (quiet ? " nextstep-quiet" : ""),
+			type: "button",
+			disabled: !!shownStep.disabled,
+			title: shownStep.title || "The next step for this session: " + shownStep.label.replace(/…$/, ""),
+			onClick: (ev) => {
+				ev.stopPropagation();
+				if (!shownStep.disabled) shownStep.run();
+			},
+			children: shownStep.label
+		}, "next") : null,
+		fasttrack: ft ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			ref: setFtEl,
+			className: "nextstep nextstep-fast" + (ft.active ? " is-on" : "") + (ft.halted ? " nextstep-fast-halted" : "") + (ft.lane !== "leave" ? " is-set" : "") + (ftMenu ? " open" : ""),
+			type: "button",
+			"aria-haspopup": "menu",
+			"aria-expanded": !!ftMenu,
+			"aria-label": "Fast-track: " + (ft.lane === "leave" ? "off" : ft.label.replace(/^⏩ /, "")) + (ft.askFirst ? ", asks first" : ""),
+			title: ft.title,
+			"data-ft-lane": ft.lane,
+			onClick: (ev) => {
+				ev.stopPropagation();
+				useUi.getState().setFastTrackMenu(ftMenu ? null : { title });
+			},
+			children: [ft.lane === "leave" && !ft.halted ? "⏩" : ft.label, ft.askFirst && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "ft-ask",
+				"aria-hidden": "true",
+				children: "?"
+			})]
+		}, "fasttrack") : null,
+		history: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			className: "act pane-hist",
+			type: "button",
+			"aria-label": "Browse the full history",
+			title: "Browse the full history — scroll & select like a page (or drag a selection past the top of the terminal)",
+			onClick: (e) => {
+				e.stopPropagation();
+				openHistory();
+			},
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+				className: "btn-icon",
+				width: "12",
+				height: "12",
+				viewBox: "0 0 24 24",
+				fill: "none",
+				stroke: "currentColor",
+				strokeWidth: "2",
+				strokeLinecap: "round",
+				strokeLinejoin: "round",
+				"aria-hidden": "true",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 8v4l2 2" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.05 11a9 9 0 1 1 .5 4" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 22v-6h6" })
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "btn-label",
+				"aria-hidden": "true",
+				children: "History"
+			})]
+		}, "history"),
+		copy: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			className: "act copy-history",
+			type: "button",
+			disabled: !termTab,
+			"aria-label": "Copy this pane's whole history",
+			title: termTab ? `Copy this pane's whole history — the ${termTab === "shell" ? "Terminal" : "Agent"} tab's full scrollback` : "Copy this pane's whole history — open the Agent or Terminal tab first",
+			onClick: (e) => {
+				e.stopPropagation();
+				copyHistory();
+			},
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+				className: "btn-icon",
+				width: "12",
+				height: "12",
+				viewBox: "0 0 24 24",
+				fill: "none",
+				stroke: "currentColor",
+				strokeWidth: "2",
+				strokeLinecap: "round",
+				strokeLinejoin: "round",
+				"aria-hidden": "true",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+					x: "8",
+					y: "2",
+					width: "8",
+					height: "4",
+					rx: "1"
+				})]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "btn-label",
+				"aria-hidden": "true",
+				children: "Copy all"
+			})]
+		}, "copy"),
+		cost: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionUsageChip, { inst }, "cost"),
+		diffstat: hasDiffStat ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CtxLine, { inst }, "diffstat") : null,
+		hide: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			className: "act pane-close",
+			type: "button",
+			"aria-label": "Hide window",
+			title: HIDE_TITLE,
+			onClick: (e) => {
+				e.stopPropagation();
+				useUi.getState().setHidden(title, true);
+			},
+			children: "−"
+		}, "hide")
+	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		ref: paneRef,
 		className: "pane" + (focused ? " focused" : "") + (dragging ? " dragging" : ""),
@@ -63490,7 +64094,9 @@ function Pane({ inst, drag, dragging }) {
 		...paneDrag,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "pane-head",
+				ref: headRef,
+				className: "pane-head pane-head-fit" + (icons ? " head-icons" : ""),
+				"data-fit-key": fitKeyNow,
 				...headDrag,
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -63517,137 +64123,17 @@ function Pane({ inst, drag, dragging }) {
 							" behind"
 						]
 					}),
-					hasDiffStat && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CtxLine, { inst }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "tabs",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								"data-tab": "agent",
-								className: tab === "agent" ? "active" : "",
-								title: "Agent — the session's agent CLI",
-								onClick: (e) => {
-									e.stopPropagation();
-									showTab("agent");
-								},
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "agent" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "tab-label",
-									children: "Agent"
-								})]
-							}),
-							showShellTab && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								"data-tab": "shell",
-								className: tab === "shell" ? "active" : "",
-								title: "Terminal — a shell in this session's folder",
-								onClick: (e) => {
-									e.stopPropagation();
-									showTab("shell");
-								},
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "shell" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "tab-label",
-									children: "Terminal"
-								})]
-							}),
-							caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								"data-tab": "diff",
-								className: tab === "diff" ? "active" : "",
-								title: "Diff — what this session changed",
-								onClick: (e) => {
-									e.stopPropagation();
-									showTab("diff");
-								},
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "diff" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "tab-label",
-									children: "Diff"
-								})]
-							}),
-							showMapTab && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								"data-tab": "map",
-								className: tab === "map" ? "active" : "",
-								title: "Code map — the worktree as a tree: agents, zones, plan, blast radius",
-								onClick: (e) => {
-									e.stopPropagation();
-									showTab("map");
-								},
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "map" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "tab-label",
-									children: "Map"
-								})]
-							}),
-							showQueueTab && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								"data-tab": "queue",
-								className: "queue-tab" + (tab === "queue" ? " active" : "") + (pending > 0 && q?.enabled === false ? " q-paused" : "") + (q?.loop ? " q-loop" : "") + (holding ? " q-limited" : ""),
-								title: holding ? q?.wait_for_limit !== false ? `Usage limit reached · auto-resumes in ${queueRelTime(limitedMs)} (${pending} queued)` : `Usage limit reached · queue stopped (${pending} queued)` : "Send a message now or queue prompts to auto-run — keeps the session going across usage limits",
-								onClick: (e) => {
-									e.stopPropagation();
-									showTab("queue");
-								},
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "queue" }),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "tab-label",
-										children: "Queue"
-									}),
-									(pending > 0 || holding) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "queue-tab-badge",
-										children: holding ? "⏳" : pending > 99 ? "99+" : String(pending)
-									})
-								]
-							}),
-							threadShown && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								"data-tab": "thread",
-								className: "thread-tab" + (tab === "thread" ? " active" : ""),
-								title: "Thread — this session's workers, what they reported and what passed between them; write to any of them as you (Ctrl+K T)" + (badge.needs ? `\n${badge.needs} need${badge.needs === 1 ? "s" : ""} you` : "") + (badge.fresh ? `\n${badge.fresh} new report${badge.fresh === 1 ? "" : "s"}` : ""),
-								onClick: (e) => {
-									e.stopPropagation();
-									showTab("thread");
-								},
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "thread" }),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "tab-label",
-										children: "Thread"
-									}),
-									badge.count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "queue-tab-badge thread-badge" + (badge.needs ? " needs" : ""),
-										children: badge.count > 99 ? "99+" : String(badge.count)
-									})
-								]
-							})
-						]
+						children: items.tabs.map((id) => tabEls[id])
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "head-spacer",
+						"aria-hidden": "true"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "actions",
 						children: [
-							shownStep ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								className: "nextstep" + (shownStep.hint ? " nextstep-hint" : "") + (shownStep.disabled ? " nextstep-blocked" : "") + (quiet ? " nextstep-quiet" : ""),
-								type: "button",
-								disabled: !!shownStep.disabled,
-								title: shownStep.title || "The next step for this session: " + shownStep.label.replace(/…$/, ""),
-								onClick: (ev) => {
-									ev.stopPropagation();
-									if (!shownStep.disabled) shownStep.run();
-								},
-								children: shownStep.label
-							}) : null,
-							ft && showFt && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								ref: setFtEl,
-								className: "nextstep nextstep-fast" + (ft.active ? " is-on" : "") + (ft.halted ? " nextstep-fast-halted" : "") + (ft.lane !== "leave" ? " is-set" : "") + (ftMenu ? " open" : ""),
-								type: "button",
-								"aria-haspopup": "menu",
-								"aria-expanded": !!ftMenu,
-								"aria-label": "Fast-track: " + (ft.lane === "leave" ? "off" : ft.label.replace(/^⏩ /, "")) + (ft.askFirst ? ", asks first" : ""),
-								title: ft.title,
-								"data-ft-lane": ft.lane,
-								onClick: (ev) => {
-									ev.stopPropagation();
-									useUi.getState().setFastTrackMenu(ftMenu ? null : { title });
-								},
-								children: [ft.lane === "leave" && !ft.halted ? "⏩" : ft.label, ft.askFirst && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "ft-ask",
-									"aria-hidden": "true",
-									children: "?"
-								})]
-							}),
 							step && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 								className: "stepnow is-" + step.tone + (step.href ? " is-link" : ""),
 								title: step.title,
@@ -63687,14 +64173,14 @@ function Pane({ inst, drag, dragging }) {
 									window.open(inst.pr_url, "_blank");
 								} : void 0,
 								children: chip.label
-							})
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AccountChip, { inst }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DriveButton, {
+								inst,
+								me
+							}),
+							items.buttons.map((id) => buttonEls[id])
 						]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AccountChip, { inst }),
-					!compact && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionUsageChip, { inst }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DriveButton, {
-						inst,
-						me
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "state" + (wsState !== "connected" ? " state-bad" : ""),
@@ -63702,96 +64188,28 @@ function Pane({ inst, drag, dragging }) {
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "head-tail",
-						children: [
-							canResume && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								className: "act pane-resume",
-								type: "button",
-								"aria-label": "Resume session",
-								title: "Resume — starts the agent again in the same worktree",
-								onClick: (e) => {
-									e.stopPropagation();
-									sessionAction("resume").run(title);
-								},
-								children: paneNarrow ? "▶" : "▶ Resume"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneMoreMenu, {
-								btnRef: ft && !showFt ? setFtEl : void 0,
-								children: (close) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionMenu, {
-									model: menu(),
-									onDone: close,
-									onInUse: (t) => errorPop("Can't delete " + displayName, folderInUseText(t))
-								})
-							}),
-							!compact && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								className: "act pane-hist",
-								type: "button",
-								"aria-label": "Browse the full history",
-								title: "Browse the full history — scroll & select like a page (or drag a selection past the top of the terminal)",
-								onClick: (e) => {
-									e.stopPropagation();
-									setHistPane({
-										kind: tab === "shell" ? "shell" : "agent",
-										dragSel: null
-									});
-								},
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-									width: "12",
-									height: "12",
-									viewBox: "0 0 24 24",
-									fill: "none",
-									stroke: "currentColor",
-									strokeWidth: "2",
-									strokeLinecap: "round",
-									strokeLinejoin: "round",
-									"aria-hidden": "true",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 8v4l2 2" }),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.05 11a9 9 0 1 1 .5 4" }),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 22v-6h6" })
-									]
-								})
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								className: "act copy-history",
-								type: "button",
-								disabled: !termTab,
-								"aria-label": "Copy this pane's whole history",
-								title: termTab ? `Copy this pane's whole history — the ${termTab === "shell" ? "Terminal" : "Agent"} tab's full scrollback` : "Copy this pane's whole history — open the Agent or Terminal tab first",
-								onClick: (e) => {
-									e.stopPropagation();
-									copyHistory();
-								},
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-									width: "12",
-									height: "12",
-									viewBox: "0 0 24 24",
-									fill: "none",
-									stroke: "currentColor",
-									strokeWidth: "2",
-									strokeLinecap: "round",
-									strokeLinejoin: "round",
-									"aria-hidden": "true",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-										x: "8",
-										y: "2",
-										width: "8",
-										height: "4",
-										rx: "1"
-									})]
-								})
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								className: "act pane-close",
-								type: "button",
-								"aria-label": "Hide window",
-								title: HIDE_TITLE,
-								onClick: (e) => {
-									e.stopPropagation();
-									useUi.getState().setHidden(title, true);
-								},
-								children: "−"
-							})
-						]
+						children: [canResume && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							className: "act pane-resume",
+							type: "button",
+							"aria-label": "Resume session",
+							title: "Resume — starts the agent again in the same worktree",
+							onClick: (e) => {
+								e.stopPropagation();
+								sessionAction("resume").run(title);
+							},
+							children: icons ? "▶" : "▶ Resume"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneMoreMenu, {
+							btnRef: ft && !ftShown ? setFtEl : void 0,
+							children: (close) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [menuSummary.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "pane-more-summary",
+								role: "note",
+								children: menuSummary.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t }, t))
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionMenu, {
+								model: menu(),
+								onDone: close,
+								onInUse: (t) => errorPop("Can't delete " + displayName, folderInUseText(t))
+							})] })
+						})]
 					})
 				]
 			}),
@@ -63923,85 +64341,29 @@ function Pane({ inst, drag, dragging }) {
 		]
 	});
 }
-var TAB_ICONS = {
-	agent: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" }),
-	shell: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("polyline", { points: "4 17 10 11 4 5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
-		x1: "12",
-		y1: "19",
-		x2: "20",
-		y2: "19"
-	})] }),
-	diff: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 3v12" }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M6 9h12" }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M6 20h12" })
-	] }),
-	map: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("polygon", { points: "2 6 9 3 15 6 22 3 22 18 15 21 9 18 2 21" }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
-			x1: "9",
-			y1: "3",
-			x2: "9",
-			y2: "18"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
-			x1: "15",
-			y1: "6",
-			x2: "15",
-			y2: "21"
-		})
-	] }),
-	queue: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
-			x1: "9",
-			y1: "6",
-			x2: "20",
-			y2: "6"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
-			x1: "9",
-			y1: "12",
-			x2: "20",
-			y2: "12"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
-			x1: "9",
-			y1: "18",
-			x2: "20",
-			y2: "18"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-			cx: "4.5",
-			cy: "6",
-			r: "1"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-			cx: "4.5",
-			cy: "12",
-			r: "1"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-			cx: "4.5",
-			cy: "18",
-			r: "1"
-		})
-	] }),
-	thread: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1" })] })
-};
-function TabIcon({ name }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
-		className: "tab-icon",
-		width: "13",
-		height: "13",
-		viewBox: "0 0 24 24",
-		fill: "none",
-		stroke: "currentColor",
-		strokeWidth: "2",
-		strokeLinecap: "round",
-		strokeLinejoin: "round",
-		"aria-hidden": "true",
-		children: TAB_ICONS[name]
-	});
+function headNeed(head) {
+	const cs = getComputedStyle(head);
+	const px = (v) => parseFloat(v) || 0;
+	let need = px(cs.paddingLeft) + px(cs.paddingRight);
+	let drawn = 0;
+	for (const el of Array.from(head.children)) {
+		if (!el.getClientRects().length) continue;
+		const ecs = getComputedStyle(el);
+		if (ecs.position === "absolute" || ecs.position === "fixed") continue;
+		drawn++;
+		if (el.classList.contains("head-spacer")) continue;
+		need += px(ecs.marginLeft) + px(ecs.marginRight);
+		if (el.classList.contains("title")) need += Math.min(textWidth(el.textContent || "", ecs.font) + 2, TITLE_ROOM_PX);
+		else need += el.getBoundingClientRect().width;
+	}
+	return need + px(cs.columnGap) * Math.max(0, drawn - 1);
+}
+var measureCtx;
+function textWidth(text, font) {
+	if (measureCtx === void 0) measureCtx = document.createElement("canvas").getContext("2d");
+	if (!measureCtx) return text.length * 7;
+	measureCtx.font = font;
+	return measureCtx.measureText(text).width;
 }
 function RunningCover({ paneRef }) {
 	const [revealed, setRevealed] = (0, import_react.useState)(false);
@@ -64044,15 +64406,20 @@ function RunningCover({ paneRef }) {
 		})]
 	});
 }
+function ctxNum(n) {
+	if (n < 1e3) return String(n);
+	const k = n / 1e3;
+	return (k < 10 ? k.toFixed(1) : String(Math.round(k))).replace(/\.0$/, "") + "k";
+}
+function diffStatText(inst) {
+	const ds = inst.diff_stat;
+	const files = ds?.files || 0;
+	return `+${ctxNum(ds?.additions || 0)} −${ctxNum(ds?.deletions || 0)} · ${files}${files === 1 ? " file" : " files"}`;
+}
 function CtxLine({ inst }) {
 	const ds = inst.diff_stat;
 	const files = ds.files || 0, additions = ds.additions || 0, deletions = ds.deletions || 0;
 	const plural = files === 1 ? " file" : " files";
-	const ctxNum = (n) => {
-		if (n < 1e3) return String(n);
-		const k = n / 1e3;
-		return (k < 10 ? k.toFixed(1) : String(Math.round(k))).replace(/\.0$/, "") + "k";
-	};
 	let tip = `Total change vs base: +${additions} −${deletions} across ${files}${plural}`;
 	const un = ds.uncommitted;
 	if (un) tip += ` · uncommitted +${un.additions || 0} −${un.deletions || 0}`;
@@ -86391,6 +86758,89 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 	});
 }
 //#endregion
+//#region src/components/customize/CustomizeRow.tsx
+var ROW_MIME = "application/x-mf-customize-row";
+function CustomizeRow({ id, list, label, note, on, locked, lockedWhy, onToggle, onMove, onDropBefore, first, last }) {
+	const [over, setOver] = (0, import_react.useState)(false);
+	const inputId = "cz-" + list + "-" + id;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		className: "cz-row" + (on ? "" : " is-off") + (over ? " drop-over" : ""),
+		"data-item": id,
+		onDragOver: (e) => {
+			if (!e.dataTransfer.types.includes(ROW_MIME + "/" + list)) return;
+			e.preventDefault();
+			e.dataTransfer.dropEffect = "move";
+			setOver(true);
+		},
+		onDragLeave: () => setOver(false),
+		onDrop: (e) => {
+			setOver(false);
+			const dragged = e.dataTransfer.getData(ROW_MIME + "/" + list);
+			if (!dragged) return;
+			e.preventDefault();
+			if (dragged !== id) onDropBefore(dragged);
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "cz-grip",
+				draggable: true,
+				title: "Drag to reorder",
+				"aria-hidden": "true",
+				onDragStart: (e) => {
+					e.dataTransfer.setData(ROW_MIME + "/" + list, id);
+					e.dataTransfer.effectAllowed = "move";
+				},
+				children: "⠿"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "cz-switch",
+				htmlFor: inputId,
+				title: locked ? lockedWhy : on ? "Shown — click to hide" : "Hidden — click to show",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					id: inputId,
+					type: "checkbox",
+					role: "switch",
+					checked: on,
+					disabled: locked,
+					onChange: onToggle
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "cz-track",
+					"aria-hidden": "true"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "cz-text",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+					className: "cz-name",
+					htmlFor: inputId,
+					children: label
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "cz-note",
+					children: note
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "cz-move",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					"aria-label": "Move " + label + " up",
+					title: "Move up",
+					disabled: first,
+					onClick: () => onMove(-1),
+					children: "↑"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					"aria-label": "Move " + label + " down",
+					title: "Move down",
+					disabled: last,
+					onClick: () => onMove(1),
+					children: "↓"
+				})]
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/customize/SidebarBarsPicker.tsx
 var NOTES = {
 	usage: { text: "What your sessions cost" },
@@ -86439,77 +86889,103 @@ function SidebarBarsPicker() {
 	const hiddenBars = useUi((s) => s.hiddenBars);
 	const toggleBarHidden = useUi((s) => s.toggleBarHidden);
 	const barOrder = useUi((s) => s.barOrder);
+	const setBarOrder = useUi((s) => s.setBarOrder);
 	const openDialogFor = useUi((s) => s.openDialogFor);
 	const showFilter = useUi((s) => s.showFilter);
 	const setShowFilter = useUi((s) => s.setShowFilter);
 	const extBars = useExtensionBarDefs();
+	const extKeys = extBars.map((b) => b.key);
+	const bars = orderedBars(barOrder, extBars);
+	const byKey = new Map(bars.map((b) => [b.key, b]));
+	const sections = orderedSections(barOrder, extKeys);
+	const move = (key, dir) => {
+		const next = [...sections];
+		const i = next.indexOf(key);
+		const j = i + dir;
+		if (i < 0 || j < 0 || j >= next.length) return;
+		[next[i], next[j]] = [next[j], next[i]];
+		setBarOrder(next);
+	};
+	const dropBefore = (dragged, before) => {
+		const next = sections.filter((k) => k !== dragged);
+		next.splice(next.indexOf(before), 0, dragged);
+		setBarOrder(next);
+	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "customize-sidebar",
-		className: "cz-bars",
+		className: "cz-page",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 				className: "cz-heading",
 				children: "Show in the sidebar"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-				className: "cz-bar-list",
-				children: orderedBars(barOrder, extBars).map((b) => {
+				className: "cz-list",
+				"aria-label": "Sidebar bars",
+				children: sections.map((key, i) => {
+					if (key === SESSIONS_KEY) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+						className: "cz-anchor",
+						"aria-label": "The session list",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Your sessions" })
+					}, key);
+					const b = byKey.get(key);
+					if (!b) return null;
 					const note = NOTES[b.key] || EXTENSION_NOTE;
-					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-						className: "cz-bar",
-						"data-bar": b.key,
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-							className: "cz-bar-check",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-								type: "checkbox",
-								checked: !hiddenBars.has(b.key),
-								onChange: () => toggleBarHidden(b.key)
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "cz-bar-name",
-								children: b.label
-							})]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "cz-bar-note muted",
-							children: [note.text, note.link && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" · ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "linklike cz-bar-link",
-								onClick: () => openDialogFor(note.link.dialog, note.link.target ?? null),
-								children: note.link.label
-							})] })]
-						})]
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CustomizeRow, {
+						id: b.key,
+						list: "bars",
+						label: b.label,
+						on: !hiddenBars.has(b.key),
+						onToggle: () => toggleBarHidden(b.key),
+						onMove: (dir) => move(b.key, dir),
+						onDropBefore: (dragged) => dropBefore(dragged, b.key),
+						first: i === 0,
+						last: i === sections.length - 1,
+						note: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [note.text, note.link && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" · ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike cz-link",
+							onClick: () => openDialogFor(note.link.dialog, note.link.target ?? null),
+							children: note.link.label
+						})] })] })
 					}, b.key);
 				})
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "cz-foot muted",
-				children: "Drag a bar's ⠿ grip in the sidebar to reorder it."
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 				className: "cz-heading",
 				children: "Session list"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-				className: "cz-bar-list",
+				className: "cz-list",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-					className: "cz-bar",
-					"data-bar": "session-filter",
+					className: "cz-row cz-row-plain",
+					"data-item": "session-filter",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "cz-bar-check",
+						className: "cz-switch",
+						htmlFor: "cz-session-filter",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							id: "cz-session-filter",
 							type: "checkbox",
+							role: "switch",
 							checked: showFilter,
 							onChange: () => setShowFilter(!showFilter)
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "cz-bar-name",
-							children: "Filter box"
+							className: "cz-track",
+							"aria-hidden": "true"
 						})]
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "cz-bar-note muted",
-						children: [
-							"Filter sessions by name or branch · hidden, ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "/" }),
-							" still opens it"
-						]
+						className: "cz-text",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+							className: "cz-name",
+							htmlFor: "cz-session-filter",
+							children: "Filter box"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "cz-note",
+							children: [
+								"Filter sessions by name or branch · hidden, ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "/" }),
+								" still opens it"
+							]
+						})]
 					})]
 				})
 			})
@@ -86517,11 +86993,242 @@ function SidebarBarsPicker() {
 	});
 }
 //#endregion
+//#region src/components/customize/PaneHeaderPicker.tsx
+var ICON = {
+	width: 12,
+	height: 12,
+	viewBox: "0 0 24 24",
+	fill: "none",
+	stroke: "currentColor",
+	strokeWidth: 2,
+	strokeLinecap: "round",
+	strokeLinejoin: "round",
+	"aria-hidden": true
+};
+function previewButton(id) {
+	switch (id) {
+		case "next": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "nextstep",
+			children: "Commit…"
+		}, id);
+		case "fasttrack": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "nextstep nextstep-fast",
+			children: "⏩"
+		}, id);
+		case "copy": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "act copy-history",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+				className: "btn-icon",
+				...ICON,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+					x: "8",
+					y: "2",
+					width: "8",
+					height: "4",
+					rx: "1"
+				})]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "btn-label",
+				children: "Copy all"
+			})]
+		}, id);
+		case "history": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "act pane-hist",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+				className: "btn-icon",
+				...ICON,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 8v4l2 2" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.05 11a9 9 0 1 1 .5 4" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 22v-6h6" })
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "btn-label",
+				children: "History"
+			})]
+		}, id);
+		case "cost": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "tok usage-trigger",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "usage-head",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "uh-cost",
+					children: "~$0.62"
+				})
+			})
+		}, id);
+		case "diffstat": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "ctxline",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ctx-add",
+					children: "+12"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ctx-del",
+					children: "−3"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ctx-files",
+					children: "· 2 files"
+				})
+			]
+		}, id);
+		case "hide": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "act pane-close",
+			children: "−"
+		}, id);
+		default: return null;
+	}
+}
+function PreviewHead({ tabs, buttons, icons }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pane-head pane-head-fit cz-preview-head" + (icons ? " head-icons" : ""),
+		"aria-hidden": "true",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "grip",
+				children: "⠿"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "title",
+				children: "fix-login-redirect"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "tabs",
+				children: tabs.map((id) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					tabIndex: -1,
+					className: id === "agent" ? "active" : "",
+					"data-tab": id,
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: id }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "tab-label",
+						children: paneItemDef(id).label
+					})]
+				}, id))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "head-spacer" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "actions",
+				children: buttons.map(previewButton)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "head-tail",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "act pane-more",
+					children: "⋯"
+				})
+			})
+		]
+	});
+}
+function PaneHeaderPicker() {
+	const pref = useUi((s) => s.paneHeader);
+	const setPaneHeader = useUi((s) => s.setPaneHeader);
+	const r = resolvePaneHeader(pref);
+	const shownTabs = r.tabs.filter((id) => r.shown.has(id));
+	const shownButtons = r.buttons.filter((id) => r.shown.has(id));
+	const rows = (ids, list) => ids.map((id, i) => {
+		const d = paneItemDef(id);
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CustomizeRow, {
+			id,
+			list,
+			label: d.label,
+			note: d.note,
+			on: r.shown.has(id),
+			locked: d.locked,
+			lockedWhy: "Every header shows the agent",
+			onToggle: () => setPaneHeader(togglePaneItem(pref, id)),
+			onMove: (dir) => setPaneHeader(movePaneItem(pref, id, dir)),
+			onDropBefore: (dragged) => setPaneHeader(placePaneItem(pref, dragged, id)),
+			first: i === 0,
+			last: i === ids.length - 1
+		}, id);
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "customize-pane",
+		className: "cz-page",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "cz-preview",
+				"aria-label": "Preview of a pane header with your choice",
+				role: "img",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "cz-preview-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "cz-preview-tag",
+						children: "Room to spare"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PreviewHead, {
+						tabs: shownTabs,
+						buttons: shownButtons,
+						icons: false
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "cz-preview-row cz-preview-narrow",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "cz-preview-tag",
+						children: "Too narrow for words"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PreviewHead, {
+						tabs: shownTabs,
+						buttons: shownButtons,
+						icons: true
+					})]
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+				className: "cz-heading",
+				children: ["Tabs", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InfoTip, {
+					label: "About hidden tabs",
+					children: "A hidden tab still shows while you are on it — opened from ⋯, a shortcut or a link — and ⋯ always lists it. Terminal never shows for a shared folder, Diff and Map only for a session in a git repository, Thread only once a session has workers or messages."
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cz-list",
+				"aria-label": "Pane header tabs",
+				children: rows(r.tabs, "tabs")
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+				className: "cz-heading",
+				children: ["Buttons", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InfoTip, {
+					label: "About hidden buttons",
+					children: "Everything you switch off here is still one click away in the header's ⋯ menu: the next step (Commit…, Push, Open PR), Fast-track…, Browse history, Copy entire history and Hide window. The cost and the diff stats are read out at the top of ⋯. During the calm first hour an untouched header also leaves Queue and ⏩ to ⋯; once you change anything here it shows exactly your choice."
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cz-list",
+				"aria-label": "Pane header buttons",
+				children: rows(r.buttons, "buttons")
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "cz-foot",
+				children: "⋯ is always last: it holds everything switched off here."
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/customize/CustomizeDialog.tsx
+var PAGES = [{
+	id: "sidebar",
+	label: "Sidebar",
+	intro: "Choose which bars sit around your session list, and in what order."
+}, {
+	id: "pane",
+	label: "Pane header",
+	intro: "Choose the tabs and buttons along the top of every session window. The rest stay in its ⋯ menu."
+}];
 function CustomizeDialog() {
 	const open = useUi((s) => s.openDialog === "customize");
 	const closeDialog = useUi((s) => s.closeDialog);
+	const page = useUi((s) => s.customizePage);
+	const setPage = useUi((s) => s.setCustomizePage);
+	const resetSidebarBars = useUi((s) => s.resetSidebarBars);
+	const setPaneHeader = useUi((s) => s.setPaneHeader);
+	const paneCustomized = useUi((s) => s.paneHeader !== null);
+	const barsCustomized = useUi((s) => s.barsExplicit || s.barOrder.length > 0 || !s.showFilter);
 	if (!open) return null;
+	const cur = PAGES.find((p) => p.id === page) || PAGES[0];
+	const canReset = cur.id === "pane" ? paneCustomized : barsCustomized;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "customize-dialog",
 		role: "dialog",
@@ -86530,29 +87237,57 @@ function CustomizeDialog() {
 		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "customize-panel",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "ws-head",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-						id: "customize-title",
-						children: "Customize"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "ik-subtitle",
-						children: "Choose what the sidebar shows"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "ws-head",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+							id: "customize-title",
+							children: "Customize"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "customize-tabs",
+							role: "tablist",
+							"aria-label": "What to customize",
+							children: PAGES.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								role: "tab",
+								id: "customize-tab-" + p.id,
+								"aria-selected": p.id === cur.id,
+								"aria-controls": "customize-body",
+								className: p.id === cur.id ? "active" : "",
+								onClick: () => setPage(p.id),
+								children: p.label
+							}, p.id))
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "customize-close",
+							onClick: closeDialog,
+							children: "Close"
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "cz-intro",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: cur.intro }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						id: "customize-close",
-						onClick: closeDialog,
-						children: "Close"
-					})
-				]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				id: "customize-body",
-				"data-tab": "sidebar",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SidebarBarsPicker, {})
-			})]
+						id: "customize-reset",
+						className: "linklike",
+						disabled: !canReset,
+						title: canReset ? "Back to what a fresh install shows" : "Already the default",
+						onClick: () => cur.id === "pane" ? setPaneHeader(null) : resetSidebarBars(),
+						children: "Reset to default"
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					id: "customize-body",
+					"data-tab": cur.id,
+					role: "tabpanel",
+					"aria-labelledby": "customize-tab-" + cur.id,
+					children: cur.id === "pane" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneHeaderPicker, {}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SidebarBarsPicker, {})
+				})
+			]
 		})
 	});
 }

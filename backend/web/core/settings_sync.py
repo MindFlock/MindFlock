@@ -196,6 +196,7 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
         "map_tour",
         "welcome_tour",
         "settings_advanced",
+        "pane_header",
     ),
     # The person all these devices share (docs/people.md). Its ``id`` is not
     # here: it is agreed, never last-edit-wins (see LOCAL and sync_once).
@@ -411,6 +412,7 @@ LABELS: Dict[str, str] = {
     "prefs.map_tour": "Map tour seen",
     "prefs.welcome_tour": "Welcome tour seen",
     "prefs.settings_advanced": "Advanced settings shown",
+    "prefs.pane_header": "Pane header items",
     "person.name": "Your name",
     "person.git_name": "Git author name",
     "person.git_email": "Git author email",

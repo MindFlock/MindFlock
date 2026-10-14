@@ -121,7 +121,8 @@ describe("shared branch on the rail and the pane head", () => {
 
   it("the pane head shows how far behind the remote it is, only when > 0, never as a stagechip", () => {
     expect(PANE_SRC).toContain("{(inst.behind || 0) > 0 && (");
-    const chip = PANE_SRC.slice(PANE_SRC.indexOf("{(inst.behind || 0) > 0 && ("), PANE_SRC.indexOf("{hasDiffStat && <CtxLine"));
+    const chip = PANE_SRC.slice(PANE_SRC.indexOf("{(inst.behind || 0) > 0 && ("), PANE_SRC.indexOf('<div className="tabs">'));
+    expect(chip.length).toBeGreaterThan(0);
     expect(chip).toContain('className="pane-behind"');
     expect(chip).not.toMatch(/className="[^"]*stagechip/);
   });

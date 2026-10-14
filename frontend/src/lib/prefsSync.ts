@@ -12,6 +12,7 @@ import type { Json } from "../api/types";
 import { queryClient, refreshConfig } from "../state/queries";
 import { useUi } from "../state/store";
 import { defaultHiddenBars } from "../components/sidebar/barDefs";
+import { asPaneHeaderPref } from "./paneHeader";
 import {
   BREAK_DEFAULT_MINUTES,
   clampBreakMinutes,
@@ -71,6 +72,9 @@ function applyLive(fields: Partial<Prefs>) {
         break;
       case "bar_order":
         st.barOrder = Array.isArray(v) ? v : [];
+        break;
+      case "pane_header":
+        st.paneHeader = asPaneHeaderPref(v);
         break;
       case "reduce_motion":
         st.reduceMotion = v === true;
