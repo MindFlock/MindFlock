@@ -312,6 +312,12 @@ FastAPI app `backend.web.server:app`. Key pieces:
   Python heap under ~120 MB. Keep big transient buffers out of per-poll paths
   too — the transcript tail readers (`providers/claude.py` `_tail_lines`) read
   backward in 64 KB blocks and stop at the first match.
+- **Sleeping agents** (`web/core/sleep.py`) — the lifespan's sleep sweep stops
+  the CLI (and MCP servers) of an agent idle, unwatched and with nothing
+  waiting for it for `general.sleep_idle_minutes` (5 min while memory is low),
+  keeping the session; `ensure_awake` relaunches it, resuming, from every path
+  that types into a session. See
+  [session-engine.md](session-engine.md#sleeping-agents).
 - **Addons** (`web/addons/`) — self-registering feature modules with their own
   `APIRouter` and optional managed subprocess. Seven ship today: **mindflock**
   (start/stop/tail the ingestion pipeline), **assistant** (a long-lived

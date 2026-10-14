@@ -677,6 +677,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_REVIVE_ON_START` | on | `0` starts the server without the background revive sweep or the auto-revive of agents the OOM killer took (sandboxed or scratch servers), whatever `general.revive_on_start` says |
 | `MALLOC_ARENA_MAX` | `2` (server only) | glibc malloc arenas for the web server process. Unset, `run.py` caps them at 2 with `mallopt` before any thread starts (not via the environment, so agent shells keep glibc's default); set it (or `GLIBC_TUNABLES=glibc.malloc.arena_max=…`) to choose another cap — glibc applies yours and the server leaves it alone. Uncapped, every worker thread grew its own arena of freed-but-kept memory (~1 GB RSS on a busy server). See [architecture.md](architecture.md) |
 | `MINDFLOCK_OOM_SCORE_ADJ` | `500` | The `oom_score_adj` every agent launch (and shell tab) gives itself, so under memory pressure the kernel kills an agent's process tree before the server ([session-engine.md](session-engine.md#when-the-oom-killer-fires-anyway-agents-go-first-and-come-back)); an integer up to 1000, `0` turns it off. Read when a launch command or launcher script is generated (a provisioned launcher keeps the value it was written with) |
+| `MINDFLOCK_SLEEP` | on | `0` starts the server without the sleep sweep ([session-engine.md](session-engine.md#sleeping-agents)) — no idle agent is put to sleep, whatever `general.sleep_idle_minutes` says (sandboxed or scratch servers). Sleepers already recorded still wake normally |
 | `CLAUDE_CONFIG_DIR` | — | Extra Claude config root — scanned for token usage, and probed for login evidence (`.claude.json` / `.credentials.json`) by the provider auth probe (legacy/backend-only; see [providers.md](providers.md)) |
 | `GH_TOKEN` / `GITHUB_TOKEN` | — | GitHub auth fallback for the PR flow |
 | `SHELL` | — | Shell used by each session's Terminal tab |
@@ -967,6 +968,16 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   back on — seeded"); a field unset here is stamped older still, so it never
   clears another device's value. Otherwise sync stays off (logged once) until
   the device joins your others again.
+- **Sleeping agents** (`general.sleep_idle_minutes`; Settings → General →
+  **Put idle agents to sleep after**): how many minutes an agent must have
+  sat idle — its turn ended, nobody's terminal attached, nothing queued or
+  waiting for it — before its CLI and MCP servers are stopped to free their
+  memory ([session-engine.md](session-engine.md#sleeping-agents)). Unset = 45;
+  `0` turns sleeping off. While memory reads low the wait drops to 5 minutes
+  (never above the value). Opening a sleeping session or sending it anything
+  wakes it, resuming the conversation. Owner only (`auth.may_configure`), and
+  per device: never synced (it is about this machine's memory). Read per
+  sweep, so a save applies within a minute.
 - **Agent MCP** (`general.agent_mcp`, `general.agent_mcp_scope`; Settings →
   Agent orchestration → **Give agents the MindFlock MCP** and **Agent MCP
   scope**): whether

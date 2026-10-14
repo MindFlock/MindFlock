@@ -51,6 +51,7 @@ List all sessions. Each item:
   "tokens_model": "…",
   "diff_stat": {"files": 2, "additions": 42, "deletions": 7},  // or null
   "workspace_missing": false,  // L1(c): started but its directory vanished
+  "sleeping": null,            // or {"since", "reason": "idle"|"memory"|"manual", "freed_mb"}: agent asleep
   "has_origin": true,          // L2: workspace has an `origin` remote (cached ~30s)
   "last_turn": "…",            // L3: ≤120-char snippet of the latest agent turn, or null
   "mcp_attached": true,        // this launch got the MindFlock MCP tools (null = unknown)
@@ -124,6 +125,14 @@ per-session base — committed-beyond-base **plus** uncommitted tracked changes,
 one `git diff --shortstat <merge-base(base, HEAD)>` cached ~10 s per session.
 Untracked files aren't counted (counting them would mutate the index on every
 poll). `null` when unavailable (paused / loading / no worktree / git failure).
+
+`sleeping` is set while the session's agent is asleep
+([session-engine.md](session-engine.md#sleeping-agents)): its CLI and MCP
+servers were stopped on purpose, idle, to free memory (`freed_mb` ≈ what they
+held); `activity` reads `offline` meanwhile, but it is not a crash — the UI
+paints it **Sleeping**, outside Offline, the bell and "Restart all". Opening
+its terminal, `/send`, the queue, Send now, a mailbox message or `/wake`
+wakes it, resuming the conversation.
 
 `workspace_missing` (L1c) is `true` for a started, non-paused session whose
 workspace directory no longer exists (deleted outside MindFlock). The UI renders
@@ -498,6 +507,8 @@ Errors carry one human sentence and leave the form untouched:
 | POST | `/api/instances/{title}/pause` | Pause: stop the agent (its tmux session and PTY are killed) and keep the worktree and branch **exactly as they are** — no commit, no removal; `status` becomes `paused`. 400 when the engine refuses (not started, already paused) |
 | POST | `/api/instances/{title}/resume` | Resume a paused session: relaunch the agent in the same worktree. A session paused under the old scheme (worktree removed, branch kept) is rebuilt first |
 | POST | `/api/instances/{title}/background/{pid}/stop` | Stop one **background job** the agent left running past its turn — the rail's **job stuck ✕** chip. Only a pid that is a *current* job root of this session (see `background` on the row and [providers.md](providers.md#background-jobs)) is signalled: SIGTERM to the job's process group, SIGKILL after 2 s. Claude Code then reports the job as ended, which may start a short turn. → `{title, pid, stopped: true}`. **404** unknown title; **409** `no such background job in this session` |
+| POST | `/api/instances/{title}/sleep` | Put the agent to sleep now ([session-engine.md](session-engine.md#sleeping-agents)): its CLI and MCP servers stop to free memory; the session, worktree and conversation stay. Every safety rule of the sleep sweep holds — idle with its turn ended, no dialog, no background job, nothing queued or waiting, not in a team run / fast-track chain / busy family, a CLI that can resume, its own workspace, no terminal attached — but not the timing ones. → `{title, sleeping: {since, reason: "manual", freed_mb}}`. **404** unknown; **409** `{error, veto}` (`veto` names the rule, e.g. `not idle`, `open in a terminal`, `prompts queued`) |
+| POST | `/api/instances/{title}/wake` | Wake a sleeping agent — the rail's **Wake**: relaunch it, resuming its conversation, and open the prompt queue's boot grace (nothing is typed before its prompt is drawn). Opening its terminal or sending it anything does the same. → `{title, woke}` (`false` = it wasn't asleep, nothing done). **404** unknown; **409** with the relaunch's reason (`workspace no longer exists`, …) |
 | POST | `/api/instances/{title}/revive` | Restart an **offline** agent — the rail chip's **Restart** action (the web UI's one session state, [web-ui.md](web-ui.md#one-session-state)). Runs the same lazy revive a terminal attach or `/send` does: a live agent tmux is reused, a dead one is relaunched (resuming the conversation after a crash, fresh after a clean quit). An agent that died mid-turn is also queued a *continue where you left off* at the front of its prompt queue ([session-engine.md](session-engine.md#after-a-restart-background-revive-and-nothing-dropped-silently)). Never held for memory. → `{title, revived: true, continued: bool, memory_warning}` (`memory_warning`: the one-line reason when memory is low, else `""`). **404** unknown; **409** `session is paused — resume it instead`, or the revive's own reason (`workspace no longer exists`, a shared folder the agent may not launch in) |
 
 `DELETE`, `/close`, `/cleanup` and `/api/workspaces/delete` end a session
@@ -1098,7 +1109,7 @@ row, unless it is waived here). The per-session zones read also answers
 
 | Method | Path | Behavior |
 |---|---|---|
-| POST | `/api/instances/{title}/send` | Body `{text, submit?, dialog_safe?}`. Types `text` into the **agent** window and (default) presses Enter, booting/resuming the agent tmux first if it isn't running — so one call kicks a fresh session into motion (max token use). `submit:false` types without submitting. Enter is a separate keystroke a beat after the text so an agent TUI doesn't read the burst as a paste. `dialog_safe:true` (the web UI's Thread "Send now" and every playbook paste) re-probes the agent's live, uncached activity first — and checks the screen for a dialog, which outranks the reading (see the screen-evidence guard under [Inter-agent messages](#inter-agent-messages)) — and never types into a prompt or the usage-limit menu (a digit or an Enter there would answer it): on `clarify`/`limit`, a dialog on screen (or an activity that can't be read) a submitted message is **queued** instead → `{sent: false, queued: true, submitted: false}` (the drain delivers it once the agent is free), and an unsubmitted paste is **409** `{error, in_dialog: true}` with nothing typed (queueing it would submit it later). A working agent is still typed into. → `{sent, submitted}` (409 if the workspace is gone or `{budget_locked: true}` when the session is over budget, 502 if the send fails) |
+| POST | `/api/instances/{title}/send` | Body `{text, submit?, dialog_safe?}`. Types `text` into the **agent** window and (default) presses Enter, booting/resuming the agent tmux first if it isn't running — so one call kicks a fresh session into motion (max token use). `submit:false` types without submitting. Enter is a separate keystroke a beat after the text so an agent TUI doesn't read the burst as a paste. A **sleeping** agent is woken and the text put at the front of its prompt queue instead of typed into the booting CLI → `{sent: false, queued: true, submitted: false, woke: true}`; an unsubmitted paste (or a looping queue) only wakes it → **409** `{error, waking: true}` — send again in a moment. `dialog_safe:true` (the web UI's Thread "Send now" and every playbook paste) re-probes the agent's live, uncached activity first — and checks the screen for a dialog, which outranks the reading (see the screen-evidence guard under [Inter-agent messages](#inter-agent-messages)) — and never types into a prompt or the usage-limit menu (a digit or an Enter there would answer it): on `clarify`/`limit`, a dialog on screen (or an activity that can't be read) a submitted message is **queued** instead → `{sent: false, queued: true, submitted: false}` (the drain delivers it once the agent is free), and an unsubmitted paste is **409** `{error, in_dialog: true}` with nothing typed (queueing it would submit it later). A working agent is still typed into. → `{sent, submitted}` (409 if the workspace is gone or `{budget_locked: true}` when the session is over budget, 502 if the send fails) |
 | POST | `/api/instances/{title}/driver` | Take or release the session's keyboard ([people.md](people.md#owner-driver-viewers)). `{"take": true}` makes the caller's person the driver — anyone who can reach the session may; the previous driver hears it as a `session.driver_changed` event and their open terminals turn read-only. `{"release": true}` gives it up (**409** `{error: "driven by <name>", driver}` when another person holds it). → `{owner, driver, driver_name, viewers}` (+ `previous`, the old driver's id, on a take). **400** neither, **404** unknown. A remote row (`<device>::<title>`) is forwarded like every per-session route, carrying the caller's person |
 | POST | `/api/instances/{title}/owner` | `{"person": "<id>"}` — give the session to another person. The owner otherwise never changes (it defaults to the person the session was created for). This device's owner only (`may_configure`, **403**; so not through a gateway). → the presence fields; **400** not a person id, **404** unknown |
 | GET | `/api/instances/{title}/queue` | `{items: [{id, text, added}], pending, enabled, loop, loop_interval, wait_for_limit, limited_until, last_sent}` |
@@ -1107,7 +1118,7 @@ row, unless it is waived here). The per-session zones read also answers
 | POST | `/api/instances/{title}/queue/reorder` | Body `{id, index}` — move to an absolute 0-based position (clamped; the drag-and-drop path) — or `{id, direction}` (`up`/`down`) to nudge one slot |
 | POST | `/api/instances/{title}/queue/edit` | Body `{id, text}` — rewrite a queued prompt in place |
 | DELETE | `/api/instances/{title}/queue?item=<id>` | Remove one item; omit `item` to clear the whole queue |
-| POST | `/api/instances/{title}/queue/send_now` | Body `{id}` — send one queued item now, skipping the drain's waits |
+| POST | `/api/instances/{title}/queue/send_now` | Body `{id}` — send one queued item now, skipping the drain's waits. On a **sleeping** agent: wakes it and moves the item to the front (the drain sends it once the CLI is ready) → the queue state plus `woke: true`; **409** `{error, waking: true}` when the queue is paused |
 
 **One keyboard per session.** `/send`, the queue's add (`POST /queue`) and
 Send now (`POST /queue/send_now`) — like `/answer` below and the terminal
@@ -1274,7 +1285,12 @@ conditions:
 - the 8 s send cooldown has passed, counting the queue's sends too;
 - the user's prompt queue doesn't want this turn, and no fast-track chain is
   mid-flight;
-- its tmux session is alive; the lane **never** boots an agent;
+- its tmux session is alive; the lane **never** boots an agent — except a
+  **sleeping** one ([session-engine.md](session-engine.md#sleeping-agents)),
+  which it wakes (a message is exactly what should wake it) and then types
+  into once the gates above pass on the relaunched CLI; `delivery: "now"` to
+  a sleeper wakes it the same way and answers `pending` (*the recipient was
+  asleep — it is waking up*);
 - an agent CLI holds the pane: its executable (any provider's binary, or the
   session's own program, also as `node …/claude`) is in the pane's process
   tree, so a shell the agent quit to, or `vim`/`ssh`/`psql` started there,
@@ -1901,6 +1917,13 @@ ntfy pushes, desktop notifications, clarify toasts, shell hooks — would
 otherwise fire on the flicker. A reading that reverts before it settles emits
 nothing at all; transitions back to `working`/`offline` are instant.
 
+A **sleeping** session's `offline` is not announced at all
+([session-engine.md](session-engine.md#sleeping-agents)): the emitter records
+it as `sleeping` and stays silent on the way in and on a wake back to `idle`,
+so no channel says "agent offline" for an agent stopped on purpose. Any other
+move out of it is announced with `old: "sleeping"` (a woken agent that starts
+working, or lands on a dialog).
+
 That settle is a **flicker** filter and nothing more: it can only suppress a
 reading that reverts. "The agent has finished" is a different question, and
 `session.activity_changed` with `new == "idle"` is the wrong event to answer it
@@ -2489,7 +2512,7 @@ outlive the server.
 in the background, every session whose agent was running when it stopped — two
 at a time, oldest first, through the same `_ensure_agent_session` path as
 `POST /api/instances/{title}/revive` — skipping paused, provisioning,
-peer-shared, workspace-missing and usage-limited sessions (see
+peer-shared, workspace-missing, usage-limited and sleeping sessions (see
 [session-engine.md](session-engine.md#after-a-restart-background-revive-and-nothing-dropped-silently)).
 Each revive emits the usual `session.status_changed` / `session.activity_changed`
 as it lands. `general.revive_on_start` (default on) turns the startup sweep off,

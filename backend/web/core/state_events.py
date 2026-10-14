@@ -32,6 +32,7 @@ from backend.web.core import ownership as _ownership
 from backend.web.core import pane_scroll_find as _pane_scroll_find
 from backend.web.core import prompt_queue as _prompt_queue
 from backend.web.core import revive as _revive
+from backend.web.core import sleep as _sleep
 
 
 def _server():
@@ -84,6 +85,15 @@ _STAGE_SETTLE_SECONDS = 2.0
 _BOOT_QUIET_SECONDS = 30.0
 _BOOT_MONO = time.monotonic()
 
+# A sleeping agent (core.sleep) was stopped on purpose, at the end of a turn,
+# to give its memory back. Its reading is "offline" — the same as a crash —
+# and "agent offline" is a default-on alarm (bell row, toast, push). So the
+# emitter, the one place every channel listens to, records it as this word
+# instead and announces neither the move INTO it nor the wake landing back
+# at an idle prompt. Anything else out of it (a woken agent that starts
+# working, or meets a dialog) is announced with ``old="sleeping"``.
+_SLEEPING = "sleeping"
+
 
 def _in_boot_quiet() -> bool:
     """Whether the process is still inside its post-launch quiet window."""
@@ -105,6 +115,8 @@ def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> N
     point: a one-tick "idle" misread must not push a phone notification."""
     srv = _server()
     now = time.monotonic()
+    if activity == "offline" and _sleep.is_sleeping(title):
+        activity = _SLEEPING
     with _EVENT_SNAPSHOT_LOCK:
         prev = srv._EVENT_SNAPSHOT.get(title)
         snap = {
@@ -196,8 +208,13 @@ def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> N
             ("stage", "session.stage_changed", snap["stage"]),
         ):
             old = prev.get(field)
-            if old != new:
-                _events.BUS.emit(event, session=title, old=old, new=new)
+            if old == new:
+                continue
+            if field == "activity" and (
+                new == _SLEEPING or (old == _SLEEPING and new == "idle")
+            ):
+                continue  # a sleep, or a wake back to its prompt: not news
+            _events.BUS.emit(event, session=title, old=old, new=new)
     # Verify — the SECOND of two triggers that write a test plan for freshly
     # pushed work. The first is the ``session.pushed`` subscriber below, fed by
     # the live_stage push watcher, which is the better signal (it knows the sha

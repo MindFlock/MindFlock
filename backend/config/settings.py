@@ -1180,6 +1180,14 @@ class GeneralSettings:
     (never set) reads as ON; ``False`` turns both off (``POST
     /api/server/revive-all`` still runs the sweep on demand).
 
+    ``sleep_idle_minutes``: put an agent to sleep (:mod:`backend.web.core.sleep`
+    — its CLI and MCP servers stopped to give their memory back, the session,
+    worktree and conversation kept) once its turn has ended and it has sat
+    idle, unwatched and with nothing waiting for it this many minutes; it
+    wakes, resuming its conversation, as soon as it is opened or sent
+    anything. ``None`` (never set) = 45; ``0`` turns sleeping off. While
+    memory reads low the wait drops to 5 minutes (never above this value).
+
     ``agent_mcp``: whether every session's agent CLI is launched with the
     MindFlock MCP server attached (:mod:`backend.providers.mcp_attach`), so
     agents can list, message, spawn and steer each other. ``None`` (never set)
@@ -1222,6 +1230,7 @@ class GeneralSettings:
     setup_devices: str = ""  # "" (not asked) | "first" | "join"
     resume_on_usage_reset: Optional[bool] = None  # None = on (see docstring)
     revive_on_start: Optional[bool] = None  # None = on (see docstring)
+    sleep_idle_minutes: Optional[int] = None  # None = 45; 0 = off (see docstring)
     agent_mcp: Optional[bool] = None  # None = on (see docstring)
     agent_mcp_scope: str = ""  # "" (= children) | "readonly" | "children" | "all"
     agent_max_children: Optional[int] = None  # None = lineage default (8)
@@ -1262,6 +1271,8 @@ class GeneralSettings:
             d["resume_on_usage_reset"] = self.resume_on_usage_reset
         if self.revive_on_start is not None:
             d["revive_on_start"] = self.revive_on_start
+        if self.sleep_idle_minutes is not None:
+            d["sleep_idle_minutes"] = self.sleep_idle_minutes
         if self.agent_mcp is not None:
             d["agent_mcp"] = self.agent_mcp
         if self.agent_mcp_scope:
@@ -1299,6 +1310,7 @@ class GeneralSettings:
             setup_devices=_setup_devices(d.get("setup_devices")),
             resume_on_usage_reset=_opt_bool(d.get("resume_on_usage_reset")),
             revive_on_start=_opt_bool(d.get("revive_on_start")),
+            sleep_idle_minutes=_opt_nonneg_int(d.get("sleep_idle_minutes")),
             agent_mcp=_opt_bool(d.get("agent_mcp")),
             agent_mcp_scope=_agent_mcp_scope(d.get("agent_mcp_scope")),
             agent_max_children=_opt_nonneg_int(d.get("agent_max_children")),

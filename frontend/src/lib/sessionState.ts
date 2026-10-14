@@ -20,9 +20,13 @@
  *   limit      waiting    nobody     no        Waiting on limit[, resumes HH:MM]
  *   offline    broken     you        yes       Offline (the chip's Restart action)
  *
- * Two rows outside the table — a paused session and one whose folder is gone —
- * keep their own words ("Paused", "Missing"): neither is a state of the AGENT,
- * and neither waits on anyone in the bell.
+ * Three rows outside the table — a paused session, one whose folder is gone,
+ * and one whose agent is asleep — keep their own words ("Paused", "Missing",
+ * "Sleeping"): none is a state of a running AGENT, and none waits on anyone in
+ * the bell. A sleeping agent (backend core/sleep.py) was stopped on purpose,
+ * idle, to give its memory back; its activity reads "offline", but it is not
+ * broken — it is neither Offline nor counted by "Restart all", and opening it
+ * or sending it anything wakes it.
  *
  * The live-activity debounce (`effectiveActivity` and friends) lives here too,
  * because it is the input every state reads; stage.ts re-exports it so the
@@ -38,6 +42,13 @@ const actPending = new Map<string, { value: string; count: number }>();
 
 export function noteActivity(inst: Instance) {
   const title = inst.title;
+  if (inst.sleeping) {
+    // Asleep: its "offline" is not a reading to carry into the wake — drop
+    // it, so the first row after the wake is shown as-is instead of keeping
+    // "Offline" up for two more polls.
+    dropActivity(title);
+    return;
+  }
   const raw = inst.activity || "idle";
   if (!actShown.has(title)) {
     actShown.set(title, raw);
@@ -177,6 +188,20 @@ function needsYou(reason: SessionReason, hint?: string): SessionState {
   return { state: "needs_you", reason, label: REASON_LABEL[reason], tone: "attention", inBell: true, restartable: false, hint };
 }
 
+/** The rail's word for a sleeping session. */
+export const SLEEPING_LABEL = "Sleeping";
+
+function sleepingState(info: NonNullable<Instance["sleeping"]>, now: number): SessionState {
+  const since = Number(info.since) || 0;
+  const freed = Number(info.freed_mb) || 0;
+  let hint = "Asleep";
+  if (since > 0) hint += " since " + fmtClock(since) + " (" + spanWord(now / 1000 - since) + ")";
+  hint += info.reason === "memory" ? " — memory was low" : info.reason === "manual" ? "" : " — it was idle";
+  if (freed > 0) hint += "; freed ~" + (freed >= 1024 ? (freed / 1024).toFixed(1) + " GB" : freed + " MB");
+  hint += ". Opening it or sending it anything wakes it, resuming the conversation.";
+  return { state: "idle", label: SLEEPING_LABEL, tone: "muted", inBell: false, restartable: false, hint };
+}
+
 /** The one session state. Pure: reads the row and the debounced activity. */
 export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStateExtras): SessionState {
   const now = extras?.now ?? Date.now();
@@ -193,6 +218,7 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
     return { state: "idle", label: "Paused", tone: "muted", inBell: false, restartable: false, hint: "Session paused" };
   if (inst.pending || inst.status === "loading")
     return { state: "starting", label: STATE_LABEL.starting, tone: "muted", inBell: false, restartable: false, hint: "Provisioning workspace" };
+  if (inst.sleeping) return sleepingState(inst.sleeping, now);
   if (inst.setup && inst.setup.state === "running")
     return {
       state: "starting",

@@ -3,7 +3,7 @@
 The console entry point (`backend/cli.py`) has two kinds of commands. **Host
 commands** run things locally: `serve`, `doctor`, `uninstall`, and `mcp`, the
 MindFlock MCP stdio server. **Session commands** (`new`, `ls`, `attach`, `close`,
-`delete`, `pause`, `resume`, `open`, `events`, `msg`, `inbox`; `rm` is an alias) are thin clients over a *running* server's
+`delete`, `pause`, `resume`, `sleep`, `wake`, `open`, `events`, `msg`, `inbox`; `rm` is an alias) are thin clients over a *running* server's
 HTTP API (`backend/client.py`). Session commands never spawn an engine of
 their own: the terminal and the web UI drive the same server, so a session
 created from either shows up in both.
@@ -394,6 +394,9 @@ session's tmux (the `tmux_name` field of `/api/instances`, i.e.
 any unambiguous prefix; ambiguous prefixes list the candidates. Detach with the
 normal tmux `Ctrl-b d`.
 
+A sleeping session is woken first (`POST /api/instances/{title}/wake`), so
+there is an agent to land in, back in its conversation.
+
 `attach` requires a real terminal: when stdout isn't a TTY (a pipe, a script,
 CI) it exits 1 with ``attach needs a real terminal (running in a script? use
 `mindflock ls --json`)`` instead of letting tmux fail cryptically.
@@ -439,6 +442,23 @@ the agent in place in the same worktree. They print `paused session <title>` /
 can't be paused, say) is reported on stderr, the rest still run, and the
 command exits 1. Titles resolve like `close` (unambiguous prefixes, all before
 anything runs).
+
+### `mindflock sleep TITLE...` / `mindflock wake TITLE...`
+
+**Sleep** frees an idle agent's memory now: `sleep` calls `POST
+/api/instances/{title}/sleep`, which stops the agent CLI and its MCP servers
+and keeps the session, worktree and conversation — the row reads
+**Sleeping** ([session-engine.md](session-engine.md#sleeping-agents)). It is
+refused (stderr, exit 1, the other titles still run) while the agent is
+mid-turn or on a dialog, runs a background job, has something queued or a
+message waiting, belongs to a busy team run or family, can't resume, or has a
+terminal attached. It prints `<title> is asleep (freed ~780 MB)`. Idle agents
+also fall asleep on their own after `general.sleep_idle_minutes`. `wake` calls
+`POST /api/instances/{title}/wake`, relaunching the agent into the same
+conversation, and prints `woke <title>` (or `<title> was not asleep`).
+Opening the session anywhere, or sending it anything, wakes it too — and
+`attach` wakes a sleeper before landing in its tmux. `ls` shows a sleeper's
+ACTIVITY as `sleeping`. Titles resolve like `close`.
 
 ### `mindflock open TITLE`
 

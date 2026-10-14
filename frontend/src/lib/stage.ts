@@ -26,7 +26,7 @@ import {
 } from "./laneActions";
 import { autopilotChipTitle, mergeBlockerLabel } from "./autopilot";
 import { useUi } from "../state/store";
-import { deriveSessionState, type SessionState } from "./sessionState";
+import { deriveSessionState, SLEEPING_LABEL, type SessionState } from "./sessionState";
 
 const STAGE_META: Record<string, { label: string }> = {
   provisioning: { label: "provisioning" },
@@ -181,6 +181,7 @@ const STATE_CLS: Record<SessionState["state"], string> = {
 export function stateChip(ss: SessionState): ChipState {
   let cls = STATE_CLS[ss.state];
   if (ss.label === "Paused") cls = "s-paused";
+  else if (ss.label === SLEEPING_LABEL) cls = "s-sleeping";
   else if (ss.label === "Missing") cls = "s-missing";
   return { label: ss.label, cls: cls + " tone-" + ss.tone, title: ss.hint || ss.label };
 }

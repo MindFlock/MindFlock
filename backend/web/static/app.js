@@ -24736,6 +24736,10 @@ var actShown = /* @__PURE__ */ new Map();
 var actPending = /* @__PURE__ */ new Map();
 function noteActivity(inst) {
 	const title = inst.title;
+	if (inst.sleeping) {
+		dropActivity(title);
+		return;
+	}
 	const raw = inst.activity || "idle";
 	if (!actShown.has(title)) {
 		actShown.set(title, raw);
@@ -24828,6 +24832,24 @@ function needsYou(reason, hint) {
 		hint
 	};
 }
+var SLEEPING_LABEL = "Sleeping";
+function sleepingState(info, now) {
+	const since = Number(info.since) || 0;
+	const freed = Number(info.freed_mb) || 0;
+	let hint = "Asleep";
+	if (since > 0) hint += " since " + fmtClock(since) + " (" + spanWord(now / 1e3 - since) + ")";
+	hint += info.reason === "memory" ? " — memory was low" : info.reason === "manual" ? "" : " — it was idle";
+	if (freed > 0) hint += "; freed ~" + (freed >= 1024 ? (freed / 1024).toFixed(1) + " GB" : freed + " MB");
+	hint += ". Opening it or sending it anything wakes it, resuming the conversation.";
+	return {
+		state: "idle",
+		label: SLEEPING_LABEL,
+		tone: "muted",
+		inBell: false,
+		restartable: false,
+		hint
+	};
+}
 function deriveSessionState(inst, extras) {
 	const now = extras?.now ?? Date.now();
 	if (inst.workspace_missing) return {
@@ -24854,6 +24876,7 @@ function deriveSessionState(inst, extras) {
 		restartable: false,
 		hint: "Provisioning workspace"
 	};
+	if (inst.sleeping) return sleepingState(inst.sleeping, now);
 	if (inst.setup && inst.setup.state === "running") return {
 		state: "starting",
 		label: STATE_LABEL.starting,
@@ -25385,7 +25408,7 @@ function shipLine(row, opts = {}) {
 	} else if (act === "limit") {
 		rest = " · usage limit — waiting";
 		state = "limit";
-	} else if (act === "offline") rest = " · offline";
+	} else if (act === "offline") rest = row.sleeping ? " · sleeping" : " · offline";
 	else rest = " · idle";
 	return line(head, rest, "rep-lane", state);
 }
@@ -28868,6 +28891,7 @@ var STATE_CLS = {
 function stateChip(ss) {
 	let cls = STATE_CLS[ss.state];
 	if (ss.label === "Paused") cls = "s-paused";
+	else if (ss.label === SLEEPING_LABEL) cls = "s-sleeping";
 	else if (ss.label === "Missing") cls = "s-missing";
 	return {
 		label: ss.label,
@@ -36098,6 +36122,20 @@ function rowDndProps(key, cbs, draggable = true) {
 	};
 }
 //#endregion
+//#region src/lib/wake.ts
+async function wakeSession(title) {
+	try {
+		await instApi(title, "/wake", { method: "POST" });
+	} catch (e) {
+		toast("Couldn't wake " + displayName(title) + " — " + errMsg(e));
+		return false;
+	}
+	forceActivity(title, "idle");
+	toast("Waking " + displayName(title) + "…");
+	refreshInstances();
+	return true;
+}
+//#endregion
 //#region src/lib/stopBackgroundJob.ts
 async function stopBackgroundJob(title, pid) {
 	try {
@@ -36767,6 +36805,18 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 						"aria-hidden": "true",
 						children: "↻ Restart"
 					})]
+				}) : inst.sleeping && !inst.device && !paused ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "stagechip chip-restart chip-wake " + chip.cls,
+					title: chip.title,
+					"aria-label": "Sleeping — wake the agent",
+					onClick: (e) => act(() => void wakeSession(title), e),
+					onDoubleClick: (e) => e.stopPropagation(),
+					children: [chip.label, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "chip-act",
+						"aria-hidden": "true",
+						children: "Wake"
+					})]
 				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "stagechip " + chip.cls,
 					title: chip.title,
@@ -37408,15 +37458,18 @@ function sweepToast(r, offline) {
 	}
 	return line;
 }
+function offlineRows(instances) {
+	return instances.filter((i) => {
+		if (i.device || i.pending || i.sleeping) return false;
+		const ss = deriveSessionState(i);
+		return ss.state === "offline" && ss.restartable && i.status !== "paused";
+	});
+}
 function OfflineBar() {
 	const { data: instances = [] } = useInstances();
 	const memory = useMemory().data;
 	const [busy, setBusy] = (0, import_react.useState)(false);
-	const offline = instances.filter((i) => {
-		if (i.device || i.pending) return false;
-		const ss = deriveSessionState(i);
-		return ss.state === "offline" && ss.restartable && i.status !== "paused";
-	});
+	const offline = offlineRows(instances);
 	if (offline.length < 2 && !busy) return null;
 	const titles = offline.map((i) => i.title);
 	const low = memory?.level === "low" || memory?.level === "critical";
@@ -71443,6 +71496,7 @@ function General(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResumeOnUsageResetRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReviveOnStartRow, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SleepIdleRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReduceMotionRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TakeABreakRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(IdleFlockRow, {}),
@@ -71524,6 +71578,29 @@ function ReviveOnStartRow() {
 				}
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 		})]
+	});
+}
+function SleepIdleRow() {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row",
+		id: "general-sleep-idle",
+		title: "0 turns sleeping off. Empty = 45 minutes. While memory is low, idle agents sleep after 5 minutes.",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Put idle agents to sleep after (minutes, 0 = never)"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+				group: "general",
+				field: "sleep_idle_minutes",
+				type: "number",
+				placeholder: "45"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: "An agent that finished its turn and sits unwatched, with nothing queued, stops its CLI and MCP servers to free their memory and shows Sleeping. Opening it or sending it anything wakes it, back in the same conversation. While memory is low this happens after 5 minutes."
+			})
+		]
 	});
 }
 function GettingStarted() {

@@ -37,6 +37,7 @@ export function General(_: ScreenProps) {
       </label>
       <ResumeOnUsageResetRow />
       <ReviveOnStartRow />
+      <SleepIdleRow />
       <ReduceMotionRow />
       <TakeABreakRow />
       <IdleFlockRow />
@@ -131,6 +132,28 @@ function ReviveOnStartRow() {
         <span className="ca-slider" />
       </label>
     </div>
+  );
+}
+
+/** Sleeping agents (backend/web/core/sleep.py): an agent whose turn ended
+ * and that has sat idle, unwatched, with nothing queued or waiting for it
+ * this many minutes has its CLI and MCP servers stopped to give their memory
+ * back; opening it or sending it anything wakes it. Empty = 45, 0 = never. */
+function SleepIdleRow() {
+  return (
+    <label
+      className="set-row"
+      id="general-sleep-idle"
+      title="0 turns sleeping off. Empty = 45 minutes. While memory is low, idle agents sleep after 5 minutes."
+    >
+      <span className="set-label">Put idle agents to sleep after (minutes, 0 = never)</span>
+      <SettingField group="general" field="sleep_idle_minutes" type="number" placeholder="45" />
+      <span className="set-hint">
+        An agent that finished its turn and sits unwatched, with nothing queued, stops its CLI and MCP
+        servers to free their memory and shows Sleeping. Opening it or sending it anything wakes it, back
+        in the same conversation. While memory is low this happens after 5 minutes.
+      </span>
+    </label>
   );
 }
 
