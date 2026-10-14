@@ -79,11 +79,14 @@ describe("save as you type (M1: never 'Saved ✓' over unsent text)", () => {
 
 describe("the safe default (M2): a new source starts nothing until a state is picked", () => {
   it("a new source preselects no tracker and carries needs_filter", () => {
-    // "+ Add source" opens on the tiles with none picked (step 1); the draft a
-    // tile creates is the safe default — nothing auto-starts until a state.
+    // "+ Add source" opens on the tiles with none picked (step 1) — a tile
+    // marks the choice, Continue drafts it (intakeTrackerNoDefault.test.ts
+    // renders it); the draft is the safe default — nothing auto-starts until
+    // a state.
     expect(TICKETS).toContain('const fresh = { id, provider, needs_filter: "on" } as Source;');
     expect(TICKETS).not.toContain("const provider = catalog[0]?.id");
-    expect(TICKETS).toContain('picked={draftSource?.provider || ""}');
+    expect(TICKETS).toContain('picked={draftSource?.provider || (draft ? "" : choice)}');
+    expect(TICKETS).toContain('const [choice, setChoice] = useState("");');
     expect(TICKETS).toContain("step={draft ? draft.step : 1}");
   });
 

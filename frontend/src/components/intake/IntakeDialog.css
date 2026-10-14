@@ -1765,14 +1765,19 @@
   text-overflow: ellipsis;
   max-width: 100%;
 }
+/* Up to two lines: the sub is what tells the GitHub Issues tracker from a
+   watched Repository, so it must be read whole, not ellipsized. */
 .ik-kind-sub {
   font-size: 10.5px;
   font-weight: 400;
+  line-height: 1.3;
   color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   max-width: 100%;
+  text-wrap: balance;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 /* The add flow's slug box with its Test access beside it; the answer wraps
    to its own line under both, so a long verdict never squeezes the box. */
