@@ -34,7 +34,6 @@ import type { TicketingSource } from "../../api/types";
 import { SettingField, useSettings } from "../settings/useSettings";
 import { useAgentChoices } from "../settings/screens/AgentPicker";
 import { WorkItemRow, ageText, panelNote, useListFilter } from "./kit";
-import { useIntakePause } from "./pause";
 import { friendlySourceError } from "./vocab";
 import type { RepoOverrides } from "./RepoSources";
 import { queuedMatches } from "./search";
@@ -79,8 +78,6 @@ interface Section {
   /** The switch that would make this section's rows move, named as its tab
    * names it ("Auto-start tickets"). */
   blockedOn: string;
-  /** Every auto-start is off because of Pause intake. */
-  paused?: boolean;
   /** Set when every configured source of this kind can't connect: the
    * sentence saying which and where to fix it. */
   broken?: string;
@@ -94,11 +91,9 @@ interface Section {
 function StateChip({
   state,
   device,
-  paused,
 }: {
   state: QueueRunState | "broken";
   device?: string;
-  paused?: boolean;
 }) {
   if (state === "unset") return <span className="pr-open-chip">not set up</span>;
   if (state === "elsewhere")
@@ -112,7 +107,7 @@ function StateChip({
   // Neutral rather than a colour-coded warning: the words say it, the sentence
   // below says what to do, and a hue would need its own contrast pass in both
   // themes to add nothing.
-  return <span className="pr-open-chip">{paused ? "auto-start paused" : "auto-start off"}</span>;
+  return <span className="pr-open-chip">auto-start off</span>;
 }
 
 /** Why these rows are not moving and which switch fixes it. One sentence shape
@@ -127,14 +122,6 @@ function StalledNote({ s }: { s: Section }) {
         {many ? "these" : "this one"} on its own; this computer doesn't (to move them here, choose{" "}
         <strong>Run here</strong> in Settings → Your devices). You can
         still start {many ? "any of them" : "it"} here, with <strong>Start</strong>.
-      </div>
-    );
-  if (s.paused)
-    return (
-      <div className="ik-queue-stalled">
-        Intake is paused — {many ? "these" : "this one"} won't start on {many ? "their" : "its"}{" "}
-        own until you <strong>Resume intake</strong> (top of this dialog). You can still start{" "}
-        {many ? "any of them" : "it"} with <strong>Start</strong>.
       </div>
     );
   return (
@@ -174,7 +161,7 @@ function SectionBlock({
       <div className="ik-queue-head">
         <span className="ik-queue-kind">{s.label}</span>
         <span className="ik-tab-count">{s.items.length}</span>
-        <StateChip state={s.broken ? "broken" : s.state} device={s.runsOn} paused={s.paused} />
+        <StateChip state={s.broken ? "broken" : s.state} device={s.runsOn} />
         <button
           type="button"
           className="test-btn ik-queue-goto"
@@ -226,7 +213,7 @@ function SectionBlock({
                       .join(" · ")}
                     route={item.route}
                     // Only a section that is ON will auto-start anything; a
-                    // paused or half-set-up one already says why above
+                    // switched-off or half-set-up one already says why above
                     // (StalledNote), and a green "will auto-start" chip under
                     // it would contradict that sentence on every row.
                     eligible={s.state === "on"}
@@ -283,7 +270,6 @@ export function QueueTab({ gotoTab }: TabProps) {
   const ticketSources = ((s.settings.ticketing || {}) as {
     sources?: Array<{ id?: string; agent?: string; depth?: string; label?: string; provider?: string }>;
   }).sources;
-  const pause = useIntakePause((ticketSources || []).length);
 
   /** What "Configured" resolves to on a row's pickers — this item's own source
    * or repo card, else the app default. Same resolution the item's home tab
@@ -376,7 +362,6 @@ export function QueueTab({ gotoTab }: TabProps) {
           .map((e) => friendlySourceError(nameOfSource(e.source), e.error).replace(/ — press Fix on its heading\.$/, "."))
           .join(" ") + " Fix it on the Tickets tab."
       : "";
-  const paused = pause.paused;
 
   const sections: Section[] = [
     {
@@ -391,7 +376,6 @@ export function QueueTab({ gotoTab }: TabProps) {
         switchOn: true,
       }),
       blockedOn: "Auto-start tickets",
-      paused,
       broken: ticketsBroken,
       items: queuedOf("tickets", payloads),
       note: noteFor(ticketsQ, "tickets"),
@@ -414,7 +398,6 @@ export function QueueTab({ gotoTab }: TabProps) {
         runsElsewhere: runsElsewhere && gh.enabled !== false,
       }),
       blockedOn: "Auto-address review comments",
-      paused,
       runsOn,
       items: queuedOf("prs", payloads),
       note: noteFor(prsQ, "PRs"),
@@ -431,7 +414,6 @@ export function QueueTab({ gotoTab }: TabProps) {
         runsElsewhere: runsElsewhere && gh.issues_enabled === true,
       }),
       blockedOn: "Auto-start new issues",
-      paused,
       runsOn,
       items: queuedOf("issues", payloads),
       note: noteFor(issuesQ, "issues"),
@@ -454,7 +436,7 @@ export function QueueTab({ gotoTab }: TabProps) {
   const shownTotal = shownSections.reduce((n, sec) => n + sec.items.length, 0);
   // Only the sections that are ON will start anything by themselves — the
   // same rule as each row's chip. Counting the rest as "will auto-start" put
-  // a promise in the toolbar that every paused section's own note denied.
+  // a promise in the toolbar that every switched-off section's own note denied.
   const autoTotal = sections
     .filter((sec) => sec.state === "on")
     .reduce((n, sec) => n + sec.items.length, 0);

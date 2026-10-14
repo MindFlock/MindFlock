@@ -1,5 +1,5 @@
 /** Intake, round 4 (fresh-eyes round 3 → fixes): save as you type, the safe
- * auto-start default, one server-side truth for "paused", GitHub untangled from
+ * auto-start default, one truth for auto-start, GitHub untangled from
  * the trackers, tracker housekeeping away from Start, the repo on every row and
  * no raw tracker JSON in a failed Start. */
 
@@ -12,7 +12,6 @@ import { friendlyStartError } from "../components/intake/vocab";
 import TICKETS_RAW from "../components/intake/TicketsTab.tsx?raw";
 import KIT_RAW from "../components/intake/kit.tsx?raw";
 import DIALOG_RAW from "../components/intake/IntakeDialog.tsx?raw";
-import PAUSE_RAW from "../components/intake/pause.ts?raw";
 import REPO_FIELD_RAW from "../components/intake/RepoListField.tsx?raw";
 import MERGE_RAW from "../components/intake/MergeTicket.tsx?raw";
 import NEW_TICKET_RAW from "../components/dialogs/NewTicketPane.tsx?raw";
@@ -22,7 +21,6 @@ const code = (raw: string) => norm(dropComments(raw));
 const TICKETS = code(TICKETS_RAW);
 const KIT = code(KIT_RAW);
 const DIALOG = code(DIALOG_RAW);
-const PAUSE = code(PAUSE_RAW);
 
 describe("save as you type (M1: never 'Saved ✓' over unsent text)", () => {
   beforeEach(() => vi.useFakeTimers());
@@ -102,24 +100,19 @@ describe("the safe default (M2): a new source starts nothing until a state is pi
 });
 
 describe("one truth for auto-start (M4, M5)", () => {
-  it("paused is stored on the server, not per browser", () => {
-    expect(PAUSE).toContain('api("/api/settings", { json: { general: { intake_paused: kinds } } })');
-    expect(PAUSE).toContain('queryKey: ["intake-paused"]');
-    expect(PAUSE).not.toContain("localStorage.setItem");
-  });
-
-  it("Pause/Resume is always on screen (disabled, saying why, when nothing is on)", () => {
-    expect(DIALOG).toContain("disabled={p.busy || (!p.paused && !p.onKinds.length)}");
-    expect(DIALOG).not.toContain("(p.paused || p.onKinds.length > 0) && (");
+  // "Pause intake" (and its server-side record) is gone — intakeNoPause.test.
+  it("the Intake header says what auto-starts, and offers Turn on… when nothing does", () => {
     expect(DIALOG).toContain("Turn on…");
+    expect(DIALOG).not.toContain("Pause intake");
     const bar = code(AUTOMATION_BAR_RAW);
-    expect(bar).not.toContain("(pause.paused || pause.onKinds.length > 0) && (");
-    expect(bar).toContain('"dc-switch" + (!desired && pause.pausedKind("tickets") ? " paused" : "")');
+    expect(bar).toContain('<label className="dc-switch"');
+    expect(bar).not.toContain("pause");
   });
 
-  it("a paused switch looks different from an off one", () => {
-    expect(KIT).toContain('"ik-switch" + (paused ? " paused" : "")');
-    expect(TICKETS).toContain("paused={paused}");
+  it("an off switch is drawn as off — there is no second, 'paused' look", () => {
+    expect(KIT).toContain('className="ik-switch"');
+    expect(KIT).not.toContain("paused");
+    expect(TICKETS).not.toContain("paused={");
   });
 
   it("New → Ticket reads the same switch Intake does, and never says 'ingestion'", () => {

@@ -22,8 +22,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../../api/client";
 import { errMsg } from "../../lib/format";
 import { useUi } from "../../state/store";
-import { useMindflockStatus, useTicketingSources } from "../../state/queries";
-import { useIntakePause } from "../intake/pause";
+import { useMindflockStatus } from "../../state/queries";
 
 /** One configured ticketing source, and whether it will accept a ticket. */
 interface TicketSource {
@@ -84,17 +83,14 @@ export function NewTicketPane() {
   const openDialogFor = useUi((s) => s.openDialogFor);
 
   const [sources, setSources] = useState<TicketSource[] | null>(null);
-  // Auto-start for tickets, as Intake shows it: the same switch, the same
-  // pause — never the config flag, which said "on" over a switch that was off.
+  // Auto-start for tickets, as Intake shows it: the same switch — never the
+  // config flag, which said "on" over a switch that was off.
   const { data: status } = useMindflockStatus();
-  const pause = useIntakePause((useTicketingSources(true).data || []).length);
   const autoNote = !status?.available
     ? ""
     : (status.desired ?? status.running)
       ? "Auto-start is on for tickets: once this ticket is in one of its source's auto-start states, a session starts on its own."
-      : pause.paused
-        ? "Intake is paused, so nothing starts on its own. Start it from Intake → Tickets."
-        : "Auto-start is off for tickets. Start it from Intake → Tickets.";
+      : "Auto-start is off for tickets. Start it from Intake → Tickets.";
   const [sourcesError, setSourcesError] = useState("");
   const [source, setSource] = useState("");
   const [brief, setBrief] = useState("");

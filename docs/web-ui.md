@@ -199,12 +199,10 @@ comments**, **Auto-start new issues**), and a switch that fails says why in a bo
 card rather than a browser `alert()` (which the desktop app does not
 implement). The **Verify** bar's label opens Verify the same way. Turning a
 feature's bar on is still how you get an at-a-glance dot for PR review and
-issue handling once you've connected them. The **Tickets** bar also carries
-Intake's **Pause intake** as a small ⏸ (▶ **Resume intake** while paused) —
-the same control as the band at the top of the Intake dialog, always shown
-(disabled, saying why, while nothing auto-starts). The bars' labels read
-**GitHub PRs** / **GitHub issues**, like the Intake tabs, and a switch that is
-off because intake is paused is drawn striped amber, not plain off.
+issue handling once you've connected them. The bars' labels read
+**GitHub PRs** / **GitHub issues**, like the Intake tabs. There is no
+"pause everything" control: each bar's switch is the one that turns its
+automation off.
 
 **Window rows** — every open non-session window (MindFlock logs, System
 logs, the Assistant chat, a verify watch window, an extension pane such as a
@@ -2769,26 +2767,21 @@ shared top edge ([dialog placement](#new-session-dialog)) rather than being
 centred, so switching to a taller tab grows it downward instead of moving the
 tab strip under the cursor.
 
-**Pause intake.** A band above the tabs says what auto-starts right now
-(*Auto-start is on for tickets and PR comments.*) with one **Pause intake**
-button that turns every switch that is on OFF — tickets, PR comments and issues
-at once — and records which were on in the server's settings
-(`general.intake_paused`, per device like the ticket switch), so a reload, the
-desktop app or another browser on this machine all still read *paused*;
-**Resume intake** turns exactly those back on and clears the record. Paused is
-"Pause was pressed and nothing is on since", never just "everything is off": a
-setup that was never switched on is *off*, not paused, and turning a switch back
-on by hand ends the pause. The button is always on screen — disabled, saying
-why, while nothing auto-starts — and with everything off the band offers
-**Turn on…**, which goes to the tab whose switch does it. While paused the band
-is amber, the switches (here and in the sidebar) are striped amber with *Intake
-is paused — Resume intake at the top turns it back on*, and every row chip
-reads *auto-start paused* (`intake/pause.ts`). **New → Ticket** reads the same
-switch and pause, so it never says auto-start is on while Intake says off.
+**What auto-starts, in one line.** A line above the tabs says what auto-starts
+right now across the three switches (*Auto-start is on for tickets and PR
+comments.*, *Auto-start is off everywhere.*, or *Nothing auto-starts yet — set
+up a tab below first.*); with everything off it offers **Turn on…**, which goes
+to the tab whose switch does it (`intake/switches.ts` reads the three together).
+It is read-only: there is no **Pause intake** any more — it was removed as
+redundant, since each tab's switch already turns its own automation off. An
+older build's pause record (`general.intake_paused`) is no longer read: the
+switches it turned off simply show as off, and turning one back on is the
+ordinary switch. **New → Ticket** reads the same ticket switch, so it never says
+auto-start is on while Intake says off.
 
 **Chips follow the switches.** A row that passes every filter says
 **will auto-start** only while its kind's switch is on; otherwise it reads
-*auto-start off* (or *auto-start paused*) in a neutral chip. Skip reasons from
+*auto-start off* in a neutral chip. Skip reasons from
 the server are written in the UI's words — *not in an auto-start state*, *missing
 an auto-start label (…)*, *already started before*, *already queued to start*,
 *already handled before*, *too new — waits 12 more min* — never "ingest" or
@@ -2862,8 +2855,7 @@ it). You can still start any of them here, with **Start**."* — naming the swit
 its tab names it: **Auto-start tickets**, **Auto-address review comments**,
 **Auto-start new issues**. The PR and issue sections follow their own switches
 only; they used to be read as stalled whenever the ticket switch was off, which
-was wrong — the pipeline runs whichever halves are on. While intake is paused the
-sentence says so and points at **Resume intake** instead. A ticket section whose
+was wrong — the pipeline runs whichever halves are on. A ticket section whose
 sources are all saved but can't be reached says *can't connect* and names the
 source and why (*Shortcut rejected the token*) rather than *not set up*.
 

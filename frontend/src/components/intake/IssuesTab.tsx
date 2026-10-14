@@ -13,7 +13,6 @@ import {
   refreshInstances,
   usePanelQuery,
   useTicketingCatalog,
-  useTicketingSources,
 } from "../../state/queries";
 import { SettingField, useSettings } from "../settings/useSettings";
 import { AgentPicker, useAgentChoices } from "../settings/screens/AgentPicker";
@@ -35,7 +34,6 @@ import {
   type ItemWorkspace,
 } from "./kit";
 import { AddRepoFlow, RepoEditor, type RepoOverrides } from "./RepoSources";
-import { useIntakePause } from "./pause";
 import { issueMatches } from "./search";
 import type { TabProps } from "./IntakeDialog";
 
@@ -76,9 +74,6 @@ export function IssuesTab({ focus, adding, startAdd, endAdd }: TabProps) {
   // Opt-in: absent => off (only an explicit true switches issue handling on).
   const enabled = gh.issues_enabled === true;
   const repos = Array.isArray(gh.issue_repos) ? gh.issue_repos : [];
-  // Off because Pause intake turned it off (it will come back on Resume).
-  const pause = useIntakePause((useTicketingSources(true).data || []).length);
-  const pausedOff = !enabled && repos.length > 0 && pause.pausedKind("issues");
   const overrides = (gh.issue_repo_settings || {}) as RepoOverrides;
   const skipAuthors = Array.isArray(gh.issue_skip_authors)
     ? gh.issue_skip_authors.join(", ")
@@ -202,9 +197,7 @@ export function IssuesTab({ focus, adding, startAdd, endAdd }: TabProps) {
                 meta={`by ${i.author || "?"} · ${ageText(i.created_at)}`}
                 hasSession={i.has_session}
                 eligible={i.eligible}
-                eligibleLabel={
-                  enabled ? "will auto-start" : pausedOff ? "auto-start paused" : "auto-start off"
-                }
+                eligibleLabel={enabled ? "will auto-start" : "auto-start off"}
                 eligibleOn={enabled}
                 reasons={i.reasons}
                 actionLabel="Start"
@@ -301,7 +294,6 @@ export function IssuesTab({ focus, adding, startAdd, endAdd }: TabProps) {
         inputId="gh-issues-enabled"
         statusId="gh-issues-status"
         checked={enabled}
-        paused={pausedOff}
         disabled={!n}
         onChange={(next) =>
           saveGithub(
@@ -309,13 +301,7 @@ export function IssuesTab({ focus, adding, startAdd, endAdd }: TabProps) {
             next ? "Auto-start new issues on" : "Auto-start new issues off"
           )
         }
-        note={
-          !n
-            ? "Add a repository first — + Add source"
-            : pausedOff
-              ? "Intake is paused — Resume intake at the top turns it back on"
-              : undefined
-        }
+        note={!n ? "Add a repository first — + Add source" : undefined}
       />
       <GithubStatusLine buttonId="gh-issue-connect-btn" needFor="issues can't be listed or started" />
 

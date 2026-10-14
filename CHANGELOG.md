@@ -96,10 +96,14 @@ fresh-eyes testers who could only use the UI (never the code or docs).
   from the task; "Save as template…" saves the whole form.
 - **Intake:** a new ticket source auto-starts nothing until you pick a state
   or label (existing sources are unchanged); text saves as you type and only
-  then says "Saved ✓"; one **Pause intake** switch, remembered on the server;
-  tabs named **GitHub PRs** and **GitHub issues**; the PR feature is "Auto-
+  then says "Saved ✓"; tabs named **GitHub PRs** and **GitHub issues**; the PR feature is "Auto-
   address review comments" and starts off for new setups; one **Start** verb
   on every row; plain reasons when a ticket is skipped.
+- **No more Pause intake.** The sidebar Tickets bar's ⏸ and Intake's
+  **Pause intake / Resume intake** are gone: each tab's own switch (Auto-start
+  tickets, Auto-address review comments, Auto-start new issues) already turns
+  its automation off and on. Anything an earlier pause turned off simply
+  shows as off — turn it back on with its switch.
 - **Settings:** Notifications opens with "Where alerts go", alerts are in a
   few plain groups with one-line descriptions, and "a session finishes its
   work" is on for anyone who never changed their alerts; Connections leads

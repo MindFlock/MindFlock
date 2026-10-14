@@ -1168,13 +1168,13 @@ class GeneralSettings:
     to where the user left it; ``None`` (never toggled) / ``False`` = stay
     stopped.
 
-    ``intake_paused``: what Intake's **Pause intake** turned off — a list of
-    ``"tickets"`` / ``"prs"`` / ``"issues"`` — while intake is paused; ``None``
-    (the default, and what every store written before this field reads as)
-    when it is not. Kept here rather than in the browser so the paused state,
-    and what Resume turns back on, survives a reload, the desktop app and a
-    second browser on the same machine. Per device, like
-    ``ingestion_autostart``: the ticket switch it pauses is per device too.
+    ``intake_paused``: LEGACY. What Intake's former **Pause intake** turned
+    off — a list of ``"tickets"`` / ``"prs"`` / ``"issues"`` — while paused;
+    ``None`` (the default) when not. The control was removed and the web UI
+    neither reads nor writes this any more: whatever a pause turned off simply
+    shows as off. Still parsed and round-tripped so a store an older build
+    wrote loads unchanged (and an older build on this machine still finds its
+    record). Per device, like ``ingestion_autostart``; never synced.
 
     ``setup_devices``: the answer to Setup's "First computer, or join one you
     already have?" (``"first"`` | ``"join"``; ``""`` = not asked yet). It
@@ -1252,7 +1252,7 @@ class GeneralSettings:
     serve_mode: str = ""  # "" / "local" | "tailscale"
     shared_link: str = ""  # "" = off | a Tailscale Service name, e.g. "mindflock"
     ingestion_autostart: Optional[bool] = None
-    intake_paused: Optional[List[str]] = None  # None = not paused (see docstring)
+    intake_paused: Optional[List[str]] = None  # LEGACY, unread (see docstring)
     setup_devices: str = ""  # "" (not asked) | "first" | "join"
     resume_on_usage_reset: Optional[bool] = None  # None = on (see docstring)
     revive_on_start: Optional[bool] = None  # None = on (see docstring)
@@ -2035,14 +2035,14 @@ def _login_list(v: Any) -> List[str]:
     return out
 
 
-#: What Pause intake can turn off, in tab order.
+#: What the former Pause intake could turn off, in tab order (legacy record).
 INTAKE_KINDS = ("tickets", "prs", "issues")
 
 
 def _intake_kinds(v: Any) -> Optional[List[str]]:
     """``general.intake_paused``: ``None`` (not paused) unless ``v`` is a list,
-    then its known kinds, in tab order, each once. An empty list is still
-    "paused" — with nothing remembered, Resume turns on whatever is set up."""
+    then its known kinds, in tab order, each once (an empty list stays an
+    empty list). Legacy: nothing reads it since Pause intake was removed."""
     if not isinstance(v, (list, tuple)):
         return None
     wanted = {str(x).strip().lower() for x in v}

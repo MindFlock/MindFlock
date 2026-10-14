@@ -69,7 +69,6 @@ import {
   savedLabels,
   stateName,
 } from "./vocab";
-import { useIntakePause } from "./pause";
 import { useAutosave } from "./autosave";
 import {
   TEST_STATE_LABELS,
@@ -159,14 +158,11 @@ function IngestionToggle({
   const [optimistic, setOptimistic] = useState<boolean | null>(null);
   const [asking, setAsking] = useState(false);
   const { data: status, refetch } = useMindflockStatus();
-  const pause = useIntakePause(sourceCount);
 
   // No engine installed / reachable — nothing to toggle (matches the sidebar).
   if (!status || !status.available) return null;
   const running = !!status.running;
   const desired = optimistic ?? (status.desired ?? running);
-  // Off because Pause intake turned it off — drawn as paused, not plain off.
-  const paused = !desired && pause.pausedKind("tickets");
 
   const toggle = async (start: boolean) => {
     if (busy) return;
@@ -201,7 +197,6 @@ function IngestionToggle({
         inputId="tk-ingestion-enabled"
         statusId="tk-ingestion-status"
         checked={desired}
-        paused={paused}
         onChange={(next) => {
           if (busy) return;
           if (next && broken.length) setAsking(true);
@@ -210,8 +205,6 @@ function IngestionToggle({
         note={
           !sourceCount
             ? "Add a ticket source first — + Add source"
-            : paused
-              ? "Intake is paused — Resume intake at the top turns it back on"
             : desired && broken.length
               ? names + " can't connect — nothing starts from " + (one ? "it" : "them") + " until fixed"
               : undefined
@@ -1397,16 +1390,11 @@ function AssignedTickets({
     return server && server !== key ? server : key;
   };
   // Whether a ticket found here would actually start on its own: the ticket
-  // switch, and the pause over all three. The row chips follow these, so none
-  // can say "will auto-start" beside a switch that says it won't.
+  // switch. The row chips follow it, so none can say "will auto-start" beside
+  // a switch that says it won't.
   const { data: status } = useMindflockStatus();
-  const pause = useIntakePause(sources.length);
   const autoOn = !!(status?.desired ?? status?.running);
-  const eligibleLabel = autoOn
-    ? "will auto-start"
-    : pause.paused
-      ? "auto-start paused"
-      : "auto-start off";
+  const eligibleLabel = autoOn ? "will auto-start" : "auto-start off";
   const bucketMeta = ticketsQuery.data?.bucket_meta || {};
   /** The workflow/board a bucket belongs to ("" = the source has only one, so
    * there is nothing to nest under). */
@@ -1857,7 +1845,7 @@ function AssignedTicketRow({
   pick,
 }: {
   t: AssignedTicket;
-  /** "will auto-start" / "auto-start off" / "auto-start paused". */
+  /** "will auto-start" / "auto-start off". */
   eligibleLabel: string;
   autoOn: boolean;
   /** The "start together" tick box. */

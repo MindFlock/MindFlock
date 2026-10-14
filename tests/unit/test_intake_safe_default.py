@@ -1,6 +1,6 @@
 """Intake round 4: a new ticket source auto-starts nothing until a state (or
 label) is picked, a state typed before Test never widens the search, and the
-"Pause intake" record lives in the settings store.
+legacy "Pause intake" record (the control is gone) still round-trips.
 
 Existing sources keep their behaviour: ``needs_filter`` is only written on
 sources Intake creates, and ``general.intake_paused`` defaults to "not paused".
@@ -108,7 +108,7 @@ def test_intake_paused_keeps_known_kinds_in_tab_order():
     )
     assert g.intake_paused == ["tickets", "issues"]
     assert g.to_dict()["intake_paused"] == ["tickets", "issues"]
-    # An empty record is still "paused" (Resume turns on what is set up).
+    # Legacy record (unread by the UI now): an empty list still round-trips.
     assert GeneralSettings.from_dict({"intake_paused": []}).intake_paused == []
     assert GeneralSettings.from_dict({"intake_paused": "tickets"}).intake_paused is None
 
