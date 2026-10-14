@@ -265,7 +265,11 @@ Every source also takes an OPTIONAL-in-TOML-but-required-in-the-UI `repo_url`
 (the repo that source's tickets clone into) — set it per source; there is no
 global default repo. A source whose tickets span several repos lists them in
 `repos` instead (see "A source spanning several repos" below). `workflow_state` gates ingestion so a ticket only gets a
-session once it reaches the chosen state (blank = any state). The Intake →
+session once it reaches the chosen state (blank = any state — except on a
+source with `needs_filter = "on"`, which every source added in Intake gets:
+there blank means *start nothing* until a state or `ingest_labels` is set. A
+state still holding a typed name rather than an id also starts nothing until
+Intake's Test swaps it for the id). The Intake →
 **Tickets** tab loads the live state list per source (Shortcut/Jira/Linear).
 The same list feeds the optional **`start_state`** ("Move to state on start"),
 which is the other direction: where a ticket goes once a session starts for it.

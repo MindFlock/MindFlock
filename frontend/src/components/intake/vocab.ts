@@ -40,6 +40,21 @@ export function friendlySourceError(name: string, raw: string, onCard = false): 
   return name + " can't be listed" + (clean ? " — " + clean : "") + ".";
 }
 
+/** One sentence for a ticket that failed to START because its tracker
+ * refused — never the provider's raw JSON body. Anything that isn't a tracker
+ * refusal (a git error, a full disk) keeps its own words, minus a JSON tail. */
+export function friendlyStartError(name: string, raw: string): string {
+  const text = String(raw || "").trim();
+  const status = text.match(/\bAPI returned (\d{3})\b/i)?.[1] || "";
+  if (status === "401" || (!!status && /unauthori[sz]ed|bad credentials/i.test(text)))
+    return name + " rejected the API token. Fix it in Intake → Tickets, on the source's card.";
+  if (status === "403") return name + " refused access with this token. Check its permissions in Intake → Tickets.";
+  if (status === "404") return name + " couldn't find this ticket — it may have been deleted or moved.";
+  if (status === "429") return name + " is rate-limiting requests — try again in a minute.";
+  if (status.startsWith("5")) return name + " is having trouble (server error) — try again later.";
+  return text.replace(/[:\s]*[{[].*$/s, "").trim() || "the server gave no reason";
+}
+
 /** The state ids a source auto-starts from, as SAVED (the catalog's
  * `workflow_state` field, comma-joined). Never depends on the tracker. */
 export function savedFilter(source: TicketingSource | null | undefined): string[] {
@@ -83,12 +98,17 @@ export function listNames(names: string[]): string {
  * - `kind: "states"` — a saved state filter; `text` names them when it can,
  *   else counts them ("1 saved state").
  * - `kind: "labels"` — no states, but auto-start labels.
- * - `kind: "none"` — genuinely nothing saved: every state auto-starts. */
+ * - `kind: "waiting"` — nothing saved on a source that needs a pick first
+ *   (`needs_filter`, every source Intake creates): NOTHING auto-starts.
+ * - `kind: "none"` — nothing saved on an older source: every state
+ *   auto-starts. */
 export function filterSummary(opts: {
   ids: string[];
   names: string[];
   labels: string[];
-}): { kind: "states" | "labels" | "none"; text: string; named: boolean } {
+  /** The source's `needs_filter` is on. */
+  waiting?: boolean;
+}): { kind: "states" | "labels" | "none" | "waiting"; text: string; named: boolean } {
   const { ids, names, labels } = opts;
   if (ids.length) {
     const named = names.length >= ids.length;
@@ -98,5 +118,6 @@ export function filterSummary(opts: {
     return { kind: "states", text, named };
   }
   if (labels.length) return { kind: "labels", text: "label " + listNames(labels), named: true };
+  if (opts.waiting) return { kind: "waiting", text: "nothing yet", named: true };
   return { kind: "none", text: "every state", named: true };
 }

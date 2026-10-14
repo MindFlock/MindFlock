@@ -398,7 +398,7 @@ export function QueueTab({ gotoTab }: TabProps) {
     },
     {
       kind: "prs",
-      label: "Pull requests",
+      label: "GitHub PRs",
       tab: "prs",
       // PR comments and issues run on their own switches: the pipeline boots
       // for whichever halves are on, so the ticket switch is not their gate
@@ -421,7 +421,7 @@ export function QueueTab({ gotoTab }: TabProps) {
     },
     {
       kind: "issues",
-      label: "Issues",
+      label: "GitHub issues",
       tab: "issues",
       state: runState({
         configured: (issuesQ.data?.repos || []).length > 0,

@@ -20,6 +20,7 @@ from backend.ticket_ingestion.config import (
 from backend.ticket_ingestion.models import Ticket
 from backend.ticket_ingestion.repo_routing import targets_of
 from backend.ticket_ingestion.providers import get_provider
+from backend.ticket_ingestion.providers.base import auto_start_waiting
 from backend.ticket_ingestion.state import (
     load_last_run_timestamp,
     load_pending_stories,
@@ -111,6 +112,19 @@ class BackfillScanner:
         self._provider = get_provider(self._source)
 
     async def scan(self) -> int:
+        # A source with no auto-start state picked yet (or only a typed name
+        # Test hasn't matched) starts nothing: nothing is fetched, and the
+        # checkpoint stays put so the first scan after a state is picked still
+        # covers the tickets that changed meanwhile.
+        waiting = auto_start_waiting(self._source)
+        if waiting:
+            if getattr(self, "_waiting_logged", "") != waiting:
+                _logger.info(
+                    "Source %s auto-starts nothing yet: %s", self._source_key, waiting
+                )
+                self._waiting_logged = waiting
+            return 0
+        self._waiting_logged = ""
         last_run = load_last_run_timestamp(_STATE_DIR, self._source_key)
         scan_started = datetime.now(timezone.utc)
 
