@@ -213,6 +213,10 @@ class TicketProviderConfig:
     #: ``""`` = ``"mindflock"``. See
     #: :func:`~backend.ticket_ingestion.tracker_claims.claim_label`.
     claim_label: str = ""
+    #: Auto-start nothing until an ingest state or label is picked (sources
+    #: Intake creates set it; older ones keep "empty filter = every state").
+    #: See :func:`~backend.ticket_ingestion.providers.base.auto_start_waiting`.
+    needs_filter: bool = False
     poll_interval_seconds: int = 20
     # Per-source discriminator so you can connect several sources — including
     # multiple of the SAME provider (e.g. two Jira sites) — without their
@@ -1132,6 +1136,7 @@ def _parse_source(
         start_state=start_state,
         start_comment=flag_on(src.get("start_comment")),
         claim_label=str(src.get("claim_label", "") or "").strip(),
+        needs_filter=flag_on(src.get("needs_filter")),
         poll_interval_seconds=int(poll),
         id=str(src.get("id", "") or ""),
         label=str(src.get("label", "") or ""),

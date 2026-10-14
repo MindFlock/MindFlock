@@ -8,8 +8,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { TestPlan, TestStep, TestStepResult } from "../../api/types";
-import { refreshTestPlans } from "../../state/queries";
+import { refreshTestPlans, useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
+import { selectSession } from "../../lib/sessionActions";
 import { errorPop } from "../../lib/errorPop";
 import { relTime } from "../../lib/format";
 import * as actions from "../../lib/verifyActions";
@@ -26,14 +27,16 @@ import {
   failCount,
   latestRun,
   openHumanSteps,
+  isVerifySession,
+  planForSession,
   planName,
   planStatus,
   runEvidence,
   runTreeMismatch,
-  stepIsYours,
   tallyBits,
   tallySentence,
 } from "./verify";
+import { VerdictBadge } from "./VerdictChip";
 import {
   AddStep,
   RewriteBox,
@@ -89,6 +92,12 @@ export function PlanRow({
 }) {
   const closeDialog = useUi((s) => s.closeDialog);
   const openVerifyPane = useUi((s) => s.openVerifyPane);
+  // The session this checklist is for, when it is still open — what "Open
+  // session", "View diff" and "Open PR" in the ⋯ need.
+  const { data: instances } = useInstances();
+  const session =
+    (instances || []).find((i) => !isVerifySession(i) && planForSession([plan], i) === plan) ||
+    null;
   const [busy, setBusy] = useState("");
   const [stepBusy, setStepBusy] = useState("");
   const [focusStep, setFocusStep] = useState("");
@@ -147,21 +156,11 @@ export function PlanRow({
   // can read what it did.
   const watchSession = plan.run_session || run?.session || "";
   const watchingHere = watchPref === null ? running : watchPref;
-  const evidence = runEvidence(run, plan.live_branch || liveBranch);
+  const evidence = runEvidence(run, plan.live_branch || liveBranch, plan.branch);
   const failedCount = failCount(plan);
   const steps = plan.steps || [];
   const status = planStatus(plan, liveBranch);
   const open = openHumanSteps(plan);
-  // The split, counted once. Said in the legend so "which of these are mine?"
-  // is answered before you start reading rows, and so a plan that is entirely
-  // one lane says so instead of leaving you to check every row for a label.
-  // Counted through `stepIsYours`, like every other count on this card: a run
-  // that handed six steps back moved them into your lane, and a legend still
-  // reading "6 for the agent" would be describing the checklist as written
-  // rather than the one on screen — directly contradicting the eight ● marks
-  // underneath it.
-  const mineCount = steps.filter((s) => stepIsYours(plan, s)).length;
-  const agentCount = steps.length - mineCount;
   // What THIS PLAN'S REPO calls live today, which is the only branch the plan's
   // own stamp can honestly be compared with. "What counts as shipped" is a
   // per-repo fact and a plan records the per-repo answer, so measuring it
@@ -186,16 +185,24 @@ export function PlanRow({
   // which got as far as staging, which is out. The moment stays; only the noun
   // in front of it changes, so the line still dates itself.
   //
-  // `local` is not a branch name and is deliberately not styled like one: it is
-  // the absence of a landing, which is exactly the state a checklist spends its
-  // first hours in. `live_at` without a `merged_into` is an older payload — the
-  // rung that answers "merged into what?" is newer than the one that stamps
-  // "this is live" — so it falls back to the branch the plan is measured
-  // against rather than reporting a shipped plan as local.
-  const where = plan.merged_into || (plan.live_at ? nowLive || "shipped" : "local");
+  // "not merged", never "local": a checklist exists because the branch was
+  // PUSHED, and to a git user "local" means the opposite. `live_at` without a
+  // `merged_into` is an older payload — the rung that answers "merged into
+  // what?" is newer than the one that stamps "this is live" — so it falls back
+  // to the branch the plan is measured against.
+  const landed = plan.merged_into || (plan.live_at ? nowLive || "" : "");
+  const where = landed
+    ? "merged \u2192 " + landed
+    : plan.live_at
+      ? "shipped"
+      : plan.merged_at
+        ? "merged"
+        : "not merged";
   // "" for a landing the rung that answered could not date — a squash merge is
   // known by its PR, and a PR does not carry the moment it merged.
-  const whereAgo = agoOf(plan.merged_into_at || plan.live_at || plan.generated_at);
+  const whereAgo = agoOf(
+    plan.merged_into_at || plan.live_at || plan.merged_at || plan.generated_at,
+  );
   const whereTitle = (
     plan.merged_into
       ? [
@@ -216,7 +223,7 @@ export function PlanRow({
       : [
           plan.live_at
             ? "Live on " + (nowLive || "the live branch") + "."
-            : "Still only on " + (plan.branch || "its own branch") + " — origin has it nowhere else yet.",
+            : "Pushed to " + (plan.branch || "its own branch") + " — not merged anywhere yet.",
           plan.generated_at && !plan.live_at
             ? "Checklist written " + agoOf(plan.generated_at) + "."
             : "",
@@ -390,6 +397,34 @@ export function PlanRow({
 
   // Every applicable action EXCEPT the one already on the primary button.
   const menu: MenuItem[] = [];
+  // THE WAY BACK to the work this checklist is about — the session, its diff,
+  // its PR. Only while that session is open; a closed one has no pane to show.
+  if (session) {
+    const go = (tab?: string) => {
+      closeDialog();
+      selectSession(session.title);
+      if (tab) useUi.getState().setLastTab(session.title, tab);
+    };
+    menu.push({
+      key: "open-session",
+      label: "Open session",
+      title: "Show " + session.title + " in the grid",
+      onSelect: () => go(),
+    });
+    menu.push({
+      key: "view-diff",
+      label: "View diff",
+      title: "Show what changed on " + (plan.branch || "this branch"),
+      onSelect: () => go("diff"),
+    });
+    if (session.pr_url)
+      menu.push({
+        key: "open-pr",
+        label: "Open PR \u2197",
+        title: session.pr_url,
+        onSelect: () => void window.open(session.pr_url!, "_blank"),
+      });
+  }
   // BRING THE LOG BACK. Opening it inline is otherwise reachable only while the
   // plan is `running` (the primary button's "watch" arm), so the terminal that
   // vanished when the run finished — the moment its own failure arrived — could
@@ -444,23 +479,11 @@ export function PlanRow({
     )
       menu.push({
         key: "run",
-        label: run ? "Check again" : "Check now",
+        label: "Check now",
         title: "An agent checks the steps it can",
         onSelect: () => void startRun(),
       });
   }
-  // Only when there is something to fix — a button that opens an empty session
-  // is worse than no button, and the route 409s it anyway.
-  if (!running && failedCount > 0)
-    menu.push({
-      key: "fix",
-      label:
-        failedCount === 1
-          ? "Fix what failed…"
-          : "Fix the " + failedCount + " that failed…",
-      title: "Start a session to fix the failed steps",
-      onSelect: () => void fixFailures(),
-    });
   if (plan.state !== "generating" && status.action !== "rewrite")
     menu.push({
       key: "regen",
@@ -547,6 +570,8 @@ export function PlanRow({
             things a triaging eye runs down, "whose turn is it" and "is anything
             red", on the same baseline, so a list of eight is one pass. */}
         <div className="vf-plan-line">
+          {/* THE VERDICT first — the yes-or-no a lead reads before merging. */}
+          <VerdictBadge plan={plan} />
           <div className="vf-stopline" data-tone={status.tone}>
             {/* THE WHEEL. `generating` is the one state with nothing to press
                 and nothing on screen changing for up to three minutes; without
@@ -575,17 +600,33 @@ export function PlanRow({
               and "it's got as far as staging" are told apart without reading. */}
           <span
             className="vf-plan-landed"
-            data-live={where === nowLive && !!nowLive ? "yes" : "no"}
+            data-live={landed === nowLive && !!nowLive ? "yes" : "no"}
             title={whereTitle}
           >
             {where}
             {whereAgo ? " · " + whereAgo : ""}
           </span>
         </div>
+        {/* ONE primary button per row at most: filled only when the row is
+            asking something of YOU; every other row's button is a plain one,
+            so a list of eight is not eight purple buttons. A failed row also
+            offers Fix… beside it — the most useful next press there. */}
+        <span className="vf-acts">
+        {!running && failedCount > 0 ? (
+          <button
+            type="button"
+            className="test-btn vf-fix"
+            disabled={busy !== ""}
+            title="Start a session to fix what failed"
+            onClick={() => void fixFailures()}
+          >
+            {busy === "fix" ? "Opening…" : "Fix…"}
+          </button>
+        ) : null}
         {status.action !== "none" ? (
           <button
             type="button"
-            className="btn-primary vf-primary"
+            className={(status.tone === "you" ? "btn-primary" : "test-btn") + " vf-primary"}
             data-action={status.action}
             // `stepBusy` too: a per-step Re-check and this button start the SAME
             // request, and two of them in flight for one plan is how a title
@@ -621,6 +662,7 @@ export function PlanRow({
             {busy === "run" ? "Starting…" : busy === "regen" ? "…" : status.actionLabel}
           </button>
         ) : null}
+        </span>
         <OverflowMenu
           label={"More actions for " + planName(plan)}
           items={menu}
@@ -716,43 +758,6 @@ export function PlanRow({
               That check wasn't on {nowLive || "the live branch"} — it ran on{" "}
               <code>{(run?.tested_sha || "").slice(0, 7)}</code>, so its passes don't
               count. Check again.
-            </div>
-          )}
-          {steps.length > 0 && (
-            // The one sentence a new user genuinely must read, said once per
-            // plan where it is unmissable. It used to be three `title`
-            // attributes, which is a strange place to keep the promise the
-            // whole surface rests on.
-            <div className="vf-legend">
-              {/* Two sentences, in the order a reader needs them: first whose
-                  step is whose, then what the three answers mean. The lane
-                  labels are quoted in their own colours so the line teaches the
-                  column beside it rather than describing it. */}
-              <div>
-                <span className="vf-step-who vf-who-you">you</span> = only a person can
-                check it · <span className="vf-step-who">agent</span> = the agent checks it
-                {mineCount > 0 && agentCount > 0
-                  ? " — " + mineCount + " for you, " + agentCount + " for the agent"
-                  : ""}
-                .
-              </div>
-              {/* The one sentence a new user must read, and the promise the
-                  whole surface rests on: all three are answers, and only one of
-                  them says it works. Spelling that out is what makes "Can't
-                  check" safe to press — before it, the honest answer was the one
-                  that left the row nagging, so people pressed Pass instead. */}
-              <div>
-                <strong>Pass</strong> = it did what's expected · <strong>Fail</strong> = it
-                didn't · <strong>Can't check</strong> = you couldn't get to it. All three
-                count as your answer; only Pass says it works.
-              </div>
-              {/* Not optional furniture: none of this is discoverable, and the
-                  legend is the one place per plan where this surface's
-                  vocabulary is taught rather than assumed. */}
-              <div className="vf-keys">
-                On a step: <kbd>1</kbd> pass · <kbd>2</kbd> fail · <kbd>3</kbd> can't
-                check · <kbd>u</kbd> undo · <kbd>n</kbd> note.
-              </div>
             </div>
           )}
           {rewriting && (

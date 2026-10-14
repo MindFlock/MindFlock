@@ -40,6 +40,7 @@ import { RedZonesDialog } from "./components/dialogs/RedZonesDialog";
 import { WelcomeTour } from "./components/onboarding/WelcomeTour";
 import { Breaks } from "./components/breaks/Breaks";
 import { openSettings } from "./lib/openSettings";
+import { installSurfaceHash } from "./lib/surfaceHash";
 
 /** At or under this window width the main screen goes single-column. */
 const NARROW_PX = 760;
@@ -266,6 +267,9 @@ export default function App() {
   }, []);
 
   useEffect(() => installKeymap(host), [host]);
+  // New / Intake / Verify / Settings / Templates in the URL hash: browser
+  // Back closes the open one, a link opens it (lib/surfaceHash).
+  useEffect(() => installSurfaceHash(), []);
 
   return (
     <>

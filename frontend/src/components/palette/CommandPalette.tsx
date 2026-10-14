@@ -26,6 +26,7 @@ import { openSettings } from "../../lib/openSettings";
 import { TEMPLATES_CHANGED, ensureTemplates, runProblem, templatesNow } from "../../lib/templates";
 import { runTemplateNow } from "../../lib/templateRun";
 import { settingsActions } from "./settingsSearch";
+import { VERIFY_BLURB } from "../../lib/vocab";
 
 /** The focused session's entries, in palette order (the table holds what
  * each one says and when it applies). Pause and Resume never both apply;
@@ -127,7 +128,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     // The other end of the same arc, so it sits with the Intake entries rather
     // than down among the settings screens.
     acts.push({
-      label: "Verify — check what was pushed",
+      label: "Verify — " + VERIFY_BLURB,
       hint: "Alt+V",
       top: TOP.verify,
       run: () => ui.openDialogFor("verify"),
@@ -157,7 +158,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       });
     }
     acts.push({ label: "Recently closed…", hint: "reopen or delete closed sessions", run: () => ui.openDialogFor("recent") });
-    acts.push({ label: "Assistant agent file…", run: () => ui.openDialogFor("assistant-agent") });
+    acts.push({ label: "Assistant instructions (agent file)…", run: () => ui.openDialogFor("assistant-agent") });
     if (caps.git)
       acts.push({
         label: "Zones…",

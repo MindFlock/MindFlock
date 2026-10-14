@@ -32,8 +32,8 @@ export function TaskField({ prompt, setPrompt, presetValue, setPresetValue, save
         <span className="preset-row">
           <select
             id="new-preset"
-            aria-label="Insert a saved prompt"
-            title="Put a saved prompt in the Task box (you can edit it after)"
+            aria-label="Insert a prompt"
+            title="Put one of your prompts in the Task box (you can edit it after)"
             value={presetValue}
             onChange={(e) => {
               setPresetValue(e.target.value);
@@ -41,7 +41,7 @@ export function TaskField({ prompt, setPrompt, presetValue, setPresetValue, save
               if (p) setPrompt(p.prompt);
             }}
           >
-            <option value="">Insert a saved prompt…</option>
+            <option value="">Insert a prompt…</option>
             {BUILTIN_PRESETS.length > 0 && (
               <optgroup label="Built-in">
                 {BUILTIN_PRESETS.map((p) => (
@@ -65,7 +65,7 @@ export function TaskField({ prompt, setPrompt, presetValue, setPresetValue, save
             type="button"
             id="preset-manage"
             className="linklike"
-            title="Add or remove saved prompts — you come back here on Close"
+            title="Add or remove prompts, or pick one for this Task — you come back here on Close"
             // Not a hand-off that loses the form: Close in Prompts brings
             // this dialog back as it was (newSessionResume).
             onClick={() => useUi.getState().openDialogFor("prompts", "new")}
@@ -104,9 +104,8 @@ export function PlanFirstRow({
       id="new-plan-first-row"
       title={
         planOk
-          ? "The agent first lists every file it intends to create, modify or delete, with a one-line " +
-            "intent for each, then waits for your go-ahead. Open the session's Map tab to see that plan " +
-            "and its blast radius, red-zone anything it shouldn't touch, and press Go."
+          ? "Before any edit, the agent lists the files it will change and why, then waits. Review it " +
+            "on the session's Map tab and press Go."
           : "Only an agent that can declare a plan gets the Map's plan review and Go button — pick Claude " +
             "for Plan first."
       }
@@ -123,8 +122,8 @@ export function PlanFirstRow({
         {!planOk
           ? "(needs an agent with plan support — Claude)"
           : prompt.trim()
-            ? "(list files + intent, then wait for Go on the Map tab)"
-            : "(takes effect with a task)"}
+            ? "— the agent lists the files it will change and waits for your OK (Map tab)"
+            : "— needs a task: the agent lists the files it will change and waits for your OK"}
       </span>
     </label>
   );

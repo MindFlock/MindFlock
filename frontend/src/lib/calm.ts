@@ -19,9 +19,15 @@
  * fold, a "⋯" item, a Customize checkbox or a palette entry away, and a
  * choice the user made (Customize → Sidebar, a View preset) always wins.
  *
- * Unknown (the setup payload not in yet) is NOT calm: a veteran's screen must
- * never flash empty while /api/setup is in flight. The server's `onboarded`
- * flag stands in meanwhile — false only on a genuinely fresh install. */
+ * Unknown (the setup payload not in yet — /api/setup carries the doctor and
+ * can take seconds) is answered by a RENDER HINT: the last calm decision this
+ * browser made from server data (CALM_HINT_KEY). It only picks the first
+ * paint, so the screen doesn't flash the dense layout and then collapse; the
+ * server's answer replaces it the moment it lands and is written back as the
+ * new hint. It is not a first-run flag — nothing is marked done or seen by
+ * it, and a cleared profile just falls back to the old rule: no hint means
+ * the server's `onboarded` flag (false only on a genuinely fresh install),
+ * else not calm, so a veteran never flashes empty. */
 
 import type { SetupStatus } from "../api/types";
 
@@ -55,8 +61,33 @@ export function isNewcomer(status: SetupStatus | null | undefined, onboarded?: b
 
 /** The calm main screen is on: a newcomer with fewer than three sessions. */
 export function isCalm(opts: CalmInput): boolean {
+  return calmDecision(opts) === true;
+}
+
+/** isCalm, or `null` while the server hasn't said enough to decide. */
+export function calmDecision(opts: CalmInput): boolean | null {
   if (opts.sessions >= CALM_MAX_SESSIONS) return false;
-  return isNewcomer(opts.status, opts.onboarded, opts.now) === true;
+  return isNewcomer(opts.status, opts.onboarded, opts.now);
+}
+
+/** localStorage key of the render hint (see the header): "1" calm, "0" not. */
+export const CALM_HINT_KEY = "mf_calm_hint";
+
+export function readCalmHint(): boolean | null {
+  try {
+    const v = localStorage.getItem(CALM_HINT_KEY);
+    return v === "1" ? true : v === "0" ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeCalmHint(calm: boolean): void {
+  try {
+    if (localStorage.getItem(CALM_HINT_KEY) !== (calm ? "1" : "0")) localStorage.setItem(CALM_HINT_KEY, calm ? "1" : "0");
+  } catch {
+    /* storage blocked: the hint is only a nicety */
+  }
 }
 
 /** Sidebar bars a calm screen leaves out by default (Customize brings any of

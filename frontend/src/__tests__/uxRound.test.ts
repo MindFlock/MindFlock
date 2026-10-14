@@ -100,7 +100,8 @@ describe("session rename (alias)", () => {
     // Rename surfaced in the row menu and the palette (one table row both read).
     expect(SESSION_ACTIONS.rename.label).toBe("Rename…");
     expect(normCode("components/palette/CommandPalette.tsx")).toContain('"rename",');
-    expect(ROW).toContain('"rename",');
+    expect(normCode("lib/sessionMenu.ts")).toContain('fromTable("rename")');
+    expect(ROW).toContain("<SessionMenu");
     // Rows carry the stable title as a data attr (so focus/lookup don't depend
     // on the displayed text, which may be an alias).
     expect(has(ROW, "data-title={title}")).toBe(true);
@@ -240,9 +241,12 @@ describe("New-session dialog progressive disclosure", () => {
     expect(has(strip, 'id="new-templates"')).toBe(true);
     expect(has(strip, 'id="new-templates-list"')).toBe(true);
     expect(has(strip, 'id="new-templates-manage"')).toBe(true);
-    // A chip prefills the form; Manage… opens the templates editor.
-    expect(has(strip, "onClick={() => fillFromTemplate(t)}")).toBe(true);
-    expect(has(strip, 'useUi.getState().openDialogFor("templates", "new")')).toBe(true);
+    // A chip's name prefills the form (▶ runs it, ⏰ schedules it); All
+    // templates… opens the templates editor.
+    expect(has(strip, "onClick={() => onPick(t)}")).toBe(true);
+    expect(has(strip, "onClick={() => onRun(t)}")).toBe(true);
+    expect(has(strip, "onClick={() => onSchedule(t)}")).toBe(true);
+    expect(has(strip, 'useUi.getState().openDialogFor("templates", templatesTarget({ fromNew: true, schedule: null }))')).toBe(true);
     expect(normCode("components/dialogs/NewSessionDialog.tsx")).toContain('"/api/templates"');
     // A plain folder works — git is offered as an init-repo toggle.
     expect(normCode("components/dialogs/newSession/WorkspaceFold.tsx")).toContain('id="new-init-repo"');

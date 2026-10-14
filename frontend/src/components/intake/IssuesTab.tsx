@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
-import { refreshInstances, usePanelQuery } from "../../state/queries";
+import { refreshInstances, usePanelQuery, useTicketingSources } from "../../state/queries";
 import { SettingField, useSettings } from "../settings/useSettings";
 import { AgentPicker, useAgentChoices } from "../settings/screens/AgentPicker";
 import { openConnectGitHub } from "../../lib/githubConnect";
@@ -25,7 +25,7 @@ import {
   type ItemWorkspace,
 } from "./kit";
 import { RepoSourceList, type RepoOverrides } from "./RepoSources";
-import { loadRemembered } from "./pause";
+import { useIntakePause } from "./pause";
 import { issueMatches } from "./search";
 import type { TabProps } from "./IntakeDialog";
 
@@ -66,7 +66,8 @@ export function IssuesTab({ gotoTab }: TabProps) {
   const enabled = gh.issues_enabled === true;
   const repos = Array.isArray(gh.issue_repos) ? gh.issue_repos : [];
   // Off because Pause intake turned it off (it will come back on Resume).
-  const pausedOff = !enabled && (loadRemembered() || []).includes("issues");
+  const pause = useIntakePause((useTicketingSources(true).data || []).length);
+  const pausedOff = !enabled && repos.length > 0 && pause.pausedKind("issues");
   const overrides = (gh.issue_repo_settings || {}) as RepoOverrides;
   const skipAuthors = Array.isArray(gh.issue_skip_authors)
     ? gh.issue_skip_authors.join(", ")
@@ -143,7 +144,7 @@ export function IssuesTab({ gotoTab }: TabProps) {
       hint={
         <>
           Each card is one repository, with its own agent and filters. Blank fields use the
-          defaults under <strong>Advanced options</strong>. Separate from the Pull requests
+          defaults under <strong>Advanced options</strong>. Separate from the GitHub PRs
           tab's list.
         </>
       }
@@ -263,8 +264,8 @@ export function IssuesTab({ gotoTab }: TabProps) {
         </p>
       </div>
       <p className="set-hint set-block-hint">
-        When a new issue opens on one of the repositories below, MindFlock starts a session
-        for it, with its comments, on a fresh branch.
+        When a new GitHub issue opens on one of the repositories below, MindFlock starts a
+        session for it, with its comments, on a fresh branch.
       </p>
 
       <AutomationSwitch
@@ -274,6 +275,7 @@ export function IssuesTab({ gotoTab }: TabProps) {
         inputId="gh-issues-enabled"
         statusId="gh-issues-status"
         checked={enabled}
+        paused={pausedOff}
         disabled={!n}
         onChange={(next) =>
           saveGithub(
@@ -309,7 +311,7 @@ export function IssuesTab({ gotoTab }: TabProps) {
             value={String(gh.issue_agent || "")}
             choices={agentChoices}
             onChange={(v) => s.saveField("github", "issue_agent", v)}
-            hint={<>Which agent works new issues. Separate from the Pull requests tab's.</>}
+            hint={<>Which agent works new issues. Separate from the GitHub PRs tab's.</>}
           />
           <label className="set-row">
             <span className="set-label">Min issue age (minutes)</span>
@@ -354,7 +356,7 @@ export function IssuesTab({ gotoTab }: TabProps) {
               </button>
             </span>
             <span className="set-hint">
-              The same GitHub sign-in the Pull requests tab uses.
+              The same GitHub sign-in the GitHub PRs tab uses.
             </span>
           </div>
         </div>

@@ -77,7 +77,9 @@ describe("the Intake dialog shell", () => {
   });
 
   it("the tab strip names the three queues (and the fourth) and counts them", () => {
-    for (const label of ['label: "Tickets"', 'label: "Pull requests"', 'label: "Issues"', 'label: "Auto-start"'])
+    // The GitHub tabs say "GitHub" (round 3: an "Issues" tab beside a GitHub
+    // Issues ticket provider read as two homes for one thing). Keys unchanged.
+    for (const label of ['label: "Tickets"', 'label: "GitHub PRs"', 'label: "GitHub issues"', 'label: "Auto-start"'])
       expect(DIALOG, label).toContain(label);
     expect(DIALOG).toContain('{ key: "autostart", label: "Auto-start"');
     expect(DIALOG).toContain('className="ik-tab-count"');
@@ -331,7 +333,10 @@ describe("Reopen window (intake reopen)", () => {
     expect(KIT).toContain('"Reopen session"');
     // The start button demotes when a workspace exists, so the row has one
     // primary action rather than two competing ones.
-    expect(KIT).toContain('canReopen ? "test-btn ik-start-again" : "btn-primary pr-review-btn"');
+    expect(KIT).toMatch(/canReopen\s*\?\s*"test-btn ik-start-again"/);
+    // ...and a row that will auto-start anyway gets the quiet Start too
+    // (round 3: seven identical purple Starts; the chip carries the row).
+    expect(KIT).toMatch(/willAutoStart\s*\?\s*"test-btn pr-review-btn ik-start-quiet"\s*:\s*"btn-primary pr-review-btn"/);
     expect(INTAKE_CSS).toContain(".ik-start-again");
   });
 });

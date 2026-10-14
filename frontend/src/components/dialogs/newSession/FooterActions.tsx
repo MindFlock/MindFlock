@@ -50,6 +50,8 @@ export function FooterActions({
   runDescribe,
   startRun,
   startNow,
+  setUpMyself,
+  onClear,
   saveTpl,
 }: {
   error: string;
@@ -66,6 +68,10 @@ export function FooterActions({
   runDescribe(mode?: "fill" | "start"): Promise<void>;
   startRun(): Promise<void>;
   startNow(): void;
+  /** To the form, carrying what was typed as the Task. */
+  setUpMyself(): void;
+  /** Clear the draft (shown on the form while something typed is in it). */
+  onClear?: () => void;
   saveTpl: SaveTemplateUi;
 }) {
   return (
@@ -109,7 +115,8 @@ export function FooterActions({
             Cancel
           </button>
           <span className="muted nf-save-tpl-hint">
-            {saveTpl.blocked || "Saves this whole setup. Run it later from Templates, or on a schedule."}
+            {saveTpl.blocked ||
+              "Saves the folder, agent, where it works, task and fast-track. Run it from Templates, now or on a schedule."}
           </span>
         </div>
       )}
@@ -126,8 +133,8 @@ export function FooterActions({
               type="button"
               id="new-describe-skip"
               className="nf-quiet"
-              title="Go straight to the form and choose the folder and options yourself. Nothing is read."
-              onClick={() => setPage(2)}
+              title="Go to the form with what you typed as the task, and choose the folder and options yourself. Nothing is read."
+              onClick={setUpMyself}
             >
               Set it up myself instead
             </button>
@@ -158,15 +165,17 @@ export function FooterActions({
                 )}
               </button>
             )}
+            {/* Never waits on the agent: pressed during a Review read, it drops
+                the read and starts from the words as typed. */}
             <button
               type="button"
               id="new-describe-start"
-              disabled={describing || draft.starting}
+              disabled={draft.starting || (runMode && describing)}
               aria-busy={(describing && describeMode === "start") || draft.starting || undefined}
               title={
                 runMode
                   ? "Start them now. MindFlock queues the rest and ships each one as chosen above, and the bell shows anything that needs you."
-                  : "Create the session right away from what you typed, without showing you the details first."
+                  : "Start the session now in the folder shown, with what you typed as its task — nothing to review."
               }
               onClick={runMode ? () => void startRun() : startNow}
             >
@@ -191,6 +200,17 @@ export function FooterActions({
             >
               Save as template…
             </button>
+            {onClear && (
+              <button
+                type="button"
+                id="new-clear-form"
+                className="linklike"
+                title="Empty the form and start over — what you type here otherwise stays until you Create"
+                onClick={onClear}
+              >
+                Clear
+              </button>
+            )}
             {/* Back, not Cancel: page 1 still holds the sentence, and a
                 create that has not happened yet is not something to undo. */}
             <button type="button" id="new-back" className="linklike" onClick={() => setPage(1)}>

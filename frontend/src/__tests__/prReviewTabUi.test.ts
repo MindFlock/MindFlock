@@ -51,7 +51,7 @@ describe("the Pull requests tab", () => {
   it("has the feature block: switch, status, filters and its legacy id", () => {
     // The tab label in the Intake dialog's strip; the tab strip IS the heading,
     // so the switch label and its status line are what name the feature.
-    expect(code(DIALOG_RAW)).toContain('label: "Pull requests"');
+    expect(code(DIALOG_RAW)).toContain('label: "GitHub PRs"');
     // Named for what it does: it addresses review comments on YOUR PRs; it
     // never reviews anyone's (round-2: "Automated review" read as the opposite).
     expect(PRS).toContain('label="Auto-address review comments"');
@@ -138,7 +138,7 @@ describe("ticketing source cards", () => {
     // Repo URL is required per source (there is no global default repo). The
     // field moved into RepoListField when a source learned to hold a SET of
     // repos; with one repo it is still labelled "Repo URL".
-    expect(TICKETS).toContain("<RepoListField source={source} onChange={onChange} />");
+    expect(TICKETS).toMatch(/<RepoListField\s+source=\{source\}/);
     const field = code(REPO_FIELD_RAW);
     expect(field).toContain('data-tk-field={i === 0 ? "repo_url" : undefined}');
     expect(field).toContain('{many ? "Repos" : "Repo URL"}');

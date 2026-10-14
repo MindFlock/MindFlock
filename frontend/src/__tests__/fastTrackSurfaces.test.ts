@@ -66,7 +66,8 @@ const SHIP_MODULES = [
   "lib/runStart.ts",
   "lib/playbooks.ts",
   "components/grid/FastTrackMenu.tsx",
-  "components/sidebar/SessionRowItems.tsx",
+  "lib/sessionMenu.ts",
+  "components/sidebar/SessionMenu.tsx",
   "components/dialogs/FastTrackChoice.tsx",
   "components/dialogs/NewList.tsx",
   "components/dialogs/SplitCheck.tsx",
@@ -94,7 +95,8 @@ const newDialog = () => NEW_DIALOG_MODULES.map(mod).join("\n");
 
 const PANE = "components/grid/Pane.tsx";
 const MENU = "components/grid/FastTrackMenu.tsx";
-const ROW_ITEMS = "components/sidebar/SessionRowItems.tsx";
+// The session's one menu (row ⋯ and pane ⋯ draw the same model).
+const ROW_ITEMS = "lib/sessionMenu.ts";
 const TABLE = "lib/sessionActionTable.ts";
 const PALETTE = "components/palette/CommandPalette.tsx";
 const KEYMAP = "lib/keymap.ts";
@@ -353,7 +355,7 @@ describe("the ⏩ button and its picker", () => {
     ).toBe(true);
     expect(menu).toContain("useLayoutEffect(() => placeRef.current())");
     const pane = norm(mod(PANE));
-    const guided = pane.indexOf('"nextstep" + (ns.hint ?');
+    const guided = pane.indexOf('"nextstep" + (shownStep.hint ?');
     const fast = pane.indexOf('"nextstep nextstep-fast"');
     const live = pane.indexOf('className={"stepnow is-"');
     expect(guided).toBeGreaterThanOrEqual(0);
@@ -375,27 +377,27 @@ describe("the ⏩ button and its picker", () => {
 
 describe("the other doors: row › menu, palette, chords", () => {
   it("row › menu items", () => {
-    expect(mod("components/sidebar/SidebarRow.tsx")).toContain("<SessionRowItems inst={inst} />");
+    expect(mod("components/sidebar/SidebarRow.tsx")).toContain("<SessionMenu");
+    expect(mod(PANE)).toContain("<SessionMenu");
     const group = mod(ROW_ITEMS);
     // Fast-track… opens THE picker (the table's row), never a second copy of
     // its choices.
-    expect(group).toContain("SESSION_ACTIONS.fastTrack.run(title);");
-    expect(group).toContain("SESSION_ACTIONS.fastTrack.label");
-    expect(group).toContain("SESSION_ACTIONS.fastTrack.keys");
+    expect(group).toContain('run: () => sessionAction("fastTrack").run(title)');
+    expect(group).toContain('label: "Fast-track…"');
+    expect(group).toContain('keys: sessionAction("fastTrack").keys');
     expect(SESSION_ACTIONS.fastTrack).toMatchObject({ label: "Fast-track…", keys: "Ctrl+K F", chord: "f" });
     expect(has(mod(TABLE), 'label: "Fast-track…", keys: "Ctrl+K F", chord: "f",')).toBe(true);
     expect(mod(TABLE)).toContain("run: (t) => openFastTrackMenu(t)");
-    expect(group).toContain("LANE_SHORT[cur.lane]");
+    expect(group).toContain("LANE_SHORT[laneChoice(inst).lane]");
     expect(group).not.toContain("setLane(");
     expect(group).not.toContain("pickFastTrack(");
     // Split is its own action; Move out is a member's; Message… stays.
-    expect(group).toContain(">Split into parallel pieces…<");
+    expect(group).toContain('label: "Split into parallel pieces…"');
     expect(group).toContain("detachableGroup(inst)");
     expect(group).toContain("moveOutOfGroup(group.id, group.task)");
-    expect(group).toContain("Move out of {group.name}");
-    expect(group).toContain("SESSION_ACTIONS.message.run(title);");
-    expect(group).toContain("if (inst.pending) return null;");
-    expect(group).toContain('className="menu-sep"');
+    expect(group).toContain('label: "Move out of " + group.name');
+    expect(group).toContain('fromTable("message")');
+    expect(group).toContain("!inst.pending");
     expect(group).not.toContain("pb-row-sub");
     expect(group).not.toContain("When it");
   });
@@ -591,7 +593,7 @@ describe("New dialog: auto-split is an optional split run", () => {
     expect(dlg.indexOf('id="new-ft-row"')).toBeGreaterThanOrEqual(0);
     expect(dlg.indexOf('id="new-ft-row"')).toBeLessThan(dlg.indexOf('id="new-split-row"'));
     expect(dlg).toContain("splitBox={null}");
-    let reset = dlg.slice(dlg.indexOf("if (failedReopen.current) {"));
+    let reset = dlg.slice(dlg.indexOf("const resetForm = (prefill: string) => {"));
     reset = reset.slice(0, reset.indexOf('folderDo({ t: "reopen" });'));
     expect(reset).toContain("setSplit(false);");
     expect(reset).toContain("setMaxPieces(SPLIT_DEFAULT);");

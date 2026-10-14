@@ -40,8 +40,25 @@ in. The **MindFlock** wordmark (carrying the *running engine's* version, plus a
 red `-DEV` badge under a dev shell) sits centered, and the empty strip beside it
 is the drag region that moves the desktop shell's window.
 
-**Verify** is always on the bar. Its badge counts pushed changes nobody has
-checked and says nothing at zero.
+**Verify** is always on the bar. Its badge counts the checklists under **Needs
+you** and **Failed** (the dialog's first two groups) and says nothing at zero. Everywhere Verify is described in passing
+(this tooltip, the palette, the tour, the shortcut sheet) it is one sentence,
+`lib/vocab.ts`'s *check that pushed changes work*.
+
+**The bar's tooltips read their shortcuts off the live keymap**
+(`shortcutLabels`), rebinds included — and in a browser tab they leave out
+keys the browser keeps for itself, so **New** says *Alt+N* there (Ctrl+N opens
+a browser window) and *Ctrl+N / Alt+N* in the desktop app. Under 560 px the
+wordmark steps aside rather than being clipped.
+
+**Each surface has a URL.** Opening **New**, **Intake**, **Verify**,
+**Settings** or **Templates** puts it in the hash (`#new`, `#intake/tickets`,
+`#verify`, `#settings/accounts`, `#templates`) with one history entry, so the
+browser's **Back** closes it instead of leaving the app, and a link (or a
+reload) opens it (`lib/surfaceHash.ts`). Moving from one surface to another
+replaces that entry, so Back still lands on the grid; closing a surface in the
+app steps back over its entry. Commit, the palette and other moments don't
+touch the URL.
 
 Four entries left the bar:
 
@@ -77,9 +94,13 @@ theme and addon authors styling against the bar: `#topbar[data-mac]` (native
 title bar) and `#topbar[data-mac-lights]` (…and the lights are visible right
 now).
 
-**Sidebar** — session list with drag-to-reorder, status dots, stage chips, and a
-close ✕ per row (closes the session, keeps the worktree). Long titles ellipsize
-(full name on hover); a session cut from a different repo than the one the
+**Sidebar** — session list with drag-to-reorder, stage chips, and a
+close ✕ per row (closes the session, keeps the worktree). The chip is the
+row's state; a status dot is drawn only where it adds something — a dropped
+terminal socket (red), or a node of a family tree, whose connector lines meet
+it. Long titles ellipsize **in the middle** (`add-readm…-setup-2`), so the
+suffix that tells two sessions apart is never the part cut (full name on
+hover; the pane title does the same); a session cut from a different repo than the one the
 server manages shows a compact `⇄` glyph whose tooltip carries the repo name and
 full path. Under each row title a muted **context line** shows the session's
 total diff stat at a glance — `+120 −8 · 6 files`: everything the session has
@@ -92,10 +113,11 @@ another session's agent spawned or adopted (see
 a status line under its name; the parent carries a roll-up of its workers. Above the list:
 **+ New** and a stack of **customizable bars** (see below) — the token/cost
 **Usage** readout (hidden while there are no sessions), the **Assistant** bar
-(**Chat** · **Todo** · **Agent** — **Agent** opens the assistant's editable
-agent file, its standing instructions; the chat window's head has the same
-editor as **Agent file**, and so does the palette's **Assistant agent
-file…**), the **Prompts** bar (your saved prompts, one click from any
+(**Chat** · **Todo** · **Instructions** — **Instructions** opens the
+assistant's editable agent file, its standing instructions; the chat window's
+head has the same editor under the same word, and so does the palette's
+**Assistant instructions (agent file)…** — "Agent" on its own means the coding
+agent only), the **Prompts** bar (your saved prompts, one click from any
 session — see [Saved prompts](#saved-prompts)), the **Tickets** bar (pipeline on/off switch and state dot;
 it appears once a ticket source is connected), the **Pull requests** and
 **Issues** bars, the opt-in **Verify** bar, and one bar per extension. Under the
@@ -119,8 +141,19 @@ Alt+N numbers wait too; and pane headers are calm (see
 [The pane header](#the-pane-header)). Three sessions, or a week, brings the
 full screen back by itself. A choice the person made always wins: bars set in
 Customize (here or synced from another device) are never touched, and a View
-preset other than Auto keeps the picker shown. While `/api/setup` is still
-loading nothing is hidden — a veteran's screen never flashes empty.
+preset other than Auto keeps the picker shown.
+
+The decision is made **before first paint**: `/api/setup` carries the doctor
+and can take seconds, so until it (and the session list) answer, the screen
+uses this browser's last calm decision (`mf_calm_hint` in localStorage — a
+render hint only, never a first-run flag) and the server's answer replaces it
+the moment it lands. No dense layout flashes and then collapses on reload.
+With no hint (a new browser) the old rule holds: calm only on a genuinely
+fresh install (`onboarded: false`), so a veteran's screen never flashes empty.
+
+The footer's **Setup** chip is amber only while a *required* step is left;
+once the three are done it turns neutral (*Setup 3 of 3 · 2 optional* is an
+offer, not a warning).
 
 The footer's doctor chip (*⚠ setup issues — open Setup*) stays down while the
 grid's **Get set up** card or the **Setup** chip is showing — they open the
@@ -153,7 +186,10 @@ implement). The **Verify** bar's label opens Verify the same way. Turning a
 feature's bar on is still how you get an at-a-glance dot for PR review and
 issue handling once you've connected them. The **Tickets** bar also carries
 Intake's **Pause intake** as a small ⏸ (▶ **Resume intake** while paused) —
-the same control as the band at the top of the Intake dialog.
+the same control as the band at the top of the Intake dialog, always shown
+(disabled, saying why, while nothing auto-starts). The bars' labels read
+**GitHub PRs** / **GitHub issues**, like the Intake tabs, and a switch that is
+off because intake is paused is drawn striped amber, not plain off.
 
 **Window rows** — every open non-session window (MindFlock logs, System
 logs, the Assistant chat, a verify watch window, an extension pane such as a
@@ -421,18 +457,31 @@ buttons did nothing there.
 Left to right: the ⠿ grip, the session's name, the tabs (**Agent**,
 **Terminal**, **Diff**, **Map**, **Queue**, and **Thread** once the session has
 workers or messages), the guided next-step button, ⏩
-[Fast-track](#fast-track-), the cost chip, **History**, **⋯** and **−**.
+[Fast-track](#fast-track-), the cost chip, **History**, **❚❚ Pause** (or
+**▶ Resume**), **⋯** and **−**. Under the header, a one-line **Task:** bar
+names what the session was asked to do — its newest prompt from the agent's
+transcript, or, until there is one (or for an agent MindFlock can't read a
+transcript of), the task this browser started it with; the ❯ arrow drops the
+whole prompt over the terminal.
 
+- **⋯ is the session's one menu** — the same model as the sidebar row's ⋯
+  (see [Session row actions](#session-row-actions-expand-a-sidebar-row-with-)),
+  less the tabs this header already shows, plus **Browse history**.
 - **Calm header.** In the [calm first hour](#layout), or when a pane is
   narrower than 560 px, the header shows name · **Agent** / **Diff** ·
-  **Commit…**, and folds **Terminal**, **Map**, **Queue**, **Fast-track…**,
-  **Browse history** and the cost chip into **⋯** — the next-step button is
-  never the thing scrolled out of view. A tab you are on, a Queue with
-  something in it and a fast-track someone set stay in the row.
+  the next step, and leaves **Terminal**, **Map**, **Queue**, ⏩ and the cost
+  chip to **⋯** (Queue prompt… and Fast-track… are in it always; Terminal, Map
+  and Browse history under its **More**). A tab you are on, a Queue with
+  something in it and a fast-track someone set stay in the row. A narrow pane
+  draws Pause as its glyph alone.
+- **Commit…** shows only once there is something to commit (uncommitted
+  files, untracked included); until then the header has no lead button and
+  the state chip says what the agent is doing. On hover: *Commit this
+  session's changes — you check the message first. Next: Push, then Open PR.*
 - **⋯ → Checklist…** (any header, when the session has a branch) opens Verify
-  on that branch's checklist — also on the row's › menu.
-- **Commit…** says what it does on hover: *Commit this session's changes — you
-  check the message first. Next: Push, then Open PR.*
+  on that branch's checklist — also on the row's ⋯ menu. When a checklist
+  exists, its verdict chip (*✓ Verified*, *✗ Failed*, *3/5 checked*) sits beside
+  the PR chip and opens it in one click.
 - **An agent that isn't installed, or isn't signed in.** When the session's
   agent CLI is missing on this computer (`/api/setup`'s `logins`), a line over
   the terminal says so with **Install <agent>…** (the Setup checklist), and the
@@ -545,21 +594,35 @@ session. That follow-up is the browser's (`submitMakePr` in
 `/make-pr` route's, so a PR opened from `/m` or by Fast-track at `pr` depth
 leaves the ladder still asking for **Merge** until someone presses ↺.
 
-## Session row actions (expand a sidebar row with ›)
+## Session row actions (expand a sidebar row with ⋯)
 
-Copy path · **Commit…** · **Push** · **Open PR** · **Merge PR** ·
-**View PR ↗** · **Checklist…** (when the session has a branch: Verify on that
-branch's checklist, `openDialogFor("verify", branch)`) · **Fast-track…** (opens the pane's [⏩ picker](#fast-track-)) ·
-**Split into parallel pieces…** · **Move out of {team run}** for a team run member ·
-**Message…** · **Run checks now** · **Rename…** · **Duplicate session**
-(`Ctrl+K D`; a second in-place session on the same worktree) ·
-**Open / focus <IDE>** (`Ctrl+K O`; row double-click does the same) ·
-**Hide/Show window** (`Ctrl+K H`; the session keeps running) · **Open preview
-↗** when the session serves a port · **Pause session** (*stops the agent;
-keeps it in the sidebar to resume*) / **Resume session** · then the two ways to
-leave a session: **✕ Close** and **Delete…**. Every verb's label, shortcut and
-when-it-applies rule comes from one table (`lib/sessionActionTable.ts`) that this
-menu, the command palette and the `Ctrl+K` chords all read. A row whose workspace folder is gone offers only
+A session has **one menu**, opened from the row's **⋯** (an accordion under
+the row) or the pane header's **⋯** (a popover) — one model
+(`lib/sessionMenu.ts`) drawn by one component (`sidebar/SessionMenu.tsx`), in
+groups:
+
+- **Work** — **Message…** (`Ctrl+K S`) · **Queue prompt…** *runs when idle*
+- **Ship** — **Commit…** (only once there is something to commit) · **Push** ·
+  **Open PR** · **Merge PR** once there is a PR · **View PR ↗** ·
+  **Fast-track…** (opens the pane's [⏩ picker](#fast-track-), with the current
+  choice under it) · **Checklist…** (when the session has a branch: Verify on
+  that branch's checklist, `openDialogFor("verify", branch)`) · **Run checks
+  now** · **Bring work home…** on a shared folder
+- **Session** — **Rename…** · **Pause session** (*stops the agent; keeps it in
+  the sidebar to resume*) / **Resume session**
+- **More ▸** (folded) — **Terminal** · **Code map** · **Thread** · **Browse
+  history** (pane only) · **Split into parallel pieces…** · **Move out of {team
+  run}** for a team run member · **Duplicate session** (`Ctrl+K D`; a second
+  in-place session on the same worktree) · **Open in <IDE>** *your code editor*
+  (`Ctrl+K O`; row double-click does the same) · **Open preview ↗** `:port`
+  when the session serves one · **Select** (`Ctrl+click`) · **Hide/Show
+  window** (`Ctrl+K H`; the session keeps running) · **Re-run worktree setup**
+  after a failed one · **Copy folder path**
+- then the two ways to leave a session: **✕ Close** and **Delete…**.
+
+Every verb's label, shortcut and when-it-applies rule comes from one table
+(`lib/sessionActionTable.ts`) that this menu, the command palette and the
+`Ctrl+K` chords all read. A row whose workspace folder is gone offers only
 **Delete — remove session**.
 
 **Pause keeps your work, and keeps the session here.** Pause only stops the
@@ -1412,19 +1475,30 @@ nothing at all once the approval lands. Like every PR signal it is seeded
 silently on first sight, so a restart never re-announces an approval that was
 already there, and a failed lookup is never a withdrawal.
 
-**Verify has four rules of its own, all default-off.** They ride the same narrow
-events the Verify dialog refetches on, one rule per event — folding the halves
-together would silence the case most worth hearing about:
+**Verify has six rules of its own.** They ride the same narrow events the
+Verify dialog refetches on — folding the halves together would silence the case
+most worth hearing about. The three that are bad news or "your turn" are **on by
+default**; the ambient ones are opt-in:
 
-| Rule | Event | Means |
-|---|---|---|
-| `verify_plan_ready` | `session.test_plan_ready` | A checklist got written — there are steps worth showing |
-| `verify_plan_failed` | `session.test_plan_failed` | The generation or rewrite produced no checklist at all |
-| `verify_run_finished` | `session.test_plan_checked` | An agent finished working a checklist |
-| `verify_run_gave_up` | `session.test_plan_gave_up` | A run was released without ever writing its answers |
+| Rule | Event | Default | Means |
+|---|---|---|---|
+| `verify_plan_failed` | `session.test_plan_failed` | on | The generation or rewrite produced no checklist at all |
+| `verify_plan_due` | `session.test_plan_due` | on | The work shipped and its checklist is ready to check |
+| `verify_run_failed` | `session.test_plan_checked` with `new: "failed"` | on | An agent's check found a failed step |
+| `verify_plan_ready` | `session.test_plan_ready` | off | A checklist got written — there are steps worth showing |
+| `verify_run_finished` | `session.test_plan_checked` | off | An agent finished working a checklist |
+| `verify_run_gave_up` | `session.test_plan_gave_up` | off | A run was released without ever writing its answers |
 
-They are opt-in because a flock that pushes all day writes one plan per session
-per branch, which is ambient rather than actionable. A **push cannot carry the
+`verify_plan_failed` was opt-in before round 4 (`was_opt_in`, so a saved choice
+is kept). `verify_run_failed` matches because the emitter stamps `new: "failed"`
+on a check with any failed step — a rule sees `old`/`new`, never `data`.
+`verify_plan_due` is `ntfy: False`: its phone push is the driver's own
+at-most-once announcement (`_notify_test_plan_due`), which honours this rule's
+switch, so one toggle governs both channels. The ambient rules stay opt-in
+because a flock that pushes all day writes one checklist per session per branch.
+The bell's history feed does not list these events yet (see
+`NotificationsBell.notifFromEvent`); the app toasts "… shipped to main — its
+checklist is ready in Verify" when one comes due. A **push cannot carry the
 numbers**: the templates fill `{session}` and nothing else, so where the in-app
 toast says "8 passed, 3 need your eyes" the push says to open Verify — the
 envelope's `failed` / `needs_you` are for the browser, and a body that invented
@@ -1457,11 +1531,15 @@ notification fires either way.
   open on a secure origin (HTTPS or localhost), so it is silent on a plain-http
   tailnet URL and says so in the toggle's status line.
 - **Phone push (ntfy)** — optional, off until you turn it on, in the
-  screen's **Advanced** fold. The *server*
+  screen's **Phone alerts (ntfy)** fold. The *server*
   publishes to an [ntfy](https://ntfy.sh) topic your phone subscribes to, so an
-  alert reaches you with MindFlock closed and no tab anywhere. Set a topic
-  (**Generate** offers a random one), scan the QR into the ntfy app, and
-  **Send a test** confirms the round trip; the row afterwards reports the last
+  alert reaches you with MindFlock closed and no tab anywhere. **Set up** (the
+  Phone alerts row) generates a long random topic AND saves it when none is
+  saved, so the topic and its QR stay the same on every visit (**Generate**
+  picks a new one; the empty field's grey text is just "press Generate",
+  never an unsaved name). Scan the QR into the ntfy app, and
+  **Send a test** confirms the round trip (with no topic it is disabled and
+  says *Needs a topic first: press Generate.*); the row afterwards reports the last
   push (or why it failed). Point **Server** at your own ntfy instance to keep
   everything in-house, and give **Access token** a value only if the topic is
   protected — **Clear** beside it removes a saved one, since blanking the field
@@ -1614,8 +1692,10 @@ instead. `Ctrl` means `Cmd` on Mac throughout. Press `?` in the app for the
 live cheat-sheet — it is generated from the same table that drives the
 bindings.
 
-The sheet is also the editor: rebindable rows highlight on hover — click one,
-press the new combo (`Esc` cancels), and it takes effect immediately. The
+`Esc` closes the sheet. It is also the editor, once you ask for it: **Change
+keys** in its header turns the rows rebindable (they highlight on hover) —
+click one, press the new combo (`Esc` cancels the recording), and it takes
+effect immediately; **Done** leaves the mode. The
 row's `+` button adds an *extra* combo instead of replacing (starting from
 the defaults, so an action can answer to several combos). Chord rows rebind
 their second key (the `Ctrl+K` prefix is fixed). A `↺` next to a customized
@@ -1677,11 +1757,19 @@ because it is the hot path. Ticket is described further down.
 The Session tab is two pages, as in v0.7: a compact **Describe** card it opens
 on (*What do you want to work on?* — see
 [describe it in a sentence](#new-session-dialog-describe-it-in-a-sentence)),
-and the full form behind it (**Set it up myself instead**, or **Review details
-first** to have the model fill it in). The form has **← Back** to the sentence.
-The caret starts in the sentence box; after a refused create the dialog
-reopens on the form with the caret in **Name**, since the form is what needs
-fixing.
+and the full form behind it (**Set it up myself instead**, which carries what
+you typed into the Task, or **Review details first** to have the model fill it
+in). The form has **← Back** to the sentence. The caret starts in the sentence
+box; after a refused create the dialog reopens on the form with the caret in
+**Name**, since the form is what needs fixing.
+
+**What you type is never thrown away.** Closing New — or a trip to Intake,
+Settings or anywhere else — keeps the sentence, the form and the page you were
+on; the next opening shows them as you left them. Only a **Create** (or
+Intake's **Start together…**, which opens New on its own list) starts fresh,
+and **Clear** — beside the box on page 1 and beside **← Back** on the form,
+shown while something typed is in it — empties it on purpose. A Task the
+opening's own last-used template wrote doesn't count as typed.
 
 Every pane hangs from a fixed top edge and is its own natural height, so
 switching tabs or opening a fold never moves the card's top: a centred card
@@ -1694,30 +1782,45 @@ scroll; at 420 px the fields stack and Fast-track's choices wrap.
 
 **The form, in order:** the **Templates** strip (only once a template exists),
 **Folder** and **Agent**, **Task**, **Works in**, then **More options** (shut).
-The footer has **Save as template…**, **← Back** and **Create**.
+The footer has **Save as template…**, **Clear** (while there is a draft),
+**← Back** and **Create**.
 
 - **Folder** — with *Folders you might mean — click one to use it* under it
   (**Recent**, **Started in** = the folder MindFlock was started in, **Home**;
-  📦 git repo · 📁 plain folder).
+  the 📦 git repo / 📁 plain folder legend is the head's tooltip). The box is
+  left out when its only suggestion is the folder already in the field.
 - **Agent** — the agents this device has; one that isn't installed reads
   *codex (not installed)* (`GET /api/providers/status`, this device only — an
   unknown answer never blocks). The default never starts on a missing agent
   when another is installed. Picking a missing one shows *<agent> isn't
   installed on this device. Install it in Settings → Agents, or pick another
   agent.* under the field, and **Create** (and page 1's **Create session**)
-  refuses — a session would otherwise sit "Idle" on *command not found*.
+  refuses — a session would otherwise sit "Idle" on *command not found*. An
+  installed agent `GET /api/setup` knows is NOT signed in gets *<agent> isn't
+  signed in yet — a session would stop at its sign-in screen.* **Sign in…**
+  (Settings → Agents) — under the field and on page 1. A note, not a block.
 - **Task** — what the agent starts on (blank starts it idle), always on the
-  form, with **Insert a saved prompt…** (built-ins first, then yours) and
+  form, with **Insert a prompt…** (built-ins first, then yours) and
   **Manage…**, which opens the Prompts dialog and comes back to this form as
-  it was.
+  it was — there, clicking a prompt puts it in this Task box (no *Paste
+  into*: you are making a new session, not talking to a running one).
 - **Works in** — two radios, on the form: **Separate worktree** `recommended`
   (*— its own branch, so several sessions can run at once*) — **the default** —
   and **This folder directly** (*— edits your checkout as it is, on its current
   branch*). Under the worktree, for a git folder, the branch it will cut:
   *New branch `me/add-readme-section-about-setup` from main* (the configured
   prefix from `GET /api/repos/check`'s `branch_prefix`, plus the Name or the
-  name made from the Task — the server numbers a taken one `-2`). For a folder
-  with no repo it says the session will run in the folder itself instead.
+  name made from the Task). It is the **real** name: a name made from the task
+  that another session already has is numbered here exactly as the server
+  numbers it (`session_create.free_title` — titles and renames), *New branch
+  `me/add-readme-section-about-setup-2` from main — “add-readme-section-about-setup”
+  is taken, so this one is numbered*. A typed Name another session has says so
+  (the server refuses it). With no Task yet it reads *New branch `me/…` named
+  from your task*. When other sessions on this device already work in this
+  repo (any way; Verify's runs aside), one line says who: *“<session>” is
+  already working in this repo — a separate worktree keeps you apart.* For a
+  folder with no repo it says the session will run in the folder itself
+  instead.
   Picking **This folder directly** while another session on this device
   already edits that folder directly warns *“<session>” is already editing
   this folder directly. Pick “Separate worktree” so they don't overwrite each
@@ -1725,11 +1828,15 @@ The footer has **Save as template…**, **← Back** and **Create**.
 - **More options** — its summary names anything in it that isn't the default
   (*named x · fast-track on · from main · flags*), else *name, fast-track,
   base branch, flags*. Inside: **Name** (*optional; empty names it from the
-  task* — see below), **Fast-track to**, **Auto-split**, **Provision the
-  worktree** (*also run the repo's setup and warm test caches* — a box on top
-  of the separate worktree, with the workspace strategy), **Base branch**,
+  task* — see below), **Fast-track to** (*Ask me before it ships* reads
+  *(needs fast-track)* while it is Off), **Auto-split** (*Lets the agent break
+  a big task into up to 3 parallel sessions — you approve the split first.*),
+  **Provision the worktree** (*also run the repo's setup and warm test caches*
+  — a box on top of the separate worktree, with the workspace strategy),
+  **Base branch** (drawn at once, *Loading branches…* until the list lands),
   **Create a git repo in this folder** (only for a folder that isn't a repo
-  yet), **Plan first** and the **Launch flags** fold.
+  yet), **Plan first** (*— the agent lists the files it will change and waits
+  for your OK (Map tab)*) and the **Launch flags** fold.
 
 **Names come from the task.** With the Name empty, a session is named from
 its Task: the first line's first few words, filler dropped, lowercased and
@@ -1757,25 +1864,39 @@ on create. **Ctrl/Cmd+Enter** submits the dialog from anywhere in it.
 **Save as template…** opens an inline name row above the footer (Enter saves,
 Esc cancels without closing the dialog; never a `prompt()`) and saves the
 **whole form**: folder, agent, where it works, provisioning, git init, Task and
-fast-track (with *ask me before it ships*). Saving over a template that has a
-schedule keeps the schedule. The strip appears (or updates) at once — no
-reopen.
+fast-track (with *ask me before it ships*) — not Plan first or Auto-split.
+Saving over a template that has a schedule keeps the schedule. The strip
+appears (or updates) at once — no reopen — and the toast (6 s, clickable)
+says where: *▶ runs it and ⏰ schedules it, in Templates at the top of New.
+Click to open Templates.*
 
-**One Templates list.** The **Templates** strip (*Templates — click one to
-fill the form*) has one chip per template — a chip fills the form, fast-track
-included, and opens More options when the template set something there; the
-Name is left empty so the session is named from its task — and **Manage…**,
-which opens the **Templates** dialog (also the palette's **Templates…**).
+**One Templates list.** The **Templates** strip (*Templates — ▶ runs one now ·
+⏰ schedules it · its name fills the form*) is on **both pages**: under the
+sentence box on page 1 (not for an Intake batch) and at the top of the form.
+Each template is one pill: its **name** fills the form, fast-track included,
+and opens More options when the template set something there (on page 1 it
+also moves to the form; a template with no task takes the sentence); the Name
+is left empty so the session is named from its task. **▶** starts a new
+session from it now (`POST /api/templates/{name}/run`, greyed with the reason
+when it has no folder) and New steps aside, keeping your draft; **⏰** opens
+the Templates dialog on that template's editor with its schedule on.
+**All templates…** opens the **Templates** dialog (also the palette's
+**Templates…**). ▶ and ⏰ are this device's: they are not drawn when the
+session would run on another device.
 Closing that dialog brings New back **as it was left**, with the list
 reloaded. The dialog opens on one line: *A template is a saved session setup —
 folder, agent and task — that starts a **new** session: now, or on a schedule.
 To send text to a session that's already running, use Prompts.* Each card
 has **▶ Run now**, **Schedule…**, **Edit** (inline: Name, Agent — a picker of
 this device's agents, *Your default agent* first — Folder *— needed to Run now
-or schedule*, Task, Separate worktree / This folder directly / Provisioned
-worktree, git init, the schedule, and **Fast-track** *— how far a session from
-it ships itself*: Off / Commit / Push / Open PR / Merge when green, plus *Ask
-me before it ships*) and **Delete**, which asks on an inline row — *Delete
+or schedule*, Task, **Works in** — the New form's own controls and words:
+**Separate worktree** `recommended` with **Provision the worktree** (and its
+workspace strategy) as a box under it, **This folder directly**, **Create a
+git repo in this folder** — the schedule, and **Fast-track to** *— how far a
+session from it ships itself*: the New form's segmented Off / Commit / Push /
+Open PR / Merge when green, plus *Ask me before it ships*; picking a rung
+moves *This folder directly* to the worktree and the other way round, as in
+New) and **Delete**, which asks on an inline row — *Delete
 “<name>”? It goes from every device.* **Delete** / **Keep** — and checks the
 delete happened (*“<name>” was already gone*). **+ New template** adds one.
 Templates live on the server (`/api/templates`, synced between devices).
@@ -1918,18 +2039,22 @@ text box — and the full form is page 2. The box is the widest of the three way
 to fill the form in (a sentence, a template chip, or by hand), and **nothing in
 it is submitted**: it wears the same card as the Templates and folder-suggestion
 strips rather than looking like a second form stacked on the first. Under it,
-*Your agent reads this and fills in the folder, the session name and its first
-instruction. **Review details first** shows them to you before anything is
-created; **Create session** starts right away.* and two examples (*Examples:
-start a new project called invoice-parser · add metrics to billing, in a
-worktree*).
+*__Create session__ starts it now in **<folder>**, with what you typed as its
+task. __Review details first__ has your agent pick the folder, name and
+options, and shows them to you before anything starts.* — the folder named is
+the one the form holds (the last-used or best suggestion; with none, *needs a
+folder — it opens the form with what you typed as the task*) — then two
+examples (*Examples: start a new project called invoice-parser · add metrics
+to billing, in a worktree*) and *Starting from a ticket, pull request or
+issue? **Open Intake***.
 
 Three actions sit under it, in increasing order of commitment, each named for
 its outcome rather than for the app's own vocabulary:
 
-- **Set it up myself instead** — straight to page 2. Nothing is read and no model
-  runs. It cannot be dropped: every opening lands here, so it is the only route
-  to the form for someone with no coding CLI installed.
+- **Set it up myself instead** — straight to page 2, with what you typed as the
+  Task (a Task you edited since an earlier trip is kept). Nothing is read and
+  no model runs. It cannot be dropped: it is the only route to the form for
+  someone with no coding CLI installed.
 - **Review details first ↵** — the primary (accent) button, because it is
   what Enter in the box does (hidden for an
   Intake batch, which has no single form to fill in). Sends the sentence to
@@ -1943,17 +2068,22 @@ its outcome rather than for the app's own vocabulary:
   so without it a sentence nobody has resolved yet would become a create in
   whatever folder the pre-fill left behind. The button is **`type="button"`**
   for the same reason. Shift+Enter starts another line.
-- **Create session** — the secondary button: start now from what you typed, without reading the
-  details. The one thing it does *not* skip is a folder that does not exist;
-  its refusal says to *press Create session again* or *use Set it up myself
-  instead*.
+- **Create session** — the secondary button: starts the session **now**, in
+  the folder the help line names, with the sentence as typed as its Task, the
+  form's other choices as they stand, and the name made from the task — no
+  model turn, nothing to wait for (pressed during a Review read, it drops the
+  read). A refusal (no folder, a missing agent, a folder to confirm) opens the
+  form with the sentence already in Task. After **Review details first** and
+  **← Back**, it acts on that plan instead of reading again.
 
 While a turn is in flight **the button that was pressed** shows a ring, a word
 and a clock — **Reading… 0:04**, then **Still reading… 0:09** after 8 s. The
 read gives up at **30 s** (the server's own budget, `session_plan.TIMEOUT_PLAN`,
 is the same): *The agent didn't answer within 30 seconds.* with **Fill the form
 with what I typed**, which opens the form with the sentence as its Task. Any
-other failure says why, *— fill the form instead.*, and offers the same button.
+other failure says why and offers the same button — a CLI known not to be
+signed in says *claude isn't signed in yet — sign in under Settings → Agents*
+rather than *claude exited 1*.
 A **Cancel** link appears beside the box, which goes read-only rather than
 disabled so the caret and the selection survive the wait. Create on the form is
 held while a turn is reading.
@@ -2055,13 +2185,14 @@ server and follow you between devices. They have three doors, one job each:
   more are running ("running" = status `running` or started, but not paused;
   verify sessions are left out; *All* sends once per session). Both surfaces
   use one paste path, `lib/promptPaste.ts`.
-- **New's Task box** can start from one: **Insert a saved prompt…** sits
+- **New's Task box** can start from one: **Insert a prompt…** sits
   beside the **Task** label. Built-ins ship for the common loops — *Fix
   failing tests*, *Address PR review comments*, *Write tests for recent
   changes*, *Refactor for clarity — no behavior change*. Picking one fills the
   Task; edit freely before creating. Adding and deleting saved prompts happens
-  in the Prompts dialog (**Manage…**); the form's one save is **Save as
-  template…**, which saves the whole setup.
+  in the Prompts dialog (**Manage…**, where — opened from New — a click puts
+  the prompt in the Task box and there is no *Paste into*); the form's one
+  save is **Save as template…**, which saves the whole setup.
 
 All three read the same list: the templates that hold a prompt
 (`/api/templates`, through `lib/presets.ts` over `lib/templates.ts`, with a
@@ -2076,7 +2207,9 @@ a same-named different one is saved as *<name> (saved prompt)*.
 
 One checklist, shown in one place at a time. On a genuinely first launch the
 welcome tour opens once over the grid's first-run card (below); nothing else
-opens by itself. UI store state
+opens by itself. It counts as seen (the synced `welcome_tour` pref) when it is
+closed — **Get started**, **Skip** or `Esc` — not when it first shows, so a
+reload halfway through brings it back. UI store state
 (`state/store.ts`: `hintsEnabled`, `dismissedHints`, persisted in
 `localStorage`) covers the hints; the checklist's state is the server's.
 
@@ -2341,19 +2474,21 @@ ingestion has queued it, so `queued` narrows a repo to what is about to start on
 its own and `already handled` finds what it skipped. **Filtering happens before
 grouping**, so every heading's count describes what is under it and a repo or a
 workflow state with no match drops out instead of leaving an empty group behind.
-The one number that ignores the filter is the **+ Add bucket…** menu's per-state
+The one number that ignores the filter is the **+ Show state…** menu's per-state
 count, because that menu is a standing choice about which states this panel
 shows at all (`intake/search.ts` holds the four rules, one per list).
 
-**Tab strip with live counts** — **Tickets**, **Pull requests**, **Issues**,
-**Auto-start** (keys `tickets` | `prs` | `issues` | `autostart`), a horizontal
+**Tab strip with live counts** — **Tickets**, **GitHub PRs**, **GitHub issues**,
+**Auto-start** (keys `tickets` | `prs` | `issues` | `autostart`, unchanged — the
+GitHub tabs say "GitHub" so they no longer read as a second home for the GitHub
+Issues ticket provider), a horizontal
 strip rather than Settings' long left nav because they are peers you flip
 between while reading. Each badge counts what needs you: the rows on that tab
 that are **ready to start** (what auto-start would take), not every row listed —
-and the **Auto-start** badge turns grey when nothing is switched on, since those
-rows are waiting rather than about to go. It is still never a total. That distinction is
+and the **Auto-start** badge turns grey and says *N waiting* when nothing is
+switched on, since those rows are waiting rather than about to go. It is still never a total. That distinction is
 the whole of it: counting every ticket the provider ever assigned you read `1221`
-over a list of 52, because done states are parked behind **+ Add bucket…**, so
+over a list of 52, because done states are parked behind **+ Show state…**, so
 the badge and the panel go through one shared bucket filter (`intake/buckets.ts`)
 and cannot disagree. A tab with nothing (or an unconfigured integration, which
 502s) shows no badge at all rather than a `0` that turns into `12` a second
@@ -2369,11 +2504,19 @@ moving the tab strip under the cursor.
 **Pause intake.** A band above the tabs says what auto-starts right now
 (*Auto-start is on for tickets and PR comments.*) with one **Pause intake**
 button that turns every switch that is on OFF — tickets, PR comments and issues
-at once — and remembers (per device) which were on; **Resume intake** turns
-exactly those back on. Paused is "Pause was pressed and nothing is on since",
-never just "everything is off": a setup that was never switched on is *off*, not
-paused. While paused the band is amber, the PR / Issues switches say *Intake is
-paused*, and every row chip reads *auto-start paused* (`intake/pause.ts`).
+at once — and records which were on in the server's settings
+(`general.intake_paused`, per device like the ticket switch), so a reload, the
+desktop app or another browser on this machine all still read *paused*;
+**Resume intake** turns exactly those back on and clears the record. Paused is
+"Pause was pressed and nothing is on since", never just "everything is off": a
+setup that was never switched on is *off*, not paused, and turning a switch back
+on by hand ends the pause. The button is always on screen — disabled, saying
+why, while nothing auto-starts — and with everything off the band offers
+**Turn on…**, which goes to the tab whose switch does it. While paused the band
+is amber, the switches (here and in the sidebar) are striped amber with *Intake
+is paused — Resume intake at the top turns it back on*, and every row chip
+reads *auto-start paused* (`intake/pause.ts`). **New → Ticket** reads the same
+switch and pause, so it never says auto-start is on while Intake says off.
 
 **Chips follow the switches.** A row that passes every filter says
 **will auto-start** only while its kind's switch is on; otherwise it reads
@@ -2506,19 +2649,42 @@ credential.
   **Claim label (on start)** — whose hint says it assigns the ticket to you,
   except on an *Anyone's* source where it only labels it — the optional
   Test-filled account ids, Jira's **Project key**). The card's footer is its save
-  line (*Saving…* / *Saved ✓* / *Not saved*, every edit) and **Remove**; its pill
+  line (*Saving…* / *Saved ✓* / *Not saved*) and **Remove**; its pill
   reads *Can't connect* with the reason when the last Test failed or the listing
-  couldn't reach it. Until a Test has passed the state picker is disabled and says
-  *Run Test to load your workflow states*; a saved state whose name isn't known
-  yet shows as *Saved state*, and a chip's ✕ reads *Stop auto-starting
-  "Ready for MindFlock"*, never the state's id. The work list reads each source's
+  couldn't reach it. Text fields **save as you type** (on a short pause, on blur,
+  on Enter, and when the dialog closes — `intake/autosave.ts`), and the save line
+  reads *Saving…* while any field holds text not sent yet, never *Saved ✓*.
+  **+ Add ticket source** preselects no tracker (*Choose a tracker…*); the rest
+  of the card appears once one is picked, and picking **GitHub Issues** points at
+  the **GitHub issues** tab for "every new issue in a repo". **The safe
+  default:** a source added here auto-starts **nothing** until at least one
+  auto-start state (or label) is picked (`needs_filter` on the source; the card
+  says *None picked — nothing auto-starts from this source yet*, rows say *no
+  auto-start state picked yet*, and the pipeline's scan skips the source —
+  `providers.base.auto_start_waiting`). **Any state — start every ticket assigned
+  to me** stays in the state menu as an explicit choice; sources saved before
+  this keep their old "empty = every state" rule. Until a Test has passed a
+  state can be **typed** (*Type a state name*); it is swapped for the tracker's
+  real state once a Test lists one by that name, a typed name the tracker lacks
+  shows as a red chip, and the server starts nothing on a name it can't match
+  (Shortcut would otherwise drop it and search every state). A saved state whose
+  name isn't known yet shows as *Saved state*, and a chip's ✕ reads *Stop
+  auto-starting "Ready for MindFlock"*, never the state's id. **Whose tickets**
+  shows the hint for the option that is selected. The work list reads each source's
   auto-start filter from its **saved** settings, so a source the tracker can't
   reach still says *Auto-start only takes tickets in 1 saved state* — never "no
   filter is set". A source that can't be listed is said once, in its own group,
   by its name, in words (*Shortcut rejected the token — open its card below to fix
   it*) — no raw API JSON, no internal id like `sc`, and no group at all for a card
-  that hasn't been saved yet. Rows say **Start**; **Merge into…** lives under the
-  row's **⋯**. Then
+  that hasn't been saved yet. Rows say **Start** — the quiet weight on a row that
+  will auto-start anyway, so the *will auto-start* chip carries it — and every
+  row names its repo (*→ payments-api*; on a several-repo source, which one and
+  why, with a **Repo** pick under **Options**). **Combine with another ticket
+  (deletes this one)…** lives at the bottom of the row's **Options**, under *On
+  the tracker*, never beside Start; Escape closes that drawer, then the row's
+  Options, before the dialog. A Start the tracker refuses says so in one
+  sentence (*Shortcut rejected the API token. Fix it in Intake → Tickets…*),
+  never its raw JSON. Then
   **Assigned tickets** — the slowest of the three fan-outs (~3 s: a provider
   search per source plus a `git ls-remote` per repo). A **Shortcut** source
   lists what Shortcut's own boards show: archived stories, and stories under an
@@ -2689,7 +2855,7 @@ heading read as a stray line of copy and people did not find the tickets under i
 `GET /api/tickets` carries a `bucket_meta` map (`{bucket: {group, label}}`) so the
 UI nests without splitting strings: the provider reports the workflow (`group`)
 and the unqualified state (`label`) alongside the composite `name`, which stays
-the unique bucket key that `+ Add bucket…` / ✕ and `done_buckets` are indexed by
+the unique bucket key that `+ Show state…` / ✕ and `done_buckets` are indexed by
 (see `TicketProvider.list_states`). A provider with one workflow — or none, like
 Jira and Linear — reports an empty `group`, the level doesn't render, and the
 bucket keeps its own name. The two GitHub tabs have no analogous middle level:
@@ -2702,7 +2868,7 @@ is also why `GET /api/tickets` gained a top-level `source_labels` map covering
 **every** configured source — one that returned nothing, or errored, still needs
 a heading to say so under. Bucket **show/hide** is app-wide by name (choosing
 "I don't care about Completed" means it everywhere; done-type buckets start
-parked behind **+ Add bucket…**), while a bucket's **open/closed** state is per
+parked behind **+ Show state…**), while a bucket's **open/closed** state is per
 source, keyed `source::bucket`. Both live in `localStorage`
 (`mf_ticket_buckets`, `mf_ticket_buckets_open`, `mf_work_ticket_sources`;
 `mf_work_pr_groups` / `mf_work_issue_groups` for the repo groups) rather than
@@ -2756,9 +2922,11 @@ was. Every part of the probe is read-only and best-effort, and any failure answe
 **Duplicate tickets are merged away, in the tracker.** Two people file the same
 task constantly, and until this existed the queue's only answers were to start
 two sessions on it or to remember forever that sc-41 is "really" sc-38 — neither
-of which is visible to the person who filed the second one. So a ticket row
-carries a **Merge into…** button, under **Begin work** in the row's action
-column: pick another ticket from the *same* source, and
+of which is visible to the person who filed the second one. So a ticket row's
+**Options** end with **Combine with another ticket (deletes this one)…**, under
+an *On the tracker* heading (tracker housekeeping, kept away from **Start**):
+pick the ticket to keep from the *same* source, confirm (*Confirm — delete
+sc-41, keep sc-38*), and
 everything the duplicate has — description, acceptance criteria, comments and
 attached files — is appended to the survivor's description, a comment on the
 survivor records where it came from, and the duplicate is **deleted from the
@@ -3021,13 +3189,13 @@ developer it reads as pytest.
 **Two moments, one line each** — the dialog's intro says exactly this, and folds
 it into **How Verify works** once there are checklists to work:
 
-- **Before merge** — press **Check now** to check the branch.
+- **Before merge** — press **Check now** to check the branch. Every step passed
+  reads **Verified on branch**.
 - **After merge** — it comes back here to be checked again on the live branch.
 
-Checking before merge never costs the check after it: a run (or a full set of
-answers) on work that has not shipped leaves the checklist waiting in **Not
-shipped yet**, and when the work ships it comes back to **Not checked yet** like
-any other. The branch's answers are kept as history — the expanded checklist
+Checking before merge never costs the check after it: a branch whose every step
+passed sits under **Verified** as *Verified on branch*, and when the work ships
+it comes back to **Needs you** like any other. The branch's answers are kept as history — the expanded checklist
 says *"Checked before merge: every step passed, 2d ago. This is the check after
 merge."* — but they are not the current answer, and answers a person gave on the
 branch are not carried into the after-merge run. (Server side: a run made before
@@ -3046,7 +3214,7 @@ and every "why is nothing showing up?" is a question about which one hasn't:
    doing. One per branch, not per session: two sessions on the same branch of the
    same repo (a duplicated session, a repo adopted twice) share the checklist
    written under whichever pushed first, and a push from the other one refreshes
-   *that* plan rather than writing a second. It sits in **Not shipped yet** while
+   *that* plan rather than writing a second. It sits in **In progress** while
    the branch is reviewed and merged — with **Check now** on it, for checking
    the branch before you merge it. A later push always records the newest
    commit, and — *only while
@@ -3063,11 +3231,11 @@ and every "why is nothing showing up?" is a question about which one hasn't:
    pass asks `origin` whether each waiting checklist's sha is an ancestor of the
    live branch. **Merged is not deployed**, so that starts a clock rather than
    handing you the checklist: the row reads *"Merged 4m ago — waiting for it to
-   deploy"* until the repo's deploy window has passed, and only then does it move
-   into **Not checked yet**, raise the badge and (if ntfy is configured) push to
+   deploy"* (verdict **Waiting to ship**) until the repo's deploy window has
+   passed, and only then does it move into **Needs you**, raise the badge and (if ntfy is configured) push to
    your phone.
 
-   The window is **Deploy takes (minutes)** on the repo's Sources card, inheriting
+   The window is **Wait after merge (minutes)** on the repo's Sources card, inheriting
    the flock-wide `repository.deploy_delay_minutes`, which defaults to **5**. Set
    it to `0` where merging *is* shipping. It exists because checking too early is
    not merely early — you see the behaviour the change replaced and record a
@@ -3198,11 +3366,42 @@ owner"* — and it sits under the session's title. A checklist coming due three
 weeks later used to be `sc-1234-fix-filters` over a list of imperatives, leaving
 the reader to reconstruct the change from the steps.
 
-**Five groups, most urgent first.** **Not checked yet** (shipped, nobody has
-finished checking it — this is the badge, by construction), **Steps failed**,
-**Not shipped yet**, **Checked**, **Couldn't be written**. Each row carries one
-plain-English sentence saying whose turn it is and one button that does what the
-sentence says; everything rare is in the row's ⋯ menu.
+**Five groups, one axis, loudest first** (round 4). **Failed** (a step failed,
+or the checklist couldn't be written), **Needs you** (shipped and unchecked, or
+steps of yours still open), **In progress** (an agent is writing or checking it,
+or the branch hasn't merged and nobody has checked it), **Not verified** (a run
+finished with gaps nobody owes — steps never reached, or answered *Can't check*)
+and **Verified**. The badge counts the first two, by construction. Merged-or-not
+is never a heading; it is on the row.
+
+**Every row says its verdict first** — a pill before the sentence: **Verified on
+branch**, **Verified live**, **Failed**, **Couldn't be written**, **Agent
+checking**, **Being written**, **Waiting to ship** (merged, waiting out the
+deploy) or **n of m checked** (`planVerdict` in `verify.ts`). Then one
+plain-English sentence saying whose turn it is — a failure names its step:
+*"Failed: step 2 — POST /webhooks returns 200 (+1 more)."* — and at most one
+filled button: only a row asking something of **you** gets the accent button;
+every other row's button is a plain one. A failed row also has **Fix…** beside
+it. The landing chip reads **not merged** or **merged → main · 4m ago** (never
+"local" — the branch was pushed). Everything rare is in the row's ⋯ menu, which
+starts with **Open session**, **View diff** and **Open PR ↗** while the session
+is open.
+
+**"Check now" means one thing** — start the agent's steps — on the row, in the ⋯
+and in the intro. A checklist with no agent step says **Show steps** instead
+(the button only opens the steps), and one whose every step has an answer but
+some were *Can't check* reads *"Couldn't check 2 steps — not verified."* with
+**Show steps**, never "Answer 2 steps".
+
+**The legend is said once**, under the list: `you` = a person checks it ·
+`agent` = the agent does · Pass, Fail and Can't check are all answers, only Pass
+says it works · keys 1 2 3, u undo, n note.
+
+**The verdict outside Verify.** A session's sidebar row and pane head carry the
+same verdict as a small chip (`VerdictChip`, class `.vchip` — not `.stagechip`,
+which a pane head hides): *✓ Verified*, *✗ Failed*, *3/5 checked*, … Clicking it
+opens Verify on that branch. The chip matches a checklist by session title, then
+by repo + branch, so a duplicated window shows its sibling's checklist.
 
 **Finding one, and acting on several.** The list grows by one checklist per
 session branch per repo, so it has Recently-closed's two controls, reused rather
@@ -3214,7 +3413,7 @@ applies to what the filter is *showing*. The filter searches what the row shows
 because a checklist is remembered as "the one about the Grafana collage board"
 long after its number has stopped meaning anything.
 
-Selecting rows raises the bulk bar: **Check N** (only the ones a run would
+Selecting rows raises the bulk bar: **Check N now · M can't** (only the ones a run would
 actually take — a checklist that is still generating, one an agent is already
 working, or one with no agent step in it is counted out in the label rather than
 discovered as a wall of 409s) and **Delete selected**, which asks first and lists
@@ -3231,7 +3430,7 @@ and colours the step rows and the roll-up inside the plan use, so the three
 renderings cannot drift (and the whole thing is announced as a sentence: *"9
 steps: 5 passed, 1 failed, 2 need you"*). The
 two groups that are an ask carry the same arithmetic on their **heading** —
-*"Not checked yet · 7 · 3 steps need you"* — because a collapsed group was a
+*"Needs you · 7 · 3 steps need you"* — because a collapsed group was a
 number of checklists and said nothing about how much work was in them, or
 whether any of it was red. Triage used to mean expanding all seven.
 
@@ -3241,16 +3440,15 @@ so a failure arrives minutes later, on a background task. It lands on the plan,
 and the row now carries the first sentence of it (*"The verify session couldn't
 start."*) after whatever it says next, with the raw git or tmux line kept for
 the expanded body where there is room for it. Before that, `fail_run` put the
-plan back to **Not checked yet** and the row read exactly like one nobody had
+plan back to unchecked and the row read exactly like one nobody had
 pressed Run on. The failure is retracted when a later run reports, when the run
 is cancelled, and when the next one starts.
 
 **The sidebar bar says when something shipped broken.** The **Verify** dot goes
-red with a `✗N` count beside the due one when a checklist has a recorded
-failure. It is deliberately a separate number rather than added to the due
-count: *"3 to check"* and *"1 of them is broken"* are different questions with
-different urgencies, and a badge that answered both would answer neither. A
-failure is an answer, so it stays until the thing is fixed and re-checked.
+red with a `✗N` count when checklists are under **Failed** (a failed step, or one
+that couldn't be written). The top bar's badge counts them too, alongside Needs
+you; the red pill says how many of those are failures. A failure is an answer,
+so it stays until the thing is fixed and re-checked (or the checklist deleted).
 
 **Answering steps.** Expand a row and each step is labelled **you** or **agent**:
 `agent` is anything settleable from a shell or the agent's own tools — log
@@ -3262,8 +3460,8 @@ no tool for. Three answers, and all three count as *your* answer:
 - **Fail** — it didn't.
 - **Can't check** — you went and looked and could not get to it (staging is down,
   you have no account on it). Recorded with a reason, and **never** counted as a
-  pass: the checklist stops asking you, but its verdict stays *partial* and the
-  **Checked** heading says so (`N you couldn't check`).
+  pass: the checklist stops asking you, and it files under **Not verified** with
+  the verdict *n of m checked*.
 
 Pressing an answer is idempotent; **Undo** beside it is the way back. An answer
 the *agent* recorded shows as `blocked · agent`, which is it saying "a person has
@@ -3352,26 +3550,27 @@ right answer for a library, a CLI, or anything with no environment to point at �
 and the run exercises a fresh checkout of the live branch on this machine, which
 is what a green checklist then means.
 
-**Checking before merge is the primary button**, not a menu item. A checklist in
-**Not shipped yet** reads *"Not merged yet — check the branch now, or it comes
+**Checking before merge is the row's button**, not a menu item. A checklist in
+**In progress** that hasn't merged reads *"Not merged yet — check the branch now, or it comes
 back here after it reaches main"* with **Check now** beside it (it used to be
 ⋯ → **Check it early…**, behind a confirm warning that it closed the checklist
 for good — and, on a collapsed card, a press that did nothing at all). Running
 it, or answering every step by hand, keeps the checklist waiting; it comes back
-after merge (see *Two moments* above). A branch that passed reads *"Works on the
-branch — it comes back to be checked again after merge."*
+after merge (see *Two moments* above). A branch that passed is **Verified on
+branch** and reads *"Works on the branch — it comes back to be checked again
+after merge."*
 
 **A failed step has its next move beside it.** **Fix this…** on the step starts a
 session to fix it (the same route as ⋯ → **Fix what failed…**, scoped to that
 step); the session is told to reproduce the failure first.
 
 **Finishing a checklist doesn't make it vanish.** Answering the last step re-files
-it — usually under **Checked**, far down the list — so a notice stays where it
-was for a few seconds: *"✓ add-csv-export moved to Checked."* with **Show**,
+it — usually under **Verified**, far down the list — so a notice stays where it
+was for a few seconds: *"✓ add-csv-export moved to Verified."* with **Show**,
 which scrolls to it.
 
 **A checklist that couldn't be written can still be used**: add a step to it and
-it becomes an ordinary checklist (it leaves **Couldn't be written**, and the
+it becomes an ordinary checklist (it leaves **Failed**, and the
 generation error goes with it — it no longer describes the checklist).
 
 **Deep link for other surfaces.** `useUi.getState().openDialogFor("verify",
@@ -3465,15 +3664,18 @@ advanced settings** at the foot of the nav (`#settings-advanced-toggle`, with
 "*N* more screens" under it) reveals every other screen; **Hide advanced
 settings** puts them away again. The choice is the synced pref
 `prefs.settings_advanced` (cached in localStorage `mf_settings_advanced`), so it
-follows the person to all their devices, like the theme. The controls on a
-basic screen that only some people need sit in a collapsed **Advanced** fold
-on that screen (open by default in advanced mode): General's plan window
-budget and terminal scroll speed, Notifications' phone alerts (ntfy) and its
-expert alerts, Agents' keep-usage-windows-warm schedule and **Check another
-agent**, Workspace's live branch, fast-track depth and retryable pre-commit
-hooks, and Connections' other agents and its rows beyond what you use
-(devices and people, orchestration, databases, phone push, extensions,
-system). A control's long explanation sits in a small **Learn more** fold
+follows the person to all their devices, like the theme. There is ONE
+advanced mechanism: the power-user controls that live on a basic screen sit
+in an **Advanced** section (`AdvancedFold`) that basic mode does not render
+at all, and advanced mode shows as an open fold — General's plan window
+budget and terminal scroll speed, Agents' keep-usage-windows-warm schedule
+and **Check another agent**, Workspace's live branch, fast-track depth and
+retryable pre-commit hooks, and Connections' other agents and its rows beyond
+what you use (devices and people, orchestration, databases, phone push,
+extensions, system — so basic mode never calls a merely enabled extension
+"Connected"). Only Notifications' two optional folds — **Phone alerts
+(ntfy)** and **More alerts** — opt back into basic mode (`basic`), as closed
+folds. A control's long explanation sits in a small **Learn more** fold
 under its one-line hint (`LearnMore` in settingsMode.tsx). A deep link to an
 advanced screen — the palette, a Connections card, an in-screen link,
 `openSettings(...)`, a legacy key — still opens it in basic mode: the open
@@ -3514,8 +3716,17 @@ A few screens got quieter:
 - **Security**'s turn-off and **Regenerate**, and **Accounts**' **Remove
   anyway**, confirm in an inline row with **Cancel**. They used to be browser
   `confirm()`s, which do nothing in the desktop app.
-- Saving any screen toasts **Saved**, and the IDE toggle toasts *IDE
-  auto-adopt on* / *off*.
+- **Every save says "✓ Saved" right by the control** — text fields, numbers,
+  selects and toggles alike (`savedCue.ts`: the screens pane notes the control
+  last changed or left, and the save marks its label for a moment; a toast
+  only when no such control is on screen). A number field refuses a value it
+  can't take (below 0) with the reason under it — *Enter a number, 0 or more,
+  or leave it blank for no limit.* — instead of saving `-2` as "no limit".
+- **Search settings…** heads the nav (`#settings-search`, on the command
+  palette's own index, `palette/settingsSearch.ts`, synonyms included): the
+  matches list under the box as you type; ↑/↓ and Enter (or a click) open the
+  screen, scroll to the control (opening a fold around it) and outline it for
+  a moment; Escape clears the box before it closes Settings.
 - **Notifications** opens on **Where alerts go**: In MindFlock (the bell,
   always on), **Desktop notifications** (the only desktop on/off toggle; the
   bell carries no copy) and **Phone alerts** (**Set up** opens the ntfy fold),
@@ -3550,17 +3761,36 @@ A few screens got quieter:
 - **Connect GitHub** never shows "device flow is not configured": without a
   device flow the token path leads (the `repo` and `read:org` scopes named,
   the link opening GitHub's token page with both ticked), with the gh CLI
-  sign-in as a second button when gh is installed. **Test** and **Check I
-  can push** stay disabled until a credential is saved.
+  sign-in as a second button when gh is installed. The token path is three
+  numbered steps — **1** make a token (**Open GitHub ↗**), **2** paste it,
+  **3** **Save & test** (disabled with *Paste a token first.* beside it) — and
+  the answer appears right under step 3: *✓ Connected as @you* (then the Test
+  result) or *✗ Token rejected — GitHub says it is mistyped, expired or
+  revoked*. **Test** appears once connected (before that, step 3 is the test);
+  **Check I can push** is always available — it asks the repository's remote
+  with git and needs no token. Connected, the steps fold under **Use a
+  different token**.
+- **Workspace** answers *where do my worktrees live?* in one place (**Where
+  your worktrees live**, `GET /api/settings/workspace-paths`): the absolute
+  folder for **Sessions you start** (`<config dir>/worktrees`) and for
+  **Ticket and PR sessions** (the **Workspace folder** field — a relative one
+  anchored where the ticket pipeline runs, `~` expanded and stored expanded),
+  each with **Copy**. The folder is checked as you type: a missing one *will
+  be created*, an unwritable one or a file is flagged in red under the field,
+  and `MINDFLOCK_WORKSPACE_DIR` is named when it overrides the field. **How
+  ticket sessions copy the repo** (worktree or full clone, `engine.mode`)
+  moved here from Engine & updates.
 
 **Spacing.** Every screen runs on one rhythm (`--set-rhythm`, 24px, on
 `#settings-panel`): a field's label, control and hint sit 6px apart, the next
 field starts 24px below, so a hint always reads as part of the field above it.
 Section titles get 40px above and 16px below; cards and inline button rows
 use the same 4/8/12/16/24 scale. In a window narrower than 600px the nav
-wraps into a few short rows of tabs above the screen (group headings hidden;
-advanced mode's long list scrolls inside a capped height) and the ntfy fields
-stack their labels above the inputs.
+becomes a short stack above the screen — the search box, one `<select>` of
+the screens (`#settings-nav-select`, the same list as the buttons) and the
+advanced switch on its own line — instead of a wrap of tabs that re-flowed
+whenever the bold active tab changed width; the ntfy fields stack their
+labels above the inputs.
 
 - **Cursor auto-adopt** — adopt Cursor-opened workspaces as sessions.
 - **Per-session budget (USD, 0 = off)** (General) — cost guardrail: when a session's
@@ -4086,9 +4316,10 @@ stack their labels above the inputs.
 - **Session templates** — save a New-session dialog configuration under a name
   and refill it later (templates addon, `/api/templates`, synced between
   devices). A template only ever *starts* a session — CLI, repo, workspace
-  and an opening prompt; New's **Templates** strip lists them and its
-  **Manage…** (or the palette's **Templates…**) opens the Templates dialog.
-  A template's **Run now** (its card, or the palette's **Run template: …**)
+  and an opening prompt; New's **Templates** strip lists them on both pages
+  (▶ runs one, ⏰ schedules it) and its **All templates…** (or the palette's
+  **Templates…**) opens the Templates dialog.
+  A template's **Run now** (its card, its ▶ in New, or the palette's **Run template: …**)
   starts a fresh session from it with the prompt already sent, and an
   optional schedule (every day / weekdays at a time) starts one on its own.
   A template can carry a fast-track, so a scheduled one can end in a PR.

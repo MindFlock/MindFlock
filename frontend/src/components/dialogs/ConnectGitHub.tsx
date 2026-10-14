@@ -15,8 +15,12 @@
  *    --web` in a sign-in terminal as the second way when gh is installed.
  *    No build-internals sentence ("device flow is not configured") and no
  *    dead button: a person sees the way that works on this computer.
- * Test and the push check stay disabled until a credential is saved — before
- * that, all either could say is "no token".
+ * The token path is three numbered steps — make a token (the scopes named,
+ * the link ticks them) → paste it → Save & test — and the answer lands right
+ * under step 3: "✓ Connected as @handle" or why GitHub said no. The Test
+ * button appears once connected (before that, step 3 is the test); the push
+ * check needs no token (it asks the remote with git), so it is never
+ * disabled for want of one.
  * **Test** is real: POST /api/settings/test/github does a GET /user with the
  * token the one chain resolves plus one repo-access check against the first
  * configured repository. Then git's name/email (pre-filled from the account,
@@ -45,6 +49,7 @@ import { toast } from "../../lib/toast";
 import { useWsTerm } from "../../lib/wsTerm";
 import { notifyConnectionsChanged } from "../settings/screens/Connections";
 import { Modal } from "../Modal";
+import "../settings/connectGitHub.css";
 
 interface PushCheck {
   ok: boolean | null;
@@ -112,6 +117,8 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
   const [email, setEmail] = useState("");
   const [push, setPush] = useState<PushCheck | null>(null);
   const [test, setTest] = useState<TestLine | null>(null);
+  /** Step 3's answer: "Connected as @handle" or why GitHub said no. */
+  const [tokenResult, setTokenResult] = useState<TestLine | null>(null);
   const changeRef = useRef(onChange);
   changeRef.current = onChange;
 
@@ -134,9 +141,9 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
     void load();
   }, [load]);
 
+  // No toast: the dialog itself flips to "✓ Connected as @handle".
   const connected = useCallback(
-    async (login: string) => {
-      toast(login ? "GitHub connected — @" + login : "GitHub connected");
+    async (_login: string) => {
       await load();
       changeRef.current?.();
     },
@@ -176,50 +183,127 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
   const hasDevice = method === "device";
   /** gh can sign in here (installed, or offered by the server). */
   const hasGh = (st.methods || []).includes("gh") || !!st.gh?.installed;
-  const pasteBox = (
-    <div className="setup-acct-row gh-token-row">
-      <a href={st.token_url} target="_blank" rel="noopener noreferrer" className="gh-token-link">
-        Make a token on GitHub
-      </a>
-      <input
-        type="password"
-        className="gh-token-input"
-        aria-label="GitHub token"
-        placeholder="…then paste it here"
-        autoComplete="off"
-        value={token}
-        onChange={(e) => setToken(e.target.value)}
-        onClick={(e) => e.stopPropagation()}
-      />
-      <button
-        type="button"
-        className="gh-token-save"
-        disabled={!!busy || !token.trim()}
-        onClick={(e) => {
-          e.stopPropagation();
-          void run("token", async () => {
-            const r = await api<{ ok: boolean; login: string; error: string }>("/api/github/token", {
-              json: { token: token.trim() },
-            });
-            setToken("");
-            if (r.error) toast(r.error);
-            await connected(r.login);
-          });
-        }}
-      >
-        {busy === "token" ? "Checking…" : "Save"}
-      </button>
-    </div>
+  /** Save the pasted token (GitHub checks it first), then run the Test, all
+   * answered inline under step 3 — never a toast at the far edge. */
+  const saveToken = () =>
+    run("token", async () => {
+      setTokenResult(null);
+      setTest(null);
+      // A rejected token is a 400 carrying the reason: said here, inline.
+      let r: { ok: boolean; login: string; error: string };
+      try {
+        r = await api<{ ok: boolean; login: string; error: string }>("/api/github/token", {
+          json: { token: token.trim() },
+        });
+      } catch (e) {
+        setTokenResult({ ok: false, msg: errText(e) || "GitHub rejected this token." });
+        return;
+      }
+      if (!r.ok) {
+        setTokenResult({ ok: false, msg: r.error || "GitHub rejected this token." });
+        return;
+      }
+      setToken("");
+      setTokenResult({
+        ok: true,
+        msg: (r.login ? "Connected as @" + r.login : "Connected") + (r.error ? " (" + r.error + ")" : ""),
+      });
+      await connected(r.login);
+      try {
+        setTest(describeConnectionTest(await api<ConnectionTest>("/api/settings/test/github", { method: "POST" })));
+      } catch {
+        /* the save worked; Test stays one click away */
+      }
+    });
+
+  const tokenSteps = (
+    <ol className="gh-steps" id="gh-token-steps">
+      <li className="gh-step">
+        <span className="gh-step-n" aria-hidden="true">1</span>
+        <div className="gh-step-body">
+          <span className="gh-step-title">Make a token on GitHub</span>
+          <span className="set-hint gh-token-scopes" id="gh-token-scopes">
+            It needs the <code>repo</code> and <code>read:org</code> scopes. This link opens
+            GitHub's token page with both ticked.
+          </span>
+          <a
+            href={st.token_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="test-btn gh-token-link"
+            onClick={(e) => e.stopPropagation()}
+          >
+            Open GitHub ↗
+          </a>
+        </div>
+      </li>
+      <li className="gh-step">
+        <span className="gh-step-n" aria-hidden="true">2</span>
+        <label className="gh-step-body">
+          <span className="gh-step-title">Paste it here</span>
+          <input
+            type="password"
+            className="gh-token-input"
+            aria-label="GitHub token"
+            placeholder="ghp_… or github_pat_…"
+            autoComplete="off"
+            value={token}
+            onChange={(e) => {
+              setToken(e.target.value);
+              setTokenResult(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && token.trim() && !busy) void saveToken();
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </label>
+      </li>
+      <li className="gh-step">
+        <span className="gh-step-n" aria-hidden="true">3</span>
+        <div className="gh-step-body">
+          <span className="gh-step-row">
+            <button
+              type="button"
+              className="gh-token-save"
+              disabled={!!busy || !token.trim()}
+              onClick={(e) => {
+                e.stopPropagation();
+                void saveToken();
+              }}
+            >
+              {busy === "token" ? "Checking with GitHub…" : "Save & test"}
+            </button>
+            {!token.trim() && !tokenResult && <span className="set-hint">Paste a token first.</span>}
+          </span>
+          {tokenResult && (
+            <span
+              id="gh-token-result"
+              role="status"
+              className={"test-result " + (tokenResult.ok ? "ok" : "bad")}
+            >
+              {(tokenResult.ok ? "✓ " : "✗ ") + tokenResult.msg}
+            </span>
+          )}
+        </div>
+      </li>
+    </ol>
   );
 
   return (
     <div className="connect-github" id="connect-github">
       {st.connected ? (
-        <p className="gh-connected" id="gh-connected">
-          ✓ Connected{st.login ? " as @" + st.login : ""}
-          <span className="muted"> · {st.source === "gh-cli" ? "via gh" : st.source}</span>
-          {st.user_error && <span className="error"> — {st.user_error}</span>}
-        </p>
+        <>
+          <p className="gh-connected" id="gh-connected" role="status">
+            ✓ Connected{st.login ? " as @" + st.login : ""}
+            <span className="muted"> · {st.source === "gh-cli" ? "via gh" : st.source}</span>
+            {st.user_error && <span className="error"> — {st.user_error}</span>}
+          </p>
+          <details className="gh-token-fold" onClick={(e) => e.stopPropagation()}>
+            <summary>Use a different token</summary>
+            {tokenSteps}
+          </details>
+        </>
       ) : (
         <>
           {method === "device" &&
@@ -265,11 +349,7 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
             ))}
           {!hasDevice && (
             <div className="gh-token-lead" id="gh-token-lead">
-              <p className="set-hint gh-token-scopes" id="gh-token-scopes">
-                Paste a GitHub token with the <code>repo</code> and <code>read:org</code> scopes.
-                The link opens GitHub's token page with both ticked.
-              </p>
-              {pasteBox}
+              {tokenSteps}
             </div>
           )}
           {!hasDevice && hasGh && (
@@ -292,10 +372,7 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
           {hasDevice && (
             <details className="gh-token-fold" onClick={(e) => e.stopPropagation()}>
               <summary>Or paste a token</summary>
-              <p className="set-hint gh-token-scopes">
-                Needs the <code>repo</code> and <code>read:org</code> scopes.
-              </p>
-              {pasteBox}
+              {tokenSteps}
             </details>
           )}
           <p className="muted setup-hint">
@@ -326,6 +403,7 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
               type="button"
               id="gh-ident-save"
               disabled={!!busy || !name.trim() || !email.trim()}
+              title={!name.trim() || !email.trim() ? "Fill in both your name and email" : undefined}
               onClick={(e) => {
                 e.stopPropagation();
                 void run("identity", async () => {
@@ -340,46 +418,49 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
             </button>
           </div>
           <span className="set-hint">
-            Saved in your global git config (~/.gitconfig) when you click — the @users.noreply address
-            keeps your real email private.
+            {!name.trim() || !email.trim()
+              ? "Fill in both, then click Use these. "
+              : ""}
+            Saved in your global git config (~/.gitconfig) — the @users.noreply address keeps your
+            real email private.
           </span>
         </div>
       )}
 
-      <div className="setup-acct-row gh-test-row">
-        <button
-          type="button"
-          id="gh-connection-test"
-          disabled={!!busy || !st.connected}
-          onClick={(e) => {
-            e.stopPropagation();
-            void run("test", async () => {
-              const r = await api<ConnectionTest>("/api/settings/test/github", { method: "POST" });
-              setTest(describeConnectionTest(r));
-            });
-          }}
-        >
-          {busy === "test" ? "Testing…" : "Test"}
-        </button>
-        {test && (
-          <span className={"test-result " + (test.ok ? "ok" : "bad")} id="gh-connection-test-result">
-            {(test.ok ? "✓ " : "✗ ") + test.msg}
-          </span>
-        )}
-        {!test && (
-          <span className="set-hint">
-            {st.connected
-              ? "Asks GitHub who you are, and whether it reaches your first repository."
-              : "Save a token first."}
-          </span>
-        )}
-      </div>
+      {/* Test only once there is something to test: before that, step 3
+          above is the test (no button that is disabled for no stated reason). */}
+      {st.connected && (
+        <div className="setup-acct-row gh-test-row">
+          <button
+            type="button"
+            id="gh-connection-test"
+            disabled={!!busy}
+            onClick={(e) => {
+              e.stopPropagation();
+              void run("test", async () => {
+                const r = await api<ConnectionTest>("/api/settings/test/github", { method: "POST" });
+                setTest(describeConnectionTest(r));
+              });
+            }}
+          >
+            {busy === "test" ? "Testing…" : "Test"}
+          </button>
+          {test ? (
+            <span className={"test-result " + (test.ok ? "ok" : "bad")} id="gh-connection-test-result">
+              {(test.ok ? "✓ " : "✗ ") + test.msg}
+            </span>
+          ) : (
+            <span className="set-hint">Asks GitHub who you are, and whether it reaches your first repository.</span>
+          )}
+        </div>
+      )}
 
+      {/* No token needed: it asks your repository's remote with git itself. */}
       <div className="setup-acct-row gh-push-row">
         <button
           type="button"
           id="gh-push-check"
-          disabled={!!busy || !st.connected}
+          disabled={!!busy}
           onClick={(e) => {
             e.stopPropagation();
             void run("push", async () => setPush(await api<PushCheck>("/api/github/push-check", { method: "POST" })));
@@ -387,11 +468,13 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
         >
           {busy === "push" ? "Checking…" : "Check I can push"}
         </button>
-        {push && (
+        {push ? (
           <span className={"test-result " + (push.ok ? "ok" : push.ok === false ? "bad" : "")}>
             {(push.ok ? "✓ " : push.ok === false ? "✗ " : "") + (push.message || "")}
             {push.ok === false && push.fix ? " — " + push.fix : ""}
           </span>
+        ) : (
+          <span className="set-hint">Asks your repository's remote, with git — no token needed.</span>
         )}
         {push?.ok === false && push.id === "https_auth" && st.connected && (
           <button

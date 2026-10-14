@@ -24,7 +24,7 @@ describe("J2 — command palette (Ctrl+P / Ctrl+Shift+P)", () => {
     expect(top).toContain('"palette-btn"');
     // Ctrl+P / Ctrl+Shift+P (Cmd on Mac); Ctrl+K is the chord prefix for
     // focused-session git actions.
-    expect(top).toContain("Ctrl+P");
+    expect(top).toContain('keys("palette")');
   });
 
   it("toggles through the capture-phase keymap, so it works over a terminal", () => {

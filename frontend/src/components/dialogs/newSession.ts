@@ -774,14 +774,6 @@ export function sanitizeBranch(s: string): string {
     .replace(/^[-/]+|[-/]+$/g, "");
 }
 
-/** The branch a new worktree will be cut on — `<prefix><name>`, the name
- * being what the session will be called (typed, else made from the task,
- * else "untitled"). A preview: the server numbers a taken name `-2`. */
-export function branchPreview(where: { prefix: string; title: string; prompt: string }): string {
-  const name = where.title.trim() || titleFromPrompt(where.prompt) || "untitled";
-  return sanitizeBranch((where.prefix || "") + name);
-}
-
 /** "/a/b/" and "/a/b" are one folder; "~" is left as typed. */
 function samePath(a: string, b: string): boolean {
   const n = (p: string) => (p || "").trim().replace(/\/+$/, "");
@@ -809,6 +801,101 @@ export function sharedCheckoutWarning(titles: string[]): string {
     who +
     " already editing this folder directly. Pick “Separate worktree” so they " +
     "don't overwrite each other."
+  );
+}
+
+/** `base`, or `base-2`, `base-3`… — the first name not in `taken`. The
+ * server's session_create.free_title (and _free_untitled for "untitled"),
+ * so the preview names the branch Create will really make. */
+export function freeTitle(base: string, taken: ReadonlySet<string>): string {
+  let title = base;
+  for (let n = 2; taken.has(title); n++) title = base + "-" + n;
+  return title;
+}
+
+/** What Create will call the session and its branch, given the names
+ * already in use. `clash` is a TYPED name another session already has (the
+ * server refuses it); `renumbered` is the name made from the task that was
+ * taken, so this one gets a number. */
+export interface PlannedName {
+  title: string;
+  branch: string;
+  /** Where the name comes from: typed, made from the task, or neither. */
+  from: "name" | "task" | "none";
+  clash: boolean;
+  renumbered: string;
+}
+
+export function plannedName(where: {
+  prefix: string;
+  title: string;
+  prompt: string;
+  taken: ReadonlySet<string>;
+}): PlannedName {
+  const typed = where.title.trim();
+  if (typed)
+    return {
+      title: typed,
+      branch: sanitizeBranch((where.prefix || "") + typed),
+      from: "name",
+      clash: where.taken.has(typed),
+      renumbered: "",
+    };
+  const base = titleFromPrompt(where.prompt);
+  const from = base ? "task" : "none";
+  const title = freeTitle(base || "untitled", where.taken);
+  return {
+    title,
+    branch: sanitizeBranch((where.prefix || "") + title),
+    from,
+    clash: false,
+    renumbered: title !== (base || "untitled") ? base || "untitled" : "",
+  };
+}
+
+/** The names a new session can't have: every session's title and the name
+ * it shows (a rename), as the server's free_title checks them. Another
+ * device's rows (`device::title`) live in that device's namespace. */
+export function takenNames(
+  rows: Array<{ title: string }>,
+  aliases: Record<string, string>
+): Set<string> {
+  const out = new Set<string>();
+  for (const r of rows) {
+    if (!r.title || r.title.includes("::")) continue;
+    out.add(r.title);
+    const a = aliases[r.title];
+    if (a) out.add(a);
+  }
+  return out;
+}
+
+/** The sessions already working in this repo, however they work in it
+ * (their own worktree or the folder itself). Verify's checklist runs and
+ * another device's rows are not "someone working here". */
+export function sessionsInRepo(
+  rows: Array<{ title: string; path: string; hidden_by?: string }>,
+  paths: string[]
+): string[] {
+  return rows
+    .filter(
+      (r) => !r.hidden_by && !r.title.includes("::") && paths.some((p) => samePath(r.path, p))
+    )
+    .map((r) => r.title);
+}
+
+/** The one line under "Works in" when other sessions already work in this
+ * repo — the answer to "will a second one clobber the first?". */
+export function otherSessionsLine(titles: string[], worktree: boolean): string {
+  if (!titles.length) return "";
+  const who =
+    titles.length === 1
+      ? "“" + titles[0] + "” is"
+      : titles.length + " other sessions are";
+  return (
+    who +
+    " already working in this repo" +
+    (worktree ? " — a separate worktree keeps you apart." : ".")
   );
 }
 
@@ -878,5 +965,38 @@ export function elapsedLabel(sec: number): string {
 
 /** Set by the Templates dialog when it hands the person back to New (its
  * Close, after New → Manage…): the reopen keeps the form as it was instead of
- * resetting it, and only reloads the template list. One-shot. */
-export const newSessionResume = { keep: false };
+ * resetting it, and only reloads the template list. One-shot. `prompt` is a
+ * prompt picked in Prompts (opened from New's Task box) for the Task box. */
+export const newSessionResume: { keep: boolean; prompt?: string } = { keep: false };
+
+/** Whether the New dialog holds something the person TYPED, which a
+ * reopen keeps (closing New, a trip to Intake or Settings) until Create or
+ * Clear. A Task the opening's own last-used pre-fill wrote is not typed. */
+export function hasTypedDraft(d: {
+  describe: string;
+  title: string;
+  prompt: string;
+  prefilledPrompt: string;
+}): boolean {
+  if (d.describe.trim() || d.title.trim()) return true;
+  const p = d.prompt.trim();
+  return !!p && p !== d.prefilledPrompt.trim();
+}
+
+/** What an opening does with the form: a failed create's own reopen and a
+ * hand-back from Templates/Prompts keep it exactly; Intake's "Start
+ * together…" (a prefill) always starts fresh; otherwise a typed draft is
+ * kept unless the last close was a Create. */
+export function openingMode(o: {
+  failedReopen: boolean;
+  resume: boolean;
+  prefill: boolean;
+  draft: boolean;
+  spent: boolean;
+}): "failed" | "resume" | "fresh" {
+  if (o.failedReopen) return "failed";
+  if (o.prefill) return "fresh";
+  if (o.resume) return "resume";
+  if (o.draft && !o.spent) return "resume";
+  return "fresh";
+}

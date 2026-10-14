@@ -31,6 +31,8 @@ import { toast } from "../../lib/toast";
 import { useAgentChoices } from "../settings/screens/AgentPicker";
 import { SourceCard, TestButton } from "./kit";
 import { LANE_LABEL, SOURCE_DEPTHS } from "../../lib/autopilot";
+import { openConnectGitHub } from "../../lib/githubConnect";
+import { useGithubConnected } from "../../state/queries";
 
 export const REPO_RE = /^[^\s/]+\/[^\s/]+$/;
 
@@ -169,6 +171,9 @@ export function RepoSourceList({
   // in step for the rest of the app's life, which is the more expensive of the
   // two costs by some distance.
   const agents = useAgentChoices();
+  // Verify only: a repository here does nothing without a GitHub token, and
+  // the form used to say so only after + Add and Test access. Asked up front.
+  const gh = useGithubConnected(surface === "verify");
   const [cards, setCards] = useState<Card[]>(() =>
     repos.map((r) => ({ key: nextKey++, repo: r }))
   );
@@ -444,7 +449,7 @@ export function RepoSourceList({
                       {surface === "verify"
                         ? // How a checkout is matched to the name: by its remote,
                           // not its path — the reason this list is slugs.
-                          "Any clone whose origin is this repo counts, on any machine."
+                          "Any clone of it counts."
                         : "Press Enter to save. Separate from the other GitHub tab's list."}
                     </span>
                   )}
@@ -452,7 +457,7 @@ export function RepoSourceList({
                 {surface === "verify" && (
                   <>
                     <label className="set-row">
-                      <span className="set-label">Live branch</span>
+                      <span className="set-label">Branch that ships</span>
                       <input
                         // Keyed by the slug, not just by the card, so naming a
                         // card REMOUNTS this box. These fields are uncontrolled
@@ -483,12 +488,11 @@ export function RepoSourceList({
                         }}
                       />
                       <span className="set-hint">
-                        The branch that counts as shipped. Blank uses{" "}
-                        <code>{defaults.liveBranch || "main"}</code>.
+                        Blank uses <code>{defaults.liveBranch || "main"}</code>.
                       </span>
                     </label>
                     <label className="set-row">
-                      <span className="set-label">Deploy takes (minutes)</span>
+                      <span className="set-label">Wait after merge (minutes)</span>
                       <input
                         // Remounted on rename for the same reason as the branch
                         // box above.
@@ -513,8 +517,8 @@ export function RepoSourceList({
                         }}
                       />
                       <span className="set-hint">
-                        Minutes from merge until it's running; checks wait this long. Blank
-                        uses <code>{defaults.deployDelay || "5"}</code>.
+                        Time to deploy before checking; 0 = no deploy. Blank uses{" "}
+                        <code>{defaults.deployDelay || "5"}</code>.
                       </span>
                     </label>
                     <label className="set-row">
@@ -540,12 +544,11 @@ export function RepoSourceList({
                         }}
                       />
                       <span className="set-hint">
-                        The running app checks are aimed at. Blank checks a fresh checkout
-                        here instead.
+                        URL and test login the checks use. Blank checks a fresh checkout.
                       </span>
                     </label>
                     <label className="set-row">
-                      <span className="set-label">Extra instructions (optional)</span>
+                      <span className="set-label">Notes for the checklist writer (optional)</span>
                       <textarea
                         // Remounted on rename for the same reason as the branch
                         // box above.
@@ -575,9 +578,7 @@ export function RepoSourceList({
                             patch(card.repo, "prompt", e.target.value);
                         }}
                       />
-                      <span className="set-hint">
-                        Added to every checklist for this repo. Click away to save.
-                      </span>
+                      <span className="set-hint">Added to every checklist for this repo.</span>
                     </label>
                   </>
                 )}
@@ -711,6 +712,14 @@ export function RepoSourceList({
         <button type="button" id={addId} className="btn-primary" onClick={add}>
           {addLabel}
         </button>
+        {surface === "verify" && gh.data === false ? (
+          <span className="set-hint ik-gh-needed" role="note">
+            Needs GitHub connected —{" "}
+            <button type="button" className="test-btn" onClick={() => openConnectGitHub()}>
+              Connect GitHub
+            </button>
+          </span>
+        ) : null}
       </div>
       <span className="set-hint">{hint}</span>
     </div>

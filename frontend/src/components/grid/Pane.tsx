@@ -37,12 +37,19 @@ import { AccountChip } from "./AccountChip";
 import { DriveButton } from "../presence/Presence";
 import { useMe } from "../../lib/presence";
 import { FastTrackMenu } from "./FastTrackMenu";
-import { PaneMoreMenu, type PaneMoreItem } from "./PaneMoreMenu";
+import { PaneMoreMenu } from "./PaneMoreMenu";
+import { SessionMenu } from "../sidebar/SessionMenu";
+import { MidName } from "../sidebar/MidName";
+import { hasUncommitted, sessionMenu } from "../../lib/sessionMenu";
+import { actionCtx, sessionAction } from "../../lib/sessionActionTable";
+import { folderInUseText } from "../../lib/sessionActions";
+import { errorPop } from "../../lib/errorPop";
+import { rememberedTask } from "../../lib/sessionTask";
 import { useCalm } from "../../lib/useCalm";
 import { agentBlocked } from "../../lib/sessionState";
 import { AgentBlockedBanner } from "../setup/AgentBlocked";
 import { useSetup } from "../setup/useSetup";
-import { openChecklist } from "../../lib/checklistLink";
+import { VerdictChip } from "../dialogs/VerdictChip";
 import { familyOf, newestReportTs, threadBadge, threadTabShown } from "../../lib/thread";
 import { effectiveActivity } from "../../lib/stage";
 
@@ -215,10 +222,11 @@ export function Pane({
     kindTag && displayName.startsWith(kindTag) ? (
       <>
         <span className="title-kind">{kindTag}</span>
-        {displayName.slice(kindTag.length)}
+        <MidName text={displayName.slice(kindTag.length)} />
       </>
     ) : (
-      displayName
+      // Middle-truncated: a "-2" suffix is what tells two panes apart.
+      <MidName text={displayName} />
     );
 
   // Adopt a registry terminal into a host div; re-runs safely on remount.
@@ -285,7 +293,10 @@ export function Pane({
   const ghostCore = (ghost || "").replace(/[…]+\s*$/, "").replace(/\s+/g, " ").trim();
   const fullNorm = (inst.last_prompt_full || "").replace(/\s+/g, " ");
   const ghostIsLatest = !ghost || (!!fullNorm && fullNorm.includes(ghostCore.slice(0, 80)));
-  const pinLine = ghost ?? inst.last_prompt;
+  // Before the transcript names one (or for an agent without a transcript
+  // reader), the task this browser started it with (lib/sessionTask).
+  const task = inst.last_prompt || rememberedTask(title) || null;
+  const pinLine = ghost ?? task;
 
   // Expanding an OLDER prompt (the ghost isn't the latest) needs its full
   // body looked up server-side — only the latest prompt's body rides the
@@ -306,7 +317,7 @@ export function Pane({
   }, [pinOpen, ghostIsLatest, ghostCore, title, lookup]);
 
   const pinBody = ghostIsLatest
-    ? inst.last_prompt_full || inst.last_prompt
+    ? inst.last_prompt_full || task
     : lookup?.q === ghostCore
       ? lookup.text
       : ghost;
@@ -624,23 +635,13 @@ export function Pane({
   const ds = inst.workspace_missing ? null : inst.diff_stat;
   const hasDiffStat = !!(ds && ((ds.files || 0) + (ds.additions || 0) + (ds.deletions || 0) > 0));
   // The guided button only wears the accent when pressing it is the thing to
-  // do now: not while the agent is busy (working, asking, at its limit), and
-  // not a "Commit…" with nothing uncommitted to commit (files counts too: an
-  // empty or binary new file changes no lines). Quiet, it is still the same
-  // button, outlined. Hint and blocked steps keep their own look.
+  // do now: not while the agent is busy (working, asking, at its limit).
+  // Quiet, it is still the same button, outlined. Hint and blocked steps keep
+  // their own look. (A "Commit…" with nothing to commit isn't drawn at all —
+  // shownStep below.)
   const act = effectiveActivity(inst);
   const quiet =
-    !!ns &&
-    !ns.hint &&
-    !ns.disabled &&
-    (act === "working" ||
-      act === "clarify" ||
-      act === "limit" ||
-      (ns.label === "Commit…" &&
-        (ds?.uncommitted?.files || 0) +
-          (ds?.uncommitted?.additions || 0) +
-          (ds?.uncommitted?.deletions || 0) ===
-          0));
+    !!ns && !ns.hint && !ns.disabled && (act === "working" || act === "clarify" || act === "limit");
 
   // What the calm header folds under ⋯ (see PANE_NARROW_PX / useCalm). A tab
   // you are ON stays in the row, and so does a Queue with something in it or
@@ -649,39 +650,25 @@ export function Pane({
   const showMapTab = caps.git && (!compact || tab === "map");
   const showQueueTab = !compact || tab === "queue" || pending > 0 || holding;
   const showFt = !!ft && (!compact || ft.lane !== "leave" || ft.halted || ft.active || !!ftMenu);
-  const more: PaneMoreItem[] = [];
-  if (!sharedFolder && !showShellTab)
-    more.push({ key: "shell", label: "Terminal", title: "A shell in this session's folder", run: () => showTab("shell") });
-  if (caps.git && !showMapTab)
-    more.push({ key: "map", label: "Map", title: "Code map — the worktree as a tree", run: () => showTab("map") });
-  if (!showQueueTab)
-    more.push({
-      key: "queue",
-      label: "Queue",
-      title: "Send a message now or queue prompts to auto-run",
-      run: () => showTab("queue"),
+  // The ⋯ menu: the session's one menu (lib/sessionMenu), less the tabs this
+  // header already shows, plus the history view only a pane has.
+  const menuCtx = actionCtx(title, { inst, caps });
+  const visibleTabs = [showShellTab && "shell", showMapTab && "map"].filter(Boolean) as string[];
+  const menu = () =>
+    sessionMenu(inst, menuCtx, {
+      visibleTabs,
+      onHistory: compact
+        ? () => setHistPane({ kind: tab === "shell" ? "shell" : "agent", dragSel: null })
+        : undefined,
     });
-  if (ft && !showFt)
-    more.push({
-      key: "fast-track",
-      label: "Fast-track…",
-      title: ft.title,
-      run: () => useUi.getState().setFastTrackMenu({ title }),
-    });
-  if (compact)
-    more.push({
-      key: "history",
-      label: "Browse history",
-      title: "Scroll and select the full history like a page",
-      run: () => setHistPane({ kind: tab === "shell" ? "shell" : "agent", dragSel: null }),
-    });
-  if (inst.branch && !sharedFolder)
-    more.push({
-      key: "checklist",
-      label: "Checklist…",
-      title: "Verify's checklist for " + inst.branch + " — the steps to check before or after it merges",
-      run: () => openChecklist(inst.branch),
-    });
+  // Pause / Resume in the header itself, next to −: how to stop an agent
+  // shouldn't be the last item of a long menu. Left out where it can't act
+  // (a shared folder can't pause; a row still being created).
+  const pauseId = sessionAction("resume").enabled(menuCtx) ? "resume" : "pause";
+  const canPause = sessionAction(pauseId).enabled(menuCtx);
+  // "Commit…" only once there is something to commit; until then the header
+  // has no lead button (the agent's state chip says what it is doing).
+  const shownStep = ns && ns.label === "Commit…" && !hasUncommitted(inst) ? null : ns;
 
   return (
     <section
@@ -782,23 +769,23 @@ export function Pane({
           )}
         </div>
         <div className="actions">
-          {ns ? (
+          {shownStep ? (
             <button
               className={
                 "nextstep" +
-                (ns.hint ? " nextstep-hint" : "") +
-                (ns.disabled ? " nextstep-blocked" : "") +
+                (shownStep.hint ? " nextstep-hint" : "") +
+                (shownStep.disabled ? " nextstep-blocked" : "") +
                 (quiet ? " nextstep-quiet" : "")
               }
               type="button"
-              disabled={!!ns.disabled}
-              title={ns.title || "The next step for this session: " + ns.label.replace(/…$/, "")}
+              disabled={!!shownStep.disabled}
+              title={shownStep.title || "The next step for this session: " + shownStep.label.replace(/…$/, "")}
               onClick={(ev) => {
                 ev.stopPropagation();
-                if (!ns.disabled) ns.run();
+                if (!shownStep.disabled) shownStep.run();
               }}
             >
-              {ns.label}
+              {shownStep.label}
             </button>
           ) : null}
           {ft && showFt && (
@@ -872,6 +859,8 @@ export function Pane({
               {rs.label}
             </button>
           )}
+          {/* Verify's verdict, next to Open PR; opens its checklist. */}
+          <VerdictChip inst={inst} where="pane" />
           <span
             className={"stagechip " + chip.cls}
             title={inst.pr_url ? "Open PR" : chip.title}
@@ -898,7 +887,34 @@ export function Pane({
             reachable without scrolling to the end of a long header. Copy-all
             lives in the history view's bar. */}
         <div className="head-tail">
-        <PaneMoreMenu items={more} btnRef={ft && !showFt ? setFtEl : undefined} />
+        {canPause && (
+          <button
+            className={"act pane-pause" + (pauseId === "resume" ? " is-paused" : "")}
+            type="button"
+            aria-label={pauseId === "resume" ? "Resume session" : "Pause session"}
+            title={
+              pauseId === "resume"
+                ? "Resume — starts the agent again in the same worktree"
+                : "Pause — stops the agent; the session stays in the sidebar to resume"
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              sessionAction(pauseId).run(title);
+            }}
+          >
+            {/* Glyph only where the header is short of room. */}
+            {pauseId === "resume" ? (paneNarrow ? "▶" : "▶ Resume") : paneNarrow ? "❚❚" : "❚❚ Pause"}
+          </button>
+        )}
+        <PaneMoreMenu btnRef={ft && !showFt ? setFtEl : undefined}>
+          {(close) => (
+            <SessionMenu
+              model={menu()}
+              onDone={close}
+              onInUse={(t) => errorPop("Can't delete " + displayName, folderInUseText(t))}
+            />
+          )}
+        </PaneMoreMenu>
         {!compact && (
         <button
           className="act copyhist"
@@ -971,6 +987,9 @@ export function Pane({
                   Pane.css hides this copy with visibility while it keeps
                   occupying that line — so there is no duplicated first line and
                   no blank row, and the terminal still never moves. */}
+              {/* "Task:" names what the line is; a scrolled-back older prompt
+                  (the ghost) is just a prompt. */}
+              {ghost == null && <span className="prompt-pin-label">Task:</span>}
               <span className="prompt-pin-text">{pinLine}</span>
               {pinOpen ? <div className="prompt-pin-body">{pinBody}</div> : null}
               {/* While the TUI's own pinned row is being mirrored above, hide

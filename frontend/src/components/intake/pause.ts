@@ -7,19 +7,22 @@
  * tuning and wrong for "I'm on holiday": that took three switches on three tabs,
  * and nothing on screen said all three were off.
  *
- * Pausing turns every switch that is on OFF and remembers which ones were on
- * (per device, in localStorage — the switches themselves are synced settings).
- * Resuming turns exactly those back on. With nothing remembered (paused on
- * another device, or storage cleared) it resumes every kind that has something
- * configured, which is what "turn intake back on" means to someone who never
- * touched the individual switches.
+ * Pausing turns every switch that is on OFF and records which ones were on in
+ * the server's settings (`general.intake_paused`), so a reload, the desktop app
+ * or another browser on this machine all see "paused" and can Resume. Resuming
+ * turns exactly those back on and clears the record. With an empty record (an
+ * older browser-only pause carried over) it resumes every kind that has
+ * something configured, which is what "turn intake back on" means to someone
+ * who never touched the individual switches.
  *
  * "Paused" is "the Pause button was used, and every switch is still off": the
- * remembered set says the first half, the switches the second, so the two can
- * never disagree. A setup that was simply never switched on is OFF, not
- * paused — calling it paused offered to "resume" something that never ran. */
+ * record says the first half, the switches the second, so the two can never
+ * disagree. A setup that was simply never switched on is OFF, not paused —
+ * calling it paused offered to "resume" something that never ran. Turning a
+ * switch back on by hand ends the pause (the record is cleared), so a later
+ * "everything off" is off again, not a stale pause. */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import { queryClient, refreshMindflockStatus, useMindflockStatus } from "../../state/queries";
@@ -108,25 +111,56 @@ export function kindsText(kinds: IntakeKind[]): string {
   return names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
 }
 
-const REMEMBER_KEY = "mf_intake_paused_kinds";
+/** The browser-only record older builds kept. Read once as a fallback (a
+ * pause made before the record moved to the server still reads as paused) and
+ * removed on the next Pause or Resume. */
+const LEGACY_REMEMBER_KEY = "mf_intake_paused_kinds";
 
-export function loadRemembered(): IntakeKind[] | null {
+function cleanKinds(v: unknown): IntakeKind[] | null {
+  return Array.isArray(v)
+    ? (v.filter((k) => k === "tickets" || k === "prs" || k === "issues") as IntakeKind[])
+    : null;
+}
+
+export function loadLegacyRemembered(): IntakeKind[] | null {
   try {
-    const v = JSON.parse(localStorage.getItem(REMEMBER_KEY) || "null");
-    return Array.isArray(v) ? (v.filter((k) => k === "tickets" || k === "prs" || k === "issues") as IntakeKind[]) : null;
+    return cleanKinds(JSON.parse(localStorage.getItem(LEGACY_REMEMBER_KEY) || "null"));
   } catch {
     return null;
   }
 }
 
-function saveRemembered(kinds: IntakeKind[] | null) {
+function dropLegacyRemembered() {
   try {
-    if (kinds === null) localStorage.removeItem(REMEMBER_KEY);
-    else localStorage.setItem(REMEMBER_KEY, JSON.stringify(kinds));
+    localStorage.removeItem(LEGACY_REMEMBER_KEY);
   } catch {
-    /* storage unavailable: Resume falls back to "everything configured" */
+    /* storage unavailable: nothing to drop */
   }
 }
+
+/** What Pause turned off, as the server stores it (`general.intake_paused`;
+ * null = not paused), falling back to an older browser-only record. */
+export function useIntakePaused() {
+  return useQuery({
+    queryKey: ["intake-paused"],
+    queryFn: async () => {
+      const r = await api<{ settings?: { general?: { intake_paused?: unknown } } }>("/api/settings");
+      return cleanKinds(r?.settings?.general?.intake_paused) ?? loadLegacyRemembered();
+    },
+    refetchInterval: 30_000,
+    retry: false,
+  });
+}
+
+async function saveRemembered(kinds: IntakeKind[] | null) {
+  await api("/api/settings", { json: { general: { intake_paused: kinds } } });
+  dropLegacyRemembered();
+}
+
+/** When the switches last moved through Pause / Resume — a reading older than
+ * this may still show a switch on that the pause just turned off, so it must
+ * not be taken as "a switch was turned back on by hand". */
+let lastPauseToggle = 0;
 
 /** The same `github-settings` query the sidebar's PR / Issues bars read
  * (useGithubToggleBar) — one cache, so a pause shows on every switch at once. */
@@ -148,17 +182,41 @@ export function useGithubSettings() {
  * bar alike. `ticketSources` is the number of SAVED ticket sources. `after`
  * runs once the switches have moved (the Intake dialog reloads its settings). */
 export function useIntakePause(ticketSources: number, after?: () => void) {
-  const { data: status } = useMindflockStatus();
+  const statusQ = useMindflockStatus();
+  const status = statusQ.data;
   const gh = useGithubSettings();
+  const pausedQ = useIntakePaused();
+  const remembered = pausedQ.data ?? null;
   const [busy, setBusy] = useState(false);
   const sw = intakeSwitches({
     ticketsDesired: !!(status?.desired ?? status?.running),
     ticketSources,
     gh: gh.data,
   });
-  const paused = isPaused(sw, loadRemembered());
+  const paused = isPaused(sw, remembered);
   const onKinds = (["tickets", "prs", "issues"] as IntakeKind[]).filter((k) => sw.on[k]);
   const anyConfigured = sw.configured.tickets || sw.configured.prs || sw.configured.issues;
+
+  // A switch turned back on by hand ends the pause: clear the record, or the
+  // next "everything off" would read as paused and offer to resume a set that
+  // is no longer what anyone chose. Only on readings taken after the last
+  // Pause/Resume, so the pause's own in-flight state never clears itself.
+  const fresh =
+    !!status &&
+    !!gh.data &&
+    statusQ.dataUpdatedAt > lastPauseToggle &&
+    gh.dataUpdatedAt > lastPauseToggle &&
+    pausedQ.dataUpdatedAt > lastPauseToggle;
+  const stale = remembered !== null && onKinds.length > 0 && fresh && !busy;
+  useEffect(() => {
+    if (!stale) return;
+    lastPauseToggle = Date.now();
+    void saveRemembered(null)
+      .catch(() => {
+        /* best effort: it is re-tried on the next reading */
+      })
+      .finally(() => queryClient.invalidateQueries({ queryKey: ["intake-paused"] }));
+  }, [stale]);
 
   const setKinds = async (kinds: IntakeKind[], on: boolean) => {
     const github: Record<string, boolean> = {};
@@ -171,29 +229,39 @@ export function useIntakePause(ticketSources: number, after?: () => void) {
 
   const toggle = async () => {
     if (busy) return;
+    if (!paused && !onKinds.length) return;
     setBusy(true);
+    lastPauseToggle = Date.now();
     try {
       if (paused) {
-        const kinds = resumeKinds(loadRemembered(), sw.configured);
+        const kinds = resumeKinds(remembered, sw.configured);
         await setKinds(kinds, true);
-        saveRemembered(null);
+        await saveRemembered(null);
         toast("Intake resumed — auto-start is on for " + kindsText(kinds));
       } else {
+        // Recorded first: if a switch then fails to turn off, Resume still
+        // knows what was on.
+        await saveRemembered(onKinds);
         await setKinds(onKinds, false);
-        saveRemembered(onKinds);
         toast("Intake paused — nothing new starts on its own");
       }
     } catch (err) {
       errorPop(paused ? "Resume intake failed" : "Pause intake failed", (err as Error).message || "error");
     } finally {
-      setBusy(false);
+      lastPauseToggle = Date.now();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["github-settings"] }),
+        queryClient.invalidateQueries({ queryKey: ["intake-paused"] }),
         refreshMindflockStatus(),
       ]);
+      setBusy(false);
       after?.();
     }
   };
 
-  return { status, sw, paused, onKinds, anyConfigured, busy, toggle };
+  /** Whether `kind` is off because of the pause (rather than plain off). */
+  const pausedKind = (kind: IntakeKind) =>
+    paused && (remembered && remembered.length ? remembered.includes(kind) : sw.configured[kind]);
+
+  return { status, sw, paused, pausedKind, onKinds, anyConfigured, busy, toggle };
 }

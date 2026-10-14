@@ -43,8 +43,9 @@ import {
   ageText,
   panelNote,
   reopenIntakeItem,
-  RowMore,
+  repoNameOf,
   useToggleSet,
+  ONLY_REPO,
   type ItemRoute,
   type ItemWorkspace,
   type TestResult,
@@ -52,12 +53,14 @@ import {
 import {
   filterSummary,
   friendlySourceError,
+  friendlyStartError,
   listNames,
   savedFilter,
   savedLabels,
   stateName,
 } from "./vocab";
 import { useIntakePause } from "./pause";
+import { useAutosave } from "./autosave";
 import {
   TEST_STATE_LABELS,
   advancedFields,
@@ -93,7 +96,7 @@ import {
   supportsEffort,
 } from "../../lib/effort";
 import { useMindflockStatus, useProviderEfforts } from "../../state/queries";
-import type { TabProps } from "./IntakeDialog";
+import type { IntakeTabKey, TabProps } from "./IntakeDialog";
 import { ticketMatches } from "./search";
 import { MergeButton, MergeDrawer } from "./MergeTicket";
 import { RepoListField } from "./RepoListField";
@@ -144,11 +147,14 @@ function IngestionToggle({
   const [optimistic, setOptimistic] = useState<boolean | null>(null);
   const [asking, setAsking] = useState(false);
   const { data: status, refetch } = useMindflockStatus();
+  const pause = useIntakePause(sourceCount);
 
   // No engine installed / reachable — nothing to toggle (matches the sidebar).
   if (!status || !status.available) return null;
   const running = !!status.running;
   const desired = optimistic ?? (status.desired ?? running);
+  // Off because Pause intake turned it off — drawn as paused, not plain off.
+  const paused = !desired && pause.pausedKind("tickets");
 
   const toggle = async (start: boolean) => {
     if (busy) return;
@@ -183,6 +189,7 @@ function IngestionToggle({
         inputId="tk-ingestion-enabled"
         statusId="tk-ingestion-status"
         checked={desired}
+        paused={paused}
         onChange={(next) => {
           if (busy) return;
           if (next && broken.length) setAsking(true);
@@ -191,6 +198,8 @@ function IngestionToggle({
         note={
           !sourceCount
             ? "Add a ticket source below first"
+            : paused
+              ? "Intake is paused — Resume intake at the top turns it back on"
             : desired && broken.length
               ? names + " can't connect — nothing starts from " + (one ? "it" : "them") + " until fixed"
               : undefined
@@ -244,9 +253,11 @@ export function sourceDisplayName(source: Source, catalog: CatalogEntry[]): stri
 }
 
 /** A card's save line: what its last edit did. */
-type SaveState = { state: "saving" | "saved" | "failed"; at: number };
+/** "pending" = a field holds typed text not sent yet (it goes on a short
+ * pause, blur or Enter) — the card says "Saving…" then, never "Saved ✓". */
+type SaveState = { state: "pending" | "saving" | "saved" | "failed"; at: number };
 
-export function TicketsTab(_: TabProps) {
+export function TicketsTab({ gotoTab }: TabProps) {
   // Catalog, saved sources and agent names all come from the shared query cache
   // (see state/queries), warmed at app startup. They used to be three requests
   // fired in series from this component's mount, behind a full-tab "Loading…" —
@@ -281,6 +292,24 @@ export function TicketsTab(_: TabProps) {
   // Per card: "Saving…" / "Saved ✓" / "Not saved" — on the card itself, every
   // time, instead of a toast that only some edits raised.
   const [saves, setSaves] = useState<Record<string, SaveState>>({});
+  // Per card: the fields holding typed text not sent yet. While any is, the
+  // card reads "Saving…" — a save of ANOTHER field must not flip it to
+  // "Saved ✓" over text that is still on its way.
+  const [dirty, setDirty] = useState<Record<string, string[]>>({});
+  const markDirty = (id: string, key: string, on: boolean) =>
+    setDirty((prev) => {
+      const cur = new Set(prev[id] || []);
+      if (on) cur.add(key);
+      else cur.delete(key);
+      if (cur.size === (prev[id] || []).length && [...cur].every((k) => (prev[id] || []).includes(k)))
+        return prev;
+      return { ...prev, [id]: [...cur] };
+    });
+  // The list as last edited, ahead of React's next render: a field that saves
+  // as it unmounts (the dialog closing mid-typing) edits this, not a closure
+  // over a render that is already gone.
+  const latest = useRef<Source[] | null>(null);
+  latest.current = sources;
   const markSave = (ids: string[], state: SaveState["state"]) =>
     setSaves((prev) => {
       const next = { ...prev };
@@ -464,8 +493,8 @@ export function TicketsTab(_: TabProps) {
   };
 
   const update = (id: string, patch: Record<string, string | null>) => {
-    setSources((prev) => {
-      const list = prev || [];
+    {
+      const list = latest.current || [];
       // A null clears the field (a secret's Clear control): locally it reads
       // as blank, and the PUT sends the null so the server clears it rather
       // than keeping the stored value, which is what a blank secret means.
@@ -484,7 +513,11 @@ export function TicketsTab(_: TabProps) {
         // Switching the provider of a card whose id is still the seeded one
         // re-seeds it, or "Add source → pick Jira" branches Jira tickets under
         // whatever provider the card happened to open on.
-        if (patch.provider && patch.provider !== s.provider && isSeededId(s.id, s.provider)) {
+        if (
+          patch.provider &&
+          patch.provider !== s.provider &&
+          (!s.provider || isSeededId(s.id, s.provider))
+        ) {
           merged.id = uniqueId(prefixFor(patch.provider), list, s.id);
           // Still the stored source under a new id: it is sent (and judged by
           // the server) rather than held, or holding it would drop the stored one.
@@ -502,25 +535,50 @@ export function TicketsTab(_: TabProps) {
         changedId = merged.id;
         return merged;
       });
+      // Outside a setState updater on purpose: an edit flushed while the tab
+      // unmounts must still reach the server, and an updater never runs then.
+      latest.current = next;
+      setSources(next);
+      // Picking the tracker on a card nothing has been typed into yet is not
+      // a save: there is nothing to store, and "Required" in red under fields
+      // the user hasn't reached yet reads as a telling-off.
+      const firstPick =
+        !storedIds.current.has(id) &&
+        Object.keys(patch).length === 1 &&
+        "provider" in patch &&
+        !next.find((s) => s.id === changedId)?.api_token;
+      if (firstPick) {
+        setErrors((prev) => {
+          const out = { ...prev };
+          delete out[id];
+          delete out[changedId];
+          return out;
+        });
+        return;
+      }
       persist(next, { nulls, autoTest, changed: changedId });
-      return next;
-    });
+    }
   };
 
   const remove = (id: string) => {
-    setSources((prev) => {
-      const gone = (prev || []).find((s) => s.id === id);
-      const next = (prev || []).filter((s) => s.id !== id);
-      persist(next);
-      if (gone && storedIds.current.has(id)) toast("Removed " + sourceDisplayName(gone, catalog));
-      return next;
-    });
+    const list = latest.current || [];
+    const gone = list.find((s) => s.id === id);
+    const next = list.filter((s) => s.id !== id);
+    latest.current = next;
+    setSources(next);
+    persist(next);
+    if (gone && storedIds.current.has(id)) toast("Removed " + sourceDisplayName(gone, catalog));
   };
 
   const add = () => {
-    const provider = catalog[0]?.id || "shortcut";
-    const id = uniqueId(prefixFor(provider));
-    setSources((prev) => [...(prev || []), { id, provider } as Source]);
+    // No tracker preselected: the user picks theirs (a preselected GitHub
+    // Issues read as "the place for issues", beside the GitHub issues tab).
+    // `needs_filter`: this source auto-starts nothing until a state or label
+    // is picked — the safe default (sources saved before it keep theirs).
+    const id = uniqueId("new");
+    const fresh = { id, provider: "", needs_filter: "on" } as Source;
+    latest.current = [...(latest.current || []), fresh];
+    setSources(latest.current);
     setCollapsed((prev) => {
       const next = new Set(prev);
       next.delete(id);
@@ -597,6 +655,9 @@ export function TicketsTab(_: TabProps) {
               }
               fieldErrors={errors[src.id]}
               save={saves[src.id]}
+              dirty={(dirty[src.id] || []).length > 0}
+              onDirty={(key, on) => markDirty(src.id, key, on)}
+              gotoTab={gotoTab}
               saved={storedIds.current.has(src.id)}
               listError={panelErrors.get(src.id)}
               test={tests[src.id]}
@@ -618,11 +679,18 @@ export function TicketsTab(_: TabProps) {
 
 /** Multi-state auto-start picker: the field stores one or more state ids
  * comma-joined; each shows as a chip with a ✕, and the dropdown appends
- * another. Empty = every state auto-starts.
+ * another.
+ *
+ * Empty means "auto-start nothing" on every source Intake created
+ * (`needs_filter`: the safe default — round 3 found "every ticket assigned to
+ * you" sitting there as the default), and "every state" only on sources saved
+ * before that, or where the user explicitly picked **Any state**.
  *
  * The names come from the tracker (what the last Test listed, refreshed on
- * focus). Until a Test has passed there is nothing to pick from, and the
- * dropdown says so instead of opening empty. */
+ * focus). Before a Test has passed there is nothing to list, so the state can
+ * be TYPED; a typed name is swapped for the real state once Test lists one
+ * with that name, and the server starts nothing on a name it can't match
+ * (backend: auto_start_waiting). */
 function StatePicker({
   field,
   source,
@@ -640,37 +708,81 @@ function StatePicker({
   const nameOf = (id: string) => stateName(id, states);
   const remaining = states.filter((s) => !selected.includes(String(s.id)));
   const commit = (list: string[]) => onChange({ [field.key]: list.join(",") });
+  const [typed, setTyped] = useState("");
   // "Anyone's" is carried by this filter (or, on Shortcut, an auto-start
   // label) — with neither there is nothing to scope a whole-tracker search by,
   // so the source stays on assigned-to-me until one is set. Say that where the
   // gap is.
   const hasLabels = !!(source.ingest_labels || "").trim();
   const needsState = source.assignee_scope === "anyone" && !selected.length && !hasLabels;
+  const safe = source.needs_filter === "on";
   const noList = !states.length;
+  // The tracker's word: "states", "statuses" (Jira), "sections" (Asana).
+  const plural = (field.label.replace(/^Auto-start /i, "") || "states").toLowerCase();
+  const noun = /statuses$/.test(plural) ? plural.replace(/es$/, "") : plural.replace(/s$/, "");
+
+  // A typed name becomes the real state once the tracker lists one by that
+  // name (any Test or focus refresh), so what is stored is what the search uses.
+  const selectedKey = selected.join(",");
+  useEffect(() => {
+    if (!states.length || !selected.length) return;
+    const byName = new Map(states.map((st) => [String(st.name || "").trim().toLowerCase(), String(st.id)]));
+    const ids = new Set(states.map((st) => String(st.id)));
+    const next = selected.map((v) => (ids.has(v) ? v : byName.get(v.trim().toLowerCase()) || v));
+    if (next.join(",") !== selectedKey) commit([...new Set(next)]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [states, selectedKey]);
+
+  const addTyped = () => {
+    const v = typed.trim().replace(/,/g, " ");
+    if (!v || selected.some((x) => x.toLowerCase() === v.toLowerCase())) return setTyped("");
+    commit([...selected, v]);
+    setTyped("");
+  };
 
   return (
     <div className="set-row">
       <span className="set-label">{field.label}</span>
       <div className="repo-list">
         {!selected.length ? (
-          <div className="repo-empty">
+          <div className={"repo-empty" + (safe && !hasLabels ? " tk-state-none" : "")} data-tk-state-empty={safe ? "safe" : "any"}>
             {needsState
-              ? "Pick at least one state — until you do, this source only takes tickets assigned to you."
+              ? "Pick at least one " + noun + " — until you do, this source only takes tickets assigned to you."
               : hasLabels
-                ? "Any state — every ticket with an auto-start label can auto-start."
-                : "Any state — every ticket assigned to you can auto-start."}
+                ? "Any " + noun + " — every ticket with an auto-start label can auto-start."
+                : safe
+                  ? "None picked — nothing auto-starts from this source yet. Pick the " +
+                    noun +
+                    "(s) that mean “ready for MindFlock”."
+                  : "Any " + noun + " — every ticket assigned to you can auto-start."}
           </div>
         ) : (
           selected.map((id) => {
             const name = nameOf(id);
+            // Not a listed state: a name typed before Test (or one the
+            // tracker doesn't have).
+            const unmatched = !name && !/^\d+$/.test(id) && !/^[0-9a-f-]{36}$/i.test(id);
             return (
-              <span className="repo-chip" key={id} title={name ? undefined : "Run Test to show this state's name"}>
-                <span className="repo-chip-name">{name || "Saved state"}</span>
+              <span
+                className={"repo-chip" + (unmatched && !noList ? " tk-state-unknown" : "")}
+                key={id}
+                data-tk-typed={unmatched ? "1" : undefined}
+                title={
+                  name
+                    ? undefined
+                    : unmatched
+                      ? noList
+                        ? "Typed — matched to your tracker's " + noun + " when Test passes"
+                        : "Your tracker has no " + noun + " by this name — check the spelling"
+                      : "Run Test to show this " + noun + "'s name"
+                }
+              >
+                <span className="repo-chip-name">{name || (unmatched ? id : "Saved " + noun)}</span>
                 <button
                   type="button"
                   className="repo-chip-x"
-                  title={name ? "Stop auto-starting “" + name + "”" : "Remove this saved state"}
-                  aria-label={"Remove auto-start state " + (name || "")}
+                  title={"Stop auto-starting “" + (name || id) + "”"}
+                  aria-label={"Remove auto-start " + noun + " " + (name || id)}
                   onClick={() => commit(selected.filter((x) => x !== id))}
                 >
                   ✕
@@ -680,36 +792,69 @@ function StatePicker({
           })
         )}
       </div>
-      <select
-        className="tk-state"
-        data-tk-field={field.key}
-        value=""
-        aria-label={"Add an auto-start state"}
-        // Opens with what the last Test saw; every focus asks the tracker
-        // again, so a column added this morning is there without a retest.
-        onFocus={loadStates}
-        disabled={noList}
-        title={noList ? "Run Test above to load your workflow states" : undefined}
-        onChange={(e) => {
-          if (e.target.value) commit([...selected, e.target.value]);
-        }}
-      >
-        <option value="">
-          {noList ? "Run Test to load your workflow states" : "+ Add state…"}
-        </option>
-        {remaining.map((st) => (
-          <option key={String(st.id)} value={String(st.id)}>
-            {st.name || String(st.id)}
-          </option>
-        ))}
-      </select>
+      {noList ? (
+        // No list until Test passes — but the state can be typed now.
+        <span className="tk-state-type">
+          <input
+            type="text"
+            className="tk-state-typed"
+            data-tk-field={field.key + "-typed"}
+            autoComplete="off"
+            placeholder={"Type a " + noun + " name, e.g. Ready for dev"}
+            aria-label={"Add an auto-start " + noun + " by name"}
+            value={typed}
+            onFocus={loadStates}
+            onChange={(e) => setTyped(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                addTyped();
+              }
+            }}
+          />
+          <button type="button" className="test-btn tk-state-add" disabled={!typed.trim()} onClick={addTyped}>
+            Add
+          </button>
+        </span>
+      ) : (
+        <select
+          className="tk-state"
+          data-tk-field={field.key}
+          value=""
+          aria-label={"Add an auto-start " + noun}
+          // Opens with what the last Test saw; every focus asks the tracker
+          // again, so a column added this morning is there without a retest.
+          onFocus={loadStates}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === ANY_STATE) onChange({ needs_filter: "" });
+            else if (v) commit([...selected, v]);
+          }}
+        >
+          <option value="">{"+ Add " + noun + "…"}</option>
+          {remaining.map((st) => (
+            <option key={String(st.id)} value={String(st.id)}>
+              {st.name || String(st.id)}
+            </option>
+          ))}
+          {/* The explicit opt-in to the old wide default — kept, never the default. */}
+          {safe && !selected.length && !hasLabels ? (
+            <option value={ANY_STATE}>{"Any " + noun + " — start every ticket assigned to me"}</option>
+          ) : null}
+        </select>
+      )}
       <span className="set-hint">
-        Only tickets in these states auto-start; empty = every state. Start any other ticket
-        from the list above.
+        {noList
+          ? "Only tickets in these " + plural + " auto-start. Typed names are checked when Test passes."
+          : "Only tickets in these " + plural + " auto-start. Any other ticket starts with its row's Start."}
       </span>
     </div>
   );
 }
+
+/** The state select's "Any state" choice: clears `needs_filter` instead of
+ * adding a state. Not a valid state id on any tracker. */
+const ANY_STATE = "__any_state__";
 
 /** Single-state picker: where a ticket is MOVED when a session starts for it.
  *
@@ -771,6 +916,9 @@ function ChoicePicker({
   error?: string;
   onChange(patch: Record<string, string>): void;
 }) {
+  const value = source[field.key] || "";
+  const option = (field.options || []).find((o) => o.value === value);
+  const hint = option && option.hint !== undefined ? option.hint : field.hint;
   return (
     <label className="set-row">
       <FieldLabel field={field} />
@@ -778,7 +926,7 @@ function ChoicePicker({
         className={"tk-choice" + (error ? " field-missing" : "")}
         data-tk-field={field.key}
         aria-invalid={error ? true : undefined}
-        value={source[field.key] || ""}
+        value={value}
         onChange={(e) => onChange({ [field.key]: e.target.value })}
       >
         {(field.options || []).map((o) => (
@@ -787,9 +935,11 @@ function ChoicePicker({
           </option>
         ))}
       </select>
-      {/* The hint stays under the error: the rule is worth reading either way. */}
+      {/* The hint stays under the error: the rule is worth reading either way.
+          It explains the option that is SELECTED when the catalog has one for
+          it — never "Anyone's takes…" under "Assigned to me". */}
       {error ? <span className="ik-field-error" data-tk-error={field.key}>{error}</span> : null}
-      {field.hint ? <span className="set-hint">{field.hint}</span> : null}
+      {hint ? <span className="set-hint">{hint}</span> : null}
     </label>
   );
 }
@@ -834,6 +984,8 @@ interface AssignedTicket {
   /** On a source with several repos: which one(s) this ticket goes to and why
    * (backend/ticket_ingestion/repo_routing.py::preview). */
   route?: ItemRoute & { summary?: string };
+  /** The repo a start provisions from (the routed one, else the source's). */
+  repo_url?: string;
 }
 
 /** Per-device: which `source::bucket` pairs are expanded. Keyed by the pair,
@@ -1056,6 +1208,7 @@ function AssignedTickets({
       ids,
       names: names.length >= ids.length ? names : live.length >= ids.length ? live : names,
       labels: savedLabels(src),
+      waiting: src?.needs_filter === "on",
     });
   };
 
@@ -1068,6 +1221,11 @@ function AssignedTickets({
   const only = sourceOrder.length === 1 ? filterOf(sourceOrder[0]) : null;
   const ingestSummary = !only ? (
     <>Each source's heading says which tickets it auto-starts; <strong>Start</strong> starts any ticket now.</>
+  ) : only.kind === "waiting" ? (
+    <>
+      This source auto-starts <strong>nothing</strong> until you pick a state on its card.{" "}
+      <strong>Start</strong> starts any ticket now.
+    </>
   ) : only.kind === "none" ? (
     <>
       Auto-start takes tickets in <strong>every state</strong> — pick states on the source card
@@ -1120,7 +1278,7 @@ function AssignedTickets({
             title="Show another workflow state in this panel"
             onChange={(e) => addBucket(e.target.value)}
           >
-            <option value="">{hidden.length ? "+ Add bucket…" : "All buckets shown"}</option>
+            <option value="">{hidden.length ? "+ Show state…" : "All states shown"}</option>
             {hidden.map((b) => (
               <option key={b} value={b}>
                 {b} ({countAll.get(b) || 0})
@@ -1136,7 +1294,7 @@ function AssignedTickets({
             <>
               <strong>{listNames(parkedDone)}</strong> {parkedDone.length === 1 ? "is" : "are"}{" "}
               hidden — add {parkedDone.length === 1 ? "it" : "them"} back with{" "}
-              <strong>+ Add bucket…</strong>.
+              <strong>+ Show state…</strong>.
             </>
           ) : null}
         </>
@@ -1146,7 +1304,7 @@ function AssignedTickets({
         <div className="repo-empty">{error}</div>
       ) : tickets === null ? null : !visible.length && buckets.length ? (
         <div className="repo-empty">
-          All buckets are hidden — pick one from the “+ Add bucket…” menu above.
+          All states are hidden — pick one from the “+ Show state…” menu above.
         </div>
       ) : !sourceOrder.length ? (
         <div className="repo-empty">
@@ -1194,7 +1352,7 @@ function AssignedTickets({
                     onToggle={() => openBuckets.toggle(key)}
                     onHide={() => hideBucket(b)}
                     hideTitle={
-                      "Hide the " + b + " bucket everywhere (re-add it from the dropdown)"
+                      "Hide " + b + " in this list (show it again from “+ Show state…”)"
                     }
                   >
                     {rows.map((t) => (
@@ -1235,7 +1393,7 @@ function AssignedTickets({
             <div className="repo-empty">No tickets are assigned to you on this source.</div>
           ) : !shownBuckets.length ? (
             <div className="repo-empty">
-              No tickets from this source in the buckets you're showing.
+              No tickets from this source in the states you're showing.
             </div>
           ) : !nestWorkflows ? (
             bucketsOf(null)
@@ -1270,7 +1428,9 @@ function AssignedTickets({
                   ? "can't connect"
                   : filt.kind === "labels"
                     ? "auto-starts tickets with " + filt.text
-                    : "auto-starts " + filt.text
+                    : filt.kind === "waiting"
+                      ? "auto-starts nothing yet — pick a state on its card"
+                      : "auto-starts " + filt.text
               }
               open={openSources.isOpen(src)}
               onToggle={() => openSources.toggle(src)}
@@ -1340,7 +1500,6 @@ function AssignedTicketRow({
   onStarted(): void;
 }) {
   const [merging, setMerging] = useState(false);
-  const [more, setMore] = useState(false);
   // No Merge control on a source whose adapter cannot write (Asana today), and
   // none on a ticket with nothing to merge into: a chip that opens a drawer
   // saying "there is nothing here" is worse than no chip.
@@ -1366,28 +1525,30 @@ function AssignedTicketRow({
           ? ageText(t.created_at) + " · " + (t.assignee || "someone else")
           : ageText(t.created_at)
       }
-      // A source spanning several repos says where this one goes, and why.
-      route={t.route}
+      // Where it goes: a source spanning several repos says which and why; a
+      // one-repo source just names its repo (cheap, and it answers "where
+      // will this start?" on every row).
+      route={
+        t.route ||
+        (t.repo_url
+          ? { repos: [repoNameOf(t.repo_url)], repo_url: t.repo_url, method: ONLY_REPO }
+          : undefined)
+      }
       hasSession={t.has_session}
       elsewhere={t.elsewhere?.label}
       eligible={t.eligible}
       eligibleLabel={eligibleLabel}
       eligibleOn={autoOn}
       reasons={t.reasons}
-      actionExtra={
-        // Tracker housekeeping, not intake: behind the row's ⋯, never at the
-        // same weight as Start.
+      housekeeping={
+        // Tracker housekeeping, not intake: at the bottom of the row's Options
+        // under "On the tracker", never beside Start.
         canMerge ? (
-          <RowMore reference={t.slug} open={more || merging} onToggle={() => {
-            if (merging) setMerging(false);
-            setMore((v) => !v);
-          }}>
-            <MergeButton
-              reference={t.slug}
-              open={merging}
-              onToggle={() => setMerging((v) => !v)}
-            />
-          </RowMore>
+          <MergeButton
+            reference={t.slug}
+            open={merging}
+            onToggle={() => setMerging((v) => !v)}
+          />
         ) : null
       }
       onDrawerClose={() => setMerging(false)}
@@ -1458,6 +1619,12 @@ function AssignedTicketRow({
                   ),
               },
             ]);
+          // Never the tracker's raw JSON ("Shortcut API returned 401 …
+          // {"message":"Unauthorized"}"): one sentence saying what to fix.
+          if (!claimedBy(err))
+            throw new Error(
+              friendlyStartError(t.source_label || t.source, (err as Error).message || "")
+            );
           throw err;
         }
         // The server already has a provisioning row for it: pull it now
@@ -1477,6 +1644,9 @@ function TicketSourceCard({
   collapsed,
   fieldErrors,
   save,
+  dirty,
+  onDirty,
+  gotoTab,
   saved,
   listError,
   test,
@@ -1493,6 +1663,11 @@ function TicketSourceCard({
   fieldErrors?: FieldErrors;
   /** What this card's last edit did ("Saving…" / "Saved ✓" / "Not saved"). */
   save?: SaveState;
+  /** A field on this card holds typed text not sent yet. */
+  dirty: boolean;
+  /** A field started (`on`) or stopped holding unsent text. */
+  onDirty(key: string, on: boolean): void;
+  gotoTab(key: IntakeTabKey): void;
   /** Whether the server holds this card at all (a new card may not, yet). */
   saved: boolean;
   /** The ticket listing's error for this source, when it couldn't be listed. */
@@ -1555,20 +1730,23 @@ function TicketSourceCard({
   // The source's name (label, else provider), then — when it has no label of
   // its own — the repo it feeds, which is what tells two of one tracker apart.
   // Never the member id: that is an opaque tracker id nobody recognises.
-  const repoNames = sourceRepos(source).map((r) =>
-    r.url.replace(/\/+$/, "").replace(/\.git$/, "").split(/[/:]/).pop() || r.url
-  );
+  // Named after the tracker; the repo count follows as a plain fact. "Shortcut
+  // — payments-api +1" read as a routing decision (every ticket going to
+  // payments-api), which it never was.
+  const repoNames = sourceRepos(source).map((r) => repoNameOf(r.url));
   const feeds =
-    repoNames.length > 1 ? repoNames[0] + " +" + (repoNames.length - 1) : repoNames[0] || "";
-  const base =
-    sourceDisplayName(source, catalog) + (feeds && !(source.label || "").trim() ? " — " + feeds : "");
+    repoNames.length > 1 ? repoNames.length + " repos" : repoNames[0] || "";
+  const base = !source.provider
+    ? "New ticket source"
+    : sourceDisplayName(source, catalog) + (feeds && !(source.label || "").trim() ? " · " + feeds : "");
   // Always show which CLI this queue runs, not just when it is overridden.
   // Saved sources render collapsed, so an agent shown only when explicitly set
   // made the common case — "it's on the app default" — indistinguishable from
   // "this source has no agent setting at all", which is what sent people
   // looking for the picker in the first place.
-  const summary =
-    base + " · " + (source.agent || (agents.fallback ? agents.fallback + " (default)" : "app default"));
+  const summary = !source.provider
+    ? base
+    : base + " · " + (source.agent || (agents.fallback ? agents.fallback + " (default)" : "app default"));
   // A GitHub Issues source saved before the one GitHub credential path still
   // carries its own token (the server masks it as "•••set"): still read, as
   // the last fallback, this release only.
@@ -1613,6 +1791,15 @@ function TicketSourceCard({
     if (wantAdvanced) setAdvancedOpen(true);
   }, [wantAdvanced]);
 
+  // The Name field saves as you type, like every other text field here.
+  const labelSave = useAutosave<string>(
+    (v) => {
+      onDirty("label", false);
+      if (v !== (source.label || "")) onChange({ label: v });
+    },
+    () => onDirty("label", true)
+  );
+
   const renderField = (f: CatalogField) =>
     f.type === "state" ? (
       <StatePicker
@@ -1641,6 +1828,7 @@ function TicketSourceCard({
         source={source}
         error={errs[f.key]}
         onChange={onChange}
+        onDirty={(on) => onDirty(f.key, on)}
       />
     );
 
@@ -1652,11 +1840,15 @@ function TicketSourceCard({
   const cut = basics.findIndex((f) => f.key === "assignee_scope" || f.type === "state");
   const credFields = cut < 0 ? basics : basics.slice(0, cut);
   const filterFields = cut < 0 ? [] : basics.slice(cut);
-  const saveLine = !saved
+  const saveLine = !source.provider
+    ? "Pick a tracker to start"
+    : !saved
     ? unsaved
       ? "Not saved — fill in the marked fields"
-      : "Not saved yet"
-    : save?.state === "saving"
+      : dirty
+        ? "Saving…"
+        : "Not saved yet"
+    : dirty || save?.state === "saving" || save?.state === "pending"
       ? "Saving…"
       : save?.state === "failed"
         ? "Not saved"
@@ -1674,8 +1866,8 @@ function TicketSourceCard({
       footer={
         <>
           <span
-            className={"ik-save-line" + (save?.state === "saved" && saved ? " ok" : "")}
-            data-save={!saved ? "unsaved" : save?.state || ""}
+            className={"ik-save-line" + (save?.state === "saved" && saved && !dirty ? " ok" : "")}
+            data-save={!saved ? "unsaved" : dirty ? "pending" : save?.state || ""}
             role="status"
             aria-live="polite"
           >
@@ -1692,22 +1884,41 @@ function TicketSourceCard({
         <select
           className="tk-provider"
           value={source.provider}
-          onChange={(e) => onChange({ provider: e.target.value })}
+          onChange={(e) => {
+            if (e.target.value) onChange({ provider: e.target.value });
+          }}
         >
+          {!source.provider ? <option value="">Choose a tracker…</option> : null}
           {catalog.map((p) => (
             <option key={p.id} value={p.id}>
               {p.label}
             </option>
           ))}
         </select>
-        <span className="set-hint tk-blurb">{meta?.blurb || ""}</span>
+        <span className="set-hint tk-blurb">
+          {meta?.blurb || (source.provider ? "" : "Shortcut, Jira, Linear, Asana or GitHub Issues.")}
+        </span>
       </label>
+      {source.provider === "github_issues" ? (
+        // The two GitHub-issue homes, told apart: this one is "issues assigned
+        // to me, as tickets"; the GitHub issues tab is "every NEW issue in a repo".
+        <p className="set-hint tk-gh-issues-note" role="note">
+          Want every new issue in a repo to start on its own?{" "}
+          <button type="button" className="linklike" onClick={() => gotoTab("issues")}>
+            Use the GitHub issues tab
+          </button>
+          .
+        </p>
+      ) : null}
       {ownGithubToken && (
         <p className="set-hint tk-own-token" role="note" data-tk-notice="own-token">
           This source still has its own token — move it to Settings → Connections → GitHub →
           Connect (read as a fallback this release, ignored from the next)
         </p>
       )}
+      {/* Nothing below means anything until the tracker is picked. */}
+      {source.provider ? (
+        <>
       <div className="tk-fields">{credFields.map(renderField)}</div>
       {/* Test sits right under the credentials it checks — it is also what
           loads the workflow states the fields below pick from. */}
@@ -1723,7 +1934,15 @@ function TicketSourceCard({
       </div>
       <div className="tk-fields">{filterFields.map(renderField)}</div>
       {/* One repo, or a set of them with per-repo hints (repoList.ts). */}
-      <RepoListField source={source} onChange={onChange} />
+      <RepoListField
+        source={source}
+        onChange={(patch) => {
+          onDirty("repos", false);
+          onChange(patch);
+        }}
+        onPending={() => onDirty("repos", true)}
+        onSettled={() => onDirty("repos", false)}
+      />
       <label className="set-row">
         <span className="set-label">Agent</span>
         <select
@@ -1763,8 +1982,13 @@ function TicketSourceCard({
               className="tk-label"
               placeholder="e.g. Jira – EU"
               defaultValue={source.label || ""}
-              onBlur={(e) => {
-                if (e.target.value !== (source.label || "")) onChange({ label: e.target.value });
+              onChange={(e) => labelSave.schedule(e.target.value)}
+              onBlur={labelSave.flush}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  labelSave.flush();
+                }
               }}
             />
             <span className="set-hint">
@@ -1828,6 +2052,8 @@ function TicketSourceCard({
           {advancedFields(meta).map(renderField)}
         </div>
       </details>
+        </>
+      ) : null}
     </SourceCard>
   );
 }
@@ -1866,12 +2092,27 @@ function CatalogInput({
   source,
   error,
   onChange,
+  onDirty,
 }: {
   field: CatalogField;
   source: Source;
   error?: string;
   onChange(patch: Record<string, string | null>): void;
+  /** The box holds typed text not sent yet (`true`), or no longer (`false`). */
+  onDirty?(on: boolean): void;
 }) {
+  // Sent when typing pauses, on blur, on Enter and when the card goes away —
+  // a typed value never sits unsaved under "Saved ✓".
+  const save = useAutosave<string>(
+    (v) => {
+      onDirty?.(false);
+      // Blank password => keep stored secret (omit from patch); Clear is
+      // the one way to drop it.
+      if (f.secret && v === "") return;
+      if (v !== (source[f.key] || "")) onChange({ [f.key]: v });
+    },
+    () => onDirty?.(true)
+  );
   const choices = f.key === "project" && f.auto ? workspaceChoices(source) : [];
   if (choices.length) {
     return (
@@ -1910,11 +2151,13 @@ function CatalogInput({
       aria-invalid={error ? true : undefined}
       placeholder={f.secret && stored ? "•••set (saved) — type to replace" : f.placeholder || ""}
       defaultValue={f.secret ? "" : source[f.key] || ""}
-      onBlur={(e) => {
-        // Blank password => keep stored secret (omit from patch); Clear is
-        // the one way to drop it.
-        if (f.secret && e.target.value === "") return;
-        if (e.target.value !== (source[f.key] || "")) onChange({ [f.key]: e.target.value });
+      onChange={(e) => save.schedule(e.target.value)}
+      onBlur={save.flush}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          save.flush();
+        }
       }}
     />
   );

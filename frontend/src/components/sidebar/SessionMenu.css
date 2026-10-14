@@ -1,0 +1,153 @@
+/* The one per-session menu (SessionMenu.tsx): the same items in the sidebar
+   row's accordion (.inst-actions) and the pane header's popover
+   (.pane-more-menu). Everything here is scoped to .session-menu so the two
+   hosts draw it identically. */
+
+.session-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.session-menu .sm-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.session-menu .sm-head {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 4px 10px 2px;
+}
+
+.session-menu button {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.session-menu button:hover,
+.session-menu button:focus-visible {
+  background: var(--panel-2);
+}
+
+.session-menu button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.session-menu button:disabled:hover {
+  background: none;
+}
+
+.session-menu .sm-verb {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.session-menu .sm-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-menu .kbd {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted);
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.session-menu .end-sub {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: normal;
+}
+
+.session-menu .sm-caret {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.session-menu .sm-more-items {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+  margin-left: 10px;
+}
+
+.session-menu button.danger {
+  color: var(--red);
+}
+
+.session-menu button.danger:hover {
+  background: rgba(222, 97, 62, 0.14);
+}
+
+.session-menu .menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 8px;
+}
+
+/* Delete…, armed: a calm question; only the answer that deletes is red. */
+.session-menu .del-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.session-menu .del-q {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.session-menu .del-acts {
+  display: flex;
+  flex-direction: row;
+  gap: 6px;
+}
+
+.session-menu .del-acts button {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+}
+
+.session-menu .del-acts button.danger {
+  border-color: var(--red);
+}
+
+/* In the pane popover: tall menus scroll instead of running off the screen. */
+.pane-more-menu .session-menu {
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  min-width: 220px;
+}

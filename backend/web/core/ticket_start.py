@@ -322,10 +322,16 @@ async def list_assigned_tickets() -> dict:
         # bucket names — tickets in any other bucket must not read as
         # "queued for auto ingestion".
         from backend.ticket_ingestion.providers.base import (
+            auto_start_waiting,
             ingest_label_list,
             ingests_any_assignee,
             workflow_state_list,
         )
+
+        # A source that auto-starts nothing yet (no state picked on a new
+        # source, or a typed state Test hasn't matched): every row says so,
+        # rather than "will auto-start" over a scan that never runs.
+        source_waiting = auto_start_waiting(src)
 
         state_filter = workflow_state_list(src)
         if not state_filter and getattr(src, "workflow_state_id", None) is not None:
@@ -380,6 +386,10 @@ async def list_assigned_tickets() -> dict:
                 failures=failures,
                 ingest_labels=ingest_label_list(src),
             )
+            if source_waiting:
+                reasons = [source_waiting] + [
+                    r for r in reasons if r != "not in an auto-start state"
+                ]
             claimed = _tracker.claimed_by_other(
                 story, src, me=claim_me, started_ids=started
             )

@@ -84,7 +84,7 @@ export function AutomationBar() {
       title={
         pause.paused
           ? "Intake is paused — nothing new starts on its own"
-          : "Tickets — auto-start starts a session for each ticket in your auto-start states. Stays in this state across restarts."
+          : "Tickets — auto-start starts a session for each ticket in your auto-start states. Stays in this state across restarts. ⏸ pauses tickets, GitHub PRs and GitHub issues together."
       }
     >
       <span
@@ -126,25 +126,34 @@ export function AutomationBar() {
         Tickets
       </button>
       <span className="dc-actions">
-        {(pause.paused || pause.onKinds.length > 0) && (
-          <button
-            type="button"
-            id="intake-pause-btn"
-            className={"dc-pause" + (pause.paused ? " on" : "")}
-            disabled={pause.busy}
-            aria-pressed={pause.paused}
-            aria-label={pause.paused ? "Resume intake" : "Pause intake"}
-            title={
-              pause.paused
-                ? "Resume intake — turn back on what was on before the pause"
-                : "Pause intake — stop auto-start for tickets, PR comments and issues at once"
-            }
-            onClick={() => void pause.toggle()}
-          >
-            {pause.paused ? "▶" : "⏸"}
-          </button>
-        )}
-        <label className="dc-switch" title="Auto-start tickets — the same switch as Intake → Tickets">
+        {/* Always here, so pausing is never a hunt: disabled (and saying
+            why) while nothing auto-starts, ▶ while paused. */}
+        <button
+          type="button"
+          id="intake-pause-btn"
+          className={"dc-pause" + (pause.paused ? " on" : "")}
+          disabled={pause.busy || (!pause.paused && !pause.onKinds.length)}
+          aria-pressed={pause.paused}
+          aria-label={pause.paused ? "Resume intake" : "Pause intake"}
+          title={
+            pause.paused
+              ? "Resume intake — turn back on what was on before the pause"
+              : pause.onKinds.length
+                ? "Pause intake — stop auto-start for tickets, GitHub PRs and GitHub issues at once"
+                : "Pause intake — nothing auto-starts right now"
+          }
+          onClick={() => void pause.toggle()}
+        >
+          {pause.paused ? "▶" : "⏸"}
+        </button>
+        <label
+          className={"dc-switch" + (!desired && pause.pausedKind("tickets") ? " paused" : "")}
+          title={
+            !desired && pause.pausedKind("tickets")
+              ? "Auto-start tickets — paused; ▶ resumes it"
+              : "Auto-start tickets — the same switch as Intake → Tickets"
+          }
+        >
           <input
             type="checkbox"
             id="mindflock-toggle"

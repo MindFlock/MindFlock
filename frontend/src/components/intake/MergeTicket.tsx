@@ -1,5 +1,10 @@
-/** Intake → Tickets → **Merge into…** — fold one duplicate ticket into another
- * and delete it.
+/** Intake → Tickets → a row's Options → **Combine with another ticket (deletes
+ * this one)…** — fold one duplicate ticket into another and delete it.
+ *
+ * WHERE IT LIVES. Tracker housekeeping, not intake: it sits at the bottom of
+ * the row's Options, under its own "On the tracker" heading, never beside
+ * Start (round 3: a destructive tracker write one click from Start, named like
+ * a git merge, read as a git merge).
  *
  * The surface this exists for: two people file the same task, and the queue now
  * has two rows that will each become a session. The fix has to happen in the
@@ -77,7 +82,7 @@ export function MergeButton({
           inches apart is a question about which one means what. The button is
           highlighted and `aria-expanded`, which is how every other toggle in
           this dialog says it is open. */}
-      Merge into…
+      Combine with another ticket (deletes this one)…
     </button>
   );
 }
@@ -124,12 +129,12 @@ export function MergeDrawer({
       // toast: "it could not be deleted, go and delete it by hand" is an
       // instruction, and an instruction has to outlive the animation.
       if (tone === "ok") toast(text);
-      else errorPop("Merged, with something left to do", text);
+      else errorPop("Combined, with something left to do", text);
       onClose();
       onDone();
     } catch (err) {
       errorPop(
-        "Merge failed — " + row.slug + " is untouched",
+        "Combine failed — " + row.slug + " is untouched",
         (err as Error).message || "the server gave no reason"
       );
       setBusy(false);
@@ -140,7 +145,7 @@ export function MergeDrawer({
   return (
     <div className="ik-merge">
       <label className="ik-merge-pick">
-        <span className="ik-merge-label">Merge {row.slug} into</span>
+        <span className="ik-merge-label">Combine {row.slug} into</span>
         <input
           type="text"
           className="ik-merge-filter"
@@ -159,7 +164,7 @@ export function MergeDrawer({
           className="ik-merge-target"
           value={effective}
           disabled={busy}
-          aria-label={"Ticket to merge " + row.slug + " into"}
+          aria-label={"Ticket to combine " + row.slug + " into"}
           onChange={(e) => {
             setTarget(e.target.value);
             setArmed(false);
@@ -167,7 +172,7 @@ export function MergeDrawer({
         >
           <option value="">
             {candidates.length
-              ? "Pick the ticket that survives…"
+              ? "Pick the ticket to keep…"
               : query
                 ? "No other ticket here matches that"
                 : "No other ticket on this source"}
@@ -190,16 +195,15 @@ export function MergeDrawer({
           </>
         ) : (
           <>
-            Only tickets from this same source can receive it: the files cannot follow a
-            ticket into another tracker, and the surviving ticket keeps its own queue's
-            repo and agent.
+            Only tickets from this same source are offered — a ticket can't move to
+            another tracker. The one you keep keeps its own repo and agent.
           </>
         )}
       </p>
       {hasSession && picked ? (
         <p className="ik-merge-warn">
           A session is open on {row.slug}. It keeps running on its own workspace and
-          branch — merging the ticket away does not close it, and nothing here touches
+          branch — combining the ticket away does not close it, and nothing here touches
           the work in it. Close it yourself if it is the duplicate you are dropping.
         </p>
       ) : null}
@@ -214,15 +218,15 @@ export function MergeDrawer({
           title={
             effective
               ? "Deletes " + row.slug + " once its content is on " + (picked?.slug || "")
-              : "Pick the ticket that survives first"
+              : "Pick the ticket to keep first"
           }
           onClick={() => (armed ? submit() : setArmed(true))}
         >
           {busy
-            ? "Merging…"
+            ? "Combining…"
             : armed
-              ? "Confirm — delete " + row.slug
-              : "Merge and delete " + row.slug}
+              ? "Confirm — delete " + row.slug + ", keep " + (picked?.slug || "")
+              : "Combine and delete " + row.slug}
         </button>
       </div>
     </div>

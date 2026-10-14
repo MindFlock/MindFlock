@@ -1,0 +1,74 @@
+/* Connect GitHub's numbered token steps (components/dialogs/ConnectGitHub.tsx):
+   1 make a token → 2 paste it → 3 Save & test, the answer under step 3. The
+   dialog's card and the rest of its rows are styled in SetupDialog.css. */
+.gh-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.gh-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.gh-step-n {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.gh-step-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.gh-step-title {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 22px;
+}
+
+.gh-step-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.gh-step .gh-token-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
+/* A link styled as the app's small button. */
+.gh-step a.gh-token-link {
+  text-decoration: none;
+  display: inline-block;
+}
+
+.gh-step .test-result {
+  font-size: 12px;
+}
+
+.gh-token-fold > .gh-steps {
+  margin-top: 10px;
+}

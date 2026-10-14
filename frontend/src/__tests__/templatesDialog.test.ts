@@ -90,7 +90,11 @@ describe("templateBody / formFromTemplate — the stored shape both ways", () =>
   it("sums a template up in one line", () => {
     expect(templateMeta(T[0])).toBe("claude · separate worktree");
     expect(templateMeta(T[1])).toBe("this folder directly · git init");
-    expect(templateMeta({ name: "c", repo_path: "/r", provisioned: true, workspace_strategy: "clone" })).toBe("/r · provisioned (clone)");
+    // The folder's own name (the card's tooltip has the path), and the New
+    // form's words for a provisioned worktree.
+    expect(templateMeta({ name: "c", repo_path: "/home/me/r", provisioned: true, workspace_strategy: "clone" })).toBe(
+      "r · separate worktree, provisioned (full clone)"
+    );
   });
 });
 

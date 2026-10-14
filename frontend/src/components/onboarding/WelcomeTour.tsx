@@ -19,6 +19,7 @@ import { firstPrefsPull } from "../../lib/prefsSync";
 import { Modal } from "../Modal";
 import { LEGACY_SCREEN_TABS } from "../intake/IntakeDialog";
 import { useDoctorWarn } from "../dialogs/SetupDialog";
+import { VERIFY_BLURB } from "../../lib/vocab";
 import "./WelcomeTour.css";
 
 interface Slide {
@@ -75,7 +76,7 @@ const SLIDES: Slide[] = [
     body: (
       <>
         <b>Intake</b> turns tickets, PRs and issues into sessions (Jira, Linear,
-        GitHub Issues, Shortcut, Asana). <b>Verify</b> checks what you shipped.{" "}
+        GitHub Issues, Shortcut, Asana). <b>Verify</b>: {VERIFY_BLURB}.{" "}
         <b>⚙ Customize</b> at the bottom of the sidebar adds more bars — like{" "}
         <b>Prompts</b>, your saved text one click from any session.
       </>
@@ -143,9 +144,19 @@ function useFirstLaunchTour() {
   useEffect(() => {
     if (!due) return;
     const ui = useUi.getState();
-    ui.markWelcomeTourSeen();
     if (!ui.tourOpen) useUi.setState({ tourOpen: true });
   }, [due]);
+  // Seen once it is CLOSED (Get started, Skip, Esc), not the moment it shows:
+  // a reload halfway through brings it back instead of losing it for good.
+  const open = useUi((s) => s.tourOpen);
+  const [wasOpen, setWasOpen] = useState(false);
+  useEffect(() => {
+    if (open) setWasOpen(true);
+    else if (wasOpen) {
+      setWasOpen(false);
+      useUi.getState().markWelcomeTourSeen();
+    }
+  }, [open, wasOpen]);
 }
 
 export function WelcomeTour() {

@@ -44,7 +44,7 @@ describe("the chords are table rows", () => {
       c: "Commit…",
       p: "Push",
       r: "Open PR",
-      o: "Open / focus IDE",
+      o: "Open in your code editor",
       d: "Duplicate session",
       h: "Hide / show window",
       m: "Code map",
@@ -98,7 +98,7 @@ describe("enable rules and words", () => {
   it("the window verb follows the pane, the IDE verb names the IDE", () => {
     expect(actionLabel("hide", { ...ctx({}), hidden: true })).toBe("Show window");
     expect(actionLabel("hide", ctx({}))).toBe("Hide window");
-    expect(actionLabel("ide", ctx({}))).toBe("Open / focus Cursor");
+    expect(actionLabel("ide", ctx({}))).toBe("Open in Cursor");
   });
 
   it("Close's palette hint carries its shortcut and where the session goes", () => {

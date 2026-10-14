@@ -51,7 +51,15 @@ import {
   loadUserPresets,
   type Preset,
 } from "../../lib/presets";
-import { ensureTemplates, saveTemplate, templatesNow, type Template } from "../../lib/templates";
+import {
+  ensureTemplates,
+  saveTemplate,
+  templatesNow,
+  templatesTarget,
+  type Template,
+} from "../../lib/templates";
+import { runTemplateNow } from "../../lib/templateRun";
+import { openSettings } from "../../lib/openSettings";
 import { toast } from "../../lib/toast";
 import { errMsg } from "../../lib/format";
 import { TemplatesDialog } from "./TemplatesDialog";
@@ -90,13 +98,16 @@ import {
   rememberedProfileVerdict,
   worktreeClampReason,
   agentMissingReason,
-  branchPreview,
+  hasTypedDraft,
   newSessionResume,
+  openingMode,
+  plannedName,
+  sessionsInRepo,
+  takenNames,
   preferInstalled,
   remoteBranchName,
   sessionsInFolder,
   templateFromForm,
-  titleFromPrompt,
   type InstalledMap,
   type NewTab,
   type PlanRun,
@@ -338,6 +349,22 @@ export function NewSessionDialog() {
   // Armed by a failed create, for the reopen it is about to trigger. See the
   // reset effect, which is the thing that has to know.
   const failedReopen = useRef(false);
+  /** The last close was a Create (or a run's start): the next opening starts
+   * fresh. Any other close keeps what was typed — see openingMode. */
+  const draftSpent = useRef(false);
+  /** The text "Set it up myself" last carried from the sentence into Task:
+   * a Task still holding exactly that is the sentence's, so a changed
+   * sentence replaces it — a Task edited since is the user's and is kept. */
+  const carried = useRef("");
+  /** The Task the opening's last-used template wrote by itself (not typed). */
+  const prefilledPrompt = useRef("");
+  /** Silences the open's loads when the dialog closes (see loadFor). */
+  const loadCleanup = useRef<(() => void) | null>(null);
+  /** The open's main load (agents, defaults, templates) has landed. A draft
+   * kept from an opening closed before it did loads again on reopen. */
+  const loadDone = useRef(false);
+  /** Agents installed here but known NOT signed in (GET /api/setup). */
+  const [signedOut, setSignedOut] = useState<Record<string, boolean>>({});
   // The Folder field and the browser's visibility travel together: see
   // folderReducer for the two orderings that forced them into one value. These
   // aliases keep the form's many readers reading a plain value, while every
@@ -370,6 +397,7 @@ export function NewSessionDialog() {
   const loadFor = (dev: string) => {
     const dapi = deviceApi(dev);
     let live = true;
+    loadDone.current = false;
     const here = () => live && deviceRef.current === dev;
     // The folder suggestions get a request of their own rather than a place in
     // the barrier below, because the endpoint walks the filesystem: hundreds of
@@ -393,6 +421,20 @@ export function NewSessionDialog() {
         if (here()) setSuggestions([]);
       }
     })();
+    // Which agents are signed in — this device only, and never in the way:
+    // its own request, a note under the Agent field when one is not.
+    if (!dev)
+      (async () => {
+        try {
+          const st = await dapi<{ logins?: Array<{ name: string; logged_in: boolean | null }> }>("/api/setup");
+          if (!here()) return;
+          const out: Record<string, boolean> = {};
+          for (const l of st.logins || []) if (l.logged_in === false) out[l.name] = true;
+          setSignedOut(out);
+        } catch {
+          if (here()) setSignedOut({});
+        }
+      })();
     (async () => {
       // Config, settings and templates all answer out of memory, so waiting for
       // the slowest of the three costs the dialog nothing.
@@ -469,6 +511,7 @@ export function NewSessionDialog() {
       // default — and only for this device: another device's agents and
       // accounts are its own.
       if (!dev) applyLastUsed.current(tpls, provs);
+      loadDone.current = true;
     })();
     return () => {
       // Answers for a dialog that has since been closed (or closed and reopened)
@@ -478,52 +521,15 @@ export function NewSessionDialog() {
     };
   };
 
-  // Reset + load fresh data on every open (matches openDialog()) — except the
-  // one open that is a failed create's own reopen.
-  //
-  // That path arrives here a tick after `submit` set the error, so this reset
-  // used to wipe the only report of the failure the user ever gets, along with
-  // the name, the prompt and the Provision tick they would have had to retype.
-  // A refused create was therefore indistinguishable from the New Session menu
-  // reopening itself for no reason. Nothing below needs redoing on that path
-  // either: the component never unmounts, so every list this effect loads is
-  // still in state from the open the user actually made.
-  useEffect(() => {
-    if (!open) {
-      // A CLOSE cancels the plan too, and nothing used to do it. The reset
-      // below was the only thing that bumped the seq, and it runs on OPEN — so
-      // closing the dialog registered no cleanup at all, and since this
-      // component never unmounts the answer landed ~15s later with its
-      // staleness check still passing, writing the model's folder into a form
-      // that was not on screen. Cancel first, return second.
-      cancelPlanRun(planRun.current);
-      return;
-    }
-    if (failedReopen.current) {
-      failedReopen.current = false;
-      newSessionResume.keep = false;
-      // failCreate has already put the form (page 2) back on screen. Name
-      // lives under More options, so open it for the caret to land there.
-      openedPage.current = 2;
-      openedFocus.current = "title";
-      setAdvancedOpen(true);
-      return;
-    }
-    if (newSessionResume.keep) {
-      // Back from Templates / Prompts (New → Manage…): the form exactly as it
-      // was left, with the lists it reads fetched again — that is what the
-      // trip was for.
-      newSessionResume.keep = false;
-      openedPage.current = page;
-      openedFocus.current = page === 2 ? "title" : "describe";
-      setSaveTplName(null);
-      setSavedPresets(loadUserPresets());
-      if (!deviceRef.current)
-        void ensureTemplates(true)
-          .then((list) => setTemplates(list))
-          .catch(() => {});
-      return;
-    }
+  /** Empty the form for a fresh start and load what it offers: every
+   * opening that keeps nothing, and Clear. `prefill` is Intake's "Start
+   * together…" list (a batch), "" otherwise. */
+  const resetForm = (prefill: string) => {
+    newSessionResume.keep = false;
+    newSessionResume.prompt = undefined;
+    draftSpent.current = false;
+    carried.current = "";
+    prefilledPrompt.current = "";
     openedFocus.current = "describe";
     // Back to Session on every open, for the reason the tab state's own
     // comment gives: Alt+N is a shortcut for starting work, and a shortcut
@@ -543,7 +549,6 @@ export function NewSessionDialog() {
     // longer showing.
     // Intake's "Start together…" hands its ticked tickets over as the box's
     // text, once, and that opening is a batch; every other starts empty.
-    const prefill = useUi.getState().takeNewPrefill();
     setDescribe(prefill);
     setBatch(!!prefill);
     setBaseBranch("");
@@ -565,11 +570,8 @@ export function NewSessionDialog() {
     // planFolderReducer's "reopen" for the asymmetry and why keeping it is
     // safe: the gate is derived from the live field, so a retained plan
     // self-clears the moment that field moves off it.
-    // Every opening starts at the sentence (a batch at its list). The form is
-    // one click away and keeps whatever the last opening left in it only as
-    // far as the resets below allow — page is not one of the things worth
-    // remembering, because a dialog that reopens halfway through a flow nobody
-    // is in the middle of reads as a bug.
+    // A fresh opening starts at the sentence (a batch at its list). An
+    // opening that keeps a typed draft keeps its page too (see openingMode).
     openedPage.current = 1;
     setPage(1);
     setNewFolderOk(false);
@@ -591,7 +593,7 @@ export function NewSessionDialog() {
     // "Git & workspace" starts SHUT, and its summary line says what it holds
     // (where the work happens, and the base branch), so the choice is read
     // without a click and changed with one. Set here, not only in useState:
-    // this reset runs on EVERY open.
+    // this reset runs on every fresh open.
     setAdvancedOpen(false);
     setLaunchOpen(false);
     folderDo({ t: "reopen" });
@@ -610,7 +612,85 @@ export function NewSessionDialog() {
     setProfileModels({});
     setSavedPresets(loadUserPresets());
     loadedDevice.current = deviceRef.current;
-    return loadFor(deviceRef.current);
+    loadCleanup.current?.();
+    loadCleanup.current = loadFor(deviceRef.current);
+  };
+
+  // What each opening does with the form (openingMode): a failed create's
+  // own reopen and a hand-back from Templates/Prompts keep it exactly; so
+  // does any opening while something TYPED is still in it — closing New,
+  // or a trip to Intake or Settings, never throws a sentence away. Only a
+  // Create, Clear or Intake's "Start together…" starts it fresh.
+  //
+  // The failed-create path arrives here a tick after `submit` set the error,
+  // so a reset would wipe the only report of the failure the user ever gets,
+  // along with the name, the prompt and the Provision tick they would have
+  // had to retype. Nothing needs redoing on the keeping paths either: the
+  // component never unmounts, so every list the open loaded is still in state.
+  useEffect(() => {
+    if (!open) {
+      // A CLOSE cancels the plan too, and nothing used to do it. The reset
+      // below was the only thing that bumped the seq, and it runs on OPEN — so
+      // closing the dialog registered no cleanup at all, and since this
+      // component never unmounts the answer landed ~15s later with its
+      // staleness check still passing, writing the model's folder into a form
+      // that was not on screen. Cancel first, return second.
+      cancelPlanRun(planRun.current);
+      loadCleanup.current?.();
+      loadCleanup.current = null;
+      return;
+    }
+    if (failedReopen.current) {
+      failedReopen.current = false;
+      newSessionResume.keep = false;
+      // failCreate has already put the form (page 2) back on screen. Name
+      // lives under More options, so open it for the caret to land there.
+      openedPage.current = 2;
+      openedFocus.current = "title";
+      setAdvancedOpen(true);
+      return;
+    }
+    const prefill = useUi.getState().takeNewPrefill();
+    const mode = openingMode({
+      failedReopen: false,
+      resume: newSessionResume.keep,
+      prefill: !!prefill,
+      draft: hasTypedDraft({ describe, title, prompt, prefilledPrompt: prefilledPrompt.current }),
+      spent: draftSpent.current,
+    });
+    if (mode === "resume") {
+      // The form exactly as it was left, with the lists it reads fetched
+      // again (Templates/Prompts are where they get edited). A prompt picked
+      // in Prompts (New → Manage…) lands in the Task box.
+      newSessionResume.keep = false;
+      const picked = newSessionResume.prompt;
+      newSessionResume.prompt = undefined;
+      if (picked !== undefined) {
+        setPrompt(picked);
+        setPresetValue("");
+      }
+      openedPage.current = page;
+      openedFocus.current = page === 2 ? "title" : "describe";
+      setTab("session");
+      // The close cancelled any read in flight; its spinner goes with it.
+      setDescribing(false);
+      setDescribeSlow(false);
+      setSaveTplName(null);
+      setSavedPresets(loadUserPresets());
+      if (!loadDone.current) {
+        // Closed before its first load landed: load now (it never writes
+        // over what was typed — see applyLastUsed).
+        loadCleanup.current = loadFor(deviceRef.current);
+        return;
+      }
+      if (!deviceRef.current)
+        void ensureTemplates(true)
+          .then((list) => setTemplates(list))
+          .catch(() => {});
+      return;
+    }
+    resetForm(prefill);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   // The saved-prompt list is the templates list: repaint it when the fetch
@@ -854,8 +934,13 @@ export function NewSessionDialog() {
   applyLastUsed.current = (tpls, provs) => {
     const { choice } = lastNewSessionChoice(repoPath);
     if (!choice) return;
+    // A kept draft's late load: what was typed outranks the memory.
+    if (prompt.trim() || title.trim()) return;
     const t = choice.template ? tpls.find((x) => x.name === choice.template) : null;
-    if (t) fillFromTemplate(t, { quiet: true });
+    if (t) {
+      fillFromTemplate(t, { quiet: true });
+      prefilledPrompt.current = t.prompt || "";
+    }
     if (choice.program && provs.some((p) => p.name === choice.program)) setAgent(choice.program);
     // Carry the agent being applied this tick: setAccount would otherwise read
     // the previous render's `program` and could swap the remembered agent away.
@@ -913,8 +998,10 @@ export function NewSessionDialog() {
     setAdvancedOpen(true);
   };
 
-  // Live sessions, for "is anyone already editing this folder directly?".
+  // Live sessions, for "is anyone already editing this folder directly?",
+  // "who else works in this repo?" and the names a new one can't take.
   const { data: liveRows } = useInstances();
+  const aliases = useUi((s) => s.aliases);
 
   // The Templates dialog is this dialog's manager (New → Manage… hands over
   // to it and it hands back), so it rides here, in the one component that is
@@ -966,13 +1053,24 @@ export function NewSessionDialog() {
     : sessionsInFolder(liveRows || [], [folderPath, folderCheck?.asked === folderPath ? folderCheck.resolved || "" : ""]);
   const continueBranch =
     !!baseBranch && continueOn === baseBranch && canContinue ? remoteBranchName(baseBranch) : "";
-  const branchName =
-    isGit && folderCheck?.branchPrefix !== undefined
-      ? branchPreview({ prefix: folderCheck.branchPrefix || "", title, prompt })
-      : "";
+  /** What Create will call the session — numbered past the names already
+   * taken, as the server does — and the branch it cuts. */
+  const planned = plannedName({
+    prefix: (folderCheck?.asked === folderPath && folderCheck?.branchPrefix) || "",
+    title,
+    prompt,
+    taken: device ? new Set<string>() : takenNames(liveRows || [], aliases),
+  });
+  const branchKnown = isGit && folderCheck?.branchPrefix !== undefined;
+  /** Sessions on this device already working in this repo, any way. */
+  const others = device
+    ? []
+    : sessionsInRepo(liveRows || [], [folderPath, folderCheck?.asked === folderPath ? folderCheck.resolved || "" : ""]);
   const baseLabel = baseBranch || branches?.current || "";
   /** Why Create must not launch the agent in the field ("" = go ahead). */
   const agentMissing = device ? "" : agentMissingReason(canonAgent(program), installed);
+  /** Installed but known not signed in: it would stop at its sign-in. */
+  const agentSignedOut = !device && !agentMissing && !!signedOut[canonAgent(program)];
   /** More options' summary line: what in it is NOT the default. */
   const moreBits: string[] = [];
   if (title.trim()) moreBits.push("named " + title.trim());
@@ -1088,7 +1186,12 @@ export function NewSessionDialog() {
     setPromptOpen,
     setPage,
     planFolderDo,
-    closeDialog,
+    // A create (or a run's start) closes the dialog: the draft it was made
+    // from is spent, so the next opening starts fresh.
+    closeDialog: () => {
+      draftSpent.current = true;
+      closeDialog();
+    },
   });
   // Never launch an agent this device doesn't have: the session would sit
   // "Idle" on "command not found". Said where the button was pressed.
@@ -1142,8 +1245,14 @@ export function NewSessionDialog() {
       }
       setActiveTemplate(String(body.name));
       setSaveTplName(null);
+      // Points at the strip it just appeared in (▶ / ⏰ on its chip); a click
+      // opens Templates itself. Up for 6s — a link needs time to be read.
       toast(
-        `Saved template “${body.name}” — start it from Templates (Run now) or give it a schedule there`
+        `Saved template “${body.name}” — ▶ runs it and ⏰ schedules it, in Templates at the top of New. Click to open Templates.`,
+        {
+          onClick: () =>
+            useUi.getState().openDialogFor("templates", templatesTarget({ fromNew: true, schedule: null })),
+        }
       );
     } catch (err) {
       setError("Couldn't save the template: " + errMsg(err));
@@ -1152,8 +1261,50 @@ export function NewSessionDialog() {
     }
   };
 
-  const { startNow, cancelDescribe, runDescribe, fillFormInstead } = describeFlow({
+  /** Page 1's Create session: start NOW, in the folder the form holds, with
+   * the sentence as typed as its task — no model turn. The sentence is also
+   * written into the Task box, so any refusal lands on a form that has it. */
+  const startRaw = () => {
+    const text = describe.trim();
+    if (!text) {
+      setPlanError("Type what you want to work on first.");
+      return;
+    }
+    cancelPlanRun(planRun.current);
+    setDescribing(false);
+    setDescribeSlow(false);
+    setPlanError("");
+    setPrompt(text);
+    carried.current = text;
+    if (!folderPath) {
+      setPage(2);
+      setError("Pick a folder for it, then Create.");
+      return;
+    }
+    if (agentMissing) {
+      setPage(2);
+      setError("Can't create yet — pick an agent that's installed.");
+      return;
+    }
+    void submitRaw({ prompt: text }).then((sent) => {
+      // A guard refused (a name instead of a folder, a folder to confirm…):
+      // the form is where that gets fixed.
+      if (!sent) setPage(2);
+    });
+  };
+
+  /** Clear: the explicit way to throw a draft away (Create is the other). */
+  const clearDraft = () => {
+    resetForm("");
+    window.setTimeout(() => describeRef.current?.focus(), 0);
+  };
+  const draftTyped = hasTypedDraft({ describe, title, prompt, prefilledPrompt: prefilledPrompt.current });
+
+  const { startNow, cancelDescribe, runDescribe, setUpMyself } = describeFlow({
     describe,
+    prompt,
+    carried,
+    startRaw,
     describing,
     newFolderOk,
     dapi,
@@ -1185,6 +1336,24 @@ export function NewSessionDialog() {
     postCreate,
   });
 
+  /** The agent would stop at its own sign-in: said before Create, with the
+   * way to fix it. */
+  const signedOutNote = (
+    <p className="nf-git-nudge nf-agent-missing" id="new-agent-signin" role="status">
+      {canonAgent(program)} isn't signed in yet — a session would stop at its sign-in screen.{" "}
+      <button
+        type="button"
+        className="linklike"
+        onClick={() => {
+          closeDialog();
+          openSettings("coding");
+        }}
+      >
+        Sign in…
+      </button>
+    </p>
+  );
+
   /** Page 1's sentence box. */
   const describeProps = {
     batch,
@@ -1200,7 +1369,7 @@ export function NewSessionDialog() {
     planError,
     setPlanError,
     describeFailed,
-    fillFormInstead,
+    fillFormInstead: setUpMyself,
     newFolderRow,
     runBrowse,
     setRunBrowse,
@@ -1210,6 +1379,34 @@ export function NewSessionDialog() {
     suggestions,
     device,
     homePath,
+    onClear: draftTyped ? clearDraft : undefined,
+    agentNote: agentSignedOut ? signedOutNote : null,
+  };
+
+  /** The template strip's ▶ and ⏰ (this device's list only — another
+   * device's template runs there). ▶ starts it now; New steps aside and
+   * keeps what was typed for next time. */
+  const runTpl = device
+    ? undefined
+    : (t: Template) => {
+        closeDialog();
+        void runTemplateNow(t.name);
+      };
+  const scheduleTpl = device
+    ? undefined
+    : (t: Template) =>
+        useUi.getState().openDialogFor("templates", templatesTarget({ fromNew: true, schedule: t.name }));
+  /** A template's name: fill the form from it (on page 1, then show it). */
+  const pickTpl = (t: Template) => {
+    fillFromTemplate(t);
+    if (page === 1) {
+      // Its own task wins; a template without one takes the sentence.
+      if (!t.prompt && describe.trim()) {
+        setPrompt(describe.trim());
+        carried.current = describe.trim();
+      }
+      setPage(2);
+    }
   };
 
   return (
@@ -1299,13 +1496,29 @@ export function NewSessionDialog() {
             </div>
           )}
           {page === 1 ? (
-            <DescribeSection {...describeProps} />
+            <>
+              <DescribeSection {...describeProps} />
+              {/* The second door, under the first: a saved setup, run now,
+                  scheduled, or filled in. Not for a batch (that is a list). */}
+              {!batch && (
+                <TemplatesStrip
+                  landing
+                  templates={templates}
+                  activeTemplate={activeTemplate}
+                  onPick={pickTpl}
+                  onRun={runTpl}
+                  onSchedule={scheduleTpl}
+                />
+              )}
+            </>
           ) : (
             <>
               <TemplatesStrip
                 templates={templates}
                 activeTemplate={activeTemplate}
-                fillFromTemplate={fillFromTemplate}
+                onPick={pickTpl}
+                onRun={runTpl}
+                onSchedule={scheduleTpl}
               />
 
               <div className="nf-quick">
@@ -1341,6 +1554,7 @@ export function NewSessionDialog() {
                   {agentMissing}
                 </p>
               )}
+              {agentSignedOut && signedOutNote}
 
               <ModelRow
                 selectedProfile={selectedProfile}
@@ -1390,10 +1604,12 @@ export function NewSessionDialog() {
                   setSplit={setSplit}
                   worktreeClamped={worktreeClamped}
                   isGit={isGit}
-                  branch={branchName}
+                  name={branchKnown ? planned : null}
+                  prefix={(folderCheck?.branchPrefix as string) || ""}
                   baseLabel={baseLabel}
                   continueBranch={continueBranch}
                   sharers={sharers}
+                  others={others}
                 />
               )}
 
@@ -1430,7 +1646,9 @@ export function NewSessionDialog() {
                       id="new-title"
                       ref={titleRef}
                       autoComplete="off"
-                      placeholder={(titleFromPrompt(prompt) || "untitled") + " — Enter creates it"}
+                      placeholder={
+                        (planned.from === "none" ? "named from the task" : planned.title) + " — Enter creates it"
+                      }
                       value={title}
                       onChange={(e) => setTitle(e.target.value)}
                     />
@@ -1478,6 +1696,12 @@ export function NewSessionDialog() {
                         limit={splitLimit}
                         text={prompt || describe}
                       />
+                      {!splitOn && mcpOk.reason !== SERVER_NO_SPLIT && (
+                        <p className="nf-opt-help muted" id="new-split-help">
+                          Lets the agent break a big task into up to {clampSplit(maxPieces, splitLimit)} parallel
+                          sessions — you approve the split first.
+                        </p>
+                      )}
                       {splitSum && (
                         <p className="rt-sum" aria-live="polite">
                           {splitSum.lead} {splitSum.tail && <span className="muted">{splitSum.tail}</span>}{" "}
@@ -1545,6 +1769,8 @@ export function NewSessionDialog() {
           runDescribe={runDescribe}
           startRun={startRun}
           startNow={startNow}
+          setUpMyself={setUpMyself}
+          onClear={draftTyped ? clearDraft : undefined}
           saveTpl={{
             name: saveTplName,
             setName: setSaveTplName,

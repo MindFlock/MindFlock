@@ -602,3 +602,13 @@ def test_mobile_payload_leads_with_tailscale_on_the_phone(monkeypatch):
         TestClient(server.app, client=("100.64.0.99", 50000)).get("/api/mobile").json()
     )
     assert away["phone_app"]["login"] == ""  # who you are is for this device only
+
+
+def test_daemon_not_answering_on_macos_never_says_systemctl(monkeypatch):
+    """The first-run phone step shows this fix verbatim: a Mac has no systemd,
+    so its variant is "open the Tailscale app", with no command at all."""
+    h = _health(monkeypatch, None, os_kind="macos")
+    issue = h["issues"][0]
+    assert issue["id"] == "not_running"
+    assert "systemctl" not in issue["message"] + issue.get("fix", "")
+    assert "Tailscale app" in issue["message"] and not issue.get("fix")

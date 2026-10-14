@@ -7,6 +7,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from "rea
 import { api } from "../../api/client";
 import type { Json } from "../../api/types";
 import { toast } from "../../lib/toast";
+import { flashSaved } from "./savedCue";
 import {
   fetchSettingsDoc,
   putSettingsDoc,
@@ -60,9 +61,10 @@ export function useSettingsModel(open: boolean): SettingsModel {
         // hand-rolled in exactly one screen before, which is precisely how the
         // fast-track rows shipped without it.
         void refreshConfig();
-        // Just "Saved": the field you touched is the one under your cursor, and
-        // its raw key ("Saved window budget usd") was config vocabulary.
-        toast("Saved");
+        // "✓ Saved" by the control you touched (savedCue.ts); a toast only
+        // when there is no such control on screen. Just "Saved" either way:
+        // the raw key ("Saved window budget usd") was config vocabulary.
+        if (!flashSaved()) toast("Saved");
       } catch (err) {
         toast("Save failed: " + ((err as Error).message || field));
         reload(); // re-sync on failure
@@ -105,9 +107,23 @@ export function useSettings(): SettingsModel {
   return ctx;
 }
 
+/** Why `raw` is not a number this field takes ("" when it is fine). Blank is
+ * always fine — it means the field's default, which the placeholder names
+ * ("no limit"), so the message points at it instead of a negative number
+ * silently meaning the same thing. */
+export function numberFieldError(raw: string, min = 0, placeholder = ""): string {
+  const v = raw.trim();
+  if (!v) return "";
+  const n = Number(v);
+  if (Number.isFinite(n) && n >= min) return "";
+  const blank = placeholder && !/^[\d.]+$/.test(placeholder) ? ", or leave it blank for " + placeholder : "";
+  return "Enter a number, " + min + " or more" + blank + ".";
+}
+
 /** One generic settings field bound to group/field. Uncontrolled between
  * saves (mirrors the vanilla change-event flow): value seeds from settings,
- * commits on change/blur. */
+ * commits on change/blur. A number field refuses a value below `min`
+ * (default 0) with the reason under it, rather than saving it. */
 export function SettingField(props: {
   group: string;
   field: string;
@@ -116,16 +132,24 @@ export function SettingField(props: {
   title?: string;
   className?: string;
   options?: Array<{ value: string; label: string }>;
+  /** Lowest number a `type="number"` field takes (default 0). */
+  min?: number;
 }) {
   const s = useSettings();
   const stored = s.get(props.group, props.field);
   const isSecret = props.type === "password";
   const display = isSecret ? "" : stored == null ? "" : String(stored);
   const [value, setValue] = useState(display);
+  const [error, setError] = useState("");
   useEffect(() => setValue(display), [display]);
 
   const commit = () => {
     if (isSecret && value === "") return; // blank secret = keep existing
+    if (props.type === "number") {
+      const why = numberFieldError(value, props.min ?? 0, props.placeholder || "");
+      setError(why);
+      if (why) return;
+    }
     if (value === display && !isSecret) return;
     s.saveField(props.group, props.field, value);
     if (isSecret) setValue("");
@@ -150,11 +174,13 @@ export function SettingField(props: {
     );
   }
 
-  return (
+  const input = (
     <input
       data-group={props.group}
       data-field={props.field}
       type={props.type || "text"}
+      min={props.type === "number" ? props.min ?? 0 : undefined}
+      aria-invalid={error ? true : undefined}
       className={props.className}
       autoComplete="off"
       spellCheck={false}
@@ -163,12 +189,24 @@ export function SettingField(props: {
       }
       title={props.title}
       value={value}
-      onChange={(e) => setValue(e.target.value)}
+      onChange={(e) => {
+        setValue(e.target.value);
+        if (error) setError("");
+      }}
       onBlur={commit}
       onKeyDown={(e) => {
         if (e.key === "Enter") (e.target as HTMLInputElement).blur();
       }}
     />
+  );
+  if (!error) return input;
+  return (
+    <>
+      {input}
+      <span className="set-field-error" role="alert">
+        {error}
+      </span>
+    </>
   );
 }
 
