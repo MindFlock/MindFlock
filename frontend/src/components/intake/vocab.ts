@@ -1,13 +1,9 @@
 /** Intake's user-facing wording, kept apart from the components so it can be
  * tested without a DOM and so the four tabs say one thing one way.
  *
- * Three jobs:
+ * Two jobs (the server's skip reasons already speak this vocabulary —
+ * ticket_start.skip_reasons, pr_review, issue_start — so rows show them as-is):
  *
- * - **Reason chips.** The server explains every skipped row in the pipeline's
- *   own vocabulary ("not in an ingest state — won't auto-ingest", "already
- *   ingested (recorded completed in the ledger)"). The UI says *auto-start*,
- *   never *ingest*, and never "ledger" — `reasonText` translates the known
- *   phrasings and passes anything else through untouched.
  * - **Source errors.** A provider that refuses the token answers with its raw
  *   JSON (`Shortcut API returned 401: {"message":"Unauthorized",…}`).
  *   `friendlySourceError` turns that into one sentence a person can act on.
@@ -20,30 +16,6 @@
  */
 
 import type { TicketingSource, TicketingWorkflowState } from "../../api/types";
-
-/** Server skip reasons (ticket_start.skip_reasons, pr_review, issue_start) in
- * the UI's words. Matched on their stable stems, so a server that adds detail
- * after the stem still translates. */
-const REASONS: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
-  [/^not in an ingest state\b.*$/i, () => "not in an auto-start state"],
-  [/^missing an ingest label \(([^)]*)\).*$/i, (m) => "missing an auto-start label (" + m[1] + ")"],
-  [/^already ingested\b.*$/i, () => "already started before"],
-  [/^skipped earlier \(recorded in the ledger\)$/i, () => "skipped earlier"],
-  [/^already in the processed ledger \(([^)]*)\)$/i, (m) => "already handled before (" + m[1] + ")"],
-  [/^queued for ingestion \(pending\)$/i, () => "already queued to start"],
-  [/^already reviewed \(recorded in the processed ledger\)$/i, () => "already handled before"],
-  [/^already handled \(recorded in the processed ledger\)$/i, () => "already handled before"],
-  [/^not assigned to the configured member id$/i, () => "not assigned to you"],
-];
-
-export function reasonText(reason: string): string {
-  const r = (reason || "").trim();
-  for (const [re, fn] of REASONS) {
-    const m = r.match(re);
-    if (m) return fn(m);
-  }
-  return r;
-}
 
 /** One sentence for a source the panel could not list, under its display
  * name — never the provider's raw JSON body. `name` is what the user knows the

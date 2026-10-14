@@ -21,6 +21,7 @@ from backend.ticket_ingestion.config import (
 )
 from backend.ticket_ingestion.state import load_ticket_routes, record_ticket_route
 from tests._factories import make_ticket
+from tests.unit.test_ticket_launch import launch_env  # noqa: F401 — fixture
 
 BACK = "git@github.com:acme/vnext-backend.git"
 FRONT = "git@github.com:acme/vnext-frontend.git"
@@ -543,3 +544,128 @@ def test_paths_with_spaces_are_quoted_in_the_commands(tmp_path):
     text = R.other_repos_section(story, "feature/sc-3/fix")
     assert f"git -C '{front}' fetch origin" in text
     assert f"worktree add '{tmp_path / 'My Code' / 'vnext-frontend-sc-3'}' -b" in text
+
+
+# --------------------------------------------------------------------------- #
+# A repo picked on the Intake row (POST /api/tickets/start ``repo``)
+# --------------------------------------------------------------------------- #
+def test_pick_target_takes_a_url_or_a_short_name_of_the_sources_repos():
+    src = _src()
+    assert R.pick_target(src, FRONT) == FRONT
+    assert R.pick_target(src, "sitecheck") == SITE
+    assert R.pick_target(src, "git@github.com:acme/other.git") is None
+    assert R.pick_target(src, "") is None
+
+
+def test_a_manual_pick_skips_routing_and_is_recorded(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "route", lambda *a, **k: pytest.fail("must not route"))
+    # A label says frontend; the row said sitecheck — the person wins.
+    story = make_ticket(slug="sc-21", labels=["frontend"], repo_url=BACK)
+    d = R.apply_manual_route(story, _src(), SITE, state_dir=tmp_path)
+    assert story.repo_url == SITE
+    assert (d.repos, d.reason, d.method) == ([SITE], "picked on the row", "manual")
+    assert story.route["method"] == "manual" and story.route["extra"] == []
+    assert story.route["others"] == ["vnext-backend", "vnext-frontend"]
+    rec = load_ticket_routes(tmp_path)["sc-21"]
+    assert (rec["repos"], rec["reason"], rec["method"]) == (
+        [SITE],
+        "picked on the row",
+        "manual",
+    )
+
+
+def test_a_recorded_manual_pick_outranks_labels_in_route_and_preview():
+    story = make_ticket(slug="sc-22", labels=["frontend"])
+    stored = R.RouteDecision([SITE], "picked on the row", "manual").to_dict()
+    assert R.route(story, THREE, ask=_never, stored=stored).repos == [SITE]
+    got = R.preview(story, _src(), {"sc-22": stored})
+    assert got["repo_url"] == SITE and got["method"] == "manual"
+    # A pick of a repo the source no longer has falls back to routing.
+    gone = R.RouteDecision(["git@x:o/gone.git"], "picked on the row", "manual")
+    assert R.preview(story, _src(), {"sc-22": gone.to_dict()})["repo_url"] == FRONT
+
+
+def test_preview_lists_every_repo_of_the_source_for_the_row_picker():
+    want = [
+        {"name": "vnext-backend", "url": BACK},
+        {"name": "vnext-frontend", "url": FRONT},
+        {"name": "sitecheck", "url": SITE},
+    ]
+    assert R.preview(make_ticket(labels=["api"]), _src(), {})["choices"] == want
+    pending = R.preview(make_ticket(name="Improve things"), _src(), {})
+    assert pending["method"] == "pending" and pending["choices"] == want
+
+
+def _multi_repo_config(monkeypatch, tmp_path, targets=THREE):
+    from backend.web.core import ticket_start
+
+    cfg = PipelineConfig(ticketing_sources=[_src(targets, id="sc")])
+    monkeypatch.setattr(ticket_start, "_load_config", lambda: cfg)
+    monkeypatch.setattr(ticket_start, "_REPO_ROOT", tmp_path)
+    return ticket_start
+
+
+def test_route_story_pins_a_picked_repo(tmp_path, monkeypatch):
+    ticket_start = _multi_repo_config(monkeypatch, tmp_path)
+    monkeypatch.setattr(R, "route", lambda *a, **k: pytest.fail("must not route"))
+    story = make_ticket(slug="sc-23", labels=["scanner"], repo_url=BACK)
+    d = ticket_start.route_story(story, "sc", "claude", FRONT)
+    assert d.method == "manual" and story.repo_url == FRONT
+
+
+def test_resolve_repo_pick_refuses_what_the_source_does_not_have(tmp_path, monkeypatch):
+    ticket_start = _multi_repo_config(monkeypatch, tmp_path)
+    assert ticket_start.resolve_repo_pick("sc", "") == ""
+    assert ticket_start.resolve_repo_pick("sc", "vnext-frontend") == FRONT
+    with pytest.raises(ticket_start.LaunchError) as err:
+        ticket_start.resolve_repo_pick("sc", "git@x:o/elsewhere.git")
+    assert err.value.status == 400
+    assert "vnext-backend, vnext-frontend, sitecheck" in err.value.body["error"]
+    # A one-repo source has nothing to pick.
+    _multi_repo_config(monkeypatch, tmp_path, _targets((BACK, "")))
+    with pytest.raises(ticket_start.LaunchError) as err:
+        ticket_start.resolve_repo_pick("sc", BACK)
+    assert err.value.status == 400
+
+
+def test_a_start_with_a_picked_repo_launches_there(tmp_path, monkeypatch, launch_env):
+    import asyncio
+
+    from tests.unit.test_ticket_launch import _drain
+
+    ticket_start = _multi_repo_config(monkeypatch, tmp_path)
+    story = asyncio.run(ticket_start.find_ticket("sc", "23588"))
+    body = asyncio.run(ticket_start.launch("sc", "23588", repo="sitecheck"))
+    assert body["title"] == "sc-23588"
+    _drain(launch_env.tasks)
+    assert story.repo_url == SITE
+    assert story.route["reason"] == "picked on the row"
+    assert load_ticket_routes(tmp_path)["23588"]["method"] == "manual"
+
+
+def test_a_bad_repo_pick_claims_nothing(tmp_path, monkeypatch, launch_env):
+    import asyncio
+
+    from backend.web.core import pending as pending_mod
+
+    ticket_start = _multi_repo_config(monkeypatch, tmp_path)
+    with pytest.raises(ticket_start.LaunchError) as err:
+        asyncio.run(ticket_start.launch("sc", "23588", repo="nope"))
+    assert err.value.status == 400
+    assert not pending_mod.has("sc-23588") and launch_env.tasks == []
+
+
+@pytest.mark.parametrize("repo", ["nope", 7])
+def test_the_start_route_answers_400_for_a_bad_repo(tmp_path, monkeypatch, repo):
+    from fastapi.testclient import TestClient
+
+    from backend.web import server
+
+    monkeypatch.setenv("MINDFLOCK_AUTH", "0")
+    _multi_repo_config(monkeypatch, tmp_path)
+    monkeypatch.setattr(server, "git_available", lambda: True)
+    r = TestClient(server.app).post(
+        "/api/tickets/start", json={"source": "sc", "id": "1", "repo": repo}
+    )
+    assert r.status_code == 400
+    assert "repo" in r.json()["error"]

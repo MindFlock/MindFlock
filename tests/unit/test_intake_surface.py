@@ -792,9 +792,9 @@ def test_every_configured_source_gets_a_label_even_when_it_fails(monkeypatch):
     )
     out = _run(ticket_start.list_assigned_tickets())
     # The user's own label wins; a blank one falls back to the provider's, and a
-    # failed source is still named.
+    # failed source is still named — by the catalog's display name, never its id.
     assert out["source_labels"]["jira"] == "Jira – EU"
-    assert out["source_labels"]["linear"] == "linear"
+    assert out["source_labels"]["linear"] == "Linear"
     assert [e["source"] for e in out["errors"]] == ["linear"]
 
 

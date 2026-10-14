@@ -333,7 +333,7 @@ class TestReopenRoute:
             json={"kind": "tickets", "source": "shortcut", "id": "21214"},
         )
         assert r.status_code == 410
-        assert "Begin work" in r.json()["error"]
+        assert "use Start to start it fresh" in r.json()["error"]
 
     def test_the_workspace_is_resolved_from_the_row_not_the_payload(
         self, cached_ticket, monkeypatch

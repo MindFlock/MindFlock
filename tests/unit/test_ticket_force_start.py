@@ -35,7 +35,7 @@ def test_missing_ingest_label_is_a_skip_reason():
     unlabelled = ticket_start.skip_reasons(
         _story(), {}, set(), set(), MEMBER_IDS, ingest_labels=["brainflight"]
     )
-    assert unlabelled == ["missing an ingest label (brainflight) — won't auto-ingest"]
+    assert unlabelled == ["missing an auto-start label (brainflight)"]
     labelled = _story(labels=["BrainFlight"])
     assert (
         ticket_start.skip_reasons(
@@ -58,11 +58,11 @@ def test_eligible_with_no_member_id_configured():
 @pytest.mark.parametrize(
     "status, fragment",
     [
-        ("completed", "already ingested"),
+        ("completed", "already started before"),
         ("in_flight", "in flight"),
         ("failed", "failed earlier"),
         ("skipped", "skipped earlier"),
-        ("mystery", "already in the processed ledger (mystery)"),
+        ("mystery", "already handled before (mystery)"),
     ],
 )
 def test_ledger_status_is_flagged(status, fragment):
@@ -79,7 +79,7 @@ def test_ledger_matches_by_id_when_slug_absent():
     reasons = ticket_start.skip_reasons(
         story, {"1": "completed"}, set(), set(), MEMBER_IDS
     )
-    assert any("already ingested" in r for r in reasons)
+    assert any("already started before" in r for r in reasons)
 
 
 def test_ledger_entry_does_not_flag_a_different_ticket():
@@ -88,13 +88,13 @@ def test_ledger_entry_does_not_flag_a_different_ticket():
     reasons = ticket_start.skip_reasons(
         other, {"sc-1": "completed"}, set(), set(), MEMBER_IDS
     )
-    assert not any("already ingested" in r for r in reasons)
+    assert not any("already started before" in r for r in reasons)
 
 
 def test_pending_ticket_is_flagged():
     story = _story()
     reasons = ticket_start.skip_reasons(story, {}, {story.slug}, set(), MEMBER_IDS)
-    assert any("pending" in r for r in reasons)
+    assert "already queued to start" in reasons
 
 
 def test_existing_feature_branch_is_flagged():
@@ -114,7 +114,7 @@ def test_branch_for_a_different_slug_does_not_flag():
 def test_unassigned_ticket_is_flagged():
     story = _story(owner_ids=["someone-else"])
     reasons = ticket_start.skip_reasons(story, {}, set(), set(), MEMBER_IDS)
-    assert any("not assigned" in r for r in reasons)
+    assert "not assigned to you" in reasons
 
 
 def test_ingest_state_filter_flags_other_buckets():
@@ -122,7 +122,7 @@ def test_ingest_state_filter_flags_other_buckets():
     reasons = ticket_start.skip_reasons(
         story, {}, set(), set(), MEMBER_IDS, ingest_state=["In Progress"]
     )
-    assert any("not in an ingest state" in r for r in reasons)
+    assert any("not in an auto-start state" in r for r in reasons)
 
 
 def test_ingest_state_filter_passes_matching_bucket():
@@ -130,7 +130,7 @@ def test_ingest_state_filter_passes_matching_bucket():
     reasons = ticket_start.skip_reasons(
         story, {}, set(), set(), MEMBER_IDS, ingest_state=["In Progress"]
     )
-    assert not any("ingest state" in r for r in reasons)
+    assert not any("auto-start state" in r for r in reasons)
 
 
 def test_unknown_state_is_never_flagged_by_the_filter():
@@ -139,7 +139,7 @@ def test_unknown_state_is_never_flagged_by_the_filter():
     reasons = ticket_start.skip_reasons(
         story, {}, set(), set(), MEMBER_IDS, ingest_state=["In Progress"]
     )
-    assert not any("ingest state" in r for r in reasons)
+    assert not any("auto-start state" in r for r in reasons)
 
 
 def test_multiple_reasons_accumulate():
@@ -543,7 +543,7 @@ async def test_download_attachments_noop_without_worktree(monkeypatch):
 async def test_list_assigned_tickets_workflow_state_id_filter(monkeypatch, tmp_path):
     # A source configured only via the integer workflow_state_id (Shortcut's
     # legacy filter) still resolves to an ingest-state bucket name, and a ticket
-    # in a different bucket is flagged "not in an ingest state".
+    # in a different bucket is flagged "not in an auto-start state".
     from backend.ticket_ingestion import backfill
     from backend.ticket_ingestion import providers as providers_mod
     from backend.ticket_ingestion.providers import base as providers_base
@@ -583,7 +583,7 @@ async def test_list_assigned_tickets_workflow_state_id_filter(monkeypatch, tmp_p
     out = await ticket_start.list_assigned_tickets()
     assert out["ingest_states"] == {"shortcut": ["In Progress"]}
     ticket = out["tickets"][0]
-    assert any("not in an ingest state" in r for r in ticket["reasons"])
+    assert any("not in an auto-start state" in r for r in ticket["reasons"])
 
 
 async def test_list_assigned_tickets_states_failure_and_branch_error(
@@ -680,7 +680,7 @@ def test_failed_reason_whitespace_is_normalized():
 
 def test_failed_with_no_recorded_reason_still_points_at_the_button():
     chip = ticket_start._failed_label("")
-    assert "Run ticket" in chip
+    assert "Start to retry" in chip
     assert "state.json" not in chip
 
 

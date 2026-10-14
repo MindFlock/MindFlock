@@ -539,7 +539,9 @@ def _tracker_action(source_id: str = "") -> dict:
     )
 
 
-_TRACKER_PURPOSE = "Auto-create a session for each ticket assigned to you."
+_TRACKER_PURPOSE = (
+    "Start sessions from tickets in Shortcut, Jira, Linear, Asana or GitHub Issues."
+)
 
 
 def _source_connection(source, only: bool) -> dict:

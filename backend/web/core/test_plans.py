@@ -1262,6 +1262,54 @@ def ensure_plan_for(
         return plan
 
 
+def branch_plan_id(repo_root: str, branch: str) -> str:
+    """The id of a checklist asked for by BRANCH, with no session behind it
+    (Verify → New checklist → Another branch…): ``<repo>@<branch>``.
+
+    Plans are otherwise keyed by session title; this spelling cannot be a
+    session's title in practice, so a branch-only plan never takes over (or is
+    replaced by) a session's slot. A session that later pushes the same branch
+    finds it through :func:`_branch_owner` and does not buy a second one."""
+    name = os.path.basename(norm_repo(repo_root).rstrip(os.sep)) or "repo"
+    return "%s@%s" % (name, str(branch or "").strip())
+
+
+def valid_branch_name(branch: str) -> bool:
+    """Whether ``branch`` is a branch name git accepts (``check-ref-format
+    --branch``) — never an option (``-x``) or a revision expression."""
+    b = str(branch or "").strip()
+    if not b or b.startswith("-") or len(b) > 255:
+        return False
+    cp = gitutil.git(
+        ["check-ref-format", "--branch", b],
+        None,
+        stdin=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=10,
+    )
+    return cp.returncode == 0
+
+
+def resolve_branch_sha(repo_root: str, branch: str) -> str:
+    """The commit ``branch`` points at in ``repo_root``: the local branch, else
+    origin's copy (fetched first — a branch nobody worked on here has usually
+    never been fetched). ``""`` when neither exists. Blocking."""
+    root = str(repo_root or "")
+    b = str(branch or "").strip()
+    if not root or not b:
+        return ""
+
+    def _rev(ref: str) -> str:
+        out = _git_out(root, ["rev-parse", "--verify", "-q", ref + "^{commit}"], 15.0)
+        return (out or "").strip()
+
+    sha = _rev("refs/heads/" + b)
+    if sha:
+        return sha
+    fetch_all_heads(root)
+    return _rev("refs/remotes/origin/" + b)
+
+
 def _has_settled_answers(plan: dict, after_merge_only: bool = False) -> bool:
     """Whether anybody has actually ANSWERED anything here.
 
