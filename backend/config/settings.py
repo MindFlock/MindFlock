@@ -1404,6 +1404,9 @@ class PrefsSettings:
     hints: Optional[bool] = None
     # The Map tab's first-open tour: True once seen (here or on any device).
     map_tour: Optional[bool] = None
+    # The welcome tour: True once seen or dismissed (here or on any device), so
+    # it auto-opens on a first launch exactly once.
+    welcome_tour: Optional[bool] = None
     # Settings shows its advanced screens; unset = the basic set only.
     settings_advanced: Optional[bool] = None
 
@@ -1414,6 +1417,7 @@ class PrefsSettings:
         "idle_flock",
         "hints",
         "map_tour",
+        "welcome_tour",
         "settings_advanced",
     )
     _INTS = ("break_every", "idle_after")
@@ -1457,6 +1461,7 @@ class PrefsSettings:
             idle_after=_opt_int(d.get("idle_after")),
             hints=_opt_bool(d.get("hints")),
             map_tour=_opt_bool(d.get("map_tour")),
+            welcome_tour=_opt_bool(d.get("welcome_tour")),
             settings_advanced=_opt_bool(d.get("settings_advanced")),
         )
 
