@@ -26,7 +26,6 @@ import { backgroundChip } from "../../lib/backgroundJobs";
 import { stopBackgroundJob } from "../../lib/stopBackgroundJob";
 import { sessionLabel } from "../../lib/sessionLabel";
 import { useNow } from "../../lib/useNow";
-import { firstLine } from "../../lib/format";
 import {
   cleanupMissing,
   folderInUseText,
@@ -55,6 +54,7 @@ import { RUN_DONE_STATES, type RunInfo } from "../../lib/runs";
 import type { RunDTO } from "../../api/types";
 import { SessionMenu } from "./SessionMenu";
 import { MidName } from "./MidName";
+import { TaskLine, taskLineOf } from "./TaskLine";
 import { sessionMenu } from "../../lib/sessionMenu";
 import { PresenceDots } from "../presence/Presence";
 import { useMe } from "../../lib/presence";
@@ -296,10 +296,11 @@ export const SidebarRow = memo(function SidebarRow({
   // 1–9 press them while the ROW has focus.
   const answering =
     (inFamily(inst, isWorker, kids.length) || shipLane) && activity === "clarify" && !missing && !paused;
-  // What the session was asked to do, under its name — the first line of its
-  // newest prompt — when nothing more pressing (a ship line, a family line)
-  // has the slot. "untitled · Idle" said nothing about the work.
-  const task = String(inst.last_prompt || firstLine(inst.task) || "").trim();
+  // What the session was asked to do, under its name — its task headline, a
+  // short verb phrase of the newest meaningful prompt (TaskLine) — when
+  // nothing more pressing (a ship line, a family line) has the slot.
+  // "untitled · Idle" said nothing about the work.
+  const task = taskLineOf(inst).text;
   const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !!task;
   const subline = !editing && (ship || wline || roll || lline || lineage || taskLine || !!noAgent);
   // "working · 6m" counts up by itself: a busy worker's row data can sit
@@ -600,11 +601,7 @@ export const SidebarRow = memo(function SidebarRow({
               {agentBlockedLine(noAgent)}
             </span>
           )}
-          {!editing && taskLine && (
-            <span className="lineage task-line" title={String(inst.last_prompt_full || task)}>
-              {task}
-            </span>
-          )}
+          {!editing && taskLine && <TaskLine inst={inst} />}
           {!editing && !ship && !lline && !wline && lineage && (
             <span
               className={"lineage" + (lineage.spawned ? " spawned" : "")}

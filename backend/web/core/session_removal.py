@@ -35,6 +35,7 @@ from backend.web.core import ownership as _ownership
 from backend.web.core import person_sessions as _person_sessions
 from backend.web.core import shared_branch as _shared_branch
 from backend.web.core import sleep as _sleep
+from backend.web.core import task_headlines as _task_headlines
 from backend.web.core import thread as _thread
 
 
@@ -308,6 +309,8 @@ def _forget_session_state(title: str) -> None:
     _ownership.drop(title)
     # …nor asleep.
     _sleep.drop(title)
+    # …nor described by the dead session's last task.
+    _task_headlines.drop(title)
     # Keyed by TMUX SESSION NAME, not by title (see agent_state._maybe_record_
     # thread), so it needs the translation the others do not.
     srv._THREAD_RECORD_AT.pop(tmux.to_mindflock_tmux_name(title), None)
@@ -335,3 +338,4 @@ def _prune_session_state(live_titles) -> None:
     for dead in [n for n in list(srv._THREAD_RECORD_AT) if n not in live_names]:
         srv._THREAD_RECORD_AT.pop(dead, None)
     _sleep.prune(live)
+    _task_headlines.prune(live)

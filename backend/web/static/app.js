@@ -38403,6 +38403,24 @@ function MidName({ text }) {
 	});
 }
 //#endregion
+//#region src/components/sidebar/TaskLine.tsx
+function taskLineOf(inst) {
+	const text = String(inst.task_headline || inst.last_prompt || firstLine$1(inst.task) || "").trim();
+	return {
+		text,
+		title: String(inst.task_headline_prompt || inst.last_prompt_full || inst.last_prompt || inst.task || text).trim()
+	};
+}
+function TaskLine({ inst }) {
+	const { text, title } = taskLineOf(inst);
+	if (!text) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "lineage task-line",
+		title,
+		children: text
+	});
+}
+//#endregion
 //#region src/lib/checklistLink.ts
 function openChecklist(branch) {
 	const b = String(branch || "").trim();
@@ -38845,7 +38863,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 		document.dispatchEvent(new CustomEvent("mf-open-bell", { detail: { title } }));
 	};
 	const answering = (inFamily(inst, isWorker, kids.length) || shipLane) && activity === "clarify" && !missing && !paused;
-	const task = String(inst.last_prompt || firstLine$1(inst.task) || "").trim();
+	const task = taskLineOf(inst).text;
 	const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !!task;
 	const subline = !editing && (ship || wline || roll || lline || lineage || taskLine || !!noAgent);
 	useNow(wline?.state === "working" || ship?.state === "working" ? 3e4 : false);
@@ -39074,11 +39092,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 							title: ss.hint,
 							children: agentBlockedLine(noAgent)
 						}),
-						!editing && taskLine && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "lineage task-line",
-							title: String(inst.last_prompt_full || task),
-							children: task
-						}),
+						!editing && taskLine && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TaskLine, { inst }),
 						!editing && !ship && !lline && !wline && lineage && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "lineage" + (lineage.spawned ? " spawned" : ""),
 							title: lineage.title,
