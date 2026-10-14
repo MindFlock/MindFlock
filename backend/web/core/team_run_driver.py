@@ -35,6 +35,7 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 from backend import gitutil
+from backend import memory_pressure as _memory_pressure
 from backend.web.core import autopilot as _autopilot
 from backend.web.core import events as _events
 from backend.web.core import git_merge as _git_merge
@@ -259,6 +260,7 @@ def observe(run: dict, now: float, boot: bool = False) -> dict:
     out = {
         "boot": boot,
         "limited_providers": sorted(limited),
+        "memory_low": _memory_pressure.is_low(),
         "provider": provider,
         "cost": round(cost, 4),
         "tasks": tasks,
@@ -2058,6 +2060,9 @@ def _plan_and_apply(run_id: str, obs: dict, now: float) -> Tuple[List[dict], boo
             bool(obs.get("limited_providers"))
             and any(t["state"] == "queued" for t in run["tasks"])
             and obs.get("provider") in (obs.get("limited_providers") or [])
+        )
+        run["waiting_for_memory"] = bool(obs.get("memory_low")) and any(
+            t["state"] == "queued" and not t.get("start_now") for t in run["tasks"]
         )
         after = (
             run["state"],

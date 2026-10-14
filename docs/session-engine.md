@@ -339,10 +339,70 @@ server also runs a **background revive sweep** (`web/core/revive.py`):
   each launch. Each landed revive republishes the session's row, which emits
   `session.status_changed` / `session.activity_changed`, so the rail turns from
   Offline to Working/Idle by itself.
-- **Logs.** One line per revive (`revive <title>: agent relaunched (1.2s)` or
-  `not started (<reason>)`), one summary per sweep
-  (`revive sweep (startup): revived 3, skipped 2: 1 paused, 1 usage limit; 4
-  already running`).
+- **Memory.** Relaunching every agent straight after the OOM killer took them
+  down is how it happens again, so before each launch the sweep reads
+  `backend.memory_pressure` (see [Memory guard](#memory-guard)). While it reads
+  low it waits up to 120 s for headroom; if none comes, the rest of the sweep is
+  skipped as `low memory` and those rows stay Offline for a later Restart.
+- **Continue.** A relaunch resumes the conversation, not the turn the agent was
+  in: it comes back parked at its prompt. When the agent **died mid-turn** —
+  no live tmux, an unnatural exit (the same provider rule that makes the
+  relaunch resume), a CLI that can resume (`resume_flag`), not in place, and
+  its hook marker last said `working` (a turn began and no `Stop` /
+  `SessionEnd` followed; a SIGKILL fires neither; over 6 h old reads as no
+  signal) — `revive.relaunch` puts a short *continue where you left off* at the
+  **front** of its prompt queue. The queue sends it once the CLI has drawn its
+  prompt and settled idle, never over a dialog or a person typing; it is an
+  ordinary item, visible and removable before it goes. A queue the user paused
+  with prompts in it is left alone (enqueueing would switch it back on). The
+  Restart chip and the sweep share `relaunch`; the lazy revive (terminal
+  attach, a sent prompt) does not continue on its own.
+- **Logs.** One line per revive (`revive <title>: agent relaunched (1.2s)`,
+  `… — died mid-turn, queued a continue`, or `not started (<reason>)`), one
+  summary per sweep (`revive sweep (startup): revived 3, skipped 2: 1 paused,
+  1 usage limit; 4 already running; told 1 to continue`).
+
+### Memory guard
+
+A big job — a team run, an orchestrator fanning out workers, a ticket queue
+draining — can start agents faster than the machine holds them: each is a node
+CLI plus whatever it runs, and once RAM runs out the box swaps (on WSL a
+disk-backed swap that stalls everything) and the OOM killer takes agents down
+mid-turn. `backend/memory_pressure.py` (stdlib only; the pipeline process
+imports it too) reads two signals and returns `ok` / `low` / `critical`
+(`unknown` where there is nothing to read — non-Linux — which never gates):
+
+| Signal | low at | critical at |
+|---|---|---|
+| `MemAvailable` (`/proc/meminfo`) | ≤ 15 % of `MemTotal` or ≤ 2 GB | ≤ 7 % or ≤ 1 GB |
+| PSI `some avg60` (`/proc/pressure/memory`) | ≥ 20 % | ≥ 40 % |
+| PSI `full avg60` | ≥ 5 % | ≥ 15 % |
+
+Stepping back down needs every reading past a recovery line a margin beyond the
+entry one (20 % / 2.5 GB / some 10 / full 2 to leave `low`; 10 % / 1.5 GB /
+some 30 / full 10 to leave `critical`), so a box hovering at the line doesn't
+flap. A reading is cached for 2 s, and the level is per process: the ticket
+pipeline keeps its own, so it and the server can briefly disagree near a line.
+While the level is `low` or `critical`:
+
+- **Agent spawns are refused** — `POST /api/instances` with `spawned: true`
+  (the MCP's `spawn_session`) and an agent's `POST /api/tickets/start` answer
+  **409** with `memory` in the body. A person's New and Intake starts, and a
+  team run's own members, are never refused here.
+- **Team runs start no new lines** — the planner holds queued tasks exactly
+  as it does for a usage limit (a task marked `start_now` still starts); the
+  run's `waiting_for_memory` puts a *memory* badge on its rail header.
+- **The ticket pipeline holds its next launch** (`session_runner`), logging why
+  every 5 minutes; after 30 minutes it starts anyway with a warning, so a
+  misreading can never stall intake for good.
+- **The revive sweep waits**, as above. A person's single Restart is never
+  held; its response carries `memory_warning` instead.
+
+The server's memory watch polls every 10 s, logs each level change and emits
+`system.memory_changed`. It starts from `ok`, so a server that boots already
+low emits `ok → low` on its first reading; `unknown` never emits. The web UI
+polls `GET /api/system/memory` and shows a notice while the level is low.
+`MINDFLOCK_MEMORY_GUARD=0` forces `unknown`, which turns it all off.
 
 **Nothing disappears silently.** The engine still drops, at load, a session
 whose worktree folder **and** tmux session are both gone (outside the 120 s

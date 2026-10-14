@@ -19,6 +19,7 @@ import { windowRows, WindowRowItem, type WindowRow } from "./WindowList";
 import { SessionFilter } from "./SessionFilter";
 import { SidebarResizer } from "./SidebarResizer";
 import { BulkBar } from "./BulkBar";
+import { OfflineBar } from "./OfflineBar";
 import { useExtensionBarDefs } from "../../extensions/ExtensionBar";
 import { BarSlot, barContent, SECTION_MIME } from "./SidebarBars";
 import { orderedSections, SESSIONS_KEY } from "./barDefs";
@@ -474,6 +475,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
               <div id="addon-bars" ref={addonBarsRef} />
               {searchVisible && <SessionFilter />}
               <BulkBar />
+              <OfflineBar />
               <ul id="instance-list">
                 {grouped ? (
                   <>

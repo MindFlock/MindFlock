@@ -349,8 +349,25 @@ background job is still running: …*). A pending row draws no job chip.
 **Restart.** The Offline chip calls `POST /api/instances/{title}/revive`
 ([web-api.md](web-api.md)), the same lazy relaunch a terminal attach or a sent
 prompt does: the conversation resumes after a crash, a clean quit starts
-fresh. A click toasts *Restarting <name>…* (or *Couldn't restart <name> —
-<why>*). Rows proxied from another device are read-only and offer no Restart.
+fresh, and an agent that died mid-turn is queued a *continue where you left
+off*. A click toasts *Restarting <name>…* (*… — it will continue where it left
+off…* when it was mid-turn, with the memory reason appended when memory is low;
+or *Couldn't restart <name> — <why>*). Rows proxied from another device are
+read-only and offer no Restart.
+
+**Restart all.** From two Offline rows up, a strip above the list reads *N
+agents offline · ↻ Restart all*: `POST /api/server/revive-all` with exactly
+those titles — two at a time, waiting for memory between launches — and a toast
+of what happened (*Restarted 4 agents — 2 told to continue where they left off;
+1 held back: memory is low*). The toast counts only the rows the strip offered,
+not the paused or already-running sessions the sweep also reports. The button
+is disabled while the sweep runs, and the strip hides below two offline rows.
+
+**Memory notice.** While `GET /api/system/memory` reads low or critical, a card
+in the bottom-right corner gives the numbers (free memory, swap in use, the
+share of the last minute spent stalled) and what MindFlock is holding back
+(agent spawns, team-run lines, restarts). **Hide** lasts until the level worsens
+or clears and returns.
 
 **After a server restart, Offline fixes itself.** Once the server has booted
 (past its 30 s quiet window) it relaunches in the background every session
@@ -2747,8 +2764,12 @@ A header appears only for a team run of two or more, and **On their own** only
 under at least one header. A split or one-for-all team run never gets one: it is
 a family under its lead, and its lead's Thread tab holds what the header's ⋯
 would — **Start now** / **Take out of run** on a queued piece and, once finished,
-**Copy summary**. Queued lines are dim, with a hollow dot and no
-number. Headers and queued lines are never rail keys: Alt+N numbering skips
+**Copy summary**. While the team run waits, the header shows a badge: *usage*
+for a usage limit, or else *memory* while the [memory
+guard](session-engine.md#memory-guard) holds its queued lines (tooltip *Memory
+is low — queued lines start once it recovers*; the header's tooltip says
+*waiting for memory — queued lines start once it recovers*). Queued lines are
+dim, with a hollow dot and no number. Headers and queued lines are never rail keys: Alt+N numbering skips
 them, and a folded team run's rows leave the numbering like a folded device's.
 
 Every session with fast-track on leads its status line with the target, so a

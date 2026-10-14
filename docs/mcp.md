@@ -1674,7 +1674,11 @@ event carry). An older server that keeps no reasons answers "failed to start
 `MINDFLOCK_MAX_SPAWNED`), says the parent is over budget, or says the
 worker's branch or workspace "already exists" (a closed or paused session with
 that title keeps it). Default titles skip those; for an explicit `title`, pick
-another one.
+another one. A 409 starting *memory is low* (or *critically low*) is the memory
+guard ([session-engine.md](session-engine.md#memory-guard)): the machine has no
+room for another agent right now, and the same holds for `spawn_ticket_session`.
+Wait for running workers to finish (or finish some yourself) and try again;
+spawning in a loop won't get past it.
 
 **A worker asks for permission to use a mindflock tool.** Only the fifteen
 read, wait and report tools are pre-approved, so `send_message`,

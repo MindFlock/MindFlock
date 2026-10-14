@@ -135,6 +135,7 @@ def test_event_names_vocabulary_is_complete():
         "peer.message",
         "peer.relay_changed",
         "update.available",
+        "system.memory_changed",
     }
 
 
