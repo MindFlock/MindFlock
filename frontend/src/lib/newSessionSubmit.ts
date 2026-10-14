@@ -111,7 +111,7 @@ export function newSessionSubmit(ctx: NewSessionSubmitCtx) {
     setError("");
     if (splitOn && !prompt.trim()) {
       setPromptOpen(true);
-      fail("Auto-split needs a task — write it in the Prompt below, or untick Auto-split.");
+      fail("Auto-split needs a task — write it in the Task below, or untick Auto-split.");
       return;
     }
     const r = await draft.start({

@@ -177,10 +177,40 @@ def test_agent_signed_in_is_connected_with_no_fix(quiet):
 
 
 def test_agent_with_nothing_to_sign_in_to_is_connected(quiet):
-    _stub_providers(quiet, _provider(authenticated=False, has_login=False))
+    # No login flow and nowhere it says credentials live: nothing to check.
+    _stub_providers(
+        quiet, _provider(authenticated=False, has_login=False, auth_probe=False)
+    )
     r = connections._agent_connections()[0]
     assert r["status"] == "connected"
     assert "no sign-in needed" in r["detail"]
+
+
+def test_api_key_agent_without_a_key_needs_attention_with_the_doctors_fix(quiet):
+    """Aider: no login flow, but it names the API-key env vars it reads and
+    none is set — not "no sign-in needed · Connected"."""
+    _stub_providers(
+        quiet,
+        _provider("claude"),
+        _provider(
+            "aider",
+            is_default=False,
+            authenticated=False,
+            auth_probe=True,
+            has_login=False,
+            login_command="",
+        ),
+    )
+    r = next(r for r in connections._agent_connections() if r["id"] == "agent:aider")
+    assert r["status"] == "needs_attention"
+    assert "not signed in" in r["detail"]
+    assert "no sign-in needed" not in r["detail"]
+    # The doctor's own remedy: the API keys it reads, nothing to run.
+    assert r["fix"].startswith("set one of the API keys `aider` reads (")
+    assert r["fix_command"] == ""
+    # No Sign in button: there is no login flow to open.
+    assert r["action"]["label"] != "Sign in"
+    assert r["action"] == {"label": "Set up", "kind": "screen", "target": "providers"}
 
 
 def test_agent_installed_not_signed_in_needs_attention_with_sign_in(quiet):

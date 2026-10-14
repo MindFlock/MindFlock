@@ -143,3 +143,20 @@ describe("presets.ts — the old readers over the server list", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 });
+
+describe("what counts as a saved prompt (round 2 glue)", () => {
+  it("a template carrying a fast-track or a schedule is a template, not a prompt", async () => {
+    const { isPromptOnly } = await import("../lib/templates");
+    expect(isPromptOnly({ name: "a", prompt: "do it" })).toBe(true);
+    expect(isPromptOnly({ name: "b", prompt: "do it", fasttrack: "pr" })).toBe(false);
+    expect(isPromptOnly({ name: "c", prompt: "do it", ask_first: true })).toBe(false);
+    expect(isPromptOnly({ name: "d", prompt: "do it", schedule: { at: "09:00", days: "daily" } })).toBe(false);
+    expect(isPromptOnly({ name: "e", prompt: "do it", repo_path: "/r" })).toBe(false);
+  });
+
+  it("the Auto-split hint names the field by its label, Task", async () => {
+    const src = (await import("../lib/newSessionSubmit.ts?raw")).default;
+    expect(src).toContain("write it in the Task below");
+    expect(src).not.toContain("the Prompt below");
+  });
+});

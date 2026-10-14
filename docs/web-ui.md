@@ -199,7 +199,8 @@ first and the jump rows last: **New session…**, then the dialog openers — Op
 Intake (plus **Intake: Tickets** / **Intake: Pull requests** / **Intake:
 Issues**, so typing "issues" lands on that queue instead of on a dialog you then
 have to navigate), **Verify — check what was pushed**, **Customize…**, **Prompts…** (*manage saved prompts*),
-**Templates…** (*manage saved New-session setups*), one **Run template:
+**Templates…** (*manage saved New-session setups*), **Schedule a session…**
+(opens Templates on a new template with **Run on a schedule** ticked), one **Run template:
 <name>** (*fresh session, prompt sent*) per template that has a folder,
 **Assistant agent file…**,
 **Recently closed…**, Open Settings / Doctor / **Open Setup checklist**,
@@ -1787,7 +1788,10 @@ was refused or its fast-track couldn't be set. A template's fast-track is
 armed on every session it starts, so a nightly chore can end in a PR. A
 schedule fires once per slot, starts counting from when it was saved, and
 after the server was down fires only the most recent missed slot — see
-[web-api.md](web-api.md) (Templates → Schedules).
+[web-api.md](web-api.md) (Templates → Schedules). Scheduled templates are also
+listed last on **Intake → Auto-start** (*Scheduled templates*: name · schedule ·
+next run, with **Run now**), since they answer the same "what starts on its
+own?" question as the ticket, PR and issue queues there.
 
 **Browse… → + Folder** creates a folder on disk, inside whatever directory the
 browser is currently showing — the path line directly above the name box — and
@@ -2681,7 +2685,7 @@ ticket with its workflow state, while GitHub Issues and Asana expose no
 workflow-state model and land in `No state`.
 
 **Work that is already on this machine leads with Reopen.** A row for an item
-that has been worked once already said so in chips — *already ingested*, *a branch
+that has been worked once already said so in chips — *already started before*, *a branch
 for it exists on the remote* — and then offered exactly one button, **Begin work**,
 which starts it over. But the workspace is usually still right there: ending a
 session keeps its worktree (see Recently closed), and a run whose session was lost
@@ -4066,9 +4070,12 @@ stack their labels above the inputs.
 - **System logs** — a grid pane tailing the server log (`GET /api/logs`,
   3 s poll).
 - **Terminal scroll speed** — 1–20 lines per wheel notch, applied live.
-- **Appearance** — theme sets (surface: backgrounds/panels/borders/text) and
+- **Appearance** — **Mode** (*Dark* / *Light*: the same value as the top
+  bar's 🌙, held in the UI store and set through `lib/theme.ts`, synced as the
+  `theme` pref; until anyone chooses, the first paint follows the OS colour
+  scheme), then theme sets (surface: backgrounds/panels/borders/text) and
   accent presets, mixable freely; every set ships its own light-mode palette so
-  the 🌙 toggle works inside any theme. One bird per set, painted the way the bird
+  Mode works inside any theme. One bird per set, painted the way the bird
   is: most are **multi-color**, giving the top bar, the sidebar and the window a
   hue each — Scarlet Macaw is a cobalt bar over an emerald sidebar over a scarlet
   window; Goldfinch is brilliant lemon over a black cap. Swallow (the default),

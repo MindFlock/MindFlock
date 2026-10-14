@@ -7,7 +7,6 @@ import {
   groupRules,
   hasPlaceholder,
   MORE_GROUP,
-  RULE_COPY,
   RULE_GROUPS,
   ruleCopy,
   ruleGroup,
@@ -57,15 +56,20 @@ const SERVER_RULES = [
 ].map(([id, body]) => ({ id, label: id, title: "{session}: x", body, enabled: true }));
 
 describe("Notifications copy", () => {
-  it("has plain words for every rule the server ships, none with a {placeholder}", () => {
+  it("shows the server's label and description, never its templated title or body", () => {
+    // The plain words live on the server (notify.py `description`, pinned in
+    // tests/unit/test_notify_rules.py); the row prefers them over the body.
     for (const r of SERVER_RULES) {
-      const c = ruleCopy(r);
-      expect(RULE_COPY[r.id], r.id).toBeTruthy();
-      expect(hasPlaceholder(c.label), r.id).toBe(false);
-      expect(hasPlaceholder(c.desc), r.id).toBe(false);
-      // No internal ids in the words either.
-      expect(c.label + c.desc).not.toMatch(/session\.[a-z_]+|_[a-z]+_/);
+      const c = ruleCopy({ ...r, label: "Plain label", description: "One plain line." });
+      expect(c, r.id).toEqual({ label: "Plain label", desc: "One plain line." });
     }
+  });
+
+  it("a rule from before descriptions keeps a finished body, never a template", () => {
+    expect(hasPlaceholder("{detail}")).toBe(true);
+    expect(ruleCopy({ id: "a", label: "A", body: "Done." }).desc).toBe("Done.");
+    expect(ruleCopy({ id: "b", label: "B", body: "{detail}" }).desc).toBe("");
+    expect(ruleCopy({ id: "c", label: "C", description: "{detail}", body: "Done." }).desc).toBe("Done.");
   });
 
   it("an unknown rule never shows a templated body or a {placeholder} title", () => {

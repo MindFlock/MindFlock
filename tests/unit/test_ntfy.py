@@ -601,8 +601,17 @@ def test_dispatch_respects_a_muted_rule(pushes):
 
 
 def test_dispatch_honours_an_opted_in_rule(pushes):
-    """Default-off rules push only once the user turns them on."""
-    S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
+    """A rule that is off for this user pushes only once they turn it on.
+
+    "A session finishes" is on by default now, but someone who already saved
+    rule choices (here: muted pr_closed) keeps the "off" they had."""
+    S.update_settings(
+        notifications={
+            "ntfy_enabled": True,
+            "ntfy_topic": "t1",
+            "muted_rules": ["pr_closed"],
+        }
+    )
     done = {
         "event": "session.turn_ended",
         "session": "s1",
@@ -1149,3 +1158,18 @@ def test_browser_fill_twin_handles_detail():
     js = client.get("/addons/notify.js").text
     assert "{detail}" in js or "\\{detail\\}" in js
     assert "data.detail" in js
+
+
+def test_session_finished_pushes_by_default(pushes):
+    """Someone who never chose gets "a session finished" on their phone."""
+    S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
+    _addon()._on_event(
+        {
+            "event": "session.turn_ended",
+            "session": "s1",
+            "old": None,
+            "new": None,
+            "data": {"idle_for": 46.0},
+        }
+    )
+    assert len(pushes) == 1 and pushes[0]["title"] == "s1 has finished"

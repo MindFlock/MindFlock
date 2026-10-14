@@ -94,6 +94,14 @@ describe("provisioning fields: current names, repo-neutral copy, no sitecheck-er
     expect(code("components/grid/Pane.tsx")).toContain("The first provisioned run clones the base repo");
     expect(codeFilesWith("sitecheck-bot")).toEqual([]);
   });
+
+  it("only a provisioned session says it clones; a plain worktree says what it does", () => {
+    const pane = code("components/grid/Pane.tsx");
+    const clone = pane.indexOf("The first provisioned run clones the base repo");
+    expect(pane.lastIndexOf("{inst.provisioned ? (", clone)).toBeGreaterThan(-1);
+    expect(pane).toContain('<p>Creating worktree{inst.branch ? " on " + inst.branch : ""}…</p>');
+    expect(pane).toContain("<p>Starting the session…</p>");
+  });
 });
 
 describe("pane header: a long title costs its OWN characters, never the controls", () => {

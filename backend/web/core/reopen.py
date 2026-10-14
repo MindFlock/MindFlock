@@ -1,9 +1,9 @@
 """The workspace a previous run of an intake item left behind on this machine.
 
 Intake rows answer "should this be started?" — and for an item that has been
-worked once already they answer it with chips: *already ingested*, *a feature
-branch for it already exists on the remote*. Both are true, and both used to
-lead nowhere: the only button on the row was **Begin work**, which starts a
+worked once already they answer it with chips: *already started before*, *a
+feature branch for it already exists on the remote*. Both are true, and both
+used to lead nowhere: the only button on the row was **Start**, which starts a
 *fresh* session. But the work is usually still right there — ending a session
 keeps its worktree on disk (see :mod:`backend.web.core.recently_closed`), and a
 run whose session was lost to a restart leaves its worktree behind too (the

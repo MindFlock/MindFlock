@@ -308,12 +308,7 @@ export function VerifyNewChecklist({
             <option value={ANOTHER_BRANCH}>Another branch…</option>
           </select>
           {other && (
-            // `.vf-addstep` for its field styling, minus its dashed frame: the
-            // two fields belong to the row, not to a box of their own.
-            <div
-              className="vf-addstep vf-newplan-branch"
-              style={{ border: "none", padding: 0, margin: 0, flex: "1 1 320px" }}
-            >
+            <div className="vf-newplan-branch">
               <select
                 id="vf-newplan-repo"
                 aria-label="Repo"
@@ -338,7 +333,6 @@ export function VerifyNewChecklist({
                 type="text"
                 aria-label="Branch"
                 placeholder="branch, e.g. feature/login"
-                style={{ flex: "1 1 160px" }}
                 value={branch}
                 disabled={busy}
                 onChange={(e) => setBranch(e.target.value)}

@@ -20,13 +20,10 @@ import { dueCount } from "./dialogs/verify";
 import { rethemeAll } from "../lib/terminals";
 import { NotificationsBell } from "./NotificationsBell";
 import { redrawFavicon } from "./EventToasts";
-import { notePrefWrite, THEME_CHANGED } from "../lib/prefs";
+import { THEME_CHANGED } from "../lib/prefs";
+import { setTheme } from "../lib/theme";
 import { hasNativeWindowControls, isFullScreen, onFullScreenChanged } from "../lib/shell";
 import { openSettings } from "../lib/openSettings";
-
-function applyTheme(light: boolean) {
-  document.documentElement.classList.toggle("light", light);
-}
 
 /* The wordmark carries the RUNNING ENGINE's version (GET /api/doctor), not the
  * desktop shell's: this frontend ships inside the engine wheel, so that string
@@ -45,7 +42,9 @@ function engineVersion(raw: string | undefined): string {
 
 export function TopBar() {
   const ui = useUi();
-  const [light, setLight] = useState(() => document.documentElement.classList.contains("light"));
+  // In the store, not local state: Settings → Appearance → Mode drives the
+  // same value (lib/theme.ts), so the moon and the Mode buttons always agree.
+  const light = useUi((s) => s.themeLight);
   const version = engineVersion(useDoctor().data?.version);
   // How much verification is waiting on you, without opening the dialog. Same
   // query and same helper the dialog itself uses, so the badge and the list can
@@ -60,14 +59,12 @@ export function TopBar() {
   // macOS hides the traffic lights in fullscreen — stop reserving their room.
   const [fullScreen, setFullScreen] = useState(false);
 
-  // The theme is a person-wide pref (lib/prefs.ts): one adopted from another
-  // of your devices flips the <html> class from outside — follow it, and
-  // repaint what the toggle below would have.
+  // Whoever changed the theme — this toggle, Settings → Appearance, or a pref
+  // adopted from another of your devices — repaint what the CSS can't reach.
   useEffect(() => {
     const onTheme = () => {
-      setLight(document.documentElement.classList.contains("light"));
-      rethemeAll();
-      redrawFavicon();
+      rethemeAll(); // re-theme already-open terminals
+      redrawFavicon(); // the tab favicon inverts with the theme
     };
     document.addEventListener(THEME_CHANGED, onTheme);
     return () => document.removeEventListener(THEME_CHANGED, onTheme);
@@ -89,19 +86,7 @@ export function TopBar() {
   }, [mac]);
 
 
-  const toggleTheme = () => {
-    const next = !light;
-    setLight(next);
-    try {
-      localStorage.setItem("cs_theme", next ? "light" : "dark");
-    } catch {
-      /* storage unavailable */
-    }
-    notePrefWrite("cs_theme"); // follows you to your other devices
-    applyTheme(next);
-    rethemeAll(); // re-theme already-open terminals
-    redrawFavicon(); // the tab favicon inverts with the theme
-  };
+  const toggleTheme = () => setTheme(!light);
 
   // The cluster that swaps sides on macOS. Defined once and rendered in exactly
   // one place, so the two layouts can't drift apart.

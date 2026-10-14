@@ -584,6 +584,11 @@
   border-color: var(--danger, #e5534b);
 }
 
+/* "Required", said only once a field was left empty (RepoSources). */
+.set-row .set-hint.ik-field-error {
+  color: var(--danger, #e5534b);
+}
+
 /* Disabled fields must LOOK disabled: `.set-row input[…]` sets colour,
    background and border unconditionally, which overrides the UA's greying, so
    a card's not-yet-usable fields read as editable. */

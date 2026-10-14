@@ -104,6 +104,7 @@ function applyLive(fields: Partial<Prefs>) {
         break;
       case "theme":
         document.documentElement.classList.toggle("light", v === "light");
+        st.themeLight = v === "light";
         document.dispatchEvent(new Event(THEME_CHANGED));
         break;
       // diff_mode / diff_base are read when a diff opens — the cache is enough.

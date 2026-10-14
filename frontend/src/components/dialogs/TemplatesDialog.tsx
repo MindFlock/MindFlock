@@ -44,7 +44,6 @@ import { newSessionResume } from "./newSession";
 
 /** A template as the server stores it, fast-track included (lib/templates'
  * Template predates the field). */
-type TemplateX = Template & { fasttrack?: string; ask_first?: boolean };
 /** A run row, with the time zone the schedule's "at" is in. */
 type RunInfoX = TemplateRunInfo & { tz?: string };
 
@@ -134,10 +133,8 @@ export function formFromTemplate(t: Template | null): TemplateForm {
     scheduled: !!t?.schedule?.at,
     at: t?.schedule?.at || "21:00",
     days: t?.schedule?.days === "weekdays" ? "weekdays" : "daily",
-    fasttrack: TEMPLATE_LANES.includes((t as TemplateX | null)?.fasttrack as Lane)
-      ? ((t as TemplateX).fasttrack as Lane)
-      : "leave",
-    ask_first: !!(t as TemplateX | null)?.ask_first,
+    fasttrack: TEMPLATE_LANES.includes(t?.fasttrack as Lane) ? (t!.fasttrack as Lane) : "leave",
+    ask_first: !!t?.ask_first,
   };
 }
 
@@ -187,9 +184,9 @@ export function templateMeta(t: Template): string {
   if (t.repo_path) bits.push(t.repo_path);
   bits.push(t.provisioned ? "provisioned" + (t.workspace_strategy === "clone" ? " (clone)" : "") : t.in_place ? "this folder directly" : "separate worktree");
   if (t.init_repo) bits.push("git init");
-  const ft = (t as TemplateX).fasttrack;
+  const ft = t.fasttrack;
   if (ft && ft !== "leave" && ft in LANE_LABEL)
-    bits.push("fast-track → " + LANE_LABEL[ft as Lane] + ((t as TemplateX).ask_first ? " (asks first)" : ""));
+    bits.push("fast-track → " + LANE_LABEL[ft as Lane] + (t.ask_first ? " (asks first)" : ""));
   return bits.join(" · ");
 }
 
@@ -599,6 +596,12 @@ export function TemplatesDialog() {
   useEffect(() => {
     if (!open) return;
     dispatch({ t: "cancel" });
+    // The palette's "Schedule a session…" opens straight onto a NEW template's
+    // editor with its schedule already switched on.
+    if (useUi.getState().dialogTarget === "schedule") {
+      setScheduleFocus(true);
+      dispatch({ t: "new" });
+    }
     setBusy(false);
     setLoadError("");
     let live = true;

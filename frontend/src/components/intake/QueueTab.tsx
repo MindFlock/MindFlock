@@ -38,6 +38,7 @@ import { useIntakePause } from "./pause";
 import { friendlySourceError } from "./vocab";
 import type { RepoOverrides } from "./RepoSources";
 import { queuedMatches } from "./search";
+import { ScheduledTemplates } from "./ScheduledTemplates";
 import {
   byGroup,
   collectQueued,
@@ -514,6 +515,8 @@ export function QueueTab({ gotoTab }: TabProps) {
               onStart={startItem}
             />
           ))}
+          {/* Not a work queue, but the same answer: what starts by itself. */}
+          {!filter.active && <ScheduledTemplates />}
         </div>
         <span className="set-hint">
           What would start on its own next, oldest first. Each other tab says why anything

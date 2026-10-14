@@ -585,10 +585,21 @@ export function Pane({
         <div className="pane-body">
           <div className="provisioning">
             <div className="spinner" />
-            <p>Provisioning workspace…</p>
-            <p className="muted">
-              The first provisioned run clones the base repo — this can take a while.
-            </p>
+            {/* Only a provisioned session clones anything; a plain worktree is
+                a quick `git worktree add`, and saying "clones the base repo"
+                there had people waiting for a download that never happens. */}
+            {inst.provisioned ? (
+              <>
+                <p>Provisioning workspace…</p>
+                <p className="muted">
+                  The first provisioned run clones the base repo — this can take a while.
+                </p>
+              </>
+            ) : inst.in_place ? (
+              <p>Starting the session…</p>
+            ) : (
+              <p>Creating worktree{inst.branch ? " on " + inst.branch : ""}…</p>
+            )}
           </div>
         </div>
       </section>

@@ -9,7 +9,6 @@ import type { Lane } from "../../../lib/laneActions";
 
 /** A template as the server stores it, fast-track included (lib/templates'
  * Template predates the field). */
-export type TemplateWithLane = Template & { fasttrack?: string; ask_first?: boolean };
 
 const LANES: readonly string[] = ["leave", "commit", "push", "pr", "merge"];
 
@@ -64,9 +63,9 @@ export function templateFiller(ctx: TemplateFillCtx) {
     // an ordinary combination.
     setInPlace(!!t.in_place && !t.provisioned);
     setInitRepo(!!t.init_repo);
-    const ft = (t as TemplateWithLane).fasttrack;
+    const ft = t.fasttrack;
     setLane(ft && LANES.includes(ft as Lane) ? (ft as Lane) : "leave");
-    setAskFirst(!!(t as TemplateWithLane).ask_first);
+    setAskFirst(!!t.ask_first);
     setActiveTemplate(t.name);
     if (opts.quiet) return;
     // The extras it set live under More options: show them.
