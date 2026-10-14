@@ -898,6 +898,33 @@ def test_the_route_answers_502_with_the_clis_own_sentence(route_home, monkeypatc
     assert res.json() == {"error": "claude is not installed"}
 
 
+def test_a_signed_out_cli_is_named_not_just_its_exit_code(route_home, monkeypatch):
+    """A signed-out ``claude -p`` exits 1 with its complaint on stdout, so the
+    bare error is "claude exited 1". When the CLI is known signed out, the
+    sentence says so — and only then."""
+    from backend.web.core import setup_steps
+
+    monkeypatch.setattr(cm, "pick_argv", lambda *a, **k: ["/usr/bin/claude", "-p", "x"])
+
+    def exited(*a, **kw):
+        raise cm.CommitMessageError("claude exited 1")
+
+    monkeypatch.setattr(cm, "_run", exited)
+    monkeypatch.setattr(
+        setup_steps, "provider_logins", lambda: [{"name": "claude", "logged_in": False}]
+    )
+    res = client.post("/api/session-plan", json={"text": "fix the auth bug in proj"})
+    assert res.status_code == 502
+    assert res.json()["error"].startswith("claude isn't signed in yet")
+
+    # Signed in (or unknowable): the CLI's own sentence, untouched.
+    monkeypatch.setattr(
+        setup_steps, "provider_logins", lambda: [{"name": "claude", "logged_in": None}]
+    )
+    res = client.post("/api/session-plan", json={"text": "fix the auth bug in proj"})
+    assert res.json() == {"error": "claude exited 1"}
+
+
 def test_the_route_answers_502_when_the_answer_cannot_be_read(route_home, monkeypatch):
     _stub_run(monkeypatch, "I'd suggest sitecheck-bot6, personally.")
     res = client.post("/api/session-plan", json={"text": "fix the auth bug in proj"})

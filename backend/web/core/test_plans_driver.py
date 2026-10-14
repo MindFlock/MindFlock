@@ -784,6 +784,13 @@ def _notify_test_plan_due(plan: dict) -> None:
         _test_plans.mark_notified(str(plan.get("id") or ""))
         if not cfg.active:
             return
+        # The ``verify_plan_due`` rule's switch governs this push as well as
+        # the browser notification (the rule itself is ``ntfy: False`` so the
+        # generic dispatch doesn't send it twice).
+        from backend.web.addons import notify as _notify
+
+        if not _notify.rule_enabled("verify_plan_due"):
+            return
         steps = plan.get("steps") or []
         mine = sum(1 for s in steps if s.get("actor") == "human")
         _ntfy.publish_soon(
@@ -1222,6 +1229,10 @@ def _announce_test_plan_checked(plan: dict) -> None:
         _events.BUS.emit(
             "session.test_plan_checked",
             session=pid,
+            # "failed" when any step failed, "" otherwise: what the
+            # default-on ``verify_run_failed`` notify rule matches on (a rule
+            # can only look at ``old``/``new``, never inside ``data``).
+            new="failed" if failed else "",
             data={
                 "plan": pid,
                 "title": plan.get("title") or pid,

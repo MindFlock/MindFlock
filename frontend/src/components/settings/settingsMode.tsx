@@ -5,7 +5,8 @@
  * internals, orchestration, extensions, troubleshooting) are real features
  * but noise on day one. So the nav shows the basic screens until the person
  * flips "Show advanced settings" at its foot, and the advanced controls that
- * live ON a basic screen sit in a collapsed <AdvancedFold> there.
+ * live ON a basic screen sit in an <AdvancedFold> there, which basic mode
+ * does not render at all.
  *
  * The choice is a synced pref (`prefs.settings_advanced`, localStorage
  * `mf_settings_advanced` as the cache — lib/prefs.ts), so it follows the
@@ -114,22 +115,32 @@ export function LearnMore({ children }: { children: ReactNode }) {
   );
 }
 
-/** A collapsed "Advanced" section on a basic screen: what most people never
- * need, still one click away. Open by default in advanced mode; the person
- * can fold or unfold it either way. Its controls stay mounted while folded,
- * so their ids and loads behave as before. */
+/** An "Advanced" section on a basic screen: power-user rows that only exist
+ * in advanced mode. Basic mode renders NOTHING for it — not a closed fold —
+ * so a newcomer never meets "Merge when green" or pre-commit hook ids one
+ * click away; there is one advanced mechanism (the nav's "Show advanced
+ * settings"), not two. In advanced mode it is an open fold the person can
+ * collapse.
+ *
+ * `basic` keeps it on basic screens as a CLOSED fold instead — for a part
+ * that is optional rather than expert (Notifications' phone alerts and its
+ * longer alert list). */
 export function AdvancedFold({
   id,
   summary = "Advanced",
+  basic = false,
   children,
 }: {
   id: string;
   summary?: string;
+  /** Show it (folded) in basic mode too. */
+  basic?: boolean;
   children: ReactNode;
 }) {
   const advanced = useAdvancedSettings();
   const [open, setOpen] = useState(advanced);
   useEffect(() => setOpen(advanced), [advanced]);
+  if (!advanced && !basic) return null;
   return (
     <details
       className="pr-advanced set-adv-fold"

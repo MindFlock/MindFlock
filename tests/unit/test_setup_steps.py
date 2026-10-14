@@ -125,13 +125,67 @@ class TestSettings:
 # --------------------------------------------------------------------------- #
 class TestMarking:
     def test_mark_is_forward_only_and_idempotent(self):
-        assert setup_steps.mark("repo") is True
-        at = setup_steps.state()["repo"]["at"]
-        assert setup_steps.mark("repo") is False
-        assert setup_steps.state()["repo"]["at"] == at
-        assert setup_steps.mark("repo", done=False) is False
-        assert setup_steps.state()["repo"]["done"] is True
+        assert setup_steps.mark("tools") is True
+        at = setup_steps.state()["tools"]["at"]
+        assert setup_steps.mark("tools") is False
+        assert setup_steps.state()["tools"]["at"] == at
+        assert setup_steps.mark("tools", done=False) is False
+        assert setup_steps.state()["tools"]["done"] is True
         assert setup_steps.mark("nonsense") is False
+
+    def test_a_session_create_only_starts_the_first_agent_step(self, monkeypatch):
+        # "Start your first agent" is not done because a session row exists:
+        # a session parked at a sign-in prompt has started nothing.
+        monkeypatch.setattr(setup_steps, "_worked_noted", False)
+        assert setup_steps.mark("repo") is True
+        st = setup_steps.state()["repo"]
+        assert st["done"] is False and st["started"]
+        row = next(r for r in setup_steps.checklist() if r["id"] == "repo")
+        assert row["status"] == "todo" and row["started"] is True
+        assert setup_steps.mark("repo") is False  # idempotent
+        assert S.load_settings().general.onboarded is False
+        # The agent working on something is what finishes it.
+        assert setup_steps.note_agent_worked() is True
+        st = setup_steps.state()["repo"]
+        assert st["done"] is True and st["at"]
+        row = next(r for r in setup_steps.checklist() if r["id"] == "repo")
+        assert row["status"] == "done" and row["started"] is False
+        assert S.load_settings().general.onboarded is True
+        # Free after the first time: a process flag, no settings read.
+        assert setup_steps.note_agent_worked() is False
+
+    def test_started_survives_the_round_trip_and_old_stores(self):
+        full = setup_steps.empty_state()
+        assert setup_steps.compact(full) == {}
+        full["repo"]["started"] = "2026-10-14T00:00:00+00:00"
+        out = setup_steps.compact(full)
+        assert out["repo"] == {
+            "done": False,
+            "at": None,
+            "started": "2026-10-14T00:00:00+00:00",
+        }
+        assert (
+            setup_steps.normalize(out)["repo"]["started"] == "2026-10-14T00:00:00+00:00"
+        )
+        # A store from before `started` existed: done implies started.
+        old = setup_steps.normalize(
+            {"repo": {"done": True, "at": "2026-01-01T00:00:00+00:00"}}
+        )
+        assert old["repo"]["started"] == "2026-01-01T00:00:00+00:00"
+
+    def test_the_activity_classifier_ticks_it_on_corroborated_work(self, monkeypatch):
+        from backend.web.core import agent_state
+
+        monkeypatch.setattr(setup_steps, "_worked_noted", False)
+        setup_steps.mark("repo")
+        rec: dict = {}
+        # A reading that does not arm (a CPU blip) is not work.
+        agent_state._verdict(rec, "working", 100.0, arms=False, source="pane")
+        assert setup_steps.state()["repo"]["done"] is False
+        agent_state._verdict(rec, "idle", 101.0, source="marker")
+        assert setup_steps.state()["repo"]["done"] is False
+        agent_state._verdict(rec, "working", 102.0, arms=True, source="marker")
+        assert setup_steps.state()["repo"]["done"] is True
 
     def test_skip_is_for_optional_steps_and_done_wins(self):
         assert setup_steps.skip("tools") is False
@@ -145,7 +199,7 @@ class TestMarking:
         assert setup_steps.unskip("tracker") is True
         assert setup_steps.checklist()[4]["status"] == "todo"
 
-    def test_summary_counts_skips_as_done_and_gates_the_card(self):
+    def test_summary_counts_skips_as_done_and_gates_the_card(self, monkeypatch):
         s = setup_steps.summary()
         assert s == {
             "done": 0,
@@ -154,8 +208,10 @@ class TestMarking:
             "complete": False,
             "next": "tools",
         }
-        for sid in ("tools", "agent_login", "repo"):
+        for sid in ("tools", "agent_login"):
             setup_steps.mark(sid)
+        monkeypatch.setattr(setup_steps, "_worked_noted", False)
+        setup_steps.note_agent_worked()
         s = setup_steps.summary()
         assert s["required_done"] is True and s["complete"] is False
         assert s["done"] == 3 and s["next"] == "github"
@@ -261,10 +317,10 @@ class TestMarking:
         assert "Settings → Coding CLI" not in src
         assert "Settings → Agent CLI" in src
 
-    def test_first_session_create_marks_repo(self):
+    def test_first_session_create_starts_repo(self):
         server._mark_onboarded()
-        assert setup_steps.state()["repo"]["done"] is True
-        assert S.load_settings().general.onboarded is True
+        assert setup_steps.state()["repo"]["started"]
+        assert setup_steps.state()["repo"]["done"] is False
 
     def test_report_text_is_kept_for_the_api(self):
         setup_steps.set_first_run_report("First run — hello")
@@ -348,16 +404,22 @@ class TestRoutes:
             "later",
         ]
         for s in d["steps"]:
-            assert set(s) == {
-                "id",
-                "title",
-                "required",
-                "group",
-                "done",
-                "at",
-                "skipped",
-                "status",
-            }
+            # `repo` also says whether a session exists that hasn't started yet.
+            extra = {"started"} if s["id"] == "repo" else set()
+            assert (
+                set(s)
+                == {
+                    "id",
+                    "title",
+                    "required",
+                    "group",
+                    "done",
+                    "at",
+                    "skipped",
+                    "status",
+                }
+                | extra
+            )
         assert set(d["summary"]) == {
             "done",
             "total",
@@ -456,7 +518,8 @@ class TestRoutes:
         c2.get("/m")
         assert setup_steps.state()["phone"]["done"] is True
 
-    def test_config_onboarded_follows_the_repo_step(self, client):
+    def test_config_onboarded_follows_the_repo_step(self, client, monkeypatch):
+        monkeypatch.setattr(setup_steps, "_worked_noted", False)
         assert client.get("/api/config").json()["onboarded"] is False
-        setup_steps.mark("repo")
+        setup_steps.note_agent_worked()
         assert client.get("/api/config").json()["onboarded"] is True

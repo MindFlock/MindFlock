@@ -23,9 +23,8 @@ function onWindows(): boolean {
   return (window as unknown as { mfshell?: { platform?: string } }).mfshell?.platform === "win32";
 }
 
-export function Advanced(_: ScreenProps) {
+export function Advanced({ gotoScreen }: ScreenProps) {
   const s = useSettings();
-  const mode = String(s.get("engine", "mode") ?? "");
   // Tri-state on the wire: unset (never touched) means the backend default,
   // which is ON — so only an explicit stored `false` unchecks this.
   const engineSessions = s.get("engine", "enabled") !== false;
@@ -57,24 +56,18 @@ export function Advanced(_: ScreenProps) {
         </label>
       </div>
       <p className="set-hint">
-        Leave this on to get the flow in the screenshots: tickets assigned to you become
-        MindFlock sessions you can watch, commit, and open a PR from. Turning it off sends
-        ingested tickets to a bare tmux session and an OS terminal tab instead. Takes effect
-        the next time the ingestion pipeline starts.
+        Leave this on: tickets assigned to you become MindFlock sessions you can watch, commit
+        and open a PR from. Off sends them to a bare tmux session and a terminal tab instead.
+        Takes effect the next time auto-start starts.
       </p>
-      <label className="set-row">
-        <span className="set-label">Worktree mode</span>
-        <select
-          data-group="engine"
-          data-field="mode"
-          value={mode}
-          onChange={(e) => s.saveField("engine", "mode", e.target.value)}
-        >
-          <option value="">(default)</option>
-          <option value="worktree">worktree — fast</option>
-          <option value="clone">clone — full standalone</option>
-        </select>
-      </label>
+      {/* Worktree vs clone moved to Workspace, next to where the copies live. */}
+      <p className="set-hint">
+        How ticket sessions copy the repo (worktree or clone) is on{" "}
+        <button type="button" className="linklike" data-goto-screen="workspace" onClick={() => gotoScreen("workspace")}>
+          Workspace
+        </button>
+        .
+      </p>
       <EngineUpdate />
       {showPlatform && (
         <>

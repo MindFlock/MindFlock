@@ -175,6 +175,9 @@ def ensure_command_session(session: str, cmd: str) -> Optional[str]:
         ("mouse", "on"),
         ("history-limit", "10000"),
         ("window-size", "latest"),
+        # No status line: the window around the terminal already says what
+        # it is, and tmux's bar (host name, clock) read as part of the login.
+        ("status", "off"),
     ):
         try:
             subprocess.run(

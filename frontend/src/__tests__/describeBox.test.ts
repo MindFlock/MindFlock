@@ -105,10 +105,14 @@ describe("the workspace mode is a choice with something always selected", () => 
   });
 
   it("provisioning is a box on top of the separate worktree, not a third answer", () => {
+    // Round 4: one ProvisionCheck, drawn by the New form AND the Templates
+    // editor, so the two can't describe it differently.
     const [t] = tags(WORKSPACE, "new-provision");
-    expect(attr(t, "type")).toBe("checkbox");
+    expect(t.name).toBe("ProvisionCheck");
+    const check = WORKSPACE.slice(WORKSPACE.indexOf("export function ProvisionCheck("));
+    expect(check.slice(0, check.indexOf("</label>"))).toContain('<input type="checkbox" id={id}');
     // Ticking it picks the worktree.
-    expect(WORKSPACE).toContain("if (e.target.checked) setInPlace(false);");
+    expect(WORKSPACE).toContain("if (on) setInPlace(false);");
   });
 
   it("reads as one labelled question, and the radios are styled", () => {

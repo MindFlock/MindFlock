@@ -64,14 +64,14 @@ const TABS: Array<{
   // so they are not locked behind connecting a tracker.
   {
     key: "prs",
-    label: "Pull requests",
+    label: "GitHub PRs",
     caps: "git",
     legacyId: "pr-review-block",
     el: (p) => <PullRequestsTab {...p} />,
   },
   {
     key: "issues",
-    label: "Issues",
+    label: "GitHub issues",
     caps: "git",
     legacyId: "git-issues-block",
     el: (p) => <IssuesTab {...p} />,
@@ -109,7 +109,9 @@ function AutoStartCount({ on }: { on: boolean }) {
       className={"ik-tab-count" + (on ? "" : " muted")}
       title={on ? n + " will start on their own" : n + " waiting — auto-start is off"}
     >
-      {n}
+      {/* A word when it means something different from the other tabs'
+          "ready to start" counts: these are waiting on a switch. */}
+      {on ? n : n + " waiting"}
     </span>
   );
 }
@@ -151,38 +153,74 @@ function TabCount({ tab }: { tab: Exclude<IntakeTabKey, "autostart"> }) {
 }
 
 /** "Pause intake" — the one control that stops every auto-start at once
- * (tickets, PR comments, issues), with a line saying what is on right now.
- * Logic in ./pause.ts; the sidebar's Tickets bar carries the same control. */
-function PauseBar({ ticketSources, onDone }: { ticketSources: number; onDone(): void }) {
+ * (tickets, GitHub PRs, GitHub issues), with a line saying what is on right
+ * now. Always on screen: the button is how you find out pausing exists, so it
+ * never appears only once something is on — it is disabled, saying why, when
+ * there is nothing to pause. With everything off, "Turn on…" goes to the tab
+ * whose switch does it. Logic in ./pause.ts (the paused state is kept on the
+ * server); the sidebar's Tickets bar carries the same control. */
+function PauseBar({
+  ticketSources,
+  onDone,
+  gotoTab,
+}: {
+  ticketSources: number;
+  onDone(): void;
+  gotoTab(key: IntakeTabKey): void;
+}) {
   const p = useIntakePause(ticketSources, onDone);
-  if (!p.anyConfigured) return null;
   const line = p.paused
     ? "Intake is paused — nothing new starts on its own. Start still works on any row."
     : p.onKinds.length
       ? "Auto-start is on for " + kindsText(p.onKinds) + "."
-      : "";
+      : p.anyConfigured
+        ? "Auto-start is off everywhere."
+        : "Nothing auto-starts yet — set up a tab below first.";
+  // Where "Turn on…" goes: the first tab with something set up but off.
+  const offTab: IntakeTabKey | null = p.paused || p.onKinds.length
+    ? null
+    : p.sw.configured.tickets
+      ? "tickets"
+      : p.sw.configured.prs
+        ? "prs"
+        : p.sw.configured.issues
+          ? "issues"
+          : null;
   return (
     <div className={"ik-pause" + (p.paused ? " paused" : "")} id="ik-pause-row">
       <span className="ik-pause-text" id="ik-pause-status" role="status" aria-live="polite">
-        {line || "Auto-start is off everywhere."}
+        {line}
       </span>
-      {(p.paused || p.onKinds.length > 0) && (
+      <span className="ik-pause-actions">
+        {offTab && (
+          <button
+            type="button"
+            id="ik-turn-on-btn"
+            className="linklike"
+            title="Go to the switch that turns auto-start on"
+            onClick={() => gotoTab(offTab)}
+          >
+            Turn on…
+          </button>
+        )}
         <button
           type="button"
           id="ik-pause-btn"
           className={"test-btn ik-pause-btn" + (p.paused ? " on" : "")}
-          disabled={p.busy}
+          disabled={p.busy || (!p.paused && !p.onKinds.length)}
           aria-pressed={p.paused}
           title={
             p.paused
               ? "Turn back on what was on before the pause"
-              : "Stop auto-start for tickets, PR comments and issues at once"
+              : p.onKinds.length
+                ? "Stop auto-start for tickets, GitHub PRs and GitHub issues at once"
+                : "Nothing auto-starts right now, so there is nothing to pause"
           }
           onClick={() => void p.toggle()}
         >
           {p.busy ? "…" : p.paused ? "Resume intake" : "Pause intake"}
         </button>
-      )}
+      </span>
     </div>
   );
 }
@@ -253,7 +291,11 @@ export function IntakeDialog() {
               Close
             </button>
           </div>
-          <PauseBar ticketSources={savedSources.length} onDone={() => void model.reload()} />
+          <PauseBar
+            ticketSources={savedSources.length}
+            onDone={() => void model.reload()}
+            gotoTab={setTab}
+          />
           <div id="intake-tabs" role="tablist" aria-label="Intake">
             {TABS.map((t, i) => (
               <button

@@ -19,7 +19,7 @@ State lives in settings as ``general.setup``::
 
     {"tools":       {"done": bool, "at": iso|null},
      "agent_login": {"done": bool, "at": iso|null},
-     "repo":        {"done": bool, "at": iso|null},
+     "repo":        {"done": bool, "at": iso|null, "started": iso|null},
      "github":      {"done": bool, "at": iso|null, "skipped": bool},
      "tracker":     {"done": bool, "at": iso|null, "skipped": bool},
      "phone":       {"done": bool, "at": iso|null, "skipped": bool}}
@@ -38,7 +38,12 @@ Who marks what:
   (:func:`backend.doctor.run_checks`): tools when no required check fails,
   agent login when the default agent CLI is installed and its login probe
   found evidence (or has nothing to look for).
-* ``repo`` — the first session create (``server._mark_onboarded``).
+* ``repo`` — done only once a session's agent has actually WORKED on
+  something (:func:`note_agent_worked`, from the activity classifier's first
+  corroborated ``working`` reading). The first session create
+  (``server._mark_onboarded`` → ``mark("repo")``) only records ``started``: a
+  session sitting at a sign-in prompt is not a first agent, and calling it one
+  told a new user they had succeeded when nothing ran.
 * ``github`` — :func:`status` (every ``GET /api/setup``) when a GitHub
   credential resolves: a Settings / env token, or the doctor's signed-in gh.
 * ``tracker`` — saving the first ticket source (``PUT /api/settings/ticketing/sources``).
@@ -70,6 +75,7 @@ __all__ = [
     "normalize",
     "state",
     "mark",
+    "note_agent_worked",
     "skip",
     "checklist",
     "summary",
@@ -119,6 +125,9 @@ OPTIONAL = tuple(str(s["id"]) for s in STEPS if not s["required"])
 LATER = tuple(str(s["id"]) for s in STEPS if s["group"] == "later")
 #: What :func:`summary` counts (the chip's "N/5").
 COUNTED = tuple(sid for sid in STEP_IDS if sid not in LATER)
+#: Steps a plain :func:`mark` only STARTS: done takes the thing itself
+#: (``repo``: an agent that worked — :func:`note_agent_worked`).
+EVIDENCE_STEPS = ("repo",)
 GROUPS = {str(s["id"]): str(s["group"]) for s in STEPS}
 TITLES = {str(s["id"]): str(s["title"]) for s in STEPS}
 
@@ -156,6 +165,8 @@ def empty_state() -> Dict[str, dict]:
         entry: dict = {"done": False, "at": None}
         if sid in OPTIONAL:
             entry["skipped"] = False
+        if sid in EVIDENCE_STEPS:
+            entry["started"] = None
         out[sid] = entry
     return out
 
@@ -176,6 +187,9 @@ def normalize(raw: Any) -> Dict[str, dict]:
         out[sid]["at"] = str(at) if (done and at) else None
         if sid in OPTIONAL:
             out[sid]["skipped"] = bool(v.get("skipped", False))
+        if sid in EVIDENCE_STEPS:
+            started = v.get("started")
+            out[sid]["started"] = str(started) if started else (out[sid]["at"])
     # ``github`` used to be half of "Connect a tracker and GitHub": a store
     # that settled that step before ``github`` existed has settled GitHub too.
     if "github" not in raw and not out["github"]["done"]:
@@ -189,7 +203,9 @@ def compact(full: Dict[str, dict]) -> Dict[str, dict]:
     """The on-disk form: ``{}`` while nothing is done or skipped (so an
     untouched store serializes unchanged), else every step."""
     full = normalize(full)
-    if not any(v["done"] or v.get("skipped") for v in full.values()):
+    if not any(
+        v["done"] or v.get("skipped") or v.get("started") for v in full.values()
+    ):
         return {}
     out: Dict[str, dict] = {}
     for sid in STEP_IDS:
@@ -197,6 +213,8 @@ def compact(full: Dict[str, dict]) -> Dict[str, dict]:
         entry: dict = {"done": bool(v["done"]), "at": v["at"]}
         if sid in OPTIONAL and v.get("skipped"):
             entry["skipped"] = True
+        if sid in EVIDENCE_STEPS and v.get("started"):
+            entry["started"] = v["started"]
         out[sid] = entry
     return out
 
@@ -226,17 +244,55 @@ def _write(full: Dict[str, dict]) -> bool:
 
 def mark(step: str, *, done: bool = True) -> bool:
     """Record ``step`` as done. Forward-only and idempotent; returns whether
-    the store changed. Unknown steps are ignored."""
+    the store changed. Unknown steps are ignored.
+
+    An :data:`EVIDENCE_STEPS` step (``repo``) is only STARTED here — the
+    session exists; :func:`note_agent_worked` is what finishes it."""
     if step not in STEP_IDS or not done:
         return False
     cur = state()
     if cur[step]["done"]:
         return False
+    if step in EVIDENCE_STEPS:
+        if cur[step].get("started"):
+            return False
+        cur[step]["started"] = _now()
+        return _write(cur)
     cur[step]["done"] = True
     cur[step]["at"] = _now()
     if step in OPTIONAL:
         cur[step]["skipped"] = False
     return _write(cur)
+
+
+#: Set once this process has seen the repo step done (or written it), so the
+#: activity classifier's hot path stops asking.
+_worked_noted = False
+
+
+def note_agent_worked() -> bool:
+    """A session's agent was seen WORKING (corroborated — a hook, its live
+    status line, sustained CPU): the first agent really started on its task,
+    so ``repo`` is done. Cheap after the first call (a process flag); returns
+    whether the store changed. Never raises."""
+    global _worked_noted
+    if _worked_noted:
+        return False
+    try:
+        cur = state()
+        if cur["repo"]["done"]:
+            _worked_noted = True
+            return False
+        now = _now()
+        cur["repo"]["done"] = True
+        cur["repo"]["at"] = now
+        cur["repo"]["started"] = cur["repo"].get("started") or now
+        changed = _write(cur)
+        if changed:
+            _worked_noted = True
+        return changed
+    except Exception:  # noqa: BLE001 — a bookkeeping flag
+        return False
 
 
 def skip(step: str) -> bool:
@@ -285,6 +341,11 @@ def checklist(current: Optional[Dict[str, dict]] = None) -> List[dict]:
                 "at": v["at"],
                 "skipped": skipped,
                 "status": "done" if v["done"] else ("skipped" if skipped else "todo"),
+                **(
+                    {"started": bool(v.get("started")) and not v["done"]}
+                    if sid in EVIDENCE_STEPS
+                    else {}
+                ),
             }
         )
     return out

@@ -11,7 +11,10 @@
  * review (absent = on), issue handling is opt-in: absent = off. */
 
 import { useUi } from "../../state/store";
+import { useTicketingSources } from "../../state/queries";
 import { useGithubToggleBar } from "./useGithubToggleBar";
+import { useIntakePause } from "../intake/pause";
+import "../intake/pauseButton.css";
 
 export function GitIssueBar() {
   const openDialogFor = useUi((s) => s.openDialogFor);
@@ -23,13 +26,16 @@ export function GitIssueBar() {
     activeFlag: "issues_active",
     toggleLabel: "Auto-start new issues",
   });
+  // Off because Pause intake turned it off: drawn striped amber, not plain off.
+  const pause = useIntakePause((useTicketingSources(true).data || []).length);
+  const paused = !on && pause.pausedKind("issues");
   if (!visible) return null;
 
   return (
     <div
       id="git-issue-bar"
       title={
-        `Issues — starts a session for each new issue in ${repos.length} ` +
+        `GitHub issues — starts a session for each new issue in ${repos.length} ` +
         `${repos.length === 1 ? "repository" : "repositories"}.`
       }
     >
@@ -52,15 +58,15 @@ export function GitIssueBar() {
         id="git-issue-repos-btn"
         type="button"
         className="dc-label dc-open"
-        title="Open Intake → Issues"
+        title="Open Intake → GitHub issues"
         onClick={() => openDialogFor("intake", "issues")}
       >
-        Issues
+        GitHub issues
       </button>
       <span className="dc-actions">
         <label
-          className="dc-switch"
-          title="Auto-start new issues — the same switch as Intake → Issues (your repositories are kept either way)"
+          className={"dc-switch" + (paused ? " paused" : "")}
+          title="Auto-start new issues — the same switch as Intake → GitHub issues (your repositories are kept either way)"
         >
           <input
             type="checkbox"

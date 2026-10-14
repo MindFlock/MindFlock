@@ -17,6 +17,7 @@ import {
   cantCheckCount,
   dueCount,
   failCount,
+  failingCount,
   GENERATION_STALE_S,
   groupPlans,
   isGenerationStalled,
@@ -30,10 +31,12 @@ import {
   needsConfirmation,
   noTargetsReason,
   openHumanSteps,
+  planForSession,
   planGroup,
   planShipped,
   planStatus,
   planTargets,
+  planVerdict,
   rewriteBlockedReason,
   rewriteWarning,
   stepCheck,
@@ -390,14 +393,18 @@ describe("needsConfirmation", () => {
 describe("dueCount", () => {
   const humanStep = [step("s1", "human")];
   const unconfirmed = [run({ results: results({ s1: "blocked" }) })];
+  const one = [step("s1")];
 
-  it("counts plans that are live and unchecked", () => {
+  it("counts a shipped plan nobody has checked, but not one an agent is checking", () => {
+    // Round 4, one axis: a running plan is "In progress" — its row says
+    // "Agent checking" — so it is not on the badge, which counts Needs you +
+    // Failed.
     expect(
       dueCount([
-        plan({ id: "a", state: "due" }),
-        plan({ id: "b", state: "running" }),
+        plan({ id: "a", state: "due", steps: one }),
+        plan({ id: "b", state: "running", steps: one, run_session: "verify-b" }),
       ]),
-    ).toBe(2);
+    ).toBe(1);
   });
 
   it("counts a plan whose human steps are still open, whatever its state", () => {
@@ -413,42 +420,40 @@ describe("dueCount", () => {
     // reach the live branch. Nothing to check until it ships.
     expect(
       dueCount([
-        plan({ id: "a", state: "generating" }),
-        plan({ id: "b", state: "generated" }),
+        plan({ id: "a", state: "generating", steps: one }),
+        plan({ id: "b", state: "generated", steps: one }),
       ]),
     ).toBe(0);
   });
 
-  it("keeps a shipped plan in the badge while a rewrite runs", () => {
-    // Rewrite flips the state to `generating`, but the work is still live and
-    // still unchecked the whole time the model writes — the server puts the
-    // plan straight back into `due` when the answer lands, and a badge that
-    // dropped for those minutes would read as the work un-shipping.
+  it("drops a shipped plan from the badge while a rewrite runs — an agent is on it", () => {
     expect(
-      dueCount([
-        plan({ id: "a", state: "generating", live_at: 500, steps: [step("s1")] }),
-      ]),
-    ).toBe(1);
-    // ...but not one whose every step already had an answer: that plan resolves
-    // to `done` (the server's `_all_settled` rule) and was under "Checked" a
-    // moment ago, so it must not jump into the badge for the rewrite's duration.
+      dueCount([plan({ id: "a", state: "generating", live_at: 500, steps: one })]),
+    ).toBe(0);
+  });
+
+  it("counts failures — a failed step, and a checklist that couldn't be written", () => {
+    // Round 4: failures are loud, and the badge is where a lead looks first.
     expect(
       dueCount([
         plan({
-          id: "b",
-          state: "generating",
-          live_at: 500,
-          steps: [step("s1")],
-          runs: [run({ results: results({ s1: "pass" }) })],
+          id: "a",
+          state: "done",
+          steps: one,
+          runs: [run({ results: results({ s1: "fail" }) })],
         }),
+        plan({ id: "b", state: "failed", error: "no <testplan> block" }),
       ]),
-    ).toBe(0);
+    ).toBe(2);
+    expect(
+      failingCount([
+        plan({ id: "b", state: "failed", error: "no <testplan> block" }),
+        plan({ id: "c", state: "due", steps: one }),
+      ]),
+    ).toBe(1);
   });
 
-  it("ignores a finished plan and a plan that never generated", () => {
-    // "done" with nothing outstanding is the point of the feature. "failed" is a
-    // defect to look at in the list, not a shipped thing awaiting checking — and
-    // no amount of checking would ever clear it from the badge.
+  it("ignores a verified plan", () => {
     expect(
       dueCount([
         plan({
@@ -457,7 +462,6 @@ describe("dueCount", () => {
           steps: [step("s1", "human")],
           runs: [run({ results: results({ s1: "pass" }) })],
         }),
-        plan({ id: "b", state: "failed", error: "no <testplan> block" }),
       ]),
     ).toBe(0);
   });
@@ -476,30 +480,28 @@ describe("dueCount", () => {
   });
 });
 
-describe("the badge and the top group are one set", () => {
-  // The whole point of isWaitingOnYou. One number used to be printed in four
-  // places — the badge, the Due tab's count, "Due now" and "Awaiting your
-  // confirmation" — and no two of them were ever equal, which taught the reader
-  // that the badge was approximate. This is that promise, machine-checked.
+describe("the badge and the first two groups are one set", () => {
+  // The whole point of dueCount. One number used to be printed in four places
+  // and no two of them were ever equal, which taught the reader that the badge
+  // was approximate. This is that promise, machine-checked: the badge counts
+  // exactly the rows under "Failed" and "Needs you".
+  const one = [step("s1")];
   const everything = [
-    plan({ id: "due", state: "due" }),
-    plan({ id: "running", state: "running" }),
-    plan({ id: "generating", state: "generating" }),
-    plan({ id: "generated", state: "generated" }),
-    // A shipped plan mid-rewrite stays in the top group; a fully-answered one
-    // stays in Checked. Both here so the badge/group agreement is machine-checked
-    // across the rewrite window too.
+    plan({ id: "due", state: "due", steps: one }),
+    plan({ id: "running", state: "running", steps: one, run_session: "verify-r" }),
+    plan({ id: "generating", state: "generating", steps: one }),
+    plan({ id: "generated", state: "generated", steps: one }),
     plan({
       id: "rewriting-shipped",
       state: "generating",
       live_at: 500,
-      steps: [step("s1")],
+      steps: one,
     }),
     plan({
       id: "rewriting-checked",
       state: "generating",
       live_at: 500,
-      steps: [step("s1")],
+      steps: one,
       runs: [run({ results: results({ s1: "pass" }) })],
     }),
     plan({ id: "nogen", state: "failed", error: "no <testplan> block" }),
@@ -512,27 +514,28 @@ describe("the badge and the top group are one set", () => {
     plan({
       id: "flunked",
       state: "done",
-      steps: [step("s1")],
+      steps: one,
       runs: [run({ results: results({ s1: "fail" }) })],
     }),
     plan({
       id: "clean",
       state: "done",
-      steps: [step("s1")],
+      steps: one,
       runs: [run({ results: results({ s1: "pass" }) })],
     }),
   ];
 
-  it("counts exactly the plans the first group renders", () => {
-    const top = groupPlans(everything).find((g) => g.key === "due");
-    expect(dueCount(everything)).toBe(top?.plans.length ?? -1);
+  it("counts exactly the plans the first two groups render", () => {
+    const top = groupPlans(everything).filter((g) => g.key === "due" || g.key === "fail");
+    expect(dueCount(everything)).toBe(top.reduce((n, g) => n + g.plans.length, 0));
   });
 
   it("agrees plan by plan, not just in total", () => {
-    const top = groupPlans(everything).find((g) => g.key === "due");
-    expect(top?.plans.map((p) => p.id)).toEqual(
-      everything.filter(isWaitingOnYou).map((p) => p.id),
-    );
+    const due = groupPlans(everything).find((g) => g.key === "due");
+    expect(due?.plans.map((p) => p.id)).toEqual(["due", "handed-back"]);
+    const fail = groupPlans(everything).find((g) => g.key === "fail");
+    expect(fail?.plans.map((p) => p.id)).toEqual(["nogen", "flunked"]);
+    expect(everything.filter(isWaitingOnYou).map((p) => p.id)).toEqual(["due", "handed-back"]);
   });
 
   it("puts every plan in exactly one group", () => {
@@ -630,7 +633,22 @@ describe("planStatus (the one sentence and the one button)", () => {
     const status = planStatus(flunked, "main");
     expect(status.group).toBe("fail");
     expect(status.tone).toBe("bad");
-    expect(status.line).toBe("2 steps didn't do what was expected.");
+    // Named, not counted: the first failing step, and how many more.
+    expect(status.line).toBe("Failed: step 1 — do s1 (+1 more).");
+  });
+
+  it("leads a failed row with the failure, even when steps are still yours", () => {
+    // It files under Failed; leading with "1 step needs your eyes" in the
+    // your-turn tone read as an ask. The open step is still said, after it.
+    const mixed = plan({
+      state: "done",
+      steps: [step("s1"), step("s2", "human")],
+      runs: [run({ results: results({ s1: "fail", s2: "blocked" }) })],
+    });
+    const status = planStatus(mixed, "main");
+    expect(status.tone).toBe("bad");
+    expect(status.line).toBe("Failed: step 1 — do s1. 1 step still needs you.");
+    expect(status.actionLabel).toBe("See what failed");
   });
 
   it("never says it works when the run stopped short", () => {
@@ -643,8 +661,10 @@ describe("planStatus (the one sentence and the one button)", () => {
     });
     const status = planStatus(short, "main");
     expect(status.tone).toBe("warn");
-    expect(status.line).toBe("Checked — 2 steps with no answer.");
-    expect(status.actionLabel).toBe("Check again");
+    expect(status.group).toBe("partial");
+    expect(status.line).toBe("Not verified — 2 steps with no answer.");
+    // One name for the agent's run, everywhere.
+    expect(status.actionLabel).toBe("Check now");
   });
 
   it("says it works only when every step has a real answer", () => {
@@ -687,11 +707,13 @@ describe("planStatus (the one sentence and the one button)", () => {
     );
   });
 
-  it("offers Check now even when every step is a person's", () => {
+  it("says Show steps, not Check now, when every step is a person's", () => {
+    // "Check now" means one thing — start the agent's steps. With none, the
+    // button only opens the steps, and says so.
     const early = plan({ state: "generated", live_at: 0, steps: [step("s1", "human")] });
     const status = planStatus(early, "main");
     expect(status.action).toBe("answer");
-    expect(status.actionLabel).toBe("Check now");
+    expect(status.actionLabel).toBe("Show steps");
   });
 
   it("says a branch that passed before merge is checked again after it", () => {
@@ -720,7 +742,7 @@ describe("planStatus (the one sentence and the one button)", () => {
   it("says an agent is on it while a run is going", () => {
     const running = plan({ state: "running", steps: [step("s1")], run_session: "verify-a" });
     const status = planStatus(running, "main");
-    expect(status.group).toBe("due");
+    expect(status.group).toBe("generated");
     expect(status.action).toBe("watch");
     expect(status.actionLabel).toBe("Watch");
   });
@@ -781,7 +803,7 @@ describe("planStatus (the one sentence and the one button)", () => {
   it("hands a failed generation the only button that helps", () => {
     const broken = plan({ state: "failed", error: "no <testplan> block" });
     const status = planStatus(broken, "main");
-    expect(status.group).toBe("failed");
+    expect(status.group).toBe("fail");
     expect(status.actionLabel).toBe("Rewrite the checklist");
   });
 
@@ -811,18 +833,32 @@ describe("planStatus (the one sentence and the one button)", () => {
 });
 
 describe("groupPlans", () => {
-  it("orders the groups most-urgent first", () => {
-    // Fixed order so the list reads top-down as a work queue. The input is
-    // deliberately shuffled: nothing about the caller's order may leak into it.
+  const one = [step("s1")];
+
+  it("groups by ONE axis, loudest first", () => {
+    // Round 4: the outcome and whose move it is — never "merged?" mixed in.
+    // The input is deliberately shuffled: nothing about the caller's order may
+    // leak into it.
     const groups = groupPlans([
       plan({ id: "e", state: "failed" }),
-      plan({ id: "d", state: "done" }),
-      plan({ id: "c", state: "generated" }),
+      plan({
+        id: "d",
+        state: "done",
+        steps: one,
+        runs: [run({ results: results({ s1: "pass" }) })],
+      }),
+      plan({ id: "c", state: "generated", steps: one }),
       plan({
         id: "f",
         state: "done",
-        steps: [step("s1")],
+        steps: one,
         runs: [run({ results: results({ s1: "fail" }) })],
+      }),
+      plan({
+        id: "g",
+        state: "done",
+        steps: [step("s1"), step("s2")],
+        runs: [run({ results: results({ s1: "pass" }) })],
       }),
       plan({
         id: "b",
@@ -830,28 +866,39 @@ describe("groupPlans", () => {
         steps: [step("s1", "human")],
         runs: [run({ results: results({ s1: "blocked" }) })],
       }),
-      plan({ id: "a", state: "due" }),
+      plan({ id: "a", state: "due", steps: one }),
     ]);
-    expect(groups.map((g) => g.key)).toEqual([
-      "due",
-      "fail",
-      "generated",
-      "done",
-      "failed",
-    ]);
+    expect(groups.map((g) => g.key)).toEqual(["fail", "due", "generated", "partial", "done"]);
     expect(groups.map((g) => g.label)).toEqual([
-      "Not checked yet",
-      "Steps failed",
-      "Not shipped yet",
-      "Checked",
-      "Couldn't be written",
+      "Failed",
+      "Needs you",
+      "In progress",
+      "Not verified",
+      "Verified",
     ]);
+    expect(groups[0].plans.map((p) => p.id)).toEqual(["e", "f"]);
+  });
+
+  it("files a branch that passed before merge under Verified, not 'not shipped'", () => {
+    // The judge's core complaint: every step passed on an unmerged branch,
+    // and the row jumped into "Not shipped yet" — never "Checked".
+    const groups = groupPlans([
+      plan({
+        id: "a",
+        state: "generated",
+        live_at: 0,
+        steps: one,
+        runs: [run({ results: results({ s1: "pass" }), prelive: true } as Partial<TestRun>)],
+      }),
+    ]);
+    expect(groups.map((g) => g.key)).toEqual(["done"]);
+    expect(groups[0].label).toBe("Verified");
   });
 
   it("gives a shipped thing that flunked its own plan a group of its own", () => {
     // finish_run writes state="done" whatever the results said, so without this
     // the single most valuable output of the whole feature — it shipped and it
-    // is broken — filed under "Checked" and was findable only by scrolling.
+    // is broken — filed among the successes.
     const groups = groupPlans([
       plan({
         id: "a",
@@ -863,30 +910,23 @@ describe("groupPlans", () => {
     expect(groups.map((g) => g.key)).toEqual(["fail"]);
   });
 
-  it("keeps a fail out of the badge's group — an answer is not an ask", () => {
-    // A fail is somebody having looked, not somebody being asked to look. It
-    // gets a loud group; it does not get a number on the top bar that no amount
-    // of checking would ever clear.
+  it("counts a fail on the badge — failures are loud", () => {
     const flunked = plan({
       id: "a",
       state: "done",
-      steps: [step("s1")],
+      steps: one,
       runs: [run({ results: results({ s1: "fail" }) })],
     });
-    expect(dueCount([flunked])).toBe(0);
+    expect(dueCount([flunked])).toBe(1);
     expect(planGroup(flunked)).toBe("fail");
   });
 
-  it("puts an unfinished run above the successes inside Checked", () => {
-    // With real failures lifted out, the residue in Checked is the run that
-    // stopped early — which would otherwise sit under every success the flock
-    // has ever recorded. The heading says so too, so a collapsed group cannot
-    // hide it.
+  it("files a run that stopped short under Not verified, apart from the verified", () => {
     const groups = groupPlans([
       plan({
         id: "clean",
         state: "done",
-        steps: [step("s1")],
+        steps: one,
         runs: [run({ results: results({ s1: "pass" }) })],
       }),
       plan({
@@ -896,26 +936,15 @@ describe("groupPlans", () => {
         runs: [run({ results: results({ s1: "pass" }) })],
       }),
     ]);
-    expect(groups[0].plans.map((p) => p.id)).toEqual(["short", "clean"]);
-    expect(groups[0].detail).toBe("1 checklist never got an answer");
-  });
-
-  it("says nothing on the Checked heading when every run finished", () => {
-    const groups = groupPlans([
-      plan({
-        id: "clean",
-        state: "done",
-        steps: [step("s1")],
-        runs: [run({ results: results({ s1: "pass" }) })],
-      }),
-    ]);
-    expect(groups[0].detail).toBe(undefined);
+    expect(groups.map((g) => g.key)).toEqual(["partial", "done"]);
+    expect(groups[0].plans.map((p) => p.id)).toEqual(["short"]);
+    expect(groups[1].detail).toBe(undefined);
   });
 
   it("omits groups that would render empty", () => {
     // The steady state is one group with one item in it; four empty headings
     // around it would bury the only thing worth reading.
-    const groups = groupPlans([plan({ id: "a", state: "due" })]);
+    const groups = groupPlans([plan({ id: "a", state: "due", steps: one })]);
     expect(groups.map((g) => g.key)).toEqual(["due"]);
     expect(groups[0].plans.map((p) => p.id)).toEqual(["a"]);
   });
@@ -924,12 +953,7 @@ describe("groupPlans", () => {
     expect(groupPlans([])).toEqual([]);
   });
 
-  it("files a plan awaiting confirmation with the rest of what is waiting on you", () => {
-    // These used to be two adjacent groups. One pile, because the reader's
-    // question is "what is asking something of me?" and both answers are yes —
-    // the difference between "nobody has started this" and "the agent left you
-    // a short list" is carried by the row's own sentence and button, where it
-    // costs nothing.
+  it("files a plan awaiting confirmation with the rest of what needs you", () => {
     const groups = groupPlans([
       plan({
         id: "a",
@@ -941,10 +965,10 @@ describe("groupPlans", () => {
     expect(groups.map((g) => g.key)).toEqual(["due"]);
   });
 
-  it("keeps a done plan with an open human step in Waiting on you", () => {
-    // Otherwise the one plan actually asking you something hides in the pile of
-    // finished ones — and it must outrank the fail group too, since a plan can
-    // be both and the ask is what you can act on.
+  it("lets a failure outrank an open step for you", () => {
+    // A plan can be both; the verdict is "Failed", and the red group is where a
+    // lead about to merge looks first. Its open step is still counted on the
+    // heading and answerable inside.
     const groups = groupPlans([
       plan({
         id: "a",
@@ -953,67 +977,40 @@ describe("groupPlans", () => {
         runs: [run({ results: results({ s1: "fail", s2: "blocked" }) })],
       }),
     ]);
-    expect(groups.map((g) => g.key)).toEqual(["due"]);
+    expect(groups.map((g) => g.key)).toEqual(["fail"]);
+    expect(groups[0].detail).toBe("1 step failed · 1 step needs you");
   });
 
-  it("keeps a running plan with the due ones", () => {
-    // It is a due plan with an agent mid-run; a group of its own would split one
-    // pile in two for the few minutes a run takes.
+  it("files an agent at work under In progress", () => {
     const groups = groupPlans([
-      plan({ id: "a", state: "due" }),
-      plan({ id: "b", state: "running", run_session: "verify-b" }),
+      plan({ id: "a", state: "due", steps: one }),
+      plan({ id: "b", state: "running", steps: one, run_session: "verify-b" }),
+      plan({ id: "c", state: "generating" }),
+      plan({ id: "d", state: "generating", live_at: 500, steps: one }),
     ]);
-    expect(groups.map((g) => g.key)).toEqual(["due"]);
-    expect(groups[0].plans.map((p) => p.id)).toEqual(["a", "b"]);
+    expect(groups.map((g) => g.key)).toEqual(["due", "generated"]);
+    expect(groups[1].plans.map((p) => p.id)).toEqual(["b", "c", "d"]);
   });
 
-  it("shows a still-generating plan with the pre-live ones", () => {
-    // Both are pre-live, and dropping either would make plans vanish from "All
-    // plans" exactly while they were most interesting to look at.
-    const groups = groupPlans([
-      plan({ id: "a", state: "generating" }),
-      plan({ id: "b", state: "generated" }),
-    ]);
-    expect(groups.map((g) => g.key)).toEqual(["generated"]);
-    expect(groups[0].plans.map((p) => p.id)).toEqual(["a", "b"]);
-  });
-
-  it("keeps a shipped plan mid-rewrite out of Not shipped yet", () => {
-    // Rewrite (and a later push refreshing the checklist) flips the state to
-    // `generating`, and the grouping used to read that as pre-live — so a live,
-    // unchecked plan dropped from "Not checked yet" to "Not shipped yet" for
-    // the minutes the model took, which reads as the work un-shipping.
-    // `live_at` is a fact about the world; no rewrite can retract it.
-    const groups = groupPlans([
-      plan({ id: "a", state: "generating", live_at: 500, steps: [step("s1")] }),
-    ]);
-    expect(groups.map((g) => g.key)).toEqual(["due"]);
-  });
-
-  it("returns a fully-answered plan to Checked while its rewrite runs", () => {
-    // The other half of the same rule, mirroring where the server resolves the
-    // rewrite (`done` when `_all_settled`): a shipped checklist whose every
-    // step already has an answer stays under "Checked" rather than jumping
-    // into the badge for the rewrite's duration.
+  it("files a write that stalled under Failed", () => {
     const groups = groupPlans([
       plan({
         id: "a",
         state: "generating",
-        live_at: 500,
-        steps: [step("s1")],
-        runs: [run({ results: results({ s1: "pass" }) })],
+        gen_started: Date.now() / 1000 - (GENERATION_STALE_S + 1),
       }),
     ]);
-    expect(groups.map((g) => g.key)).toEqual(["done"]);
+    expect(groups.map((g) => g.key)).toEqual(["fail"]);
+    expect(groups[0].detail).toBe("1 checklist couldn't be written");
   });
 
   it("preserves the caller's order inside a group", () => {
     // GET /api/test-plans returns newest generated_at first; re-sorting here
     // would fight whatever the caller chose.
     const groups = groupPlans([
-      plan({ id: "new", state: "due", generated_at: 300 }),
-      plan({ id: "mid", state: "due", generated_at: 200 }),
-      plan({ id: "old", state: "due", generated_at: 100 }),
+      plan({ id: "new", state: "due", steps: one, generated_at: 300 }),
+      plan({ id: "mid", state: "due", steps: one, generated_at: 200 }),
+      plan({ id: "old", state: "due", steps: one, generated_at: 100 }),
     ]);
     expect(groups[0].plans.map((p) => p.id)).toEqual(["new", "mid", "old"]);
   });
@@ -1025,10 +1022,112 @@ describe("groupPlans", () => {
     const groups = groupPlans([
       // Double assertion because the union is exactly what is being stepped
       // outside of; the server is under no obligation to stay inside it.
-      plan({ id: "a", state: "quarantined" as unknown as TestPlan["state"] }),
+      plan({ id: "a", state: "quarantined" as unknown as TestPlan["state"], steps: one }),
     ]);
     expect(groups.map((g) => g.key)).toEqual(["generated"]);
     expect(groups[0].plans.map((p) => p.id)).toEqual(["a"]);
+  });
+});
+
+describe("planVerdict (the yes-or-no on every row)", () => {
+  const one = [step("s1")];
+  const ran = (r: Record<string, TestStepResult>, over: Partial<TestRun> = {}) => [
+    run({ results: results(r), ...over }),
+  ];
+
+  it("says Verified on branch for an unmerged branch whose every step passed", () => {
+    const v = planVerdict(
+      plan({ state: "generated", steps: one, runs: ran({ s1: "pass" }, { prelive: true }) }),
+    );
+    expect(v.label).toBe("Verified on branch");
+    expect(v.tone).toBe("ok");
+  });
+
+  it("says Verified live once it shipped and passed", () => {
+    const v = planVerdict(
+      plan({ state: "done", live_at: 500, steps: one, runs: ran({ s1: "pass" }) }),
+    );
+    expect(v.label).toBe("Verified live");
+  });
+
+  it("says Failed, Agent checking, Being written, Couldn't be written", () => {
+    expect(planVerdict(plan({ state: "done", steps: one, runs: ran({ s1: "fail" }) })).label).toBe(
+      "Failed",
+    );
+    expect(
+      planVerdict(plan({ state: "running", steps: one, run_session: "verify-a" })).label,
+    ).toBe("Agent checking");
+    expect(planVerdict(plan({ state: "generating" })).label).toBe("Being written");
+    expect(planVerdict(plan({ state: "failed", error: "x" })).label).toBe("Couldn't be written");
+  });
+
+  it("says Waiting to ship while a merged branch waits out its deploy", () => {
+    expect(planVerdict(plan({ state: "generated", steps: one, merged_at: 400 })).label).toBe(
+      "Waiting to ship",
+    );
+  });
+
+  it("says n of m checked for anything in between — can't-check is not a pass", () => {
+    const v = planVerdict(
+      plan({
+        state: "done",
+        steps: [step("s1"), step("s2", "human")],
+        runs: [
+          run({
+            results: {
+              s1: { result: "pass", note: "", at: 1, by: "agent" },
+              s2: { result: "blocked", note: "staging down", at: 1, by: "human" },
+            },
+          }),
+        ],
+      }),
+    );
+    expect(v.label).toBe("1 of 2 checked");
+    expect(v.short).toBe("1/2 checked");
+    expect(v.tone).toBe("warn");
+  });
+
+  it("agrees with the group it files under", () => {
+    const cases: Array<[TestPlan, string]> = [
+      [plan({ state: "done", steps: one, runs: ran({ s1: "fail" }) }), "fail"],
+      [plan({ state: "failed" }), "fail"],
+      [plan({ state: "done", steps: one, runs: ran({ s1: "pass" }) }), "done"],
+      [plan({ state: "running", steps: one, run_session: "v" }), "generated"],
+    ];
+    const verdictGroup: Record<string, string> = {
+      failed: "fail",
+      unwritten: "fail",
+      branch: "done",
+      live: "done",
+      checking: "generated",
+      writing: "generated",
+    };
+    for (const [p, g] of cases) {
+      expect(planGroup(p)).toBe(g);
+      expect(verdictGroup[planVerdict(p).key]).toBe(g);
+    }
+  });
+});
+
+describe("planForSession (which checklist a sidebar row's chip shows)", () => {
+  const plans = [
+    plan({ id: "alpha", branch: "feat/a", repo_root: "/code/app" }),
+    plan({ id: "beta", branch: "feat/b", repo_root: "/code/app" }),
+  ];
+
+  it("matches by session title first", () => {
+    expect(planForSession(plans, { title: "beta", branch: "x", repo: "y" })?.id).toBe("beta");
+  });
+
+  it("falls back to repo + branch — a duplicated window shares the checklist", () => {
+    expect(planForSession(plans, { title: "alpha-copy", branch: "feat/a", repo: "app" })?.id).toBe(
+      "alpha",
+    );
+  });
+
+  it("never matches a branch name across repos", () => {
+    expect(planForSession(plans, { title: "z", branch: "feat/a", repo: "other" })).toBe(null);
+    expect(planForSession(plans, { title: "z", branch: "feat/a" })).toBe(null);
   });
 });
 
@@ -1307,7 +1406,7 @@ describe("a person's \"Can't check\" is an answer; an agent's \"blocked\" is not
         ],
       }),
     );
-    expect(status.line).toBe("2 steps passed · 1 you couldn't check.");
+    expect(status.line).toBe("2 passed · Couldn't check 1 step — not verified.");
     // Never `ok`: a can't-check is a known unknown, and the tone is the loudest
     // claim on the row.
     expect(status.tone).toBe("warn");
@@ -1322,13 +1421,16 @@ describe("a person's \"Can't check\" is an answer; an agent's \"blocked\" is not
         runs: [run({ results: mine({ s1: "blocked" }) })],
       }),
     );
-    expect(status.line).toBe("Nothing could be checked — 1 step you couldn't get to.");
+    expect(status.line).toBe("Couldn't check 1 step — not verified.");
     expect(status.tone).toBe("warn");
+    // Every step has an answer, so it does not ask "Answer 1 step".
+    expect(status.actionLabel).toBe("Show steps");
+    expect(status.group).toBe("partial");
   });
 
-  it("does not let the Checked heading call your answer a non-answer", () => {
-    // The same lie one line higher up: the row says "you couldn't check it" and
-    // the heading above it used to say it "never got an answer".
+  it("files both kinds of gap under Not verified, and never under Needs you", () => {
+    // A person's "Can't check" is an answer: it must not pin the row on the
+    // badge forever — and nothing about it is verified either.
     const yours = plan({
       id: "yours",
       state: "done",
@@ -1341,11 +1443,9 @@ describe("a person's \"Can't check\" is an answer; an agent's \"blocked\" is not
       steps: [step("s1"), step("s2")],
       runs: [run({ results: results({ s1: "pass" }) })],
     });
-    expect(groupPlans([yours])[0].detail).toBe("1 you couldn't check");
-    expect(groupPlans([stopped])[0].detail).toBe("1 checklist never got an answer");
-    expect(groupPlans([yours, stopped])[0].detail).toBe(
-      "1 checklist never got an answer · 1 you couldn't check",
-    );
+    expect(groupPlans([yours]).map((g) => g.key)).toEqual(["partial"]);
+    expect(groupPlans([stopped]).map((g) => g.key)).toEqual(["partial"]);
+    expect(dueCount([yours, stopped])).toBe(0);
   });
 });
 
@@ -1517,7 +1617,7 @@ describe("the gaps are named apart, and a run nobody ran is not \"a run\"", () =
         ],
       }),
     );
-    expect(status.line).toBe("Checked — 1 step with no answer · 1 you couldn't check.");
+    expect(status.line).toBe("Not verified — 1 step with no answer · 1 you couldn't check.");
   });
 
   it("does not claim a run stopped early when no agent ever started one", () => {
@@ -1713,7 +1813,7 @@ describe("finding one checklist among many", () => {
   });
 
   it("narrows to a heading a reader can already see", () => {
-    expect(planMatches(p, tokens("not checked"))).toBe(true);
+    expect(planMatches(p, tokens("needs you"))).toBe(true);
     expect(planMatches(p, tokens("couldn't be written"))).toBe(false);
   });
 
@@ -1835,8 +1935,8 @@ describe("what a collapsed group heading adds up to", () => {
   });
 
   it("leads with the red ones where a group has both", () => {
-    // A failure AND a step still open for you: `planGroup` files this under the
-    // pile you came to pick up, and the heading has to carry both numbers.
+    // A failure AND a step still open for you: `planGroup` files this under
+    // Failed, and the heading has to carry both numbers.
     const mixed = plan({
       id: "a",
       title: "a",
@@ -1845,7 +1945,7 @@ describe("what a collapsed group heading adds up to", () => {
       steps: [step("s1"), step("s2", "human")],
       runs: [run({ results: { s1: { result: "fail", note: "", at: 1, by: "agent" } } })],
     });
-    expect(groupPlans([mixed]).find((g) => g.key === "due")?.detail).toBe(
+    expect(groupPlans([mixed]).find((g) => g.key === "fail")?.detail).toBe(
       "1 step failed · 1 step needs you",
     );
   });

@@ -4422,7 +4422,7 @@ def _generate_steps(plan: dict, program: str, worktree: str) -> tuple:
     # one press away and a plan about somebody else's product is worse than no
     # plan, because it is believed.
     if steps and all(_norm_example(s.get("text")) in _EXAMPLE_TEXTS for s in steps):
-        raise TestPlanError("the CLI echoed the example instead of writing a plan")
+        raise TestPlanError("the CLI echoed the example instead of writing a checklist")
     # NOTHING SURVIVED THE VETTING. ``parse_answer`` already refuses a block with
     # no steps in it, so reaching here means the model DID write steps and every
     # one of them was thrown away — in practice a checklist of placeholders
@@ -4524,7 +4524,7 @@ def _generate_inner(
     except Exception as err:  # noqa: BLE001 — see the docstring: nowhere to raise
         if refresh:
             return _refresh_failed(plan_id, was)
-        return _fail(plan_id, "could not write a test plan: %s" % err, was)
+        return _fail(plan_id, "could not write a checklist: %s" % err, was)
     now = time.time()
     outcome: dict = {"stale": False}
 

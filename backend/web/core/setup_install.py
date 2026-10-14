@@ -197,6 +197,9 @@ def ensure_session() -> Tuple[str, Optional[str]]:
         ("mouse", "on"),
         ("history-limit", "10000"),
         ("window-size", "latest"),
+        # No status line: tmux's bar (host name, clock) inside the install
+        # window read as part of the install's output.
+        ("status", "off"),
     ):
         _tmux("set-option", "-t", SESSION, opt, val)
     return SESSION, None

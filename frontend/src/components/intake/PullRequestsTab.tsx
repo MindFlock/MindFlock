@@ -17,7 +17,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
-import { refreshInstances, usePanelQuery } from "../../state/queries";
+import { refreshInstances, usePanelQuery, useTicketingSources } from "../../state/queries";
 import { SettingField, useSettings } from "../settings/useSettings";
 import { AgentPicker, useAgentChoices } from "../settings/screens/AgentPicker";
 import { openConnectGitHub } from "../../lib/githubConnect";
@@ -34,7 +34,7 @@ import {
   type ItemWorkspace,
 } from "./kit";
 import { RepoSourceList, type RepoOverrides } from "./RepoSources";
-import { loadRemembered, prsOn } from "./pause";
+import { prsOn, useIntakePause } from "./pause";
 import { prMatches } from "./search";
 import type { TabProps } from "./IntakeDialog";
 
@@ -80,7 +80,8 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
   // the off-by-default change); explicit false => off.
   const enabled = prsOn(gh);
   // Off because Pause intake turned it off (it will come back on Resume).
-  const pausedOff = !enabled && repos.length > 0 && (loadRemembered() || []).includes("prs");
+  const pause = useIntakePause((useTicketingSources(true).data || []).length);
+  const pausedOff = !enabled && repos.length > 0 && pause.pausedKind("prs");
   const overrides = (gh.repo_settings || {}) as RepoOverrides;
   const skipAuthors = Array.isArray(gh.skip_authors)
     ? gh.skip_authors.join(", ")
@@ -314,6 +315,7 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
         inputId="gh-pr-enabled"
         statusId="gh-pr-status"
         checked={enabled}
+        paused={pausedOff}
         disabled={!n}
         onChange={(next) =>
           saveGithub(

@@ -292,7 +292,7 @@ def fetch_user(token: str, *, fresh: bool = False) -> dict:
             "name": "",
             "id": 0,
             "scopes": [],
-            "error": "GitHub doesn't accept this token (expired or revoked)",
+            "error": "Token rejected — GitHub says it is mistyped, expired or revoked",
         }
     elif status == 0:
         # Unknown, not wrong: don't cache an offline answer.

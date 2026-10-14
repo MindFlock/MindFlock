@@ -402,7 +402,10 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
    owned by `member_id` and updated since the last run (optionally restricted to
    `workflow_state_id`). Search results lack descriptions, so each story is
    re-fetched by id. Retries with exponential backoff; a failed scan never kills
-   the pipeline.
+   the pipeline. A source that is *waiting for a filter*
+   (`providers.base.auto_start_waiting`: `needs_filter` set with no state or
+   label, or only typed state names Test hasn't matched) is not searched at
+   all, and its checkpoint stays put until it has one.
 
    **Archived work is excluded, at two levels**, so the pipeline sees what
    Shortcut's own boards show. `/stories/search` returns archived stories, so

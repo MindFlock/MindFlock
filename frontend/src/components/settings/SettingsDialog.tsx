@@ -22,6 +22,14 @@
  * (a synced pref). Screens marked `advanced` below are the rest; a deep link
  * to one still opens it, listed last under an "Advanced" heading.
  *
+ * The nav opens with "Search settings…" (SettingsSearch.tsx, the palette's
+ * index). Below 600 px the screen buttons give way to one <select>: a wrap
+ * of tabs re-flowed whenever the bold active tab changed width.
+ *
+ * Every save marks the control it came from with "✓ Saved" (savedCue.ts):
+ * the screens pane notes the last control changed or left, and
+ * useSettings' saveField marks it.
+ *
  * Labels follow the shared glossary ("Agents", "Custom agents"); the keys
  * ("coding", "providers") never change — palette/settingsSearch.ts, deep
  * links and the server's Connections rows use them. */
@@ -41,6 +49,8 @@ import {
   writeAdvancedMode,
 } from "./settingsMode";
 import { isDevShell } from "../../lib/shell";
+import { SettingsSearch } from "./SettingsSearch";
+import { noteTouched } from "./savedCue";
 import { General } from "./screens/General";
 import { Appearance } from "./screens/Appearance";
 import { Mobile } from "./screens/Mobile";
@@ -196,6 +206,22 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
               aria-label="Settings sections"
               data-mode={advanced ? "advanced" : "basic"}
             >
+              <SettingsSearch onPick={gotoScreen} />
+              {/* Phone width: one select instead of a wrap of tabs. Same list
+                  as the buttons (CSS shows one or the other). */}
+              <select
+                id="settings-nav-select"
+                className="set-nav-select"
+                aria-label="Settings screen"
+                value={screen}
+                onChange={(e) => setScreen(e.target.value)}
+              >
+                {shown.map((s) => (
+                  <option key={s.key} value={s.key}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
               {shown.map((s, i) => {
                 // A heading before each group's first screen (advanced mode),
                 // or "Advanced" over a deep-linked advanced screen (basic) —
@@ -222,7 +248,11 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
               })}
               <AdvancedToggle advanced={advanced} hidden={hiddenCount} onChange={changeMode} />
             </nav>
-            <div id="settings-screens">
+            <div
+              id="settings-screens"
+              onChangeCapture={(e) => noteTouched(e.target)}
+              onBlurCapture={(e) => noteTouched(e.target)}
+            >
               {screens.map((s) => (
                 <section
                   key={s.key}

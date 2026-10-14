@@ -336,6 +336,60 @@ def ingest_filter_miss(cfg, ticket: Ticket) -> str:
     return ""
 
 
+#: The row chip / log line for a source that auto-starts nothing yet.
+NO_FILTER_YET = "no auto-start state picked yet"
+#: ...and for one whose picked state is still a typed name the tracker has not
+#: matched to a state (Test does that).
+FILTER_UNMATCHED = "auto-start state not matched yet — press Test"
+
+_LINEAR_ID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
+)
+
+
+def _is_state_id(provider: str, value: str) -> bool:
+    """Whether ``value`` is a state id this provider's search can use, rather
+    than a state NAME typed before Test could list the real ones. Jira filters
+    by name natively, so every value is usable there."""
+    if provider in ("shortcut", "asana"):
+        return value.isdigit()
+    if provider == "linear":
+        return bool(_LINEAR_ID.match(value))
+    return True
+
+
+def auto_start_waiting(cfg) -> str:
+    """Why this source auto-starts nothing right now, or ``""`` when it may.
+
+    Two cases, both "wait" rather than "widen":
+
+    * ``needs_filter`` (set on every source Intake creates) with no ingest
+      state and no ingest label: a new source's default is "start nothing", not
+      "start every ticket assigned to me". Sources saved before the flag keep
+      the old empty-filter-means-every-state rule.
+    * A picked state that is still a typed name (Intake lets you type one before
+      Test can list them; Test swaps it for the real id). Shortcut's search
+      drops a non-numeric state, which would turn "only Ready" into "every
+      state" — so until at least one picked state is a real id, nothing starts.
+
+    Only the providers with a workflow model (``STATE_BOUNDED_PROVIDERS``) can
+    wait on one; GitHub Issues is bounded by its repo.
+    """
+    provider = (getattr(cfg, "provider", "") or "").strip().lower()
+    if provider not in STATE_BOUNDED_PROVIDERS:
+        return ""
+    states = workflow_state_list(cfg)
+    labels = ingest_label_list(cfg)
+    legacy = getattr(cfg, "workflow_state_id", None)
+    if states:
+        if not any(_is_state_id(provider, s) for s in states):
+            return FILTER_UNMATCHED
+        return ""
+    if labels or legacy is not None:
+        return ""
+    return NO_FILTER_YET if getattr(cfg, "needs_filter", False) else ""
+
+
 def start_state_id(cfg) -> str:
     """The state this source moves a ticket INTO when its session starts.
 

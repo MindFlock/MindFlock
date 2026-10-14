@@ -65,10 +65,12 @@ def test_probe_endpoint_reports_supported_agents():
 # GitHub Issues as the flagship on-ramp.
 # --------------------------------------------------------------------------- #
 def test_ticketing_catalog_leads_with_github_issues():
-    """The UI seeds a newly added source with the catalog's FIRST entry, so this
-    is what makes GitHub Issues the default on-ramp."""
+    """GitHub Issues leads the Provider list and needs no input. It is no
+    longer preselected: a new Intake source starts on "Choose a tracker…"
+    (round 3: a preselected GitHub Issues read as the place for issues, beside
+    the GitHub issues tab)."""
     r = client.get("/api/settings/providers/ticketing")
     providers = r.json()["providers"]
     assert providers[0]["id"] == "github_issues"
-    assert "Zero config" in providers[0]["blurb"]
+    assert "GitHub connection" in providers[0]["blurb"]
     assert not any(f.get("required") for f in providers[0]["fields"])

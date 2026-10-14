@@ -27,6 +27,7 @@ import {
   type RepoSuggestion,
 } from "../newSession";
 import { FolderBrowser } from "./FolderBrowser";
+import { useUi } from "../../../state/store";
 
 type Set<T> = Dispatch<SetStateAction<T>>;
 
@@ -42,6 +43,12 @@ type BodyFields = {
 
 export interface DescribeFlowCtx {
   describe: string;
+  /** The Task box, and the text "Set it up myself" last carried into it. */
+  prompt: string;
+  carried: MutableRefObject<string>;
+  /** Create session without a plan in hand: start from the sentence as
+   * typed, in the folder the form holds (NewSessionDialog's startRaw). */
+  startRaw(): void;
   describing: boolean;
   newFolderOk: boolean;
   dapi: ReturnType<typeof deviceApi>;
@@ -79,6 +86,9 @@ export interface DescribeFlowCtx {
 export function describeFlow(ctx: DescribeFlowCtx) {
   const {
     describe,
+    prompt,
+    carried,
+    startRaw,
     describing,
     newFolderOk,
     dapi,
@@ -168,22 +178,25 @@ export function describeFlow(ctx: DescribeFlowCtx) {
    * subprocess on the far side is not killed by this and runs to its own
    * timeout; it is a read-only one-shot with stdin closed, so that is bounded
    * and harmless rather than something worth building a kill channel for. */
-  /** Page 1's "Start session": plan if we need to, otherwise act on the plan
-   * we already have.
+  /** Page 1's "Create session": it never waits on a model turn. With a
+   * plan already in hand for this very sentence (Review, then Back) it acts
+   * on that plan; otherwise it starts from the sentence as typed, in the
+   * folder the form holds (startRaw) — the line under the box names it.
    *
-   * The second press of this button — the one after ticking a new folder's
-   * confirm — must NOT buy another model turn. Beyond the waste, a fresh turn
-   * could answer with a different folder than the one the user just said yes
-   * to, which would spend a confirmation on a directory nobody was shown. The
-   * cached answer is keyed on the sentence, so editing the box does correctly
-   * force a new plan. */
+   * Acting on the cached plan is also what a second press after ticking a
+   * new folder's confirm needs: a fresh turn could answer with a different
+   * folder than the one the user just said yes to. The cache is keyed on the
+   * sentence, so editing the box drops it. */
   const startNow = () => {
     const cached = lastAnswer.current;
     if (cached && cached.sentence === describe.trim()) {
+      cancelPlanRun(planRun.current);
+      setDescribing(false);
+      setDescribeSlow(false);
       void startFromPlan(cached.answer);
       return;
     }
-    void runDescribe("start");
+    startRaw();
   };
 
   const cancelDescribe = () => {
@@ -192,15 +205,22 @@ export function describeFlow(ctx: DescribeFlowCtx) {
     setDescribeSlow(false);
   };
 
-  /** The way out when the agent did not answer: the form, with what was
-   * typed as its Task — nothing typed is lost. */
-  const fillFormInstead = () => {
+  /** The way to the form — "Set it up myself instead", and the way out
+   * when the agent did not answer: what was typed goes with it as the Task,
+   * so nothing typed is ever lost. A Task edited since an earlier trip is
+   * the user's and stays; one still holding the last carried sentence takes
+   * the new one. */
+  const setUpMyself = () => {
     cancelPlanRun(planRun.current);
     setDescribing(false);
     setDescribeSlow(false);
     setDescribeFailed(false);
     setPlanError("");
-    setPrompt(describe.trim());
+    const text = describe.trim();
+    if (text && (!prompt.trim() || prompt.trim() === carried.current)) {
+      setPrompt(text);
+      carried.current = text;
+    }
     setPage(2);
   };
 
@@ -339,7 +359,9 @@ export function describeFlow(ctx: DescribeFlowCtx) {
       // open dialog — which is exactly what #new-error and MakePrDialog's .error
       // line already are. The remedy never changes and is already on screen, so
       // the sentence names it.
-      setPlanError(errMsg(err) + " — fill the form instead.");
+      // The way out is the button beside it ("Fill the form with what I
+      // typed"), so the sentence only says what went wrong.
+      setPlanError(errMsg(err));
       setDescribeFailed(true);
     } finally {
       window.clearTimeout(slow);
@@ -354,7 +376,15 @@ export function describeFlow(ctx: DescribeFlowCtx) {
     }
   };
 
-  return { applyPlan, startNow, cancelDescribe, startFromPlan, runDescribe, fillFormInstead };
+  return {
+    applyPlan,
+    startNow,
+    cancelDescribe,
+    startFromPlan,
+    runDescribe,
+    setUpMyself,
+    fillFormInstead: setUpMyself,
+  };
 }
 
 /** The focus moves that belong to the describe flow itself, plus the
@@ -486,6 +516,10 @@ export interface DescribeSectionProps {
   suggestions: RepoSuggestion[];
   device: string;
   homePath: string;
+  /** Clear (shown while something typed is in the form). */
+  onClear?: () => void;
+  /** A note about the agent (not signed in), shown above the buttons. */
+  agentNote?: ReactNode;
 }
 
 /** Page 1's body: the sentence box, what it is for, and — for an Intake
@@ -514,6 +548,8 @@ export function DescribeSection({
   suggestions,
   device,
   homePath,
+  onClear,
+  agentNote,
 }: DescribeSectionProps) {
   /* The one-sentence door, the whole of page 1 because it is the widest of
      the three ways to fill this form in (a sentence, a template chip, or by
@@ -583,20 +619,41 @@ export function DescribeSection({
             Cancel
           </button>
         )}
+        {!describing && onClear && (
+          /* What you type stays across closing New (and trips to Intake or
+             Settings) until a Create — this is the other way to drop it. */
+          <button
+            type="button"
+            id="new-clear"
+            className="linklike"
+            title="Empty the box and the form, and start over"
+            onClick={onClear}
+          >
+            Clear
+          </button>
+        )}
       </div>
-      {/* Written for somebody who has never opened this dialog. The
-          line this replaced — "Enter fills in the form — or start the
-          session straight away" — named two things a first-time user
-          has no way to know: WHICH form, and what starting it straight
-          away skips. This says what the sentence is for, and that
-          reading it costs nothing, which is the fact that makes the
-          button row below safe to experiment with. */}
+      {/* Each button said on its face, for somebody who has never opened
+          this dialog: Create session starts NOW, from the words as typed, in
+          the folder named here — no waiting on the agent; Review details
+          first is the one that has the agent read the sentence. */}
       {!runMode && (
       <>
-      <p className="nf-describe-help">
-        Your agent reads this and fills in the folder, the session name and
-        its first instruction. <b>Review details first</b> shows them to you
-        before anything is created; <b>Create session</b> starts right away.
+      <p className="nf-describe-help" id="new-describe-help">
+        <b>Create session</b>{" "}
+        {repoPath.trim() ? (
+          <>
+            starts it now in{" "}
+            <code className="nf-starts-in" title={repoPath.trim()}>
+              {leafName(repoPath.trim())}
+            </code>
+            , with what you typed as its task.
+          </>
+        ) : (
+          <>needs a folder — it opens the form with what you typed as the task.</>
+        )}{" "}
+        <b>Review details first</b> has your agent pick the folder, name and options, and shows
+        them to you before anything starts.
       </p>
       {/* Two examples rather than none: the placeholder can only show
           one shape and the box accepts three — an existing project, a
@@ -609,6 +666,20 @@ export function DescribeSection({
         {" · "}
         <code>add metrics to billing, in a worktree</code>
       </p>
+      {!batch && (
+        /* Work that starts from somewhere else — a ticket, a PR, an issue —
+           lives in Intake; the draft here waits for you. */
+        <p className="nf-describe-eg" id="new-intake-door">
+          Starting from a ticket, pull request or issue?{" "}
+          <button
+            type="button"
+            className="linklike"
+            onClick={() => useUi.getState().openDialogFor("intake")}
+          >
+            Open Intake
+          </button>
+        </p>
+      )}
       </>
       )}
       {draft.listMode && (
@@ -721,6 +792,7 @@ export function DescribeSection({
         </p>
       )}
       {newFolderRow}
+      {agentNote}
     </div>
   );
 }

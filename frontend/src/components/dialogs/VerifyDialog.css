@@ -128,8 +128,10 @@
    valuable output — both have to be findable in a list you are scrolling past.
    Everything else is deliberately unmarked, because a list where every row is
    emphasised has no emphasis in it. */
+/* Calmer since round 4: the border stays neutral and only the thin edge says
+   "your turn" — purple means exactly that and nothing else. Red is a failure,
+   green (on the verdict chip) is verified. */
 .vf-plan[data-tone="you"] {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
@@ -260,7 +262,7 @@
 /* The two that are asking something carry weight as well as colour: on a long
    list, weight is what the eye finds before it can read a hue. */
 .vf-stopline[data-tone="you"] {
-  color: var(--accent);
+  color: var(--text);
   font-weight: 600;
 }
 
@@ -274,7 +276,7 @@
 }
 
 .vf-stopline[data-tone="busy"] {
-  color: color-mix(in srgb, var(--accent) 75%, var(--muted));
+  color: var(--muted);
 }
 
 /* A plan the generator could not write is broken plumbing, not a bad result —
@@ -403,13 +405,27 @@
    reads as "this thing → do this" rather than as a title with a button after
    it. `.btn-primary` is the app's shared accent button; the size is trimmed
    here because it sits on a three-line row rather than in a form. */
-.vf-plan-head > .vf-primary {
+.vf-plan-head > .vf-acts {
   grid-column: 3;
   grid-row: 1 / span 3;
   align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vf-acts > .vf-primary,
+.vf-acts > .vf-fix {
   font-size: 12px;
   padding: 5px 12px;
   white-space: nowrap;
+}
+
+/* Fix… on a failed row: the danger colour, as an outline — it starts a
+   session, it is not the row's main call to action. */
+.vf-acts > .vf-fix {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 50%, var(--border));
 }
 
 /* A primary button that cannot act must not look like one. `.btn-primary` has
@@ -417,7 +433,8 @@
    accent — indistinguishable from a live button, and pressing it produces
    nothing at all. That is the worst possible feedback: the user concludes the
    feature is broken rather than that the control is unavailable. */
-.vf-plan-head > .vf-primary:disabled {
+.vf-acts > .vf-primary:disabled,
+.vf-acts > .vf-fix:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -1178,7 +1195,7 @@
     grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
-  .vf-plan-head > .vf-primary {
+  .vf-plan-head > .vf-acts {
     grid-column: 3;
     grid-row: 1;
   }
@@ -1669,4 +1686,112 @@
   .vf-plan-tally {
     margin-left: 0;
   }
+}
+
+/* Phone width: the buttons take their own line under the row, so the sentence
+   (the one thing on the row allowed to be long) keeps the width. */
+@media (max-width: 560px) {
+  .vf-plan-head > .vf-acts {
+    grid-column: 2 / span 2;
+    grid-row: 4;
+    justify-self: start;
+    margin-top: 6px;
+  }
+
+  .vf-plan-head > .vf-menu {
+    grid-row: 1 / span 3;
+  }
+}
+
+/* THE VERDICT ----------------------------------------------------------------
+   One pill, three homes: a checklist row inside Verify (`VerdictBadge`), and a
+   session's sidebar row and pane head (`VerdictChip`, a button that opens its
+   checklist). Its own class, never `.stagechip`: grid/DiffTab.css hides that
+   inside a pane head. Colour by meaning only — green verified, red failed,
+   accent "your turn", gold "not verified", muted for everything still moving. */
+.vchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+button.vchip {
+  cursor: pointer;
+}
+
+button.vchip:hover {
+  border-color: var(--muted);
+}
+
+button.vchip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.vchip-glyph {
+  font-weight: 700;
+}
+
+.vchip[data-tone="ok"] {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 45%, transparent);
+}
+
+.vchip[data-tone="bad"] {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 55%, transparent);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+
+.vchip[data-tone="you"] {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.vchip[data-tone="warn"] {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--gold) 55%, transparent);
+}
+
+/* On a session row and a pane head: a touch smaller, so it sits with the
+   other chips there without growing the row. */
+.vchip-row,
+.vchip-pane {
+  font-size: 10.5px;
+  line-height: 1.5;
+  padding: 0 6px;
+}
+
+.vchip-pane {
+  margin-right: 4px;
+}
+
+/* The legend, once, under the list (it used to repeat inside every expanded
+   checklist). */
+.vf-legend-once .vf-step-who {
+  min-width: 0;
+  display: inline-block;
+  vertical-align: baseline;
+}
+
+.vf-legend-once kbd {
+  display: inline-block;
+  min-width: 12px;
+  padding: 0 3px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 10px;
+  text-align: center;
 }

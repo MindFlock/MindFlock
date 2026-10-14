@@ -302,6 +302,14 @@ class TicketingSource:
     # to you), so a teammate's MindFlock that was never paired with yours sees
     # who is on it (backend.ticket_ingestion.tracker_claims). Blank = "mindflock".
     claim_label: str = ""
+    # "on" = this source auto-starts nothing until at least one ingest state
+    # (``workflow_state``) or ingest label is picked. Intake writes it on every
+    # source it creates, so a new source's default is "start nothing" rather
+    # than "start every ticket assigned to me". Blank = the historic rule (an
+    # empty filter takes every state), which every source saved before this
+    # field existed keeps — nobody's working setup changes under them. See
+    # backend.ticket_ingestion.providers.base.auto_start_waiting.
+    needs_filter: str = ""
     # The last connection test the Intake card (or its auto-test after a save)
     # ran against THIS configuration: ``{ok, at, message, member_id?, states?,
     # workspaces?}``. Written only by the test route; the sources PUT carries
@@ -331,6 +339,7 @@ class TicketingSource:
             "start_state",
             "start_comment",
             "claim_label",
+            "needs_filter",
         ):
             v = getattr(self, k)
             if v:
@@ -376,6 +385,7 @@ class TicketingSource:
             start_state=str(d.get("start_state", "") or ""),
             start_comment=_on_or_blank(d.get("start_comment")),
             claim_label=str(d.get("claim_label", "") or "").strip(),
+            needs_filter=_on_or_blank(d.get("needs_filter")),
             last_test=(
                 dict(d["last_test"]) if isinstance(d.get("last_test"), dict) else {}
             ),
@@ -1149,6 +1159,14 @@ class GeneralSettings:
     to where the user left it; ``None`` (never toggled) / ``False`` = stay
     stopped.
 
+    ``intake_paused``: what Intake's **Pause intake** turned off — a list of
+    ``"tickets"`` / ``"prs"`` / ``"issues"`` — while intake is paused; ``None``
+    (the default, and what every store written before this field reads as)
+    when it is not. Kept here rather than in the browser so the paused state,
+    and what Resume turns back on, survives a reload, the desktop app and a
+    second browser on the same machine. Per device, like
+    ``ingestion_autostart``: the ticket switch it pauses is per device too.
+
     ``setup_devices``: the answer to Setup's "First computer, or join one you
     already have?" (``"first"`` | ``"join"``; ``""`` = not asked yet). It
     orders the first-run plan (:mod:`backend.onboarding`): joining brings the
@@ -1202,6 +1220,7 @@ class GeneralSettings:
     serve_mode: str = ""  # "" / "local" | "tailscale"
     shared_link: str = ""  # "" = off | a Tailscale Service name, e.g. "mindflock"
     ingestion_autostart: Optional[bool] = None
+    intake_paused: Optional[List[str]] = None  # None = not paused (see docstring)
     setup_devices: str = ""  # "" (not asked) | "first" | "join"
     resume_on_usage_reset: Optional[bool] = None  # None = on (see docstring)
     revive_on_start: Optional[bool] = None  # None = on (see docstring)
@@ -1238,6 +1257,8 @@ class GeneralSettings:
             d["shared_link"] = self.shared_link
         if self.ingestion_autostart is not None:
             d["ingestion_autostart"] = self.ingestion_autostart
+        if self.intake_paused is not None:
+            d["intake_paused"] = list(self.intake_paused)
         if self.setup_devices:
             d["setup_devices"] = self.setup_devices
         if self.resume_on_usage_reset is not None:
@@ -1276,6 +1297,7 @@ class GeneralSettings:
             serve_mode=str(d.get("serve_mode", "") or "").strip().lower(),
             shared_link=str(d.get("shared_link", "") or "").strip().lower(),
             ingestion_autostart=_opt_bool(d.get("ingestion_autostart")),
+            intake_paused=_intake_kinds(d.get("intake_paused")),
             setup_devices=_setup_devices(d.get("setup_devices")),
             resume_on_usage_reset=_opt_bool(d.get("resume_on_usage_reset")),
             revive_on_start=_opt_bool(d.get("revive_on_start")),
@@ -1961,6 +1983,20 @@ def _login_list(v: Any) -> List[str]:
         if s and s not in out:
             out.append(s)
     return out
+
+
+#: What Pause intake can turn off, in tab order.
+INTAKE_KINDS = ("tickets", "prs", "issues")
+
+
+def _intake_kinds(v: Any) -> Optional[List[str]]:
+    """``general.intake_paused``: ``None`` (not paused) unless ``v`` is a list,
+    then its known kinds, in tab order, each once. An empty list is still
+    "paused" — with nothing remembered, Resume turns on whatever is set up."""
+    if not isinstance(v, (list, tuple)):
+        return None
+    wanted = {str(x).strip().lower() for x in v}
+    return [k for k in INTAKE_KINDS if k in wanted]
 
 
 def _opt_bool(v: Any) -> Optional[bool]:

@@ -593,7 +593,7 @@ describe("New dialog: auto-split is an optional split run", () => {
     expect(dlg.indexOf('id="new-ft-row"')).toBeGreaterThanOrEqual(0);
     expect(dlg.indexOf('id="new-ft-row"')).toBeLessThan(dlg.indexOf('id="new-split-row"'));
     expect(dlg).toContain("splitBox={null}");
-    let reset = dlg.slice(dlg.indexOf("if (failedReopen.current) {"));
+    let reset = dlg.slice(dlg.indexOf("const resetForm = (prefill: string) => {"));
     reset = reset.slice(0, reset.indexOf('folderDo({ t: "reopen" });'));
     expect(reset).toContain("setSplit(false);");
     expect(reset).toContain("setMaxPieces(SPLIT_DEFAULT);");

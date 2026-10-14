@@ -140,6 +140,7 @@ export function AutomationSwitch({
   onChange,
   note,
   disabled,
+  paused,
 }: {
   label: string;
   title: string;
@@ -153,12 +154,15 @@ export function AutomationSwitch({
    * plain on/off the switch already shows. */
   note?: string;
   disabled?: boolean;
+  /** Off because Pause intake turned it off: drawn amber and striped, not as
+   * a plain off — "paused" and "never switched on" are different answers. */
+  paused?: boolean;
 }) {
   // The switch's accessible name is the row's own words (aria-labelledby), so
   // a screen reader hears "Auto-start tickets, switch" rather than nothing.
   const nameId = inputId ? inputId + "-name" : undefined;
   return (
-    <div className="ik-switch" id={rowId} title={title}>
+    <div className={"ik-switch" + (paused ? " paused" : "")} id={rowId} title={title} data-paused={paused || undefined}>
       <span className="ik-switch-text">
         <span className="set-label" id={nameId}>
           {label}
@@ -442,10 +446,23 @@ export interface ItemRoute {
   choices?: Array<{ name: string; url: string }>;
 }
 
+/** `route.method` of a ticket on a source with ONE repo: not a routing
+ * decision, just where every ticket from it starts (built client-side — the
+ * server only routes sources with several). */
+export const ONLY_REPO = "only";
+
+/** The repo name in a clone URL or path: `git@github.com:acme/api.git` → `api`. */
+export function repoNameOf(url: string): string {
+  const u = (url || "").trim().replace(/\/+$/, "").replace(/\.git$/, "");
+  return u.split(/[/:\\]/).pop() || u;
+}
+
 /** "→ billing-service · label 'billing'" / "→ repo picked when it starts". */
 export function routeText(route: ItemRoute | null | undefined): string {
   if (!route) return "";
   const repos = (route.repos || []).filter(Boolean);
+  // A one-repo source: just the repo — there was nothing to decide.
+  if (route.method === ONLY_REPO && repos.length) return "→ " + repos[0];
   if (!repos.length || route.method === "pending") return "→ repo picked by the agent when it starts";
   return "→ " + repos.join(" + ") + (route.reason ? " · " + route.reason : "");
 }
@@ -557,6 +574,7 @@ export function WorkItemRow({
   drawer,
   onDrawerClose,
   pick,
+  housekeeping,
 }: {
   reference: string;
   url?: string;
@@ -631,6 +649,11 @@ export function WorkItemRow({
   /** A tick box before the reference, for picking several rows to start
    * together (Tickets → "Start together…"). Absent = no box. */
   pick?: { checked: boolean; onChange(on: boolean): void };
+  /** Rare actions on the item in its TRACKER (Tickets: combine a duplicate
+   * into another ticket), not on intake. Shown at the bottom of the row's
+   * Options under their own "On the tracker" heading — never beside Start, so
+   * a destructive tracker write is never one stray click from starting work. */
+  housekeeping?: React.ReactNode;
 }) {
   const [state, setState] = useState<"idle" | "starting" | "started">("idle");
   // The session a start created, once the server names it: "Started" becomes a
@@ -692,8 +715,46 @@ export function WorkItemRow({
   ]
     .filter(Boolean)
     .join(" · ");
+  const willAutoStart = !!eligible && eligibleOn && !hasSession;
+  const housekeepingBlock = housekeeping ? (
+    <div className="ik-item-housekeeping" role="group" aria-label="On the tracker">
+      <span className="ik-item-pick-label">On the tracker</span>
+      {housekeeping}
+    </div>
+  ) : null;
+  // A row with no start (session open, or taken on another device) has no
+  // Options of its own; it still gets the tracker actions behind one.
+  const housekeepingFold = housekeeping ? (
+    <>
+      <button
+        type="button"
+        className="linklike ik-item-opts"
+        aria-expanded={optsOpen}
+        title="Actions on this ticket in the tracker"
+        onClick={() => setOptsOpen(!optsOpen)}
+      >
+        {optsOpen ? "Hide options" : "Options"}
+      </button>
+      {optsOpen ? <div className="ik-item-picks">{housekeepingBlock}</div> : null}
+    </>
+  ) : null;
   return (
-    <div className={"pr-open-item" + (pick?.checked ? " picked" : "")} title={tooltip}>
+    <div
+      className={"pr-open-item" + (pick?.checked ? " picked" : "")}
+      title={tooltip}
+      onKeyDown={(e) => {
+        // Escape closes the innermost open thing: this row's Options before
+        // the Intake dialog (a drawer under it has already taken its own).
+        if (e.key !== "Escape" || e.defaultPrevented) return;
+        if (drawer && onDrawerClose) {
+          e.preventDefault();
+          onDrawerClose();
+        } else if (optsOpen) {
+          e.preventDefault();
+          setOptsOpen(false);
+        }
+      }}
+    >
       <div className="pr-open-main">
         {pick && (
           <input
@@ -723,12 +784,14 @@ export function WorkItemRow({
             className="ik-item-route"
             data-route={route?.method || ""}
             title={
-              (route?.method === "pending" || !(route?.repos || []).length
-                ? "Nothing on the ticket names one of this source's repos, so the agent reads the ticket and picks when it starts."
-                : "The repo this starts in, and why.") +
-              (canPickRepo
-                ? " To start it in another repo, pick one under Options."
-                : " To send it elsewhere, give the ticket a label that matches another repo's name or hint (on the source card).")
+              route?.method === ONLY_REPO
+                ? "The repo this starts in — this source's only repo. Add more on its card."
+                : (route?.method === "pending" || !(route?.repos || []).length
+                    ? "Nothing on the ticket names one of this source's repos, so the agent reads the ticket and picks when it starts."
+                    : "The repo this starts in, and why.") +
+                  (canPickRepo
+                    ? " To start it in another repo, pick one under Options."
+                    : " To send it elsewhere, give the ticket a label that matches another repo's name or hint (on the source card).")
             }
           >
             {where}
@@ -779,6 +842,7 @@ export function WorkItemRow({
             On {elsewhere}
           </button>
           {actionExtra}
+          {housekeepingFold}
         </div>
       ) : hasSession ? (
         // Wrapped in the same action column the other branch uses, rather than
@@ -790,6 +854,7 @@ export function WorkItemRow({
             Session open
           </button>
           {actionExtra}
+          {housekeepingFold}
         </div>
       ) : (
         <div className="ik-item-start">
@@ -965,16 +1030,29 @@ export function WorkItemRow({
             </label>
             {where && !canPickRepo ? (
               <span className="ik-item-pick-note">
-                Starts in {where.replace(/^→ /, "")}. To send it to another repo, give the
-                ticket a label matching that repo's name or hint.
+                {route?.method === ONLY_REPO ? (
+                  <>Starts in {where.replace(/^→ /, "")}, this source's repo.</>
+                ) : (
+                  <>
+                    Starts in {where.replace(/^→ /, "")}. To send it to another repo, give the
+                    ticket a label matching that repo's name or hint.
+                  </>
+                )}
               </span>
             ) : null}
+            {housekeepingBlock}
           </div>
           )}
           <button
             type="button"
             className={
-              canReopen ? "test-btn ik-start-again" : "btn-primary pr-review-btn"
+              canReopen
+                ? "test-btn ik-start-again"
+                : // It starts on its own anyway: Start is the quiet "now, not
+                  // later" button, and the "will auto-start" chip carries the row.
+                  willAutoStart
+                  ? "test-btn pr-review-btn ik-start-quiet"
+                  : "btn-primary pr-review-btn"
             }
             disabled={state === "starting" || (state === "started" && !startedTitle)}
             title={
@@ -1033,7 +1111,14 @@ export function WorkItemRow({
             if (e.key !== "Escape" || !onDrawerClose) return;
             // Modal skips a defaultPrevented Escape: the drawer takes this one.
             e.preventDefault();
+            // Focus goes back to the row (its Options toggle), so the NEXT
+            // Escape closes the row's Options rather than, from a focus lost
+            // to the page, the whole dialog.
+            const rowEl = (e.currentTarget as HTMLElement).closest(".pr-open-item");
             onDrawerClose();
+            requestAnimationFrame(() =>
+              (rowEl?.querySelector(".ik-item-opts") as HTMLElement | null)?.focus()
+            );
           }}
         >
           {drawer}

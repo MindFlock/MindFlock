@@ -1,7 +1,7 @@
 /** Settings → General (partial 101 + the scroll-speed wiring from
  * section 20): getting started, the cost budget, what happens when usage
- * runs out or MindFlock restarts, and (folded) the plan estimate + terminal
- * scroll speed. One plain line per control; the long why sits in a "Learn
+ * runs out or MindFlock restarts, and (advanced mode only) the plan estimate
+ * + terminal scroll speed. One plain line per control; the long why sits in a "Learn
  * more" fold. The comfort switches (Reduce motion, Take a break, Idle flock)
  * live on Appearance — they are about how the app looks and feels. */
 
@@ -13,6 +13,7 @@ import { useUi } from "../../../state/store";
 import { SettingField, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 import { AdvancedFold, LearnMore } from "../settingsMode";
+import { flashSaved } from "../savedCue";
 
 export function General(_: ScreenProps) {
   return (
@@ -28,7 +29,7 @@ export function General(_: ScreenProps) {
       </label>
       <ResumeOnUsageResetRow />
       <ReviveOnStartRow />
-      {/* An estimate to calibrate and a wheel to fine-tune: folded. */}
+      {/* An estimate to calibrate and a wheel to fine-tune: advanced mode only. */}
       <AdvancedFold id="general-advanced">
         <label className="set-row">
           <span className="set-label">Plan window budget (≈USD per window, 0 = off)</span>
@@ -71,8 +72,8 @@ function ResumeOnUsageResetRow() {
           type="checkbox"
           checked={on}
           onChange={(e) => {
+            // saveField marks the row "✓ Saved" (savedCue.ts).
             s.saveField("general", "resume_on_usage_reset", e.target.checked);
-            toast(e.target.checked ? "Auto-resume on" : "Auto-resume off");
           }}
         />
         <span className="ca-slider" />
@@ -107,7 +108,6 @@ function ReviveOnStartRow() {
           checked={on}
           onChange={(e) => {
             s.saveField("general", "revive_on_start", e.target.checked);
-            toast(e.target.checked ? "Sessions revive after a restart" : "Sessions stay Offline after a restart");
           }}
         />
         <span className="ca-slider" />
@@ -139,7 +139,7 @@ function GettingStarted() {
             checked={enabled}
             onChange={(e) => {
               setHintsEnabled(e.target.checked);
-              toast(e.target.checked ? "Hints re-enabled" : "Hints turned off");
+              if (!flashSaved(e.currentTarget)) toast(e.target.checked ? "Hints re-enabled" : "Hints turned off");
             }}
           />
           <span className="ca-slider" />

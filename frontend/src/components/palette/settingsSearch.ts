@@ -29,7 +29,7 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
   {
     key: "general",
     label: "General",
-    terms: ["general", "budget", "cost", "spend", "usage resets", "resume", "revive", "restart sessions", "hints", "tips", "tour", "scroll speed"],
+    terms: ["general", "budget", "cost", "spend", "usage resets", "resume", "revive", "restart sessions", "hints", "tips", "tour"],
   },
   {
     key: "connections",
@@ -83,7 +83,19 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
   {
     key: "workspace",
     label: "Workspace",
-    terms: ["workspace", "worktree", "worktrees", "folder", "directory", "dir", "checkout", "branch", "base branch", "pr base", "fast-track", "fast track", "live branch", "pre-commit"],
+    terms: ["workspace", "worktree", "worktrees", "folder", "directory", "dir", "checkout", "branch", "base branch", "pr base"],
+  },
+  {
+    key: "workspace",
+    label: "Workspace → Where worktrees live",
+    terms: ["where are worktrees", "worktree folder", "workspace folder", "path", "checkout location", "where are my files"],
+    anchor: "#workspace-paths",
+  },
+  {
+    key: "workspace",
+    label: "Workspace → Worktree or clone",
+    terms: ["worktree mode", "clone", "full clone", "copy the repo", "ticket sessions"],
+    anchor: "#workspace-copy-mode",
   },
   { key: "ide", label: "IDE", terms: ["ide", "editor", "cursor", "vscode", "vs code", "open in editor"] },
   {
@@ -113,7 +125,7 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
   {
     key: "advanced",
     label: "Engine & updates",
-    terms: ["engine", "update", "updates", "upgrade", "version", "restart server", "ticket sessions"],
+    terms: ["engine", "update", "updates", "upgrade", "version", "restart server"],
   },
 ];
 

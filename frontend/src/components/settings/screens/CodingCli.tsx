@@ -1,26 +1,21 @@
 /** Settings → Agents (key "coding"; partial 106 + sections 21/22's pickers):
- * the default agent and its sign-in state (the SAME row Connections shows,
- * so the two screens can never disagree), per-agent default launch flags (a
- * name -> flags map re-sent whole on every edit), how many sessions run at
- * once, and — folded — a check for any other agent plus the window-refresh
- * keepalive. */
+ * the default agent and its card (the SAME card Connections, Custom agents
+ * and the Setup checklist show — components/setup/AgentCard — so "is my
+ * agent ready?" has one answer and one button wherever you look), per-agent
+ * default launch flags (a name -> flags map re-sent whole on every edit), how
+ * many sessions run at once, and — folded — any other agent's card plus the
+ * window-refresh keepalive. */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../api/client";
-import type { ConnectionRow, ConnectionsResponse } from "../../../api/types";
-import { useUi } from "../../../state/store";
 import { toast } from "../../../lib/toast";
+import { agentName } from "../../../lib/agentNames";
 import { pickerOptions } from "../../../lib/providerRows";
 import { FlagChips } from "../../dialogs/FlagChips";
 import { SettingField, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 import { AdvancedFold } from "../settingsMode";
-import {
-  CONNECTIONS_CHANGED_EVENT,
-  ConnectionRowView,
-  runTest,
-  type TestOutcome,
-} from "./Connections";
+import { AgentCard } from "../../setup/AgentCard";
 
 /** The flags field's example, per agent: a harmless flag that agent really
  * takes — never a permission-skipping one, which as grey placeholder text
@@ -50,11 +45,8 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
   const [selected, setSelected] = useState("");
   const [flags, setFlags] = useState("");
   const flagsMap = useRef<Record<string, string>>({});
-  const [agentTest, setAgentTest] = useState<{ testing: boolean; ok?: boolean; msg?: string }>({
-    testing: false,
-  });
-  /** Which CLI "Test agent CLI" probes; "" = the default provider above. */
-  const [testProvider, setTestProvider] = useState("");
+  /** Which other agent's card the fold shows; "" = the first one that isn't the default. */
+  const [otherProvider, setOtherProvider] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -130,25 +122,8 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
     [selected]
   );
 
-  const runAgentTest = async () => {
-    setAgentTest({ testing: true });
-    try {
-      const r = await api<{ ok?: boolean; cli?: { detail?: string }; auth?: { detail?: string } }>(
-        "/api/settings/test/agent",
-        { method: "POST", json: { provider: testProvider || selected } }
-      );
-      const bits: string[] = [];
-      if (r?.cli?.detail) bits.push(r.cli.detail);
-      if (r?.auth?.detail) bits.push(r.auth.detail);
-      setAgentTest({
-        testing: false,
-        ok: !!r?.ok,
-        msg: bits.join(" · ") || (r?.ok ? "agent CLI ready" : "agent CLI not ready"),
-      });
-    } catch (e) {
-      setAgentTest({ testing: false, ok: false, msg: (e as Error).message });
-    }
-  };
+  const others = providers.filter((p) => p.name !== selected);
+  const other = others.find((p) => p.name === otherProvider)?.name || others[0]?.name || "";
 
   return (
     <>
@@ -173,15 +148,12 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
           value={selected}
           readOnly
         />
-        <span className="set-hint">
-          New sessions start with this agent. To install or sign in to another, see{" "}
-          <button type="button" className="linklike" data-goto-screen="connections" onClick={() => gotoScreen("connections")}>
-            Connections
-          </button>
-          .
-        </span>
+        <span className="set-hint">New sessions start with this agent.</span>
       </label>
-      <DefaultAgentStatus provider={selected} refresh={defaultSaved} gotoScreen={gotoScreen} />
+      <div className="set-row coding-agent-status" id="coding-agent-status">
+        <span className="set-label">Status</span>
+        <AgentCard key={selected + ":" + defaultSaved} provider={selected} here="coding" gotoScreen={gotoScreen} />
+      </div>
       <label className="set-row">
         <span className="set-label">Extra flags for new sessions</span>
         <input
@@ -205,119 +177,33 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
           }}
         />
         <span className="set-hint">
-          Added every time the default agent starts. "Skip permissions", "Bypass approvals" and
-          "Yes to all" let the agent edit files and run commands without asking you first.
+          Added every time the default agent starts. A chip that skips permissions lets the agent
+          edit files and run commands without asking you first.
         </span>
       </label>
       <SessionsAtOnce gotoScreen={gotoScreen} />
       <AdvancedFold id="coding-advanced">
         <WindowRefresh />
-        <div className="set-row">
-          <span className="set-label">Check another agent</span>
-          <span className="test-row">
+        {others.length > 0 && (
+          <div className="set-row" id="coding-other-agent">
+            <span className="set-label">Set up another agent</span>
             <select
               id="agent-test-provider"
-              aria-label="Agent to check"
-              value={testProvider || selected}
-              onChange={(e) => {
-                setTestProvider(e.target.value);
-                setAgentTest({ testing: false });
-              }}
+              aria-label="Another agent"
+              value={other}
+              onChange={(e) => setOtherProvider(e.target.value)}
             >
-              {providers.map((p) => (
+              {others.map((p) => (
                 <option key={p.name} value={p.name}>
-                  {p.name}
-                  {p.name === selected ? " (default)" : ""}
+                  {agentName(p.name)}
                 </option>
               ))}
             </select>
-            <button type="button" id="agent-test-btn" className="test-btn" onClick={runAgentTest}>
-              Test
-            </button>
-            <span
-              id="agent-test-result"
-              className={"test-result" + (agentTest.msg ? (agentTest.ok ? " ok" : " bad") : "")}
-            >
-              {agentTest.testing ? "testing…" : agentTest.msg ? (agentTest.ok ? "✓ " : "✗ ") + agentTest.msg : ""}
-            </span>
-          </span>
-          <span className="set-hint">Is it installed, and can MindFlock see a sign-in?</span>
-        </div>
+            {other && <AgentCard key={other} provider={other} here="coding" gotoScreen={gotoScreen} />}
+          </div>
+        )}
       </AdvancedFold>
     </>
-  );
-}
-
-/** The default agent's own Connections row: the same status, Test and Sign
- * in as Settings → Connections, read from the same endpoint — so "is my
- * agent signed in?" has one answer wherever you look. */
-function DefaultAgentStatus({
-  provider,
-  refresh,
-  gotoScreen,
-}: {
-  provider: string;
-  refresh: number;
-  gotoScreen(name: string): void;
-}) {
-  const [row, setRow] = useState<ConnectionRow | null>(null);
-  const [result, setResult] = useState<TestOutcome | undefined>();
-  const [testing, setTesting] = useState(false);
-  const openDialogFor = useUi((st) => st.openDialogFor);
-  const closeDialog = useUi((st) => st.closeDialog);
-
-  const load = useCallback(async () => {
-    try {
-      const d = await api<ConnectionsResponse>("/api/connections?refresh=1");
-      const rows = d?.connections || [];
-      const want = (provider || "").toLowerCase();
-      const found =
-        rows.find((c) => c.kind === "agent" && (c as ConnectionRow & { provider?: string }).provider === want) ||
-        rows.find((c) => c.kind === "agent" && c.default) ||
-        null;
-      setRow(found);
-    } catch {
-      setRow(null);
-    }
-  }, [provider]);
-
-  useEffect(() => {
-    setResult(undefined);
-    void load();
-  }, [load, refresh]);
-
-  useEffect(() => {
-    const on = () => void load();
-    window.addEventListener(CONNECTIONS_CHANGED_EVENT, on);
-    return () => window.removeEventListener(CONNECTIONS_CHANGED_EVENT, on);
-  }, [load]);
-
-  if (!row) return null;
-  // "Manage" on this row leads HERE: drop it rather than offer a no-op.
-  const toHere = row.action?.kind === "screen" && row.action.target === "coding";
-  const shown: ConnectionRow = toHere ? { ...row, action: null, settings_screen: "" } : row;
-  return (
-    <div className="set-row coding-agent-status" id="coding-agent-status">
-      <span className="set-label">Sign-in</span>
-      <ConnectionRowView
-        c={shown}
-        deps={{ gotoScreen, openDialogFor, closeDialog }}
-        result={result}
-        testing={testing}
-        onTest={
-          row.test
-            ? async () => {
-                setTesting(true);
-                const out = await runTest(row.test!);
-                setTesting(false);
-                setResult(out);
-                void load();
-              }
-            : undefined
-        }
-        onChanged={() => void load()}
-      />
-    </div>
   );
 }
 

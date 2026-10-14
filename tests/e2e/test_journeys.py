@@ -203,12 +203,15 @@ def test_connections(mf_server, page, open_app):
 
     rows = screen.locator(".conn-row")
     expect(rows.first).to_be_visible(timeout=45_000)
-    # Basic mode keeps all but the everyday rows in a collapsed Advanced fold,
-    # and a hidden row's inner_text is "": open it so every row is checked.
-    fold = screen.locator("details#connections-advanced")
-    if fold.count() and fold.get_attribute("open") is None:
-        fold.locator("summary").click()
-        expect(fold).to_have_attribute("open", "")
+    # Rows past the everyday ones sit in collapsed folds ("Other agents",
+    # Advanced), and a hidden row's inner_text is "": open every fold so every
+    # row is checked.
+    folds = screen.locator("details")
+    for k in range(folds.count()):
+        fold = folds.nth(k)
+        if fold.get_attribute("open") is None and fold.locator("summary").is_visible():
+            fold.locator("summary").click()
+            expect(fold).to_have_attribute("open", "")
     n = rows.count()
     assert n >= 1
     seen = []
@@ -219,7 +222,9 @@ def test_connections(mf_server, page, open_app):
         seen.append((name, status))
         assert name, "connection row %d has no name" % i
         assert status, "connection %r has no status word" % name
-    assert any(name.lower().startswith("coding") for name, _ in seen), seen
+    # The agent rows: "Agent · Claude Code" (the server's own name still reads
+    # "Coding agent · …" on older builds).
+    assert any(name.lower().startswith(("agent ·", "coding")) for name, _ in seen), seen
 
 
 # The Ctrl+W / Delete guard (frontend/src/lib/keymap.ts endShortcutAllowed)
