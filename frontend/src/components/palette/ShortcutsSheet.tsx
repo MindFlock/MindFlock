@@ -119,12 +119,33 @@ export function ShortcutsSheet() {
   const open = useUi((s) => s.openDialog === "shortcuts");
   const closeDialog = useUi((s) => s.closeDialog);
   const [capturing, setCapturing] = useState<Capture | null>(null);
+  // Changing keys is a mode you ask for: a newcomer opens this sheet to READ
+  // it, and a click on a row shouldn't start recording keystrokes.
+  const [editing, setEditing] = useState(false);
   const [, setVersion] = useState(keymapVersion());
 
   useEffect(() => subscribeKeymap(() => setVersion(keymapVersion())), []);
   useEffect(() => {
-    if (!open) setCapturing(null);
+    if (!open) {
+      setCapturing(null);
+      setEditing(false);
+    }
   }, [open]);
+
+  // Esc closes the sheet (its own Dialogs row says so). Window capture, so a
+  // focused terminal can't swallow it; while a combo is being recorded the
+  // recorder below owns Esc (it cancels the recording) and stops it first.
+  useEffect(() => {
+    if (!open || capturing) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeDialog();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, capturing, closeDialog]);
 
   // The recorder listens on window in the capture phase — it runs BEFORE the
   // keymap's document-level listener, and the dispatcher bails while the
@@ -202,7 +223,19 @@ export function ShortcutsSheet() {
       <div className="shortcuts-card">
         <div className="shortcuts-head">
           <span>Keyboard shortcuts</span>
-          {anyCustom && (
+          <button
+            className={"shortcuts-edit linklike" + (editing ? " on" : "")}
+            type="button"
+            aria-pressed={editing}
+            title="Click a shortcut, then press the new keys to replace it"
+            onClick={() => {
+              setCapturing(null);
+              setEditing((v) => !v);
+            }}
+          >
+            {editing ? "Done" : "Change keys"}
+          </button>
+          {anyCustom && editing && (
             <button
               className="shortcuts-restore"
               type="button"
@@ -232,17 +265,22 @@ export function ShortcutsSheet() {
             ✕
           </button>
         </div>
-        <p className="shortcuts-hint">
-          Click a highlighted shortcut and press the new keys to replace it · <b>+</b> adds an
-          extra combo · <b>↺</b> restores its default · Esc cancels.
-          {inBrowser && (
-            <>
-              {" "}
-              In a browser tab, keys marked <span className="kbd-desktop-tag">desktop app</span> belong to the
-              browser.
-            </>
-          )}
-        </p>
+        {(editing || inBrowser) && (
+          <p className="shortcuts-hint">
+            {editing && (
+              <>
+                Click a highlighted shortcut and press the new keys to replace it · <b>+</b> adds an
+                extra combo · <b>↺</b> restores its default · Esc cancels.{" "}
+              </>
+            )}
+            {inBrowser && (
+              <>
+                In a browser tab, keys marked <span className="kbd-desktop-tag">desktop app</span> belong to the
+                browser.
+              </>
+            )}
+          </p>
+        )}
         <div className="shortcuts-body">
           {sheet.map(([group, rows]) => (
             <div className="shortcuts-group" key={group}>
@@ -251,7 +289,8 @@ export function ShortcutsSheet() {
                 .map((r, ri) => ({ r, ri, b: browserOrder(r[0], r[1], inBrowser) }))
                 // Rows that work in this tab first; the desktop app's after.
                 .sort((x, y) => Number(x.b.desktopOnly) - Number(y.b.desktopOnly) || x.ri - y.ri)
-                .map(({ r: [keysLabel, desc, meta], ri, b }) => {
+                .map(({ r: [keysLabel, desc, rowMeta], ri, b }) => {
+                const meta = editing ? rowMeta : null;
                 const isCapturing =
                   capturing && meta && capturing.meta.kind === meta.kind && capturing.meta.id === meta.id;
                 return (
@@ -260,7 +299,7 @@ export function ShortcutsSheet() {
                     className={
                       "shortcut-row" +
                       (meta ? " rebindable" : "") +
-                      (meta?.custom ? " customized" : "") +
+                      (rowMeta?.custom ? " customized" : "") +
                       (b.desktopOnly ? " desktop-only" : "") +
                       (isCapturing ? " capturing" : "")
                     }

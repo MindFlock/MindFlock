@@ -210,3 +210,23 @@ body.narrow #sidebar {
 body.narrow .sidebar-resizer {
   display: none;
 }
+
+/* The Setup chip once every required step is done: the optional ones are
+   offers, not warnings — neutral, not amber. !important because the chip's
+   own sheet (setup/setup.css) is imported unlayered by the Setup checklist,
+   and an unlayered rule outranks every rule in a layer. */
+.setup-chip-slot {
+  display: contents;
+}
+
+.setup-chip-slot.req-done .setup-chip {
+  color: var(--muted) !important;
+  background: none !important;
+  border-color: var(--border) !important;
+  font-weight: 500 !important;
+}
+
+.setup-chip-slot.req-done .setup-chip:hover {
+  color: var(--text) !important;
+  background: var(--panel-2) !important;
+}

@@ -11,6 +11,7 @@ import { refreshInstances } from "../state/queries";
 import { deviceApi, deviceTitle } from "./devices";
 import { rememberNewSessionChoice, useUi } from "../state/store";
 import { toast } from "./toast";
+import { rememberTask } from "./sessionTask";
 import { addPendingSession, clearStaleAlias, failPendingSession, selectSession } from "./sessionActions";
 import { tokenize } from "../components/dialogs/FlagChips";
 import type { RunDraft } from "../components/dialogs/NewList";
@@ -253,6 +254,8 @@ export function newSessionSubmit(ctx: NewSessionSubmitCtx) {
       // Same reason as the guess in addPendingSession: the server's real title
       // must not arrive wearing a closed session's rename.
       clearStaleAlias(inst.title);
+      // What the pane's "Task:" line shows until the agent's transcript has it.
+      rememberTask(inst.title, String(body.prompt || ""));
       await refreshInstances();
       selectSession(inst.title);
       // Arming waits for the worktree; it never holds the dialog.

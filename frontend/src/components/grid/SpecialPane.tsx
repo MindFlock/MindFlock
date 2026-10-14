@@ -200,8 +200,8 @@ function ChatBody({ headDrag }: { headDrag: HeadDrag }) {
         <span className="grip" title="Drag to move this window">⠿</span>
         <span className="title">Assistant</span>
         <span className="state">{state}</span>
-        {/* Its agent file, from the window it shapes (the sidebar bar's
-            "Agent" opens the same editor). */}
+        {/* Its standing instructions, from the window they shape (the
+            sidebar bar's "Instructions" opens the same editor). */}
         <button
           id="assistant-agent-head-btn"
           className="act"
@@ -212,7 +212,7 @@ function ChatBody({ headDrag }: { headDrag: HeadDrag }) {
             useUi.getState().openDialogFor("assistant-agent");
           }}
         >
-          Agent file
+          Instructions
         </button>
         <CloseBtn desc={{ kind: "chat" }} />
       </div>

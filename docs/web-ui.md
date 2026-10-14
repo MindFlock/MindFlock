@@ -41,7 +41,24 @@ red `-DEV` badge under a dev shell) sits centered, and the empty strip beside it
 is the drag region that moves the desktop shell's window.
 
 **Verify** is always on the bar. Its badge counts pushed changes nobody has
-checked and says nothing at zero.
+checked and says nothing at zero. Everywhere Verify is described in passing
+(this tooltip, the palette, the tour, the shortcut sheet) it is one sentence,
+`lib/vocab.ts`'s *check that pushed changes work*.
+
+**The bar's tooltips read their shortcuts off the live keymap**
+(`shortcutLabels`), rebinds included — and in a browser tab they leave out
+keys the browser keeps for itself, so **New** says *Alt+N* there (Ctrl+N opens
+a browser window) and *Ctrl+N / Alt+N* in the desktop app. Under 560 px the
+wordmark steps aside rather than being clipped.
+
+**Each surface has a URL.** Opening **New**, **Intake**, **Verify**,
+**Settings** or **Templates** puts it in the hash (`#new`, `#intake/tickets`,
+`#verify`, `#settings/accounts`, `#templates`) with one history entry, so the
+browser's **Back** closes it instead of leaving the app, and a link (or a
+reload) opens it (`lib/surfaceHash.ts`). Moving from one surface to another
+replaces that entry, so Back still lands on the grid; closing a surface in the
+app steps back over its entry. Commit, the palette and other moments don't
+touch the URL.
 
 Four entries left the bar:
 
@@ -77,9 +94,13 @@ theme and addon authors styling against the bar: `#topbar[data-mac]` (native
 title bar) and `#topbar[data-mac-lights]` (…and the lights are visible right
 now).
 
-**Sidebar** — session list with drag-to-reorder, status dots, stage chips, and a
-close ✕ per row (closes the session, keeps the worktree). Long titles ellipsize
-(full name on hover); a session cut from a different repo than the one the
+**Sidebar** — session list with drag-to-reorder, stage chips, and a
+close ✕ per row (closes the session, keeps the worktree). The chip is the
+row's state; a status dot is drawn only where it adds something — a dropped
+terminal socket (red), or a node of a family tree, whose connector lines meet
+it. Long titles ellipsize **in the middle** (`add-readm…-setup-2`), so the
+suffix that tells two sessions apart is never the part cut (full name on
+hover; the pane title does the same); a session cut from a different repo than the one the
 server manages shows a compact `⇄` glyph whose tooltip carries the repo name and
 full path. Under each row title a muted **context line** shows the session's
 total diff stat at a glance — `+120 −8 · 6 files`: everything the session has
@@ -92,10 +113,11 @@ another session's agent spawned or adopted (see
 a status line under its name; the parent carries a roll-up of its workers. Above the list:
 **+ New** and a stack of **customizable bars** (see below) — the token/cost
 **Usage** readout (hidden while there are no sessions), the **Assistant** bar
-(**Chat** · **Todo** · **Agent** — **Agent** opens the assistant's editable
-agent file, its standing instructions; the chat window's head has the same
-editor as **Agent file**, and so does the palette's **Assistant agent
-file…**), the **Prompts** bar (your saved prompts, one click from any
+(**Chat** · **Todo** · **Instructions** — **Instructions** opens the
+assistant's editable agent file, its standing instructions; the chat window's
+head has the same editor under the same word, and so does the palette's
+**Assistant instructions (agent file)…** — "Agent" on its own means the coding
+agent only), the **Prompts** bar (your saved prompts, one click from any
 session — see [Saved prompts](#saved-prompts)), the **Tickets** bar (pipeline on/off switch and state dot;
 it appears once a ticket source is connected), the **Pull requests** and
 **Issues** bars, the opt-in **Verify** bar, and one bar per extension. Under the
@@ -119,8 +141,19 @@ Alt+N numbers wait too; and pane headers are calm (see
 [The pane header](#the-pane-header)). Three sessions, or a week, brings the
 full screen back by itself. A choice the person made always wins: bars set in
 Customize (here or synced from another device) are never touched, and a View
-preset other than Auto keeps the picker shown. While `/api/setup` is still
-loading nothing is hidden — a veteran's screen never flashes empty.
+preset other than Auto keeps the picker shown.
+
+The decision is made **before first paint**: `/api/setup` carries the doctor
+and can take seconds, so until it (and the session list) answer, the screen
+uses this browser's last calm decision (`mf_calm_hint` in localStorage — a
+render hint only, never a first-run flag) and the server's answer replaces it
+the moment it lands. No dense layout flashes and then collapses on reload.
+With no hint (a new browser) the old rule holds: calm only on a genuinely
+fresh install (`onboarded: false`), so a veteran's screen never flashes empty.
+
+The footer's **Setup** chip is amber only while a *required* step is left;
+once the three are done it turns neutral (*Setup 3 of 3 · 2 optional* is an
+offer, not a warning).
 
 The footer's doctor chip (*⚠ setup issues — open Setup*) stays down while the
 grid's **Get set up** card or the **Setup** chip is showing — they open the
@@ -421,18 +454,27 @@ buttons did nothing there.
 Left to right: the ⠿ grip, the session's name, the tabs (**Agent**,
 **Terminal**, **Diff**, **Map**, **Queue**, and **Thread** once the session has
 workers or messages), the guided next-step button, ⏩
-[Fast-track](#fast-track-), the cost chip, **History**, **⋯** and **−**.
+[Fast-track](#fast-track-), the cost chip, **History**, **❚❚ Pause** (or
+**▶ Resume**), **⋯** and **−**. Under the header, a one-line **Task:** bar
+names what the session was asked to do — its newest prompt from the agent's
+transcript, or, until there is one (or for an agent MindFlock can't read a
+transcript of), the task this browser started it with; the ❯ arrow drops the
+whole prompt over the terminal.
 
+- **⋯ is the session's one menu** — the same model as the sidebar row's ⋯
+  (see [Session row actions](#session-row-actions-expand-a-sidebar-row-with-)),
+  less the tabs this header already shows, plus **Browse history**.
 - **Calm header.** In the [calm first hour](#layout), or when a pane is
   narrower than 560 px, the header shows name · **Agent** / **Diff** ·
-  **Commit…**, and folds **Terminal**, **Map**, **Queue**, **Fast-track…**,
-  **Browse history** and the cost chip into **⋯** — the next-step button is
-  never the thing scrolled out of view. A tab you are on, a Queue with
-  something in it and a fast-track someone set stay in the row.
-- **⋯ → Checklist…** (any header, when the session has a branch) opens Verify
-  on that branch's checklist — also on the row's › menu.
-- **Commit…** says what it does on hover: *Commit this session's changes — you
-  check the message first. Next: Push, then Open PR.*
+  the next step, and leaves **Terminal**, **Map**, **Queue**, ⏩ and the cost
+  chip to **⋯** (Queue prompt… and Fast-track… are in it always; Terminal, Map
+  and Browse history under its **More**). A tab you are on, a Queue with
+  something in it and a fast-track someone set stay in the row. A narrow pane
+  draws Pause as its glyph alone.
+- **Commit…** shows only once there is something to commit (uncommitted
+  files, untracked included); until then the header has no lead button and
+  the state chip says what the agent is doing. On hover: *Commit this
+  session's changes — you check the message first. Next: Push, then Open PR.*
 - **An agent that isn't installed.** When the session's agent CLI is missing
   on this computer (`/api/setup`'s `logins`), a line over the terminal says
   so with **Install <agent>…** (the Setup checklist), and the rail row reads
@@ -534,21 +576,35 @@ session. That follow-up is the browser's (`submitMakePr` in
 `/make-pr` route's, so a PR opened from `/m` or by Fast-track at `pr` depth
 leaves the ladder still asking for **Merge** until someone presses ↺.
 
-## Session row actions (expand a sidebar row with ›)
+## Session row actions (expand a sidebar row with ⋯)
 
-Copy path · **Commit…** · **Push** · **Open PR** · **Merge PR** ·
-**View PR ↗** · **Checklist…** (when the session has a branch: Verify on that
-branch's checklist, `openDialogFor("verify", branch)`) · **Fast-track…** (opens the pane's [⏩ picker](#fast-track-)) ·
-**Split into parallel pieces…** · **Move out of {team run}** for a team run member ·
-**Message…** · **Run checks now** · **Rename…** · **Duplicate session**
-(`Ctrl+K D`; a second in-place session on the same worktree) ·
-**Open / focus <IDE>** (`Ctrl+K O`; row double-click does the same) ·
-**Hide/Show window** (`Ctrl+K H`; the session keeps running) · **Open preview
-↗** when the session serves a port · **Pause session** (*stops the agent;
-keeps it in the sidebar to resume*) / **Resume session** · then the two ways to
-leave a session: **✕ Close** and **Delete…**. Every verb's label, shortcut and
-when-it-applies rule comes from one table (`lib/sessionActionTable.ts`) that this
-menu, the command palette and the `Ctrl+K` chords all read. A row whose workspace folder is gone offers only
+A session has **one menu**, opened from the row's **⋯** (an accordion under
+the row) or the pane header's **⋯** (a popover) — one model
+(`lib/sessionMenu.ts`) drawn by one component (`sidebar/SessionMenu.tsx`), in
+groups:
+
+- **Work** — **Message…** (`Ctrl+K S`) · **Queue prompt…** *runs when idle*
+- **Ship** — **Commit…** (only once there is something to commit) · **Push** ·
+  **Open PR** · **Merge PR** once there is a PR · **View PR ↗** ·
+  **Fast-track…** (opens the pane's [⏩ picker](#fast-track-), with the current
+  choice under it) · **Checklist…** (when the session has a branch: Verify on
+  that branch's checklist, `openDialogFor("verify", branch)`) · **Run checks
+  now** · **Bring work home…** on a shared folder
+- **Session** — **Rename…** · **Pause session** (*stops the agent; keeps it in
+  the sidebar to resume*) / **Resume session**
+- **More ▸** (folded) — **Terminal** · **Code map** · **Thread** · **Browse
+  history** (pane only) · **Split into parallel pieces…** · **Move out of {team
+  run}** for a team run member · **Duplicate session** (`Ctrl+K D`; a second
+  in-place session on the same worktree) · **Open in <IDE>** *your code editor*
+  (`Ctrl+K O`; row double-click does the same) · **Open preview ↗** `:port`
+  when the session serves one · **Select** (`Ctrl+click`) · **Hide/Show
+  window** (`Ctrl+K H`; the session keeps running) · **Re-run worktree setup**
+  after a failed one · **Copy folder path**
+- then the two ways to leave a session: **✕ Close** and **Delete…**.
+
+Every verb's label, shortcut and when-it-applies rule comes from one table
+(`lib/sessionActionTable.ts`) that this menu, the command palette and the
+`Ctrl+K` chords all read. A row whose workspace folder is gone offers only
 **Delete — remove session**.
 
 **Pause keeps your work, and keeps the session here.** Pause only stops the
@@ -1603,8 +1659,10 @@ instead. `Ctrl` means `Cmd` on Mac throughout. Press `?` in the app for the
 live cheat-sheet — it is generated from the same table that drives the
 bindings.
 
-The sheet is also the editor: rebindable rows highlight on hover — click one,
-press the new combo (`Esc` cancels), and it takes effect immediately. The
+`Esc` closes the sheet. It is also the editor, once you ask for it: **Change
+keys** in its header turns the rows rebindable (they highlight on hover) —
+click one, press the new combo (`Esc` cancels the recording), and it takes
+effect immediately; **Done** leaves the mode. The
 row's `+` button adds an *extra* combo instead of replacing (starting from
 the defaults, so an action can answer to several combos). Chord rows rebind
 their second key (the `Ctrl+K` prefix is fixed). A `↺` next to a customized
@@ -2065,7 +2123,9 @@ a same-named different one is saved as *<name> (saved prompt)*.
 
 One checklist, shown in one place at a time. On a genuinely first launch the
 welcome tour opens once over the grid's first-run card (below); nothing else
-opens by itself. UI store state
+opens by itself. It counts as seen (the synced `welcome_tour` pref) when it is
+closed — **Get started**, **Skip** or `Esc` — not when it first shows, so a
+reload halfway through brings it back. UI store state
 (`state/store.ts`: `hintsEnabled`, `dismissedHints`, persisted in
 `localStorage`) covers the hints; the checklist's state is the server's.
 

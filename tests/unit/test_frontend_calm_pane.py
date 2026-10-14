@@ -95,18 +95,18 @@ def test_guided_next_step_has_a_quiet_variant():
     pane = _read("components/grid/Pane.tsx")
     # Appended AFTER the existing expression, whose prefix other pins read.
     assert re.search(
-        r'"nextstep" \+\s*\(ns\.hint \? " nextstep-hint" : ""\) \+\s*'
-        r'\(ns\.disabled \? " nextstep-blocked" : ""\) \+\s*'
+        r'"nextstep" \+\s*\(shownStep\.hint \? " nextstep-hint" : ""\) \+\s*'
+        r'\(shownStep\.disabled \? " nextstep-blocked" : ""\) \+\s*'
         r'\(quiet \? " nextstep-quiet" : ""\)\s*\}',
         pane,
     )
-    # Busy agent, or a Commit… with nothing uncommitted.
+    # Busy agent; a Commit… with nothing uncommitted isn't drawn at all.
     assert (
         'act === "working"' in pane
         and 'act === "clarify"' in pane
         and 'act === "limit"' in pane
     )
-    assert 'ns.label === "Commit…"' in pane
+    assert 'ns && ns.label === "Commit…" && !hasUncommitted(inst) ? null : ns' in pane
     css = _read("components/grid/Pane.css")
     assert re.search(
         r"\.pane-head \.actions \.nextstep\.nextstep-quiet \{\s*background: transparent;\s*"
@@ -191,13 +191,15 @@ def test_narrow_heads_keep_the_cost():
 
 
 def test_assistant_agent_file_has_one_name_and_two_doors():
-    """The owner looks for the "assistant agent file": its bar button is back
-    ("Agent"), the chat window's head has "Agent file", and the palette row
-    and the dialog heading say agent file too."""
+    """The owner looks for the "assistant agent file": both doors (the bar's
+    button and the chat window's head) read "Instructions" — "Agent" is the
+    coding agent's word alone (GLOSSARY) — and still say "agent file" in their
+    tooltips and the palette row, so searching for it finds it."""
     special = _read("components/grid/SpecialPane.tsx")
     assert 'id="assistant-agent-head-btn"' in special
     assert 'openDialogFor("assistant-agent")' in special
-    assert "Agent file" in special
+    assert re.search(r">\s*Instructions\s*</button>", special)
+    assert "the assistant's agent file" in special
     bars = _read("components/sidebar/SidebarBars.tsx")
     assert 'id="assistant-agent-btn"' in bars
     # One id per button: the head no longer reuses the bar's.
@@ -205,7 +207,7 @@ def test_assistant_agent_file_has_one_name_and_two_doors():
     dialog = _read("components/dialogs/AssistantAgentDialog.tsx")
     assert "<h2>Assistant agent file</h2>" in dialog
     assert 'id="assistant-agent-text"' in dialog  # editable in place
-    assert 'label: "Assistant agent file…"' in _read(
+    assert 'label: "Assistant instructions (agent file)…"' in _read(
         "components/palette/CommandPalette.tsx"
     )
 
