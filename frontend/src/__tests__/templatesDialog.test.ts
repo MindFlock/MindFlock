@@ -130,9 +130,16 @@ describe("TemplatesDialogView — the markup", () => {
     expect(html).not.toContain('id="templates-new"');
     expect(html).toContain('id="tpl-name"');
   });
-  it("says so while loading and when empty, and never reaches for a browser dialog", () => {
+  it("says so while loading; empty, it says what Schedule is for in one line and offers to start", () => {
     expect(view({ templates: [], loaded: false })).toContain("Loading templates…");
-    expect(view({ templates: [] })).toContain("No templates yet");
+    const empty = view({ templates: [] });
+    expect(empty).toContain('id="schedule-empty"');
+    expect(empty).toContain("Save a session setup once, then start it with one click");
+    expect(empty).toContain('id="schedule-empty-create"');
+    expect(empty).toContain(">Create a template<");
+    // One way in, not two: no head "+ New template", no intro paragraph.
+    expect(empty).not.toContain('id="templates-new"');
+    expect(empty).not.toContain("tpl-intro");
   });
   it("shows a failed load at list level instead of loading forever", () => {
     const html = view({ templates: [], loaded: false, loadError: "HTTP 500" });

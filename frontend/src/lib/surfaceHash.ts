@@ -1,6 +1,6 @@
-/** Top-bar surfaces in the URL: New, Intake, Verify, Settings and Templates
- * each get a hash (#new, #intake/tickets, #verify, #settings/accounts,
- * #templates), so browser Back closes the open one instead of leaving the
+/** Top-bar surfaces in the URL: New, Intake, Verify, Schedule and Settings
+ * each get a hash (#new, #intake/tickets, #verify, #schedule,
+ * #settings/accounts), so browser Back closes the open one instead of leaving the
  * app, and a link opens it. The store's openDialog stays the one truth; this
  * only mirrors it into history and back.
  *
@@ -18,11 +18,15 @@ const BY_HASH: Record<string, DialogName> = {
   intake: "intake",
   verify: "verify",
   settings: "settings",
-  templates: "templates",
+  schedule: "schedule",
+  // Schedule's name before it moved to the top bar: an old link still lands.
+  templates: "schedule",
 };
-const BY_DIALOG: Partial<Record<DialogName, string>> = Object.fromEntries(
-  Object.entries(BY_HASH).map(([h, d]) => [d, h])
-);
+const BY_DIALOG: Partial<Record<DialogName, string>> = {
+  ...Object.fromEntries(Object.entries(BY_HASH).map(([h, d]) => [d, h])),
+  schedule: "schedule",
+  templates: "schedule",
+};
 
 export interface Surface {
   name: DialogName;
@@ -30,12 +34,12 @@ export interface Surface {
 }
 
 /** The hash for an open dialog, or "" when it isn't a surface. The target
- * (a Settings screen, an Intake tab) rides after a slash; Templates' "new"
+ * (a Settings screen, an Intake tab) rides after a slash; Schedule's "new"
  * (reopen New on close) is internal and left out. */
 export function hashFor(name: DialogName | null, target: string | null): string {
   const h = name ? BY_DIALOG[name] : undefined;
   if (!h) return "";
-  const t = target && !(name === "templates" && target === "new") ? "/" + encodeURIComponent(target) : "";
+  const t = target && !(h === "schedule" && target === "new") ? "/" + encodeURIComponent(target) : "";
   return "#" + h + t;
 }
 
@@ -64,7 +68,7 @@ export function installSurfaceHash(win: Window = window): () => void {
   // A Back we triggered ourselves: its popstate must not re-close anything.
   let stepping = false;
   // A close waits one microtask before stepping back: a dialog that closes and
-  // opens the next surface in the same tick (Templates handing back to New)
+  // opens the next surface in the same tick (Schedule handing back to New)
   // is a switch, and a back() racing a pushState would lose the new entry.
   let pendingClose = false;
   const urlWith = (hash: string) => loc.pathname + loc.search + hash;

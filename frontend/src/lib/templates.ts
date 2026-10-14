@@ -32,11 +32,16 @@ export interface Template {
   autopilot?: TemplateAutopilot;
 }
 
-/** Either `{at, days}` or `{cron}` (5-field, local time). */
+/** Either `{at, days}` or `{cron}` (5-field, local time), plus two
+ * switches the Schedule surface flips per row: `paused` (keeps the cadence,
+ * starts nothing) and `skip_until` (epoch seconds — every slot at or before
+ * it passes without a session: "Skip next"). Both are stored only when set. */
 export interface TemplateSchedule {
   at?: string;
   days?: "daily" | "weekdays";
   cron?: string;
+  paused?: boolean;
+  skip_until?: number;
 }
 
 export type TemplateAutopilot = "commit" | "push" | "pr";
@@ -75,6 +80,11 @@ export interface TemplateRunInfo {
   last_skip?: string;
   last_skip_at?: number;
   history?: TemplateRunEntry[];
+  /** The schedule is paused (no `next_at`). */
+  paused?: boolean;
+  /** "Skip next" is set: the slot that will pass without a session
+   * (`next_at` is then the one after it). */
+  skipping_at?: number;
 }
 
 export interface TemplateRunsStatus {
@@ -218,7 +228,7 @@ export function runProblem(t: Template): string {
   return !(t.repo_path || "").trim() && !t.provisioned ? "Pick a folder for this template first" : "";
 }
 
-/** Who opened the Templates dialog and for what, as the store's
+/** Who opened the Schedule surface (the Templates dialog that was) and for what, as the store's
  * dialogTarget carries it: "new" (from New — Close hands back to it),
  * "schedule" (the palette's "Schedule a session…": a new template, schedule
  * on), and "new|schedule:<name>" (a template chip's Schedule… in New). */
@@ -251,6 +261,63 @@ export function readTemplatesTarget(target: string | null | undefined): Template
 /** Whether a template starts itself. */
 export function hasSchedule(t: Template): boolean {
   return !!(t.schedule && (t.schedule.at || t.schedule.cron));
+}
+
+/** A scheduled template's run row (the server's, keyed by lowercased name). */
+function infoOf(t: Template, status: Pick<TemplateRunsStatus, "runs">): TemplateRunInfo {
+  return status.runs[(t.name || "").trim().toLowerCase()] || {};
+}
+
+/** The scheduled templates whose LAST run failed — what the top bar's
+ * Schedule badge counts, and exactly the cards that say "Last run failed"
+ * (a later good run clears it on the server). A paused one is left out: it
+ * isn't going to try again until you resume it, which is a choice, not news. */
+export function failingSchedules(templates: Template[], status: Pick<TemplateRunsStatus, "runs">): string[] {
+  return templates
+    .filter((t) => hasSchedule(t) && !t.schedule?.paused && !!infoOf(t, status).last_error)
+    .map((t) => t.name);
+}
+
+/** What runs next across every schedule: the earliest `next_at` of a
+ * template that isn't paused, or null. */
+export function nextUp(
+  templates: Template[],
+  status: Pick<TemplateRunsStatus, "runs">
+): { name: string; at: number } | null {
+  let best: { name: string; at: number } | null = null;
+  for (const t of templates) {
+    if (!hasSchedule(t) || t.schedule?.paused) continue;
+    const at = Number(infoOf(t, status).next_at) || 0;
+    if (at && (!best || at < best.at)) best = { name: t.name, at };
+  }
+  return best;
+}
+
+/** How far off a time is, in the fewest words: "in 5 min", "in 2h",
+ * "in 2h 30m" (under 10 hours), "in 3 days". `now` is injectable for tests. */
+export function inLabel(epochSec: number, now: Date = new Date()): string {
+  const mins = Math.round((epochSec * 1000 - now.getTime()) / 60000);
+  if (mins <= 0) return "now";
+  if (mins < 60) return "in " + mins + " min";
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h < 10) return "in " + h + "h" + (m ? " " + m + "m" : "");
+  if (h < 36) return "in " + h + "h";
+  return "in " + Math.round(h / 24) + " days";
+}
+
+/** The template with its schedule's switches changed — what Pause / Resume /
+ * Skip next / Undo skip POST (the whole template: the server upserts by
+ * name). A `skip_until` of 0 (or a past one) is dropped. */
+export function withScheduleFlags(
+  t: Template,
+  patch: { paused?: boolean; skip_until?: number },
+  nowSec: number = Date.now() / 1000
+): Template {
+  const sched: TemplateSchedule = { ...(t.schedule || {}), ...patch };
+  if (!sched.paused) delete sched.paused;
+  if (!sched.skip_until || sched.skip_until <= nowSec) delete sched.skip_until;
+  return { ...t, schedule: sched };
 }
 
 /** "Every day at 21:00" / "Weekdays at 21:00" / "Cron 0 9 1 * mon" (the

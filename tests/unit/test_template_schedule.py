@@ -631,3 +631,77 @@ def test_cron_preview_route():
     assert r["next"][1] - r["next"][0] == 1800
     r = client.get("/api/templates/cron-preview", params={"expr": "61 * * * *"}).json()
     assert r == {"ok": False, "error": "minute: 61 is outside 0-59"}
+
+
+# --------------------------------------------------------------------------- #
+# Pause and skip next (the Schedule surface's per-row switches)
+# --------------------------------------------------------------------------- #
+def test_pause_and_skip_are_stored_only_when_set():
+    assert ts.normalize_schedule({"at": "21:00", "paused": False}) == DAILY_21
+    assert ts.normalize_schedule({"at": "21:00", "paused": True}) == {
+        **DAILY_21,
+        "paused": True,
+    }
+    assert ts.normalize_schedule(
+        {"cron": "0 9 * * 1-5", "skip_until": 1700000000.7}
+    ) == {
+        "cron": "0 9 * * 1-5",
+        "skip_until": 1700000000,
+    }
+    assert ts.normalize_schedule({"at": "21:00", "skip_until": "junk"}) == DAILY_21
+    # Neither re-arms: the cadence is what the signature is about.
+    assert ts.signature(ts.normalize_schedule({"at": "21:00", "paused": True})) == (
+        ts.signature(DAILY_21)
+    )
+
+
+def test_a_paused_schedule_spends_its_slots_without_firing(ny_tz):
+    runs = {"nightly": {"sig": "21:00/daily", "armed_at": at(2026, 10, 1, 0)}}
+    paused = tpl(schedule={**DAILY_21, "paused": True})
+    fire, runs = ts.plan_tick(at(2026, 10, 13, 21, 1), [paused], runs, True)
+    assert fire == [] and runs["nightly"]["last_slot"] == "2026-10-13"
+    # Resumed later that night: tonight's slot is NOT replayed...
+    fire, runs = ts.plan_tick(at(2026, 10, 13, 22, 0), [tpl()], runs, True)
+    assert fire == []
+    # ...and tomorrow's fires as usual.
+    fire, runs = ts.plan_tick(at(2026, 10, 14, 21, 0, 30), [tpl()], runs, True)
+    assert [s for _t, s in fire] == ["2026-10-14"]
+
+
+def test_skip_next_passes_one_slot_and_says_so(ny_tz):
+    runs = {"nightly": {"sig": "21:00/daily", "armed_at": at(2026, 10, 1, 0)}}
+    skip = tpl(schedule={**DAILY_21, "skip_until": int(at(2026, 10, 13, 21, 0))})
+    fire, runs = ts.plan_tick(at(2026, 10, 13, 21, 1), [skip], runs, True)
+    assert fire == []
+    assert runs["nightly"]["history"][0]["skipped"] == ts.SKIPPED_BY_HAND
+    fire, runs = ts.plan_tick(at(2026, 10, 14, 21, 1), [skip], runs, True)
+    assert [s for _t, s in fire] == ["2026-10-14"]
+
+
+def test_status_shows_paused_and_the_skipped_slot(ny_tz, stores, fake_create):
+    from backend.web.addons import templates
+
+    now = at(2026, 10, 13, 12, 0)
+    templates.save_template(tpl(schedule={**DAILY_21, "paused": True}))
+    row = ts.status_for(templates.list_templates(), now=now)["runs"]["nightly"]
+    assert row["paused"] is True and row["next_at"] is None
+    templates.save_template(
+        tpl(schedule={**DAILY_21, "skip_until": int(at(2026, 10, 13, 21, 0))})
+    )
+    row = ts.status_for(templates.list_templates(), now=now)["runs"]["nightly"]
+    assert "paused" not in row
+    assert local(row["skipping_at"]) == "2026-10-13 21:00"
+    assert local(row["next_at"]) == "2026-10-14 21:00"
+    # A skip that already passed is nothing.
+    row = ts.status_for(templates.list_templates(), now=at(2026, 10, 14, 12, 0))[
+        "runs"
+    ]["nightly"]
+    assert "skipping_at" not in row and local(row["next_at"]) == "2026-10-14 21:00"
+
+
+def test_pause_round_trips_through_the_route(stores, fake_create):
+    r = client.post("/api/templates", json=tpl(schedule={**DAILY_21, "paused": True}))
+    assert r.status_code == 200
+    assert r.json()["template"]["schedule"] == {**DAILY_21, "paused": True}
+    got = client.get("/api/templates").json()["runs"]["nightly"]
+    assert got["paused"] is True and got["next_at"] is None

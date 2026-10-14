@@ -37,6 +37,21 @@ describe("scheduledRows", () => {
     ]);
   });
 
+  it("lists a cron schedule too, in the server's words, and says paused", () => {
+    const rows = scheduledRows(
+      [
+        { name: "Watch", repo_path: "/r", prompt: "p", schedule: { cron: "*/30 * * * *" } },
+        { name: "Held", repo_path: "/r", prompt: "p", schedule: { at: "09:00", days: "daily", paused: true } },
+      ],
+      { runs: { watch: { schedule_label: "Every 30 minutes", next_at: at(9, 30) } }, runs_here: true, runs_on: "" },
+      NOW
+    );
+    expect(rows.map((r) => [r.name, r.when, r.next])).toEqual([
+      ["Watch", "Every 30 minutes", "next today 09:30"],
+      ["Held", "Every day at 09:00", "paused"],
+    ]);
+  });
+
   it("says which device fires them when it isn't this one", () => {
     const rows = scheduledRows(list, { runs: {}, runs_here: false, runs_on: "mac-mini" }, NOW);
     expect(rows[0].next).toBe("starts on mac-mini");
@@ -49,11 +64,14 @@ describe("wiring", () => {
     expect(SCHEDULED).toContain('<span className="ik-queue-kind">Scheduled templates</span>');
     expect(SCHEDULED).toContain("await runTemplateNow(r.name);");
     expect(SCHEDULED).toContain('"Run now"');
+    // Its link goes to Schedule, the surface's name on the top bar.
+    expect(SCHEDULED).toContain('openDialogFor("schedule")');
+    expect(SCHEDULED).toContain("Open Schedule ›");
   });
 
   it("the palette's Schedule a session… opens a new template with its schedule on", () => {
     expect(PALETTE).toContain('label: "Schedule a session…"');
-    expect(PALETTE).toContain('ui.openDialogFor("templates", "schedule")');
+    expect(PALETTE).toContain('ui.openDialogFor("schedule", "schedule")');
     // "schedule" = a new template; New's ⏰ on a chip names one (lib/templates'
     // readTemplatesTarget, pinned in newSessionDraft.test.ts).
     expect(TEMPLATES_DIALOG).toContain("const want = readTemplatesTarget(useUi.getState().dialogTarget).schedule;");

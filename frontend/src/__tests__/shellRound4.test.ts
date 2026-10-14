@@ -144,7 +144,12 @@ describe("surfaces in the URL hash", () => {
     expect(hashFor("intake", "tickets")).toBe("#intake/tickets");
     expect(hashFor("new-session", null)).toBe("#new");
     expect(hashFor("verify", null)).toBe("#verify");
-    expect(hashFor("templates", "new")).toBe("#templates");
+    expect(hashFor("schedule", "new")).toBe("#schedule");
+    expect(hashFor("schedule", null)).toBe("#schedule");
+    // Schedule was Templates: the old name and an old link both land on it.
+    expect(hashFor("templates", "new")).toBe("#schedule");
+    expect(parseHash("#templates")).toEqual({ name: "schedule", target: null });
+    expect(parseHash("#schedule")).toEqual({ name: "schedule", target: null });
     expect(hashFor("commit", "x")).toBe("");
     expect(hashFor("palette", null)).toBe("");
     expect(parseHash("#settings/accounts")).toEqual({ name: "settings", target: "accounts" });
@@ -200,13 +205,15 @@ describe("surfaces in the URL hash", () => {
     await Promise.resolve();
     expect(calls.slice(-2)).toEqual(["push /#new", "back"]);
     expect(useUi.getState().openDialog).toBeNull();
-    // Close and open the next surface in one tick (Templates → back to New):
-    // a switch — the entry is replaced, never stepped back over.
+    // Close and open the next surface in one tick (Schedule → back to New):
+    // a switch — the entry is replaced, never stepped back over. New's strip
+    // still asks for "templates"; the store opens Schedule.
     useUi.getState().openDialogFor("templates", "new");
+    expect(useUi.getState().openDialog).toBe("schedule");
     useUi.getState().closeDialog();
     useUi.getState().openDialogFor("new-session");
     await Promise.resolve();
-    expect(calls.slice(-2)).toEqual(["push /#templates", "replace /#new"]);
+    expect(calls.slice(-2)).toEqual(["push /#schedule", "replace /#new"]);
     expect(useUi.getState().openDialog).toBe("new-session");
     off();
   });

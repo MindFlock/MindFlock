@@ -77,6 +77,8 @@ const SLIDES: Slide[] = [
       <>
         <b>Intake</b> turns tickets, PRs and issues into sessions (Jira, Linear,
         GitHub Issues, Shortcut, Asana). <b>Verify</b>: {VERIFY_BLURB}.{" "}
+        <b>Schedule</b> starts a saved setup by itself — nightly, weekdays or
+        on any cron.{" "}
         <b>⚙ Customize</b> at the bottom of the sidebar adds more bars — like{" "}
         <b>Prompts</b>, your saved text one click from any session.
       </>

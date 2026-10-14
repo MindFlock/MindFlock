@@ -1,7 +1,7 @@
 /** Intake → Auto-start's last section: templates that start a session on
  * their own (a schedule). The rest of the tab is what tickets, PRs and issues
  * will start; a nightly template is the same kind of answer to "what starts
- * by itself?", and it was only visible inside the Templates dialog.
+ * by itself?" — its home is Schedule (the top bar), linked from here.
  *
  * Each row: name · when · next run, with Run now (the same call as the
  * Templates card and the palette's "Run template: …"). */
@@ -9,6 +9,7 @@
 import { useEffect, useState } from "react";
 import {
   ensureTemplates,
+  hasSchedule,
   runProblem,
   scheduleLabel,
   TEMPLATES_CHANGED,
@@ -38,16 +39,23 @@ export function scheduledRows(
   now: Date = new Date()
 ): ScheduledRow[] {
   return templates
-    .filter((t) => !!t.schedule?.at)
+    // A cron schedule is a schedule too (`.at` alone left every one out).
+    .filter(hasSchedule)
     .map((t) => {
       const info = status.runs[t.name.trim().toLowerCase()] || {};
-      const next =
-        !status.runs_here && status.runs_on
+      const next = t.schedule?.paused
+        ? "paused"
+        : !status.runs_here && status.runs_on
           ? "starts on " + status.runs_on
           : info.next_at
             ? "next " + whenLabel(info.next_at, now)
             : "";
-      return { name: t.name, when: scheduleLabel(t.schedule), next, problem: runProblem(t) };
+      return {
+        name: t.name,
+        when: info.schedule_label || scheduleLabel(t.schedule),
+        next,
+        problem: runProblem(t),
+      };
     });
 }
 
@@ -78,10 +86,10 @@ export function ScheduledTemplates() {
         <button
           type="button"
           className="test-btn ik-queue-goto"
-          onClick={() => useUi.getState().openDialogFor("templates")}
-          title="Open Templates to change or stop a schedule"
+          onClick={() => useUi.getState().openDialogFor("schedule")}
+          title="Open Schedule to change, pause or skip a schedule"
         >
-          Open Templates ›
+          Open Schedule ›
         </button>
       </div>
       {rows.map((r) => (

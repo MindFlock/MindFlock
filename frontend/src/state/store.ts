@@ -121,8 +121,13 @@ export type DialogName =
   | "shortcuts"
   // Repo-level red zones + Plan-first, managed outside any one session.
   | "red-zones"
-  // The templates manager (TemplatesDialog): New → Templates → Manage…, or
-  // the palette's "Templates…". dialogTarget "new" = reopen New on close.
+  // Schedule (TemplatesDialog): the top bar's Schedule (Alt+S), New's
+  // templates strip, the palette's "Schedule…" / "Templates…". dialogTarget
+  // "new" = reopen New on close (lib/templates' readTemplatesTarget).
+  | "schedule"
+  // The surface's name before it was Schedule. Still accepted by
+  // openDialogFor (old call sites, a saved #templates link) and opened as
+  // "schedule" — the store never holds it.
   | "templates"
   // The one dialog every extension's dialog surfaces share; the extension id +
   // surface ride in dialogTarget ("<ext>:<surface>[:<ref>]").
@@ -675,7 +680,8 @@ export const useUi = create<UiState>((set, get) => ({
     save("cs_lasttab", lastTab);
     set({ lastTab });
   },
-  openDialogFor: (name, target = null) => set({ openDialog: name, dialogTarget: target }),
+  openDialogFor: (name, target = null) =>
+    set({ openDialog: name === "templates" ? "schedule" : name, dialogTarget: target }),
   closeDialog: () => set({ openDialog: null, dialogTarget: null }),
   setPrBase: (repo, base) => {
     if (!repo) return;

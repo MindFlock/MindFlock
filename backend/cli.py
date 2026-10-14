@@ -1565,7 +1565,7 @@ def _cmd_templates(args: argparse.Namespace) -> int:
         return 0
     items = [t for t in data.get("templates") or [] if isinstance(t, dict)]
     if not items:
-        print("no templates — save one from the New dialog (Templates → Manage…)")
+        print("no templates — save one from the New dialog (Save as template…)")
         return 0
     runs = data.get("runs") if isinstance(data.get("runs"), dict) else {}
     rows = []
@@ -1579,11 +1579,16 @@ def _cmd_templates(args: argparse.Namespace) -> int:
             last = "skipped: " + str(info["last_skip"])
         elif info.get("last_error"):
             last = "failed: " + str(info["last_error"])
+        nxt = _fmt_when(info.get("next_at"))
+        if info.get("paused"):
+            nxt = "paused"
+        elif info.get("skipping_at"):
+            nxt += " (skipping %s)" % _fmt_when(info.get("skipping_at"))
         rows.append(
             [
                 name,
                 str(info.get("schedule_label") or ""),
-                _fmt_when(info.get("next_at")),
+                nxt,
                 str(t.get("autopilot") or ""),
                 last,
             ]

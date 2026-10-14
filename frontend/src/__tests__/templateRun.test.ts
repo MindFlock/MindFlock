@@ -25,8 +25,10 @@ const {
   TemplatesDialogView,
   cronPreviewLine,
   formFromTemplate,
+  cadenceLine,
   historyLine,
-  runLine,
+  lastLine,
+  nextLine,
   templateBody,
   templateMeta,
   templatesReducer,
@@ -106,12 +108,17 @@ describe("Templates cards", () => {
     expect(html).toContain("Run now and schedules need a folder.");
     expect(html).toContain(">Add one<");
   });
-  it("every card has Schedule… — the schedule is reachable from the list", () => {
+  it("every card reaches its schedule — Schedule… or, on a scheduled one's strip, Change schedule", () => {
     const html = view();
-    expect(html.match(/tpl-btn tpl-sched"/g)?.length).toBe(2);
-    // A scheduled one says "Schedule" (change it), an unscheduled "Schedule…".
-    expect(html).toContain(">Schedule<");
-    expect(html).toContain(">Schedule…<");
+    expect(html.match(/tpl-sched"/g)?.length).toBe(2);
+    const sched = html.slice(html.indexOf('data-name="nightly"'), html.indexOf('data-name="loose"'));
+    expect(sched).toContain('class="sch-strip"');
+    expect(sched).toContain(">Change schedule<");
+    expect(sched).not.toContain(">Schedule…<");
+    const loose = html.slice(html.indexOf('data-name="loose"'));
+    expect(loose).toContain('class="tpl-btn tpl-sched"');
+    expect(loose).toContain(">Schedule…<");
+    expect(loose).not.toContain("sch-strip");
   });
   it("Schedule… opens the editor with the schedule on", () => {
     expect(templatesReducer(TEMPLATES_UI_INIT, { t: "schedule", name: "x" })).toEqual({
@@ -125,12 +132,11 @@ describe("Templates cards", () => {
     const next = new Date(2026, 9, 13, 21, 0).getTime() / 1000;
     const last = new Date(2026, 9, 12, 21, 0).getTime() / 1000;
     const st = { runs_here: true, runs_on: "" };
-    expect(
-      runLine(T[0], { next_at: next, last_at: last, last_trigger: "schedule", tz: "EDT" } as never, st, now)
-    ).toBe("Weekdays at 21:00 EDT · next today 21:00 · last yesterday 21:00 (scheduled)");
-    expect(runLine(T[1], { last_at: last, last_trigger: "manual" }, st, now)).toBe(
-      "last yesterday 21:00 (by hand)"
-    );
+    const info = { next_at: next, last_at: last, last_trigger: "schedule", tz: "EDT" } as never;
+    expect(cadenceLine(T[0], info)).toBe("Weekdays at 21:00 EDT");
+    expect(nextLine(T[0], info, st, now)).toBe("Next today 21:00 · in 9h");
+    expect(lastLine(info, now)).toBe("Last run yesterday 21:00 · scheduled");
+    expect(lastLine({ last_at: last, last_trigger: "manual" }, now)).toBe("Last run yesterday 21:00 · by hand");
   });
   it("a template can carry an autopilot depth, stored only when on", () => {
     const base = { ...formFromTemplate(null), name: "n", repo_path: "/r", prompt: "p" };
@@ -144,14 +150,21 @@ describe("Templates cards", () => {
     const now = new Date(2026, 9, 13, 12, 0);
     const next = new Date(2026, 9, 13, 21, 0).getTime() / 1000;
     const last = new Date(2026, 9, 12, 21, 0).getTime() / 1000;
-    expect(
-      runLine(T[0], { next_at: next, last_at: last, last_session: "nightly-oct12" }, { runs_here: true, runs_on: "" }, now)
-    ).toBe("Weekdays at 21:00 · next today 21:00 · last yesterday 21:00 → nightly-oct12");
-    // fired by another device in the group: say which, not a next time
-    expect(runLine(T[0], { next_at: next }, { runs_here: false, runs_on: "mac-mini" }, now)).toBe(
-      "Weekdays at 21:00 · starts on mac-mini"
+    const st = { runs_here: true, runs_on: "" };
+    expect(cadenceLine(T[0], {})).toBe("Weekdays at 21:00");
+    expect(nextLine(T[0], { next_at: next }, st, now)).toBe("Next today 21:00 · in 9h");
+    expect(lastLine({ last_at: last, last_session: "nightly-oct12" }, now)).toBe(
+      "Last run yesterday 21:00 → nightly-oct12"
     );
-    expect(runLine(T[1], {}, { runs_here: true, runs_on: "" }, now)).toBe("");
+    // fired by another device in the group: say which, not a next time
+    expect(nextLine(T[0], { next_at: next }, { runs_here: false, runs_on: "mac-mini" }, now)).toBe(
+      "Starts on mac-mini"
+    );
+    // paused says so, whatever the server's next time
+    expect(nextLine({ ...T[0], schedule: { ...T[0].schedule, paused: true } }, { next_at: next }, st, now)).toBe(
+      "Paused"
+    );
+    expect(lastLine({}, now)).toBe("");
   });
   it("Starting… while a run is in flight; every Run now waits", () => {
     const html = view({ running: "nightly" });
@@ -247,10 +260,13 @@ describe("cron schedules, autopilot and history", () => {
   });
   it("the card uses the server's words for a cron schedule and says what autopilot does", () => {
     const now = new Date(2026, 9, 14, 10, 0);
-    expect(runLine(CRON, { schedule_label: "Every 30 minutes" }, { runs_here: true, runs_on: "" }, now)).toBe(
-      "Every 30 minutes"
+    expect(cadenceLine(CRON, { schedule_label: "Every 30 minutes" })).toBe("Every 30 minutes");
+    expect(cadenceLine(CRON, {})).toBe("Cron */30 * * * *");
+    // a cron schedule has no single "at", so no zone tacked on
+    expect(cadenceLine(CRON, { schedule_label: "Every 30 minutes", tz: "EDT" } as never)).toBe("Every 30 minutes");
+    expect(nextLine(CRON, { next_at: now.getTime() / 1000 + 25 * 60 }, { runs_here: true, runs_on: "" }, now)).toBe(
+      "Next today 10:25 · in 25 min"
     );
-    expect(runLine(CRON, {}, { runs_here: true, runs_on: "" }, now)).toBe("Cron */30 * * * *");
     expect(scheduleLabel({ cron: "0 9 * * 1" })).toBe("Cron 0 9 * * 1");
     expect(templateMeta(CRON)).toContain("then: open a PR");
   });

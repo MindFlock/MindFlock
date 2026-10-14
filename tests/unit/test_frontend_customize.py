@@ -108,8 +108,21 @@ def test_verify_always_shows_in_the_top_bar():
     assert (
         src.index('id="intake-btn"')
         < src.index('id="verify-btn"')
+        < src.index('id="schedule-btn"')
         < src.index('id="settings-btn"')
     )
+
+
+def test_schedule_is_on_the_top_bar_and_sized_like_its_neighbours():
+    """The owner couldn't find templates ("only through the command prompt"):
+    Schedule sits on the bar between Verify and Settings, opens on Alt+S, and
+    wears the worded items' type (by id in TopBar.css, or it reads as fine
+    print beside them)."""
+    src = _code("components/TopBar.tsx")
+    assert 'ui.openDialogFor("schedule")' in src
+    assert 'keys("schedule")' in src
+    css = (_SRC / "components" / "TopBar.css").read_text()
+    assert "#topbar #schedule-btn," in css
 
 
 def test_the_bell_hosts_the_waiting_rows_and_drops_its_toggle():

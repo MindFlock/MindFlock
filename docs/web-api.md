@@ -2257,8 +2257,9 @@ new-session templates (`~/.mindflock/session_templates.json`), the ONE list
 behind the New dialog's Templates strip, its Task box's "Insert a saved
 prompt…" list and the sidebar Prompts bar (a template that is only a prompt is a saved
 prompt). Settings sync carries it between devices as the `store:templates`
-unit, keyed by name. Managed by the SPA's own Templates dialog (New →
-Templates → Manage…, or the palette's "Templates…"); the addon ships no
+unit, keyed by name. Managed by the SPA's **Schedule** surface (the top
+bar's Schedule, `Alt+S`; New's "All templates…"; the palette's "Schedule…" /
+"Templates…"); the addon ships no
 frontend module any more (`module: null`, `builtin_ui: true`). A browser's
 legacy per-browser saved prompts (`localStorage mindflock.prompt_presets`)
 are pushed here once on its first load, deduped by name+body (a same-name,
@@ -2266,8 +2267,8 @@ different-body clash is kept as `<name> (saved prompt)`):
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/templates` | `{templates: [{name, program, repo_path, prompt, provisioned, workspace_strategy, in_place, init_repo, schedule?, autopilot?}], runs: {<name lower>: {next_at, last_at, last_session, last_trigger, last_error, schedule_label, history, last_skip?, last_skip_at?, tz?}}, runs_here, runs_on, tz}` — `tz` is this device's time-zone abbreviation (`EDT`), which a schedule's `at` is in (on a scheduled template's row, as of its next run); `runs` is THIS device's record of each template's runs (epoch seconds; only templates with a schedule or a past run appear); `schedule_label` is the schedule in words ("Every 30 minutes", "Weekdays at 21:00", else `Cron <expr>`); `history` the last 20 runs, newest first (`{at, trigger, session?, autopilot?, error?, skipped?}`); `last_skip` is set when a scheduled run was skipped after the last start or failure; `runs_here` says whether schedules fire on this device, `runs_on` names the device that does when it isn't this one |
-| POST | `/api/templates` | Save/overwrite a template (upsert by name, ignoring case) → `{template, templates}`; owner-only (`may_configure`). `schedule` (optional): `{at: "HH:MM", days: "daily" \| "weekdays"}` or `{cron: "<minute hour day month weekday>"}` (standard 5-field cron, names, ranges, steps and `@daily`-style macros), local time; 400 for a bad time/days/expression, one that fires more often than every 15 minutes, and for a scheduled template with no folder (`repo_path`, unless `provisioned`) or no prompt. `autopilot` (optional): `commit` \| `push` \| `pr` — each Run now / scheduled run is armed to carry its work that far when its turn ends (400 for anything else). A template without a schedule / autopilot stores no such key |
+| GET | `/api/templates` | `{templates: [{name, program, repo_path, prompt, provisioned, workspace_strategy, in_place, init_repo, schedule?, autopilot?}], runs: {<name lower>: {next_at, last_at, last_session, last_trigger, last_error, schedule_label, history, last_skip?, last_skip_at?, paused?, skipping_at?, tz?}}, runs_here, runs_on, tz}` — `tz` is this device's time-zone abbreviation (`EDT`), which a schedule's `at` is in (on a scheduled template's row, as of its next run); `runs` is THIS device's record of each template's runs (epoch seconds; only templates with a schedule or a past run appear); `schedule_label` is the schedule in words ("Every 30 minutes", "Weekdays at 21:00", else `Cron <expr>`); `history` the last 20 runs, newest first (`{at, trigger, session?, autopilot?, error?, skipped?}`); `last_skip` is set when a scheduled run was skipped after the last start or failure; `paused: true` for a paused schedule (its `next_at` is null); `skipping_at` names the slot "Skip next" will pass over (`next_at` is then the one after it); `runs_here` says whether schedules fire on this device, `runs_on` names the device that does when it isn't this one |
+| POST | `/api/templates` | Save/overwrite a template (upsert by name, ignoring case) → `{template, templates}`; owner-only (`may_configure`). `schedule` (optional): `{at: "HH:MM", days: "daily" \| "weekdays"}` or `{cron: "<minute hour day month weekday>"}` (standard 5-field cron, names, ranges, steps and `@daily`-style macros), local time, either one optionally with `paused: true` (keeps the cadence, starts nothing) and `skip_until: <epoch>` (every slot at or before it passes without a session — the Schedule surface's "Skip next"); both are stored only when set; 400 for a bad time/days/expression, one that fires more often than every 15 minutes, and for a scheduled template with no folder (`repo_path`, unless `provisioned`) or no prompt. `autopilot` (optional): `commit` \| `push` \| `pr` — each Run now / scheduled run is armed to carry its work that far when its turn ends (400 for anything else). A template without a schedule / autopilot stores no such key |
 | GET | `/api/templates/cron-preview?expr=` | What a cron field means, with the save's own rules: `{ok: true, cron, label, next: [3 epochs]}` or `{ok: false, error}` |
 | DELETE | `/api/templates/{name}` | Remove a template → `{deleted: bool}` (false for a name that wasn't there); owner-only |
 | POST | `/api/templates/{name}/run` | **Run now** (also `mindflock run <name>`): create a fresh session from the template, its prompt already sent, through the same path as `POST /api/instances` → its **202** body (the new row + `prompt_delivery`), then arm its `autopilot` (a template with one never runs in place: it gets its own worktree). Titled `<template slug>-<mon><day>` (`rivian-update-oct13`; `-2`, `-3`… when a session of that name exists or, for a worktree template, its branch is still in the repo from a closed run). **404** unknown template, **400** for one with no folder (it would run in the server's own directory) or whatever the create refuses. Not owner-only — starting a session isn't configuring anything |
@@ -2284,7 +2285,10 @@ is one slot); a scheduled run is **skipped** — recorded in the history,
 working, waiting on a question or at a usage limit (Run now always starts);
 a scheduled run that can't start emits `template.run_failed`; the slot is recorded (`last_slot`) before the session is
 created, so a slot never fires twice; after downtime only the most recent
-missed slot fires; a schedule counts only from when it was saved (saving 21:00
+missed slot fires; a **paused** schedule spends its slots without firing,
+and one with `skip_until` spends every slot up to it the same way (the
+history notes *you skipped this run*), so resuming never replays a slot that
+fell inside the pause — neither switch re-arms the schedule; a schedule counts only from when it was saved (saving 21:00
 at 22:00 waits for tomorrow; changing the time or days re-arms it). In a group
 of devices only the automation device (the one running PR review and issue
 handling) fires — the others mark each slot spent without firing, so a device
