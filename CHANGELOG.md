@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+A pass over New, Intake, Verify, Settings and the first hour, judged by
+fresh-eyes testers who could only use the UI (never the code or docs).
+
+### Added
+
+- **Templates are easy to reach and can run on a schedule from anywhere.**
+  The template strip shows on the New dialog's first page; each template has
+  ▶ Run now and ⏰ Schedule… right on it. "Schedule a session…" is in the
+  command palette (also found by "recurring", "cron", "nightly"), and
+  scheduled templates are listed under Intake → Auto-start.
+- **Verify says yes or no.** Every checklist leads with a verdict (Verified
+  on branch, Verified live, Failed, 2 of 3 checked, Agent checking…) and the
+  list is grouped Failed · Needs you · In progress · Verified. The same
+  verdict shows as a chip on the session's sidebar row and pane header.
+  **Check now** runs a checklist before merge without losing the after-merge
+  check. You can ask for a checklist for any branch (even one no session was
+  on), or start an empty one and write the steps yourself. Failures are red,
+  turn the top-bar badge red, and reach the bell.
+- **Start a ticket in the repo you choose.** On a source with several repos,
+  each ticket row shows where it will go and why, and its Options have a
+  Repo picker.
+- **Search settings**, from a box at the top of Settings or the command
+  palette ("github", "worktree", "parallel", "phone" all land on the right
+  control).
+- **Each surface has a URL**, so the browser's Back closes New, Intake,
+  Verify, Settings or Templates instead of leaving the app.
+- **Light/Dark in Settings → Appearance**, and a first launch follows the
+  system's colour scheme.
+
+### Changed
+
+- **One agent card everywhere** (Connections, Settings → Agents, Custom
+  agents, Setup): the agent's status and its one next step — Install, Sign
+  in, or Test — with Test answering "Signed in as you@example.com". The
+  sign-in window describes what the agent's terminal really asks. A session
+  whose agent isn't signed in says **Not signed in — Sign in**, not "Idle" or
+  "claude exited 1"; Setup's "Start your first agent" ticks only once the
+  agent has actually started working.
+- **A calm first hour.** Until you have a few sessions the sidebar shows
+  sessions, New and Setup, nothing else; it no longer flashes the full
+  layout on load. The welcome tour opens once (per person, synced), and
+  setup shows one count everywhere.
+- **One menu per session** (the row's ⋯ and the pane's ⋯ are the same, in
+  groups), **Commit…** only when there is something to commit, the session's
+  task in the pane header ("Task: …", kept on the server) and a visible
+  Pause. Names are shortened in the middle, so "-2" stays visible.
+- **New:** a git folder defaults to a separate worktree and shows the branch
+  it will create (the real "-2" name when the repo is busy, and who else is
+  in it); Folder → Agent → Task → Create, the rest under More options; what
+  you typed is never thrown away; "Create session" starts straight away;
+  agents that aren't installed are marked and refused; a blank name is taken
+  from the task; "Save as template…" saves the whole form.
+- **Intake:** a new ticket source auto-starts nothing until you pick a state
+  or label (existing sources are unchanged); text saves as you type and only
+  then says "Saved ✓"; one **Pause intake** switch, remembered on the server;
+  tabs named **GitHub PRs** and **GitHub issues**; the PR feature is "Auto-
+  address review comments" and starts off for new setups; one **Start** verb
+  on every row; plain reasons when a ticket is skipped.
+- **Settings:** Notifications opens with "Where alerts go", alerts are in a
+  few plain groups with one-line descriptions, and "a session finishes its
+  work" is on for anyone who never changed their alerts; Connections leads
+  with your agent, GitHub and tracker; Connect GitHub is three numbered steps
+  with the result shown in the dialog; phone alerts keep the same topic;
+  Workspace shows where worktrees live (copyable, checked as you type); basic
+  mode shows no power-user controls; every save shows "✓ Saved".
+- **Words:** one vocabulary across the app — *agent* (never "Agent CLI" or
+  "provider"), *auto-start* (never "ingestion"), *checklist* and *step*
+  (never "plan").
+
+### Fixed
+
+- Aider (and other API-key agents) no longer read "Connected" without a key.
+- Notification rules no longer show raw `{detail}` placeholders.
+- The command palette no longer offers "Join with code W0RK-TREE" for
+  ordinary words, and never makes Push/Merge/Delete the Enter default.
+- Esc closes the Shortcuts sheet; top-bar tooltips show the shortcut that
+  actually works (Alt+N in a browser tab).
+
 ## [0.8.6] - 2026-10-13
 
 ### Added
