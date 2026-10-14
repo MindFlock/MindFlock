@@ -25,7 +25,14 @@ import {
   type Preset,
 } from "../../lib/presets";
 
-export function PromptsPanel() {
+export function PromptsPanel({
+  onUse,
+}: {
+  /** Opened from New's Task box: a click puts the prompt in that Task box
+   * (through this) instead of pasting it into a running session — there is
+   * no "Paste into" while you are making a new one. */
+  onUse?: (prompt: string) => void;
+} = {}) {
   const closeDialog = useUi((s) => s.closeDialog);
   const focused = useUi((s) => s.focused);
   const railOrder = useUi((s) => s.railOrder);
@@ -125,11 +132,13 @@ export function PromptsPanel() {
                   type="button"
                   className="prompt-card-main"
                   title={
-                    target === ALL_RUNNING
-                      ? "Paste into every running session"
-                      : "Paste into the chosen session"
+                    onUse
+                      ? "Put it in the new session's Task box"
+                      : target === ALL_RUNNING
+                        ? "Paste into every running session"
+                        : "Paste into the chosen session"
                   }
-                  onClick={() => pastePrompt(p.prompt)}
+                  onClick={() => (onUse ? onUse(p.prompt) : pastePrompt(p.prompt))}
                 >
                   <span className="prompt-card-name">{p.name}</span>
                 </button>
@@ -189,6 +198,7 @@ export function PromptsPanel() {
         if (pop) setPop(null);
       }}
     >
+      {!onUse && (
       <div className="cz-tab-head">
         <label className="prompts-target-wrap" onClick={(e) => e.stopPropagation()}>
           <span className="muted">Paste into</span>
@@ -208,9 +218,11 @@ export function PromptsPanel() {
           </select>
         </label>
       </div>
+      )}
       <p className="prompts-hint">
-        Click a prompt to paste it into the chosen session — nothing is sent until you press Enter
-        there.
+        {onUse
+          ? "Click a prompt to put it in the new session's Task box."
+          : "Click a prompt to paste it into the chosen session — nothing is sent until you press Enter there."}
       </p>
       <div id="prompts-list" ref={listRef}>
         {section("Built-in", BUILTIN_PRESETS, false, "b")}
@@ -290,7 +302,16 @@ export function PromptsDialog() {
             Close
           </button>
         </div>
-        <PromptsPanel />
+        <PromptsPanel
+          onUse={
+            target === "new"
+              ? (text) => {
+                  newSessionResume.prompt = text;
+                  closeDialog();
+                }
+              : undefined
+          }
+        />
       </div>
     </Modal>
   );
