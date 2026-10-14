@@ -16114,6 +16114,58 @@ button.ct-chip:hover {
   border-color: var(--accent);
 }
 
+/* A cron schedule: the expression field, and the server's reading of it
+   ("Every 30 minutes — next today 10:30, …") or why it can't be saved. */
+#tpl-cron {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  min-width: 14ch;
+  flex: 1 1 14ch;
+  max-width: 28ch;
+}
+
+.tpl-cron-preview {
+  font-size: 11.5px;
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+}
+
+/* "When a run's turn ends [Open a PR] — Run now and scheduled runs": one row. */
+.tpl-editor label.tpl-autopilot {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  color: var(--text);
+}
+
+.tpl-run-skip {
+  font-size: 11.5px;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+/* "Recent runs (n)": the last runs, newest first. */
+.tpl-history {
+  font-size: 11.5px;
+  margin-top: 4px;
+}
+
+.tpl-history summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.tpl-history ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.tpl-history li {
+  overflow-wrap: anywhere;
+}
+
 .tpl-row-actions {
   display: flex;
   justify-content: flex-end;

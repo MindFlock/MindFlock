@@ -441,6 +441,38 @@ NOTIFY_RULES: List[dict] = [
         "priority": 4,
         "tags": ["computer"],
     },
+    {
+        # A template's SCHEDULED run couldn't start (no folder any more, the
+        # repo moved, no free name). It fired with nobody watching — at 21:00
+        # or overnight — so without a push the failure waits on a card in the
+        # Templates dialog until someone happens to look. Default-on: only a
+        # user with a schedule can ever get one.
+        "id": "template_run_failed",
+        "label": "A scheduled template run can't start",
+        "event": "template.run_failed",
+        "old": None,
+        "new": None,
+        "title": "Scheduled run failed",
+        "body": "{detail}",
+        "default_enabled": True,
+        "priority": 4,
+        "tags": ["warning"],
+    },
+    {
+        # A scheduled run skipped because the previous one hasn't finished.
+        # Opt-in: a skip is the guard working (it stops a slow job stacking
+        # sessions), and the card already says so.
+        "id": "template_run_skipped",
+        "label": "A scheduled template run is skipped (previous run unfinished)",
+        "event": "template.run_skipped",
+        "old": None,
+        "new": None,
+        "title": "Scheduled run skipped",
+        "body": "{detail}",
+        "default_enabled": False,
+        "priority": 3,
+        "tags": ["hourglass"],
+    },
 ]
 
 #: Rule fields the client never needs: opt-in/opt-out semantics (it gets the
