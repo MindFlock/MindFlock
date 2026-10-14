@@ -116,7 +116,7 @@ export function TemplatesStrip({
           type="button"
           id="new-templates-manage"
           className="linklike"
-          title="Run, schedule, edit and delete templates — you come back here on Close"
+          title="Run, schedule, edit and delete templates in Schedule — you come back here on Close"
           onClick={() => useUi.getState().openDialogFor("templates", templatesTarget({ fromNew: true, schedule: null }))}
         >
           All templates…

@@ -32,7 +32,8 @@ keys, event names and MCP tool names keep their older names (`/api/instances`,
 the theme toggle 🌙 and the notifications 🔔 bell, whose one amber badge counts
 everything that needs you (see [Notifications](#notifications-)). Then the menu,
 which carries only the daily loop — **New**, **Intake** (`Alt+I`; see
-[Intake](#intake)), **Verify** (`Alt+V`) and **Settings** — and ends in a
+[Intake](#intake)), **Verify** (`Alt+V`), **Schedule** (`Alt+S`; see
+[Schedule](#schedule)) and **Settings** — and ends in a
 monochrome magnifier icon (`#palette-btn`, tooltip *Command palette — Ctrl+P /
 ⌘P*) that opens the command palette (below). **Intake** sits beside **New**
 because both are about starting sessions — one from scratch, one from what came
@@ -47,6 +48,17 @@ what it counts (*3 checklists need you or failed — 1 failed*). Everywhere Veri
 (this tooltip, the palette, the tour, the shortcut sheet) it is one sentence,
 `lib/vocab.ts`'s *check that pushed changes work*.
 
+**Schedule** is always on the bar too (`#schedule-btn`, tooltip *Schedule —
+templates that start sessions on their own (Alt+S)*). Its only mark is a red
+count of the scheduled templates whose **last run failed** — exactly the
+Schedule cards that say *Last run failed*, so it clears when the next run
+starts fine — with the tooltip's second line saying so (*1 scheduled
+template's last run failed*). A schedule that is merely set, a paused one, or
+a run skipped because the previous one was still going gets no mark: those
+are the feature working. It refreshes on `template.run_started` /
+`template.run_failed` (`lib/useScheduleStatus.ts`). Under 520 px the worded
+items close up so the palette icon stays on the bar.
+
 **The bar's tooltips read their shortcuts off the live keymap**
 (`shortcutLabels`), rebinds included — and in a browser tab they leave out
 keys the browser keeps for itself, so **New** says *Alt+N* there (Ctrl+N opens
@@ -54,8 +66,9 @@ a browser window) and *Ctrl+N / Alt+N* in the desktop app. Under 560 px the
 wordmark steps aside rather than being clipped.
 
 **Each surface has a URL.** Opening **New**, **Intake**, **Verify**,
-**Settings** or **Templates** puts it in the hash (`#new`, `#intake/tickets`,
-`#verify`, `#settings/accounts`, `#templates`) with one history entry, so the
+**Schedule** or **Settings** puts it in the hash (`#new`, `#intake/tickets`,
+`#verify`, `#schedule`, `#settings/accounts`; an old `#templates` link opens
+Schedule) with one history entry, so the
 browser's **Back** closes it instead of leaving the app, and a link (or a
 reload) opens it (`lib/surfaceHash.ts`). Moving from one surface to another
 replaces that entry, so Back still lands on the grid; closing a surface in the
@@ -237,8 +250,9 @@ first and the jump rows last: **New session…**, then the dialog openers — Op
 Intake (plus **Intake: Tickets** / **Intake: Pull requests** / **Intake:
 Issues**, so typing "issues" lands on that queue instead of on a dialog you then
 have to navigate), **Verify — check that pushed changes work**, **Customize…**, **Prompts…** (*manage saved prompts*),
-**Templates…** (*manage saved New-session setups*), **Schedule a session…**
-(opens Templates on a new template with **Run on a schedule** ticked), one **Run template:
+**Schedule…** (`Alt+S`; also on the short menu), **Templates…** (*saved setups — in
+Schedule*, the name it had, kept so the word still finds it), **Schedule a session…**
+(opens Schedule on a new template with **Run on a schedule** ticked), one **Run template:
 <name>** (*fresh session, prompt sent*) per template that has a folder,
 **Assistant instructions (agent file)…**,
 **Recently closed…**, Open Settings / Doctor / **Open Setup checklist**,
@@ -261,8 +275,8 @@ terminal has keyboard focus — the same VSCode trade-off as its quick-open/pale
 keys.
 
 The palette opens on a **short menu**, not the whole index: New session, the
-sessions you last looked at, Intake, Verify, Setup, Settings, Tour, Keyboard
-shortcuts, and **All commands…** (`palette/paletteRank.ts`). Typing matches
+sessions you last looked at, Intake, Verify, Schedule, Setup, Settings, Tour,
+Keyboard shortcuts (the first nine), and **All commands…** (`palette/paletteRank.ts`). Typing matches
 labels and a few plain synonyms (*help* finds the shortcuts and the tour,
 *install* finds Setup and the Doctor). An **outward verb** — Commit, Push,
 Open PR, Merge, Pause, Close, Delete — is never the `Enter` default: typing a
@@ -1790,6 +1804,7 @@ built-in alias.
 | `Ctrl+N` / `Alt+N` | New-session dialog |
 | `Alt+I` | Intake — tickets, PRs and issues waiting to become sessions |
 | `Alt+V` | Verify — pushed changes nobody has checked |
+| `Alt+S` | Schedule — templates that start sessions on their own |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` (also `Ctrl+PgDn` / `Ctrl+PgUp`) | Next / previous window — sessions and open windows (assistant, logs, extension panes), one list |
 | `Ctrl+1…9` / `Alt+1…9` | Focus the Nth sidebar row — a session or a window, matching the number badges |
 | `/` | Focus the sidebar session filter (when it's showing) |
@@ -1947,7 +1962,7 @@ fast-track — stored as the template's autopilot (*Commit*, *Commit + push* or
 Saving over a template that has a schedule keeps the schedule. The strip
 appears (or updates) at once — no reopen — and the toast (6 s, clickable)
 says where: *▶ runs it and ⏰ schedules it, in Templates at the top of New.
-Click to open Templates.*
+Click to open Schedule.*
 
 **One Templates list.** The **Templates** strip (*Templates — ▶ runs one now ·
 ⏰ schedules it · its name fills the form*) is on **both pages**: under the
@@ -1959,15 +1974,45 @@ also moves to the form; a template with no task takes the sentence); the Name
 is left empty so the session is named from its task. **▶** starts a new
 session from it now (`POST /api/templates/{name}/run`, greyed with the reason
 when it has no folder) and New steps aside, keeping your draft; **⏰** opens
-the Templates dialog on that template's editor with its schedule on.
-**All templates…** opens the **Templates** dialog (also the palette's
-**Templates…**). ▶ and ⏰ are this device's: they are not drawn when the
+[Schedule](#schedule) on that template's editor with its schedule on.
+**All templates…** opens **Schedule** (also the top bar's **Schedule**, `Alt+S`,
+and the palette's **Schedule…** / **Templates…**). ▶ and ⏰ are this device's: they are not drawn when the
 session would run on another device.
-Closing that dialog brings New back **as it was left**, with the list
-reloaded. The dialog opens on one line: *A template is a saved session setup —
-folder, agent and task — that starts a **new** session: now, or on a schedule.
-To send text to a session that's already running, use Prompts.* Each card
-has **▶ Run now**, **Schedule…**, **Edit** (inline: Name, Agent — a picker of
+Closing Schedule brings New back **as it was left**, with the list
+reloaded.
+
+<a id="schedule"></a>**Schedule** (top bar, `Alt+S`, `#schedule`; `TemplatesDialog.tsx`, store key
+`schedule` — `openDialogFor("templates")` still opens it) is the home of
+templates and of what starts by itself. It opens on two lines: *Templates
+start a **new** session — when you run one, or by themselves on a schedule.*
+and *To send text to a session that's already running, use Prompts.*, with
+**+ New template** and **Close** in the header. Top to bottom:
+
+- **Next** — one band: *NEXT nightly-deps in 2h — today 21:00*, the soonest
+  run of any schedule that isn't paused (or *Schedules start on mac-mini —
+  the device that runs automation.* when another device fires them).
+- **Scheduled (n)** — the scheduled templates, soonest next run first, then
+  any with no next run, paused ones last. Each card's **strip** holds its
+  cadence in this device's zone (*Every day at 21:00 EDT*, *Every 4 hours*),
+  when it runs next (*Next today 21:00 · in 2h*, *Paused*, *Starts on
+  mac-mini*) and its three switches: **Change schedule** (the editor, schedule
+  on), **Skip next** (*Let today 21:00 pass without a session — the one after
+  runs as usual*; the card then says *Skipping today 21:00 — you asked to
+  skip it* and offers **Undo skip**) and **Pause** / **Resume** (keeps the
+  cadence, starts nothing; the cadence is struck through and the strip says
+  *Paused*). Under it: the last run (*Last run yesterday 21:00 · scheduled →
+  nightly-deps-oct13*), or *Last run failed: …* (the card's border turns red,
+  and the top bar counts it), or *Skipped …: the previous run is still
+  working*, and the **Recent runs (n)** fold. With nothing scheduled the
+  section says *Nothing runs by itself yet — Schedule… on a setup below
+  starts it every day, weekday or on any cron.*
+- **Saved setups (n)** *run now or add a schedule* — the templates without a
+  schedule, each with **▶ Run now**, **Schedule…**, **Edit** and **Delete**.
+
+Every card has **▶ Run now**, **Edit** and **Delete** at its top right.
+With no templates at all the surface is one dashed panel: *Save a session
+setup once, then start it with one click — or every night by itself.* and a
+**Create a template** button (the new-template editor). **Edit** (inline: Name, Agent — a picker of
 this device's agents, *Your default agent* first — Folder *— needed to Run now
 or schedule*, Task, **Works in** — the New form's own controls and words:
 **Separate worktree** `recommended` with **Provision the worktree** (and its
@@ -1984,11 +2029,11 @@ Templates live on the server (`/api/templates`, synced between devices).
 this template*) starts a fresh session — the template's agent, folder and
 workspace — with its Task already sent, titled after the template and the date
 (`rivian-update-oct13`, `-2` for a second run that day, so a nightly
-template's sessions sort together), and focuses it (the dialog closes). The
+template's sessions sort together), and focuses it (Schedule steps aside). The
 palette offers the same as **Run template: <name>**. A template with no folder
 can't start a session on its own: Run now is visibly disabled and the card
 says *Run now and schedules need a folder.* **Add one** (opens Edit); the
-palette leaves it out. **Schedule…** on a card opens the editor with **Run on
+palette leaves it out. **Schedule…** (or a scheduled card's **Change schedule**) opens the editor with **Run on
 a schedule** already ticked: **Every day** / **Weekdays** **at** a time, in
 this device's zone (*EDT — this device's time*), or **Custom (cron)**: a
 5-field cron expression (`*/30 * * * *`, `0 21 * * 1-5`, `@weekly`) with the
@@ -2010,7 +2055,7 @@ start*). A schedule fires once per slot, starts counting from when it was
 saved, and after the server was down fires only the most recent missed slot —
 see [web-api.md](web-api.md) (Templates → Schedules). Scheduled templates are
 also listed last on **Intake → Auto-start** (*Scheduled templates*: name ·
-schedule · next run, with **Run now**), since they answer the same "what
+schedule · next run or *paused*, with **Run now**, and **Open Schedule ›**), since they answer the same "what
 starts on its own?" question as the ticket, PR and issue queues there. From a
 shell, `mindflock run <template>` is Run now and `mindflock templates` lists
 schedules and last runs.
@@ -4436,8 +4481,8 @@ labels above the inputs.
   and refill it later (templates addon, `/api/templates`, synced between
   devices). A template only ever *starts* a session — CLI, repo, workspace
   and an opening prompt; New's **Templates** strip lists them on both pages
-  (▶ runs one, ⏰ schedules it) and its **All templates…** (or the palette's
-  **Templates…**) opens the Templates dialog.
+  (▶ runs one, ⏰ schedules it) and its **All templates…** (or the top bar's
+  **Schedule**, `Alt+S`) opens [Schedule](#schedule).
   A template's **Run now** (its card, its ▶ in New, or the palette's **Run template: …**)
   starts a fresh session from it with the prompt already sent, and an
   optional schedule (every day / weekdays at a time) starts one on its own.

@@ -1,7 +1,7 @@
 /** Top bar (port of the 030 partial + section 17's chrome wiring):
  * sidebar/theme cluster, notifications bell, the main menu (New / Intake /
- * Verify / Settings, then the command palette as an icon), centered wordmark,
- * and the Electron drag region.
+ * Verify / Schedule / Settings, then the command palette as an icon), centered
+ * wordmark, and the Electron drag region.
  *
  * Only the daily loop is on the bar. Everything that waits on you is the
  * bell's (one badge); saved prompts are a tab of Customize (the sidebar
@@ -28,6 +28,8 @@ import { inShell } from "../lib/shell";
 import { keymapVersion, shortcutLabels, subscribeKeymap } from "../lib/keymap";
 import { browserReserved } from "./palette/ShortcutsSheet";
 import { VERIFY_BLURB } from "../lib/vocab";
+import { useScheduleStatus } from "../lib/useScheduleStatus";
+import { failingSchedules } from "../lib/templates";
 
 /* The wordmark carries the RUNNING ENGINE's version (GET /api/doctor), not the
  * desktop shell's: this frontend ships inside the engine wheel, so that string
@@ -60,6 +62,12 @@ export function TopBar() {
   const due = dueCount(testPlans?.plans || []);
   // Of those, the ones that FAILED: the badge turns red for them.
   const failing = failingCount(testPlans?.plans || []);
+  // Schedule's badge: the scheduled templates whose last run FAILED — the
+  // cards that say "Last run failed", nothing else. A schedule that is merely
+  // set, or a run skipped because the last one was still going, is the
+  // feature working and gets no mark.
+  const sched = useScheduleStatus();
+  const schedFailing = failingSchedules(sched.templates, sched.status).length;
   // Evaluated once: the shell can't grow or lose its title bar mid-run.
   const [mac] = useState(hasNativeWindowControls);
   // macOS hides the traffic lights in fullscreen — stop reserving their room.
@@ -214,6 +222,30 @@ export function TopBar() {
                 the one thing this badge must never say while it is still finding
                 out. */}
             {due > 0 && <span className={"tb-count" + (failing > 0 ? " is-failing" : "")}>{due}</span>}
+          </button>
+          {/* Schedule: what starts by itself (and the saved setups it starts
+              from). Before it had a slot here, the only ways in were the
+              palette and New's strip — the owner couldn't find it. */}
+          <button
+            id="schedule-btn"
+            className="tb-item"
+            type="button"
+            title={
+              "Schedule — templates that start sessions on their own" +
+              keys("schedule") +
+              (schedFailing > 0
+                ? "\n" +
+                  (schedFailing === 1
+                    ? "1 scheduled template's last run failed"
+                    : schedFailing + " scheduled templates' last runs failed")
+                : "")
+            }
+            onClick={() => ui.openDialogFor("schedule")}
+          >
+            Schedule
+            {/* Only a failure, in the failure red, and nothing at zero — the
+                rule Verify's count keeps. */}
+            {schedFailing > 0 && <span className="tb-count is-failing">{schedFailing}</span>}
           </button>
           <button
             id="settings-btn"

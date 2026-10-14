@@ -58,6 +58,8 @@
    NewSessionDialog so the drop cue wins over the plain textarea border it sets. */
 @import "../components/dialogs/smallDialogs.css" layer(components); /* 180 */
 @import "../components/dialogs/RedZonesDialog.css" layer(components); /* 185 */
+@import "../components/dialogs/ScheduleDialog.css" layer(components); /* 186 — after
+   NewSessionDialog.css, whose .tpl-* card and editor rules Schedule builds on */
 @import "../components/ConnBanner.css" layer(components); /* 200 */
 @import "../components/StateNotice.css" layer(components); /* 200 */
 @import "../components/PeerSessionViewer.css" layer(components); /* 200 */

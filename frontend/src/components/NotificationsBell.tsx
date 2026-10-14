@@ -83,7 +83,7 @@ interface Notif {
   verify?: string;
   /** The row's name when it isn't a session's (a checklist's title). */
   name?: string;
-  /** A template.* row with no session: named "Templates", opens the Templates dialog. */
+  /** A template.* row with no session: named "Schedule", opens Schedule. */
   template?: boolean;
 }
 
@@ -601,7 +601,7 @@ export function NotificationsBell() {
                         useUi.getState().openDialogFor("verify", n.verify);
                       } else if (n.template && !n.session) {
                         setOpen(false);
-                        useUi.getState().openDialogFor("templates");
+                        useUi.getState().openDialogFor("schedule");
                       } else if (n.run) {
                         // A group's row shows the group where it lives: its
                         // header on the rail (its ⋯ holds the summary, the
@@ -620,7 +620,7 @@ export function NotificationsBell() {
                         : n.settings && !n.session
                         ? "Updates"
                         : n.template && !n.session
-                        ? "Templates"
+                        ? "Schedule"
                         : n.run && !n.session
                         ? runLookups.name(n.run) || "Team run"
                         : n.verify

@@ -37,6 +37,12 @@ injected clock):
 * Nothing fires more often than every
   :data:`~backend.web.core.cronspec.MIN_INTERVAL_SECONDS` — each run is a
   whole new worktree and agent.
+* A schedule may be **paused** (``schedule.paused``: it keeps its cadence
+  and fires nothing) or told to **skip its next run** (``schedule.skip_until``,
+  an epoch: every slot at or before it passes without a session, noted in the
+  history). Either way the slot is still spent, so resuming never replays
+  one that fell inside the pause. Neither changes the signature, so neither
+  re-arms the schedule.
 * In a group of devices only the automation device (the one that runs PR
   review and issue handling, ``settings_hooks.automation_here``) fires. The
   others still advance ``last_slot`` silently, so a device that takes the
@@ -79,6 +85,8 @@ BUSY_ACTIVITIES = {
     "clarify": "the previous run is waiting on a question",
     "limit": "the previous run is stopped at a usage limit",
 }
+#: The history's words for a slot passed over by "Skip next".
+SKIPPED_BY_HAND = "you skipped this run"
 _HHMM_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
 
@@ -99,7 +107,7 @@ def normalize_schedule(raw) -> Optional[dict]:
                 "a schedule can't run more often than every %d minutes — each run "
                 "is a new session" % (cronspec.MIN_INTERVAL_SECONDS // 60)
             )
-        return {"cron": cron.expr}
+        return {"cron": cron.expr, **_flags(raw)}
     at = str(raw.get("at", "") or "").strip()
     m = _HHMM_RE.match(at)
     if not m:
@@ -107,7 +115,27 @@ def normalize_schedule(raw) -> Optional[dict]:
     days = str(raw.get("days", "") or "daily").strip()
     if days not in DAYS:
         raise ValueError("schedule.days must be 'daily' or 'weekdays'")
-    return {"at": "%02d:%02d" % (int(m.group(1)), int(m.group(2))), "days": days}
+    return {
+        "at": "%02d:%02d" % (int(m.group(1)), int(m.group(2))),
+        "days": days,
+        **_flags(raw),
+    }
+
+
+def _flags(raw: dict) -> dict:
+    """A schedule's optional switches, stored only when set (a schedule
+    without them keeps the exact shape older devices wrote): ``paused`` and
+    ``skip_until`` (epoch seconds; slots at or before it are skipped)."""
+    out: dict = {}
+    if raw.get("paused") is True:
+        out["paused"] = True
+    try:
+        until = float(raw.get("skip_until") or 0)
+    except (TypeError, ValueError):
+        until = 0.0
+    if until > 0:
+        out["skip_until"] = int(until)
+    return out
 
 
 def schedule_or_none(raw) -> Optional[dict]:
@@ -298,7 +326,20 @@ def plan_tick(
             continue
         if str(rec.get("last_slot") or "") >= slot:
             continue
+        # Spent whatever happens next: a paused or skipped slot is never
+        # replayed once the schedule resumes.
         rec["last_slot"] = slot
+        if sched.get("paused"):
+            continue
+        if at <= float(sched.get("skip_until") or 0):
+            if here:
+                hist = (
+                    rec.get("history") if isinstance(rec.get("history"), list) else []
+                )
+                rec["history"] = [
+                    {"at": at, "trigger": "schedule", "skipped": SKIPPED_BY_HAND}
+                ] + [h for h in hist if isinstance(h, dict)][: HISTORY_MAX - 1]
+            continue
         if here:
             fire.append((tpl, slot))
     return fire, out
@@ -650,7 +691,10 @@ async def run_loop() -> None:
 # --------------------------------------------------------------------------- #
 def status_for(templates_list: List[dict], now: Optional[float] = None) -> dict:
     """``{runs: {<name lower>: {next_at, last_at, last_session, last_trigger,
-    last_error}}, runs_here, runs_on}`` for ``GET /api/templates``."""
+    last_error, paused?, skipping_at?}}, runs_here, runs_on}`` for ``GET
+    /api/templates``. A paused schedule has no ``next_at``; one told to skip
+    its next run names that slot (``skipping_at``) and ``next_at`` is the one
+    after it."""
     now = time.time() if now is None else now
     runs = load_runs()
     out: Dict[str, dict] = {}
@@ -660,7 +704,14 @@ def status_for(templates_list: List[dict], now: Optional[float] = None) -> dict:
             continue
         rec = runs.get(key) or {}
         sched = schedule_or_none(tpl.get("schedule"))
-        nxt = next_due(now, sched) if sched else None
+        paused = bool(sched and sched.get("paused"))
+        nxt = next_due(now, sched) if sched and not paused else None
+        # "Skip next": the slot that will pass, and the one after it.
+        skipping = None
+        until = float((sched or {}).get("skip_until") or 0)
+        if nxt and until and nxt <= until:
+            skipping = nxt
+            nxt = next_due(until, sched)
         hist = rec.get("history") if isinstance(rec.get("history"), list) else []
         row = {
             "next_at": nxt,
@@ -678,6 +729,10 @@ def status_for(templates_list: List[dict], now: Optional[float] = None) -> dict:
         ):
             row["last_skip"] = rec.get("last_skip") or ""
             row["last_skip_at"] = skip_at
+        if paused:
+            row["paused"] = True
+        if skipping:
+            row["skipping_at"] = skipping
         if any(v for v in row.values()):
             # The schedule's "at" is THIS device's local time: name the zone
             # on the row the card reads (EDT, CET…), as of the next run.

@@ -494,6 +494,18 @@ export const KEYMAP: KeymapEntry[] = [
     run: () => useUi.getState().openDialogFor("verify"),
   },
   {
+    // The top bar's next word, on the same terms as Alt+I / Alt+V: Ctrl+S is
+    // "save page" in a browser tab, Alt+S is free in the app, the desktop shell
+    // and the pane find bar (Alt+C / W / R), and guarded the same way — Option+S
+    // types ß on macOS.
+    key: "s",
+    alt: true,
+    id: "schedule",
+    help: ["Navigation", "Alt+S", "Schedule — templates that start sessions on their own"],
+    when: () => !isEditingTarget(document.activeElement),
+    run: () => useUi.getState().openDialogFor("schedule"),
+  },
+  {
     key: "Tab",
     mod: "ctrl",
     id: "cycle",

@@ -1,17 +1,19 @@
-/** Templates dialog: the ONE list of saved New-session setups (server-side,
- * `/api/templates`, synced between devices), managed here — list, edit
- * inline, delete behind an inline confirm row. Opened from the New dialog's
- * Templates strip ("Manage…", always shown) and the command palette
- * ("Templates…"). It replaces the vanilla-JS addon modal, which asked
- * `window.confirm` on Delete — a call that does nothing in Electron — and
- * never looked at the server's answer.
+/** Schedule: the top-bar surface for what starts by itself — and the ONE
+ * list of saved New-session setups (server-side, `/api/templates`, synced
+ * between devices) it starts from. It was the Templates dialog, reached only
+ * from the palette and New's strip; it is the same component, store key
+ * "schedule" ("templates" still opens it — state/store.ts).
  *
- * Each card also has **Run now** (a fresh session from the template, its
- * prompt already sent — lib/templateRun) and may carry a **schedule** (every
- * day or weekdays at a local time, or a cron expression whose meaning and
- * next runs the server previews as you type; the server's template_schedule
- * loop starts it), with the next and last run under the name, a "Recent
- * runs" fold, and an optional **autopilot** depth each run is armed with.
+ * Top to bottom: what runs next ("Next: nightly in 2h — today 21:00"), the
+ * SCHEDULED templates (cadence, next run, last run, Recent runs), then the
+ * unscheduled ones ("Saved setups — run now or add a schedule"). Every card
+ * has **Run now** (a fresh session, its prompt already sent —
+ * lib/templateRun), **Edit** (inline), **Schedule…** / **Change schedule**
+ * (every day or weekdays at a local time, or a cron expression whose meaning
+ * and next runs the server previews as you type; the server's
+ * template_schedule loop starts it), **Delete** behind an inline confirm row,
+ * and a scheduled one **Skip next** / **Pause** (schedule.skip_until /
+ * schedule.paused). An optional **autopilot** depth arms each run.
  *
  * Every confirm is a row in the card, never a browser dialog: Electron has
  * no window.confirm/prompt/alert, and a Delete that silently does nothing is
@@ -32,6 +34,9 @@ import {
   deleteTemplate,
   hasSchedule,
   ensureTemplates,
+  inLabel,
+  nextUp,
+  withScheduleFlags,
   readTemplatesTarget,
   runProblem,
   saveTemplate,
@@ -124,6 +129,19 @@ export interface TemplateForm {
   cron: string;
   /** How far each run carries its work on its own ("" = leave it). */
   autopilot: TemplateAutopilot | "";
+  /** The row's Pause / Skip next, carried through an edit untouched (the
+   * editor doesn't show them; the card does). */
+  paused: boolean;
+  skip_until: number;
+  /** The cadence the form was seeded with: a skip is for a slot of THAT
+   * cadence, so changing it drops the skip. */
+  seeded: string;
+}
+
+/** A schedule's cadence as one comparable string ("" = none). */
+function cadenceKey(s: { at?: string; days?: string; cron?: string } | null | undefined): string {
+  if (!s) return "";
+  return s.cron ? "cron:" + s.cron.trim().replace(/\s+/g, " ") : s.at ? s.at + "/" + (s.days || "daily") : "";
 }
 
 export function formFromTemplate(t: Template | null): TemplateForm {
@@ -140,6 +158,9 @@ export function formFromTemplate(t: Template | null): TemplateForm {
     days: t?.schedule?.cron ? "cron" : t?.schedule?.days === "weekdays" ? "weekdays" : "daily",
     cron: t?.schedule?.cron || "0 21 * * 1-5",
     autopilot: t?.autopilot || "",
+    paused: !!t?.schedule?.paused,
+    skip_until: Number(t?.schedule?.skip_until) || 0,
+    seeded: t && hasSchedule(t) ? cadenceKey(t.schedule) : "",
   };
 }
 
@@ -168,12 +189,22 @@ export function templateBody(f: TemplateForm): { body: Template } | { error: str
       in_place: f.mode === "in_place",
       workspace_strategy: f.workspace_strategy === "clone" ? "clone" : "worktree",
       init_repo: f.init_repo,
-      ...(f.scheduled
-        ? { schedule: f.days === "cron" ? { cron } : { at, days: f.days === "weekdays" ? "weekdays" : "daily" } }
-        : {}),
+      ...(f.scheduled ? { schedule: scheduleOf(f, at, cron) } : {}),
       ...(f.autopilot ? { autopilot: f.autopilot } : {}),
     },
   };
+}
+
+/** The schedule a form saves: its cadence, plus the card's Pause and (for
+ * the same cadence, still ahead) Skip next. */
+function scheduleOf(f: TemplateForm, at: string, cron: string): NonNullable<Template["schedule"]> {
+  const cadence: NonNullable<Template["schedule"]> =
+    f.days === "cron" ? { cron } : { at, days: f.days === "weekdays" ? "weekdays" : "daily" };
+  const out = { ...cadence };
+  if (f.paused) out.paused = true;
+  const sameCadence = (f.seeded || "") === cadenceKey(cadence);
+  if (f.skip_until && sameCadence && f.skip_until > Date.now() / 1000) out.skip_until = f.skip_until;
+  return out;
 }
 
 /** A rename is a save under the new name AND a delete of the old one — the
@@ -213,32 +244,6 @@ export function templateMeta(t: Template): string {
   return bits.join(" · ");
 }
 
-/** The card's schedule line: what the schedule is, when it fires next and
- * how the last run went ("" for a template that never ran and has no
- * schedule). `now` is injectable for tests. */
-export function runLine(
-  t: Template,
-  info: TemplateRunInfo,
-  status: Pick<TemplateRunsStatus, "runs_here" | "runs_on">,
-  now: Date = new Date()
-): string {
-  const bits: string[] = [];
-  const tz = (info as RunInfoX).tz;
-  if (hasSchedule(t)) {
-    bits.push((info.schedule_label || scheduleLabel(t.schedule)) + (tz && t.schedule?.at ? " " + tz : ""));
-    if (!status.runs_here && status.runs_on) bits.push("starts on " + status.runs_on);
-    else if (info.next_at) bits.push("next " + whenLabel(info.next_at, now));
-  }
-  if (info.last_at)
-    bits.push(
-      "last " +
-        whenLabel(info.last_at, now) +
-        (info.last_trigger === "schedule" ? " (scheduled)" : info.last_trigger === "manual" ? " (by hand)" : "") +
-        (info.last_session ? " → " + info.last_session : "")
-    );
-  return bits.join(" · ");
-}
-
 /** One history row: "today 21:00 · scheduled → nightly-oct14" (or why it
  * failed / was skipped). */
 export function historyLine(h: TemplateRunEntry, now: Date = new Date()): string {
@@ -257,6 +262,55 @@ export function cronPreviewLine(pv: CronPreview | null | undefined, now: Date = 
   if (!pv.ok) return pv.error || "Not a cron expression";
   const next = (pv.next || []).map((t) => whenLabel(t, now)).join(", ");
   return (pv.label || "") + (next ? " — next " + next : "");
+}
+
+/** A scheduled card's cadence, in this device's zone: "Weekdays at 21:00
+ * EDT", "Every 30 minutes". */
+export function cadenceLine(t: Template, info: TemplateRunInfo): string {
+  const tz = (info as RunInfoX).tz;
+  return (info.schedule_label || scheduleLabel(t.schedule)) + (tz && t.schedule?.at ? " " + tz : "");
+}
+
+/** A scheduled card's "when next": "Next today 21:00 · in 9h", "Paused",
+ * "Starts on mac-mini" (another device fires schedules), or "". */
+export function nextLine(
+  t: Template,
+  info: TemplateRunInfo,
+  status: Pick<TemplateRunsStatus, "runs_here" | "runs_on">,
+  now: Date = new Date()
+): string {
+  if (t.schedule?.paused || info.paused) return "Paused";
+  if (!status.runs_here && status.runs_on) return "Starts on " + status.runs_on;
+  if (!info.next_at) return "";
+  return "Next " + whenLabel(info.next_at, now) + " · " + inLabel(info.next_at, now);
+}
+
+/** The card's last-run line when the last run STARTED fine: "Last run today
+ * 09:00 · scheduled → nightly-oct14" ("" when it never ran). */
+export function lastLine(info: TemplateRunInfo, now: Date = new Date()): string {
+  if (!info.last_at) return "";
+  const how = info.last_trigger === "schedule" ? "scheduled" : info.last_trigger === "manual" ? "by hand" : "";
+  return (
+    "Last run " +
+    whenLabel(info.last_at, now) +
+    (how ? " · " + how : "") +
+    (info.last_session ? " → " + info.last_session : "")
+  );
+}
+
+/** The scheduled templates in the order the surface lists them: soonest
+ * next run first, then any with no next run, then the paused ones. */
+export function scheduledOrder(templates: Template[], status: Pick<TemplateRunsStatus, "runs">): Template[] {
+  const rank = (t: Template) => {
+    if (t.schedule?.paused) return [2, 0];
+    const at = Number(status.runs[t.name.trim().toLowerCase()]?.next_at) || 0;
+    return at ? [0, at] : [1, 0];
+  };
+  return templates
+    .filter(hasSchedule)
+    .map((t, i) => ({ t, i, r: rank(t) }))
+    .sort((a, b) => a.r[0] - b.r[0] || a.r[1] - b.r[1] || a.i - b.i)
+    .map((x) => x.t);
 }
 
 interface ViewProps {
@@ -291,6 +345,14 @@ interface ViewProps {
   tz?: string;
   /** The server's reading of the cron field being typed. */
   cronPreview?: CronPreview | null;
+  /** A card's Pause / Resume (true = pause). */
+  onPause?: (name: string, paused: boolean) => void;
+  /** A card's Skip next (the slot's epoch) / Undo skip (0). */
+  onSkip?: (name: string, until: number) => void;
+  /** The template whose Pause / Skip is being saved. */
+  flagging?: string;
+  /** Injectable clock for the "in 2h" words (tests). */
+  now?: Date;
 }
 
 /** Markup only: everything it shows comes in as props. */
@@ -513,6 +575,213 @@ export function TemplatesDialogView(p: ViewProps) {
     </form>
   );
 
+  const now = p.now || new Date();
+  const infoFor = (t: Template): TemplateRunInfo => runs.runs[t.name.trim().toLowerCase()] || {};
+
+  /** Run now / Edit / Delete — every card's own verbs; the schedule's live on
+   * its strip. An unscheduled card adds Schedule…, the way to give it one. */
+  const actions = (t: Template) => (
+    <div className="tpl-actions">
+      <button
+        type="button"
+        className="tpl-btn tpl-run"
+        disabled={!!runProblem(t) || !!p.running}
+        title={runProblem(t) ? "Run now needs a folder" : "Run now — starts a new session from this template"}
+        onClick={() => p.onRun?.(t.name)}
+      >
+        {p.running === t.name ? "Starting…" : "▶ Run now"}
+      </button>
+      {!hasSchedule(t) && (
+        <button
+          type="button"
+          className="tpl-btn tpl-sched"
+          title="Start it by itself — every day, weekdays, or on a cron expression"
+          onClick={() => p.dispatch({ t: "schedule", name: t.name })}
+        >
+          Schedule…
+        </button>
+      )}
+      <button type="button" className="tpl-btn" onClick={() => p.dispatch({ t: "edit", name: t.name })}>
+        Edit
+      </button>
+      <button
+        type="button"
+        className="tpl-btn tpl-del"
+        onClick={() => p.dispatch({ t: "ask-delete", name: t.name })}
+        disabled={busy}
+      >
+        Delete
+      </button>
+    </div>
+  );
+
+  /** The schedule strip of a scheduled card: cadence, when next, and its
+   * three switches — Change schedule, Skip next / Undo skip, Pause / Resume. */
+  const strip = (t: Template, info: TemplateRunInfo) => {
+    const paused = !!(t.schedule?.paused || info.paused);
+    const next = nextLine(t, info, runs, now);
+    const skipping = !paused && info.skipping_at ? info.skipping_at : 0;
+    const flagging = p.flagging === t.name;
+    return (
+      <div className={"sch-strip" + (paused ? " is-paused" : "")}>
+        <div className="sch-when">
+          <span className="sch-cadence">{cadenceLine(t, info)}</span>
+          {next && <span className={"sch-next" + (paused ? " sch-paused-chip" : "")}>{next}</span>}
+        </div>
+        <div className="sch-switches">
+          <button
+            type="button"
+            className="sch-sw tpl-sched"
+            title="Change when it runs, or stop its schedule"
+            onClick={() => p.dispatch({ t: "schedule", name: t.name })}
+          >
+            Change schedule
+          </button>
+          {!paused &&
+            (skipping ? (
+              <button
+                type="button"
+                className="sch-sw sch-skip"
+                disabled={flagging}
+                onClick={() => p.onSkip?.(t.name, 0)}
+              >
+                Undo skip
+              </button>
+            ) : (
+              info.next_at && (
+                <button
+                  type="button"
+                  className="sch-sw sch-skip"
+                  disabled={flagging}
+                  title={"Let " + whenLabel(info.next_at, now) + " pass without a session — the one after runs as usual"}
+                  onClick={() => p.onSkip?.(t.name, Number(info.next_at))}
+                >
+                  Skip next
+                </button>
+              )
+            ))}
+          <button
+            type="button"
+            className="sch-sw sch-pause"
+            disabled={flagging}
+            title={paused ? "Start running on its schedule again" : "Keep the schedule, start nothing until you resume"}
+            onClick={() => p.onPause?.(t.name, !paused)}
+          >
+            {paused ? "Resume" : "Pause"}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  /** What happened last, and the fold with the rest. */
+  const outcome = (t: Template, info: TemplateRunInfo) => {
+    const skipping = !(t.schedule?.paused || info.paused) && info.skipping_at ? info.skipping_at : 0;
+    const last = lastLine(info, now);
+    return (
+      <>
+        {skipping > 0 && (
+          <div className="sch-skipping muted">Skipping {whenLabel(skipping, now)} — you asked to skip it</div>
+        )}
+        {info.last_error ? (
+          <div className="tpl-run-error error">Last run failed: {info.last_error}</div>
+        ) : info.last_skip ? (
+          <div className="tpl-run-skip muted">
+            Skipped {whenLabel(info.last_skip_at, now)}: {info.last_skip}
+          </div>
+        ) : (
+          last && <div className="tpl-runs">{last}</div>
+        )}
+        {info.history && info.history.length > 0 && (
+          <details className="tpl-history">
+            <summary>Recent runs ({info.history.length})</summary>
+            <ul>
+              {info.history.map((h, i) => (
+                <li key={i} className={h.error ? "error" : h.skipped ? "muted" : ""}>
+                  {historyLine(h, now)}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </>
+    );
+  };
+
+  const card = (t: Template) => {
+    if (ui.editing === t.name)
+      return (
+        <div key={t.name} className="tpl-card tpl-card-editing" data-name={t.name}>
+          {editor}
+        </div>
+      );
+    const info = infoFor(t);
+    const scheduled = hasSchedule(t);
+    const paused = scheduled && !!(t.schedule?.paused || info.paused);
+    return (
+      <div
+        key={t.name}
+        className={
+          "tpl-card" +
+          (scheduled ? " is-scheduled" : "") +
+          (paused ? " is-paused" : "") +
+          (scheduled && !paused && info.last_error ? " is-failing" : "")
+        }
+        data-name={t.name}
+      >
+        <div className="tpl-card-top">
+          <div className="tpl-card-text">
+            <div className="tpl-name">{t.name}</div>
+            <div className="tpl-meta" title={t.repo_path || undefined}>
+              {templateMeta(t)}
+            </div>
+          </div>
+          {actions(t)}
+        </div>
+        {scheduled && strip(t, info)}
+        {outcome(t, info)}
+        {t.prompt && <div className="tpl-prompt">{t.prompt}</div>}
+        {runProblem(t) && (
+          /* Said on the card, not only in a hover title: a disabled button
+             that won't say why is furniture. */
+          <div className="tpl-needs">
+            Run now and schedules need a folder.{" "}
+            <button type="button" className="linklike" onClick={() => p.dispatch({ t: "edit", name: t.name })}>
+              Add one
+            </button>
+          </div>
+        )}
+        {ui.confirming === t.name && (
+          <div className="tpl-confirm" role="group" aria-live="polite">
+            <span>Delete “{t.name}”? It goes from every device.</span>
+            <button
+              type="button"
+              className="tpl-btn tpl-del tpl-confirm-yes"
+              disabled={busy}
+              onClick={() => p.onDelete(t.name)}
+            >
+              {busy ? "Deleting…" : "Delete"}
+            </button>
+            <button type="button" className="tpl-btn" onClick={() => p.dispatch({ t: "cancel" })}>
+              Keep
+            </button>
+          </div>
+        )}
+        {ui.confirming === t.name && ui.error && (
+          <p className="error" aria-live="polite">
+            {ui.error}
+          </p>
+        )}
+      </div>
+    );
+  };
+
+  const scheduledList = scheduledOrder(templates, runs);
+  const saved = templates.filter((t) => !hasSchedule(t));
+  const up = nextUp(templates, runs);
+  const elsewhere = !runs.runs_here && !!runs.runs_on;
+  const empty = loaded && templates.length === 0 && ui.editing !== "";
+
   return (
     <Modal
       id="templates-dialog"
@@ -526,153 +795,94 @@ export function TemplatesDialogView(p: ViewProps) {
     >
       <div id="templates-card" role="dialog" aria-modal="true" aria-labelledby="templates-title">
         <div className="tpl-head">
-          <h2 id="templates-title">Templates</h2>
-          <button type="button" id="templates-close" onClick={p.onClose}>
-            Close
-          </button>
-        </div>
-        <p className="tpl-intro muted">
-          A template is a saved session setup — folder, agent and task — that starts a{" "}
-          <strong>new</strong> session: now, on a schedule (a daily time or any cron expression), or
-          with <code>mindflock run &lt;name&gt;</code>. To send text to a session that's already
-          running, use Prompts.
-        </p>
-        <div className="tpl-list" id="templates-list">
-          {ui.editing === "" ? (
-            editor
-          ) : (
-            <button
-              type="button"
-              id="templates-new"
-              className="tpl-new"
-              onClick={() => p.dispatch({ t: "new" })}
-            >
-              + New template
+          <h2 id="templates-title">Schedule</h2>
+          <div className="tpl-head-acts">
+            {ui.editing !== "" && !empty && (
+              <button type="button" id="templates-new" className="tpl-new" onClick={() => p.dispatch({ t: "new" })}>
+                + New template
+              </button>
+            )}
+            <button type="button" id="templates-close" onClick={p.onClose}>
+              Close
             </button>
-          )}
+          </div>
+        </div>
+        {!empty && (
+          <p className="tpl-intro muted">
+            Templates start a <strong>new</strong> session — when you run one, or by themselves on a schedule.
+            <span className="tpl-intro-aside">To send text to a session that's already running, use Prompts.</span>
+          </p>
+        )}
+        <div className="tpl-list" id="templates-list">
+          {ui.editing === "" && <div className="tpl-card tpl-card-editing tpl-card-new">{editor}</div>}
           {loadError && (
             <p className="error tpl-load-error" role="alert">
               Could not load templates: {loadError}
             </p>
           )}
-          {!loaded && !loadError && templates.length === 0 && (
-            <p className="tpl-empty muted">Loading templates…</p>
-          )}
-          {loaded && templates.length === 0 && (
-            <p className="tpl-empty muted">No templates yet — add one above, or use “Save as template…” in the New dialog.</p>
-          )}
-          {templates.map((t) =>
-            ui.editing === t.name ? (
-              <div key={t.name} className="tpl-card tpl-card-editing" data-name={t.name}>
-                {editor}
+          {!loaded && !loadError && templates.length === 0 && <p className="tpl-empty muted">Loading templates…</p>}
+          {empty && (
+            <div className="sch-empty" id="schedule-empty">
+              <div className="sch-empty-mark" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                  <circle cx="12" cy="13" r="8" />
+                  <path d="M12 9v4l2.5 2.5M9 2.5h6" />
+                </svg>
               </div>
-            ) : (
-              <div key={t.name} className="tpl-card" data-name={t.name}>
-                <div className="tpl-card-top">
-                  <div className="tpl-card-text">
-                    <div className="tpl-name">{t.name}</div>
-                    <div className="tpl-meta" title={t.repo_path || undefined}>
-                      {templateMeta(t)}
-                    </div>
-                    {(() => {
-                      const info = runs.runs[t.name.trim().toLowerCase()] || {};
-                      const line = runLine(t, info, runs);
-                      return (
-                        <>
-                          {line && <div className="tpl-runs">{line}</div>}
-                          {info.last_error && <div className="tpl-run-error error">Last run failed: {info.last_error}</div>}
-                          {info.last_skip && (
-                            <div className="tpl-run-skip muted">
-                              Skipped {whenLabel(info.last_skip_at)}: {info.last_skip}
-                            </div>
-                          )}
-                          {info.history && info.history.length > 0 && (
-                            <details className="tpl-history">
-                              <summary>Recent runs ({info.history.length})</summary>
-                              <ul>
-                                {info.history.map((h, i) => (
-                                  <li key={i} className={h.error ? "error" : h.skipped ? "muted" : ""}>
-                                    {historyLine(h)}
-                                  </li>
-                                ))}
-                              </ul>
-                            </details>
-                          )}
-                        </>
-                      );
-                    })()}
-                    {t.prompt && <div className="tpl-prompt">{t.prompt}</div>}
-                    {runProblem(t) && (
-                      /* Said on the card, not only in a hover title: a
-                         disabled button that won't say why is furniture. */
-                      <div className="tpl-needs">
-                        Run now and schedules need a folder.{" "}
-                        <button
-                          type="button"
-                          className="linklike"
-                          onClick={() => p.dispatch({ t: "edit", name: t.name })}
-                        >
-                          Add one
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                  <div className="tpl-actions">
-                    <button
-                      type="button"
-                      className="tpl-btn tpl-run"
-                      disabled={!!runProblem(t) || !!p.running}
-                      title={runProblem(t) ? "Run now needs a folder" : "Run now — starts a new session from this template"}
-                      onClick={() => p.onRun?.(t.name)}
-                    >
-                      {p.running === t.name ? "Starting…" : "▶ Run now"}
-                    </button>
-                    <button
-                      type="button"
-                      className="tpl-btn tpl-sched"
-                      title={t.schedule?.at ? "Change or stop its schedule" : "Start it by itself every day or weekday"}
-                      onClick={() => p.dispatch({ t: "schedule", name: t.name })}
-                    >
-                      {t.schedule?.at ? "Schedule" : "Schedule…"}
-                    </button>
-                    <button type="button" className="tpl-btn" onClick={() => p.dispatch({ t: "edit", name: t.name })}>
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      className="tpl-btn tpl-del"
-                      onClick={() => p.dispatch({ t: "ask-delete", name: t.name })}
-                      disabled={busy}
-                    >
-                      Delete
-                    </button>
-                  </div>
+              <p>Save a session setup once, then start it with one click — or every night by itself.</p>
+              <button
+                type="button"
+                id="schedule-empty-create"
+                className="tpl-btn tpl-run"
+                onClick={() => p.dispatch({ t: "new" })}
+              >
+                Create a template
+              </button>
+            </div>
+          )}
+          {templates.length > 0 && (
+            <>
+              {(up || elsewhere) && (
+                <div className="sch-next-up" id="schedule-next">
+                  {elsewhere ? (
+                    <>
+                      Schedules start on <strong>{runs.runs_on}</strong> — the device that runs automation.
+                    </>
+                  ) : (
+                    up && (
+                      <>
+                        <span className="sch-next-label">Next</span>
+                        <strong>{up.name}</strong>
+                        <span>{inLabel(up.at, now)}</span>
+                        <span className="muted">— {whenLabel(up.at, now)}</span>
+                      </>
+                    )
+                  )}
                 </div>
-                {ui.confirming === t.name && (
-                  <div className="tpl-confirm" role="group" aria-live="polite">
-                    <span>
-                      Delete “{t.name}”? It goes from every device.
-                    </span>
-                    <button
-                      type="button"
-                      className="tpl-btn tpl-del tpl-confirm-yes"
-                      disabled={busy}
-                      onClick={() => p.onDelete(t.name)}
-                    >
-                      {busy ? "Deleting…" : "Delete"}
-                    </button>
-                    <button type="button" className="tpl-btn" onClick={() => p.dispatch({ t: "cancel" })}>
-                      Keep
-                    </button>
-                  </div>
-                )}
-                {ui.confirming === t.name && ui.error && (
-                  <p className="error" aria-live="polite">
-                    {ui.error}
+              )}
+              <section className="sch-section" id="schedule-scheduled" aria-labelledby="schedule-scheduled-h">
+                <h3 id="schedule-scheduled-h">
+                  Scheduled{scheduledList.length > 0 && <span className="sch-count">{scheduledList.length}</span>}
+                </h3>
+                {scheduledList.length ? (
+                  scheduledList.map(card)
+                ) : (
+                  <p className="sch-none muted">
+                    Nothing runs by itself yet — <strong>Schedule…</strong> on a setup below starts it every day,
+                    weekday or on any cron.
                   </p>
                 )}
-              </div>
-            )
+              </section>
+              {saved.length > 0 && (
+                <section className="sch-section" id="schedule-saved" aria-labelledby="schedule-saved-h">
+                  <h3 id="schedule-saved-h">
+                    Saved setups<span className="sch-count">{saved.length}</span>
+                    <span className="sch-section-hint">run now or add a schedule</span>
+                  </h3>
+                  {saved.map(card)}
+                </section>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -681,7 +891,7 @@ export function TemplatesDialogView(p: ViewProps) {
 }
 
 export function TemplatesDialog() {
-  const open = useUi((s) => s.openDialog === "templates");
+  const open = useUi((s) => s.openDialog === "schedule");
   const target = useUi((s) => s.dialogTarget);
   const closeDialog = useUi((s) => s.closeDialog);
   const [templates, setList] = useState<Template[]>(() => templatesNow());
@@ -692,6 +902,7 @@ export function TemplatesDialog() {
   const [busy, setBusy] = useState(false);
   const [runs, setRuns] = useState<TemplateRunsStatus>(() => templateRunsNow());
   const [running, setRunning] = useState("");
+  const [flagging, setFlagging] = useState("");
   const [agents, setAgents] = useState<string[]>([]);
   const [scheduleFocus, setScheduleFocus] = useState(false);
   const [preview, setPreview] = useState<CronPreview | null>(null);
@@ -845,9 +1056,40 @@ export function TemplatesDialog() {
     }
   };
 
+  // Pause / Resume / Skip next / Undo skip: the whole template POSTed with
+  // its schedule's switch flipped, then the run rows re-read (the next run
+  // moves).
+  const flag = async (name: string, patch: { paused?: boolean; skip_until?: number }, said: string) => {
+    const t = templates.find((x) => x.name === name);
+    if (!t) return;
+    setFlagging(name);
+    try {
+      await saveTemplate(withScheduleFlags(t, patch));
+      setList(templatesNow());
+      await ensureTemplates(true).catch(() => {});
+      setRuns(templateRunsNow());
+      toast(said);
+    } catch (err) {
+      toast("Couldn't change the schedule: " + errMsg(err));
+    } finally {
+      setFlagging("");
+    }
+  };
+
   return (
     <TemplatesDialogView
       templates={templates}
+      flagging={flagging}
+      onPause={(name, paused) =>
+        void flag(name, { paused }, paused ? `Paused “${name}” — it starts nothing until you resume it` : `Resumed “${name}”`)
+      }
+      onSkip={(name, until) =>
+        void flag(
+          name,
+          { skip_until: until },
+          until ? `“${name}” will skip ${whenLabel(until)} — the run after it goes ahead` : `“${name}” runs next time as usual`
+        )
+      }
       runs={runs}
       running={running}
       cronPreview={preview}

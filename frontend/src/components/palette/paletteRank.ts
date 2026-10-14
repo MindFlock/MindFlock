@@ -2,7 +2,7 @@
  *
  *  - An EMPTY query is a short menu, not the whole index: the few commands a
  *    person reaches for (New, the sessions they last looked at, Intake,
- *    Verify, Setup, Settings, help) and one "All commands…" row. Sixty rows
+ *    Verify, Schedule, Setup, Settings, help) and one "All commands…" row. Sixty rows
  *    on open read as a wall.
  *  - A typed query matches labels AND a few plain synonyms ("help" finds the
  *    shortcuts and the tour, "install" finds Setup and the Doctor).

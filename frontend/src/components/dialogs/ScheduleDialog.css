@@ -1,0 +1,243 @@
+/* --- Schedule (TemplatesDialog.tsx) --------------------------------------- */
+/* The top bar's Schedule surface. Its card and editor rules started life as
+   the Templates dialog's and still live in NewSessionDialog.css (`.tpl-*`);
+   this file is what Schedule adds on top: the wider card, the "Next" band,
+   the two sections, a scheduled card's strip and the empty state. Imported
+   after NewSessionDialog.css (styles/index.css), so equal selectors win. */
+
+#templates-card {
+  width: min(720px, 94vw);
+  max-height: 88vh;
+  gap: 12px;
+}
+
+.tpl-head-acts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tpl-head h2 {
+  font-size: 17px;
+}
+
+.tpl-head .tpl-new {
+  border-color: var(--accent);
+}
+
+.tpl-list {
+  gap: 14px;
+}
+
+/* The intro is two sentences, two lines: what a template does, and where the
+   look-alike (Prompts) lives — never one sentence wrapped mid-phrase. */
+.tpl-intro-aside {
+  display: block;
+}
+
+/* "Next  nightly-deps  in 2h — today 21:00": the one line that answers "what
+   happens next" before you read a single card. */
+.sch-next-up {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  padding: 9px 12px;
+  border-radius: 9px;
+  font-size: 13px;
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.sch-next-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.sch-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sch-section h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sch-count {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  padding: 0 6px;
+  line-height: 16px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.sch-section-hint {
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  font-size: 12px;
+}
+
+.sch-none {
+  margin: 0;
+  font-size: 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+}
+
+/* A scheduled card: its schedule as a strip inside it — the cadence, when it
+   runs next, and the three switches that only a schedule has. */
+.sch-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 14px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.sch-when {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  min-width: 0;
+}
+
+.sch-cadence {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.sch-next {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.sch-switches {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.sch-sw {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sch-sw:hover:not(:disabled) {
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+
+.sch-sw:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+/* Paused: the strip says so in amber and the cadence steps back. */
+.sch-strip.is-paused .sch-cadence {
+  color: var(--muted);
+  font-weight: 500;
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent);
+}
+
+.sch-paused-chip {
+  color: var(--amber, #d29922);
+  font-weight: 600;
+}
+
+.tpl-card.is-failing {
+  border-color: color-mix(in srgb, var(--red) 45%, var(--border));
+}
+
+.sch-skipping {
+  font-size: 11.5px;
+}
+
+.tpl-card .tpl-runs {
+  color: var(--muted);
+}
+
+/* The prompt reads as a quote of the task, two lines at most in the list. */
+#templates-card .tpl-prompt {
+  -webkit-line-clamp: 2;
+  color: var(--text);
+  opacity: .85;
+}
+
+.tpl-card-new {
+  border-color: var(--accent);
+}
+
+/* Nothing saved yet: one line of what this is for, and the way to start. */
+.sch-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  padding: 30px 16px 26px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+}
+
+.sch-empty p {
+  margin: 0;
+  font-size: 13px;
+  max-width: 52ch;
+  line-height: 1.45;
+  text-wrap: balance;
+}
+
+.sch-empty-mark {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+}
+
+.sch-empty .tpl-run {
+  font-size: 12.5px;
+  padding: 7px 16px;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.sch-empty .tpl-run:hover {
+  background: var(--accent-deep);
+}

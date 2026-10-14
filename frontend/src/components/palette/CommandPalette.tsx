@@ -62,10 +62,11 @@ const TOP = {
   recent: 1, // + 0.1 per place in the MRU (the last three looked at)
   intake: 2,
   verify: 3,
-  setup: 4,
-  settings: 5,
-  tour: 6,
-  shortcuts: 7,
+  schedule: 4,
+  setup: 5,
+  settings: 6,
+  tour: 7,
+  shortcuts: 8,
 };
 
 export function CommandPalette({ host }: { host: KeymapHost }) {
@@ -133,6 +134,13 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       top: TOP.verify,
       run: () => ui.openDialogFor("verify"),
     });
+    acts.push({
+      label: "Schedule…",
+      hint: "Alt+S",
+      top: TOP.schedule,
+      keywords: "templates cron recurring nightly timer daily weekly",
+      run: () => ui.openDialogFor("schedule"),
+    });
     // Customize and its tabs: the extras you opt into.
     acts.push({ label: "Customize…", hint: "choose sidebar bars", run: () => ui.openDialogFor("customize") });
     acts.push({
@@ -141,12 +149,14 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       run: () => ui.setBulkMode(true),
     });
     acts.push({ label: "Prompts…", hint: "manage saved prompts", run: () => ui.openDialogFor("prompts") });
-    acts.push({ label: "Templates…", hint: "manage saved New-session setups", run: () => ui.openDialogFor("templates") });
+    // Schedule is the top bar's; "Templates…" is the name it had, kept as a
+    // row so the word people learned still finds it.
+    acts.push({ label: "Templates…", hint: "saved setups — in Schedule", run: () => ui.openDialogFor("schedule") });
     acts.push({
       label: "Schedule a session…",
       hint: "daily or weekdays",
       keywords: "recurring cron every day nightly weekly",
-      run: () => ui.openDialogFor("templates", "schedule"),
+      run: () => ui.openDialogFor("schedule", "schedule"),
     });
     // Run now: a fresh session from a template, its prompt already sent —
     // one row per template that can start one on its own (it has a folder).

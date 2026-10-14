@@ -177,7 +177,7 @@ describe("Manage… trips hand the form back", () => {
 
 describe("Templates vs Prompts: one line each", () => {
   it("says which starts a session and which talks to a running one", () => {
-    expect(TEMPLATES_DIALOG).toContain("that starts a{\" \"}");
+    expect(TEMPLATES_DIALOG).toContain("Templates start a <strong>new</strong> session");
     expect(TEMPLATES_DIALOG).toContain("To send text to a session that's");
     expect(PROMPTS_DIALOG).toContain("Saved text you send to a running session.");
     // The contradictions the judges quoted are gone.

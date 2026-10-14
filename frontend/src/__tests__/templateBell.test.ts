@@ -19,7 +19,7 @@ const env = (event: string, session: string, data: Record<string, unknown>): Eve
 });
 
 describe("template events in the bell", () => {
-  it("a scheduled failure warns, names its rule and opens Templates", () => {
+  it("a scheduled failure warns, names its rule and opens Schedule", () => {
     const n = notifFromEvent(
       env("template.run_failed", "", {
         template: "nightly",
@@ -33,8 +33,8 @@ describe("template events in the bell", () => {
       template: true,
       rule: "template_run_failed",
     });
-    expect(BELL).toContain('useUi.getState().openDialogFor("templates")');
-    expect(BELL).toContain('? "Templates"');
+    expect(BELL).toContain('useUi.getState().openDialogFor("schedule")');
+    expect(BELL).toContain('? "Schedule"');
   });
   it("a skip is a quiet row on the run still going", () => {
     const n = notifFromEvent(

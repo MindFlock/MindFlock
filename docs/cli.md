@@ -519,9 +519,11 @@ and exit 1.
 
 ### `mindflock templates [--json]`
 
-The templates with their schedule in words, the next run, the autopilot depth
+The templates with their schedule in words, the next run (*paused* for a
+paused schedule, *(skipping …)* when Skip next is set), the autopilot depth
 and the last run (or why it failed / was skipped), plus which device fires
-schedules when it isn't this one. `--json` prints `GET /api/templates` as is.
+schedules when it isn't this one. The same list, with Run now, Pause and Skip
+next, is the web UI's **Schedule** (top bar, `Alt+S`). `--json` prints `GET /api/templates` as is.
 
 ### `mindflock peer [status|invite|join|links|unlink|share|unshare|export|address]`
 

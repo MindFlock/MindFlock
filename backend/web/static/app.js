@@ -26776,7 +26776,7 @@ var useUi = create((set, get) => ({
 		set({ lastTab });
 	},
 	openDialogFor: (name, target = null) => set({
-		openDialog: name,
+		openDialog: name === "templates" ? "schedule" : name,
 		dialogTarget: target
 	}),
 	closeDialog: () => set({
@@ -30727,6 +30727,18 @@ var KEYMAP = [
 		run: () => useUi.getState().openDialogFor("verify")
 	},
 	{
+		key: "s",
+		alt: true,
+		id: "schedule",
+		help: [
+			"Navigation",
+			"Alt+S",
+			"Schedule — templates that start sessions on their own"
+		],
+		when: () => !isEditingTarget(document.activeElement),
+		run: () => useUi.getState().openDialogFor("schedule")
+	},
+	{
 		key: "Tab",
 		mod: "ctrl",
 		id: "cycle",
@@ -31089,6 +31101,46 @@ function readTemplatesTarget(target) {
 }
 function hasSchedule(t) {
 	return !!(t.schedule && (t.schedule.at || t.schedule.cron));
+}
+function infoOf(t, status) {
+	return status.runs[(t.name || "").trim().toLowerCase()] || {};
+}
+function failingSchedules(templates, status) {
+	return templates.filter((t) => hasSchedule(t) && !t.schedule?.paused && !!infoOf(t, status).last_error).map((t) => t.name);
+}
+function nextUp(templates, status) {
+	let best = null;
+	for (const t of templates) {
+		if (!hasSchedule(t) || t.schedule?.paused) continue;
+		const at = Number(infoOf(t, status).next_at) || 0;
+		if (at && (!best || at < best.at)) best = {
+			name: t.name,
+			at
+		};
+	}
+	return best;
+}
+function inLabel(epochSec, now = /* @__PURE__ */ new Date()) {
+	const mins = Math.round((epochSec * 1e3 - now.getTime()) / 6e4);
+	if (mins <= 0) return "now";
+	if (mins < 60) return "in " + mins + " min";
+	const h = Math.floor(mins / 60);
+	const m = mins % 60;
+	if (h < 10) return "in " + h + "h" + (m ? " " + m + "m" : "");
+	if (h < 36) return "in " + h + "h";
+	return "in " + Math.round(h / 24) + " days";
+}
+function withScheduleFlags(t, patch, nowSec = Date.now() / 1e3) {
+	const sched = {
+		...t.schedule || {},
+		...patch
+	};
+	if (!sched.paused) delete sched.paused;
+	if (!sched.skip_until || sched.skip_until <= nowSec) delete sched.skip_until;
+	return {
+		...t,
+		schedule: sched
+	};
 }
 function scheduleLabel(s) {
 	if (!s) return "";
@@ -35441,7 +35493,7 @@ function NotificationsBell() {
 							useUi.getState().openDialogFor("verify", n.verify);
 						} else if (n.template && !n.session) {
 							setOpen(false);
-							useUi.getState().openDialogFor("templates");
+							useUi.getState().openDialogFor("schedule");
 						} else if (n.run) {
 							setOpen(false);
 							showGroup(n.run);
@@ -35450,7 +35502,7 @@ function NotificationsBell() {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-sess",
-							children: n.device && !n.session ? "Devices" : n.peer && !n.session ? "Collaborate" : n.settings && !n.session ? "Updates" : n.template && !n.session ? "Templates" : n.run && !n.session ? runLookups.name(n.run) || "Team run" : n.verify ? "Verify · " + (n.name || windowName(n.session)) : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (n.session ? windowName(n.session) : "—")
+							children: n.device && !n.session ? "Devices" : n.peer && !n.session ? "Collaborate" : n.settings && !n.session ? "Updates" : n.template && !n.session ? "Schedule" : n.run && !n.session ? runLookups.name(n.run) || "Team run" : n.verify ? "Verify · " + (n.name || windowName(n.session)) : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (n.session ? windowName(n.session) : "—")
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-text",
@@ -36445,6 +36497,34 @@ function ShortcutsSheet() {
 	});
 }
 //#endregion
+//#region src/lib/useScheduleStatus.ts
+function useScheduleStatus() {
+	const [templates, setTemplates] = (0, import_react.useState)(() => templatesNow());
+	const [status, setStatus] = (0, import_react.useState)(() => templateRunsNow());
+	(0, import_react.useEffect)(() => {
+		const reload = () => {
+			setTemplates(templatesNow());
+			setStatus(templateRunsNow());
+		};
+		document.addEventListener(TEMPLATES_CHANGED, reload);
+		ensureTemplates().then(reload).catch(() => {});
+		const bus = window.mindflock?.events;
+		const offs = [];
+		if (bus) for (const name of ["template.run_started", "template.run_failed"]) offs.push(bus.subscribe(name, (env) => {
+			if (typeof bus.isReplay === "function" && bus.isReplay(env)) return;
+			ensureTemplates(true).then(reload).catch(() => {});
+		}));
+		return () => {
+			document.removeEventListener(TEMPLATES_CHANGED, reload);
+			offs.forEach((off) => off());
+		};
+	}, []);
+	return {
+		templates,
+		status
+	};
+}
+//#endregion
 //#region src/components/TopBar.tsx
 function engineVersion(raw) {
 	const v = (raw || "").trim();
@@ -36457,6 +36537,8 @@ function TopBar() {
 	const { data: testPlans } = useTestPlans();
 	const due = dueCount(testPlans?.plans || []);
 	const failing = failingCount(testPlans?.plans || []);
+	const sched = useScheduleStatus();
+	const schedFailing = failingSchedules(sched.templates, sched.status).length;
 	const [mac] = (0, import_react.useState)(hasNativeWindowControls);
 	const [fullScreen, setFullScreen] = (0, import_react.useState)(false);
 	(0, import_react.useEffect)(() => {
@@ -36588,6 +36670,17 @@ function TopBar() {
 							children: ["Verify", due > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "tb-count" + (failing > 0 ? " is-failing" : ""),
 								children: due
+							})]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							id: "schedule-btn",
+							className: "tb-item",
+							type: "button",
+							title: "Schedule — templates that start sessions on their own" + keys("schedule") + (schedFailing > 0 ? "\n" + (schedFailing === 1 ? "1 scheduled template's last run failed" : schedFailing + " scheduled templates' last runs failed") : ""),
+							onClick: () => ui.openDialogFor("schedule"),
+							children: ["Schedule", schedFailing > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "tb-count is-failing",
+								children: schedFailing
 							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -64637,10 +64730,11 @@ var TOP = {
 	recent: 1,
 	intake: 2,
 	verify: 3,
-	setup: 4,
-	settings: 5,
-	tour: 6,
-	shortcuts: 7
+	schedule: 4,
+	setup: 5,
+	settings: 6,
+	tour: 7,
+	shortcuts: 8
 };
 function CommandPalette({ host }) {
 	const open = useUi((s) => s.openDialog === "palette");
@@ -64714,6 +64808,13 @@ function CommandPalette({ host }) {
 			run: () => ui.openDialogFor("verify")
 		});
 		acts.push({
+			label: "Schedule…",
+			hint: "Alt+S",
+			top: TOP.schedule,
+			keywords: "templates cron recurring nightly timer daily weekly",
+			run: () => ui.openDialogFor("schedule")
+		});
+		acts.push({
 			label: "Customize…",
 			hint: "choose sidebar bars",
 			run: () => ui.openDialogFor("customize")
@@ -64730,14 +64831,14 @@ function CommandPalette({ host }) {
 		});
 		acts.push({
 			label: "Templates…",
-			hint: "manage saved New-session setups",
-			run: () => ui.openDialogFor("templates")
+			hint: "saved setups — in Schedule",
+			run: () => ui.openDialogFor("schedule")
 		});
 		acts.push({
 			label: "Schedule a session…",
 			hint: "daily or weekdays",
 			keywords: "recurring cron every day nightly weekly",
-			run: () => ui.openDialogFor("templates", "schedule")
+			run: () => ui.openDialogFor("schedule", "schedule")
 		});
 		for (const tpl of templatesNow()) {
 			if (runProblem(tpl)) continue;
@@ -65718,6 +65819,10 @@ function templatesReducer(s, a) {
 		};
 	}
 }
+function cadenceKey(s) {
+	if (!s) return "";
+	return s.cron ? "cron:" + s.cron.trim().replace(/\s+/g, " ") : s.at ? s.at + "/" + (s.days || "daily") : "";
+}
 function formFromTemplate(t) {
 	return {
 		name: t?.name || "",
@@ -65731,7 +65836,10 @@ function formFromTemplate(t) {
 		at: t?.schedule?.at || "21:00",
 		days: t?.schedule?.cron ? "cron" : t?.schedule?.days === "weekdays" ? "weekdays" : "daily",
 		cron: t?.schedule?.cron || "0 21 * * 1-5",
-		autopilot: t?.autopilot || ""
+		autopilot: t?.autopilot || "",
+		paused: !!t?.schedule?.paused,
+		skip_until: Number(t?.schedule?.skip_until) || 0,
+		seeded: t && hasSchedule(t) ? cadenceKey(t.schedule) : ""
 	};
 }
 function templateBody(f) {
@@ -65756,12 +65864,20 @@ function templateBody(f) {
 		in_place: f.mode === "in_place",
 		workspace_strategy: f.workspace_strategy === "clone" ? "clone" : "worktree",
 		init_repo: f.init_repo,
-		...f.scheduled ? { schedule: f.days === "cron" ? { cron } : {
-			at,
-			days: f.days === "weekdays" ? "weekdays" : "daily"
-		} } : {},
+		...f.scheduled ? { schedule: scheduleOf(f, at, cron) } : {},
 		...f.autopilot ? { autopilot: f.autopilot } : {}
 	} };
+}
+function scheduleOf(f, at, cron) {
+	const cadence = f.days === "cron" ? { cron } : {
+		at,
+		days: f.days === "weekdays" ? "weekdays" : "daily"
+	};
+	const out = { ...cadence };
+	if (f.paused) out.paused = true;
+	const sameCadence = (f.seeded || "") === cadenceKey(cadence);
+	if (f.skip_until && sameCadence && f.skip_until > Date.now() / 1e3) out.skip_until = f.skip_until;
+	return out;
 }
 function renameLeaves(oldName, newName) {
 	const a = oldName.trim().toLowerCase();
@@ -65782,17 +65898,6 @@ function templateMeta(t) {
 	if (t.autopilot) bits.push("then: " + AUTOPILOT_THEN[t.autopilot]);
 	return bits.join(" · ");
 }
-function runLine(t, info, status, now = /* @__PURE__ */ new Date()) {
-	const bits = [];
-	const tz = info.tz;
-	if (hasSchedule(t)) {
-		bits.push((info.schedule_label || scheduleLabel(t.schedule)) + (tz && t.schedule?.at ? " " + tz : ""));
-		if (!status.runs_here && status.runs_on) bits.push("starts on " + status.runs_on);
-		else if (info.next_at) bits.push("next " + whenLabel(info.next_at, now));
-	}
-	if (info.last_at) bits.push("last " + whenLabel(info.last_at, now) + (info.last_trigger === "schedule" ? " (scheduled)" : info.last_trigger === "manual" ? " (by hand)" : "") + (info.last_session ? " → " + info.last_session : ""));
-	return bits.join(" · ");
-}
 function historyLine(h, now = /* @__PURE__ */ new Date()) {
 	let line = [whenLabel(h.at, now), h.trigger === "schedule" ? "scheduled" : "by hand"].join(" · ");
 	if (h.skipped) line += " — skipped: " + h.skipped;
@@ -65805,6 +65910,33 @@ function cronPreviewLine(pv, now = /* @__PURE__ */ new Date()) {
 	if (!pv.ok) return pv.error || "Not a cron expression";
 	const next = (pv.next || []).map((t) => whenLabel(t, now)).join(", ");
 	return (pv.label || "") + (next ? " — next " + next : "");
+}
+function cadenceLine(t, info) {
+	const tz = info.tz;
+	return (info.schedule_label || scheduleLabel(t.schedule)) + (tz && t.schedule?.at ? " " + tz : "");
+}
+function nextLine(t, info, status, now = /* @__PURE__ */ new Date()) {
+	if (t.schedule?.paused || info.paused) return "Paused";
+	if (!status.runs_here && status.runs_on) return "Starts on " + status.runs_on;
+	if (!info.next_at) return "";
+	return "Next " + whenLabel(info.next_at, now) + " · " + inLabel(info.next_at, now);
+}
+function lastLine(info, now = /* @__PURE__ */ new Date()) {
+	if (!info.last_at) return "";
+	const how = info.last_trigger === "schedule" ? "scheduled" : info.last_trigger === "manual" ? "by hand" : "";
+	return "Last run " + whenLabel(info.last_at, now) + (how ? " · " + how : "") + (info.last_session ? " → " + info.last_session : "");
+}
+function scheduledOrder(templates, status) {
+	const rank = (t) => {
+		if (t.schedule?.paused) return [2, 0];
+		const at = Number(status.runs[t.name.trim().toLowerCase()]?.next_at) || 0;
+		return at ? [0, at] : [1, 0];
+	};
+	return templates.filter(hasSchedule).map((t, i) => ({
+		t,
+		i,
+		r: rank(t)
+	})).sort((a, b) => a.r[0] - b.r[0] || a.r[1] - b.r[1] || a.i - b.i).map((x) => x.t);
 }
 function TemplatesDialogView(p) {
 	const { templates, ui, form, busy, loaded } = p;
@@ -66068,6 +66200,232 @@ function TemplatesDialogView(p) {
 			})
 		]
 	});
+	const now = p.now || /* @__PURE__ */ new Date();
+	const infoFor = (t) => runs.runs[t.name.trim().toLowerCase()] || {};
+	const actions = (t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "tpl-actions",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "tpl-btn tpl-run",
+				disabled: !!runProblem(t) || !!p.running,
+				title: runProblem(t) ? "Run now needs a folder" : "Run now — starts a new session from this template",
+				onClick: () => p.onRun?.(t.name),
+				children: p.running === t.name ? "Starting…" : "▶ Run now"
+			}),
+			!hasSchedule(t) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "tpl-btn tpl-sched",
+				title: "Start it by itself — every day, weekdays, or on a cron expression",
+				onClick: () => p.dispatch({
+					t: "schedule",
+					name: t.name
+				}),
+				children: "Schedule…"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "tpl-btn",
+				onClick: () => p.dispatch({
+					t: "edit",
+					name: t.name
+				}),
+				children: "Edit"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "tpl-btn tpl-del",
+				onClick: () => p.dispatch({
+					t: "ask-delete",
+					name: t.name
+				}),
+				disabled: busy,
+				children: "Delete"
+			})
+		]
+	});
+	const strip = (t, info) => {
+		const paused = !!(t.schedule?.paused || info.paused);
+		const next = nextLine(t, info, runs, now);
+		const skipping = !paused && info.skipping_at ? info.skipping_at : 0;
+		const flagging = p.flagging === t.name;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sch-strip" + (paused ? " is-paused" : ""),
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sch-when",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sch-cadence",
+					children: cadenceLine(t, info)
+				}), next && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sch-next" + (paused ? " sch-paused-chip" : ""),
+					children: next
+				})]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sch-switches",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "sch-sw tpl-sched",
+						title: "Change when it runs, or stop its schedule",
+						onClick: () => p.dispatch({
+							t: "schedule",
+							name: t.name
+						}),
+						children: "Change schedule"
+					}),
+					!paused && (skipping ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "sch-sw sch-skip",
+						disabled: flagging,
+						onClick: () => p.onSkip?.(t.name, 0),
+						children: "Undo skip"
+					}) : info.next_at && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "sch-sw sch-skip",
+						disabled: flagging,
+						title: "Let " + whenLabel(info.next_at, now) + " pass without a session — the one after runs as usual",
+						onClick: () => p.onSkip?.(t.name, Number(info.next_at)),
+						children: "Skip next"
+					})),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "sch-sw sch-pause",
+						disabled: flagging,
+						title: paused ? "Start running on its schedule again" : "Keep the schedule, start nothing until you resume",
+						onClick: () => p.onPause?.(t.name, !paused),
+						children: paused ? "Resume" : "Pause"
+					})
+				]
+			})]
+		});
+	};
+	const outcome = (t, info) => {
+		const skipping = !(t.schedule?.paused || info.paused) && info.skipping_at ? info.skipping_at : 0;
+		const last = lastLine(info, now);
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			skipping > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sch-skipping muted",
+				children: [
+					"Skipping ",
+					whenLabel(skipping, now),
+					" — you asked to skip it"
+				]
+			}),
+			info.last_error ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "tpl-run-error error",
+				children: ["Last run failed: ", info.last_error]
+			}) : info.last_skip ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "tpl-run-skip muted",
+				children: [
+					"Skipped ",
+					whenLabel(info.last_skip_at, now),
+					": ",
+					info.last_skip
+				]
+			}) : last && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "tpl-runs",
+				children: last
+			}),
+			info.history && info.history.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+				className: "tpl-history",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: [
+					"Recent runs (",
+					info.history.length,
+					")"
+				] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: info.history.map((h, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+					className: h.error ? "error" : h.skipped ? "muted" : "",
+					children: historyLine(h, now)
+				}, i)) })]
+			})
+		] });
+	};
+	const card = (t) => {
+		if (ui.editing === t.name) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "tpl-card tpl-card-editing",
+			"data-name": t.name,
+			children: editor
+		}, t.name);
+		const info = infoFor(t);
+		const scheduled = hasSchedule(t);
+		const paused = scheduled && !!(t.schedule?.paused || info.paused);
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "tpl-card" + (scheduled ? " is-scheduled" : "") + (paused ? " is-paused" : "") + (scheduled && !paused && info.last_error ? " is-failing" : ""),
+			"data-name": t.name,
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "tpl-card-top",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "tpl-card-text",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "tpl-name",
+							children: t.name
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "tpl-meta",
+							title: t.repo_path || void 0,
+							children: templateMeta(t)
+						})]
+					}), actions(t)]
+				}),
+				scheduled && strip(t, info),
+				outcome(t, info),
+				t.prompt && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "tpl-prompt",
+					children: t.prompt
+				}),
+				runProblem(t) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "tpl-needs",
+					children: [
+						"Run now and schedules need a folder.",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike",
+							onClick: () => p.dispatch({
+								t: "edit",
+								name: t.name
+							}),
+							children: "Add one"
+						})
+					]
+				}),
+				ui.confirming === t.name && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "tpl-confirm",
+					role: "group",
+					"aria-live": "polite",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+							"Delete “",
+							t.name,
+							"”? It goes from every device."
+						] }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "tpl-btn tpl-del tpl-confirm-yes",
+							disabled: busy,
+							onClick: () => p.onDelete(t.name),
+							children: busy ? "Deleting…" : "Delete"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "tpl-btn",
+							onClick: () => p.dispatch({ t: "cancel" }),
+							children: "Keep"
+						})
+					]
+				}),
+				ui.confirming === t.name && ui.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "error",
+					"aria-live": "polite",
+					children: ui.error
+				})
+			]
+		}, t.name);
+	};
+	const scheduledList = scheduledOrder(templates, runs);
+	const saved = templates.filter((t) => !hasSchedule(t));
+	const up = nextUp(templates, runs);
+	const elsewhere = !runs.runs_here && !!runs.runs_on;
+	const empty = loaded && templates.length === 0 && ui.editing !== "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "templates-dialog",
 		onClose: p.onClose,
@@ -66086,35 +66444,42 @@ function TemplatesDialogView(p) {
 					className: "tpl-head",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
 						id: "templates-title",
-						children: "Templates"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "templates-close",
-						onClick: p.onClose,
-						children: "Close"
+						children: "Schedule"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "tpl-head-acts",
+						children: [ui.editing !== "" && !empty && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "templates-new",
+							className: "tpl-new",
+							onClick: () => p.dispatch({ t: "new" }),
+							children: "+ New template"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "templates-close",
+							onClick: p.onClose,
+							children: "Close"
+						})]
 					})]
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				!empty && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "tpl-intro muted",
 					children: [
-						"A template is a saved session setup — folder, agent and task — that starts a",
-						" ",
+						"Templates start a ",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "new" }),
-						" session: now, on a schedule (a daily time or any cron expression), or with ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "mindflock run <name>" }),
-						". To send text to a session that's already running, use Prompts."
+						" session — when you run one, or by themselves on a schedule.",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "tpl-intro-aside",
+							children: "To send text to a session that's already running, use Prompts."
+						})
 					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "tpl-list",
 					id: "templates-list",
 					children: [
-						ui.editing === "" ? editor : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "templates-new",
-							className: "tpl-new",
-							onClick: () => p.dispatch({ t: "new" }),
-							children: "+ New template"
+						ui.editing === "" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "tpl-card tpl-card-editing tpl-card-new",
+							children: editor
 						}),
 						loadError && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 							className: "error tpl-load-error",
@@ -66125,162 +66490,98 @@ function TemplatesDialogView(p) {
 							className: "tpl-empty muted",
 							children: "Loading templates…"
 						}),
-						loaded && templates.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "tpl-empty muted",
-							children: "No templates yet — add one above, or use “Save as template…” in the New dialog."
-						}),
-						templates.map((t) => ui.editing === t.name ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "tpl-card tpl-card-editing",
-							"data-name": t.name,
-							children: editor
-						}, t.name) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "tpl-card",
-							"data-name": t.name,
+						empty && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "sch-empty",
+							id: "schedule-empty",
 							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "tpl-card-top",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "tpl-card-text",
-										children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-												className: "tpl-name",
-												children: t.name
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-												className: "tpl-meta",
-												title: t.repo_path || void 0,
-												children: templateMeta(t)
-											}),
-											(() => {
-												const info = runs.runs[t.name.trim().toLowerCase()] || {};
-												const line = runLine(t, info, runs);
-												return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-													line && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-														className: "tpl-runs",
-														children: line
-													}),
-													info.last_error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-														className: "tpl-run-error error",
-														children: ["Last run failed: ", info.last_error]
-													}),
-													info.last_skip && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-														className: "tpl-run-skip muted",
-														children: [
-															"Skipped ",
-															whenLabel(info.last_skip_at),
-															": ",
-															info.last_skip
-														]
-													}),
-													info.history && info.history.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-														className: "tpl-history",
-														children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: [
-															"Recent runs (",
-															info.history.length,
-															")"
-														] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: info.history.map((h, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
-															className: h.error ? "error" : h.skipped ? "muted" : "",
-															children: historyLine(h)
-														}, i)) })]
-													})
-												] });
-											})(),
-											t.prompt && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-												className: "tpl-prompt",
-												children: t.prompt
-											}),
-											runProblem(t) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-												className: "tpl-needs",
-												children: [
-													"Run now and schedules need a folder.",
-													" ",
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-														type: "button",
-														className: "linklike",
-														onClick: () => p.dispatch({
-															t: "edit",
-															name: t.name
-														}),
-														children: "Add one"
-													})
-												]
-											})
-										]
-									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "tpl-actions",
-										children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												className: "tpl-btn tpl-run",
-												disabled: !!runProblem(t) || !!p.running,
-												title: runProblem(t) ? "Run now needs a folder" : "Run now — starts a new session from this template",
-												onClick: () => p.onRun?.(t.name),
-												children: p.running === t.name ? "Starting…" : "▶ Run now"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												className: "tpl-btn tpl-sched",
-												title: t.schedule?.at ? "Change or stop its schedule" : "Start it by itself every day or weekday",
-												onClick: () => p.dispatch({
-													t: "schedule",
-													name: t.name
-												}),
-												children: t.schedule?.at ? "Schedule" : "Schedule…"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												className: "tpl-btn",
-												onClick: () => p.dispatch({
-													t: "edit",
-													name: t.name
-												}),
-												children: "Edit"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												className: "tpl-btn tpl-del",
-												onClick: () => p.dispatch({
-													t: "ask-delete",
-													name: t.name
-												}),
-												disabled: busy,
-												children: "Delete"
-											})
-										]
-									})]
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "sch-empty-mark",
+									"aria-hidden": "true",
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+										viewBox: "0 0 24 24",
+										width: "22",
+										height: "22",
+										fill: "none",
+										stroke: "currentColor",
+										strokeWidth: "1.8",
+										strokeLinecap: "round",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+											cx: "12",
+											cy: "13",
+											r: "8"
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 9v4l2.5 2.5M9 2.5h6" })]
+									})
 								}),
-								ui.confirming === t.name && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "tpl-confirm",
-									role: "group",
-									"aria-live": "polite",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-											"Delete “",
-											t.name,
-											"”? It goes from every device."
-										] }),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-											type: "button",
-											className: "tpl-btn tpl-del tpl-confirm-yes",
-											disabled: busy,
-											onClick: () => p.onDelete(t.name),
-											children: busy ? "Deleting…" : "Delete"
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-											type: "button",
-											className: "tpl-btn",
-											onClick: () => p.dispatch({ t: "cancel" }),
-											children: "Keep"
-										})
-									]
-								}),
-								ui.confirming === t.name && ui.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-									className: "error",
-									"aria-live": "polite",
-									children: ui.error
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Save a session setup once, then start it with one click — or every night by itself." }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									id: "schedule-empty-create",
+									className: "tpl-btn tpl-run",
+									onClick: () => p.dispatch({ t: "new" }),
+									children: "Create a template"
 								})
 							]
-						}, t.name))
+						}),
+						templates.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+							(up || elsewhere) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "sch-next-up",
+								id: "schedule-next",
+								children: elsewhere ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+									"Schedules start on ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: runs.runs_on }),
+									" — the device that runs automation."
+								] }) : up && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "sch-next-label",
+										children: "Next"
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: up.name }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: inLabel(up.at, now) }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "muted",
+										children: ["— ", whenLabel(up.at, now)]
+									})
+								] })
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+								className: "sch-section",
+								id: "schedule-scheduled",
+								"aria-labelledby": "schedule-scheduled-h",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+									id: "schedule-scheduled-h",
+									children: ["Scheduled", scheduledList.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "sch-count",
+										children: scheduledList.length
+									})]
+								}), scheduledList.length ? scheduledList.map(card) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+									className: "sch-none muted",
+									children: [
+										"Nothing runs by itself yet — ",
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Schedule…" }),
+										" on a setup below starts it every day, weekday or on any cron."
+									]
+								})]
+							}),
+							saved.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+								className: "sch-section",
+								id: "schedule-saved",
+								"aria-labelledby": "schedule-saved-h",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+									id: "schedule-saved-h",
+									children: [
+										"Saved setups",
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "sch-count",
+											children: saved.length
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "sch-section-hint",
+											children: "run now or add a schedule"
+										})
+									]
+								}), saved.map(card)]
+							})
+						] })
 					]
 				})
 			]
@@ -66288,7 +66589,7 @@ function TemplatesDialogView(p) {
 	});
 }
 function TemplatesDialog() {
-	const open = useUi((s) => s.openDialog === "templates");
+	const open = useUi((s) => s.openDialog === "schedule");
 	const target = useUi((s) => s.dialogTarget);
 	const closeDialog = useUi((s) => s.closeDialog);
 	const [templates, setList] = (0, import_react.useState)(() => templatesNow());
@@ -66299,6 +66600,7 @@ function TemplatesDialog() {
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [runs, setRuns] = (0, import_react.useState)(() => templateRunsNow());
 	const [running, setRunning] = (0, import_react.useState)("");
+	const [flagging, setFlagging] = (0, import_react.useState)("");
 	const [agents, setAgents] = (0, import_react.useState)([]);
 	const [scheduleFocus, setScheduleFocus] = (0, import_react.useState)(false);
 	const [preview, setPreview] = (0, import_react.useState)(null);
@@ -66430,8 +66732,27 @@ function TemplatesDialog() {
 			setRunning("");
 		}
 	};
+	const flag = async (name, patch, said) => {
+		const t = templates.find((x) => x.name === name);
+		if (!t) return;
+		setFlagging(name);
+		try {
+			await saveTemplate(withScheduleFlags(t, patch));
+			setList(templatesNow());
+			await ensureTemplates(true).catch(() => {});
+			setRuns(templateRunsNow());
+			toast(said);
+		} catch (err) {
+			toast("Couldn't change the schedule: " + errMsg(err));
+		} finally {
+			setFlagging("");
+		}
+	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TemplatesDialogView, {
 		templates,
+		flagging,
+		onPause: (name, paused) => void flag(name, { paused }, paused ? `Paused “${name}” — it starts nothing until you resume it` : `Resumed “${name}”`),
+		onSkip: (name, until) => void flag(name, { skip_until: until }, until ? `“${name}” will skip ${whenLabel(until)} — the run after it goes ahead` : `“${name}” runs next time as usual`),
 		runs,
 		running,
 		cronPreview: preview,
@@ -68493,7 +68814,7 @@ function TemplatesStrip({ templates, activeTemplate, onPick, onRun, onSchedule, 
 				type: "button",
 				id: "new-templates-manage",
 				className: "linklike",
-				title: "Run, schedule, edit and delete templates — you come back here on Close",
+				title: "Run, schedule, edit and delete templates in Schedule — you come back here on Close",
 				onClick: () => useUi.getState().openDialogFor("templates", templatesTarget({
 					fromNew: true,
 					schedule: null
@@ -69886,7 +70207,7 @@ function NewSessionDialog() {
 			} else setTemplates(await saveTemplate(body));
 			setActiveTemplate(String(body.name));
 			setSaveTplName(null);
-			toast(`Saved template “${body.name}” — ▶ runs it and ⏰ schedules it, in Templates at the top of New. Click to open Templates.`, { onClick: () => useUi.getState().openDialogFor("templates", templatesTarget({
+			toast(`Saved template “${body.name}” — ▶ runs it and ⏰ schedules it, in Templates at the top of New. Click to open Schedule.`, { onClick: () => useUi.getState().openDialogFor("templates", templatesTarget({
 				fromNew: true,
 				schedule: null
 			})) });
@@ -74509,12 +74830,12 @@ function IssuesTab({ gotoTab }) {
 //#endregion
 //#region src/components/intake/ScheduledTemplates.tsx
 function scheduledRows(templates, status, now = /* @__PURE__ */ new Date()) {
-	return templates.filter((t) => !!t.schedule?.at).map((t) => {
+	return templates.filter(hasSchedule).map((t) => {
 		const info = status.runs[t.name.trim().toLowerCase()] || {};
-		const next = !status.runs_here && status.runs_on ? "starts on " + status.runs_on : info.next_at ? "next " + whenLabel(info.next_at, now) : "";
+		const next = t.schedule?.paused ? "paused" : !status.runs_here && status.runs_on ? "starts on " + status.runs_on : info.next_at ? "next " + whenLabel(info.next_at, now) : "";
 		return {
 			name: t.name,
-			when: scheduleLabel(t.schedule),
+			when: info.schedule_label || scheduleLabel(t.schedule),
 			next,
 			problem: runProblem(t)
 		};
@@ -74552,9 +74873,9 @@ function ScheduledTemplates() {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "test-btn ik-queue-goto",
-					onClick: () => useUi.getState().openDialogFor("templates"),
-					title: "Open Templates to change or stop a schedule",
-					children: "Open Templates ›"
+					onClick: () => useUi.getState().openDialogFor("schedule"),
+					title: "Open Schedule to change, pause or skip a schedule",
+					children: "Open Schedule ›"
 				})
 			]
 		}), rows.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -90215,6 +90536,9 @@ var SLIDES = [
 			VERIFY_BLURB,
 			".",
 			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Schedule" }),
+			" starts a saved setup by itself — nightly, weekdays or on any cron.",
+			" ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⚙ Customize" }),
 			" at the bottom of the sidebar adds more bars — like",
 			" ",
@@ -90677,13 +91001,18 @@ var BY_HASH = {
 	intake: "intake",
 	verify: "verify",
 	settings: "settings",
-	templates: "templates"
+	schedule: "schedule",
+	templates: "schedule"
 };
-var BY_DIALOG = Object.fromEntries(Object.entries(BY_HASH).map(([h, d]) => [d, h]));
+var BY_DIALOG = {
+	...Object.fromEntries(Object.entries(BY_HASH).map(([h, d]) => [d, h])),
+	schedule: "schedule",
+	templates: "schedule"
+};
 function hashFor(name, target) {
 	const h = name ? BY_DIALOG[name] : void 0;
 	if (!h) return "";
-	const t = target && !(name === "templates" && target === "new") ? "/" + encodeURIComponent(target) : "";
+	const t = target && !(h === "schedule" && target === "new") ? "/" + encodeURIComponent(target) : "";
 	return "#" + h + t;
 }
 function parseHash(hash) {

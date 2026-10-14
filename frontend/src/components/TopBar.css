@@ -290,12 +290,13 @@ body #mf-winctl {
   cursor: pointer;
 }
 
-/* The four worded actions read at the wordmark's size; 11px (the icon-button
+/* The five worded actions read at the wordmark's size; 11px (the icon-button
    default above) made them look like fine print. By id so the palette icon,
    which shares .tb-item, keeps its box. */
 #topbar #new-btn.tb-new,
 #topbar #intake-btn,
 #topbar #verify-btn,
+#topbar #schedule-btn,
 #topbar #settings-btn {
   font-size: 13px;
   height: 28px;
@@ -317,5 +318,18 @@ body #mf-winctl {
 @media (max-width: 560px) {
   #topbar .tb-brand {
     display: none;
+  }
+}
+
+/* Narrower still (a browser tab squeezed to a side): the worded items close
+   up rather than pushing the palette icon past the edge — the bar is fixed
+   and never wraps, so whatever doesn't fit is simply gone. */
+@media (max-width: 520px) {
+  #topbar #new-btn.tb-new,
+  #topbar #intake-btn,
+  #topbar #verify-btn,
+  #topbar #schedule-btn,
+  #topbar #settings-btn {
+    padding: 0 5px;
   }
 }
