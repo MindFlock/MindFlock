@@ -40,6 +40,10 @@
   line-height: 1.45;
 }
 
+#memory-notice .mn-slots {
+  font-variant-numeric: tabular-nums;
+}
+
 #memory-notice .mn-what {
   color: var(--muted);
 }

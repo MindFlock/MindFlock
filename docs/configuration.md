@@ -671,6 +671,9 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `CS_CURSOR_AUTOADOPT` | on | `0` starts the Cursor auto-adopt loop disabled |
 | `MINDFLOCK_CODE_MAP_WARM` | on | `0` skips the boot warm-up that builds every open session's Code Map snapshot in the background (it is always off under pytest) |
 | `MINDFLOCK_MEMORY_GUARD` | on | `0` turns off the memory guard ([session-engine.md](session-engine.md#memory-guard)): the level reads `unknown`, so agent spawns, team-run starts, pipeline launches and the revive sweep are never held for memory |
+| `MINDFLOCK_SLOT` | on | `0` makes `mindflock slot` run its command straight away, no slot and no memory hold ([cli.md](cli.md#mindflock-slot---pool-name---max-n---timeout-secs---no-wait-memory----cmd-args)) |
+| `MINDFLOCK_HEAVY_SLOTS` | — | How many heavy commands `mindflock slot` lets run at once; wins over `general.heavy_slots` (`--max` wins over both) |
+| `MINDFLOCK_SLOT_HELD` | — | **Internal**: set by `mindflock slot` on the command it runs (the pools held, comma-separated), so a nested `mindflock slot` for the same pool runs straight through |
 | `MINDFLOCK_REVIVE_ON_START` | on | `0` starts the server without the background revive sweep (sandboxed or scratch servers), whatever `general.revive_on_start` says |
 | `MALLOC_ARENA_MAX` | `2` (server only) | glibc malloc arenas for the web server process. Unset, `run.py` caps them at 2 with `mallopt` before any thread starts (not via the environment, so agent shells keep glibc's default); set it (or `GLIBC_TUNABLES=glibc.malloc.arena_max=…`) to choose another cap — glibc applies yours and the server leaves it alone. Uncapped, every worker thread grew its own arena of freed-but-kept memory (~1 GB RSS on a busy server). See [architecture.md](architecture.md) |
 | `CLAUDE_CONFIG_DIR` | — | Extra Claude config root — scanned for token usage, and probed for login evidence (`.claude.json` / `.credentials.json`) by the provider auth probe (legacy/backend-only; see [providers.md](providers.md)) |
@@ -679,7 +682,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_AUTH` | unset | Web auth gate override — `1` forces it on, `0` off (wins over settings) |
 | `MINDFLOCK_AUTH_TOKEN` | — | Web auth token; setting it enables the auth gate. The CLI's session commands and the MindFlock MCP send it as `Authorization: Bearer`, falling back to `general.auth_token` in the settings file (that fallback goes to loopback addresses only; set this variable to reach a server on another host) |
 | `MINDFLOCK_AUTH_PROFILE` | unset | App-wide default **auth profile** id — the identity new sessions run under when they pin none. Wins over `auth_profiles.default_profile` in settings; `default` means the CLI's own ambient login. `GET /api/settings/auth-profiles` reports it (`default_profile_env`, `default_profile_locked`) and the Accounts screen disables its picker while it is set. See [accounts.md](accounts.md) |
-| `MINDFLOCK_RUN_DIR` | `~/.mindflock/run` | Where a session's per-run files are written (mode 0600, removed on close): the credential file that lets API keys reach the CLI without passing through argv (see [accounts.md](accounts.md#where-the-credentials-go)), and Claude's MindFlock-MCP `--mcp-config` file `mcp-<tmux name>.json` |
+| `MINDFLOCK_RUN_DIR` | `~/.mindflock/run` | Where a session's per-run files are written (mode 0600, removed on close): the credential file that lets API keys reach the CLI without passing through argv (see [accounts.md](accounts.md#where-the-credentials-go)), and Claude's MindFlock-MCP `--mcp-config` file `mcp-<tmux name>.json`. Also holds `slots/<pool>/`, the lock files of `mindflock slot` |
 | `MINDFLOCK_HOST` / `MINDFLOCK_PORT` | `127.0.0.1` / `8765` | CLI client and MindFlock MCP: where to find the running server (after `--host`/`--port` flags). Auto-attach sets both for each session's MCP |
 | `MINDFLOCK_AGENT_MCP` | unset | **Kill switch** for MindFlock-MCP auto-attach: `0`/`false`/`no`/`off` in the server's environment stops new launches from attaching it, and wins over `general.agent_mcp`. A truthy value does not force it on. See [mcp.md](mcp.md#turning-it-off-and-how-far-it-reaches) |
 | `MINDFLOCK_MCP_SCOPE` | `children` | The MindFlock MCP server's scope (`readonly`, `children` or `all`) when `--scope` isn't given. Auto-attach sets it from `general.agent_mcp_scope`. An unknown value runs `readonly` |
@@ -999,6 +1002,16 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   the agent a `[MindFlock note …]` saying what failed when a run stops on
   something it can fix (see [web-ui.md](web-ui.md)). Only `false` is
   written, and anything other than an explicit `false` reads as on.
+- **Heavy-job slots** (`general.heavy_slots`): how many commands wrapped in
+  `mindflock slot` run at once on this machine (see
+  [cli.md](cli.md#mindflock-slot---pool-name---max-n---timeout-secs---no-wait-memory----cmd-args)).
+  Unset (or below 1) means by RAM: 1 below ~32 GB, else 2. Per device — it
+  is sized to this machine's memory, so settings sync never carries it.
+  `MINDFLOCK_HEAVY_SLOTS` and `--max` win. `mindflock slot` reads the file
+  directly on every run (no server, no restart); `GET /api/system/slots`
+  reports the effective count and its source. Written through
+  `POST /api/settings` (`{"general": {"heavy_slots": 2}}`, owner only); no
+  Settings screen shows it yet.
 - **Notification rules** (`notifications.muted_rules` / `enabled_rules`,
   Settings → Notifications) — which session events notify you. Default-on rules
   are opt-*out* (their id lands in `muted_rules`), noisier ones are opt-*in*

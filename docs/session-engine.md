@@ -404,6 +404,19 @@ low emits `ok → low` on its first reading; `unknown` never emits. The web UI
 polls `GET /api/system/memory` and shows a notice while the level is low.
 `MINDFLOCK_MEMORY_GUARD=0` forces `unknown`, which turns it all off.
 
+**The guard gates agents, not their work.** The OOM it was built for turned out
+(measured 2026-10) to come mostly from inside sessions that were already
+running: pre-commit hooks running `pytest -n auto` suites (~1.2-1.5 GB per
+xdist worker), a documentarian starting more agent CLIs, an indexer — ~8 GB per
+commit, with several agents committing at once. Nothing above holds those.
+[`mindflock slot`](cli.md#mindflock-slot---pool-name---max-n---timeout-secs---no-wait-memory----cmd-args)
+does: a repo prefixes its heavy hooks with it, and those commands take turns
+for N machine-wide slots (`general.heavy_slots`; 1 below ~32 GB of RAM) and,
+once holding one, wait (capped at 10 min) for this same reading to leave
+`low`. It is a flock-based semaphore in `~/.mindflock/run/slots/` that needs no
+server; `GET /api/system/slots` shows who holds and who waits, and the memory
+notice adds a line for them while it is up.
+
 **Nothing disappears silently.** The engine still drops, at load, a session
 whose worktree folder **and** tmux session are both gone (outside the 120 s
 grace window; paused sessions are exempt) — but it now records each one in

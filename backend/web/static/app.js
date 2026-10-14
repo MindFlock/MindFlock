@@ -24409,6 +24409,15 @@ function useMemory() {
 		retry: false
 	});
 }
+function useSlots(enabled) {
+	return useQuery({
+		queryKey: ["system-slots"],
+		queryFn: () => api("/api/system/slots"),
+		refetchInterval: 15e3,
+		retry: false,
+		enabled
+	});
+}
 function refreshMindflockStatus() {
 	return queryClient.invalidateQueries({ queryKey: ["mindflock-status"] });
 }
@@ -35799,12 +35808,31 @@ function memoryDetail(m) {
 	if (stall >= 5) bits.push("stalled on memory " + Math.round(stall) + "% of the last minute");
 	return bits.join(" · ");
 }
+function jobName(j) {
+	if (j.session) return j.session;
+	return (j.cwd || "").replace(/\/+$/, "").split("/").pop() || (j.pid ? "pid " + j.pid : "a job");
+}
+function slotsLine(s) {
+	if (!s || !s.running && !s.waiting) return "";
+	const holders = s.pools.flatMap((p) => p.holders);
+	const bits = [];
+	if (holders.length) {
+		const names = holders.slice(0, 2).map(jobName).join(", ");
+		const more = holders.length > 2 ? " +" + (holders.length - 2) : "";
+		bits.push(names + more + " running");
+	}
+	if (s.waiting) bits.push(s.waiting + " waiting for a slot");
+	return "Heavy jobs: " + bits.join(" · ");
+}
 function MemoryNotice() {
 	const { data, isError } = useMemory();
 	const [hiddenAt, setHiddenAt] = (0, import_react.useState)(0);
 	const rank = RANK$1[data?.level || "ok"] ?? 0;
+	const shown = !!data && !isError && rank > 0 && !(hiddenAt && rank <= hiddenAt);
+	const { data: slots } = useSlots(shown);
 	if (hiddenAt && (rank === 0 || rank > hiddenAt)) setHiddenAt(0);
-	if (!data || isError || rank === 0 || hiddenAt && rank <= hiddenAt) return null;
+	if (!data || !shown) return null;
+	const heavy = slotsLine(slots);
 	const critical = data.level === "critical";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "memory-notice",
@@ -35818,6 +35846,10 @@ function MemoryNotice() {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "mn-detail",
 				children: memoryDetail(data)
+			}),
+			heavy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "mn-detail mn-slots",
+				children: heavy
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "mn-detail mn-what",

@@ -2044,3 +2044,27 @@ export interface MemoryReading {
   /** One-line reason ("memory is low: 2.1 GB free of 24.0 GB (9%)"); "" when ok. */
   message?: string;
 }
+
+/** One holder or waiter of a heavy-job slot (`mindflock slot`). */
+export interface SlotJob {
+  slot?: number;
+  pid?: number | null;
+  cmd?: string;
+  cwd?: string;
+  since?: number;
+  max?: number;
+  /** The MindFlock session it runs in; "" when none. */
+  session?: string;
+  /** Waiters only: 1 = next in line. */
+  position?: number;
+}
+
+/** `GET /api/system/slots` — heavy commands gated by `mindflock slot`
+ * (backend/slot.py): who holds a slot, who is queued for one. */
+export interface SlotsReading {
+  slots: number;
+  source: "env" | "setting" | "default";
+  pools: { name: string; holders: SlotJob[]; waiters: SlotJob[] }[];
+  running: number;
+  waiting: number;
+}

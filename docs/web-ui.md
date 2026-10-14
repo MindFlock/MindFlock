@@ -366,8 +366,10 @@ is disabled while the sweep runs, and the strip hides below two offline rows.
 **Memory notice.** While `GET /api/system/memory` reads low or critical, a card
 in the bottom-right corner gives the numbers (free memory, swap in use, the
 share of the last minute spent stalled) and what MindFlock is holding back
-(agent spawns, team-run lines, restarts). **Hide** lasts until the level worsens
-or clears and returns.
+(agent spawns, team-run lines, restarts). While it is up it also polls
+`GET /api/system/slots` and, when heavy commands are using `mindflock slot`,
+adds a line for them (*Heavy jobs: fix-auth running · 2 waiting for a slot*).
+**Hide** lasts until the level worsens or clears and returns.
 
 **After a server restart, Offline fixes itself.** Once the server has booted
 (past its 30 s quiet window) it relaunches in the background every session

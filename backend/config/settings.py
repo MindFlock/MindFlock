@@ -1197,6 +1197,12 @@ class GeneralSettings:
     value reads as unset. The ``MINDFLOCK_MAX_CHILDREN`` /
     ``MINDFLOCK_MAX_SPAWN_DEPTH`` / ``MINDFLOCK_MAX_SPAWNED`` env vars, when
     set, still win over these (an operator's override).
+
+    ``heavy_slots``: how many heavy commands wrapped in ``mindflock slot``
+    (:mod:`backend.slot`) run at once on this machine. ``None`` = by RAM (1
+    below ~32 GB, else 2); ``MINDFLOCK_HEAVY_SLOTS`` and ``--max`` win. Per
+    device (RAM is), so settings sync leaves it alone. ``backend.slot`` reads
+    the file directly, never through this layer — it wraps every commit.
     """
 
     session_budget_usd: Optional[float] = None
@@ -1219,6 +1225,7 @@ class GeneralSettings:
     agent_max_children: Optional[int] = None  # None = lineage default (8)
     agent_max_spawn_depth: Optional[int] = None  # None = lineage default (3)
     agent_max_spawned: Optional[int] = None  # None = lineage default (24)
+    heavy_slots: Optional[int] = None  # None = by RAM (see docstring)
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -1261,6 +1268,8 @@ class GeneralSettings:
             value = getattr(self, key)
             if value is not None:
                 d[key] = value
+        if self.heavy_slots is not None:
+            d["heavy_slots"] = self.heavy_slots
         return d
 
     @classmethod
@@ -1293,6 +1302,7 @@ class GeneralSettings:
             agent_max_children=_opt_nonneg_int(d.get("agent_max_children")),
             agent_max_spawn_depth=_opt_nonneg_int(d.get("agent_max_spawn_depth")),
             agent_max_spawned=_opt_nonneg_int(d.get("agent_max_spawned")),
+            heavy_slots=_opt_pos_int(d.get("heavy_slots")),
         )
 
 
@@ -1852,6 +1862,12 @@ def _opt_nonneg_int(v: Any) -> Optional[int]:
     """:func:`_opt_int`, with a negative count read as unset."""
     n = _opt_int(v)
     return n if n is not None and n >= 0 else None
+
+
+def _opt_pos_int(v: Any) -> Optional[int]:
+    """:func:`_opt_int`, with anything below 1 read as unset."""
+    n = _opt_int(v)
+    return n if n is not None and n >= 1 else None
 
 
 def _opt_float(v: Any) -> Optional[float]:

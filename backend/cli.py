@@ -47,6 +47,8 @@ Installed via ``[project.scripts]``::
     mindflock update --check      # …only say whether there is a newer one
     mindflock restart             # restart the running server (onto what is installed)
 
+    mindflock slot -- CMD ...     # run a heavy command once a machine-wide slot is free
+
     mindflock mcp                 # MCP stdio server (lets agents reach other sessions)
     mindflock mcp --print-config  # …the snippets to register it in Claude/Codex
 
@@ -757,6 +759,20 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="print_config",
         help="print the Claude Code / Codex registration snippets and exit",
     )
+
+    slot_p = sub.add_parser(
+        "slot",
+        help="run a heavy command (tests, builds) once a machine-wide slot is free",
+        description=(
+            "mindflock slot [--pool NAME] [--max N] [--timeout SECS] "
+            "[--no-wait-memory] -- CMD [ARGS...]: run CMD once it holds one of N "
+            "machine-wide slots (and memory reads ok), so heavy jobs from many "
+            "sessions take turns. No server needed; `mindflock slot --help` "
+            "lists the options. MINDFLOCK_SLOT=0 bypasses it."
+        ),
+    )
+    # Dispatched before this parser runs (see main): listed here for --help.
+    slot_p.add_argument("args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
 
     sub.add_parser(
         "token",
@@ -3120,6 +3136,8 @@ def _cli_update():
 def main(argv: Optional[List[str]] = None) -> int:
     """Parse ``argv`` and dispatch to the matching subcommand; return the exit code.
 
+    ``slot`` is dispatched before the parser is even built (it wraps commit
+    hooks: startup cost matters, and its command's flags must pass through).
     ``doctor``, ``mcp`` and the J1 session commands
     (new/ls/attach/close/delete/rm/pause/resume/open/events/msg/inbox/run/
     templates) run in-process; any other invocation — including no subcommand at all — falls
@@ -3127,7 +3145,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     :class:`client.ServerNotFound` / :class:`client.ClientError` into a one-line
     stderr message and exit 1, never a traceback.
     """
-    args = _build_parser().parse_args(sys.argv[1:] if argv is None else argv)
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["slot"]:
+        # Before the big parser on purpose: `slot` wraps every commit's test
+        # run, takes its own options and passes everything after `--` through
+        # verbatim (argparse would eat a wrapped command's own flags).
+        from backend import slot
+
+        return slot.main(argv[1:])
+    args = _build_parser().parse_args(argv)
     if args.command == "doctor":
         return _cmd_doctor(fix=args.fix)
     if args.command == "init":
