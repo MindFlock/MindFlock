@@ -203,6 +203,12 @@ def test_connections(mf_server, page, open_app):
 
     rows = screen.locator(".conn-row")
     expect(rows.first).to_be_visible(timeout=45_000)
+    # Basic mode keeps all but the everyday rows in a collapsed Advanced fold,
+    # and a hidden row's inner_text is "": open it so every row is checked.
+    fold = screen.locator("details#connections-advanced")
+    if fold.count() and fold.get_attribute("open") is None:
+        fold.locator("summary").click()
+        expect(fold).to_have_attribute("open", "")
     n = rows.count()
     assert n >= 1
     seen = []
