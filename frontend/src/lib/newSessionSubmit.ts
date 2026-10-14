@@ -278,16 +278,20 @@ export function newSessionSubmit(ctx: NewSessionSubmitCtx) {
     }
   };
 
-  const submit = async () => {
+  /** Create from the form. `over.prompt` is page 1's Create session, which
+   * starts from the sentence as typed (it is also written into the Task box,
+   * so a refusal lands on a form that still holds it). Resolves true once a
+   * create or run has been sent, false when a guard refused it here. */
+  const submit = async (over: { prompt?: string } = {}): Promise<boolean> => {
     if (runMode) {
       if (splitOn && isNameQuery(repoPath)) {
         setError(
           `“${repoPath.trim()}” is a name to look up, not a folder — pick one of the matches, or type a full path.`
         );
-        return;
+        return false;
       }
       void startRun();
-      return;
+      return true;
     }
     const held = submitHoldReason(submitArmAt.current, Date.now());
     if (held) {
@@ -296,7 +300,7 @@ export function newSessionSubmit(ctx: NewSessionSubmitCtx) {
       // rather than failCreate because a half-second hold is not a create
       // failure and does not deserve a nine-second toast for it.
       setError(held);
-      return;
+      return false;
     }
     if (newFolderBlocked) {
       // failCreate, not setError, for the reason its two siblings below give:
@@ -305,13 +309,13 @@ export function newSessionSubmit(ctx: NewSessionSubmitCtx) {
       // up. And before the optimistic close, like every guard here — once the
       // dialog has shut the directory is made and there is nothing to correct.
       failCreate(newFolderBlocked);
-      return;
+      return false;
     }
     if (provisionBlocked) {
       // Before the optimistic close below, for the same reason the name guard
       // is: once the dialog has shut there is nothing on screen to correct.
       failCreate(provisionBlocked);
-      return;
+      return false;
     }
     if (isNameQuery(repoPath)) {
       // Every way of reaching Create lands here — the button, Ctrl/Cmd+Enter,
@@ -324,13 +328,13 @@ export function newSessionSubmit(ctx: NewSessionSubmitCtx) {
       failCreate(
         `“${repoPath.trim()}” is a name to look up, not a folder — pick one of the matches, or type a full path starting with / or ~ (Browse… fills one in).`
       );
-      return;
+      return false;
     }
     await postCreate(
       buildBody({
         title,
         repoPath,
-        prompt,
+        prompt: over.prompt ?? prompt,
         inPlace: inPlace && !laneNeedsWorktree,
         initRepo,
         provisioned: provision,
@@ -339,6 +343,7 @@ export function newSessionSubmit(ctx: NewSessionSubmitCtx) {
         continueBranch: !!baseBranch && continueOn === baseBranch,
       })
     );
+    return true;
   };
 
   return { failCreate, buildBody, postCreate, startRun, submit };

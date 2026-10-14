@@ -2,7 +2,7 @@
  * TemplatesDialog), and the fill that writes a template into the form. */
 
 import type { Dispatch, SetStateAction } from "react";
-import type { Template } from "../../../lib/templates";
+import { runProblem, scheduleLabel, templatesTarget, type Template } from "../../../lib/templates";
 import { useUi } from "../../../state/store";
 import type { FolderAction } from "../newSession";
 import type { Lane } from "../../../lib/laneActions";
@@ -80,45 +80,93 @@ export function templateFiller(ctx: TemplateFillCtx) {
 export function TemplatesStrip({
   templates,
   activeTemplate,
-  fillFromTemplate,
+  onPick,
+  onRun,
+  onSchedule,
+  landing,
 }: {
   templates: Template[];
   activeTemplate: string;
-  fillFromTemplate(t: Template): void;
+  /** A click on a template's name: fill the form from it. */
+  onPick(t: Template): void;
+  /** ▶: start a new session from it now (absent = not offered, e.g. the
+   * session would live on another device). */
+  onRun?: (t: Template) => void;
+  /** ⏰: open its schedule in Templates. */
+  onSchedule?: (t: Template) => void;
+  /** Drawn on page 1, under the describe box. */
+  landing?: boolean;
 }) {
   // Nothing to pick: no strip at all (a new user's first form is short).
   // Templates are made with "Save as template…" at the bottom of this form.
   if (!templates.length) return null;
+  const acts = !!(onRun || onSchedule);
   return (
-    <div id="new-templates" className="new-templates">
+    <div id="new-templates" className={"new-templates" + (landing ? " nt-landing" : "")}>
       <div className="nt-head">
         <span title="Saved session setups — one list on every device">
-          Templates <span className="muted">— click one to fill the form</span>
+          Templates{" "}
+          <span className="muted">
+            {acts
+              ? "— ▶ runs one now · ⏰ schedules it · its name fills the form"
+              : "— click one to fill the form"}
+          </span>
         </span>
         <button
           type="button"
           id="new-templates-manage"
           className="linklike"
           title="Run, schedule, edit and delete templates — you come back here on Close"
-          onClick={() => useUi.getState().openDialogFor("templates", "new")}
+          onClick={() => useUi.getState().openDialogFor("templates", templatesTarget({ fromNew: true, schedule: null }))}
         >
-          Manage…
+          All templates…
         </button>
       </div>
       <div id="new-templates-list" className="nt-list">
-        {templates.map((t) => (
-          <button
-            key={t.name}
-            type="button"
-            className={"nt-chip" + (activeTemplate === t.name ? " active" : "")}
-            data-name={t.name}
-            aria-pressed={activeTemplate === t.name}
-            title={"Fill the form from “" + t.name + "”" + (t.prompt ? ": " + t.prompt : "")}
-            onClick={() => fillFromTemplate(t)}
-          >
-            {t.name}
-          </button>
-        ))}
+        {templates.map((t) => {
+          const problem = runProblem(t);
+          return (
+            <span key={t.name} className={"nt-tpl" + (acts ? " nt-tpl-acts" : "")}>
+              <button
+                type="button"
+                className={"nt-chip" + (activeTemplate === t.name ? " active" : "")}
+                data-name={t.name}
+                aria-pressed={activeTemplate === t.name}
+                title={"Fill the form from “" + t.name + "”" + (t.prompt ? ": " + t.prompt : "")}
+                onClick={() => onPick(t)}
+              >
+                {t.name}
+              </button>
+              {onRun && (
+                <button
+                  type="button"
+                  className="nt-act nt-run"
+                  aria-label={"Run “" + t.name + "” now"}
+                  title={problem ? problem + " (All templates… → Edit)" : "Run now — starts a new session from “" + t.name + "”"}
+                  disabled={!!problem}
+                  onClick={() => onRun(t)}
+                >
+                  ▶
+                </button>
+              )}
+              {onSchedule && (
+                <button
+                  type="button"
+                  className={"nt-act nt-sched" + (t.schedule?.at ? " on" : "")}
+                  aria-label={"Schedule “" + t.name + "”"}
+                  title={
+                    t.schedule?.at
+                      ? scheduleLabel(t.schedule) + " — change or stop it"
+                      : "Schedule… — start it by itself every day or weekday"
+                  }
+                  onClick={() => onSchedule(t)}
+                >
+                  ⏰
+                </button>
+              )}
+            </span>
+          );
+        })}
       </div>
     </div>
   );

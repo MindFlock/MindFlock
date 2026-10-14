@@ -108,6 +108,9 @@ export function FastTrackChoice({
           onChange={(e) => onAskFirst(e.target.checked)}
         />
         {ASK_FIRST_LABEL}
+        {/* Greyed because fast-track is Off: said on its face, not only in
+            a tooltip, so it doesn't read as broken. */}
+        {askWhy && !askReason && <span className="muted"> (needs fast-track)</span>}
       </label>
     </>
   );

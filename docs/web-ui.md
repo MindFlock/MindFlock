@@ -1666,11 +1666,19 @@ because it is the hot path. Ticket is described further down.
 The Session tab is two pages, as in v0.7: a compact **Describe** card it opens
 on (*What do you want to work on?* — see
 [describe it in a sentence](#new-session-dialog-describe-it-in-a-sentence)),
-and the full form behind it (**Set it up myself instead**, or **Review details
-first** to have the model fill it in). The form has **← Back** to the sentence.
-The caret starts in the sentence box; after a refused create the dialog
-reopens on the form with the caret in **Name**, since the form is what needs
-fixing.
+and the full form behind it (**Set it up myself instead**, which carries what
+you typed into the Task, or **Review details first** to have the model fill it
+in). The form has **← Back** to the sentence. The caret starts in the sentence
+box; after a refused create the dialog reopens on the form with the caret in
+**Name**, since the form is what needs fixing.
+
+**What you type is never thrown away.** Closing New — or a trip to Intake,
+Settings or anywhere else — keeps the sentence, the form and the page you were
+on; the next opening shows them as you left them. Only a **Create** (or
+Intake's **Start together…**, which opens New on its own list) starts fresh,
+and **Clear** — beside the box on page 1 and beside **← Back** on the form,
+shown while something typed is in it — empties it on purpose. A Task the
+opening's own last-used template wrote doesn't count as typed.
 
 Every pane hangs from a fixed top edge and is its own natural height, so
 switching tabs or opening a fold never moves the card's top: a centred card
@@ -1683,30 +1691,45 @@ scroll; at 420 px the fields stack and Fast-track's choices wrap.
 
 **The form, in order:** the **Templates** strip (only once a template exists),
 **Folder** and **Agent**, **Task**, **Works in**, then **More options** (shut).
-The footer has **Save as template…**, **← Back** and **Create**.
+The footer has **Save as template…**, **Clear** (while there is a draft),
+**← Back** and **Create**.
 
 - **Folder** — with *Folders you might mean — click one to use it* under it
   (**Recent**, **Started in** = the folder MindFlock was started in, **Home**;
-  📦 git repo · 📁 plain folder).
+  the 📦 git repo / 📁 plain folder legend is the head's tooltip). The box is
+  left out when its only suggestion is the folder already in the field.
 - **Agent** — the agents this device has; one that isn't installed reads
   *codex (not installed)* (`GET /api/providers/status`, this device only — an
   unknown answer never blocks). The default never starts on a missing agent
   when another is installed. Picking a missing one shows *<agent> isn't
   installed on this device. Install it in Settings → Agents, or pick another
   agent.* under the field, and **Create** (and page 1's **Create session**)
-  refuses — a session would otherwise sit "Idle" on *command not found*.
+  refuses — a session would otherwise sit "Idle" on *command not found*. An
+  installed agent `GET /api/setup` knows is NOT signed in gets *<agent> isn't
+  signed in yet — a session would stop at its sign-in screen.* **Sign in…**
+  (Settings → Agents) — under the field and on page 1. A note, not a block.
 - **Task** — what the agent starts on (blank starts it idle), always on the
-  form, with **Insert a saved prompt…** (built-ins first, then yours) and
+  form, with **Insert a prompt…** (built-ins first, then yours) and
   **Manage…**, which opens the Prompts dialog and comes back to this form as
-  it was.
+  it was — there, clicking a prompt puts it in this Task box (no *Paste
+  into*: you are making a new session, not talking to a running one).
 - **Works in** — two radios, on the form: **Separate worktree** `recommended`
   (*— its own branch, so several sessions can run at once*) — **the default** —
   and **This folder directly** (*— edits your checkout as it is, on its current
   branch*). Under the worktree, for a git folder, the branch it will cut:
   *New branch `me/add-readme-section-about-setup` from main* (the configured
   prefix from `GET /api/repos/check`'s `branch_prefix`, plus the Name or the
-  name made from the Task — the server numbers a taken one `-2`). For a folder
-  with no repo it says the session will run in the folder itself instead.
+  name made from the Task). It is the **real** name: a name made from the task
+  that another session already has is numbered here exactly as the server
+  numbers it (`session_create.free_title` — titles and renames), *New branch
+  `me/add-readme-section-about-setup-2` from main — “add-readme-section-about-setup”
+  is taken, so this one is numbered*. A typed Name another session has says so
+  (the server refuses it). With no Task yet it reads *New branch `me/…` named
+  from your task*. When other sessions on this device already work in this
+  repo (any way; Verify's runs aside), one line says who: *“<session>” is
+  already working in this repo — a separate worktree keeps you apart.* For a
+  folder with no repo it says the session will run in the folder itself
+  instead.
   Picking **This folder directly** while another session on this device
   already edits that folder directly warns *“<session>” is already editing
   this folder directly. Pick “Separate worktree” so they don't overwrite each
@@ -1714,11 +1737,15 @@ The footer has **Save as template…**, **← Back** and **Create**.
 - **More options** — its summary names anything in it that isn't the default
   (*named x · fast-track on · from main · flags*), else *name, fast-track,
   base branch, flags*. Inside: **Name** (*optional; empty names it from the
-  task* — see below), **Fast-track to**, **Auto-split**, **Provision the
-  worktree** (*also run the repo's setup and warm test caches* — a box on top
-  of the separate worktree, with the workspace strategy), **Base branch**,
+  task* — see below), **Fast-track to** (*Ask me before it ships* reads
+  *(needs fast-track)* while it is Off), **Auto-split** (*Lets the agent break
+  a big task into up to 3 parallel sessions — you approve the split first.*),
+  **Provision the worktree** (*also run the repo's setup and warm test caches*
+  — a box on top of the separate worktree, with the workspace strategy),
+  **Base branch** (drawn at once, *Loading branches…* until the list lands),
   **Create a git repo in this folder** (only for a folder that isn't a repo
-  yet), **Plan first** and the **Launch flags** fold.
+  yet), **Plan first** (*— the agent lists the files it will change and waits
+  for your OK (Map tab)*) and the **Launch flags** fold.
 
 **Names come from the task.** With the Name empty, a session is named from
 its Task: the first line's first few words, filler dropped, lowercased and
@@ -1746,25 +1773,39 @@ on create. **Ctrl/Cmd+Enter** submits the dialog from anywhere in it.
 **Save as template…** opens an inline name row above the footer (Enter saves,
 Esc cancels without closing the dialog; never a `prompt()`) and saves the
 **whole form**: folder, agent, where it works, provisioning, git init, Task and
-fast-track (with *ask me before it ships*). Saving over a template that has a
-schedule keeps the schedule. The strip appears (or updates) at once — no
-reopen.
+fast-track (with *ask me before it ships*) — not Plan first or Auto-split.
+Saving over a template that has a schedule keeps the schedule. The strip
+appears (or updates) at once — no reopen — and the toast (6 s, clickable)
+says where: *▶ runs it and ⏰ schedules it, in Templates at the top of New.
+Click to open Templates.*
 
-**One Templates list.** The **Templates** strip (*Templates — click one to
-fill the form*) has one chip per template — a chip fills the form, fast-track
-included, and opens More options when the template set something there; the
-Name is left empty so the session is named from its task — and **Manage…**,
-which opens the **Templates** dialog (also the palette's **Templates…**).
+**One Templates list.** The **Templates** strip (*Templates — ▶ runs one now ·
+⏰ schedules it · its name fills the form*) is on **both pages**: under the
+sentence box on page 1 (not for an Intake batch) and at the top of the form.
+Each template is one pill: its **name** fills the form, fast-track included,
+and opens More options when the template set something there (on page 1 it
+also moves to the form; a template with no task takes the sentence); the Name
+is left empty so the session is named from its task. **▶** starts a new
+session from it now (`POST /api/templates/{name}/run`, greyed with the reason
+when it has no folder) and New steps aside, keeping your draft; **⏰** opens
+the Templates dialog on that template's editor with its schedule on.
+**All templates…** opens the **Templates** dialog (also the palette's
+**Templates…**). ▶ and ⏰ are this device's: they are not drawn when the
+session would run on another device.
 Closing that dialog brings New back **as it was left**, with the list
 reloaded. The dialog opens on one line: *A template is a saved session setup —
 folder, agent and task — that starts a **new** session: now, or on a schedule.
 To send text to a session that's already running, use Prompts.* Each card
 has **▶ Run now**, **Schedule…**, **Edit** (inline: Name, Agent — a picker of
 this device's agents, *Your default agent* first — Folder *— needed to Run now
-or schedule*, Task, Separate worktree / This folder directly / Provisioned
-worktree, git init, the schedule, and **Fast-track** *— how far a session from
-it ships itself*: Off / Commit / Push / Open PR / Merge when green, plus *Ask
-me before it ships*) and **Delete**, which asks on an inline row — *Delete
+or schedule*, Task, **Works in** — the New form's own controls and words:
+**Separate worktree** `recommended` with **Provision the worktree** (and its
+workspace strategy) as a box under it, **This folder directly**, **Create a
+git repo in this folder** — the schedule, and **Fast-track to** *— how far a
+session from it ships itself*: the New form's segmented Off / Commit / Push /
+Open PR / Merge when green, plus *Ask me before it ships*; picking a rung
+moves *This folder directly* to the worktree and the other way round, as in
+New) and **Delete**, which asks on an inline row — *Delete
 “<name>”? It goes from every device.* **Delete** / **Keep** — and checks the
 delete happened (*“<name>” was already gone*). **+ New template** adds one.
 Templates live on the server (`/api/templates`, synced between devices).
@@ -1907,18 +1948,22 @@ text box — and the full form is page 2. The box is the widest of the three way
 to fill the form in (a sentence, a template chip, or by hand), and **nothing in
 it is submitted**: it wears the same card as the Templates and folder-suggestion
 strips rather than looking like a second form stacked on the first. Under it,
-*Your agent reads this and fills in the folder, the session name and its first
-instruction. **Review details first** shows them to you before anything is
-created; **Create session** starts right away.* and two examples (*Examples:
-start a new project called invoice-parser · add metrics to billing, in a
-worktree*).
+*__Create session__ starts it now in **<folder>**, with what you typed as its
+task. __Review details first__ has your agent pick the folder, name and
+options, and shows them to you before anything starts.* — the folder named is
+the one the form holds (the last-used or best suggestion; with none, *needs a
+folder — it opens the form with what you typed as the task*) — then two
+examples (*Examples: start a new project called invoice-parser · add metrics
+to billing, in a worktree*) and *Starting from a ticket, pull request or
+issue? **Open Intake***.
 
 Three actions sit under it, in increasing order of commitment, each named for
 its outcome rather than for the app's own vocabulary:
 
-- **Set it up myself instead** — straight to page 2. Nothing is read and no model
-  runs. It cannot be dropped: every opening lands here, so it is the only route
-  to the form for someone with no coding CLI installed.
+- **Set it up myself instead** — straight to page 2, with what you typed as the
+  Task (a Task you edited since an earlier trip is kept). Nothing is read and
+  no model runs. It cannot be dropped: it is the only route to the form for
+  someone with no coding CLI installed.
 - **Review details first ↵** — the primary (accent) button, because it is
   what Enter in the box does (hidden for an
   Intake batch, which has no single form to fill in). Sends the sentence to
@@ -1932,17 +1977,22 @@ its outcome rather than for the app's own vocabulary:
   so without it a sentence nobody has resolved yet would become a create in
   whatever folder the pre-fill left behind. The button is **`type="button"`**
   for the same reason. Shift+Enter starts another line.
-- **Create session** — the secondary button: start now from what you typed, without reading the
-  details. The one thing it does *not* skip is a folder that does not exist;
-  its refusal says to *press Create session again* or *use Set it up myself
-  instead*.
+- **Create session** — the secondary button: starts the session **now**, in
+  the folder the help line names, with the sentence as typed as its Task, the
+  form's other choices as they stand, and the name made from the task — no
+  model turn, nothing to wait for (pressed during a Review read, it drops the
+  read). A refusal (no folder, a missing agent, a folder to confirm) opens the
+  form with the sentence already in Task. After **Review details first** and
+  **← Back**, it acts on that plan instead of reading again.
 
 While a turn is in flight **the button that was pressed** shows a ring, a word
 and a clock — **Reading… 0:04**, then **Still reading… 0:09** after 8 s. The
 read gives up at **30 s** (the server's own budget, `session_plan.TIMEOUT_PLAN`,
 is the same): *The agent didn't answer within 30 seconds.* with **Fill the form
 with what I typed**, which opens the form with the sentence as its Task. Any
-other failure says why, *— fill the form instead.*, and offers the same button.
+other failure says why and offers the same button — a CLI known not to be
+signed in says *claude isn't signed in yet — sign in under Settings → Agents*
+rather than *claude exited 1*.
 A **Cancel** link appears beside the box, which goes read-only rather than
 disabled so the caret and the selection survive the wait. Create on the form is
 held while a turn is reading.
@@ -2044,13 +2094,14 @@ server and follow you between devices. They have three doors, one job each:
   more are running ("running" = status `running` or started, but not paused;
   verify sessions are left out; *All* sends once per session). Both surfaces
   use one paste path, `lib/promptPaste.ts`.
-- **New's Task box** can start from one: **Insert a saved prompt…** sits
+- **New's Task box** can start from one: **Insert a prompt…** sits
   beside the **Task** label. Built-ins ship for the common loops — *Fix
   failing tests*, *Address PR review comments*, *Write tests for recent
   changes*, *Refactor for clarity — no behavior change*. Picking one fills the
   Task; edit freely before creating. Adding and deleting saved prompts happens
-  in the Prompts dialog (**Manage…**); the form's one save is **Save as
-  template…**, which saves the whole setup.
+  in the Prompts dialog (**Manage…**, where — opened from New — a click puts
+  the prompt in the Task box and there is no *Paste into*); the form's one
+  save is **Save as template…**, which saves the whole setup.
 
 All three read the same list: the templates that hold a prompt
 (`/api/templates`, through `lib/presets.ts` over `lib/templates.ts`, with a
@@ -4058,9 +4109,10 @@ stack their labels above the inputs.
 - **Session templates** — save a New-session dialog configuration under a name
   and refill it later (templates addon, `/api/templates`, synced between
   devices). A template only ever *starts* a session — CLI, repo, workspace
-  and an opening prompt; New's **Templates** strip lists them and its
-  **Manage…** (or the palette's **Templates…**) opens the Templates dialog.
-  A template's **Run now** (its card, or the palette's **Run template: …**)
+  and an opening prompt; New's **Templates** strip lists them on both pages
+  (▶ runs one, ⏰ schedules it) and its **All templates…** (or the palette's
+  **Templates…**) opens the Templates dialog.
+  A template's **Run now** (its card, its ▶ in New, or the palette's **Run template: …**)
   starts a fresh session from it with the prompt already sent, and an
   optional schedule (every day / weekdays at a time) starts one on its own.
   A template can carry a fast-track, so a scheduled one can end in a PR.

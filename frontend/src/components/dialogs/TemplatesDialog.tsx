@@ -27,6 +27,7 @@ import {
   TEMPLATES_CHANGED,
   deleteTemplate,
   ensureTemplates,
+  readTemplatesTarget,
   runProblem,
   saveTemplate,
   scheduleLabel,
@@ -40,7 +41,9 @@ import {
 import { runTemplateNow } from "../../lib/templateRun";
 import { api } from "../../api/client";
 import { LANE_LABEL, type Lane } from "../../lib/laneActions";
-import { newSessionResume } from "./newSession";
+import { leafName, newSessionResume } from "./newSession";
+import { FastTrackChoice } from "./FastTrackChoice";
+import { IN_PLACE_HINT, InitRepoCheck, ProvisionCheck, StrategyPicker, WorktreeText } from "./newSession/WorkspaceFold";
 
 /** A template as the server stores it, fast-track included (lib/templates'
  * Template predates the field). */
@@ -181,8 +184,18 @@ export function renameLeaves(oldName: string, newName: string): string | null {
 export function templateMeta(t: Template): string {
   const bits: string[] = [];
   if (t.program) bits.push(t.program);
-  if (t.repo_path) bits.push(t.repo_path);
-  bits.push(t.provisioned ? "provisioned" + (t.workspace_strategy === "clone" ? " (clone)" : "") : t.in_place ? "this folder directly" : "separate worktree");
+  // The folder's own name; the card's tooltip carries the whole path, which
+  // wrapped beside the buttons into a four-line column.
+  if (t.repo_path) bits.push(leafName(t.repo_path));
+  // The New form's words: a separate worktree, or this folder directly, and
+  // "provisioned" as the box on top of the worktree.
+  bits.push(
+    t.provisioned
+      ? "separate worktree, provisioned" + (t.workspace_strategy === "clone" ? " (full clone)" : "")
+      : t.in_place
+        ? "this folder directly"
+        : "separate worktree"
+  );
   if (t.init_repo) bits.push("git init");
   const ft = t.fasttrack;
   if (ft && ft !== "leave" && ft in LANE_LABEL)
@@ -310,43 +323,58 @@ export function TemplatesDialogView(p: ViewProps) {
           onChange={(e) => p.onForm({ prompt: e.target.value })}
         />
       </label>
-      <div className="tpl-mode" role="radiogroup" aria-label="Where the work happens">
-        {(
-          [
-            ["worktree", "Separate worktree"],
-            ["in_place", "This folder directly"],
-            ["provisioned", "Provisioned worktree"],
-          ] as Array<[TemplateForm["mode"], string]>
-        ).map(([mode, label]) => (
-          <label key={mode} className="check">
-            <input
-              type="radio"
-              name="tpl-mode"
-              checked={form.mode === mode}
-              onChange={() => p.onForm({ mode })}
+      {/* Where it works: the New form's own controls and words — two answers,
+          and "Provision the worktree" as a box on the worktree, not a third. */}
+      <div className="tpl-mode" role="radiogroup" aria-label="Works in">
+        <span className="tpl-mode-label">Works in</span>
+        <label className="check">
+          <input
+            type="radio"
+            name="tpl-mode"
+            id="tpl-worktree"
+            checked={form.mode !== "in_place"}
+            onChange={() => p.onForm({ mode: "worktree" })}
+          />
+          <span>
+            <WorktreeText />
+          </span>
+        </label>
+        {form.mode !== "in_place" && (
+          <div className="tpl-mode-sub">
+            <ProvisionCheck
+              id="tpl-provision"
+              checked={form.mode === "provisioned"}
+              onChange={(on) => p.onForm({ mode: on ? "provisioned" : "worktree" })}
             />
-            {label}
-          </label>
-        ))}
-        {form.mode === "provisioned" && (
-          <select
-            id="tpl-strategy"
-            value={form.workspace_strategy}
-            onChange={(e) => p.onForm({ workspace_strategy: e.target.value })}
-          >
-            <option value="worktree">shared base clone (worktree)</option>
-            <option value="clone">full clone</option>
-          </select>
+            {form.mode === "provisioned" && (
+              <StrategyPicker
+                id="tpl-strategy"
+                value={form.workspace_strategy}
+                onChange={(v) => p.onForm({ workspace_strategy: v })}
+              />
+            )}
+          </div>
         )}
         <label className="check">
           <input
-            type="checkbox"
-            id="tpl-init"
-            checked={form.init_repo}
-            onChange={(e) => p.onForm({ init_repo: e.target.checked })}
+            type="radio"
+            name="tpl-mode"
+            id="tpl-in-place"
+            checked={form.mode === "in_place"}
+            // Fast-track commits for its own session, so it never drives a
+            // shared checkout — the same rule as the New form.
+            onChange={() => p.onForm({ mode: "in_place", fasttrack: "leave", ask_first: false })}
           />
-          Create a git repo in the folder
+          <span>
+            This folder directly{" "}
+            <span className="muted">
+              {form.fasttrack !== "leave"
+                ? "— turns fast-track off (it commits for this session, so it needs its own worktree)"
+                : IN_PLACE_HINT}
+            </span>
+          </span>
         </label>
+        <InitRepoCheck id="tpl-init" checked={form.init_repo} onChange={(on) => p.onForm({ init_repo: on })} />
       </div>
       <div className="tpl-schedule" role="group" aria-label="Schedule">
         <label className="check">
@@ -386,31 +414,19 @@ export function TemplatesDialogView(p: ViewProps) {
         )}
       </div>
       <div className="tpl-ft" role="group" aria-label="Fast-track">
-        <label>
-          Fast-track <span className="muted">— how far a session from it ships itself</span>
-          <select
-            id="tpl-fasttrack"
-            value={form.fasttrack}
-            onChange={(e) => p.onForm({ fasttrack: e.target.value as Lane })}
-          >
-            {TEMPLATE_LANES.map((l) => (
-              <option key={l} value={l}>
-                {l === "leave" ? "Off — leave the changes for you" : LANE_LABEL[l]}
-              </option>
-            ))}
-          </select>
-        </label>
-        {form.fasttrack !== "leave" && (
-          <label className="check">
-            <input
-              type="checkbox"
-              id="tpl-ask-first"
-              checked={form.ask_first}
-              onChange={(e) => p.onForm({ ask_first: e.target.checked })}
-            />
-            Ask me before it ships
-          </label>
-        )}
+        {/* The New form's Fast-track control, not a dropdown of its own. */}
+        <span className="tpl-ft-label">
+          Fast-track to <span className="muted">— how far a session from it ships itself</span>
+        </span>
+        <FastTrackChoice
+          id="tpl-fasttrack"
+          label="Fast-track to"
+          value={form.fasttrack}
+          // A lane needs its own worktree (it commits for this session).
+          onChange={(l) => p.onForm(l !== "leave" && form.mode === "in_place" ? { fasttrack: l, mode: "worktree" } : { fasttrack: l })}
+          askFirst={form.ask_first}
+          onAskFirst={(on) => p.onForm({ ask_first: on })}
+        />
       </div>
       {ui.error && (
         <p className="error" aria-live="polite">
@@ -485,7 +501,9 @@ export function TemplatesDialogView(p: ViewProps) {
                 <div className="tpl-card-top">
                   <div className="tpl-card-text">
                     <div className="tpl-name">{t.name}</div>
-                    <div className="tpl-meta">{templateMeta(t)}</div>
+                    <div className="tpl-meta" title={t.repo_path || undefined}>
+                      {templateMeta(t)}
+                    </div>
                     {(() => {
                       const info = runs.runs[t.name.trim().toLowerCase()] || {};
                       const line = runLine(t, info, runs);
@@ -597,10 +615,12 @@ export function TemplatesDialog() {
     if (!open) return;
     dispatch({ t: "cancel" });
     // The palette's "Schedule a session…" opens straight onto a NEW template's
-    // editor with its schedule already switched on.
-    if (useUi.getState().dialogTarget === "schedule") {
+    // editor with its schedule already switched on; a template chip's ⏰ in
+    // New opens that template's.
+    const want = readTemplatesTarget(useUi.getState().dialogTarget).schedule;
+    if (want !== null) {
       setScheduleFocus(true);
-      dispatch({ t: "new" });
+      dispatch(want ? { t: "schedule", name: want } : { t: "new" });
     }
     setBusy(false);
     setLoadError("");
@@ -635,15 +655,21 @@ export function TemplatesDialog() {
   // Opening an editor seeds the form from the card it is for.
   useEffect(() => {
     if (ui.editing === editingRef.current) return;
-    editingRef.current = ui.editing;
-    if (ui.editing === null) return;
+    if (ui.editing === null) {
+      editingRef.current = null;
+      return;
+    }
     const t = ui.editing ? templates.find((x) => x.name === ui.editing) || null : null;
+    // Opened for a template the list hasn't brought yet (New's ⏰ on a cold
+    // list): seed once it lands, never a blank form under its name.
+    if (ui.editing && !t) return;
+    editingRef.current = ui.editing;
     const f = formFromTemplate(t);
     // Schedule… on a card: the same editor, with the schedule already on.
     if (scheduleFocus) f.scheduled = true;
     setForm(f);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ui.editing]);
+  }, [ui.editing, templates]);
 
   if (!open) return null;
 
@@ -651,7 +677,7 @@ export function TemplatesDialog() {
     closeDialog();
     // Came from the New dialog: hand the person back to it AS THEY LEFT IT
     // (newSessionResume), with the list they just edited reloaded.
-    if (target === "new") {
+    if (readTemplatesTarget(target).fromNew) {
       newSessionResume.keep = true;
       useUi.getState().openDialogFor("new-session");
     }

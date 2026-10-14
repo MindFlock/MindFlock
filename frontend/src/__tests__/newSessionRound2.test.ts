@@ -15,7 +15,7 @@ import AGENT from "../components/dialogs/newSession/AgentAccount.tsx?raw";
 import {
   DESCRIBE_CAP_MS,
   agentMissingReason,
-  branchPreview,
+  plannedName,
   elapsedLabel,
   preferInstalled,
   sanitizeBranch,
@@ -43,7 +43,9 @@ describe("a session is named from its task", () => {
 
   it("the Name placeholder says so", () => {
     expect(DIALOG).toContain("— optional; empty names it from the task");
-    expect(DIALOG).toContain('placeholder={(titleFromPrompt(prompt) || "untitled") + " — Enter creates it"}');
+    // The name Create will really use (numbered past a taken one), or — with
+    // no task yet — that it will come from the task, never "untitled".
+    expect(DIALOG).toContain('(planned.from === "none" ? "named from the task" : planned.title) + " — Enter creates it"');
   });
 });
 
@@ -54,9 +56,10 @@ describe("Works in: a separate worktree by default", () => {
   });
 
   it("previews the branch the worktree will be cut on", () => {
-    expect(branchPreview({ prefix: "me/", title: "", prompt: "Fix the login bug" })).toBe("me/fix-login-bug");
-    expect(branchPreview({ prefix: "me/", title: "My Thing", prompt: "x" })).toBe("me/my-thing");
-    expect(branchPreview({ prefix: "", title: "", prompt: "" })).toBe("untitled");
+    const none = new Set<string>();
+    expect(plannedName({ prefix: "me/", title: "", prompt: "Fix the login bug", taken: none }).branch).toBe("me/fix-login-bug");
+    expect(plannedName({ prefix: "me/", title: "My Thing", prompt: "x", taken: none }).branch).toBe("me/my-thing");
+    expect(plannedName({ prefix: "", title: "", prompt: "", taken: none }).branch).toBe("untitled");
     expect(sanitizeBranch("--A b//")).toBe("a-b");
   });
 
@@ -149,7 +152,10 @@ describe("describe-first: a clock, a cap and a way out", () => {
     expect(DESCRIBE_CAP_MS).toBe(30000);
     expect(DESCRIBE).toContain("}, DESCRIBE_CAP_MS);");
     expect(DESCRIBE).toContain("Fill the form with what I typed");
-    expect(DESCRIBE).toContain("setPrompt(describe.trim());");
+    // The fallback and "Set it up myself instead" are one path that carries
+    // the text into Task (setUpMyself).
+    expect(DESCRIBE).toContain("fillFormInstead: setUpMyself");
+    expect(DESCRIBE).toContain("setPrompt(text);");
   });
   it("puts the spinner and the clock on the button that was pressed", () => {
     expect(FOOTER).toContain('describing && describeMode === "fill"');
@@ -161,11 +167,11 @@ describe("describe-first: a clock, a cap and a way out", () => {
 
 describe("Manage… trips hand the form back", () => {
   it("Templates and Prompts reopen New as it was", () => {
-    for (const src of [TEMPLATES_DIALOG, PROMPTS_DIALOG]) {
-      expect(src).toContain('if (target === "new") {');
-      expect(src).toContain("newSessionResume.keep = true;");
-    }
-    expect(DIALOG).toContain("if (newSessionResume.keep) {");
+    expect(TEMPLATES_DIALOG).toContain("if (readTemplatesTarget(target).fromNew) {");
+    expect(PROMPTS_DIALOG).toContain('if (target === "new") {');
+    for (const src of [TEMPLATES_DIALOG, PROMPTS_DIALOG]) expect(src).toContain("newSessionResume.keep = true;");
+    expect(DIALOG).toContain("resume: newSessionResume.keep,");
+    expect(DIALOG).toContain('if (mode === "resume") {');
   });
 });
 

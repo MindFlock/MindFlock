@@ -54,7 +54,9 @@ describe("wiring", () => {
   it("the palette's Schedule a session… opens a new template with its schedule on", () => {
     expect(PALETTE).toContain('label: "Schedule a session…"');
     expect(PALETTE).toContain('ui.openDialogFor("templates", "schedule")');
-    expect(TEMPLATES_DIALOG).toContain('if (useUi.getState().dialogTarget === "schedule") {');
-    expect(TEMPLATES_DIALOG).toMatch(/setScheduleFocus\(true\);\s*dispatch\(\{ t: "new" \}\);/);
+    // "schedule" = a new template; New's ⏰ on a chip names one (lib/templates'
+    // readTemplatesTarget, pinned in newSessionDraft.test.ts).
+    expect(TEMPLATES_DIALOG).toContain("const want = readTemplatesTarget(useUi.getState().dialogTarget).schedule;");
+    expect(TEMPLATES_DIALOG).toMatch(/setScheduleFocus\(true\);\s*dispatch\(want \? \{ t: "schedule", name: want \} : \{ t: "new" \}\);/);
   });
 });

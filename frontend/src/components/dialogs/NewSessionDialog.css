@@ -1544,7 +1544,7 @@
   overflow: hidden;
 }
 
-:is(#new-form, #commit-form) .rt-seg button {
+:is(#new-form, #commit-form, .tpl-editor) .rt-seg button {
   border: none;
   border-left: 1px solid var(--border);
   border-radius: 0;
@@ -1556,32 +1556,32 @@
   white-space: nowrap;
 }
 
-:is(#new-form, #commit-form) .rt-seg button:first-child {
+:is(#new-form, #commit-form, .tpl-editor) .rt-seg button:first-child {
   border-left: none;
 }
 
-:is(#new-form, #commit-form) .rt-seg button:hover:not(.on):not(:disabled) {
+:is(#new-form, #commit-form, .tpl-editor) .rt-seg button:hover:not(.on):not(:disabled) {
   background: var(--panel-2);
 }
 
 /* A choice an older server can't take (caps.team_runs): shown, not offered. */
-:is(#new-form, #commit-form) .rt-seg button:disabled {
+:is(#new-form, #commit-form, .tpl-editor) .rt-seg button:disabled {
   color: var(--muted);
   cursor: not-allowed;
   opacity: 0.6;
 }
 
-:is(#new-form, #commit-form) .rt-seg button.on {
+:is(#new-form, #commit-form, .tpl-editor) .rt-seg button.on {
   background: var(--accent);
   color: #fff;
 }
 
-#new-form label.check.rt-ask {
+:is(#new-form, .tpl-editor) label.check.rt-ask {
   font-size: 12.5px;
   color: var(--text);
 }
 
-#new-form label.check.rt-ask.disabled {
+:is(#new-form, .tpl-editor) label.check.rt-ask.disabled {
   color: var(--muted);
   cursor: not-allowed;
 }
@@ -1813,14 +1813,17 @@
 
 .tpl-card-top {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px 10px;
 }
 
+/* At least this wide before the buttons give way: when the card is narrow
+   they wrap UNDER the meta line instead of squeezing it into a column. */
 .tpl-card-text {
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 1 1 260px;
 }
 
 .tpl-name {
@@ -1930,10 +1933,22 @@
 
 .tpl-mode {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
-  align-items: center;
+  flex-direction: column;
+  gap: 6px;
   font-size: 12px;
+}
+
+.tpl-mode-label,
+.tpl-ft-label {
+  color: var(--muted);
+}
+
+/* Provision (and its strategy) sit under the worktree answer they modify. */
+.tpl-mode-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 22px;
 }
 
 /* Schedule: a checkbox, then "Every day ▾ at 21:00" on one row once on. */
@@ -2192,9 +2207,102 @@
 .tpl-ft {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
   gap: 6px 14px;
   font-size: 12px;
   padding-top: 8px;
   border-top: 1px solid var(--border);
+}
+
+/* A template in New's strip: its name (fills the form) joined to ▶ (run it
+   now) and ⏰ (its schedule), as one pill — the actions belong to it. */
+.new-templates .nt-tpl {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.new-templates .nt-tpl-acts .nt-chip {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  min-width: 0;
+}
+
+.new-templates .nt-act {
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-left: none;
+  background: var(--panel);
+  color: var(--muted);
+  border-radius: 0;
+}
+
+.new-templates .nt-act:last-child {
+  border-top-right-radius: 999px;
+  border-bottom-right-radius: 999px;
+  padding-right: 10px;
+}
+
+.new-templates .nt-act:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.new-templates .nt-act:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.new-templates .nt-act.nt-sched.on {
+  color: var(--accent);
+}
+
+/* On the landing it sits under the describe box: a second door, quieter. */
+.new-templates.nt-landing {
+  margin-top: 10px;
+}
+
+/* One plain line under an option whose label alone doesn't say what it does
+   (Auto-split). */
+.nf-opt-help {
+  margin: 2px 0 0 24px;
+  font-size: 11.5px;
+}
+
+/* Clear: a quiet word beside the box (and beside ← Back on the form) — the
+   way to drop a draft that otherwise waits for you between openings. */
+#new-form #new-clear,
+#new-form #new-clear-form {
+  font-size: 12px;
+  color: var(--muted);
+  flex: none;
+}
+
+#new-form #new-clear {
+  align-self: flex-start;
+  margin-top: 6px;
+}
+
+#new-form #new-clear-form {
+  margin-right: 6px;
+}
+
+#new-form #new-clear:hover,
+#new-form #new-clear-form:hover {
+  color: var(--accent);
+}
+
+@media (max-width: 480px) {
+  #new-form #new-clear {
+    align-self: flex-end;
+    margin-top: 0;
+  }
+}
+
+/* The folder Create session starts in, named in the help line. */
+.nf-describe-help .nf-starts-in {
+  font-weight: 600;
 }

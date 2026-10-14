@@ -434,6 +434,10 @@ export function FolderAids({
     ...g,
     items: suggestions.filter((s) => s.source === g.key),
   })).filter((g) => g.items.length > 0);
+  // A box whose only suggestion is the folder already in the field repeats
+  // the field above it: nothing to choose, so nothing drawn.
+  const onlyCurrent =
+    suggestions.length > 0 && suggestions.every((s) => s.path === folderPath);
   return (
     <>
       {searchHits && (
@@ -555,14 +559,13 @@ export function FolderAids({
         </p>
       )}
 
-      {suggestRows.length > 0 && (
+      {suggestRows.length > 0 && !onlyCurrent && (
         /* Wears .new-templates as well as its own class on purpose: this is
            the same chip strip as Templates, filled from a different source,
            and sharing the class is what stops the two from drifting apart. */
         <div id="new-suggest" className="new-templates nf-suggest">
           <div className="nt-head">
-            <span>Folders you might mean — click one to use it</span>
-            <span className="nf-suggest-legend">📦 git repo · 📁 plain folder</span>
+            <span title="📦 a git repo · 📁 a plain folder">Folders you might mean — click one to use it</span>
           </div>
           {suggestRows.map((g) => (
             <div key={g.key} className="nf-suggest-row">
