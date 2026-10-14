@@ -26,6 +26,7 @@ import { CHORD_ACTIONS, chordDesc, runChordAction, sessionAction, type SessionAc
 import { toast } from "./toast";
 import { notePrefWrite } from "./prefs";
 import { useUi } from "../state/store";
+import { VERIFY_BLURB } from "./vocab";
 
 /** One key combination as matched by the dispatcher and stored in the
  * "mf_keymap" overrides ({key, mod, shift, alt}). `mod` true = Ctrl/⌘;
@@ -488,7 +489,7 @@ export const KEYMAP: KeymapEntry[] = [
     key: "v",
     alt: true,
     id: "verify",
-    help: ["Navigation", "Alt+V", "Verify — pushed changes nobody has checked"],
+    help: ["Navigation", "Alt+V", "Verify — " + VERIFY_BLURB],
     when: () => !isEditingTarget(document.activeElement),
     run: () => useUi.getState().openDialogFor("verify"),
   },
@@ -624,6 +625,21 @@ export function effBindings(b: KeymapEntry): Combo[] {
 }
 
 // --- Display / rebinding helpers ----------------------------------------------
+
+/** Every live combo for an action (its own entry and its browser-safe
+ * aliases, under the user's rebinds), as labels — what a tooltip should
+ * advertise. Pick with `usable` to drop the ones this context can't press. */
+export function shortcutLabels(id: string, usable: (label: string) => boolean = () => true): string[] {
+  const out: string[] = [];
+  for (const b of KEYMAP) {
+    if (b.id !== id && b.aliasOf !== id) continue;
+    for (const c of effBindings(b)) {
+      const l = comboLabel(c);
+      if (usable(l) && !out.includes(l)) out.push(l);
+    }
+  }
+  return out;
+}
 
 // Human label for a stored combo ({key,mod,shift,alt} → "Ctrl+Shift+X").
 // `mod` renders as Ctrl to match the rest of the sheet (it means ⌘ too).

@@ -47,12 +47,13 @@ export function barContent(key: string, cbs: ContentCbs): ReactNode {
     case "verify":
       return <VerifyBar />;
     case "assistant":
-      // Chat, Todo, and Agent: the assistant's agent file (its standing
-      // instructions), editable in place.
+      // Chat, Todo, and Instructions: the assistant's standing instructions
+      // (its agent file), editable in place. Not "Agent" — that word is the
+      // coding agent's alone.
       return (
         <div
           id="assistant-bar"
-          title="A personal AI assistant (powered by your chosen provider) — answers questions and manages your todo list"
+          title="A personal AI assistant (it runs on your default agent) — answers questions and manages your todo list"
         >
           <span className="as-label">Assistant</span>
           <span className="as-actions">
@@ -78,7 +79,7 @@ export function barContent(key: string, cbs: ContentCbs): ReactNode {
               title="Edit the assistant's agent file — its standing instructions"
               onClick={() => useUi.getState().openDialogFor("assistant-agent")}
             >
-              Agent
+              Instructions
             </button>
           </span>
         </div>

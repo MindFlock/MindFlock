@@ -182,7 +182,9 @@ export const SESSION_ACTIONS = {
     run: (t) => useUi.getState().threadOpen(t),
   },
   ide: {
-    label: (c) => "Open / focus " + c.ideName,
+    // "Cursor" alone read as the mouse cursor: the note says it's an editor.
+    label: (c) => "Open in " + c.ideName,
+    note: "your code editor",
     keys: "Ctrl+K O",
     chord: "o",
     enabled: (c) => !c.shared,
@@ -286,7 +288,7 @@ export const CHORD_ACTIONS: SessionActionId[] = [
 /** The text the "?" sheet shows for a chord: the label (the IDE generic, the
  * window verb both ways) plus the note where it names the destination. */
 export function chordDesc(id: SessionActionId): string {
-  if (id === "ide") return "Open / focus IDE";
+  if (id === "ide") return "Open in your code editor";
   if (id === "hide") return "Hide / show window";
   if (id === "thread") return "Thread — " + actionNote(id, {} as ActionCtx);
   const l = sessionAction(id).label;

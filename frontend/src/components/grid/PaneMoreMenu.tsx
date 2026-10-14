@@ -1,29 +1,22 @@
-/** The pane header's "⋯": everything a session's header has that isn't the
- * one thing you came for. A calm header (the first hour, or a pane too narrow
- * for its row of controls) shows name · state · Agent / Diff · Commit… and
- * folds the rest — Terminal, Map, Queue, Fast-track, the history view — in
- * here; every header lists Checklist… here when the session has a branch.
+/** The pane header's "⋯": the session's ONE menu (lib/sessionMenu — the
+ * sidebar row's ⋯ draws the same model), grouped Work · Ship · Session ·
+ * More · Close/Delete. What a calm header (the first hour, or a pane too
+ * narrow for its row of controls) leaves out of the row — Terminal, Map, the
+ * history view — is in its More fold; Queue prompt… and Fast-track… are in
+ * it always.
  *
  * Its own small popover rather than the shared OverflowMenu: the pane header
  * scrolls sideways (overflow-x: auto), which clips anything absolutely
  * positioned inside it, so this one is position: fixed against the button. */
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-
-export interface PaneMoreItem {
-  key: string;
-  label: string;
-  title?: string;
-  /** A small badge after the label (the Queue's count). */
-  badge?: string;
-  run(): void;
-}
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 export function PaneMoreMenu({
-  items,
+  children,
   btnRef,
 }: {
-  items: PaneMoreItem[];
+  /** The menu's body, given a close() for after an item ran. */
+  children: (close: () => void) => ReactNode;
   /** Also handed to the fast-track picker as its anchor while ⏩ is folded. */
   btnRef?: (el: HTMLButtonElement | null) => void;
 }) {
@@ -61,7 +54,6 @@ export function PaneMoreMenu({
     };
   }, [open]);
 
-  if (!items.length) return null;
   return (
     <>
       <button
@@ -73,8 +65,8 @@ export function PaneMoreMenu({
         className={"act pane-more" + (open ? " open" : "")}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="More for this session"
-        title="More — the other tabs and actions for this session"
+        aria-label="Actions for this session"
+        title="Actions for this session — the same menu as its sidebar row's ⋯"
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => {
           e.stopPropagation();
@@ -91,23 +83,7 @@ export function PaneMoreMenu({
           style={{ top: pos.top, right: pos.right }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          {items.map((it) => (
-            <button
-              key={it.key}
-              type="button"
-              role="menuitem"
-              data-more={it.key}
-              title={it.title}
-              onClick={(e) => {
-                e.stopPropagation();
-                setOpen(false);
-                it.run();
-              }}
-            >
-              {it.label}
-              {it.badge && <span className="queue-tab-badge">{it.badge}</span>}
-            </button>
-          ))}
+          {children(() => setOpen(false))}
         </div>
       )}
     </>

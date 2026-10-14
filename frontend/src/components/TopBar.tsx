@@ -24,6 +24,10 @@ import { THEME_CHANGED } from "../lib/prefs";
 import { setTheme } from "../lib/theme";
 import { hasNativeWindowControls, isFullScreen, onFullScreenChanged } from "../lib/shell";
 import { openSettings } from "../lib/openSettings";
+import { inShell } from "../lib/shell";
+import { keymapVersion, shortcutLabels, subscribeKeymap } from "../lib/keymap";
+import { browserReserved } from "./palette/ShortcutsSheet";
+import { VERIFY_BLURB } from "../lib/vocab";
 
 /* The wordmark carries the RUNNING ENGINE's version (GET /api/doctor), not the
  * desktop shell's: this frontend ships inside the engine wheel, so that string
@@ -88,6 +92,17 @@ export function TopBar() {
 
   const toggleTheme = () => setTheme(!light);
 
+  // Tooltip shortcuts come from the live keymap (rebinds included), never a
+  // hand-typed string: in a browser tab, only keys the browser hands to the
+  // page (Ctrl+N opens a browser window there — Alt+N is New).
+  const [, setKeysVer] = useState(keymapVersion());
+  useEffect(() => subscribeKeymap(() => setKeysVer(keymapVersion())), []);
+  const tab = !inShell();
+  const keys = (id: string) => {
+    const k = shortcutLabels(id, (l) => !tab || !browserReserved(l));
+    return k.length ? " (" + k.join(" / ") + ")" : "";
+  };
+
   // The cluster that swaps sides on macOS. Defined once and rendered in exactly
   // one place, so the two layouts can't drift apart.
   const logo = <span id="brand-logo" aria-hidden="true" />;
@@ -127,7 +142,7 @@ export function TopBar() {
           <button
             id="sidebar-toggle"
             type="button"
-            title={(ui.sidebarHidden ? "Show" : "Hide") + " sidebar (Ctrl+B / ⌘B)"}
+            title={(ui.sidebarHidden ? "Show" : "Hide") + " sidebar" + keys("sidebar")}
             aria-label="Toggle sidebar"
             onClick={() => ui.toggleSidebar()}
           >
@@ -151,7 +166,7 @@ export function TopBar() {
           <button
             id="new-btn"
             className="tb-new"
-            title="New session (Ctrl+N)"
+            title={"New session" + keys("new")}
             onClick={() => ui.openDialogFor("new-session")}
           >
             New
@@ -162,7 +177,7 @@ export function TopBar() {
             id="intake-btn"
             className="tb-item"
             type="button"
-            title="Intake — tickets, pull requests and issues waiting to become sessions (Alt+I)"
+            title={"Intake — tickets, pull requests and issues waiting to become sessions" + keys("intake")}
             /* No aria-label: the visible "Intake" IS the name. The old one still
                said "Open work", the surface's name two renames ago, so a screen
                reader announced a button nobody could see. */
@@ -183,7 +198,7 @@ export function TopBar() {
             id="verify-btn"
             className="tb-item"
             type="button"
-            title="Verify — pushed changes nobody has checked (Alt+V)"
+            title={"Verify — " + VERIFY_BLURB + keys("verify")}
             /* No aria-label, for the same reason as Intake above: the visible
                "Verify" IS the name, and a second wording would be the one a
                screen reader announced. */
@@ -213,7 +228,7 @@ export function TopBar() {
             id="palette-btn"
             className="tb-item"
             type="button"
-            title="Command palette — Ctrl+P / ⌘P"
+            title={"Command palette" + keys("palette")}
             aria-label="Open command palette"
             onClick={() => ui.openDialogFor("palette")}
           >

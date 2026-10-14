@@ -61,7 +61,10 @@ def test_the_rail_and_recently_closed_never_call_a_native_dialog():
         # The exact old call sites, so a rename of the helper can't hide one.
         for old in old_sites:
             assert old not in _src(rel), (rel, old)
-        # Failures go to an error card instead.
+        # Failures go to an error card instead (the row's menu actions live in
+        # the session menu's model, lib/sessionMenu.ts).
+        if rel == "components/sidebar/SidebarRow.tsx":
+            code = _code("lib/sessionMenu.ts")
         assert "errorPop(" in code, rel
 
 
@@ -86,23 +89,34 @@ def test_delete_asks_inline_in_two_steps():
     Recently closed) and Delete… (removes worktree and branch), the latter asked
     on an inline strip — never a native confirm(), which the desktop app lacks.
     The verbs' words are the session action table's."""
-    row = _code("components/sidebar/SidebarRow.tsx")
+    # The row's ⋯ and the pane's ⋯ draw one menu (SessionMenu + lib/sessionMenu).
+    menu = _code("components/sidebar/SessionMenu.tsx")
+    model = _code("lib/sessionMenu.ts")
     table = _code("lib/sessionActionTable.ts")
-    assert "const [deleteArmed, setDeleteArmed] = useState(false);" in row
+    row = _code("components/sidebar/SidebarRow.tsx")
+    assert "<SessionMenu" in row
+    assert "const [deleteArmed, setDeleteArmed] = useState(false);" in menu
     # the first click arms it
-    assert re.search(r">\s*\{SESSION_ACTIONS\.delete\.short\}\s*</button>", row)
+    assert "if (it.confirm && !deleteArmed) {" in menu
+    assert 'label: sessionAction("delete").short!,' in model
     assert 'short: "Delete…",' in table
-    assert "Removes the worktree and branch" in row
-    assert re.search(r">\s*Delete\s*</button>", row)
-    assert re.search(r">\s*Cancel\s*</button>", row)
+    assert 'confirm: "Removes the worktree and branch",' in model
+    assert re.search(r">\s*Cancel\s*</button>", menu)
     # Focus lands on Cancel, never on Delete: a second Enter can't delete.
-    assert "autoFocus onClick={() => setDeleteArmed(false)}" in row
-    armed = row[row.index("(deleteArmed ? (") : row.index("end-delete")]
+    armed = menu[
+        menu.index("it.confirm && deleteArmed ? (") : menu.index(
+            ") : (", menu.index("it.confirm && deleteArmed ? (")
+        )
+    ]
     assert armed.count("autoFocus") == 1
-    # Close is the other verb, and says where the session goes.
-    assert '<span className="end-sub">{actionNote("close", ctx)}</span>' in row
+    assert armed.index('className="danger"') < armed.index("autoFocus")
+    # Close is the other verb, and says where the session goes (the note is
+    # drawn under the verb).
+    assert 'note: actionNote("close", ctx),' in model
+    assert '{it.note && <span className="end-sub">{it.note}</span>}' in menu
     assert 'note: "stops the agent and moves it to Recently closed",' in table
-    assert 'sessionAction("close").run(title)' in row
+    assert 'run: () => sessionAction("close").run(title),' in model
+    assert 'sessionAction("close").run(title)' in row  # the row's own ✕
     for gone in ("Delete + wipe", "End session", "wipeArmed"):
         assert gone not in row, gone
 
@@ -275,9 +289,11 @@ def test_a_lane_line_waiting_on_you_opens_the_bell():
 def test_merge_is_named_for_what_it_merges():
     row = _src("components/sidebar/SidebarRow.tsx")
     table = _src("lib/sessionActionTable.ts")
+    menu = _src("lib/sessionMenu.ts")
     assert "Merge to staging" not in row and "Merge to staging" not in table
     assert 'label: "Merge PR",' in table
-    assert '"merge"' in row[row.index("const ROW_GIT") :]
+    ship = menu[menu.index("const ship = keep([") :]
+    assert 'fromTable("merge")' in ship[: ship.index("]);")]
 
 
 def test_only_a_lane_line_waiting_on_you_is_a_door():
@@ -301,29 +317,35 @@ def test_only_a_lane_line_waiting_on_you_is_a_door():
 
 def test_delete_only_fires_from_the_armed_state_and_closing_disarms():
     row = _code("components/sidebar/SidebarRow.tsx")
-    assert "if (!expanded) setDeleteArmed(false);" in row
-    armed = row.index("(deleteArmed ? (")
-    unarmed = row.index("onClick={() => setDeleteArmed(true)}", armed)
-    # The one delete call lives in the armed branch; the unarmed button only
-    # arms. The POST /cleanup itself lives in lib/sessionActions.deleteSession.
-    delete = row.index("deleteSession(title, true)")
-    assert row.count("deleteSession(") == 1
-    assert armed < delete < unarmed
-    assert '"/cleanup"' not in row
+    menu = _code("components/sidebar/SessionMenu.tsx")
+    model = _code("lib/sessionMenu.ts")
+    # Closing the menu unmounts it, and its armed state goes with it.
+    assert "{expanded && !pending && (" in row
+    # The unarmed click only arms; the armed strip's Delete runs the item.
+    fire = menu[menu.index("const fire = (it: MenuItem)") :]
+    fire = fire[: fire.index("};")]
+    assert fire.index("setDeleteArmed(true);") < fire.index("const r = it.run();")
+    assert "return;" in fire[fire.index("setDeleteArmed(true);") :][:40]
+    # The POST /cleanup itself lives in lib/sessionActions.deleteSession.
+    assert model.count("deleteSession(") == 1
+    assert "run: () => deleteSession(title, true)," in model
+    assert '"/cleanup"' not in row and '"/cleanup"' not in model
     actions = _code("lib/sessionActions.ts")
     assert 'instApi<EndResult>(title, "/cleanup", { method: "POST" })' in actions
     # A 409 "folder in use" is drawn on the row (setInUse), not swallowed.
-    assert 'if (r && r !== "done") setInUse(r.inUse);' in row
+    assert "if (inUse) onInUse?.(inUse);" in menu
+    assert "onInUse={setInUse}" in row
     assert 'className="folder-in-use"' in row
 
 
 def test_merge_keeps_its_browser_fallback_mark():
-    row = _code("components/sidebar/SidebarRow.tsx")
+    menu = _code("components/sidebar/SessionMenu.tsx")
+    model = _code("lib/sessionMenu.ts")
     table = _code("lib/sessionActionTable.ts")
     merge = table[table.index("  merge: {") :]
     assert "external: (c) => !c.prSupport," in merge[: merge.index("\n  },")]
-    assert '{ext ? " ↗" : ""}' in row
-    assert "title={ext ? PR_FALLBACK_HINT : undefined}" in row
+    assert '{it.external ? " ↗" : ""}' in menu
+    assert "title: ext ? PR_FALLBACK_HINT : undefined," in model
 
 
 # --- Recently closed: one question at a time -----------------------------------------

@@ -48,7 +48,7 @@ import { Hint } from "../onboarding/Hint";
 import { sidebarDeviceNote } from "../../lib/fleet";
 import { openDevicesFor } from "../../lib/deviceActions";
 import { SetupChip } from "../setup/SetupChip";
-import { showSetupCard, showSetupChip } from "../setup/setupModel";
+import { setupCount, showSetupCard, showSetupChip } from "../setup/setupModel";
 import { useSetup } from "../setup/useSetup";
 import { useCalm } from "../../lib/useCalm";
 import { CALM_HIDDEN_BARS, calmHidesBar } from "../../lib/calm";
@@ -477,6 +477,8 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   // ONE setup signal in the footer: while the "Setup 1 of 3" chip is up, the
   // doctor's "setup issues" line is the same checklist said twice (with a
   // different count) — the chip opens the same modal, which lists the issue.
+  const setupReq = setupCount(setup);
+  const setupReqDone = !!setup && setupReq.total > 0 && setupReq.done === setupReq.total;
   const setupChip = showSetupChip({
     sessions: instances.length,
     status: setup,
@@ -639,7 +641,11 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
               </button>
             </div>
           )}
-          <SetupChip />
+          {/* Amber while a REQUIRED step is left; quiet once only optional
+              ones remain — done is not a warning (Sidebar.css). */}
+          <span className={"setup-chip-slot" + (setupReqDone ? " req-done" : "")}>
+            <SetupChip />
+          </span>
         </div>
         {/* A set-once preference that means nothing with one or two panes:
             the calm first hour leaves it out unless it was already changed. */}

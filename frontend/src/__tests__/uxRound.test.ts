@@ -100,7 +100,8 @@ describe("session rename (alias)", () => {
     // Rename surfaced in the row menu and the palette (one table row both read).
     expect(SESSION_ACTIONS.rename.label).toBe("Rename…");
     expect(normCode("components/palette/CommandPalette.tsx")).toContain('"rename",');
-    expect(ROW).toContain('"rename",');
+    expect(normCode("lib/sessionMenu.ts")).toContain('fromTable("rename")');
+    expect(ROW).toContain("<SessionMenu");
     // Rows carry the stable title as a data attr (so focus/lookup don't depend
     // on the displayed text, which may be an alias).
     expect(has(ROW, "data-title={title}")).toBe(true);

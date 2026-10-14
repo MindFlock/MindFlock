@@ -128,7 +128,7 @@ describe("Alt+O is gone with the Outbox", () => {
     expect(defaultCombosFor("outbox")).toEqual([]);
     // Alt+O is free for a rebind again.
     expect(comboProblem({ key: "o", alt: true }, "palette")).toBeNull();
-    // Not a Ctrl+K chord either: O there is still "Open / focus IDE".
+    // Not a Ctrl+K chord either: O there is still "Open in your code editor".
     expect(chordForKey("o")).toBe("o");
   });
 

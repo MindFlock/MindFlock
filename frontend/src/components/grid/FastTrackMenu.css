@@ -1,6 +1,5 @@
 /* Fast-track: the ⏩ picker the pane head's ⏩ button opens
-   (FastTrackMenu.tsx), the button's own marks, and the row › menu's
-   session items (SessionRowItems.tsx). Written against the theme tokens only,
+   (FastTrackMenu.tsx) and the button's own marks. Written against the theme tokens only,
    so light mode and every surface set need nothing of their own beyond the
    shadow (theme-light.css). The ⏩ button's base look (outline / filled while
    a run works / red on a halt) is Pane.css's .nextstep-fast. */
@@ -172,17 +171,4 @@
 
 .pb-menu .pb-foot b {
   color: var(--text);
-}
-
-/* ---- The sidebar row's › menu items ----------------------------------------- */
-
-/* An item this session can't take right now (its reason is the tooltip, and
-   a click says it in a toast). */
-.inst-actions button.pb-row-off {
-  color: var(--muted);
-  cursor: default;
-}
-
-.inst-actions button.pb-row-off:hover {
-  background: none;
 }

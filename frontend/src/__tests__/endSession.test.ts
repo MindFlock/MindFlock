@@ -23,6 +23,7 @@ import { KEYMAP, OVERLAY_SELECTOR, endShortcutAllowed, modalOpen, overlayOpen, t
 import { useUi, type DialogName } from "../state/store";
 import { folderInUse, folderInUseText, keptRunningText } from "../lib/sessionActions";
 import { SESSION_ACTIONS, actionCtx, actionNote } from "../lib/sessionActionTable";
+import { sessionMenu } from "../lib/sessionMenu";
 import type { Instance } from "../api/types";
 
 /** Every module the app ships (never the tests), source keyed by its path
@@ -261,38 +262,55 @@ describe("Ctrl+W / Delete guard: typing targets", () => {
 
 describe("the row menu ends a session in exactly two ways", () => {
   const row = read("components/sidebar/SidebarRow.tsx");
+  // The row's ⋯ and the pane's ⋯ draw ONE model (lib/sessionMenu).
+  const menuSrc = read("components/sidebar/SessionMenu.tsx");
+  const caps = { git: true, tailscale: true, ticketing: true };
+  const model = (o: Partial<Instance> = {}) => {
+    const inst = { title: "s", status: "ready", branch: "b", ...o } as Instance;
+    return sessionMenu(inst, actionCtx("s", { inst, caps }));
+  };
+  const danger = (o: Partial<Instance> = {}) => model(o).groups.find((g) => g.id === "danger")!.items;
 
   it("Close says where the session goes, under the verb", () => {
     // The words are the action table's (the palette and Ctrl+W read the same row).
     expect(SESSION_ACTIONS.close.short).toBe("Close");
     expect(SESSION_ACTIONS.close.keys).toBe("Ctrl+W");
     expect(SESSION_ACTIONS.close.note).toBe("stops the agent and moves it to Recently closed");
-    expect(row).toContain(
-      '✕ {SESSION_ACTIONS.close.short}<span className="kbd">{SESSION_ACTIONS.close.keys}</span>'
-    );
-    expect(row).toContain('<span className="end-sub">{actionNote("close", ctx)}</span>');
-    expect(row).toMatch(/className="end-close"[\s\S]{0,400}sessionAction\("close"\)\.run\(title\)/);
+    const close = danger()[0];
+    expect(close.key).toBe("close");
+    expect(close.label).toBe("✕ Close");
+    expect(close.keys).toBe("Ctrl+W");
+    expect(close.note).toBe("stops the agent and moves it to Recently closed");
+    // The note is drawn under the verb.
+    expect(menuSrc).toContain('{it.note && <span className="end-sub">{it.note}</span>}');
   });
 
   it("Delete… asks on an inline strip with Delete / Cancel — no confirm()", () => {
     expect(SESSION_ACTIONS.delete.short).toBe("Delete…");
-    expect(row).toMatch(/>\s*\{SESSION_ACTIONS\.delete\.short\}\s*<\/button>/);
-    expect(row).toContain("Removes the worktree and branch");
-    const armed = row.slice(row.indexOf("deleteArmed ? ("), row.indexOf("end-delete"));
+    const del = danger()[1];
+    expect(del.label).toBe("Delete…");
+    expect(del.danger).toBe(true);
+    expect(del.confirm).toBe("Removes the worktree and branch");
+    // Already asked (the strip): it deletes for real.
+    expect(read("lib/sessionMenu.ts")).toContain("run: () => deleteSession(title, true)");
+    const armed = menuSrc.slice(menuSrc.indexOf("it.confirm && deleteArmed ? ("), menuSrc.indexOf(") : (", menuSrc.indexOf("it.confirm && deleteArmed ? (")));
     expect(armed).toMatch(/className="danger"/);
-    expect(armed).toMatch(/>\s*Delete\s*<\/button>/);
+    expect(armed).toContain('{it.label.replace(/…$/, "")}');
     expect(armed).toMatch(/>\s*Cancel\s*<\/button>/);
     // Focus lands on Cancel: a second Enter on the item never deletes.
-    expect(armed).toContain("autoFocus onClick={() => setDeleteArmed(false)}");
     expect(armed.split("autoFocus").length - 1).toBe(1);
-    expect(armed).toContain("deleteSession(title, true)");
+    expect(armed.indexOf("autoFocus")).toBeGreaterThan(armed.indexOf('className="danger"'));
+    expect(strip(menuSrc)).not.toMatch(/\bconfirm\(/);
   });
 
   it("Pause and Close both stop the agent, and each says where the session goes", () => {
     expect(SESSION_ACTIONS.pause.note).toBe("stops the agent; keeps it in the sidebar to resume");
     expect(SESSION_ACTIONS.pause.note).not.toBe(SESSION_ACTIONS.close.note);
-    // The row draws the note under the verb, as Close does.
-    expect(row).toMatch(/className="end-pause"[\s\S]{0,400}<span className="end-sub">\{actionNote\(pauseId, ctx\)\}<\/span>/);
+    // The menu draws the note under the verb, as Close does.
+    const pause = model().groups.find((g) => g.id === "session")!.items.find((i) => i.key === "pause")!;
+    expect(pause.note).toBe(SESSION_ACTIONS.pause.note);
+    const resume = model({ status: "paused" }).groups.find((g) => g.id === "session")!.items.find((i) => i.key === "resume")!;
+    expect(resume.label).toBe("Resume session");
     // Resume replaces Pause on a paused session; a shared folder can't pause.
     const at = (o: Partial<Instance>) =>
       actionCtx("s", { inst: { title: "s", ...o } as Instance, caps: { git: true, tailscale: true, ticketing: true } });
@@ -335,7 +353,8 @@ describe("the row menu ends a session in exactly two ways", () => {
     const row = read("components/sidebar/SidebarRow.tsx");
     expect(row).toContain("e.ctrlKey || e.metaKey || e.shiftKey || picking");
     expect(row).toContain("useUi.getState().pickRow(title, e.shiftKey)");
-    expect(row).toContain('{picked ? "Unselect" : "Select"}');
+    expect(read("lib/sessionMenu.ts")).toContain('label: opts.picked ? "Unselect" : "Select"');
+    expect(row).toContain("useUi.getState().pickRow(title, false);");
     const bar = read("components/sidebar/BulkBar.tsx");
     expect(bar).toContain("if (!bulkMode) return null;");
     expect(bar).toMatch(/>\s*Close\s*<\/button>/);
@@ -398,7 +417,9 @@ describe("Delete that 409s: folder in use", () => {
 
   it("the row draws the holders on an inline card under the row, outside the menu", () => {
     const row = read("components/sidebar/SidebarRow.tsx");
-    expect(row).toContain("if (r && r !== \"done\") setInUse(r.inUse);");
+    // The menu hands a refused Delete's holders back to the row.
+    expect(row).toContain("onInUse={setInUse}");
+    expect(read("components/sidebar/SessionMenu.tsx")).toContain("if (inUse) onInUse?.(inUse);");
     expect(row).toMatch(/<div className="folder-in-use" role="status">\s*<span className="fiu-text">\{folderInUseText\(inUse\)\}<\/span>/);
     // Under the row's tail, after the (conditional) menu — not inside it.
     expect(row.indexOf('className="folder-in-use"')).toBeGreaterThan(row.indexOf('className="inst-actions"'));

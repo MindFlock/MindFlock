@@ -87,7 +87,8 @@ def test_the_top_bar_has_no_outbox_prompts_or_recent_and_keeps_the_palette_title
     src = _code("components/TopBar.tsx")
     for gone in ('id="outbox-btn"', 'id="prompts-btn"', 'id="recent-btn"'):
         assert gone not in src, gone
-    assert 'title="Command palette — Ctrl+P / ⌘P"' in src
+    # The shortcut comes from the live keymap (rebinds included).
+    assert 'title={"Command palette" + keys("palette")}' in src
     assert 'aria-label="Open command palette"' in src
     assert src.index('id="settings-btn"') < src.index('id="palette-btn"')
 
@@ -230,11 +231,11 @@ def test_the_palette_lists_commands_before_focus_rows():
     assert at == sorted(at), order
     for label in (
         'label: "Prompts…", hint: "manage saved prompts"',
-        'label: "Assistant agent file…"',
+        'label: "Assistant instructions (agent file)…"',
         'label: "Recently closed…", hint: "reopen or delete closed sessions"',
         '  "pr",\n',
         '  "merge",\n',
-        'label: "Verify — check what was pushed"',
+        'label: "Verify — " + VERIFY_BLURB',
         'label: "Customize…", hint: "choose sidebar bars"',
     ):
         assert label in src, label

@@ -126,7 +126,8 @@ describe("no Outbox: the bell and the group header", () => {
     const p = top.indexOf('id="palette-btn"');
     expect(i).toBeGreaterThanOrEqual(0);
     expect(i < v && v < s && s < p).toBe(true);
-    expect(has(top, 'title="Command palette — Ctrl+P / ⌘P"')).toBe(true);
+    // The shortcut comes from the live keymap, never a hand-typed string.
+    expect(has(top, 'title={"Command palette" + keys("palette")}')).toBe(true);
     expect(top).not.toContain("waitingCount");
     expect(top).not.toContain("useOutbox");
     // Always rendered: no earn-its-slot gate, no per-device memory of one.

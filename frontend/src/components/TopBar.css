@@ -305,3 +305,11 @@ body #mf-winctl {
   position: relative;
 }
 
+
+/* A phone-narrow window: the wordmark has no room left beside the menu and
+   got clipped to "Mi". The menu is the bar's job; the name steps aside. */
+@media (max-width: 560px) {
+  #topbar .tb-brand {
+    display: none;
+  }
+}

@@ -233,3 +233,27 @@
 .shortcut-row.desktop-only .shortcut-desc {
   color: var(--muted);
 }
+
+/* "Change keys": rebinding is a mode you ask for, not what a click on a row
+   does by default. */
+.shortcuts-edit {
+  margin-left: auto;
+  margin-right: 10px;
+  cursor: pointer;
+  background: none;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 3px 9px;
+}
+
+.shortcuts-edit:hover,
+.shortcuts-edit.on {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.shortcuts-edit ~ .shortcuts-restore {
+  margin-left: 0;
+}

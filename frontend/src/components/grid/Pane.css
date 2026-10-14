@@ -334,6 +334,17 @@
   transform: rotate(90deg);
 }
 
+/* "Task:" — what the pinned line is. */
+.prompt-pin .prompt-pin-label {
+  flex: none;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.prompt-pin.pin-open .prompt-pin-label {
+  visibility: hidden;
+}
+
 .prompt-pin .prompt-pin-text {
   min-width: 0;
   white-space: nowrap;
@@ -994,6 +1005,19 @@
   padding: 2px 8px;
   font-size: 13px;
   line-height: 1;
+}
+
+/* Pause / Resume, in the header itself next to −. */
+.pane-head .act.pane-pause {
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.pane-head .act.pane-pause.is-paused {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .pane-head .act.pane-more.open {

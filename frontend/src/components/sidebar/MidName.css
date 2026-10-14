@@ -1,0 +1,20 @@
+/* MidName: the head gives way with an ellipsis, the tail never does. */
+.mid-name {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.mid-name .mid-head {
+  flex: 0 1 auto;
+  min-width: 1ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mid-name .mid-tail {
+  flex: none;
+  white-space: nowrap;
+}
