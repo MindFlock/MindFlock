@@ -41,6 +41,7 @@ import {
   AddFlowShell,
   ArmButton,
   GithubStatusLine,
+  REPO_KIND,
   TestButton,
   type AddKind,
 } from "./kit";
@@ -616,7 +617,7 @@ export function AddRepoFlow({
     (r) => r.toLowerCase() !== repo.toLowerCase()
   );
   const kinds: AddKind[] = trackers.length
-    ? [...trackers, { key: "repo", label: "Repository", sub: "PRs · issues · Verify" }]
+    ? [...trackers, REPO_KIND]
     : [];
 
   const commit = async (andContinue: boolean) => {

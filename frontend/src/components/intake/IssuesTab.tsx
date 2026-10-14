@@ -30,6 +30,7 @@ import {
   ageText,
   panelNote,
   reopenIntakeItem,
+  trackerKinds,
   useToggleSet,
   type ItemWorkspace,
 } from "./kit";
@@ -136,7 +137,7 @@ export function IssuesTab({ focus, adding, startAdd, endAdd }: TabProps) {
     <AddRepoFlow
       key="add"
       uses={adding?.uses?.length ? adding.uses : ["issue"]}
-      trackers={catalog.map((p) => ({ key: p.id, label: p.label }))}
+      trackers={trackerKinds(catalog)}
       onPickTracker={(provider) => startAdd({ kind: "tracker", provider }, "tickets")}
       onCancel={closeAdd}
       onDone={(repo) => {

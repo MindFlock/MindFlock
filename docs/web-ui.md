@@ -2857,15 +2857,26 @@ live inside an `aria-modal` dialog and the desktop app has no native confirm.
 the four "+ Add" buttons that sat under four card lists in two dialogs. It opens
 an inline three-step flow at the top of the tab that owns the kind
 (`AddFlowShell`): **What** (tiles: every tracker in the catalog, and
-**Repository** — *PRs · issues · Verify*) → **Connect** → **What it does**. On
-Tickets (and Auto-start) the tiles start with nothing picked; on GitHub PRs /
-GitHub issues the Repository tile is picked with *PR comments* / *New issues*
-ticked. A tracker tile pressed on a GitHub tab switches to Tickets with that
+**Repository**) → **Connect** → **What it does**. Each tile carries one line
+saying whose work it brings in (`trackerKinds` / `REPO_KIND` in `kit.tsx`) —
+above all so **GitHub Issues** the tracker (*Issues assigned to you, as
+tickets*) never reads as **Repository** (*Every PR or new issue in a repo*,
+the GitHub issues / PRs tabs). On Tickets (and Auto-start) the tiles start with
+**nothing picked** and **Continue** disabled under a one-line *Pick your
+tracker* hint: a tile only marks the choice, Continue makes the draft, and the
+title stays *Add a source* until then — it becomes *Add Jira* once Jira is
+chosen. (v0.8.6 drafted the catalog's first entry, so a new user opened a card
+already titled *GitHub Issues* over a Provider select set to it, and read it as
+"I'm configuring GitHub Issues" before choosing anything.) On GitHub PRs /
+GitHub issues the Repository tile is picked — the tab's own kind, never a
+tracker — with *PR comments* / *New issues* ticked. A tracker tile pressed on a GitHub tab switches to Tickets with that
 tracker's draft open. With nothing configured on a tab, the flow **leads** the
 tab on its own until you Cancel it (then an empty line offers **+ Add a ticket
 source** / **+ Add a repository**). The tracker and repository halves:
 
-- **A tracker** — picking its tile starts a draft (`needs_filter: "on"`: it
+- **A tracker** — picking its tile and pressing **Continue** (‹ Back keeps the
+  tile picked; past step 1 another tile switches the draft straight over)
+  starts a draft (`needs_filter: "on"`: it
   auto-starts nothing until a state or label is picked). **Connect** is the
   credentials; **Test & continue** saves the draft first (Test records its
   verdict, member id and state list on a *saved* source) and then tests; a

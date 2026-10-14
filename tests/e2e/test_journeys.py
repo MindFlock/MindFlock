@@ -324,3 +324,52 @@ def test_intake_add_a_repository_once_and_edit_it_where_it_shows(
     assert not st.get("github", {}).get("repos"), st.get("github")
     # Verify keeps watching it: Remove took it off THIS list only.
     assert st.get("repository", {}).get("verify_repos") == [repo], st.get("repository")
+
+
+# --------------------------------------------------------------------------- #
+# intake: adding a ticket source never picks the tracker for you
+# --------------------------------------------------------------------------- #
+def test_intake_add_a_ticket_source_makes_you_pick_the_tracker(
+    mf_server, page, open_app
+):
+    """Intake → Tickets with no source: the add flow leads with NO tile picked
+    and Continue disabled, titled "Add a source" — not the first tracker's name
+    (v0.8.6 opened a card titled GitHub Issues over a select set to it). A
+    tile only marks the choice; Continue drafts it, and only then does the
+    title name it. Cancel leaves nothing saved."""
+    open_app(mf_server)
+
+    page.locator("#intake-btn").click()
+    panel = page.locator("#intake-panel")
+    expect(panel).to_be_visible(timeout=10_000)
+
+    flow = panel.locator("#ik-add-flow")
+    expect(flow).to_be_visible(timeout=10_000)
+    title = flow.locator(".ik-add-title")
+    expect(title).to_have_text("Add a source")
+    expect(flow.locator(".ik-kind[aria-checked='true']")).to_have_count(0)
+    expect(flow.locator(".ik-kind[data-kind='github_issues']")).to_contain_text(
+        "as tickets"
+    )
+    expect(flow.locator(".ik-kind[data-kind='repo']")).to_contain_text("in a repo")
+    cont = flow.locator("#ik-add-continue")
+    expect(cont).to_be_disabled()
+    expect(flow.locator("#ik-add-pick-hint")).to_contain_text("Pick your tracker")
+
+    # A tile marks the choice — nothing is drafted, the title still names nothing.
+    flow.locator(".ik-kind[data-kind='jira']").click()
+    expect(flow.locator(".ik-kind[data-kind='jira']")).to_have_attribute(
+        "aria-checked", "true"
+    )
+    expect(title).to_have_text("Add a source")
+    expect(flow.locator(".tk-source-editor")).to_have_count(0)
+    expect(cont).to_be_enabled()
+
+    cont.click()
+    expect(title).to_have_text("Add Jira")
+    expect(flow.locator(".tk-source-editor[data-section='connect']")).to_be_visible()
+
+    flow.locator("#ik-add-cancel").click()
+    expect(flow).to_have_count(0, timeout=10_000)
+    sources = mf_server.api("/api/settings/ticketing/sources").get("sources")
+    assert not sources, sources

@@ -279,6 +279,14 @@
   filter: brightness(1.08);
 }
 
+/* A disabled primary must LOOK unavailable (e.g. the add flow's Continue
+   before a tracker is picked), not like a live accent button. */
+.btn-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  filter: none;
+}
+
 /* Narrow numeric/time input (e.g. refresh interval, fresh-window time) —
    replaces an inline width. accent-color tints the number spinner + the
    time-picker clock glyph to match the rest of MindFlock. */

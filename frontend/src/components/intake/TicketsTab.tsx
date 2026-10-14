@@ -52,8 +52,10 @@ import {
   panelNote,
   reopenIntakeItem,
   repoNameOf,
+  trackerKinds,
   useToggleSet,
   ONLY_REPO,
+  REPO_KIND,
   type ItemRoute,
   type ItemWorkspace,
   type TestResult,
@@ -336,6 +338,10 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
   const edit = useEditing(focus);
   // The tracker draft "+ Add source" is building, and which step it is on.
   const [draft, setDraft] = useState<{ id: string; step: 2 | 3 } | null>(null);
+  // Step 1's pick: "" until the person presses a tile — nothing is chosen for
+  // them (a preselected tracker read as "you are configuring GitHub Issues"
+  // to someone who hadn't picked one). Continue makes the draft.
+  const [choice, setChoice] = useState("");
   const [flowError, setFlowError] = useState("");
   const [busy, setBusy] = useState(false);
   // With no source yet the add flow leads — until you cancel it.
@@ -620,6 +626,8 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
     latest.current = [...list, fresh];
     setSources(latest.current);
     setDraft({ id, step: 2 });
+    // ‹ Back to step 1 keeps this tile picked.
+    setChoice(provider);
     setFlowError("");
   };
   const dropDraft = () => {
@@ -635,6 +643,7 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
   };
   const closeAdd = () => {
     dropDraft();
+    setChoice("");
     endAdd();
     setDismissed(true);
   };
@@ -707,6 +716,7 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
       }
       const name = sourceDisplayName(src, catalog);
       setDraft(null);
+      setChoice("");
       setFlowError("");
       endAdd();
       setDismissed(true);
@@ -784,16 +794,25 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
   };
 
   const showAdd = !!adding || !!draft || (!stored.length && !dismissed);
-  const trackerKinds = catalog.map((p) => ({
-    key: p.id,
-    label: p.label,
-    sub: p.id === "github_issues" ? "assigned to me" : undefined,
-  }));
+  const trackers = trackerKinds(catalog);
+  // Step 1 → step 2: a tracker becomes a draft; Repository hands over to the
+  // repository flow. Only ever from a tile the person pressed.
+  const continueWith = (key: string) => {
+    if (!key) return;
+    if (key === "repo") {
+      dropDraft();
+      setChoice("");
+      startAdd({ kind: "repo", uses: ["pr"] });
+    } else beginDraft(key);
+  };
+  // The title names a tracker only once one is chosen — before that it is the
+  // neutral "Add a source", never the first tile's name.
+  const addTitle = draftMeta ? "Add " + draftMeta.label : "Add a source";
   const addFlow = !showAdd ? null : adding?.kind === "repo" && !draft ? (
     <AddRepoFlow
       key="add-repo"
       uses={adding.uses?.length ? adding.uses : ["pr"]}
-      trackers={trackerKinds}
+      trackers={trackers}
       onPickTracker={(provider) => {
         endAdd();
         beginDraft(provider);
@@ -804,22 +823,45 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
   ) : (
     <AddFlowShell
       key="add-tracker"
+      title={addTitle}
       step={draft ? draft.step : 1}
-      kinds={[...trackerKinds, { key: "repo", label: "Repository", sub: "PRs · issues · Verify" }]}
-      picked={draftSource?.provider || ""}
+      kinds={[...trackers, REPO_KIND]}
+      picked={draftSource?.provider || (draft ? "" : choice)}
       onPick={(key) => {
-        if (key === "repo") {
-          dropDraft();
-          startAdd({ kind: "repo", uses: ["pr"] });
-        } else if (key !== draftSource?.provider) beginDraft(key);
+        // Step 1 only marks the tile (Continue goes on); once past it, a
+        // different tile switches the draft straight over.
+        if (!draft) {
+          setChoice(key);
+          setFlowError("");
+        } else if (key !== draftSource?.provider) continueWith(key);
       }}
       onCancel={closeAdd}
       footer={
         !draft ? (
-          <span className="ik-add-hint">
-            Pick the tracker your tickets live in — or <strong>Repository</strong> to watch a
-            GitHub repository's PRs, issues or what ships.
-          </span>
+          <>
+            <span className="ik-add-hint" id="ik-add-pick-hint">
+              {!choice ? (
+                <>
+                  <strong>Pick your tracker</strong> — or <strong>Repository</strong> to watch a
+                  GitHub repository's PRs, issues or what ships.
+                </>
+              ) : choice === "repo" ? (
+                "Next: the repository to watch, and what to use it for."
+              ) : (
+                "Next: connect " + (catalog.find((p) => p.id === choice)?.label || "it") + "."
+              )}
+            </span>
+            <button
+              type="button"
+              className="btn-primary"
+              id="ik-add-continue"
+              disabled={!choice}
+              title={choice ? undefined : "Pick your tracker first"}
+              onClick={() => continueWith(choice)}
+            >
+              Continue ›
+            </button>
+          </>
         ) : draft.step === 2 ? (
           <>
             <span className="ik-add-error" role="alert">

@@ -543,6 +543,30 @@ export interface AddKind {
   sub?: string;
 }
 
+/** What each tracker tile says under its name: whose work it brings in. The
+ * point is GitHub Issues — a TRACKER here (issues assigned to you, worked
+ * like tickets), which a new user otherwise reads as the GitHub issues tab
+ * (every new issue in a watched repo: the Repository tile). */
+const TRACKER_SUB: Record<string, string> = {
+  github_issues: "Issues assigned to you, as tickets",
+  shortcut: "Stories assigned to you",
+  jira: "Issues assigned to you",
+  linear: "Issues assigned to you",
+  asana: "Tasks assigned to you",
+};
+
+/** The tracker tiles, one per catalog entry, in the catalog's order. */
+export function trackerKinds(catalog: Array<{ id: string; label: string }>): AddKind[] {
+  return catalog.map((p) => ({ key: p.id, label: p.label, sub: TRACKER_SUB[p.id] || "Tickets assigned to you" }));
+}
+
+/** The Repository tile: a watched GitHub repo, not a tracker. */
+export const REPO_KIND: AddKind = {
+  key: "repo",
+  label: "Repository",
+  sub: "Every PR or new issue in a repo",
+};
+
 /** The add flow's frame: title, the three steps, the kind tiles, the body and
  * the footer. Shared by the tracker flow (TicketsTab) and the repository flow
  * (RepoSources' AddRepoFlow), so "+ Add source" is one door whichever kind you

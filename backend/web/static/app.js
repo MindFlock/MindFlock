@@ -71679,6 +71679,25 @@ function GithubStatusLine({ buttonId, needFor }) {
 		]
 	});
 }
+var TRACKER_SUB = {
+	github_issues: "Issues assigned to you, as tickets",
+	shortcut: "Stories assigned to you",
+	jira: "Issues assigned to you",
+	linear: "Issues assigned to you",
+	asana: "Tasks assigned to you"
+};
+function trackerKinds(catalog) {
+	return catalog.map((p) => ({
+		key: p.id,
+		label: p.label,
+		sub: TRACKER_SUB[p.id] || "Tickets assigned to you"
+	}));
+}
+var REPO_KIND = {
+	key: "repo",
+	label: "Repository",
+	sub: "Every PR or new issue in a repo"
+};
 function AddFlowShell({ title = "Add a source", step, kinds, picked, onPick, onCancel, cancelLabel = "Cancel", children, footer }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "ik-add",
@@ -73384,11 +73403,7 @@ function AddRepoFlow({ uses: initialUses, trackers = [], onPickTracker, onDone, 
 	const already = REPO_RE.test(repo) ? usesOf(s.settings, repo) : [];
 	const ticketRepos = ticketSources.flatMap((src) => sourceRepos(src).map((r) => githubSlugOf(r.url)));
 	const suggestions = knownRepos(s.settings, ticketRepos).filter((r) => r.toLowerCase() !== repo.toLowerCase());
-	const kinds = trackers.length ? [...trackers, {
-		key: "repo",
-		label: "Repository",
-		sub: "PRs · issues · Verify"
-	}] : [];
+	const kinds = trackers.length ? [...trackers, REPO_KIND] : [];
 	const commit = async (andContinue) => {
 		if (!REPO_RE.test(repo)) {
 			setError("Type the repository as owner/name — e.g. mindflockai/MindFlock.");
@@ -73652,6 +73667,7 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	const ticketsPanel = usePanelQuery("tickets");
 	const edit = useEditing(focus);
 	const [draft, setDraft] = (0, import_react.useState)(null);
+	const [choice, setChoice] = (0, import_react.useState)("");
 	const [flowError, setFlowError] = (0, import_react.useState)("");
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [dismissed, setDismissed] = (0, import_react.useState)(false);
@@ -73871,6 +73887,7 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 			id,
 			step: 2
 		});
+		setChoice(provider);
 		setFlowError("");
 	};
 	const dropDraft = () => {
@@ -73886,6 +73903,7 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	};
 	const closeAdd = () => {
 		dropDraft();
+		setChoice("");
 		endAdd();
 		setDismissed(true);
 	};
@@ -73946,6 +73964,7 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 			}
 			const name = sourceDisplayName(src, catalog);
 			setDraft(null);
+			setChoice("");
 			setFlowError("");
 			endAdd();
 			setDismissed(true);
@@ -74028,14 +74047,22 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 		});
 	};
 	const showAdd = !!adding || !!draft || !stored.length && !dismissed;
-	const trackerKinds = catalog.map((p) => ({
-		key: p.id,
-		label: p.label,
-		sub: p.id === "github_issues" ? "assigned to me" : void 0
-	}));
+	const trackers = trackerKinds(catalog);
+	const continueWith = (key) => {
+		if (!key) return;
+		if (key === "repo") {
+			dropDraft();
+			setChoice("");
+			startAdd({
+				kind: "repo",
+				uses: ["pr"]
+			});
+		} else beginDraft(key);
+	};
+	const addTitle = draftMeta ? "Add " + draftMeta.label : "Add a source";
 	const addFlow = !showAdd ? null : adding?.kind === "repo" && !draft ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddRepoFlow, {
 		uses: adding.uses?.length ? adding.uses : ["pr"],
-		trackers: trackerKinds,
+		trackers,
 		onPickTracker: (provider) => {
 			endAdd();
 			beginDraft(provider);
@@ -74043,31 +74070,35 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 		onCancel: closeAdd,
 		onDone: () => closeAdd()
 	}, "add-repo") : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddFlowShell, {
+		title: addTitle,
 		step: draft ? draft.step : 1,
-		kinds: [...trackerKinds, {
-			key: "repo",
-			label: "Repository",
-			sub: "PRs · issues · Verify"
-		}],
-		picked: draftSource?.provider || "",
+		kinds: [...trackers, REPO_KIND],
+		picked: draftSource?.provider || (draft ? "" : choice),
 		onPick: (key) => {
-			if (key === "repo") {
-				dropDraft();
-				startAdd({
-					kind: "repo",
-					uses: ["pr"]
-				});
-			} else if (key !== draftSource?.provider) beginDraft(key);
+			if (!draft) {
+				setChoice(key);
+				setFlowError("");
+			} else if (key !== draftSource?.provider) continueWith(key);
 		},
 		onCancel: closeAdd,
-		footer: !draft ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		footer: !draft ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "ik-add-hint",
-			children: [
-				"Pick the tracker your tickets live in — or ",
+			id: "ik-add-pick-hint",
+			children: !choice ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Pick your tracker" }),
+				" — or ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Repository" }),
 				" to watch a GitHub repository's PRs, issues or what ships."
-			]
-		}) : draft.step === 2 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			] }) : choice === "repo" ? "Next: the repository to watch, and what to use it for." : "Next: connect " + (catalog.find((p) => p.id === choice)?.label || "it") + "."
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "btn-primary",
+			id: "ik-add-continue",
+			disabled: !choice,
+			title: choice ? void 0 : "Pick your tracker first",
+			onClick: () => continueWith(choice),
+			children: "Continue ›"
+		})] }) : draft.step === 2 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "ik-add-error",
 				role: "alert",
@@ -75322,10 +75353,7 @@ function PullRequestsTab({ focus, adding, startAdd, endAdd }) {
 	};
 	const addFlow = showAdd ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddRepoFlow, {
 		uses: adding?.uses?.length ? adding.uses : ["pr"],
-		trackers: catalog.map((p) => ({
-			key: p.id,
-			label: p.label
-		})),
+		trackers: trackerKinds(catalog),
 		onPickTracker: (provider) => startAdd({
 			kind: "tracker",
 			provider
@@ -75647,10 +75675,7 @@ function IssuesTab({ focus, adding, startAdd, endAdd }) {
 	};
 	const addFlow = showAdd ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddRepoFlow, {
 		uses: adding?.uses?.length ? adding.uses : ["issue"],
-		trackers: catalog.map((p) => ({
-			key: p.id,
-			label: p.label
-		})),
+		trackers: trackerKinds(catalog),
 		onPickTracker: (provider) => startAdd({
 			kind: "tracker",
 			provider
