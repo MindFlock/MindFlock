@@ -38,12 +38,12 @@
    under the title on every row. Same height contract as #intake-panel, and for
    the same reason — sized to its content, with a floor that stops a one-plan
    list collapsing into a strip and a ceiling that starts the body scrolling
-   instead of growing the card past the chrome. */
+   instead of growing the card past the chrome. The top edge and that ceiling
+   are the top-bar dialogs' shared ones (.modal.top-dialog, Modal.css). */
 #verify-panel {
   width: 860px;
   max-width: 94vw;
-  min-height: min(420px, 84vh);
-  max-height: min(84vh, 760px);
+  min-height: min(420px, var(--dlg-max-h));
   padding: 18px 22px 20px;
   border-radius: 12px;
   background: var(--panel);

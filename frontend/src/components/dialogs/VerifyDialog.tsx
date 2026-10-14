@@ -542,6 +542,9 @@ export function VerifyDialog() {
           the topmost modal (so a ⋯ menu or a note box spends it first). */}
       <Modal
         id="verify-dialog"
+        // The top-bar dialogs' shared fixed top edge (Modal.css): opening a
+        // plan or adding a repository grows the card down, never moves it.
+        className="top-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="verify-title"

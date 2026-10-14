@@ -5,9 +5,10 @@
    the two sections, a scheduled card's strip and the empty state. Imported
    after NewSessionDialog.css (styles/index.css), so equal selectors win. */
 
+/* Width only: its top edge and ceiling are the top-bar dialogs' shared ones
+   (.modal.top-dialog, Modal.css). */
 #templates-card {
   width: min(720px, 94vw);
-  max-height: 88vh;
   gap: 12px;
 }
 

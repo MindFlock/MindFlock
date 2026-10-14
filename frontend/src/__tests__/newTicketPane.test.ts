@@ -1,4 +1,4 @@
-/** New → Ticket, the centred one-height card, and the folder row that replaced
+/** New → Ticket, the fixed-top card, and the folder row that replaced
  * a dead window.prompt.
  *
  * Moved from tests/unit/test_frontend_new_ticket.py, which grepped the built
@@ -36,24 +36,16 @@ describe("the New dialog's two tabs", () => {
 describe("the card: every pane shares a fixed top edge", () => {
   // Every pane — Session page 1, the full form and the Ticket tab — hangs
   // from ONE top edge at its own natural height, so neither a tab click nor
-  // More options moves the card's top. The edge centres the tallest common
-  // pane (the full form, More options shut) and never rides under the top bar.
-  it("anchors every pane's top edge, one anchor for all", () => {
-    expect(squash(ALL_CODE)).toContain('className="modal nf-landing"');
+  // More options moves the card's top. That edge is the top-bar dialogs'
+  // shared one (.modal.top-dialog in Modal.css, pinned by
+  // topDialogPlacement.test.ts) — New keeps no placement of its own.
+  it("hangs from the shared top-bar edge, with no anchor of its own", () => {
+    expect(squash(ALL_CODE)).toContain('className="modal top-dialog"');
     expect(ALL_CODE).not.toContain("nf-form-page");
-    const block = cssRule(CSS, "#new-dialog.nf-landing");
-    expect(block).toContain("align-items: flex-start;");
-    expect(block).toContain("padding-top: var(--nf-top);");
-    expect(block).toContain("--nf-anchor-h: 620px;");
-    expect(block).toContain(
-      "--nf-top: max(calc(var(--topbar-h, 40px) + 16px), calc((100vh - var(--nf-anchor-h)) / 2));"
-    );
-    expect(block).toContain("--nf-max-h: calc(100vh - var(--nf-top) - 24px);");
-    expect(squash(CSS)).toContain(
-      "#new-dialog.nf-landing #new-form, #new-dialog.nf-landing #new-ticket-form { max-height: var(--nf-max-h); }"
-    );
-    // The anchor is written once: no second, per-pane top to drift from it.
-    expect(ALL_CSS.split("--nf-anchor-h:").length - 1).toBe(1);
+    expect(ALL_CODE).not.toContain("nf-landing");
+    for (const gone of ["nf-landing", "--nf-anchor-h", "--nf-top", "--nf-max-h"]) {
+      expect(ALL_CSS).not.toContain(gone);
+    }
   });
 
   it("gives every pane its natural height under the fixed top edge", () => {
