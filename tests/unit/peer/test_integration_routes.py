@@ -166,6 +166,9 @@ ROUTES = [
     ("post", "/api/peer/links/" + "ab" * 16 + "/messages/read", {}),
     ("post", "/api/peer/links/" + "ab" * 16 + "/message", {"text": "hi"}),
     ("get", "/api/peer/links/" + "ab" * 16 + "/diff", None),
+    ("get", "/api/peer/links/" + "ab" * 16 + "/their-screen", None),
+    ("get", "/api/peer/links/" + "ab" * 16 + "/their-files", None),
+    ("get", "/api/peer/links/" + "ab" * 16 + "/their-file?path=a.txt", None),
 ]
 
 

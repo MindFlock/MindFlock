@@ -118,6 +118,8 @@ _OP_PERM = {
     "read_file": "read_file",
     "list_files": "read_file",
     "status": None,
+    # Watching the shared session's screen shows what its diff and files do.
+    "screen": "diff",
 }
 
 

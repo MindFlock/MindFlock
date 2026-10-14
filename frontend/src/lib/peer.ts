@@ -30,6 +30,9 @@ export interface PeerLink {
   unread?: number;
   /** Their MindFlock version, when they said. */
   peer_app?: string | null;
+  /** THEIR shared session as they last reported it (asked over the link
+   * every ~10s while connected): null when not connected or not asked yet. */
+  their_share?: { shared: boolean; agent: "running" | "stopped" | "none" | string } | null;
 }
 
 export interface PeerRelay {

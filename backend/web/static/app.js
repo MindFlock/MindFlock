@@ -24421,6 +24421,14 @@ function useSlots(enabled) {
 function refreshMindflockStatus() {
 	return queryClient.invalidateQueries({ queryKey: ["mindflock-status"] });
 }
+function usePeerLinks() {
+	return useQuery({
+		queryKey: ["peer-links"],
+		queryFn: () => api("/api/peer"),
+		refetchInterval: 1e4,
+		retry: false
+	});
+}
 function useDevices() {
 	return useQuery({
 		queryKey: ["devices"],
@@ -28004,7 +28012,7 @@ function adoptAccent(name) {
 function current(dim) {
 	return document.documentElement.getAttribute(dim.attr) || "";
 }
-function apply(dim, name) {
+function apply$1(dim, name) {
 	if (name) document.documentElement.setAttribute(dim.attr, name);
 	else document.documentElement.removeAttribute(dim.attr);
 	try {
@@ -28023,7 +28031,7 @@ function Appearance(_) {
 		"data-surface-choice": name,
 		onClick: () => {
 			setSurface(name);
-			apply(DIMS.surface, name);
+			apply$1(DIMS.surface, name);
 		},
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "sw-dot",
@@ -28057,7 +28065,7 @@ function Appearance(_) {
 				"data-accent-choice": name,
 				onClick: () => {
 					setAccent(name);
-					apply(DIMS.accent, name);
+					apply$1(DIMS.accent, name);
 				},
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "sw-dot",
@@ -37508,6 +37516,42 @@ function OfflineBar() {
 	});
 }
 //#endregion
+//#region src/components/sidebar/PeerSharedRows.tsx
+function PeerSharedRows() {
+	const links = usePeerLinks().data?.links || [];
+	const openDialogFor = useUi((s) => s.openDialogFor);
+	const theirs = links.filter((l) => l.connected && l.their_share?.shared);
+	if (!theirs.length) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "peer-shared-rows",
+		role: "group",
+		"aria-label": "Shared with you",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "psr-head",
+			children: "Shared with you"
+		}), theirs.map((l) => {
+			const running = l.their_share?.agent === "running";
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "psr-row",
+				title: "Watch " + l.peer_name + "’s shared session — their screen, files and changes",
+				onClick: () => openDialogFor("peer-session", l.link_id),
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "psr-dot" + (running ? " running" : ""),
+						"aria-hidden": "true"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [l.peer_name, "’s session"] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "psr-sub",
+						children: running ? "running" : "stopped"
+					})
+				]
+			}, l.link_id);
+		})]
+	});
+}
+//#endregion
 //#region src/extensions/ExtensionBar.tsx
 function useExtensionBarDefs() {
 	const { data: extensions } = useExtensions();
@@ -40682,6 +40726,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 						searchVisible && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionFilter, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BulkBar, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(OfflineBar, {}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerSharedRows, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
 							id: "instance-list",
 							children: [grouped ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -72990,6 +73035,7 @@ function PeerLinkCard(props) {
 	const [target, setTarget] = (0, import_react.useState)("");
 	const [exportBranch, setExportBranch] = (0, import_react.useState)("peer/" + (link.peer_name || "work").replace(/[^A-Za-z0-9._-]+/g, "-"));
 	const [confirm, setConfirm] = (0, import_react.useState)("");
+	const [browsing, setBrowsing] = (0, import_react.useState)("");
 	const [deleteFiles, setDeleteFiles] = (0, import_react.useState)(false);
 	const [reconnect, setReconnect] = (0, import_react.useState)("");
 	const [msgsOpen, setMsgsOpen] = (0, import_react.useState)(false);
@@ -73161,6 +73207,13 @@ function PeerLinkCard(props) {
 							value: target,
 							onChange: (e) => setTarget(e.target.value)
 						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							"aria-expanded": browsing === "export",
+							onClick: () => setBrowsing(browsing === "export" ? "" : "export"),
+							children: "Browse…"
+						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 							placeholder: "peer/branch",
 							value: exportBranch,
@@ -73178,6 +73231,15 @@ function PeerLinkCard(props) {
 						})
 					]
 				}),
+				browsing === "export" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
+					initialPath: target.trim(),
+					selected: target.trim(),
+					onSelect: setTarget,
+					onPick: (p) => {
+						setTarget(p);
+						setBrowsing("");
+					}
+				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "test-btn",
@@ -73185,13 +73247,20 @@ function PeerLinkCard(props) {
 					onClick: () => setConfirm("unshare"),
 					children: "Stop sharing…"
 				})
-			] }) : sandbox ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			] }) : sandbox ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "set-row",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						placeholder: "repo path to share",
+						placeholder: "folder to share",
 						value: repo,
 						onChange: (e) => setRepo(e.target.value)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						"aria-expanded": browsing === "share",
+						onClick: () => setBrowsing(browsing === "share" ? "" : "share"),
+						children: "Browse…"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						placeholder: "branch (optional)",
@@ -73222,7 +73291,15 @@ function PeerLinkCard(props) {
 						children: busy === "share" ? "Sharing…" : "Share a folder"
 					})
 				]
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			}), browsing === "share" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
+				initialPath: repo.trim(),
+				selected: repo.trim(),
+				onSelect: setRepo,
+				onPick: (p) => {
+					setRepo(p);
+					setBrowsing("");
+				}
+			})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "set-hint",
 				children: [
 					"Here you can message ",
@@ -73249,6 +73326,14 @@ function PeerLinkCard(props) {
 						disabled: !!busy || !link.connected,
 						onClick: showDiff,
 						children: busy === "diff" ? "Loading…" : "Their changes"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: !link.connected,
+						title: link.connected ? "Their screen, files and changes" : "They're offline",
+						onClick: () => useUi.getState().openDialogFor("peer-session", link.link_id),
+						children: "Watch their session"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -82885,6 +82970,389 @@ function warnZones(title, breaches, proceed) {
 	}]);
 }
 //#endregion
+//#region src/lib/ansiSpans.ts
+var BASE16 = [
+	"#000000",
+	"#cd3131",
+	"#0dbc79",
+	"#e5e510",
+	"#2472c8",
+	"#bc3fbc",
+	"#11a8cd",
+	"#e5e5e5",
+	"#666666",
+	"#f14c4c",
+	"#23d18b",
+	"#f5f543",
+	"#3b8eea",
+	"#d670d6",
+	"#29b8db",
+	"#ffffff"
+];
+function xterm256(n) {
+	if (n < 16) return BASE16[n];
+	if (n < 232) {
+		const i = n - 16;
+		const step = (v) => v === 0 ? 0 : 55 + v * 40;
+		return `rgb(${step(Math.floor(i / 36))},${step(Math.floor(i / 6) % 6)},${step(i % 6)})`;
+	}
+	const g = 8 + (n - 232) * 10;
+	return `rgb(${g},${g},${g})`;
+}
+function apply(style, params) {
+	const s = { ...style };
+	if (!params.length) params = [0];
+	for (let i = 0; i < params.length; i++) {
+		const p = params[i];
+		if (p === 0) for (const k of Object.keys(s)) delete s[k];
+		else if (p === 1) s.bold = true;
+		else if (p === 2) s.dim = true;
+		else if (p === 3) s.italic = true;
+		else if (p === 4) s.underline = true;
+		else if (p === 7) s.reverse = true;
+		else if (p === 22) s.bold = s.dim = void 0;
+		else if (p === 23) s.italic = void 0;
+		else if (p === 24) s.underline = void 0;
+		else if (p === 27) s.reverse = void 0;
+		else if (p >= 30 && p <= 37) s.color = BASE16[p - 30];
+		else if (p >= 90 && p <= 97) s.color = BASE16[p - 90 + 8];
+		else if (p === 39) s.color = void 0;
+		else if (p >= 40 && p <= 47) s.background = BASE16[p - 40];
+		else if (p >= 100 && p <= 107) s.background = BASE16[p - 100 + 8];
+		else if (p === 49) s.background = void 0;
+		else if (p === 38 || p === 48) {
+			const key = p === 38 ? "color" : "background";
+			if (params[i + 1] === 5 && params[i + 2] !== void 0) {
+				s[key] = xterm256(Math.max(0, Math.min(255, params[i + 2])));
+				i += 2;
+			} else if (params[i + 1] === 2 && params[i + 4] !== void 0) {
+				const [r, g, b] = params.slice(i + 2, i + 5).map((v) => Math.max(0, Math.min(255, v)));
+				s[key] = `rgb(${r},${g},${b})`;
+				i += 4;
+			}
+		}
+	}
+	return s;
+}
+function ansiLines(text) {
+	const lines = [];
+	let style = {};
+	for (const raw of text.split("\n")) {
+		const runs = [];
+		const re = /\x1b\[([0-9;:]*)m/g;
+		let pos = 0;
+		let m;
+		while (m = re.exec(raw)) {
+			if (m.index > pos) runs.push({
+				text: raw.slice(pos, m.index),
+				style
+			});
+			const params = m[1] ? m[1].split(/[;:]/).map((x) => Number(x) || 0) : [];
+			style = apply(style, params);
+			pos = re.lastIndex;
+		}
+		if (pos < raw.length) runs.push({
+			text: raw.slice(pos),
+			style
+		});
+		lines.push(runs);
+	}
+	while (lines.length && lines[lines.length - 1].every((r) => !r.text.trim())) lines.pop();
+	return lines;
+}
+function runCss(s) {
+	const css = {};
+	let fg = s.color;
+	let bg = s.background;
+	if (s.reverse) [fg, bg] = [bg || "var(--bg)", fg || "var(--text)"];
+	if (fg) css.color = fg;
+	if (bg) css.background = bg;
+	if (s.bold) css.fontWeight = "700";
+	if (s.dim) css.opacity = "0.7";
+	if (s.italic) css.fontStyle = "italic";
+	if (s.underline) css.textDecoration = "underline";
+	return css;
+}
+//#endregion
+//#region src/components/PeerSessionViewer.tsx
+var SCREEN_POLL_MS = 1500;
+function PeerSessionViewer() {
+	const open = useUi((s) => s.openDialog === "peer-session");
+	const linkId = useUi((s) => s.openDialog === "peer-session" ? s.dialogTarget : null);
+	const close = useUi((s) => s.closeDialog);
+	if (!open || !linkId) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Viewer, {
+		linkId,
+		onClose: close
+	});
+}
+function Viewer({ linkId, onClose }) {
+	const link = (usePeerLinks().data?.links || []).find((l) => l.link_id === linkId);
+	const name = link?.peer_name || "them";
+	const base = "/api/peer/links/" + encodeURIComponent(linkId);
+	const [tab, setTab] = (0, import_react.useState)("session");
+	const [draft, setDraft] = (0, import_react.useState)("");
+	const [sending, setSending] = (0, import_react.useState)(false);
+	const send = async () => {
+		const text = draft.trim();
+		if (!text || sending) return;
+		setSending(true);
+		try {
+			const r = await api(base + "/message", { json: { text } });
+			setDraft("");
+			toast(r.delivered ? "Sent to " + name : name + " isn't taking messages right now — it's in your log");
+		} catch (e) {
+			toast("Couldn't send — " + errMsg(e));
+		}
+		setSending(false);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "peer-session-dialog",
+		onClose,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "psv-card",
+			role: "dialog",
+			"aria-label": name + "'s shared session",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "psv-head",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "psv-title",
+							children: [name, "’s shared session"]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "psv-state" + (link?.connected ? " on" : ""),
+							children: link?.connected ? "connected" : "offline"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "psv-tabs",
+							role: "tablist",
+							children: [
+								"session",
+								"files",
+								"changes"
+							].map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								role: "tab",
+								"aria-selected": tab === t,
+								className: "psv-tab" + (tab === t ? " active" : ""),
+								onClick: () => setTab(t),
+								children: t === "session" ? "Session" : t === "files" ? "Files" : "Changes"
+							}, t))
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "psv-close",
+							"aria-label": "Close",
+							onClick: onClose,
+							children: "×"
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "psv-body",
+					children: [
+						tab === "session" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionTab, {
+							base,
+							name
+						}),
+						tab === "files" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FilesTab, { base }),
+						tab === "changes" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChangesTab, { base })
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+					className: "psv-say",
+					onSubmit: (e) => {
+						e.preventDefault();
+						send();
+					},
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						placeholder: "Message " + name + " (their agent sees it too)",
+						value: draft,
+						onChange: (e) => setDraft(e.target.value)
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "submit",
+						disabled: !draft.trim() || sending,
+						children: sending ? "Sending…" : "Send"
+					})]
+				})
+			]
+		})
+	});
+}
+function SessionTab({ base, name }) {
+	const [screen, setScreen] = (0, import_react.useState)(null);
+	const [err, setErr] = (0, import_react.useState)("");
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		let timer;
+		const tick = async () => {
+			try {
+				const s = await api(base + "/their-screen");
+				if (!live) return;
+				setScreen(s);
+				setErr("");
+			} catch (e) {
+				if (live) setErr(errMsg(e));
+			}
+			if (live) timer = setTimeout(() => void tick(), SCREEN_POLL_MS);
+		};
+		tick();
+		return () => {
+			live = false;
+			if (timer) clearTimeout(timer);
+		};
+	}, [base]);
+	const lines = (0, import_react.useMemo)(() => ansiLines(screen?.text || ""), [screen?.text]);
+	if (err && !screen) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "error psv-msg",
+		children: err
+	});
+	if (!screen) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "psv-msg",
+		children: [
+			"Asking ",
+			name,
+			" for their screen…"
+		]
+	});
+	if (screen.agent !== "running") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "psv-msg",
+		children: screen.agent === "stopped" ? name + "’s shared session isn’t running right now." : name + " hasn’t started a shared session."
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [err && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "error psv-msg",
+		children: [err, " (showing the last screen)"]
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+		className: "psv-screen",
+		style: screen.cols ? { minWidth: screen.cols + "ch" } : void 0,
+		children: lines.map((runs, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "psv-line",
+			children: runs.length ? runs.map((r, j) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				style: runCss(r.style),
+				children: r.text
+			}, j)) : " "
+		}, i))
+	})] });
+}
+function FilesTab({ base }) {
+	const [files, setFiles] = (0, import_react.useState)(null);
+	const [truncated, setTruncated] = (0, import_react.useState)(false);
+	const [filter, setFilter] = (0, import_react.useState)("");
+	const [open, setOpen] = (0, import_react.useState)(null);
+	const [err, setErr] = (0, import_react.useState)("");
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		api(base + "/their-files").then((r) => {
+			if (!live) return;
+			setFiles(r.files || []);
+			setTruncated(!!r.truncated);
+		}).catch((e) => live && setErr(errMsg(e)));
+		return () => {
+			live = false;
+		};
+	}, [base]);
+	const read = async (path) => {
+		setErr("");
+		try {
+			setOpen(await api(base + "/their-file?path=" + encodeURIComponent(path)));
+		} catch (e) {
+			setErr(errMsg(e));
+		}
+	};
+	if (err && !files) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "error psv-msg",
+		children: err
+	});
+	if (!files) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "psv-msg",
+		children: "Listing their folder…"
+	});
+	const q = filter.trim().toLowerCase();
+	const shown = q ? files.filter((f) => f.toLowerCase().includes(q)) : files;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "psv-files",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "psv-filelist",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					placeholder: "Filter files",
+					value: filter,
+					onChange: (e) => setFilter(e.target.value)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: shown.slice(0, 2e3).map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: open?.path === f ? "active" : "",
+					title: f,
+					onClick: () => void read(f),
+					children: f
+				}) }, f)) }),
+				(truncated || shown.length > 2e3) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "psv-note",
+					children: "Not every file is listed — filter to narrow it."
+				})
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "psv-file",
+			children: [err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error psv-msg",
+				children: err
+			}), !open ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "psv-msg",
+				children: "Pick a file to read it."
+			}) : open.encoding !== "utf-8" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "psv-msg",
+				children: [
+					open.path,
+					" is a binary file (",
+					open.size,
+					" bytes)."
+				]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "psv-filehead",
+				children: [open.path, open.truncated ? " — only the first part is shown" : ""]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+				className: "psv-code",
+				children: open.content
+			})] })]
+		})]
+	});
+}
+function ChangesTab({ base }) {
+	const [diff, setDiff] = (0, import_react.useState)(null);
+	const [err, setErr] = (0, import_react.useState)("");
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		api(base + "/diff").then((r) => live && setDiff(r)).catch((e) => live && setErr(errMsg(e)));
+		return () => {
+			live = false;
+		};
+	}, [base]);
+	if (err) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "error psv-msg",
+		children: err
+	});
+	if (!diff) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "psv-msg",
+		children: "Asking for their changes…"
+	});
+	if (!diff.diff.trim()) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "psv-msg",
+		children: "No changes yet."
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("pre", {
+		className: "psv-code psv-diff",
+		children: [diff.diff.split("\n").map((l, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : l.startsWith("@@") ? "hunk" : "",
+			children: l || " "
+		}, i)), diff.truncated && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "psv-note",
+			children: "… the rest is cut off"
+		})]
+	});
+}
+//#endregion
 //#region src/components/dialogs/MakePrDialog.tsx
 function MakePrDialog() {
 	const open = useUi((s) => s.openDialog === "make-pr");
@@ -85836,6 +86304,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptsDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommitDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerSessionViewer, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MakePrDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RenameDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RecentDialog, {}),
