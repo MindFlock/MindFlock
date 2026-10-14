@@ -50,6 +50,13 @@ someone chose); every row carries `lane: {target, ask_first, owner, by}` —
 `by` is who chose it (`user`, or `agent:<title>` for an agent's
 `set_autopilot`).
 
+When a run stops on something the agent can fix, the stop's detail carries
+`fix` (`precommit`, `check`, `ci` or `conflict`), and before halting the
+driver posts the agent a one-line mailbox note (`kind: "note"`) saying what
+failed and where to look (`repository.fasttrack_failure_notes`, on by
+default). A team run's members never get one: their run sends its own fix
+prompt (below), so they are not told twice.
+
 **Nothing ships beyond what you chose for that session or team run:**
 
 - A session with fast-track on gets its own worktree (the New dialog never

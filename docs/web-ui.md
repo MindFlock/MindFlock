@@ -637,11 +637,13 @@ What it looks like in the app:
   pause or close a worker like any other session. A row whose parent is gone
   keeps a muted **`↳ agent`** line.
 - **Workers nest under their orchestrator on the rail.** A new worker lands
-  directly below its orchestrator's family, and while it sits there it is
-  indented (from the status dot onwards) with a thin accent connector. The
-  nesting is only drawn: the row numbers, Alt+N, Ctrl+Tab and drag-and-drop
-  keep working on the rail exactly as listed. Drag a worker somewhere else
-  and it stays there, un-indented.
+  directly below its orchestrator's family, indented (from the status dot
+  onwards) with a thin accent connector. The rail always keeps a family
+  together: whatever the saved order says (a duplicated window slotted in
+  under its source, a drag), a worker draws directly under its parent's
+  family, and the row numbers, Alt+N, Ctrl+Tab and drag-and-drop follow that
+  same order. Drag the orchestrator and its workers move with it; drag a
+  worker and it only reorders among its siblings.
 - **Fold a family away.** The orchestrator's roll-up line ends in a small
   **hide**; click it and every session below it (workers, their workers)
   leaves the rail, and it reads **show 3**. The roll-up stays, so a folded
@@ -799,6 +801,19 @@ turns red with **✗** (and the reason in its tooltip) when a run halts, and
 is never hidden while a run is armed — even while the workspace is still
 provisioning. To do *one* step yourself, use the guided button beside it;
 fast-track never takes that slot over.
+
+**When a run stops on something the agent can fix** — a pre-commit step or
+the repo's verification check failed, CI went red on the PR, or the PR
+conflicts with (or is behind) its base — MindFlock also leaves that agent a
+one-line **`[MindFlock note …]`**: what failed, where to look (`pre-commit run
+<hook>`, `.mindflock_check.log`), and to fix it and commit — or, when the
+failure is really a conflict with someone else's change, to stop and tell
+you. It rides the agent-message lane, so it is typed only once the agent is
+idle and never while you are typing in the pane. The halt reason is
+unchanged; the ✗ tooltip and the *fast-track stopped* toast add that the
+agent was told. A team run's members are left to their run, which sends its
+own fix prompt. **Settings → Workspace → Advanced → Tell the agent when
+fast-track stops** turns it off (on by default).
 
 A session that shares its branch with another (a copy session), a team run's
 lead (its team run ships it once) and a one-for-all member (its work merges

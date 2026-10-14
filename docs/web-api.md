@@ -1198,6 +1198,10 @@ The full semantics are in [mcp.md](mcp.md#messages).
   `report_result` sends, with `data: {status, branch, head_sha, diff_stat}`.
   For a `result` from a session the server replaces `data.diff_stat` with one
   measured from the sender's worktree as the message is posted.
+  A third kind, `note`, is posted only by MindFlock itself (the fast-track
+  failure note, `from: ""`): this route refuses it (400 `bad kind`), so a
+  client can't fake one. A note is delivered as `[MindFlock note <id>]
+  <text>`, with no sender framing and no reply hint.
 - `data`: any JSON object, at most 8192 bytes serialized.
 
 **Safety rules.** A push (`auto`/`now`) that breaks one is stored `held`, with
@@ -1214,7 +1218,8 @@ The full semantics are in [mcp.md](mcp.md#messages).
 **Message object.**
 
 ```jsonc
-{"id": "m1759600000123_42", "kind": "message", "from": "orch", "to": "orch-w1",
+{"id": "m1759600000123_42", "kind": "message", // message | result | note (note: from "")
+ "from": "orch", "to": "orch-w1",
  "text": "…", "data": null, "ts": 1759600000.12, "reply_to": null, "hop": 0,
  "delivery": "auto",            // the mode actually applied (a downgrade reads "inbox")
  "state": "pending",            // pending | delivered | read | held
@@ -1232,7 +1237,7 @@ globally.
 | `include_consumed` | 0 | `1` also returns `delivered` and `read` messages |
 | `after` | — | a message id; only strictly newer messages |
 | `from` | — | only messages from this sender; `""` selects the CLI and external clients |
-| `kind` | — | `message` or `result` |
+| `kind` | — | `message` or `result` (`note` is not a valid filter: 400) |
 | `limit` | 50 | clamped to 1–200 |
 | `mark_read` | 0 | `1` atomically marks the returned messages read |
 | `wait` | 0 | seconds, clamped to 0–30: long-poll until a match arrives |

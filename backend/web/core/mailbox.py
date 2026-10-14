@@ -19,7 +19,8 @@ second copy starts a needless turn, and a reply to it feeds a ping-pong loop).
 
 Message shape (what the routes return)::
 
-    {"id": "m<epoch_ms>_<n>", "kind": "message"|"result", "from": "<title>|''",
+    {"id": "m<epoch_ms>_<n>", "kind": "message"|"result"|"note",
+     "from": "<title>|''",
      "to": "<title>", "text": str, "data": {..}|None, "ts": float,
      "reply_to": "m..."|None, "hop": int, "delivery": "auto"|"inbox"|"now",
      "state": "pending"|"delivered"|"read"|"held",
@@ -109,6 +110,7 @@ __all__ = [
     "render_delivery",
     "long_notice_detail",
     "KINDS",
+    "NOTE_KIND",
     "DELIVERIES",
     "UNREAD_STATES",
 ]
@@ -116,6 +118,11 @@ __all__ = [
 _FileName = "mailbox.json"
 
 KINDS = ("message", "result")
+#: A note from MindFlock ITSELF (e.g. "Fast-track stopped: pre-commit failed"),
+#: posted only by server code — never in :data:`KINDS`, which is what the HTTP
+#: route accepts, so no client can dress its text up as one.
+NOTE_KIND = "note"
+_STORED_KINDS = KINDS + (NOTE_KIND,)
 DELIVERIES = ("auto", "inbox", "now")
 #: Push modes: the ones that type into the recipient's terminal.
 PUSH_DELIVERIES = ("auto", "now")
@@ -221,7 +228,7 @@ def _normalize_msg(m) -> Optional[dict]:
         hop = 0
     return {
         "id": m["id"],
-        "kind": kind if kind in KINDS else "message",
+        "kind": kind if kind in _STORED_KINDS else "message",
         "from": str(m.get("from") or ""),
         "to": str(m.get("to") or ""),
         "text": str(m.get("text") or ""),
@@ -520,7 +527,7 @@ def post(
     A push that survives is ``pending``; ``inbox`` (or a downgraded push) is
     ``held``. ``detail`` is an explanation the caller already has (e.g. a
     ``now`` that fell back to ``auto``); a downgrade's reason replaces it."""
-    if kind not in KINDS:
+    if kind not in _STORED_KINDS:
         raise ValueError("bad kind: %r" % (kind,))
     if delivery not in DELIVERIES:
         raise ValueError("bad delivery: %r" % (delivery,))
@@ -1076,6 +1083,10 @@ def render_delivery(msg: dict, provider: str = "") -> Tuple[str, bool]:
     if is_peer_sender(msg.get("from")):
         return _render_peer_delivery(msg, provider)
     mid = sanitize(msg.get("id") or "")
+    if msg.get("kind") == NOTE_KIND:
+        # MindFlock's own note: no peer framing (it is not another agent) and
+        # no reply hint (nothing reads a reply). Kept short by its writers.
+        return "[MindFlock note %s] %s" % (mid, sanitize(msg.get("text") or "")), True
     sender = _quoted_title(msg.get("from") or "")
     # No ";" anywhere in the framing: should the line ever land in a bare
     # shell (the delivery paths refuse a pane without a live agent, but this

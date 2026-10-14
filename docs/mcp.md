@@ -893,7 +893,10 @@ a gating check before the push, waits for CI before a merge, and halts with a re
 needs a human (a failing test hook, a red zone, a merge blocker). Arming works
 while the agent is still working; that is the point. The state shows on the
 session's row as `autopilot`, in `get_session` and in `list_sessions`' compact
-rows. See [web-ui.md](web-ui.md) for Fast-track itself.
+rows. A `halted` record's `note` reads `MindFlock told the agent what failed
+and asked it to fix it.` when a failure note went into the session's inbox
+(else `""`); its `reason` is unchanged. See [web-ui.md](web-ui.md) for
+Fast-track itself.
 
 Use `ship_session` for a worker that has reported and is idle, and
 `set_autopilot` for one that is still working (or for yourself, to ship after
@@ -1148,6 +1151,10 @@ How the line varies:
   the hint is what invites the next hop.
 - **Results.** A `result` message reads `[MindFlock result <id> from worker
   "<from>" (status: done) — …] <summary>`.
+- **MindFlock notes.** When fast-track stops on something the agent can fix,
+  MindFlock leaves it a `kind: "note"` message (`from: ""`), which reads
+  `[MindFlock note <id>] <what failed, where to look, fix and commit>`. It
+  needs no reply. `send_message` and `report_result` can't produce one.
 
 **Long bodies.** When the sanitized body is over 1500 chars, the lane types a
 notice instead: the first 300 chars, then `… (full text: call

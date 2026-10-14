@@ -235,9 +235,12 @@ export function EventToasts() {
           { live: true }
         );
         if (String(env.new || "") === "halted")
-          notifyOnce(env.session, "ftstop", "fast-track stopped on " + namedSlot(env.session), {
-            onClick: () => selectSession(env.session),
-          });
+          notifyOnce(
+            env.session,
+            "ftstop",
+            "fast-track stopped on " + namedSlot(env.session) + (d.note ? " — the agent was told what failed" : ""),
+            { onClick: () => selectSession(env.session) }
+          );
       })
     );
     unsubs.push(
