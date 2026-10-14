@@ -12,6 +12,7 @@ import { useNotifyConfig, type NotifyRule } from "../../../state/runs";
 import { SECRET_MASK } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 import { AdvancedFold } from "../settingsMode";
+import { flashSaved } from "../savedCue";
 import { groupRules, ONLY_BELL_HINT, ruleCopy } from "./notifyCopy";
 
 const NOTIFY_KEY = "mindflock.notify.enabled";
@@ -82,8 +83,12 @@ export function Notifications({ gotoScreen }: ScreenProps) {
   const grouped = rules ? groupRules(rules) : null;
   const moreOn = grouped ? grouped.more.filter((r) => r.enabled !== false).length : 0;
 
-  /** Open the phone fold and bring it into view. */
+  // "Set up" presses: the Ntfy form saves a topic on the first one, so what
+  // the person subscribes to is the topic MindFlock will send to.
+  const [setupTick, setSetupTick] = useState(0);
+  /** Open the phone fold, bring it into view, and make sure a topic exists. */
   const showPhone = () => {
+    setSetupTick((n) => n + 1);
     const fold = document.getElementById("notif-advanced") as HTMLDetailsElement | null;
     if (!fold) return;
     fold.open = true;
@@ -180,6 +185,7 @@ export function Notifications({ gotoScreen }: ScreenProps) {
             {grouped.more.length ? (
               <AdvancedFold
                 id="notif-more-events"
+                basic
                 summary={`More alerts: team runs, hooks, Verify, zones (${moreOn} of ${grouped.more.length} on)`}
               >
                 {grouped.more.map((rule) => (
@@ -191,9 +197,10 @@ export function Notifications({ gotoScreen }: ScreenProps) {
         )}
       </div>
       {/* Phone push is a delivery channel, set up once by the few who want it:
-          folded, opened from "Phone alerts → Set up" above. */}
-      <AdvancedFold id="notif-advanced" summary="Phone alerts (ntfy)">
-        <Ntfy onChange={(v) => setPhoneOn(!!v.enabled)} />
+          folded (in basic mode too — it is optional, not expert), opened
+          from "Phone alerts → Set up" above. */}
+      <AdvancedFold id="notif-advanced" summary="Phone alerts (ntfy)" basic>
+        <Ntfy onChange={(v) => setPhoneOn(!!v.enabled)} setup={setupTick} />
       </AdvancedFold>
     </>
   );
@@ -225,7 +232,13 @@ interface NtfyView {
   note?: string;
 }
 
-function Ntfy({ onChange }: { onChange?(v: NtfyView): void } = {}) {
+/** Why "Send a test" can't run yet ("" when it can). */
+export function ntfyTestBlocked(topic: string, testing: boolean): string {
+  if (testing) return "";
+  return topic.trim() ? "" : "Needs a topic first: press Generate.";
+}
+
+function Ntfy({ onChange, setup = 0 }: { onChange?(v: NtfyView): void; setup?: number } = {}) {
   const [view, setView] = useState<NtfyView | null>(null);
   const [failed, setFailed] = useState(false);
   // Text fields are uncontrolled between saves (same flow as SettingField):
@@ -264,9 +277,10 @@ function Ntfy({ onChange }: { onChange?(v: NtfyView): void } = {}) {
 
   /** Persist a patch; on rejection show why and re-sync from the server. */
   const save = useCallback(
-    async (patch: Record<string, unknown>) => {
+    async (patch: Record<string, unknown>, from?: Element | null) => {
       try {
         apply(await api<NtfyView>("/api/notify/ntfy", { json: patch }));
+        if (from) flashSaved(from);
       } catch (err) {
         toast((err as Error).message || "Couldn't save the ntfy settings");
         load();
@@ -274,6 +288,19 @@ function Ntfy({ onChange }: { onChange?(v: NtfyView): void } = {}) {
     },
     [apply, load]
   );
+
+  // "Set up" (the Phone alerts row): with no topic saved yet, generate one AND
+  // save it, once per press. The topic used to be only a placeholder — a new
+  // random one on every visit — so a person could subscribe to a name
+  // MindFlock never sends to.
+  const setupSeen = useRef(0);
+  useEffect(() => {
+    if (!setup || setup === setupSeen.current || !view) return;
+    setupSeen.current = setup;
+    if (view.topic || !view.suggested_topic) return;
+    setTopic(view.suggested_topic);
+    void save({ topic: view.suggested_topic });
+  }, [setup, view, save]);
 
   if (failed)
     return (
@@ -285,6 +312,7 @@ function Ntfy({ onChange }: { onChange?(v: NtfyView): void } = {}) {
 
   const on = !!view.enabled;
   const last = view.last || {};
+  const testBlocked = ntfyTestBlocked(topic, testing);
 
   // No heading of its own: the fold's summary ("Phone alerts (ntfy)") is it.
   return (
@@ -294,8 +322,8 @@ function Ntfy({ onChange }: { onChange?(v: NtfyView): void } = {}) {
         <a href="https://ntfy.sh" target="_blank" rel="noopener noreferrer">
           ntfy
         </a>{" "}
-        app, subscribe to the topic below (or scan the code), then turn this on. Works even
-        with MindFlock closed.
+        app, subscribe to the topic below, send a test, then turn this on. Works even with
+        MindFlock closed.
       </p>
       <div
         className="set-row set-switch-row"
@@ -309,13 +337,16 @@ function Ntfy({ onChange }: { onChange?(v: NtfyView): void } = {}) {
             id="ntfy-toggle"
             checked={on}
             onChange={(e) =>
-              save({
-                enabled: e.target.checked,
-                // Send the typed-but-uncommitted topic too, so flipping the
-                // switch right after typing one doesn't fail validation.
-                topic: topic.trim(),
-                server: server.trim(),
-              })
+              save(
+                {
+                  enabled: e.target.checked,
+                  // Send the typed-but-uncommitted topic too, so flipping the
+                  // switch right after typing one doesn't fail validation.
+                  topic: topic.trim(),
+                  server: server.trim(),
+                },
+                e.currentTarget
+              )
             }
           />
           <span className="ca-slider" />
@@ -328,9 +359,13 @@ function Ntfy({ onChange }: { onChange?(v: NtfyView): void } = {}) {
           value={topic}
           autoComplete="off"
           spellCheck={false}
-          placeholder={view.suggested_topic || "mindflock-…"}
+          // Never the suggested name as grey text: it changed on every visit
+          // and was never saved. "Set up" / Generate save a real one.
+          placeholder="press Generate"
           onChange={(e) => setTopic(e.target.value)}
-          onBlur={() => topic.trim() !== (view.topic || "") && save({ topic: topic.trim() })}
+          onBlur={(e) =>
+            topic.trim() !== (view.topic || "") && save({ topic: topic.trim() }, e.currentTarget)
+          }
           onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
         />
         <button
@@ -338,13 +373,13 @@ function Ntfy({ onChange }: { onChange?(v: NtfyView): void } = {}) {
           className="test-btn"
           id="ntfy-generate"
           title="Use a long random topic name — on the public server the topic name is the only thing keeping strangers out"
-          onClick={() => {
+          onClick={(e) => {
             // The server supplies the random name (crypto-strength, and the
             // same charset ntfy accepts); every response carries a fresh one.
             const fresh = view.suggested_topic;
             if (!fresh) return;
             setTopic(fresh);
-            save({ topic: fresh });
+            save({ topic: fresh }, e.currentTarget);
           }}
         >
           Generate
@@ -359,8 +394,8 @@ function Ntfy({ onChange }: { onChange?(v: NtfyView): void } = {}) {
           spellCheck={false}
           placeholder={view.server_default || "https://ntfy.sh"}
           onChange={(e) => setServer(e.target.value)}
-          onBlur={() =>
-            server.trim() !== (view.server || "") && save({ server: server.trim() })
+          onBlur={(e) =>
+            server.trim() !== (view.server || "") && save({ server: server.trim() }, e.currentTarget)
           }
           onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
         />
@@ -376,7 +411,7 @@ function Ntfy({ onChange }: { onChange?(v: NtfyView): void } = {}) {
           autoComplete="off"
           placeholder={view.has_token ? SECRET_MASK + " (saved)" : "only for a protected topic"}
           onChange={(e) => setToken(e.target.value)}
-          onBlur={() => token && save({ token })}
+          onBlur={(e) => token && save({ token }, e.currentTarget)}
           onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
         />
         {/* Blanking the field means "keep" (the app-wide secret convention), so
@@ -389,9 +424,9 @@ function Ntfy({ onChange }: { onChange?(v: NtfyView): void } = {}) {
             className="test-btn"
             id="ntfy-token-clear"
             title="Remove the saved access token — most public topics need none"
-            onClick={() => {
+            onClick={(e) => {
               setToken("");
-              save({ clear_token: true });
+              save({ clear_token: true }, e.currentTarget);
             }}
           >
             Clear
@@ -412,8 +447,9 @@ function Ntfy({ onChange }: { onChange?(v: NtfyView): void } = {}) {
           spellCheck={false}
           placeholder="optional link"
           onChange={(e) => setClick(e.target.value)}
-          onBlur={() =>
-            click.trim() !== (view.click_url || "") && save({ click_url: click.trim() })
+          onBlur={(e) =>
+            click.trim() !== (view.click_url || "") &&
+            save({ click_url: click.trim() }, e.currentTarget)
           }
           onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
         />
@@ -427,7 +463,8 @@ function Ntfy({ onChange }: { onChange?(v: NtfyView): void } = {}) {
           type="button"
           className="test-btn"
           id="ntfy-test"
-          disabled={testing || !topic.trim()}
+          disabled={testing || !!testBlocked}
+          title={testBlocked || undefined}
           onClick={async () => {
             setTesting(true);
             setVerdict(null);
@@ -461,7 +498,12 @@ function Ntfy({ onChange }: { onChange?(v: NtfyView): void } = {}) {
             {verdict.text}
           </span>
         )}
-        {!verdict && last.ts && (
+        {testBlocked && (
+          <span className="set-hint" id="ntfy-test-why">
+            {testBlocked}
+          </span>
+        )}
+        {!verdict && !testBlocked && last.ts && (
           <span className={last.ok ? "ntfy-verdict-ok" : "ntfy-verdict-bad"}>
             {last.ok ? "Last push sent " + relTime(last.ts) : "Last push failed: " + last.error}
           </span>
@@ -512,6 +554,7 @@ function RuleRow({ rule }: { rule: NotifyRule }) {
           checked={on}
           onChange={async (e) => {
             const want = e.target.checked;
+            const row = e.currentTarget;
             setOn(want);
             try {
               await api(`/api/notify/rules/${encodeURIComponent(rule.id)}`, {
@@ -519,7 +562,8 @@ function RuleRow({ rule }: { rule: NotifyRule }) {
               });
               notifApi()?.refreshRules?.();
               void queryClient.invalidateQueries({ queryKey: ["notify-config"] });
-              toast(want ? "Notify: " + label : "Muted: " + label);
+              // "✓ Saved" by the rule, like every other save in Settings.
+              if (!flashSaved(row)) toast(want ? "Notify: " + label : "Muted: " + label);
             } catch {
               setOn(!want); // revert on failure
               toast("Save failed: notification rule");

@@ -64,8 +64,25 @@ describe("ConnectGitHub dialog", () => {
     expect(dialog).not.toContain("DEVICE_FLOW_UNCONFIGURED");
     expect(dialog).toContain('id="gh-token-lead"');
     expect(dialog).toContain("<code>repo</code> and <code>read:org</code>");
-    // Test and the push check wait for a saved credential.
-    expect(dialog).toContain("disabled={!!busy || !st.connected}");
+    // Round 4: no control is disabled without a reason. Test appears once
+    // connected (step 3 is the test before that); the push check needs no
+    // token, so it never waits for one.
+    expect(dialog).not.toContain("disabled={!!busy || !st.connected}");
+    expect(dialog).toContain("{st.connected && (");
+    expect(dialog).toContain('id="gh-push-check"\n          disabled={!!busy}');
+  });
+
+  it("is three numbered steps, answered inline under step 3", () => {
+    const dialog = src("components/dialogs/ConnectGitHub.tsx");
+    expect(dialog).toContain('id="gh-token-steps"');
+    for (const step of ["Make a token on GitHub", "Paste it here", "Save & test"]) expect(dialog).toContain(step);
+    expect(dialog).toContain('id="gh-token-result"');
+    expect(dialog).toContain('"Connected as @" + r.login');
+    // A rejected token is said under the field, not in a toast at the far edge.
+    expect(dialog).toContain('setTokenResult({ ok: false, msg: r.error || "GitHub rejected this token." })');
+    expect(dialog).not.toMatch(/if \(r\.error\) toast\(r\.error\)/);
+    // The paste-first reason is visible next to the disabled button.
+    expect(dialog).toContain("Paste a token first.");
   });
 
   it("Test calls the real connection test", () => {

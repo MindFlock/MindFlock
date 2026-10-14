@@ -205,8 +205,9 @@ describe("navScreens / navHeading", () => {
 describe("advanced controls on basic screens are folded", () => {
   const folds: Array<[string, string, RegExp]> = [
     // Phone push (ntfy) — the phone, during basic use.
-    ["screens/Notifications.tsx", "notif-advanced", /<AdvancedFold id="notif-advanced" summary="Phone alerts \(ntfy\)">\s*<Ntfy /],
-    ["screens/Notifications.tsx", "notif-more-events", /<AdvancedFold\s+id="notif-more-events"/],
+    // Optional, not expert: these two stay on the basic screen, folded.
+    ["screens/Notifications.tsx", "notif-advanced", /<AdvancedFold id="notif-advanced" summary="Phone alerts \(ntfy\)" basic>\s*<Ntfy /],
+    ["screens/Notifications.tsx", "notif-more-events", /<AdvancedFold\s+id="notif-more-events"\s+basic/],
     ["screens/CodingCli.tsx", "coding-advanced", /<AdvancedFold id="coding-advanced">\s*<WindowRefresh \/>/],
     ["screens/General.tsx", "general-advanced", /<AdvancedFold id="general-advanced">[\s\S]*window_budget_usd[\s\S]*<ScrollSpeedRow \/>/],
     ["screens/Workspace.tsx", "workspace-advanced", /<AdvancedFold id="workspace-advanced">[\s\S]*live_branch[\s\S]*fasttrack_depth[\s\S]*precommit_retry_hooks/],
@@ -228,10 +229,19 @@ describe("advanced controls on basic screens are folded", () => {
       expect(isBasicKind(k), String(k)).toBe(false);
   });
 
-  it("the fold is closed in basic mode and open in advanced mode", () => {
+  it("the fold is absent in basic mode (unless `basic`) and open in advanced mode", () => {
     const mode = src("components/settings/settingsMode.tsx");
     expect(mode).toContain("const [open, setOpen] = useState(advanced);");
     expect(mode).toContain("useEffect(() => setOpen(advanced), [advanced]);");
+    // Round 4: one advanced mechanism — basic mode renders no fold at all.
+    expect(mode).toContain("if (!advanced && !basic) return null;");
+  });
+
+  it("only Notifications' optional folds opt back into basic mode", () => {
+    for (const f of ["General", "Workspace", "CodingCli", "Connections"]) {
+      const text = src("components/settings/screens/" + f + ".tsx");
+      expect(text, f).not.toMatch(/<AdvancedFold[^>]*\sbasic[\s>]/);
+    }
   });
 
   it("the basic screens don't tell a newcomer about other devices", () => {

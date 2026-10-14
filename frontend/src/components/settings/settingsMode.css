@@ -40,6 +40,29 @@
   opacity: 0.8;
 }
 
+/* Phone width (the nav is a short stack: search, a screen select, this): the
+   switch and its count on ONE line, left-aligned, so it reads as a switch and
+   not as one more tab. Here and not in screens.css, which sits in a cascade
+   layer — this sheet is imported unlayered and would win over it. */
+@media (max-width: 600px) {
+  #settings-nav .set-mode-foot {
+    margin-top: 0;
+    padding-top: 0;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  #settings-nav .set-mode-toggle {
+    border-top: none;
+    padding: 2px 0;
+  }
+
+  #settings-nav .set-mode-more {
+    padding: 0;
+  }
+}
+
 /* The "Advanced" fold on a basic screen: the screen's own sections, one
    click away. The body keeps the screen's own rhythm, so a moved row looks
    the same inside the fold as it did outside it. */
@@ -78,4 +101,38 @@
   margin-top: 4px;
   line-height: 1.45;
   max-width: 62ch;
+}
+
+/* "✓ Saved" after the changed control's label (savedCue.ts) — every save in
+   Settings, toggles included, says so right where you are. Inline, so it
+   never moves the control. */
+[data-saved]::after {
+  content: "✓ Saved";
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--green);
+  animation: set-saved-in 0.15s ease-out;
+}
+
+@keyframes set-saved-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-saved]::after {
+    animation: none;
+  }
+}
+
+/* A value a field refused (SettingField): the reason, under the field. */
+.set-field-error {
+  font-size: 12px;
+  color: var(--red);
+}
+
+.set-row input[aria-invalid="true"] {
+  border-color: var(--red);
 }
