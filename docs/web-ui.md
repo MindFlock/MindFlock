@@ -40,8 +40,8 @@ in. The **MindFlock** wordmark (carrying the *running engine's* version, plus a
 red `-DEV` badge under a dev shell) sits centered, and the empty strip beside it
 is the drag region that moves the desktop shell's window.
 
-**Verify** is always on the bar. Its badge counts pushed changes nobody has
-checked and says nothing at zero. Everywhere Verify is described in passing
+**Verify** is always on the bar. Its badge counts the checklists under **Needs
+you** and **Failed** (the dialog's first two groups) and says nothing at zero. Everywhere Verify is described in passing
 (this tooltip, the palette, the tour, the shortcut sheet) it is one sentence,
 `lib/vocab.ts`'s *check that pushed changes work*.
 
@@ -475,6 +475,10 @@ whole prompt over the terminal.
   files, untracked included); until then the header has no lead button and
   the state chip says what the agent is doing. On hover: *Commit this
   session's changes — you check the message first. Next: Push, then Open PR.*
+- **⋯ → Checklist…** (any header, when the session has a branch) opens Verify
+  on that branch's checklist — also on the row's ⋯ menu. When a checklist
+  exists, its verdict chip (*✓ Verified*, *✗ Failed*, *3/5 checked*) sits beside
+  the PR chip and opens it in one click.
 - **An agent that isn't installed.** When the session's agent CLI is missing
   on this computer (`/api/setup`'s `logins`), a line over the terminal says
   so with **Install <agent>…** (the Setup checklist), and the rail row reads
@@ -1457,19 +1461,30 @@ nothing at all once the approval lands. Like every PR signal it is seeded
 silently on first sight, so a restart never re-announces an approval that was
 already there, and a failed lookup is never a withdrawal.
 
-**Verify has four rules of its own, all default-off.** They ride the same narrow
-events the Verify dialog refetches on, one rule per event — folding the halves
-together would silence the case most worth hearing about:
+**Verify has six rules of its own.** They ride the same narrow events the
+Verify dialog refetches on — folding the halves together would silence the case
+most worth hearing about. The three that are bad news or "your turn" are **on by
+default**; the ambient ones are opt-in:
 
-| Rule | Event | Means |
-|---|---|---|
-| `verify_plan_ready` | `session.test_plan_ready` | A checklist got written — there are steps worth showing |
-| `verify_plan_failed` | `session.test_plan_failed` | The generation or rewrite produced no checklist at all |
-| `verify_run_finished` | `session.test_plan_checked` | An agent finished working a checklist |
-| `verify_run_gave_up` | `session.test_plan_gave_up` | A run was released without ever writing its answers |
+| Rule | Event | Default | Means |
+|---|---|---|---|
+| `verify_plan_failed` | `session.test_plan_failed` | on | The generation or rewrite produced no checklist at all |
+| `verify_plan_due` | `session.test_plan_due` | on | The work shipped and its checklist is ready to check |
+| `verify_run_failed` | `session.test_plan_checked` with `new: "failed"` | on | An agent's check found a failed step |
+| `verify_plan_ready` | `session.test_plan_ready` | off | A checklist got written — there are steps worth showing |
+| `verify_run_finished` | `session.test_plan_checked` | off | An agent finished working a checklist |
+| `verify_run_gave_up` | `session.test_plan_gave_up` | off | A run was released without ever writing its answers |
 
-They are opt-in because a flock that pushes all day writes one plan per session
-per branch, which is ambient rather than actionable. A **push cannot carry the
+`verify_plan_failed` was opt-in before round 4 (`was_opt_in`, so a saved choice
+is kept). `verify_run_failed` matches because the emitter stamps `new: "failed"`
+on a check with any failed step — a rule sees `old`/`new`, never `data`.
+`verify_plan_due` is `ntfy: False`: its phone push is the driver's own
+at-most-once announcement (`_notify_test_plan_due`), which honours this rule's
+switch, so one toggle governs both channels. The ambient rules stay opt-in
+because a flock that pushes all day writes one checklist per session per branch.
+The bell's history feed does not list these events yet (see
+`NotificationsBell.notifFromEvent`); the app toasts "… shipped to main — its
+checklist is ready in Verify" when one comes due. A **push cannot carry the
 numbers**: the templates fill `{session}` and nothing else, so where the in-app
 toast says "8 passed, 3 need your eyes" the push says to open Verify — the
 envelope's `failed` / `needs_you` are for the browser, and a body that invented
@@ -3105,13 +3120,13 @@ developer it reads as pytest.
 **Two moments, one line each** — the dialog's intro says exactly this, and folds
 it into **How Verify works** once there are checklists to work:
 
-- **Before merge** — press **Check now** to check the branch.
+- **Before merge** — press **Check now** to check the branch. Every step passed
+  reads **Verified on branch**.
 - **After merge** — it comes back here to be checked again on the live branch.
 
-Checking before merge never costs the check after it: a run (or a full set of
-answers) on work that has not shipped leaves the checklist waiting in **Not
-shipped yet**, and when the work ships it comes back to **Not checked yet** like
-any other. The branch's answers are kept as history — the expanded checklist
+Checking before merge never costs the check after it: a branch whose every step
+passed sits under **Verified** as *Verified on branch*, and when the work ships
+it comes back to **Needs you** like any other. The branch's answers are kept as history — the expanded checklist
 says *"Checked before merge: every step passed, 2d ago. This is the check after
 merge."* — but they are not the current answer, and answers a person gave on the
 branch are not carried into the after-merge run. (Server side: a run made before
@@ -3130,7 +3145,7 @@ and every "why is nothing showing up?" is a question about which one hasn't:
    doing. One per branch, not per session: two sessions on the same branch of the
    same repo (a duplicated session, a repo adopted twice) share the checklist
    written under whichever pushed first, and a push from the other one refreshes
-   *that* plan rather than writing a second. It sits in **Not shipped yet** while
+   *that* plan rather than writing a second. It sits in **In progress** while
    the branch is reviewed and merged — with **Check now** on it, for checking
    the branch before you merge it. A later push always records the newest
    commit, and — *only while
@@ -3147,11 +3162,11 @@ and every "why is nothing showing up?" is a question about which one hasn't:
    pass asks `origin` whether each waiting checklist's sha is an ancestor of the
    live branch. **Merged is not deployed**, so that starts a clock rather than
    handing you the checklist: the row reads *"Merged 4m ago — waiting for it to
-   deploy"* until the repo's deploy window has passed, and only then does it move
-   into **Not checked yet**, raise the badge and (if ntfy is configured) push to
+   deploy"* (verdict **Waiting to ship**) until the repo's deploy window has
+   passed, and only then does it move into **Needs you**, raise the badge and (if ntfy is configured) push to
    your phone.
 
-   The window is **Deploy takes (minutes)** on the repo's Sources card, inheriting
+   The window is **Wait after merge (minutes)** on the repo's Sources card, inheriting
    the flock-wide `repository.deploy_delay_minutes`, which defaults to **5**. Set
    it to `0` where merging *is* shipping. It exists because checking too early is
    not merely early — you see the behaviour the change replaced and record a
@@ -3282,11 +3297,42 @@ owner"* — and it sits under the session's title. A checklist coming due three
 weeks later used to be `sc-1234-fix-filters` over a list of imperatives, leaving
 the reader to reconstruct the change from the steps.
 
-**Five groups, most urgent first.** **Not checked yet** (shipped, nobody has
-finished checking it — this is the badge, by construction), **Steps failed**,
-**Not shipped yet**, **Checked**, **Couldn't be written**. Each row carries one
-plain-English sentence saying whose turn it is and one button that does what the
-sentence says; everything rare is in the row's ⋯ menu.
+**Five groups, one axis, loudest first** (round 4). **Failed** (a step failed,
+or the checklist couldn't be written), **Needs you** (shipped and unchecked, or
+steps of yours still open), **In progress** (an agent is writing or checking it,
+or the branch hasn't merged and nobody has checked it), **Not verified** (a run
+finished with gaps nobody owes — steps never reached, or answered *Can't check*)
+and **Verified**. The badge counts the first two, by construction. Merged-or-not
+is never a heading; it is on the row.
+
+**Every row says its verdict first** — a pill before the sentence: **Verified on
+branch**, **Verified live**, **Failed**, **Couldn't be written**, **Agent
+checking**, **Being written**, **Waiting to ship** (merged, waiting out the
+deploy) or **n of m checked** (`planVerdict` in `verify.ts`). Then one
+plain-English sentence saying whose turn it is — a failure names its step:
+*"Failed: step 2 — POST /webhooks returns 200 (+1 more)."* — and at most one
+filled button: only a row asking something of **you** gets the accent button;
+every other row's button is a plain one. A failed row also has **Fix…** beside
+it. The landing chip reads **not merged** or **merged → main · 4m ago** (never
+"local" — the branch was pushed). Everything rare is in the row's ⋯ menu, which
+starts with **Open session**, **View diff** and **Open PR ↗** while the session
+is open.
+
+**"Check now" means one thing** — start the agent's steps — on the row, in the ⋯
+and in the intro. A checklist with no agent step says **Show steps** instead
+(the button only opens the steps), and one whose every step has an answer but
+some were *Can't check* reads *"Couldn't check 2 steps — not verified."* with
+**Show steps**, never "Answer 2 steps".
+
+**The legend is said once**, under the list: `you` = a person checks it ·
+`agent` = the agent does · Pass, Fail and Can't check are all answers, only Pass
+says it works · keys 1 2 3, u undo, n note.
+
+**The verdict outside Verify.** A session's sidebar row and pane head carry the
+same verdict as a small chip (`VerdictChip`, class `.vchip` — not `.stagechip`,
+which a pane head hides): *✓ Verified*, *✗ Failed*, *3/5 checked*, … Clicking it
+opens Verify on that branch. The chip matches a checklist by session title, then
+by repo + branch, so a duplicated window shows its sibling's checklist.
 
 **Finding one, and acting on several.** The list grows by one checklist per
 session branch per repo, so it has Recently-closed's two controls, reused rather
@@ -3298,7 +3344,7 @@ applies to what the filter is *showing*. The filter searches what the row shows
 because a checklist is remembered as "the one about the Grafana collage board"
 long after its number has stopped meaning anything.
 
-Selecting rows raises the bulk bar: **Check N** (only the ones a run would
+Selecting rows raises the bulk bar: **Check N now · M can't** (only the ones a run would
 actually take — a checklist that is still generating, one an agent is already
 working, or one with no agent step in it is counted out in the label rather than
 discovered as a wall of 409s) and **Delete selected**, which asks first and lists
@@ -3315,7 +3361,7 @@ and colours the step rows and the roll-up inside the plan use, so the three
 renderings cannot drift (and the whole thing is announced as a sentence: *"9
 steps: 5 passed, 1 failed, 2 need you"*). The
 two groups that are an ask carry the same arithmetic on their **heading** —
-*"Not checked yet · 7 · 3 steps need you"* — because a collapsed group was a
+*"Needs you · 7 · 3 steps need you"* — because a collapsed group was a
 number of checklists and said nothing about how much work was in them, or
 whether any of it was red. Triage used to mean expanding all seven.
 
@@ -3325,16 +3371,15 @@ so a failure arrives minutes later, on a background task. It lands on the plan,
 and the row now carries the first sentence of it (*"The verify session couldn't
 start."*) after whatever it says next, with the raw git or tmux line kept for
 the expanded body where there is room for it. Before that, `fail_run` put the
-plan back to **Not checked yet** and the row read exactly like one nobody had
+plan back to unchecked and the row read exactly like one nobody had
 pressed Run on. The failure is retracted when a later run reports, when the run
 is cancelled, and when the next one starts.
 
 **The sidebar bar says when something shipped broken.** The **Verify** dot goes
-red with a `✗N` count beside the due one when a checklist has a recorded
-failure. It is deliberately a separate number rather than added to the due
-count: *"3 to check"* and *"1 of them is broken"* are different questions with
-different urgencies, and a badge that answered both would answer neither. A
-failure is an answer, so it stays until the thing is fixed and re-checked.
+red with a `✗N` count when checklists are under **Failed** (a failed step, or one
+that couldn't be written). The top bar's badge counts them too, alongside Needs
+you; the red pill says how many of those are failures. A failure is an answer,
+so it stays until the thing is fixed and re-checked (or the checklist deleted).
 
 **Answering steps.** Expand a row and each step is labelled **you** or **agent**:
 `agent` is anything settleable from a shell or the agent's own tools — log
@@ -3346,8 +3391,8 @@ no tool for. Three answers, and all three count as *your* answer:
 - **Fail** — it didn't.
 - **Can't check** — you went and looked and could not get to it (staging is down,
   you have no account on it). Recorded with a reason, and **never** counted as a
-  pass: the checklist stops asking you, but its verdict stays *partial* and the
-  **Checked** heading says so (`N you couldn't check`).
+  pass: the checklist stops asking you, and it files under **Not verified** with
+  the verdict *n of m checked*.
 
 Pressing an answer is idempotent; **Undo** beside it is the way back. An answer
 the *agent* recorded shows as `blocked · agent`, which is it saying "a person has
@@ -3436,26 +3481,27 @@ right answer for a library, a CLI, or anything with no environment to point at �
 and the run exercises a fresh checkout of the live branch on this machine, which
 is what a green checklist then means.
 
-**Checking before merge is the primary button**, not a menu item. A checklist in
-**Not shipped yet** reads *"Not merged yet — check the branch now, or it comes
+**Checking before merge is the row's button**, not a menu item. A checklist in
+**In progress** that hasn't merged reads *"Not merged yet — check the branch now, or it comes
 back here after it reaches main"* with **Check now** beside it (it used to be
 ⋯ → **Check it early…**, behind a confirm warning that it closed the checklist
 for good — and, on a collapsed card, a press that did nothing at all). Running
 it, or answering every step by hand, keeps the checklist waiting; it comes back
-after merge (see *Two moments* above). A branch that passed reads *"Works on the
-branch — it comes back to be checked again after merge."*
+after merge (see *Two moments* above). A branch that passed is **Verified on
+branch** and reads *"Works on the branch — it comes back to be checked again
+after merge."*
 
 **A failed step has its next move beside it.** **Fix this…** on the step starts a
 session to fix it (the same route as ⋯ → **Fix what failed…**, scoped to that
 step); the session is told to reproduce the failure first.
 
 **Finishing a checklist doesn't make it vanish.** Answering the last step re-files
-it — usually under **Checked**, far down the list — so a notice stays where it
-was for a few seconds: *"✓ add-csv-export moved to Checked."* with **Show**,
+it — usually under **Verified**, far down the list — so a notice stays where it
+was for a few seconds: *"✓ add-csv-export moved to Verified."* with **Show**,
 which scrolls to it.
 
 **A checklist that couldn't be written can still be used**: add a step to it and
-it becomes an ordinary checklist (it leaves **Couldn't be written**, and the
+it becomes an ordinary checklist (it leaves **Failed**, and the
 generation error goes with it — it no longer describes the checklist).
 
 **Deep link for other surfaces.** `useUi.getState().openDialogFor("verify",

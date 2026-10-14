@@ -17,10 +17,12 @@
  * moment it exists to serve — a plan going due while you were somewhere else —
  * is exactly the moment nobody remembers to go looking.
  *
- * THE SHAPE, and why it is this one. The surface is one grouped queue, and the
- * first group IS the badge: `verify.ts` exports one predicate, `dueCount`
- * filters by it, and the "Waiting on you" heading renders exactly the plans it
- * counted. There is no tab strip, because the tab strip was a filter that
+ * THE SHAPE, and why it is this one. The surface is one grouped queue on ONE
+ * axis — Failed · Needs you · In progress · Not verified · Verified — and the
+ * first two groups ARE the badge: `dueCount` counts exactly the plans
+ * `planGroup` files under them. Every row leads with its verdict
+ * (`planVerdict`), the same one a session's sidebar row and pane head show
+ * (VerdictChip.tsx). There is no tab strip, because the tab strip was a filter that
  * rendered the top of the list under the same headings — one number printed in
  * four places, and no two of them ever equal.
  *
@@ -386,15 +388,17 @@ export function VerifyDialog() {
           </>
         ) : undefined
       }
-      // Dropped entirely when there is nothing to read it against: a
-      // line teaching what a step's lane means, printed over a list with
-      // no steps in it, is vocabulary a first-time reader has nowhere to
-      // spend.
+      // THE LEGEND, ONCE. It used to repeat as three lines inside every
+      // expanded checklist; it is said here, under the list, and nowhere
+      // else. Dropped when there is nothing to read it against.
       hint={
         plans.length ? (
-          <>
-            Steps marked <strong>you</strong> need a person — the agent checks the rest.
-          </>
+          <span className="vf-legend-once">
+            <span className="vf-step-who vf-who-you">you</span> = a person checks it ·{" "}
+            <span className="vf-step-who">agent</span> = the agent does · Pass, Fail and
+            Can't check are all answers; only Pass says it works · on a step:{" "}
+            <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd>, <kbd>u</kbd> undo, <kbd>n</kbd> note
+          </span>
         ) : undefined
       }
     >
@@ -443,8 +447,11 @@ export function VerifyDialog() {
                 disabled={!runnable.length || bulk !== ""}
                 title={
                   runnable.length
-                    ? "An agent checks each one — a few minutes apiece"
-                    : "None of the selected checklists has a step an agent can check"
+                    ? "An agent checks each one — a few minutes apiece" +
+                      (runnable.length < picked.length
+                        ? ". The others can't run now: an agent is already on them, they're being written, or they have no agent steps."
+                        : "")
+                    : "None of the selected checklists can be checked by an agent right now"
                 }
                 onClick={() =>
                   void fanOut(runnable, "Started", (plan) => requestPlanRun(plan.id))
@@ -460,9 +467,10 @@ export function VerifyDialog() {
                   ? "Starting…"
                   : "Check " +
                     runnable.length +
+                    " now" +
                     (runnable.length === picked.length
                       ? ""
-                      : " of " + picked.length)}
+                      : " · " + (picked.length - runnable.length) + " can't")}
               </button>
               <button
                 type="button"
@@ -525,26 +533,6 @@ export function VerifyDialog() {
           <div className="ws-head">
             <h2 id="verify-title">Verify</h2>
             <span className="ik-subtitle">Does the change work?</span>
-            {/* The two moments, compressed: what a checklist is checked against
-                before merge and after. The branch is named only once the server
-                has answered — guessing "main" would be the one lie this surface
-                cannot afford — and "some repos differ" is said when a repo in
-                Sources ships from another branch. */}
-            {liveBranch ? (
-              <span
-                className="vf-live"
-                title={
-                  "Before merge a checklist is checked on its branch; after merge it " +
-                  "comes back to be checked on " +
-                  liveBranch +
-                  "." +
-                  (overridden ? " Some repos ship from another branch — it's on each checklist." : "")
-                }
-              >
-                before merge: the branch · after merge: <code>{liveBranch}</code>
-                {overridden ? <span className="vf-live-more"> · some repos differ</span> : null}
-              </span>
-            ) : null}
             <button type="button" id="verify-close" onClick={closeDialog}>
               Close
             </button>
@@ -563,7 +551,7 @@ export function VerifyDialog() {
             {plans.length ? (
               <details className="vf-intro">
                 <summary>How Verify works</summary>
-                <VerifyMoments liveBranch={liveBranch} />
+                <VerifyMoments liveBranch={liveBranch} overridden={overridden} />
               </details>
             ) : (
               <div className="vf-intro">
@@ -571,7 +559,7 @@ export function VerifyDialog() {
                   Each pushed branch gets a checklist of real-world checks — the agent
                   does the ones it can, the rest are yours.
                 </p>
-                <VerifyMoments liveBranch={liveBranch} />
+                <VerifyMoments liveBranch={liveBranch} overridden={overridden} />
               </div>
             )}
             <VerifySwitch hasPlans={plans.length > 0} />

@@ -324,24 +324,6 @@ export function needsConfirmation(plan: TestPlan): boolean {
   return openHumanSteps(plan).length > 0;
 }
 
-/** Whether every step of the plan's newest run has an answer.
- *
- * The mirror of the server's ``_all_settled``, and it exists here for the same
- * reason it exists there: it is what a rewrite of a SHIPPED plan resolves to
- * when the model answers — ``done`` if everything was settled, ``due`` if not —
- * so the grouping can file the plan where it is headed instead of dropping it
- * a rung for the minutes the rewrite takes. Same settled rule as the server's
- * (:func:`isYourAnswer`): a person's "Can't check" is an answer, an agent's
- * blocked is a handover. A plan with no steps or no real run has settled
- * nothing. */
-function allSettled(plan: TestPlan): boolean {
-  const run = latestRun(plan);
-  const steps = plan.steps || [];
-  if (!run || !steps.length) return false;
-  const results = run.results || {};
-  return steps.every((s) => answeredByYou(results[s.id]));
-}
-
 /** How many steps the latest run recorded as an outright failure.
  *
  * Zero before anything has run — an unchecked step is not a failed one, and the
@@ -390,66 +372,58 @@ export function cantCheckCount(plan: TestPlan): number {
   }).length;
 }
 
-/** Whether this plan is asking something of the person reading.
+/** Whether this plan is asking something of the person reading — the "Needs
+ * you" group.
  *
- * THE predicate of the surface. The top-bar badge, the "Not checked yet" group
- * and every row's tone are three renderings of this one answer, and they agree
- * because they all call this rather than each re-deriving it — the previous
- * arrangement printed one number in four places and the four never matched.
+ * Two things qualify: a shipped checklist nobody has checked yet (``due`` —
+ * somebody has to press Check now or answer it), and any checklist whose steps
+ * for a person are still unanswered after a run. Everything else is kept out,
+ * because a badge that over-counts stops being read within a day:
  *
- * It is named for the reader's TURN and labelled for the FACT, and the gap
- * between those two is deliberate: "shipped, and nobody has finished checking
- * it" is what every member has in common, while only some of them literally
- * want the reader's hands right now. The heading says the fact; the row's own
- * sentence says whose turn it is.
+ * - an agent at work (``running``, ``generating``) — "In progress";
+ * - ``generated`` with no run — not merged yet, nothing is asked;
+ * - a finished checklist — "Verified", or "Not verified" when it stopped with
+ *   gaps nobody owes (a person's "Can't check" is an answer — see
+ *   :func:`isYourAnswer` — so it can never pin a row here forever).
  *
- * Everything that is not literally asking for a person's attention is kept out,
- * because a badge that over-counts stops being read within a day, and once it is
- * wallpaper the feature is dead:
- *
- * - ``generating`` / ``generated`` — the plan isn't yours yet. One is still
- *   being written; the other is waiting for the branch to reach the live
- *   branch. Nothing to check until it ships. The EXCEPTION is a rewrite of a
- *   plan that has ALREADY shipped (``generating`` with ``live_at`` set): the
- *   work is live and unchecked the whole time the model is writing, and the
- *   server puts it straight back into ``due`` when the answer lands — dropping
- *   it from the badge for those minutes would read as the work un-shipping,
- *   which is a lie the reader can see through. Same argument as ``running``
- *   below.
- * - ``done`` with nothing unconfirmed — that is the point of the feature.
- * - ``failed`` — the generator couldn't produce a plan. That is a defect to
- *   look at in the list, not a shipped thing awaiting verification, and a badge
- *   that counted it would nag about something no amount of checking clears.
- *
- * What is left is ``due`` (live, unrun), ``running`` (live, the agent is mid-run
- * — still nothing checked, and a badge that dropped to zero for the minutes a
- * run takes and then popped back up would read as a bug), and any plan whose
- * human steps are still unsettled regardless of state, which is the ``done``
- * plan that came back with a list for you.
- *
- * A recorded FAIL is deliberately NOT in here. A fail is an answer, not an ask —
- * somebody looked and it did not work — so it gets a loud red group of its own
- * second from the top rather than a number on the top bar that no amount of
- * checking would ever clear. */
+ * A FAILURE is its own group and is not in here — see :func:`isFailing`. The
+ * badge (:func:`dueCount`) counts both. */
 export function isWaitingOnYou(plan: TestPlan): boolean {
-  return (
-    plan.state === "due" ||
-    plan.state === "running" ||
-    // A shipped plan being rewritten. The rewrite resolves to ``due`` unless
-    // every step was already settled (the server's ``_generate_inner`` mirrors
-    // this exact expression), so the badge holds steady across it.
-    (plan.state === "generating" && !!plan.live_at && !allSettled(plan)) ||
-    needsConfirmation(plan)
-  );
+  // ONE AXIS (round 4). An agent at work — a run, or a rewrite — is "In
+  // progress", whatever it is working on: the old rule filed a running plan
+  // under the reader's heading, and the row under it then said "Agent
+  // checking", which is the contradiction the single axis exists to remove.
+  if (plan.state === "running" || plan.state === "generating") return false;
+  return plan.state === "due" || needsConfirmation(plan);
 }
 
-/** What the top-bar badge shows: how many plans are asking something of you.
+/** Whether this checklist has FAILED — a step that didn't do what was
+ * expected, or a checklist that could not be written at all (the generator
+ * gave up, it came back empty, or writing it stalled part-way).
  *
- * Each plan counts at most once — a due plan whose earlier run left human steps
- * open matches both halves of :func:`isWaitingOnYou`, and counting it twice
- * would make the badge exceed the number of rows the dialog can show. */
+ * Both are the loud red group and both count on the badge: they are answers,
+ * not asks, but they are the answers somebody about to merge most needs to
+ * see. Nothing an agent is working on right now counts — its result is not in
+ * yet — except a write that has visibly stalled. */
+export function isFailing(plan: TestPlan): boolean {
+  if (plan.state === "running") return false;
+  if (plan.state === "generating") return isGenerationStalled(plan);
+  if (!(plan.steps || []).length) return true;
+  return verdictOf(plan) === "fail";
+}
+
+/** What the top-bar badge shows: the checklists in "Needs you" and "Failed".
+ *
+ * Each plan counts at most once, and it is the same two groups the dialog
+ * draws first, so the number on the top bar is the number of rows under those
+ * two headings. */
 export function dueCount(plans: TestPlan[]): number {
-  return (plans || []).filter(isWaitingOnYou).length;
+  return (plans || []).filter((p) => isFailing(p) || isWaitingOnYou(p)).length;
+}
+
+/** How many of those are failures — the VerifyBar's red pill. */
+export function failingCount(plans: TestPlan[]): number {
+  return (plans || []).filter(isFailing).length;
 }
 
 /** Whether the one branch in the header is the whole story.
@@ -711,52 +685,38 @@ export function noTargetsReason(
   return "Every session's branch already has a checklist.";
 }
 
-/** The groups, in the order the dialog draws them.
+/** The groups, in the order the dialog draws them — ONE axis: what the
+ * checklist says about the branch, and whose move it is.
  *
- * Fixed order, most-urgent first, so the list reads top-down as a work queue
- * rather than as a database dump. Labels are plain English about what the
- * reader has to do, not the state names: "generated" tells you nothing, whereas
- * "Not live yet" says why it isn't your problem yet.
+ * Round 3's judge put the question this list has to answer as "is this branch
+ * verified, yes or no, before I merge?", and the old headings could not answer
+ * it: "Not checked yet / Not shipped yet / Checked" mixed "has it merged?" with
+ * "has it been checked?", so a branch whose every step passed before merge
+ * landed under "Not shipped yet" and was never "Checked" at all. Merged or not
+ * is now a fact ON the row (its verdict chip says "on branch" or "live"), and
+ * the heading says only the outcome.
  *
- * The first group is the badge. Its membership predicate IS
- * :func:`isWaitingOnYou`, which is what ``dueCount`` filters by, so the number
- * on the top bar and the number on that heading are the same array length by
- * construction. They used to be four separate numbers ("Due now",
- * "Awaiting your confirmation", the Due tab's count, the badge) that were never
- * equal to each other, which taught the reader that the badge was approximate.
- * The distinction the old split carried survives where it costs nothing: the
- * row's own sentence and button say whether nobody has started this yet or the
- * agent has left you a short list.
+ * Fixed order, loudest first: a failure is the most valuable thing the feature
+ * produces, then what is asking for you, then what an agent or a merge is still
+ * doing, then what finished short of verified, then what is verified.
  *
- * TWO KEYS ONE LETTER APART, on purpose. ``failed`` is the plan the generator
- * could not write; ``fail`` is the shipped thing that flunked its own checks —
- * opposite ends of the feature. ``failed`` keeps its historical spelling
- * because ``mf_verify_groups`` persists these keys as collapse exceptions and
- * renaming one silently resets everybody's saved state. */
+ * The first two groups are the badge — :func:`dueCount` counts exactly the
+ * plans filed under them.
+ *
+ * KEYS ARE KEPT where the meaning survived. ``mf_verify_groups`` persists these
+ * keys as collapse exceptions, so ``due`` / ``fail`` / ``generated`` / ``done``
+ * keep their spelling; "Couldn't be written" (``failed``) folded into Failed,
+ * and "Not verified" (``partial``) is new. */
 const GROUPS: Array<{ key: string; label: string }> = [
-  // "Not checked yet", not "Waiting on you": the group holds three unlike
-  // situations — nobody has pressed Run, an agent is running it right now, and
-  // some steps genuinely need your eyes — and only the third is literally
-  // waiting on the reader. A heading that named the person while the row under
-  // it said "an agent is checking the steps it can" was a contradiction the
-  // reader had to resolve, and the natural resolution is "this count is
-  // approximate", which is how a badge dies. What is true of every member is
-  // that it shipped and nobody has finished checking it, so that is the name.
-  { key: "due", label: "Not checked yet" },
-  // "Steps failed", not "Failed the check": in a repo this reads next to a PR's
-  // CI checks, and a heading with that shape sent people to GitHub to look for
-  // a red tick. This is about steps in a checklist, and it says so.
-  { key: "fail", label: "Steps failed" },
-  { key: "generated", label: "Not shipped yet" },
-  { key: "done", label: "Checked" },
-  // "Couldn't be written", not "No plan": every row in this group IS a plan, so
-  // the old heading contradicted its own contents. The defect is that the model
-  // could not produce steps for it.
-  { key: "failed", label: "Couldn't be written" },
+  { key: "fail", label: "Failed" },
+  { key: "due", label: "Needs you" },
+  { key: "generated", label: "In progress" },
+  { key: "partial", label: "Not verified" },
+  { key: "done", label: "Verified" },
 ];
 
 /** The groups' keys in drawing order, and one group's heading — for the list's
- * "moved to Checked" notice, which has to draw a heading its plan just left. */
+ * "moved to Verified" notice, which has to draw a heading its plan just left. */
 export const GROUP_KEYS: readonly string[] = GROUPS.map((g) => g.key);
 export function groupLabel(key: string): string {
   return GROUPS.find((g) => g.key === key)?.label || key;
@@ -764,33 +724,21 @@ export function groupLabel(key: string): string {
 
 /** Which group one plan belongs to.
  *
- * Asking something of you wins over everything else, because that is the pile
- * you came to pick up. A recorded failure comes next: ``finish_run`` writes
- * ``state = "done"`` unconditionally, so without this a shipped thing that
- * flunked its own plan filed under "Checked" — the single most valuable output
- * of the feature, hidden in the pile of successes.
- *
- * ``running`` files with the due ones because it is a due plan with an agent
- * currently working it, and ``generating`` files with ``generated`` because both
- * are pre-live — dropping either from the grouping would make plans vanish from
- * the list exactly while they were at their most interesting. The one exception
- * is a rewrite of a plan that has already SHIPPED: filing that under "Not
- * shipped yet" for the minutes the model takes told the reader their live work
- * had somehow un-shipped, so it stays where the server will put it back —
- * ``due`` via :func:`isWaitingOnYou` while anything is unsettled, "Checked"
- * when every step already had an answer. The trailing fallback covers a state
- * written by a newer server than this bundle: unknown is shown somewhere
- * harmless rather than silently dropped. */
+ * Ordered, not switched: a plan can be several of these at once, and the order
+ * is what makes "a step failed" outrank "two steps are yours". An agent at
+ * work files under In progress whatever it is working on; a checklist that
+ * has not merged and has not been run is In progress too — it comes back on
+ * its own after merge, and nothing is asked of anybody yet. "Not verified" is
+ * a run that finished with gaps nobody owes: steps the agent never reached, or
+ * ones a person answered "Can't check". A trailing fallback covers a state
+ * written by a newer server: unknown is shown somewhere harmless rather than
+ * silently dropped. */
 export function planGroup(plan: TestPlan): string {
+  if (isFailing(plan)) return "fail";
   if (isWaitingOnYou(plan)) return "due";
-  if (plan.state === "failed") return "failed";
-  if (verdictOf(plan) === "fail") return "fail";
-  if (plan.state === "done") return "done";
-  // Reached in ``generating`` only when the plan shipped AND everything was
-  // settled (anything unsettled is caught by isWaitingOnYou above), i.e. a
-  // fully-answered checklist being rewritten: it was under "Checked" a second
-  // ago and it lands back there when the rewrite resolves.
-  if (plan.state === "generating" && plan.live_at) return "done";
+  if (plan.state === "running" || plan.state === "generating") return "generated";
+  if (verdictOf(plan) === "pass") return "done";
+  if (latestRun(plan)) return "partial";
   return "generated";
 }
 
@@ -840,11 +788,7 @@ export function canRunNow(plan: TestPlan): boolean {
  *
  * Input order is preserved inside each group — ``GET /api/test-plans`` returns
  * newest ``generated_at`` first, and re-sorting here would fight whatever the
- * caller chose. The ONE exception is "Checked", which is stably partitioned so
- * the plans that never got a full answer come first: with real failures lifted
- * into their own group, the residue in there is the run that stopped early, and
- * it would otherwise be buried under every success the flock has ever recorded.
- * A stable partition keeps the caller's order inside each half.
+ * caller chose.
  *
  * Empty groups are omitted rather than rendered as headers with nothing under
  * them: the common steady state is one group with one item in it, and four empty
@@ -863,11 +807,10 @@ export function groupPlans(
   return GROUPS.filter((g) => (buckets.get(g.key) || []).length > 0).map((g) => {
     const found = buckets.get(g.key) || [];
     // WHAT THE WHOLE PILE ADDS UP TO, on the heading. A collapsed group is a
-    // number and a noun — "Not checked yet · 7" — which says how many
-    // checklists are in there and nothing about how much is being asked of you:
-    // seven plans might be two steps or forty, and one of them might be red.
-    // The two groups that are an ASK say what the ask is, from the same tally
-    // the rows and the roll-ups use.
+    // number and a noun — "Needs you · 7" — which says how many checklists are
+    // in there and nothing about how much is being asked: seven plans might be
+    // two steps or forty. The two groups on the badge say what the ask is,
+    // from the same tally the rows and the roll-ups use.
     if (g.key === "due" || g.key === "fail") {
       const sum = found.reduce(
         (acc, p) => {
@@ -876,8 +819,11 @@ export function groupPlans(
         },
         { yours: 0, failed: 0 },
       );
+      const unwritten = g.key === "fail" ? found.filter((p) => !failCount(p)).length : 0;
       const bits: string[] = [];
       if (sum.failed) bits.push(sum.failed + (sum.failed === 1 ? " step failed" : " steps failed"));
+      if (unwritten)
+        bits.push(unwritten + (unwritten === 1 ? " checklist" : " checklists") + " couldn't be written");
       if (sum.yours) bits.push(sum.yours + (sum.yours === 1 ? " step needs" : " steps need") + " you");
       return {
         key: g.key,
@@ -886,32 +832,7 @@ export function groupPlans(
         plans: found,
       };
     }
-    if (g.key !== "done") return { key: g.key, label: g.label, plans: found };
-    const short = found.filter((p) => unansweredCount(p) > 0);
-    // The two reasons a step has no outcome, counted apart and said apart — see
-    // :func:`cantCheckCount`. A plan whose only gap is a step you went and
-    // looked at is NOT one that "never got an answer", and filing it under that
-    // wording is the badge's old lie moved up one line to the heading, where it
-    // would contradict the row's own sentence directly underneath.
-    const blank = short.filter((p) => unansweredCount(p) - cantCheckCount(p) > 0).length;
-    const cant = short.length - blank;
-    const bits: string[] = [];
-    // The noun, spelled out: the two headings above this one now carry a count
-    // of STEPS, and "3 never got an answer" in the same grammar reads as three
-    // steps when it means three checklists.
-    if (blank)
-      bits.push(
-        blank + (blank === 1 ? " checklist" : " checklists") + " never got an answer",
-      );
-    if (cant) bits.push(cant + " you couldn't check");
-    return {
-      key: g.key,
-      label: g.label,
-      // Said on the heading so a collapsed "Checked · 11" cannot hide the fact
-      // that three of those eleven were never actually finished.
-      detail: bits.length ? bits.join(" · ") : undefined,
-      plans: [...short, ...found.filter((p) => unansweredCount(p) === 0)],
-    };
+    return { key: g.key, label: g.label, plans: found };
   });
 }
 
@@ -1098,14 +1019,12 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
    * `ran` distinguishes "an agent has had a go at this" from "the only run on
    * record is you answering steps by hand" — offering to run it *again* when no
    * agent ever ran it is a small lie about what has already happened here. */
-  const again = (ran = true): [PlanAction, string] =>
-    agentCan
-      ? ["rerun", ran ? "Check again" : "Check now"]
-      : // No agent step to re-run, so there is nothing to run and the button is
-        // just the way back into the list. It used to read "Check again", which
-        // is the same phrase the can't-check branch below uses for an actual
-        // re-check — one label, two meanings, six lines apart.
-        ["answer", "Open the steps"];
+  // ONE NAME FOR THE AGENT'S RUN: "Check now", on the row, in the ⋯ and in
+  // the intro alike — it used to be "Check again" in two of them. A checklist
+  // with no agent step has nothing to run, so its button says what it does:
+  // it shows the steps.
+  const again = (): [PlanAction, string] =>
+    agentCan ? ["rerun", "Check now"] : ["answer", "Show steps"];
   const at = (tone: PlanTone, line: string, action: PlanAction, actionLabel = "") =>
     ({ group, tone, line, action, actionLabel }) as PlanStatus;
 
@@ -1193,7 +1112,7 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
       return at(
         "warn",
         "The agent that was checking this is gone — nothing is running now.",
-        ...again(false),
+        ...again(),
       );
     // HOW LONG IT HAS BEEN GOING. One sentence stood for everything from "you
     // pressed this three seconds ago" to "this has been wedged for an hour and
@@ -1221,7 +1140,7 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
   // checklist still comes back to be checked again after merge.
   const unshipped = !plan.live_at && plan.state === "generated";
   const checkNow = (): [PlanAction, string] =>
-    agentCan ? ["early", "Check now"] : ["answer", "Check now"];
+    agentCan ? ["early", "Check now"] : ["answer", "Show steps"];
 
   if (!run) {
     // Shipped, and nobody has looked. The reason the surface exists.
@@ -1296,6 +1215,37 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
     );
   }
 
+  // The most valuable output of the whole feature: it shipped and it is broken.
+  // The button opens the evidence rather than spending minutes of an agent to
+  // reprint an answer already on disk — and, less obviously, "Run again" here
+  // was destructive: the new run is `latestRun` the moment it starts, so one
+  // press replaced the failure you were reading with an empty in-flight run.
+  // Re-running after a fix is still one item away, in the ⋯.
+  // FIRST since round 4, ahead of the steps still yours: the row files under
+  // "Failed", and a failed row that led with "1 step needs your eyes" in the
+  // your-turn colour read as an ask, not as a failure. The open steps are
+  // still said, after it.
+  const open = openHumanSteps(plan);
+  const failed = failCount(plan);
+  if (failed) {
+    // NAMED, not counted: "Failed: step 2 — POST /webhooks returns 200" is the
+    // sentence somebody about to merge needs, and "1 step didn't do what was
+    // expected" made them open the row to find out which.
+    const first = steps.findIndex((s) => run.results?.[s.id]?.result === "fail");
+    const text = first >= 0 ? clip(steps[first].text, 80) : "";
+    return at(
+      "bad",
+      (first >= 0 ? "Failed: step " + (first + 1) + (text ? " — " + text : "") : "Failed") +
+        (failed > 1 ? " (+" + (failed - 1) + " more)" : "") +
+        "." +
+        (open.length
+          ? " " + open.length + (open.length === 1 ? " step still needs" : " steps still need") + " you."
+          : ""),
+      "answer",
+      "See what failed",
+    );
+  }
+
   // The agent ran and handed back the steps only a person can settle. This is
   // the surface's actual call to action, so it outranks every answer below.
   // "Needs your eyes", not "your call". "Your call" is a phrase people use to
@@ -1304,7 +1254,6 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
   // for. The button is a verb plus a counted noun ("Answer 2 steps") because a
   // bare numeral after a verb parses as an ordinal: "Answer 1" reads as
   // "answer number one".
-  const open = openHumanSteps(plan);
   if (open.length)
     return at(
       "you",
@@ -1313,23 +1262,6 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
         : open.length + " steps need your eyes — an agent can't judge them.",
       "answer",
       "Answer " + open.length + (open.length === 1 ? " step" : " steps"),
-    );
-
-  // The most valuable output of the whole feature: it shipped and it is broken.
-  // The button opens the evidence rather than spending minutes of an agent to
-  // reprint an answer already on disk — and, less obviously, "Run again" here
-  // was destructive: the new run is `latestRun` the moment it starts, so one
-  // press replaced the failure you were reading with an empty in-flight run.
-  // Re-running after a fix is still one item away, in the ⋯.
-  const failed = failCount(plan);
-  if (failed)
-    return at(
-      "bad",
-      failed === 1
-        ? "1 step didn't do what was expected."
-        : failed + " steps didn't do what was expected.",
-      "answer",
-      "See what failed",
     );
 
   // Everything is answered, and some of those answers were "I couldn't get to
@@ -1341,15 +1273,17 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
   const cant = cantCheckCount(plan);
   if (missing && missing === cant) {
     const seen = (plan.steps || []).length - cant;
+    // "Not verified", said in so many words: every step has an answer, so
+    // nothing is asked of anybody — but nothing was observed either.
     return at(
       "warn",
-      seen
-        ? seen + (seen === 1 ? " step passed · " : " steps passed · ") +
-          cant + " you couldn't check."
-        : "Nothing could be checked — " + cant +
-          (cant === 1 ? " step you couldn't get to." : " steps you couldn't get to."),
+      (seen ? seen + " passed · " : "") +
+        "Couldn't check " +
+        cant +
+        (cant === 1 ? " step" : " steps") +
+        " — not verified.",
       "answer",
-      "Open the steps",
+      "Show steps",
     );
   }
 
@@ -1373,13 +1307,13 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
     return at(
       "warn",
       (plan.state === "done"
-        ? "Checked — "
+        ? "Not verified — "
         : ranByAgent
           ? "The check stopped early — "
           : "Part-answered — ") +
         gaps +
         ".",
-      ...again(ranByAgent),
+      ...again(),
     );
   }
 
@@ -1398,6 +1332,97 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
       "See the answers",
     );
   return at("ok", "Every step has an answer — it works.", "answer", "See the answers");
+}
+
+/** A step's text cut to fit one row, at a word boundary. */
+function clip(text: string, max: number): string {
+  const t = String(text || "").trim().replace(/\s+/g, " ");
+  if (t.length <= max) return t.replace(/[.]$/, "");
+  const cut = t.slice(0, max);
+  const space = cut.lastIndexOf(" ");
+  return (space > max / 2 ? cut.slice(0, space) : cut).replace(/[,;:.]$/, "") + "…";
+}
+
+/** THE VERDICT — the yes-or-no a lead wants before merging, in a few words.
+ *
+ * The status sentence says whose turn it is; this says what the checklist
+ * concluded, and it is the one thing shown OUTSIDE Verify too (the session's
+ * sidebar row and pane head, through `VerdictChip`). Ordered like
+ * :func:`planGroup`, and read off the same rules, so the chip on a row and the
+ * heading above it cannot disagree:
+ *
+ * - **Being written** / **Agent checking** — an agent is at work;
+ * - **Couldn't be written** — no steps (failed, empty, or stalled);
+ * - **Failed** — a step didn't do what was expected;
+ * - **Verified on branch** / **Verified live** — every step passed, before or
+ *   after it shipped;
+ * - **Waiting to ship** — merged, waiting out the deploy, nothing checked;
+ * - **n of m checked** — anything else: n steps passed of m.
+ *
+ * `short` is the sidebar's version, where a row has room for two words. */
+export type VerdictKey =
+  | "writing"
+  | "checking"
+  | "unwritten"
+  | "failed"
+  | "branch"
+  | "live"
+  | "shipping"
+  | "partial";
+
+export interface PlanVerdict {
+  key: VerdictKey;
+  label: string;
+  short: string;
+  tone: "ok" | "bad" | "you" | "busy" | "wait" | "warn";
+  glyph: string;
+}
+
+export function planVerdict(plan: TestPlan): PlanVerdict {
+  const v = (key: VerdictKey, label: string, tone: PlanVerdict["tone"], glyph: string, short = label) =>
+    ({ key, label, short, tone, glyph }) as PlanVerdict;
+  const steps = plan.steps || [];
+  if (plan.state === "generating" && !isGenerationStalled(plan))
+    return v("writing", "Being written", "busy", "\u2026", "Checklist…");
+  if (plan.state === "running") return v("checking", "Agent checking", "busy", "\u2026", "Checking…");
+  if (!steps.length || isGenerationStalled(plan))
+    return v("unwritten", "Couldn't be written", "bad", "\u2717", "No checklist");
+  const verdict = verdictOf(plan);
+  if (verdict === "fail") return v("failed", "Failed", "bad", "\u2717");
+  if (verdict === "pass")
+    return plan.live_at
+      ? v("live", "Verified live", "ok", "\u2713")
+      : v("branch", "Verified on branch", "ok", "\u2713", "Verified");
+  if (!latestRun(plan) && plan.merged_at && !plan.live_at)
+    return v("shipping", "Waiting to ship", "wait", "\u25f7");
+  const t = checkTally(plan);
+  return v(
+    "partial",
+    t.passed + " of " + t.total + " checked",
+    isWaitingOnYou(plan) ? "you" : latestRun(plan) ? "warn" : "wait",
+    "\u25d0",
+    t.passed + "/" + t.total + " checked",
+  );
+}
+
+/** The checklist that covers one session, or null.
+ *
+ * By title first — a checklist is keyed by the session that asked for it — and
+ * then by (repo, branch), because a branch open in two windows has ONE
+ * checklist between them, filed under whichever got there first. A branch name
+ * alone never matches across repos: two repos sharing `fix-login` are two
+ * different things to check. */
+export function planForSession(
+  plans: TestPlan[],
+  inst: { title: string; branch?: string; repo?: string },
+): TestPlan | null {
+  const list = plans || [];
+  const byTitle = list.find((p) => p.id === inst.title);
+  if (byTitle) return byTitle;
+  const branch = (inst.branch || "").trim();
+  const repo = (inst.repo || "").trim();
+  if (!branch || !repo) return null;
+  return list.find((p) => p.branch === branch && repoName(p.repo_root) === repo) || null;
 }
 
 /** A GitHub-checks-style tally of one plan's steps.
@@ -1676,12 +1701,16 @@ export function stepKeyIsUndo(key: string): boolean {
  * against that deployment; one without had them worked against a checkout of the
  * live branch on this machine. Saying which is the difference between evidence
  * and a claim. */
-export function runEvidence(run: TestRun | null, liveBranch = ""): string {
+export function runEvidence(run: TestRun | null, liveBranch = "", branch = ""): string {
   if (!run) return "";
   if (run.target) return "Checked against " + run.target;
   const sha = (run.tested_sha || "").slice(0, 7);
   if (!sha) return "";
-  return "Checked on " + (liveBranch || "the live branch") + " @ " + sha;
+  // A check made BEFORE merge ran on the branch, not on the live branch — and
+  // saying "Checked on main @ 63794a4" under "Not merged yet" was a line
+  // contradicting the one above it.
+  const where = isBeforeMerge(run) && branch ? branch : liveBranch || "the live branch";
+  return "Checked on " + where + " @ " + sha;
 }
 
 /** Whether this run demonstrably worked a tree other than the one asked for.

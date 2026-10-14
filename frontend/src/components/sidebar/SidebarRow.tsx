@@ -59,6 +59,7 @@ import { useMe } from "../../lib/presence";
 import { PEER_SCREEN, peerChip } from "../../lib/peer";
 import { actionCtx, sessionAction } from "../../lib/sessionActionTable";
 import { openSettings } from "../../lib/openSettings";
+import { VerdictChip } from "../dialogs/VerdictChip";
 
 /** How long a click on the selected row waits for a second click before it
  * turns into an inline rename. Under the browser's ~500ms dblclick ceiling,
@@ -710,6 +711,8 @@ export const SidebarRow = memo(function SidebarRow({
             {extra.check.label}
           </span>
         )}
+        {/* Verify's verdict for this branch; opens its checklist. */}
+        {!pending && <VerdictChip inst={inst} where="row" />}
         {bg &&
           (bg.stopPid ? (
             <button

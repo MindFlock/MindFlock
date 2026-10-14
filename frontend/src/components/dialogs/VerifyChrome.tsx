@@ -563,10 +563,9 @@ export function VerifySwitch({ hasPlans }: { hasPlans: boolean }) {
           next ? "Automatic checking on" : "Automatic checking paused"
         )
       }
-      // The one thing a switch genuinely cannot say for itself: it is ON and it
-      // is watching nothing, which is the state every new install starts in and
-      // the reason the list below is empty. Never shown to narrate on/off.
-      note={n ? undefined : on ? "On — no repository to watch yet" : undefined}
+      // No "On — no repository to watch yet": with no repository listed this
+      // only shows because checklists exist, and those came from somewhere (a
+      // repo's own .mindflock.toml), so the note contradicted the list below.
     />
   );
 }
@@ -588,15 +587,24 @@ export function VerifyEmpty() {
 }
 
 /** The two moments, one plain line each — the whole model of the surface. */
-export function VerifyMoments({ liveBranch }: { liveBranch: string }) {
+export function VerifyMoments({
+  liveBranch,
+  overridden = false,
+}: {
+  liveBranch: string;
+  /** Some repo ships from another branch (see `liveBranchOverridden`). */
+  overridden?: boolean;
+}) {
   return (
     <ul className="vf-moments">
       <li>
         <strong>Before merge</strong> — press <strong>Check now</strong> to check the branch.
+        Every step passed reads <strong>Verified on branch</strong>.
       </li>
       <li>
         <strong>After merge</strong> — it comes back here to be checked again on{" "}
-        <code>{liveBranch || "the branch you ship from"}</code>.
+        <code>{liveBranch || "the branch you ship from"}</code>
+        {overridden ? " (some repos ship from another branch — each checklist says which)" : ""}.
       </li>
     </ul>
   );
