@@ -64038,7 +64038,7 @@ function Pane({ inst, drag, dragging }) {
 				children: "History"
 			})]
 		}, "history"),
-		copy: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		copy: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			className: "act copy-history",
 			type: "button",
 			disabled: !termTab,
@@ -64048,7 +64048,7 @@ function Pane({ inst, drag, dragging }) {
 				e.stopPropagation();
 				copyHistory();
 			},
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 				className: "btn-icon",
 				width: "12",
 				height: "12",
@@ -64066,11 +64066,7 @@ function Pane({ inst, drag, dragging }) {
 					height: "4",
 					rx: "1"
 				})]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "btn-label",
-				"aria-hidden": "true",
-				children: "Copy all"
-			})]
+			})
 		}, "copy"),
 		cost: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionUsageChip, { inst }, "cost"),
 		diffstat: hasDiffStat ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CtxLine, { inst }, "diffstat") : null,
@@ -87015,9 +87011,9 @@ function previewButton(id) {
 			className: "nextstep nextstep-fast",
 			children: "⏩"
 		}, id);
-		case "copy": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		case "copy": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "act copy-history",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 				className: "btn-icon",
 				...ICON,
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
@@ -87027,10 +87023,7 @@ function previewButton(id) {
 					height: "4",
 					rx: "1"
 				})]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "btn-label",
-				children: "Copy all"
-			})]
+			})
 		}, id);
 		case "history": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			className: "act pane-hist",
