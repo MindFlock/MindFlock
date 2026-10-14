@@ -171,6 +171,9 @@ export function shownStatus(c: ConnectionRow, result?: TestOutcome): ShownStatus
     if (signInUnknown(c) && !result) return { status, pill: "Installed", tone: "neutral" };
   } else if (c.kind === "agent" && status === "connected" && signInUnknown(c) && !result) {
     return { status, pill: "Installed", tone: "neutral" };
+  } else if (c.kind === "extension" && status === "connected") {
+    // An extension isn't connected to anything: it loaded.
+    return { status, pill: "Loaded", tone: status };
   }
   return { status, pill: PILL_TEXT[status], tone: status };
 }
@@ -531,13 +534,15 @@ export function Connections({ gotoScreen }: ScreenProps) {
               </section>
             ) : null}
             {otherAgents.length ? (
-              <AdvancedFold
-                id="connections-other-agents"
-                summary={`Other agents on this computer (${otherAgents.length})`}
-              >
-                <p className="set-hint">Only if you want to try another agent. Nothing here needs fixing.</p>
-                {otherAgents.map(renderRow)}
-              </AdvancedFold>
+              // A plain fold, not AdvancedFold: it stays visible (closed) in
+              // basic mode — "can I use Codex too?" is a basic question.
+              <details className="pr-advanced set-adv-fold" id="connections-other-agents">
+                <summary>{`Other agents on this computer (${otherAgents.length})`}</summary>
+                <div className="pr-advanced-body set-adv-fold-body">
+                  <p className="set-hint">Only if you want to try another agent. Nothing here needs fixing.</p>
+                  {otherAgents.map(renderRow)}
+                </div>
+              </details>
             ) : null}
             {more.length ? (
               <AdvancedFold id="connections-advanced" summary="More connections">

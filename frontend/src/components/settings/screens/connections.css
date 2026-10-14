@@ -145,3 +145,8 @@
 .conn-actions .conn-link {
   font-size: 12px;
 }
+
+/* Settings → Agents: the extra flags let the agent act without asking. */
+.flags-danger {
+  color: var(--red);
+}

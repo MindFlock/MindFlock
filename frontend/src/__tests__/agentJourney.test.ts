@@ -236,3 +236,46 @@ describe("a passing Test doesn't repeat the line above it", () => {
     expect(html).toContain("Checked just now");
   });
 });
+
+describe("orchestrator leftovers", () => {
+  it("an extension that loaded reads Loaded, not Connected", () => {
+    const html = render({ id: "extension:db", name: "Database", kind: "extension", status: "connected", detail: "", action: null, test: null } as ConnectionRow);
+    expect(html).toContain(">Loaded<");
+    expect(html).not.toContain(">Connected<");
+  });
+
+  it("Other agents stays visible in basic mode (a plain fold, not AdvancedFold)", () => {
+    const conns = src("components/settings/screens/Connections.tsx");
+    expect(conns).toContain('<details className="pr-advanced set-adv-fold" id="connections-other-agents">');
+  });
+
+  it("warns once a flag lets the agent act without asking", async () => {
+    const { skipsPermissions } = await import("../components/settings/screens/CodingCli");
+    expect(skipsPermissions("--model opus --dangerously-skip-permissions")).toBe(true);
+    expect(skipsPermissions("--dangerously-bypass-approvals-and-sandbox")).toBe(true);
+    expect(skipsPermissions("--yes-always")).toBe(true);
+    expect(skipsPermissions("--model opus")).toBe(false);
+    expect(skipsPermissions("")).toBe(false);
+    const coding = src("components/settings/screens/CodingCli.tsx");
+    expect(coding).not.toContain("Bypass approvals");
+    expect(coding).toContain("without asking you first.");
+  });
+});
+
+describe("Setup's API-key link lands on the API-key form", () => {
+  it("leaves a one-shot intent for Accounts", async () => {
+    const { requestApiKeyForm, takeAccountsIntent } = await import("../components/setup/accountsIntent");
+    expect(takeAccountsIntent()).toBeNull();
+    requestApiKeyForm("codex");
+    expect(takeAccountsIntent()).toEqual({ kind: "api_key", provider: "codex" });
+    expect(takeAccountsIntent()).toBeNull(); // applies exactly once
+    requestApiKeyForm("");
+    expect(takeAccountsIntent()?.provider).toBe("claude");
+  });
+
+  it("the link sets the intent before opening Accounts", () => {
+    const s = code("components/setup/SetupChecklist.tsx");
+    expect(s).toMatch(/requestApiKeyForm\(defaultAgent\);\s*go\("settings", "accounts"\);/);
+    expect(s).toContain("Add an API key");
+  });
+});

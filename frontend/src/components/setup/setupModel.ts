@@ -178,6 +178,15 @@ export function tailscaleMissing(status: SetupStatus | null | undefined): boolea
   return ts.status !== "ok";
 }
 
+/** Whether Tailscale is actually absent (the doctor's row says "not found"),
+ * as opposed to installed but stopped, signed out or unreachable — which
+ * `tailscaleMissing` also covers, and whose fix starts it rather than
+ * installs it. */
+export function tailscaleNotInstalled(status: SetupStatus | null | undefined): boolean {
+  const ts = status?.tailscale;
+  return !!ts && ts.status !== "ok" && /^not found/i.test(ts.detail || "");
+}
+
 /** Did the desktop app (or a link) ask for the Setup modal? `?setup=1` is
  * what the desktop sends after a first-launch engine install; `install` is
  * its older spelling. Strips the parameter so a reload doesn't ask again. */
