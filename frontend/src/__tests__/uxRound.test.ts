@@ -220,8 +220,10 @@ describe("undo toasts, favicon dot, no maximize", () => {
 describe("New-session dialog progressive disclosure", () => {
   it("shows Works in on the form and folds the rest under More options", () => {
     const fold = normCode("components/dialogs/newSession/WorkspaceFold.tsx");
-    expect(has(fold, 'id="new-in-place"')).toBe(true); // this folder directly
-    expect(has(fold, 'id="new-worktree"')).toBe(true); // separate worktree
+    // WorksInGroup, drawn by New as scope "new": #new-in-place, #new-worktree.
+    expect(has(fold, 'scope="new"')).toBe(true);
+    expect(has(fold, 'id={scope + "-in-place"}')).toBe(true); // this folder directly
+    expect(has(fold, 'id={scope + "-worktree"}')).toBe(true); // separate worktree
     expect(has(fold, 'id="new-init-repo"')).toBe(true); // git init lives here
     const dlg = normCode("components/dialogs/NewSessionDialog.tsx");
     expect(has(dlg, 'id="new-advanced" className="nf-advanced"')).toBe(true);
@@ -230,8 +232,10 @@ describe("New-session dialog progressive disclosure", () => {
 
   it("picks the agent from the configured providers, with a Manage link to Coding CLI", () => {
     const agent = normCode("components/dialogs/newSession/AgentAccount.tsx");
-    expect(has(agent, '<select id="new-program"')).toBe(true);
-    expect(has(agent, 'id="new-agent-manage"')).toBe(true);
+    // #new-program / #new-agent-manage (scope "new"; a template's editor is "tpl").
+    expect(has(agent, 'scope = "new"')).toBe(true);
+    expect(has(agent, '<select id={scope + "-program"}')).toBe(true);
+    expect(has(agent, 'id={scope + "-agent-manage"}')).toBe(true);
     expect(agent).toContain('"coding"'); // Manage jumps to Coding CLI
     expect(normCode("components/dialogs/NewSessionDialog.tsx")).toContain('"/api/providers/manage"');
   });

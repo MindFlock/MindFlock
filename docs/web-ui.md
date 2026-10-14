@@ -2069,15 +2069,29 @@ and *To send text to a session that's already running, use Prompts.*, with
 Every card has **▶ Run now**, **Edit** and **Delete** at its top right.
 With no templates at all the surface is one dashed panel: *Save a session
 setup once, then start it with one click — or every night by itself.* and a
-**Create a template** button (the new-template editor). **Edit** (inline: Name, Agent — a picker of
-this device's agents, *Your default agent* first — Folder *— needed to Run now
-or schedule*, Task, **Works in** — the New form's own controls and words:
-**Separate worktree** `recommended` with **Provision the worktree** (and its
-workspace strategy) as a box under it, **This folder directly**, **Create a
-git repo in this folder** — the schedule, and **When a run's turn ends**
-(*Leave it for me* / *Commit* / *Commit + push* / *Open a PR*), the template's
-autopilot; picking one moves *This folder directly* to the worktree and the
-other way round, as in New) and **Delete**, which asks on an inline row — *Delete
+**Create a template** button (the new-template editor). **Edit** opens the
+editor inline in the card — the New form's own parts, laid out the way New
+lays them out (`TemplateEditor.tsx`; `scope="tpl"` ids): **Name**; then the
+New form's Folder row — **Folder** (placeholder *Needed to Run now or
+schedule*; the field also takes a folder name to look up, as in New) with
+**Browse…** (the same inline folder browser; Escape puts the old folder back
+before it closes the editor) beside **Agent** (New's picker — this device's
+agents with *Your default agent* first, and its **Manage** link), the two on
+one baseline and one height; under them New's one line of **Recent** / **Home**
+folder chips with its *N more…* chip, and New's *No git repo in this folder…
+Create one* line for a plain folder; **Task** (*— what each session from it
+starts on*), New's box that starts at two rows and grows. Below a rule, New's
+label column: **Works in** — New's own row: **Separate worktree**
+`recommended` with **Provision the worktree** (*Also runs the repo's setup and
+warms test caches*, and its workspace strategy once ticked) hung under it,
+**This folder directly**, and **Create a git repo in this folder** (*git init +
+first commit — turns on diff, commit and PR*; not offered for a folder that is
+already a repo); **Schedule** — **Run on a schedule** (*Starts a new session
+from it, by itself*); and **When a run's turn ends** (*Leave it for me* /
+*Commit* / *Commit + push* / *Open a PR*), the template's autopilot — picking
+one moves *This folder directly* to the worktree and the other way round, as
+in New. **Cancel** / **Save** close the card, with a refused save's reason on
+the left of that row. **Delete** asks on an inline row — *Delete
 “<name>”? It goes from every device.* **Delete** / **Keep** — and checks the
 delete happened (*“<name>” was already gone*). **+ New template** adds one.
 Templates live on the server (`/api/templates`, synced between devices).

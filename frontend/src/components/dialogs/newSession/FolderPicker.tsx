@@ -219,10 +219,12 @@ export function matchPicker(folderDo: Dispatch<FolderAction>, setSearchOpen: Set
  * row settles without a second render. A ResizeObserver redoes it when the
  * dialog is resized. */
 function SuggestRow({
+  scope,
   suggestions,
   folderPath,
   folderDo,
 }: {
+  scope: string;
   suggestions: RepoSuggestion[];
   folderPath: string;
   folderDo: Dispatch<FolderAction>;
@@ -282,7 +284,7 @@ function SuggestRow({
 
   return (
     <div
-      id="new-suggest"
+      id={scope + "-suggest"}
       ref={ref}
       className={"nf-suggest nf-folders" + (open ? " open" : "")}
       role="group"
@@ -321,7 +323,7 @@ function SuggestRow({
         type="button"
         ref={moreRef}
         className="nt-chip nf-more"
-        id="new-suggest-more"
+        id={scope + "-suggest-more"}
         aria-expanded={open}
         title={open ? "Back to one line" : "Show all " + total + " folders"}
         onClick={() => setOpen((o) => !o)}
@@ -330,7 +332,23 @@ function SuggestRow({
   );
 }
 
+/** The ids a Folder field's parts wear: the New form's ("new" — the
+ * browse button keeps its old #repo-browse-btn), or a template editor's
+ * ("tpl"). The two dialogs never show at once, but the e2e journeys and the
+ * form's own aria wiring address these by id, so each gets its own. */
+export function folderIds(scope: string) {
+  return {
+    input: scope + "-repo-path",
+    browse: scope === "new" ? "repo-browse-btn" : scope + "-browse",
+    search: scope + "-search",
+    list: scope + "-search-list",
+    hit: scope + "-search-hit-",
+  };
+}
+
 export function FolderField({
+  scope = "new",
+  placeholder = "/home/me/projects/foo — or a folder name to look up",
   repoRef,
   repoPath,
   folderPath,
@@ -344,7 +362,10 @@ export function FolderField({
   browserOpen,
   pickMatch,
 }: {
-  repoRef: MutableRefObject<HTMLInputElement | null>;
+  /** Whose field: "new" (the New form) or "tpl" (a template's editor). */
+  scope?: string;
+  placeholder?: string;
+  repoRef?: MutableRefObject<HTMLInputElement | null>;
   repoPath: string;
   folderPath: string;
   folderDo: Dispatch<FolderAction>;
@@ -358,6 +379,7 @@ export function FolderField({
   browserOpen: boolean;
   pickMatch(path: string): void;
 }) {
+  const ids = folderIds(scope);
   return (
     <label
       className="nf-folder"
@@ -366,10 +388,10 @@ export function FolderField({
       Folder
       <span className="repo-path-row">
         <input
-          id="new-repo-path"
+          id={ids.input}
           ref={repoRef}
           autoComplete="off"
-          placeholder="/home/me/projects/foo — or a folder name to look up"
+          placeholder={placeholder}
           value={repoPath}
           // Announced as a combobox because it is one now: without these
           // a screen reader hears an ordinary text box, the arrow keys
@@ -377,9 +399,9 @@ export function FolderField({
           // from a list that was never mentioned.
           role="combobox"
           aria-expanded={!!searchHits}
-          aria-controls="new-search-list"
+          aria-controls={ids.list}
           aria-autocomplete="list"
-          aria-activedescendant={selIndex >= 0 ? "new-search-hit-" + selIndex : undefined}
+          aria-activedescendant={selIndex >= 0 ? ids.hit + selIndex : undefined}
           onChange={(e) => {
             folderDo({ t: "user-set", path: e.target.value });
             // Typing is what brings a dismissed list back: the query has
@@ -452,7 +474,8 @@ export function FolderField({
         />
         <button
           type="button"
-          id="repo-browse-btn"
+          id={ids.browse}
+          className="repo-browse"
           title={
             browserOpen
               ? "Close the browser and keep this folder (Esc puts the old one back)"
@@ -476,6 +499,7 @@ export function FolderField({
 
 /** Everything under the Folder field, in the order it is drawn. */
 export function FolderAids({
+  scope = "new",
   searchHits,
   selIndex,
   searchListRef,
@@ -492,6 +516,7 @@ export function FolderAids({
   browserOpen,
   device,
 }: {
+  scope?: string;
   searchHits: FolderSearch;
   selIndex: number;
   searchListRef: MutableRefObject<HTMLDivElement | null>;
@@ -512,6 +537,7 @@ export function FolderAids({
   // the field above it: nothing to choose, so nothing drawn.
   const onlyCurrent =
     suggestions.length > 0 && suggestions.every((s) => s.path === folderPath);
+  const ids = folderIds(scope);
   return (
     <>
       {searchHits && (
@@ -521,14 +547,14 @@ export function FolderAids({
            hit needs that a suggestion chip doesn't: its path. Two folders
            called `api` are told apart by where they live, and telling them
            apart is the entire point of having searched. */
-        <div id="new-search" className="new-templates nf-suggest nf-search">
+        <div id={ids.search} className="new-templates nf-suggest nf-search">
           <div className="nt-head">
             <span>Matches for “{searchHits.asked}”</span>
             <span className="nf-suggest-legend">↑↓ choose · Enter fills · Esc closes</span>
           </div>
           {searchHits.matches.length > 0 && (
             <div
-              id="new-search-list"
+              id={ids.list}
               className="nf-search-list"
               ref={searchListRef}
               role="listbox"
@@ -537,7 +563,7 @@ export function FolderAids({
               {searchHits.matches.map((m, i) => (
                 <button
                   key={m.path}
-                  id={"new-search-hit-" + i}
+                  id={ids.hit + i}
                   type="button"
                   role="option"
                   aria-selected={i === selIndex}
@@ -623,7 +649,7 @@ export function FolderAids({
               <button
                 type="button"
                 className="linklike"
-                title="Ticks “Create a git repo in this folder” under More options"
+                title="Ticks “Create a git repo in this folder”"
                 onClick={armInitRepo}
               >
                 Create one
@@ -634,7 +660,7 @@ export function FolderAids({
       )}
 
       {suggestions.length > 0 && !onlyCurrent && (
-        <SuggestRow suggestions={suggestions} folderPath={folderPath} folderDo={folderDo} />
+        <SuggestRow scope={scope} suggestions={suggestions} folderPath={folderPath} folderDo={folderDo} />
       )}
 
       {browserOpen && (

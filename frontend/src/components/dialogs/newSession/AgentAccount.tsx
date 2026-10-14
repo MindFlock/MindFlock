@@ -70,6 +70,8 @@ export function accountSetter(ctx: AccountCtx) {
 }
 
 export function AgentFields({
+  scope = "new",
+  defaultLabel,
   program,
   providers,
   installed = null,
@@ -81,6 +83,11 @@ export function AgentFields({
   setAccount,
   closeDialog,
 }: {
+  /** Whose fields: "new" (the New form) or "tpl" (a template's editor). */
+  scope?: string;
+  /** A first "" row ("Your default agent") for a form that may leave the
+   * agent to the device that runs it — a template's. */
+  defaultLabel?: string;
   program: string;
   providers: Provider[];
   /** Which agents this device has (null = unknown): a missing one is
@@ -88,10 +95,12 @@ export function AgentFields({
   installed?: InstalledMap | null;
   setAgent(value: string): void;
   device: string;
-  authProfiles: AuthProfilesResponse | undefined;
-  profileId: string;
-  pendingProfile: MutableRefObject<unknown>;
-  setAccount(id: string, agentNow?: string): void;
+  /** The account picker's data; a form without one (a template's) leaves
+   * these out and draws Agent alone. */
+  authProfiles?: AuthProfilesResponse | undefined;
+  profileId?: string;
+  pendingProfile?: MutableRefObject<unknown>;
+  setAccount?(id: string, agentNow?: string): void;
   closeDialog(): void;
 }) {
   return (
@@ -101,7 +110,7 @@ export function AgentFields({
           Agent
           <button
             type="button"
-            id="new-agent-manage"
+            id={scope + "-agent-manage"}
             className="linklike"
             title="Install, sign in and pick your default agent in Settings → Agents"
             onClick={() => {
@@ -113,11 +122,12 @@ export function AgentFields({
           </button>
         </span>
         <select
-          id="new-program"
-          title="The agent this session runs"
+          id={scope + "-program"}
+          title={defaultLabel ? "The agent each session from this template runs" : "The agent this session runs"}
           value={program}
           onChange={(e) => setAgent(e.target.value)}
         >
+          {defaultLabel !== undefined && <option value="">{defaultLabel}</option>}
           {!providers.some((p) => p.name === program) && program && (
             <option value={program}>{program}</option>
           )}
@@ -131,7 +141,7 @@ export function AgentFields({
       </label>
       {/* Accounts are THIS device's logins; a session on another
           device signs in with that device's own. */}
-      {!device && (authProfiles?.profiles || []).length > 0 && (
+      {!device && setAccount && (authProfiles?.profiles || []).length > 0 && (
         <label className="nf-agent">
           <span className="nf-agent-head">
             Account
@@ -153,7 +163,7 @@ export function AgentFields({
             title="Which identity this session's CLI runs as"
             value={profileId}
             onChange={(e) => {
-              pendingProfile.current = null;
+              if (pendingProfile) pendingProfile.current = null;
               setAccount(e.target.value);
             }}
           >

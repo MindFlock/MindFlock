@@ -64,8 +64,11 @@ describe("screens and panels declare what they need, and say how to get it", () 
   it("tags the git-only entry points so they vanish without git", () => {
     // New's "Works in" choice (separate worktree / this folder directly) is
     // git-only; More options holds the Name too, so it stays.
-    const worksIn = tagsWithId(src("components/dialogs/newSession/WorkspaceFold.tsx"), "new-works-in");
-    expect(worksIn.map((t) => attr(t, "data-caps"))).toEqual(["git"]);
+    // (the row is WorksInGroup, drawn by New as scope "new" — #new-works-in —
+    // and by a template's editor as "tpl").
+    const fold = src("components/dialogs/newSession/WorkspaceFold.tsx");
+    expect(fold).toContain('<div id={scope + "-works-in"} className="rt-row rt-row-top nf-works-in" data-caps="git">');
+    expect(fold).toContain('scope="new"');
     // The disk manager's git-only action: the unused-worktree sweep.
     const prune = tagsWithId(src("components/dialogs/RecentDialog.tsx"), "recent-prune");
     expect(prune.map((t) => attr(t, "data-caps"))).toEqual(["git"]);

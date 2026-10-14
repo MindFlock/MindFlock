@@ -15393,7 +15393,7 @@ button.ct-chip:hover {
   font-size: 16px;
 }
 
-#new-form label {
+:is(#new-form, .tpl-editor) label {
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -15401,7 +15401,7 @@ button.ct-chip:hover {
   color: var(--muted);
 }
 
-#new-form input {
+:is(#new-form, .tpl-editor) input {
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
@@ -15410,13 +15410,13 @@ button.ct-chip:hover {
   font-size: 14px;
 }
 
-#new-form input:focus {
+:is(#new-form, .tpl-editor) input:focus {
   outline: none;
   border-color: var(--accent);
 }
 
-#new-form select,
-#new-form textarea {
+:is(#new-form, .tpl-editor) select,
+:is(#new-form, .tpl-editor) textarea {
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
@@ -15426,13 +15426,13 @@ button.ct-chip:hover {
   font-family: inherit;
 }
 
-#new-form textarea {
+:is(#new-form, .tpl-editor) textarea {
   resize: vertical;
   min-height: 52px;
 }
 
-#new-form select:focus,
-#new-form textarea:focus {
+:is(#new-form, .tpl-editor) select:focus,
+:is(#new-form, .tpl-editor) textarea:focus {
   outline: none;
   border-color: var(--accent);
 }
@@ -15440,7 +15440,7 @@ button.ct-chip:hover {
 /* Checkbox row: the box, label text and hint flow as one wrapping paragraph
    (block, not flex) so a long hint continues the line and wraps naturally under
    it — no separate hint sub-column, no box floating in the vertical centre. */
-#new-form label.check {
+:is(#new-form, .tpl-editor) label.check {
   display: block;
   color: var(--text);
   cursor: pointer;
@@ -15452,7 +15452,7 @@ button.ct-chip:hover {
    that fills with the accent + a white checkmark when on (replaces the default
    browser tick). Scoped to #new-form so the Settings toggle switches, which
    hide their own 0×0 checkbox, are untouched. */
-#new-form label.check input[type="checkbox"] {
+:is(#new-form, .tpl-editor) label.check input[type="checkbox"] {
   appearance: none;
   -webkit-appearance: none;
   flex: none;
@@ -15470,11 +15470,11 @@ button.ct-chip:hover {
   transition: border-color .12s, background .12s;
 }
 
-#new-form label.check input[type="checkbox"]:hover {
+:is(#new-form, .tpl-editor) label.check input[type="checkbox"]:hover {
   border-color: var(--accent);
 }
 
-#new-form label.check input[type="checkbox"]:checked {
+:is(#new-form, .tpl-editor) label.check input[type="checkbox"]:checked {
   border-color: var(--accent);
   /* White checkmark drawn as an inline SVG so it stays centered and crisp
      regardless of box-sizing / border width (the CSS border-triangle drifted). */
@@ -15483,17 +15483,17 @@ button.ct-chip:hover {
     center / 11px 11px no-repeat;
 }
 
-#new-form label.check input[type="checkbox"]:focus-visible {
+:is(#new-form, .tpl-editor) label.check input[type="checkbox"]:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
-#new-form label.check input[type="checkbox"]:disabled {
+:is(#new-form, .tpl-editor) label.check input[type="checkbox"]:disabled {
   opacity: .45;
   cursor: not-allowed;
 }
 
-#new-form label.check .muted {
+:is(#new-form, .tpl-editor) label.check .muted {
   font-size: 12px;
 }
 
@@ -15527,7 +15527,7 @@ button.ct-chip:hover {
    its own block rather than folded into the checkbox selectors: the two differ
    only in border-radius and the mark, and a shared rule with two exceptions is
    how the next person ends up restyling both by accident. */
-#new-form label.check input[type="radio"] {
+:is(#new-form, .tpl-editor) label.check input[type="radio"] {
   appearance: none;
   -webkit-appearance: none;
   flex: none;
@@ -15545,25 +15545,25 @@ button.ct-chip:hover {
   transition: border-color .12s, background .12s;
 }
 
-#new-form label.check input[type="radio"]:hover {
+:is(#new-form, .tpl-editor) label.check input[type="radio"]:hover {
   border-color: var(--accent);
 }
 
 /* A filled dot rather than the checkmark: at 16px a tick inside a circle is a
    smudge, and the dot is what makes "one of these" read at a glance. */
-#new-form label.check input[type="radio"]:checked {
+:is(#new-form, .tpl-editor) label.check input[type="radio"]:checked {
   border-color: var(--accent);
   background: var(--accent)
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Ccircle cx='6' cy='6' r='2.6' fill='%23fff'/%3E%3C/svg%3E")
     center / 12px 12px no-repeat;
 }
 
-#new-form label.check input[type="radio"]:focus-visible {
+:is(#new-form, .tpl-editor) label.check input[type="radio"]:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
-#new-form label.check input[type="radio"]:disabled {
+:is(#new-form, .tpl-editor) label.check input[type="radio"]:disabled {
   opacity: .45;
   cursor: not-allowed;
 }
@@ -15590,7 +15590,7 @@ button.ct-chip:hover {
   flex: 1;
 }
 
-#repo-browse-btn {
+:is(#repo-browse-btn, .repo-browse) {
   border-radius: 7px;
   padding: 0 12px;
   font-size: 12px;
@@ -15601,7 +15601,7 @@ button.ct-chip:hover {
   color: var(--text);
 }
 
-#repo-browse-btn:hover {
+:is(#repo-browse-btn, .repo-browse):hover {
   border-color: var(--accent);
 }
 
@@ -16899,91 +16899,86 @@ button.ct-chip:hover {
   flex: 1 1 auto;
 }
 
+/* The editor: the New form's own parts (TemplateEditor.tsx) — its inputs,
+   checkboxes and radios come from the :is(#new-form, .tpl-editor) rules
+   above, the Folder/Agent row from .nf-quick, the folder chips from
+   .nf-folders, Works in from .nf-works-in — at the New form's rhythm (the
+   13px of .nf-body). Only what is the editor's own is here. */
 .tpl-editor {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 13px;
 }
 
 .tpl-card-editing {
   border-color: var(--accent);
+  padding: 16px 18px 14px;
 }
 
-.tpl-editor label {
+/* Folder's input and Agent's select on one baseline and one height: a
+   select draws a few pixels taller than an input at the same padding. */
+.tpl-editor .nf-quick input,
+.tpl-editor .nf-quick select,
+.tpl-editor .nf-quick .repo-browse {
+  box-sizing: border-box;
+  /* 9px padding + 1px border each side, and room for a "g" under 14px text. */
+  height: 40px;
+}
+
+/* Works in, Schedule, When a run's turn ends: the New form's label column,
+   wide enough that the longest label stays on one line. */
+.tpl-rows {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.tpl-editor label.check {
-  flex-direction: row;
-  align-items: center;
-  gap: 6px;
-  color: var(--text);
-}
-
-.tpl-editor input,
-.tpl-editor textarea,
-.tpl-editor select {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 7px;
-  padding: 7px 10px;
-  font-size: 13px;
-  font-family: inherit;
-}
-
-.tpl-editor input:focus,
-.tpl-editor textarea:focus,
-.tpl-editor select:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.tpl-two {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-@media (max-width: 520px) {
-  .tpl-two {
-    grid-template-columns: 1fr;
-  }
-}
-
-.tpl-mode {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
-}
-
-.tpl-mode-label,
-.tpl-ft-label {
-  color: var(--muted);
-}
-
-/* Provision (and its strategy) sit under the worktree answer they modify,
-   on the same hung edge as its text (.nf-opt). */
-.tpl-mode-sub {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding-left: 25px;
-}
-
-/* Schedule: a checkbox, then "Every day ▾ at 21:00" on one row once on. */
-.tpl-schedule {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  font-size: 12px;
-  padding-top: 8px;
+  gap: 16px;
+  padding-top: 14px;
   border-top: 1px solid var(--border);
+}
+
+.tpl-editor .rt-row {
+  grid-template-columns: 150px minmax(0, 1fr);
+}
+
+.tpl-editor .rt-label {
+  white-space: nowrap;
+}
+
+/* A label beside a stacked answer sits on its title's line, as Works in's
+   does (.rt-row-top's 6px is for a label beside a 38px control). */
+.tpl-editor .rt-row-top > .rt-label {
+  padding-top: 1px;
+}
+
+/* An unticked box a step toward the muted ink, as New's unpicked radios:
+   at the border colour it vanished into the card. (#new-form has no
+   .tpl-rows; the :is() keeps the id weight the box's own rule has.) */
+:is(#new-form, .tpl-editor) .tpl-rows label.check input[type="checkbox"]:not(:checked):not(:hover) {
+  border-color: color-mix(in srgb, var(--border) 55%, var(--muted));
+}
+
+/* Agent: room for "Your default agent". */
+.tpl-editor .nf-quick .nf-agent {
+  flex-basis: 178px;
+}
+
+/* Provision (and its strategy) hang under the worktree answer they modify. */
+.tpl-provision {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tpl-provision select {
+  max-width: 340px;
+}
+
+/* Schedule: the checkbox, then "Every day ▾ at 21:00 EDT" hung on the
+   checkbox's text edge (16px box + 9px gap), then its notes on that edge. */
+.tpl-editor .rt-ctl.tpl-schedule {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 8px;
 }
 
 .tpl-schedule-when {
@@ -16991,7 +16986,79 @@ button.ct-chip:hover {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 8px;
-  padding-left: 20px;
+  padding-left: 25px;
+  font-size: 13px;
+}
+
+.tpl-schedule-when .tpl-tz {
+  font-size: 12px;
+}
+
+.tpl-cron-preview {
+  margin: 0;
+  padding-left: 25px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.tpl-autopilot-hint {
+  font-size: 12px;
+}
+
+/* Footer: a refusal on the left (as in New's actions row), Cancel / Save on
+   the right, one height. */
+.tpl-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.tpl-row-actions .error {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  text-align: left;
+}
+
+.tpl-row-actions button {
+  border-radius: 7px;
+  padding: 7px 16px;
+  font-size: 12.5px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.tpl-row-actions button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.tpl-row-actions button.tpl-save {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.tpl-row-actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Narrow: each label stacks over its control, as New's Works in does. */
+@media (max-width: 520px) {
+  .tpl-editor .rt-row {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 6px;
+  }
+
+  .tpl-editor .rt-row-top > .rt-label {
+    padding-top: 0;
+  }
 }
 
 /* The card's "Every day at 21:00 · next today 21:00 · last …" line. */
@@ -17021,21 +17088,6 @@ button.ct-chip:hover {
   max-width: 28ch;
 }
 
-.tpl-cron-preview {
-  font-size: 11.5px;
-  padding-left: 20px;
-  overflow-wrap: anywhere;
-}
-
-/* "When a run's turn ends [Open a PR] — Run now and scheduled runs": one row. */
-.tpl-editor label.tpl-autopilot {
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 8px;
-  color: var(--text);
-}
-
 .tpl-run-skip {
   font-size: 11.5px;
   margin-top: 3px;
@@ -17062,23 +17114,6 @@ button.ct-chip:hover {
 
 .tpl-history li {
   overflow-wrap: anywhere;
-}
-
-.tpl-row-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  align-items: center;
-}
-
-.tpl-row-actions button[type=submit] {
-  border-radius: 7px;
-  padding: 7px 14px;
-  font-size: 12.5px;
-  cursor: pointer;
-  background: var(--accent);
-  border: 1px solid var(--accent);
-  color: #fff;
 }
 
 /* --- New dialog: the Base branch picker ---------------------------------- */
@@ -17132,7 +17167,7 @@ button.ct-chip:hover {
 }
 
 /* "Works in": two radios, the recommended one first and marked. */
-.rt-label#new-mode-label {
+.nf-works-in > .rt-label {
   padding-top: 1px;
 }
 
@@ -17164,8 +17199,10 @@ button.ct-chip:hover {
   align-items: start;
 }
 
-/* 16px radio on an 18px first line: one pixel down centres it on the title. */
-:is(#new-form, .tpl-editor) label.check.nf-opt input[type="radio"] {
+/* 16px radio on an 18px first line: one pixel down centres it on the title.
+   A stacked checkbox (.nf-opt-check: StackedCheck, Run on a schedule) sits
+   the same way. */
+:is(#new-form, .tpl-editor) label.check.nf-opt input:is([type="radio"], [type="checkbox"]) {
   margin: 1px 0 0;
   padding: 0;
 }
@@ -17173,7 +17210,7 @@ button.ct-chip:hover {
 /* The unpicked answer's ring a step toward the muted ink: at the plain border
    colour it all but vanished into the dark panel, reading as one option and
    a stray line of text. */
-#new-form label.check.nf-opt input[type="radio"]:not(:checked):not(:hover) {
+:is(#new-form, .tpl-editor) label.check.nf-opt input[type="radio"]:not(:checked):not(:hover) {
   border-color: color-mix(in srgb, var(--border) 55%, var(--muted));
 }
 
@@ -17309,12 +17346,12 @@ button.ct-chip:hover {
 }
 
 /* The Task head: its label and the saved-prompt picker on one line. */
-#new-form .nf-task-head label {
+:is(#new-form, .tpl-editor) .nf-task-head label {
   display: block;
   font-size: 12px;
 }
 
-#new-form .nf-task-head select {
+:is(#new-form, .tpl-editor) .nf-task-head select {
   width: auto;
   max-width: 230px;
   padding: 3px 6px;
