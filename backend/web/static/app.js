@@ -34574,7 +34574,6 @@ function carrierText(carrier) {
 	if (carrier === "tcp") return "directly (same network or tailnet)";
 	return "";
 }
-var PEER_SANDBOX_HINT = "Runs in a sandbox — use Bring work home in People";
 var PEER_SCREEN = "peer";
 function peerChip(inst) {
 	if (!inst.peer_share) return null;
@@ -38803,16 +38802,7 @@ function sessionMenu(inst, ctx, opts = {}) {
 			run: () => openSettings(PEER_SCREEN)
 		}
 	]);
-	const pauseId = sessionAction("resume").enabled(ctx) ? "resume" : "pause";
-	const pauseOff = !sessionAction(pauseId).enabled(ctx);
-	const session = keep([fromTable("rename"), !(pauseOff && !peer) && {
-		key: pauseId,
-		label: actionLabel(pauseId, ctx),
-		note: actionNote(pauseId, ctx),
-		disabled: pauseOff,
-		title: pauseOff && peer ? PEER_SANDBOX_HINT : void 0,
-		run: () => sessionAction(pauseId).run(title)
-	}]);
+	const session = keep([fromTable("rename"), fromTable("resume", { note: actionNote("resume", ctx) })]);
 	const splitWhy = remote ? "" : splitBlockReason(ctx.caps, inst);
 	const group = remote ? null : detachableGroup(inst);
 	const folder = inst.folder || inst.path || "";
@@ -38830,6 +38820,12 @@ function sessionMenu(inst, ctx, opts = {}) {
 			label: "Browse history",
 			title: "Scroll and select the full history like a page",
 			run: opts.onHistory
+		},
+		opts.onCopyHistory && {
+			key: "copy-history",
+			label: "Copy entire history",
+			title: "Copy the open terminal tab's whole history to the clipboard",
+			run: opts.onCopyHistory
 		},
 		!remote && !peer && !inst.pending && {
 			key: "split",
@@ -43248,6 +43244,29 @@ function DeviceSection(props) {
 	] });
 }
 //#endregion
+//#region src/lib/paneHistory.ts
+function fetchPaneHistory(title, pane) {
+	return apiText(`/api/instances/${encodeURIComponent(title)}/history?pane=${pane}`);
+}
+function historyForClipboard(text, title, pane) {
+	return pane === "agent" ? agentCopyText(text, title, peekTerm(title, "agent")?.term.cols || 80) : text;
+}
+function copyPaneHistory(title, pane, loaded) {
+	return (loaded != null ? Promise.resolve(loaded) : fetchPaneHistory(title, pane)).then((all) => {
+		if (!all.trim()) {
+			toast("No history to copy");
+			return false;
+		}
+		return copyText(historyForClipboard(all, title, pane)).then((ok) => {
+			toast(ok ? `Copied full ${pane} history (${all.length} chars)` : "Copy failed");
+			return ok;
+		});
+	}).catch((err) => {
+		toast("History copy failed: " + err.message);
+		return false;
+	});
+}
+//#endregion
 //#region src/lib/diff.ts
 function parseUnifiedDiff(text) {
 	return text.split("\n").map((line) => {
@@ -43834,11 +43853,9 @@ function syncFindHighlights() {
 }
 var histCache = /* @__PURE__ */ new Map();
 var HIST_CACHE_MAX = 8;
-function fetchHistory(title, pane) {
-	return apiText(`/api/instances/${encodeURIComponent(title)}/history?pane=${pane}`);
-}
+var fetchHistory = fetchPaneHistory;
 function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGhost, initialPos, initialFind, onClose }) {
-	const forClipboard = (text) => pane === "agent" ? agentCopyText(text, title, peekTerm(title, "agent")?.term.cols || 80) : text;
+	const forClipboard = (text) => historyForClipboard(text, title, pane);
 	const [text, setText] = (0, import_react.useState)(null);
 	const [error, setError] = (0, import_react.useState)("");
 	const scrollRef = (0, import_react.useRef)(null);
@@ -44127,15 +44144,7 @@ function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGho
 		}, 0);
 	};
 	const pressAt = (0, import_react.useRef)(null);
-	const copyAll = () => {
-		(text !== null ? Promise.resolve(text) : fetchHistory(title, pane)).then((all) => {
-			if (!all.trim()) {
-				toast("No history to copy");
-				return;
-			}
-			copyText(forClipboard(all)).then((ok) => toast(ok ? `Copied full ${pane} history (${all.length} chars)` : "Copy failed"));
-		}).catch((err) => toast("History copy failed: " + err.message));
-	};
+	const copyAll = () => void copyPaneHistory(title, pane, text);
 	const onRootMouseDown = (e) => {
 		if (e.button !== 0 || e.target.closest?.(".hist-bar")) {
 			pressAt.current = null;
@@ -62961,7 +62970,7 @@ function PaneMoreMenu({ children, btnRef }) {
 			setOpen((v) => !v);
 		},
 		children: "⋯"
-	}), open && pos && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	}), open && pos && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		ref: menu,
 		className: "pane-more-menu",
 		role: "menu",
@@ -62971,7 +62980,7 @@ function PaneMoreMenu({ children, btnRef }) {
 		},
 		onMouseDown: (e) => e.stopPropagation(),
 		children: children(() => setOpen(false))
-	})] });
+	}), document.body)] });
 }
 //#endregion
 //#region src/components/grid/Pane.tsx
@@ -63429,8 +63438,8 @@ function Pane({ inst, drag, dragging }) {
 	const hasDiffStat = !!(ds && (ds.files || 0) + (ds.additions || 0) + (ds.deletions || 0) > 0);
 	const act = effectiveActivity(inst);
 	const quiet = !!ns && !ns.hint && !ns.disabled && (act === "working" || act === "clarify" || act === "limit");
-	const showShellTab = !sharedFolder && (!compact || tab === "shell");
-	const showMapTab = caps.git && (!compact || tab === "map");
+	const showShellTab = !sharedFolder;
+	const showMapTab = caps.git;
 	const showQueueTab = !compact || tab === "queue" || pending > 0 || holding;
 	const showFt = !!ft && (!compact || ft.lane !== "leave" || ft.halted || ft.active || !!ftMenu);
 	const menuCtx = actionCtx(title, {
@@ -63438,15 +63447,19 @@ function Pane({ inst, drag, dragging }) {
 		caps
 	});
 	const visibleTabs = [showShellTab && "shell", showMapTab && "map"].filter(Boolean);
+	const termTab = tab === "agent" || tab === "shell" ? tab : null;
+	const copyHistory = () => {
+		if (termTab) copyPaneHistory(title, termTab);
+	};
 	const menu = () => sessionMenu(inst, menuCtx, {
 		visibleTabs,
 		onHistory: compact ? () => setHistPane({
 			kind: tab === "shell" ? "shell" : "agent",
 			dragSel: null
-		}) : void 0
+		}) : void 0,
+		onCopyHistory: termTab ? copyHistory : void 0
 	});
-	const pauseId = sessionAction("resume").enabled(menuCtx) ? "resume" : "pause";
-	const canPause = sessionAction(pauseId).enabled(menuCtx);
+	const canResume = sessionAction("resume").enabled(menuCtx);
 	const shownStep = ns && ns.label === "Commit…" && !hasUncommitted(inst) ? null : ns;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		ref: paneRef,
@@ -63487,34 +63500,46 @@ function Pane({ inst, drag, dragging }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "tabs",
 						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 								"data-tab": "agent",
 								className: tab === "agent" ? "active" : "",
+								title: "Agent — the session's agent CLI",
 								onClick: (e) => {
 									e.stopPropagation();
 									showTab("agent");
 								},
-								children: "Agent"
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "agent" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "tab-label",
+									children: "Agent"
+								})]
 							}),
-							showShellTab && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							showShellTab && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 								"data-tab": "shell",
 								className: tab === "shell" ? "active" : "",
+								title: "Terminal — a shell in this session's folder",
 								onClick: (e) => {
 									e.stopPropagation();
 									showTab("shell");
 								},
-								children: "Terminal"
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "shell" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "tab-label",
+									children: "Terminal"
+								})]
 							}),
-							caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 								"data-tab": "diff",
 								className: tab === "diff" ? "active" : "",
+								title: "Diff — what this session changed",
 								onClick: (e) => {
 									e.stopPropagation();
 									showTab("diff");
 								},
-								children: "Diff"
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "diff" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "tab-label",
+									children: "Diff"
+								})]
 							}),
-							showMapTab && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							showMapTab && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 								"data-tab": "map",
 								className: tab === "map" ? "active" : "",
 								title: "Code map — the worktree as a tree: agents, zones, plan, blast radius",
@@ -63522,7 +63547,10 @@ function Pane({ inst, drag, dragging }) {
 									e.stopPropagation();
 									showTab("map");
 								},
-								children: "Map"
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "map" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "tab-label",
+									children: "Map"
+								})]
 							}),
 							showQueueTab && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 								"data-tab": "queue",
@@ -63532,10 +63560,17 @@ function Pane({ inst, drag, dragging }) {
 									e.stopPropagation();
 									showTab("queue");
 								},
-								children: ["Queue", (pending > 0 || holding) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "queue-tab-badge",
-									children: holding ? "⏳" : pending > 99 ? "99+" : String(pending)
-								})]
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "queue" }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "tab-label",
+										children: "Queue"
+									}),
+									(pending > 0 || holding) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "queue-tab-badge",
+										children: holding ? "⏳" : pending > 99 ? "99+" : String(pending)
+									})
+								]
 							}),
 							threadShown && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 								"data-tab": "thread",
@@ -63545,10 +63580,17 @@ function Pane({ inst, drag, dragging }) {
 									e.stopPropagation();
 									showTab("thread");
 								},
-								children: ["Thread", badge.count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "queue-tab-badge thread-badge" + (badge.needs ? " needs" : ""),
-									children: badge.count > 99 ? "99+" : String(badge.count)
-								})]
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "thread" }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "tab-label",
+										children: "Thread"
+									}),
+									badge.count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "queue-tab-badge thread-badge" + (badge.needs ? " needs" : ""),
+										children: badge.count > 99 ? "99+" : String(badge.count)
+									})
+								]
 							})
 						]
 					}),
@@ -63640,16 +63682,16 @@ function Pane({ inst, drag, dragging }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "head-tail",
 						children: [
-							canPause && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								className: "act pane-pause" + (pauseId === "resume" ? " is-paused" : ""),
+							canResume && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "act pane-resume",
 								type: "button",
-								"aria-label": pauseId === "resume" ? "Resume session" : "Pause session",
-								title: pauseId === "resume" ? "Resume — starts the agent again in the same worktree" : "Pause — stops the agent; the session stays in the sidebar to resume",
+								"aria-label": "Resume session",
+								title: "Resume — starts the agent again in the same worktree",
 								onClick: (e) => {
 									e.stopPropagation();
-									sessionAction(pauseId).run(title);
+									sessionAction("resume").run(title);
 								},
-								children: pauseId === "resume" ? paneNarrow ? "▶" : "▶ Resume" : paneNarrow ? "❚❚" : "❚❚ Pause"
+								children: paneNarrow ? "▶" : "▶ Resume"
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneMoreMenu, {
 								btnRef: ft && !showFt ? setFtEl : void 0,
@@ -63660,8 +63702,9 @@ function Pane({ inst, drag, dragging }) {
 								})
 							}),
 							!compact && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								className: "act copyhist",
+								className: "act pane-hist",
 								type: "button",
+								"aria-label": "Browse the full history",
 								title: "Browse the full history — scroll & select like a page (or drag a selection past the top of the terminal)",
 								onClick: (e) => {
 									e.stopPropagation();
@@ -63685,6 +63728,35 @@ function Pane({ inst, drag, dragging }) {
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.05 11a9 9 0 1 1 .5 4" }),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 22v-6h6" })
 									]
+								})
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "act copy-history",
+								type: "button",
+								disabled: !termTab,
+								"aria-label": "Copy this pane's whole history",
+								title: termTab ? `Copy this pane's whole history — the ${termTab === "shell" ? "Terminal" : "Agent"} tab's full scrollback` : "Copy this pane's whole history — open the Agent or Terminal tab first",
+								onClick: (e) => {
+									e.stopPropagation();
+									copyHistory();
+								},
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+									width: "12",
+									height: "12",
+									viewBox: "0 0 24 24",
+									fill: "none",
+									stroke: "currentColor",
+									strokeWidth: "2",
+									strokeLinecap: "round",
+									strokeLinejoin: "round",
+									"aria-hidden": "true",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+										x: "8",
+										y: "2",
+										width: "8",
+										height: "4",
+										rx: "1"
+									})]
 								})
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -63828,6 +63900,86 @@ function Pane({ inst, drag, dragging }) {
 				}
 			})
 		]
+	});
+}
+var TAB_ICONS = {
+	agent: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" }),
+	shell: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("polyline", { points: "4 17 10 11 4 5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+		x1: "12",
+		y1: "19",
+		x2: "20",
+		y2: "19"
+	})] }),
+	diff: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 3v12" }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M6 9h12" }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M6 20h12" })
+	] }),
+	map: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("polygon", { points: "2 6 9 3 15 6 22 3 22 18 15 21 9 18 2 21" }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+			x1: "9",
+			y1: "3",
+			x2: "9",
+			y2: "18"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+			x1: "15",
+			y1: "6",
+			x2: "15",
+			y2: "21"
+		})
+	] }),
+	queue: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+			x1: "9",
+			y1: "6",
+			x2: "20",
+			y2: "6"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+			x1: "9",
+			y1: "12",
+			x2: "20",
+			y2: "12"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+			x1: "9",
+			y1: "18",
+			x2: "20",
+			y2: "18"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+			cx: "4.5",
+			cy: "6",
+			r: "1"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+			cx: "4.5",
+			cy: "12",
+			r: "1"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+			cx: "4.5",
+			cy: "18",
+			r: "1"
+		})
+	] }),
+	thread: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1" })] })
+};
+function TabIcon({ name }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+		className: "tab-icon",
+		width: "13",
+		height: "13",
+		viewBox: "0 0 24 24",
+		fill: "none",
+		stroke: "currentColor",
+		strokeWidth: "2",
+		strokeLinecap: "round",
+		strokeLinejoin: "round",
+		"aria-hidden": "true",
+		children: TAB_ICONS[name]
 	});
 }
 function RunningCover({ paneRef }) {

@@ -12,8 +12,9 @@
  *            the row menu's sub-line
  *   external ends in the browser (GitHub's own page) — the row adds ↗
  *   enabled  whether the action applies to this session right now. The palette
- *            and the row menu leave out an action that doesn't (the row keeps
- *            Pause, greyed, on a shared folder); a chord refuses with a toast.
+ *            and the row menu leave out an action that doesn't; a chord
+ *            refuses with a toast. (Pause is the palette's only: the menus
+ *            offer just Resume, on a paused session.)
  *   why      for a disabled action whose reason is worth SAYING rather than
  *            hiding the entry (Branch on a folder outside git): the row menu
  *            draws it greyed with this as its note, the palette lists it with

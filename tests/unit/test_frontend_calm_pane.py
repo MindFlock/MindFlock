@@ -5,9 +5,9 @@ the fit at a 2×2 grid was checked with the screenshot harness).
 Pins: session actions ask and fail on inline error cards, never
 confirm()/alert() (a silent no-op in the desktop app, so Merge, Push anyway
 and Clean up did nothing there); the guided next step's quiet variant; the
-pane's hide control is − (✕ means end/close everywhere); copy-all moved from
-the header into the history view's bar; the Assistant window's Instructions
-button.
+pane's hide control is − (✕ means end/close everywhere); the header's
+copy-whole-history button and the history view's Copy all share one loader
+(lib/paneHistory); the Assistant window's Instructions button.
 """
 
 from __future__ import annotations
@@ -158,30 +158,35 @@ def test_pane_title_is_the_rail_label():
     )
 
 
-def test_copy_all_lives_in_the_history_bar():
+def test_copy_all_and_the_header_copy_share_one_loader():
+    """The owner asked for "copy entire channel" back in the header (it had
+    moved into the History view's bar): both now go through lib/paneHistory,
+    so neither fetches /history itself nor copies differently."""
     pane = _read("components/grid/Pane.tsx")
     assert "/history?pane=" not in pane
     assert "copyText" not in pane
-    assert "Copy this pane's whole history" not in pane
+    assert 'aria-label="Copy this pane\'s whole history"' in pane
+    assert "void copyPaneHistory(title, termTab);" in pane
     hist = _read("components/grid/HistoryOverlay.tsx")
     assert "Copy all" in hist
     assert 'className="hist-copy"' in hist
     assert "onClick={copyAll}" in hist
-    assert (
-        "copyText(forClipboard(all))" in hist
-    )  # Claude Code layout cleaned (agentCopy)
-    # One fetch helper (through apiText, so a 401 reloads) serves both the
-    # view's load and the copy fallback.
-    assert hist.count("/history?pane=${pane}") == 1
+    assert "const copyAll = () => void copyPaneHistory(title, pane, text);" in hist
+    assert "/history?pane=" not in hist
     assert "t = await fetchHistory(title, pane);" in hist
-    assert ": fetchHistory(title, pane);" in hist
-    assert "return apiText(" in hist
+    lib = _read("lib/paneHistory.ts")
+    # One fetch helper (through apiText, so a 401 reloads).
+    assert lib.count("/history?pane=${pane}") == 1
+    assert "return apiText(" in lib
+    # Claude Code layout cleaned (agentCopy) on the way to the clipboard.
+    assert "copyText(historyForClipboard(all, title, pane))" in lib
+    assert "agentCopyText(" in lib
 
 
 def test_narrow_heads_keep_the_cost():
     css = _read("components/grid/Pane.css")
     head = css[css.index(".pane-head {\n  container-type: inline-size;") :]
-    narrow = head[head.index("@container (max-width: 640px)") :]
+    narrow = head[head.index("@container (max-width: 1000px)") :]
     narrow = narrow[: narrow.index("\n}\n")]
     assert ".uh-prov" in narrow and ".uh-ctx" in narrow and ".uh-cost" not in narrow
     chip = _read("components/usage/SessionUsageChip.tsx")

@@ -1,5 +1,5 @@
 /** Round 4 — the main screen and its glue: calm decided before first paint,
- * one per-session menu, the pane's Task line and Pause, middle-truncated
+ * one per-session menu, the pane's Task line and Resume, middle-truncated
  * names, surfaces in the URL hash, shortcut text from the live keymap, and a
  * quieter main screen. */
 
@@ -137,8 +137,11 @@ describe("the pane header", () => {
     expect(firstLine(null)).toBe("");
   });
 
-  it("has a visible Pause / Resume, and no Commit… with nothing to commit", () => {
-    expect(pane).toContain('className={"act pane-pause"');
+  it("has no Pause button — only ▶ Resume, on a paused session — and no Commit… with nothing to commit", () => {
+    expect(pane).not.toContain("pane-pause");
+    expect(pane).not.toContain("❚❚");
+    expect(pane).toContain('const canResume = sessionAction("resume").enabled(menuCtx);');
+    expect(pane).toMatch(/\{canResume && \(\s*<button\s+className="act pane-resume"/);
     expect(pane).toContain('ns && ns.label === "Commit…" && !hasUncommitted(inst) ? null : ns');
   });
 });

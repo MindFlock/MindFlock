@@ -265,7 +265,9 @@ after the commands whose names contain the text),
 shortcuts — then the focused session's verbs (Commit / Push / **Open PR** /
 **Merge PR** once there is a PR / Open / focus IDE, Rename…, Queue prompt… *runs when idle*, Split…
 only where a split can actually start, **Pause session** (*stops the agent;
-keeps it in the sidebar to resume*) / **Resume session** (whichever applies),
+keeps it in the sidebar to resume* — the one place in the desktop UI that
+pauses; the menus and the pane header only resume) / **Resume session**
+(whichever applies),
 **Close session** (*Ctrl+W · stops the agent and moves it to Recently closed*) and
 **Delete session…** (*removes the worktree and branch*, asked on a card)), then one
 **Focus:** row per session, named exactly as its rail row, then extension
@@ -519,8 +521,12 @@ buttons did nothing there.
 Left to right: the ⠿ grip, the session's name, the tabs (**Agent**,
 **Terminal**, **Diff**, **Map**, **Queue**, and **Thread** once the session has
 workers or messages), the guided next-step button, ⏩
-[Fast-track](#fast-track-), the cost chip, **History**, **❚❚ Pause** (or
-**▶ Resume**), **⋯** and **−**. Under the header, a one-line **Task:** bar
+[Fast-track](#fast-track-), the cost chip, **▶ Resume** (only on a paused
+session), **⋯**, **History**, **Copy** and **−**. There is no Pause button:
+pausing is the palette's *Pause session*, `mindflock pause` or
+`POST …/pause` (see *Pause keeps your work* under
+[Session row actions](#session-row-actions-expand-a-sidebar-row-with-)).
+Under the header, a one-line **Task:** bar
 names what the session was asked to do — its newest prompt from the agent's
 transcript, or, until there is one (or for an agent MindFlock can't read a
 transcript of), the task it was created with (`task` on `/api/instances`:
@@ -544,14 +550,28 @@ newest thing you actually asked.
 
 - **⋯ is the session's one menu** — the same model as the sidebar row's ⋯
   (see [Session row actions](#session-row-actions-expand-a-sidebar-row-with-)),
-  less the tabs this header already shows, plus **Browse history**.
+  less Terminal and Code map (every header shows those tabs), plus **Copy
+  entire history** and, in a calm header, **Browse history** (both under its
+  **More**). It opens over the whole window — a 2×2 grid's lower pane used to
+  paint over its lower half.
+- **Terminal and Map are always tabs.** Every header shows **Agent ·
+  Terminal · Diff · Map** — calm or narrow alike (Terminal is left out only
+  for a peer-shared folder, whose shell would run outside the sandbox; Map and
+  Diff only where the session is in a git repository). They used to fold into
+  ⋯ in a calm header, which also hid them in a full-width pane during the calm
+  first hour.
+- **Copy the whole history.** The clipboard button beside History copies the
+  open terminal tab's entire scrollback (Agent or Terminal) — the same text as
+  the History view's **Copy all**, through the same loader
+  (`lib/paneHistory.ts`) — and says *Copied full agent history (N chars)*,
+  *No history to copy* or *Copy failed*. On Diff, Map, Queue and Thread it is
+  greyed (not hidden, so the controls don't shift as you change tabs).
 - **Calm header.** In the [calm first hour](#layout), or when a pane is
-  narrower than 560 px, the header shows name · **Agent** / **Diff** ·
-  the next step, and leaves **Terminal**, **Map**, **Queue**, ⏩ and the cost
-  chip to **⋯** (Queue prompt… and Fast-track… are in it always; Terminal, Map
-  and Browse history under its **More**). A tab you are on, a Queue with
-  something in it and a fast-track someone set stay in the row. A narrow pane
-  draws Pause as its glyph alone.
+  narrower than 560 px, the header leaves **Queue**, ⏩, the cost chip and
+  History to **⋯** (Queue prompt… and Fast-track… are in it always, Browse
+  history under its **More**). A tab you are on, a Queue with something in
+  it and a fast-track someone set stay in the row. A narrow pane draws
+  Resume as its glyph alone.
 - **Commit…** shows only once there is something to commit (uncommitted
   files, untracked included); until then the header has no lead button and
   the state chip says what the agent is doing. On hover: *Commit this
@@ -591,12 +611,18 @@ newest thing you actually asked.
 - **− hides, ✕ closes.** The session pane's last button is **−** (*Hide window —
   the session keeps running*); ✕ is kept for closing a session (the rail row's
   ✕) and closing a non-session window.
-- **Copy all** moved into **History**: the header no longer carries a copy
-  button, and the History overlay's bar copies the whole pane's text.
-- **Narrow panes compact.** Below about 640px the header drops the provider
-  and context parts of the cost chip (the cost stays) and tightens the tabs,
-  so at a 2×2 grid on a laptop every control stays visible without sideways
-  scrolling.
+- **Narrow panes compact, in a measured order** (container queries on the
+  header, `grid/Pane.css`). Below 1000px the cost chip drops its provider and
+  context parts (the cost stays); below 760px the tabs become icons — a
+  sparkle, `>_`, `±`, a folded map, a list, two bubbles — each with a tooltip
+  naming it and the word kept for screen readers, the active one still
+  filled; below 700px the diff-stat line goes; below 640px and 440px the gaps
+  and pads tighten. At a 2×2 grid on a 1044px window (heads ~375px) every
+  control fits with the name's distinguishing tail whole
+  (`flaky-rol…st/sc-17455`), and from 350px to 1150px no header scrolls
+  sideways. A squeezed name gives way in its middle first, then — only past
+  its tail — with an ellipsis at the end, never sliced mid-letter; a
+  `(tix)` tag stays on the name's line.
 - **The live step doesn't repeat the target.** While fast-track is working,
   the step chip shows the run's own note (what it is doing or waiting on) and
   the target stays on ⏩ beside it; a halted run shows ✗ on ⏩ with the reason
@@ -686,10 +712,12 @@ groups:
   choice under it) · **Checklist…** (when the session has a branch: Verify on
   that branch's checklist, `openDialogFor("verify", branch)`) · **Run checks
   now** · **Bring work home…** on a shared folder
-- **Session** — **Rename…** · **Pause session** (*stops the agent; keeps it in
-  the sidebar to resume*) / **Resume session**
-- **More ▸** (folded) — **Terminal** · **Code map** · **Thread** · **Browse
-  history** (pane only) · **Split into parallel pieces…** · **Move out of {team
+- **Session** — **Rename…** · **Resume session** (*starts the agent again in
+  the same worktree*; only on a paused session — neither menu offers Pause)
+- **More ▸** (folded) — **Terminal** · **Code map** (row menu only: the pane
+  header always has those tabs) · **Thread** · **Browse history** (pane only,
+  calm header) · **Copy entire history** (pane only, on a terminal tab) ·
+  **Split into parallel pieces…** · **Move out of {team
   run}** for a team run member · **Duplicate session** (`Ctrl+K D`; a second
   in-place session on the same worktree) · **Branch session** (`Ctrl+K B`;
   see [Branch session](#branch-session)) · **Open in <IDE>** *your code editor*
@@ -738,7 +766,10 @@ repository is the session's own folder, deleted with it).
 agent: the session stays in the sidebar (status *Paused*), and the worktree and
 branch stay exactly as they are — no commit under your name, no removed
 checkout — and **Resume session** relaunches the agent in the same folder
-(`POST /api/instances/{title}/pause` / `/resume`). A session paused by an
+(`POST /api/instances/{title}/pause` / `/resume`). Pausing is the command
+palette's *Pause session*, `mindflock pause` or the API — the pane header and
+the ⋯ menus have no Pause (it was judged pointless there); a paused session
+shows **▶ Resume** in its pane header and **Resume session** in both menus. A session paused by an
 older build (checkout removed) still resumes the old way. While paused, the
 pane's **Agent** tab is a calm placeholder — *Paused · The agent is stopped;
 your worktree and conversation are kept.* with a **▶ Resume** button
