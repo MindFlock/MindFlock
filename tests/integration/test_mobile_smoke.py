@@ -378,9 +378,10 @@ def test_mobile_session_actions_sheet(server, chrome):
     assert flow["rowState"] == "Offline"
     # The row's ⋯ opens the actions sheet in place of the list.
     assert flow["actOpen"] is True and flow["sessionsClosed"] is True
+    # No Pause on the phone (#210): a running session has none; Resume shows
+    # only for a session that is already paused.
     assert flow["labels"] == [
         "Restart",
-        "Pause",
         "Close",
         "Delete…",
         "Recently closed",
