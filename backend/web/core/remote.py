@@ -1016,7 +1016,10 @@ def merged_instances() -> List[dict]:
             _namespace_refs(entry, dev["key"])
             if "task_headline" not in entry:
                 # A device that predates the field: read its prompt here.
-                entry["task_headline"] = _task_headlines.for_session(
+                (
+                    entry["task_headline"],
+                    entry["task_headline_prompt"],
+                ) = _task_headlines.for_session(
                     entry["title"],
                     entry.get("last_prompt_full"),
                     entry.get("last_prompt"),

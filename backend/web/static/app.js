@@ -38408,7 +38408,7 @@ function taskLineOf(inst) {
 	const text = String(inst.task_headline || inst.last_prompt || firstLine$1(inst.task) || "").trim();
 	return {
 		text,
-		title: String(inst.last_prompt_full || inst.last_prompt || inst.task || text).trim()
+		title: String(inst.task_headline_prompt || inst.last_prompt_full || inst.last_prompt || inst.task || text).trim()
 	};
 }
 function TaskLine({ inst }) {

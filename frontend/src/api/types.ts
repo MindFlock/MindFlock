@@ -271,6 +271,10 @@ export interface Instance {
    * before any prompt. The rail row's task line. Optional: an older server
    * doesn't send it. */
   task_headline?: string | null;
+  /** The prompt `task_headline` was read from (the remembered meaningful
+   * one, or the create task) — the task line's hover, so a later "continue"
+   * never stands in for it. Optional: an older server doesn't send it. */
+  task_headline_prompt?: string | null;
   /** What the session was asked to do when it was created (the create
    * prompt, trimmed; first line is what the UI shows) — the pane's "Task:"
    * line until the transcript names a newer prompt. Null when it was started

@@ -117,7 +117,7 @@ def test_phrasal_verbs_and_rewrites(prompt, want):
         ("how do I run the e2e suite locally?", "Explain how to run E2E suite locally"),
         ("what does the reaper job do", "Explain reaper job"),
         ("where is the rate limiter configured", "Find rate limiter"),
-        ("is the cache invalidated on deploy?", "Check cache invalidated on deploy"),
+        ("is the cache invalidated on deploy?", "Check cache is invalidated on deploy"),
         ("can we batch the uploads", "Consider batching uploads"),
         ("what is wrong with the importer", "Fix importer"),
         ("what is causing the duplicate emails?", "Investigate duplicate emails"),
@@ -218,7 +218,7 @@ def test_a_shipping_step_with_a_name_is_meaningful():
         ("how much longer?", "Check progress"),
         ("hello", ""),
         ("/compact", "Run /compact"),
-        ("I signed in", "Signed"),
+        ("I signed in", "I signed in"),
     ],
 )
 def test_no_task_replies_are_not_meaningful(prompt, want):
@@ -366,3 +366,76 @@ def test_deterministic():
     p = "ok so can you look into why the deploy step is failing and then fix it"
     first = headline(p)
     assert all(headline(p) == first for _ in range(20))
+
+
+# --- confidence: a rule's phrase, or the person's own words ---------------------
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "can you please fix the bug where the pin bar draws below the terminal",
+        "the settings page is so slow",
+        "commit, push and open a PR",
+        "is the cache invalidated on deploy?",
+        "make the search faster",
+        "continue",
+    ],
+)
+def test_clean_rule_matches_are_confident(prompt):
+    assert headline(prompt).confident is True
+
+
+@pytest.mark.parametrize(
+    "prompt, own",
+    [
+        # A complaint whose subject is "it", then a requirement on "it": no
+        # clean reading — the person's own words, cut, never "Make it give…".
+        (
+            "ok i like this but i dont like how weird it looks. it should show "
+            "me the total first",
+            "I like this but I dont…",
+        ),
+        # Narration with no ask in it.
+        (
+            "although it was nice you did the parser stuff what i actually care "
+            "about is the exporter stuff so apply it there",
+            "Although it was nice you did the parser…",
+        ),
+        ("the widget is the blue one on the left", "The widget is the blue one…"),
+    ],
+)
+def test_loose_readings_fall_back_to_own_words(prompt, own):
+    got = headline(prompt)
+    assert got.confident is False
+    assert got.text == own
+
+
+def test_own_words_are_cleaned_and_cut():
+    got = headline(
+        'hey so <pasted_content id="p1">\nlog line\n</pasted_content> honestly '
+        "the thing from yesterday with https://example.com/a/b and the other "
+        "stuff we talked about"
+    )
+    assert got.confident is False
+    assert got.text.endswith("…")
+    assert "pasted" not in got.text and "https" not in got.text
+    assert len(got.text.rstrip("…").split()) <= 8
+    assert got.text[0].isupper()
+
+
+@pytest.mark.parametrize(
+    "prompt, want",
+    [
+        ("does the importer work on windows?", "Check importer works on windows"),
+        ("do the retries fire after a timeout?", "Check retries fire after timeout"),
+        ("are the nightly jobs scheduled?", "Check nightly jobs are scheduled"),
+    ],
+)
+def test_yes_no_questions_read_as_statements_to_check(prompt, want):
+    got = headline(prompt)
+    assert (got.text, got.confident) == (want, True)
+
+
+def test_a_question_without_a_clean_subject_is_own_words():
+    got = headline("is it going to take long?")
+    assert got.confident is False
+    assert got.text == "Is it going to take long"

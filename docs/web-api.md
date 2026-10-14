@@ -55,6 +55,7 @@ List all sessions. Each item:
   "has_origin": true,          // L2: workspace has an `origin` remote (cached ~30s)
   "last_turn": "…",            // L3: ≤120-char snippet of the latest agent turn, or null
   "task_headline": "Fix pin bar drawing below terminal",  // newest MEANINGFUL prompt as a verb phrase, or null
+  "task_headline_prompt": "can you please fix the bug where…",  // the prompt task_headline was read from, or null
   "mcp_attached": true,        // this launch got the MindFlock MCP tools (null = unknown)
   "last_report": {"id": "m…", "status": "done", "summary": "…", "ts": 1759600300.0}  // or null
 }
@@ -151,13 +152,19 @@ doesn't expose one) for at-a-glance triage across many sessions.
 `last_prompt_full` by fixed rules (`backend/task_headline.py`: no model, no
 network): politeness and preambles are dropped, MindFlock's message envelope
 is stripped, questions become *Investigate/Explain/Check …* and complaints
-*Fix/Polish/Speed up …*. A prompt that carries no task — "continue", "yes", a
+*Fix/Polish/Speed up …*. A phrase is only built when a rule matches cleanly;
+otherwise the headline is the person's own words — the first sentence of the
+ask, cleaned the same way and cut to 8 words with "…" — never a guessed
+phrase. A prompt that carries no task — "continue", "yes", a
 status ping, a bare "commit and push", MindFlock's revive prompt or its own
 notes — does not replace it: the row keeps the last meaningful headline of
 the same conversation (process memory, keyed by title + the window's
 conversation id), else the headline of `task`, else that prompt's own
-("Continue"). `null` when there is nothing at all. Rows from a paired device
-that predates the field get one computed by the gateway from their
+("Continue"). `null` when there is nothing at all. `task_headline_prompt` is
+the prompt the headline was read from (the remembered one, or `task`) — the
+row's tooltip, so a later "continue" never stands in for it; `last_prompt` /
+`last_prompt_full` stay the newest prompt. Rows from a paired device that
+predates the fields get both computed by the gateway from their
 `last_prompt`.
 
 `parent` is the title of the session this one works for: the orchestrator

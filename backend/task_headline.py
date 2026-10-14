@@ -53,15 +53,23 @@ MAX_SENTENCES = 14
 
 
 class Headline(NamedTuple):
-    """A headline plus whether it says anything about the TASK.
+    """A headline plus whether it says anything about the TASK, and whether
+    a rule built it.
 
     ``meaningful`` is False for confirmations, "continue", status pings,
     MindFlock's own notes and bare shipping steps ("commit and push") — a
     caller tracking what a session is FOR keeps its previous headline then.
+
+    ``confident`` is True when a rule matched cleanly (an imperative, wish,
+    requirement, question or complaint with a real object; the shipping
+    chain; a canned reply). When False, ``text`` is NOT a constructed phrase:
+    it is the person's own words, cleaned and cut ("I like this but I dont
+    like how slow…") — never word salad.
     """
 
     text: str
     meaningful: bool
+    confident: bool = True
 
 
 def _phrases(spec: str) -> Tuple[Tuple[str, ...], ...]:
@@ -126,7 +134,7 @@ _VERB_TABLE = {
         """,
     SHIP: """
         commit push pr merge rebase squash release tag deploy ship land
-        approve backport publish
+        approve backport publish roll
         """,
     META: """
         spawn follow tell show give point help let ask report use keep take
@@ -770,7 +778,7 @@ _STATE_VERBS = frozenset(
     have make work use cause return point match pass hit send post call
     lose miss hold reset overflow cover duplicate double repeat block
     eat cut drop grow shrink spin lag display print emit read write
-    contain include sag ask spam swallow timeout stutter truncate stall
+    contain include sag ask spam swallow timeout stutter truncate stall request
     vanish clip drift leak ignore shift""".split()
 )
 
@@ -1494,13 +1502,78 @@ class _Cand(NamedTuple):
     cls: str
     score: float
     order: int
+    #: Whether the reading is trustworthy as a constructed phrase: True (the
+    #: rule vouches for its grammar), False (a loose reading — show the
+    #: person's own words instead), None (judge the object, :func:`_tidy`).
+    clean: Optional[bool] = None
 
 
-def _cand(verb: str, obj: Sequence[_Tok], cls: str, order: int, boost: float) -> _Cand:
+def _cand(
+    verb: str,
+    obj: Sequence[_Tok],
+    cls: str,
+    order: int,
+    boost: float,
+    clean: Optional[bool] = None,
+) -> _Cand:
     obj = _trim_tails(_drop_determiners(obj))
     while obj and obj[0].key in (",", "and"):
         obj = obj[1:]
-    return _Cand(verb, tuple(obj), cls, _score(obj, cls, order, boost), order)
+    if obj and obj[0].key not in _EMBEDDED:
+        # "option to confirm I'm happy with session" → "option to confirm":
+        # a new subject inside an object starts the sentence's next clause.
+        cut = next((i for i, t in enumerate(obj) if t.key in _LEFTOVER), len(obj))
+        if cut >= 2:
+            obj = _trim_tails(list(obj[:cut]))
+    score = _score(obj, cls, order, boost) - (0.3 if clean is False else 0.0)
+    return _Cand(verb, tuple(obj), cls, score, order, clean)
+
+
+#: Words that, left inside an object, mean the reading kept a fragment of
+#: the sentence around it ("Make it give me count", "Fix stuff I'm confused").
+_LEFTOVER = frozenset("i im ive id we you youre they me us he she".split())
+
+
+def _tidy(c: _Cand) -> bool:
+    """Whether a candidate renders as a clean phrase (judged on the words
+    :func:`_render` will actually show)."""
+    if c.clean is not None:
+        return c.clean
+    keys = [t.key for t in _shown(c.verb, c.obj)]
+    if not keys:
+        # "Open argo PR", "Roll forward": the verb phrase is the whole task.
+        return c.verb.startswith("Open ") or c.verb.split()[0] in _INTRANSITIVE_OK
+    if keys[0] in _EMBEDDED or c.verb in ("Explain how", "Explain what"):
+        return True  # "what keys I'm missing", "if there was a cache clear"
+    if any(k in _LEFTOVER for k in keys):
+        return False
+    if c.verb != "Ensure" and any(k in _AUX for k in keys):
+        return False  # "is", "doesnt" left in: a clause, not an object
+    first = _INFLECTED.get(keys[0])
+    if keys[0] == "going" or (first and first[1] == "ed"):
+        return False  # "Pull requested", "Investigate going to take"
+    if c.cls == LOOK and keys[0] in _VERB_STARTS and c.verb.split()[-1] in _LOOK_HEADS:
+        return False  # "Explain keeps file up to date": the subject is lost
+    if len(keys) > 1 and keys[0] in _POINTERS:
+        # "it in the VPC" is an object; "it give me count" is a clause.
+        return keys[1] in _PREPOSITIONS or keys[1] in _PARTICLES
+    return True
+
+
+#: Object-initial words that point instead of naming.
+_POINTERS = frozenset("it this that them these those there here one ones".split())
+#: Verbs that, opening a question's object, show its subject was lost.
+_VERB_STARTS = frozenset(
+    """see need get make do go know have want use take keep say run keeps
+    makes does says means needs has goes gets saying seeing""".split()
+)
+#: LOOK verbs whose object must name a thing, not start with a verb.
+_LOOK_HEADS = frozenset("Explain Investigate Check Find Identify Review".split())
+
+
+#: Words that open an embedded question — the object is a clause on purpose.
+_EMBEDDED = frozenset("what how which why where if whether who when".split())
+_PARTICLES = frozenset("up out back down off on forward".split())
 
 
 def _score(obj: Sequence[_Tok], cls: str, order: int, boost: float) -> float:
@@ -1520,7 +1593,7 @@ def _read_imperative(toks: List[_Tok], order: int, boost: float) -> Optional[_Ca
     v = _verb_at(toks)
     if not v:
         # "You are analyzing staged changes" → "Analyze staged changes".
-        if len(keys) > 2 and keys[0] in ("you", "we") and keys[1] in ("are", "were"):
+        if len(keys) > 2 and keys[0] == "you" and keys[1] in ("are", "were"):
             inf = _INFLECTED.get(keys[2])
             if inf and inf[1] == "ing" and inf[0] in _VERBS:
                 return _cand(
@@ -2068,7 +2141,64 @@ def _read_question(toks: List[_Tok], order: int, boost: float) -> Optional[_Cand
             return _cand(
                 "Check need for", _squeeze(r[nd + 1 :]), LOOK, order, boost - 0.2
             )
-        return _cand("Check", _squeeze(r), LOOK, order, boost - 0.3)
+        stated = _statement_of(w, r)
+        if stated is not None:
+            return _cand("Check", stated, LOOK, order, boost - 0.3, clean=True)
+        return _cand("Check", _squeeze(r), LOOK, order, boost - 0.3, clean=False)
+    return None
+
+
+def _third_person(base: str) -> str:
+    """``work`` → ``works``, ``fix`` → ``fixes``, ``apply`` → ``applies``."""
+    if base.endswith("y") and len(base) > 2 and base[-2] not in "aeiou":
+        return base[:-1] + "ies"
+    if base.endswith(("s", "sh", "ch", "x", "z", "o")):
+        return base + "es"
+    return base + "s"
+
+
+def _statement_of(aux: str, rest: Sequence[_Tok]) -> Optional[List[_Tok]]:
+    """A yes/no question turned back into the statement to check, or None
+    when its subject can't be found: "does X work on mac" → "X works on
+    mac", "is the cache invalidated" → "cache is invalidated"."""
+    keys = _keys(rest)
+    if not keys or keys[0] in _SUBJECT_PRONOUNS | {"there"}:
+        return None
+    if aux in ("does", "do"):
+        for i in range(1, min(len(keys), 6)):
+            k = keys[i]
+            if k in _VERBS or k in _STATE_VERBS:
+                subject = _drop_determiners(rest[:i])
+                if _is_vague(subject):
+                    return None
+                verb = _third_person(k) if aux == "does" else k
+                tail = [t for t in _object(rest[i + 1 :]) if t.key not in _INTENSIFIERS]
+                tail = [t for t in tail if t.key not in ("yet", "already", "ever")]
+                return subject + [_Tok(verb, verb)] + tail
+        return None
+    if aux in ("is", "are", "was", "were"):
+        np = _leading_np(rest)
+        if len(np) == len(keys):
+            # An unknown participle ends the subject too: "the cache
+            # invalidated on deploy" → "the cache".
+            at = next(
+                (
+                    i
+                    for i in range(1, len(keys))
+                    if keys[i].endswith("ed") and len(keys[i]) > 4
+                ),
+                len(keys),
+            )
+            np = list(rest[:at])
+        if not np or len(np) == len(keys) or _is_vague(np):
+            return None
+        if any(_INFLECTED.get(t.key, ("", ""))[1] == "ing" for t in np):
+            return None  # "the cause prod getting wiped": no clean subject
+        tail = [t for t in _object(rest[len(np) :]) if t.key not in _INTENSIFIERS]
+        tail = [t for t in tail if t.key not in ("yet", "already", "ever")]
+        if not tail:
+            return None
+        return _drop_determiners(np) + [_Tok(aux, aux)] + tail
     return None
 
 
@@ -2108,7 +2238,8 @@ def _read_complaint(toks: List[_Tok], order: int, boost: float) -> Optional[_Can
                 adj = next((v for p, v in _COMPLAINTS if p == (rest[1].key,)), None)
                 if adj:  # vague ("it"), but it still says what is wrong
                     return _cand(adj, _object(rest[2:]), WORK, order, boost + 1.2)
-            if rest and rest[0].key in ("how", "that"):
+            how_or_that = bool(rest) and rest[0].key in ("how", "that")
+            if how_or_that:
                 rest = rest[1:]
                 rk = _keys(rest)
                 if len(rk) > 3 and rk[0] in _SUBJECT_PRONOUNS and rk[1] in _AUX:
@@ -2121,8 +2252,10 @@ def _read_complaint(toks: List[_Tok], order: int, boost: float) -> Optional[_Can
             obj = _object(rest)
             np = _leading_np(obj) or obj
             target = np if not _is_vague(np) else _gerundize(obj)
+            # After "how"/"that" nothing above read the clause: a guess.
+            loose = False if how_or_that else None
             return _cand(
-                verb, target, LOOK if verb == "Explain" else WORK, order, boost
+                verb, target, LOOK if verb == "Explain" else WORK, order, boost, loose
             )
     # "the wrapping looks lazy" → "Polish wrapping": earliest predicate wins.
     skeys = [k if k not in _INTENSIFIERS else "" for k in keys]
@@ -2302,7 +2435,12 @@ def _read_clause(
     if inf and inf[1] == "ing" and inf[0] in _VERBS and len(keys) > 1:
         rest = toks[2:] if keys[1] == "that" else toks[1:]
         return _cand(
-            _display(inf[0]), _object(rest), _VERBS[inf[0]], order, boost - 0.3
+            _display(inf[0]),
+            _object(rest),
+            _VERBS[inf[0]],
+            order,
+            boost - 0.3,
+            clean=False,
         )
     # "merge conflicts please fix" → "Fix merge conflicts"
     last = _verb_at(toks, len(toks) - 1) if len(toks) > 1 else None
@@ -2313,7 +2451,7 @@ def _read_clause(
     ):
         return _cand(last[0], toks[:-1], last[1], order, boost)
     if question and keys[0] not in ("i", "we", "im"):
-        return _cand("Check", _squeeze(toks), LOOK, order, boost - 0.8)
+        return _cand("Check", _squeeze(toks), LOOK, order, boost - 0.8, clean=False)
     return None
 
 
@@ -2331,9 +2469,8 @@ def _asks(keys: Sequence[str], question: bool) -> bool:
     if keys[0] in ("can", "could", "would", "will") and nxt == "you":
         return False  # a request — the filler strip handles it
     if keys[0] == "do":
-        return nxt in _SUBJECT_PRONOUNS | {"this", "that", "these", "those"} or (
-            question and nxt not in _ARTICLES
-        )
+        # "do a scan of X" is an order; "do the retries fire?" asks.
+        return question or nxt in _SUBJECT_PRONOUNS | {"this", "that", "these", "those"}
     return question or nxt in _SUBJECT_PRONOUNS | _ARTICLES | {
         "there",
         "all",
@@ -2398,7 +2535,8 @@ def _render_word(t: _Tok) -> str:
     return t.text
 
 
-def _render(verb: str, obj: Sequence[_Tok]) -> str:
+def _shown(verb: str, obj: Sequence[_Tok]) -> List[_Tok]:
+    """The object words :func:`_render` shows after ``verb``."""
     toks = [t for t in obj if t.key not in (",",)]
     # Never repeat the verb's own words ("Open PR" + "PR").
     vwords = set(verb.lower().split())
@@ -2412,7 +2550,11 @@ def _render(verb: str, obj: Sequence[_Tok]) -> str:
         toks[-1].key in _TRAILING_STOP or toks[-1].key in _AUX or toks[-1].key == "and"
     ):
         toks.pop()
-    words = [_render_word(t) for t in toks]
+    return toks
+
+
+def _render(verb: str, obj: Sequence[_Tok]) -> str:
+    words = [_render_word(t) for t in _shown(verb, obj)]
     text = " ".join([verb] + words).strip()
     text = re.sub(r"[\s\-–—:;,.!?/]+$", "", text)
     return text[:1].upper() + text[1:] if text else text
@@ -2507,9 +2649,9 @@ def _headline(text: Optional[str]) -> Headline:
         return canned
     best = _best(clean)
     if best is None:
-        words = _fallback_words(clean)
-        return Headline(words, meaningful and _fallback_meaningful(clean, words))
-    out, weak = best
+        words = _own_words(clean)
+        return Headline(words, meaningful and _fallback_meaningful(clean, words), False)
+    out, weak, confident = best
     if (
         weak
         and has_image
@@ -2517,7 +2659,13 @@ def _headline(text: Optional[str]) -> Headline:
         and out not in ("Continue", "Go ahead")
     ):
         return Headline(out + " UI in screenshot", meaningful)
-    return Headline(out, meaningful and not weak)
+    if not confident:
+        # A loose reading: the person's own words beat a constructed phrase
+        # that might be salad. Weak stays weak (the caller keeps the task).
+        words = _own_words(clean)
+        if words:
+            return Headline(words, meaningful and not weak, False)
+    return Headline(out, meaningful and not weak, confident)
 
 
 #: Verbs that are a whole task without an object.
@@ -2553,18 +2701,26 @@ def _best(clean: str) -> Optional[Tuple[str, bool]]:
     best = max(cands, key=lambda c: (c.score, -c.order))
     if best.cls == SHIP or (best.score < 1.0 and ships):
         text, specific = _chain(ships)
-        return text, not specific
+        return text, not specific, True
     vague = _is_vague(best.obj)
-    if best.verb in ("Check progress", "Make it happen", "File ticket"):
-        return best.verb, True
-    weak = vague and best.verb.split()[0] not in _INTRANSITIVE_OK
+    if best.verb == "Check progress":
+        return best.verb, True, True
+    if best.verb in ("Make it happen", "File ticket"):
+        return best.verb, True, False
+    intransitive = best.verb.split()[0] in _INTRANSITIVE_OK
+    # "Open argo PR": a verb phrase that names the work needs no object.
+    named = (
+        not best.obj and best.verb.startswith("Open ") and len(best.verb.split()) > 2
+    )
+    weak = vague and not intransitive and not named
     if weak and best.cls in (VAGUE, META):
         # A vague ask ("do both", "use it") with nothing better: the plain
         # words of the prompt say more.
         words = _fallback_words(clean)
         if len(words.split()) >= 3 and _fallback_meaningful(clean, words):
-            return words, False
-    return _render(best.verb, best.obj), weak
+            return words, False, False
+    confident = _tidy(best) and (not vague or named or (intransitive and not best.obj))
+    return _render(best.verb, best.obj), weak, confident
 
 
 def _fallback_meaningful(clean: str, words: str) -> bool:
@@ -2580,6 +2736,35 @@ def _fallback_meaningful(clean: str, words: str) -> bool:
     # A statement ("it says X", "0.7.2 is merged", "you can leave v1 on") is
     # news, not a task; a title ("V2 launch-gate fixes #2861") is a task.
     return not any(k in _AUX or k in ("says", "said") for k in keys[1:8])
+
+
+#: Own-words fallback length: enough to recognise the ask, short for a rail.
+MAX_OWN_WORDS = 8
+
+
+def _own_words(clean: str) -> str:
+    """The person's own words, cleaned: the first sentence of the ask (a
+    "Task:" line if there is one; background sections skipped), politeness
+    and preambles peeled off, cut to :data:`MAX_OWN_WORDS` words with "…",
+    sentence case, no trailing punctuation. "" when nothing readable."""
+    sents = [s for s in _sentences(clean) if s.boost >= 0]
+    sents.sort(key=lambda s: -s.boost)  # stable: a labelled task line first
+    for sent in sents:
+        toks = _strip_filler(_tokens(sent.text))
+        toks = [t for t in toks if t.key not in _NOISE_WORDS]
+        if not any(t.key not in _STOP for t in toks):
+            continue
+        cut = len(toks) > MAX_OWN_WORDS
+        toks = toks[:MAX_OWN_WORDS]
+        while cut and len(toks) > 2 and toks[-1].key in _TRAILING_STOP:
+            toks.pop()
+        words = [_render_word(t) for t in toks]
+        text = re.sub(r"[\s\-–—:;,.!?/]+$", "", " ".join(words))
+        if not text:
+            continue
+        text = text[:1].upper() + text[1:]
+        return text + "…" if cut else text
+    return ""
 
 
 def _fallback_words(text: str) -> str:

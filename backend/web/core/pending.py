@@ -232,6 +232,7 @@ def rows(engine=None) -> list:
                 "last_prompt": None,
                 "last_prompt_full": None,
                 "task_headline": None,
+                "task_headline_prompt": None,
                 "setup": None,
                 "check": None,
                 "ports": None,

@@ -34,10 +34,20 @@ describe("taskLineOf", () => {
     );
   });
 
-  it("keeps the headline when the newest prompt was only 'continue'", () => {
-    // The server kept the last real task; the hover still says what was typed.
-    const line = taskLineOf({ task_headline: "Add dark mode toggle", last_prompt: "continue", last_prompt_full: "continue" });
+  it("hovers the prompt the headline came from, not a later 'continue'", () => {
+    // The server kept the last real task AND the prompt behind it.
+    const line = taskLineOf({
+      task_headline: "Add dark mode toggle",
+      task_headline_prompt: "please add a dark mode toggle to settings",
+      last_prompt: "continue",
+      last_prompt_full: "continue",
+    });
     expect(line.text).toBe("Add dark mode toggle");
+    expect(line.title).toBe("please add a dark mode toggle to settings");
+  });
+
+  it("falls back to the newest prompt for the hover on an older server", () => {
+    const line = taskLineOf({ task_headline: "Add dark mode toggle", last_prompt_full: "continue" });
     expect(line.title).toBe("continue");
   });
 
@@ -51,8 +61,12 @@ describe("taskLineOf", () => {
 describe("TaskLine", () => {
   const html = (inst: Parameters<typeof taskLineOf>[0]) => renderToStaticMarkup(createElement(TaskLine, { inst }));
 
-  it("renders the headline in the task-line slot with the prompt as its title", () => {
-    const out = html({ task_headline: "Investigate server memory use", last_prompt_full: "why is the server using so much memory" });
+  it("renders the headline in the task-line slot with its prompt as the title", () => {
+    const out = html({
+      task_headline: "Investigate server memory use",
+      task_headline_prompt: "why is the server using so much memory",
+      last_prompt_full: "yes",
+    });
     expect(out).toBe(
       '<span class="lineage task-line" title="why is the server using so much memory">Investigate server memory use</span>',
     );

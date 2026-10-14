@@ -1275,10 +1275,10 @@ def _session_last_prompt_full_cached(inst) -> Optional[str]:
 
 def _session_task_headline_cached(
     inst, prompt_full: Optional[str], prompt: Optional[str]
-) -> Optional[str]:
+) -> "_task_headlines.TaskHeadline":
     """The sidebar's task line (core.task_headlines): the newest MEANINGFUL
-    prompt as a short verb phrase, memoized per session like the prompt it
-    is read from."""
+    prompt as a short verb phrase plus that prompt, memoized per session like
+    the prompt it is read from."""
     return _probe_cached(
         "task_headline",
         inst,
@@ -1583,7 +1583,9 @@ def _session_snapshot(i, queues: dict) -> dict:
     # That prompt as a short verb phrase ("Fix pin bar below terminal") for
     # the sidebar's task line; "continue"/"yes"/MindFlock's own notes keep the
     # last real task (core.task_headlines). None when there is nothing.
-    d["task_headline"] = _session_task_headline_cached(
+    # task_headline_prompt is the prompt it was read from — the row's tooltip
+    # (a later "continue" must not stand in for it).
+    d["task_headline"], d["task_headline_prompt"] = _session_task_headline_cached(
         i, d["last_prompt_full"], d["last_prompt"]
     )
     # What it was asked to do when it was created (Instance.Task) — the
@@ -1629,6 +1631,7 @@ _SNAPSHOT_PROBE_KEYS = (
     "last_prompt",
     "last_prompt_full",
     "task_headline",
+    "task_headline_prompt",
     "setup",
     "check",
 )
@@ -1671,7 +1674,9 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["task"] = getattr(i, "Task", "") or None
     # No transcript read on this path: the remembered headline, else the
     # creation task's (the tick fills in the real one; ``prev`` wins below).
-    d["task_headline"] = _task_headlines.for_session(i.Title, None, None, d["task"])
+    d["task_headline"], d["task_headline_prompt"] = _task_headlines.for_session(
+        i.Title, None, None, d["task"]
+    )
     d["setup"] = None
     d["check"] = None
     pb = _ports.get(i.Title)
