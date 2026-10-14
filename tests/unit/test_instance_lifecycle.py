@@ -663,6 +663,24 @@ def test_pause_stops_the_agent_even_when_the_worktree_is_orphaned():
     assert wt.calls == []
 
 
+def test_pause_marks_paused_before_it_kills_the_agent():
+    """An open terminal socket reconnects the instant its tmux dies, and the
+    web relaunch path refuses only a session already marked Paused — so the
+    status must be set before the kill, or that reconnect revives the agent."""
+    inst = _started_instance()
+    seen = []
+    tmuxs = inst._tmux_session
+    real_close = tmuxs.close
+
+    def close():
+        seen.append(inst.Status)
+        return real_close()
+
+    tmuxs.close = close
+    inst.Pause()
+    assert seen == [Status.Paused]
+
+
 def test_pause_copies_the_branch_name(monkeypatch):
     copied = []
     monkeypatch.setattr(inst_mod, "_clipboard_write", lambda t: copied.append(t))

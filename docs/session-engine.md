@@ -70,13 +70,16 @@ kept in both places, so `--model sonnet` plus `--model opus` stays two pairs
 and the CLI's last-flag-wins rule applies. (De-duplicating single tokens used
 to tear such pairs apart into `--model sonnet opus`.)
 
-There is one known exception. A paused session resumed **after a server
-restart** is relaunched with the bare program, because the built launch
-command is not persisted. That drops its `LaunchArgs`, its profile and
-local-model args, and its MindFlock-MCP attach flags. A resume within the
-same process, or a relaunch from the web UI, keeps them. The MindFlock-MCP
-flags (see [mcp.md](mcp.md)) are added in front of the launch args at each
-launch, and are never stored in `LaunchArgs`.
+`Resume()` rebuilds the launch command each time (the provider's resume
+form, from the persisted `LaunchArgs`, the profile and local-model overlays,
+and the MindFlock-MCP attach flags), so a resume after a server restart keeps
+them too. There is one known exception: a session paused by a build **up to
+0.7.5** (its worktree was removed) and resumed after a server restart takes
+the legacy path, which reruns whatever command the tmux session holds — none
+is persisted, so it is the bare program, without its `LaunchArgs`, profile and
+local-model args or MindFlock-MCP flags. A relaunch from the web UI keeps
+them. The MindFlock-MCP flags (see [mcp.md](mcp.md)) are added in front of the
+launch args at each launch, and are never stored in `LaunchArgs`.
 
 **`Start(first_time_setup)`** — builds the worktree (strategy above), resolves the
 launch command through the **provider framework** (`providers.resolve(program)`),
@@ -87,9 +90,24 @@ partial worktree/tmux is torn down before the error propagates.
 
 **`Pause()`** — stops the agent (kills its tmux session and PTY) and keeps the
 worktree and branch **exactly as they are**: no commit, no removal. The status
-becomes `Paused` and the branch name is copied to the clipboard. (Until 0.7.5
-a pause committed the dirty tree as `[mindflock] update from '<title>' on
-<date> (paused)` under the user's identity and removed the checkout.)
+becomes `Paused` (set before the kill, so a terminal socket reconnecting the
+instant its tmux dies already sees it) and the branch name is copied to the
+clipboard. (Until 0.7.5 a pause committed the dirty tree as `[mindflock]
+update from '<title>' on <date> (paused)` under the user's identity and
+removed the checkout.)
+
+A pause **sticks**: nothing but `Resume()` starts the agent again. The web
+server's relaunch-on-touch helper (`agent_sessions._ensure_agent_session`,
+which every lazy relaunch goes through — the agent terminal socket, `/send`,
+Send now, the queue drain, a wake, a revive) refuses a paused session whose
+agent is not running with `session is paused — resume it first` instead of
+launching it; `sleep.ensure_awake` never wakes one; `/send` and Send now
+answer **409** `{paused: true}`; the agent terminal socket closes with
+**4423** and the pane shows a Paused placeholder with ▶ Resume rather than
+reconnecting. The **shell** tab keeps working: Pause stops only the agent.
+(Until the worktree was kept, the socket's "workspace no longer exists" masked
+this; with it kept, an open pane relaunched a just-paused agent within a
+second while the row still read Paused.)
 
 **`Resume()`** — relaunches the agent in the same worktree: reattaches the tmux
 session if one is still alive, else starts a new one; a failed launch leaves

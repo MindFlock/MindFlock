@@ -33,6 +33,11 @@ const NOT_YET = 4404;
  * (tmux still starting, or the agent being rebooted). Also transient. */
 const NOT_READY = 4409;
 
+/** ...and when the session is PAUSED: its agent was stopped on purpose and the
+ * server will not relaunch it on a socket (only Resume does). Final — retrying
+ * would just be refused again. */
+export const PAUSED_CLOSE = 4423;
+
 /** Backoff between attempts, in ms. Flat after the third: the thing being waited
  * on is a worktree checkout, which takes as long as it takes, and a doubling
  * curve would be checking every two minutes by the time it finished. */
@@ -62,7 +67,7 @@ export function retryAfter(
   attempts: number,
   reconnect: boolean,
 ): number | null {
-  if (!reconnect || attempts >= RETRY_LIMIT) return null;
+  if (!reconnect || attempts >= RETRY_LIMIT || code === PAUSED_CLOSE) return null;
   // The session is not up YET — the normal path for the first seconds of every
   // run, and never a failure.
   if (code === NOT_YET || code === NOT_READY)
@@ -234,7 +239,7 @@ export function useWsTerm(
         if (dead) return;
         const wait = retryAfter(ev.code, attempts, reconnect);
         if (wait === null) {
-          setState("disconnected");
+          setState(ev.code === PAUSED_CLOSE ? "paused" : "disconnected");
           return;
         }
         const transient = isStarting(ev.code);

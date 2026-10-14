@@ -738,9 +738,23 @@ def ensure_awake(inst, title: str, why: str, srv=None) -> Tuple[bool, Optional[s
     """Wake ``title`` if it is asleep → ``(woke, error)``. Every path that
     types into a session calls this first (or relaunches through
     ``_ensure_agent_session``, which ends the sleep the same way). ``why`` is
-    what the log line says woke it. Blocking — off the loop."""
+    what the log line says woke it. Blocking — off the loop.
+
+    A PAUSED session is never woken: Pause outranks a sleep (the pause route
+    drops the record), so a leftover one is dropped here and the wake is
+    refused with ``PAUSED_REFUSED`` — only Resume starts its agent again."""
     if not is_sleeping(title):
         return False, None
+    try:
+        paused = inst.Status == session.Paused
+    except Exception:  # noqa: BLE001
+        paused = False
+    if paused:
+        from backend.web.core.agent_sessions import PAUSED_REFUSED
+
+        drop(title)
+        _info("wake %s: refused — the session is paused", title)
+        return False, PAUSED_REFUSED
     if srv is None:
         srv = _server()
     _WAKE_WHY[title] = why

@@ -10,7 +10,8 @@
 //   - binary frames from the server are raw PTY bytes -> term.write
 //   - a text frame {"type":"error","message":...} surfaces a spawn error
 //   - we send {"type":"resize","cols","rows"} on open + on fit
-//   - close code 4404 (instance gone) / 4409 (workspace gone) => stop, don't
+//   - close code 4404 (instance gone) / 4409 (workspace gone) / 4423 (session
+//     paused: the server never relaunches a paused agent) => stop, don't
 //     reconnect; any other close => reconnect after 2.5s.
 //
 // Requires the global xterm.js (window.Terminal) + fit addon, loaded by the
@@ -219,8 +220,9 @@ export class WsXterm {
       this.term.write(new Uint8Array(ev.data));
     };
     ws.onclose = (ev) => {
-      // 4404 instance gone / 4409 workspace gone => don't reconnect.
-      if (ev.code === 4404 || ev.code === 4409) {
+      // 4404 instance gone / 4409 workspace gone / 4423 paused => don't
+      // reconnect (a paused agent is refused until Resume).
+      if (ev.code === 4404 || ev.code === 4409 || ev.code === 4423) {
         this._stop = true;
         if (this.onGone) this.onGone(ev.code);
         return;

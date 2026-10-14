@@ -20,6 +20,7 @@ import {
   freezeTerm,
   getTerm,
   peekTerm,
+  releaseTerm,
   type DragScreenCtx,
   type TermHandle,
 } from "../../lib/terminals";
@@ -29,6 +30,7 @@ import type { DragCtx } from "./TerminalGrid";
 import { DiffTab } from "./DiffTab";
 import { HistoryOverlay } from "./HistoryOverlay";
 import { PaneFindBar, type FindMode } from "./PaneFindBar";
+import { PausedBody } from "./PausedBody";
 import { QueueTab } from "./QueueTab";
 import { ThreadTab } from "./ThreadTab";
 import { CodeMapTab, prefetchCodeMap } from "./CodeMapTab";
@@ -141,6 +143,10 @@ export function Pane({
 
   const missing = !!inst.workspace_missing;
   const loading = inst.status === "loading";
+  // Paused: the agent was stopped on purpose. The Agent tab is a placeholder
+  // (PausedBody) and NO agent socket is opened — the server refuses one with
+  // 4423 rather than relaunch the agent; Resume brings the terminal back.
+  const paused = inst.status === "paused";
 
   // A shared-folder (peer) session has no companion shell (it would run
   // outside the sandbox), so a saved "shell" tab opens on the agent instead.
@@ -231,7 +237,7 @@ export function Pane({
   // Adopt a registry terminal into a host div; re-runs safely on remount.
   const adopt = useCallback(
     (kind: "agent" | "shell") => (el: HTMLDivElement | null) => {
-      if (!el || missing || loading) return;
+      if (!el || missing || loading || (kind === "agent" && paused)) return;
       const handle = getTerm(title, kind);
       if (!el.contains(handle.container)) el.appendChild(handle.container);
       handle.onHistoryDrag = (sel, edge, ctx) =>
@@ -258,8 +264,17 @@ export function Pane({
       }
       requestAnimationFrame(() => handle.doFit());
     },
-    [title, missing, loading]
+    [title, missing, loading, paused]
   );
+
+  // Pausing with the pane open: drop the agent terminal (its socket would
+  // only be refused now) so Resume starts a fresh one; the shell stays.
+  useEffect(() => {
+    if (!paused) return;
+    releaseTerm(title, "agent");
+    setBooted(false);
+    setWsState("paused");
+  }, [paused, title]);
 
   const fitSoon = useCallback(() => {
     clearTimeout(fitTimer.current);
@@ -960,7 +975,14 @@ export function Pane({
       </div>
       <AgentBlockedBanner block={noAgent} title={title} />
       <div className="pane-body" ref={bodyRef}>
-        <div className={"pane-term agent-term" + (tab !== "agent" ? " hidden" : "")} ref={adopt("agent")}>
+        {paused ? (
+          <PausedBody key="paused" title={title} hidden={tab !== "agent"} />
+        ) : (
+        <div
+          key="agent-term"
+          className={"pane-term agent-term" + (tab !== "agent" ? " hidden" : "")}
+          ref={adopt("agent")}
+        >
           {/* Pinned prompt: what this session was last asked to do, always
               visible while the output scrolls beneath it (the behavior the
               mobile view's short screen gives for free). One line by default;
@@ -1007,6 +1029,7 @@ export function Pane({
             </div>
           )}
         </div>
+        )}
         {shellStarted ? (
           <div className={"pane-term shell-term" + (tab !== "shell" ? " hidden" : "")} ref={adopt("shell")} />
         ) : (

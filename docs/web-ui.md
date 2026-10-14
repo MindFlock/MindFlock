@@ -680,7 +680,14 @@ agent: the session stays in the sidebar (status *Paused*), and the worktree and
 branch stay exactly as they are — no commit under your name, no removed
 checkout — and **Resume session** relaunches the agent in the same folder
 (`POST /api/instances/{title}/pause` / `/resume`). A session paused by an
-older build (checkout removed) still resumes the old way.
+older build (checkout removed) still resumes the old way. While paused, the
+pane's **Agent** tab is a calm placeholder — *Paused · The agent is stopped;
+your worktree and conversation are kept.* with a **▶ Resume** button
+(`grid/PausedBody.tsx`) — and opens no agent socket (the server would refuse
+it with 4423 rather than relaunch the agent; `lib/terminals.ts` never
+reconnects on that code). Pausing with the pane open drops its agent terminal;
+Resume mounts a fresh one. The **Shell** tab keeps working. The phone page
+(`/m`) shows the same line and attaches once the session is resumed.
 
 **One way to leave a session, in two strengths.** **Close** (the ✕ on the row,
 `Ctrl+W` / `Delete`, the palette's *Close session*) stops the agent and moves
@@ -4676,4 +4683,4 @@ into the New-session dialog's Program field.
 
 `core/ws-xterm.js` exports `WsXterm`, the shared xterm↔WebSocket bridge used by
 addon panes (binary PTY frames in, resize JSON out, auto-reconnect except on
-4404/4409).
+4404/4409/4423).

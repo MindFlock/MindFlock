@@ -383,7 +383,8 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         folder = inst.Path or ""
     # L1(c): a started session whose workspace directory vanished (deleted
     # outside MindFlock) — surfaced distinctly so the UI can offer "Clean up"
-    # instead of a fake running terminal. Paused sessions have no dir by design.
+    # instead of a fake running terminal. Paused sessions are exempt: a pause
+    # by a build up to 0.7.5 removed the dir by design (Resume rebuilds it).
     try:
         workspace_missing = bool(
             inst.Started()
