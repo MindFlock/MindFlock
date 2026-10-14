@@ -999,7 +999,12 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   a dwell sized to that evidence, 12–45 s, and nothing is queued to wake it;
   see [web-api.md](web-api.md)), rather than on the activity
   chip going grey at the end of every assistant turn. An existing opt-in simply
-  gets quieter; **no migration is needed**, by hand or otherwise.
+  gets quieter; **no migration is needed**, by hand or otherwise. Since
+  2026-10 it is **on by default** (labelled *"A session finishes its work"*) —
+  but only for someone who never saved a rule choice: anyone with either list
+  non-empty keeps the "off" that absence from `enabled_rules` meant, and its
+  toggle then records on in `enabled_rules` and off in `muted_rules`. Every
+  rule also carries a one-line `description` for the Settings screen.
 - **ntfy push** (`notifications.ntfy_enabled` / `_server` / `_topic` / `_token` /
   `_click_url`, Settings → Notifications) — the optional server-side push channel
   that reaches a phone with no browser tab open (see

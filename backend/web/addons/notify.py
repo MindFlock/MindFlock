@@ -45,8 +45,9 @@ from .base import SECRET_MASK, Addon, AppContext, FrontendDescriptor
 #: Event → notification rules both channels apply. ``old``/``new`` of ``None``
 #: match any value; ``{session}`` in title/body is replaced with the envelope's
 #: session title and ``{detail}`` with the envelope's ``data.detail`` (a
-#: sentence the emitter wrote for humans; empty when the event has none). Each rule has a stable ``id``, a short ``label`` for the
-#: settings UI, and a ``default_enabled`` flag: default-on rules are opt-out
+#: sentence the emitter wrote for humans; empty when the event has none). Each rule has a stable ``id``, a short ``label`` and a
+#: one-line ``description`` for the settings UI (plain words, no placeholders —
+#: ``title``/``body`` are the notification's own text), and a ``default_enabled`` flag: default-on rules are opt-out
 #: (muted via settings.notifications.muted_rules); default-off rules are opt-in
 #: (turned on via settings.notifications.enabled_rules) because they're noisy.
 #:
@@ -60,7 +61,8 @@ NOTIFY_RULES: List[dict] = [
         # its toast and badge gating): the agent process is gone and the chip
         # offers Restart.
         "id": "session_offline",
-        "label": "A session went offline",
+        "label": "A session stops unexpectedly",
+        "description": "The agent closed. Restart it from the sidebar.",
         "event": "session.activity_changed",
         "old": None,
         "new": "offline",
@@ -72,7 +74,8 @@ NOTIFY_RULES: List[dict] = [
     },
     {
         "id": "needs_input",
-        "label": "A session needs you (Question)",
+        "label": "A session asks you a question",
+        "description": "The agent is waiting for your answer.",
         "event": "session.activity_changed",
         "old": None,
         "new": "clarify",
@@ -92,6 +95,7 @@ NOTIFY_RULES: List[dict] = [
         # `old: "OPEN"` covers both real endings (MERGED and CLOSED).
         "id": "pr_closed",
         "label": "A pull request is merged or closed",
+        "description": "The pull request is no longer open.",
         "event": "session.pr_state_changed",
         "old": "OPEN",
         "new": None,
@@ -111,6 +115,7 @@ NOTIFY_RULES: List[dict] = [
         # server started is never re-announced.
         "id": "pr_approved",
         "label": "A pull request is approved",
+        "description": "A reviewer approved it. It's ready to merge.",
         "event": "session.pr_review_changed",
         "old": None,
         "new": "approved",
@@ -125,7 +130,8 @@ NOTIFY_RULES: List[dict] = [
         # because the agent is usually still working in that session anyway, so
         # for most people it lands on a window they are already looking at.
         "id": "pr_changes_requested",
-        "label": "A pull request gets changes requested",
+        "label": "A reviewer asks for changes",
+        "description": "Someone requested changes on a session's pull request.",
         "event": "session.pr_review_changed",
         "old": None,
         "new": "changes_requested",
@@ -139,7 +145,8 @@ NOTIFY_RULES: List[dict] = [
         # J5 — cost guardrail: emitted once per session when its estimated
         # cost crosses the configured per-session budget (data: {cost, budget}).
         "id": "budget_exceeded",
-        "label": "A session exceeds its cost budget",
+        "label": "A session goes over its cost budget",
+        "description": "Set the budget in Settings → General.",
         "event": "session.budget_exceeded",
         "old": None,
         "new": None,
@@ -156,6 +163,7 @@ NOTIFY_RULES: List[dict] = [
         # picks it back up on its own when it does.
         "id": "usage_limit",
         "label": "A session runs out of usage",
+        "description": "It waits until your plan's usage resets.",
         "event": "session.activity_changed",
         "old": None,
         "new": "limit",
@@ -171,7 +179,8 @@ NOTIFY_RULES: List[dict] = [
         # at sessions that had run out — so this cannot fire on a window that
         # merely rolled over while everything was fine.
         "id": "usage_restored",
-        "label": "Usage comes back after running out",
+        "label": "Usage comes back",
+        "description": "A session that ran out of usage can run again.",
         "event": "session.usage_restored",
         "old": None,
         "new": None,
@@ -199,13 +208,18 @@ NOTIFY_RULES: List[dict] = [
         # settings.notifications.enabled_rules carries straight over and simply
         # gets quieter, with no migration.
         "id": "session_idle",
-        "label": "A session finishes its work and stays idle",
+        "label": "A session finishes its work",
+        "description": "The agent stopped and nothing else is queued.",
         "event": "session.turn_ended",
         "old": None,
         "new": None,
         "title": "{session} has finished",
         "body": "The agent finished its turn and has been idle since, with nothing queued.",
-        "default_enabled": False,
+        # On by default (it is what a new user leaves sessions running FOR),
+        # but it was opt-in until 2026-10: anyone who has saved a rule choice
+        # keeps what they had — see ``was_opt_in`` in :func:`_rule_enabled`.
+        "default_enabled": True,
+        "was_opt_in": True,
         "priority": 2,
         "tags": ["zzz"],
     },
@@ -219,6 +233,7 @@ NOTIFY_RULES: List[dict] = [
         # payments: PAY-421 hooks failed twice").
         "id": "run_needs_you",
         "label": "A team run needs you",
+        "description": "A session in a team run is stuck or blocked.",
         "event": "run.needs_you",
         "old": None,
         "new": None,
@@ -234,6 +249,7 @@ NOTIFY_RULES: List[dict] = [
         # announces once after the boot quiet window).
         "id": "run_finished",
         "label": "A team run finishes",
+        "description": "Every session in the team run is done.",
         "event": "run.finished",
         "old": None,
         "new": None,
@@ -247,7 +263,8 @@ NOTIFY_RULES: List[dict] = [
         # Opt-in: every member that reaches its lane. Its rail row and the
         # bell already show these; a push per PR is ambient, not actionable.
         "id": "run_task_shipped",
-        "label": "A team run member ships",
+        "label": "A team run session ships",
+        "description": "One session in a team run reached its goal, such as opening its pull request.",
         "event": "run.task_shipped",
         "old": None,
         "new": None,
@@ -261,7 +278,8 @@ NOTIFY_RULES: List[dict] = [
         # Opt-in (noisy): the commit hit the pre-commit lock — hooks are running
         # (stage -> "precommit"). See server._session_stage.
         "id": "precommit_running",
-        "label": "Pre-commit hooks are running",
+        "label": "Pre-commit hooks start",
+        "description": "A commit is running your repo's pre-commit checks.",
         "event": "session.stage_changed",
         "old": None,
         "new": "precommit",
@@ -278,7 +296,8 @@ NOTIFY_RULES: List[dict] = [
         # counterpart to precommit_running — it fires once per block, and the
         # session needs a re-commit to move on.
         "id": "precommit_failed",
-        "label": "Pre-commit hooks failed a commit",
+        "label": "Pre-commit hooks block a commit",
+        "description": "The commit didn't land. The session needs to commit again.",
         "event": "session.stage_changed",
         "old": None,
         "new": "interrupt",
@@ -300,7 +319,8 @@ NOTIFY_RULES: List[dict] = [
         # pushes all day writes one of these per session per branch, which is
         # ambient rather than actionable.
         "id": "verify_plan_ready",
-        "label": "A verification plan is ready",
+        "label": "A checklist is ready",
+        "description": "Verify finished writing a checklist for a push.",
         "event": "session.test_plan_ready",
         "old": None,
         "new": None,
@@ -318,7 +338,8 @@ NOTIFY_RULES: List[dict] = [
         # one case most worth telling a human about: the attempt that produced
         # no checklist at all.
         "id": "verify_plan_failed",
-        "label": "A verification plan fails to generate",
+        "label": "A checklist couldn't be written",
+        "description": "Open Verify to see why.",
         "event": "session.test_plan_failed",
         "old": None,
         "new": None,
@@ -340,7 +361,8 @@ NOTIFY_RULES: List[dict] = [
         # no ``detail``. So the body says where the numbers are rather than
         # inventing them.
         "id": "verify_run_finished",
-        "label": "An agent finishes checking a verification plan",
+        "label": "An agent finishes a checklist",
+        "description": "Open Verify to see what it found.",
         "event": "session.test_plan_checked",
         "old": None,
         "new": None,
@@ -358,7 +380,8 @@ NOTIFY_RULES: List[dict] = [
         # yet", making a run that was started, billed and abandoned
         # indistinguishable from a button nobody ever pressed.
         "id": "verify_run_gave_up",
-        "label": "A verification run ends without reporting",
+        "label": "A checklist run stops without answers",
+        "description": "The checklist goes back to unchecked.",
         "event": "session.test_plan_gave_up",
         "old": None,
         "new": None,
@@ -376,7 +399,8 @@ NOTIFY_RULES: List[dict] = [
         # to once per (session, zone) per work cycle, so turning it on is one
         # push per zone per turn, not one per attempt.
         "id": "red_zone_blocked",
-        "label": "Zone guard blocked an edit (red zone / outside green)",
+        "label": "An edit to an off-limits file is blocked",
+        "description": "An agent tried to change a file in a zone you protected.",
         "event": "session.red_zone_blocked",
         "old": None,
         "new": None,
@@ -400,7 +424,8 @@ NOTIFY_RULES: List[dict] = [
         # would block pushes, PRs and merges" / "git-ignored, so never
         # pushed; restore it by hand"); `data.blocks_push` says the same.
         "id": "red_zone_breached",
-        "label": "Zone breached (red zone / outside green)",
+        "label": "An off-limits file was changed",
+        "description": "Look at it before it's pushed.",
         "event": "session.red_zone_breached",
         "old": None,
         "new": None,
@@ -414,7 +439,8 @@ NOTIFY_RULES: List[dict] = [
         # The protection itself was interfered with (guard file, hook config,
         # zone store). Default-on and loud: whatever did it, a human should know.
         "id": "red_zone_tampered",
-        "label": "Red zone guard tampered",
+        "label": "Zone protection was tampered with",
+        "description": "Something changed the files that enforce your zones.",
         "event": "session.red_zone_tampered",
         "old": None,
         "new": None,
@@ -431,7 +457,8 @@ NOTIFY_RULES: List[dict] = [
         # emitter's "<host> · code 123 456" — the code is how the user checks
         # it's the computer in front of them (core.fleet.open_request).
         "id": "device_join",
-        "label": "A device asks to join your devices",
+        "label": "A computer asks to join your devices",
+        "description": "Approve it on this computer within 10 minutes.",
         "event": "device.join_requested",
         "old": None,
         "new": None,
@@ -445,7 +472,7 @@ NOTIFY_RULES: List[dict] = [
 
 #: Rule fields the client never needs: opt-in/opt-out semantics (it gets the
 #: resolved ``enabled``) and the ntfy-only presentation hints.
-_INTERNAL_RULE_FIELDS = ("default_enabled", "priority", "tags")
+_INTERNAL_RULE_FIELDS = ("default_enabled", "was_opt_in", "priority", "tags")
 
 #: At most one push per (session, RULE) per this many seconds — the key is the
 #: rule id, not the event name, because three rules ride
@@ -470,10 +497,21 @@ def _unreadable_response() -> JSONResponse:
 def _rule_enabled(rule: dict, muted: set, opted_in: set) -> bool:
     """Whether ``rule`` is active given the muted (opt-out) and enabled (opt-in)
     id sets. Default-on rules fire unless muted; default-off rules fire only when
-    explicitly opted in."""
+    explicitly opted in.
+
+    ``was_opt_in`` marks a rule that USED to be default-off. Its new default
+    applies only to someone who never saved a rule choice (both lists empty):
+    for anyone else, absence from ``enabled_rules`` was their answer — "off" —
+    and a new default must not flip it. Its toggle keeps both lists in step
+    (see ``set_rule``)."""
+    rid = rule["id"]
     if rule.get("default_enabled", True):
-        return rule["id"] not in muted
-    return rule["id"] in opted_in
+        if rid in muted:
+            return False
+        if rule.get("was_opt_in") and (muted or opted_in) and rid not in opted_in:
+            return False
+        return True
+    return rid in opted_in
 
 
 def _enabled_rules() -> List[dict]:
@@ -699,6 +737,12 @@ class NotifyAddon(Addon):
                     muted = [m for m in muted if m != rule_id]
                 elif rule_id not in muted:
                     muted.append(rule_id)
+                # A once-opt-in rule also records "on" as an opt-in, which is
+                # what keeps it on once any other choice has been saved.
+                if rule.get("was_opt_in"):
+                    opted_in = [e for e in opted_in if e != rule_id]
+                    if enabled:
+                        opted_in.append(rule_id)
             else:
                 # Opt-in: on = present in enabled, off = absent from enabled.
                 if enabled and rule_id not in opted_in:

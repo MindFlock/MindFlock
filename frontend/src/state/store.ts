@@ -237,6 +237,9 @@ interface UiState {
   tourOpen: boolean;
   /** The welcome tour has been shown (synced pref `welcome_tour`). */
   welcomeTourSeen: boolean;
+  /** Light mode is on (the <html> `light` class; synced pref `theme`). Change
+   * it with lib/theme.ts `setTheme`, never by toggling the class directly. */
+  themeLight: boolean;
   /** Remember the welcome tour as shown — on every device. */
   markWelcomeTourSeen(): void;
   /** The Map tab's tour has been seen (synced pref `map_tour`): it opens itself on a first Map only until then. */
@@ -409,6 +412,9 @@ export const useUi = create<UiState>((set, get) => ({
   tourOpen: false,
   mapTourSeen: load<boolean>("mf_map_tour", false) === true,
   welcomeTourSeen: load<boolean>("mf_welcome_tour", false) === true,
+  // index.html's pre-paint script has already decided (saved choice, else the
+  // OS colour scheme), so the class is the answer.
+  themeLight: typeof document !== "undefined" && document.documentElement.classList.contains("light"),
   lastTab: load<Record<string, string>>("cs_lasttab", {}),
   openDialog: null,
   dialogTarget: null,

@@ -17,6 +17,7 @@ import {
 } from "../../../lib/breakTimer";
 import { rethemeAll } from "../../../lib/terminals";
 import { toast } from "../../../lib/toast";
+import { setTheme } from "../../../lib/theme";
 import { useUi } from "../../../state/store";
 import type { ScreenProps } from "../SettingsDialog";
 import { LearnMore } from "../settingsMode";
@@ -159,6 +160,7 @@ function apply(dim: Dim, name: string) {
 }
 
 export function Appearance(_: ScreenProps) {
+  const themeLight = useUi((s) => s.themeLight);
   const [accent, setAccent] = useState(() => current(DIMS.accent));
   const [surface, setSurface] = useState(() => current(DIMS.surface));
 
@@ -180,10 +182,28 @@ export function Appearance(_: ScreenProps) {
 
   return (
     <>
-      <h3 className="set-section-title">Appearance</h3>
-      <p className="set-hint">
-        Light or dark is the moon button in the top bar. Every theme below has both.
-      </p>
+      <h3 className="set-section-title">Mode</h3>
+      <p className="set-hint">Every theme below has both. The moon in the top bar switches too.</p>
+      <div id="mode-swatches" className="accent-swatches" role="radiogroup" aria-label="Light or dark">
+        {(
+          [
+            [false, "Dark"],
+            [true, "Light"],
+          ] as const
+        ).map(([isLight, label]) => (
+          <button
+            key={label}
+            type="button"
+            role="radio"
+            aria-checked={themeLight === isLight}
+            className={"accent-swatch" + (themeLight === isLight ? " active" : "")}
+            data-mode-choice={isLight ? "light" : "dark"}
+            onClick={() => setTheme(isLight)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <h3 className="set-section-title">Theme</h3>
       <div id="surface-swatches" className="accent-swatches">
         {SURFACES.map(surfaceSwatch)}

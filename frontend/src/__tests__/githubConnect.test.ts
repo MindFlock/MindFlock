@@ -12,7 +12,6 @@ import dialogSrc from "../components/dialogs/ConnectGitHub.tsx?raw";
 import appSrc from "../App.tsx?raw";
 import connsSrc from "../components/settings/screens/Connections.tsx?raw";
 import {
-  DEVICE_FLOW_UNCONFIGURED,
   OPEN_CONNECT_GITHUB_EVENT,
   describeConnectionTest,
 } from "../lib/githubConnect";
@@ -67,9 +66,6 @@ describe("ConnectGitHub dialog", () => {
     expect(dialog).toContain("<code>repo</code> and <code>read:org</code>");
     // Test and the push check wait for a saved credential.
     expect(dialog).toContain("disabled={!!busy || !st.connected}");
-    expect(DEVICE_FLOW_UNCONFIGURED).toBe(
-      "Device flow is not configured in this build; paste a token or use gh"
-    );
   });
 
   it("Test calls the real connection test", () => {

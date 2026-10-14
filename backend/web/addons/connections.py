@@ -18,6 +18,7 @@ and friends), which the frontend calls directly. The row contract is
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from typing import List, Optional
@@ -205,6 +206,22 @@ def _agent_label(name: str) -> str:
     return name[:1].upper() + name[1:] if name else "Agent"
 
 
+def _agent_auth_fix(name: str, binary: str) -> tuple:
+    """``(fix line, runnable command)`` the doctor gives a logged-out agent
+    (``doctor._login_fix``: its login command, else the API keys it reads).
+    ``("", "")`` when the registry can't produce the provider."""
+    try:
+        from backend import doctor
+
+        provider = doctor._agent_provider(name)
+        if provider is None:
+            return "", ""
+        base = os.path.basename((binary.split() or [name])[0]) or name
+        return doctor._login_fix(provider, base)
+    except Exception:  # noqa: BLE001 — a fix line must never break the row
+        return "", ""
+
+
 def _agent_row(st: dict) -> dict:
     """One provider's row. Connected = installed and signed in (or nothing to
     sign in to, or no way to tell); needs attention = installed but its login
@@ -255,6 +272,22 @@ def _agent_row(st: dict) -> dict:
     where = path or "installed"
     if authed:
         detail = f"signed in ({st.get('auth_detail')}) · {where}"
+    elif probe and not has_login:
+        # It named where its credentials live (aider: API-key env vars) and
+        # none are there. No login flow to offer — a "Sign in" button would
+        # only open the agent's REPL — so the doctor's own fix says what to set.
+        fix, fix_cmd = _agent_auth_fix(name, str(st.get("binary") or ""))
+        return _row(
+            rid,
+            rname,
+            "agent",
+            STATE_NEEDS_ATTENTION,
+            f"installed, not signed in · {where}",
+            _action("Set up", "screen", screen),
+            fix=fix or "sign in to " + label,
+            fix_command=fix_cmd,
+            **common,
+        )
     elif not has_login:
         detail = f"no sign-in needed · {where}"
     elif not probe:

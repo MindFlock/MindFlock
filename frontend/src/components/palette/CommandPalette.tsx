@@ -141,6 +141,11 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     });
     acts.push({ label: "Prompts…", hint: "manage saved prompts", run: () => ui.openDialogFor("prompts") });
     acts.push({ label: "Templates…", hint: "manage saved New-session setups", run: () => ui.openDialogFor("templates") });
+    acts.push({
+      label: "Schedule a session…",
+      hint: "daily or weekdays",
+      run: () => ui.openDialogFor("templates", "schedule"),
+    });
     // Run now: a fresh session from a template, its prompt already sent —
     // one row per template that can start one on its own (it has a folder).
     for (const tpl of templatesNow()) {

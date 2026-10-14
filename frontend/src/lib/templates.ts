@@ -25,6 +25,11 @@ export interface Template {
   /** Start a fresh session from this template on its own: daily (or
    * weekdays) at a local "HH:MM". Absent = only by hand. */
   schedule?: TemplateSchedule;
+  /** How far a session started from it ships itself: "commit" | "push" |
+   * "pr" | "merge" (backend/web/addons/templates.py). Absent = not at all. */
+  fasttrack?: string;
+  /** With `fasttrack`: stop and ask before the last rung. */
+  ask_first?: boolean;
 }
 
 export interface TemplateSchedule {
@@ -216,7 +221,12 @@ export function isPromptOnly(t: Template): boolean {
     !t.repo_path &&
     !t.provisioned &&
     !t.in_place &&
-    !t.init_repo
+    !t.init_repo &&
+    // A fast-track or a schedule is session setup: that is a template, even
+    // with no folder in it — offering it as a snippet to paste would drop both.
+    !t.fasttrack &&
+    !t.ask_first &&
+    !t.schedule
   );
 }
 

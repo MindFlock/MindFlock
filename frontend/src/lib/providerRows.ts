@@ -4,6 +4,7 @@
  * without a DOM (the screen only lays rows out). */
 
 import type { ProviderLoadError, ProviderStatus } from "../api/types";
+import { agentName } from "./agentNames";
 
 export type SignInState =
   | "signed-in"
@@ -127,9 +128,10 @@ export interface PickerOption {
 export function pickerOptions(
   statuses: Array<Pick<ProviderStatus, "name" | "installed">>
 ): PickerOption[] {
+  // The option's VALUE stays the provider id; the words are its product name.
   return statuses.map((p) => ({
     name: p.name,
     disabled: !p.installed,
-    label: p.installed ? p.name : `${p.name} — not installed`,
+    label: p.installed ? agentName(p.name) : `${agentName(p.name)} — not installed`,
   }));
 }

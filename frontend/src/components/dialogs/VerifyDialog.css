@@ -1060,6 +1060,34 @@
   border-color: var(--accent);
 }
 
+/* "Another branch…": a repo picker and a branch box, part of the row (no frame
+   of their own), wrapping onto their own line when the dialog is narrow. The
+   box gets the selects' treatment above, since the UA styles inputs too. */
+.vf-newplan-branch {
+  display: flex;
+  flex: 1 1 320px;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.vf-newplan-branch input {
+  flex: 1 1 160px;
+  min-width: 0;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.vf-newplan-branch input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .vf-newplan > .set-hint {
   flex: 1 0 100%;
   margin: 0;
