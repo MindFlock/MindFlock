@@ -298,6 +298,12 @@ FastAPI app `backend.web.server:app`. Key pieces:
   while it reads low; the lifespan's `_memory_watch_loop` emits
   `system.memory_changed` on each level change. See
   [session-engine.md](session-engine.md#memory-guard).
+- **Heavy-job slots** (`backend/slot.py`, `mindflock slot -- CMD`) — the
+  other half: a server-less, flock-based semaphore that repos put in front of
+  heavy commands (test suites in commit hooks), so jobs from many sessions
+  take turns; held slots also wait out a low memory reading.
+  `GET /api/system/slots` reads its lock dir. See
+  [cli.md](cli.md#mindflock-slot---pool-name---max-n---timeout-secs---no-wait-memory----cmd-args).
 - **Malloc arena cap** (`web/core/malloc_arenas.py`) — `run.py`'s `main()` first
   calls `mallopt(M_ARENA_MAX, 2)` (glibc only; an explicit `MALLOC_ARENA_MAX` /
   `GLIBC_TUNABLES` wins). The server's blocking work runs on worker threads, and

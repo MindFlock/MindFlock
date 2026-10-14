@@ -224,6 +224,8 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         "setup_devices",
         # What THIS machine relaunches when its own server boots.
         "revive_on_start",
+        # Sized to THIS machine's RAM (backend.slot).
+        "heavy_slots",
     ),
     "notifications": ("ntfy_click_url",),
     "peer": (

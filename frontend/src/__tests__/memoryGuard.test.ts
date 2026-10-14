@@ -2,7 +2,7 @@
  * (components/MemoryNotice.tsx, components/sidebar/OfflineBar.tsx). */
 
 import { describe, expect, it } from "vitest";
-import { memoryDetail } from "../components/MemoryNotice";
+import { memoryDetail, slotsLine } from "../components/MemoryNotice";
 import { sweepToast } from "../components/sidebar/OfflineBar";
 
 const GB = 1024 ** 3;
@@ -26,6 +26,36 @@ describe("memoryDetail", () => {
     expect(
       memoryDetail({ level: "low", available: 3 * GB, total: 24 * GB, available_pct: 12.5, swap_total: 8 * GB, swap_free: 8 * GB, psi: { some_avg60: 1 } })
     ).toBe("3.0 GB free of 24.0 GB (13%)");
+  });
+});
+
+describe("slotsLine", () => {
+  const job = (o: object) => ({ pid: 1, cmd: "uv run pytest", cwd: "/w/repo", since: 0, ...o });
+
+  it("is empty when nothing holds or waits for a slot", () => {
+    expect(slotsLine(undefined)).toBe("");
+    expect(slotsLine({ slots: 1, source: "default", pools: [], running: 0, waiting: 0 })).toBe("");
+  });
+
+  it("names the holders by session, else folder, and counts the queue", () => {
+    expect(
+      slotsLine({
+        slots: 1,
+        source: "default",
+        pools: [{ name: "heavy", holders: [job({ session: "fix-auth" })], waiters: [job({}), job({})] }],
+        running: 1,
+        waiting: 2,
+      })
+    ).toBe("Heavy jobs: fix-auth running · 2 waiting for a slot");
+    expect(
+      slotsLine({
+        slots: 2,
+        source: "setting",
+        pools: [{ name: "heavy", holders: [job({ cwd: "/w/sitecheck-bot7/" }), job({ session: "b" }), job({ session: "c" })], waiters: [] }],
+        running: 3,
+        waiting: 0,
+      })
+    ).toBe("Heavy jobs: sitecheck-bot7, b +1 running");
   });
 });
 

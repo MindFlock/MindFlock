@@ -2154,6 +2154,33 @@ def get_system_memory() -> JSONResponse:
     return JSONResponse(snap)
 
 
+@app.get("/api/system/slots")
+def get_system_slots() -> JSONResponse:
+    """Heavy-job slots (``mindflock slot``, :mod:`backend.slot`): ``{"slots":
+    N, "source": "env"|"setting"|"default", "pools": [{"name", "holders":
+    [{"slot", "pid", "cmd", "cwd", "since", "max", "session"}], "waiters":
+    [{..., "position"}]}], "running": n, "waiting": n}``. ``session`` is the
+    MindFlock session a holder or waiter runs in ("" when none), matched by
+    its tmux pane, then its working folder. Read from the lock dir: works
+    for jobs started with no server, and is empty when nobody uses slots."""
+    from backend import slot as _slot
+
+    sessions = []
+    for inst in list(ENGINE.instances.values()):
+        try:
+            folder = inst.GetWorktreePath() if inst.Started() else (inst.Path or "")
+        except Exception:  # noqa: BLE001 — a half-built row maps by name only
+            folder = getattr(inst, "Path", "") or ""
+        sessions.append(
+            {
+                "title": inst.Title,
+                "tmux_name": tmux.to_mindflock_tmux_name(inst.Title),
+                "folder": folder,
+            }
+        )
+    return JSONResponse(_slot.status(sessions))
+
+
 #: How often the memory watch re-reads (backend.memory_pressure caches 2s).
 _MEMORY_WATCH_SECONDS = 10.0
 

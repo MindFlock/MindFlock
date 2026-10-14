@@ -20,6 +20,7 @@ import type {
   DoctorPayload,
   Instance,
   MemoryReading,
+  SlotsReading,
   MindflockStatus,
   TestPlansResponse,
   TicketingCatalogEntry,
@@ -270,6 +271,18 @@ export function useMemory() {
     queryFn: () => api<MemoryReading>("/api/system/memory"),
     refetchInterval: 15_000,
     retry: false,
+  });
+}
+
+/** Heavy-job slots (`GET /api/system/slots`). Polled only while something
+ * shows them (the memory notice), so an idle app never reads the lock dir. */
+export function useSlots(enabled: boolean) {
+  return useQuery({
+    queryKey: ["system-slots"],
+    queryFn: () => api<SlotsReading>("/api/system/slots"),
+    refetchInterval: 15_000,
+    retry: false,
+    enabled,
   });
 }
 
