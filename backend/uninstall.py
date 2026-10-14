@@ -236,6 +236,24 @@ def _mcp_run_files() -> List[str]:
         return []
 
 
+def _mcp_bridge_running() -> bool:
+    try:
+        from backend.providers import mcp_share
+
+        return mcp_share.bridge_pid() is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _stop_mcp_bridge() -> bool:
+    try:
+        from backend.providers import mcp_share
+
+        return mcp_share.stop_bridge()
+    except Exception:  # noqa: BLE001 — no resolvable home dir, import trouble
+        return False
+
+
 def build_plan() -> Plan:
     """Survey the machine and return everything uninstall would touch."""
     plan = Plan()
@@ -582,6 +600,14 @@ def execute(
             pass  # already gone (a session closed since the plan was built)
         except OSError as err:
             report.failed("could not delete %s: %s" % (path, err))
+
+    # The shared-MCP bridge is detached on purpose (it outlives a server
+    # restart); uninstall is what ends it, and it stops its servers with it.
+    if dry_run:
+        if _mcp_bridge_running():
+            report.did("would stop the shared-MCP bridge")
+    elif _stop_mcp_bridge():
+        report.did("stopped the shared-MCP bridge")
 
     if purge:
         for path in plan.purge_dirs:

@@ -357,14 +357,37 @@ class ClaudeProvider(BaseProvider):
         ``--mcp-config`` start without an approval dialog, and the allow list
         is additive to the user's own permission rules (both verified there).
         No ``--strict-mcp-config``: the user's own servers keep loading.
+
+        The run file also carries the user's SHARED servers
+        (:meth:`shared_mcp_entries`): same-named http entries pointing at the
+        one-per-machine bridge, which replace the stdio entries for this launch.
         """
         from . import mcp_attach
 
-        path = mcp_attach.write_claude_config(spec)
+        path = mcp_attach.write_claude_config(
+            spec, self.shared_mcp_entries(spec.workdir)
+        )
         return (
             "--mcp-config=" + path,
             "--allowedTools=" + ",".join(mcp_attach.claude_tool_names()),
         )
+
+    def shared_mcp_entries(self, workdir: str) -> dict:
+        """``{name: http entry}`` for the user's shared MCP servers
+        (:func:`backend.providers.claude_mcp.shared_mcp_entries`); ``{}`` when
+        none are shared or anything fails — the session then runs its own."""
+        try:
+            from . import claude_mcp
+
+            return claude_mcp.shared_mcp_entries(workdir)
+        except Exception:  # noqa: BLE001 — sharing is best-effort
+            return {}
+
+    def mcp_servers(self) -> list:
+        """The user's MCP servers for Settings → Shared MCP servers."""
+        from . import claude_mcp
+
+        return claude_mcp.list_servers()
 
     # --- worktree launcher ------------------------------------------------ #
     def owns_launcher(self, ctx: LaunchContext) -> bool:

@@ -937,6 +937,42 @@ class SettingsAddon(Addon):
 
             return JSONResponse(tailnet_trust.status())
 
+        @router.get("/settings/mcp-shared")
+        def get_mcp_shared() -> JSONResponse:
+            """Settings → Agents → Shared MCP servers: the user's own MCP
+            servers (from each provider that can share them — Claude today),
+            which are shared (``general.mcp_shared_servers``), and the bridge
+            that runs them (:mod:`backend.providers.mcp_share`). Names and
+            command basenames only — never a server's env (it holds tokens).
+            Saving goes through ``POST /api/settings`` (owner-only)."""
+            from backend.providers import mcp_share
+
+            shared = list(settings_store.load_settings().general.mcp_shared_servers)
+            rows: list = []
+            seen: set = set()
+            for prov in providers.all_providers():
+                try:
+                    listed = prov.mcp_servers() or []
+                except (
+                    Exception
+                ):  # noqa: BLE001 — one CLI's config must not sink the list
+                    listed = []
+                for row in listed:
+                    if row.get("name") in seen:
+                        continue
+                    seen.add(row.get("name"))
+                    rows.append(
+                        dict(row, provider=prov.name, shared=row.get("name") in shared)
+                    )
+            return JSONResponse(
+                {
+                    "available": mcp_share.enabled(),
+                    "servers": rows,
+                    "shared": shared,
+                    "bridge": mcp_share.bridge_status(),
+                }
+            )
+
         @router.get("/settings/sync")
         def get_settings_sync() -> JSONResponse:
             """Settings → Your devices → Settings sync: on/off, where this device

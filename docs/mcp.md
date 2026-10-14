@@ -1726,6 +1726,129 @@ assigned to you, or filtered out), pass `source` and the tracker's own id.
 logs go to stderr, which the agent CLI captures. The server log records every
 message the lane types (`mailbox typed <id> from … into …`).
 
+## Shared MCP servers (one copy per machine)
+
+Every Claude Code window starts its own copy of every stdio MCP server in your
+Claude config. On a busy machine that adds up: measured 2026-10-14, about
+500 MB of identical servers per window (mcp-proxy-for-aws ~120 MB, context7
+via `npx` ~75 MB, aws-documentation ~75 MB, shortcut ~70 MB, and so on), so
+11 windows held about 5.5 GB of copies. **Settings → Agent orchestration →
+Shared MCP servers** lists your user-scope servers, each with a **Share
+across sessions** switch (`general.mcp_shared_servers`). A shared server runs
+once in MindFlock's bridge, and every window MindFlock launches connects to
+that copy. Nothing is shared by default.
+
+### How it works
+
+- **The bridge** (`backend/mcp/bridge.py`, stdlib only) is one process per
+  machine. It serves MCP streamable HTTP at
+  `http://127.0.0.1:<port>/mcp/<name>`, with a per-machine bearer token in the
+  `Authorization` header. For each shared server it runs one upstream stdio
+  process, started on the first client's `initialize`.
+- **The launch** (`backend/providers/mcp_share.py` and
+  `backend/providers/claude_mcp.py`) adds an http entry for each shared name
+  to the session's existing `--mcp-config` run file, pointing at the bridge.
+  It starts the bridge first if it isn't running. A same-named
+  `--mcp-config` entry replaces your own stdio entry for that launch, so
+  Claude never spawns the per-window copy. Your other servers load as
+  before: there is no `--strict-mcp-config` and no copy of your config to
+  keep in sync.
+- **Multiplexing.** The upstream is initialized once, with the first client's
+  protocol version and *no* client capabilities. Every client's `initialize`
+  is answered from the cached result under that client's own id. Request ids,
+  `_meta.progressToken` and the `requestId` of `notifications/cancelled` are
+  remapped, so two windows using the same id or token still get their own
+  replies. `ping` and `logging/setLevel` are answered by the bridge, because
+  one window's log level must not change another's. `resources/subscribe` is
+  reference-counted per URI. `*/list_changed`, `notifications/message` and
+  `resources/updated` go to every client over its GET stream.
+- **Server-to-client requests are refused.** `sampling/createMessage`,
+  `elicitation/create`, `roots/list`, or any request other than `ping` gets
+  `-32601`, since there is no single window that could answer it. The bridge
+  counts these, and the Settings row tells you to switch the server off. **A
+  server that needs sampling, elicitation or roots must not be shared.**
+- **Restarts.** An upstream that exits is restarted on the next request and
+  re-initialized with the cached parameters. Calls in flight fail with
+  `-32603`, and clients get `list_changed` so they refetch. Sessions survive.
+  After 5 crashes within 60 s the bridge fails fast instead of looping. Its
+  stderr goes to `~/.mindflock/run/mcp-shared/logs/<name>.log`.
+- **Lifetime.** The bridge is started detached (its own session), so it
+  outlives a MindFlock server restart, as the tmux windows using it do. The
+  next server finds it through `bridge.json`. A client counts as live while
+  it holds its GET notification stream open (Claude Code keeps one for the
+  life of the window, and a closed one is noticed within a second) or has
+  made a request in the last 6 h. An upstream with no live client for 10 min
+  is stopped (its whole process group). The bridge exits after 15 min with
+  nothing running. On SIGTERM it kills its upstreams. `mindflock uninstall`
+  stops it.
+- **Same URL across restarts.** The port and token are chosen once
+  (`endpoint.json`) and reused by every bridge. When the bridge restarts,
+  Claude Code sees its stream drop, re-initializes within about a second and
+  carries on (verified). Windows already open never lose a shared server
+  because of a bridge restart. If that port is taken by something else, the
+  bridge picks a new one, and windows launched earlier lose the shared
+  servers until their next launch.
+
+### What can be shared, and what can't
+
+A shared copy runs with the **MindFlock server's environment** and **your
+home folder as its working directory**, not each session's. So:
+
+- **Good candidates** are servers configured entirely by their own
+  command, args and env, which proxy a remote API: context7,
+  aws-documentation, mcp-proxy-for-aws, shortcut, grafana, github.
+- **Don't share** servers that work on the folder they start in. gitnexus,
+  for example, resolves the repo from its launch directory, and so do
+  filesystem, git and serena servers. **Don't share** servers that keep
+  per-client state either: database connections and transactions (postgres),
+  browser pages, an excalidraw canvas. The Settings row shows a caution for
+  these, based on the command line. It is a hint, and the switch stays yours.
+- **Can't share**: MindFlock's own server (it carries the session's
+  identity), remote http/sse servers (nothing runs per window), and entries
+  whose `${VAR}` has no default and isn't set in the server's environment.
+- **A folder that redefines the server keeps its own.** If the session's
+  folder, its repo root or an ancestor has a local-scope entry
+  (`projects.<path>.mcpServers`) or a `.mcp.json` entry with the same name but
+  a different definition, that session is left alone, because the shared
+  override would replace the folder's own server.
+- Your per-project `/mcp` disables (`disabledMcpServers`) and
+  `deniedMcpServers` still apply to a shared server by name (verified).
+
+### Verified Claude Code behaviour (2.1.299)
+
+Checked with a scratch `HOME`, marker stdio servers that log their own
+launches, and a stub Anthropic API that records the tool list of each request
+(no real credentials involved):
+
+| Question | Result |
+|---|---|
+| Same name in `--mcp-config` and user scope | `--mcp-config` wins, and the user's process is never spawned |
+| … and local scope (`projects.<cwd>.mcpServers`) | `--mcp-config` wins, and other local servers still load |
+| … and an approved `.mcp.json` server | `--mcp-config` wins, and other `.mcp.json` servers still load |
+| An http entry replacing a stdio one | Works. Only the http server connects, and tools keep the `mcp__<name>__*` names |
+| Per-project `disabledMcpServers: [name]` | Also disables the `--mcp-config` entry |
+| `--settings '{"deniedMcpServers":[{"serverName":…}]}'` | Disables a user server for one launch, and also blocks a same-named `--mcp-config` entry |
+| `--settings '{"disabledMcpServers":[…]}'` | No effect (that key is per-project state in `~/.claude.json`, not a setting) |
+| Transports in `--mcp-config` | `stdio`, `http` (streamable, with `headers`), `sse`, `ws`. No unix-socket URLs, so the bridge uses 127.0.0.1 |
+| Client behaviour against the bridge | Sends a `server/discover` probe before `initialize` (answered `-32601`), opens a GET stream, and re-initializes when the server restarts at the same URL |
+
+### Limits
+
+- **Claude only.** Codex and the other CLIs keep their own copies. Codex can
+  take an http server through `-c mcp_servers.<name>.url=…`, but that hasn't
+  been built or verified.
+- **It rides on the MindFlock MCP attach.** Shared entries go into the same
+  `--mcp-config` run file, so with **Give agents the MindFlock MCP** off,
+  nothing is shared.
+- **Auth-profile sessions.** Definitions are read from your main Claude config
+  (`$CLAUDE_CONFIG_DIR/.claude.json`, else `~/.claude.json`). A session pinned
+  to an account whose own config lacks the server gets it anyway.
+- **Takes effect on each session's next launch,** like every attach change.
+- The bridge serves nothing until a launch has published the definitions it
+  may run (`servers.json`, 0600: it holds the servers' env, the same as
+  `~/.claude.json`).
+- POSIX only (Linux, macOS, WSL).
+
 ## Known gaps
 
 - **Resume after a server restart drops the attach, and the launch args.** A

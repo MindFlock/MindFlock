@@ -1200,6 +1200,13 @@ class GeneralSettings:
     and messaging are not gated by it beyond ``readonly``. Unknown values read
     as ``""``.
 
+    ``mcp_shared_servers``: names of the user's own stdio MCP servers (from
+    their Claude config) that run ONCE per machine in the shared-MCP bridge
+    instead of once per agent window (:mod:`backend.providers.mcp_share`).
+    ``[]`` (the default) shares nothing. Per device. MindFlock's own server is
+    never shareable (it carries each session's identity); the
+    ``MINDFLOCK_MCP_SHARE=0`` env var turns sharing off. Read at launch.
+
     ``agent_max_children`` / ``agent_max_spawn_depth`` / ``agent_max_spawned``:
     the spawn guard-rails (``backend.web.core.lineage``) — live sub-sessions
     per orchestrator, how deep spawns may nest, and agent-spawned sessions
@@ -1237,6 +1244,7 @@ class GeneralSettings:
     agent_max_spawn_depth: Optional[int] = None  # None = lineage default (3)
     agent_max_spawned: Optional[int] = None  # None = lineage default (24)
     heavy_slots: Optional[int] = None  # None = by RAM (see docstring)
+    mcp_shared_servers: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -1283,6 +1291,8 @@ class GeneralSettings:
                 d[key] = value
         if self.heavy_slots is not None:
             d["heavy_slots"] = self.heavy_slots
+        if self.mcp_shared_servers:
+            d["mcp_shared_servers"] = list(self.mcp_shared_servers)
         return d
 
     @classmethod
@@ -1317,6 +1327,7 @@ class GeneralSettings:
             agent_max_spawn_depth=_opt_nonneg_int(d.get("agent_max_spawn_depth")),
             agent_max_spawned=_opt_nonneg_int(d.get("agent_max_spawned")),
             heavy_slots=_opt_pos_int(d.get("heavy_slots")),
+            mcp_shared_servers=_mcp_server_names(d.get("mcp_shared_servers")),
         )
 
 
@@ -2040,6 +2051,19 @@ def _str_list(v: Any) -> List[str]:
     else:
         return []
     return [s for s in (str(x).strip() for x in items) if s]
+
+
+_MCP_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def _mcp_server_names(v: Any) -> List[str]:
+    """``general.mcp_shared_servers``: de-duplicated MCP server names, never
+    ``mindflock`` (MindFlock's own server is per-session by design)."""
+    out: List[str] = []
+    for name in _str_list(v):
+        if _MCP_NAME_RE.match(name) and name != "mindflock" and name not in out:
+            out.append(name)
+    return out
 
 
 def _group(d: dict, key: str) -> dict:
