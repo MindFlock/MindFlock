@@ -38,6 +38,7 @@ _REDIRECTS = (
     "MINDFLOCK_THREAD_MARKER_DIR",
     "MINDFLOCK_ASSISTANT_DIR",
     "MINDFLOCK_HOOKS_DIR",
+    "MINDFLOCK_WORKFLOW_FILE",
 )
 
 
@@ -47,6 +48,7 @@ def _resolvers():
     from backend.session import secret_env
     from backend.web.addons import templates
     from backend.web.addons.dbclient import store as dbclient_store
+    from backend.web.addons.workflow import store as workflow_store
     from backend.web.core import (
         autopilot,
         events,
@@ -78,6 +80,7 @@ def _resolvers():
         "window refresh": window_refresh.config_path,
         "activity markers": activity_markers.marker_dir,
         "thread markers": thread_markers.marker_dir,
+        "workflow optimizer": workflow_store.path,
     }
 
 
