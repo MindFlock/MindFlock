@@ -100,9 +100,10 @@ def test_a_stored_agent_rung_reads_as_off():
 
 def test_ticket_fast_track_hint_is_one_sentence_pair():
     src = re.sub(r"\s+", " ", _read(_INTAKE / "TicketsTab.tsx"))
+    # Plain words (round 2): what happens, and why Merge isn't offered here.
     assert (
-        "How far each ticket goes after its agent finishes. Merge is per-ticket only — "
-        "a source default runs with nobody watching." in src
+        "What happens after the agent finishes: commit, push, open a PR. Merge can only "
+        "be picked per ticket, so nothing merges unattended." in src
     )
 
 

@@ -22,13 +22,12 @@ import {
 import "./RepoListField.css";
 
 export const REPO_HELP_ONE =
-  "Required — tickets from this source clone into this repo. Tickets that span " +
-  "repos? Add another and each ticket starts in the one it needs.";
+  "Where this source's tickets are worked on. Work spans repos? Add another and " +
+  "each ticket starts in the one it needs.";
 export const REPO_HELP_MANY =
-  "Each ticket starts in the repo it needs: a ticket label or title word that " +
-  "matches a repo's name or hint decides; otherwise the agent CLI picks from " +
-  "the ticket text, else the first repo. A ticket that needs several starts in " +
-  "one and is told to open a separate PR in each of the others.";
+  "Each ticket starts in the repo whose name or hint matches one of its labels or " +
+  "title words; otherwise the agent reads the ticket and picks. Every ticket row " +
+  "shows where it will go.";
 
 function rowsFor(source: TicketingSource): RepoEntry[] {
   const stored = sourceRepos(source);
@@ -63,7 +62,13 @@ export function RepoListField({
   const missing = cleanRepos(rows).length === 0;
   return (
     <div className="set-row tk-repos" role="group" aria-label="Repositories">
-      <span className="set-label">{many ? "Repos" : "Repo URL"}</span>
+      {/* The same required marker the catalog's fields wear (FieldLabel). */}
+      <span className="set-label">
+        {many ? "Repos" : "Repo URL"}
+        <span className="ik-field-marker required" data-marker="required">
+          *
+        </span>
+      </span>
       {rows.map((r, i) => (
         <div className="tk-repo-row" key={i}>
           <input

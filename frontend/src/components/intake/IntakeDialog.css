@@ -856,8 +856,8 @@
   color: var(--muted);
 }
 .ik-source-pill.connected {
-  color: var(--ok, #3fb950);
-  border-color: var(--ok, #3fb950);
+  color: var(--green);
+  border-color: var(--green);
 }
 .ik-source-pill.needs_attention {
   color: var(--warn, #d29922);
@@ -1024,4 +1024,154 @@
 
 #intake-panel .pr-advanced-body > .set-row > .set-hint {
   line-height: 1.45;
+}
+
+/* ---- Round 2 (fresh-eyes pass) ------------------------------------------- */
+
+/* Anchored to the top, not centred: the panel is content-sized (above), and a
+   centred box that changes height moves its own tab strip under the cursor on
+   every tab switch. Pinned at the top, a taller tab only grows downward. */
+#intake-dialog > #intake-panel {
+  align-self: flex-start;
+  margin-top: min(8vh, 64px);
+}
+
+/* Pause intake: one band above the tabs saying what auto-starts right now,
+   with the one button that stops all of it. Amber while paused — it is the one
+   state where nothing happens on its own, and that should be visible from
+   across the room. */
+.ik-pause {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: none;
+  font-size: 12.5px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 7px 8px 7px 12px;
+}
+.ik-pause.paused {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--gold) 60%, var(--border));
+  background: color-mix(in srgb, var(--gold) 10%, transparent);
+}
+.ik-pause-text {
+  min-width: 0;
+}
+.ik-pause-btn {
+  flex: none;
+}
+
+/* A badge for rows that will NOT start on their own (auto-start off): grey,
+   so the accent stays reserved for "this needs you / this will happen". */
+.ik-tab-count.muted,
+.ik-tab.active .ik-tab-count.muted {
+  color: var(--muted);
+  background: transparent;
+  border-color: var(--border);
+}
+
+/* Where a ticket on a several-repo source will start, and why. Plain text in
+   the meta line, in the text colour so it reads as a fact about the row. */
+.pr-open-meta .ik-item-route {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* The per-start pickers each carry a small label over them now. */
+.ik-item-start .ik-item-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ik-item-start .ik-item-pick-label {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.ik-item-start .ik-item-pick-note {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+/* The row's ⋯ menu: housekeeping (Merge into…) kept off the main column. */
+.ik-row-more {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.ik-row-more-btn {
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 4px;
+  color: var(--muted);
+}
+.ik-row-more-btn.on,
+.ik-row-more-btn:hover {
+  color: var(--text);
+}
+.ik-row-more-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* A source card's save line: "Saving…" / "Saved ✓" / "Not saved". */
+.tk-source .test-row .ik-save-line {
+  font-size: 12px;
+  color: var(--muted);
+  margin-right: auto;
+}
+.tk-source .test-row .ik-save-line.ok {
+  color: var(--green);
+}
+.tk-source .tk-test-row .test-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ik-source-error {
+  text-align: left;
+}
+
+/* Narrow (the 420px phone/side-panel case): the tab strip scrolls rather than
+   wrapping into two lines, and each work row stacks — title over meta over
+   its buttons — instead of squeezing the title into a sliver beside them. */
+@media (max-width: 600px) {
+  #intake-panel {
+    padding: 14px 12px 14px;
+    max-width: 100vw;
+  }
+  #intake-dialog > #intake-panel {
+    margin-top: 8px;
+  }
+  #intake-tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .ik-tab {
+    white-space: nowrap;
+    flex: none;
+  }
+  #intake-panel .pr-open-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  #intake-panel .pr-open-item > .ik-item-start {
+    grid-column: 1;
+    grid-row: auto;
+    align-items: stretch;
+    max-width: none;
+  }
+  #intake-panel .pr-open-chip {
+    white-space: normal;
+  }
+  .ik-pause {
+    flex-wrap: wrap;
+  }
 }

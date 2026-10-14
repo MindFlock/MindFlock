@@ -1,6 +1,6 @@
 /** The sidebar's Pull requests bar — Intake → Pull requests' door and quick
- * switch: its label opens that tab, its switch is the tab's "Automated review"
- * switch. Sits under the Tickets bar. The switch is the github.enabled setting
+ * switch: its label opens that tab, its switch is the tab's "Auto-address
+ * review comments" switch. Sits under the Tickets bar. The switch is the github.enabled setting
  * — the settings addon emits addon.settings.github_toggled on a real change
  * and the ingestion addon reconciles the pipeline process (start / stop /
  * bounce), so flipping it here takes effect on its own, independent of the
@@ -20,7 +20,7 @@ export function PrReviewBar() {
     reposKey: "repos",
     defaultOn: true,
     activeFlag: "pr_active",
-    toggleLabel: "Automated review",
+    toggleLabel: "Auto-address review comments",
   });
   if (!visible) return null;
 
@@ -28,9 +28,8 @@ export function PrReviewBar() {
     <div
       id="pr-review-bar"
       title={
-        `Pull requests — automated review watches your open PRs on ${repos.length} ` +
-        `${repos.length === 1 ? "repository" : "repositories"} and starts a review ` +
-        "session for each."
+        `Pull requests — addresses review comments on your open PRs in ${repos.length} ` +
+        `${repos.length === 1 ? "repository" : "repositories"}.`
       }
     >
       <span
@@ -40,11 +39,11 @@ export function PrReviewBar() {
         className={"dc-dot " + (active ? "on" : !on ? "off" : "idle")}
         title={
           active
-            ? "A pull request is being brought in for review right now (automated or a forced start)"
+            ? "A session is addressing a PR's comments right now"
             : on
               ? starting
-                ? "Switched on — the review pipeline is starting"
-                : "Waiting for an open PR with actionable review comments — turns green while one is being handled"
+                ? "Switched on — starting"
+                : "Waiting for review comments on your PRs — turns green while one is being handled"
               : undefined
         }
       />
@@ -60,7 +59,7 @@ export function PrReviewBar() {
       <span className="dc-actions">
         <label
           className="dc-switch"
-          title="Automated review — the same switch as Intake → Pull requests (your repositories are kept either way)"
+          title="Auto-address review comments — the same switch as Intake → Pull requests (your repositories are kept either way)"
         >
           <input
             type="checkbox"

@@ -87,13 +87,13 @@ def test_skip_list_author_is_flagged_case_insensitively():
     reasons = issue_start.skip_reasons(
         issue, set(), _gh(issue_skip_authors=["dependabot"])
     )
-    assert any("skip list" in r for r in reasons)
+    assert any("ignore list" in r for r in reasons)
 
 
 def test_min_age_grace_is_flagged_with_minutes_left():
     issue = _issue(created_at=datetime.now(timezone.utc) - timedelta(minutes=5))
     reasons = issue_start.skip_reasons(issue, set(), _gh(issue_min_age_minutes=15))
-    assert any("min-age grace" in r for r in reasons)
+    assert any("too new" in r for r in reasons)
 
 
 def test_multiple_reasons_accumulate():
