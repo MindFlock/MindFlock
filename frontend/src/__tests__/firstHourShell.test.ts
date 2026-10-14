@@ -10,6 +10,7 @@ import { paletteCode, rankActions, type PaletteAction } from "../components/pale
 import { browserOrder, browserReserved } from "../components/palette/ShortcutsSheet";
 import { fmtElapsed, manualCommands } from "../components/dialogs/InstallTerminal";
 import { defaultHiddenBars, setCalmBarDefaults } from "../components/sidebar/barDefs";
+import { code } from "./sourceText";
 
 const NOW = Date.parse("2026-10-14T12:00:00Z");
 
@@ -118,6 +119,15 @@ describe("the palette", () => {
     const actions = [act("Keyboard shortcuts"), act("Tour"), act("Open Doctor"), act("Open Setup checklist"), act("Zones…")];
     expect(rankActions(actions, "help").map((a) => a.label)).toEqual(["Keyboard shortcuts", "Tour"]);
     expect(rankActions(actions, "install").map((a) => a.label).sort()).toEqual(["Open Doctor", "Open Setup checklist"]);
+  });
+
+  it("finds Schedule a session… by the words people use for it, phrases too", () => {
+    const sched = act("Schedule a session…", { keywords: "recurring cron every day nightly weekly" });
+    const actions = [act("New session…"), sched, act("Templates…")];
+    for (const q of ["recurring", "cron", "every day", "nightly", "weekly", "Every Day"])
+      expect(rankActions(actions, q)[0]?.label, q).toBe("Schedule a session…");
+    expect(rankActions(actions, "every night").map((a) => a.label)).not.toContain("Schedule a session…");
+    expect(code("components/palette/CommandPalette.tsx")).toContain('keywords: "recurring cron every day nightly weekly"');
   });
 
   it("opens on a short menu plus All commands…, not the whole index", () => {

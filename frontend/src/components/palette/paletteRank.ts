@@ -102,10 +102,12 @@ export function rankActions(
     if (words) {
       // A synonym is a whole-word hit only ("help", not "elp"), after every
       // label substring and before any spread-out label subsequence.
-      const hit = words
-        .toLowerCase()
-        .split(/\s+/)
-        .some((w) => w.startsWith(q.toLowerCase()));
+      // A query with a space ("every day") matches as a phrase.
+      const lw = words.toLowerCase();
+      const lq = q.toLowerCase();
+      const hit = /\s/.test(lq.trim())
+        ? lw.includes(lq.trim())
+        : lw.split(/\s+/).some((w) => w.startsWith(lq));
       if (hit && (s < 0 || s >= 1000)) s = 500;
     }
     if (s >= 0) scored.push({ a, i, s });
