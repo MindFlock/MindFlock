@@ -211,7 +211,8 @@ describe("advanced controls on basic screens are folded", () => {
     ["screens/General.tsx", "general-advanced", /<AdvancedFold id="general-advanced">[\s\S]*window_budget_usd[\s\S]*<ScrollSpeedRow \/>/],
     ["screens/Workspace.tsx", "workspace-advanced", /<AdvancedFold id="workspace-advanced">[\s\S]*live_branch[\s\S]*fasttrack_depth[\s\S]*precommit_retry_hooks/],
     ["screens/Connections.tsx", "connections-advanced", /<AdvancedFold id="connections-advanced" summary="More connections">\s*\{more\.map\(renderGroup\)\}/],
-    ["screens/Connections.tsx", "connections-other-agents", /<AdvancedFold\s+id="connections-other-agents"/],
+    // "Other agents on this computer" is a plain fold on purpose: visible
+    // (closed) in basic mode too — agentJourney.test.ts pins it.
   ];
   for (const [file, id, shape] of folds) {
     it(file + " folds its advanced part", () => {

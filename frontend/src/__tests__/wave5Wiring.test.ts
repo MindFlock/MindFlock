@@ -234,7 +234,7 @@ describe("ssh-friendly-github — the GitHub CLI is optional in every UI surface
     // The welcome tour leads with the token; `gh auth login` is no longer the
     // onboarding's concrete instruction.
     expect(codeFilesWith("gh auth login")).toEqual([]);
-    expect(code("components/setup/SetupChecklist.tsx")).toContain("That token is the whole setup");
+    expect(code("components/setup/SetupChecklist.tsx")).toContain("all MindFlock needs to open and merge PRs");
   });
 });
 

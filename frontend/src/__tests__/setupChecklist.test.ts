@@ -222,6 +222,31 @@ describe("SetupChecklist", () => {
     expect(html).not.toContain("Show QR");
   });
 
+  it("an installed but stopped Tailscale gets the doctor's start command, not 'Install'", () => {
+    setupData.current = status(
+      {},
+      {
+        tailscale: {
+          status: "warn",
+          detail: "Tailscale is installed but isn't answering",
+          fix: "sudo systemctl enable --now tailscaled",
+          docs: "",
+        },
+      }
+    );
+    const html = render();
+    expect(html).toContain('data-phone="fix-tailscale"');
+    expect(html).not.toContain("Install Tailscale");
+    expect(html).toContain("Run: <code>sudo systemctl enable --now tailscaled</code>");
+  });
+
+  it("the Connect GitHub tooltip only promises what the dialog offers", () => {
+    setupData.current = status({ tools: { done: true }, agent_login: { done: true }, repo: { done: true } });
+    const html = render();
+    expect(html).not.toContain("Sign in with GitHub");
+    expect(html).toContain("Paste a GitHub token");
+  });
+
   it("the phone offers the QR when Tailscale is fine, and is always there", () => {
     setupData.current = status({}, { tailscale: { status: "ok", detail: "running", fix: "", docs: "" } });
     const html = render();

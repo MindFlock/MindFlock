@@ -27,6 +27,20 @@ export const FLAG_EXAMPLES: Record<string, string> = {
   aider: "e.g. --no-auto-commits",
 };
 
+/** Flags that let an agent act without asking (each agent's "skip
+ * permissions" chip: claude/agy, codex, aider, opencode). */
+export const SKIP_PERMISSION_FLAGS = [
+  "--dangerously-skip-permissions",
+  "--dangerously-bypass-approvals-and-sandbox",
+  "--yes-always",
+  "--auto",
+];
+
+export function skipsPermissions(flags: string): boolean {
+  const tokens = (flags || "").split(/\s+/);
+  return SKIP_PERMISSION_FLAGS.some((f) => tokens.includes(f));
+}
+
 export function flagsPlaceholder(provider: string): string {
   return FLAG_EXAMPLES[(provider || "").trim().toLowerCase()] || "";
 }
@@ -176,10 +190,12 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
             saveFlags(v);
           }}
         />
-        <span className="set-hint">
-          Added every time the default agent starts. A chip that skips permissions lets the agent
-          edit files and run commands without asking you first.
-        </span>
+        <span className="set-hint">Added every time the default agent starts.</span>
+        {skipsPermissions(flags) && (
+          <span className="set-hint flags-danger" id="default-launch-args-warning" role="note">
+            ⚠ The agent will edit files and run commands without asking you first.
+          </span>
+        )}
       </label>
       <SessionsAtOnce gotoScreen={gotoScreen} />
       <AdvancedFold id="coding-advanced">

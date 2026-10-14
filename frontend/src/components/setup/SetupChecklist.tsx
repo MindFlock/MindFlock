@@ -44,6 +44,7 @@ import {
   orderedSteps,
   stepNumber,
   tailscaleMissing,
+  tailscaleNotInstalled,
 } from "./setupModel";
 import type { SetupStatus, SetupStep } from "../../api/types";
 import "./setup.css";
@@ -329,8 +330,8 @@ export function SetupChecklist() {
               next={github.id === next}
               className="setup-connect-github"
               title={
-                "Sign in with GitHub, use gh, or paste a token. That token is the whole setup for " +
-                "opening and merging PRs — pushing is plain git push over your own remote."
+                "Paste a GitHub token (or sign in with the GitHub CLI if it's installed). That token is " +
+                "all MindFlock needs to open and merge PRs — pushing is plain git push over your own remote."
               }
               onClick={() => openConnectGitHub()}
             >
@@ -424,12 +425,21 @@ function PhoneStep({ status, done }: { status: SetupStatus | null | undefined; d
 
   if (status && tailscaleMissing(status)) {
     const ts = status.tailscale!;
+    // Missing → install it; installed but stopped / signed out → the
+    // doctor's fix starts it (`sudo systemctl enable --now tailscaled` is a
+    // start, not an install).
+    const absent = tailscaleNotInstalled(status);
     return (
-      <div className="setup-phone setup-phone-tailscale" data-phone="install-tailscale">
-        <p className="muted setup-hint">Your phone reaches MindFlock over Tailscale, which isn't on this computer yet.</p>
+      <div className="setup-phone setup-phone-tailscale" data-phone={absent ? "install-tailscale" : "fix-tailscale"}>
+        <p className="muted setup-hint">
+          {absent
+            ? "Your phone reaches MindFlock over Tailscale, which isn't on this computer yet."
+            : "Your phone reaches MindFlock over Tailscale, which is installed but not ready: " + ts.detail}
+        </p>
         {ts.fix && (
           <p className="setup-hint">
-            Install Tailscale: <code>{ts.fix}</code>
+            {absent ? "Install Tailscale: " : "Run: "}
+            <code>{ts.fix}</code>
           </p>
         )}
         {ts.docs && (
