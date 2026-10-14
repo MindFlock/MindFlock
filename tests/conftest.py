@@ -112,6 +112,11 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
         "MINDFLOCK_OPTIMIZER_FILE",
         str(tmp_path / "mindflock" / "usage_optimizer.jsonl"),
     )
+    # The Workflow Optimizer's timeline (``~/.mindflock/workflow_optimizer.jsonl``).
+    monkeypatch.setenv(
+        "MINDFLOCK_WORKFLOW_FILE",
+        str(tmp_path / "mindflock" / "workflow_optimizer.jsonl"),
+    )
     # The ingestion ledger a forced ticket start writes (``<repo root>/
     # state.json``, resolved once at import — in a checkout under the app
     # that is the owner's REAL pipeline ledger): a team run reserves queued

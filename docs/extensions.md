@@ -1104,6 +1104,71 @@ rate, advice — all functions of `(samples, now)`, pinned by
 | `GET /summary?range=24h\|7d\|30d` | `{now, range, period_s, bucket_s, attended_now, overall, providers: [{name, label, mode, window_hours, weekly_hours, score: {score, windows, avg_fill, ceiling, used, basis}, live, weekly, windows, timeline, tokens, split, split_24h, advice}]}`. `basis` is `"estimate"` when any scored window came from the transcript estimate rather than the provider's meter. Never 500s. |
 | `POST /sample` | Record a sample for every watched provider right now (`{ok, written, samples}`). The "Sample now" button and the `optimizer.sample` command. |
 
+### Worked example 3: the Workflow Optimizer
+
+`workflow` (label "Workflow Optimizer", bar **Workflow**, button
+**Bottlenecks**) answers "where does a ticket's time go between starting it
+and the PR?". Same shape as the Usage Optimizer — a `main` dialog and a
+`board` pane on one renderer, a background loop, its own JSONL store, a pure
+analysis — plus the one thing that example doesn't show: an extension that
+**subscribes to the bus** (`ctx.subscribe("*", …)` in `on_startup`, undone
+in `on_shutdown`). Recording is off under pytest.
+
+**Why it records its own timeline.** Nothing else keeps one: bus events live
+in a 100-entry in-memory buffer, and the activity / stage clocks reset on
+restart. The recorder samples the published session rows every 5 s and
+appends a row only when a session's **phase** changes (plus a heartbeat every
+5 minutes, so server downtime is a visible gap — `untracked` — rather than
+the last phase stretched over it). Bus events give it the moments a sample
+would blur: `stage_changed` / `activity_changed` (the second pre-commit
+hooks start), `pr_state_changed` → `MERGED` (no row field says merged — the
+stage just falls back), `session.created` (the ticket id) and
+`session.deleted`. Remote devices' `<device>::<title>` rows are skipped;
+each device records its own.
+
+**Phases** (`recorder.phase_of`, "what is holding the work right now", in
+precedence order): `paused`; `setup` (provisioning, loading, setup commands
+running); `precommit` (stage — the commit's hooks are running); `question`
+(clarify); `limit`; `hook_fix` (stage `interrupt`: a commit failed its hooks
+and is being fixed); `agent` / `rework` (working; `rework` once a PR is
+open); `offline`; `review` (PR open, nothing working); `to_pr` (pushed, no
+PR); `to_push` (committed, not pushed); `your_turn` (the agent's turn ended,
+nothing shipped). `your_turn` carries the attended bit (a keystroke into
+MindFlock in the last 10 minutes) and the analysis splits it into
+`your_turn` (you were there: a review/steer bottleneck) and `away` (idle
+capacity).
+
+**Work items** (`analysis.build_items`). One item is one branch's trip to a
+merged PR: everything recorded for the same `repo@branch` — two windows on
+one branch are one item, and at each moment the busiest window speaks for it
+— up to a merge. A long-lived session that ships PR after PR yields one item
+per PR; after a merge the next item starts at the next real work, never at
+the idle in between. Work on `main` / `master` / `develop` / `trunk` is no
+item (it never becomes a PR). Per item: time to PR (first work → stage `pr`), active
+time to PR (without `away` and `untracked`), time to merge, seconds per phase
+before and after the PR, commits and failed-hook commits, and the phase
+timeline. The report adds the medians / p90, the phase and group shares
+(Agent · You · Tooling · Handoffs · Review · Limits · Idle), a weekly trend,
+and **advice** for the phases worth ≥ 5 % of time to PR (your turn → arm
+autopilot to the PR; questions → front-load the prompt; slow hooks → move
+slow checks to pre-push/CI; failing hooks → put the formatter in the agent's
+instructions; handoffs → autopilot depth "pr"; setup; limits; idle while
+away; agent-dominated → split tickets).
+
+**Files.** `backend/web/addons/workflow/{__init__,recorder,store,analysis}.py`
+(store: `~/.mindflock/workflow_optimizer.jsonl`, mode 0600, append-only,
+100-day compaction, `$MINDFLOCK_WORKFLOW_FILE` redirects it and
+`tests/conftest.py` does so for every test; pinned by
+`tests/unit/test_workflow_addon.py`) and
+`backend/web/static/extensions/workflow/{index,view}.js` + `style.css`.
+
+**Routes** (`APIRouter(prefix="/api/workflow")`):
+
+| Route | Purpose |
+|---|---|
+| `GET /summary?range=7d\|30d\|90d` | `{now, range, period_s, tracking_since, phases, groups, kpi: {items, prs_opened, merged, median_to_pr, p90_to_pr, median_active_to_pr, median_to_merge, in_progress}, basis, to_pr: [{phase, label, group, total_s, share, median_s, p90_s, items}], to_pr_groups, after_pr, advice: [{phase, level, title, detail, at_stake_s, share}], trend: [{start, end, items, median_to_pr}], items}` — items without their timelines. `basis` is `"shipped"` (the PRs opened in the range) or `"all"` when none was. Never 500s. |
+| `GET /item?id=<repo@branch#n>` | One work item with its `timeline: [{ph, start, end}]` (404 when unknown). |
+
 ### A minimal third-party extension
 
 Two files make a working extension: `extension.py` (the manifest and, if you
