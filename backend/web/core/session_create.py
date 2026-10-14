@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from typing import Tuple
+from typing import Optional, Tuple
 
 from fastapi.responses import JSONResponse
 
@@ -24,7 +24,13 @@ from backend.web.core import hidden_sessions as _hidden_sessions
 from backend.web.core import person_sessions as _person_sessions
 from backend.web.core import shared_branch as _shared_branch
 
-__all__ = ["create", "create_result", "free_title", "title_from_prompt"]
+__all__ = [
+    "create",
+    "create_result",
+    "free_title",
+    "memory_refusal",
+    "title_from_prompt",
+]
 
 
 def _server():
@@ -272,6 +278,15 @@ async def create(
             },
             status_code=409,
         )
+    # Memory guard: an agent fanning out workers is how a big job runs the
+    # machine out of memory, so an agent's create waits for headroom. A team
+    # run's own members are held by its planner instead (they stay queued
+    # rather than failing here), and a person's create is never refused: the
+    # memory banner already says what they are walking into.
+    if spawned and not payload.get("run_member"):
+        mem_refusal = await asyncio.to_thread(memory_refusal)
+        if mem_refusal is not None:
+            return JSONResponse(mem_refusal, status_code=409)
     # Split across workers: the agent fans the task out through its own
     # MindFlock tools, so it must GET them (attach on, a CLI that attaches)
     # and must have a task. Workers fork from its commits, so it runs in a
@@ -855,6 +870,24 @@ def _creator(person: str) -> str:
         return _person.person_id()
     except Exception:  # noqa: BLE001
         return ""
+
+
+def memory_refusal() -> Optional[dict]:
+    """The 409 body refusing an agent-spawned create while memory is low, or
+    None. It carries ``memory`` (the reading) so a caller can tell this apart
+    from the other 409s and wait instead of giving up. Blocking (reads
+    /proc) — call it off the event loop."""
+    from backend import memory_pressure as _mem
+
+    snap = _mem.snapshot()
+    if snap.get("level") not in ("low", "critical"):
+        return None
+    return {
+        "error": "%s — new agent-spawned sessions wait until it recovers; "
+        "try again in a few minutes, or finish/close some sessions first"
+        % _mem.describe(snap),
+        "memory": snap,
+    }
 
 
 def _peer_share_payload_error(payload: dict, peer_share: str, program: str) -> str:

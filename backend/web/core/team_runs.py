@@ -695,6 +695,7 @@ def _normalize(d) -> dict:
         "updated_at": _f(d.get("updated_at")),
         "finished_at": _f(d.get("finished_at")),
         "waiting_for_usage": bool(d.get("waiting_for_usage")),
+        "waiting_for_memory": bool(d.get("waiting_for_memory")),
         # (run, task, reason, incarnation) keys already announced — persisted,
         # so a restart never re-announces a standing escalation.
         "announced": [str(k) for k in (d.get("announced") or [])][-500:],
@@ -1798,6 +1799,7 @@ def run_dto(run: dict, live_titles: Optional[Iterable[str]] = None) -> dict:
     out["cost_usd"] = run_cost(run)
     out["rev"] = run["rev"]
     out["waiting_for_usage"] = run["waiting_for_usage"]
+    out["waiting_for_memory"] = run["waiting_for_memory"]
     return out
 
 
@@ -2014,6 +2016,7 @@ def plan_actions(run: dict, obs: dict, now: float) -> List[dict]:
 
         {"boot": bool,                       # the silent reconcile pass
          "limited_providers": [..],
+         "memory_low": bool,                 # hold new starts (memory_pressure)
          "cost": float,                      # sum of member costs
          "tasks": {task_id: {
              "present", "created_at", "pending", "status", "activity",
@@ -2125,6 +2128,11 @@ def _plan_starts(run: dict, obs: dict, now: float, acts: List[dict]) -> List[dic
             # Waiting for usage to come back on this CLI: start nothing new
             # on it (the resume watcher brings the members back by itself).
             if provider and provider in limited:
+                continue
+            # Waiting for memory: another agent now is how a big run tips the
+            # machine into swap and the OOM killer (backend.memory_pressure).
+            # The task stays queued and starts once the reading recovers.
+            if obs.get("memory_low"):
                 continue
         out.append(_act("start", t))
         active += 1

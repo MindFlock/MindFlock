@@ -60,6 +60,8 @@ export interface RunGroup<E extends RailEntry = RailEntry> {
   cancelled: boolean;
   /** A member hit the usage limit, or the server paused the group for it. */
   waitingUsage: boolean;
+  /** Memory is low: no queued line starts until it recovers. */
+  waitingMemory: boolean;
   collapsed: boolean;
   entries: E[];
   /** Lines still waiting for a slot, in the order they will start. */
@@ -153,6 +155,7 @@ export function splitRail<E extends RailEntry>(
       done,
       cancelled: info?.state === "cancelled",
       waitingUsage: limited || info?.pause_reason === "limit" || !!info?.waiting_for_usage,
+      waitingMemory: !!info?.waiting_for_memory,
       collapsed: !!opts.collapsed?.has(id),
       entries: mine,
       queued,
@@ -235,6 +238,7 @@ export function groupTitle(g: RunGroup): string {
           : "paused — nothing new starts and nothing ships"
     );
   else if (g.waitingUsage) bits.push("waiting for usage to come back");
+  else if (g.waitingMemory) bits.push("waiting for memory — queued lines start once it recovers");
   bits.push("Click to fold");
   return bits.join("\n");
 }

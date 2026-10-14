@@ -83,6 +83,8 @@ interface Notif {
   verify?: string;
   /** The row's name when it isn't a session's (a checklist's title). */
   name?: string;
+  /** A template.* row with no session: named "Templates", opens the Templates dialog. */
+  template?: boolean;
 }
 
 /** How long a join request's Approve stays on its bell row (the server's
@@ -114,6 +116,7 @@ export interface NotifRow {
   settings?: SettingsScreen;
   verify?: string;
   name?: string;
+  template?: boolean;
 }
 
 /** A Verify event's checklist: its plan id (what the click opens) and the
@@ -136,6 +139,19 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
       return runNote(env.event, d, runLookups);
     case "session.created":
       return { text: "created", cls: "n-info" };
+    // Template schedules (core.template_schedule): a scheduled run that
+    // couldn't start, or was skipped because the previous one hadn't
+    // finished — both happened with nobody watching. A start is not news (the
+    // new session's own "created" row says it).
+    case "template.run_failed":
+      return {
+        text: String(d.detail || "a scheduled run couldn't start — " + (d.error || "failed")),
+        cls: "n-warn",
+        template: true,
+        rule: "template_run_failed",
+      };
+    case "template.run_skipped":
+      return { text: String(d.detail || "skipped a scheduled run — " + (d.reason || "")), cls: "n-muted" };
     case "session.create_failed":
       // A forced PR review / ticket start that dies during background
       // provisioning (clone, comment fetch) only emits this — without a case
@@ -583,6 +599,9 @@ export function NotificationsBell() {
                         // The checklist itself, in Verify.
                         setOpen(false);
                         useUi.getState().openDialogFor("verify", n.verify);
+                      } else if (n.template && !n.session) {
+                        setOpen(false);
+                        useUi.getState().openDialogFor("templates");
                       } else if (n.run) {
                         // A group's row shows the group where it lives: its
                         // header on the rail (its ⋯ holds the summary, the
@@ -600,6 +619,8 @@ export function NotificationsBell() {
                         ? "Collaborate"
                         : n.settings && !n.session
                         ? "Updates"
+                        : n.template && !n.session
+                        ? "Templates"
                         : n.run && !n.session
                         ? runLookups.name(n.run) || "Team run"
                         : n.verify

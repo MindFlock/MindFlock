@@ -15,16 +15,14 @@ writes, tolerant of a missing/corrupt file — the same pattern as
 session from the New dialog stays with the existing ``POST /api/instances``
 (the frontend posts the template's fields there).
 
-A template may also carry a **fast-track** (``fasttrack``: ``commit`` /
-``push`` / ``pr`` / ``merge``, plus ``ask_first``), so a session started from it
-— by hand or on its schedule — ships itself that far, e.g. a nightly chore that
-ends in a PR. Off is stored as no key at all.
-
 Two ways to start one WITHOUT the dialog — **Run now** (``POST
-/api/templates/{name}/run``) and an optional per-template **schedule**
-(``{"at": "HH:MM", "days": "daily" | "weekdays"}``) — live in
+/api/templates/{name}/run``, also ``mindflock run <name>``) and an optional
+per-template **schedule** (``{"at": "HH:MM", "days": "daily" | "weekdays"}``
+or a cron expression, ``{"cron": "0 21 * * 1-5"}``) — live in
 :mod:`backend.web.core.template_schedule`; both go through the same
 ``core.session_create`` path, so session creation still has one code path.
+A template may also carry ``autopilot`` (``commit`` / ``push`` / ``pr``): how
+far each run's session carries its work on its own.
 """
 
 from __future__ import annotations
@@ -99,15 +97,13 @@ def _clean(body: dict) -> dict:
     sched = _schedule.schedule_or_none(body.get("schedule"))
     if sched:
         out["schedule"] = sched
-    # Fast-track: how far a session started from this template ships itself
-    # (commit / push / pr / merge), plus "ask me before it ships". Same rule
-    # as the schedule — only a template that HAS one carries the keys, so an
-    # older device's template and settings sync see no edit.
-    lane = _schedule.template_lane(body)
-    if lane:
-        out["fasttrack"] = lane
-        if body.get("ask_first") is True:
-            out["ask_first"] = True
+    # Same rule for the autopilot depth: only a template that has one stores it.
+    try:
+        depth = _schedule.normalize_autopilot(body.get("autopilot"))
+    except ValueError:
+        depth = ""
+    if depth:
+        out["autopilot"] = depth
     return out
 
 
@@ -166,6 +162,12 @@ class TemplatesAddon(Addon):
             # schedules fire here or on which other device.
             return JSONResponse({"templates": items, **_schedule.status_for(items)})
 
+        # What a cron field means, as it is typed: its words and next runs
+        # (or why it can't be saved). Read-only.
+        @router.get("/cron-preview")
+        def cron_preview(expr: str = "") -> JSONResponse:
+            return JSONResponse(_schedule.preview(expr))
+
         # Run now: a fresh session from the template, its prompt already
         # sent — the same create path as the New dialog (no may_configure:
         # starting a session isn't configuring anything).
@@ -210,14 +212,12 @@ class TemplatesAddon(Addon):
                         {"error": f"{f} too long (max {_MAX_FIELD} chars)"},
                         status_code=400,
                     )
-            raw_lane = body.get("fasttrack")
-            if raw_lane not in (None, "") and not _schedule.lane_name(raw_lane):
-                return JSONResponse(
-                    {"error": "fasttrack must be one of: off, commit, push, pr, merge"},
-                    status_code=400,
-                )
             try:
                 sched = _schedule.normalize_schedule(body.get("schedule"))
+            except ValueError as err:
+                return JSONResponse({"error": str(err)}, status_code=400)
+            try:
+                _schedule.normalize_autopilot(body.get("autopilot"))
             except ValueError as err:
                 return JSONResponse({"error": str(err)}, status_code=400)
             if sched:

@@ -428,8 +428,25 @@ background job is still running: …*). A pending row draws no job chip.
 **Restart.** The Offline chip calls `POST /api/instances/{title}/revive`
 ([web-api.md](web-api.md)), the same lazy relaunch a terminal attach or a sent
 prompt does: the conversation resumes after a crash, a clean quit starts
-fresh. A click toasts *Restarting <name>…* (or *Couldn't restart <name> —
-<why>*). Rows proxied from another device are read-only and offer no Restart.
+fresh, and an agent that died mid-turn is queued a *continue where you left
+off*. A click toasts *Restarting <name>…* (*… — it will continue where it left
+off…* when it was mid-turn, with the memory reason appended when memory is low;
+or *Couldn't restart <name> — <why>*). Rows proxied from another device are
+read-only and offer no Restart.
+
+**Restart all.** From two Offline rows up, a strip above the list reads *N
+agents offline · ↻ Restart all*: `POST /api/server/revive-all` with exactly
+those titles — two at a time, waiting for memory between launches — and a toast
+of what happened (*Restarted 4 agents — 2 told to continue where they left off;
+1 held back: memory is low*). The toast counts only the rows the strip offered,
+not the paused or already-running sessions the sweep also reports. The button
+is disabled while the sweep runs, and the strip hides below two offline rows.
+
+**Memory notice.** While `GET /api/system/memory` reads low or critical, a card
+in the bottom-right corner gives the numbers (free memory, swap in use, the
+share of the last minute spent stalled) and what MindFlock is holding back
+(agent spawns, team-run lines, restarts). **Hide** lasts until the level worsens
+or clears and returns.
 
 **After a server restart, Offline fixes itself.** Once the server has booted
 (past its 30 s quiet window) it relaunches in the background every session
@@ -777,11 +794,13 @@ What it looks like in the app:
   pause or close a worker like any other session. A row whose parent is gone
   keeps a muted **`↳ agent`** line.
 - **Workers nest under their orchestrator on the rail.** A new worker lands
-  directly below its orchestrator's family, and while it sits there it is
-  indented (from the status dot onwards) with a thin accent connector. The
-  nesting is only drawn: the row numbers, Alt+N, Ctrl+Tab and drag-and-drop
-  keep working on the rail exactly as listed. Drag a worker somewhere else
-  and it stays there, un-indented.
+  directly below its orchestrator's family, indented (from the status dot
+  onwards) with a thin accent connector. The rail always keeps a family
+  together: whatever the saved order says (a duplicated window slotted in
+  under its source, a drag), a worker draws directly under its parent's
+  family, and the row numbers, Alt+N, Ctrl+Tab and drag-and-drop follow that
+  same order. Drag the orchestrator and its workers move with it; drag a
+  worker and it only reorders among its siblings.
 - **Fold a family away.** The orchestrator's roll-up line ends in a small
   **hide**; click it and every session below it (workers, their workers)
   leaves the rail, and it reads **show 3**. The roll-up stays, so a folded
@@ -939,6 +958,19 @@ turns red with **✗** (and the reason in its tooltip) when a run halts, and
 is never hidden while a run is armed — even while the workspace is still
 provisioning. To do *one* step yourself, use the guided button beside it;
 fast-track never takes that slot over.
+
+**When a run stops on something the agent can fix** — a pre-commit step or
+the repo's verification check failed, CI went red on the PR, or the PR
+conflicts with (or is behind) its base — MindFlock also leaves that agent a
+one-line **`[MindFlock note …]`**: what failed, where to look (`pre-commit run
+<hook>`, `.mindflock_check.log`), and to fix it and commit — or, when the
+failure is really a conflict with someone else's change, to stop and tell
+you. It rides the agent-message lane, so it is typed only once the agent is
+idle and never while you are typing in the pane. The halt reason is
+unchanged; the ✗ tooltip and the *fast-track stopped* toast add that the
+agent was told. A team run's members are left to their run, which sends its
+own fix prompt. **Settings → Workspace → Advanced → Tell the agent when
+fast-track stops** turns it off (on by default).
 
 A session that shares its branch with another (a copy session), a team run's
 lead (its team run ships it once) and a one-for-all member (its work merges
@@ -1873,7 +1905,9 @@ on create. **Ctrl/Cmd+Enter** submits the dialog from anywhere in it.
 **Save as template…** opens an inline name row above the footer (Enter saves,
 Esc cancels without closing the dialog; never a `prompt()`) and saves the
 **whole form**: folder, agent, where it works, provisioning, git init, Task and
-fast-track (with *ask me before it ships*) — not Plan first or Auto-split.
+fast-track — stored as the template's autopilot (*Commit*, *Commit + push* or
+*Open a PR*; a template never merges unattended, so *Merge when green* saves as
+*Open a PR*) — not Plan first or Auto-split.
 Saving over a template that has a schedule keeps the schedule. The strip
 appears (or updates) at once — no reopen — and the toast (6 s, clickable)
 says where: *▶ runs it and ⏰ schedules it, in Templates at the top of New.
@@ -1882,7 +1916,8 @@ Click to open Templates.*
 **One Templates list.** The **Templates** strip (*Templates — ▶ runs one now ·
 ⏰ schedules it · its name fills the form*) is on **both pages**: under the
 sentence box on page 1 (not for an Intake batch) and at the top of the form.
-Each template is one pill: its **name** fills the form, fast-track included,
+Each template is one pill: its **name** fills the form, its autopilot as the
+fast-track,
 and opens More options when the template set something there (on page 1 it
 also moves to the form; a template with no task takes the sentence); the Name
 is left empty so the session is named from its task. **▶** starts a new
@@ -1901,38 +1936,48 @@ this device's agents, *Your default agent* first — Folder *— needed to Run n
 or schedule*, Task, **Works in** — the New form's own controls and words:
 **Separate worktree** `recommended` with **Provision the worktree** (and its
 workspace strategy) as a box under it, **This folder directly**, **Create a
-git repo in this folder** — the schedule, and **Fast-track to** *— how far a
-session from it ships itself*: the New form's segmented Off / Commit / Push /
-Open PR / Merge when green, plus *Ask me before it ships*; picking a rung
-moves *This folder directly* to the worktree and the other way round, as in
-New) and **Delete**, which asks on an inline row — *Delete
+git repo in this folder** — the schedule, and **When a run's turn ends**
+(*Leave it for me* / *Commit* / *Commit + push* / *Open a PR*), the template's
+autopilot; picking one moves *This folder directly* to the worktree and the
+other way round, as in New) and **Delete**, which asks on an inline row — *Delete
 “<name>”? It goes from every device.* **Delete** / **Keep** — and checks the
 delete happened (*“<name>” was already gone*). **+ New template** adds one.
 Templates live on the server (`/api/templates`, synced between devices).
 
 **Run now and schedules.** **▶ Run now** (*Run now — starts a new session from
-this template*) starts a fresh session — the template's agent, folder,
-workspace and fast-track — with its Task already sent, titled after the
-template and the date (`rivian-update-oct13`, `-2` for a second run that day,
-so a nightly template's sessions sort together), and focuses it (the dialog
-closes). The palette offers the same as **Run template: <name>**. A template
-with no folder can't start a session on its own: Run now is visibly disabled
-and the card says *Run now and schedules need a folder.* **Add one** (opens
-Edit); the palette leaves it out. **Schedule…** on a card opens the editor
-with **Run on a schedule** already ticked: **Every day** / **Weekdays** **at**
-a time, in this device's zone (*EDT — this device's time*); a scheduled
-template needs a folder and a Task. The card then reads *Weekdays at 21:00 EDT
-· next today 21:00 · last yesterday 21:00 (scheduled) → rivian-update-oct12*
-(*by hand* for a Run now; *starts on <device>* when another device in the group
-runs automation and fires schedules), and *Last run failed: …* when the create
-was refused or its fast-track couldn't be set. A template's fast-track is
-armed on every session it starts, so a nightly chore can end in a PR. A
-schedule fires once per slot, starts counting from when it was saved, and
-after the server was down fires only the most recent missed slot — see
-[web-api.md](web-api.md) (Templates → Schedules). Scheduled templates are also
-listed last on **Intake → Auto-start** (*Scheduled templates*: name · schedule ·
-next run, with **Run now**), since they answer the same "what starts on its
-own?" question as the ticket, PR and issue queues there.
+this template*) starts a fresh session — the template's agent, folder and
+workspace — with its Task already sent, titled after the template and the date
+(`rivian-update-oct13`, `-2` for a second run that day, so a nightly
+template's sessions sort together), and focuses it (the dialog closes). The
+palette offers the same as **Run template: <name>**. A template with no folder
+can't start a session on its own: Run now is visibly disabled and the card
+says *Run now and schedules need a folder.* **Add one** (opens Edit); the
+palette leaves it out. **Schedule…** on a card opens the editor with **Run on
+a schedule** already ticked: **Every day** / **Weekdays** **at** a time, in
+this device's zone (*EDT — this device's time*), or **Custom (cron)**: a
+5-field cron expression (`*/30 * * * *`, `0 21 * * 1-5`, `@weekly`) with the
+server's reading under it as you type (*Every 30 minutes — next today 10:30,
+today 11:00, today 11:30*, or why it can't be saved — nothing more often than
+every 15 minutes). A scheduled template needs a folder and a Task. **When a
+run's turn ends** (*Leave it for me* / *Commit* / *Commit + push* / *Open a
+PR*) arms each Run now and scheduled run with that autopilot depth, so a
+nightly chore can end in a PR. The card then reads *Weekdays at 21:00 EDT ·
+next today 21:00 · last yesterday 21:00 (scheduled) → rivian-update-oct12*
+(*by hand* for a Run now; *starts on <device>* when another device in the
+group runs automation and fires schedules), *Last run failed: …* when the
+create was refused, *Skipped …: the previous run is still working* when a
+scheduled run didn't start because the last one hadn't finished (or is
+waiting on you), and a **Recent runs (n)** fold lists the last 20 starts,
+failures and skips. A scheduled run that fails or is skipped is also a bell
+row (a failure is a default-on push, *A scheduled template run can't
+start*). A schedule fires once per slot, starts counting from when it was
+saved, and after the server was down fires only the most recent missed slot —
+see [web-api.md](web-api.md) (Templates → Schedules). Scheduled templates are
+also listed last on **Intake → Auto-start** (*Scheduled templates*: name ·
+schedule · next run, with **Run now**), since they answer the same "what
+starts on its own?" question as the ticket, PR and issue queues there. From a
+shell, `mindflock run <template>` is Run now and `mindflock templates` lists
+schedules and last runs.
 
 **Browse… → + Folder** creates a folder on disk, inside whatever directory the
 browser is currently showing — the path line directly above the name box — and
@@ -3149,8 +3194,12 @@ A header appears only for a team run of two or more, and **On their own** only
 under at least one header. A split or one-for-all team run never gets one: it is
 a family under its lead, and its lead's Thread tab holds what the header's ⋯
 would — **Start now** / **Take out of run** on a queued piece and, once finished,
-**Copy summary**. Queued lines are dim, with a hollow dot and no
-number. Headers and queued lines are never rail keys: Alt+N numbering skips
+**Copy summary**. While the team run waits, the header shows a badge: *usage*
+for a usage limit, or else *memory* while the [memory
+guard](session-engine.md#memory-guard) holds its queued lines (tooltip *Memory
+is low — queued lines start once it recovers*; the header's tooltip says
+*waiting for memory — queued lines start once it recovers*). Queued lines are
+dim, with a hollow dot and no number. Headers and queued lines are never rail keys: Alt+N numbering skips
 them, and a folded team run's rows leave the numbering like a folded device's.
 
 Every session with fast-track on leads its status line with the target, so a

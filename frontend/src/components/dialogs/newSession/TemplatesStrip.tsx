@@ -63,13 +63,13 @@ export function templateFiller(ctx: TemplateFillCtx) {
     // an ordinary combination.
     setInPlace(!!t.in_place && !t.provisioned);
     setInitRepo(!!t.init_repo);
-    const ft = t.fasttrack;
+    const ft = t.autopilot;
     setLane(ft && LANES.includes(ft as Lane) ? (ft as Lane) : "leave");
-    setAskFirst(!!t.ask_first);
+    setAskFirst(false);
     setActiveTemplate(t.name);
     if (opts.quiet) return;
     // The extras it set live under More options: show them.
-    setAdvancedOpen(!!(t.provisioned || t.init_repo || (ft && ft !== "leave")));
+    setAdvancedOpen(!!(t.provisioned || t.init_repo || ft));
     // The Name is NOT written: a session from a template is named from its
     // task (or the Name you type), so two runs never collide on the
     // template's own name.

@@ -38,6 +38,8 @@ modules under
                      radius, tool feed, declared plans, zone dry-run
     code_outline     Code Map outlines: symbol outlines, the file view, symbol
                      search
+    cronspec         5-field cron expressions for template schedules: parse,
+                     slots (DST-safe), describe
     cursor_windows   IDE window adoption/focus/close (Cursor & friends)
     engine           the Engine singleton: instance registry + state reload
     events           the event bus behind /api/events
@@ -449,6 +451,7 @@ from backend.web.core.autopilot_driver import (
     _autopilot_run_check,
     _autopilot_snapshot,
     _autopilot_step,
+    _autopilot_tell_agent,
     _autopilot_wait,
     _autopilot_written_message,
     _emit_autopilot,
@@ -831,6 +834,7 @@ async def lifespan(app: FastAPI):
     # developer's real state there, and this LAUNCHES agents.
     if _revive_on_start_loop_enabled():
         _register_task(_revive.run_on_start())
+    _register_task(_memory_watch_loop())
     # The Map's snapshot warmer reads every open session's worktree — never
     # under pytest (ENGINE is the developer's real state there).
     if _code_map_warm_on_start_enabled():
@@ -2118,11 +2122,72 @@ async def post_server_revive_all(request: Request) -> JSONResponse:
     relaunch every session whose agent should be running but isn't, two at a
     time, through the same path as ``/api/instances/{title}/revive``. Owner
     only (``auth.may_configure``, 403) — it launches agents. Waits for the
-    sweep and returns ``{"revived": [...], "skipped": {title: reason},
-    "already_running": n, "summary": "revived N, skipped M: ..."}``."""
+    sweep and returns ``{"revived": [...], "continued": [...], "skipped":
+    {title: reason}, "already_running": n, "summary": "revived N, skipped M:
+    ..."}``. Body ``{"titles": [...]}`` (the rail's "Restart all") sweeps
+    just those sessions, including agents the user quit — every row it names
+    showed a Restart chip — which the plain sweep leaves alone."""
     if not await _auth.may_configure(request.scope):
         return _auth.configure_refused()
-    return JSONResponse(await _revive.sweep(trigger="on demand"))
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001 — no body = the plain sweep
+        payload = None
+    only = None
+    if isinstance(payload, dict) and payload.get("titles") is not None:
+        titles = payload.get("titles")
+        if not isinstance(titles, list) or not all(isinstance(t, str) for t in titles):
+            return JSONResponse(
+                {"error": "titles must be a list of session titles"}, status_code=400
+            )
+        only = titles
+    return JSONResponse(await _revive.sweep(trigger="on demand", only=only))
+
+
+@app.get("/api/system/memory")
+def get_system_memory() -> JSONResponse:
+    """The machine's memory headroom (:mod:`backend.memory_pressure`):
+    ``{"level": "ok"|"low"|"critical"|"unknown", "available", "total",
+    "available_pct", "swap_total", "swap_free", "psi", "at", "message"}``.
+    While ``level`` is low or critical, agent-spawned sessions are refused,
+    team runs start no new lines and the revive sweep waits; ``message`` is
+    the one-line reason (empty when ok)."""
+    from backend import memory_pressure as _mem
+
+    snap = _mem.snapshot()
+    snap["message"] = _mem.describe(snap)
+    return JSONResponse(snap)
+
+
+#: How often the memory watch re-reads (backend.memory_pressure caches 2s).
+_MEMORY_WATCH_SECONDS = 10.0
+
+
+async def _memory_watch_loop() -> None:
+    """Log and emit ``system.memory_changed`` when the memory level changes,
+    so a user event hook (``~/.mindflock/hooks/system.memory_changed/``) can
+    page someone before the OOM killer does. The UI polls the route."""
+    from backend import memory_pressure as _mem
+
+    last = "ok"
+    while True:
+        try:
+            snap = await asyncio.to_thread(_mem.snapshot)
+            lvl = str(snap.get("level") or "unknown")
+            if lvl != "unknown" and lvl != last:
+                msg = _mem.describe(snap) or "memory recovered"
+                if log.InfoLog is not None:
+                    log.InfoLog.Printf("memory: %s -> %s (%s)", last, lvl, msg)
+                _events.BUS.emit(
+                    "system.memory_changed",
+                    old=last,
+                    new=lvl,
+                    data={"message": msg, "memory": snap},
+                )
+                last = lvl
+        except Exception:  # noqa: BLE001 — a watch must never die
+            pass
+        await asyncio.sleep(_MEMORY_WATCH_SECONDS)
 
 
 # --------------------------------------------------------------------------- #
@@ -3892,7 +3957,12 @@ async def instance_revive(title: str) -> JSONResponse:
     is relaunched — resuming the conversation after a crash, fresh after a
     clean quit. A paused session is **409** (resume it instead); a workspace
     that is gone, or a shared folder the agent may not launch in, is **409**
-    with the helper's reason. → ``{"title", "revived": true}``."""
+    with the helper's reason.
+
+    An agent that died mid-turn also gets a "continue where you left off" at
+    the front of its prompt queue (:func:`core.revive.relaunch`). A person's
+    Restart is never held for memory, but the answer says when it is low.
+    → ``{"title", "revived": true, "continued": bool, "memory_warning": str}``."""
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
@@ -3900,10 +3970,19 @@ async def instance_revive(title: str) -> JSONResponse:
         return JSONResponse(
             {"error": "session is paused — resume it instead"}, status_code=409
         )
-    _, rerr = await asyncio.to_thread(_ensure_agent_session, inst, title)
+    _, rerr, continued = await asyncio.to_thread(_revive.relaunch, inst, title)
     if rerr is not None:
         return JSONResponse({"error": rerr}, status_code=409)
-    return JSONResponse({"title": title, "revived": True})
+    from backend import memory_pressure as _mem
+
+    return JSONResponse(
+        {
+            "title": title,
+            "revived": True,
+            "continued": bool(continued),
+            "memory_warning": await asyncio.to_thread(_mem.describe),
+        }
+    )
 
 
 # --------------------------------------------------------------------------- #

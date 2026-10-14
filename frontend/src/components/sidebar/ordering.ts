@@ -112,6 +112,45 @@ export function orderWithAfter(order: string[], title: string, after: string): s
   return next;
 }
 
+/** `keys` with every worker pulled up beneath its parent's family.
+ *
+ * A worker is NEVER separated from its parent on the rail: whatever the saved
+ * order says — a duplicated window slotted in under its source, a drag, a row
+ * placed before its family existed — a parent's descendants follow it as one
+ * block, siblings in their saved order. Everything else (roots, windows, a
+ * worker whose parent is absent from `keys`) keeps the saved sequence, with
+ * each family riding along at its parent's slot. A parent cycle is treated as
+ * roots so nothing is lost. Returns `keys` itself when nothing moves. */
+export function keepFamiliesTogether(keys: string[], parentOf: (key: string) => string | undefined): string[] {
+  const present = new Set(keys);
+  const up = (k: string) => {
+    const p = parentOf(k) || "";
+    return p && p !== k && present.has(p) ? p : "";
+  };
+  const kids = new Map<string, string[]>();
+  const roots: string[] = [];
+  for (const k of keys) {
+    const p = up(k);
+    // In a cycle iff walking up comes back to k (bounded by the list size).
+    let q = p;
+    for (let hops = 0; q && q !== k && hops <= keys.length; hops++) q = up(q);
+    if (!p || q === k) roots.push(k);
+    else kids.set(p, [...(kids.get(p) || []), k]);
+  }
+  if (!kids.size) return keys;
+  const out: string[] = [];
+  const done = new Set<string>();
+  const emit = (k: string) => {
+    if (done.has(k)) return;
+    done.add(k);
+    out.push(k);
+    for (const c of kids.get(k) || []) emit(c);
+  };
+  roots.forEach(emit);
+  for (const k of keys) emit(k); // defensive: nothing is ever dropped
+  return out.every((k, i) => k === keys[i]) ? keys : out;
+}
+
 /** How deep the rail draws a family. The MCP refuses spawns past depth 3
  * (MINDFLOCK_MAX_SPAWN_DEPTH), and an adopted subtree answers to the same
  * limit; a deeper chain (the knob raised) simply stops indenting. */
@@ -133,9 +172,10 @@ export interface NestInfo {
  *
  * A row nests only when it DIRECTLY follows its parent or a row already
  * nested under that parent (a sibling, or a sibling's own subtree). Anything
- * else — a window row, an unrelated session, a worker dragged elsewhere —
- * breaks the chain, and the worker renders flat (its status line then names
- * the parent instead).
+ * else breaks the chain, and the worker renders flat (its status line then
+ * names the parent instead). On the rail that only happens across a section
+ * boundary (a run group, a device): `keepFamiliesTogether` already made every
+ * family contiguous before this runs.
  *
  * Deliberately a pure read of the order it is given: it never moves, hides or
  * folds a row. `railOrder` (Alt+N, Ctrl+Tab, the notification "[N]"), the

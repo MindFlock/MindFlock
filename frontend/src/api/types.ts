@@ -1691,6 +1691,8 @@ export interface RunDTO extends RunSummary {
   rev?: number;
   /** A member is at its usage limit: nothing new starts on that CLI. */
   waiting_for_usage?: boolean;
+  /** Memory is low: queued lines wait for headroom before they start. */
+  waiting_for_memory?: boolean;
   /** Phase 3: one-for-all and split groups. */
   split?: boolean;
   /** An auto-split: its lead may decide not to split (the group then
@@ -2037,4 +2039,21 @@ export interface MindflockStatus {
   issues_active?: boolean;
   /** Set while the next ticket waits on engine.max_sessions. */
   held_for_slot?: { live: number; max: number } | null;
+}
+
+/** `GET /api/system/memory` — the machine's memory headroom
+ * (backend/memory_pressure.py). While `level` is low or critical, agent-
+ * spawned sessions are refused, team runs start no new lines and the revive
+ * sweep waits. `unknown`: nothing to read (non-Linux) — never gates. */
+export interface MemoryReading {
+  level: "ok" | "low" | "critical" | "unknown";
+  available?: number;
+  total?: number;
+  available_pct?: number;
+  swap_total?: number;
+  swap_free?: number;
+  psi?: { some_avg10?: number; some_avg60?: number; full_avg10?: number; full_avg60?: number } | null;
+  at?: number;
+  /** One-line reason ("memory is low: 2.1 GB free of 24.0 GB (9%)"); "" when ok. */
+  message?: string;
 }

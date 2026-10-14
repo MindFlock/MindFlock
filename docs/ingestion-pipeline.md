@@ -500,6 +500,14 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
      rather than raised — so the launch never fails the invoke (this covers
      the story runner, PR runner, and IDE launch alike) and the session is
      always reachable over tmux even when no GUI tab opens.
+   - **Memory hold.** Before each launch (stories and PR reviews alike)
+     `SessionRunner` checks the [memory guard](session-engine.md#memory-guard).
+     While it reads low or critical the launch waits: it re-reads every 15 s,
+     logs `Holding ticket <slug>: … — it starts once memory recovers` (or
+     `Holding PR #<n>: …`) every 5 minutes, and after 30 minutes launches anyway with a warning, so a
+     misreading delays the queue but never stalls it. This is not the
+     [cache refreshers](#cache-refreshers)' PSI ≥ 10 % skip: that is a
+     different, lower threshold on a background job, not on a launch.
 8. **Record** — the story id, branch, and status land in `state.json`.
 9. **Move it on the board** (optional, per source) — when the source sets
    `start_state`, the ticket is moved into that state right after the session is

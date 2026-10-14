@@ -1,0 +1,66 @@
+/* --------------------------------------------------------------------------- *
+ * Memory-pressure notice. Bottom-right, the corner ConnBanner uses (both are
+ * the machine's status, not the grid's). The two never show together: a
+ * server that doesn't answer has no reading, and the notice hides on error.
+ * --------------------------------------------------------------------------- */
+#memory-notice {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 3990;
+  width: 330px;
+  max-width: calc(100vw - 32px);
+  padding: 11px 14px 10px;
+  text-align: left;
+  font-size: 12.5px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--yellow, #d6a53c);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+#memory-notice.critical {
+  border-left-color: var(--red);
+}
+
+#memory-notice .mn-head {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--yellow, #d6a53c);
+}
+
+#memory-notice.critical .mn-head {
+  color: var(--red);
+}
+
+#memory-notice .mn-detail {
+  margin-top: 4px;
+  line-height: 1.45;
+}
+
+#memory-notice .mn-what {
+  color: var(--muted);
+}
+
+#memory-notice .mn-foot {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+#memory-notice .mn-btn {
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#memory-notice .mn-btn:hover {
+  border-color: var(--accent);
+}

@@ -114,7 +114,7 @@ describe("Save as template… saves the whole form", () => {
     lane: "pr",
     askFirst: true,
   };
-  it("folder, agent, works in, task and fast-track", () => {
+  it("folder, agent, works in, task and its autopilot depth", () => {
     expect(templateFromForm(form, [])).toEqual({
       name: "nightly",
       program: "claude",
@@ -124,13 +124,13 @@ describe("Save as template… saves the whole form", () => {
       in_place: false,
       workspace_strategy: "worktree",
       init_repo: false,
-      fasttrack: "pr",
-      ask_first: true,
+      autopilot: "pr",
     });
   });
-  it("fast-track off stores no key; a fast-track never runs in place", () => {
+  it("fast-track off stores no key; a fast-track never runs in place; merge saves as pr", () => {
     const off = templateFromForm({ ...form, lane: "leave", inPlace: true }, []);
-    expect(off).not.toHaveProperty("fasttrack");
+    expect(off).not.toHaveProperty("autopilot");
+    expect(templateFromForm({ ...form, lane: "merge" }, []).autopilot).toBe("pr");
     expect(off.in_place).toBe(true);
     expect(templateFromForm({ ...form, inPlace: true }, []).in_place).toBe(false);
   });

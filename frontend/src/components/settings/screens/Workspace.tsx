@@ -229,7 +229,42 @@ export function Workspace({ gotoScreen }: ScreenProps) {
             skipped. Test and secret-scanning hooks are refused here.
           </LearnMore>
         </label>
+        <FailureNotesRow />
       </AdvancedFold>
     </>
+  );
+}
+
+/** When fast-track stops on something the agent can fix (a pre-commit step or
+ * the check failed, red CI, a conflicting PR), MindFlock types a short note
+ * into that agent saying what failed (backend/web/core/autopilot_driver.py
+ * `_autopilot_tell_agent`). Unset reads as on. */
+function FailureNotesRow() {
+  const s = useSettings();
+  const on = s.get("repository", "fasttrack_failure_notes") !== false;
+  return (
+    <div className="set-row set-switch-row" id="workspace-failure-notes">
+      <span className="notif-rule-text">
+        <span className="set-label">Tell the agent when fast-track stops</span>
+        <span className="set-hint notif-rule-desc">
+          When a pre-commit step or the verification check fails, CI goes red or the PR
+          conflicts with its base, fast-track stops and leaves the agent a one-line note: what
+          failed and to fix it — or, when it is a conflict with someone else's change, to stop
+          and tell you. You still get the usual &quot;fast-track stopped&quot; notice.
+        </span>
+      </span>
+      {/* label wraps only the switch, so clicking the row text doesn't flip it */}
+      <label className="ca-switch">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) => {
+            s.saveField("repository", "fasttrack_failure_notes", e.target.checked);
+            toast(e.target.checked ? "Fast-track will tell the agent what failed" : "Fast-track failure notes off");
+          }}
+        />
+        <span className="ca-slider" />
+      </label>
+    </div>
   );
 }

@@ -440,6 +440,22 @@ def _build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", dest="as_json", help="raw JSON for scripting"
     )
 
+    run_p = sub.add_parser(
+        "run",
+        parents=[server_opts],
+        help="start a fresh session from a template now, its prompt already sent",
+    )
+    run_p.add_argument("template", metavar="TEMPLATE", help="template name (any case)")
+
+    tpls = sub.add_parser(
+        "templates",
+        parents=[server_opts],
+        help="list templates with their schedules and last runs",
+    )
+    tpls.add_argument(
+        "--json", action="store_true", dest="as_json", help="raw JSON for scripting"
+    )
+
     peer = sub.add_parser(
         "peer",
         parents=[server_opts],
@@ -1438,6 +1454,64 @@ def _cmd_msg(args: argparse.Namespace) -> int:
     print("sent %s to %s (%s)" % (message.get("id") or "message", title, outcome))
     if result.get("detail"):
         print("  note: %s" % result["detail"], file=sys.stderr)
+    return 0
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    """POST /api/templates/{name}/run — the template's Run now, from a shell
+    (or the system's own cron, or a Slack bot)."""
+    base = client.discover(args.host, args.port)
+    name = str(args.template or "").strip()
+    made = client.post(base, "/api/templates/%s/run" % _quote_title(name), {})
+    made = made if isinstance(made, dict) else {}
+    print("started %s from template %s" % (made.get("title") or "a session", name))
+    return 0
+
+
+def _fmt_when(epoch) -> str:
+    try:
+        return time.strftime("%a %b %d %H:%M", time.localtime(float(epoch)))
+    except (TypeError, ValueError):
+        return ""
+
+
+def _cmd_templates(args: argparse.Namespace) -> int:
+    base = client.discover(args.host, args.port)
+    data = client.get(base, "/api/templates") or {}
+    data = data if isinstance(data, dict) else {}
+    if args.as_json:
+        print(json.dumps(data, indent=2))
+        return 0
+    items = [t for t in data.get("templates") or [] if isinstance(t, dict)]
+    if not items:
+        print("no templates — save one from the New dialog (Templates → Manage…)")
+        return 0
+    runs = data.get("runs") if isinstance(data.get("runs"), dict) else {}
+    rows = []
+    for t in items:
+        name = str(t.get("name", ""))
+        info = runs.get(name.strip().lower()) or {}
+        last = _fmt_when(info.get("last_at"))
+        if last and info.get("last_session"):
+            last += " → " + str(info["last_session"])
+        if info.get("last_skip"):
+            last = "skipped: " + str(info["last_skip"])
+        elif info.get("last_error"):
+            last = "failed: " + str(info["last_error"])
+        rows.append(
+            [
+                name,
+                str(info.get("schedule_label") or ""),
+                _fmt_when(info.get("next_at")),
+                str(t.get("autopilot") or ""),
+                last,
+            ]
+        )
+    print(
+        _render_table(rows, ["TEMPLATE", "SCHEDULE", "NEXT", "AUTOPILOT", "LAST RUN"])
+    )
+    if data.get("runs_here") is False and data.get("runs_on"):
+        print("schedules fire on %s (the automation device)" % data["runs_on"])
     return 0
 
 
@@ -3027,6 +3101,8 @@ _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "events": _cmd_events,
     "msg": _cmd_msg,
     "inbox": _cmd_inbox,
+    "run": _cmd_run,
+    "templates": _cmd_templates,
     "peer": _cmd_peer,
     "devices": _cmd_devices,
     "join": _cmd_join,
@@ -3045,7 +3121,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     """Parse ``argv`` and dispatch to the matching subcommand; return the exit code.
 
     ``doctor``, ``mcp`` and the J1 session commands
-    (new/ls/attach/close/delete/rm/pause/resume/open/events/msg/inbox) run in-process; any other invocation — including no subcommand at all — falls
+    (new/ls/attach/close/delete/rm/pause/resume/open/events/msg/inbox/run/
+    templates) run in-process; any other invocation — including no subcommand at all — falls
     through to ``serve``. A session command that can't reach a server turns the
     :class:`client.ServerNotFound` / :class:`client.ClientError` into a one-line
     stderr message and exit 1, never a traceback.

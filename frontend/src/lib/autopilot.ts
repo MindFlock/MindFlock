@@ -107,7 +107,8 @@ export function laneLabel(value: string | null | undefined): string {
 export function autopilotChipTitle(run: AutopilotRun): string {
   const target = laneLabel(run.depth);
   if (run.state === "halted")
-    return "Fast-track stopped: " + (run.reason || "unknown reason");
+    // A halt's `note` is set only when the agent was sent a fix-it note.
+    return "Fast-track stopped: " + (run.reason || "unknown reason") + (run.note ? "\n" + run.note : "");
   if (run.state === "done")
     return "Fast-track finished at " + target + " and switched itself off.";
   // Prefer the server's own sentence for what this pass is waiting on — it knows

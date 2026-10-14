@@ -50,6 +50,13 @@ someone chose); every row carries `lane: {target, ask_first, owner, by}` —
 `by` is who chose it (`user`, or `agent:<title>` for an agent's
 `set_autopilot`).
 
+When a run stops on something the agent can fix, the stop's detail carries
+`fix` (`precommit`, `check`, `ci` or `conflict`), and before halting the
+driver posts the agent a one-line mailbox note (`kind: "note"`) saying what
+failed and where to look (`repository.fasttrack_failure_notes`, on by
+default). A team run's members never get one: their run sends its own fix
+prompt (below), so they are not told twice.
+
 **Nothing ships beyond what you chose for that session or team run:**
 
 - A session with fast-track on gets its own worktree (the New dialog never
@@ -221,6 +228,11 @@ updates.
 - **Usage limits.** While a member is limited, the team run starts nothing new on
   that CLI (`waiting_for_usage`); the stuck clock stops. The existing resume
   watcher brings members back.
+- **Memory.** While the [memory guard](session-engine.md#memory-guard) reads
+  low or critical, the team run starts no queued task (one marked `start_now`
+  still starts) and sets `waiting_for_memory` (persisted, in the run DTO), which
+  shows a *memory* badge on its rail header. Tasks stay queued and start once
+  the reading recovers. The run's own members are exempt from the spawn 409.
 - **Budget.** When the members' summed cost reaches `budget_usd` the team run
   pauses and asks once ("Raise to $N" = resume with a new budget).
   Per-session budgets still hold Fast-track as before.

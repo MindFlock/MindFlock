@@ -952,7 +952,9 @@ export function templateFromForm(
     in_place: f.inPlace && !f.provision && !lane,
     workspace_strategy: f.strategy === "clone" ? "clone" : "worktree",
     init_repo: f.initRepo,
-    ...(lane ? { fasttrack: lane, ...(f.askFirst ? { ask_first: true } : {}) } : {}),
+    // A template carries its run as far as an autopilot depth (commit / push
+    // / pr): it never merges unattended, so the New form's "merge" saves as "pr".
+    ...(lane ? { autopilot: lane === "merge" ? "pr" : lane } : {}),
     ...(prior?.schedule ? { schedule: prior.schedule } : {}),
   };
 }

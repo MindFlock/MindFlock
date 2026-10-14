@@ -317,50 +317,19 @@ def test_loop_is_off_under_pytest():
 
 
 # --------------------------------------------------------------------------- #
-# Fast-track on a template
+# Autopilot on a template: its run never shares a checkout
 # --------------------------------------------------------------------------- #
-def test_fasttrack_round_trips_only_when_set(stores, fake_create):
-    r = client.post("/api/templates", json=tpl("ships", fasttrack="pr", ask_first=True))
-    assert r.status_code == 200
-    saved = r.json()["template"]
-    assert saved["fasttrack"] == "pr" and saved["ask_first"] is True
-    # Off is no key at all (older devices and settings sync see no edit).
-    for off in ("off", "leave", "", None):
-        got = client.post("/api/templates", json=tpl("quiet", fasttrack=off))
-        assert got.status_code == 200, off
-        assert "fasttrack" not in got.json()["template"]
-        assert "ask_first" not in got.json()["template"]
-    bad = client.post("/api/templates", json=tpl("bad", fasttrack="yolo"))
-    assert bad.status_code == 400 and "fasttrack" in bad.json()["error"]
-
-
-def test_a_fasttrack_template_arms_its_session(stores, fake_create):
-    armed = []
-
-    def arm(title, lane, ask_first):
-        armed.append((title, lane, ask_first))
-
-    t = tpl(schedule=None, in_place=True, fasttrack="pr", ask_first=True)
-    status, body = asyncio.run(
-        ts.fire(t, "schedule", now=at(2026, 10, 13, 21, 0), arm=arm)
+def test_an_autopilot_template_never_runs_in_place(stores, fake_create, monkeypatch):
+    monkeypatch.setattr(ts, "_arm_autopilot", lambda title, depth: depth)
+    status, _ = asyncio.run(
+        ts.fire(tpl(schedule=None, in_place=True, autopilot="pr"), "manual")
     )
     assert status == 202
-    assert armed == [(body["title"], "pr", True)]
     # It commits for THIS session, so never in a checkout others share.
     assert "in_place" not in fake_create[0]
-    # Without one nothing is armed and in_place is kept.
-    asyncio.run(ts.fire(tpl("plain", schedule=None, in_place=True), "manual", arm=arm))
-    assert len(armed) == 1 and fake_create[1]["in_place"] is True
-
-
-def test_a_failed_arm_is_recorded_but_the_run_stands(stores, fake_create):
-    def arm(title, lane, ask_first):
-        raise RuntimeError("workspace gone")
-
-    status, _ = asyncio.run(ts.fire(tpl(fasttrack="commit"), "manual", arm=arm))
-    assert status == 202
-    rec = ts.load_runs()["nightly"]
-    assert rec["last_session"] and "fast-track" in rec["last_error"]
+    # Without one in_place is kept.
+    asyncio.run(ts.fire(tpl("plain", schedule=None, in_place=True), "manual"))
+    assert fake_create[1]["in_place"] is True
 
 
 def test_status_names_the_time_zone(ny_tz, stores, fake_create):
@@ -372,3 +341,293 @@ def test_status_names_the_time_zone(ny_tz, stores, fake_create):
     assert st["tz"] == "EDT"
     st = ts.status_for(templates.list_templates(), now=at(2026, 12, 1, 12, 0))
     assert st["runs"]["nightly"]["tz"] == "EST"
+
+
+# --------------------------------------------------------------------------- #
+# Cron schedules
+# --------------------------------------------------------------------------- #
+CRON_30 = {"cron": "*/30 * * * *"}
+
+
+def test_normalize_cron_schedule():
+    assert ts.normalize_schedule({"cron": " 0  21 * * 1-5 "}) == {
+        "cron": "0 21 * * 1-5"
+    }
+    assert ts.normalize_schedule({"cron": "@daily"}) == {"cron": "@daily"}
+    with pytest.raises(ValueError, match="5 fields"):
+        ts.normalize_schedule({"cron": "0 21 * *"})
+    with pytest.raises(ValueError, match="every 15 minutes"):
+        ts.normalize_schedule({"cron": "*/5 * * * *"})
+    assert ts.schedule_or_none({"cron": "nope"}) is None
+    assert ts.describe({"cron": "0 21 * * 1-5"}) == "Weekdays at 21:00"
+    assert ts.describe(DAILY_21) == "Every day at 21:00"
+
+
+def test_cron_fires_each_slot_once(ny_tz):
+    fired = _fires_over(at(2026, 10, 14, 9, 5), 2, CRON_30, step_min=5)
+    assert fired == [
+        "2026-10-14T09:30",
+        "2026-10-14T10:00",
+        "2026-10-14T10:30",
+        "2026-10-14T11:00",
+    ]
+
+
+def test_cron_downtime_backfills_at_most_one_run(ny_tz):
+    start = at(2026, 10, 14, 9, 0)
+    runs = {"t": {"sig": ts.signature(CRON_30), "armed_at": start}}
+    fire, runs = ts.plan_tick(at(2026, 10, 14, 13, 40), [tpl("t", CRON_30)], runs, True)
+    assert [slot for _t, slot in fire] == ["2026-10-14T13:30"]
+
+
+def test_a_legacy_slot_never_refires_after_upgrade(ny_tz):
+    # A record written by the {at, days} code (slot = a date) still reads as
+    # spent for that schedule.
+    runs = {"nightly": {"sig": "21:00/daily", "armed_at": 0, "last_slot": "2026-10-13"}}
+    fire, _ = ts.plan_tick(at(2026, 10, 13, 22, 0), [tpl()], runs, True)
+    assert fire == []
+
+
+def test_switching_to_cron_rearms(ny_tz):
+    runs = {"nightly": {"sig": "21:00/daily", "armed_at": 0, "last_slot": "2026-10-13"}}
+    now = at(2026, 10, 13, 22, 10)
+    fire, runs = ts.plan_tick(now, [tpl(schedule=CRON_30)], runs, True)
+    assert fire == [] and runs["nightly"]["sig"] == "cron:*/30 * * * *"
+    fire, _ = ts.plan_tick(now + 25 * 60, [tpl(schedule=CRON_30)], runs, True)
+    assert [slot for _t, slot in fire] == ["2026-10-13T22:30"]
+
+
+def test_many_a_day_titles_carry_the_time(ny_tz, stores, fake_create):
+    from backend.web.addons import templates
+
+    templates.save_template(tpl("Deploy watch", schedule={"cron": "0 */2 * * *"}))
+    asyncio.run(ts.tick(now=at(2026, 10, 13, 9, 0), here=True))  # arm
+    assert asyncio.run(ts.tick(now=at(2026, 10, 13, 10, 0, 20), here=True)) == [
+        "Deploy watch"
+    ]
+    assert fake_create[0]["title"] == "deploy-watch-oct13-1000"
+    # Run now keeps the plain date title
+    status, body = asyncio.run(ts.run_template("deploy watch"))
+    assert status == 202 and body["title"] == ts.session_title(
+        "Deploy watch", time.time()
+    )
+
+
+def test_a_closed_runs_branch_is_not_reused(ny_tz, stores, fake_create, monkeypatch):
+    seen = []
+
+    def branch_taken(t, title):
+        seen.append(title)
+        return title in ("nightly-oct13", "nightly-oct13-2")
+
+    monkeypatch.setattr(ts, "_branch_taken", branch_taken)
+    status, body = asyncio.run(ts.fire(tpl(), "manual", now=at(2026, 10, 13, 21, 0)))
+    assert status == 202 and body["title"] == "nightly-oct13-3"
+    assert seen[:3] == ["nightly-oct13", "nightly-oct13-2", "nightly-oct13-3"]
+
+
+def test_branch_taken_reads_the_repo(tmp_path, monkeypatch):
+    import subprocess
+
+    from backend.web import server
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "x",
+        ],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(repo), "branch", "mf/nightly-oct13"], check=True)
+    monkeypatch.setattr(server, "_session_branch_name", lambda t: "mf/" + t)
+    t = tpl(repo_path=str(repo))
+    assert ts._branch_taken(t, "nightly-oct13") is True
+    assert ts._branch_taken(t, "nightly-oct14") is False
+    # in-place and provisioned sessions don't make a branch from the title
+    assert ts._branch_taken({**t, "in_place": True}, "nightly-oct13") is False
+    assert ts._branch_taken({**t, "provisioned": True}, "nightly-oct13") is False
+
+
+# --------------------------------------------------------------------------- #
+# Overlap guard, history, autopilot
+# --------------------------------------------------------------------------- #
+def test_a_busy_previous_run_skips_the_slot(ny_tz, stores, fake_create, monkeypatch):
+    from backend.web.addons import templates
+
+    events = []
+    monkeypatch.setattr(ts, "_emit", lambda ev, tpl, trig, **d: events.append((ev, d)))
+    templates.save_template(tpl())
+    asyncio.run(ts.tick(now=at(2026, 10, 12, 12, 0), here=True))  # arm
+    assert asyncio.run(ts.tick(now=at(2026, 10, 12, 21, 0, 10), here=True)) == [
+        "nightly"
+    ]
+
+    monkeypatch.setattr(
+        ts, "_session_activity", lambda t: "working" if t == "nightly-oct12" else ""
+    )
+    assert asyncio.run(ts.tick(now=at(2026, 10, 13, 21, 0, 10), here=True)) == []
+    assert len(fake_create) == 1
+    rec = ts.load_runs()["nightly"]
+    assert rec["last_slot"] == "2026-10-13"  # spent: never retried late
+    assert rec["history"][0]["skipped"] == "the previous run is still working"
+    assert events[-1][0] == "template.run_skipped"
+    row = ts.status_for(templates.list_templates(), now=at(2026, 10, 13, 21, 5))[
+        "runs"
+    ]["nightly"]
+    assert row["last_skip"] == "the previous run is still working"
+    assert [h.get("session") for h in row["history"]] == [
+        "nightly-oct12",
+        "nightly-oct12",
+    ]
+
+    # Run now is never held back
+    status, _ = asyncio.run(ts.run_template("nightly"))
+    assert status == 202 and len(fake_create) == 2
+
+    # idle (or gone) lets the next slot through
+    monkeypatch.setattr(ts, "_session_activity", lambda t: "idle")
+    assert asyncio.run(ts.tick(now=at(2026, 10, 14, 21, 0, 10), here=True)) == [
+        "nightly"
+    ]
+
+
+def test_busy_reason_reads_activity(monkeypatch):
+    for act, words in (
+        ("working", "working"),
+        ("clarify", "question"),
+        ("limit", "usage limit"),
+    ):
+        monkeypatch.setattr(ts, "_session_activity", lambda t, a=act: a)
+        assert words in ts.busy_reason("x")
+    for act in ("idle", "offline", "unknown", ""):
+        monkeypatch.setattr(ts, "_session_activity", lambda t, a=act: a)
+        assert ts.busy_reason("x") == ""
+    assert ts.busy_reason("") == ""
+
+
+def test_history_is_capped_newest_first(stores):
+    for i in range(ts.HISTORY_MAX + 5):
+        ts.record_run("k", {"at": i, "trigger": "manual", "session": "s%d" % i})
+    hist = ts.load_runs()["k"]["history"]
+    assert len(hist) == ts.HISTORY_MAX and hist[0]["session"] == "s%d" % (
+        ts.HISTORY_MAX + 4
+    )
+
+
+def test_autopilot_is_armed_after_the_create(stores, fake_create, monkeypatch):
+    armed = []
+    monkeypatch.setattr(
+        ts, "_arm_autopilot", lambda title, depth: armed.append((title, depth)) or depth
+    )
+    status, body = asyncio.run(
+        ts.fire(tpl(autopilot="pr"), "manual", now=at(2026, 10, 13, 21, 0))
+    )
+    assert status == 202 and armed == [(body["title"], "pr")]
+    assert "autopilot" not in fake_create[0]  # not a create field
+    assert ts.load_runs()["nightly"]["history"][0]["autopilot"] == "pr"
+
+    async def refuse(payload):
+        return 400, {"error": "nope"}
+
+    asyncio.run(ts.fire(tpl(autopilot="pr"), "manual", create=refuse))
+    assert len(armed) == 1  # a failed create arms nothing
+
+
+def test_arm_autopilot_uses_the_lane(monkeypatch):
+    from backend.web.core import lanes
+
+    calls = []
+    monkeypatch.setattr(
+        lanes, "arm_session", lambda title, lane, **kw: calls.append((title, lane, kw))
+    )
+    assert ts._arm_autopilot("s1", "push") == "push"
+    assert calls[0][:2] == ("s1", "push") and calls[0][2]["require_workspace"] is False
+
+    def boom(*a, **k):
+        raise lanes.LaneError("bad")
+
+    monkeypatch.setattr(lanes, "arm_session", boom)
+    assert ts._arm_autopilot("s1", "push") == ""
+
+
+def test_normalize_autopilot():
+    assert ts.normalize_autopilot(None) == ""
+    assert ts.normalize_autopilot("off") == ""
+    assert ts.normalize_autopilot(" PR ") == "pr"
+    with pytest.raises(ValueError):
+        ts.normalize_autopilot("merge")
+
+
+def test_a_scheduled_failure_is_announced(stores, fake_create, monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        ts, "_emit", lambda ev, tpl, trig, **d: events.append((ev, trig, d))
+    )
+    asyncio.run(ts.fire({"name": "loose", "prompt": "p"}, "schedule"))
+    assert len(events) == 1
+    ev, trig, data = events[0]
+    assert (ev, trig, data["error"]) == (
+        "template.run_failed",
+        "schedule",
+        ts.run_problem({}),
+    )
+    assert data["detail"].startswith("Scheduled run of “loose” couldn't start")
+    assert ts.load_runs()["loose"]["history"][0]["error"]
+
+    async def refuse(payload):
+        return 400, {"error": "nope"}
+
+    # Run now's failure is the clicker's toast, not a bell row / push
+    asyncio.run(ts.fire(tpl(), "manual", create=refuse))
+    assert len(events) == 1
+    assert ts.load_runs()["nightly"]["last_error"] == "nope"
+
+
+# --------------------------------------------------------------------------- #
+# Routes: cron + autopilot
+# --------------------------------------------------------------------------- #
+def test_cron_and_autopilot_round_trip(stores, fake_create):
+    r = client.post(
+        "/api/templates",
+        json=tpl(schedule={"cron": "0 21 * * mon-fri"}, autopilot="push"),
+    )
+    assert r.status_code == 200, r.text
+    saved = r.json()["template"]
+    assert (
+        saved["schedule"] == {"cron": "0 21 * * mon-fri"}
+        and saved["autopilot"] == "push"
+    )
+    row = client.get("/api/templates").json()["runs"]["nightly"]
+    assert row["schedule_label"] == "Weekdays at 21:00"
+    plain = client.post("/api/templates", json=tpl("plain", schedule=None)).json()[
+        "template"
+    ]
+    assert "autopilot" not in plain
+
+    bad = client.post("/api/templates", json=tpl(schedule={"cron": "* * * * *"}))
+    assert bad.status_code == 400 and "15 minutes" in bad.json()["error"]
+    bad = client.post("/api/templates", json=tpl(autopilot="merge"))
+    assert bad.status_code == 400 and "autopilot" in bad.json()["error"]
+
+
+def test_cron_preview_route():
+    r = client.get(
+        "/api/templates/cron-preview", params={"expr": "*/30 * * * *"}
+    ).json()
+    assert r["ok"] and r["label"] == "Every 30 minutes" and len(r["next"]) == 3
+    assert r["next"][1] - r["next"][0] == 1800
+    r = client.get("/api/templates/cron-preview", params={"expr": "61 * * * *"}).json()
+    assert r == {"ok": False, "error": "minute: 61 is outside 0-59"}

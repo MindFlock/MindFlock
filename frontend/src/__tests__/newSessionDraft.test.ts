@@ -192,10 +192,12 @@ describe("one vocabulary and one set of controls, New and Templates", () => {
     expect(TEMPLATES_DIALOG).not.toContain("Create a git repo in the folder");
   });
 
-  it("and the same Fast-track control", () => {
-    expect(TEMPLATES_DIALOG).toContain('<FastTrackChoice\n          id="tpl-fasttrack"');
-    expect(TEMPLATES_DIALOG).not.toContain('"Off — leave the changes for you"');
-    // Ask me before it ships says why it is grey.
+  it("a template carries its run as far as an autopilot depth", () => {
+    // Templates store `autopilot` (commit / push / pr — never an unattended
+    // merge); the editor offers exactly those, the New form's Fast-track keeps
+    // its own control (and "Ask me before it ships" says why it is grey).
+    expect(TEMPLATES_DIALOG).toContain('id="tpl-autopilot"');
+    expect(TEMPLATES_DIALOG).toContain("AUTOPILOT_CHOICES.map");
     expect(FASTTRACK).toContain("(needs fast-track)");
   });
 

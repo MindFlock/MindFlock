@@ -9,30 +9,42 @@ New dialog live here:
   sent, through the very same ``core.session_create`` path the New dialog's
   ``POST /api/instances`` takes.
 * **A schedule** — a template may carry ``schedule: {"at": "HH:MM", "days":
-  "daily" | "weekdays"}`` (local time). :func:`run_loop` fires each due one.
+  "daily" | "weekdays"}`` or a full cron expression, ``schedule: {"cron":
+  "*/30 * * * *"}`` (both local time; the cron math is
+  :mod:`backend.web.core.cronspec`). :func:`run_loop` fires each due one.
 
-A template's ``fasttrack`` (``templates.py``) is armed on every session it
-starts, so a scheduled chore can end in a commit, a push, a PR or a merge.
+Either way a template may carry ``autopilot`` (``commit`` / ``push`` /
+``pr``): the new session is armed to carry its work that far once its turn
+ends — the same autopilot the ⏩ button arms.
 
 The rules a schedule keeps (all in the pure :func:`plan_tick`, tested with an
 injected clock):
 
-* A slot is identified by its LOCAL DATE, not an epoch, so a DST shift can
-  neither skip nor repeat a day; the slot's epoch comes from ``mktime`` with
-  ``isdst=-1`` (a 02:30 that doesn't exist on a spring-forward day lands an
-  hour later, never on another day).
+* A slot is identified by its LOCAL DATE (``{at, days}``) or local wall-clock
+  minute (``{cron}``), not an epoch, so a DST shift can neither skip nor
+  repeat one; the slot's epoch comes from ``mktime`` with ``isdst=-1`` (a
+  02:30 that doesn't exist on a spring-forward day lands an hour later, never
+  on another day).
 * Never double-fires: ``last_slot`` is persisted BEFORE the session is
   created, so a crash mid-create loses that run rather than repeating it.
 * After downtime only the most recent missed slot fires — never a backlog.
 * A schedule fires only from when it was set (``armed_at``): saving "21:00" at
   22:00 waits for tomorrow; changing the time or days re-arms it.
+* A scheduled run is SKIPPED (and says so in the history) while the
+  template's previous run is still working, waiting on a question or stopped
+  at a usage limit — a schedule never stacks sessions on top of one that
+  hasn't finished. Run now always starts.
+* Nothing fires more often than every
+  :data:`~backend.web.core.cronspec.MIN_INTERVAL_SECONDS` — each run is a
+  whole new worktree and agent.
 * In a group of devices only the automation device (the one that runs PR
   review and issue handling, ``settings_hooks.automation_here``) fires. The
   others still advance ``last_slot`` silently, so a device that takes the
   role over later never replays a slot the previous one already ran.
 
 Templates sync between devices (``store:templates``) and the schedule with
-them; the run record (``template_runs.json``) is per device and never synced.
+them; the run record (``template_runs.json``, with the last
+:data:`HISTORY_MAX` runs per template) is per device and never synced.
 """
 
 from __future__ import annotations
@@ -47,6 +59,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from backend.config.config import GetConfigDir
 from backend.fsutil import atomic_write_json, read_json
+from backend.web.core import cronspec
 
 _FileName = "template_runs.json"
 _LOCK = threading.Lock()
@@ -55,6 +68,17 @@ _LOCK = threading.Lock()
 TICK_SECONDS = 30.0
 
 DAYS = ("daily", "weekdays")
+#: How far a template may carry its run on its own (autopilot depths; merge
+#: stays a human's call).
+AUTOPILOT_DEPTHS = ("commit", "push", "pr")
+#: Runs kept per template in the run record.
+HISTORY_MAX = 20
+#: A previous run in one of these keeps a scheduled run from starting.
+BUSY_ACTIVITIES = {
+    "working": "the previous run is still working",
+    "clarify": "the previous run is waiting on a question",
+    "limit": "the previous run is stopped at a usage limit",
+}
 _HHMM_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
 
@@ -67,7 +91,15 @@ def normalize_schedule(raw) -> Optional[dict]:
     if raw in (None, "", {}, False):
         return None
     if not isinstance(raw, dict):
-        raise ValueError("schedule must be an object: {at: 'HH:MM', days}")
+        raise ValueError("schedule must be an object: {at: 'HH:MM', days} or {cron}")
+    if "cron" in raw:
+        cron = cronspec.parse(str(raw.get("cron") or ""))
+        if cronspec.too_frequent(cron):
+            raise ValueError(
+                "a schedule can't run more often than every %d minutes — each run "
+                "is a new session" % (cronspec.MIN_INTERVAL_SECONDS // 60)
+            )
+        return {"cron": cron.expr}
     at = str(raw.get("at", "") or "").strip()
     m = _HHMM_RE.match(at)
     if not m:
@@ -88,7 +120,42 @@ def schedule_or_none(raw) -> Optional[dict]:
 
 
 def signature(sched: Optional[dict]) -> str:
-    return "%s/%s" % (sched["at"], sched["days"]) if sched else ""
+    if not sched:
+        return ""
+    if "cron" in sched:
+        return "cron:" + sched["cron"]
+    return "%s/%s" % (sched["at"], sched["days"])
+
+
+def normalize_autopilot(raw) -> str:
+    """``raw`` as a stored autopilot depth ("" = leave the session as it
+    ends). Raises ``ValueError`` for anything else."""
+    v = str(raw or "").strip().lower()
+    if v in ("", "off", "agent", "none", "leave"):
+        return ""
+    if v not in AUTOPILOT_DEPTHS:
+        raise ValueError("autopilot must be one of: " + ", ".join(AUTOPILOT_DEPTHS))
+    return v
+
+
+def describe(sched: Optional[dict]) -> str:
+    """The card's words for a schedule ("" for none)."""
+    if not sched:
+        return ""
+    if "cron" in sched:
+        return cronspec.describe(sched["cron"])
+    return ("Weekdays at " if sched["days"] == "weekdays" else "Every day at ") + sched[
+        "at"
+    ]
+
+
+def runs_many_per_day(sched: Optional[dict]) -> bool:
+    """Whether a schedule can fire twice in one day (its run titles then
+    carry the time, not just the date)."""
+    if not sched or "cron" not in sched:
+        return False
+    c = cronspec.parse(sched["cron"])
+    return len(c.hours) * len(c.minutes) > 1
 
 
 def _hm(sched: dict) -> Tuple[int, int]:
@@ -106,8 +173,14 @@ def slot_epoch(day: _dt.date, sched: dict) -> float:
     return time.mktime((day.year, day.month, day.day, hh, mm, 0, 0, 0, -1))
 
 
-def latest_due(now: float, sched: dict) -> Optional[Tuple[str, float]]:
-    """The most recent slot at or before ``now``: ``(local date, epoch)``."""
+def latest_due(
+    now: float, sched: dict, not_before: Optional[float] = None
+) -> Optional[Tuple[str, float]]:
+    """The most recent slot at or before ``now``: ``(slot, epoch)`` — the slot
+    a local date for ``{at, days}``, a local ``YYYY-MM-DDTHH:MM`` for
+    ``{cron}`` (both sort as strings). ``not_before`` only bounds the search."""
+    if "cron" in sched:
+        return cronspec.latest_due(cronspec.parse(sched["cron"]), now, not_before)
     today = _dt.date.fromtimestamp(now)
     for back in range(0, 8):
         day = today - _dt.timedelta(days=back)
@@ -121,6 +194,8 @@ def latest_due(now: float, sched: dict) -> Optional[Tuple[str, float]]:
 
 def next_due(now: float, sched: dict) -> Optional[float]:
     """Epoch of the first slot strictly after ``now``."""
+    if "cron" in sched:
+        return cronspec.next_due(cronspec.parse(sched["cron"]), now)
     today = _dt.date.fromtimestamp(now)
     for ahead in range(0, 9):
         day = today + _dt.timedelta(days=ahead)
@@ -160,13 +235,18 @@ def save_runs(runs: Dict[str, dict]) -> None:
         _save_runs(runs)
 
 
-def update_run(key: str, **fields) -> None:
-    """Merge ``fields`` into one template's run record."""
+def record_run(key: str, entry: dict, **fields) -> None:
+    """Merge ``fields`` into one template's run record AND put ``entry`` at
+    the head of its history (newest first, :data:`HISTORY_MAX` kept)."""
     with _LOCK:
         data = read_json(runs_path(), {}, expect=dict)
         runs = data.get("runs") if isinstance(data.get("runs"), dict) else {}
         rec = dict(runs.get(key) or {})
         rec.update(fields)
+        hist = rec.get("history") if isinstance(rec.get("history"), list) else []
+        rec["history"] = ([dict(entry)] + [h for h in hist if isinstance(h, dict)])[
+            :HISTORY_MAX
+        ]
         runs[key] = rec
         _save_runs(runs)
 
@@ -210,7 +290,7 @@ def plan_tick(
             rec["sig"] = sig
             rec["armed_at"] = now
             out[key] = rec
-        due = latest_due(now, sched)
+        due = latest_due(now, sched, not_before=float(rec.get("armed_at") or 0) or None)
         if due is None:
             continue
         slot, at = due
@@ -236,28 +316,15 @@ def run_problem(tpl: dict) -> str:
     return ""
 
 
-def session_title(name: str, when: float) -> str:
-    """``<template slug>-<mon><day>`` — "rivian-update-oct13". Every run of a
-    template is named this way (a second run that day is ``-2``), so a
-    nightly template's sessions sort together and read by date."""
+def session_title(name: str, when: float, with_time: bool = False) -> str:
+    """``<template slug>-<mon><day>`` — "rivian-update-oct13"; with
+    ``with_time`` (a schedule that fires more than once a day)
+    ``<slug>-<mon><day>-<HHMM>`` — "deploy-watch-oct13-2130"."""
     slug = re.sub(r"[^a-z0-9]+", "-", str(name or "").lower()).strip("-")[:40]
     slug = slug.strip("-") or "template"
     day = _dt.datetime.fromtimestamp(when)
-    return "%s-%s%d" % (slug, day.strftime("%b").lower(), day.day)
-
-
-def lane_name(raw) -> str:
-    """``raw`` as a ship lane (``leave`` / ``commit`` / ``push`` / ``pr`` /
-    ``merge``; "off" reads ``leave``), or "" for none of them."""
-    from backend.web.core import lanes as _lanes
-
-    return _lanes.normalize_lane(raw)
-
-
-def template_lane(tpl: dict) -> str:
-    """The fast-track a session from ``tpl`` arms ("" = off)."""
-    lane = lane_name((tpl or {}).get("fasttrack"))
-    return "" if lane in ("", "leave") else lane
+    title = "%s-%s%d" % (slug, day.strftime("%b").lower(), day.day)
+    return title + day.strftime("-%H%M") if with_time else title
 
 
 def _payload(tpl: dict, title: str) -> dict:
@@ -269,19 +336,14 @@ def _payload(tpl: dict, title: str) -> dict:
     for f in ("provisioned", "in_place", "init_repo"):
         if tpl.get(f):
             body[f] = True
-    # Fast-track commits for THIS session, so it never drives a checkout other
+    # Autopilot commits for THIS session, so it never drives a checkout other
     # sessions share — the New dialog's rule: with one, it gets a worktree.
-    if template_lane(tpl):
-        body.pop("in_place", None)
+    try:
+        if normalize_autopilot(tpl.get("autopilot")):
+            body.pop("in_place", None)
+    except ValueError:
+        pass
     return body
-
-
-def _arm_lane(title: str, lane: str, ask_first: bool) -> None:
-    """Arm ``title``'s fast-track the moment it is created. The intake shape
-    (``require_workspace=False``): the worktree is still being cut."""
-    from backend.web.core import lanes as _lanes
-
-    _lanes.arm_session(title, lane, ask_first=ask_first, require_workspace=False)
 
 
 async def _default_create(payload: dict) -> Tuple[int, dict]:
@@ -297,57 +359,166 @@ async def fire(
     now: Optional[float] = None,
     create=None,
     taken: Optional[Callable[[str], bool]] = None,
-    arm: Optional[Callable[[str, str, bool], None]] = None,
 ) -> Tuple[int, dict]:
     """Start a session from ``tpl`` and record it. ``(status, body)`` — the
     create's own answer (202 + the new row), or 400 for a template that
-    can't run. ``trigger`` is ``"manual"`` or ``"schedule"``. A template with
-    a fast-track has it armed on the new session (``arm``, injectable)."""
+    can't run. ``trigger`` is ``"manual"`` or ``"schedule"``."""
     now = time.time() if now is None else now
     create = create or _default_create
-    arm = arm or _arm_lane
     key = _key(tpl.get("name"))
     problem = run_problem(tpl)
     if problem:
         if trigger == "schedule":
-            update_run(key, last_error=problem, last_error_at=now)
+            _note_failure(tpl, trigger, now, problem)
         return 400, {"error": problem}
-    base = session_title(tpl.get("name", ""), now)
+    sched = schedule_or_none(tpl.get("schedule"))
+    base = session_title(
+        tpl.get("name", ""),
+        now,
+        with_time=trigger == "schedule" and runs_many_per_day(sched),
+    )
     if taken is None:
-        taken = _title_taken
+
+        def taken(title: str) -> bool:
+            return _title_taken(title) or _branch_taken(tpl, title)
+
     status, body = 0, {}
-    for n in range(1, 10):
+    for n in range(1, 30):
         title = base if n == 1 else "%s-%d" % (base, n)
-        if taken(title):
+        if await asyncio.to_thread(taken, title):
             continue
         status, body = await create(_payload(tpl, title))
         if status != 409:
             break
     if 200 <= status < 300:
-        made = str(body.get("title") or "")
-        lane = template_lane(tpl)
-        lane_error = ""
-        if lane and made:
-            try:
-                await asyncio.to_thread(arm, made, lane, tpl.get("ask_first") is True)
-            except Exception as err:  # noqa: BLE001 — the session is up; say so
-                lane_error = "started, but its fast-track wasn't set: %s" % (
-                    getattr(err, "message", "") or err
-                )
-        update_run(
+        title = str(body.get("title") or "")
+        depth = ""
+        try:
+            depth = normalize_autopilot(tpl.get("autopilot"))
+        except ValueError:
+            pass
+        armed = ""
+        if depth and title:
+            armed = await asyncio.to_thread(_arm_autopilot, title, depth)
+        entry = {"at": now, "trigger": trigger, "session": title}
+        if armed:
+            entry["autopilot"] = armed
+        record_run(
             key,
+            entry,
             last_run_at=now,
-            last_session=made,
+            last_session=title,
             last_trigger=trigger,
-            last_error=lane_error,
+            last_error="",
         )
+        _emit("template.run_started", tpl, trigger, session=title)
     else:
-        update_run(
-            key,
-            last_error=str(body.get("error") or "couldn't start (%s)" % status),
-            last_error_at=now,
-        )
+        err = str(body.get("error") or "couldn't start (%s)" % status)
+        if not status:
+            err = "no free session name"
+        _note_failure(tpl, trigger, now, err)
     return status or 409, body or {"error": "no free session name"}
+
+
+def _note_failure(tpl: dict, trigger: str, now: float, err: str) -> None:
+    record_run(
+        _key(tpl.get("name")),
+        {"at": now, "trigger": trigger, "error": err},
+        last_error=err,
+        last_error_at=now,
+    )
+    # Run now's failure is the clicker's toast; a scheduled one happened with
+    # nobody watching, so it is news.
+    if trigger == "schedule":
+        _emit(
+            "template.run_failed",
+            tpl,
+            trigger,
+            error=err,
+            detail="Scheduled run of “%s” couldn't start: %s"
+            % (tpl.get("name") or "", err),
+        )
+
+
+def _emit(event: str, tpl: dict, trigger: str, **data) -> None:
+    """Tell the browser (the bell shows a scheduled run that failed or was
+    skipped — nobody was watching when it happened). Never raises."""
+    try:
+        from backend.web.core import events
+
+        events.BUS.emit(
+            event,
+            session=str(data.get("session") or ""),
+            data={"template": str(tpl.get("name") or ""), "trigger": trigger, **data},
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _arm_autopilot(title: str, depth: str) -> str:
+    """Arm the new session's autopilot to ``depth``; the depth armed, or ""
+    when arming failed (the run still started — it just stops where the
+    agent leaves it). Blocking."""
+    try:
+        from backend.web.core import lanes
+
+        lane = lanes.lane_of_depth(depth)
+        if not lane:
+            return ""
+        lanes.arm_session(title, lane, require_workspace=False, source="session")
+        return depth
+    except Exception as err:  # noqa: BLE001
+        try:
+            from backend import log
+
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf(
+                    "template run %s: autopilot not armed: %v", title, err
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        return ""
+
+
+def _branch_taken(tpl: dict, title: str) -> bool:
+    """Whether a NEW worktree session titled ``title`` would land on a branch
+    that already exists in the template's repo — a closed run's branch left
+    behind. The engine would quietly check that old branch out instead of
+    starting fresh, so the title is skipped. Blocking (one git call)."""
+    if tpl.get("provisioned") or tpl.get("in_place"):
+        return False
+    repo = str(tpl.get("repo_path") or "").strip()
+    if not repo or not os.path.isdir(repo):
+        return False
+    try:
+        from backend import gitutil
+        from backend.web import server
+
+        branch = server._session_branch_name(title)
+        return bool(branch) and gitutil.ref_exists(
+            repo, "refs/heads/" + branch, timeout=10
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def busy_reason(title: str) -> str:
+    """Why the session ``title`` keeps a scheduled run from starting ("" =
+    it doesn't: gone, idle, offline)."""
+    if not title:
+        return ""
+    return BUSY_ACTIVITIES.get(_session_activity(title), "")
+
+
+def _session_activity(title: str) -> str:
+    try:
+        from backend.web import server
+
+        if title not in server.ENGINE.instances:
+            return ""
+        return server._snapshot_activity(title)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _title_taken(title: str) -> bool:
@@ -424,6 +595,32 @@ async def tick(now: Optional[float] = None, here: Optional[bool] = None) -> List
             await asyncio.to_thread(save_runs, new_runs)
         fired = []
         for tpl, _slot in to_fire:
+            key = _key(tpl.get("name"))
+            prev = str((new_runs.get(key) or {}).get("last_session") or "")
+            busy = await asyncio.to_thread(busy_reason, prev)
+            if busy:
+                await asyncio.to_thread(
+                    record_run,
+                    key,
+                    {
+                        "at": now,
+                        "trigger": "schedule",
+                        "skipped": busy,
+                        "session": prev,
+                    },
+                    last_skip_at=now,
+                    last_skip=busy,
+                )
+                _emit(
+                    "template.run_skipped",
+                    tpl,
+                    "schedule",
+                    reason=busy,
+                    session=prev,
+                    detail="Skipped a scheduled run of “%s”: %s"
+                    % (tpl.get("name") or "", busy),
+                )
+                continue
             await fire(tpl, "schedule", now=now)
             fired.append(str(tpl.get("name") or ""))
     return fired
@@ -464,13 +661,23 @@ def status_for(templates_list: List[dict], now: Optional[float] = None) -> dict:
         rec = runs.get(key) or {}
         sched = schedule_or_none(tpl.get("schedule"))
         nxt = next_due(now, sched) if sched else None
+        hist = rec.get("history") if isinstance(rec.get("history"), list) else []
         row = {
             "next_at": nxt,
             "last_at": rec.get("last_run_at"),
             "last_session": rec.get("last_session") or "",
             "last_trigger": rec.get("last_trigger") or "",
             "last_error": rec.get("last_error") or "",
+            "schedule_label": describe(sched),
+            "history": [h for h in hist if isinstance(h, dict)],
         }
+        # A skip newer than the last start/failure is what the card says.
+        skip_at = float(rec.get("last_skip_at") or 0)
+        if skip_at and skip_at >= max(
+            float(rec.get("last_run_at") or 0), float(rec.get("last_error_at") or 0)
+        ):
+            row["last_skip"] = rec.get("last_skip") or ""
+            row["last_skip_at"] = skip_at
         if any(v for v in row.values()):
             # The schedule's "at" is THIS device's local time: name the zone
             # on the row the card reads (EDT, CET…), as of the next run.
@@ -491,3 +698,22 @@ def time_zone(at: float) -> str:
         return time.strftime("%Z", time.localtime(at)) or ""
     except (OverflowError, OSError, ValueError):
         return ""
+
+
+def preview(expr: str, now: Optional[float] = None, count: int = 3) -> dict:
+    """What the editor shows under a cron field as you type: ``{ok, label,
+    next: [epoch...]}`` or ``{ok: false, error}``. Applies the same rules a
+    save does (:func:`normalize_schedule`)."""
+    now = time.time() if now is None else now
+    try:
+        sched = normalize_schedule({"cron": expr})
+    except ValueError as err:
+        return {"ok": False, "error": str(err)}
+    assert sched is not None
+    cron = cronspec.parse(sched["cron"])
+    return {
+        "ok": True,
+        "cron": sched["cron"],
+        "label": describe(sched),
+        "next": cronspec.upcoming(cron, now, count),
+    }

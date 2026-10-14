@@ -24401,6 +24401,14 @@ function useMindflockStatus() {
 		retry: false
 	});
 }
+function useMemory() {
+	return useQuery({
+		queryKey: ["system-memory"],
+		queryFn: () => api("/api/system/memory"),
+		refetchInterval: 15e3,
+		retry: false
+	});
+}
 function refreshMindflockStatus() {
 	return queryClient.invalidateQueries({ queryKey: ["mindflock-status"] });
 }
@@ -25507,6 +25515,34 @@ function orderWithAfter(order, title, after) {
 	if (at < 0) return order;
 	next.splice(at + 1, 0, title);
 	return next;
+}
+function keepFamiliesTogether(keys, parentOf) {
+	const present = new Set(keys);
+	const up = (k) => {
+		const p = parentOf(k) || "";
+		return p && p !== k && present.has(p) ? p : "";
+	};
+	const kids = /* @__PURE__ */ new Map();
+	const roots = [];
+	for (const k of keys) {
+		const p = up(k);
+		let q = p;
+		for (let hops = 0; q && q !== k && hops <= keys.length; hops++) q = up(q);
+		if (!p || q === k) roots.push(k);
+		else kids.set(p, [...kids.get(p) || [], k]);
+	}
+	if (!kids.size) return keys;
+	const out = [];
+	const done = /* @__PURE__ */ new Set();
+	const emit = (k) => {
+		if (done.has(k)) return;
+		done.add(k);
+		out.push(k);
+		for (const c of kids.get(k) || []) emit(c);
+	};
+	roots.forEach(emit);
+	for (const k of keys) emit(k);
+	return out.every((k, i) => k === keys[i]) ? keys : out;
 }
 var NEST_MAX = 3;
 function railNesting(rows) {
@@ -28543,7 +28579,7 @@ function laneLabel(value) {
 }
 function autopilotChipTitle(run) {
 	const target = laneLabel(run.depth);
-	if (run.state === "halted") return "Fast-track stopped: " + (run.reason || "unknown reason");
+	if (run.state === "halted") return "Fast-track stopped: " + (run.reason || "unknown reason") + (run.note ? "\n" + run.note : "");
 	if (run.state === "done") return "Fast-track finished at " + target + " and switched itself off.";
 	const where = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waiting to start)";
 	const skipped = run.skipped?.length ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
@@ -28627,6 +28663,7 @@ function splitRail(entries, runs, opts = {}) {
 			done,
 			cancelled: info?.state === "cancelled",
 			waitingUsage: limited || info?.pause_reason === "limit" || !!info?.waiting_for_usage,
+			waitingMemory: !!info?.waiting_for_memory,
 			collapsed: !!opts.collapsed?.has(id),
 			entries: mine,
 			queued,
@@ -28689,6 +28726,7 @@ function groupTitle(g) {
 	if (g.cancelled) bits.push("cancelled — its sessions and branches were kept");
 	else if (g.paused) bits.push(g.pauseReason === "budget" ? "paused: the budget is used up" : g.pauseReason === "limit" ? "paused: waiting for usage to come back" : "paused — nothing new starts and nothing ships");
 	else if (g.waitingUsage) bits.push("waiting for usage to come back");
+	else if (g.waitingMemory) bits.push("waiting for memory — queued lines start once it recovers");
 	bits.push("Click to fold");
 	return bits.join("\n");
 }
@@ -30871,6 +30909,12 @@ function installKeymap(host) {
 }
 //#endregion
 //#region src/lib/templates.ts
+var AUTOPILOT_CHOICES = [
+	["", "Leave it for me"],
+	["commit", "Commit"],
+	["push", "Commit + push"],
+	["pr", "Open a PR"]
+];
 var TEMPLATES_CHANGED = "mf-presets-changed";
 var TEMPLATES_MIRROR_KEY = "mindflock.templates_cache";
 var OLD_PRESETS_STORAGE_KEY = "mindflock.prompt_presets";
@@ -30977,9 +31021,17 @@ function readTemplatesTarget(target) {
 		schedule: null
 	};
 }
+function hasSchedule(t) {
+	return !!(t.schedule && (t.schedule.at || t.schedule.cron));
+}
 function scheduleLabel(s) {
-	if (!s || !s.at) return "";
+	if (!s) return "";
+	if (s.cron) return "Cron " + s.cron;
+	if (!s.at) return "";
 	return (s.days === "weekdays" ? "Weekdays at " : "Every day at ") + s.at;
+}
+async function cronPreview(expr) {
+	return api("/api/templates/cron-preview?expr=" + encodeURIComponent(expr));
 }
 function whenLabel(epochSec, now = /* @__PURE__ */ new Date()) {
 	if (!epochSec) return "";
@@ -30997,7 +31049,7 @@ function whenLabel(epochSec, now = /* @__PURE__ */ new Date()) {
 	}) + " " + hm;
 }
 function isPromptOnly(t) {
-	return typeof t.prompt === "string" && !!t.prompt.trim() && !t.program && !t.repo_path && !t.provisioned && !t.in_place && !t.init_repo && !t.fasttrack && !t.ask_first && !t.schedule;
+	return typeof t.prompt === "string" && !!t.prompt.trim() && !t.program && !t.repo_path && !t.provisioned && !t.in_place && !t.init_repo && !t.autopilot && !t.schedule;
 }
 function promptTemplates(list) {
 	return list.filter(isPromptOnly).map((t) => ({
@@ -34904,6 +34956,16 @@ function notifFromEvent(env) {
 			text: "created",
 			cls: "n-info"
 		};
+		case "template.run_failed": return {
+			text: String(d.detail || "a scheduled run couldn't start — " + (d.error || "failed")),
+			cls: "n-warn",
+			template: true,
+			rule: "template_run_failed"
+		};
+		case "template.run_skipped": return {
+			text: String(d.detail || "skipped a scheduled run — " + (d.reason || "")),
+			cls: "n-muted"
+		};
 		case "session.create_failed": return {
 			text: "couldn't start — " + (d.error || "failed"),
 			cls: "n-warn"
@@ -35311,6 +35373,9 @@ function NotificationsBell() {
 						} else if (n.verify) {
 							setOpen(false);
 							useUi.getState().openDialogFor("verify", n.verify);
+						} else if (n.template && !n.session) {
+							setOpen(false);
+							useUi.getState().openDialogFor("templates");
 						} else if (n.run) {
 							setOpen(false);
 							showGroup(n.run);
@@ -35319,7 +35384,7 @@ function NotificationsBell() {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-sess",
-							children: n.device && !n.session ? "Devices" : n.peer && !n.session ? "Collaborate" : n.settings && !n.session ? "Updates" : n.run && !n.session ? runLookups.name(n.run) || "Team run" : n.verify ? "Verify · " + (n.name || windowName(n.session)) : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (n.session ? windowName(n.session) : "—")
+							children: n.device && !n.session ? "Devices" : n.peer && !n.session ? "Collaborate" : n.settings && !n.session ? "Updates" : n.template && !n.session ? "Templates" : n.run && !n.session ? runLookups.name(n.run) || "Team run" : n.verify ? "Verify · " + (n.name || windowName(n.session)) : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (n.session ? windowName(n.session) : "—")
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-text",
@@ -35471,14 +35536,17 @@ function pushFailedNote(session, data) {
 //#endregion
 //#region src/lib/revive.ts
 async function reviveSession(title) {
+	let r;
 	try {
-		await instApi(title, "/revive", { method: "POST" });
+		r = await instApi(title, "/revive", { method: "POST" });
 	} catch (e) {
 		toast("Couldn't restart " + displayName(title) + " — " + errMsg(e));
 		return false;
 	}
 	forceActivity(title, "idle");
-	toast("Restarting " + displayName(title) + "…");
+	let line = "Restarting " + displayName(title) + (r?.continued ? " — it will continue where it left off" : "") + "…";
+	if (r?.memory_warning) line += " (" + r.memory_warning + ")";
+	toast(line);
 	refreshInstances();
 	return true;
 }
@@ -35810,7 +35878,7 @@ function EventToasts() {
 					item: String(d.item || "")
 				}
 			}, { live: true });
-			if (String(env.new || "") === "halted") notifyOnce(env.session, "ftstop", "fast-track stopped on " + namedSlot(env.session), { onClick: () => selectSession(env.session) });
+			if (String(env.new || "") === "halted") notifyOnce(env.session, "ftstop", "fast-track stopped on " + namedSlot(env.session) + (d.note ? " — the agent was told what failed" : ""), { onClick: () => selectSession(env.session) });
 		}));
 		unsubs.push(ev.subscribe("session.stage_changed", (env) => {
 			if (env.new) patchInstance(env.session, { stage: String(env.new) });
@@ -36635,6 +36703,65 @@ function ConnBanner() {
 					},
 					children: fixBusy ? "Restarting WSL…" : fixArmed ? "Really restart? (closes WSL apps)" : fixLabel
 				})]
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/MemoryNotice.tsx
+var GB = 1024 ** 3;
+var RANK$1 = {
+	ok: 0,
+	unknown: 0,
+	low: 1,
+	critical: 2
+};
+function gb(n) {
+	return ((n || 0) / GB).toFixed(1) + " GB";
+}
+function memoryDetail(m) {
+	const bits = [gb(m.available) + " free of " + gb(m.total) + " (" + Math.round(m.available_pct || 0) + "%)"];
+	const swapTotal = m.swap_total || 0;
+	if (swapTotal > 0) {
+		const used = 1 - (m.swap_free || 0) / swapTotal;
+		if (used >= .25) bits.push("swap " + Math.round(used * 100) + "% used");
+	}
+	const stall = m.psi?.some_avg60 || 0;
+	if (stall >= 5) bits.push("stalled on memory " + Math.round(stall) + "% of the last minute");
+	return bits.join(" · ");
+}
+function MemoryNotice() {
+	const { data, isError } = useMemory();
+	const [hiddenAt, setHiddenAt] = (0, import_react.useState)(0);
+	const rank = RANK$1[data?.level || "ok"] ?? 0;
+	if (hiddenAt && (rank === 0 || rank > hiddenAt)) setHiddenAt(0);
+	if (!data || isError || rank === 0 || hiddenAt && rank <= hiddenAt) return null;
+	const critical = data.level === "critical";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "memory-notice",
+		role: "status",
+		className: critical ? "critical" : "",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "mn-head",
+				children: ["⚠ Memory is ", critical ? "critically low" : "running low"]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "mn-detail",
+				children: memoryDetail(data)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "mn-detail mn-what",
+				children: ["MindFlock is holding new agent-spawned sessions, team-run lines and auto-restarts until it recovers. Closing idle sessions frees memory fastest", critical ? " — the system may start killing agents soon." : "."]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "mn-foot",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "mn-btn",
+					onClick: () => setHiddenAt(rank),
+					children: "Hide"
+				})
 			})
 		]
 	});
@@ -39365,6 +39492,70 @@ function BulkBar() {
 	});
 }
 //#endregion
+//#region src/components/sidebar/OfflineBar.tsx
+function sweepToast(r, offline) {
+	const revived = r.revived?.length || 0;
+	const continued = r.continued?.length || 0;
+	const skipped = r.skipped || {};
+	const mine = offline.filter((t) => skipped[t] !== void 0);
+	const memory = mine.filter((t) => skipped[t] === "low memory").length;
+	let line = revived ? "Restarted " + revived + (revived === 1 ? " agent" : " agents") : "No agents restarted";
+	if (continued) line += " — " + continued + " told to continue where " + (continued === 1 ? "it" : "they") + " left off";
+	if (memory) line += "; " + memory + " held back: memory is low";
+	const other = mine.filter((t) => skipped[t] !== "low memory");
+	if (other.length) {
+		const why = Array.from(new Set(other.map((t) => skipped[t]))).join(", ");
+		line += "; " + other.length + " couldn't restart (" + why + ")";
+	}
+	return line;
+}
+function OfflineBar() {
+	const { data: instances = [] } = useInstances();
+	const memory = useMemory().data;
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const offline = instances.filter((i) => {
+		if (i.device || i.pending) return false;
+		const ss = deriveSessionState(i);
+		return ss.state === "offline" && ss.restartable && i.status !== "paused";
+	});
+	if (offline.length < 2 && !busy) return null;
+	const titles = offline.map((i) => i.title);
+	const low = memory?.level === "low" || memory?.level === "critical";
+	const run = async () => {
+		if (busy) return;
+		setBusy(true);
+		try {
+			const r = await api("/api/server/revive-all", {
+				method: "POST",
+				json: { titles }
+			});
+			for (const t of r.revived || []) forceActivity(t, "idle");
+			toast(sweepToast(r, titles));
+		} catch (e) {
+			toast("Couldn't restart the offline agents — " + errMsg(e));
+		} finally {
+			setBusy(false);
+			refreshInstances();
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "offline-bar",
+		role: "group",
+		"aria-label": "Offline agents",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "ob-count",
+			children: busy ? "Restarting offline agents…" : offline.length + " agents offline"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "ob-btn",
+			disabled: busy,
+			title: "Relaunch every offline agent, two at a time, resuming its conversation; an agent that died mid-task is told to continue where it left off." + (low ? " Memory is low: restarts wait for headroom, and the rest are held back if none comes." : ""),
+			onClick: () => void run(),
+			children: "↻ Restart all"
+		})]
+	});
+}
+//#endregion
 //#region src/extensions/ExtensionBar.tsx
 function useExtensionBarDefs() {
 	const { data: extensions } = useExtensions();
@@ -40763,6 +40954,10 @@ function RunGroupHeader({ group, repoPath }) {
 			}) : group.waitingUsage && !group.done ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "dev-badge rg-usage",
 				children: "usage"
+			}) : group.waitingMemory && !group.done ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "dev-badge rg-usage",
+				title: "Memory is low — queued lines start once it recovers",
+				children: "memory"
 			}) : null,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "dev-badge rg-shipped" + (group.done && !group.cancelled ? " ok" : ""),
@@ -42049,7 +42244,10 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 		ui.extPanes
 	]);
 	const winFiltered = (0, import_react.useMemo)(() => windows.filter((w) => !ui.filter || w.title.toLowerCase().includes(ui.filter)), [windows, ui.filter]);
-	const railKeys = (0, import_react.useMemo)(() => orderedKeys([...allRows.map((i) => i.title), ...windows.map((w) => w.key)], order), [
+	const railKeys = (0, import_react.useMemo)(() => {
+		const parentOf = new Map(allRows.map((i) => [i.title, i.parent || ""]));
+		return keepFamiliesTogether(orderedKeys([...allRows.map((i) => i.title), ...windows.map((w) => w.key)], order), (k) => parentOf.get(k));
+	}, [
 		allRows,
 		windows,
 		order
@@ -42257,6 +42455,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 						}),
 						searchVisible && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionFilter, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BulkBar, {}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(OfflineBar, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
 							id: "instance-list",
 							children: [grouped ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -64886,10 +65085,7 @@ function templateFromForm(f, existing) {
 		in_place: f.inPlace && !f.provision && !lane,
 		workspace_strategy: f.strategy === "clone" ? "clone" : "worktree",
 		init_repo: f.initRepo,
-		...lane ? {
-			fasttrack: lane,
-			...f.askFirst ? { ask_first: true } : {}
-		} : {},
+		...lane ? { autopilot: lane === "merge" ? "pr" : lane } : {},
 		...prior?.schedule ? { schedule: prior.schedule } : {}
 	};
 }
@@ -64909,57 +65105,6 @@ function openingMode(o) {
 	if (o.resume) return "resume";
 	if (o.draft && !o.spent) return "resume";
 	return "fresh";
-}
-//#endregion
-//#region src/components/dialogs/FastTrackChoice.tsx
-function Seg({ value, options, onChange, label, id }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "rt-seg",
-		role: "group",
-		"aria-label": label,
-		id,
-		children: options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			className: o.v === value ? "on" : void 0,
-			"aria-pressed": o.v === value,
-			title: o.title,
-			disabled: o.disabled || void 0,
-			onClick: () => onChange(o.v),
-			children: o.label
-		}, o.v))
-	});
-}
-function FastTrackChoice({ id, label, value, onChange, askFirst, onAskFirst, lanes = LANE_CHOICES, laneLabel, laneTitle, disabledReason, askReason }) {
-	const askWhy = askReason || (askFirstApplies(value) ? "" : "Fast-track is off: nothing is committed, pushed or merged for you");
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
-		id,
-		label,
-		value,
-		options: lanes.map((l) => ({
-			v: l,
-			label: laneLabel?.[l] || LANE_LABEL[l],
-			title: disabledReason?.[l] || laneTitle?.[l] || LANE_DESC[l],
-			disabled: !!disabledReason?.[l]
-		})),
-		onChange
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-		className: "check rt-ask" + (askWhy ? " disabled" : ""),
-		title: askWhy || ASK_FIRST_DESC,
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "checkbox",
-				id: id + "-ask",
-				checked: !askWhy && askFirst,
-				disabled: !!askWhy,
-				onChange: (e) => onAskFirst(e.target.checked)
-			}),
-			ASK_FIRST_LABEL,
-			askWhy && !askReason && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "muted",
-				children: " (needs fast-track)"
-			})
-		]
-	})] });
 }
 //#endregion
 //#region src/components/dialogs/newSession/WorkspaceFold.tsx
@@ -65336,13 +65481,6 @@ function localZone() {
 		return "";
 	}
 }
-var TEMPLATE_LANES = [
-	"leave",
-	"commit",
-	"push",
-	"pr",
-	"merge"
-];
 var TEMPLATES_UI_INIT = {
 	editing: null,
 	confirming: null,
@@ -65388,11 +65526,11 @@ function formFromTemplate(t) {
 		mode: t?.provisioned ? "provisioned" : t?.in_place ? "in_place" : "worktree",
 		workspace_strategy: t?.workspace_strategy === "clone" ? "clone" : "worktree",
 		init_repo: !!t?.init_repo,
-		scheduled: !!t?.schedule?.at,
+		scheduled: !!t && hasSchedule(t),
 		at: t?.schedule?.at || "21:00",
-		days: t?.schedule?.days === "weekdays" ? "weekdays" : "daily",
-		fasttrack: TEMPLATE_LANES.includes(t?.fasttrack) ? t.fasttrack : "leave",
-		ask_first: !!t?.ask_first
+		days: t?.schedule?.cron ? "cron" : t?.schedule?.days === "weekdays" ? "weekdays" : "daily",
+		cron: t?.schedule?.cron || "0 21 * * 1-5",
+		autopilot: t?.autopilot || ""
 	};
 }
 function templateBody(f) {
@@ -65400,8 +65538,11 @@ function templateBody(f) {
 	if (!name) return { error: "A template needs a name." };
 	if (name.length > 100) return { error: "Names are at most 100 characters." };
 	const at = f.at.trim();
+	const cron = f.cron.trim().replace(/\s+/g, " ");
 	if (f.scheduled) {
-		if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(at)) return { error: "Pick a time for the schedule, like 21:00." };
+		if (f.days === "cron") {
+			if (!cron) return { error: "Type a cron expression, like 0 21 * * 1-5 (weekdays at 21:00)." };
+		} else if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(at)) return { error: "Pick a time for the schedule, like 21:00." };
 		if (!f.repo_path.trim() && f.mode !== "provisioned") return { error: "A scheduled template needs a folder to start its session in." };
 		if (!f.prompt.trim()) return { error: "A scheduled template needs a task — it's what the session is told to do." };
 	}
@@ -65414,14 +65555,11 @@ function templateBody(f) {
 		in_place: f.mode === "in_place",
 		workspace_strategy: f.workspace_strategy === "clone" ? "clone" : "worktree",
 		init_repo: f.init_repo,
-		...f.scheduled ? { schedule: {
+		...f.scheduled ? { schedule: f.days === "cron" ? { cron } : {
 			at,
-			days: f.days
+			days: f.days === "weekdays" ? "weekdays" : "daily"
 		} } : {},
-		...f.fasttrack && f.fasttrack !== "leave" ? {
-			fasttrack: f.fasttrack,
-			...f.ask_first ? { ask_first: true } : {}
-		} : {}
+		...f.autopilot ? { autopilot: f.autopilot } : {}
 	} };
 }
 function renameLeaves(oldName, newName) {
@@ -65429,26 +65567,43 @@ function renameLeaves(oldName, newName) {
 	const b = newName.trim().toLowerCase();
 	return a && a !== b ? oldName : null;
 }
+var AUTOPILOT_THEN = {
+	commit: "commit",
+	push: "commit + push",
+	pr: "open a PR"
+};
 function templateMeta(t) {
 	const bits = [];
 	if (t.program) bits.push(t.program);
 	if (t.repo_path) bits.push(leafName(t.repo_path));
 	bits.push(t.provisioned ? "separate worktree, provisioned" + (t.workspace_strategy === "clone" ? " (full clone)" : "") : t.in_place ? "this folder directly" : "separate worktree");
 	if (t.init_repo) bits.push("git init");
-	const ft = t.fasttrack;
-	if (ft && ft !== "leave" && ft in LANE_LABEL) bits.push("fast-track → " + LANE_LABEL[ft] + (t.ask_first ? " (asks first)" : ""));
+	if (t.autopilot) bits.push("then: " + AUTOPILOT_THEN[t.autopilot]);
 	return bits.join(" · ");
 }
 function runLine(t, info, status, now = /* @__PURE__ */ new Date()) {
 	const bits = [];
 	const tz = info.tz;
-	if (t.schedule?.at) {
-		bits.push(scheduleLabel(t.schedule) + (tz ? " " + tz : ""));
+	if (hasSchedule(t)) {
+		bits.push((info.schedule_label || scheduleLabel(t.schedule)) + (tz && t.schedule?.at ? " " + tz : ""));
 		if (!status.runs_here && status.runs_on) bits.push("starts on " + status.runs_on);
 		else if (info.next_at) bits.push("next " + whenLabel(info.next_at, now));
 	}
 	if (info.last_at) bits.push("last " + whenLabel(info.last_at, now) + (info.last_trigger === "schedule" ? " (scheduled)" : info.last_trigger === "manual" ? " (by hand)" : "") + (info.last_session ? " → " + info.last_session : ""));
 	return bits.join(" · ");
+}
+function historyLine(h, now = /* @__PURE__ */ new Date()) {
+	let line = [whenLabel(h.at, now), h.trigger === "schedule" ? "scheduled" : "by hand"].join(" · ");
+	if (h.skipped) line += " — skipped: " + h.skipped;
+	else if (h.error) line += " — failed: " + h.error;
+	else if (h.session) line += " → " + h.session + (h.autopilot ? " (autopilot: " + h.autopilot + ")" : "");
+	return line;
+}
+function cronPreviewLine(pv, now = /* @__PURE__ */ new Date()) {
+	if (!pv) return "";
+	if (!pv.ok) return pv.error || "Not a cron expression";
+	const next = (pv.next || []).map((t) => whenLabel(t, now)).join(", ");
+	return (pv.label || "") + (next ? " — next " + next : "");
 }
 function TemplatesDialogView(p) {
 	const { templates, ui, form, busy, loaded } = p;
@@ -65560,15 +65715,14 @@ function TemplatesDialogView(p) {
 							checked: form.mode === "in_place",
 							onChange: () => p.onForm({
 								mode: "in_place",
-								fasttrack: "leave",
-								ask_first: false
+								autopilot: ""
 							})
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
 							"This folder directly",
 							" ",
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "muted",
-								children: form.fasttrack !== "leave" ? "— turns fast-track off (it commits for this session, so it needs its own worktree)" : IN_PLACE_HINT
+								children: form.autopilot ? "— turns the autopilot off (it commits for this session, so it needs its own worktree)" : IN_PLACE_HINT
 							})
 						] })]
 					}),
@@ -65583,82 +65737,115 @@ function TemplatesDialogView(p) {
 				className: "tpl-schedule",
 				role: "group",
 				"aria-label": "Schedule",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "check",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: "checkbox",
-							id: "tpl-scheduled",
-							checked: form.scheduled,
-							onChange: (e) => p.onForm({ scheduled: e.target.checked })
-						}),
-						"Run on a schedule ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "muted",
-							children: "— starts a new session from it, by itself"
-						})
-					]
-				}), form.scheduled && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "tpl-schedule-when",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-							id: "tpl-days",
-							"aria-label": "Which days",
-							value: form.days,
-							onChange: (e) => p.onForm({ days: e.target.value === "weekdays" ? "weekdays" : "daily" }),
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-								value: "daily",
-								children: "Every day"
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-								value: "weekdays",
-								children: "Weekdays"
-							})]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "at" }),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							id: "tpl-at",
-							type: "time",
-							"aria-label": "Time",
-							autoFocus: ui.editing !== null && p.scheduleFocus === true,
-							value: form.at,
-							onChange: (e) => p.onForm({ at: e.target.value })
-						}),
-						p.tz && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "muted",
-							children: [p.tz, " — this device's time"]
-						}),
-						p.runs && !p.runs.runs_here && p.runs.runs_on && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "muted",
-							children: [
-								"Starts on ",
-								p.runs.runs_on,
-								" — the device that runs automation."
-							]
-						})
-					]
-				})]
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "check",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "checkbox",
+								id: "tpl-scheduled",
+								checked: form.scheduled,
+								onChange: (e) => p.onForm({ scheduled: e.target.checked })
+							}),
+							"Run on a schedule ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "muted",
+								children: "— starts a new session from it, by itself"
+							})
+						]
+					}),
+					form.scheduled && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "tpl-schedule-when",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+								id: "tpl-days",
+								"aria-label": "Which days",
+								value: form.days,
+								onChange: (e) => p.onForm({ days: e.target.value === "weekdays" ? "weekdays" : e.target.value === "cron" ? "cron" : "daily" }),
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: "daily",
+										children: "Every day"
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: "weekdays",
+										children: "Weekdays"
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: "cron",
+										children: "Custom (cron)"
+									})
+								]
+							}),
+							form.days === "cron" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								id: "tpl-cron",
+								"aria-label": "Cron expression",
+								autoComplete: "off",
+								spellCheck: false,
+								value: form.cron,
+								onChange: (e) => p.onForm({ cron: e.target.value }),
+								placeholder: "*/30 * * * *"
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "at" }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									id: "tpl-at",
+									type: "time",
+									"aria-label": "Time",
+									autoFocus: ui.editing !== null && p.scheduleFocus === true,
+									value: form.at,
+									onChange: (e) => p.onForm({ at: e.target.value })
+								}),
+								p.tz && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "muted",
+									children: [p.tz, " — this device's time"]
+								})
+							] }),
+							p.runs && !p.runs.runs_here && p.runs.runs_on && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "muted",
+								children: [
+									"Starts on ",
+									p.runs.runs_on,
+									" — the device that runs automation."
+								]
+							})
+						]
+					}),
+					form.scheduled && form.days === "cron" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "tpl-cron-preview" + (p.cronPreview && !p.cronPreview.ok ? " error" : " muted"),
+						id: "tpl-cron-preview",
+						"aria-live": "polite",
+						children: cronPreviewLine(p.cronPreview) || "minute hour day-of-month month weekday — local time"
+					}),
+					form.scheduled && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "tpl-cron-preview muted",
+						children: "A scheduled run is skipped while the previous one is still working or waiting on you."
+					})
+				]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "tpl-ft",
-				role: "group",
-				"aria-label": "Fast-track",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "tpl-ft-label",
-					children: ["Fast-track to ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "tpl-autopilot",
+				children: [
+					"When a run's turn ends",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+						id: "tpl-autopilot",
+						value: form.autopilot,
+						onChange: (e) => {
+							const autopilot = e.target.value;
+							p.onForm(autopilot && form.mode === "in_place" ? {
+								autopilot,
+								mode: "worktree"
+							} : { autopilot });
+						},
+						children: AUTOPILOT_CHOICES.map(([v, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: v,
+							children: label
+						}, v || "leave"))
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "muted",
-						children: "— how far a session from it ships itself"
-					})]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FastTrackChoice, {
-					id: "tpl-fasttrack",
-					label: "Fast-track to",
-					value: form.fasttrack,
-					onChange: (l) => p.onForm(l !== "leave" && form.mode === "in_place" ? {
-						fasttrack: l,
-						mode: "worktree"
-					} : { fasttrack: l }),
-					askFirst: form.ask_first,
-					onAskFirst: (on) => p.onForm({ ask_first: on })
-				})]
+						children: "— each Run now and scheduled run"
+					})
+				]
 			}),
 			ui.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "error",
@@ -65712,7 +65899,9 @@ function TemplatesDialogView(p) {
 						"A template is a saved session setup — folder, agent and task — that starts a",
 						" ",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "new" }),
-						" session: now, or on a schedule. To send text to a session that's already running, use Prompts."
+						" session: now, on a schedule (a daily time or any cron expression), or with ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "mindflock run <name>" }),
+						". To send text to a session that's already running, use Prompts."
 					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -65764,13 +65953,36 @@ function TemplatesDialogView(p) {
 											(() => {
 												const info = runs.runs[t.name.trim().toLowerCase()] || {};
 												const line = runLine(t, info, runs);
-												return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [line && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-													className: "tpl-runs",
-													children: line
-												}), info.last_error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-													className: "tpl-run-error error",
-													children: ["Last run failed: ", info.last_error]
-												})] });
+												return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+													line && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+														className: "tpl-runs",
+														children: line
+													}),
+													info.last_error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+														className: "tpl-run-error error",
+														children: ["Last run failed: ", info.last_error]
+													}),
+													info.last_skip && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+														className: "tpl-run-skip muted",
+														children: [
+															"Skipped ",
+															whenLabel(info.last_skip_at),
+															": ",
+															info.last_skip
+														]
+													}),
+													info.history && info.history.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+														className: "tpl-history",
+														children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: [
+															"Recent runs (",
+															info.history.length,
+															")"
+														] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: info.history.map((h, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+															className: h.error ? "error" : h.skipped ? "muted" : "",
+															children: historyLine(h)
+														}, i)) })]
+													})
+												] });
 											})(),
 											t.prompt && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 												className: "tpl-prompt",
@@ -65888,7 +66100,28 @@ function TemplatesDialog() {
 	const [running, setRunning] = (0, import_react.useState)("");
 	const [agents, setAgents] = (0, import_react.useState)([]);
 	const [scheduleFocus, setScheduleFocus] = (0, import_react.useState)(false);
+	const [preview, setPreview] = (0, import_react.useState)(null);
 	const editingRef = (0, import_react.useRef)(null);
+	const wantsPreview = open && ui.editing !== null && form.scheduled && form.days === "cron";
+	const cronText = form.cron.trim();
+	(0, import_react.useEffect)(() => {
+		if (!wantsPreview || !cronText) {
+			setPreview(null);
+			return;
+		}
+		let live = true;
+		const timer = setTimeout(() => {
+			cronPreview(cronText).then((pv) => {
+				if (live) setPreview(pv);
+			}).catch(() => {
+				if (live) setPreview(null);
+			});
+		}, 300);
+		return () => {
+			live = false;
+			clearTimeout(timer);
+		};
+	}, [wantsPreview, cronText]);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
 		dispatch({ t: "cancel" });
@@ -66000,6 +66233,7 @@ function TemplatesDialog() {
 		templates,
 		runs,
 		running,
+		cronPreview: preview,
 		onRun: (name) => void run(name),
 		ui,
 		form,
@@ -66678,6 +66912,57 @@ function SplitCheck({ id, split, onSplit, gate, maxPieces, onMaxPieces, limit, t
 			})
 		]
 	});
+}
+//#endregion
+//#region src/components/dialogs/FastTrackChoice.tsx
+function Seg({ value, options, onChange, label, id }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "rt-seg",
+		role: "group",
+		"aria-label": label,
+		id,
+		children: options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: o.v === value ? "on" : void 0,
+			"aria-pressed": o.v === value,
+			title: o.title,
+			disabled: o.disabled || void 0,
+			onClick: () => onChange(o.v),
+			children: o.label
+		}, o.v))
+	});
+}
+function FastTrackChoice({ id, label, value, onChange, askFirst, onAskFirst, lanes = LANE_CHOICES, laneLabel, laneTitle, disabledReason, askReason }) {
+	const askWhy = askReason || (askFirstApplies(value) ? "" : "Fast-track is off: nothing is committed, pushed or merged for you");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
+		id,
+		label,
+		value,
+		options: lanes.map((l) => ({
+			v: l,
+			label: laneLabel?.[l] || LANE_LABEL[l],
+			title: disabledReason?.[l] || laneTitle?.[l] || LANE_DESC[l],
+			disabled: !!disabledReason?.[l]
+		})),
+		onChange
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "check rt-ask" + (askWhy ? " disabled" : ""),
+		title: askWhy || ASK_FIRST_DESC,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				id: id + "-ask",
+				checked: !askWhy && askFirst,
+				disabled: !!askWhy,
+				onChange: (e) => onAskFirst(e.target.checked)
+			}),
+			ASK_FIRST_LABEL,
+			askWhy && !askReason && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "muted",
+				children: " (needs fast-track)"
+			})
+		]
+	})] });
 }
 //#endregion
 //#region src/components/dialogs/NewList.tsx
@@ -67976,12 +68261,12 @@ function templateFiller(ctx) {
 		if (t.workspace_strategy) setStrategy(t.workspace_strategy);
 		setInPlace(!!t.in_place && !t.provisioned);
 		setInitRepo(!!t.init_repo);
-		const ft = t.fasttrack;
+		const ft = t.autopilot;
 		setLane(ft && LANES.includes(ft) ? ft : "leave");
-		setAskFirst(!!t.ask_first);
+		setAskFirst(false);
 		setActiveTemplate(t.name);
 		if (opts.quiet) return;
-		setAdvancedOpen(!!(t.provisioned || t.init_repo || ft && ft !== "leave"));
+		setAdvancedOpen(!!(t.provisioned || t.init_repo || ft));
 	};
 	return fillFromTemplate;
 }
@@ -78808,10 +79093,39 @@ function Workspace({ gotoScreen }) {
 							" and says which hook it skipped. Test and secret-scanning hooks are refused here."
 						] })
 					]
-				})
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FailureNotesRow, {})
 			]
 		})
 	] });
+}
+function FailureNotesRow() {
+	const s = useSettings();
+	const on = s.get("repository", "fasttrack_failure_notes") !== false;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row set-switch-row",
+		id: "workspace-failure-notes",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "notif-rule-text",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Tell the agent when fast-track stops"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint notif-rule-desc",
+				children: "When a pre-commit step or the verification check fails, CI goes red or the PR conflicts with its base, fast-track stops and leaves the agent a one-line note: what failed and to fix it — or, when it is a conflict with someone else's change, to stop and tell you. You still get the usual \"fast-track stopped\" notice."
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "ca-switch",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				checked: on,
+				onChange: (e) => {
+					s.saveField("repository", "fasttrack_failure_notes", e.target.checked);
+					toast(e.target.checked ? "Fast-track will tell the agent what failed" : "Fast-track failure notes off");
+				}
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+		})]
+	});
 }
 //#endregion
 //#region src/components/settings/screens/Ide.tsx
@@ -89799,6 +90113,7 @@ function App() {
 	(0, import_react.useEffect)(() => installSurfaceHash(), []);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnBanner, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MemoryNotice, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateNotice, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TopBar, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sidebar, {

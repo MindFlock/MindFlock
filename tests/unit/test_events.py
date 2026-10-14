@@ -123,6 +123,9 @@ def test_event_names_vocabulary_is_complete():
         "run.needs_you",
         "run.task_shipped",
         "run.finished",
+        "template.run_started",
+        "template.run_failed",
+        "template.run_skipped",
         "device.join_requested",
         "device.joined",
         "device.removed",
@@ -135,6 +138,7 @@ def test_event_names_vocabulary_is_complete():
         "peer.message",
         "peer.relay_changed",
         "update.available",
+        "system.memory_changed",
     }
 
 

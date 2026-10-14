@@ -8,8 +8,10 @@
  *
  * Each card also has **Run now** (a fresh session from the template, its
  * prompt already sent — lib/templateRun) and may carry a **schedule** (every
- * day or weekdays at a local time; the server's template_schedule loop
- * starts it), with the next and last run under the name.
+ * day or weekdays at a local time, or a cron expression whose meaning and
+ * next runs the server previews as you type; the server's template_schedule
+ * loop starts it), with the next and last run under the name, a "Recent
+ * runs" fold, and an optional **autopilot** depth each run is armed with.
  *
  * Every confirm is a row in the card, never a browser dialog: Electron has
  * no window.confirm/prompt/alert, and a Delete that silently does nothing is
@@ -24,8 +26,11 @@ import { toast } from "../../lib/toast";
 import { errMsg } from "../../lib/format";
 import { Modal } from "../Modal";
 import {
+  AUTOPILOT_CHOICES,
   TEMPLATES_CHANGED,
+  cronPreview,
   deleteTemplate,
+  hasSchedule,
   ensureTemplates,
   readTemplatesTarget,
   runProblem,
@@ -34,19 +39,18 @@ import {
   templateRunsNow,
   templatesNow,
   whenLabel,
+  type CronPreview,
   type Template,
+  type TemplateAutopilot,
+  type TemplateRunEntry,
   type TemplateRunInfo,
   type TemplateRunsStatus,
 } from "../../lib/templates";
 import { runTemplateNow } from "../../lib/templateRun";
 import { api } from "../../api/client";
-import { LANE_LABEL, type Lane } from "../../lib/laneActions";
 import { leafName, newSessionResume } from "./newSession";
-import { FastTrackChoice } from "./FastTrackChoice";
 import { IN_PLACE_HINT, InitRepoCheck, ProvisionCheck, StrategyPicker, WorktreeText } from "./newSession/WorkspaceFold";
 
-/** A template as the server stores it, fast-track included (lib/templates'
- * Template predates the field). */
 /** A run row, with the time zone the schedule's "at" is in. */
 type RunInfoX = TemplateRunInfo & { tz?: string };
 
@@ -60,9 +64,6 @@ function localZone(): string {
     return "";
   }
 }
-
-/** The fast-track choices a template can carry (Off = none stored). */
-export const TEMPLATE_LANES: Lane[] = ["leave", "commit", "push", "pr", "merge"];
 
 /** The dialog's UI state: which card is open for editing ("" = the + New
  * form, null = none) and which card is asking "delete?". One at a time —
@@ -115,13 +116,14 @@ export interface TemplateForm {
   mode: "worktree" | "in_place" | "provisioned";
   workspace_strategy: string;
   init_repo: boolean;
-  /** Run on a schedule: every day / weekdays at `at` (local "HH:MM"). */
+  /** Run on a schedule: every day / weekdays at `at` (local "HH:MM"), or
+   * on the cron expression `cron` ("cron"). */
   scheduled: boolean;
   at: string;
-  days: "daily" | "weekdays";
-  /** How far a session from it ships itself ("leave" = off). */
-  fasttrack: Lane;
-  ask_first: boolean;
+  days: "daily" | "weekdays" | "cron";
+  cron: string;
+  /** How far each run carries its work on its own ("" = leave it). */
+  autopilot: TemplateAutopilot | "";
 }
 
 export function formFromTemplate(t: Template | null): TemplateForm {
@@ -133,11 +135,11 @@ export function formFromTemplate(t: Template | null): TemplateForm {
     mode: t?.provisioned ? "provisioned" : t?.in_place ? "in_place" : "worktree",
     workspace_strategy: t?.workspace_strategy === "clone" ? "clone" : "worktree",
     init_repo: !!t?.init_repo,
-    scheduled: !!t?.schedule?.at,
+    scheduled: !!t && hasSchedule(t),
     at: t?.schedule?.at || "21:00",
-    days: t?.schedule?.days === "weekdays" ? "weekdays" : "daily",
-    fasttrack: TEMPLATE_LANES.includes(t?.fasttrack as Lane) ? (t!.fasttrack as Lane) : "leave",
-    ask_first: !!t?.ask_first,
+    days: t?.schedule?.cron ? "cron" : t?.schedule?.days === "weekdays" ? "weekdays" : "daily",
+    cron: t?.schedule?.cron || "0 21 * * 1-5",
+    autopilot: t?.autopilot || "",
   };
 }
 
@@ -147,8 +149,11 @@ export function templateBody(f: TemplateForm): { body: Template } | { error: str
   if (!name) return { error: "A template needs a name." };
   if (name.length > 100) return { error: "Names are at most 100 characters." };
   const at = f.at.trim();
+  const cron = f.cron.trim().replace(/\s+/g, " ");
   if (f.scheduled) {
-    if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(at)) return { error: "Pick a time for the schedule, like 21:00." };
+    if (f.days === "cron") {
+      if (!cron) return { error: "Type a cron expression, like 0 21 * * 1-5 (weekdays at 21:00)." };
+    } else if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(at)) return { error: "Pick a time for the schedule, like 21:00." };
     if (!f.repo_path.trim() && f.mode !== "provisioned")
       return { error: "A scheduled template needs a folder to start its session in." };
     if (!f.prompt.trim()) return { error: "A scheduled template needs a task — it's what the session is told to do." };
@@ -163,11 +168,11 @@ export function templateBody(f: TemplateForm): { body: Template } | { error: str
       in_place: f.mode === "in_place",
       workspace_strategy: f.workspace_strategy === "clone" ? "clone" : "worktree",
       init_repo: f.init_repo,
-      ...(f.scheduled ? { schedule: { at, days: f.days } } : {}),
-      ...(f.fasttrack && f.fasttrack !== "leave"
-        ? { fasttrack: f.fasttrack, ...(f.ask_first ? { ask_first: true } : {}) }
+      ...(f.scheduled
+        ? { schedule: f.days === "cron" ? { cron } : { at, days: f.days === "weekdays" ? "weekdays" : "daily" } }
         : {}),
-    } as Template,
+      ...(f.autopilot ? { autopilot: f.autopilot } : {}),
+    },
   };
 }
 
@@ -179,6 +184,13 @@ export function renameLeaves(oldName: string, newName: string): string | null {
   const b = newName.trim().toLowerCase();
   return a && a !== b ? oldName : null;
 }
+
+/** The card's words for what a run does once its turn ends. */
+const AUTOPILOT_THEN: Record<TemplateAutopilot, string> = {
+  commit: "commit",
+  push: "commit + push",
+  pr: "open a PR",
+};
 
 /** One line about a template, for the card under its name. */
 export function templateMeta(t: Template): string {
@@ -197,9 +209,7 @@ export function templateMeta(t: Template): string {
         : "separate worktree"
   );
   if (t.init_repo) bits.push("git init");
-  const ft = t.fasttrack;
-  if (ft && ft !== "leave" && ft in LANE_LABEL)
-    bits.push("fast-track → " + LANE_LABEL[ft as Lane] + (t.ask_first ? " (asks first)" : ""));
+  if (t.autopilot) bits.push("then: " + AUTOPILOT_THEN[t.autopilot]);
   return bits.join(" · ");
 }
 
@@ -214,8 +224,8 @@ export function runLine(
 ): string {
   const bits: string[] = [];
   const tz = (info as RunInfoX).tz;
-  if (t.schedule?.at) {
-    bits.push(scheduleLabel(t.schedule) + (tz ? " " + tz : ""));
+  if (hasSchedule(t)) {
+    bits.push((info.schedule_label || scheduleLabel(t.schedule)) + (tz && t.schedule?.at ? " " + tz : ""));
     if (!status.runs_here && status.runs_on) bits.push("starts on " + status.runs_on);
     else if (info.next_at) bits.push("next " + whenLabel(info.next_at, now));
   }
@@ -227,6 +237,26 @@ export function runLine(
         (info.last_session ? " → " + info.last_session : "")
     );
   return bits.join(" · ");
+}
+
+/** One history row: "today 21:00 · scheduled → nightly-oct14" (or why it
+ * failed / was skipped). */
+export function historyLine(h: TemplateRunEntry, now: Date = new Date()): string {
+  const bits = [whenLabel(h.at, now), h.trigger === "schedule" ? "scheduled" : "by hand"];
+  let line = bits.join(" · ");
+  if (h.skipped) line += " — skipped: " + h.skipped;
+  else if (h.error) line += " — failed: " + h.error;
+  else if (h.session) line += " → " + h.session + (h.autopilot ? " (autopilot: " + h.autopilot + ")" : "");
+  return line;
+}
+
+/** The line under a cron field: its words and next runs, or why it can't be
+ * saved ("" while nothing is known yet). */
+export function cronPreviewLine(pv: CronPreview | null | undefined, now: Date = new Date()): string {
+  if (!pv) return "";
+  if (!pv.ok) return pv.error || "Not a cron expression";
+  const next = (pv.next || []).map((t) => whenLabel(t, now)).join(", ");
+  return (pv.label || "") + (next ? " — next " + next : "");
 }
 
 interface ViewProps {
@@ -259,6 +289,8 @@ interface ViewProps {
   scheduleFocus?: boolean;
   /** This device's time zone ("EDT"), which a schedule's time is in. */
   tz?: string;
+  /** The server's reading of the cron field being typed. */
+  cronPreview?: CronPreview | null;
 }
 
 /** Markup only: everything it shows comes in as props. */
@@ -361,15 +393,15 @@ export function TemplatesDialogView(p: ViewProps) {
             name="tpl-mode"
             id="tpl-in-place"
             checked={form.mode === "in_place"}
-            // Fast-track commits for its own session, so it never drives a
+            // Autopilot commits for its own session, so it never drives a
             // shared checkout — the same rule as the New form.
-            onChange={() => p.onForm({ mode: "in_place", fasttrack: "leave", ask_first: false })}
+            onChange={() => p.onForm({ mode: "in_place", autopilot: "" })}
           />
           <span>
             This folder directly{" "}
             <span className="muted">
-              {form.fasttrack !== "leave"
-                ? "— turns fast-track off (it commits for this session, so it needs its own worktree)"
+              {form.autopilot
+                ? "— turns the autopilot off (it commits for this session, so it needs its own worktree)"
                 : IN_PLACE_HINT}
             </span>
           </span>
@@ -392,42 +424,79 @@ export function TemplatesDialogView(p: ViewProps) {
               id="tpl-days"
               aria-label="Which days"
               value={form.days}
-              onChange={(e) => p.onForm({ days: e.target.value === "weekdays" ? "weekdays" : "daily" })}
+              onChange={(e) =>
+                p.onForm({
+                  days: e.target.value === "weekdays" ? "weekdays" : e.target.value === "cron" ? "cron" : "daily",
+                })
+              }
             >
               <option value="daily">Every day</option>
               <option value="weekdays">Weekdays</option>
+              <option value="cron">Custom (cron)</option>
             </select>
-            <span>at</span>
-            <input
-              id="tpl-at"
-              type="time"
-              aria-label="Time"
-              autoFocus={ui.editing !== null && p.scheduleFocus === true}
-              value={form.at}
-              onChange={(e) => p.onForm({ at: e.target.value })}
-            />
-            {p.tz && <span className="muted">{p.tz} — this device's time</span>}
+            {form.days === "cron" ? (
+              <input
+                id="tpl-cron"
+                aria-label="Cron expression"
+                autoComplete="off"
+                spellCheck={false}
+                value={form.cron}
+                onChange={(e) => p.onForm({ cron: e.target.value })}
+                placeholder="*/30 * * * *"
+              />
+            ) : (
+              <>
+                <span>at</span>
+                <input
+                  id="tpl-at"
+                  type="time"
+                  aria-label="Time"
+                  autoFocus={ui.editing !== null && p.scheduleFocus === true}
+                  value={form.at}
+                  onChange={(e) => p.onForm({ at: e.target.value })}
+                />
+                {p.tz && <span className="muted">{p.tz} — this device's time</span>}
+              </>
+            )}
             {p.runs && !p.runs.runs_here && p.runs.runs_on && (
               <span className="muted">Starts on {p.runs.runs_on} — the device that runs automation.</span>
             )}
           </div>
         )}
+        {form.scheduled && form.days === "cron" && (
+          <div
+            className={"tpl-cron-preview" + (p.cronPreview && !p.cronPreview.ok ? " error" : " muted")}
+            id="tpl-cron-preview"
+            aria-live="polite"
+          >
+            {cronPreviewLine(p.cronPreview) || "minute hour day-of-month month weekday — local time"}
+          </div>
+        )}
+        {form.scheduled && (
+          <div className="tpl-cron-preview muted">
+            A scheduled run is skipped while the previous one is still working or waiting on you.
+          </div>
+        )}
       </div>
-      <div className="tpl-ft" role="group" aria-label="Fast-track">
-        {/* The New form's Fast-track control, not a dropdown of its own. */}
-        <span className="tpl-ft-label">
-          Fast-track to <span className="muted">— how far a session from it ships itself</span>
-        </span>
-        <FastTrackChoice
-          id="tpl-fasttrack"
-          label="Fast-track to"
-          value={form.fasttrack}
-          // A lane needs its own worktree (it commits for this session).
-          onChange={(l) => p.onForm(l !== "leave" && form.mode === "in_place" ? { fasttrack: l, mode: "worktree" } : { fasttrack: l })}
-          askFirst={form.ask_first}
-          onAskFirst={(on) => p.onForm({ ask_first: on })}
-        />
-      </div>
+      <label className="tpl-autopilot">
+        When a run's turn ends
+        <select
+          id="tpl-autopilot"
+          value={form.autopilot}
+          onChange={(e) => {
+            const autopilot = e.target.value as TemplateForm["autopilot"];
+            // Autopilot commits for this session, so it needs its own worktree.
+            p.onForm(autopilot && form.mode === "in_place" ? { autopilot, mode: "worktree" } : { autopilot });
+          }}
+        >
+          {AUTOPILOT_CHOICES.map(([v, label]) => (
+            <option key={v || "leave"} value={v}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <span className="muted">— each Run now and scheduled run</span>
+      </label>
       {ui.error && (
         <p className="error" aria-live="polite">
           {ui.error}
@@ -464,8 +533,9 @@ export function TemplatesDialogView(p: ViewProps) {
         </div>
         <p className="tpl-intro muted">
           A template is a saved session setup — folder, agent and task — that starts a{" "}
-          <strong>new</strong> session: now, or on a schedule. To send text to a session that's
-          already running, use Prompts.
+          <strong>new</strong> session: now, on a schedule (a daily time or any cron expression), or
+          with <code>mindflock run &lt;name&gt;</code>. To send text to a session that's already
+          running, use Prompts.
         </p>
         <div className="tpl-list" id="templates-list">
           {ui.editing === "" ? (
@@ -511,6 +581,23 @@ export function TemplatesDialogView(p: ViewProps) {
                         <>
                           {line && <div className="tpl-runs">{line}</div>}
                           {info.last_error && <div className="tpl-run-error error">Last run failed: {info.last_error}</div>}
+                          {info.last_skip && (
+                            <div className="tpl-run-skip muted">
+                              Skipped {whenLabel(info.last_skip_at)}: {info.last_skip}
+                            </div>
+                          )}
+                          {info.history && info.history.length > 0 && (
+                            <details className="tpl-history">
+                              <summary>Recent runs ({info.history.length})</summary>
+                              <ul>
+                                {info.history.map((h, i) => (
+                                  <li key={i} className={h.error ? "error" : h.skipped ? "muted" : ""}>
+                                    {historyLine(h)}
+                                  </li>
+                                ))}
+                              </ul>
+                            </details>
+                          )}
                         </>
                       );
                     })()}
@@ -607,7 +694,33 @@ export function TemplatesDialog() {
   const [running, setRunning] = useState("");
   const [agents, setAgents] = useState<string[]>([]);
   const [scheduleFocus, setScheduleFocus] = useState(false);
+  const [preview, setPreview] = useState<CronPreview | null>(null);
   const editingRef = useRef<string | null>(null);
+
+  // The cron field's meaning, asked of the server as it is typed (debounced;
+  // a stale answer never overwrites a newer one).
+  const wantsPreview = open && ui.editing !== null && form.scheduled && form.days === "cron";
+  const cronText = form.cron.trim();
+  useEffect(() => {
+    if (!wantsPreview || !cronText) {
+      setPreview(null);
+      return;
+    }
+    let live = true;
+    const timer = setTimeout(() => {
+      cronPreview(cronText)
+        .then((pv) => {
+          if (live) setPreview(pv);
+        })
+        .catch(() => {
+          if (live) setPreview(null);
+        });
+    }, 300);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [wantsPreview, cronText]);
 
   // The list from the server on every open, and again whenever anything
   // (this dialog, the New dialog's "Save prompt", a sync pull) changes it.
@@ -737,6 +850,7 @@ export function TemplatesDialog() {
       templates={templates}
       runs={runs}
       running={running}
+      cronPreview={preview}
       onRun={(name) => void run(name)}
       ui={ui}
       form={form}

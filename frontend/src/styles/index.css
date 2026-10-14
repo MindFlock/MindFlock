@@ -60,6 +60,7 @@
 @import "../components/dialogs/RedZonesDialog.css" layer(components); /* 185 */
 @import "../components/ConnBanner.css" layer(components); /* 200 */
 @import "../components/StateNotice.css" layer(components); /* 200 */
+@import "../components/MemoryNotice.css" layer(components); /* 200 */
 @import "../components/dialogs/SetupDialog.css" layer(components); /* 210 */
 @import "../components/palette/CommandPalette.css" layer(components); /* 220 */
 @import "../components/grid/contextPresets.css" layer(components); /* 230 */

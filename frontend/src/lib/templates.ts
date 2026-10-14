@@ -23,18 +23,42 @@ export interface Template {
   in_place?: boolean;
   init_repo?: boolean;
   /** Start a fresh session from this template on its own: daily (or
-   * weekdays) at a local "HH:MM". Absent = only by hand. */
+   * weekdays) at a local "HH:MM", or on a cron expression. Absent = only by
+   * hand. */
   schedule?: TemplateSchedule;
-  /** How far a session started from it ships itself: "commit" | "push" |
-   * "pr" | "merge" (backend/web/addons/templates.py). Absent = not at all. */
-  fasttrack?: string;
-  /** With `fasttrack`: stop and ask before the last rung. */
-  ask_first?: boolean;
+  /** How far each run (Run now or scheduled) carries its work on its own
+   * once its turn ends — the ⏩ autopilot. Absent = it stops where the
+   * agent leaves it. */
+  autopilot?: TemplateAutopilot;
 }
 
+/** Either `{at, days}` or `{cron}` (5-field, local time). */
 export interface TemplateSchedule {
-  at: string;
-  days: "daily" | "weekdays";
+  at?: string;
+  days?: "daily" | "weekdays";
+  cron?: string;
+}
+
+export type TemplateAutopilot = "commit" | "push" | "pr";
+
+/** The autopilot choices, in ladder order, with the editor's words. */
+export const AUTOPILOT_CHOICES: Array<[TemplateAutopilot | "", string]> = [
+  ["", "Leave it for me"],
+  ["commit", "Commit"],
+  ["push", "Commit + push"],
+  ["pr", "Open a PR"],
+];
+
+/** One run in a template's history (newest first): started (`session`),
+ * failed (`error`) or skipped (`skipped` — the previous run hadn't
+ * finished). */
+export interface TemplateRunEntry {
+  at: number;
+  trigger: string;
+  session?: string;
+  error?: string;
+  skipped?: string;
+  autopilot?: string;
 }
 
 /** This device's record of a template's runs (GET /api/templates `runs`,
@@ -45,6 +69,12 @@ export interface TemplateRunInfo {
   last_session?: string;
   last_trigger?: string;
   last_error?: string;
+  /** The server's words for the schedule ("Every 30 minutes"). */
+  schedule_label?: string;
+  /** A scheduled run skipped since the last start: why. */
+  last_skip?: string;
+  last_skip_at?: number;
+  history?: TemplateRunEntry[];
 }
 
 export interface TemplateRunsStatus {
@@ -218,10 +248,30 @@ export function readTemplatesTarget(target: string | null | undefined): Template
   return { fromNew, schedule: null };
 }
 
-/** "Every day at 21:00" / "Weekdays at 21:00". */
+/** Whether a template starts itself. */
+export function hasSchedule(t: Template): boolean {
+  return !!(t.schedule && (t.schedule.at || t.schedule.cron));
+}
+
+/** "Every day at 21:00" / "Weekdays at 21:00" / "Cron 0 9 1 * mon" (the
+ * server's `schedule_label` says common cron shapes in words). */
 export function scheduleLabel(s: TemplateSchedule | undefined | null): string {
-  if (!s || !s.at) return "";
+  if (!s) return "";
+  if (s.cron) return "Cron " + s.cron;
+  if (!s.at) return "";
   return (s.days === "weekdays" ? "Weekdays at " : "Every day at ") + s.at;
+}
+
+/** What a cron field means, from the server (the rules a save applies). */
+export interface CronPreview {
+  ok: boolean;
+  label?: string;
+  next?: number[];
+  error?: string;
+}
+
+export async function cronPreview(expr: string): Promise<CronPreview> {
+  return api<CronPreview>("/api/templates/cron-preview?expr=" + encodeURIComponent(expr));
 }
 
 /** A run time for a card: "today 21:00", "tomorrow 21:00", "Mon 21:00", or
@@ -252,10 +302,9 @@ export function isPromptOnly(t: Template): boolean {
     !t.provisioned &&
     !t.in_place &&
     !t.init_repo &&
-    // A fast-track or a schedule is session setup: that is a template, even
+    // An autopilot or a schedule is session setup: that is a template, even
     // with no folder in it — offering it as a snippet to paste would drop both.
-    !t.fasttrack &&
-    !t.ask_first &&
+    !t.autopilot &&
     !t.schedule
   );
 }

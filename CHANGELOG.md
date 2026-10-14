@@ -36,6 +36,27 @@ fresh-eyes testers who could only use the UI (never the code or docs).
 - **Light/Dark in Settings → Appearance**, and a first launch follows the
   system's colour scheme.
 
+
+- **Cron sessions: templates run on any cron schedule.** Besides every day /
+  weekdays at a time, a template's schedule can be a cron expression
+  (`*/30 * * * *`, `0 21 * * 1-5`, `@weekly`), previewed in words with its next
+  runs as you type. Each fire starts a fresh session with the prompt sent; a
+  scheduled run is skipped while the previous one is still working or waiting
+  on you, so a slow job never stacks sessions. A template can also carry an
+  autopilot depth (commit, push or open a PR) that every run is armed with.
+  Cards show the last 20 runs; a scheduled run that can't start is a bell row
+  and a push. `mindflock run <template>` starts one from a shell and
+  `mindflock templates` lists them.
+- **Fast-track tells the agent what failed.** When a run stops on something
+  the agent can fix (a pre-commit step or the verification check failed, CI
+  went red, the PR conflicts with or is behind its base), the agent gets a
+  one-line `[MindFlock note …]`: what failed, where to look, and to fix it
+  and commit, or to stop and tell you when it clashes with someone else's
+  work. It is typed only once the agent is idle and never while you type. The
+  ✗ tooltip and the *fast-track stopped* toast say the agent was told. Team
+  run members are left to their run's own fix prompt. On by default; turn it
+  off in Settings → Workspace → Advanced.
+
 ### Changed
 
 - **One agent card everywhere** (Connections, Settings → Agents, Custom
@@ -76,6 +97,13 @@ fresh-eyes testers who could only use the UI (never the code or docs).
   "provider"), *auto-start* (never "ingestion"), *checklist* and *step*
   (never "plan").
 
+
+- **Workers always stay with their orchestrator on the rail.** A worker now
+  draws directly under its parent's family whatever the saved order says.
+  Dragging a worker elsewhere no longer un-nests it (it only reorders among
+  its siblings), dragging an orchestrator carries its workers, and the row
+  numbers, Alt+N and Ctrl+Tab follow the family order.
+
 ### Fixed
 
 - Aider (and other API-key agents) no longer read "Connected" without a key.
@@ -84,6 +112,7 @@ fresh-eyes testers who could only use the UI (never the code or docs).
   ordinary words, and never makes Push/Merge/Delete the Enter default.
 - Esc closes the Shortcuts sheet; top-bar tooltips show the shortcut that
   actually works (Alt+N in a browser tab).
+
 
 ## [0.8.6] - 2026-10-13
 
