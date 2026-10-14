@@ -672,6 +672,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_CODE_MAP_WARM` | on | `0` skips the boot warm-up that builds every open session's Code Map snapshot in the background (it is always off under pytest) |
 | `MINDFLOCK_MEMORY_GUARD` | on | `0` turns off the memory guard ([session-engine.md](session-engine.md#memory-guard)): the level reads `unknown`, so agent spawns, team-run starts, pipeline launches and the revive sweep are never held for memory |
 | `MINDFLOCK_REVIVE_ON_START` | on | `0` starts the server without the background revive sweep (sandboxed or scratch servers), whatever `general.revive_on_start` says |
+| `MALLOC_ARENA_MAX` | `2` (server only) | glibc malloc arenas for the web server process. Unset, `run.py` caps them at 2 with `mallopt` before any thread starts (not via the environment, so agent shells keep glibc's default); set it (or `GLIBC_TUNABLES=glibc.malloc.arena_max=…`) to choose another cap — glibc applies yours and the server leaves it alone. Uncapped, every worker thread grew its own arena of freed-but-kept memory (~1 GB RSS on a busy server). See [architecture.md](architecture.md) |
 | `CLAUDE_CONFIG_DIR` | — | Extra Claude config root — scanned for token usage, and probed for login evidence (`.claude.json` / `.credentials.json`) by the provider auth probe (legacy/backend-only; see [providers.md](providers.md)) |
 | `GH_TOKEN` / `GITHUB_TOKEN` | — | GitHub auth fallback for the PR flow |
 | `SHELL` | — | Shell used by each session's Terminal tab |
