@@ -119,11 +119,6 @@
   cursor: default;
 }
 
-/* Holds the chevron's column so a queued title lines up with the rows above. */
-.inst.run-queued .chevron.q-spacer {
-  visibility: hidden;
-}
-
 .inst.run-queued .dot.queued {
   background: transparent;
   border: 1px solid var(--muted);

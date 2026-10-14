@@ -113,6 +113,9 @@ export function WindowRowItem({ row, idx, numbered = true, onScreen, dropCue, ..
             same thing whichever row you read it on. */}
         {row.key === windowKey("chat") && <AssistantRowChip />}
         {row.kind && <span className="stagechip win-kind">{row.kind}</span>}
+        {/* A window has no session menu, but holds the ⋮'s slot so its chip
+            lines up with the session rows' chips. */}
+        <span className="row-kebab-slot" aria-hidden="true" />
         <button
           className="kill"
           title="Close window"

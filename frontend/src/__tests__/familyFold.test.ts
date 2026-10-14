@@ -46,7 +46,7 @@ describe("folding an orchestrator's sub-sessions", () => {
     expect(src).toContain("ui.filter ? NO_FOLDS : ui.collapsedFamilies");
   });
 
-  it("is a worded toggle, not another chevron (› is the row's actions)", () => {
+  it("is a worded toggle, not a chevron (a chevron reads as “expand”)", () => {
     const row = rowSrc as string;
     expect(row).toContain('className="fold-kids"');
     expect(row).toContain('{folded ? "show " + kids.length : "hide"}');

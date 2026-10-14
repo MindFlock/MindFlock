@@ -1,5 +1,5 @@
 /* The one per-session menu (SessionMenu.tsx): the same items in the sidebar
-   row's accordion (.inst-actions) and the pane header's popover
+   row's popover (.row-menu) and the pane header's popover
    (.pane-more-menu). Everything here is scoped to .session-menu so the two
    hosts draw it identically. */
 

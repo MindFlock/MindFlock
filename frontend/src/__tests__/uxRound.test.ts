@@ -277,7 +277,7 @@ describe("queue panel, hidden sessions, keyed sidebar, polling", () => {
     useUi.getState().setHidden("alpha", true);
     expect(JSON.parse(storage.get("mf_hidden") ?? "[]")).toContain("alpha");
     expect(has(STORE, 'hidden: new Set(load<string[]>("mf_hidden", []))')).toBe(true);
-    expect(ROW).toContain('className="inst-actions"');
+    expect(ROW).toContain("useState<RowMenuOpen | null>(null)");
   });
 
   it("renders keyed rows that update in place", () => {

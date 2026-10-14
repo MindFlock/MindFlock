@@ -114,8 +114,9 @@ describe("one per-session menu", () => {
   it("both hosts draw the same model", () => {
     expect(code("components/sidebar/SidebarRow.tsx")).toContain("model={sessionMenu(inst, ctx, {");
     expect(code("components/grid/Pane.tsx")).toContain("sessionMenu(inst, menuCtx, {");
-    // The row's opener is ⋯ (a › read as expand/collapse).
-    expect(code("components/sidebar/SidebarRow.tsx")).toMatch(/aria-label="Actions for this session"[\s\S]{0,200}⋯/);
+    // The row's opener is an SVG ⋮ at its right end (a › read as
+    // expand/collapse, a ⋯ glyph beside the name looked out of place).
+    expect(code("components/sidebar/SidebarRow.tsx")).toMatch(/aria-label="Actions for this session"[\s\S]{0,500}<KebabIcon \/>/);
   });
 });
 

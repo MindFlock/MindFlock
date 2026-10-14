@@ -38652,6 +38652,136 @@ function SessionMenu({ model, onDone, onInUse }) {
 	});
 }
 //#endregion
+//#region src/lib/menuPlace.ts
+var MENU_MARGIN = 6;
+function placeMenu(a, w, h, vw, vh, m = MENU_MARGIN) {
+	const maxHeight = Math.max(0, vh - 2 * m);
+	const hh = Math.min(h, maxHeight);
+	let left = a.align === "end" ? a.x - w : a.x;
+	if (a.align === "start" && left + w > vw - m && a.x - w >= m) left = a.x - w;
+	left = Math.max(m, Math.min(left, vw - m - w));
+	let top;
+	if (a.y + hh <= vh - m) top = a.y;
+	else if (a.flipY - hh >= m) top = a.flipY - hh;
+	else top = Math.max(m, vh - m - hh);
+	return {
+		left: Math.round(left),
+		top: Math.round(top),
+		maxHeight
+	};
+}
+function refitMenu(prev, w, h, vw, vh, m = MENU_MARGIN) {
+	const maxHeight = Math.max(0, vh - 2 * m);
+	const hh = Math.min(h, maxHeight);
+	return {
+		left: Math.round(Math.max(m, Math.min(prev.left, vw - m - w))),
+		top: Math.round(Math.max(m, Math.min(prev.top, vh - m - hh))),
+		maxHeight
+	};
+}
+//#endregion
+//#region src/components/sidebar/RowMenu.tsx
+var ITEMS = "button:not(:disabled)";
+function RowMenu({ id, at, label, opener, onClose, children }) {
+	const box = (0, import_react.useRef)(null);
+	const [place, setPlace] = (0, import_react.useState)(null);
+	const placed = (0, import_react.useRef)(null);
+	const focused = (0, import_react.useRef)(false);
+	const close = (0, import_react.useRef)(onClose);
+	close.current = onClose;
+	(0, import_react.useLayoutEffect)(() => {
+		const el = box.current;
+		if (!el) return;
+		placed.current = null;
+		focused.current = false;
+		const fit = () => {
+			const w = el.offsetWidth;
+			const h = el.scrollHeight;
+			const next = placed.current ? refitMenu(placed.current, w, h, window.innerWidth, window.innerHeight) : placeMenu(at, w, h, window.innerWidth, window.innerHeight);
+			placed.current = next;
+			setPlace(next);
+		};
+		fit();
+		const ro = typeof ResizeObserver === "function" ? new ResizeObserver(fit) : null;
+		if (el.firstElementChild) ro?.observe(el.firstElementChild);
+		return () => ro?.disconnect();
+	}, [at]);
+	(0, import_react.useEffect)(() => {
+		if (!place || !at.keyboard || focused.current) return;
+		focused.current = true;
+		box.current?.querySelector(ITEMS)?.focus();
+	}, [place, at]);
+	(0, import_react.useEffect)(() => {
+		const onDown = (e) => {
+			const t = e.target;
+			if (box.current?.contains(t) || opener?.contains(t)) return;
+			close.current(false);
+		};
+		const onKey = (e) => {
+			if (e.key !== "Escape") return;
+			e.stopPropagation();
+			e.preventDefault();
+			close.current(true);
+		};
+		const onScroll = (e) => {
+			if (box.current?.contains(e.target)) return;
+			close.current(false);
+		};
+		const onResize = () => close.current(false);
+		document.addEventListener("mousedown", onDown, true);
+		document.addEventListener("keydown", onKey, true);
+		document.addEventListener("scroll", onScroll, true);
+		window.addEventListener("resize", onResize);
+		window.addEventListener("blur", onResize);
+		return () => {
+			document.removeEventListener("mousedown", onDown, true);
+			document.removeEventListener("keydown", onKey, true);
+			document.removeEventListener("scroll", onScroll, true);
+			window.removeEventListener("resize", onResize);
+			window.removeEventListener("blur", onResize);
+		};
+	}, [opener]);
+	const onKeyDown = (e) => {
+		if (![
+			"ArrowDown",
+			"ArrowUp",
+			"Home",
+			"End"
+		].includes(e.key)) return;
+		const items = Array.from(box.current?.querySelectorAll(ITEMS) ?? []);
+		if (!items.length) return;
+		e.preventDefault();
+		const i = items.indexOf(document.activeElement);
+		const n = items.length;
+		items[e.key === "Home" ? 0 : e.key === "End" ? n - 1 : e.key === "ArrowDown" ? (i + 1) % n : (i - 1 + n) % n].focus();
+	};
+	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		ref: box,
+		id,
+		className: "row-menu",
+		role: "menu",
+		"aria-label": label,
+		style: place ? {
+			left: place.left,
+			top: place.top,
+			maxHeight: place.maxHeight
+		} : {
+			left: 0,
+			top: 0,
+			visibility: "hidden"
+		},
+		onKeyDown,
+		onMouseDown: (e) => e.stopPropagation(),
+		onClick: (e) => e.stopPropagation(),
+		onDoubleClick: (e) => e.stopPropagation(),
+		onContextMenu: (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+		},
+		children
+	}), document.body);
+}
+//#endregion
 //#region src/lib/midName.ts
 var MIN_SPLIT = 14;
 function splitName(name) {
@@ -39059,7 +39189,10 @@ var FLAT = {
 };
 var NO_KIDS = [];
 var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbered = true, onScreen, dropCue, onDragState, onDropCue, onDropRow, nest = FLAT, kids = NO_KIDS, parentLive = false, runTask = null, leadRun = null }) {
-	const [expanded, setExpanded] = (0, import_react.useState)(false);
+	const [menuAt, setMenuAt] = (0, import_react.useState)(null);
+	const expanded = !!menuAt;
+	const kebab = (0, import_react.useRef)(null);
+	const menuId = (0, import_react.useId)();
 	const [closeArmed, setCloseArmed] = (0, import_react.useState)(false);
 	const [inUse, setInUse] = (0, import_react.useState)(null);
 	const strip = (0, import_react.useRef)(null);
@@ -39179,6 +39312,38 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 		}
 	};
 	(0, import_react.useEffect)(() => clearRenameTimer, []);
+	const openAtKebab = (keyboard) => {
+		const b = kebab.current?.getBoundingClientRect();
+		if (!b) return;
+		clearRenameTimer();
+		setMenuAt({
+			x: b.right,
+			y: b.bottom + 4,
+			flipY: b.top - 4,
+			align: "end",
+			keyboard
+		});
+	};
+	const closeMenu = (refocus = false) => {
+		setMenuAt(null);
+		if (refocus) kebab.current?.focus();
+	};
+	const onRowContextMenu = (e) => {
+		if (pending || editing) return;
+		const t = e.target;
+		if (isEditingTarget(t) || t.closest?.("a[href]")) return;
+		e.preventDefault();
+		e.stopPropagation();
+		clearRenameTimer();
+		if (e.button !== 2 && e.clientX === 0 && e.clientY === 0) return openAtKebab(true);
+		setMenuAt({
+			x: e.clientX,
+			y: e.clientY,
+			flipY: e.clientY,
+			align: "start",
+			keyboard: false
+		});
+	};
 	const armRename = () => {
 		clearRenameTimer();
 		renameTimer.current = window.setTimeout(() => {
@@ -39203,12 +39368,18 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 		setAlias(title, next === label.text ? "" : next);
 		toast(`Renamed to “${next}”`);
 	};
-	const rowCls = "inst" + (nested ? " nest-" + nest.depth : "") + (nest.stem ? " has-stem" : "") + (focused === title ? " active" : "") + (hidden ? " is-hidden" : "") + (missing ? " ws-missing" : "") + (pending ? " is-pending" : "") + (picked ? " bulk-picked" : "") + (dropCue ? ` drop-${dropCue}` : "");
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+	const rowCls = "inst" + (nested ? " nest-" + nest.depth : "") + (nest.stem ? " has-stem" : "") + (focused === title ? " active" : "") + (hidden ? " is-hidden" : "") + (missing ? " ws-missing" : "") + (pending ? " is-pending" : "") + (picked ? " bulk-picked" : "") + (menuAt ? " menu-open" : "") + (dropCue ? ` drop-${dropCue}` : "");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		className: rowCls,
 		"data-title": title,
 		tabIndex: answering ? 0 : void 0,
 		onKeyDown: (e) => {
+			if (!pending && !editing && (e.key === "ContextMenu" || e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) && !isEditingTarget(e.target)) {
+				e.preventDefault();
+				e.stopPropagation();
+				openAtKebab(true);
+				return;
+			}
 			if (!answering || e.ctrlKey || e.metaKey || e.altKey || !/^[1-9]$/.test(e.key)) return;
 			if (isEditingTarget(e.target)) return;
 			if (strip.current?.answerKey(e.key)) {
@@ -39244,6 +39415,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 				if (picking) return;
 				if (!missing && !pending) ideSession(title, true);
 			},
+			onContextMenu: onRowContextMenu,
 			children: [
 				(nested || nest.stem) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NestLines, {
 					nest,
@@ -39262,15 +39434,6 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "dot tone-" + ss.tone + " st-" + ss.state + (disconnected ? " disconnected" : "") + (disconnected || nested || nest.stem || lchip || pchip ? "" : " dot-quiet"),
 					title: disconnected ? "Terminal socket lost — reconnecting" : ss.label
-				}),
-				!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					className: "chevron" + (expanded ? " open" : ""),
-					title: "Actions for this session",
-					"aria-label": "Actions for this session",
-					"aria-haspopup": "menu",
-					"aria-expanded": expanded,
-					onClick: (e) => act(() => setExpanded((v) => !v), e),
-					children: "⋯"
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "meta" + (subline ? " has-lineage" : ""),
@@ -39517,6 +39680,19 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 					children: rz.label
 				}),
 				!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					ref: kebab,
+					type: "button",
+					className: "row-kebab" + (expanded ? " open" : ""),
+					title: "Actions for this session (or right-click the row)",
+					"aria-label": "Actions for this session",
+					"aria-haspopup": "menu",
+					"aria-expanded": expanded,
+					"aria-controls": expanded ? menuId : void 0,
+					onClick: (e) => act(() => expanded ? closeMenu() : openAtKebab(e.detail === 0), e),
+					onDoubleClick: (e) => e.stopPropagation(),
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KebabIcon, {})
+				}),
+				!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					className: "kill" + (missing ? " cleanup" : ""),
 					"aria-label": missing ? "Delete session" : "Close session",
 					title: missing ? "Delete — its workspace is gone; this removes the session" : "Close session — stops the agent and moves it to Recently closed (Ctrl+W / Del; reopen with Ctrl+Shift+T)",
@@ -39575,22 +39751,6 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 					onOpen: () => selectSession(title),
 					onRedirect: () => openThread(isWorker ? inst.parent : title, title)
 				}),
-				expanded && !pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "inst-actions",
-					role: "menu",
-					"aria-label": "Actions for " + shown,
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionMenu, {
-						model: sessionMenu(inst, ctx, {
-							onSelect: () => {
-								useUi.getState().pickRow(title, false);
-								setExpanded(false);
-							},
-							picked
-						}),
-						onInUse: setInUse,
-						onDone: () => setExpanded(false)
-					})
-				}),
 				inUse && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "folder-in-use",
 					role: "status",
@@ -39608,8 +39768,51 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 				})
 			]
 		})]
-	});
+	}), menuAt && !pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMenu, {
+		id: menuId,
+		at: menuAt,
+		label: "Actions for " + shown,
+		opener: kebab.current,
+		onClose: closeMenu,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionMenu, {
+			model: sessionMenu(inst, ctx, {
+				onSelect: () => {
+					useUi.getState().pickRow(title, false);
+					closeMenu();
+				},
+				picked
+			}),
+			onInUse: setInUse,
+			onDone: () => closeMenu()
+		})
+	})] });
 });
+function KebabIcon() {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+		width: "14",
+		height: "14",
+		viewBox: "0 0 24 24",
+		fill: "currentColor",
+		"aria-hidden": "true",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+				cx: "12",
+				cy: "5",
+				r: "2"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+				cx: "12",
+				cy: "12",
+				r: "2"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+				cx: "12",
+				cy: "19",
+				r: "2"
+			})
+		]
+	});
+}
 //#endregion
 //#region src/components/AssistantChip.tsx
 function AssistantChip() {
@@ -39688,6 +39891,10 @@ function WindowRowItem({ row, idx, numbered = true, onScreen, dropCue, ...dnd })
 				row.kind && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "stagechip win-kind",
 					children: row.kind
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "row-kebab-slot",
+					"aria-hidden": "true"
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					className: "kill",
@@ -41747,11 +41954,6 @@ function QueuedRow({ task, pos, groupName }) {
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "idx" }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dot queued" }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "chevron q-spacer",
-					"aria-hidden": "true",
-					children: "›"
-				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "meta has-lineage",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {

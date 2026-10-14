@@ -10,7 +10,6 @@
 /* Not the ACTIVE tab: this layer beats the component layer whatever the
    specificity, so a hover here used to wash the accent off the tab you had
    just clicked (it is still under the pointer). */
-.light .inst-actions button:hover,
 .light .pane-head .tabs button:not(.active):hover {
   background: rgba(0, 0, 0, 0.06);
 }

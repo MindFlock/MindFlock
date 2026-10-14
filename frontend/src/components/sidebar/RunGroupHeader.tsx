@@ -317,9 +317,6 @@ export function QueuedRow({ task, pos, groupName }: { task: RunTask; pos: number
       <div className="inst-row">
         <span className="idx" />
         <span className="dot queued" />
-        <span className="chevron q-spacer" aria-hidden="true">
-          ›
-        </span>
         <span className="meta has-lineage">
           <span className="title">{title}</span>
           <span className="lineage rep-idle">{queuedLine(pos)}</span>
