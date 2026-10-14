@@ -492,6 +492,9 @@ export function TemplatesDialogView(p: ViewProps) {
   return (
     <Modal
       id="templates-dialog"
+      // The top-bar dialogs' shared fixed top edge (Modal.css): opening the
+      // editor grows the card down instead of re-centring it.
+      className="top-dialog"
       onClose={p.onClose}
       // Escape withdraws an open editor or delete question first.
       onEscape={() => {

@@ -4,3 +4,59 @@
 .modal:focus {
   outline: none;
 }
+
+/* THE TOP-BAR DIALOGS' PLACEMENT — New, Intake, Verify and Schedule (the four
+   surfaces the top bar and Alt+N / I / V / S open) all carry `.top-dialog`
+   and hang from ONE fixed top edge, the same edge for every one of them.
+
+   Why a fixed top and not centring: a centred card shifts its top by half of
+   any height change, so clicking a tab slid the whole dialog under the
+   pointer, and opening a fold (New's More options, a Verify plan, a Schedule
+   editor) moved the thing you were reading. The two ways out are equal
+   heights or a fixed top, and equal heights loses — it holds a tall card open
+   over a short pane and leaves a dead band above the buttons. A fixed top
+   gives the same stillness and lets each card be exactly as tall as it needs.
+
+   Why ONE top for all four, not one per dialog (or per pane): with two
+   anchors, a switch between them still moves the header under the pointer —
+   New's tabs did exactly that when its landing panes and its form had their
+   own tops, and New/Intake sitting higher than a centred Verify/Schedule read
+   as an inconsistency the moment you hopped between them. The edge is chosen
+   so a typical card (--dlg-anchor-h, New's full form with More options shut
+   at ~900px) reads as centred; shorter cards sit a little high, the way a
+   launcher does, and taller ones grow DOWN rather than starting near the top
+   bar and sagging to the bottom of the window.
+
+   --dlg-top   that top edge, floored a clear 16px below the top bar — which
+               draws OVER every .modal (z-index 60), so a card that starts
+               under 40px has its head hidden, not merely crowded.
+   --dlg-max-h how far a card may grow: to the bottom of the window, less a
+               margin; past it the card's own body scrolls inside it. Cards
+               read it (it inherits) for anything else bounded by it, such as
+               a min-height that must never exceed it.
+
+   The rule lives here, once: a card's own sheet sets its width and chrome,
+   never its own top, centring or max-height. */
+.modal.top-dialog {
+  --dlg-anchor-h: 620px;
+  /* vh, not %: percentage padding resolves against the containing block's
+     WIDTH even on a full-viewport fixed element. */
+  --dlg-top: max(calc(var(--topbar-h, 40px) + 16px), calc((100vh - var(--dlg-anchor-h)) / 2));
+  --dlg-max-h: calc(100vh - var(--dlg-top) - 24px);
+  align-items: flex-start;
+  padding-top: var(--dlg-top);
+}
+
+/* A phone: the card is most of the screen anyway, and a centring margin is
+   just rows pushed below the fold — straight under the top bar. */
+@media (max-width: 480px) {
+  .modal.top-dialog {
+    --dlg-top: calc(var(--topbar-h, 40px) + 8px);
+    --dlg-max-h: calc(100vh - var(--dlg-top) - 8px);
+  }
+}
+
+/* Every card grows to the bottom margin at most, never past it. */
+.modal.top-dialog > * {
+  max-height: var(--dlg-max-h);
+}

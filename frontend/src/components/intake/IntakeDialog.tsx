@@ -353,7 +353,7 @@ export function IntakeDialog() {
 
   return (
     <SettingsCtx.Provider value={model}>
-      <Modal id="intake-dialog" onClose={closeDialog}>
+      <Modal id="intake-dialog" className="top-dialog" onClose={closeDialog}>
         <div id="intake-panel">
           <div className="ws-head">
             <h2>Intake</h2>

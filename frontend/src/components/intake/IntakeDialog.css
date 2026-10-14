@@ -13,8 +13,9 @@
 #intake-panel {
   width: 780px;
   max-width: 94vw;
-  min-height: min(420px, 84vh);
-  max-height: min(84vh, 760px);
+  /* Its top edge and its ceiling are the top-bar dialogs' shared ones
+     (.modal.top-dialog, Modal.css) — never set here. */
+  min-height: min(420px, var(--dlg-max-h));
   padding: 18px 22px 20px;
   border-radius: 12px;
   background: var(--panel);
@@ -1068,14 +1069,6 @@
 
 /* ---- Round 2 (fresh-eyes pass) ------------------------------------------- */
 
-/* Anchored to the top, not centred: the panel is content-sized (above), and a
-   centred box that changes height moves its own tab strip under the cursor on
-   every tab switch. Pinned at the top, a taller tab only grows downward. */
-#intake-dialog > #intake-panel {
-  align-self: flex-start;
-  margin-top: min(8vh, 64px);
-}
-
 /* Pause intake: one band above the tabs saying what auto-starts right now,
    with the one button that stops all of it. Amber while paused — it is the one
    state where nothing happens on its own, and that should be visible from
@@ -1225,11 +1218,6 @@
   #intake-panel {
     padding: 14px 12px 14px;
     max-width: 100vw;
-  }
-  /* Clear the top bar, which stays drawn over the backdrop. */
-  #intake-dialog > #intake-panel {
-    margin-top: 48px;
-    max-height: calc(100vh - 56px);
   }
   #intake-tabs {
     overflow-x: auto;

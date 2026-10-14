@@ -13,54 +13,9 @@
 }
 
 /* EVERY pane of New — Session page 1, the full form (page 2) and the Ticket
-   tab — hangs from ONE fixed top edge and grows downward from it (.nf-landing,
-   set by NewSessionDialog).
-
-   A centred card shifts its top by half of any height change, so clicking a
-   tab slid the whole dialog under the pointer, and opening More options moved
-   the form you were filling in. The two ways out are equal heights or a fixed
-   top, and equal heights loses here — it holds a tall card open over a short
-   pane and leaves a dead band above the buttons. A fixed top gives the same
-   stillness and lets each pane be exactly as tall as it needs to be.
-
-   One top for all three, not one per pane: with two anchors (the landing
-   panes' and the form's) a tab click between the form and Ticket still moved
-   the header — the tabs themselves — under the pointer. The top is chosen so
-   the TALLEST common pane, the full form with More options shut, reads as
-   centred (--nf-anchor-h, its rough height at ~900px). The shorter landing
-   panes then sit a little high, the way a launcher does, rather than the form
-   starting near the top bar and sagging to the bottom of the window (round 2,
-   whose 640px anchor did exactly that at 904px).
-
-   --nf-top   that top edge, floored a clear 16px below the top bar — which
-              draws OVER every .modal (z-index 60), so a card that starts
-              under 40px has its head hidden, not merely crowded.
-   --nf-max-h how far a card may grow: to the bottom of the window, less a
-              margin; past it the form's body scrolls inside the card. */
-#new-dialog.nf-landing {
-  --nf-anchor-h: 620px;
-  /* vh, not %: percentage padding resolves against the containing block's
-     WIDTH even on a full-viewport fixed element. */
-  --nf-top: max(calc(var(--topbar-h, 40px) + 16px), calc((100vh - var(--nf-anchor-h)) / 2));
-  --nf-max-h: calc(100vh - var(--nf-top) - 24px);
-  align-items: flex-start;
-  padding-top: var(--nf-top);
-}
-
-/* A phone: the card is most of the screen anyway, and a centring margin is
-   just rows of form pushed below the fold — straight under the top bar. */
-@media (max-width: 480px) {
-  #new-dialog.nf-landing {
-    --nf-top: calc(var(--topbar-h, 40px) + 8px);
-    --nf-max-h: calc(100vh - var(--nf-top) - 8px);
-  }
-}
-
-/* Every card grows to the bottom margin at most, never past it. */
-#new-dialog.nf-landing #new-form,
-#new-dialog.nf-landing #new-ticket-form {
-  max-height: var(--nf-max-h);
-}
+   tab — hangs from the top-bar dialogs' ONE fixed top edge and grows downward
+   from it (`.modal.top-dialog`, Modal.css, which also says why). Switching
+   Session/Ticket or opening More options never moves the card's top. */
 
 /* New header: title, then the tab strip, then Close pinned top-right.
 
@@ -127,7 +82,7 @@
   /* One column: the folder and agent, the Task, where it works, then More
      options. Its own natural height, never a fixed one: a modal that holds a
      tall card open over a short page is its own kind of wrong. It does not
-     move when it grows — the top edge is fixed (.nf-landing above) — and past
+     move when it grows — the top edge is fixed (.top-dialog, Modal.css) — and past
      the window's bottom margin .nf-body scrolls inside it. */
   width: min(660px, 94vw);
   height: auto;
@@ -1777,7 +1732,6 @@
   border-radius: 12px;
   padding: 20px 22px;
   width: min(600px, 92vw);
-  max-height: 86vh;
   display: flex;
   flex-direction: column;
   gap: 10px;

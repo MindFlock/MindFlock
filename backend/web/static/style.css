@@ -15098,54 +15098,9 @@ button.ct-chip:hover {
 }
 
 /* EVERY pane of New — Session page 1, the full form (page 2) and the Ticket
-   tab — hangs from ONE fixed top edge and grows downward from it (.nf-landing,
-   set by NewSessionDialog).
-
-   A centred card shifts its top by half of any height change, so clicking a
-   tab slid the whole dialog under the pointer, and opening More options moved
-   the form you were filling in. The two ways out are equal heights or a fixed
-   top, and equal heights loses here — it holds a tall card open over a short
-   pane and leaves a dead band above the buttons. A fixed top gives the same
-   stillness and lets each pane be exactly as tall as it needs to be.
-
-   One top for all three, not one per pane: with two anchors (the landing
-   panes' and the form's) a tab click between the form and Ticket still moved
-   the header — the tabs themselves — under the pointer. The top is chosen so
-   the TALLEST common pane, the full form with More options shut, reads as
-   centred (--nf-anchor-h, its rough height at ~900px). The shorter landing
-   panes then sit a little high, the way a launcher does, rather than the form
-   starting near the top bar and sagging to the bottom of the window (round 2,
-   whose 640px anchor did exactly that at 904px).
-
-   --nf-top   that top edge, floored a clear 16px below the top bar — which
-              draws OVER every .modal (z-index 60), so a card that starts
-              under 40px has its head hidden, not merely crowded.
-   --nf-max-h how far a card may grow: to the bottom of the window, less a
-              margin; past it the form's body scrolls inside the card. */
-#new-dialog.nf-landing {
-  --nf-anchor-h: 620px;
-  /* vh, not %: percentage padding resolves against the containing block's
-     WIDTH even on a full-viewport fixed element. */
-  --nf-top: max(calc(var(--topbar-h, 40px) + 16px), calc((100vh - var(--nf-anchor-h)) / 2));
-  --nf-max-h: calc(100vh - var(--nf-top) - 24px);
-  align-items: flex-start;
-  padding-top: var(--nf-top);
-}
-
-/* A phone: the card is most of the screen anyway, and a centring margin is
-   just rows of form pushed below the fold — straight under the top bar. */
-@media (max-width: 480px) {
-  #new-dialog.nf-landing {
-    --nf-top: calc(var(--topbar-h, 40px) + 8px);
-    --nf-max-h: calc(100vh - var(--nf-top) - 8px);
-  }
-}
-
-/* Every card grows to the bottom margin at most, never past it. */
-#new-dialog.nf-landing #new-form,
-#new-dialog.nf-landing #new-ticket-form {
-  max-height: var(--nf-max-h);
-}
+   tab — hangs from the top-bar dialogs' ONE fixed top edge and grows downward
+   from it (`.modal.top-dialog`, Modal.css, which also says why). Switching
+   Session/Ticket or opening More options never moves the card's top. */
 
 /* New header: title, then the tab strip, then Close pinned top-right.
 
@@ -15212,7 +15167,7 @@ button.ct-chip:hover {
   /* One column: the folder and agent, the Task, where it works, then More
      options. Its own natural height, never a fixed one: a modal that holds a
      tall card open over a short page is its own kind of wrong. It does not
-     move when it grows — the top edge is fixed (.nf-landing above) — and past
+     move when it grows — the top edge is fixed (.top-dialog, Modal.css) — and past
      the window's bottom margin .nf-body scrolls inside it. */
   width: min(660px, 94vw);
   height: auto;
@@ -16862,7 +16817,6 @@ button.ct-chip:hover {
   border-radius: 12px;
   padding: 20px 22px;
   width: min(600px, 92vw);
-  max-height: 86vh;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -17596,6 +17550,62 @@ button.ct-chip:hover {
    backdrop, not a control: no focus ring on it. */
 .modal:focus {
   outline: none;
+}
+
+/* THE TOP-BAR DIALOGS' PLACEMENT — New, Intake, Verify and Schedule (the four
+   surfaces the top bar and Alt+N / I / V / S open) all carry `.top-dialog`
+   and hang from ONE fixed top edge, the same edge for every one of them.
+
+   Why a fixed top and not centring: a centred card shifts its top by half of
+   any height change, so clicking a tab slid the whole dialog under the
+   pointer, and opening a fold (New's More options, a Verify plan, a Schedule
+   editor) moved the thing you were reading. The two ways out are equal
+   heights or a fixed top, and equal heights loses — it holds a tall card open
+   over a short pane and leaves a dead band above the buttons. A fixed top
+   gives the same stillness and lets each card be exactly as tall as it needs.
+
+   Why ONE top for all four, not one per dialog (or per pane): with two
+   anchors, a switch between them still moves the header under the pointer —
+   New's tabs did exactly that when its landing panes and its form had their
+   own tops, and New/Intake sitting higher than a centred Verify/Schedule read
+   as an inconsistency the moment you hopped between them. The edge is chosen
+   so a typical card (--dlg-anchor-h, New's full form with More options shut
+   at ~900px) reads as centred; shorter cards sit a little high, the way a
+   launcher does, and taller ones grow DOWN rather than starting near the top
+   bar and sagging to the bottom of the window.
+
+   --dlg-top   that top edge, floored a clear 16px below the top bar — which
+               draws OVER every .modal (z-index 60), so a card that starts
+               under 40px has its head hidden, not merely crowded.
+   --dlg-max-h how far a card may grow: to the bottom of the window, less a
+               margin; past it the card's own body scrolls inside it. Cards
+               read it (it inherits) for anything else bounded by it, such as
+               a min-height that must never exceed it.
+
+   The rule lives here, once: a card's own sheet sets its width and chrome,
+   never its own top, centring or max-height. */
+.modal.top-dialog {
+  --dlg-anchor-h: 620px;
+  /* vh, not %: percentage padding resolves against the containing block's
+     WIDTH even on a full-viewport fixed element. */
+  --dlg-top: max(calc(var(--topbar-h, 40px) + 16px), calc((100vh - var(--dlg-anchor-h)) / 2));
+  --dlg-max-h: calc(100vh - var(--dlg-top) - 24px);
+  align-items: flex-start;
+  padding-top: var(--dlg-top);
+}
+
+/* A phone: the card is most of the screen anyway, and a centring margin is
+   just rows pushed below the fold — straight under the top bar. */
+@media (max-width: 480px) {
+  .modal.top-dialog {
+    --dlg-top: calc(var(--topbar-h, 40px) + 8px);
+    --dlg-max-h: calc(100vh - var(--dlg-top) - 8px);
+  }
+}
+
+/* Every card grows to the bottom margin at most, never past it. */
+.modal.top-dialog > * {
+  max-height: var(--dlg-max-h);
 }
 }
 
@@ -18669,9 +18679,10 @@ button.ct-chip:hover {
    the two sections, a scheduled card's strip and the empty state. Imported
    after NewSessionDialog.css (styles/index.css), so equal selectors win. */
 
+/* Width only: its top edge and ceiling are the top-bar dialogs' shared ones
+   (.modal.top-dialog, Modal.css). */
 #templates-card {
   width: min(720px, 94vw);
-  max-height: 88vh;
   gap: 12px;
 }
 
@@ -20513,8 +20524,9 @@ button.linklike {
 #intake-panel {
   width: 780px;
   max-width: 94vw;
-  min-height: min(420px, 84vh);
-  max-height: min(84vh, 760px);
+  /* Its top edge and its ceiling are the top-bar dialogs' shared ones
+     (.modal.top-dialog, Modal.css) — never set here. */
+  min-height: min(420px, var(--dlg-max-h));
   padding: 18px 22px 20px;
   border-radius: 12px;
   background: var(--panel);
@@ -21568,14 +21580,6 @@ button.linklike {
 
 /* ---- Round 2 (fresh-eyes pass) ------------------------------------------- */
 
-/* Anchored to the top, not centred: the panel is content-sized (above), and a
-   centred box that changes height moves its own tab strip under the cursor on
-   every tab switch. Pinned at the top, a taller tab only grows downward. */
-#intake-dialog > #intake-panel {
-  align-self: flex-start;
-  margin-top: min(8vh, 64px);
-}
-
 /* Pause intake: one band above the tabs saying what auto-starts right now,
    with the one button that stops all of it. Amber while paused — it is the one
    state where nothing happens on its own, and that should be visible from
@@ -21725,11 +21729,6 @@ button.linklike {
   #intake-panel {
     padding: 14px 12px 14px;
     max-width: 100vw;
-  }
-  /* Clear the top bar, which stays drawn over the backdrop. */
-  #intake-dialog > #intake-panel {
-    margin-top: 48px;
-    max-height: calc(100vh - 56px);
   }
   #intake-tabs {
     overflow-x: auto;
@@ -22519,12 +22518,12 @@ button.linklike {
    under the title on every row. Same height contract as #intake-panel, and for
    the same reason — sized to its content, with a floor that stops a one-plan
    list collapsing into a strip and a ceiling that starts the body scrolling
-   instead of growing the card past the chrome. */
+   instead of growing the card past the chrome. The top edge and that ceiling
+   are the top-bar dialogs' shared ones (.modal.top-dialog, Modal.css). */
 #verify-panel {
   width: 860px;
   max-width: 94vw;
-  min-height: min(420px, 84vh);
-  max-height: min(84vh, 760px);
+  min-height: min(420px, var(--dlg-max-h));
   padding: 18px 22px 20px;
   border-radius: 12px;
   background: var(--panel);

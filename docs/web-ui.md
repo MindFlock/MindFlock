@@ -1940,16 +1940,20 @@ and **Clear** — beside the box on page 1 and beside **← Back** on the form,
 shown while something typed is in it — empties it on purpose. A Task the
 opening's own last-used template wrote doesn't count as typed.
 
-Every pane — Session page 1, the full form and the Ticket tab — hangs from
-ONE fixed top edge at its own natural height, so switching tabs or opening a
-fold never moves the card's top (a centred card shifts by half of any height
-change). The edge is placed so the tallest common pane, the full form with
-More options shut (`--nf-anchor-h`, 620 px), reads as centred; the shorter
-panes sit a little high, like a launcher. It is floored 16 px below the top
-bar (which draws over every modal), so on a short window — the desktop app at
-125 % zoom is ~723 px — the card never starts under or against it; on a phone
-it sits straight under the bar. A card grows downward to 24 px above the
-window's bottom and then scrolls inside. With More options shut the form fits
+**Dialog placement.** The four top-bar dialogs — **New**, **Intake**,
+**Verify** and **Schedule** — share ONE fixed top edge (`.modal.top-dialog`,
+`components/Modal.css`), so they open at exactly the same y, hopping between
+them never jumps, and a tab, fold or editor inside one never moves its top (a
+centred card shifts by half of any height change). The edge is placed so a
+typical card, New's full form with More options shut (`--dlg-anchor-h`,
+620 px), reads as centred (~142 px down on a 904 px window); shorter cards sit
+a little high, like a launcher. It is floored 16 px below the top bar (which
+draws over every modal), so on a short window — the desktop app at 125 % zoom
+is ~723 px — a card never starts under or against it; on a phone (≤480 px) it
+sits straight under the bar. A card grows downward to 24 px above the window's
+bottom (`--dlg-max-h`) and then scrolls inside. Every pane of New — Session
+page 1, the full form and the Ticket tab — hangs from that edge at its own
+natural height. Settings and the smaller dialogs stay centred. With More options shut the form fits
 a 723 px window without a scroll; at 420 px the fields stack and Fast-track's
 choices wrap.
 
@@ -2739,9 +2743,10 @@ two GitHub tabs are gated on the `git` cap only and explain themselves in place
 when it is missing: PR comments and issues run on their own switches and GitHub
 sign-in (the pipeline boots for them with no ticket source), so they are no
 longer locked behind connecting a tracker. The strip is a real `role="tablist"`
-(arrow keys move along it), and the dialog is anchored to the top of the window
-rather than centred, so switching to a taller tab grows it downward instead of
-moving the tab strip under the cursor.
+(arrow keys move along it), and the dialog hangs from the top-bar dialogs'
+shared top edge ([dialog placement](#new-session-dialog)) rather than being
+centred, so switching to a taller tab grows it downward instead of moving the
+tab strip under the cursor.
 
 **Pause intake.** A band above the tabs says what auto-starts right now
 (*Auto-start is on for tickets and PR comments.*) with one **Pause intake**

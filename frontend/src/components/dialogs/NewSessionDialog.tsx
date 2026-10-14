@@ -1413,9 +1413,11 @@ export function NewSessionDialog() {
     <div
       id="new-dialog"
       // Every pane — page 1, the full form and the Ticket tab — hangs from
-      // one fixed top edge at its own natural height (NewSessionDialog.css),
-      // so neither a tab click nor More options ever moves the card's top.
-      className="modal nf-landing"
+      // the top-bar dialogs' one fixed top edge at its own natural height
+      // (.top-dialog, Modal.css), so neither a tab click nor More options
+      // ever moves the card's top, and New opens where Intake, Verify and
+      // Schedule do.
+      className="modal top-dialog"
       ref={rootRef}
       onClick={(e) => {
         if (e.target === e.currentTarget) closeDialog();

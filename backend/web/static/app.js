@@ -67785,6 +67785,7 @@ function TemplatesDialogView(p) {
 	const empty = loaded && templates.length === 0 && ui.editing !== "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "templates-dialog",
+		className: "top-dialog",
 		onClose: p.onClose,
 		onEscape: () => {
 			if (ui.editing !== null && escapeRef.current?.()) return true;
@@ -71027,7 +71028,7 @@ function NewSessionDialog() {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		id: "new-dialog",
-		className: "modal nf-landing",
+		className: "modal top-dialog",
 		ref: rootRef,
 		onClick: (e) => {
 			if (e.target === e.currentTarget) closeDialog();
@@ -76983,6 +76984,7 @@ function IntakeDialog() {
 		value: model,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 			id: "intake-dialog",
+			className: "top-dialog",
 			onClose: closeDialog,
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				id: "intake-panel",
@@ -88879,6 +88881,7 @@ function VerifyDialog() {
 		value: model,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 			id: "verify-dialog",
+			className: "top-dialog",
 			role: "dialog",
 			"aria-modal": "true",
 			"aria-labelledby": "verify-title",
