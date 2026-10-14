@@ -162,13 +162,13 @@ def test_each_bar_label_is_one_door_button_keeping_its_old_id():
         (
             "components/sidebar/PrReviewBar.tsx",
             "pr-review-prs-btn",
-            "Pull requests",
+            "GitHub PRs",
             "prs",
         ),
         (
             "components/sidebar/GitIssueBar.tsx",
             "git-issue-repos-btn",
-            "Issues",
+            "GitHub issues",
             "issues",
         ),
     ):
@@ -182,7 +182,8 @@ def test_each_bar_label_is_one_door_button_keeping_its_old_id():
         # No second label span, and no separate open button beside the switch.
         assert '<span className="dc-label">' not in code, rel
         assert 'className="dc-toggle"' not in code, rel
-        assert 'className="dc-switch"' in code, rel
+        # The switch keeps its class (the Tickets one also adds "paused").
+        assert '"dc-switch"' in code or "'dc-switch'" in code, rel
 
 
 def test_the_door_style_exists():

@@ -9,6 +9,7 @@
  * "•••set" stays stored until replaced. */
 
 import { useEffect, useMemo, useState } from "react";
+import { takeAccountsIntent } from "../../setup/accountsIntent";
 import { api } from "../../../api/client";
 import type { AuthProfile, AuthProfilesResponse } from "../../../api/types";
 import { toast } from "../../../lib/toast";
@@ -59,8 +60,13 @@ export function Accounts(_: ScreenProps) {
   // picker as live would let someone "set" a default that every session then
   // ignores.
   const [envPinned, setEnvPinned] = useState("");
-  const [addOpen, setAddOpen] = useState(false);
-  const [draft, setDraft] = useState<AuthProfile>({ id: "", kind: "account" });
+  // Setup's "Add an API key" link leaves a one-shot intent: open the add form
+  // on the API-key kind for that agent instead of the CLI-account default.
+  const [intent] = useState(takeAccountsIntent);
+  const [addOpen, setAddOpen] = useState(!!intent);
+  const [draft, setDraft] = useState<AuthProfile>(
+    intent ? { id: "", kind: "api_key", provider: intent.provider } : { id: "", kind: "account" }
+  );
   const [error, setError] = useState("");
   const [probes, setProbes] = useState<Record<string, OrProbe>>({});
   const [testing, setTesting] = useState<string>("");

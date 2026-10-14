@@ -278,4 +278,11 @@ describe("Setup's API-key link lands on the API-key form", () => {
     expect(s).toMatch(/requestApiKeyForm\(defaultAgent\);\s*go\("settings", "accounts"\);/);
     expect(s).toContain("Add an API key");
   });
+
+  it("Accounts takes the intent once and opens its add form on the API-key kind", () => {
+    const s = code("components/settings/screens/Accounts.tsx");
+    expect(s).toContain("useState(takeAccountsIntent)");
+    expect(s).toMatch(/useState\(!!intent\)/);
+    expect(s).toMatch(/kind: "api_key", provider: intent\.provider/);
+  });
 });
