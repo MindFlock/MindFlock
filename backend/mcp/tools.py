@@ -577,6 +577,8 @@ _COMPACT_KEYS = (
     "last_turn",
 )
 #: Compact-row keys shown only when set (most sessions have neither).
+#: ``task_headline``: what the session is working on, as a short verb phrase
+#: read from its newest meaningful prompt ("Fix pin bar below terminal").
 #: ``person``: the id of the person the session was created for (rows of
 #: sessions that predate people carry none). ``owner`` / ``driver`` /
 #: ``viewers``: who it belongs to, who holds its keyboard, and who has it
@@ -588,6 +590,7 @@ _COMPACT_KEYS = (
 #: ``sleeping``: its agent was put to sleep to free memory (its activity
 #: reads offline meanwhile); a message or a prompt wakes it.
 _COMPACT_OPTIONAL = (
+    "task_headline",
     "autopilot",
     "pr_url",
     "person",

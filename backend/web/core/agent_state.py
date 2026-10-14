@@ -97,6 +97,20 @@ def _session_last_prompt_full(inst) -> Optional[str]:
         return None
 
 
+def _session_conversation(inst) -> str:
+    """The id of the conversation this window is running (the resume-thread
+    marker), or "" — what the task-headline memory is keyed by, so a new
+    conversation in the same window starts from its own prompts."""
+    try:
+        name = tmux.to_mindflock_tmux_name(inst.Title)
+        return (
+            providers.resolve(getattr(inst, "Program", "") or "").resume_thread_id(name)
+            or ""
+        )
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _session_find_prompt(inst, prefix: str) -> Optional[str]:
     """Full body of the newest USER prompt starting with ``prefix`` — lets the
     desktop prompt bar expand OLDER prompts than the latest (their full

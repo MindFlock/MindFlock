@@ -127,7 +127,12 @@ describe("the pane header", () => {
     // the server's Instance.Task, the same on every browser.
     expect(pane).toContain("const createTask = firstLine(inst.task);");
     expect(pane).toContain("const task = inst.last_prompt || createTask || null;");
-    expect(code("components/sidebar/SidebarRow.tsx")).toContain("inst.last_prompt || firstLine(inst.task)");
+    // The rail row reads the server's task headline first (TaskLine), then
+    // the same prompt → create-task fallback as the pane.
+    expect(code("components/sidebar/TaskLine.tsx")).toContain(
+      "inst.task_headline || inst.last_prompt || firstLine(inst.task)",
+    );
+    expect(code("components/sidebar/SidebarRow.tsx")).toContain("taskLineOf(inst).text");
     expect(firstLine("\n  add a README section\nwith details")).toBe("add a README section");
     expect(firstLine(null)).toBe("");
   });

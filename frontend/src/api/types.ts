@@ -265,6 +265,12 @@ export interface Instance {
   /** The same prompt's whole body (capped ~4000 chars) — the pin's
    * hover/click expansion. */
   last_prompt_full?: string | null;
+  /** What the session is working on as a short verb phrase ("Fix pin bar
+   * below terminal"), read from its newest MEANINGFUL prompt — "continue",
+   * "yes" and MindFlock's own notes keep the previous one; the create task's
+   * before any prompt. The rail row's task line. Optional: an older server
+   * doesn't send it. */
+  task_headline?: string | null;
   /** What the session was asked to do when it was created (the create
    * prompt, trimmed; first line is what the UI shows) — the pane's "Task:"
    * line until the transcript names a newer prompt. Null when it was started

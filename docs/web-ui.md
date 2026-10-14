@@ -526,7 +526,15 @@ transcript, or, until there is one (or for an agent MindFlock can't read a
 transcript of), the task it was created with (`task` on `/api/instances`:
 `Instance.Task`, the create prompt, set once and persisted in `state.json`);
 the ❯ arrow drops the whole prompt over the terminal. The sidebar row's
-muted sub-line reads the same.
+muted sub-line names the same task, condensed to a short verb phrase — the
+**task headline** (`task_headline` on `/api/instances`): "ok so can you please
+fix the bug where the pin bar draws below the terminal" reads **Fix pin bar
+drawing below terminal**, "why is the server using so much memory" reads
+**Investigate server memory use**. It is made by fixed rules, not a model, and
+a reply that carries no task ("continue", "yes", "commit and push", the revive
+prompt, a status ping) leaves the previous headline in place. Hover the line
+for the whole prompt as typed. This bar does not condense: it shows what you
+actually asked.
 
 - **⋯ is the session's one menu** — the same model as the sidebar row's ⋯
   (see [Session row actions](#session-row-actions-expand-a-sidebar-row-with-)),

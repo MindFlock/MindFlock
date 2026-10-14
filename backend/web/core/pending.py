@@ -231,6 +231,7 @@ def rows(engine=None) -> list:
                 "last_turn": None,
                 "last_prompt": None,
                 "last_prompt_full": None,
+                "task_headline": None,
                 "setup": None,
                 "check": None,
                 "ports": None,

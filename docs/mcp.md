@@ -431,7 +431,9 @@ narrower than configured. Call it first.
 (`running|ready|loading|paused`), `activity`
 (`working|idle|clarify|limit|offline`), `activity_since`, `stage`, `program`,
 `branch`, `folder`, `parent`, `spawned`, `last_turn`, `is_self`, `managed`,
-plus `remote`/`pending` when true, and `autopilot` (depth, state, step,
+plus `remote`/`pending` when true, `task_headline` (what it is working on as
+a short verb phrase, e.g. "Fix pin bar drawing below terminal") when set, and
+`autopilot` (depth, state, step,
 reason, url), `pr_url`, `person` (the id of the person the session was
 created for), `owner` (who it belongs to), `driver` (who holds its keyboard)
 and `viewers` (`{person id: {name, device, devices, since, typing}}` — who has

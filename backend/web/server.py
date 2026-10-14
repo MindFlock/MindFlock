@@ -86,6 +86,9 @@ modules under
     snapshot         per-session JSON descriptors (labels, diff stat)
     state_events     session.*_changed diffing: settle + boot quiet windows,
                      session.turn_ended gates, human-input presence
+    task_headlines   the row's task_headline: newest MEANINGFUL prompt as a
+                     verb phrase (backend/task_headline.py), remembered per
+                     session + conversation
     system_logs      log-tail sources for Settings → System logs
     team_runs        team runs: the record store, goal parser, pure planner
     team_run_driver  team runs: the loop, reconcile, effects, run.* events,
@@ -222,6 +225,7 @@ from backend.web.core import window_refresh as _window_refresh
 from backend.web.core import worktree_setup as _wt_setup
 from backend.web.core.proc import run_capped as _run_capped
 from backend.web.core import agent_state as _agent_state
+from backend.web.core import task_headlines as _task_headlines
 from backend.web.core.agent_state import (
     _ACTIVITY_CACHE,
     _ACTIVITY_CONFIRM_POLLS,
@@ -261,6 +265,7 @@ from backend.web.core.agent_state import (
     _precommit_lock_is_live,
     _precommit_lock_path,
     _proc_cpu_snapshot,
+    _session_conversation,
     _session_find_prompt,
     _session_last_prompt,
     _session_last_prompt_full,
@@ -1268,6 +1273,25 @@ def _session_last_prompt_full_cached(inst) -> Optional[str]:
     )
 
 
+def _session_task_headline_cached(
+    inst, prompt_full: Optional[str], prompt: Optional[str]
+) -> Optional[str]:
+    """The sidebar's task line (core.task_headlines): the newest MEANINGFUL
+    prompt as a short verb phrase, memoized per session like the prompt it
+    is read from."""
+    return _probe_cached(
+        "task_headline",
+        inst,
+        lambda: _task_headlines.for_session(
+            inst.Title,
+            prompt_full,
+            prompt,
+            getattr(inst, "Task", "") or None,
+            _session_conversation(inst),
+        ),
+    )
+
+
 # ---- /api/events state tick (F6) ------------------------------------------ #
 # *_changed events used to exist only as a side effect of GET /api/instances,
 # so a headless websocket consumer (no browser polling) saw nothing but
@@ -1556,6 +1580,12 @@ def _session_snapshot(i, queues: dict) -> dict:
     # terminal — and its whole body for the pin's hover/click expansion.
     d["last_prompt"] = _session_last_prompt_cached(i)
     d["last_prompt_full"] = _session_last_prompt_full_cached(i)
+    # That prompt as a short verb phrase ("Fix pin bar below terminal") for
+    # the sidebar's task line; "continue"/"yes"/MindFlock's own notes keep the
+    # last real task (core.task_headlines). None when there is nothing.
+    d["task_headline"] = _session_task_headline_cached(
+        i, d["last_prompt_full"], d["last_prompt"]
+    )
     # What it was asked to do when it was created (Instance.Task) — the
     # pane's "Task:" line until the transcript names a newer prompt, and the
     # only one for an agent whose transcript MindFlock can't read.
@@ -1598,6 +1628,7 @@ _SNAPSHOT_PROBE_KEYS = (
     "last_turn",
     "last_prompt",
     "last_prompt_full",
+    "task_headline",
     "setup",
     "check",
 )
@@ -1638,6 +1669,9 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["last_prompt"] = None
     d["last_prompt_full"] = None
     d["task"] = getattr(i, "Task", "") or None
+    # No transcript read on this path: the remembered headline, else the
+    # creation task's (the tick fills in the real one; ``prev`` wins below).
+    d["task_headline"] = _task_headlines.for_session(i.Title, None, None, d["task"])
     d["setup"] = None
     d["check"] = None
     pb = _ports.get(i.Title)

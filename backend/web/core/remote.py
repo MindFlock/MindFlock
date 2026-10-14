@@ -70,6 +70,7 @@ from starlette.responses import JSONResponse
 from backend import log
 from backend import tailscale_cli as _tailscale_cli
 from backend.config import config
+from backend.web.core import task_headlines as _task_headlines
 
 try:
     import aiohttp
@@ -1013,6 +1014,14 @@ def merged_instances() -> List[dict]:
             entry["display_title"] = entry["title"]
             entry["title"] = join_title(dev["key"], entry["title"])
             _namespace_refs(entry, dev["key"])
+            if "task_headline" not in entry:
+                # A device that predates the field: read its prompt here.
+                entry["task_headline"] = _task_headlines.for_session(
+                    entry["title"],
+                    entry.get("last_prompt_full"),
+                    entry.get("last_prompt"),
+                    entry.get("task"),
+                )
             out.append(entry)
     return out
 
