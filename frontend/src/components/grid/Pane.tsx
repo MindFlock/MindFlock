@@ -46,7 +46,8 @@ import { folderInUseText } from "../../lib/sessionActions";
 import { errorPop } from "../../lib/errorPop";
 import { rememberedTask } from "../../lib/sessionTask";
 import { useCalm } from "../../lib/useCalm";
-import { agentMissing } from "../../lib/sessionState";
+import { agentBlocked } from "../../lib/sessionState";
+import { AgentBlockedBanner } from "../setup/AgentBlocked";
 import { useSetup } from "../setup/useSetup";
 import { VerdictChip } from "../dialogs/VerdictChip";
 import { familyOf, newestReportTs, threadBadge, threadTabShown } from "../../lib/thread";
@@ -506,10 +507,11 @@ export function Pane({
     return () => ro.disconnect();
   }, [missing, loading]);
   const compact = calm || paneNarrow;
-  // An agent that isn't installed: the terminal says `claude: not found`, and
-  // the pane says what that means and where the fix is.
+  // An agent that isn't installed (the terminal says `claude: not found`) or
+  // isn't signed in (it sits at its first-run questions): the pane says what
+  // that means and where the fix is.
   const { data: setupStatus } = useSetup();
-  const noAgent = agentMissing(inst, setupStatus?.logins);
+  const noAgent = agentBlocked(inst, setupStatus?.logins);
 
   if (missing) {
     return (
@@ -954,22 +956,7 @@ export function Pane({
         </button>
         </div>
       </div>
-      {noAgent && (
-        <div className="pane-noagent" role="alert">
-          <span>
-            <b>{noAgent}</b> isn't installed on this computer, so this session's agent couldn't start.
-          </span>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              useUi.getState().openDialogFor("setup");
-            }}
-          >
-            Install {noAgent}…
-          </button>
-        </div>
-      )}
+      <AgentBlockedBanner block={noAgent} title={title} />
       <div className="pane-body" ref={bodyRef}>
         <div className={"pane-term agent-term" + (tab !== "agent" ? " hidden" : "")} ref={adopt("agent")}>
           {/* Pinned prompt: what this session was last asked to do, always

@@ -328,7 +328,9 @@ describe("agent sign-in", () => {
     expect(rows).toContain("not installed");
     expect(ALL_CODE).not.toContain("ProviderLoginModal");
     expect(providers).not.toContain("login-terminal"); // the route lives in AgentSignIn only
-    expect(providers).toContain("<AgentSignIn");
+    // Its sign-in is the shared agent card's (which renders AgentSignIn).
+    expect(providers).toContain("<AgentCard");
+    expect(src("components/settings/screens/Connections.tsx")).toContain("<AgentSignIn");
     expect(providers).toContain("/binary-path");
     // Row shapes are the unit-tested pure module, not inline JSX conditions.
     expect(providers).toContain("providerRows(");

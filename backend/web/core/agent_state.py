@@ -350,6 +350,7 @@ def _verdict(
             )
             rec["worked_at"] = now
             rec["last_worked_at"] = now  # never spent: see last_worked_at()
+            _note_first_work()
     else:
         # Any non-working reading ends the pane layer's proven-busy run,
         # WHATEVER layer delivered it. These used to be cleared only by the
@@ -364,6 +365,20 @@ def _verdict(
         if value == "limit":
             rec["worked_at"] = None
     return value
+
+
+def _note_first_work() -> None:
+    """The Setup checklist's "Start your first agent" ticks HERE — on the
+    first corroborated ``working`` reading — not when a session row appears:
+    a session parked at a sign-in prompt has not started anything. A process
+    flag inside :func:`setup_steps.note_agent_worked` makes every later call
+    free, so this costs nothing on the poll path."""
+    try:
+        from backend.web.core import setup_steps
+
+        setup_steps.note_agent_worked()
+    except Exception:  # noqa: BLE001 — a bookkeeping flag never breaks a poll
+        pass
 
 
 def worked_at(title: str) -> Optional[float]:

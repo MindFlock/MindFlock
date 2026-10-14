@@ -482,11 +482,22 @@ whole prompt over the terminal.
   on that branch's checklist — also on the row's ⋯ menu. When a checklist
   exists, its verdict chip (*✓ Verified*, *✗ Failed*, *3/5 checked*) sits beside
   the PR chip and opens it in one click.
-- **An agent that isn't installed.** When the session's agent CLI is missing
-  on this computer (`/api/setup`'s `logins`), a line over the terminal says
-  so with **Install <agent>…** (the Setup checklist), and the rail row reads
-  *Failed: claude isn't installed* with an **Install** chip — never Idle or
-  Offline/Restart. Once it is installed, the row's usual Restart takes over.
+- **An agent that isn't installed, or isn't signed in.** When the session's
+  agent CLI is missing on this computer (`/api/setup`'s `logins`), a line over
+  the terminal says so with **Install <agent>…** (the Setup checklist), and the
+  rail row reads *Failed: claude isn't installed* with an **Install** chip —
+  never Idle or Offline/Restart. Once it is installed, the row's usual Restart
+  takes over. When the CLI is installed but its login probe found nothing
+  (`logged_in: false`; "can't tell" never counts, nor a session on an account
+  profile of its own), the row reads *Not signed in* with a **Sign in** chip
+  instead of Idle or Question, and the pane says what its terminal is showing
+  (*Claude Code isn't signed in yet. Answer its questions in the terminal
+  below — a text style, then how to log in — and open the link it shows.*);
+  the chip focuses that session. An agent that quit at launch instead gets
+  **Sign in…** (the sign-in window), then MindFlock restarts it. Both clear by
+  themselves once the login lands (the pane re-reads `/api/setup` every 8 s).
+  The pieces live in `components/setup/AgentBlocked.tsx`
+  (`agentBlocked` in `lib/sessionState.ts`).
 
 - **One name.** The pane is titled with exactly what its rail row shows — the
   rename if there is one, else the `(tix) feature/slug` label — and the same
@@ -2215,11 +2226,16 @@ reload halfway through brings it back. UI store state
     optional extras such as Tailscale, peer links, a local model or the gh CLI
     never show here; every check is folded under *All checks (N)*, and
     Settings → Doctor lists them all; **Re-check**), ② **Sign in to your
-    agent** (one row per *installed* agent CLI, the default first, each green
-    once signed in or with a **Sign in to <agent>** button; *Using an API
-    key? Settings → Accounts*), ③ **Start your first agent** (*Pick a repo
-    folder and say what to do.* **+ New session**, whose dialog has the
-    folder browser).
+    agent** (the default agent's **agent card** — the same card Settings →
+    Connections, Agents and Custom agents show, with its one next action:
+    **Install** → **Sign in** → **Test**; *Using Claude Code · change*; *Using
+    an API key? Settings → Accounts*), ③ **Start your first agent** (*Pick a
+    repo folder and say what to do.* **+ New session**, whose dialog has the
+    folder browser). ③ ticks only once a session's agent has actually started
+    on its task (the activity classifier's first corroborated *working*
+    reading), not when a session row appears; until then a session that exists
+    says *Your first session is open. This ticks once its agent starts on your
+    task.* (or, while ② is not done, that it can't start until you sign in).
   - **Connect your work** (optional): ④ **Connect GitHub** (the Connect
     GitHub dialog below) and ⑤ **Connect your tracker** (**Add a ticket
     source** opens Intake → Tickets). Each has a **Skip** (and **Show
@@ -2328,11 +2344,26 @@ reload halfway through brings it back. UI store state
   usually what's being installed). Closing the window mid-install doesn't stop
   it (the next click reattaches); when it finishes the checklist re-checks
   itself.
-- **Sign in to <agent>** — on the doctor's *agent auth* rows (the card, Setup
-  and Settings → Doctor), on step ②'s row for each installed agent CLI, and on
-  Settings → Custom agents, whenever no login was found for a CLI that
-  declares a login flow. It opens the CLI's own login in a
-  terminal window (`AgentSignIn.tsx`); closing it re-runs the check.
+- **Sign in to <agent>** — on the doctor's *agent auth* rows (Setup and
+  Settings → Doctor) and on every agent card (Connections, Agents, Custom
+  agents, Setup ②), whenever no login was found for a CLI that declares a
+  login flow. It opens the CLI's own login in a terminal window
+  (`AgentSignIn.tsx`) that lists what the terminal will really ask — for
+  Claude Code: *Pick a text style … Choose how to log in … Open the link it
+  shows* — and watches the login probe, so it says *✓ Signed in. You can close
+  this window.* the moment the login lands. Closing it re-runs the check.
+  Neither the login nor the install terminal draws tmux's status line.
+- **The agent card** (`components/setup/AgentCard.tsx`) — one card per agent,
+  the same on Connections (*What you use*), Settings → Agents, Settings →
+  Custom agents and Setup ②: the status pill, one plain line (*Signed in as
+  you@example.com*, never a `.claude.json` path) and ONE next action —
+  **Install** (not on this computer: the Setup checklist's own one-click
+  install, or the copyable command for an agent that isn't in its plan) →
+  **Sign in** (installed, no login found) → **Test** (everything else; it
+  answers in words: *Signed in as …*, *Installed, not signed in yet*). The
+  default agent's card on Connections adds a quiet **Change agent** link to
+  Settings → Agents; nothing points at another screen for the same thing. A
+  finished install says *✓ Installed — next: sign in to Claude Code*.
 - **Hints** (`onboarding/Hint.tsx`) — small dismissible 💡 inline callouts that
   nudge toward a feature. Each needs a **stable `id`**; dismissing one remembers
   that id (`dismissHint` → `dismissedHints`). A master switch (`hintsEnabled`,
@@ -3970,24 +4001,21 @@ labels above the inputs.
   picked — install or sign in to it under Agent providers.*) — you can't make
   a CLI that isn't there the launch default; if the stored default is missing it
   falls back to the first installed CLI and **persists the correction** (the
-  backend rejects the save otherwise — see [web-api.md](web-api.md)). The
-  **Agent CLI check** row has its own provider picker (the default marked
-  *(default)*) beside **Test agent CLI**, so any provider can be probed.
-- **Agent providers** — one row per CLI, built-in or custom
-  (`GET /api/providers/status`): **installed** / **not installed** with the
-  path it resolved to, a sign-in chip — **signed in** (with the evidence),
-  **not signed in**, **sign-in unknown** or **no sign-in needed**, whichever
-  is the honest answer — a **Sign in** button (installed, has a login flow,
-  not signed in) that runs the CLI's own login in an in-app terminal, so
-  MindFlock still never sees your credentials (see
-  [providers.md](providers.md)), and, when a CLI is missing, its install
-  command with **Copy**. Every row has a **Binary path** field (*This device
+  backend rejects the save otherwise — see [web-api.md](web-api.md)). Under
+  the picker is the default agent's card; the Advanced fold's **Set up another
+  agent** picker (product names) shows any other agent's card.
+- **Custom agents** — one row per CLI, built-in or custom
+  (`GET /api/providers/status`), named by its product name: its agent card
+  (status + Install / Sign in / Test — the sign-in runs the CLI's own login
+  in an in-app terminal, so MindFlock still never sees your credentials; see
+  [providers.md](providers.md)) and *Runs <path>* where it was found. Every
+  row has a **Binary path** field (*This device
   only — never synced to your other devices. Leave empty to use PATH.*;
   `PUT /api/providers/<name>/binary-path`) for a claude or codex that lives
   off PATH; one pinned by the server's environment says so and wins. A custom
   TOML that fails to load is a red row with the file name, *failed to load*
   and the parse error. Below the rows is the custom-provider **manager**
-  (**+ Add a custom provider**, Edit, Delete): add/edit/delete user-TOML
+  (**+ Add a custom agent**, Edit, Delete): add/edit/delete user-TOML
   providers via the `/api/providers` CRUD, including each provider's saved
   **launch flags** (`[launch] args`). The per-provider **default launch flags**
   (`coding_cli.default_launch_args`) that pre-fill the New-session dialog are

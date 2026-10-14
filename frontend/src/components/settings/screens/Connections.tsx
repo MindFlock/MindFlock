@@ -31,6 +31,10 @@ import { copyText } from "../../../lib/clipboard";
 import { toast } from "../../../lib/toast";
 import { runCommand } from "../../../extensions/host";
 import { AgentSignIn } from "../../dialogs/AgentSignIn";
+import { InstallMissing } from "../../dialogs/InstallTerminal";
+import { agentName } from "../../../lib/agentNames";
+import { reprobeDoctor, useDoctor } from "../../../state/queries";
+import { refreshSetup } from "../../setup/useSetup";
 import { AdvancedFold } from "../settingsMode";
 import "./connections.css";
 
@@ -108,21 +112,6 @@ export function groupRows(rows: ConnectionRow[]): Array<{ kind: string; label: s
 type RowExtras = { provider?: string; account?: string; pr_review_enabled?: boolean };
 const extras = (c: ConnectionRow): RowExtras => c as ConnectionRow & RowExtras;
 
-/** Each shipped agent's product name (GLOSSARY: "Agent · Claude Code"). */
-export const AGENT_NAMES: Record<string, string> = {
-  claude: "Claude Code",
-  codex: "Codex",
-  aider: "Aider",
-  antigravity: "Antigravity",
-  opencode: "OpenCode",
-  cline: "Cline",
-  goose: "Goose",
-};
-
-export function agentName(provider: string): string {
-  return AGENT_NAMES[provider] || (provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : "Agent");
-}
-
 /** The row's title: "Agent · Claude Code" for an agent (the server says
  * "Coding agent · Claude"), "Ticket tracker" for the not-configured one. */
 export function rowName(c: ConnectionRow): string {
@@ -192,7 +181,7 @@ export function shownStatus(c: ConnectionRow, result?: TestOutcome): ShownStatus
 export function plainDetail(c: ConnectionRow): string {
   const d = c.detail || "";
   if (c.kind === "agent" && extras(c).provider) {
-    if (/^signed in/i.test(d)) return "Signed in";
+    if (/^signed in/i.test(d)) return extras(c).account ? "Signed in as " + extras(c).account : "Signed in";
     if (/^no sign-in needed/i.test(d)) return "No sign-in needed";
     if (/can't be checked/i.test(d)) return "Installed. MindFlock can't check its sign-in from here.";
     if (/not signed in/i.test(d)) return "Installed, not signed in";
@@ -307,6 +296,48 @@ async function copyCommand(cmd: string): Promise<void> {
   toast(ok ? "Copied" : "Could not copy — select the command and copy it by hand");
 }
 
+/** An agent card's ONE next action, in the order a new user meets them:
+ * Install (not on this computer) → Sign in (installed, no login found) →
+ * Test (everything else). The card shows that button and no other, so
+ * Connections, Settings → Agents, Custom agents and the Setup checklist all
+ * offer the same single thing to press. */
+export type AgentStage = "install" | "signin" | "test";
+
+export function agentStage(c: ConnectionRow): AgentStage | null {
+  if (c.kind !== "agent" || !extras(c).provider) return null;
+  if (/^not installed/i.test(c.detail || "")) return "install";
+  if (c.action?.kind === "dialog" && c.action.target === "agent-sign-in") return "signin";
+  return "test";
+}
+
+/** The default agent's Install: the doctor's one-click install (the Setup
+ * checklist's own button — it installs whatever else is missing too), or the
+ * copyable command when the plan doesn't carry this agent. */
+function AgentInstall({ provider, fallback }: { provider: string; fallback: string }) {
+  const { data: doctor } = useDoctor();
+  const steps = doctor?.install?.steps || [];
+  const done = () => {
+    void reprobeDoctor().catch(() => undefined);
+    void refreshSetup(true);
+    notifyConnectionsChanged();
+  };
+  if (steps.some((st) => st.id === "agent-cli"))
+    return (
+      <div className="conn-install" data-provider={provider}>
+        <InstallMissing steps={steps} onDone={done} />
+      </div>
+    );
+  if (!fallback) return null;
+  return (
+    <div className="conn-fix">
+      <code>{fallback}</code>
+      <button type="button" className="test-btn conn-copy" onClick={() => void copyCommand(fallback)}>
+        Copy
+      </button>
+    </div>
+  );
+}
+
 /** One row. `onChanged` re-reads the list (after a Test or a sign-in). */
 export function ConnectionRowView({
   c,
@@ -326,12 +357,23 @@ export function ConnectionRowView({
   const shown = shownStatus(c, result);
   const status = shown.status;
   const a = c.action;
+  const stage = agentStage(c);
+  const install = a?.kind === "dialog" && a.target === "agent-install" && a.provider ? a.provider : "";
   // GitHub's fix is its Connect button: no `gh auth login` chip beside it.
-  const fixCmd = status !== "connected" && c.kind !== "github" ? c.fix_command || "" : "";
+  // An agent's sign-in is its Sign in button: no login command beside it.
+  const fixCmd =
+    status !== "connected" && c.kind !== "github" && stage !== "signin" && !install ? c.fix_command || "" : "";
   // A copy action IS the fix line's Copy: one button, not two.
   const copyIsFix = a?.kind === "copy" && (!fixCmd || a.target === fixCmd);
-  const handler = a && !copyIsFix && a.target !== "agent-sign-in" ? actionHandler(a, deps) : null;
-  const legacy = !a ? configureAction(c, deps.gotoScreen) : null;
+  const handler =
+    a && !copyIsFix && a.target !== "agent-sign-in" && a.target !== "agent-install" ? actionHandler(a, deps) : null;
+  // Only a row from an older server has no `action` field at all; `null` is
+  // a server saying "nothing to do here".
+  const legacy = a === undefined ? configureAction(c, deps.gotoScreen) : null;
+  // Test is the agent card's action only once there is nothing to install or
+  // sign in to; GitHub with no credential has nothing to test yet.
+  const showTest =
+    !!c.test && !!onTest && !(c.kind === "github" && status === "off") && (stage === null || stage === "test");
   return (
     <div className="conn-row" data-conn={c.id} data-status={status}>
       <div className="conn-main">
@@ -343,27 +385,29 @@ export function ConnectionRowView({
         <div className="conn-detail muted" title={c.detail || undefined}>
           {plainDetail(c)}
         </div>
-        {fixCmd || (copyIsFix && a) ? (
+        {install ? (
+          <AgentInstall provider={install} fallback={c.fix_command || ""} />
+        ) : fixCmd || (copyIsFix && a) ? (
           <div className="conn-fix">
             <code>{fixCmd || a!.target}</code>
             <button type="button" className="test-btn conn-copy" onClick={() => void copyCommand(fixCmd || a!.target)}>
               Copy
             </button>
           </div>
-        ) : status !== "connected" && c.fix && c.kind !== "github" ? (
+        ) : status !== "connected" && c.fix && c.kind !== "github" && stage !== "signin" ? (
           <div className="conn-fix muted">{c.fix}</div>
         ) : null}
         {result && (
           <div className={"conn-test-result " + (result.ok ? "ok" : "bad")} role="status">
             {result.ok ? "✓ " : "✗ "}
-            {result.text}
+            {/* A pass that says what the line above already says: just "checked". */}
+            {result.ok && result.text === plainDetail(c) ? "Checked just now" : result.text}
           </div>
         )}
       </div>
       <span className={"conn-pill conn-" + shown.tone}>{shown.pill}</span>
       <div className="conn-actions">
-        {/* GitHub with no credential has nothing to test yet (Connect first). */}
-        {c.test && onTest && !(c.kind === "github" && status === "off") && (
+        {showTest && (
           <button type="button" className="test-btn conn-test" disabled={testing} onClick={onTest}>
             {testing ? "Testing…" : "Test"}
           </button>
@@ -372,7 +416,11 @@ export function ConnectionRowView({
           <AgentSignIn provider={a.provider} profile={a.profile} label={a.label || "Sign in"} onDone={onChanged} />
         ) : null}
         {handler && (
-          <button type="button" className="test-btn conn-configure" onClick={handler}>
+          <button
+            type="button"
+            className={stage && a!.kind === "screen" ? "linklike conn-configure conn-link" : "test-btn conn-configure"}
+            onClick={handler}
+          >
             {a!.label}
           </button>
         )}
