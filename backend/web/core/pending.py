@@ -193,6 +193,9 @@ def rows(engine=None) -> list:
                 "diff_stat": None,
                 "workspace_missing": False,
                 "sleeping": None,  # nothing launched yet, so nothing asleep
+                # Nothing to branch from until it has started (Branch is
+                # left out for a starting session anyway).
+                "git_repo": False,
                 "has_origin": False,
                 # No worktree yet, so no zones (red or green) to summarize.
                 "redzone": None,
