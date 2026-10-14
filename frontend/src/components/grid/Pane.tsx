@@ -37,12 +37,21 @@ import { AccountChip } from "./AccountChip";
 import { DriveButton } from "../presence/Presence";
 import { useMe } from "../../lib/presence";
 import { FastTrackMenu } from "./FastTrackMenu";
+import { PaneMoreMenu, type PaneMoreItem } from "./PaneMoreMenu";
+import { useCalm } from "../../lib/useCalm";
+import { agentMissing } from "../../lib/sessionState";
+import { useSetup } from "../setup/useSetup";
+import { openChecklist } from "../../lib/checklistLink";
 import { familyOf, newestReportTs, threadBadge, threadTabShown } from "../../lib/thread";
 import { effectiveActivity } from "../../lib/stage";
 
 /** "thread" is the Thread tab (the session's workers and what was said
  * between them), opened by its own button or store.threadOpen. */
 type Tab = "agent" | "shell" | "diff" | "queue" | "map" | "thread";
+
+/** Below this pane width the header folds its secondary tabs and controls
+ * into ⋯ — the Commit… button must never be the thing scrolled out of view. */
+const PANE_NARROW_PX = 560;
 
 /** Tabs that need git (the Map reads the worktree's files, diff and imports). */
 const GIT_TABS: ReadonlySet<string> = new Set(["diff", "map"]);
@@ -474,6 +483,22 @@ export function Pane({
     if (ftMenu && ftGone) useUi.getState().setFastTrackMenu(null);
   }, [ftMenu, ftGone]);
   const me = useMe(); // before the early returns: hooks run every render
+  // A calm header (lib/calm.ts's first hour, or a pane too narrow for the
+  // whole row): name · state · Agent / Diff · Commit…, the rest under ⋯.
+  const calm = useCalm();
+  const [paneNarrow, setPaneNarrow] = useState(false);
+  useEffect(() => {
+    const el = paneRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setPaneNarrow(el.clientWidth > 0 && el.clientWidth < PANE_NARROW_PX));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [missing, loading]);
+  const compact = calm || paneNarrow;
+  // An agent that isn't installed: the terminal says `claude: not found`, and
+  // the pane says what that means and where the fix is.
+  const { data: setupStatus } = useSetup();
+  const noAgent = agentMissing(inst, setupStatus?.logins);
 
   if (missing) {
     return (
@@ -604,6 +629,47 @@ export function Pane({
           (ds?.uncommitted?.deletions || 0) ===
           0));
 
+  // What the calm header folds under ⋯ (see PANE_NARROW_PX / useCalm). A tab
+  // you are ON stays in the row, and so does a Queue with something in it or
+  // a fast-track someone set: those are state, not options.
+  const showShellTab = !sharedFolder && (!compact || tab === "shell");
+  const showMapTab = caps.git && (!compact || tab === "map");
+  const showQueueTab = !compact || tab === "queue" || pending > 0 || holding;
+  const showFt = !!ft && (!compact || ft.lane !== "leave" || ft.halted || ft.active || !!ftMenu);
+  const more: PaneMoreItem[] = [];
+  if (!sharedFolder && !showShellTab)
+    more.push({ key: "shell", label: "Terminal", title: "A shell in this session's folder", run: () => showTab("shell") });
+  if (caps.git && !showMapTab)
+    more.push({ key: "map", label: "Map", title: "Code map — the worktree as a tree", run: () => showTab("map") });
+  if (!showQueueTab)
+    more.push({
+      key: "queue",
+      label: "Queue",
+      title: "Send a message now or queue prompts to auto-run",
+      run: () => showTab("queue"),
+    });
+  if (ft && !showFt)
+    more.push({
+      key: "fast-track",
+      label: "Fast-track…",
+      title: ft.title,
+      run: () => useUi.getState().setFastTrackMenu({ title }),
+    });
+  if (compact)
+    more.push({
+      key: "history",
+      label: "Browse history",
+      title: "Scroll and select the full history like a page",
+      run: () => setHistPane({ kind: tab === "shell" ? "shell" : "agent", dragSel: null }),
+    });
+  if (inst.branch && !sharedFolder)
+    more.push({
+      key: "checklist",
+      label: "Checklist…",
+      title: "Verify's checklist for " + inst.branch + " — the steps to check before or after it merges",
+      run: () => openChecklist(inst.branch),
+    });
+
   return (
     <section
       ref={paneRef as React.RefObject<HTMLElement>}
@@ -635,7 +701,7 @@ export function Pane({
           </button>
           {/* The companion shell would run outside the sandbox: refused for
               a shared folder (peer_guard), so no tab. */}
-          {!sharedFolder && (
+          {showShellTab && (
             <button data-tab="shell" className={tab === "shell" ? "active" : ""} onClick={(e) => { e.stopPropagation(); showTab("shell"); }}>
               Terminal
             </button>
@@ -645,7 +711,7 @@ export function Pane({
               Diff
             </button>
           )}
-          {caps.git && (
+          {showMapTab && (
             <button
               data-tab="map"
               className={tab === "map" ? "active" : ""}
@@ -655,6 +721,7 @@ export function Pane({
               Map
             </button>
           )}
+          {showQueueTab && (
           <button
             data-tab="queue"
             className={
@@ -680,6 +747,7 @@ export function Pane({
               </span>
             )}
           </button>
+          )}
           {threadShown && (
             <button
               data-tab="thread"
@@ -711,7 +779,7 @@ export function Pane({
               }
               type="button"
               disabled={!!ns.disabled}
-              title={ns.title || "Do the next step"}
+              title={ns.title || "The next step for this session: " + ns.label.replace(/…$/, "")}
               onClick={(ev) => {
                 ev.stopPropagation();
                 if (!ns.disabled) ns.run();
@@ -720,7 +788,7 @@ export function Pane({
               {ns.label}
             </button>
           ) : null}
-          {ft && (
+          {ft && showFt && (
             // THE per-session fast-track control: it names the target and
             // opens the picker. A control, not a status chip. Right after
             // the guided button, ahead of the live step's free text, so a
@@ -808,7 +876,7 @@ export function Pane({
           </span>
         </div>
         <AccountChip inst={inst} />
-        <SessionUsageChip inst={inst} />
+        {!compact && <SessionUsageChip inst={inst} />}
         {/* The keyboard is one person's at a time (lib/presence): "Driving"
             / "Watching — take control", only once someone else is here. */}
         <DriveButton inst={inst} me={me} />
@@ -817,6 +885,8 @@ export function Pane({
             reachable without scrolling to the end of a long header. Copy-all
             lives in the history view's bar. */}
         <div className="head-tail">
+        <PaneMoreMenu items={more} btnRef={ft && !showFt ? setFtEl : undefined} />
+        {!compact && (
         <button
           className="act copyhist"
           type="button"
@@ -842,6 +912,7 @@ export function Pane({
             <path d="M3 22v-6h6" />
           </svg>
         </button>
+        )}
         <button
           className="act pane-close"
           type="button"
@@ -856,6 +927,22 @@ export function Pane({
         </button>
         </div>
       </div>
+      {noAgent && (
+        <div className="pane-noagent" role="alert">
+          <span>
+            <b>{noAgent}</b> isn't installed on this computer, so this session's agent couldn't start.
+          </span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              useUi.getState().openDialogFor("setup");
+            }}
+          >
+            Install {noAgent}…
+          </button>
+        </div>
+      )}
       <div className="pane-body" ref={bodyRef}>
         <div className={"pane-term agent-term" + (tab !== "agent" ? " hidden" : "")} ref={adopt("agent")}>
           {/* Pinned prompt: what this session was last asked to do, always

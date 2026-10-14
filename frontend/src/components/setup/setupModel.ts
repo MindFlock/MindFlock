@@ -103,11 +103,32 @@ export function showSetupChip(opts: {
   return !showSetupCard(opts);
 }
 
-/** "Setup 3/5". */
+/** THE setup count — the chip, the checklist's first line and the grid card
+ * all say it, so they can never disagree ("1 of 3" on the panel beside a
+ * "Setup 1/5" chip was three readings of one list). It counts the three
+ * REQUIRED steps (what "Get set up" promises); once those are done the
+ * optional ones still to settle ride along as `optional`, never as a bigger
+ * denominator. */
+export function setupCount(status: SetupStatus | null | undefined): {
+  done: number;
+  total: number;
+  optional: number;
+} {
+  const steps = orderedSteps(status);
+  const req = steps.filter((x) => REQUIRED_STEPS.includes(x.id as SetupStepId));
+  const done = req.filter((x) => x.done).length;
+  const optional = steps.filter(
+    (x) => stepGroup(x) === "connect" && !x.done && !x.skipped
+  ).length;
+  return { done, total: req.length, optional: done === req.length ? optional : 0 };
+}
+
+/** "Setup 1 of 3" — then "Setup 3 of 3 · 2 optional" once the required steps
+ * are done and optional ones remain. */
 export function chipLabel(status: SetupStatus | null | undefined): string {
-  const s = status?.summary;
-  if (!s) return "Setup";
-  return "Setup " + s.done + "/" + s.total;
+  if (!status?.summary) return "Setup";
+  const c = setupCount(status);
+  return "Setup " + c.done + " of " + c.total + (c.optional ? " · " + c.optional + " optional" : "");
 }
 
 /** ①…⑤ for a counted step (Get started, then Connect your work); an

@@ -210,3 +210,26 @@
   color: var(--muted);
 }
 
+
+/* In a browser tab: a key the browser keeps for itself (Ctrl+N, Ctrl+W, Ctrl+Tab…)
+   is drawn faded after the ones that work, and a row with nothing that works
+   there says "desktop app". */
+.shortcut-keys kbd.kbd-desktop {
+  opacity: 0.45;
+}
+
+.kbd-desktop-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  vertical-align: 1px;
+}
+
+.shortcut-row.desktop-only .shortcut-desc {
+  color: var(--muted);
+}

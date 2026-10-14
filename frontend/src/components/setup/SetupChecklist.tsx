@@ -39,6 +39,7 @@ import {
   installedLogins,
   loginLine,
   nextStepId,
+  setupCount,
   orderedSteps,
   stepNumber,
   tailscaleMissing,
@@ -46,20 +47,18 @@ import {
 import type { SetupStatus, SetupStep } from "../../api/types";
 import "./setup.css";
 
-/** The checklist's first line. Until the required steps are done it counts
- * only those ("1 of 3 done · next: Sign in to your agent" — the card promises
- * three steps); after, the chip's count ("3 of 5 done · next: Connect GitHub"). */
+/** The checklist's first line, in the chip's own count (setupCount): the
+ * three required steps ("1 of 3 done · next: Sign in to your agent"), then
+ * what optional is left ("3 of 3 done · 2 optional left · next: Connect
+ * GitHub"). */
 export function progressLine(status: SetupStatus | null | undefined): string {
   if (!status) return "Checking…";
   const s = status.summary;
   const next = status.steps.find((x) => x.id === s.next);
   if (s.complete) return "All set";
   const tail = next ? " · next: " + next.title : "";
-  if (!s.required_done) {
-    const req = status.steps.filter((x) => x.required);
-    return req.filter((x) => x.done).length + " of " + req.length + " done" + tail;
-  }
-  return s.done + " of " + s.total + " done" + tail;
+  const c = setupCount(status);
+  return c.done + " of " + c.total + " done" + (c.optional ? " · " + c.optional + " optional left" : "") + tail;
 }
 
 function StepHead({ step }: { step: SetupStep }) {

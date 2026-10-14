@@ -189,3 +189,24 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
   outline-offset: 2px;
   border-radius: 3px;
 }
+
+/* A phone-narrow window (App sets body.narrow): the grid takes the whole
+   width and the sidebar, when opened with ▯, slides over it instead of
+   squeezing every terminal to a word per line. */
+body.narrow {
+  grid-template-columns: 1fr;
+}
+
+body.narrow #sidebar {
+  position: fixed;
+  top: var(--topbar-h, 40px);
+  bottom: 0;
+  left: 0;
+  width: min(300px, 86vw);
+  z-index: 60;
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.35);
+}
+
+body.narrow .sidebar-resizer {
+  display: none;
+}

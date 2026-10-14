@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
+import { inShell } from "../../lib/shell";
 import {
   CHORDS,
   KEYMAP,
@@ -37,6 +38,28 @@ const SHORTCUT_EXTRAS: Array<[string, string, string]> = [
   ["Dialogs", "Ctrl+Enter", "Submit the commit dialog / launch a new session"],
   ["Dialogs", "Esc", "Close palette / dialogs / this sheet; cancel a Ctrl+K chord"],
 ];
+
+/** Keys a browser tab never hands to the page — Chrome keeps them for its own
+ * tabs and windows (new window, close tab, next tab, tab N…). In the desktop
+ * app they are ours; in a tab, pressing one does the BROWSER's thing. */
+export function browserReserved(combo: string): boolean {
+  const c = combo.trim().replace(/^⌘/, "Ctrl+").replace(/\s+/g, " ");
+  return /^Ctrl\+(N|W|T|Shift\+N|Shift\+W|Shift\+T|Tab|Shift\+Tab|PgDn|PgUp|1 … 9|[1-9])$/i.test(c);
+}
+
+/** A sheet row's combos, browser-usable ones first in a tab, and whether the
+ * row has nothing that works there (a desktop-app-only row). */
+export function browserOrder(
+  keysLabel: string,
+  desc: string,
+  inBrowser: boolean
+): { combos: Array<{ combo: string; desktop: boolean }>; desktopOnly: boolean } {
+  const all = keysLabel.split(" / ").map((combo) => ({ combo, desktop: inBrowser && browserReserved(combo) }));
+  const combos = inBrowser ? all.filter((x) => !x.desktop).concat(all.filter((x) => x.desktop)) : all;
+  const desktopOnly =
+    inBrowser && (combos.every((x) => x.desktop) || /\(desktop app\)|desktop shell/.test(desc));
+  return { combos, desktopOnly };
+}
 
 interface RowMeta {
   kind: "key" | "chord";
@@ -161,6 +184,9 @@ export function ShortcutsSheet() {
   }, [capturing]);
 
   const sheet = useMemo(() => (open ? buildSheet() : []), [open, capturing, keymapVersion()]);
+  // In a browser tab the browser keeps some keys: lead with what works here,
+  // and mark the rest as the desktop app's.
+  const inBrowser = !inShell();
 
   if (!open) return null;
 
@@ -209,12 +235,23 @@ export function ShortcutsSheet() {
         <p className="shortcuts-hint">
           Click a highlighted shortcut and press the new keys to replace it · <b>+</b> adds an
           extra combo · <b>↺</b> restores its default · Esc cancels.
+          {inBrowser && (
+            <>
+              {" "}
+              In a browser tab, keys marked <span className="kbd-desktop-tag">desktop app</span> belong to the
+              browser.
+            </>
+          )}
         </p>
         <div className="shortcuts-body">
           {sheet.map(([group, rows]) => (
             <div className="shortcuts-group" key={group}>
               <h4>{group}</h4>
-              {rows.map(([keysLabel, desc, meta], ri) => {
+              {rows
+                .map((r, ri) => ({ r, ri, b: browserOrder(r[0], r[1], inBrowser) }))
+                // Rows that work in this tab first; the desktop app's after.
+                .sort((x, y) => Number(x.b.desktopOnly) - Number(y.b.desktopOnly) || x.ri - y.ri)
+                .map(({ r: [keysLabel, desc, meta], ri, b }) => {
                 const isCapturing =
                   capturing && meta && capturing.meta.kind === meta.kind && capturing.meta.id === meta.id;
                 return (
@@ -224,6 +261,7 @@ export function ShortcutsSheet() {
                       "shortcut-row" +
                       (meta ? " rebindable" : "") +
                       (meta?.custom ? " customized" : "") +
+                      (b.desktopOnly ? " desktop-only" : "") +
                       (isCapturing ? " capturing" : "")
                     }
                     title={
@@ -242,14 +280,22 @@ export function ShortcutsSheet() {
                           : capturing!.mode === "add"
                             ? "Press the combo to add…"
                             : "Press the new keys…"
-                        : keysLabel.split(" / ").map((combo, ci) => (
+                        : b.combos.map(({ combo, desktop }, ci) => (
                             <span key={ci}>
                               {ci > 0 && <span className="kbd-sep">/</span>}
-                              <kbd>{combo}</kbd>
+                              <kbd
+                                className={desktop ? "kbd-desktop" : undefined}
+                                title={desktop ? "Desktop app only — in a browser tab your browser keeps this key" : undefined}
+                              >
+                                {combo}
+                              </kbd>
                             </span>
                           ))}
                     </span>
-                    <span className="shortcut-desc">{desc}</span>
+                    <span className="shortcut-desc">
+                      {desc}
+                      {b.desktopOnly && <span className="kbd-desktop-tag">desktop app</span>}
+                    </span>
                     <span className="shortcut-controls">
                       {meta?.kind === "key" && (
                         <button

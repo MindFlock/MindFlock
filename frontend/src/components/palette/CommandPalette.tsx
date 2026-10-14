@@ -19,16 +19,12 @@ import {
 import { orderedInstances } from "../sidebar/ordering";
 import { sessionLabel } from "../../lib/sessionLabel";
 import { openDevicesFor, routePastedCode } from "../../lib/deviceActions";
-import { routeCode } from "../../lib/fleet";
+import { fuzzyScore, paletteCode, rankActions, type PaletteAction } from "./paletteRank";
+
+export { fuzzyScore };
 import { openSettings } from "../../lib/openSettings";
 import { TEMPLATES_CHANGED, ensureTemplates, runProblem, templatesNow } from "../../lib/templates";
 import { runTemplateNow } from "../../lib/templateRun";
-
-interface PaletteAction {
-  label: string;
-  hint?: string;
-  run(): void;
-}
 
 /** The focused session's entries, in palette order (the table holds what
  * each one says and when it applies). Pause and Resume never both apply;
@@ -54,24 +50,21 @@ const PALETTE_ACTIONS: SessionActionId[] = [
   "merge",
 ];
 
-/** Contiguous substring beats a spread-out subsequence; earlier/tighter
- * matches rank higher. -1 = no match. (Port of fuzzyScore.) */
-export function fuzzyScore(query: string, text: string): number {
-  query = String(query || "").toLowerCase();
-  text = String(text || "").toLowerCase();
-  if (!query) return 0;
-  const sub = text.indexOf(query);
-  if (sub >= 0) return sub;
-  let ti = 0,
-    score = 1000; // any subsequence ranks below every substring
-  for (const ch of query) {
-    const at = text.indexOf(ch, ti);
-    if (at < 0) return -1;
-    score += at - ti;
-    ti = at + 1;
-  }
-  return score;
-}
+/** The verbs that act outside this screen — git, a remote, ending a session:
+ * listed, but never the Enter default (palette/paletteRank.ts). */
+const OUTWARD = new Set<SessionActionId>(["commit", "push", "pr", "merge", "close", "delete", "pause"]);
+
+/** The empty-query menu's order (`top`): what a person reaches for. */
+const TOP = {
+  new: 0,
+  recent: 1, // + 0.1 per place in the MRU (the last three looked at)
+  intake: 2,
+  verify: 3,
+  setup: 4,
+  settings: 5,
+  tour: 6,
+  shortcuts: 7,
+};
 
 export function CommandPalette({ host }: { host: KeymapHost }) {
   const open = useUi((s) => s.openDialog === "palette");
@@ -82,6 +75,8 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
   const { data: extensions } = useExtensions();
   const [query, setQuery] = useState("");
   const [sel, setSel] = useState(0);
+  // The empty query is a short menu; "All commands…" opens the full index.
+  const [showAll, setShowAll] = useState(false);
   // Bumped when the Templates list lands or changes, so "Run template: …"
   // rows follow it (the first paint uses the cached/mirrored list).
   const [tplVersion, setTplVersion] = useState(0);
@@ -91,6 +86,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     if (open) {
       setQuery("");
       setSel(0);
+      setShowAll(false);
       setTimeout(() => inputRef.current?.focus(), 0);
     }
   }, [open]);
@@ -112,13 +108,13 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     // Order: New, then the places you open, then what acts on the focused
     // session, then Focus rows, then extensions — commands before sessions, so
     // an empty query reads as a menu rather than as the session list again.
-    acts.push({ label: "New session…", hint: "Ctrl+N", run: () => ui.openDialogFor("new-session") });
+    acts.push({ label: "New session…", hint: "Alt+N", top: TOP.new, run: () => ui.openDialogFor("new-session") });
 
     // --- Dialog openers ----------------------------------------------------
     // Each Intake tab gets its own entry: the queue you want is the thing you
     // have in mind, and typing "issues" should land on it directly rather than
     // on a dialog you then have to navigate.
-    acts.push({ label: "Open Intake", hint: "Alt+I", run: () => ui.openDialogFor("intake") });
+    acts.push({ label: "Open Intake", hint: "Alt+I", top: TOP.intake, run: () => ui.openDialogFor("intake") });
     acts.push({ label: "Intake: Tickets", run: () => ui.openDialogFor("intake", "tickets") });
     acts.push({ label: "Intake: Pull requests", run: () => ui.openDialogFor("intake", "prs") });
     acts.push({ label: "Intake: Issues", run: () => ui.openDialogFor("intake", "issues") });
@@ -132,6 +128,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     acts.push({
       label: "Verify — check what was pushed",
       hint: "Alt+V",
+      top: TOP.verify,
       run: () => ui.openDialogFor("verify"),
     });
     // Customize and its tabs: the extras you opt into.
@@ -161,7 +158,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         hint: "keep-out paths per repo, and derived outputs",
         run: () => ui.openDialogFor("red-zones"),
       });
-    acts.push({ label: "Open Settings", run: () => openSettings() });
+    acts.push({ label: "Open Settings", top: TOP.settings, run: () => openSettings() });
     acts.push({ label: "Open Doctor", run: () => host.openDoctor() });
     acts.push({
       label: "Your devices",
@@ -187,10 +184,10 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       hint: "join with a code from your other computer, or someone's invite",
       run: () => openDevicesFor({ focusPaste: true }),
     });
-    acts.push({ label: "Open Setup checklist", run: () => ui.openDialogFor("setup") });
-    acts.push({ label: "Tour", hint: "what MindFlock is, in five slides", run: () => ui.openTour() });
+    acts.push({ label: "Open Setup checklist", top: TOP.setup, run: () => ui.openDialogFor("setup") });
+    acts.push({ label: "Tour", hint: "what MindFlock is, in five slides", top: TOP.tour, run: () => ui.openTour() });
     acts.push({ label: "Toggle sidebar", hint: "Ctrl+B", run: () => ui.toggleSidebar() });
-    acts.push({ label: "Keyboard shortcuts", hint: "?", run: () => host.toggleShortcuts() });
+    acts.push({ label: "Keyboard shortcuts", hint: "?", top: TOP.shortcuts, run: () => host.toggleShortcuts() });
 
     // --- The focused session's verbs ---------------------------------------
     // Labels, shortcuts and enable rules come from the session action table
@@ -206,6 +203,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         acts.push({
           label: `${actionLabel(id, c)} — ${t}`,
           hint: actionHint(id, c),
+          outward: OUTWARD.has(id),
           run: () => sessionAction(id).run(t),
         });
       }
@@ -216,7 +214,12 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       // `display_title` is a proxied row's own name (its title carries the device).
       const own = (inst as unknown as { display_title?: string }).display_title || inst.title;
       const name = ui.aliases[inst.title] || sessionLabel(own, inst.branch || "").text;
-      acts.push({ label: "Focus: " + name, run: () => selectSession(inst.title) });
+      const recent = ui.mru.indexOf(inst.title);
+      acts.push({
+        label: "Focus: " + name,
+        top: recent >= 0 && recent < 3 ? TOP.recent + recent / 10 : undefined,
+        run: () => selectSession(inst.title),
+      });
     }
     // Extensions (Addon API v3): every command of every ENABLED extension,
     // under the manifest's palette title ("Database: Explorer" style). Listing
@@ -236,18 +239,22 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
   }, [open, config, host, extensions, tplVersion]);
 
   const filtered = useMemo(() => {
-    const scored = actions
-      .map((a, i) => ({ a, i, s: fuzzyScore(query, a.label) }))
-      .filter((x) => x.s >= 0);
-    scored.sort((x, y) => x.s - y.s || x.i - y.i);
-    const out = scored.map((x) => x.a);
+    const out = rankActions(actions, query, {
+      showAll,
+      allRow: (n) => ({
+        label: "All commands…",
+        hint: n + " — or type to search",
+        keepOpen: true,
+        run: () => setShowAll(true),
+      }),
+    });
     // The query IS a code (pasted straight into the palette): joining with
     // it is the first thing offered, routed by its format.
     // Second, not first, when a command's own name contains the query: "run
     // template" reads as a device name + an 8-letter code too, and Enter must
     // run the command that was typed, not try to join.
-    const code = routeCode(query);
-    const named = scored.some((x) => x.s < 1000);
+    const code = paletteCode(query);
+    const named = out.some((a) => fuzzyScore(query, a.label) >= 0 && fuzzyScore(query, a.label) < 1000);
     if (code.kind)
       out[named ? "push" : "unshift"]({
         label: "Join with " + (code.kind === "peer" ? "invite " : "code ") + code.code,
@@ -255,7 +262,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         run: () => void routePastedCode(query),
       });
     return out;
-  }, [actions, query]);
+  }, [actions, query, showAll]);
 
   useEffect(() => {
     if (sel >= filtered.length) setSel(Math.max(0, filtered.length - 1));
@@ -265,6 +272,11 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
 
   const run = (a: PaletteAction | undefined) => {
     if (!a) return;
+    if (a.keepOpen) {
+      a.run();
+      setSel(0);
+      return;
+    }
     closeDialog();
     a.run();
   };

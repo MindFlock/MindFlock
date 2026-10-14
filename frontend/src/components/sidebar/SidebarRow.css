@@ -967,3 +967,50 @@ button.stagechip.bgchip.bg-stuck:hover {
   font-size: 9px;
   color: var(--muted);
 }
+
+/* The session's task (its newest prompt's first line), under its name. */
+.inst .lineage.task-line {
+  font-weight: 400;
+}
+
+/* An agent that isn't installed: the row says why it never started. */
+.inst .lineage.noagent-line {
+  color: var(--tone-broken);
+}
+
+/* The ✕ on a session with uncommitted changes asks first — the same calm strip
+   as Delete's, under the row. */
+.inst-tail .close-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 8px 4px 28px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.inst-tail .close-confirm .del-q {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.inst-tail .close-confirm .del-acts {
+  display: flex;
+  gap: 6px;
+}
+
+.inst-tail .close-confirm .del-acts button {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.inst-tail .close-confirm .del-acts button.danger {
+  border-color: var(--red);
+}
