@@ -9,9 +9,10 @@ a reboot every session not on screen sat Offline until someone clicked it.
   (``Running`` / ``Ready``). Skipped, each with a reason: paused sessions
   (their worktree is gone by design), sessions still provisioning, peer-shared
   sessions (they relaunch through the peer service), sessions whose worktree
-  is missing, and sessions whose provider reports a usage limit (a relaunch
-  would land on the limit screen; the prompt queue resumes them when the
-  window reopens). A session whose agent tmux is still alive (a server
+  is missing, sessions put to sleep on purpose (``sleeping`` — core.sleep;
+  they wake when someone opens them or sends them something), and sessions
+  whose provider reports a usage limit (a relaunch would land on the limit
+  screen; the prompt queue resumes them when the window reopens). A session whose agent tmux is still alive (a server
   restart that did not take tmux down) is left alone and counted apart.
 * **How** — the exact path the Offline chip's Restart action takes
   (``POST /api/instances/{title}/revive`` → ``_ensure_agent_session``), so one
@@ -91,6 +92,9 @@ SKIP_LIMIT = "usage limit"
 SKIP_QUIT = "quit by user"
 SKIP_GONE = "closed meanwhile"
 SKIP_MEMORY = "low memory"
+#: Put to sleep on purpose (core.sleep): it wakes when someone needs it, not
+#: because the server restarted.
+SKIP_SLEEPING = "sleeping"
 #: :func:`_revive_one`'s second item on a revive that queued a continue.
 CONTINUED = "continued"
 
@@ -174,6 +178,17 @@ def skip_reason(
         wt = ""
     if not wt or not os.path.isdir(wt):
         return SKIP_WORKSPACE
+    # A sleeping agent was stopped on purpose, idle, to give its memory back:
+    # a restart is no reason to wake it (all of them at once, after a reboot,
+    # is the memory spike sleeping exists to avoid). Opening it, or sending it
+    # anything, wakes it. Also for "Restart all", which never lists sleepers.
+    try:
+        from backend.web.core import sleep as _sleep
+
+        if _sleep.is_sleeping(title):
+            return SKIP_SLEEPING
+    except Exception:  # noqa: BLE001
+        pass
     # An agent the user quit BEFORE the restart left an exit marker with a
     # natural code: it had already ended, so a fresh process is not a revive.
     try:
@@ -268,6 +283,8 @@ def died_mid_turn(srv, inst, title: str) -> bool:
     """Whether ``title``'s agent is dead AND died in the middle of a turn, so a
     relaunch should be told to carry on. All of:
 
+    * not asleep (:mod:`backend.web.core.sleep` stops an agent only once its
+      turn has ENDED — the wake resumes it, with nothing to continue);
     * no live agent tmux (a live one is reused, nothing was interrupted);
     * the death was unnatural — the provider's exit-code policy, the same one
       that makes the relaunch RESUME rather than start fresh (a clean quit
@@ -284,7 +301,11 @@ def died_mid_turn(srv, inst, title: str) -> bool:
         from backend.providers import activity_markers
         from backend.session import tmux
 
+        from backend.web.core import sleep as _sleep
+
         if getattr(inst, "InPlace", False) or (getattr(inst, "PeerShare", "") or ""):
+            return False
+        if _sleep.is_sleeping(title):
             return False
         name = tmux.to_mindflock_tmux_name(title)
         if srv._live_session_name(name) is not None:

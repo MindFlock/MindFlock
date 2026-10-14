@@ -319,7 +319,9 @@ painted red.
 | Offline | red | you | yes | **Offline** — the chip is a **↻ Restart** button |
 
 Precedence: a missing folder (**Missing**) and a paused session (**Paused**)
-first — neither is a state of the agent and neither waits on anyone; then a
+first, then a provisioning one (**Starting**), then a sleeping one
+(**Sleeping**, grey: its agent was stopped on purpose to free memory, so its
+`offline` reading is not Offline) — none waits on anyone; then a
 failed setup (prompts are held whatever the agent is doing); then the live
 activity (`clarify` → Question, `working`, `limit`, `offline`); then the git
 facts a resting agent leaves behind (a blocked commit, failing checks); then
@@ -376,7 +378,7 @@ adds a line for them (*Heavy jobs: fix-auth running · 2 waiting for a slot*).
 whose agent was running when it went down — two at a time, oldest first,
 through the same path as Restart — so the rail comes back to Working / Idle
 without a click each. Paused, provisioning, peer-shared, workspace-missing and
-usage-limited sessions are left alone. Settings → General → **Revive sessions
+usage-limited sessions are left alone, and so are sleeping ones (below). Settings → General → **Revive sessions
 after a restart** (`general.revive_on_start`, on by default) turns it off;
 `POST /api/server/revive-all` runs it on demand. The same switch brings back
 an agent the system killed for memory, once memory recovers (at most 3 times
@@ -385,6 +387,25 @@ an hour per session — see
 while it waits its Offline chip says so in its hint and stays out of the bell,
 and no Offline toast or push fires; given up on, the hint says why and the row
 is back in the bell.
+
+**Sleeping.** An agent whose turn has ended and that has sat idle, unwatched,
+with nothing queued or waiting for it for `general.sleep_idle_minutes` (45 by
+default; 5 while memory is low) is put to sleep: its CLI and MCP servers stop,
+giving back the ~0.8 GB an open window holds, and the session, worktree and
+conversation stay (see [session-engine.md](session-engine.md#sleeping-agents)).
+The row reads **Sleeping**: a muted dot and a quiet chip whose **Wake** action
+appears on hover (`POST /api/instances/{title}/wake`; it toasts *Waking
+<name>…*). Its tooltip says since when, why (idle, or memory was low) and
+roughly how much memory it gave back. A sleeping row is not Offline: it is
+never counted by *N agents offline · Restart all*, never in the bell, and its
+sleep pops no "offline" toast or push. Opening the session (its terminal
+attaches) wakes it, back in the same conversation; so does sending it anything
+— the send box, the prompt queue, Send now, another agent's message. A prompt
+sent to a sleeper goes to the front of its queue and is typed once the CLI has
+drawn its prompt (the response carries `woke: true`). Rows from another device
+show Sleeping without the Wake action (they are read-only here; opening one
+wakes it on its own device). The phone page shows the same word with a
+**Wake** action in the session's sheet.
 
 **Tones are tokens.** The six colours live once in `styles/tokens.css`
 (`--tone-muted`, `-working`, `-attention`, `-neutral`, `-waiting`, `-broken`,
@@ -3429,6 +3450,12 @@ the ntfy fields stack their labels above the inputs.
   [One session state](#one-session-state)), and an agent the system killed
   for memory once memory recovers. Off leaves them **Offline** until you press
   their **↻ Restart**.
+- **General → Put idle agents to sleep after** (`general.sleep_idle_minutes`,
+  **45** when empty, **0 = never**) — how long an agent must have sat idle,
+  its turn over, unwatched and with nothing waiting for it, before its CLI and
+  MCP servers are stopped to free their memory (the row then reads
+  **Sleeping**; opening it or sending it anything wakes it). While memory is
+  low, 5 minutes (never longer than the value set). Per device: never synced.
 - **General → Take a break** (`mf_break_on` / `mf_break_every`, **off by
   default**) — one switch whose whole description is the sentence it configures:
   *Reminder to take a break every `[N]` minutes*, with N editable in place
@@ -3906,7 +3933,8 @@ the name, the state word and the repo. The words and tones are the rail's one
 state table ([One session state](#one-session-state)) copied into
 `mobile.js` `SESSION_STATES`: *Starting*, *Working*, *Question* / *Pre-commit
 failed* / *Checks failing* / *Setup failed*, *Idle*, *Waiting on limit*
-(*, resumes HH:MM*), *Offline*, plus *Paused* and *Missing* outside the table;
+(*, resumes HH:MM*), *Offline*, plus *Paused*, *Missing* and *Sleeping* (with
+a **Wake** action in its sheet) outside the table;
 CSS classes `tone-muted|working|attention|neutral|waiting|broken`. A row's
 **⋯** (or a long press on it), or the header's **⋯** for the current session,
 opens its actions: **Restart** (only when offline — `POST /revive`), **Pause**

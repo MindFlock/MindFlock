@@ -157,6 +157,16 @@ export interface BackgroundJob {
   quiet_s: number;
 }
 
+/** Why and since when a session's agent is asleep (Instance.sleeping). */
+export interface SleepInfo {
+  /** Epoch seconds it fell asleep. */
+  since: number;
+  /** "idle" (the sweep), "memory" (the sweep, sooner: memory was low), "manual". */
+  reason: string;
+  /** Roughly how much memory stopping it gave back, in MB (0 = unknown). */
+  freed_mb: number;
+}
+
 export interface Instance {
   title: string;
   branch: string;
@@ -174,6 +184,11 @@ export interface Instance {
   in_place: boolean;
   diff_stat: DiffStat | null;
   workspace_missing: boolean;
+  /** Asleep (backend core/sleep.py): the agent was stopped on purpose, idle,
+   * to give its memory back — its `activity` reads "offline" meanwhile. Opening
+   * it or sending it anything wakes it, resuming the conversation. Optional:
+   * an older server (or a remote device on one) never sends it. */
+  sleeping?: SleepInfo | null;
   has_origin: boolean;
   /** Auth profile: the stored pin ("" = inherit the global default,
    * "default" = the CLI's own login), its resolution, and the resolved

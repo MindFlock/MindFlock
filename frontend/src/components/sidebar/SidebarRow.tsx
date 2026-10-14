@@ -23,6 +23,7 @@ import { errMsg } from "../../lib/format";
 import { chipState, checkChip, effectiveActivity } from "../../lib/stage";
 import { deriveSessionState } from "../../lib/sessionState";
 import { reviveSession } from "../../lib/revive";
+import { wakeSession } from "../../lib/wake";
 import { backgroundChip } from "../../lib/backgroundJobs";
 import { stopBackgroundJob } from "../../lib/stopBackgroundJob";
 import { sessionLabel } from "../../lib/sessionLabel";
@@ -676,6 +677,22 @@ export const SidebarRow = memo(function SidebarRow({
             {chip.label}
             <span className="chip-act" aria-hidden="true">
               ↻ Restart
+            </span>
+          </button>
+        ) : inst.sleeping && !inst.device && !paused ? (
+          // Asleep (backend core/sleep.py): a calm chip whose remedy shows on
+          // hover. Clicking the row wakes it too (opening its terminal does).
+          <button
+            type="button"
+            className={"stagechip chip-restart chip-wake " + chip.cls}
+            title={chip.title}
+            aria-label={"Sleeping — wake the agent"}
+            onClick={(e) => act(() => void wakeSession(title), e)}
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
+            {chip.label}
+            <span className="chip-act" aria-hidden="true">
+              Wake
             </span>
           </button>
         ) : (

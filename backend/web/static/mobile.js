@@ -809,8 +809,9 @@
   //   limit      waiting    Waiting on limit[, resumes HH:MM]
   //   offline    broken     Offline (actions: Restart)
   //
-  // Two rows sit outside the table, as on the rail: "Paused" and "Missing" —
-  // neither is a state of the AGENT. No debounce here: the phone reads one
+  // Three rows sit outside the table, as on the rail: "Paused", "Missing" and
+  // "Sleeping" (an agent stopped on purpose, idle, to free memory — opening
+  // it or sending it anything wakes it) — none is a state of a running AGENT. No debounce here: the phone reads one
   // 4s poll, not the desktop's event stream.
   var SESSION_STATES = {
     starting:  { tone: "muted",     label: "Starting" },
@@ -852,6 +853,9 @@
       return st("idle", { label: "Paused", tone: "muted", hint: "Session paused" });
     if (inst.pending || inst.status === "loading")
       return st("starting", { hint: "Provisioning workspace" });
+    if (inst.sleeping)
+      return st("idle", { label: "Sleeping", tone: "muted",
+                          hint: "Asleep to free memory — opening it or sending it anything wakes it" });
     if (inst.setup && inst.setup.state === "running")
       return st("starting", { hint: "Worktree setup running" });
     if (inst.setup && inst.setup.state === "failed")
@@ -2000,6 +2004,9 @@
       if (ss.restartable)
         actListEl.appendChild(actRow("Restart", "relaunches the agent, resuming the conversation",
           function () { sessionCall(title, "revive", "Restarting " + nameOf(title) + "…", "Restart failed"); }));
+      if (inst.sleeping && !inst.device && inst.status !== "paused")
+        actListEl.appendChild(actRow("Wake", "relaunches the sleeping agent, resuming the conversation",
+          function () { sessionCall(title, "wake", "Waking " + nameOf(title) + "…", "Wake failed"); }));
       if (inst.status === "paused")
         actListEl.appendChild(actRow("Resume session", "starts the agent again in the same worktree",
           function () { sessionCall(title, "resume", "Resuming " + nameOf(title) + "…", "Resume failed"); }));

@@ -436,6 +436,9 @@ reason, url), `pr_url`, `person` (the id of the person the session was
 created for), `owner` (who it belongs to), `driver` (who holds its keyboard)
 and `viewers` (`{person id: {name, device, devices, since, typing}}` — who has
 a terminal open on it) when set ([people.md](people.md#owner-driver-viewers)),
+`sleeping` when set (`{since, reason, freed_mb}`: its agent was put to sleep
+to free memory — `activity` reads `offline` meanwhile; a `send_message` wakes
+it, see [session-engine.md](session-engine.md#sleeping-agents)),
 and `background` when set: the jobs the agent backgrounded and left running
 past its turn, each `{id, pid, command, state: running|waiting|stuck, reason,
 started, quiet_s}` ([providers.md](providers.md#background-jobs)). Sessions you manage come first. Remote
@@ -641,7 +644,9 @@ message. The `reason`s:
   60 s of a dispatch, a `clarify` or `limit` reading that started before it
   is ignored: it is the dialog you just answered, not a new one.
 - `usage_limit`, `paused`, `gone` (no longer listed), and `offline` (for at
-  least 30 s while not loading).
+  least 30 s while not loading). A **sleeping** session (its row's `sleeping`
+  set) is read as `idle`, not `offline`: it was put to sleep only after its
+  turn ended.
 
 With `return_on_message`, any other unread message for you ends the wait with
 `reason: "message"` and `messages` (consumed), plus whatever `sessions` had
@@ -1089,7 +1094,10 @@ message per pass, oldest first, and only when every gate passes:
   fast-track chain mid-flight also holds the lane.
 - **Never boots an agent**: the agent's tmux session must be alive. An
   offline, paused or loading session keeps its messages until someone starts
-  it.
+  it. The one exception is a **sleeping** session: a message is what should
+  wake it, so the lane (and `delivery: "now"`, which then answers `pending`)
+  relaunches it — resuming its conversation — and types the message once
+  the gates here pass on the woken CLI.
 - **No usage limit**: no usage-limit banner is on the pane.
 - **The agent holds the pane**: an agent CLI's executable must be in the
   pane's process tree (by name: any provider's binary, or the session's own
