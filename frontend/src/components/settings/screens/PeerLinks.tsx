@@ -289,8 +289,7 @@ export function PeerLinks(_: ScreenProps) {
         Work together with someone else's MindFlock. Send them an invite, they paste it, and
         you're connected. Then either of you can share <strong>one folder</strong>: an agent
         works in it inside a sandbox and talks to the other person's agent. You can also message
-        them and look at their changes. Nothing else on your machine is exposed — see{" "}
-        <code>docs/peer-link.md</code>.
+        them and look at their changes. Nothing else on your machine is exposed.
       </p>
 
       <div className="peer-actions" id="peer-actions">

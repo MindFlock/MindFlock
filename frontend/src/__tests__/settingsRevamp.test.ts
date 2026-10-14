@@ -75,9 +75,12 @@ describe("settings screens", () => {
     expect(conn).toContain('"/api/connections'); // reads the status endpoint
   });
 
-  it("relabels coding + providers to Agent CLI / Agent providers (keys unchanged)", () => {
-    expect(screen("coding")?.label).toBe("Agent CLI");
-    expect(screen("providers")?.label).toBe("Agent providers");
+  it("relabels coding + providers to Agents / Custom agents (keys unchanged)", () => {
+    // GLOSSARY (round 2): "Agents" and "Custom agents", never "Agent CLI".
+    expect(screen("coding")?.label).toBe("Agents");
+    expect(screen("providers")?.label).toBe("Custom agents");
+    expect(ALL_CODE).not.toContain('label: "Agent CLI"');
+    expect(ALL_CODE).not.toContain('label: "Agent providers"');
     expect(ALL_CODE).not.toContain('label: "Coding CLI"');
     expect(ALL_CODE).not.toContain('label: "Providers"');
   });
@@ -105,7 +108,7 @@ describe("settings screens", () => {
     };
     for (const [g, keys] of Object.entries(expectGroups)) for (const k of keys) expect(group(k), k).toBe(g);
     // The group follows the label, so the label pin above stays contiguous.
-    expect(squash(DIALOG)).toContain('{ key: "coding", label: "Agent CLI", group: "Agents"');
+    expect(squash(DIALOG)).toContain('{ key: "coding", label: "Agents", group: "Agents"');
     // A non-clickable heading before each group's first screen.
     expect(DIALOG).toContain('className="set-nav-group"');
     // (Advanced mode: settingsMode.tsx's navHeading; basic mode lists the
@@ -325,7 +328,9 @@ describe("agent sign-in", () => {
     expect(rows).toContain("not installed");
     expect(ALL_CODE).not.toContain("ProviderLoginModal");
     expect(providers).not.toContain("login-terminal"); // the route lives in AgentSignIn only
-    expect(providers).toContain("<AgentSignIn");
+    // Its sign-in is the shared agent card's (which renders AgentSignIn).
+    expect(providers).toContain("<AgentCard");
+    expect(src("components/settings/screens/Connections.tsx")).toContain("<AgentSignIn");
     expect(providers).toContain("/binary-path");
     // Row shapes are the unit-tested pure module, not inline JSX conditions.
     expect(providers).toContain("providerRows(");

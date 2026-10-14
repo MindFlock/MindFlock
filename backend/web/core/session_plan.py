@@ -34,13 +34,12 @@ from typing import Iterable, List, Optional
 from backend.web.core import commit_message as _commit_message
 from backend.web.core import repo_picker
 
-TIMEOUT_PLAN = 75.0
-#: The Describe box's budget. Between the autopilot's 45s and the ✨ button's
-#: 120s, and deliberately not either. Shorter than ✨ because the person is
-#: staring at one empty box rather than a textarea already full of their own
-#: words, and because the fallback here is a form that is still on screen and
-#: still works — failing over sooner strictly improves the worst case. Longer
-#: than the autopilot's because nothing else is waiting on this one.
+TIMEOUT_PLAN = 30.0
+#: The Describe box's budget. Shorter than the autopilot's 45s and the ✨
+#: button's 120s: the person is staring at one box with a ticking timer, and
+#: the fallback (the form, pre-filled with what they typed) still works —
+#: failing over sooner strictly improves the worst case. A cold CLI start plus
+#: a real turn is ~10s; the dialog gives up at the same 30s.
 
 #: Wall-clock budget for building the folder menu. The walks inside it are
 #: bounded already (each name search by its own deadline, the sweep by count),
@@ -979,6 +978,26 @@ def _candidates_within(
     return box["value"]
 
 
+def _signed_out_reason(cli: str, message: str) -> str:
+    """``message``, or — when the CLI just exited non-zero and is known NOT
+    signed in — the sentence that says so. A signed-out ``claude -p`` prints
+    its complaint on stdout and exits 1, so the error alone reads only
+    "claude exited 1", which tells a new user nothing. Only that bare shape
+    (a positive code, nothing on stderr): a killed child (``-9``) or a CLI
+    that said why keeps its own sentence. Never raises."""
+    if not cli or not re.fullmatch(r"\S+ exited [1-9]\d*", message):
+        return message
+    try:
+        from backend.web.core import setup_steps
+
+        for row in setup_steps.provider_logins():
+            if row.get("logged_in") is False and row.get("name") == cli:
+                return "%s isn't signed in yet — sign in under Settings → Agents" % cli
+    except Exception:  # noqa: BLE001 — a better sentence, never a new failure
+        pass
+    return message
+
+
 # --- the one-shot ----------------------------------------------------------
 
 
@@ -1013,6 +1032,7 @@ def plan(
         rows = rows[:8]
         candidates = candidates[:8]
         prompt = build_prompt(text, rows)
+    argv: list = []
     try:
         # The flock's own default CLI FIRST. It is the SECOND slot that may be
         # empty: providers.resolve("") returns claude unconditionally
@@ -1028,7 +1048,8 @@ def plan(
         # --skip-git-repo-check so it tolerates being run outside a repo.
         out = _commit_message._run(argv, home, timeout)
     except _commit_message.CommitMessageError as err:
-        raise SessionPlanError(str(err))
+        cli = os.path.basename(str(argv[0])) if argv else ""
+        raise SessionPlanError(_signed_out_reason(cli, str(err)))
     return resolve(
         parse_answer(out),
         candidates,

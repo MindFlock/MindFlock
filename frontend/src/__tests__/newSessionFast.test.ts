@@ -44,22 +44,27 @@ function memKV(init: Record<string, string> = {}) {
 }
 
 describe("fast path — Name → Enter creates, no model turn", () => {
-  it("opens on page 1, the sentence card, every time; a failed create reopens on the form at Name", () => {
+  it("a fresh opening lands on page 1, the sentence card; a failed create reopens on the form at Name", () => {
     // v0.7's flow, restored on the owner's word ("I like how it used to look
-    // in v0.7"): the landing card first, the form one click behind it.
+    // in v0.7"): the landing card first, the form one click behind it. Round
+    // 4: an opening that still holds a typed draft keeps it (and its page) —
+    // see openingMode in newSessionDraft.test.ts.
     expect(DIALOG).toContain("const [page, setPage] = useState(1);");
     expect(DIALOG).toContain("const openedPage = useRef(1);");
-    const reset = DIALOG.slice(DIALOG.indexOf("const prefill = useUi.getState().takeNewPrefill();"), DIALOG.indexOf("setNewFolderOk(false);"));
+    const reset = DIALOG.slice(DIALOG.indexOf("const resetForm = (prefill: string) => {"), DIALOG.indexOf("setNewFolderOk(false);"));
     expect(reset).toContain("openedPage.current = 1;");
     expect(reset).toContain("setPage(1);");
+    expect(reset).toContain('openedFocus.current = "describe";');
     expect(DIALOG).not.toContain("useState(2)");
     // The caret goes to the sentence box; Name only after a failed create,
     // whose reopen is about fixing the form failCreate put back on screen.
     expect(SRC).toContain("const el = shown ? (toTitle ? titleRef.current : describeRef.current) : null;");
-    const failed = DIALOG.slice(DIALOG.indexOf("if (failedReopen.current) {"), DIALOG.indexOf("setTab(\"session\");"));
+    const failed = DIALOG.slice(
+      DIALOG.indexOf("if (failedReopen.current) {"),
+      DIALOG.indexOf("const prefill = useUi.getState().takeNewPrefill();")
+    );
     expect(failed).toContain("openedPage.current = 2;");
     expect(failed).toContain('openedFocus.current = "title";');
-    expect(failed).toContain('openedFocus.current = "describe";');
     expect(SUBMIT).toContain("setPage(2);");
   });
 
@@ -73,7 +78,7 @@ describe("fast path — Name → Enter creates, no model turn", () => {
   });
 
   it("the create goes through submit → postCreate, which POSTs /api/instances and never /api/session-plan", () => {
-    const submit = SUBMIT.slice(SUBMIT.indexOf("const submit = async () => {"), SUBMIT.indexOf("return { failCreate"));
+    const submit = SUBMIT.slice(SUBMIT.indexOf("const submit = async (over"), SUBMIT.indexOf("return { failCreate"));
     expect(submit).toContain("buildBody(");
     expect(submit).toContain("postCreate(");
     expect(submit).not.toContain("runDescribe");
@@ -109,9 +114,17 @@ describe("page 1 — the sentence card, as in v0.7", () => {
   it("draws the box, its explanation and examples, and nothing of the form", () => {
     expect(DESCRIBE).toContain('"What do you want to work on?"');
     expect(DESCRIBE).toContain('placeholder="e.g. fix the login bug in acme-api"');
-    expect(DESCRIBE).toContain("Your coding CLI reads this and works out which folder to use");
-    expect(DESCRIBE).toContain("<b>Nothing is created until you pick one of the buttons below.</b>");
-    expect(DESCRIBE).toContain("Also understood:");
+    // Says what each button does rather than "nothing is created until…"
+    // (one of those buttons IS Create) — and only what it really does:
+    // Create session starts now from the words as typed, in the folder named
+    // right there; Review is the one that has the agent read them.
+    expect(DESCRIBE).toContain("<b>Create session</b>");
+    expect(DESCRIBE).toContain("starts it now in");
+    expect(DESCRIBE).toContain("with what you typed as its task.");
+    expect(DESCRIBE).toContain("<b>Review details first</b> has your agent pick the folder");
+    expect(DESCRIBE).not.toContain("starts right away");
+    expect(DESCRIBE).not.toContain("Nothing is created until");
+    expect(DESCRIBE).toContain("Examples:");
     // The form's own sections are page 2's alone — the box is not on the form.
     const p1 = DIALOG.slice(DIALOG.indexOf("{page === 1 ? ("), DIALOG.indexOf("<TemplatesStrip"));
     expect(p1).toContain("<DescribeSection {...describeProps} />");
@@ -129,18 +142,21 @@ describe("page 1 — the sentence card, as in v0.7", () => {
     expect(skip).toBeGreaterThan(-1);
     expect(skip).toBeLessThan(go);
     expect(go).toBeLessThan(start);
-    // Set it up myself → the form, empty, no model turn.
+    // Set it up myself → the form, with what was typed as its Task, no
+    // model turn (round 4: it used to arrive empty).
     const skipBtn = FOOTER.slice(skip, go);
     expect(skipBtn).toContain('className="nf-quiet"');
-    expect(skipBtn).toContain("onClick={() => setPage(2)}");
+    expect(skipBtn).toContain("onClick={setUpMyself}");
     expect(skipBtn).toContain("Set it up myself instead");
     // Review details first ↵ → the model fills the form in; ↵ says Enter does it.
     const goBtn = FOOTER.slice(go, start);
     expect(goBtn).toContain('onClick={() => void runDescribe("fill")}');
     expect(goBtn).toContain("Review details first");
     expect(goBtn).toContain("↵");
-    // Create session (startLabel(1)) → read and create, without the form.
+    // Create session (startLabel(1)) → create now, without the form and
+    // without waiting on the agent (it is not disabled by a Review read).
     expect(FOOTER.slice(start)).toContain("onClick={runMode ? () => void startRun() : startNow}");
+    expect(FOOTER.slice(start)).toContain("disabled={draft.starting || (runMode && describing)}");
   });
 
   it("Enter in the box is Review details first; Shift+Enter (and a list's Enter) a new line", () => {
@@ -155,8 +171,10 @@ describe("page 1 — the sentence card, as in v0.7", () => {
     expect(run).toContain("applyPlan(a)");
     expect(run).toContain("setPage(2);");
     expect(run).toContain("submitArmAt.current = Date.now() + SUBMIT_ARM_MS");
-    // A failed read names the way out page 1 offers.
-    expect(run).toContain('" — use Set it up myself instead."');
+    // A failure (or the 30s cap) offers the form, pre-filled with the text:
+    // the button beside the error says so, the error only says what failed.
+    expect(run).toContain("setPlanError(errMsg(err));");
+    expect(run).toContain("setDescribeFailed(true);");
   });
 
   it("page 2 has ← Back to the sentence, and Create is held while the model is reading", () => {
@@ -250,12 +268,14 @@ describe("Base branch — the Git & workspace fold's picker", () => {
   });
 });
 
-describe("Templates strip — one list, always manageable", () => {
-  it("shows Manage… whether or not a template exists, and opens the React dialog", () => {
+describe("Templates strip — one list, shown once there is one", () => {
+  it("hides when empty, and its All templates… opens the React dialog", () => {
     const strip = TEMPLATES.slice(TEMPLATES.indexOf('id="new-templates"'));
     expect(strip).toContain('id="new-templates-manage"');
-    expect(strip).toContain('openDialogFor("templates", "new")');
-    expect(strip).toContain("No templates yet");
+    expect(strip).toContain('openDialogFor("templates", templatesTarget({ fromNew: true, schedule: null }))');
+    expect(strip).toContain("All templates…");
+    // No templates: no strip at all (Save as template… makes the first).
+    expect(TEMPLATES).toContain("if (!templates.length) return null;");
     expect(SRC).not.toContain("mindflockAddons");
   });
 });

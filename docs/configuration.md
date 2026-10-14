@@ -265,7 +265,11 @@ Every source also takes an OPTIONAL-in-TOML-but-required-in-the-UI `repo_url`
 (the repo that source's tickets clone into) — set it per source; there is no
 global default repo. A source whose tickets span several repos lists them in
 `repos` instead (see "A source spanning several repos" below). `workflow_state` gates ingestion so a ticket only gets a
-session once it reaches the chosen state (blank = any state). The Intake →
+session once it reaches the chosen state (blank = any state — except on a
+source with `needs_filter = "on"`, which every source added in Intake gets:
+there blank means *start nothing* until a state or `ingest_labels` is set. A
+state still holding a typed name rather than an id also starts nothing until
+Intake's Test swaps it for the id). The Intake →
 **Tickets** tab loads the live state list per source (Shortcut/Jira/Linear).
 The same list feeds the optional **`start_state`** ("Move to state on start"),
 which is the other direction: where a ticket goes once a session starts for it.
@@ -288,7 +292,7 @@ labelled), so it is the opt-in for a board where every story sits in the same
 state for everyone and the label is how you hand one ticket to MindFlock. It
 also bounds `assignee_scope = "anyone"` on its own — "anyone's stories labelled
 `qa`" is as narrow as "anyone's stories in Ready for QA". The Assigned tickets
-panel still lists unlabelled stories, marked *missing an ingest label*, and they
+panel still lists unlabelled stories, marked *missing an auto-start label*, and they
 can still be started by hand. A story filed from MindFlock (New → **Ticket**)
 gets the first label, so the source can see it. Other providers reject the key
 at load time.
@@ -1049,7 +1053,12 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   a dwell sized to that evidence, 12–45 s, and nothing is queued to wake it;
   see [web-api.md](web-api.md)), rather than on the activity
   chip going grey at the end of every assistant turn. An existing opt-in simply
-  gets quieter; **no migration is needed**, by hand or otherwise.
+  gets quieter; **no migration is needed**, by hand or otherwise. Since
+  2026-10 it is **on by default** (labelled *"A session finishes its work"*) —
+  but only for someone who never saved a rule choice: anyone with either list
+  non-empty keeps the "off" that absence from `enabled_rules` meant, and its
+  toggle then records on in `enabled_rules` and off in `muted_rules`. Every
+  rule also carries a one-line `description` for the Settings screen.
 - **ntfy push** (`notifications.ntfy_enabled` / `_server` / `_topic` / `_token` /
   `_click_url`, Settings → Notifications) — the optional server-side push channel
   that reaches a phone with no browser tab open (see

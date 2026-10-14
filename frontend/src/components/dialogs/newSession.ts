@@ -40,8 +40,8 @@ export interface RepoSuggestion {
  * under $HOME, and the user can't judge a suggestion they can't account for. */
 export const SUGGEST_SOURCES: Array<{ key: string; label: string; hint: string }> = [
   { key: "recent", label: "Recent", hint: "folders your recent sessions ran in" },
-  { key: "cwd", label: "Here", hint: "the folder MindFlock itself was started in" },
-  { key: "nearby", label: "Nearby", hint: "repos and folders sitting under your home directory" },
+  { key: "cwd", label: "Started in", hint: "the folder MindFlock itself was started in" },
+  { key: "nearby", label: "Home", hint: "repos and folders sitting under your home directory" },
 ];
 
 /** How long the Folder field must sit still before we ask the server what it
@@ -727,4 +727,278 @@ export function focusRowIndex(paths: string[], leaving: string): number {
   if (!paths.length) return -1;
   const i = paths.indexOf(leaving);
   return i >= 0 ? i : 0;
+}
+
+// --- Round 2: defaults, previews and guards -----------------------------------
+
+/** The describe box gives up after this long and offers the form instead,
+ * pre-filled with what was typed. The server's own budget is the same 30s
+ * (session_plan.TIMEOUT_PLAN); a cold CLI start plus a real turn is ~10s. */
+export const DESCRIBE_CAP_MS = 30000;
+
+/** Words that say nothing about a task — the server's _TITLE_FILLER. */
+const TITLE_FILLER = new Set(
+  (
+    "a an the to of in on at for and or with by from into please can could " +
+    "you we i my our your this that it is be some"
+  ).split(" ")
+);
+export const TITLE_FROM_PROMPT_MAX = 32;
+
+/** The name a session with an empty Name gets from its task: the mirror of
+ * the server's session_create.title_from_prompt ("Add a README section about
+ * setup" → "add-readme-section-about-setup"). "" when the task has no
+ * letters or digits — the server then calls it "untitled". */
+export function titleFromPrompt(prompt: string): string {
+  const first = (prompt || "").split(/\r?\n/).find((l) => l.trim()) || "";
+  const words = first.toLowerCase().match(/[a-z0-9]+/g) || [];
+  const kept = words.filter((w) => !TITLE_FILLER.has(w));
+  const use = kept.length ? kept : words;
+  let out = "";
+  for (const w of use.slice(0, 6)) {
+    const next = out ? out + "-" + w : w;
+    if (next.length > TITLE_FROM_PROMPT_MAX) break;
+    out = next;
+  }
+  if (!out && use.length) out = use[0].slice(0, TITLE_FROM_PROMPT_MAX);
+  return out;
+}
+
+/** git-branch-safe, as the engine's sanitize_branch_name builds it. */
+export function sanitizeBranch(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/ /g, "-")
+    .replace(/[^a-z0-9\-_/.]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^[-/]+|[-/]+$/g, "");
+}
+
+/** "/a/b/" and "/a/b" are one folder; "~" is left as typed. */
+function samePath(a: string, b: string): boolean {
+  const n = (p: string) => (p || "").trim().replace(/\/+$/, "");
+  return !!n(a) && n(a) === n(b);
+}
+
+/** The sessions already editing `paths` (the folder as typed, and as the
+ * server resolved it) DIRECTLY — the ones a second in-place session would
+ * share a checkout with. */
+export function sessionsInFolder(
+  rows: Array<{ title: string; path: string; in_place?: boolean }>,
+  paths: string[]
+): string[] {
+  return rows
+    .filter((r) => r.in_place && paths.some((p) => samePath(r.path, p)))
+    .map((r) => r.title);
+}
+
+/** The warning under "This folder directly" when others already edit it. */
+export function sharedCheckoutWarning(titles: string[]): string {
+  if (!titles.length) return "";
+  const who =
+    titles.length === 1 ? "“" + titles[0] + "” is" : titles.length + " sessions are";
+  return (
+    who +
+    " already editing this folder directly. Pick “Separate worktree” so they " +
+    "don't overwrite each other."
+  );
+}
+
+/** `base`, or `base-2`, `base-3`… — the first name not in `taken`. The
+ * server's session_create.free_title (and _free_untitled for "untitled"),
+ * so the preview names the branch Create will really make. */
+export function freeTitle(base: string, taken: ReadonlySet<string>): string {
+  let title = base;
+  for (let n = 2; taken.has(title); n++) title = base + "-" + n;
+  return title;
+}
+
+/** What Create will call the session and its branch, given the names
+ * already in use. `clash` is a TYPED name another session already has (the
+ * server refuses it); `renumbered` is the name made from the task that was
+ * taken, so this one gets a number. */
+export interface PlannedName {
+  title: string;
+  branch: string;
+  /** Where the name comes from: typed, made from the task, or neither. */
+  from: "name" | "task" | "none";
+  clash: boolean;
+  renumbered: string;
+}
+
+export function plannedName(where: {
+  prefix: string;
+  title: string;
+  prompt: string;
+  taken: ReadonlySet<string>;
+}): PlannedName {
+  const typed = where.title.trim();
+  if (typed)
+    return {
+      title: typed,
+      branch: sanitizeBranch((where.prefix || "") + typed),
+      from: "name",
+      clash: where.taken.has(typed),
+      renumbered: "",
+    };
+  const base = titleFromPrompt(where.prompt);
+  const from = base ? "task" : "none";
+  const title = freeTitle(base || "untitled", where.taken);
+  return {
+    title,
+    branch: sanitizeBranch((where.prefix || "") + title),
+    from,
+    clash: false,
+    renumbered: title !== (base || "untitled") ? base || "untitled" : "",
+  };
+}
+
+/** The names a new session can't have: every session's title and the name
+ * it shows (a rename), as the server's free_title checks them. Another
+ * device's rows (`device::title`) live in that device's namespace. */
+export function takenNames(
+  rows: Array<{ title: string }>,
+  aliases: Record<string, string>
+): Set<string> {
+  const out = new Set<string>();
+  for (const r of rows) {
+    if (!r.title || r.title.includes("::")) continue;
+    out.add(r.title);
+    const a = aliases[r.title];
+    if (a) out.add(a);
+  }
+  return out;
+}
+
+/** The sessions already working in this repo, however they work in it
+ * (their own worktree or the folder itself). Verify's checklist runs and
+ * another device's rows are not "someone working here". */
+export function sessionsInRepo(
+  rows: Array<{ title: string; path: string; hidden_by?: string }>,
+  paths: string[]
+): string[] {
+  return rows
+    .filter(
+      (r) => !r.hidden_by && !r.title.includes("::") && paths.some((p) => samePath(r.path, p))
+    )
+    .map((r) => r.title);
+}
+
+/** The one line under "Works in" when other sessions already work in this
+ * repo — the answer to "will a second one clobber the first?". */
+export function otherSessionsLine(titles: string[], worktree: boolean): string {
+  if (!titles.length) return "";
+  const who =
+    titles.length === 1
+      ? "“" + titles[0] + "” is"
+      : titles.length + " other sessions are";
+  return (
+    who +
+    " already working in this repo" +
+    (worktree ? " — a separate worktree keeps you apart." : ".")
+  );
+}
+
+/** What GET /api/providers/status says about each agent on this device:
+ * name → installed. Absent = unknown (another device, an older server). */
+export type InstalledMap = Record<string, boolean>;
+
+/** Why Create must not launch `agent` ("" = go ahead). Only a KNOWN miss
+ * blocks: an agent nobody asked about may well be there. */
+export function agentMissingReason(agent: string, installed: InstalledMap | null): string {
+  if (!installed || !agent) return "";
+  if (installed[agent] !== false) return "";
+  return (
+    agent +
+    " isn't installed on this device. Install it in Settings → Agents, or pick another agent."
+  );
+}
+
+/** The agent the form should start on: the configured default, unless that
+ * one is known to be missing and another is installed. */
+export function preferInstalled(agent: string, names: string[], installed: InstalledMap | null): string {
+  if (!installed || installed[agent] !== false) return agent;
+  return names.find((n) => installed[n] === true) || agent;
+}
+
+/** The fields a template carries, from the form — the WHOLE setup, so Run now
+ * and a schedule start the same session the form would have. A template of
+ * the same name keeps its schedule (saving over it must not silently stop a
+ * nightly run). Pure, so what is saved is pinned by tests. */
+export function templateFromForm(
+  f: {
+    name: string;
+    program: string;
+    repoPath: string;
+    prompt: string;
+    inPlace: boolean;
+    provision: boolean;
+    strategy: string;
+    initRepo: boolean;
+    lane: string;
+    askFirst: boolean;
+  },
+  existing: Array<{ name: string; schedule?: unknown }>
+): Record<string, unknown> {
+  const name = f.name.trim();
+  const prior = existing.find((t) => t.name.trim().toLowerCase() === name.toLowerCase());
+  const lane = f.lane && f.lane !== "leave" ? f.lane : "";
+  return {
+    name,
+    program: f.program.trim(),
+    repo_path: f.repoPath.trim(),
+    prompt: f.prompt,
+    provisioned: f.provision,
+    in_place: f.inPlace && !f.provision && !lane,
+    workspace_strategy: f.strategy === "clone" ? "clone" : "worktree",
+    init_repo: f.initRepo,
+    // A template carries its run as far as an autopilot depth (commit / push
+    // / pr): it never merges unattended, so the New form's "merge" saves as "pr".
+    ...(lane ? { autopilot: lane === "merge" ? "pr" : lane } : {}),
+    ...(prior?.schedule ? { schedule: prior.schedule } : {}),
+  };
+}
+
+/** "0:07" for an elapsed count of seconds. */
+export function elapsedLabel(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+
+/** Set by the Templates dialog when it hands the person back to New (its
+ * Close, after New → Manage…): the reopen keeps the form as it was instead of
+ * resetting it, and only reloads the template list. One-shot. `prompt` is a
+ * prompt picked in Prompts (opened from New's Task box) for the Task box. */
+export const newSessionResume: { keep: boolean; prompt?: string } = { keep: false };
+
+/** Whether the New dialog holds something the person TYPED, which a
+ * reopen keeps (closing New, a trip to Intake or Settings) until Create or
+ * Clear. A Task the opening's own last-used pre-fill wrote is not typed. */
+export function hasTypedDraft(d: {
+  describe: string;
+  title: string;
+  prompt: string;
+  prefilledPrompt: string;
+}): boolean {
+  if (d.describe.trim() || d.title.trim()) return true;
+  const p = d.prompt.trim();
+  return !!p && p !== d.prefilledPrompt.trim();
+}
+
+/** What an opening does with the form: a failed create's own reopen and a
+ * hand-back from Templates/Prompts keep it exactly; Intake's "Start
+ * together…" (a prefill) always starts fresh; otherwise a typed draft is
+ * kept unless the last close was a Create. */
+export function openingMode(o: {
+  failedReopen: boolean;
+  resume: boolean;
+  prefill: boolean;
+  draft: boolean;
+  spent: boolean;
+}): "failed" | "resume" | "fresh" {
+  if (o.failedReopen) return "failed";
+  if (o.prefill) return "fresh";
+  if (o.resume) return "resume";
+  if (o.draft && !o.spent) return "resume";
+  return "fresh";
 }

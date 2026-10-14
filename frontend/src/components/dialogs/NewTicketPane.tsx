@@ -22,6 +22,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../../api/client";
 import { errMsg } from "../../lib/format";
 import { useUi } from "../../state/store";
+import { useMindflockStatus, useTicketingSources } from "../../state/queries";
+import { useIntakePause } from "../intake/pause";
 
 /** One configured ticketing source, and whether it will accept a ticket. */
 interface TicketSource {
@@ -35,8 +37,9 @@ interface TicketSource {
 
 interface SourcesPayload {
   sources?: TicketSource[];
-  /** Whether ticket ingestion is on for the flock, i.e. whether filing this
-   * ticket will also, eventually, start a session for it. */
+  /** Whether the CONFIG enables tickets at all. Not shown: the live answer is
+   * the Auto-start tickets switch, which this pane reads the way Intake does
+   * (useMindflockStatus) so the two can never disagree. */
   ingest_on?: boolean;
 }
 
@@ -81,7 +84,17 @@ export function NewTicketPane() {
   const openDialogFor = useUi((s) => s.openDialogFor);
 
   const [sources, setSources] = useState<TicketSource[] | null>(null);
-  const [ingestOn, setIngestOn] = useState(false);
+  // Auto-start for tickets, as Intake shows it: the same switch, the same
+  // pause — never the config flag, which said "on" over a switch that was off.
+  const { data: status } = useMindflockStatus();
+  const pause = useIntakePause((useTicketingSources(true).data || []).length);
+  const autoNote = !status?.available
+    ? ""
+    : (status.desired ?? status.running)
+      ? "Auto-start is on for tickets: once this ticket is in one of its source's auto-start states, a session starts on its own."
+      : pause.paused
+        ? "Intake is paused, so nothing starts on its own. Start it from Intake → Tickets."
+        : "Auto-start is off for tickets. Start it from Intake → Tickets.";
   const [sourcesError, setSourcesError] = useState("");
   const [source, setSource] = useState("");
   const [brief, setBrief] = useState("");
@@ -100,7 +113,6 @@ export function NewTicketPane() {
         if (!live) return;
         const rows = p.sources || [];
         setSources(rows);
-        setIngestOn(!!p.ingest_on);
         // Pre-pick when there is exactly one source that would accept a
         // ticket. Not "the first usable one" — with two connected trackers,
         // which one a ticket lands in is a decision, and a silent default is
@@ -180,12 +192,7 @@ export function NewTicketPane() {
             ))}
           </ul>
         )}
-        {ingestOn && (
-          <p className="nt-note">
-            Ticket ingestion is on for this flock, so a session may start for this
-            ticket on the next poll. You can also start one now from Intake.
-          </p>
-        )}
+        {!!autoNote && <p className="nt-note">{autoNote}</p>}
         <div className="modal-actions">
           <button
             type="button"
@@ -305,12 +312,7 @@ export function NewTicketPane() {
       {!chosen && !!usable.length && !sourcesError && (
         <p className="nt-note">Pick where the ticket should be filed.</p>
       )}
-      {ingestOn && (
-        <p className="nt-note">
-          Ticket ingestion is on, so a session may start for this ticket
-          automatically once it is filed.
-        </p>
-      )}
+      {!!autoNote && <p className="nt-note">{autoNote}</p>}
 
       {!!error && <p className="error">{error}</p>}
       {draft && (

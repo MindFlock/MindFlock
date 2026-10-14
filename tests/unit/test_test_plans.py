@@ -2371,7 +2371,9 @@ def test_verdict(store, results, verdict):
 
 
 def test_finish_run_folds_into_the_open_run_and_closes_the_plan(store):
-    tp.upsert(_plan("sc-1"))
+    # SHIPPED: only shipped work closes. A check before merge keeps the plan
+    # waiting — see the "check before merge" tests below.
+    tp.upsert(_plan("sc-1", state="due", live_at=50.0))
     tp.start_run("sc-1", "verify-sc-1")
     plan = tp.finish_run(
         "sc-1",
@@ -5386,10 +5388,20 @@ def test_a_due_checklist_with_an_answer_keeps_its_branch(store):
 
 
 def test_a_checklist_somebody_has_answered_is_never_re_aimed(store):
-    tp.upsert(_plan("sc-1", state="generated", live_branch="staging"))
+    tp.upsert(_plan("sc-1", state="due", live_at=50.0, live_branch="staging"))
     tp.record_result("sc-1", "s1", "pass")
     assert tp.retarget_live_branch("sc-1", "main") is None
     assert tp.get("sc-1")["live_branch"] == "staging"
+
+
+def test_a_check_before_merge_does_not_pin_the_live_branch(store):
+    """Answers given before merge are about the BRANCH, not about the branch the
+    repo ships from — so they must not stop the after-merge check following the
+    repo's setting."""
+    tp.upsert(_plan("sc-1", state="generated", live_branch="staging"))
+    tp.record_result("sc-1", "s1", "pass")
+    moved = tp.retarget_live_branch("sc-1", "main")
+    assert moved is not None and moved["live_branch"] == "main"
 
 
 def test_answers_clicked_back_off_do_not_pin_a_checklist(store):
@@ -8014,3 +8026,311 @@ def test_the_example_models_the_shape_the_rules_ask_for(store):
     assert steps[2]["text"].lower().startswith("on a deployment where")
     assert "log explorer" in steps[2]["text"].lower()
     assert steps[3]["text"].lower().startswith("on an order that already has")
+
+
+# --------------------------------------------------------------------------- #
+# Check before merge — checking the branch must not cost the check after merge
+# --------------------------------------------------------------------------- #
+def test_a_run_before_merge_keeps_the_plan_waiting(store):
+    """A run on a plan whose work has not shipped is a check of the branch. It
+    used to close the plan (`done`), and the liveness loop only re-asks plans in
+    `generated` — so checking before merge cost the check after it."""
+    tp.upsert(_plan("sc-1"))
+    tp.start_run("sc-1", "verify-sc-1")
+    assert tp.get("sc-1")["runs"][-1]["prelive"] is True
+    plan = tp.finish_run(
+        "sc-1",
+        [{"id": "s1", "result": "pass"}, {"id": "s2", "result": "pass"}],
+    )
+    assert plan["state"] == "generated" and plan["run_session"] == ""
+    assert plan["runs"][-1]["verdict"] == "partial"  # s2 is a person's step
+
+
+def test_the_plan_comes_back_after_merge_even_when_the_branch_check_passed(store):
+    tp.upsert(_plan("sc-1"))
+    tp.record_result("sc-1", "s1", "pass")
+    tp.record_result("sc-1", "s2", "pass")
+    # Every step answered — on the branch. Still waiting for the merge.
+    assert tp.get("sc-1")["state"] == "generated"
+    plan = tp.mark_due("sc-1")
+    # Shipped: the branch's answers are history, not the answer.
+    assert plan["state"] == "due"
+    assert plan["runs"][-1]["prelive"] is True
+
+
+def test_the_first_answer_after_merge_opens_a_new_run(store):
+    tp.upsert(_plan("sc-1"))
+    tp.record_result("sc-1", "s1", "pass")
+    tp.record_result("sc-1", "s2", "pass")
+    tp.mark_due("sc-1")
+    plan = tp.record_result("sc-1", "s2", "pass")
+    assert len(plan["runs"]) == 2
+    assert plan["runs"][0]["prelive"] is True
+    assert plan["runs"][-1]["prelive"] is False
+    assert set(plan["runs"][-1]["results"]) == {"s2"}
+    assert plan["state"] == "due"  # s1 not answered after merge yet
+    plan = tp.record_result("sc-1", "s1", "pass")
+    assert plan["state"] == "done"
+
+
+def test_a_run_after_merge_does_not_carry_answers_from_before_it(store):
+    """What a person saw on the branch is not an observation about what
+    shipped, so it is not copied into the after-merge run."""
+    tp.upsert(_plan("sc-1"))
+    tp.record_result("sc-1", "s2", "pass")
+    tp.mark_due("sc-1")
+    plan = tp.start_run("sc-1", "verify-sc-1")
+    assert plan["runs"][-1]["results"] == {}
+    assert plan["runs"][-1]["prelive"] is False
+
+
+def test_a_run_before_merge_that_cannot_start_goes_back_to_waiting(store):
+    tp.upsert(_plan("sc-1"))
+    tp.start_run("sc-1", "verify-sc-1")
+    plan = tp.fail_run("sc-1", "verify-sc-1", "worktree busy")
+    assert plan["state"] == "generated"
+    assert not plan["live_at"]
+
+
+def test_prune_returns_a_run_before_merge_to_waiting(store):
+    tp.upsert(_plan("sc-1"))
+    tp.start_run("sc-1", "verify-sc-1")
+    tp.prune(live_titles=["something-else"])
+    assert tp.get("sc-1")["state"] == "generated"
+
+
+def test_cancelling_a_run_before_merge_goes_back_to_waiting(store):
+    tp.upsert(_plan("sc-1"))
+    tp.start_run("sc-1", "verify-sc-1")
+    assert tp.cancel_run("sc-1")["state"] == "generated"
+
+
+def test_adding_a_step_to_a_checklist_that_could_not_be_written(store):
+    """The model failed and a person wrote a step: that is a working checklist,
+    not a failed one, and the model's failure no longer describes it."""
+    tp.upsert(_plan("sc-1", state="failed", steps=[], error="claude did not answer"))
+    plan = tp.add_step("sc-1", "Open the page", "It loads")
+    assert plan["state"] == "generated"
+    assert plan["error"] == ""
+    assert len(plan["steps"]) == 1
+
+
+def test_adding_a_step_to_a_shipped_checklist_that_could_not_be_written(store):
+    tp.upsert(_plan("sc-1", state="failed", steps=[], live_at=50.0, error="x"))
+    assert tp.add_step("sc-1", "Open the page")["state"] == "due"
+
+
+def test_older_runs_without_the_flag_read_as_after_merge(store):
+    """A run stored before the flag existed is not a check before merge."""
+    tp.upsert(
+        _plan(
+            "sc-1",
+            state="done",
+            live_at=50.0,
+            runs=[
+                {
+                    "at": 60.0,
+                    "by": "human",
+                    "session": "",
+                    "results": {
+                        "s1": {"result": "pass", "by": "human", "at": 61.0},
+                        "s2": {"result": "pass", "by": "human", "at": 62.0},
+                    },
+                }
+            ],
+        )
+    )
+    plan = tp.get("sc-1")
+    assert plan["runs"][-1]["prelive"] is False
+    assert tp.mark_due("sc-1")["state"] == "done"
+
+
+# --------------------------------------------------------------------------- #
+# A checklist for a BRANCH no session has been on (Verify → New checklist →
+# Another branch…): POST /api/test-plans/branch {repo, branch}
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def branch_repo(tmp_path, monkeypatch):
+    """A repo (shipping from main) with a branch nobody opened a session on,
+    known to Verify through a closed session in it. Generation is recorded,
+    never run."""
+    from backend.web import server
+
+    repo = tmp_path / "shop"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+    (repo / "a.py").write_text("x\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "init")
+    _git(repo, "checkout", "-q", "-b", "feature/teammate")
+    (repo / "a.py").write_text("y\n")
+    _git(repo, "commit", "-qam", "their work")
+    _git(repo, "checkout", "-q", "main")
+    entry = {
+        "id": "old-1",
+        "title": "old",
+        "branch": "feature/old",
+        "data": {"worktree": {"repo_path": str(repo)}},
+    }
+    monkeypatch.setattr(server, "_load_recently_closed", lambda: [entry])
+    monkeypatch.setattr(server.ENGINE, "instances", {})
+    started: list = []
+    monkeypatch.setattr(
+        server, "_start_test_plan_generation", lambda *a, **k: started.append(a)
+    )
+    return SimpleNamespace(root=os.path.realpath(repo), started=started)
+
+
+def test_the_repo_picker_lists_repos_verify_has_seen(client, branch_repo):
+    r = client.get("/api/test-plans/repos")
+    assert r.status_code == 200
+    assert r.json()["repos"] == [{"name": "shop", "root": branch_repo.root}]
+
+
+def test_a_checklist_for_a_branch_no_session_was_on(client, branch_repo):
+    r = client.post(
+        "/api/test-plans/branch",
+        json={"repo": branch_repo.root, "branch": "feature/teammate"},
+    )
+    assert r.status_code == 202
+    assert r.json() == {"ok": True, "plan": "shop@feature/teammate", "existing": False}
+    plan = tp.get("shop@feature/teammate")
+    assert plan["branch"] == "feature/teammate"
+    assert plan["repo_root"] == branch_repo.root
+    assert len(plan["sha"]) == 40 and plan["live_branch"] == "main"
+    # No session: the repo's default CLI, diffing in the repo's own checkout.
+    assert branch_repo.started == [("shop@feature/teammate", "", "")]
+
+    # Asking again points at the one it already wrote — by name, too.
+    again = client.post(
+        "/api/test-plans/branch", json={"repo": "shop", "branch": "feature/teammate"}
+    )
+    assert again.status_code == 200
+    assert again.json()["existing"] is True
+    assert again.json()["plan"] == "shop@feature/teammate"
+    assert len(branch_repo.started) == 1
+
+
+def test_an_empty_checklist_starts_no_generation(client, branch_repo):
+    """``empty: true``: the checklist exists at once, stepless and marked
+    ``origin: "manual"`` (so Verify reads it as a person's to fill, not as one
+    that couldn't be written), and no model call is started."""
+    r = client.post(
+        "/api/test-plans/branch",
+        json={"repo": branch_repo.root, "branch": "feature/teammate", "empty": True},
+    )
+    assert r.status_code == 201
+    assert r.json() == {
+        "ok": True,
+        "plan": "shop@feature/teammate",
+        "existing": False,
+        "empty": True,
+    }
+    assert branch_repo.started == []
+    plan = tp.get("shop@feature/teammate")
+    assert plan["origin"] == "manual" and plan["steps"] == []
+    assert plan["state"] == "generated" and plan["error"] == ""
+    # It is served that way, and a person's step makes it a working checklist.
+    listed = [
+        p
+        for p in client.get("/api/test-plans").json()["plans"]
+        if p["id"] == plan["id"]
+    ]
+    assert listed and listed[0]["origin"] == "manual"
+    filled = tp.add_step(plan["id"], "Open the page", "It loads")
+    assert filled["state"] == "generated" and len(filled["steps"]) == 1
+    # Asking again (empty or not) points at it and still starts nothing.
+    again = client.post(
+        "/api/test-plans/branch", json={"repo": "shop", "branch": "feature/teammate"}
+    )
+    assert again.status_code == 200 and again.json()["existing"] is True
+    assert branch_repo.started == []
+
+
+def test_only_a_literal_true_makes_it_empty(client, branch_repo):
+    r = client.post(
+        "/api/test-plans/branch",
+        json={"repo": branch_repo.root, "branch": "feature/teammate", "empty": "yes"},
+    )
+    assert r.status_code == 202
+    assert tp.get("shop@feature/teammate")["origin"] == ""
+    assert len(branch_repo.started) == 1
+
+
+def test_origin_survives_the_store_and_defaults_to_generated(store):
+    tp.ensure_plan_for("m-1", "feature/x", "abc", "/r", "main", manual=True)
+    assert tp.get("m-1")["origin"] == "manual"
+    tp.ensure_plan_for("g-1", "feature/y", "abd", "/r", "main")
+    assert tp.get("g-1")["origin"] == "" and tp.get("g-1")["state"] == "generating"
+    tp.upsert({**tp.get("m-1"), "origin": "bogus"})
+    assert tp.get("m-1")["origin"] == ""
+
+
+def test_a_branch_a_session_already_covers_names_that_checklist(client, branch_repo):
+    tp.ensure_plan_for("sc-7", "feature/teammate", "abc", branch_repo.root, "main")
+    r = client.post(
+        "/api/test-plans/branch",
+        json={"repo": branch_repo.root, "branch": "feature/teammate"},
+    )
+    assert r.status_code == 200
+    assert r.json()["existing"] is True and r.json()["plan"] == "sc-7"
+    assert branch_repo.started == []
+
+
+def test_a_branch_only_on_origin_is_fetched(client, branch_repo, tmp_path, monkeypatch):
+    from backend.web import server
+
+    clone = tmp_path / "clone"
+    _git(
+        tmp_path,
+        "clone",
+        "-q",
+        "--single-branch",
+        "-b",
+        "main",
+        branch_repo.root,
+        str(clone),
+    )
+    entry = {"title": "c", "data": {"worktree": {"repo_path": str(clone)}}}
+    monkeypatch.setattr(server, "_load_recently_closed", lambda: [entry])
+    r = client.post(
+        "/api/test-plans/branch", json={"repo": "clone", "branch": "feature/teammate"}
+    )
+    assert r.status_code == 202
+    assert tp.get("clone@feature/teammate")["sha"] == _head_of(
+        branch_repo.root, "feature/teammate"
+    )
+
+
+def _head_of(repo, ref) -> str:
+    out = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", ref], check=True, stdout=subprocess.PIPE
+    )
+    return out.stdout.decode().strip()
+
+
+@pytest.mark.parametrize(
+    "body, status, words",
+    [
+        ({"branch": "feature/teammate"}, 400, "pick a repo"),
+        ({"repo": "shop"}, 400, "type a branch"),
+        (
+            {"repo": "/nowhere", "branch": "feature/teammate"},
+            400,
+            "isn't one of your repos",
+        ),
+        ({"repo": "shop", "branch": "-x"}, 400, "isn't a branch name"),
+        ({"repo": "shop", "branch": "a..b"}, 400, "isn't a branch name"),
+        ({"repo": "shop", "branch": "main"}, 409, "ships from"),
+        ({"repo": "shop", "branch": "feature/nobody"}, 409, "no branch feature/nobody"),
+    ],
+)
+def test_a_branch_checklist_refuses_what_it_cannot_write(
+    client, branch_repo, body, status, words
+):
+    r = client.post("/api/test-plans/branch", json=body)
+    assert r.status_code == status
+    assert words in r.json()["error"]
+    assert branch_repo.started == []

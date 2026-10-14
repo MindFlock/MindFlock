@@ -14,7 +14,6 @@
 import type {
   DoctorCheckItem,
   SetupGroup,
-  SetupLogin,
   SetupStatus,
   SetupStep,
   SetupStepId,
@@ -103,11 +102,32 @@ export function showSetupChip(opts: {
   return !showSetupCard(opts);
 }
 
-/** "Setup 3/5". */
+/** THE setup count — the chip, the checklist's first line and the grid card
+ * all say it, so they can never disagree ("1 of 3" on the panel beside a
+ * "Setup 1/5" chip was three readings of one list). It counts the three
+ * REQUIRED steps (what "Get set up" promises); once those are done the
+ * optional ones still to settle ride along as `optional`, never as a bigger
+ * denominator. */
+export function setupCount(status: SetupStatus | null | undefined): {
+  done: number;
+  total: number;
+  optional: number;
+} {
+  const steps = orderedSteps(status);
+  const req = steps.filter((x) => REQUIRED_STEPS.includes(x.id as SetupStepId));
+  const done = req.filter((x) => x.done).length;
+  const optional = steps.filter(
+    (x) => stepGroup(x) === "connect" && !x.done && !x.skipped
+  ).length;
+  return { done, total: req.length, optional: done === req.length ? optional : 0 };
+}
+
+/** "Setup 1 of 3" — then "Setup 3 of 3 · 2 optional" once the required steps
+ * are done and optional ones remain. */
 export function chipLabel(status: SetupStatus | null | undefined): string {
-  const s = status?.summary;
-  if (!s) return "Setup";
-  return "Setup " + s.done + "/" + s.total;
+  if (!status?.summary) return "Setup";
+  const c = setupCount(status);
+  return "Setup " + c.done + " of " + c.total + (c.optional ? " · " + c.optional + " optional" : "");
 }
 
 /** ①…⑤ for a counted step (Get started, then Connect your work); an
@@ -148,20 +168,6 @@ export function isEssentialCheck(c: DoctorCheckItem): boolean {
   return c.status === "fail" || c.status === "warn";
 }
 
-/** The agent CLIs step 2 offers a button for: the installed ones. The default
- * agent comes first; the rest keep the registry's order. */
-export function installedLogins(logins: SetupLogin[] | null | undefined): SetupLogin[] {
-  const rows = (logins || []).filter((l) => l.installed);
-  return rows.filter((l) => l.default).concat(rows.filter((l) => !l.default));
-}
-
-/** One agent's sign-in line: what the probe found. */
-export function loginLine(l: SetupLogin): { text: string; ok: boolean | null } {
-  if (l.logged_in === true) return { text: "signed in", ok: true };
-  if (l.logged_in === false) return { text: "not signed in yet", ok: false };
-  return { text: "sign-in can't be checked — fine if it works", ok: null };
-}
-
 /** Whether the phone extra should offer to install Tailscale rather than the QR: the
  * doctor's Tailscale row says it is missing (or broken). A payload without
  * the row (doctor unavailable) still offers the QR — Settings → Your phone is
@@ -170,6 +176,15 @@ export function tailscaleMissing(status: SetupStatus | null | undefined): boolea
   const ts = status?.tailscale;
   if (!ts) return false;
   return ts.status !== "ok";
+}
+
+/** Whether Tailscale is actually absent (the doctor's row says "not found"),
+ * as opposed to installed but stopped, signed out or unreachable — which
+ * `tailscaleMissing` also covers, and whose fix starts it rather than
+ * installs it. */
+export function tailscaleNotInstalled(status: SetupStatus | null | undefined): boolean {
+  const ts = status?.tailscale;
+  return !!ts && ts.status !== "ok" && /^not found/i.test(ts.detail || "");
 }
 
 /** Did the desktop app (or a link) ask for the Setup modal? `?setup=1` is

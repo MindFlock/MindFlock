@@ -406,7 +406,7 @@ class TestPanelReasonsMatchThePerRepoFilters:
 
         gh = _gh(min_age_minutes=1, repo_settings={"org/a": {"min_age_minutes": 90}})
         reasons = pr_review.skip_reasons(_pr("org/a", 1, age_min=10), set(), "me", gh)
-        assert any("grace period" in r for r in reasons)
+        assert any("too new" in r for r in reasons)
         # …and the repo that inherits the 1-minute default is eligible.
         assert (
             pr_review.skip_reasons(_pr("org/b", 2, age_min=10), set(), "me", gh) == []
@@ -422,7 +422,7 @@ class TestPanelReasonsMatchThePerRepoFilters:
         reasons = pr_review.skip_reasons(
             _pr("org/a", 1, age_min=99, base="release/2"), set(), "me", gh
         )
-        assert reasons == ["targets release/2, not the watched base (main)"]
+        assert reasons == ["into release/2, not main"]
 
     def test_issue_reasons_use_the_repo_s_own_skip_list(self):
         from backend.web.core import issue_start
@@ -435,7 +435,7 @@ class TestPanelReasonsMatchThePerRepoFilters:
         reasons = issue_start.skip_reasons(
             _issue("org/a", 1, age_min=99, author="bot"), set(), gh
         )
-        assert reasons == ["authored by bot (in the skip list)"]
+        assert reasons == ["opened by bot — on your ignore list"]
 
 
 # --------------------------------------------------------------------------- #
@@ -792,9 +792,9 @@ def test_every_configured_source_gets_a_label_even_when_it_fails(monkeypatch):
     )
     out = _run(ticket_start.list_assigned_tickets())
     # The user's own label wins; a blank one falls back to the provider's, and a
-    # failed source is still named.
+    # failed source is still named — by the catalog's display name, never its id.
     assert out["source_labels"]["jira"] == "Jira – EU"
-    assert out["source_labels"]["linear"] == "linear"
+    assert out["source_labels"]["linear"] == "Linear"
     assert [e["source"] for e in out["errors"]] == ["linear"]
 
 
@@ -912,9 +912,11 @@ class TestAutoStartTabIsDocumented:
             assert chip in text, chip
         # The difference between the switches belongs in the sentence under the
         # heading, which names the one to flip.
-        assert "Automated ingestion" in text
-        assert "Automated PR review" in text
-        assert "Automated issue handling" in text
+        # Each switch named as its tab names it (GLOSSARY: auto-start).
+        assert "Auto-start tickets" in text
+        assert "Auto-address review comments" in text
+        assert "Auto-start new issues" in text
+        assert "Pause intake" in text
 
     def test_the_modules_the_docs_cite_exist(self):
         text = (_ROOT / "docs" / "web-ui.md").read_text(encoding="utf-8")

@@ -1,5 +1,5 @@
 /** The sidebar's Issues bar — Intake → Issues' door and quick switch: its label
- * opens that tab, its switch is the tab's "Automated handling" switch. Sits
+ * opens that tab, its switch is the tab's "Auto-start new issues" switch. Sits
  * under the Pull requests bar. The switch is the github.issues_enabled setting
  * — the settings addon emits addon.settings.github_toggled on a real change
  * and the ingestion addon reconciles the pipeline process (start / stop /
@@ -11,7 +11,10 @@
  * review (absent = on), issue handling is opt-in: absent = off. */
 
 import { useUi } from "../../state/store";
+import { useTicketingSources } from "../../state/queries";
 import { useGithubToggleBar } from "./useGithubToggleBar";
+import { useIntakePause } from "../intake/pause";
+import "../intake/pauseButton.css";
 
 export function GitIssueBar() {
   const openDialogFor = useUi((s) => s.openDialogFor);
@@ -21,17 +24,19 @@ export function GitIssueBar() {
     reposKey: "issue_repos",
     defaultOn: false,
     activeFlag: "issues_active",
-    toggleLabel: "Automated handling",
+    toggleLabel: "Auto-start new issues",
   });
+  // Off because Pause intake turned it off: drawn striped amber, not plain off.
+  const pause = useIntakePause((useTicketingSources(true).data || []).length);
+  const paused = !on && pause.pausedKind("issues");
   if (!visible) return null;
 
   return (
     <div
       id="git-issue-bar"
       title={
-        `Issues — automated handling watches ${repos.length} ` +
-        `${repos.length === 1 ? "repository" : "repositories"} and starts work on ` +
-        "each newly opened issue on a fresh branch."
+        `GitHub issues — starts a session for each new issue in ${repos.length} ` +
+        `${repos.length === 1 ? "repository" : "repositories"}.`
       }
     >
       <span
@@ -41,7 +46,7 @@ export function GitIssueBar() {
         className={"dc-dot " + (active ? "on" : !on ? "off" : "idle")}
         title={
           active
-            ? "An issue is being brought in right now (automated or a forced start)"
+            ? "An issue is starting right now"
             : on
               ? starting
                 ? "Switched on — the pipeline is starting"
@@ -53,15 +58,15 @@ export function GitIssueBar() {
         id="git-issue-repos-btn"
         type="button"
         className="dc-label dc-open"
-        title="Open Intake → Issues"
+        title="Open Intake → GitHub issues"
         onClick={() => openDialogFor("intake", "issues")}
       >
-        Issues
+        GitHub issues
       </button>
       <span className="dc-actions">
         <label
-          className="dc-switch"
-          title="Automated handling — the same switch as Intake → Issues (your repositories are kept either way)"
+          className={"dc-switch" + (paused ? " paused" : "")}
+          title="Auto-start new issues — the same switch as Intake → GitHub issues (your repositories are kept either way)"
         >
           <input
             type="checkbox"

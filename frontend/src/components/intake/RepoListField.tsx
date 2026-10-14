@@ -8,7 +8,8 @@
  * (backend/ticket_ingestion/repo_routing.py). Storage and back-compat live in
  * `repoList.ts`. */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useAutosave } from "./autosave";
 import type { TicketingSource } from "../../api/types";
 import {
   addRepoRow,
@@ -22,13 +23,12 @@ import {
 import "./RepoListField.css";
 
 export const REPO_HELP_ONE =
-  "Required — tickets from this source clone into this repo. Tickets that span " +
-  "repos? Add another and each ticket starts in the one it needs.";
+  "Where this source's tickets are worked on. Work spans repos? Add another and " +
+  "each ticket starts in the one it needs.";
 export const REPO_HELP_MANY =
-  "Each ticket starts in the repo it needs: a ticket label or title word that " +
-  "matches a repo's name or hint decides; otherwise the agent CLI picks from " +
-  "the ticket text, else the first repo. A ticket that needs several starts in " +
-  "one and is told to open a separate PR in each of the others.";
+  "Each ticket starts in the repo whose name or hint matches one of its labels or " +
+  "title words; otherwise the agent reads the ticket and picks. Every ticket row " +
+  "shows where it will go.";
 
 function rowsFor(source: TicketingSource): RepoEntry[] {
   const stored = sourceRepos(source);
@@ -38,32 +38,64 @@ function rowsFor(source: TicketingSource): RepoEntry[] {
 export function RepoListField({
   source,
   onChange,
+  onPending,
+  onSettled,
 }: {
   source: TicketingSource;
   onChange(patch: Record<string, string | null>): void;
+  /** Typed text is waiting to be saved (the card says "Saving…"). */
+  onPending?(): void;
+  /** A pending edit turned out to change nothing (typed, then typed back). */
+  onSettled?(): void;
 }) {
   const stored = sourceRepos(source);
+  const storedRef = useRef(stored);
+  storedRef.current = stored;
   const [rows, setRows] = useState<RepoEntry[]>(() => rowsFor(source));
+  // Saved as you type (a short pause), on blur and on Enter — never only on
+  // blur, which left a typed URL unsaved under a card reading "Saved ✓".
+  const save = useAutosave<RepoEntry[]>((next) => {
+    if (!sameRepos(cleanRepos(next), storedRef.current)) onChange(reposPatch(next));
+    else onSettled?.();
+  }, onPending);
   // A save elsewhere (another tab, settings sync) re-seeds the rows, unless
-  // they already say the same thing — then a half-typed blank row survives.
+  // they already say the same thing — then a half-typed blank row survives —
+  // or text typed here is still on its way to the server.
   const storedKey = JSON.stringify(stored);
   useEffect(() => {
+    if (save.isPending()) return;
     setRows((prev) => (sameRepos(cleanRepos(prev), stored) ? prev : rowsFor(source)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storedKey]);
 
   const commit = (next: RepoEntry[]) => {
     setRows(next);
-    if (!sameRepos(cleanRepos(next), stored)) onChange(reposPatch(next));
+    save.schedule(next);
+    save.flush();
   };
-  const edit = (index: number, patch: Partial<RepoEntry>) =>
-    setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  const edit = (index: number, patch: Partial<RepoEntry>) => {
+    const next = rows.map((r, i) => (i === index ? { ...r, ...patch } : r));
+    setRows(next);
+    save.schedule(next);
+  };
+  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      save.flush();
+    }
+  };
 
   const many = rows.length > 1;
   const missing = cleanRepos(rows).length === 0;
   return (
     <div className="set-row tk-repos" role="group" aria-label="Repositories">
-      <span className="set-label">{many ? "Repos" : "Repo URL"}</span>
+      {/* The same required marker the catalog's fields wear (FieldLabel). */}
+      <span className="set-label">
+        {many ? "Repos" : "Repo URL"}
+        <span className="ik-field-marker required" data-marker="required">
+          *
+        </span>
+      </span>
       {rows.map((r, i) => (
         <div className="tk-repo-row" key={i}>
           <input
@@ -76,7 +108,8 @@ export function RepoListField({
             placeholder="git@github.com:org/repo.git"
             value={r.url}
             onChange={(e) => edit(i, { url: e.target.value })}
-            onBlur={() => commit(rows)}
+            onBlur={save.flush}
+            onKeyDown={onKey}
           />
           {many && (
             <input
@@ -87,7 +120,8 @@ export function RepoListField({
               placeholder="hint, e.g. frontend, ui (optional)"
               value={r.hint || ""}
               onChange={(e) => edit(i, { hint: e.target.value })}
-              onBlur={() => commit(rows)}
+              onBlur={save.flush}
+              onKeyDown={onKey}
             />
           )}
           {many && (

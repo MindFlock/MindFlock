@@ -1,7 +1,7 @@
 """Reopening the workspace an intake item already has on this machine.
 
 The gap this closes: a ticket/PR/issue that has been worked once shows its
-history in chips ("already ingested", "a feature branch for it already exists on
+history in chips ("already started before", "a feature branch for it already exists on
 the remote") and offers exactly one action — start it *again*. But ending a
 session keeps its worktree, and a restart loses the session without touching the
 directory, so the work is usually still right there. These cover the two halves:
@@ -333,7 +333,7 @@ class TestReopenRoute:
             json={"kind": "tickets", "source": "shortcut", "id": "21214"},
         )
         assert r.status_code == 410
-        assert "Begin work" in r.json()["error"]
+        assert "use Start to start it fresh" in r.json()["error"]
 
     def test_the_workspace_is_resolved_from_the_row_not_the_payload(
         self, cached_ticket, monkeypatch

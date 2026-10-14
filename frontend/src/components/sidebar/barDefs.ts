@@ -49,10 +49,27 @@ export const LATE_BARS = new Set(["prompts"]);
  * this is only a membership set (see `defaultHiddenBars`). */
 export const DEFAULT_VISIBLE_BARS = ["usage", "ingestion", "assistant"];
 
-/** The default hidden set for a fresh user: every bar not in the essentials. */
+/** Bars the calm first hour (lib/calm.ts) adds to the default hidden set —
+ * set by the sidebar while the screen is calm, [] after. Module state rather
+ * than an argument so every reader of the default (the store at boot, a prefs
+ * pull that clears the field) agrees with what the sidebar shows. */
+let calmExtra: string[] = [];
+
+/** Set the calm extras (see above); returns whether they changed. */
+export function setCalmBarDefaults(keys: string[]): boolean {
+  const next = [...new Set(keys)].sort();
+  if (next.join("\n") === calmExtra.join("\n")) return false;
+  calmExtra = next;
+  return true;
+}
+
+/** The default hidden set for a user who never chose: every bar not in the
+ * essentials, plus the calm first hour's extras while it lasts. */
 export function defaultHiddenBars(): string[] {
   const visible = new Set(DEFAULT_VISIBLE_BARS);
-  return SIDEBAR_BARS.map((b) => b.key).filter((k) => !visible.has(k));
+  const out = SIDEBAR_BARS.map((b) => b.key).filter((k) => !visible.has(k));
+  for (const k of calmExtra) if (!out.includes(k)) out.push(k);
+  return out;
 }
 
 /** Sentinel for the session-list block in the section order. Not a bar: it is

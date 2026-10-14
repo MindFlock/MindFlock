@@ -5,7 +5,7 @@ import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { api } from "../../../api/client";
 import type { AuthProfile, AuthProfilesResponse } from "../../../api/types";
 import { openSettings } from "../../../lib/openSettings";
-import type { Provider } from "../newSession";
+import type { InstalledMap, Provider } from "../newSession";
 
 type Set<T> = Dispatch<SetStateAction<T>>;
 
@@ -72,6 +72,7 @@ export function accountSetter(ctx: AccountCtx) {
 export function AgentFields({
   program,
   providers,
+  installed = null,
   setAgent,
   device,
   authProfiles,
@@ -82,6 +83,9 @@ export function AgentFields({
 }: {
   program: string;
   providers: Provider[];
+  /** Which agents this device has (null = unknown): a missing one is
+   * marked "not installed" in the list, and Create refuses it. */
+  installed?: InstalledMap | null;
   setAgent(value: string): void;
   device: string;
   authProfiles: AuthProfilesResponse | undefined;
@@ -99,7 +103,7 @@ export function AgentFields({
             type="button"
             id="new-agent-manage"
             className="linklike"
-            title="Manage coding CLIs in Settings"
+            title="Install, sign in and pick your default agent in Settings → Agents"
             onClick={() => {
               closeDialog();
               openSettings("coding");
@@ -110,7 +114,7 @@ export function AgentFields({
         </span>
         <select
           id="new-program"
-          title="The coding CLI this session runs"
+          title="The agent this session runs"
           value={program}
           onChange={(e) => setAgent(e.target.value)}
         >
@@ -120,6 +124,7 @@ export function AgentFields({
           {providers.map((p) => (
             <option key={p.name} value={p.name}>
               {p.name}
+              {installed && installed[p.name] === false ? " (not installed)" : ""}
             </option>
           ))}
         </select>

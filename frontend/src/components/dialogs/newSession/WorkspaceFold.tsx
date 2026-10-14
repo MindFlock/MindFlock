@@ -1,12 +1,25 @@
-/** The New form's "Git & workspace" fold: where the work happens (new
- * worktree, this folder, provisioned), the Base branch picker for a new
- * worktree, and git init. */
+/** Where a New session's work happens. Two parts:
+ *
+ * - WorksIn, ON the form (never folded): "Separate worktree" (recommended,
+ *   the default for a git repo) or "This folder directly", the branch the
+ *   worktree will be cut on, and a warning when another session already
+ *   edits the folder directly.
+ * - GitOptions, under More options: provisioning (setup + warm caches on
+ *   top of the separate worktree), the Base branch picker, and git init for
+ *   a folder that has no repo yet. */
 
 import { useEffect, type Dispatch, type SetStateAction } from "react";
 import type { RepoBranches } from "../../../api/types";
 import type { deviceApi } from "../../../lib/devices";
 import type { RunDraft } from "../NewList";
-import { CHECK_DEBOUNCE_MS, looksLikePath, remoteBranchName } from "../newSession";
+import {
+  CHECK_DEBOUNCE_MS,
+  looksLikePath,
+  otherSessionsLine,
+  remoteBranchName,
+  sharedCheckoutWarning,
+  type PlannedName,
+} from "../newSession";
 
 type Set<T> = Dispatch<SetStateAction<T>>;
 
@@ -47,7 +60,8 @@ export function useBaseBranches({
         if (live) setBranches(b);
       } catch {
         // No menu, no error: the server picks the base as it always did.
-        if (live) setBranches(null);
+        // An empty answer rather than null, which reads as "still loading".
+        if (live) setBranches({ path, is_git: false, current: "", default: "", branches: [] });
       }
     }, CHECK_DEBOUNCE_MS);
     return () => {
@@ -57,21 +71,231 @@ export function useBaseBranches({
   }, [open, page, repoPath, dapi]);
 }
 
-export interface WorkspaceFoldProps {
-  advancedOpen: boolean;
-  setAdvancedOpen: Set<boolean>;
-  foldSummary: string;
+/* The words for where a session works, in ONE place: the New form and the
+   Templates editor both draw these, so a template can never describe the
+   same choice in other words (or with another kind of control). */
+
+/** "Separate worktree": the recommended answer for a git repo. */
+export function WorktreeText() {
+  return (
+    <>
+      Separate worktree <span className="nf-rec">recommended</span>{" "}
+      <span className="muted">— its own branch, so several sessions can run at once</span>
+    </>
+  );
+}
+
+/** "Provision the worktree": the separate worktree plus the repo's setup. */
+export function ProvisionCheck({
+  id,
+  rowId,
+  checked,
+  onChange,
+}: {
+  id: string;
+  rowId?: string;
+  checked: boolean;
+  onChange(on: boolean): void;
+}) {
+  return (
+    <label id={rowId} className="check">
+      <input type="checkbox" id={id} checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      Provision the worktree{" "}
+      <span className="muted">— also run the repo's setup and warm test caches</span>
+    </label>
+  );
+}
+
+/** A provisioned worktree's strategy: a shared base clone, or a full clone. */
+export function StrategyPicker({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  onChange(v: string): void;
+}) {
+  return (
+    <label>
+      Workspace strategy
+      <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="worktree">shared base clone (worktree) — fast, default</option>
+        <option value="clone">full clone — standalone</option>
+      </select>
+    </label>
+  );
+}
+
+/** git init for a folder with no repo yet. */
+export function InitRepoCheck({
+  id,
+  checked,
+  onChange,
+}: {
+  id: string;
+  checked: boolean;
+  onChange(on: boolean): void;
+}) {
+  return (
+    <label className="check">
+      <input type="checkbox" id={id} checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      Create a git repo in this folder{" "}
+      <span className="muted">(git init + first commit — turns on diff, commit and PR)</span>
+    </label>
+  );
+}
+
+/** "This folder directly"'s plain hint (the New form swaps it for a warning
+ * when picking it would turn fast-track or auto-split off). */
+export const IN_PLACE_HINT = "— edits your checkout as it is, on its current branch";
+
+export interface WorksInProps {
   inPlace: boolean;
   setInPlace: Set<boolean>;
-  provision: boolean;
   setProvision: Set<boolean>;
   provisionOn: boolean;
-  offerProvision: boolean;
   laneNeedsWorktree: boolean;
   draft: RunDraft;
   splitOn: boolean;
   setSplit: Set<boolean>;
   worktreeClamped: string;
+  /** A git repo is in the folder (the branch line is only true then). */
+  isGit: boolean;
+  /** What Create will name the session and the branch it cuts (null = not
+   * known yet: no repo, or the folder not checked). */
+  name: PlannedName | null;
+  /** The branch prefix, for the "named from your task" line. */
+  prefix: string;
+  /** What it is cut from ("" = the server's pick). */
+  baseLabel: string;
+  /** Works ON a pushed branch ("Work on x itself"). */
+  continueBranch: string;
+  /** Sessions already editing this folder directly. */
+  sharers: string[];
+  /** Sessions already working in this repo, any way. */
+  others: string[];
+}
+
+/** "Works in": the one workspace question every session answers, as two
+ * radios on the form itself. The recommended one is the default for a repo:
+ * a session on its own branch cannot overwrite another's edits, which is the
+ * promise "run several at once" rests on. */
+export function WorksIn({
+  inPlace,
+  setInPlace,
+  setProvision,
+  provisionOn,
+  laneNeedsWorktree,
+  draft,
+  splitOn,
+  setSplit,
+  worktreeClamped,
+  isGit,
+  name,
+  prefix,
+  baseLabel,
+  continueBranch,
+  sharers,
+  others,
+}: WorksInProps) {
+  const worktree = !inPlace || laneNeedsWorktree || provisionOn;
+  const warn = sharedCheckoutWarning(sharers);
+  // In place, the shared-checkout warning below says it louder.
+  const othersLine = warn && !worktree ? "" : otherSessionsLine(others, worktree);
+  return (
+    <div id="new-works-in" className="rt-row rt-row-top nf-works-in" data-caps="git">
+      <span className="rt-label" id="new-mode-label">
+        Works in
+      </span>
+      <div className="rt-ctl nf-mode" role="radiogroup" aria-labelledby="new-mode-label">
+        <label className="check">
+          <input
+            type="radio"
+            name="new-workspace-mode"
+            id="new-worktree"
+            checked={worktree}
+            onChange={() => setInPlace(false)}
+          />
+          <WorktreeText />
+        </label>
+        {worktree && isGit && !worktreeClamped && (name || continueBranch) && (
+          <p className="nf-branch-line" id="new-branch-preview">
+            {continueBranch ? (
+              <>
+                Works on <code>{continueBranch}</code> itself (shared with whoever pushed it)
+              </>
+            ) : name && name.from === "none" ? (
+              // Nothing typed yet: the name comes from the task, so say that
+              // rather than preview an "untitled" nobody means to make.
+              <>
+                New branch <code>{prefix}…</code> named from your task
+                {baseLabel ? <> (cut from {baseLabel})</> : null}
+              </>
+            ) : name ? (
+              <>
+                New branch <code>{name.branch}</code>
+                {baseLabel ? <> from {baseLabel}</> : null}
+                {name.renumbered && (
+                  <span className="muted"> — “{name.renumbered}” is taken, so this one is numbered</span>
+                )}
+              </>
+            ) : null}
+          </p>
+        )}
+        {name?.clash && (
+          <p className="nf-git-nudge" id="new-name-clash" role="status">
+            A session called “{name.title}” already exists — give this one another name under More
+            options, or clear it to name it from the task.
+          </p>
+        )}
+        {othersLine && (
+          <p className="nf-branch-line nf-others" id="new-others" role="status">
+            {othersLine}
+          </p>
+        )}
+        {worktree && worktreeClamped && <p className="nf-git-nudge">{worktreeClamped}</p>}
+        <label className="check">
+          <input
+            type="radio"
+            name="new-workspace-mode"
+            id="new-in-place"
+            checked={!worktree}
+            onChange={() => {
+              // Fast-track commits for THIS session, so it never drives a
+              // checkout others share: choosing the shared folder turns it
+              // off (said on the line, not hidden).
+              if (laneNeedsWorktree) draft.setLane("leave");
+              setSplit(false);
+              setInPlace(true);
+              setProvision(false);
+            }}
+          />
+          This folder directly{" "}
+          <span className="muted">
+            {splitOn
+              ? "— turns auto-split off (a split works in its own worktree)"
+              : laneNeedsWorktree
+              ? "— turns fast-track off (it commits for this session, so it needs its own worktree)"
+              : IN_PLACE_HINT}
+          </span>
+        </label>
+        {warn && !worktree && (
+          <p className="nf-git-nudge nf-share-warn" id="new-share-warn" role="status">
+            {warn}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export interface GitOptionsProps {
+  provision: boolean;
+  setProvision: Set<boolean>;
+  setInPlace: Set<boolean>;
+  provisionOn: boolean;
+  offerProvision: boolean;
   provisionBlocked: string;
   armInitRepo(): void;
   strategy: string;
@@ -85,23 +309,17 @@ export interface WorkspaceFoldProps {
   setContinueOn: Set<string>;
   initRepo: boolean;
   setInitRepo: Set<boolean>;
+  /** The folder is already a git repo: "Create a git repo" is not offered. */
+  isGit: boolean;
 }
 
-export function WorkspaceFold({
-  advancedOpen,
-  setAdvancedOpen,
-  foldSummary,
-  inPlace,
-  setInPlace,
+/** More options → the git extras. */
+export function GitOptions({
   provision,
   setProvision,
+  setInPlace,
   provisionOn,
   offerProvision,
-  laneNeedsWorktree,
-  draft,
-  splitOn,
-  setSplit,
-  worktreeClamped,
   provisionBlocked,
   armInitRepo,
   strategy,
@@ -115,164 +333,65 @@ export function WorkspaceFold({
   setContinueOn,
   initRepo,
   setInitRepo,
-}: WorkspaceFoldProps) {
+  isGit,
+}: GitOptionsProps) {
   return (
-    <details
-      id="new-advanced"
-      className="nf-advanced"
-      data-caps="git"
-      open={advancedOpen}
-      onToggle={(e) => setAdvancedOpen((e.target as HTMLDetailsElement).open)}
-    >
-      <summary>
-        Git &amp; workspace
-        <span className="nf-fold-sum" id="new-advanced-sum">
-          — {foldSummary}
-        </span>
-      </summary>
-      <div className="nf-advanced-body">
-        {/* ONE question with three answers, not a radio pair plus a
-            stray checkbox.
-
-            "Isn't Provision workspace the same exact thing as New
-            worktree?" — asked about the previous shape, and a fair
-            reading of it: both do produce a separate checkout, they sat
-            in the same fold, and nothing said how they were related. They
-            are not the same (provisioning ALSO runs the repo's setup
-            commands and seeds the warm caches, and can make a full clone
-            instead of a worktree), but "worktree" being a radio while
-            "provision" was a checkbox implied they answered DIFFERENT
-            questions, when they answer the same one: where does this
-            session's work happen.
-
-            Three radios say the relationship out loud — provisioning is
-            the worktree option plus setup — and cost nothing in
-            behaviour: the three states were already mutually exclusive,
-            each old setter clearing the other by hand. This is that
-            exclusion written down instead of maintained. */}
-        <div
-          className="nf-mode"
-          role="radiogroup"
-          aria-labelledby="new-mode-label"
-        >
-          <div id="new-mode-label" className="nf-mode-label">
-            Where the work happens
-          </div>
-          <label className="check">
-            <input
-              type="radio"
-              name="new-workspace-mode"
-              id="new-worktree"
-              checked={(!inPlace || laneNeedsWorktree) && !provisionOn}
-              onChange={() => {
-                setInPlace(false);
-                setProvision(false);
-              }}
-            />
-            New worktree{" "}
-            <span className="muted">
-              (a separate checkout on its own branch — nothing is installed
-              into it)
-            </span>
-          </label>
-          <label className="check">
-            <input
-              type="radio"
-              name="new-workspace-mode"
-              id="new-in-place"
-              checked={inPlace && !laneNeedsWorktree}
-              onChange={() => {
-                // Fast-track commits for THIS session, so it never
-                // drives a checkout others share: choosing the shared
-                // folder turns it off (said on the line, not hidden).
-                if (laneNeedsWorktree) draft.setLane("leave");
-                setSplit(false);
-                setInPlace(true);
-                setProvision(false);
-              }}
-            />
-            Work directly in this folder{" "}
-            <span className="muted">
-              {splitOn
-                ? "(turns auto-split off — a split works in its own worktree)"
-                : laneNeedsWorktree
-                ? "(turns fast-track off — it commits for this session, so it needs its own worktree)"
-                : "(no worktree — edits the original; multiple sessions can share it)"}
-            </span>
-          </label>
-          {offerProvision && (
-            <label id="new-provision-row" className="check">
-              <input
-                type="radio"
-                name="new-workspace-mode"
-                id="new-provision"
-                checked={provisionOn}
-                onChange={() => {
-                  setProvision(true);
-                  setInPlace(false);
-                }}
-              />
-              Provision workspace{" "}
-              <span className="muted">
-                — the same separate checkout, plus run repo setup &amp; warm
-                test caches (or a full clone instead of a worktree)
-              </span>
-            </label>
-          )}
-          {worktreeClamped && (
-            /* The server would silently do this anyway; saying so is the
-               difference between a form that reports the session you are
-               about to get and one that reports the session you asked
-               for. Same register and same remedy as the git nudge under
-               the Folder field. */
-            <p className="nf-git-nudge">{worktreeClamped}</p>
-          )}
-          {provisionBlocked && (
-            /* The git aside under the Folder field says the same thing in
-               the register of a plain session, where a repo-less folder is
-               merely a folder without diff/commit/PR. Here it is a hard
-               stop, it is three screens further down, and the fix is the
-               checkbox directly below — so it earns its own line. */
-            <p className="nf-git-nudge nf-provision-warn">
-              {provisionBlocked}{" "}
-              <button
-                type="button"
-                className="linklike"
-                title="Ticks “Create a git repo in this folder” below"
-                onClick={armInitRepo}
-              >
-                Create one here
-              </button>
-            </p>
-          )}
-          {offerProvision && provision && (
-            <div id="provision-opts">
-              <label>
-                Workspace strategy
-                <select
-                  id="new-workspace-strategy"
-                  value={strategy}
-                  onChange={(e) => setStrategy(e.target.value)}
-                >
-                  <option value="worktree">shared base clone (worktree) — fast, default</option>
-                  <option value="clone">full clone — standalone</option>
-                </select>
-              </label>
-              <p className="muted provision-hint">
-                Tip: paste a full branch in <b>Name</b> (e.g.{" "}
-                <code>feature/sc-17436/grafana-dashboard-…</code>) to use it as the branch
-                verbatim — the session name becomes its last segment.
-              </p>
-            </div>
-          )}
+    <div className="nf-git-opts" data-caps="git">
+      {offerProvision && (
+        /* Provisioning is the separate worktree PLUS the repo's setup — a
+           modifier of that answer, so a box under it rather than a third
+           answer to "works in". Ticking it picks the worktree. */
+        <ProvisionCheck
+          id="new-provision"
+          rowId="new-provision-row"
+          checked={provisionOn}
+          onChange={(on) => {
+            setProvision(on);
+            if (on) setInPlace(false);
+          }}
+        />
+      )}
+      {provisionBlocked && (
+        <p className="nf-git-nudge nf-provision-warn">
+          {provisionBlocked}{" "}
+          <button
+            type="button"
+            className="linklike"
+            title="Ticks “Create a git repo in this folder” below"
+            onClick={armInitRepo}
+          >
+            Create one here
+          </button>
+        </p>
+      )}
+      {offerProvision && provision && (
+        <div id="provision-opts">
+          <StrategyPicker id="new-workspace-strategy" value={strategy} onChange={setStrategy} />
+          <p className="muted provision-hint">
+            Tip: paste a full branch in <b>Name</b> (e.g.{" "}
+            <code>feature/sc-17436/grafana-dashboard-…</code>) to use it as the branch
+            verbatim — the session name becomes its last segment.
+          </p>
         </div>
+      )}
 
-        {worktreeMode && branches?.is_git && branches.branches.length > 0 && (
-          /* Only for a NEW WORKTREE: an in-place session runs on
-             whatever the folder has checked out, and the server
-             refuses a base for a provisioned one. The first row is
-             the server's own choice, so leaving it sends nothing. */
-          <>
+      {worktreeMode && isGit && branches === null && (
+        /* The menu is still on its way: the row is drawn now, so More
+           options shows what its summary promises from the first open. */
+        <label className="nf-base-branch">
+          Base branch{" "}
+          <span className="muted">— the worktree is cut from it and diffed against it</span>
+          <select id="new-base-branch" disabled value="">
+            <option value="">Loading branches…</option>
+          </select>
+        </label>
+      )}
+      {worktreeMode && branches?.is_git && branches.branches.length > 0 && (
+        /* Only for a NEW WORKTREE: an in-place session runs on whatever the
+           folder has checked out, and the server refuses a base for a
+           provisioned one. The first row is the server's own choice, so
+           leaving it sends nothing. */
+        <>
           <label className="nf-base-branch">
             Base branch{" "}
             <span className="muted">— the worktree is cut from it and diffed against it</span>
@@ -308,14 +427,12 @@ export function WorkspaceFold({
                 </optgroup>
               )}
             </select>
-            {branches.truncated && (
-              <span className="muted">Showing the first 200 branches.</span>
-            )}
+            {branches.truncated && <span className="muted">Showing the first 200 branches.</span>}
           </label>
           {canContinue && remoteBranchName(baseBranch) && (
-            /* A remote-tracking pick: cut a new branch from it (the
-               default), or work ON it — the same branch whoever
-               pushed it works on (continue_branch). */
+            /* A remote-tracking pick: cut a new branch from it (the default),
+               or work ON it — the same branch whoever pushed it works on
+               (continue_branch). */
             <div className="nf-base-mode" role="radiogroup" aria-label="What to do with the remote branch">
               <label className="check">
                 <input
@@ -340,31 +457,15 @@ export function WorkspaceFold({
               </label>
             </div>
           )}
-          </>
-        )}
+        </>
+      )}
 
-        {/* OUTSIDE the mode group, because it is not a fourth answer to
-            "where does the work happen" — it is a thing done to the folder
-            before any of the three run, and it combines with all of them.
-            No longer exclusive with "work directly in this folder", and
-            the pairing was always backwards: git-initialising a folder and
-            then working in that same folder is the ordinary thing to want
-            — arguably the most natural mode for a folder you just made,
-            since a worktree cut from a brand-new repo is the awkward case.
-            The server does exactly that combination: _prepare_plain_repo
-            git-inits and makes the first commit, and the session comes up
-            in place with diff/commit/PR on. */}
-        <label className="check">
-          <input
-            type="checkbox"
-            id="new-init-repo"
-            checked={initRepo}
-            onChange={(e) => setInitRepo(e.target.checked)}
-          />
-          Create a git repo in this folder{" "}
-          <span className="muted">(git init + initial commit — enables diff/commit/PR)</span>
-        </label>
-      </div>
-    </details>
+      {/* Not offered for a folder that already IS a repo — there is nothing
+          to create. It combines with either "works in" answer: git init here
+          and then work here is the ordinary reading of both. */}
+      {(!isGit || initRepo) && (
+        <InitRepoCheck id="new-init-repo" checked={initRepo} onChange={setInitRepo} />
+      )}
+    </div>
   );
 }

@@ -139,6 +139,8 @@ export function AutomationSwitch({
   checked,
   onChange,
   note,
+  disabled,
+  paused,
 }: {
   label: string;
   title: string;
@@ -147,26 +149,40 @@ export function AutomationSwitch({
   statusId?: string;
   checked: boolean;
   onChange(next: boolean): void;
-  /** Subtitle inside the row, for what the switch can't say itself. Pass it only
-   * when the tab has no sources yet — never to narrate on/off. */
+  /** Subtitle inside the row, for what the switch can't say itself: that there
+   * is nothing to turn on yet, or that intake is paused — never to narrate a
+   * plain on/off the switch already shows. */
   note?: string;
+  disabled?: boolean;
+  /** Off because Pause intake turned it off: drawn amber and striped, not as
+   * a plain off — "paused" and "never switched on" are different answers. */
+  paused?: boolean;
 }) {
+  // The switch's accessible name is the row's own words (aria-labelledby), so
+  // a screen reader hears "Auto-start tickets, switch" rather than nothing.
+  const nameId = inputId ? inputId + "-name" : undefined;
   return (
-    <div className="ik-switch" id={rowId} title={title}>
+    <div className={"ik-switch" + (paused ? " paused" : "")} id={rowId} title={title} data-paused={paused || undefined}>
       <span className="ik-switch-text">
-        <span className="set-label">{label}</span>
+        <span className="set-label" id={nameId}>
+          {label}
+        </span>
         {note ? (
           <span className="set-hint" id={statusId}>
             {note}
           </span>
         ) : null}
       </span>
-      {/* label wraps only the switch, so clicking the row text never flips it */}
+      {/* label wraps only the switch, so clicking the row text never flips it
+          (the app-wide rule — settingsRevamp.test pins it) */}
       <label className="ca-switch">
         <input
           type="checkbox"
           id={inputId}
           checked={checked}
+          disabled={disabled}
+          aria-labelledby={nameId}
+          aria-describedby={note ? statusId : undefined}
           onChange={(e) => onChange(e.target.checked)}
         />
         <span className="ca-slider" />
@@ -416,6 +432,119 @@ export function WorkListPanel({
   );
 }
 
+/** Where a ticket on a several-repo source will start, and why — the server's
+ * `route` (backend/ticket_ingestion/repo_routing.py::preview). */
+export interface ItemRoute {
+  repos?: string[];
+  /** The routed (primary) repo's URL; "" while pending. */
+  repo_url?: string;
+  reason?: string;
+  /** label | title | llm | manual | pending | … */
+  method?: string;
+  summary?: string;
+  /** Every repo of the source, for the row's Repo picker. */
+  choices?: Array<{ name: string; url: string }>;
+}
+
+/** `route.method` of a ticket on a source with ONE repo: not a routing
+ * decision, just where every ticket from it starts (built client-side — the
+ * server only routes sources with several). */
+export const ONLY_REPO = "only";
+
+/** The repo name in a clone URL or path: `git@github.com:acme/api.git` → `api`. */
+export function repoNameOf(url: string): string {
+  const u = (url || "").trim().replace(/\/+$/, "").replace(/\.git$/, "");
+  return u.split(/[/:\\]/).pop() || u;
+}
+
+/** "→ billing-service · label 'billing'" / "→ repo picked when it starts". */
+export function routeText(route: ItemRoute | null | undefined): string {
+  if (!route) return "";
+  const repos = (route.repos || []).filter(Boolean);
+  // A one-repo source: just the repo — there was nothing to decide.
+  if (route.method === ONLY_REPO && repos.length) return "→ " + repos[0];
+  if (!repos.length || route.method === "pending") return "→ repo picked by the agent when it starts";
+  return "→ " + repos.join(" + ") + (route.reason ? " · " + route.reason : "");
+}
+
+/** A multi-repo ticket row's Repo picker: "" = where routing sends it (the
+ * default it names), else one of the source's repos, for just this start.
+ * Renders nothing unless the source has several repos. */
+export function RepoPick({
+  route,
+  value,
+  reference,
+  disabled,
+  onChange,
+}: {
+  route?: ItemRoute | null;
+  value: string;
+  reference: string;
+  disabled?: boolean;
+  onChange(url: string): void;
+}) {
+  const choices = route?.choices || [];
+  if (choices.length < 2) return null;
+  const routed = route?.method === "pending" ? [] : (route?.repos || []).filter(Boolean);
+  return (
+    <label className="ik-item-pick ik-item-pick-repo">
+      <span className="ik-item-pick-label">Repo</span>
+      <select
+        className="ik-item-repo"
+        value={value}
+        data-picked={value || undefined}
+        disabled={disabled}
+        title="Which repo to start this one in — just this start"
+        aria-label={"Repo for " + reference}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">
+          {routed.length ? "Default (" + routed.join(" + ") + ")" : "Default (agent picks)"}
+        </option>
+        {choices.map((c) => (
+          <option key={c.url} value={c.url}>
+            {c.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+/** What a start resolves with: the toast text, plus the new session's title
+ * when the server named it (the button then becomes a link to it). */
+export type StartResult = string | { message: string; title?: string };
+
+/** A row's "⋯" menu: the rare, housekeeping actions (Merge into…) that should
+ * not sit next to Start at the same weight. Opens inline, under the button. */
+export function RowMore({
+  reference,
+  open,
+  onToggle,
+  children,
+}: {
+  reference: string;
+  open: boolean;
+  onToggle(): void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="ik-row-more">
+      <button
+        type="button"
+        className={"linklike ik-row-more-btn" + (open ? " on" : "")}
+        aria-expanded={open}
+        aria-label={"More actions for " + reference}
+        title="More actions"
+        onClick={onToggle}
+      >
+        ⋯
+      </button>
+      {open ? <div className="ik-row-more-list">{children}</div> : null}
+    </div>
+  );
+}
+
 /** One row of a WorkListPanel: reference, title, meta, eligibility chips and
  * the force-start button. */
 export function WorkItemRow({
@@ -428,6 +557,8 @@ export function WorkItemRow({
   elsewhere,
   eligible,
   eligibleLabel,
+  eligibleOn = true,
+  route,
   reasons,
   actionLabel,
   onStart,
@@ -441,7 +572,9 @@ export function WorkItemRow({
   onReopen,
   actionExtra,
   drawer,
+  onDrawerClose,
   pick,
+  housekeeping,
 }: {
   reference: string;
   url?: string;
@@ -453,15 +586,23 @@ export function WorkItemRow({
    * device's name. The row reads as taken there — no start button here. */
   elsewhere?: string;
   eligible?: boolean;
-  /** e.g. "queued for auto review" */
+  /** e.g. "will auto-start" — or, with auto-start off, "auto-start off". */
   eligibleLabel: string;
+  /** Whether the eligible chip is a promise (green) or only a fact (neutral):
+   * false when the kind's auto-start is off or paused, so the chip can never
+   * say "will start" next to a switch that says it won't. */
+  eligibleOn?: boolean;
+  /** Where this item will start and why, on a source with several repos. */
+  route?: ItemRoute | null;
   reasons?: string[];
-  /** e.g. "Begin review" */
+  /** "Start" — the one verb every row uses. */
   actionLabel: string;
   /** Starts the session on `agent` ("" = the configured chain); resolve with the
-   * created session's title for the toast. `effort` is a neutral rung the server
-   * translates into the launching CLI's own flag ("" = that CLI's default). */
-  onStart(opts: { agent: string; depth: string; effort: string }): Promise<string>;
+   * toast text, or with `{message, title}` so the button can open the new
+   * session. `effort` is a neutral rung the server translates into the
+   * launching CLI's own flag ("" = that CLI's default). `repo` is a repo URL
+   * picked on a multi-repo row ("" = where it is routed). */
+  onStart(opts: { agent: string; depth: string; effort: string; repo: string }): Promise<StartResult>;
   /** e.g. "Begin review failed" */
   failPrefix: string;
   /** Tooltip on the reference link; defaults to GitHub's wording. */
@@ -502,11 +643,22 @@ export function WorkItemRow({
    * nested overlay that traps focus in the wrong layer. What needs confirming
    * gets confirmed here, in the app's own paint, next to the row it is about. */
   drawer?: React.ReactNode;
+  /** Closes `drawer`. Escape inside the drawer calls it — and stops there,
+   * rather than closing the whole Intake dialog under it. */
+  onDrawerClose?: () => void;
   /** A tick box before the reference, for picking several rows to start
    * together (Tickets → "Start together…"). Absent = no box. */
   pick?: { checked: boolean; onChange(on: boolean): void };
+  /** Rare actions on the item in its TRACKER (Tickets: combine a duplicate
+   * into another ticket), not on intake. Shown at the bottom of the row's
+   * Options under their own "On the tracker" heading — never beside Start, so
+   * a destructive tracker write is never one stray click from starting work. */
+  housekeeping?: React.ReactNode;
 }) {
   const [state, setState] = useState<"idle" | "starting" | "started">("idle");
+  // The session a start created, once the server names it: "Started" becomes a
+  // link to it rather than a dead end.
+  const [startedTitle, setStartedTitle] = useState("");
   // Independent of `state`: reopening and starting are different actions on the
   // same row, and a failed reopen must leave Begin work usable.
   const [reopening, setReopening] = useState<"idle" | "busy" | "done">("idle");
@@ -520,6 +672,11 @@ export function WorkItemRow({
   // …and how hard the agent should think about it. "This ticket is gnarly, run
   // it on ultracode" is a property of the ticket, not of the queue.
   const [effort, setEffort] = useState("");
+  // …and, on a source with several repos, which one THIS start goes to.
+  // "" = wherever routing sends it (the default the picker names).
+  const [repo, setRepo] = useState("");
+  const repoChoices = route?.choices || [];
+  const canPickRepo = repoChoices.length > 1;
   // Which CLI this row would launch on, so the Effort picker can name that CLI's
   // ceiling. The cache is shared by every row (see useProviderEfforts).
   const effortCaps = useProviderEfforts().data;
@@ -532,7 +689,7 @@ export function WorkItemRow({
   // row of a long list were most of its noise. Folded behind "Options" until
   // asked for — but never while one holds a pick, so a choice is never hidden.
   const [optsOpen, setOptsOpen] = useState(false);
-  const picked = !!(agent || depth || (effortUsable && effort));
+  const picked = !!(agent || depth || (effortUsable && effort) || repo);
   const showPicks = optsOpen || picked;
   // What the empty choices resolve to, named once for the options and the
   // collapsed line alike.
@@ -543,6 +700,8 @@ export function WorkItemRow({
     : "";
   // "claude · Fast-track: Off · default effort" — what Start will use, said in
   // one line, with Fast-track named the way New's Options summary names it.
+  const pickedRepo = repo ? repoChoices.find((c) => c.url === repo) : undefined;
+  const where = pickedRepo ? "→ " + pickedRepo.name + " · your pick" : routeText(route);
   const uses = [
     agent || configuredAgent || (agents && agents.length > 0 ? "app default" : ""),
     "Fast-track: " + (depth ? laneLabel(depth) : defaultDepth),
@@ -556,8 +715,46 @@ export function WorkItemRow({
   ]
     .filter(Boolean)
     .join(" · ");
+  const willAutoStart = !!eligible && eligibleOn && !hasSession;
+  const housekeepingBlock = housekeeping ? (
+    <div className="ik-item-housekeeping" role="group" aria-label="On the tracker">
+      <span className="ik-item-pick-label">On the tracker</span>
+      {housekeeping}
+    </div>
+  ) : null;
+  // A row with no start (session open, or taken on another device) has no
+  // Options of its own; it still gets the tracker actions behind one.
+  const housekeepingFold = housekeeping ? (
+    <>
+      <button
+        type="button"
+        className="linklike ik-item-opts"
+        aria-expanded={optsOpen}
+        title="Actions on this ticket in the tracker"
+        onClick={() => setOptsOpen(!optsOpen)}
+      >
+        {optsOpen ? "Hide options" : "Options"}
+      </button>
+      {optsOpen ? <div className="ik-item-picks">{housekeepingBlock}</div> : null}
+    </>
+  ) : null;
   return (
-    <div className={"pr-open-item" + (pick?.checked ? " picked" : "")} title={tooltip}>
+    <div
+      className={"pr-open-item" + (pick?.checked ? " picked" : "")}
+      title={tooltip}
+      onKeyDown={(e) => {
+        // Escape closes the innermost open thing: this row's Options before
+        // the Intake dialog (a drawer under it has already taken its own).
+        if (e.key !== "Escape" || e.defaultPrevented) return;
+        if (drawer && onDrawerClose) {
+          e.preventDefault();
+          onDrawerClose();
+        } else if (optsOpen) {
+          e.preventDefault();
+          setOptsOpen(false);
+        }
+      }}
+    >
       <div className="pr-open-main">
         {pick && (
           <input
@@ -582,10 +779,28 @@ export function WorkItemRow({
       </div>
       <div className="pr-open-meta">
         <span>{meta}</span>
+        {where ? (
+          <span
+            className="ik-item-route"
+            data-route={route?.method || ""}
+            title={
+              route?.method === ONLY_REPO
+                ? "The repo this starts in — this source's only repo. Add more on its card."
+                : (route?.method === "pending" || !(route?.repos || []).length
+                    ? "Nothing on the ticket names one of this source's repos, so the agent reads the ticket and picks when it starts."
+                    : "The repo this starts in, and why.") +
+                  (canPickRepo
+                    ? " To start it in another repo, pick one under Options."
+                    : " To send it elsewhere, give the ticket a label that matches another repo's name or hint (on the source card).")
+            }
+          >
+            {where}
+          </span>
+        ) : null}
         {hasSession ? (
           <span className="pr-open-chip on">session open</span>
         ) : eligible ? (
-          <span className="pr-open-chip ok">{eligibleLabel}</span>
+          <span className={"pr-open-chip" + (eligibleOn ? " ok" : "")}>{eligibleLabel}</span>
         ) : (
           (reasons || []).map((reason) => {
             // A recorded failure reason is a full sentence of git output whose
@@ -627,6 +842,7 @@ export function WorkItemRow({
             On {elsewhere}
           </button>
           {actionExtra}
+          {housekeepingFold}
         </div>
       ) : hasSession ? (
         // Wrapped in the same action column the other branch uses, rather than
@@ -638,6 +854,7 @@ export function WorkItemRow({
             Session open
           </button>
           {actionExtra}
+          {housekeepingFold}
         </div>
       ) : (
         <div className="ik-item-start">
@@ -679,7 +896,7 @@ export function WorkItemRow({
                 ? "Reopening…"
                 : reopening === "done"
                   ? "Reopened"
-                  : "Reopen window"}
+                  : "Reopen session"}
             </button>
           )}
           {/* Collapsed, the row says what Start will use and offers the
@@ -696,7 +913,9 @@ export function WorkItemRow({
                 title={
                   showPicks
                     ? "Hide the per-start options"
-                    : "Pick a different CLI, Fast-track or effort for just this start"
+                    : canPickRepo
+                      ? "Pick a different repo, CLI, Fast-track or effort for just this start"
+                      : "Pick a different CLI, Fast-track or effort for just this start"
                 }
                 onClick={() => setOptsOpen(!optsOpen)}
               >
@@ -709,7 +928,16 @@ export function WorkItemRow({
               stacked control would make every row in the list taller. */}
           {showPicks && (
           <div className="ik-item-picks">
+            <RepoPick
+              route={route}
+              value={repo}
+              reference={reference}
+              disabled={state !== "idle"}
+              onChange={setRepo}
+            />
             {agents && agents.length > 0 && (
+              <label className="ik-item-pick">
+              <span className="ik-item-pick-label">Agent</span>
               <select
                 className="ik-item-agent"
                 value={agent}
@@ -731,7 +959,10 @@ export function WorkItemRow({
                   </option>
                 ))}
               </select>
+              </label>
             )}
+            <label className="ik-item-pick">
+            <span className="ik-item-pick-label">Fast-track</span>
             <select
               className="ik-item-depth"
               value={depth}
@@ -759,6 +990,7 @@ export function WorkItemRow({
                 </option>
               ))}
             </select>
+            </label>
             {/* Thinking effort, and now it has a configured default to name like
                 the other two: a ticketing source carries its own rung, so the
                 empty choice says which rung this row would run at rather than
@@ -767,6 +999,8 @@ export function WorkItemRow({
                 own default, and the tooltip says where the CLI this row would
                 launch tops out. A CLI with no effort setting gets the control
                 disabled rather than an enabled one that does nothing. */}
+            <label className="ik-item-pick">
+            <span className="ik-item-pick-label">Effort</span>
             <select
               className="ik-item-effort"
               value={effortUsable ? effort : ""}
@@ -793,20 +1027,46 @@ export function WorkItemRow({
                   </option>
                 ))}
             </select>
+            </label>
+            {where && !canPickRepo ? (
+              <span className="ik-item-pick-note">
+                {route?.method === ONLY_REPO ? (
+                  <>Starts in {where.replace(/^→ /, "")}, this source's repo.</>
+                ) : (
+                  <>
+                    Starts in {where.replace(/^→ /, "")}. To send it to another repo, give the
+                    ticket a label matching that repo's name or hint.
+                  </>
+                )}
+              </span>
+            ) : null}
+            {housekeepingBlock}
           </div>
           )}
           <button
             type="button"
             className={
-              canReopen ? "test-btn ik-start-again" : "btn-primary pr-review-btn"
-            }
-            disabled={state !== "idle"}
-            title={
               canReopen
-                ? actionLabel + " starts a NEW session, leaving the workspace above alone"
-                : undefined
+                ? "test-btn ik-start-again"
+                : // It starts on its own anyway: Start is the quiet "now, not
+                  // later" button, and the "will auto-start" chip carries the row.
+                  willAutoStart
+                  ? "test-btn pr-review-btn ik-start-quiet"
+                  : "btn-primary pr-review-btn"
+            }
+            disabled={state === "starting" || (state === "started" && !startedTitle)}
+            title={
+              state === "started" && startedTitle
+                ? "Go to the new session"
+                : canReopen
+                  ? actionLabel + " starts a NEW session, leaving the workspace above alone"
+                  : "Start a session for " + reference + " now"
             }
             onClick={async () => {
+              if (state === "started") {
+                if (startedTitle) selectSession(startedTitle);
+                return;
+              }
               setState("starting");
               try {
                 const created = await onStart({
@@ -817,8 +1077,12 @@ export function WorkItemRow({
                   // "started at its own default" note on a start nobody asked
                   // an effort for.
                   effort: effortUsable ? effort : "",
+                  repo,
                 });
-                toast(created + " — provisioning, see the sidebar");
+                const msg = typeof created === "string" ? created : created.message;
+                const newTitle = typeof created === "string" ? "" : created.title || "";
+                toast(msg + " — starting, see the sidebar");
+                setStartedTitle(newTitle);
                 setState("started");
               } catch (err) {
                 errorPop(
@@ -829,12 +1093,37 @@ export function WorkItemRow({
               }
             }}
           >
-            {state === "starting" ? "Starting…" : state === "started" ? "Started" : actionLabel}
+            {state === "starting"
+              ? "Starting…"
+              : state === "started"
+                ? startedTitle
+                  ? "Open session ›"
+                  : "Started"
+                : actionLabel}
           </button>
           {actionExtra}
         </div>
       )}
-      {drawer ? <div className="ik-item-drawer">{drawer}</div> : null}
+      {drawer ? (
+        <div
+          className="ik-item-drawer"
+          onKeyDown={(e) => {
+            if (e.key !== "Escape" || !onDrawerClose) return;
+            // Modal skips a defaultPrevented Escape: the drawer takes this one.
+            e.preventDefault();
+            // Focus goes back to the row (its Options toggle), so the NEXT
+            // Escape closes the row's Options rather than, from a focus lost
+            // to the page, the whole dialog.
+            const rowEl = (e.currentTarget as HTMLElement).closest(".pr-open-item");
+            onDrawerClose();
+            requestAnimationFrame(() =>
+              (rowEl?.querySelector(".ik-item-opts") as HTMLElement | null)?.focus()
+            );
+          }}
+        >
+          {drawer}
+        </div>
+      ) : null}
     </div>
   );
 }

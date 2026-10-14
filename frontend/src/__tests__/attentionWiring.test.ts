@@ -121,10 +121,12 @@ describe("O2/O3: chips, menu actions, gate override", () => {
     expect(checkChip(inst("a", { check: { state: "failed", rc: 2 } } as Partial<Instance>))?.label).toBe("✗ checks");
     const row = fn(ROW, "SidebarRow");
     expect(has(row, "const check = checkChip(inst);")).toBe(true);
-    expect(has(row, 'await instApi(title, "/setup/rerun", { method: "POST" });')).toBe(true);
-    expect(row).toContain("Re-run worktree setup </button>");
-    expect(has(row, 'await instApi(title, "/check", { method: "POST" });')).toBe(true);
-    expect(row).toContain("Run checks now </button>");
+    // The two actions live in the session menu's model (row ⋯ and pane ⋯).
+    const menu = normCode("lib/sessionMenu.ts");
+    expect(has(menu, 'instApi(title, "/setup/rerun", { method: "POST" })')).toBe(true);
+    expect(menu).toContain('label: "Re-run worktree setup"');
+    expect(has(menu, 'instApi(title, "/check", { method: "POST" })')).toBe(true);
+    expect(menu).toContain('label: "Run checks now"');
     const toasts = normCode("components/EventToasts.tsx");
     expect(has(toasts, 'ev.subscribe("session.setup_finished"')).toBe(true);
     expect(has(toasts, 'ev.subscribe("session.check_finished"')).toBe(true);
@@ -142,6 +144,9 @@ describe("O2/O3: chips, menu actions, gate override", () => {
 
 describe("O4: preview link", () => {
   it("opens the session's base port", () => {
-    expect(has(fn(ROW, "SidebarRow"), 'Open preview ↗<span className="kbd">:{inst.ports.base}</span>')).toBe(true);
+    const menu = normCode("lib/sessionMenu.ts");
+    expect(menu).toContain('label: "Open preview"');
+    expect(has(menu, 'keys: ":" + inst.ports!.base')).toBe(true);
+    expect(has(menu, "window.open(`http://${location.hostname}:${inst.ports!.base}/`")).toBe(true);
   });
 });

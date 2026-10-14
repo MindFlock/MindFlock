@@ -73,8 +73,8 @@ describe("provisioning fields: current names, repo-neutral copy, no sitecheck-er
       expect(fold, id).toContain(id);
     }
     const text = squash(fold);
-    expect(text).toContain("Provision workspace");
-    expect(text).toContain("run repo setup");
+    expect(text).toContain("Provision the worktree");
+    expect(text).toContain("run the repo's setup");
     expect(text).toContain("warm test caches");
     expect(text).toContain("Workspace strategy");
     expect(text).toContain("shared base clone (worktree)");
@@ -93,6 +93,14 @@ describe("provisioning fields: current names, repo-neutral copy, no sitecheck-er
   it("the provisioning placeholder hint is repo-neutral", () => {
     expect(code("components/grid/Pane.tsx")).toContain("The first provisioned run clones the base repo");
     expect(codeFilesWith("sitecheck-bot")).toEqual([]);
+  });
+
+  it("only a provisioned session says it clones; a plain worktree says what it does", () => {
+    const pane = code("components/grid/Pane.tsx");
+    const clone = pane.indexOf("The first provisioned run clones the base repo");
+    expect(pane.lastIndexOf("{inst.provisioned ? (", clone)).toBeGreaterThan(-1);
+    expect(pane).toContain('<p>Creating worktree{inst.branch ? " on " + inst.branch : ""}…</p>');
+    expect(pane).toContain("<p>Starting the session…</p>");
   });
 });
 

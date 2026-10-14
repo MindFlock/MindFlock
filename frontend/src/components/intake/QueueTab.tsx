@@ -23,12 +23,22 @@
  */
 
 import { api } from "../../api/client";
-import { refreshInstances, useMindflockStatus, usePanelQuery } from "../../state/queries";
+import {
+  refreshInstances,
+  useMindflockStatus,
+  usePanelQuery,
+  useTicketingCatalog,
+} from "../../state/queries";
+import { sourceDisplayName } from "./TicketsTab";
+import type { TicketingSource } from "../../api/types";
 import { SettingField, useSettings } from "../settings/useSettings";
 import { useAgentChoices } from "../settings/screens/AgentPicker";
 import { WorkItemRow, ageText, panelNote, useListFilter } from "./kit";
+import { useIntakePause } from "./pause";
+import { friendlySourceError } from "./vocab";
 import type { RepoOverrides } from "./RepoSources";
 import { queuedMatches } from "./search";
+import { ScheduledTemplates } from "./ScheduledTemplates";
 import {
   byGroup,
   collectQueued,
@@ -66,11 +76,14 @@ interface Section {
   label: string;
   tab: IntakeTabKey;
   state: QueueRunState;
-  /** The switch that would make this section's rows move, named as the UI names
-   * it. For a stopped engine that is Automated ingestion whatever the kind. */
+  /** The switch that would make this section's rows move, named as its tab
+   * names it ("Auto-start tickets"). */
   blockedOn: string;
-  /** True when the blocking switch lives on another tab than this section's. */
-  blockedElsewhere: boolean;
+  /** Every auto-start is off because of Pause intake. */
+  paused?: boolean;
+  /** Set when every configured source of this kind can't connect: the
+   * sentence saying which and where to fix it. */
+  broken?: string;
   /** For `elsewhere`: the device that runs it ("" when the server can't say). */
   runsOn?: string;
   items: QueuedItem[];
@@ -78,7 +91,15 @@ interface Section {
 }
 
 /** The chip beside a section heading — one vocabulary for all three kinds. */
-function StateChip({ state, device }: { state: QueueRunState; device?: string }) {
+function StateChip({
+  state,
+  device,
+  paused,
+}: {
+  state: QueueRunState | "broken";
+  device?: string;
+  paused?: boolean;
+}) {
   if (state === "unset") return <span className="pr-open-chip">not set up</span>;
   if (state === "elsewhere")
     return (
@@ -87,10 +108,11 @@ function StateChip({ state, device }: { state: QueueRunState; device?: string })
       </span>
     );
   if (state === "on") return <span className="pr-open-chip ok">auto-start on</span>;
+  if (state === "broken") return <span className="pr-open-chip">can't connect</span>;
   // Neutral rather than a colour-coded warning: the words say it, the sentence
   // below says what to do, and a hue would need its own contrast pass in both
   // themes to add nothing.
-  return <span className="pr-open-chip">auto-start off</span>;
+  return <span className="pr-open-chip">{paused ? "auto-start paused" : "auto-start off"}</span>;
 }
 
 /** Why these rows are not moving and which switch fixes it. One sentence shape
@@ -104,16 +126,23 @@ function StalledNote({ s }: { s: Section }) {
         {runsOnText(s.runsOn)} — {s.runsOn || "that device"} starts{" "}
         {many ? "these" : "this one"} on its own; this computer doesn't (to move them here, choose{" "}
         <strong>Run here</strong> in Settings → Your devices). You can
-        still start {many ? "any of them" : "it"} here, with <strong>Start now</strong>.
+        still start {many ? "any of them" : "it"} here, with <strong>Start</strong>.
+      </div>
+    );
+  if (s.paused)
+    return (
+      <div className="ik-queue-stalled">
+        Intake is paused — {many ? "these" : "this one"} won't start on {many ? "their" : "its"}{" "}
+        own until you <strong>Resume intake</strong> (top of this dialog). You can still start{" "}
+        {many ? "any of them" : "it"} with <strong>Start</strong>.
       </div>
     );
   return (
     <div className="ik-queue-stalled">
       {many ? "These are" : "This one is"} ready, but auto-start is off —{" "}
-      {many ? "they will" : "it will"} not begin until <strong>{s.blockedOn}</strong> is
-      switched on
-      {s.blockedElsewhere ? ", on the Tickets tab (this runs inside it)" : ""}. You can still
-      start {many ? "any of them" : "it"} here, with <strong>Start now</strong>.
+      {many ? "they" : "it"} won't start on {many ? "their" : "its"} own until{" "}
+      <strong>{s.blockedOn}</strong> is on (the {s.label} tab). You can still start{" "}
+      {many ? "any of them" : "it"} here, with <strong>Start</strong>.
     </div>
   );
 }
@@ -137,7 +166,7 @@ function SectionBlock({
     agent: string,
     depth: string,
     effort: string
-  ): Promise<string>;
+  ): Promise<{ message: string; title?: string }>;
 }) {
   const groups = byGroup(s.items);
   return (
@@ -145,7 +174,7 @@ function SectionBlock({
       <div className="ik-queue-head">
         <span className="ik-queue-kind">{s.label}</span>
         <span className="ik-tab-count">{s.items.length}</span>
-        <StateChip state={s.state} device={s.runsOn} />
+        <StateChip state={s.broken ? "broken" : s.state} device={s.runsOn} paused={s.paused} />
         <button
           type="button"
           className="test-btn ik-queue-goto"
@@ -155,15 +184,21 @@ function SectionBlock({
           Open {s.label} ›
         </button>
       </div>
-      {s.note ? <div className="pr-open-note">{s.note}</div> : null}
+      {s.broken ? (
+        <div className="pr-open-note">{s.broken}</div>
+      ) : s.note ? (
+        <div className="pr-open-note">{s.note}</div>
+      ) : null}
       {s.items.length === 0 ? (
         // A plain line, not the boxed `.repo-empty` the other tabs use for an
         // empty list: three kinds are always on screen here, and three empty
         // boxes make a quiet queue look like a broken one.
         <div className="ik-queue-empty">
-          {s.state === "unset"
-            ? "Nothing configured yet — set it up on the " + s.label + " tab."
-            : "Nothing waiting."}
+          {s.broken
+            ? ""
+            : s.state === "unset"
+              ? "Nothing set up yet — set it up on the " + s.label + " tab."
+              : "Nothing waiting."}
         </div>
       ) : (
         <>
@@ -189,13 +224,14 @@ function SectionBlock({
                     meta={[item.state, ageText(item.created_at), item.assignee]
                       .filter(Boolean)
                       .join(" · ")}
+                    route={item.route}
                     // Only a section that is ON will auto-start anything; a
                     // paused or half-set-up one already says why above
                     // (StalledNote), and a green "will auto-start" chip under
                     // it would contradict that sentence on every row.
                     eligible={s.state === "on"}
                     eligibleLabel={s.state === "on" ? "will auto-start" : ""}
-                    actionLabel="Start now"
+                    actionLabel="Start"
                     failPrefix="Start failed"
                     agents={agents}
                     configuredAgent={configured.agent}
@@ -245,8 +281,9 @@ export function QueueTab({ gotoTab }: TabProps) {
     issue_repo_settings?: RepoOverrides;
   };
   const ticketSources = ((s.settings.ticketing || {}) as {
-    sources?: Array<{ id?: string; agent?: string; depth?: string }>;
+    sources?: Array<{ id?: string; agent?: string; depth?: string; label?: string; provider?: string }>;
   }).sources;
+  const pause = useIntakePause((ticketSources || []).length);
 
   /** What "Configured" resolves to on a row's pickers — this item's own source
    * or repo card, else the app default. Same resolution the item's home tab
@@ -284,23 +321,23 @@ export function QueueTab({ gotoTab }: TabProps) {
       const r = await api<{ title?: string }>("/api/tickets/start", {
         json: { source: t.source, id: t.id, ...extra },
       });
-      title = "Session " + (r?.title || item.reference);
+      title = r?.title || item.reference;
     } else if (t.kind === "prs") {
       const r = await api<{ title?: string }>("/api/github/prs/review", {
         json: { repo: t.repo, number: t.number, ...extra },
       });
-      title = "Review session " + (r?.title || "");
+      title = r?.title || "";
     } else {
       const r = await api<{ title?: string }>("/api/github/issues/start", {
         json: { repo: t.repo, number: t.number, ...extra },
       });
-      title = "Issue session " + (r?.title || "");
+      title = r?.title || "";
     }
     refreshInstances();
     const panel =
       item.kind === "tickets" ? ticketsQ : item.kind === "prs" ? prsQ : issuesQ;
     setTimeout(() => void panel.refetch(), 5000);
-    return title;
+    return { message: "Session " + title, title };
   };
 
   const payloads = {
@@ -321,58 +358,80 @@ export function QueueTab({ gotoTab }: TabProps) {
       loaded: !!q.data,
     });
 
+  // Ticket sources that are saved but couldn't be listed: the section says
+  // so by name ("Shortcut can't connect"), rather than "not set up" — which
+  // sends you to set up something that already is.
+  const configuredTickets = (ticketSources || []).length;
+  const ticketErrors = ((ticketsQ.data as { errors?: Array<{ source: string; error: string }> } | null)?.errors || [])
+    .filter((e) => (ticketSources || []).some((x) => x.id === e.source));
+  const listedTickets = (ticketsQ.data?.sources || []).length;
+  const catalog = useTicketingCatalog(true).data || [];
+  const nameOfSource = (id: string) => {
+    const src = (ticketSources || []).find((x) => x.id === id);
+    return src ? sourceDisplayName(src as unknown as TicketingSource, catalog) : id;
+  };
+  const ticketsBroken =
+    configuredTickets && ticketErrors.length && !listedTickets
+      ? ticketErrors
+          .map((e) => friendlySourceError(nameOfSource(e.source), e.error).replace(/ — open its card below to fix it\.$/, "."))
+          .join(" ") + " Fix it on the Tickets tab."
+      : "";
+  const paused = pause.paused;
+
   const sections: Section[] = [
     {
       kind: "tickets",
       label: "Tickets",
       tab: "tickets",
       state: runState({
-        configured: (ticketsQ.data?.sources || []).length > 0,
+        configured: configuredTickets > 0,
         engineAvailable,
         engineOn,
         // Tickets have no switch of their own — the engine is it.
         switchOn: true,
       }),
-      blockedOn: "Automated ingestion",
-      blockedElsewhere: false,
+      blockedOn: "Auto-start tickets",
+      paused,
+      broken: ticketsBroken,
       items: queuedOf("tickets", payloads),
       note: noteFor(ticketsQ, "tickets"),
     },
     {
       kind: "prs",
-      label: "Pull requests",
+      label: "GitHub PRs",
       tab: "prs",
+      // PR comments and issues run on their own switches: the pipeline boots
+      // for whichever halves are on, so the ticket switch is not their gate
+      // (it used to be read as one, which said "off" for a PR switch that was
+      // on and working).
       state: runState({
         configured: (prsQ.data?.repos || []).length > 0,
-        engineAvailable,
-        engineOn,
-        switchOn: status?.pr_enabled !== false,
-        // The shared switch itself (absent = on): when it is off it is off
-        // on every device, and that IS the thing to fix.
+        engineAvailable: true,
+        engineOn: true,
+        switchOn: status?.pr_enabled === true,
+        // The shared switch itself: when it is off it is off on every device,
+        // and that IS the thing to fix.
         runsElsewhere: runsElsewhere && gh.enabled !== false,
       }),
-      // Its own toggle is off => name that; the engine being down => name the
-      // engine, because turning PR review on would still start nothing.
-      blockedOn: status?.pr_enabled === false ? "Automated PR review" : "Automated ingestion",
-      blockedElsewhere: status?.pr_enabled !== false,
+      blockedOn: "Auto-address review comments",
+      paused,
       runsOn,
       items: queuedOf("prs", payloads),
       note: noteFor(prsQ, "PRs"),
     },
     {
       kind: "issues",
-      label: "Issues",
+      label: "GitHub issues",
       tab: "issues",
       state: runState({
         configured: (issuesQ.data?.repos || []).length > 0,
-        engineAvailable,
-        engineOn,
+        engineAvailable: true,
+        engineOn: true,
         switchOn: status?.issues_enabled === true,
         runsElsewhere: runsElsewhere && gh.issues_enabled === true,
       }),
-      blockedOn:
-        status?.issues_enabled !== true ? "Automated issue handling" : "Automated ingestion",
-      blockedElsewhere: status?.issues_enabled === true,
+      blockedOn: "Auto-start new issues",
+      paused,
       runsOn,
       items: queuedOf("issues", payloads),
       note: noteFor(issuesQ, "issues"),
@@ -422,10 +481,7 @@ export function QueueTab({ gotoTab }: TabProps) {
               The next ticket starts when one of them is closed.{" "}
             </>
           ) : null}
-          How many auto-started ticket sessions may be alive at once. Past it, the rest stay
-          queued and start one by one as sessions are closed — so dropping 30 tickets in at
-          once doesn't launch 30 agents. Hand-started tickets count toward it but are never
-          held back. Blank or 0 means no limit; a change applies to the next queued ticket.
+          Past this, the rest wait their turn. Blank = no limit.
         </span>
       </label>
       <div className="set-row" id="ik-queue-row">
@@ -459,15 +515,12 @@ export function QueueTab({ gotoTab }: TabProps) {
               onStart={startItem}
             />
           ))}
+          {/* Not a work queue, but the same answer: what starts by itself. */}
+          {!filter.active && <ScheduledTemplates />}
         </div>
         <span className="set-hint">
-          Everything the automations would start on their next sweep, oldest first — the order
-          they are actually drawn in. An item is here because it passed its own kind's filters
-          (ingest state, min age, author, base branch, and not already in the processed ledger);
-          the other tabs explain, per row, why anything else was skipped. Where a section says
-          auto-start is off, these are exactly the items that would go the moment you switch it
-          on — or you can start any of them here now. Items the pipeline has already taken are no
-          longer waiting: they are sessions, in the sidebar.
+          What would start on its own next, oldest first. Each other tab says why anything
+          else is skipped.
         </span>
       </div>
     </>

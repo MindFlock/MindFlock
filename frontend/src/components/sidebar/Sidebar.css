@@ -189,3 +189,44 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
   outline-offset: 2px;
   border-radius: 3px;
 }
+
+/* A phone-narrow window (App sets body.narrow): the grid takes the whole
+   width and the sidebar, when opened with ▯, slides over it instead of
+   squeezing every terminal to a word per line. */
+body.narrow {
+  grid-template-columns: 1fr;
+}
+
+body.narrow #sidebar {
+  position: fixed;
+  top: var(--topbar-h, 40px);
+  bottom: 0;
+  left: 0;
+  width: min(300px, 86vw);
+  z-index: 60;
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.35);
+}
+
+body.narrow .sidebar-resizer {
+  display: none;
+}
+
+/* The Setup chip once every required step is done: the optional ones are
+   offers, not warnings — neutral, not amber. !important because the chip's
+   own sheet (setup/setup.css) is imported unlayered by the Setup checklist,
+   and an unlayered rule outranks every rule in a layer. */
+.setup-chip-slot {
+  display: contents;
+}
+
+.setup-chip-slot.req-done .setup-chip {
+  color: var(--muted) !important;
+  background: none !important;
+  border-color: var(--border) !important;
+  font-weight: 500 !important;
+}
+
+.setup-chip-slot.req-done .setup-chip:hover {
+  color: var(--text) !important;
+  background: var(--panel-2) !important;
+}

@@ -6,13 +6,20 @@
  * (`/api/providers/<name>/login-terminal` — tmux, or a plain PTY on a host that
  * has no tmux yet); this opens it in the same window the installer uses. On
  * close the terminal is torn down (`login-close`) and `onDone` re-runs whatever
- * reported the missing login, so the ✗ clears without a manual re-check. */
+ * reported the missing login, so the ✗ clears without a manual re-check.
+ *
+ * The window's words describe what the terminal really shows. Claude Code's
+ * first run asks for a text style and a login method BEFORE any link appears,
+ * so "copy the link below" pointed at nothing; the steps are spelled out per
+ * agent (`signInSteps`), and the window watches the login probe so it can
+ * say "✓ Signed in" the moment it lands (`/api/setup` → `logins`). */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Modal } from "../Modal";
 import { api } from "../../api/client";
 import { useWsTerm } from "../../lib/wsTerm";
 import { notifyConnectionsChanged } from "../settings/screens/Connections";
+import { agentName } from "../../lib/agentNames";
 
 /** The doctor row shape this needs (a subset of DoctorCheckItem). */
 export interface SignInCheck {
@@ -34,12 +41,31 @@ export function signInTarget(c: SignInCheck | null | undefined): string | null {
   return c.provider;
 }
 
-/** "claude" → "Claude" for the button label. */
+/** "claude" → "Claude Code": the product name, for the button and title. */
 export function agentDisplayName(name: string): string {
-  return name ? name.charAt(0).toUpperCase() + name.slice(1) : name;
+  return name ? agentName(name) : name;
 }
 
-function SignInWindow({
+/** What the person will actually see in the terminal, in order. Claude Code
+ * asks two first-run questions before it prints a link; the other agents go
+ * straight to their own login prompts. */
+export function signInSteps(provider: string): string[] {
+  if (provider === "claude")
+    return [
+      "Pick a text style (any is fine) and press Enter.",
+      "Choose how to log in — usually your Claude account.",
+      "Open the link it shows, sign in, and paste the code back here if asked.",
+    ];
+  return [
+    "Answer " + agentDisplayName(provider) + "'s prompts in the terminal below.",
+    "If it shows a link, open it in your browser and sign in.",
+  ];
+}
+
+/** How often the window re-checks the login while it is open. */
+export const SIGNIN_POLL_MS = 3000;
+
+export function SignInWindow({
   provider,
   profile,
   onClose,
@@ -56,6 +82,29 @@ function SignInWindow({
   const state = useWsTerm(hostRef, path, true);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  // Watch the login probe (the ambient login only: an account profile's
+  // login lives in its own dir, which this probe doesn't read).
+  const [signedIn, setSignedIn] = useState(false);
+  useEffect(() => {
+    if (profile) return;
+    let live = true;
+    const t = window.setInterval(async () => {
+      try {
+        const d = await api<{ logins?: Array<{ name: string; logged_in: boolean | null }> }>("/api/setup");
+        if (!live) return;
+        if ((d?.logins || []).some((l) => l.name === provider && l.logged_in === true)) {
+          setSignedIn(true);
+          window.clearInterval(t);
+        }
+      } catch {
+        /* the conn banner owns an unreachable server */
+      }
+    }, SIGNIN_POLL_MS);
+    return () => {
+      live = false;
+      window.clearInterval(t);
+    };
+  }, [provider, profile]);
 
   const close = async () => {
     try {
@@ -68,10 +117,7 @@ function SignInWindow({
     closeRef.current();
   };
 
-  const status =
-    state === "streaming"
-      ? "sign in when it asks (a browser window may open) — then close this window"
-      : state;
+  const status = signedIn ? "✓ Signed in. You can close this window." : state === "streaming" ? "" : state;
 
   // Escape is caught in the capture phase: it must close this window before
   // the terminal inside it (or the dialog under it) sees the key.
@@ -90,13 +136,20 @@ function SignInWindow({
             Sign in to {agentDisplayName(provider)}
             {profile ? " (" + profile + ")" : ""}
           </h2>
-          <span className="muted" id="signin-status">
+          <span className={signedIn ? "signin-ok" : "muted"} id="signin-status" role="status">
             {status}
           </span>
-          <button type="button" id="signin-close" onClick={() => void close()}>
-            Close
+          <button type="button" id="signin-close" className={signedIn ? "signin-done" : ""} onClick={() => void close()}>
+            {signedIn ? "Done" : "Close"}
           </button>
         </div>
+        {!signedIn && (
+          <ol className="signin-steps muted" id="signin-steps">
+            {signInSteps(provider).map((t) => (
+              <li key={t}>{t}</li>
+            ))}
+          </ol>
+        )}
         <div className="prov-login-term" ref={hostRef} />
       </div>
     </Modal>

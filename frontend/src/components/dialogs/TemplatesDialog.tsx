@@ -32,6 +32,7 @@ import {
   deleteTemplate,
   hasSchedule,
   ensureTemplates,
+  readTemplatesTarget,
   runProblem,
   saveTemplate,
   scheduleLabel,
@@ -46,6 +47,23 @@ import {
   type TemplateRunsStatus,
 } from "../../lib/templates";
 import { runTemplateNow } from "../../lib/templateRun";
+import { api } from "../../api/client";
+import { leafName, newSessionResume } from "./newSession";
+import { IN_PLACE_HINT, InitRepoCheck, ProvisionCheck, StrategyPicker, WorktreeText } from "./newSession/WorkspaceFold";
+
+/** A run row, with the time zone the schedule's "at" is in. */
+type RunInfoX = TemplateRunInfo & { tz?: string };
+
+/** This browser's zone abbreviation ("EDT") — the stand-in for the
+ * server's until a scheduled template's run row names it. */
+function localZone(): string {
+  try {
+    const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" }).formatToParts(new Date());
+    return parts.find((x) => x.type === "timeZoneName")?.value || "";
+  } catch {
+    return "";
+  }
+}
 
 /** The dialog's UI state: which card is open for editing ("" = the + New
  * form, null = none) and which card is asking "delete?". One at a time —
@@ -59,6 +77,7 @@ export interface TemplatesUiState {
 
 export type TemplatesUiAction =
   | { t: "edit"; name: string }
+  | { t: "schedule"; name: string }
   | { t: "new" }
   | { t: "ask-delete"; name: string }
   | { t: "cancel" }
@@ -71,6 +90,7 @@ export const TEMPLATES_UI_INIT: TemplatesUiState = { editing: null, confirming: 
 export function templatesReducer(s: TemplatesUiState, a: TemplatesUiAction): TemplatesUiState {
   switch (a.t) {
     case "edit":
+    case "schedule":
       return { editing: a.name, confirming: null, error: "" };
     case "new":
       return { editing: "", confirming: null, error: "" };
@@ -136,7 +156,7 @@ export function templateBody(f: TemplateForm): { body: Template } | { error: str
     } else if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(at)) return { error: "Pick a time for the schedule, like 21:00." };
     if (!f.repo_path.trim() && f.mode !== "provisioned")
       return { error: "A scheduled template needs a folder to start its session in." };
-    if (!f.prompt.trim()) return { error: "A scheduled template needs a prompt — it's what the session is told to do." };
+    if (!f.prompt.trim()) return { error: "A scheduled template needs a task — it's what the session is told to do." };
   }
   return {
     body: {
@@ -176,8 +196,18 @@ const AUTOPILOT_THEN: Record<TemplateAutopilot, string> = {
 export function templateMeta(t: Template): string {
   const bits: string[] = [];
   if (t.program) bits.push(t.program);
-  if (t.repo_path) bits.push(t.repo_path);
-  bits.push(t.provisioned ? "provisioned" + (t.workspace_strategy === "clone" ? " (clone)" : "") : t.in_place ? "in this folder" : "new worktree");
+  // The folder's own name; the card's tooltip carries the whole path, which
+  // wrapped beside the buttons into a four-line column.
+  if (t.repo_path) bits.push(leafName(t.repo_path));
+  // The New form's words: a separate worktree, or this folder directly, and
+  // "provisioned" as the box on top of the worktree.
+  bits.push(
+    t.provisioned
+      ? "separate worktree, provisioned" + (t.workspace_strategy === "clone" ? " (full clone)" : "")
+      : t.in_place
+        ? "this folder directly"
+        : "separate worktree"
+  );
   if (t.init_repo) bits.push("git init");
   if (t.autopilot) bits.push("then: " + AUTOPILOT_THEN[t.autopilot]);
   return bits.join(" · ");
@@ -193,13 +223,19 @@ export function runLine(
   now: Date = new Date()
 ): string {
   const bits: string[] = [];
+  const tz = (info as RunInfoX).tz;
   if (hasSchedule(t)) {
-    bits.push(info.schedule_label || scheduleLabel(t.schedule));
+    bits.push((info.schedule_label || scheduleLabel(t.schedule)) + (tz && t.schedule?.at ? " " + tz : ""));
     if (!status.runs_here && status.runs_on) bits.push("starts on " + status.runs_on);
     else if (info.next_at) bits.push("next " + whenLabel(info.next_at, now));
   }
   if (info.last_at)
-    bits.push("last " + whenLabel(info.last_at, now) + (info.last_session ? " → " + info.last_session : ""));
+    bits.push(
+      "last " +
+        whenLabel(info.last_at, now) +
+        (info.last_trigger === "schedule" ? " (scheduled)" : info.last_trigger === "manual" ? " (by hand)" : "") +
+        (info.last_session ? " → " + info.last_session : "")
+    );
   return bits.join(" · ");
 }
 
@@ -247,6 +283,12 @@ interface ViewProps {
   onRun?: (name: string) => void;
   /** The template whose Run now is in flight. */
   running?: string;
+  /** The agents to offer in the editor (GET /api/providers/manage). */
+  agents?: string[];
+  /** The editor was opened by a card's Schedule…: the time takes the caret. */
+  scheduleFocus?: boolean;
+  /** This device's time zone ("EDT"), which a schedule's time is in. */
+  tz?: string;
   /** The server's reading of the cron field being typed. */
   cronPreview?: CronPreview | null;
 }
@@ -276,17 +318,25 @@ export function TemplatesDialogView(p: ViewProps) {
       </label>
       <div className="tpl-two">
         <label>
-          Agent <span className="muted">— optional; the default CLI when blank</span>
-          <input
+          Agent
+          <select
             id="tpl-program"
-            autoComplete="off"
             value={form.program}
             onChange={(e) => p.onForm({ program: e.target.value })}
-            placeholder="claude"
-          />
+          >
+            <option value="">Your default agent</option>
+            {form.program && !(p.agents || []).includes(form.program) && (
+              <option value={form.program}>{form.program}</option>
+            )}
+            {(p.agents || []).map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
-          Folder <span className="muted">— optional</span>
+          Folder <span className="muted">— needed to Run now or schedule</span>
           <input
             id="tpl-repo"
             autoComplete="off"
@@ -297,7 +347,7 @@ export function TemplatesDialogView(p: ViewProps) {
         </label>
       </div>
       <label>
-        Prompt <span className="muted">— sent to the agent at launch; a prompt-only template is a saved prompt</span>
+        Task <span className="muted">— what the session starts on</span>
         <textarea
           id="tpl-prompt"
           rows={4}
@@ -305,43 +355,58 @@ export function TemplatesDialogView(p: ViewProps) {
           onChange={(e) => p.onForm({ prompt: e.target.value })}
         />
       </label>
-      <div className="tpl-mode" role="radiogroup" aria-label="Where the work happens">
-        {(
-          [
-            ["worktree", "New worktree"],
-            ["in_place", "Work directly in the folder"],
-            ["provisioned", "Provision workspace"],
-          ] as Array<[TemplateForm["mode"], string]>
-        ).map(([mode, label]) => (
-          <label key={mode} className="check">
-            <input
-              type="radio"
-              name="tpl-mode"
-              checked={form.mode === mode}
-              onChange={() => p.onForm({ mode })}
+      {/* Where it works: the New form's own controls and words — two answers,
+          and "Provision the worktree" as a box on the worktree, not a third. */}
+      <div className="tpl-mode" role="radiogroup" aria-label="Works in">
+        <span className="tpl-mode-label">Works in</span>
+        <label className="check">
+          <input
+            type="radio"
+            name="tpl-mode"
+            id="tpl-worktree"
+            checked={form.mode !== "in_place"}
+            onChange={() => p.onForm({ mode: "worktree" })}
+          />
+          <span>
+            <WorktreeText />
+          </span>
+        </label>
+        {form.mode !== "in_place" && (
+          <div className="tpl-mode-sub">
+            <ProvisionCheck
+              id="tpl-provision"
+              checked={form.mode === "provisioned"}
+              onChange={(on) => p.onForm({ mode: on ? "provisioned" : "worktree" })}
             />
-            {label}
-          </label>
-        ))}
-        {form.mode === "provisioned" && (
-          <select
-            id="tpl-strategy"
-            value={form.workspace_strategy}
-            onChange={(e) => p.onForm({ workspace_strategy: e.target.value })}
-          >
-            <option value="worktree">shared base clone (worktree)</option>
-            <option value="clone">full clone</option>
-          </select>
+            {form.mode === "provisioned" && (
+              <StrategyPicker
+                id="tpl-strategy"
+                value={form.workspace_strategy}
+                onChange={(v) => p.onForm({ workspace_strategy: v })}
+              />
+            )}
+          </div>
         )}
         <label className="check">
           <input
-            type="checkbox"
-            id="tpl-init"
-            checked={form.init_repo}
-            onChange={(e) => p.onForm({ init_repo: e.target.checked })}
+            type="radio"
+            name="tpl-mode"
+            id="tpl-in-place"
+            checked={form.mode === "in_place"}
+            // Autopilot commits for its own session, so it never drives a
+            // shared checkout — the same rule as the New form.
+            onChange={() => p.onForm({ mode: "in_place", autopilot: "" })}
           />
-          Create a git repo in the folder
+          <span>
+            This folder directly{" "}
+            <span className="muted">
+              {form.autopilot
+                ? "— turns the autopilot off (it commits for this session, so it needs its own worktree)"
+                : IN_PLACE_HINT}
+            </span>
+          </span>
         </label>
+        <InitRepoCheck id="tpl-init" checked={form.init_repo} onChange={(on) => p.onForm({ init_repo: on })} />
       </div>
       <div className="tpl-schedule" role="group" aria-label="Schedule">
         <label className="check">
@@ -351,7 +416,7 @@ export function TemplatesDialogView(p: ViewProps) {
             checked={form.scheduled}
             onChange={(e) => p.onForm({ scheduled: e.target.checked })}
           />
-          Run on a schedule <span className="muted">— starts a fresh session with this prompt</span>
+          Run on a schedule <span className="muted">— starts a new session from it, by itself</span>
         </label>
         {form.scheduled && (
           <div className="tpl-schedule-when">
@@ -386,9 +451,11 @@ export function TemplatesDialogView(p: ViewProps) {
                   id="tpl-at"
                   type="time"
                   aria-label="Time"
+                  autoFocus={ui.editing !== null && p.scheduleFocus === true}
                   value={form.at}
                   onChange={(e) => p.onForm({ at: e.target.value })}
                 />
+                {p.tz && <span className="muted">{p.tz} — this device's time</span>}
               </>
             )}
             {p.runs && !p.runs.runs_here && p.runs.runs_on && (
@@ -416,7 +483,11 @@ export function TemplatesDialogView(p: ViewProps) {
         <select
           id="tpl-autopilot"
           value={form.autopilot}
-          onChange={(e) => p.onForm({ autopilot: e.target.value as TemplateForm["autopilot"] })}
+          onChange={(e) => {
+            const autopilot = e.target.value as TemplateForm["autopilot"];
+            // Autopilot commits for this session, so it needs its own worktree.
+            p.onForm(autopilot && form.mode === "in_place" ? { autopilot, mode: "worktree" } : { autopilot });
+          }}
         >
           {AUTOPILOT_CHOICES.map(([v, label]) => (
             <option key={v || "leave"} value={v}>
@@ -461,12 +532,10 @@ export function TemplatesDialogView(p: ViewProps) {
           </button>
         </div>
         <p className="tpl-intro muted">
-          A template is a saved New-session setup — agent, folder, workspace and first prompt — and the
-          list is the same on every device. The New dialog's Name → Enter reuses the one you last
-          picked for that folder. A template that is only a prompt is also what the Prompts bar pastes.
-          <strong> Run now</strong> starts a fresh session from one, prompt already sent (also
-          <code> mindflock run &lt;name&gt;</code>); give it a schedule — a daily time or any cron
-          expression — and it starts itself, optionally carrying its work to a commit, a push or a PR.
+          A template is a saved session setup — folder, agent and task — that starts a{" "}
+          <strong>new</strong> session: now, on a schedule (a daily time or any cron expression), or
+          with <code>mindflock run &lt;name&gt;</code>. To send text to a session that's already
+          running, use Prompts.
         </p>
         <div className="tpl-list" id="templates-list">
           {ui.editing === "" ? (
@@ -490,7 +559,7 @@ export function TemplatesDialogView(p: ViewProps) {
             <p className="tpl-empty muted">Loading templates…</p>
           )}
           {loaded && templates.length === 0 && (
-            <p className="tpl-empty muted">No templates yet — save one above, or from the New dialog's Prompt fold.</p>
+            <p className="tpl-empty muted">No templates yet — add one above, or use “Save as template…” in the New dialog.</p>
           )}
           {templates.map((t) =>
             ui.editing === t.name ? (
@@ -502,7 +571,9 @@ export function TemplatesDialogView(p: ViewProps) {
                 <div className="tpl-card-top">
                   <div className="tpl-card-text">
                     <div className="tpl-name">{t.name}</div>
-                    <div className="tpl-meta">{templateMeta(t)}</div>
+                    <div className="tpl-meta" title={t.repo_path || undefined}>
+                      {templateMeta(t)}
+                    </div>
                     {(() => {
                       const info = runs.runs[t.name.trim().toLowerCase()] || {};
                       const line = runLine(t, info, runs);
@@ -531,16 +602,38 @@ export function TemplatesDialogView(p: ViewProps) {
                       );
                     })()}
                     {t.prompt && <div className="tpl-prompt">{t.prompt}</div>}
+                    {runProblem(t) && (
+                      /* Said on the card, not only in a hover title: a
+                         disabled button that won't say why is furniture. */
+                      <div className="tpl-needs">
+                        Run now and schedules need a folder.{" "}
+                        <button
+                          type="button"
+                          className="linklike"
+                          onClick={() => p.dispatch({ t: "edit", name: t.name })}
+                        >
+                          Add one
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <div className="tpl-actions">
                     <button
                       type="button"
                       className="tpl-btn tpl-run"
                       disabled={!!runProblem(t) || !!p.running}
-                      title={runProblem(t) || "Start a fresh session from this template, its prompt already sent"}
+                      title={runProblem(t) ? "Run now needs a folder" : "Run now — starts a new session from this template"}
                       onClick={() => p.onRun?.(t.name)}
                     >
-                      {p.running === t.name ? "Starting…" : "Run now"}
+                      {p.running === t.name ? "Starting…" : "▶ Run now"}
+                    </button>
+                    <button
+                      type="button"
+                      className="tpl-btn tpl-sched"
+                      title={t.schedule?.at ? "Change or stop its schedule" : "Start it by itself every day or weekday"}
+                      onClick={() => p.dispatch({ t: "schedule", name: t.name })}
+                    >
+                      {t.schedule?.at ? "Schedule" : "Schedule…"}
                     </button>
                     <button type="button" className="tpl-btn" onClick={() => p.dispatch({ t: "edit", name: t.name })}>
                       Edit
@@ -599,6 +692,8 @@ export function TemplatesDialog() {
   const [busy, setBusy] = useState(false);
   const [runs, setRuns] = useState<TemplateRunsStatus>(() => templateRunsNow());
   const [running, setRunning] = useState("");
+  const [agents, setAgents] = useState<string[]>([]);
+  const [scheduleFocus, setScheduleFocus] = useState(false);
   const [preview, setPreview] = useState<CronPreview | null>(null);
   const editingRef = useRef<string | null>(null);
 
@@ -632,6 +727,14 @@ export function TemplatesDialog() {
   useEffect(() => {
     if (!open) return;
     dispatch({ t: "cancel" });
+    // The palette's "Schedule a session…" opens straight onto a NEW template's
+    // editor with its schedule already switched on; a template chip's ⏰ in
+    // New opens that template's.
+    const want = readTemplatesTarget(useUi.getState().dialogTarget).schedule;
+    if (want !== null) {
+      setScheduleFocus(true);
+      dispatch(want ? { t: "schedule", name: want } : { t: "new" });
+    }
     setBusy(false);
     setLoadError("");
     let live = true;
@@ -640,6 +743,12 @@ export function TemplatesDialog() {
       setRuns(templateRunsNow());
     };
     document.addEventListener(TEMPLATES_CHANGED, reload);
+    // The editor's Agent picker: this device's agents.
+    api<{ providers?: Array<{ name: string }> }>("/api/providers/manage")
+      .then((d) => {
+        if (live) setAgents((d.providers || []).map((x) => x.name));
+      })
+      .catch(() => {});
     ensureTemplates(true)
       .then((list) => {
         if (!live) return;
@@ -659,20 +768,32 @@ export function TemplatesDialog() {
   // Opening an editor seeds the form from the card it is for.
   useEffect(() => {
     if (ui.editing === editingRef.current) return;
-    editingRef.current = ui.editing;
-    if (ui.editing === null) return;
+    if (ui.editing === null) {
+      editingRef.current = null;
+      return;
+    }
     const t = ui.editing ? templates.find((x) => x.name === ui.editing) || null : null;
-    setForm(formFromTemplate(t));
+    // Opened for a template the list hasn't brought yet (New's ⏰ on a cold
+    // list): seed once it lands, never a blank form under its name.
+    if (ui.editing && !t) return;
+    editingRef.current = ui.editing;
+    const f = formFromTemplate(t);
+    // Schedule… on a card: the same editor, with the schedule already on.
+    if (scheduleFocus) f.scheduled = true;
+    setForm(f);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ui.editing]);
+  }, [ui.editing, templates]);
 
   if (!open) return null;
 
   const close = () => {
     closeDialog();
-    // Came from the New dialog: hand the person back to it, with the list
-    // they just edited reloaded by its own open.
-    if (target === "new") useUi.getState().openDialogFor("new-session");
+    // Came from the New dialog: hand the person back to it AS THEY LEFT IT
+    // (newSessionResume), with the list they just edited reloaded.
+    if (readTemplatesTarget(target).fromNew) {
+      newSessionResume.keep = true;
+      useUi.getState().openDialogFor("new-session");
+    }
   };
 
   const save = async () => {
@@ -737,7 +858,13 @@ export function TemplatesDialog() {
       loaded={loaded}
       loadError={loadError}
       onForm={(patch) => setForm((f) => ({ ...f, ...patch }))}
-      dispatch={dispatch}
+      dispatch={(a) => {
+        setScheduleFocus(a.t === "schedule");
+        dispatch(a);
+      }}
+      agents={agents}
+      scheduleFocus={scheduleFocus}
+      tz={Object.values(runs.runs || {}).map((r) => (r as RunInfoX).tz).find(Boolean) || localZone()}
       onSave={() => void save()}
       onDelete={(name) => void del(name)}
       onClose={close}

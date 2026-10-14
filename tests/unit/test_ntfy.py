@@ -601,8 +601,17 @@ def test_dispatch_respects_a_muted_rule(pushes):
 
 
 def test_dispatch_honours_an_opted_in_rule(pushes):
-    """Default-off rules push only once the user turns them on."""
-    S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
+    """A rule that is off for this user pushes only once they turn it on.
+
+    "A session finishes" is on by default now, but someone who already saved
+    rule choices (here: muted pr_closed) keeps the "off" they had."""
+    S.update_settings(
+        notifications={
+            "ntfy_enabled": True,
+            "ntfy_topic": "t1",
+            "muted_rules": ["pr_closed"],
+        }
+    )
     done = {
         "event": "session.turn_ended",
         "session": "s1",
@@ -971,6 +980,9 @@ _VERIFY_RULES = {
     "verify_run_gave_up": "session.test_plan_gave_up",
 }
 
+#: Round 4: the moments that are bad news or "your turn" ring by default.
+_VERIFY_ON_BY_DEFAULT = {"verify_plan_failed", "verify_plan_due", "verify_run_failed"}
+
 
 def test_every_rule_names_a_real_event():
     """A rule whose ``event`` is not on the bus can never fire, and nothing else
@@ -985,14 +997,19 @@ def test_every_rule_names_a_real_event():
     assert unknown == []
 
 
-def test_verify_rules_are_opt_in_and_switchable():
-    """All four start off — a user who never opens Verify gains no new pushes —
-    and each is switchable through the same endpoint as every other rule."""
+def test_verify_rules_default_sensibly_and_are_switchable():
+    """Ambient ones start off; a checklist that failed, couldn't be written or
+    came due rings by default. Each is switchable through the same endpoint as
+    every other rule."""
     rules = {r["id"]: r for r in client.get("/api/notify/config").json()["rules"]}
     for rule_id, event in _VERIFY_RULES.items():
-        assert rules[rule_id]["enabled"] is False, rule_id
+        assert rules[rule_id]["enabled"] is (rule_id in _VERIFY_ON_BY_DEFAULT), rule_id
         assert rules[rule_id]["event"] == event, rule_id
         assert rules[rule_id]["label"], rule_id
+    for rule_id in _VERIFY_ON_BY_DEFAULT:
+        assert rules[rule_id]["enabled"] is True, rule_id
+        assert rules[rule_id]["description"].count(".") <= 1, rule_id
+    for rule_id in list(_VERIFY_RULES) + sorted(_VERIFY_ON_BY_DEFAULT):
         assert (
             client.post(
                 f"/api/notify/rules/{rule_id}", json={"enabled": True}
@@ -1003,7 +1020,17 @@ def test_verify_rules_are_opt_in_and_switchable():
     assert all(on[r]["enabled"] is True for r in _VERIFY_RULES)
 
 
-@pytest.mark.parametrize("rule_id,event", sorted(_VERIFY_RULES.items()))
+def test_no_verify_rule_says_plan_on_screen():
+    for rule in notify_addon.NOTIFY_RULES:
+        if rule["id"].startswith("verify_"):
+            for field in ("label", "description", "title", "body"):
+                assert " plan" not in rule[field].lower(), (rule["id"], field)
+
+
+@pytest.mark.parametrize(
+    "rule_id,event",
+    sorted((r, e) for r, e in _VERIFY_RULES.items() if r not in _VERIFY_ON_BY_DEFAULT),
+)
 def test_a_verify_rule_pushes_only_once_opted_in(pushes, rule_id, event):
     S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
     addon = _addon()
@@ -1016,29 +1043,63 @@ def test_a_verify_rule_pushes_only_once_opted_in(pushes, rule_id, event):
 
 
 def test_the_two_ends_of_a_plan_are_separately_switchable(pushes):
-    """ "Tell me when the plan is written" and "tell me when it has been worked"
-    are two different questions, so opting into one must not deliver the other."""
+    """ "Tell me when the checklist is written" and "tell me when it has been
+    worked" are two different questions, so opting into one must not deliver
+    the other."""
     S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
     client.post("/api/notify/rules/verify_plan_ready", json={"enabled": True})
     addon = _addon()
     addon._on_event(_verify_env("session.test_plan_checked", data={"failed": 0}))
     assert pushes == []
     addon._on_event(_verify_env("session.test_plan_ready", data={"steps": 6}))
-    assert len(pushes) == 1 and "plan ready" in pushes[0]["title"]
+    assert len(pushes) == 1 and "checklist ready" in pushes[0]["title"]
 
 
-def test_a_failed_generation_is_not_delivered_as_a_ready_plan(pushes):
-    """``test_plan_ready`` keeps its success-only meaning (see
-    ``server._generate_test_plan``), so the failure has to arrive on its own
-    switch — otherwise the attempt that produced no checklist is silent."""
+def test_a_failed_generation_rings_by_default_and_can_be_muted(pushes):
+    """``test_plan_ready`` keeps its success-only meaning, so the failure has
+    its own switch — on by default since round 4, because the attempt that
+    produced no checklist was the one nobody heard about."""
     S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
-    client.post("/api/notify/rules/verify_plan_ready", json={"enabled": True})
     addon = _addon()
     addon._on_event(_verify_env("session.test_plan_failed", data={"error": "no CLI"}))
+    assert len(pushes) == 1 and "couldn't write" in pushes[0]["title"]
+    client.post("/api/notify/rules/verify_plan_failed", json={"enabled": False})
+    addon._on_event(_verify_env("session.test_plan_failed", session="beta"))
+    assert len(pushes) == 1
+
+
+def test_a_failed_check_rings_but_a_clean_one_does_not(pushes):
+    """``verify_run_failed`` matches ``test_plan_checked`` only when the emitter
+    stamped ``new = "failed"`` — a rule can't look inside ``data``."""
+    S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
+    addon = _addon()
+    clean = _verify_env("session.test_plan_checked", data={"failed": 0})
+    clean["new"] = ""
+    addon._on_event(clean)
     assert pushes == []
-    client.post("/api/notify/rules/verify_plan_failed", json={"enabled": True})
-    addon._on_event(_verify_env("session.test_plan_failed", data={"error": "no CLI"}))
-    assert len(pushes) == 1 and "failed" in pushes[0]["title"]
+    bad = _verify_env("session.test_plan_checked", data={"failed": 2})
+    bad["new"] = "failed"
+    addon._on_event(bad)
+    assert len(pushes) == 1 and pushes[0]["title"] == "alpha: checklist failed"
+    assert pushes[0]["priority"] == 4
+
+
+def test_the_due_rule_leaves_the_phone_push_to_its_own_sender(pushes):
+    """``verify_plan_due`` is ``ntfy: False``: the driver's at-most-once push
+    owns the phone, so the generic dispatch must not send a second one — and
+    the flag stays out of the client payload."""
+    S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
+    _addon()._on_event(_verify_env("session.test_plan_due", data={"title": "alpha"}))
+    assert pushes == []
+    rule = next(
+        r
+        for r in client.get("/api/notify/config").json()["rules"]
+        if r["id"] == "verify_plan_due"
+    )
+    assert "ntfy" not in rule and rule["enabled"] is True
+    assert notify_addon.rule_enabled("verify_plan_due") is True
+    client.post("/api/notify/rules/verify_plan_due", json={"enabled": False})
+    assert notify_addon.rule_enabled("verify_plan_due") is False
 
 
 # --------------------------------------------------------------------------- #
@@ -1149,3 +1210,18 @@ def test_browser_fill_twin_handles_detail():
     js = client.get("/addons/notify.js").text
     assert "{detail}" in js or "\\{detail\\}" in js
     assert "data.detail" in js
+
+
+def test_session_finished_pushes_by_default(pushes):
+    """Someone who never chose gets "a session finished" on their phone."""
+    S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
+    _addon()._on_event(
+        {
+            "event": "session.turn_ended",
+            "session": "s1",
+            "old": None,
+            "new": None,
+            "data": {"idle_for": 46.0},
+        }
+    )
+    assert len(pushes) == 1 and pushes[0]["title"] == "s1 has finished"

@@ -70,17 +70,17 @@ def skip_reasons(issue, processed: set, gh, now: datetime | None = None) -> list
     """
     reasons: list[str] = []
     if (issue.repo, issue.number) in processed:
-        reasons.append("already handled (recorded in the processed ledger)")
+        reasons.append("already handled before")
     # This repo's own skip list and grace period, which its card may override.
     skip = {a.strip().lower() for a in gh.issue_skip_authors_for(issue.repo) if a}
     if issue.author.lower() in skip:
-        reasons.append(f"authored by {issue.author} (in the skip list)")
+        reasons.append(f"opened by {issue.author} — on your ignore list")
     now = now or datetime.now(timezone.utc)
     age_min = (now - issue.created_at).total_seconds() / 60.0
     min_age = gh.issue_min_age_for(issue.repo)
     if age_min < min_age:
         left = max(1, round(min_age - age_min))
-        reasons.append(f"in the min-age grace period ({left} min left)")
+        reasons.append(f"too new — waits {left} more min")
     return reasons
 
 

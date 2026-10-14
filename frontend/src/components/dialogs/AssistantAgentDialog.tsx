@@ -57,7 +57,7 @@ export function AssistantAgentDialog() {
           ? "Saved — assistant restarted; reopen Chat to talk to it."
           : "Saved — applies the next time the assistant starts."
       );
-      toast(restart ? "Agent file saved & assistant restarted" : "Agent file saved");
+      toast(restart ? "Instructions saved & assistant restarted" : "Instructions saved");
     } catch (err) {
       setStatus("Save failed: " + ((err as Error).message || ""));
     }
@@ -67,7 +67,9 @@ export function AssistantAgentDialog() {
     <Modal id="assistant-agent-dialog" onClose={closeDialog}>
       <div id="assistant-agent-panel">
         <div className="ws-head">
-          <h2>Assistant agent file</h2>
+          {/* "Instructions", like both of its doors: "Agent" is the coding
+              agent's word alone. Its file is still the agent file. */}
+          <h2>Assistant instructions</h2>
           <button type="button" id="assistant-agent-close" onClick={closeDialog}>
             Close
           </button>
@@ -79,7 +81,7 @@ export function AssistantAgentDialog() {
           behave, what it knows, tone, etc. Applies the next time it starts.
         </p>
         <AgentPicker
-          label="Agent CLI"
+          label="Agent"
           value={agent}
           choices={agentChoices}
           onChange={async (v) => {
@@ -96,9 +98,9 @@ export function AssistantAgentDialog() {
           }}
           hint={
             <>
-              Which coding CLI powers the assistant. It does not have to be the one your
-              coding sessions use. Changing it takes effect the next time the assistant
-              starts — <b>Save &amp; restart</b> below does that now.
+              Which agent runs the assistant. It doesn't have to be the one your sessions
+              use. Takes effect the next time the assistant starts — <b>Save &amp; restart</b>
+              below does that now.
             </>
           }
         />

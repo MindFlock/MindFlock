@@ -40,6 +40,29 @@
   opacity: 0.8;
 }
 
+/* Phone width (the nav is a short stack: search, a screen select, this): the
+   switch and its count on ONE line, left-aligned, so it reads as a switch and
+   not as one more tab. Here and not in screens.css, which sits in a cascade
+   layer — this sheet is imported unlayered and would win over it. */
+@media (max-width: 600px) {
+  #settings-nav .set-mode-foot {
+    margin-top: 0;
+    padding-top: 0;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  #settings-nav .set-mode-toggle {
+    border-top: none;
+    padding: 2px 0;
+  }
+
+  #settings-nav .set-mode-more {
+    padding: 0;
+  }
+}
+
 /* The "Advanced" fold on a basic screen: the screen's own sections, one
    click away. The body keeps the screen's own rhythm, so a moved row looks
    the same inside the fold as it did outside it. */
@@ -53,6 +76,65 @@
 
 .set-adv-fold-body > .set-section-title:first-child {
   margin-top: 0;
+}
+
+/* "Learn more" under a control (LearnMore): the long explanation, folded so
+   the screen reads one plain line per control. Sized like the hint it
+   extends — it is part of the hint, not a section. */
+.set-learn-more {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.set-learn-more > summary {
+  cursor: pointer;
+  width: fit-content;
+  list-style-position: inside;
+}
+
+.set-learn-more > summary:hover,
+.set-learn-more > summary:focus-visible {
+  color: var(--text);
+}
+
+.set-learn-more-body {
+  margin-top: 4px;
+  line-height: 1.45;
+  max-width: 62ch;
+}
+
+/* "✓ Saved" after the changed control's label (savedCue.ts) — every save in
+   Settings, toggles included, says so right where you are. Inline, so it
+   never moves the control. */
+[data-saved]::after {
+  content: "✓ Saved";
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--green);
+  animation: set-saved-in 0.15s ease-out;
+}
+
+@keyframes set-saved-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-saved]::after {
+    animation: none;
+  }
+}
+
+/* A value a field refused (SettingField): the reason, under the field. */
+.set-field-error {
+  font-size: 12px;
+  color: var(--red);
+}
+
+.set-row input[aria-invalid="true"] {
+  border-color: var(--red);
 }
 /* Settings → Connections dashboard (Connections.tsx). The base row/pill
    styles live in ticketingConnections.css; this adds the groups, the
@@ -153,6 +235,105 @@
     width: 100%;
     justify-content: flex-start;
   }
+}
+
+/* Not your concern (an agent you never set up, a sign-in nobody can check
+   from here): quiet grey, never the warning gold. */
+.conn-pill.conn-neutral {
+  color: var(--muted);
+  background: transparent;
+  border-style: dashed;
+}
+
+#connections-other-agents > .set-adv-fold-body,
+#connections-advanced > .set-adv-fold-body {
+  gap: 12px;
+}
+
+/* The sign-in window's steps: what the terminal below will ask, in order. */
+.signin-steps {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.signin-ok {
+  color: var(--green);
+  font-weight: 600;
+}
+#signin-close.signin-done {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* The agent card's one next action, when it is Install: the same button
+   (and fold) as the Setup checklist's step ①. */
+.conn-install .doctor-install {
+  margin-top: 6px;
+}
+/* The card already names the agent: no "agent CLI (claude)" summary beside
+   its Install button. */
+.conn-install .doctor-install > .set-hint {
+  display: none;
+}
+
+/* "Change agent" on the default agent's card: a quiet link, not a second
+   primary action beside Test. */
+.conn-actions .conn-link {
+  font-size: 12px;
+}
+
+/* Settings → Agents: the extra flags let the agent act without asking. */
+.flags-danger {
+  color: var(--red);
+}
+/* The sidebar Tickets bar's ⏸ / ▶ — Intake's "Pause intake" in one glyph
+   (intake/pause.ts). Lives with the intake code it drives; sized to sit beside
+   the bar's switch without outweighing it. Amber while paused, the same signal
+   the Intake dialog's pause band uses. */
+#mindflock-bar .dc-pause {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+}
+#mindflock-bar .dc-pause:hover:not(:disabled) {
+  color: var(--text);
+}
+#mindflock-bar .dc-pause.on {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--gold) 60%, var(--border));
+  background: color-mix(in srgb, var(--gold) 14%, transparent);
+}
+#mindflock-bar .dc-pause:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A sidebar switch that is off because intake is paused: striped amber, the
+   same signal as Intake's own switches, so paused never reads as plain off. */
+#mindflock-bar .dc-switch.paused .dc-slider,
+#pr-review-bar .dc-switch.paused .dc-slider,
+#git-issue-bar .dc-switch.paused .dc-slider {
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--gold) 45%, transparent) 0 4px,
+    color-mix(in srgb, var(--gold) 18%, transparent) 4px 8px
+  );
+}
+#mindflock-bar .dc-pause:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 /* --------------------------------------------------------------------------- *
  * The first-run checklist (components/setup): three groups (Get started ·
@@ -260,7 +441,7 @@
 
 .setup-checklist .setup-actions .setup-primary,
 .setup-checklist .setup-step.is-next #doctor-install-btn,
-.setup-checklist .setup-step.is-next .setup-login button:not(.linklike) {
+.setup-checklist .setup-step.is-next .agent-card .conn-actions button:not(.linklike) {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
@@ -269,7 +450,7 @@
 
 .setup-checklist .setup-actions .setup-primary:hover,
 .setup-checklist .setup-step.is-next #doctor-install-btn:hover,
-.setup-checklist .setup-step.is-next .setup-login button:not(.linklike):hover {
+.setup-checklist .setup-step.is-next .agent-card .conn-actions button:not(.linklike):hover {
   filter: brightness(1.1);
 }
 
@@ -370,40 +551,6 @@
   color: var(--text);
 }
 
-.setup-logins {
-  list-style: none;
-  margin: 0 0 8px;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.setup-login {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  font-size: 12px;
-}
-
-.setup-login-name {
-  font-weight: 600;
-  min-width: 90px;
-}
-
-.setup-login.st-ok .setup-login-state {
-  color: var(--ok, #4caf50);
-}
-
-.setup-login.st-todo .setup-login-state {
-  color: #e8a13c;
-}
-
-.setup-login.st-unknown .setup-login-state {
-  color: var(--muted);
-}
-
 .setup-actions .setup-skip {
   align-self: center;
   font-size: 12px;
@@ -500,6 +647,64 @@
   #empty .setup-card {
     padding: 18px 14px;
   }
+}
+
+/* Install: a run that is still going (after a reload), and the "run it
+   yourself" fallback — the commands in a copyable box. Shared by the install
+   window (dialogs/InstallTerminal.tsx) and every Install button. */
+.doctor-install .install-running {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.install-manual-fold {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.install-manual-fold > summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.install-manual {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+
+.install-manual > span {
+  flex: 1 1 100%;
+}
+
+.install-manual .install-cmd {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 6px 8px;
+  max-height: 8em;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+#install-dialog .install-manual {
+  padding: 0 14px;
+}
+
+/* Step ②: the default agent's card (the same card Settings shows). */
+.setup-checklist .agent-card {
+  margin: 4px 0 6px;
+}
+.setup-checklist .agent-card .conn-row {
+  background: var(--panel);
 }
 /* Getting-started hint callout. Uses the accent tint so it reads as a friendly
    nudge, not a warning. Inline in the layout flow — see Hint.tsx. */
@@ -1237,6 +1442,80 @@
 
 .devices-advanced #pair-by-token input {
   min-width: 240px;
+}
+/* Connect GitHub's numbered token steps (components/dialogs/ConnectGitHub.tsx):
+   1 make a token → 2 paste it → 3 Save & test, the answer under step 3. The
+   dialog's card and the rest of its rows are styled in SetupDialog.css. */
+.gh-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.gh-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.gh-step-n {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.gh-step-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.gh-step-title {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 22px;
+}
+
+.gh-step-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.gh-step .gh-token-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
+/* A link styled as the app's small button. */
+.gh-step a.gh-token-link {
+  text-decoration: none;
+  display: inline-block;
+}
+
+.gh-step .test-result {
+  font-size: 12px;
+}
+
+.gh-token-fold > .gh-steps {
+  margin-top: 10px;
 }
 /* The welcome walkthrough card. Rides the shared .modal overlay. */
 
@@ -2174,6 +2453,12 @@ body #mf-winctl {
   color: #fff;
 }
 
+/* A checklist FAILED: the count is red, not the usual accent. */
+#topbar .tb-count.is-failing {
+  background: var(--red);
+  color: #fff;
+}
+
 /* Flock mark before the sidebar toggle. The PNG is used as a pure-alpha mask
    painted with the theme's text color, so it flips automatically between
    light/dark mode and recolors with every surface theme. */
@@ -2268,6 +2553,15 @@ body #mf-winctl {
 
 #topbar #notif-btn {
   position: relative;
+}
+
+
+/* A phone-narrow window: the wordmark has no room left beside the menu and
+   got clipped to "Mi". The menu is the bar's job; the name steps aside. */
+@media (max-width: 560px) {
+  #topbar .tb-brand {
+    display: none;
+  }
 }
 }
 
@@ -2464,6 +2758,47 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
   outline: 1px solid var(--accent);
   outline-offset: 2px;
   border-radius: 3px;
+}
+
+/* A phone-narrow window (App sets body.narrow): the grid takes the whole
+   width and the sidebar, when opened with ▯, slides over it instead of
+   squeezing every terminal to a word per line. */
+body.narrow {
+  grid-template-columns: 1fr;
+}
+
+body.narrow #sidebar {
+  position: fixed;
+  top: var(--topbar-h, 40px);
+  bottom: 0;
+  left: 0;
+  width: min(300px, 86vw);
+  z-index: 60;
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.35);
+}
+
+body.narrow .sidebar-resizer {
+  display: none;
+}
+
+/* The Setup chip once every required step is done: the optional ones are
+   offers, not warnings — neutral, not amber. !important because the chip's
+   own sheet (setup/setup.css) is imported unlayered by the Setup checklist,
+   and an unlayered rule outranks every rule in a layer. */
+.setup-chip-slot {
+  display: contents;
+}
+
+.setup-chip-slot.req-done .setup-chip {
+  color: var(--muted) !important;
+  background: none !important;
+  border-color: var(--border) !important;
+  font-weight: 500 !important;
+}
+
+.setup-chip-slot.req-done .setup-chip:hover {
+  color: var(--text) !important;
+  background: var(--panel-2) !important;
 }
 }
 
@@ -2852,9 +3187,70 @@ p.set-hint {
   font-weight: 600;
 }
 
+/* "Search settings…" (SettingsSearch.tsx): the first thing in the nav, with
+   its matches listed right under it while you type. */
+.set-search {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+:where(#settings-panel) .set-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.set-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 0 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.set-search-hit {
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  border-radius: 7px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.35;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.set-search-hit.active {
+  background: var(--bg);
+}
+
+.set-search-none {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* The control a search landed on, outlined for a moment. */
+#settings-screens [data-search-hit] {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 6px;
+  transition: outline-color 0.3s;
+}
+
+/* The phone-width nav (a <select>); hidden at desktop width. */
+.set-nav-select {
+  display: none;
+}
+
 /* A phone-width window: the 172px nav column would leave the fields a sliver,
-   so the nav becomes one scrolling row of tabs above the screen. Group
-   headings drop out (the row is read left to right, not scanned by group). */
+   so the nav becomes a short stack above the screen (search, a screen
+   select, the mode switch). Group headings drop out. */
 @media (max-width: 600px) {
   #settings-panel {
     padding: 16px;
@@ -2866,20 +3262,41 @@ p.set-hint {
     gap: 16px;
   }
 
+  /* Narrow: search, then ONE select for the screen, then the mode switch on
+     its own line. A wrap of tabs re-flowed every time the active (bold) tab
+     changed width, so the tabs jumped as you clicked through them. */
   #settings-nav {
-    flex-direction: row;
     width: auto;
-    overflow-x: auto;
-    overflow-y: hidden;
+    gap: 6px;
+    overflow: visible;
     border-right: none;
     border-bottom: 1px solid var(--border);
     padding: 0 0 8px;
   }
 
-  .set-nav-item {
-    flex: none;
-    white-space: nowrap;
+  #settings-nav .set-search {
+    margin-bottom: 0;
   }
+
+  #settings-nav .set-nav-item {
+    display: none;
+  }
+
+  #settings-nav .set-nav-select {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 7px;
+    padding: 8px 10px;
+    font-size: 14px;
+    font-family: inherit;
+  }
+
+  /* The mode switch's narrow layout is in settingsMode.css: that sheet is
+     imported unlayered, so a rule for it here (layer "components") loses. */
 
   .set-nav-group {
     display: none;
@@ -3878,6 +4295,37 @@ p.set-hint {
   cursor: pointer;
   color: var(--muted, inherit);
   margin-bottom: 16px;
+}
+
+/* Settings → Workspace: "Where your worktrees live" — the absolute paths,
+   each selectable as a whole and copyable. */
+.ws-home {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ws-home > .set-subtitle {
+  margin: 0;
+}
+
+.ws-path-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ws-path {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: all;
 }
 }
 
@@ -5061,8 +5509,14 @@ p.set-hint {
   color: var(--text);
 }
 
+/* ⋯ opens the session menu; open, it keeps the accent instead of turning. */
 .inst .chevron.open {
-  transform: rotate(90deg);
+  color: var(--accent);
+}
+
+/* The status dot of a flat row: the chip beside it already says the state. */
+.inst .dot.dot-quiet {
+  display: none;
 }
 
 .inst .meta {
@@ -5412,111 +5866,13 @@ p.set-hint {
   background: rgba(222, 97, 62, 0.12);
 }
 
+/* The row's ⋯ menu hangs here; its items are SessionMenu.css's (the same
+   menu the pane header's ⋯ draws). */
 .inst-actions {
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: 2px 10px 6px 30px;
-}
-
-.inst-actions button {
-  background: none;
-  border: none;
-  color: var(--text);
-  cursor: pointer;
-  text-align: left;
-  font-size: 12px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  white-space: nowrap;
-}
-
-.inst-actions button {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.inst-actions button:hover {
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.inst-actions .kbd {
-  font-size: 10px;
-  color: var(--muted);
-  flex: none;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 1px 5px;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-}
-
-.inst-actions button.danger {
-  color: var(--red);
-}
-
-.inst-actions button.danger:hover {
-  background: rgba(222, 97, 62, 0.14);
-}
-
-/* The two end verbs, and Pause just above them. Pause and Close both stop
-   the agent; each carries a sub-line saying where the session goes. */
-.inst-actions button.end-pause,
-.inst-actions button.end-close {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 1px;
-}
-
-.inst-actions .end-verb {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.inst-actions .end-verb .kbd {
-  margin-left: auto;
-}
-
-.inst-actions .end-sub {
-  font-size: 11px;
-  color: var(--muted);
-  white-space: normal;
-}
-
-/* "Delete…", armed: a neutral confirm strip in place of the item (the desktop
-   app has no confirm()). The question is calm; only the answer that deletes
-   is red. */
-.inst-actions .del-confirm {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  font-size: 12px;
-}
-
-.inst-actions .del-q {
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
-.inst-actions .del-acts {
-  display: flex;
-  gap: 6px;
-}
-
-.inst-actions .del-acts button {
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-}
-
-.inst-actions .del-acts button.danger {
-  border-color: var(--red);
 }
 
 /* "Folder in use by …" — the 409 a Delete gets while a Duplicate session runs
@@ -5553,45 +5909,6 @@ p.set-hint {
 
 .inst-tail .fiu-x:hover {
   color: var(--text);
-}
-
-.inst-actions .menu-sep {
-  height: 1px;
-  background: var(--border);
-  margin: 4px 8px;
-}
-
-.inst-actions .folder-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 10px;
-}
-
-.inst-actions .folder-path {
-  flex: 1;
-  min-width: 0;
-  font-size: 11px;
-  color: var(--muted);
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.inst-actions .folder-copy {
-  flex: none;
-  cursor: pointer;
-  font-size: 11px;
-  padding: 3px 9px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
-}
-
-.inst-actions .folder-copy:hover {
-  border-color: var(--accent);
 }
 
 /* --- Non-session windows (WindowList.tsx) -------------------------------- */
@@ -5831,6 +6148,53 @@ button.stagechip.bgchip.bg-stuck:hover {
   margin-left: 3px;
   font-size: 9px;
   color: var(--muted);
+}
+
+/* The session's task (its newest prompt's first line), under its name. */
+.inst .lineage.task-line {
+  font-weight: 400;
+}
+
+/* An agent that isn't installed: the row says why it never started. */
+.inst .lineage.noagent-line {
+  color: var(--tone-broken);
+}
+
+/* The ✕ on a session with uncommitted changes asks first — the same calm strip
+   as Delete's, under the row. */
+.inst-tail .close-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 8px 4px 28px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.inst-tail .close-confirm .del-q {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.inst-tail .close-confirm .del-acts {
+  display: flex;
+  gap: 6px;
+}
+
+.inst-tail .close-confirm .del-acts button {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.inst-tail .close-confirm .del-acts button.danger {
+  border-color: var(--red);
 }
 }
 
@@ -7608,6 +7972,54 @@ button.stagechip.bgchip.bg-stuck:hover {
   font-size: 11px;
   color: var(--muted);
 }
+
+
+/* In a browser tab: a key the browser keeps for itself (Ctrl+N, Ctrl+W, Ctrl+Tab…)
+   is drawn faded after the ones that work, and a row with nothing that works
+   there says "desktop app". */
+.shortcut-keys kbd.kbd-desktop {
+  opacity: 0.45;
+}
+
+.kbd-desktop-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  vertical-align: 1px;
+}
+
+.shortcut-row.desktop-only .shortcut-desc {
+  color: var(--muted);
+}
+
+/* "Change keys": rebinding is a mode you ask for, not what a click on a row
+   does by default. */
+.shortcuts-edit {
+  margin-left: auto;
+  margin-right: 10px;
+  cursor: pointer;
+  background: none;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 3px 9px;
+}
+
+.shortcuts-edit:hover,
+.shortcuts-edit.on {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.shortcuts-edit ~ .shortcuts-restore {
+  margin-left: 0;
+}
 }
 
 /* 120 */
@@ -8123,6 +8535,17 @@ button.stagechip.bgchip.bg-stuck:hover {
 
 .prompt-pin.pin-open .prompt-pin-mark {
   transform: rotate(90deg);
+}
+
+/* "Task:" — what the pinned line is. */
+.prompt-pin .prompt-pin-label {
+  flex: none;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.prompt-pin.pin-open .prompt-pin-label {
+  visibility: hidden;
 }
 
 .prompt-pin .prompt-pin-text {
@@ -8777,6 +9200,88 @@ button.stagechip.bgchip.bg-stuck:hover {
 
 .term-notice.gone {
   opacity: 0;
+}
+
+/* The header's ⋯ (PaneMoreMenu): the folded tabs and controls. Fixed, not
+   absolute — the header scrolls sideways and would clip it. */
+.pane-head .act.pane-more {
+  padding: 2px 8px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+/* Pause / Resume, in the header itself next to −. */
+.pane-head .act.pane-pause {
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.pane-head .act.pane-pause.is-paused {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.pane-head .act.pane-more.open {
+  border-color: var(--accent);
+}
+
+.pane-more-menu {
+  position: fixed;
+  z-index: 70;
+  min-width: 170px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.pane-more-menu button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-align: left;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.pane-more-menu button:hover,
+.pane-more-menu button:focus-visible {
+  background: var(--panel-2);
+}
+
+/* The session's agent isn't installed: one line over the terminal that says
+   what `claude: not found` means, and the way out. */
+.pane-noagent {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  font-size: 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--tone-broken, var(--red));
+}
+
+.pane-noagent button {
+  padding: 3px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
 }
 }
 
@@ -12894,8 +13399,7 @@ button.ct-chip:hover {
 @layer components{
 
 /* Fast-track: the ⏩ picker the pane head's ⏩ button opens
-   (FastTrackMenu.tsx), the button's own marks, and the row › menu's
-   session items (SessionRowItems.tsx). Written against the theme tokens only,
+   (FastTrackMenu.tsx) and the button's own marks. Written against the theme tokens only,
    so light mode and every surface set need nothing of their own beyond the
    shadow (theme-light.css). The ⏩ button's base look (outline / filled while
    a run works / red on a halt) is Pane.css's .nextstep-fast. */
@@ -13068,24 +13572,197 @@ button.ct-chip:hover {
 .pb-menu .pb-foot b {
   color: var(--text);
 }
-
-/* ---- The sidebar row's › menu items ----------------------------------------- */
-
-/* An item this session can't take right now (its reason is the tooltip, and
-   a click says it in a toast). */
-.inst-actions button.pb-row-off {
-  color: var(--muted);
-  cursor: default;
-}
-
-.inst-actions button.pb-row-off:hover {
-  background: none;
-}
 }
 
 /* 165 — after
    Pane.css, whose .nextstep-fast the ⏩ button's marks extend, and after
    SidebarRow.css, whose .inst-actions the row's session items extend */
+
+@layer components{
+
+/* The one per-session menu (SessionMenu.tsx): the same items in the sidebar
+   row's accordion (.inst-actions) and the pane header's popover
+   (.pane-more-menu). Everything here is scoped to .session-menu so the two
+   hosts draw it identically. */
+
+.session-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.session-menu .sm-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.session-menu .sm-head {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 4px 10px 2px;
+}
+
+.session-menu button {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.session-menu button:hover,
+.session-menu button:focus-visible {
+  background: var(--panel-2);
+}
+
+.session-menu button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.session-menu button:disabled:hover {
+  background: none;
+}
+
+.session-menu .sm-verb {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.session-menu .sm-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-menu .kbd {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted);
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.session-menu .end-sub {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: normal;
+}
+
+.session-menu .sm-caret {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.session-menu .sm-more-items {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+  margin-left: 10px;
+}
+
+.session-menu button.danger {
+  color: var(--red);
+}
+
+.session-menu button.danger:hover {
+  background: rgba(222, 97, 62, 0.14);
+}
+
+.session-menu .menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 8px;
+}
+
+/* Delete…, armed: a calm question; only the answer that deletes is red. */
+.session-menu .del-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.session-menu .del-q {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.session-menu .del-acts {
+  display: flex;
+  flex-direction: row;
+  gap: 6px;
+}
+
+.session-menu .del-acts button {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+}
+
+.session-menu .del-acts button.danger {
+  border-color: var(--red);
+}
+
+/* In the pane popover: tall menus scroll instead of running off the screen. */
+.pane-more-menu .session-menu {
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  min-width: 220px;
+}
+}
+
+/* 165 — the
+   one per-session menu, in the row's .inst-actions and the pane's
+   .pane-more-menu: after SidebarRow.css and Pane.css, whose hosts it fills */
+
+@layer components{
+/* MidName: the head gives way with an ellipsis, the tail never does. */
+.mid-name {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.mid-name .mid-head {
+  flex: 0 1 auto;
+  min-width: 1ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mid-name .mid-tail {
+  flex: none;
+  white-space: nowrap;
+}
+}
+
+/* 165 */
 
 @layer components{
 
@@ -14268,9 +14945,10 @@ button.ct-chip:hover {
 
 /* The full form (Session page 2) is centred like every other modal, at ONE
    fixed height (--nf-card-h, scrolling inside), so opening a fold never moves
-   it; 86vh keeps it inside a short window. */
+   it; 90vh keeps it inside a short window, and on a 900px one the form with
+   More options shut fits without a scroll. */
 #new-dialog {
-  --nf-card-h: min(86vh, 620px);
+  --nf-card-h: min(90vh, 760px);
 }
 
 /* The two LANDING panes — Session page 1 and the Ticket tab — have ONE fixed
@@ -14916,6 +15594,7 @@ button.ct-chip:hover {
   font-size: 12px;
   cursor: pointer;
   flex: none;
+  white-space: nowrap;
   /* Overrides the row's align-items:center for this one item, so the button
      matches the input's height exactly the way Browse… matches the Folder
      field's — a control half the height of the box it belongs to reads as an
@@ -15036,7 +15715,8 @@ button.ct-chip:hover {
 
 .nf-suggest-label {
   flex: none;
-  width: 46px;
+  min-width: 46px;
+  white-space: nowrap;
   font-size: 11px;
   color: var(--muted);
   cursor: help;
@@ -15423,10 +16103,51 @@ button.ct-chip:hover {
    above up by itself: it is type="button" on purpose, since a submit here
    would create a session from whatever the form happened to be holding rather
    than from the plan. */
-#new-describe-start {
+/* Page 1's PRIMARY is "Review details first": it is what Enter does, so the
+   accent and the ↵ sit on one control. "Create session" (the same POST as
+   page 2's Create, reached without the form) is the secondary. */
+#new-describe-go {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
+}
+
+#new-describe-go:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+#new-describe-start {
+  border-radius: 7px;
+  padding: 7px 12px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+#new-describe-start:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+/* The elapsed clock on whichever page-1 button is reading. */
+.nf-elapsed {
+  font-variant-numeric: tabular-nums;
+  opacity: .8;
+  margin-left: 2px;
+}
+
+/* "Fill the form with what I typed" — the way out of a read that failed or
+   ran out of time, right after the sentence saying so. */
+.nf-fallback {
+  margin-left: 6px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
 }
 
 #new-describe-start:disabled {
@@ -15754,7 +16475,7 @@ button.ct-chip:hover {
   overflow: hidden;
 }
 
-:is(#new-form, #commit-form) .rt-seg button {
+:is(#new-form, #commit-form, .tpl-editor) .rt-seg button {
   border: none;
   border-left: 1px solid var(--border);
   border-radius: 0;
@@ -15766,32 +16487,32 @@ button.ct-chip:hover {
   white-space: nowrap;
 }
 
-:is(#new-form, #commit-form) .rt-seg button:first-child {
+:is(#new-form, #commit-form, .tpl-editor) .rt-seg button:first-child {
   border-left: none;
 }
 
-:is(#new-form, #commit-form) .rt-seg button:hover:not(.on):not(:disabled) {
+:is(#new-form, #commit-form, .tpl-editor) .rt-seg button:hover:not(.on):not(:disabled) {
   background: var(--panel-2);
 }
 
 /* A choice an older server can't take (caps.team_runs): shown, not offered. */
-:is(#new-form, #commit-form) .rt-seg button:disabled {
+:is(#new-form, #commit-form, .tpl-editor) .rt-seg button:disabled {
   color: var(--muted);
   cursor: not-allowed;
   opacity: 0.6;
 }
 
-:is(#new-form, #commit-form) .rt-seg button.on {
+:is(#new-form, #commit-form, .tpl-editor) .rt-seg button.on {
   background: var(--accent);
   color: #fff;
 }
 
-#new-form label.check.rt-ask {
+:is(#new-form, .tpl-editor) label.check.rt-ask {
   font-size: 12.5px;
   color: var(--text);
 }
 
-#new-form label.check.rt-ask.disabled {
+:is(#new-form, .tpl-editor) label.check.rt-ask.disabled {
   color: var(--muted);
   cursor: not-allowed;
 }
@@ -16023,14 +16744,17 @@ button.ct-chip:hover {
 
 .tpl-card-top {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px 10px;
 }
 
+/* At least this wide before the buttons give way: when the card is narrow
+   they wrap UNDER the meta line instead of squeezing it into a column. */
 .tpl-card-text {
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 1 1 260px;
 }
 
 .tpl-name {
@@ -16140,10 +16864,22 @@ button.ct-chip:hover {
 
 .tpl-mode {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
-  align-items: center;
+  flex-direction: column;
+  gap: 6px;
   font-size: 12px;
+}
+
+.tpl-mode-label,
+.tpl-ft-label {
+  color: var(--muted);
+}
+
+/* Provision (and its strategy) sit under the worktree answer they modify. */
+.tpl-mode-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 22px;
 }
 
 /* Schedule: a checkbox, then "Every day ▾ at 21:00" on one row once on. */
@@ -16266,6 +17002,292 @@ button.ct-chip:hover {
   font-weight: 400;
   color: var(--muted);
   margin-left: 4px;
+}
+
+
+/* --- Round 2: Task, Works in, More options, Save as template ------------- */
+
+/* The Task box: on the form, never folded. The head carries the label and,
+   on the right, the saved-prompt picker. */
+.nf-task {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.nf-task-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 10px;
+  font-size: 12px;
+}
+
+.nf-task-head .preset-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nf-task-head select {
+  width: auto;
+  max-width: 230px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+/* "Works in": two radios, the recommended one first and marked. */
+.rt-label#new-mode-label {
+  padding-top: 1px;
+}
+
+.nf-works-in .nf-mode {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border-left: none;
+}
+
+.nf-rec {
+  display: inline-block;
+  margin: 0 2px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 10.5px;
+  line-height: 16px;
+  vertical-align: 1px;
+}
+
+/* The branch the worktree will be cut on, under its radio. */
+.nf-branch-line {
+  margin: -3px 0 2px 24px;
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.nf-branch-line code {
+  color: var(--text);
+  font-size: 11.5px;
+}
+
+.nf-works-in .nf-git-nudge {
+  margin: -2px 0 2px 24px;
+}
+
+.nf-share-warn,
+.nf-agent-missing {
+  color: var(--amber, #d29922);
+}
+
+/* More options' git extras. */
+.nf-git-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* "Save as template…" name row, above the action row. */
+.nf-save-tpl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2, var(--panel));
+}
+
+#new-form .nf-save-tpl input {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.nf-save-tpl-hint {
+  flex-basis: 100%;
+  font-size: 11.5px;
+}
+
+/* Narrow windows: the Works-in label stacks over its radios, and the
+   segmented Fast-track control wraps instead of clipping its last choices. */
+@media (max-width: 520px) {
+  .nf-works-in,
+  #new-ft-row {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 6px;
+  }
+
+  .nf-works-in > .rt-label,
+  #new-ft-row > .rt-label {
+    padding-top: 0;
+  }
+
+  /* The segmented control wraps onto a second line rather than clipping
+     "Merge when green" off the card. */
+  #new-ft-row .rt-seg {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  #new-form #new-ft-row .rt-seg button {
+    flex: 1 1 auto;
+    padding: 5px 8px;
+  }
+
+  .nf-actions {
+    flex-wrap: wrap;
+  }
+}
+
+/* The full form (page 2): anchored at the top like the landing panes, as
+   tall as its content up to the window. */
+#new-dialog.nf-landing.nf-form-page {
+  --nf-anchor-h: min(90vh, 640px);
+}
+
+#new-dialog.nf-form-page #new-form {
+  height: auto;
+}
+
+/* The Task head: its label and the saved-prompt picker on one line. */
+#new-form .nf-task-head label {
+  display: block;
+  font-size: 12px;
+}
+
+#new-form .nf-task-head select {
+  width: auto;
+  max-width: 230px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+/* Templates: a Run now that can't run LOOKS it — dimmed, its accent dropped —
+   and the reason is a line on the card, not only a hover title. */
+.tpl-run:disabled {
+  border-color: var(--border);
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.tpl-needs {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--amber, #d29922);
+}
+
+.tpl-needs .linklike {
+  font-size: 11.5px;
+}
+
+.tpl-ft {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  font-size: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+/* A template in New's strip: its name (fills the form) joined to ▶ (run it
+   now) and ⏰ (its schedule), as one pill — the actions belong to it. */
+.new-templates .nt-tpl {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.new-templates .nt-tpl-acts .nt-chip {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  min-width: 0;
+}
+
+.new-templates .nt-act {
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-left: none;
+  background: var(--panel);
+  color: var(--muted);
+  border-radius: 0;
+}
+
+.new-templates .nt-act:last-child {
+  border-top-right-radius: 999px;
+  border-bottom-right-radius: 999px;
+  padding-right: 10px;
+}
+
+.new-templates .nt-act:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.new-templates .nt-act:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.new-templates .nt-act.nt-sched.on {
+  color: var(--accent);
+}
+
+/* On the landing it sits under the describe box: a second door, quieter. */
+.new-templates.nt-landing {
+  margin-top: 10px;
+}
+
+/* One plain line under an option whose label alone doesn't say what it does
+   (Auto-split). */
+.nf-opt-help {
+  margin: 2px 0 0 24px;
+  font-size: 11.5px;
+}
+
+/* Clear: a quiet word beside the box (and beside ← Back on the form) — the
+   way to drop a draft that otherwise waits for you between openings. */
+#new-form #new-clear,
+#new-form #new-clear-form {
+  font-size: 12px;
+  color: var(--muted);
+  flex: none;
+}
+
+#new-form #new-clear {
+  align-self: flex-start;
+  margin-top: 6px;
+}
+
+#new-form #new-clear-form {
+  margin-right: 6px;
+}
+
+#new-form #new-clear:hover,
+#new-form #new-clear-form:hover {
+  color: var(--accent);
+}
+
+@media (max-width: 480px) {
+  #new-form #new-clear {
+    align-self: flex-end;
+    margin-top: 0;
+  }
+}
+
+/* The folder Create session starts in, named in the help line. */
+.nf-describe-help .nf-starts-in {
+  font-weight: 600;
 }
 }
 
@@ -19124,6 +20146,20 @@ button.linklike {
   min-width: 0;
 }
 
+/* Off because Pause intake turned it off: amber and striped, never the plain
+   grey of "off" — a paused switch comes back on Resume, an off one doesn't. */
+.ik-switch.paused {
+  border-color: color-mix(in srgb, var(--gold) 55%, var(--border));
+  background: color-mix(in srgb, var(--gold) 7%, var(--panel-2));
+}
+.ik-switch.paused .ca-slider {
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--gold) 45%, transparent) 0 4px,
+    color-mix(in srgb, var(--gold) 18%, transparent) 4px 8px
+  );
+}
+
 /* Source cards stack in their own column so the "+ Add" button below them is
    not mistaken for part of the last card. */
 .ik-cards {
@@ -19436,6 +20472,27 @@ button.linklike {
   min-width: 104px;
 }
 
+/* The Repo picker (multi-repo ticket sources only): the same quiet control,
+   leading the pickers on a full line of its own — which repo a start lands in
+   is the biggest of the four choices, and repo names run long. */
+.ik-item-start .ik-item-repo {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  font-family: inherit;
+  flex: 1 1 100%;
+  min-width: 104px;
+}
+
+.ik-item-start .ik-item-repo:hover:not(:disabled),
+.ik-item-start .ik-item-repo[data-picked] {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 .ik-item-start .ik-item-effort:disabled {
   opacity: 0.55;
   cursor: not-allowed;
@@ -19493,6 +20550,11 @@ button.linklike {
 .set-row input.field-missing,
 .tk-source input.field-missing {
   border-color: var(--danger, #e5534b);
+}
+
+/* "Required", said only once a field was left empty (RepoSources). */
+.set-row .set-hint.ik-field-error {
+  color: var(--danger, #e5534b);
 }
 
 /* Disabled fields must LOOK disabled: `.set-row input[…]` sets colour,
@@ -19788,8 +20850,8 @@ button.linklike {
   color: var(--muted);
 }
 .ik-source-pill.connected {
-  color: var(--ok, #3fb950);
-  border-color: var(--ok, #3fb950);
+  color: var(--green);
+  border-color: var(--green);
 }
 .ik-source-pill.needs_attention {
   color: var(--warn, #d29922);
@@ -19957,6 +21019,214 @@ button.linklike {
 #intake-panel .pr-advanced-body > .set-row > .set-hint {
   line-height: 1.45;
 }
+
+/* ---- Round 2 (fresh-eyes pass) ------------------------------------------- */
+
+/* Anchored to the top, not centred: the panel is content-sized (above), and a
+   centred box that changes height moves its own tab strip under the cursor on
+   every tab switch. Pinned at the top, a taller tab only grows downward. */
+#intake-dialog > #intake-panel {
+  align-self: flex-start;
+  margin-top: min(8vh, 64px);
+}
+
+/* Pause intake: one band above the tabs saying what auto-starts right now,
+   with the one button that stops all of it. Amber while paused — it is the one
+   state where nothing happens on its own, and that should be visible from
+   across the room. */
+.ik-pause {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: none;
+  font-size: 12.5px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 7px 8px 7px 12px;
+}
+.ik-pause.paused {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--gold) 60%, var(--border));
+  background: color-mix(in srgb, var(--gold) 10%, transparent);
+}
+.ik-pause-text {
+  min-width: 0;
+}
+.ik-pause-btn {
+  flex: none;
+}
+.ik-pause-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+
+/* A badge for rows that will NOT start on their own (auto-start off): grey,
+   so the accent stays reserved for "this needs you / this will happen". */
+.ik-tab-count.muted,
+.ik-tab.active .ik-tab-count.muted {
+  color: var(--muted);
+  background: transparent;
+  border-color: var(--border);
+}
+
+/* Where a ticket on a several-repo source will start, and why. Plain text in
+   the meta line, in the text colour so it reads as a fact about the row. */
+.pr-open-meta .ik-item-route {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* The per-start pickers each carry a small label over them now. */
+.ik-item-start .ik-item-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ik-item-start .ik-item-pick-repo {
+  flex-basis: 100%;
+}
+.ik-item-start .ik-item-pick-label {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.ik-item-start .ik-item-pick-note {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+/* Tracker housekeeping (Combine with another ticket…) at the bottom of a row's
+   Options: its own heading and a rule above it, so a destructive tracker
+   action never reads as one more start option. */
+.ik-item-start .ik-item-housekeeping {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+.ik-item-start .ik-item-housekeeping .ik-item-pick-label {
+  margin-right: auto;
+}
+
+/* Start on a row that will auto-start anyway: quiet, so a list of them is not
+   a wall of identical purple buttons and the "will auto-start" chip carries
+   the row. Same hug-and-right-align as the primary button. */
+.ik-item-start .ik-start-quiet {
+  align-self: flex-end;
+}
+
+/* The row's ⋯ menu: housekeeping (Merge into…) kept off the main column. */
+.ik-row-more {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.ik-item-start .ik-row-more-btn {
+  align-self: flex-end;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 7px 4px;
+  color: var(--muted);
+  text-decoration: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.ik-item-start .ik-row-more-btn.on,
+.ik-item-start .ik-row-more-btn:hover {
+  color: var(--text);
+}
+.ik-row-more-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* A source card's save line: "Saving…" / "Saved ✓" / "Not saved". */
+.tk-source .test-row .ik-save-line {
+  font-size: 12px;
+  color: var(--muted);
+  margin-right: auto;
+}
+.tk-source .test-row .ik-save-line.ok {
+  color: var(--green);
+}
+.tk-source .tk-test-row .test-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ik-source-error {
+  text-align: left;
+}
+
+/* Narrow (the 420px phone/side-panel case): the tab strip scrolls rather than
+   wrapping into two lines, and each work row stacks — title over meta over
+   its buttons — instead of squeezing the title into a sliver beside them. */
+@media (max-width: 600px) {
+  #intake-panel {
+    padding: 14px 12px 14px;
+    max-width: 100vw;
+  }
+  /* Clear the top bar, which stays drawn over the backdrop. */
+  #intake-dialog > #intake-panel {
+    margin-top: 48px;
+    max-height: calc(100vh - 56px);
+  }
+  #intake-tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .ik-tab {
+    white-space: nowrap;
+    flex: none;
+  }
+  #intake-panel .pr-open-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  #intake-panel .pr-open-item > .ik-item-start {
+    grid-column: 1;
+    grid-row: auto;
+    align-items: stretch;
+    max-width: none;
+  }
+  #intake-panel .pr-open-chip {
+    white-space: normal;
+  }
+  .ik-pause {
+    flex-wrap: wrap;
+  }
+}
+
+/* The row's answer to "will this start on its own?" is the chip, so it gets
+   the weight the (now quieter) Start button gave up. */
+#intake-panel .pr-open-meta .pr-open-chip.ok {
+  font-weight: 600;
+}
+
+/* Typing an auto-start state before Test can list them: the box takes the
+   row, the Add button hugs it. */
+#intake-panel .tk-state-type {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+#intake-panel .tk-state-type .tk-state-typed {
+  flex: 1 1 auto;
+  min-width: 0;
+}
 }
 
 /* 255 — after
@@ -20094,8 +21364,10 @@ button.linklike {
    valuable output — both have to be findable in a list you are scrolling past.
    Everything else is deliberately unmarked, because a list where every row is
    emphasised has no emphasis in it. */
+/* Calmer since round 4: the border stays neutral and only the thin edge says
+   "your turn" — purple means exactly that and nothing else. Red is a failure,
+   green (on the verdict chip) is verified. */
 .vf-plan[data-tone="you"] {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
@@ -20208,8 +21480,9 @@ button.linklike {
   grid-column: 2;
   grid-row: 2;
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 12px;
+  gap: 2px 12px;
   min-width: 0;
 }
 
@@ -20225,7 +21498,7 @@ button.linklike {
 /* The two that are asking something carry weight as well as colour: on a long
    list, weight is what the eye finds before it can read a hue. */
 .vf-stopline[data-tone="you"] {
-  color: var(--accent);
+  color: var(--text);
   font-weight: 600;
 }
 
@@ -20239,7 +21512,7 @@ button.linklike {
 }
 
 .vf-stopline[data-tone="busy"] {
-  color: color-mix(in srgb, var(--accent) 75%, var(--muted));
+  color: var(--muted);
 }
 
 /* A plan the generator could not write is broken plumbing, not a bad result —
@@ -20368,13 +21641,27 @@ button.linklike {
    reads as "this thing → do this" rather than as a title with a button after
    it. `.btn-primary` is the app's shared accent button; the size is trimmed
    here because it sits on a three-line row rather than in a form. */
-.vf-plan-head > .vf-primary {
+.vf-plan-head > .vf-acts {
   grid-column: 3;
   grid-row: 1 / span 3;
   align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vf-acts > .vf-primary,
+.vf-acts > .vf-fix {
   font-size: 12px;
   padding: 5px 12px;
   white-space: nowrap;
+}
+
+/* Fix… on a failed row: the danger colour, as an outline — it starts a
+   session, it is not the row's main call to action. */
+.vf-acts > .vf-fix {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 50%, var(--border));
 }
 
 /* A primary button that cannot act must not look like one. `.btn-primary` has
@@ -20382,7 +21669,8 @@ button.linklike {
    accent — indistinguishable from a live button, and pressing it produces
    nothing at all. That is the worst possible feedback: the user concludes the
    feature is broken rather than that the control is unavailable. */
-.vf-plan-head > .vf-primary:disabled {
+.vf-acts > .vf-primary:disabled,
+.vf-acts > .vf-fix:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -21025,6 +22313,34 @@ button.linklike {
   border-color: var(--accent);
 }
 
+/* "Another branch…": a repo picker and a branch box, part of the row (no frame
+   of their own), wrapping onto their own line when the dialog is narrow. The
+   box gets the selects' treatment above, since the UA styles inputs too. */
+.vf-newplan-branch {
+  display: flex;
+  flex: 1 1 320px;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.vf-newplan-branch input {
+  flex: 1 1 160px;
+  min-width: 0;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.vf-newplan-branch input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .vf-newplan > .set-hint {
   flex: 1 0 100%;
   margin: 0;
@@ -21115,7 +22431,7 @@ button.linklike {
     grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
-  .vf-plan-head > .vf-primary {
+  .vf-plan-head > .vf-acts {
     grid-column: 3;
     grid-row: 1;
   }
@@ -21434,6 +22750,286 @@ button.linklike {
 .vf-runwatch-state[data-state="disconnected"],
 .vf-runwatch-state[data-state="error"] {
   color: var(--red);
+}
+
+/* ===========================================================================
+   ROUND 2 — the two moments, the deep link, and finishing in place
+   ------------------------------------------------------------------------- */
+
+/* Before merge / after merge, one plain line each. Shown open on a first
+   visit; folded into "How Verify works" once there are checklists to work. */
+.vf-intro {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.vf-intro > summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.vf-intro > .set-hint {
+  margin: 0 0 4px;
+}
+
+.vf-moments {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.vf-moments strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.vf-moments code,
+.vf-empty code {
+  font-family: var(--mono, monospace);
+  color: var(--text);
+}
+
+/* The same two moments, said inside one checklist: what an answer here is
+   about, or what the check before merge found. */
+.vf-moment {
+  border-left: 2px solid var(--border);
+  padding-left: 8px;
+}
+
+/* A label that makes the select-all box say what it is. */
+.vf-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* "moved to Checked" — drawn where the checklist was, so finishing one is an
+   outcome you can see rather than a row vanishing from under the pointer. */
+.vf-moved {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--green) 45%, var(--border));
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+.vf-moved[data-to="fail"] {
+  border-color: color-mix(in srgb, var(--red, #d33) 45%, var(--border));
+}
+
+.vf-moved > span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.vf-moved-x {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+/* A deep link to a branch with no checklist yet. */
+.vf-missing {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 4px 0 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+.vf-missing code {
+  font-family: var(--mono, monospace);
+}
+
+/* "Fix this…" beside a failed step — the next move, where the failure is. */
+.vf-fix-step {
+  font-size: 11px;
+  padding: 1px 8px;
+}
+
+/* New checklist: two rows, ask the agent / write steps yourself. */
+.vf-new .vf-newplan + .vf-newplan {
+  margin-top: 10px;
+}
+
+/* The no-GitHub-remote opt-in: a snippet to commit, with a Copy button. */
+.vf-snippet {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.vf-snippet pre {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--mono, monospace);
+  font-size: 11.5px;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--text);
+}
+
+/* NARROW WINDOWS. The subtitle and the header line give way first; the
+   branch on a row wraps rather than truncating to "emandel2630/add…". */
+@media (max-width: 600px) {
+  #verify-panel .ws-head .ik-subtitle,
+  #verify-panel .ws-head .vf-live {
+    display: none;
+  }
+
+  .vf-plan-meta {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+
+  .vf-plan-meta-text {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .vf-plan-landed {
+    max-width: none;
+  }
+
+  .vf-plan-line {
+    flex-wrap: wrap;
+  }
+
+  .vf-plan-tally {
+    margin-left: 0;
+  }
+}
+
+/* Phone width: the buttons take their own line under the row, so the sentence
+   (the one thing on the row allowed to be long) keeps the width. */
+@media (max-width: 560px) {
+  .vf-plan-head > .vf-acts {
+    grid-column: 2 / span 2;
+    grid-row: 4;
+    justify-self: start;
+    margin-top: 6px;
+  }
+
+  .vf-plan-head > .vf-menu {
+    grid-row: 1 / span 3;
+  }
+}
+
+/* THE VERDICT ----------------------------------------------------------------
+   One pill, three homes: a checklist row inside Verify (`VerdictBadge`), and a
+   session's sidebar row and pane head (`VerdictChip`, a button that opens its
+   checklist). Its own class, never `.stagechip`: grid/DiffTab.css hides that
+   inside a pane head. Colour by meaning only — green verified, red failed,
+   accent "your turn", gold "not verified", muted for everything still moving. */
+.vchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+button.vchip {
+  cursor: pointer;
+}
+
+button.vchip:hover {
+  border-color: var(--muted);
+}
+
+button.vchip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.vchip-glyph {
+  font-weight: 700;
+}
+
+.vchip[data-tone="ok"] {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 45%, transparent);
+}
+
+.vchip[data-tone="bad"] {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 55%, transparent);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+
+.vchip[data-tone="you"] {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.vchip[data-tone="warn"] {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--gold) 55%, transparent);
+}
+
+/* On a session row and a pane head: a touch smaller, so it sits with the
+   other chips there without growing the row. */
+.vchip-row,
+.vchip-pane {
+  font-size: 10.5px;
+  line-height: 1.5;
+  padding: 0 6px;
+}
+
+.vchip-pane {
+  margin-right: 4px;
+}
+
+/* The legend, once, under the list (it used to repeat inside every expanded
+   checklist). */
+.vf-legend-once .vf-step-who {
+  min-width: 0;
+  display: inline-block;
+  vertical-align: baseline;
+}
+
+.vf-legend-once kbd {
+  display: inline-block;
+  min-width: 12px;
+  padding: 0 3px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 10px;
+  text-align: center;
 }
 }
 
@@ -22197,6 +23793,82 @@ details.sl-fix[open]>*:not(summary) {
   .ntfy-field-row .set-hint,
   .ntfy-field-row > input:not(:has(+ button)) {
     grid-column: 1 / -1;
+  }
+}
+
+/* "Where alerts go": the three channels side by side as one card, so it is
+   plain at a glance which of them is on — and why a switch below can seem
+   to do nothing (every channel but the bell is off). */
+.notif-channels {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0 14px;
+}
+
+.notif-channel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+}
+
+.notif-channel + .notif-channel {
+  border-top: 1px solid var(--border);
+}
+
+/* Nested labels sit in a two-line block: no switch-row nudge. */
+.notif-channel.set-switch-row > .notif-rule-text .set-label {
+  top: 0;
+}
+
+.notif-channel > .test-btn {
+  flex: none;
+}
+
+.notif-channel-state {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.notif-channel-state.on {
+  color: var(--green);
+}
+
+.notif-only-bell {
+  color: var(--text);
+}
+
+/* One heading per event group (Needs you / Pull requests / Usage & cost),
+   the same small uppercase as Connections' group titles. */
+.notif-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.notif-group + .notif-group {
+  margin-top: 16px;
+}
+
+.notif-group-title {
+  margin: 4px 0 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+#notif-more-events {
+  margin-top: 16px;
+}
+
+@media (max-width: 640px) {
+  .notif-channels {
+    padding: 0 10px;
   }
 }
 }

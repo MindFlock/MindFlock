@@ -1,9 +1,147 @@
-/** Settings → Workspace (partial 108): checkout dir + base branches. */
+/** Settings → Workspace (partial 108): where every session's copy of the
+ * repo lives (the one answer to "where do my worktrees live?"), how ticket
+ * sessions copy it, and the base branches. Fast-track tuning and the live
+ * branch are advanced mode only.
+ *
+ * The paths come from GET /api/settings/workspace-paths: absolute, for every
+ * kind of session — the ones you start (always <config dir>/worktrees) and
+ * ticket/PR sessions (the Workspace folder field) — and a typed folder is
+ * checked as you type (missing → "will be created", unwritable → warned). */
 
+import { useEffect, useState } from "react";
+import { api } from "../../../api/client";
+import { copyText } from "../../../lib/clipboard";
 import { toast } from "../../../lib/toast";
 import { SettingField, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
-import { AdvancedFold } from "../settingsMode";
+import { AdvancedFold, LearnMore } from "../settingsMode";
+
+/** GET /api/settings/workspace-paths. */
+export interface WorkspacePaths {
+  sessions_dir: string;
+  tickets_dir: string;
+  tickets_default?: boolean;
+  /** ok | create | not_dir | not_writable */
+  tickets_state?: string;
+  tickets_warning?: string;
+  env_override?: string;
+}
+
+function pathsUrl(typed?: string): string {
+  return "/api/settings/workspace-paths" + (typed === undefined ? "" : "?dir=" + encodeURIComponent(typed));
+}
+
+/** One absolute path, selectable as a whole, with a Copy button. */
+function PathLine({ id, label, path, hint }: { id: string; label: string; path: string; hint: string }) {
+  return (
+    <div className="set-row ws-path-row" id={id}>
+      <span className="set-label">{label}</span>
+      <span className="ws-path-line">
+        <code className="ws-path">{path || "…"}</code>
+        <button
+          type="button"
+          className="test-btn"
+          disabled={!path}
+          onClick={() => void copyText(path).then((ok) => toast(ok ? "Path copied" : "Copy failed"))}
+        >
+          Copy
+        </button>
+      </span>
+      <span className="set-hint">{hint}</span>
+    </div>
+  );
+}
+
+/** "Where your worktrees live": both locations, absolute, plus the folder
+ * field for the second one, checked as you type. */
+function WorktreeHome() {
+  const s = useSettings();
+  const stored = String(s.get("repository", "workspace_dir") ?? "");
+  const [typed, setTyped] = useState(stored);
+  const [paths, setPaths] = useState<WorkspacePaths | null>(null);
+  useEffect(() => setTyped(stored), [stored]);
+
+  // Re-resolve as the person types (debounced), so the absolute path and any
+  // warning describe the folder in the box, before it is saved.
+  useEffect(() => {
+    let live = true;
+    const t = setTimeout(
+      () => {
+        api<WorkspacePaths>(pathsUrl(typed === stored ? undefined : typed))
+          .then((p) => live && setPaths(p))
+          .catch(() => undefined);
+      },
+      typed === stored ? 0 : 300
+    );
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [typed, stored]);
+
+  const warn = paths?.tickets_warning || "";
+  const bad = paths?.tickets_state === "not_dir" || paths?.tickets_state === "not_writable";
+  return (
+    <section className="ws-home" id="workspace-paths" aria-label="Where your worktrees live">
+      <h4 className="set-subtitle">Where your worktrees live</h4>
+      <PathLine
+        id="workspace-sessions-dir"
+        label="Sessions you start"
+        path={paths?.sessions_dir || ""}
+        hint="Each one gets its own folder here, unless you pick “this folder directly”."
+      />
+      <PathLine
+        id="workspace-tickets-dir"
+        label="Ticket and PR sessions"
+        path={paths?.tickets_dir || ""}
+        hint={
+          paths?.env_override
+            ? "Set by " + paths.env_override + " on this computer, which wins over the folder below."
+            : "Change it with the folder below."
+        }
+      />
+      <label className="set-row">
+        <span className="set-label">Workspace folder (ticket and PR sessions)</span>
+        <input
+          type="text"
+          data-group="repository"
+          data-field="workspace_dir"
+          id="workspace-dir-input"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="./workspaces"
+          value={typed}
+          aria-invalid={bad ? true : undefined}
+          aria-describedby="workspace-dir-check"
+          onChange={(e) => setTyped(e.target.value)}
+          onBlur={() => typed.trim() !== stored && s.saveField("repository", "workspace_dir", typed.trim())}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          }}
+        />
+        <span
+          id="workspace-dir-check"
+          className={bad ? "set-field-error" : "set-hint"}
+          role={bad ? "alert" : undefined}
+        >
+          {warn || "A full path like ~/mindflock/workspaces is clearest. Blank = ./workspaces."}
+        </span>
+      </label>
+      <label className="set-row" id="workspace-copy-mode">
+        <span className="set-label">How ticket sessions copy the repo</span>
+        <SettingField
+          group="engine"
+          field="mode"
+          options={[
+            { value: "", label: "Worktree — fast (default)" },
+            { value: "clone", label: "Full clone — a standalone copy" },
+          ]}
+        />
+        <span className="set-hint">A worktree shares your repo's history; a clone is fully separate.</span>
+      </label>
+    </section>
+  );
+}
 
 export function Workspace({ gotoScreen }: ScreenProps) {
   return (
@@ -24,42 +162,30 @@ export function Workspace({ gotoScreen }: ScreenProps) {
         </p>
       </div>
       <p className="set-hint set-block-hint">
-        Where MindFlock puts the working checkouts your <em>coding sessions</em> run in. Which
-        repo a session clones comes from its <strong>ticket source (Intake → Tickets)</strong>,
-        which names its own repo, or the repo you pick when starting a manual session — so
-        there's nothing to set here per repo.
+        Where sessions keep their copy of your repo, and which branches they start from.
       </p>
-      <label className="set-row">
-        <span className="set-label">Workspace dir</span>
-        <SettingField group="repository" field="workspace_dir" placeholder="./workspaces" />
-        <span className="set-hint">Folder on disk where session checkouts live.</span>
-      </label>
+      <WorktreeHome />
       <label className="set-row">
         <span className="set-label">Default base branch</span>
         <SettingField group="repository" field="base_branch" placeholder="main" />
-        <span className="set-hint">
-          Branch new session branches are cut from when the source doesn't specify one.
-        </span>
+        <span className="set-hint">New session branches start from this, unless told otherwise.</span>
       </label>
       <label className="set-row">
         <span className="set-label">Default PR base branch</span>
         <SettingField group="repository" field="pr_base_branch" placeholder="use the session's own base" />
         <span className="set-hint">
-          Branch the <strong>Open PR</strong> button targets. Set it to e.g. <code>staging</code>{" "}
-          to always PR there. Blank = PR into whatever branch the session was created from.
+          Where <strong>Open PR</strong> points. Blank = the branch the session started from.
         </span>
       </label>
       {/* What "shipped" means, fast-track's default reach and its hook
-          retries: tuning for a flow that already works — folded. */}
+          retries: tuning for a flow that already works — advanced mode only. */}
       <AdvancedFold id="workspace-advanced">
         <label className="set-row">
           <span className="set-label">Live branch</span>
           <SettingField group="repository" field="live_branch" placeholder="main" />
           <span className="set-hint">
-            The branch that means <em>shipped</em>. <strong>Verify</strong> waits until a
-            session's commit is an ancestor of it, then asks you to test the change for real.
-            Blank = fall back to the PR base branch, then the default base branch, then{" "}
-            <code>main</code>.
+            The branch that means <em>shipped</em>. Verify asks you to check a change once it
+            lands here. Blank = the PR base branch, then the default base branch.
           </span>
         </label>
         <label className="set-row">
@@ -77,27 +203,31 @@ export function Workspace({ gotoScreen }: ScreenProps) {
           />
           <span className="set-hint">
             <strong>New sessions start Off; batches and ticket runs start at this default.</strong>{" "}
-            A batch is a list in the New dialog or Intake's <em>Start together</em>. Fast-track
-            waits for the agent to finish, then commits, pushes and carries on to this rung. Change
-            one session any time with its <strong>⏩</strong> button. A ticket <em>source</em>{" "}
-            keeps its own <em>Fast-track tickets to</em> (Intake), which never merges.
+            Change one session any time with its <strong>⏩</strong> button.
           </span>
+          <LearnMore>
+            A batch is a list in the New dialog or Intake's <em>Start together</em>. Fast-track
+            waits for the agent to finish, then commits, pushes and carries on to this step. A
+            ticket source keeps its own <em>Fast-track tickets to</em> (Intake), which never
+            merges.
+          </LearnMore>
         </label>
         <label className="set-row">
           <span className="set-label">Retryable pre-commit hooks</span>
           <SettingField
             group="repository"
             field="precommit_retry_hooks"
-            placeholder="gitnexus-index"
+            placeholder="e.g. black"
           />
           <span className="set-hint">
-            Comma-separated pre-commit hook <strong>IDs</strong> (not display names — pre-commit's{" "}
-            <code>name:</code> is free text, so <code>Black format</code> is the hook{" "}
-            <code>black</code>). When one of these fails <em>without changing any files</em>,
-            fast-track retries the commit once and then re-runs it with{" "}
-            <code>SKIP=&lt;id&gt;</code> so the commit can land, and says which hook it skipped.
-            Test and secret-scanning hooks are refused here — a failing test always stops the run.
+            Hooks fast-track may skip when they fail without changing any files.
           </span>
+          <LearnMore>
+            Comma-separated pre-commit hook <strong>IDs</strong> (not display names:{" "}
+            <code>Black format</code> is the hook <code>black</code>). Fast-track retries the
+            commit once, then re-runs it with <code>SKIP=&lt;id&gt;</code> and says which hook it
+            skipped. Test and secret-scanning hooks are refused here.
+          </LearnMore>
         </label>
         <FailureNotesRow />
       </AdvancedFold>

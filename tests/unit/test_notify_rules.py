@@ -40,8 +40,9 @@ def test_config_rules_default_state():
     assert rules["needs_input"]["enabled"] is True
     assert rules["pr_closed"]["enabled"] is True
     assert rules["budget_exceeded"]["enabled"] is True
+    # "A session finishes its work" is on for someone who never chose.
+    assert rules["session_idle"]["enabled"] is True
     # Noisy opt-in rules start disabled (must be turned on explicitly).
-    assert rules["session_idle"]["enabled"] is False
     assert rules["precommit_running"]["enabled"] is False
     # Pre-commit *failure* is actionable, not noisy → default-on, fires on the
     # session parking in the "interrupt" stage.
@@ -93,3 +94,69 @@ def test_frontend_renders_per_rule_toggles():
     notify = client.get("/addons/notify.js").text
     assert "rule.enabled === false" in notify  # muted rules are skipped
     assert "refreshRules" in notify  # applies without reload
+
+
+# --------------------------------------------------------------------------- #
+# Plain words for Settings → Notifications
+# --------------------------------------------------------------------------- #
+def test_every_rule_has_a_plain_one_line_description():
+    import re
+
+    rules = client.get("/api/notify/config").json()["rules"]
+    for r in rules:
+        for key in ("label", "description"):
+            text = r.get(key) or ""
+            assert text, (r["id"], key)
+            assert not re.search(r"\{[a-z_]+\}", text), (r["id"], key)
+            assert "\n" not in text and len(text) <= 90, (r["id"], key)
+            # No internal ids or event names in the words.
+            assert not re.search(r"session\.[a-z_]+|_[a-z]+_", text), (r["id"], key)
+
+
+# --------------------------------------------------------------------------- #
+# session_idle: on by default, but never flipped for someone who chose
+# --------------------------------------------------------------------------- #
+def _write_notifs(**notifs):
+    S.update_settings(notifications=notifs)
+
+
+def test_session_idle_stays_off_for_someone_who_saved_other_choices():
+    # Before the new default, absence from enabled_rules meant "off".
+    _write_notifs(muted_rules=["pr_closed"], enabled_rules=[])
+    assert (
+        _enabled(client.get("/api/notify/config").json()["rules"], "session_idle")
+        is False
+    )
+    _write_notifs(muted_rules=[], enabled_rules=["precommit_running"])
+    assert (
+        _enabled(client.get("/api/notify/config").json()["rules"], "session_idle")
+        is False
+    )
+
+
+def test_session_idle_an_old_opt_in_stays_on():
+    _write_notifs(muted_rules=["pr_closed"], enabled_rules=["session_idle"])
+    assert (
+        _enabled(client.get("/api/notify/config").json()["rules"], "session_idle")
+        is True
+    )
+
+
+def test_session_idle_toggles_round_trip_with_other_choices_saved():
+    _write_notifs(muted_rules=["pr_closed"], enabled_rules=[])
+    r = client.post("/api/notify/rules/session_idle", json={"enabled": True})
+    assert _enabled(r.json()["rules"], "session_idle") is True
+    notifs = S.load_settings().notifications
+    assert "session_idle" in notifs.enabled_rules
+    assert "session_idle" not in notifs.muted_rules
+    r = client.post("/api/notify/rules/session_idle", json={"enabled": False})
+    assert _enabled(r.json()["rules"], "session_idle") is False
+    notifs = S.load_settings().notifications
+    assert "session_idle" in notifs.muted_rules
+    assert "session_idle" not in notifs.enabled_rules
+
+
+def test_session_idle_dispatches_by_default():
+    from backend.web.addons import notify
+
+    assert "session_idle" in {r["id"] for r in notify._enabled_rules()}

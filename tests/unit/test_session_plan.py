@@ -898,6 +898,33 @@ def test_the_route_answers_502_with_the_clis_own_sentence(route_home, monkeypatc
     assert res.json() == {"error": "claude is not installed"}
 
 
+def test_a_signed_out_cli_is_named_not_just_its_exit_code(route_home, monkeypatch):
+    """A signed-out ``claude -p`` exits 1 with its complaint on stdout, so the
+    bare error is "claude exited 1". When the CLI is known signed out, the
+    sentence says so — and only then."""
+    from backend.web.core import setup_steps
+
+    monkeypatch.setattr(cm, "pick_argv", lambda *a, **k: ["/usr/bin/claude", "-p", "x"])
+
+    def exited(*a, **kw):
+        raise cm.CommitMessageError("claude exited 1")
+
+    monkeypatch.setattr(cm, "_run", exited)
+    monkeypatch.setattr(
+        setup_steps, "provider_logins", lambda: [{"name": "claude", "logged_in": False}]
+    )
+    res = client.post("/api/session-plan", json={"text": "fix the auth bug in proj"})
+    assert res.status_code == 502
+    assert res.json()["error"].startswith("claude isn't signed in yet")
+
+    # Signed in (or unknowable): the CLI's own sentence, untouched.
+    monkeypatch.setattr(
+        setup_steps, "provider_logins", lambda: [{"name": "claude", "logged_in": None}]
+    )
+    res = client.post("/api/session-plan", json={"text": "fix the auth bug in proj"})
+    assert res.json() == {"error": "claude exited 1"}
+
+
 def test_the_route_answers_502_when_the_answer_cannot_be_read(route_home, monkeypatch):
     _stub_run(monkeypatch, "I'd suggest sitecheck-bot6, personally.")
     res = client.post("/api/session-plan", json={"text": "fix the auth bug in proj"})
@@ -1162,7 +1189,7 @@ def test_a_cli_killed_mid_turn_answers_502_rather_than_hanging(route_home, monke
 
     A one-shot that is killed (OOM, a ``pkill claude``, the tab's own client
     going away) returns a NEGATIVE exit code immediately — it does not sit
-    there until the 75s budget expires. That has to read as a failed plan, not
+    there until the 30s budget expires. That has to read as a failed plan, not
     as an empty answer parsed into a form.
     """
     real = subprocess.run
@@ -1197,7 +1224,7 @@ def test_a_cli_that_never_answers_says_so_within_the_budget(route_home, monkeypa
     res = client.post("/api/session-plan", json={"text": "fix the auth bug in proj"})
 
     assert res.status_code == 502
-    assert "did not answer within 75s" in res.json()["error"]
+    assert "did not answer within 30s" in res.json()["error"]
 
 
 def test_a_cli_that_is_not_installed_is_a_sentence_not_a_crash(route_home, monkeypatch):

@@ -48,9 +48,70 @@
   font-weight: 600;
 }
 
+/* "Search settings…" (SettingsSearch.tsx): the first thing in the nav, with
+   its matches listed right under it while you type. */
+.set-search {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+:where(#settings-panel) .set-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.set-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 0 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.set-search-hit {
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  border-radius: 7px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.35;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.set-search-hit.active {
+  background: var(--bg);
+}
+
+.set-search-none {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* The control a search landed on, outlined for a moment. */
+#settings-screens [data-search-hit] {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 6px;
+  transition: outline-color 0.3s;
+}
+
+/* The phone-width nav (a <select>); hidden at desktop width. */
+.set-nav-select {
+  display: none;
+}
+
 /* A phone-width window: the 172px nav column would leave the fields a sliver,
-   so the nav becomes one scrolling row of tabs above the screen. Group
-   headings drop out (the row is read left to right, not scanned by group). */
+   so the nav becomes a short stack above the screen (search, a screen
+   select, the mode switch). Group headings drop out. */
 @media (max-width: 600px) {
   #settings-panel {
     padding: 16px;
@@ -62,20 +123,41 @@
     gap: 16px;
   }
 
+  /* Narrow: search, then ONE select for the screen, then the mode switch on
+     its own line. A wrap of tabs re-flowed every time the active (bold) tab
+     changed width, so the tabs jumped as you clicked through them. */
   #settings-nav {
-    flex-direction: row;
     width: auto;
-    overflow-x: auto;
-    overflow-y: hidden;
+    gap: 6px;
+    overflow: visible;
     border-right: none;
     border-bottom: 1px solid var(--border);
     padding: 0 0 8px;
   }
 
-  .set-nav-item {
-    flex: none;
-    white-space: nowrap;
+  #settings-nav .set-search {
+    margin-bottom: 0;
   }
+
+  #settings-nav .set-nav-item {
+    display: none;
+  }
+
+  #settings-nav .set-nav-select {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 7px;
+    padding: 8px 10px;
+    font-size: 14px;
+    font-family: inherit;
+  }
+
+  /* The mode switch's narrow layout is in settingsMode.css: that sheet is
+     imported unlayered, so a rule for it here (layer "components") loses. */
 
   .set-nav-group {
     display: none;
@@ -1074,4 +1156,35 @@
   cursor: pointer;
   color: var(--muted, inherit);
   margin-bottom: 16px;
+}
+
+/* Settings → Workspace: "Where your worktrees live" — the absolute paths,
+   each selectable as a whole and copyable. */
+.ws-home {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ws-home > .set-subtitle {
+  margin: 0;
+}
+
+.ws-path-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ws-path {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: all;
 }

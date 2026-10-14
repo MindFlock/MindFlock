@@ -60,7 +60,7 @@ def test_eligible_pr_has_no_skip_reasons():
 
 def test_processed_pr_is_flagged():
     reasons = pr_review.skip_reasons(_pr(), {("acme/app", 7)}, "me", _gh())
-    assert any("already reviewed" in r for r in reasons)
+    assert any("already handled before" in r for r in reasons)
 
 
 def test_processed_entry_is_repo_scoped():
@@ -68,7 +68,7 @@ def test_processed_entry_is_repo_scoped():
     processed = {("acme/app", 7)}
     other = _pr(repo="other/repo")
     assert not any(
-        "already reviewed" in r
+        "already handled before" in r
         for r in pr_review.skip_reasons(other, processed, "me", _gh())
     )
 
@@ -83,7 +83,7 @@ def test_foreign_author_is_flagged_only_when_login_known():
 def test_min_age_grace_is_flagged_with_minutes_left():
     pr = _pr(created_at=datetime.now(timezone.utc) - timedelta(minutes=5))
     reasons = pr_review.skip_reasons(pr, set(), "me", _gh(min_age_minutes=15))
-    assert any("min-age grace" in r for r in reasons)
+    assert any("too new" in r for r in reasons)
 
 
 # --------------------------------------------------------------------------- #

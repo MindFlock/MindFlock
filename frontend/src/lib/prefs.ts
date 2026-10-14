@@ -44,6 +44,9 @@ export interface Prefs {
   map_tour: boolean | null;
   /** Settings shows its advanced screens (true) — basic only when unset. */
   settings_advanced: boolean | null;
+  /** The welcome tour has been shown (true) — on any device; it opens by
+   * itself once, on a first launch, until then. */
+  welcome_tour: boolean | null;
 }
 
 export type PrefField = keyof Prefs;
@@ -65,6 +68,7 @@ export const PREF_DEFAULTS: Prefs = {
   hints: null,
   map_tour: null,
   settings_advanced: null,
+  welcome_tour: null,
 };
 
 type Kind = "json-object" | "json-list" | "json-bool" | "json-number" | "raw";
@@ -98,6 +102,7 @@ export const PREF_MAP: PrefKey[] = [
   { ls: "mf_hints", field: "hints", kind: "json-bool" },
   { ls: "mf_map_tour", field: "map_tour", kind: "json-bool" },
   { ls: "mf_settings_advanced", field: "settings_advanced", kind: "json-bool" },
+  { ls: "mf_welcome_tour", field: "welcome_tour", kind: "json-bool" },
 ];
 
 const BY_LS = new Map(PREF_MAP.map((p) => [p.ls, p]));

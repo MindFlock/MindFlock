@@ -68,7 +68,9 @@ export function useGithubToggleBar(opts: {
     if (openDialog === null) refetch();
   }, [openDialog, refetch]);
 
-  const capsOk = !(config?.caps && (!config.caps.git || !config.caps.ticketing));
+  // git only, like Intake's Pull requests / Issues tabs: these run on their own
+  // GitHub sign-in, so a missing ticket source must not hide them.
+  const capsOk = !(config?.caps && !config.caps.git);
   const reposRaw = gh ? gh[reposKey] : undefined;
   const repos = Array.isArray(reposRaw) ? reposRaw : [];
   const visible = capsOk && !!gh && repos.length > 0;

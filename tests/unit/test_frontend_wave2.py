@@ -52,11 +52,14 @@ def test_the_ui_calls_routes_the_server_serves():
     for path in (
         "/api/doctor",
         "/api/settings/test/github",
-        "/api/settings/test/agent",
         "/api/ides",
     ):
         assert path in js, path
         assert path in paths, path
+    # The agent card's Test button posts to the path its Connections row hands
+    # it (backend/web/addons/connections.py), so the route lives on the server
+    # side of the contract rather than as a literal in the bundle.
+    assert "/api/connections/test/agent" in paths
     # D5: the open-in-IDE action hits the primary /ide route.
     assert '"/ide"' in js
     assert "/api/instances/{title}/ide" in paths

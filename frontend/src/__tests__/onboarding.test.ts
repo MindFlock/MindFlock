@@ -13,8 +13,6 @@ import {
   stepGroup,
   stepNumber,
   consumeSetupIntent,
-  installedLogins,
-  loginLine,
   orderedSteps,
   showSetupCard,
   showSetupChip,
@@ -83,13 +81,16 @@ describe("the empty grid's checklist card", () => {
   });
 });
 
-describe("the Setup N/5 chip", () => {
+describe("the Setup chip (one count: N of 3)", () => {
   const partly = status({ tools: { done: true }, agent_login: { done: true }, repo: { done: true } });
 
   it("shows after the card has gone, until every step is done or skipped", () => {
     expect(showSetupChip({ sessions: 0, status: partly, onboarded: true })).toBe(true);
     expect(showSetupChip({ sessions: 3, status: status(), onboarded: false })).toBe(true);
-    expect(chipLabel(partly)).toBe("Setup 3/5");
+    // ONE count everywhere: the three required steps, then what optional is
+    // left — never a "/5" beside the checklist's "of 3".
+    expect(chipLabel(partly)).toBe("Setup 3 of 3 · 2 optional");
+    expect(chipLabel(status({ tools: { done: true } }))).toBe("Setup 1 of 3");
   });
 
   it("counts a skipped step as done", () => {
@@ -160,18 +161,6 @@ describe("step helpers", () => {
     expect(isEssentialCheck({ id: "agent-auth", status: "warn" })).toBe(false);
   });
 
-  it("offers a sign-in button only for installed CLIs, default first", () => {
-    const rows = installedLogins([
-      { name: "codex", installed: true, logged_in: false, login_cmd: "codex login", default: false },
-      { name: "aider", installed: false, logged_in: null, login_cmd: "", default: false },
-      { name: "claude", installed: true, logged_in: true, login_cmd: "claude", default: true },
-    ]);
-    expect(rows.map((r) => r.name)).toEqual(["claude", "codex"]);
-    expect(loginLine(rows[0]).ok).toBe(true);
-    expect(loginLine(rows[1]).ok).toBe(false);
-    expect(loginLine({ ...rows[1], logged_in: null }).ok).toBeNull();
-  });
-
   it("offers Install Tailscale only when the doctor says it is missing", () => {
     expect(tailscaleMissing(status())).toBe(false);
     expect(
@@ -240,10 +229,21 @@ describe("first-run state has exactly one authority", () => {
     expect(sources.map((f) => f.path)).toContain("App.tsx");
   });
 
-  it("nothing opens the welcome tour by itself", () => {
+  it("the welcome tour opens by itself once, from one place, on a synced flag", () => {
     // openTour() is a user action: the palette's Tour, the ? sheet, Settings →
-    // General's Replay. An effect or a load-time call that opened it is the
-    // old auto-tour coming back on top of the checklist card.
+    // General's Replay. The ONE automatic opening is WelcomeTour's
+    // useFirstLaunchTour: a first launch (lib/calm firstLaunchTour), marked
+    // seen in the synced `welcome_tour` pref the moment it opens — never a
+    // per-browser flag, never from App.
+    const tour = sources.find((f) => f.path === "components/onboarding/WelcomeTour.tsx")!;
+    expect(tour.text).toContain("firstLaunchTour(");
+    expect(tour.text).toContain("markWelcomeTourSeen()");
+    expect(tour.text).toContain("firstPrefsPull");
+    const autoOpeners = sources
+      .filter((f) => /tourOpen:\s*true/.test(f.text))
+      .map((f) => f.path)
+      .sort();
+    expect(autoOpeners).toEqual(["components/onboarding/WelcomeTour.tsx", "state/store.ts"]);
     const app = sources.find((f) => f.path === "App.tsx")!;
     expect(app.text).not.toMatch(/openTour\(\)/);
     expect(app.text).not.toContain("tourDecision");

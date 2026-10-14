@@ -79,6 +79,10 @@ interface Notif {
   approve?: { id: string; via: string; code: string; host: string } | null;
   /** An update.available row: named "Updates", opens this Settings screen. */
   settings?: SettingsScreen;
+  /** A Verify row: the checklist (plan id) a click opens in Verify. */
+  verify?: string;
+  /** The row's name when it isn't a session's (a checklist's title). */
+  name?: string;
   /** A template.* row with no session: named "Templates", opens the Templates dialog. */
   template?: boolean;
 }
@@ -110,7 +114,16 @@ export interface NotifRow {
   peer?: boolean;
   approve?: { id: string; via: string; code: string; host: string } | null;
   settings?: SettingsScreen;
+  verify?: string;
+  name?: string;
   template?: boolean;
+}
+
+/** A Verify event's checklist: its plan id (what the click opens) and the
+ * title the row is named by. */
+function planOf(env: EventEnvelope, d: Record<string, unknown>): { verify: string; name: string } {
+  const verify = String(d.plan || env.session || "");
+  return { verify, name: String(d.title || "") };
 }
 
 /** Map a raw event envelope to a notification, or null to ignore the noise. */
@@ -199,6 +212,27 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
     case "session.red_zone_tampered": {
       const what = String((d as { what?: string }).what || "guard");
       return { text: "red-zone guard tampered (" + what + ")", cls: "n-warn" };
+    }
+    // Verify: the three moments a checklist needs you — it came due (the work
+    // shipped), it couldn't be written, or an agent's check found a failure.
+    // Each is gated by its own notify rule, and a click opens the checklist.
+    case "session.test_plan_due": {
+      const p = planOf(env, d);
+      return { text: "ready to check", cls: "n-info", rule: "verify_plan_due", dedupe: "plan-due:" + p.verify, ...p };
+    }
+    case "session.test_plan_failed":
+      return { text: "couldn't write the checklist", cls: "n-warn", rule: "verify_plan_failed", ...planOf(env, d) };
+    case "session.test_plan_checked": {
+      // Only a run that FOUND a failure is news here (the emitter stamps
+      // new = "failed"); a clean run is the opt-in toast's, not the bell's.
+      if (env.new !== "failed") return null;
+      const n = Number((d as { failed?: number }).failed) || 0;
+      return {
+        text: "checklist failed" + (n ? " — " + n + " step" + (n === 1 ? "" : "s") : ""),
+        cls: "n-warn",
+        rule: "verify_run_failed",
+        ...planOf(env, d),
+      };
     }
     // Agent-to-agent traffic (MindFlock MCP): only a worker's REPORT is news
     // (done / blocked / failed, filed under the parent it reported to). Plain
@@ -561,6 +595,10 @@ export function NotificationsBell() {
                       } else if (n.settings) {
                         setOpen(false);
                         openSettings(n.settings);
+                      } else if (n.verify) {
+                        // The checklist itself, in Verify.
+                        setOpen(false);
+                        useUi.getState().openDialogFor("verify", n.verify);
                       } else if (n.template && !n.session) {
                         setOpen(false);
                         useUi.getState().openDialogFor("templates");
@@ -585,6 +623,8 @@ export function NotificationsBell() {
                         ? "Templates"
                         : n.run && !n.session
                         ? runLookups.name(n.run) || "Team run"
+                        : n.verify
+                        ? "Verify · " + (n.name || windowName(n.session))
                         : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") +
                           (n.session ? windowName(n.session) : "—")}
                     </span>

@@ -45,6 +45,10 @@
 @import "../components/grid/FastTrackMenu.css" layer(components); /* 165 — after
    Pane.css, whose .nextstep-fast the ⏩ button's marks extend, and after
    SidebarRow.css, whose .inst-actions the row's session items extend */
+@import "../components/sidebar/SessionMenu.css" layer(components); /* 165 — the
+   one per-session menu, in the row's .inst-actions and the pane's
+   .pane-more-menu: after SidebarRow.css and Pane.css, whose hosts it fills */
+@import "../components/sidebar/MidName.css" layer(components); /* 165 */
 @import "../components/grid/ThreadTab.css" layer(components); /* 166 — after
    Pane.css (.pane-head .tabs button), QueueTab.css (.queue-tab-badge, which the
    Thread tab's badge reuses) and AnswerStrip.css (the .fa-thread host) */

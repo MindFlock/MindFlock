@@ -33,14 +33,16 @@ describe("the New dialog's two tabs", () => {
   });
 });
 
-describe("the card: landing panes share a top edge, the form is centred", () => {
+describe("the card: every pane shares a fixed top edge", () => {
   // v0.7's geometry for the two landing panes (Session page 1 and the Ticket
   // tab): each its own natural height, all starting at the same y, so a tab
-  // click never moves the card. The top is centred on a LANDING pane's height,
-  // so both read as centred. The full form (page 2) is centred at one fixed
-  // height, so a fold never moves it.
+  // click never moves the card. The full form (page 2) uses the same idea with
+  // its own, higher anchor: a fold grows it downward and never moves its top.
   it("anchors the landing panes' top edge", () => {
-    expect(squash(ALL_CODE)).toContain('className={"modal" + (shownTab === "ticket" || page === 1 ? " nf-landing" : "")}');
+    // Every pane is anchored at the top; the full form adds .nf-form-page.
+    expect(squash(ALL_CODE)).toContain(
+      'className={"modal nf-landing" + (shownTab === "ticket" || page === 1 ? "" : " nf-form-page")}'
+    );
     const block = cssRule(CSS, "#new-dialog.nf-landing");
     expect(block).toContain("align-items: flex-start;");
     expect(block).toContain("padding-top: var(--nf-top);");
@@ -52,20 +54,24 @@ describe("the card: landing panes share a top edge, the form is centred", () => 
     );
   });
 
-  it("gives the landing panes their natural height, and only the form the fixed one", () => {
+  it("gives every pane its natural height under the fixed top edge", () => {
     expect(cssRule(CSS, "#new-form.nf-ask")).toBe("height: auto;");
     expect(squash(ALL_CODE)).toContain('className={"ta-drop" + (page === 1 ? " nf-ask" : "")}');
     expect(squash(CSS)).toContain(
       "#new-ticket-form { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; " +
         "padding: 20px 22px; width: min(660px, 94vw); height: auto;"
     );
-    // The form is centred: the base rule overrides nothing of .modal's.
+    // The base rule overrides nothing of .modal's.
     const base = cssRule(CSS, "#new-dialog");
     expect(base).not.toContain("align-items");
     expect(base).not.toContain("padding-top");
-    expect(base).toContain("--nf-card-h: min(86vh, 620px);");
+    expect(base).toContain("--nf-card-h: min(90vh, 760px);");
+    // The full form (page 2) grows downward from a higher anchor, rather than
+    // holding a tall card mostly empty while More options is shut.
+    expect(cssRule(CSS, "#new-dialog.nf-landing.nf-form-page")).toContain("--nf-anchor-h: min(90vh, 640px);");
+    expect(cssRule(CSS, "#new-dialog.nf-form-page #new-form")).toBe("height: auto;");
     // Each literal is written once, so the anchor and the cap cannot drift.
-    for (const lit of ["min(86vh, 620px)", "min(86vh, 400px)"])
+    for (const lit of ["min(90vh, 760px)", "min(86vh, 400px)", "min(90vh, 640px)"])
       expect(ALL_CSS.split(lit).length - 1).toBe(1);
   });
 });

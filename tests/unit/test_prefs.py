@@ -224,6 +224,24 @@ def test_map_tour_is_a_synced_bool(tmp_path):
     assert "map_tour" in settings_sync.SYNCED["prefs"]
 
 
+def test_welcome_tour_is_a_synced_bool():
+    """The welcome tour auto-opens once per person, not once per browser: seen
+    on one device, it stays seen on the others."""
+    from backend.config.settings import PrefsSettings
+    from backend.web.core import settings_sync
+
+    assert PrefsSettings.from_dict({"welcome_tour": True}).to_dict() == {
+        "welcome_tour": True
+    }
+    assert PrefsSettings.from_dict({"welcome_tour": False}).to_dict() == {
+        "welcome_tour": False
+    }
+    assert PrefsSettings.from_dict({"welcome_tour": "nope"}).welcome_tour is None
+    assert "welcome_tour" not in PrefsSettings.from_dict({}).to_dict()
+    assert "welcome_tour" in settings_sync.SYNCED["prefs"]
+    assert "prefs.welcome_tour" in settings_sync.LABELS
+
+
 def test_map_tour_false_survives_and_unset_is_omitted():
     from backend.config.settings import PrefsSettings
 

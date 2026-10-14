@@ -162,7 +162,7 @@ def _failed_label(reason: str) -> str:
     in CSS and carries the whole string in its tooltip.
     """
     if not reason:
-        return "failed earlier (no reason recorded) — Run ticket to retry"
+        return "failed earlier (no reason recorded) — Start to retry"
     return "failed earlier: " + " ".join(reason.split())
 
 
@@ -195,12 +195,9 @@ def skip_reasons(
 
     reasons: list[str] = []
     if ingest_state and story.state and story.state not in ingest_state:
-        reasons.append("not in an ingest state — won't auto-ingest")
+        reasons.append("not in an auto-start state")
     if ingest_labels and not has_ingest_label(story.labels, ingest_labels):
-        reasons.append(
-            "missing an ingest label (" + ", ".join(ingest_labels) + ")"
-            " — won't auto-ingest"
-        )
+        reasons.append("missing an auto-start label (" + ", ".join(ingest_labels) + ")")
     status = ledger.get(story.slug) or ledger.get(str(story.id))
     if status:
         if status == "failed":
@@ -208,18 +205,18 @@ def skip_reasons(
             label = _failed_label(f.get(story.slug) or f.get(str(story.id)) or "")
         else:
             label = {
-                "completed": "already ingested (recorded completed in the ledger)",
+                "completed": "already started before",
                 "in_flight": "a session for it is in flight",
-                "skipped": "skipped earlier (recorded in the ledger)",
-            }.get(status, f"already in the processed ledger ({status})")
+                "skipped": "skipped earlier",
+            }.get(status, f"already handled before ({status})")
         reasons.append(label)
     if story.slug in pending_ids:
-        reasons.append("queued for ingestion (pending)")
+        reasons.append("already queued to start")
     prefix = f"feature/{story.slug}/"
     if any(b.startswith(prefix) for b in branches):
         reasons.append("a feature branch for it already exists on the remote")
     if not AssigneeFilter(member_ids).is_assigned(story):
-        reasons.append("not assigned to the configured member id")
+        reasons.append("not assigned to you")
     return reasons
 
 
@@ -232,6 +229,7 @@ async def list_assigned_tickets() -> dict:
     token, network) are reported per-source instead of failing the panel."""
     from backend.ticket_ingestion.backfill import _get_existing_branches
     from backend.ticket_ingestion.providers import get_provider
+    from backend.ticket_ingestion.providers import provider_meta as _provider_meta
     from backend.ticket_ingestion import repo_routing as _routing
     from backend.ticket_ingestion.state import (
         load_pending_stories,
@@ -270,11 +268,14 @@ async def list_assigned_tickets() -> dict:
     branch_cache: dict[str, set] = {}
     for src in sources:
         source_key = src.id or src.provider
-        # The user's own label wins; the provider's is the fallback, and it is
-        # only reachable once the adapter constructs, so seed the key first.
+        # The user's own label wins; the adapter's is the fallback, and it is
+        # only reachable once the adapter constructs — so seed with the
+        # catalog's display name ("Shortcut"), never the raw id ("sc").
         source_labels[source_key] = (
-            getattr(src, "label", "") or ""
-        ).strip() or source_key
+            (getattr(src, "label", "") or "").strip()
+            or (_provider_meta(src.provider) or {}).get("label", "")
+            or source_key
+        )
         try:
             provider = get_provider(src)
             stories = await provider.search_assigned_all()
@@ -321,10 +322,16 @@ async def list_assigned_tickets() -> dict:
         # bucket names — tickets in any other bucket must not read as
         # "queued for auto ingestion".
         from backend.ticket_ingestion.providers.base import (
+            auto_start_waiting,
             ingest_label_list,
             ingests_any_assignee,
             workflow_state_list,
         )
+
+        # A source that auto-starts nothing yet (no state picked on a new
+        # source, or a typed state Test hasn't matched): every row says so,
+        # rather than "will auto-start" over a scan that never runs.
+        source_waiting = auto_start_waiting(src)
 
         state_filter = workflow_state_list(src)
         if not state_filter and getattr(src, "workflow_state_id", None) is not None:
@@ -379,6 +386,10 @@ async def list_assigned_tickets() -> dict:
                 failures=failures,
                 ingest_labels=ingest_label_list(src),
             )
+            if source_waiting:
+                reasons = [source_waiting] + [
+                    r for r in reasons if r != "not in an auto-start state"
+                ]
             claimed = _tracker.claimed_by_other(
                 story, src, me=claim_me, started_ids=started
             )
@@ -474,25 +485,68 @@ async def find_ticket(source: str, ticket_id: str):
     )
 
 
-def route_story(story, source: str, program: str = ""):
+def _source_cfg(source: str):
+    """The configured ticket source keyed ``source`` (its id, else provider)."""
+    return next(
+        (
+            s
+            for s in (_load_config().ticketing_sources or [])
+            if (s.id or s.provider) == source
+        ),
+        None,
+    )
+
+
+def resolve_repo_pick(source: str, repo: str) -> str:
+    """The URL of the repo a row picked (``POST /api/tickets/start`` ``repo``:
+    a URL or short name), checked against the source's own repos. ``""`` for
+    no pick, or for an unknown source (the ticket lookup 404s on its own).
+    Raises :class:`LaunchError` 400 for a one-repo source or a repo that isn't
+    one of the source's."""
+    from backend.ticket_ingestion.repo_routing import pick_target, repo_name, targets_of
+
+    if not repo:
+        return ""
+    src = _source_cfg(source)
+    if src is None:
+        return ""
+    targets = targets_of(src)
+    if len(targets) < 2:
+        raise LaunchError(
+            400, {"error": "this ticket source has one repo — there is no repo to pick"}
+        )
+    url = pick_target(src, repo)
+    if url is None:
+        raise LaunchError(
+            400,
+            {
+                "error": "repo must be one of this ticket source's repos: "
+                + ", ".join(repo_name(t.url) for t in targets)
+            },
+        )
+    return url
+
+
+def route_story(story, source: str, program: str = "", repo_url: str = ""):
     """Route ``story`` across its source's repos when that source has several
     (:func:`backend.ticket_ingestion.repo_routing.apply_route` — the same step
-    the pipeline takes before a launch). Returns the decision, or ``None`` for
-    a one-repo source or any failure (the ticket then stays on the source's
-    first repo). Blocking: it may ask the agent CLI."""
-    from backend.ticket_ingestion.repo_routing import apply_route, targets_of
+    the pipeline takes before a launch). ``repo_url`` — a repo picked on the
+    row (:func:`resolve_repo_pick`) — skips routing and pins that repo instead.
+    Returns the decision, or ``None`` for a one-repo source or any failure (the
+    ticket then stays on the source's first repo). Blocking: it may ask the
+    agent CLI."""
+    from backend.ticket_ingestion.repo_routing import (
+        apply_manual_route,
+        apply_route,
+        targets_of,
+    )
 
     try:
-        src = next(
-            (
-                s
-                for s in (_load_config().ticketing_sources or [])
-                if (s.id or s.provider) == source
-            ),
-            None,
-        )
+        src = _source_cfg(source)
         if src is None or len(targets_of(src)) < 2:
             return None
+        if repo_url:
+            return apply_manual_route(story, src, repo_url, state_dir=_REPO_ROOT)
         return apply_route(story, src, state_dir=_REPO_ROOT, program=program)
     except Exception as err:  # noqa: BLE001
         _logger.warning(
@@ -636,6 +690,7 @@ async def launch(
     extra_prompt: str = "",
     run_id: str = "",
     override_claim: bool = False,
+    repo: str = "",
 ) -> dict:
     """Start a coding session for one ticket and return the 202 body.
 
@@ -657,8 +712,11 @@ async def launch(
     * ``override_claim``: start it although the TRACKER says a teammate is on
       it (the owner's "Override"; the route decides who may ask). A paired
       device's claim is never overridable here.
+    * ``repo``: on a source with several repos, start in this one (URL or
+      short name) instead of routing — the Intake row's Repo pick.
 
-    Raises :class:`LaunchError` (404 unknown ticket / source, 409 a session
+    Raises :class:`LaunchError` (400 a ``repo`` the source doesn't have,
+    404 unknown ticket / source, 409 a session
     for it already exists, another of your devices has it, or the tracker
     says someone else is on it — ``claimed_by`` + ``override`` in the body —
     502 the tracker failed).
@@ -677,6 +735,8 @@ async def launch(
     agent_override = str(agent or "")
     effort_override = str(effort or "")
     depth_override = str(depth or "")
+    # Checked before anything is claimed, so a bad pick leaves no pending row.
+    repo_url = resolve_repo_pick(source, str(repo or "").strip())
     # Row first, provider fetch second (see the PR endpoint). The panel's
     # cached list is the title's source: ticket slugs are provider-defined
     # (Shortcut hardcodes sc-<id>), so deriving one here would be a second
@@ -799,7 +859,7 @@ async def launch(
             # needs first — it decides where the worktree is cut and what the
             # prompt says about the other repos. May ask the agent CLI, so off
             # the event loop; a one-repo source is untouched.
-            await asyncio.to_thread(route_story, story, source, program)
+            await asyncio.to_thread(route_story, story, source, program, repo_url)
             prompt = build_prompt(story)
             # A previous run of this ticket may have left a worktree holding the
             # branch: the session is long gone (nothing blocked the button) but

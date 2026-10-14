@@ -181,6 +181,7 @@ def test_notify_config_route_serves_rules():
         assert set(rule) == {
             "id",
             "label",
+            "description",
             "event",
             "old",
             "new",
@@ -192,11 +193,11 @@ def test_notify_config_route_serves_rules():
 
 
 def test_notify_default_on_and_opt_in_rules():
-    """Default-on rules (needs_input) start enabled; noisy opt-in rules
-    (session_idle, precommit_running) start disabled."""
+    """Default-on rules (needs_input, session_idle) start enabled; noisy
+    opt-in rules (precommit_running) start disabled."""
     rules = {r["id"]: r for r in client.get("/api/notify/config").json()["rules"]}
     assert rules["needs_input"]["enabled"] is True
-    assert rules["session_idle"]["enabled"] is False
+    assert rules["session_idle"]["enabled"] is True
     assert rules["precommit_running"]["enabled"] is False
     # The idle rule fires on a real turn boundary — NOT on the raw activity
     # flip, which is a chip colour that changes at the end of every turn;
@@ -217,16 +218,16 @@ def test_notify_opt_in_rule_toggles_on_and_off(tmp_path, monkeypatch):
     monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(tmp_path / "settings.json"))
     assert (
         client.post(
-            "/api/notify/rules/session_idle", json={"enabled": True}
+            "/api/notify/rules/precommit_running", json={"enabled": True}
         ).status_code
         == 200
     )
     rules = {r["id"]: r for r in client.get("/api/notify/config").json()["rules"]}
-    assert rules["session_idle"]["enabled"] is True
+    assert rules["precommit_running"]["enabled"] is True
     # And back off.
-    client.post("/api/notify/rules/session_idle", json={"enabled": False})
+    client.post("/api/notify/rules/precommit_running", json={"enabled": False})
     rules = {r["id"]: r for r in client.get("/api/notify/config").json()["rules"]}
-    assert rules["session_idle"]["enabled"] is False
+    assert rules["precommit_running"]["enabled"] is False
 
 
 def test_notify_unknown_rule_is_404():

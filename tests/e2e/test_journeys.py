@@ -118,11 +118,17 @@ def test_new_session(mf_server, page, open_app):
     skip = dialog.locator("#new-describe-skip")
     expect(skip).to_be_visible(timeout=10_000)
     skip.click()
+    folder = dialog.locator("#new-repo-path")
+    expect(folder).to_be_visible(timeout=10_000)
+    folder.fill(str(mf_server.repo))
+    # The name is optional (a blank one is named from the task), so it sits
+    # under More options: open it the way a user would to pick one.
+    advanced = dialog.locator("details#new-advanced")
+    if advanced.get_attribute("open") is None:
+        advanced.locator("summary").first.click()
     name = dialog.locator("#new-title")
     expect(name).to_be_visible(timeout=10_000)
     name.fill(title)
-    folder = dialog.locator("#new-repo-path")
-    folder.fill(str(mf_server.repo))
     expect(dialog.locator("#new-program")).to_have_value("claude")
 
     create = dialog.locator("#new-form button[type='submit']")
@@ -203,12 +209,15 @@ def test_connections(mf_server, page, open_app):
 
     rows = screen.locator(".conn-row")
     expect(rows.first).to_be_visible(timeout=45_000)
-    # Basic mode keeps all but the everyday rows in a collapsed Advanced fold,
-    # and a hidden row's inner_text is "": open it so every row is checked.
-    fold = screen.locator("details#connections-advanced")
-    if fold.count() and fold.get_attribute("open") is None:
-        fold.locator("summary").click()
-        expect(fold).to_have_attribute("open", "")
+    # Rows past the everyday ones sit in collapsed folds ("Other agents",
+    # Advanced), and a hidden row's inner_text is "": open every fold so every
+    # row is checked.
+    folds = screen.locator("details")
+    for k in range(folds.count()):
+        fold = folds.nth(k)
+        if fold.get_attribute("open") is None and fold.locator("summary").is_visible():
+            fold.locator("summary").click()
+            expect(fold).to_have_attribute("open", "")
     n = rows.count()
     assert n >= 1
     seen = []
@@ -219,7 +228,9 @@ def test_connections(mf_server, page, open_app):
         seen.append((name, status))
         assert name, "connection row %d has no name" % i
         assert status, "connection %r has no status word" % name
-    assert any(name.lower().startswith("coding") for name, _ in seen), seen
+    # The agent rows: "Agent · Claude Code" (the server's own name still reads
+    # "Coding agent · …" on older builds).
+    assert any(name.lower().startswith(("agent ·", "coding")) for name, _ in seen), seen
 
 
 # The Ctrl+W / Delete guard (frontend/src/lib/keymap.ts endShortcutAllowed)

@@ -1,0 +1,79 @@
+/** Settings → Notifications' groups and the words a rule row shows, kept
+ * apart from the screen so tests can read them without a React tree.
+ *
+ * The server's rules (backend/web/addons/notify.py) carry a plain `label` and
+ * a one-line `description` for this screen. Their `title`/`body` are the
+ * NOTIFICATION's text — templates with `{session}`/`{detail}` filled in when
+ * one fires — and read as a broken product as a description ("A team run
+ * needs you — {detail}"), so a row never shows them unless they are a
+ * finished sentence (a rule from before descriptions existed).
+ *
+ * Rule ids are the stable keys (POST /api/notify/rules/<id>, muted_rules /
+ * enabled_rules in settings.json). */
+
+export interface RuleCopy {
+  label: string;
+  desc: string;
+}
+
+/** The groups, in screen order. The first three are what a new user cares
+ * about; "more" (team runs, pre-commit hooks, Verify, zones) is folded. */
+export const RULE_GROUPS: ReadonlyArray<{ key: string; title: string; ids: readonly string[] }> = [
+  { key: "needs", title: "Needs you", ids: ["needs_input", "session_idle", "session_offline", "device_join"] },
+  { key: "prs", title: "Pull requests", ids: ["pr_approved", "pr_closed", "pr_changes_requested"] },
+  { key: "usage", title: "Usage & cost", ids: ["usage_limit", "usage_restored", "budget_exceeded"] },
+];
+
+/** Where a rule id that is in no named group goes. */
+export const MORE_GROUP = "more";
+
+export interface RuleLike {
+  id: string;
+  label?: string;
+  /** The server's one plain line for this screen. */
+  description?: string;
+  title?: string;
+  event?: string;
+  body?: string;
+  enabled?: boolean;
+}
+
+/** Whether `text` still carries a `{placeholder}` — template text, never a
+ * description. */
+export function hasPlaceholder(text: string | undefined | null): boolean {
+  return /\{[a-z_]+\}/i.test(text || "");
+}
+
+/** The words a rule row shows: the server's label and description; failing
+ * those, its title / body only when they are finished sentences (an id is
+ * never shown as words). */
+export function ruleCopy(rule: RuleLike): RuleCopy {
+  const label = [rule.label, rule.title].find((t) => t && !hasPlaceholder(t)) || "Another event";
+  const desc = [rule.description, rule.body].find((t) => t && !hasPlaceholder(t)) || "";
+  return { label, desc };
+}
+
+/** The rule's group key ("needs" | "prs" | "usage" | "more"). */
+export function ruleGroup(id: string): string {
+  return RULE_GROUPS.find((g) => g.ids.includes(id))?.key || MORE_GROUP;
+}
+
+/** Rules sorted into the named groups (in the groups' own order) plus the
+ * folded rest (in the server's order). Empty groups are dropped. */
+export function groupRules<T extends RuleLike>(
+  rules: readonly T[]
+): { groups: Array<{ key: string; title: string; rules: T[] }>; more: T[] } {
+  const byId = new Map(rules.map((r) => [r.id, r]));
+  const groups = RULE_GROUPS.map((g) => ({
+    key: g.key,
+    title: g.title,
+    rules: g.ids.map((id) => byId.get(id)).filter((r): r is T => !!r),
+  })).filter((g) => g.rules.length);
+  const more = rules.filter((r) => ruleGroup(r.id) === MORE_GROUP);
+  return { groups, more };
+}
+
+/** The plain one-liner under "Where alerts go" when nothing but the bell is
+ * on — the reason the switches below seem to do nothing. */
+export const ONLY_BELL_HINT =
+  "Right now alerts only show in the bell. Turn on desktop or phone alerts to hear about them when you're away.";

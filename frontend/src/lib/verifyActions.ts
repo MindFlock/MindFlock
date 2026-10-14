@@ -382,6 +382,38 @@ export async function addPlanStep(
  * 202 means a model call is now running for up to three minutes. Say so: the
  * plan appears immediately as "writing the plan", and a user who was not told
  * would read that quiet row as the button having failed. */
+/** A repo Verify can write a checklist in by branch (GET /api/test-plans/repos). */
+export interface VerifyRepo {
+  name: string;
+  root: string;
+}
+
+export async function fetchVerifyRepos(): Promise<VerifyRepo[]> {
+  const r = await api<{ repos?: VerifyRepo[] }>("/api/test-plans/repos");
+  return Array.isArray(r?.repos) ? r.repos : [];
+}
+
+/** "Ask the agent for a checklist" for a BRANCH no session has been on
+ * (New checklist → Another branch…). Same answers as `writePlanFor`; resolves
+ * whether the server took it, so the form can clear. */
+export async function writePlanForBranch(repo: VerifyRepo, branch: string): Promise<boolean> {
+  try {
+    const r = await api<{ plan: string; existing: boolean }>("/api/test-plans/branch", {
+      json: { repo: repo.root, branch },
+    });
+    toast(
+      r.existing
+        ? branch + " already has a checklist — it's in Verify"
+        : "Asked the agent for a checklist for " + branch + " — it'll appear in Verify (up to three minutes)"
+    );
+    refreshTestPlans();
+    return true;
+  } catch (err) {
+    errorPop("Couldn't write a checklist", errMsg(err));
+    return false;
+  }
+}
+
 export async function writePlanFor(target: string): Promise<void> {
   try {
     const r = await api<{ plan: string; existing: boolean }>(
@@ -397,11 +429,11 @@ export async function writePlanFor(target: string): Promise<void> {
       r.existing
         ? (r.plan && r.plan !== target
             ? target + "'s branch already has a checklist — it's under " + r.plan
-            : target + " already has a checklist") + " — it is in the list below"
+            : target + " already has a checklist") + " — it's in Verify"
         // "up to three minutes", matching the row this press creates and the
         // server's own budget. It used to promise "a minute" 200px above a row
         // saying three, which makes the faster of the two promises a broken one.
-        : "Writing a checklist for " + target + " — up to three minutes"
+        : "Asked the agent for a checklist for " + target + " — it'll appear in Verify (up to three minutes)"
     );
     refreshTestPlans();
   } catch (err) {

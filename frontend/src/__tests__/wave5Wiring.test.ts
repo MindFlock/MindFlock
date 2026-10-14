@@ -16,7 +16,7 @@
  * routes the dialog calls stay there. Source helpers: sourceText.ts. */
 
 import { describe, expect, it, vi } from "vitest";
-import { KEYMAP } from "../lib/keymap";
+import { KEYMAP, shortcutLabels } from "../lib/keymap";
 import { PR_REMEDY } from "../lib/sessionActions";
 import { backdropPress } from "../components/Modal";
 import { blockFrom, code, codeFilesWith, css, squash } from "./sourceText";
@@ -48,7 +48,9 @@ describe("L5 → keymap era: palette on Ctrl+P, Ctrl+K chords", () => {
   });
 
   it("the footer button advertises the always-global binding", () => {
-    expect(code("components/TopBar.tsx")).toContain("Command palette — Ctrl+P / ⌘P");
+    // Read from the live keymap (rebinds included), so it can't drift.
+    expect(code("components/TopBar.tsx")).toContain('"Command palette" + keys("palette")');
+    expect(shortcutLabels("palette")).toContain("Ctrl+P");
   });
 });
 
@@ -92,7 +94,10 @@ describe("L7 — missing-workspace row/pane treatment", () => {
     expect(fnBody("lib/sessionActions.ts", "async function cleanupMissing")).toContain('{ method: "DELETE" }');
     const row = code("components/sidebar/SidebarRow.tsx");
     expect(row).toContain("cleanupMissing");
-    expect(row).toContain("Delete — remove session");
+    // The menu (row ⋯ and pane ⋯) offers the one Delete for a gone folder.
+    const menu = code("lib/sessionMenu.ts");
+    expect(menu).toContain("Delete — remove session");
+    expect(menu).toContain("run: () => cleanupMissing(title)");
   });
 
   it("swaps the pane for a placeholder with the same action; no terminal", () => {
@@ -234,7 +239,7 @@ describe("ssh-friendly-github — the GitHub CLI is optional in every UI surface
     // The welcome tour leads with the token; `gh auth login` is no longer the
     // onboarding's concrete instruction.
     expect(codeFilesWith("gh auth login")).toEqual([]);
-    expect(code("components/setup/SetupChecklist.tsx")).toContain("That token is the whole setup");
+    expect(code("components/setup/SetupChecklist.tsx")).toContain("all MindFlock needs to open and merge PRs");
   });
 });
 

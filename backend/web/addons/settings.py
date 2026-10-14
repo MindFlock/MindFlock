@@ -47,6 +47,111 @@ _SECRET_FIELDS = {
 _MASK = SECRET_MASK  # the one sentinel, defined in addons/base.py
 
 
+# --------------------------------------------------------------------------- #
+# Where worktrees live (Settings → Workspace)
+# --------------------------------------------------------------------------- #
+#: What a blank ``repository.workspace_dir`` means to the ticket pipeline.
+_WORKSPACE_DEFAULT = "./workspaces"
+
+
+def _nearest_existing(path: Path) -> Optional[Path]:
+    for p in (path, *path.parents):
+        if p.exists():
+            return p
+    return None
+
+
+def _folder_state(path: Path) -> Tuple[str, str]:
+    """``(state, warning)`` for a folder MindFlock will write checkouts into:
+    ``ok`` (exists, writable), ``create`` (missing, but its nearest existing
+    parent is writable — MindFlock makes it), ``not_dir``, ``not_writable``."""
+    if path.exists():
+        if not path.is_dir():
+            return "not_dir", "That's a file, not a folder."
+        if not os.access(path, os.W_OK | os.X_OK):
+            return "not_writable", "MindFlock can't write in this folder."
+        return "ok", ""
+    parent = _nearest_existing(path.parent)
+    if (
+        parent is None
+        or not parent.is_dir()
+        or not os.access(parent, os.W_OK | os.X_OK)
+    ):
+        return (
+            "not_writable",
+            "This folder doesn't exist and MindFlock can't create it (%s isn't writable)."
+            % (parent or path.anchor or "/"),
+        )
+    return (
+        "create",
+        "This folder doesn't exist yet. MindFlock creates it for the first session.",
+    )
+
+
+def workspace_paths(typed: Optional[str] = None) -> dict:
+    """Where every session's copy of the repo lives, as absolute paths.
+
+    * ``sessions_dir`` — sessions you start on a local repo: always
+      ``<config dir>/worktrees`` (:func:`backend.session.git.worktree.get_worktree_directory`);
+    * ``tickets_dir`` — ticket/PR sessions and fresh clones:
+      ``repository.workspace_dir`` (``typed`` when given — the field being
+      edited — else the saved value), a relative one anchored where the ticket
+      pipeline runs (:mod:`backend.web.core.pipeline_root`), ``~`` expanded.
+
+    ``tickets_state``/``tickets_warning`` say whether that folder exists and is
+    writable (:func:`_folder_state`); ``env_override`` names an environment
+    variable that wins over the field."""
+    from backend.session.git.worktree import get_worktree_directory
+    from backend.web.core import pipeline_root
+
+    sessions = Path(get_worktree_directory()).expanduser()
+    env = (os.environ.get("MINDFLOCK_WORKSPACE_DIR") or "").strip()
+    if typed is not None:
+        raw = typed.strip()
+    else:
+        try:
+            raw = (
+                settings_store.load_settings().repository.workspace_dir or ""
+            ).strip()
+        except Exception:  # noqa: BLE001 — an unreadable store reads as unset
+            raw = ""
+    value = env or raw or _WORKSPACE_DEFAULT
+    tickets = Path(value).expanduser()
+    if not tickets.is_absolute():
+        try:
+            root = pipeline_root.resolve_repo_root(__file__)
+        except Exception:  # noqa: BLE001
+            root = Path.cwd()
+        tickets = root / tickets
+    tickets = Path(os.path.normpath(str(tickets)))
+    state, warning = _folder_state(tickets)
+    return {
+        "sessions_dir": str(sessions),
+        "tickets_dir": str(tickets),
+        "tickets_default": not (env or raw),
+        "tickets_state": state,
+        "tickets_warning": warning,
+        "env_override": "MINDFLOCK_WORKSPACE_DIR" if env else "",
+    }
+
+
+def _expand_workspace_dir(payload: dict) -> dict:
+    """A typed ``~/…`` workspace folder is stored expanded: the ticket pipeline
+    reads ``repository.workspace_dir`` as a plain path, so a literal ``~``
+    would become a folder named ``~`` under its directory. (The field is
+    machine-local — never synced — so this machine's home is the right one.)"""
+    repo_in = payload.get("repository")
+    if not isinstance(repo_in, dict):
+        return payload
+    raw = repo_in.get("workspace_dir")
+    if not isinstance(raw, str) or not raw.strip().startswith("~"):
+        return payload
+    return {
+        **payload,
+        "repository": {**repo_in, "workspace_dir": os.path.expanduser(raw.strip())},
+    }
+
+
 def _mask_ticketing(d: dict) -> None:
     """Mask the api_token of every ticketing source in-place."""
     tk = d.get("ticketing")
@@ -894,6 +999,13 @@ class SettingsAddon(Addon):
         def get_settings() -> JSONResponse:
             return JSONResponse({"settings": _masked_view()})
 
+        @router.get("/settings/workspace-paths")
+        def get_workspace_paths(dir: Optional[str] = None) -> JSONResponse:
+            """Settings → Workspace's answer to "where do my worktrees live?":
+            :func:`workspace_paths`, for ``dir`` (the folder being typed) or the
+            saved one."""
+            return JSONResponse(workspace_paths(dir))
+
         @router.get("/settings/auth-token")
         def get_auth_token(request: Request) -> JSONResponse:
             """This device's access token in the clear — what another MindFlock
@@ -1337,6 +1449,7 @@ class SettingsAddon(Addon):
                     )
                 payload = {**payload, "general": {**gen_in, "shared_link": name}}
             shared_before = shared_link.configured_name() if watch_shared else None
+            payload = _expand_workspace_dir(payload)
             try:
                 wrote = _apply_post(payload)
             except settings_store.SettingsUnreadable:

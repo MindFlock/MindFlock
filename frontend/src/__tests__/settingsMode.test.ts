@@ -138,11 +138,12 @@ describe("deep links to an advanced screen", () => {
     ["tailnet-trust", "devices"],
     ["your-phone", "mobile"],
   ] as const) {
-    it(`${target} opens ${key} in basic mode, under an "Advanced" heading`, () => {
+    it(`${target} opens ${key} in basic mode, last, under an "Advanced" heading`, () => {
       const { items, headings, active, html } = renderNav(target);
       expect(active).toBe(key);
-      // The basic six plus the linked screen, in its usual place.
-      expect(items).toEqual([...BASIC, key].sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b)));
+      // The basic six in order, then the linked screen LAST — so its
+      // "Advanced" heading never sits over Workspace or Appearance.
+      expect(items).toEqual([...[...BASIC].sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b)), key]);
       expect(headings).toEqual(["Advanced"]);
       // The screen itself is the one rendered.
       expect(html).toMatch(new RegExp('class="set-screen active" data-screen="' + key + '"'));
@@ -204,11 +205,15 @@ describe("navScreens / navHeading", () => {
 describe("advanced controls on basic screens are folded", () => {
   const folds: Array<[string, string, RegExp]> = [
     // Phone push (ntfy) — the phone, during basic use.
-    ["screens/Notifications.tsx", "notif-advanced", /<AdvancedFold id="notif-advanced">\s*<Ntfy \/>/],
+    // Optional, not expert: these two stay on the basic screen, folded.
+    ["screens/Notifications.tsx", "notif-advanced", /<AdvancedFold id="notif-advanced" summary="Phone alerts \(ntfy\)" basic>\s*<Ntfy /],
+    ["screens/Notifications.tsx", "notif-more-events", /<AdvancedFold\s+id="notif-more-events"\s+basic/],
     ["screens/CodingCli.tsx", "coding-advanced", /<AdvancedFold id="coding-advanced">\s*<WindowRefresh \/>/],
     ["screens/General.tsx", "general-advanced", /<AdvancedFold id="general-advanced">[\s\S]*window_budget_usd[\s\S]*<ScrollSpeedRow \/>/],
     ["screens/Workspace.tsx", "workspace-advanced", /<AdvancedFold id="workspace-advanced">[\s\S]*live_branch[\s\S]*fasttrack_depth[\s\S]*precommit_retry_hooks/],
-    ["screens/Connections.tsx", "connections-advanced", /<AdvancedFold id="connections-advanced">\{more\.map\(renderGroup\)\}/],
+    ["screens/Connections.tsx", "connections-advanced", /<AdvancedFold id="connections-advanced" summary="More connections">\s*\{more\.map\(renderGroup\)\}/],
+    // "Other agents on this computer" is a plain fold on purpose: visible
+    // (closed) in basic mode too — agentJourney.test.ts pins it.
   ];
   for (const [file, id, shape] of folds) {
     it(file + " folds its advanced part", () => {
@@ -225,10 +230,19 @@ describe("advanced controls on basic screens are folded", () => {
       expect(isBasicKind(k), String(k)).toBe(false);
   });
 
-  it("the fold is closed in basic mode and open in advanced mode", () => {
+  it("the fold is absent in basic mode (unless `basic`) and open in advanced mode", () => {
     const mode = src("components/settings/settingsMode.tsx");
     expect(mode).toContain("const [open, setOpen] = useState(advanced);");
     expect(mode).toContain("useEffect(() => setOpen(advanced), [advanced]);");
+    // Round 4: one advanced mechanism — basic mode renders no fold at all.
+    expect(mode).toContain("if (!advanced && !basic) return null;");
+  });
+
+  it("only Notifications' optional folds opt back into basic mode", () => {
+    for (const f of ["General", "Workspace", "CodingCli", "Connections"]) {
+      const text = src("components/settings/screens/" + f + ".tsx");
+      expect(text, f).not.toMatch(/<AdvancedFold[^>]*\sbasic[\s>]/);
+    }
   });
 
   it("the basic screens don't tell a newcomer about other devices", () => {

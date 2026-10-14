@@ -581,7 +581,11 @@ export function nextStep(inst: Partial<Instance>): NextStep | null {
   // always keeps working, so you can still drive a step yourself at any time.
   switch (guidedStage(inst)) {
     case "agent":
-      return { label: "Commit…", run: () => commitSession(title) };
+      return {
+        label: "Commit…",
+        title: "Commit this session's changes — you check the message first. Next: Push, then Open PR",
+        run: () => commitSession(title),
+      };
     case "interrupt":
       return { label: "Re-commit", run: () => commitSession(title) };
     case "committed":

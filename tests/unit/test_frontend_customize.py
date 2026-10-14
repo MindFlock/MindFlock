@@ -87,7 +87,8 @@ def test_the_top_bar_has_no_outbox_prompts_or_recent_and_keeps_the_palette_title
     src = _code("components/TopBar.tsx")
     for gone in ('id="outbox-btn"', 'id="prompts-btn"', 'id="recent-btn"'):
         assert gone not in src, gone
-    assert 'title="Command palette — Ctrl+P / ⌘P"' in src
+    # The shortcut comes from the live keymap (rebinds included).
+    assert 'title={"Command palette" + keys("palette")}' in src
     assert 'aria-label="Open command palette"' in src
     assert src.index('id="settings-btn"') < src.index('id="palette-btn"')
 
@@ -100,7 +101,10 @@ def test_verify_always_shows_in_the_top_bar():
     assert "showVerify" not in src
     assert "useVerifySettings" not in src
     assert "mf_tb_verify" not in src
-    assert '{due > 0 && <span className="tb-count">{due}</span>}' in src
+    assert (
+        '{due > 0 && <span className={"tb-count" + (failing > 0 ? " is-failing" : "")}>{due}</span>}'
+        in src
+    )
     assert (
         src.index('id="intake-btn"')
         < src.index('id="verify-btn"')
@@ -230,11 +234,11 @@ def test_the_palette_lists_commands_before_focus_rows():
     assert at == sorted(at), order
     for label in (
         'label: "Prompts…", hint: "manage saved prompts"',
-        'label: "Assistant agent file…"',
+        'label: "Assistant instructions (agent file)…"',
         'label: "Recently closed…", hint: "reopen or delete closed sessions"',
         '  "pr",\n',
         '  "merge",\n',
-        'label: "Verify — check what was pushed"',
+        'label: "Verify — " + VERIFY_BLURB',
         'label: "Customize…", hint: "choose sidebar bars"',
     ):
         assert label in src, label
@@ -323,7 +327,9 @@ def test_prompts_bar_is_one_row_with_the_prompts_in_a_menu():
 def test_new_page_two_templates_strip_says_what_a_template_is():
     # The strip moved out of NewSessionDialog.tsx into its own component.
     src = _src("components/dialogs/newSession/TemplatesStrip.tsx")
-    assert (
-        '<span title="Saved New-session setups — one list on every device">Templates</span>'
-        in src
-    )
+    # Round 4: the head says what each part of a chip does (▶ runs, ⏰
+    # schedules, the name fills the form), and the door to the dialog reads
+    # "All templates…" rather than an edit-only "Manage…".
+    assert '<span title="Saved session setups — one list on every device">' in src
+    assert "— ▶ runs one now · ⏰ schedules it · its name fills the form" in src
+    assert "All templates…" in src

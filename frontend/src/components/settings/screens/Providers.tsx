@@ -1,8 +1,8 @@
-/** Settings → Agent providers: one row per agent CLI MindFlock knows (built-in
- * and custom) — installed (with the resolved path), signed in (from the status
- * API's login evidence) with a **Sign in** button that opens the CLI's own
- * login in an in-app terminal (dialogs/AgentSignIn), the install command when
- * the CLI is missing, and a **Binary path** field for every provider that
+/** Settings → Custom agents (key "providers"; was "Agent providers"): one row per agent CLI MindFlock knows (built-in
+ * and custom) — its agent card (components/setup/AgentCard: the same status
+ * and single Install → Sign in → Test action as Connections, Settings →
+ * Agents and the Setup checklist, so no screen sends you to another for the
+ * same thing), where it was found, and a **Binary path** field for every provider that
  * writes this device's `coding_cli.binary_paths[name]` (never synced: a path
  * is about this machine). A custom TOML that failed to load is a red row with
  * the file and the parse error, instead of a provider that silently isn't
@@ -13,11 +13,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../../api/client";
 import type { ProviderStatus, ProvidersStatusResponse } from "../../../api/types";
-import { copyText } from "../../../lib/clipboard";
+import { agentName } from "../../../lib/agentNames";
 import { providerRows, type ProviderRow, type Row } from "../../../lib/providerRows";
 import { toast } from "../../../lib/toast";
 import { refreshProviders } from "../../../state/queries";
-import { AgentSignIn } from "../../dialogs/AgentSignIn";
+import { AgentCard } from "../../setup/AgentCard";
+import { notifyConnectionsChanged } from "./Connections";
 import { joinTokens, tokenize } from "../../dialogs/FlagChips";
 import type { ScreenProps } from "../SettingsDialog";
 
@@ -86,6 +87,8 @@ function BinaryPathField({
       setWarning(r?.warning || "");
       toast(path ? "Binary path saved for " + row.name : "Binary path cleared for " + row.name);
       if (r?.status) onSaved(r.status);
+      // A new path can flip installed / signed in: every agent card re-reads.
+      notifyConnectionsChanged();
       window.reloadProviderPicker?.();
       void refreshProviders();
     } catch (err) {
@@ -119,7 +122,7 @@ function BinaryPathField({
   );
 }
 
-export function Providers(_: ScreenProps) {
+export function Providers({ gotoScreen }: ScreenProps) {
   const [statuses, setStatuses] = useState<ProviderStatus[]>([]);
   const [loadErrors, setLoadErrors] = useState<ProvidersStatusResponse["errors"]>([]);
   const [managed, setManaged] = useState<Record<string, ManagedProvider>>({});
@@ -166,7 +169,7 @@ export function Providers(_: ScreenProps) {
   const del = async (name: string) => {
     try {
       await api("/api/providers/" + encodeURIComponent(name), { method: "DELETE" });
-      toast("Removed provider " + name);
+      toast("Removed agent " + name);
       load();
       window.reloadProviderPicker?.();
       void refreshProviders();
@@ -216,7 +219,7 @@ export function Providers(_: ScreenProps) {
             json: body,
           })
         : api<{ warning?: string }>("/api/providers", { json: body }));
-      toast((editing ? "Saved provider " : "Added provider ") + body.name);
+      toast((editing ? "Saved agent " : "Added agent ") + body.name);
       // Saved either way — a launch warning is advice, not a failed write.
       setWarning(res?.warning || "");
       if (!res?.warning) {
@@ -234,10 +237,6 @@ export function Providers(_: ScreenProps) {
   const set = (k: FormKey) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
 
-  const copyInstall = async (cmd: string) => {
-    if (await copyText(cmd)) toast("Copied install command");
-  };
-
   /** One row's fresh status (after a binary-path save), in place. */
   const replaceStatus = (fresh: ProviderStatus) =>
     setStatuses((list) => list.map((p) => (p.name === fresh.name ? fresh : p)));
@@ -246,10 +245,10 @@ export function Providers(_: ScreenProps) {
 
   return (
     <>
-      <h3 className="set-section-title">Agent providers</h3>
+      <h3 className="set-section-title">Custom agents</h3>
       <p className="set-hint">
-        Agent CLIs new sessions can launch. Install a CLI to make it available,
-        then sign in here — or point MindFlock at a build that isn't on PATH.
+        Every agent MindFlock knows and where it runs from. Point one at a build MindFlock can't
+        find, or add an agent MindFlock doesn't ship.
       </p>
 
       <div className="prov-conn-list">
@@ -274,45 +273,19 @@ export function Providers(_: ScreenProps) {
           return (
             <div className="prov-conn" key={row.name} data-provider={row.name}>
               <div className="prov-conn-head">
-                <span className="prov-name">{row.name}</span>
+                <span className="prov-name">{agentName(row.name)}</span>
                 {row.isDefault && <span className="prov-badge">default</span>}
                 {mgr?.source && <span className="prov-badge prov-badge-src">{mgr.source}</span>}
-                <span
-                  className={"prov-dot " + (row.installed ? "ok" : "bad")}
-                  title={row.installTitle}
-                >
-                  {row.installLabel}
-                </span>
-                {row.signInLabel && (
-                  <span
-                    className={
-                      "prov-dot prov-signin " +
-                      (row.signIn === "signed-in" ? "ok" : row.signIn === "not-signed-in" ? "bad" : "unknown")
-                    }
-                    title={row.signInDetail}
-                  >
-                    {row.signInLabel}
-                  </span>
-                )}
               </div>
+
+              {/* Status and the one next action: the same card as everywhere. */}
+              <AgentCard provider={row.name} here="providers" gotoScreen={gotoScreen} onChanged={() => void load()} />
 
               {/* Where the CLI was found — the path the launcher will run. */}
               {row.installed && row.installTitle && (
                 <p className="set-hint prov-path">
-                  <code>{row.installTitle}</code>
-                  {row.signIn === "signed-in" && row.signInDetail && (
-                    <> · signed in: {row.signInDetail}</>
-                  )}
+                  Runs <code>{row.installTitle}</code>
                 </p>
-              )}
-
-              {row.installHint && (
-                <div className="prov-install">
-                  <code>{row.installHint}</code>
-                  <button type="button" onClick={() => copyInstall(row.installHint)}>
-                    Copy
-                  </button>
-                </div>
               )}
 
               {/* Why a custom CLI can't be found — usually a shell alias, which
@@ -321,21 +294,14 @@ export function Providers(_: ScreenProps) {
 
               <BinaryPathField row={row} onSaved={replaceStatus} />
 
-              {(row.canSignIn || mgr?.editable) && (
+              {mgr?.editable && (
                 <div className="prov-conn-actions">
-                  {row.canSignIn && (
-                    <AgentSignIn provider={row.name} label="Sign in" onDone={() => void load()} />
-                  )}
-                  {mgr?.editable && (
-                    <>
-                      <button type="button" onClick={() => edit(mgr)}>
-                        Edit
-                      </button>
-                      <button type="button" onClick={() => del(row.name)}>
-                        Delete
-                      </button>
-                    </>
-                  )}
+                  <button type="button" onClick={() => edit(mgr)}>
+                    Edit
+                  </button>
+                  <button type="button" onClick={() => del(row.name)}>
+                    Delete
+                  </button>
                 </div>
               )}
             </div>
@@ -344,7 +310,7 @@ export function Providers(_: ScreenProps) {
       </div>
 
       <details id="prov-add" open={!!editing}>
-        <summary>{editing ? "Edit " + editing : "+ Add a custom provider"}</summary>
+        <summary>{editing ? "Edit " + editing : "+ Add a custom agent"}</summary>
         <div className="prov-form">
           {/* Renaming would orphan sessions already pointing at the old name, so
               the name is fixed once saved — delete and re-add to rename. */}
@@ -356,7 +322,7 @@ export function Providers(_: ScreenProps) {
           <input type="text" id="prov-new-skip" placeholder="skip-perms flag (e.g. --yolo)" autoComplete="off" value={form.skip} onChange={set("skip")} />
           <div className="prov-form-actions">
             <button type="button" id="prov-add-btn" onClick={save}>
-              {editing ? "Save changes" : "Add provider"}
+              {editing ? "Save changes" : "Add agent"}
             </button>
             {editing && (
               <button type="button" id="prov-cancel-btn" onClick={cancelEdit}>

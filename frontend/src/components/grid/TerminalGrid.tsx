@@ -5,7 +5,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useConfig, useInstances } from "../../state/queries";
-import { windowKey, useUi } from "../../state/store";
+import { effectiveViewMode, windowKey, useUi } from "../../state/store";
 import { releaseTerms } from "../../lib/terminals";
 import { dropActivity } from "../../lib/stage";
 import {
@@ -77,11 +77,11 @@ export function TerminalGrid({ specialPanes }: { specialPanes: SpecialPaneDesc[]
     () =>
       computeVisibleSlots(workable, [...specialByKey.keys()], {
         hidden: ui.hidden,
-        viewMode: ui.viewMode,
+        viewMode: effectiveViewMode(ui),
         mru: ui.mru,
         order: ui.order,
       }),
-    [workable, specialByKey, ui.hidden, ui.viewMode, ui.mru, ui.order]
+    [workable, specialByKey, ui.hidden, ui.viewMode, ui.narrow, ui.mru, ui.order]
   );
   const byTitle = useMemo(() => {
     const all = new Map(workable.map((i) => [i.title, i]));

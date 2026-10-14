@@ -336,6 +336,13 @@ def _payload(tpl: dict, title: str) -> dict:
     for f in ("provisioned", "in_place", "init_repo"):
         if tpl.get(f):
             body[f] = True
+    # Autopilot commits for THIS session, so it never drives a checkout other
+    # sessions share — the New dialog's rule: with one, it gets a worktree.
+    try:
+        if normalize_autopilot(tpl.get("autopilot")):
+            body.pop("in_place", None)
+    except ValueError:
+        pass
     return body
 
 
@@ -653,9 +660,10 @@ def status_for(templates_list: List[dict], now: Optional[float] = None) -> dict:
             continue
         rec = runs.get(key) or {}
         sched = schedule_or_none(tpl.get("schedule"))
+        nxt = next_due(now, sched) if sched else None
         hist = rec.get("history") if isinstance(rec.get("history"), list) else []
         row = {
-            "next_at": next_due(now, sched) if sched else None,
+            "next_at": nxt,
             "last_at": rec.get("last_run_at"),
             "last_session": rec.get("last_session") or "",
             "last_trigger": rec.get("last_trigger") or "",
@@ -671,12 +679,25 @@ def status_for(templates_list: List[dict], now: Optional[float] = None) -> dict:
             row["last_skip"] = rec.get("last_skip") or ""
             row["last_skip_at"] = skip_at
         if any(v for v in row.values()):
+            # The schedule's "at" is THIS device's local time: name the zone
+            # on the row the card reads (EDT, CET…), as of the next run.
+            if sched:
+                row["tz"] = time_zone(nxt or now)
             out[key] = row
     return {
         "runs": out,
         "runs_here": automation_here(),
         "runs_on": automation_elsewhere(),
+        "tz": time_zone(now),
     }
+
+
+def time_zone(at: float) -> str:
+    """This device's time-zone abbreviation at ``at`` ("EDT"), "" if unknown."""
+    try:
+        return time.strftime("%Z", time.localtime(at)) or ""
+    except (OverflowError, OSError, ValueError):
+        return ""
 
 
 def preview(expr: str, now: Optional[float] = None, count: int = 3) -> dict:

@@ -402,7 +402,10 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
    owned by `member_id` and updated since the last run (optionally restricted to
    `workflow_state_id`). Search results lack descriptions, so each story is
    re-fetched by id. Retries with exponential backoff; a failed scan never kills
-   the pipeline.
+   the pipeline. A source that is *waiting for a filter*
+   (`providers.base.auto_start_waiting`: `needs_filter` set with no state or
+   label, or only typed state names Test hasn't matched) is not searched at
+   all, and its checkpoint stays put until it has one.
 
    **Archived work is excluded, at two levels**, so the pipeline sees what
    Shortcut's own boards show. `/stories/search` returns archived stories, so
@@ -559,8 +562,13 @@ is stored exactly as before.
 With two or more, each ticket is **routed** before it launches
 (`backend/ticket_ingestion/repo_routing.py`), on the pipeline path
 (`PipelineOrchestrator._route_story`, right after the claim checks) and on a
-forced start alike (`ticket_start.route_story`, before the prompt is built). The
-order, cheapest and most predictable first:
+forced start alike (`ticket_start.route_story`, before the prompt is built). A
+repo **picked on the Intake row** (Options → **Repo**, sent as `repo` on
+`POST /api/tickets/start`) skips routing for that start and is recorded as
+`{repos: [repo], reason: "picked on the row", method: "manual"}`; a recorded
+manual pick then outranks everything below, on both paths, while the repo is
+still one of the source's. Otherwise the order, cheapest and most predictable
+first:
 
 1. **Labels.** A ticket label that names a repo — its full name
    (`vnext-frontend`), a word of its name no other repo of the source shares
@@ -732,7 +740,7 @@ sources.
 Two exclusions in that roll-up are deliberate, and both are about *work the
 pipeline has already taken*:
 
-- **Items already accepted.** `queued for ingestion (pending)` is a skip
+- **Items already accepted.** `already queued to start` is a skip
   *reason*, so an accepted item is no longer `eligible`; it has left the queue
   and become a session, which is where you watch it.
 - **Items that already have a session.** Ticket eligibility rules these out
@@ -808,8 +816,8 @@ hand-editing `state.json`.
   `Dropped pending ticket … no longer exists`) rather than retried, and those
   tickets come back only once they are updated again.
 - **The Intake panel's skip reasons use their own state comparison.** A pending
-  ticket moved out of the ingest state still reads *queued for ingestion
-  (pending)* there, although the pipeline will drop it at dequeue or restart
+  ticket moved out of the ingest state still reads *already queued to
+  start* there, although the pipeline will drop it at dequeue or restart
   rather than launch it.
 - Only review-thread comments are actioned on PRs; top-level issue comments are
   fetched by dead code and ignored.

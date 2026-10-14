@@ -44,18 +44,28 @@ describe("screens and panels declare what they need, and say how to get it", () 
     expect(attr(tagsWith(ws, "data-goto-screen", "doctor")[0], "onClick")).toContain('gotoScreen("doctor")');
   });
 
-  it("gates Intake's Pull requests and Issues tabs on git AND ticketing", () => {
+  it("gates Intake's Pull requests and Issues tabs on git (not on a tracker)", () => {
+    // They run on their own GitHub sign-in and switches — the pipeline boots
+    // for them with no ticket source — so only git can lock them.
     const intake = src("components/intake/IntakeDialog.tsx");
-    expect(intake.split('caps: "git ticketing",').length - 1).toBe(2);
+    expect(intake.split('caps: "git",').length - 1).toBe(2);
     for (const tab of ["components/intake/IssuesTab.tsx", "components/intake/PullRequestsTab.tsx"]) {
       expect(tagsWith(src(tab), "data-caps-gate", "git"), tab).toHaveLength(1);
-      expect(tagsWith(src(tab), "data-caps-gate", "ticketing"), tab).toHaveLength(1);
+      expect(tagsWith(src(tab), "data-caps-gate", "ticketing"), tab).toHaveLength(0);
     }
   });
 
+  it("gates the sidebar PR-review / issue bars on git alone, matching those tabs", () => {
+    const hook = src("components/sidebar/useGithubToggleBar.ts");
+    expect(hook).toContain("const capsOk = !(config?.caps && !config.caps.git);");
+    expect(hook).not.toContain("caps.ticketing");
+  });
+
   it("tags the git-only entry points so they vanish without git", () => {
-    const advanced = tagsWithId(src("components/dialogs/newSession/WorkspaceFold.tsx"), "new-advanced");
-    expect(advanced.map((t) => attr(t, "data-caps"))).toEqual(["git"]);
+    // New's "Works in" choice (separate worktree / this folder directly) is
+    // git-only; More options holds the Name too, so it stays.
+    const worksIn = tagsWithId(src("components/dialogs/newSession/WorkspaceFold.tsx"), "new-works-in");
+    expect(worksIn.map((t) => attr(t, "data-caps"))).toEqual(["git"]);
     // The disk manager's git-only action: the unused-worktree sweep.
     const prune = tagsWithId(src("components/dialogs/RecentDialog.tsx"), "recent-prune");
     expect(prune.map((t) => attr(t, "data-caps"))).toEqual(["git"]);

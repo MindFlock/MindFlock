@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
-import { refreshInstances, usePanelQuery } from "../../state/queries";
+import { refreshInstances, usePanelQuery, useTicketingSources } from "../../state/queries";
 import { SettingField, useSettings } from "../settings/useSettings";
 import { AgentPicker, useAgentChoices } from "../settings/screens/AgentPicker";
 import { openConnectGitHub } from "../../lib/githubConnect";
@@ -25,6 +25,7 @@ import {
   type ItemWorkspace,
 } from "./kit";
 import { RepoSourceList, type RepoOverrides } from "./RepoSources";
+import { useIntakePause } from "./pause";
 import { issueMatches } from "./search";
 import type { TabProps } from "./IntakeDialog";
 
@@ -64,6 +65,9 @@ export function IssuesTab({ gotoTab }: TabProps) {
   // Opt-in: absent => off (only an explicit true switches issue handling on).
   const enabled = gh.issues_enabled === true;
   const repos = Array.isArray(gh.issue_repos) ? gh.issue_repos : [];
+  // Off because Pause intake turned it off (it will come back on Resume).
+  const pause = useIntakePause((useTicketingSources(true).data || []).length);
+  const pausedOff = !enabled && repos.length > 0 && pause.pausedKind("issues");
   const overrides = (gh.issue_repo_settings || {}) as RepoOverrides;
   const skipAuthors = Array.isArray(gh.issue_skip_authors)
     ? gh.issue_skip_authors.join(", ")
@@ -136,12 +140,12 @@ export function IssuesTab({ gotoTab }: TabProps) {
       listId="gh-issue-repos-list"
       addId="gh-issue-repo-add-btn"
       addLabel="+ Add repository"
-      emptyText="No repositories yet — add one below to start handling new issues."
+      emptyText="No repositories yet — add one whose new issues you want worked on."
       hint={
         <>
-          Each card is one repository, with its own agent CLI and filters. Blank fields
-          inherit the tab defaults under <strong>Advanced options</strong>. This list is
-          separate from PR review's — a repo can be on either, or both.
+          Each card is one repository, with its own agent and filters. Blank fields use the
+          defaults under <strong>Advanced options</strong>. Separate from the GitHub PRs
+          tab's list.
         </>
       }
     />
@@ -160,9 +164,8 @@ export function IssuesTab({ gotoTab }: TabProps) {
       toolbarExtra={issues && issues.length ? filter.control : undefined}
       hint={
         <>
-          Every open issue on your watched repositories, grouped by repository, with why
-          auto handling has or hasn't picked it up. <strong>Start work</strong> spins up a session for that issue right
-          now, bypassing the age / already-handled filters.
+          Each row says whether auto-start will take it. <strong>Start</strong> starts a
+          session for an issue now, whatever the filters say.
         </>
       }
     >
@@ -192,10 +195,13 @@ export function IssuesTab({ gotoTab }: TabProps) {
                     meta={`by ${i.author || "?"} · ${ageText(i.created_at)}`}
                     hasSession={i.has_session}
                     eligible={i.eligible}
-                    eligibleLabel="queued for auto handling"
+                    eligibleLabel={
+                      enabled ? "will auto-start" : pausedOff ? "auto-start paused" : "auto-start off"
+                    }
+                    eligibleOn={enabled}
                     reasons={i.reasons}
-                    actionLabel="Start work"
-                    failPrefix="Start work failed"
+                    actionLabel="Start"
+                    failPrefix="Start failed"
                     workspace={i.workspace}
                     onReopen={async () => {
                       const title = await reopenIntakeItem({
@@ -226,7 +232,7 @@ export function IssuesTab({ gotoTab }: TabProps) {
                       // instead of leaving the sidebar blank until the next poll.
                       refreshInstances();
                       setTimeout(relistIssues, 5000);
-                      return "Issue session " + (r?.title || "");
+                      return { message: "Session " + (r?.title || ""), title: r?.title };
                     }}
                   />
                 ))
@@ -252,44 +258,38 @@ export function IssuesTab({ gotoTab }: TabProps) {
     <>
       <div className="caps-gate" data-caps-gate="git">
         <p>
-          Install <strong>Git</strong> to get access to these features — automated issue
-          handling clones your repositories and works on fresh branches, which needs git.
-          Install it (e.g. <code>sudo apt install git</code> / <code>brew install git</code>
-          ), then reload this page.
-        </p>
-      </div>
-      <div className="caps-gate" data-caps-gate="ticketing">
-        <p>
-          Connect a <strong>ticketing tool</strong> to get access to these features —
-          automated issue handling runs alongside ticket ingestion, which needs a connected
-          ticketing source (Jira, Linear, GitHub Issues, Shortcut or Asana).
-        </p>
-        <p>
-          <button type="button" className="linklike" data-goto-tab="tickets" onClick={() => gotoTab("tickets")}>
-            Connect one on the Tickets tab
-          </button>
+          Install <strong>Git</strong> to use this — each issue is worked on in a fresh
+          branch. Install it (e.g. <code>sudo apt install git</code> /{" "}
+          <code>brew install git</code>), then reload this page.
         </p>
       </div>
       <p className="set-hint set-block-hint">
-        MindFlock watches for <em>newly opened issues</em> on the repositories below, grabs
-        each one with its comments, and starts a session on a fresh branch. Its repository
-        list is independent of PR review's.
+        When a new GitHub issue opens on one of the repositories below, MindFlock starts a
+        session for it, with its comments, on a fresh branch.
       </p>
 
       <AutomationSwitch
-        label="Automated handling"
-        title="Turn automated issue handling on or off — your repositories are kept either way"
+        label="Auto-start new issues"
+        title="Start a session on its own for each newly opened issue — your repositories are kept either way"
         rowId="gh-issues-toggle-row"
         inputId="gh-issues-enabled"
         statusId="gh-issues-status"
         checked={enabled}
+        paused={pausedOff}
+        disabled={!n}
         onChange={(next) =>
           saveGithub(
             { issues_enabled: next },
-            next ? "Automated issue handling on" : "Automated issue handling off"
+            next ? "Auto-start new issues on" : "Auto-start new issues off"
           )
         }
-        note={n ? undefined : "Add a repository below and this starts handling its new issues"}
+        note={
+          !n
+            ? "Add a repository below first"
+            : pausedOff
+              ? "Intake is paused — Resume intake at the top turns it back on"
+              : undefined
+        }
       />
 
       {/* WORK FIRST once a repository is watched — the same anatomy as the
@@ -304,41 +304,31 @@ export function IssuesTab({ gotoTab }: TabProps) {
         <summary>Advanced options</summary>
         <div className="pr-advanced-body">
           <p className="set-hint set-block-hint">
-            The defaults every repository card inherits, plus the settings that are
-            genuinely one-per-app.
+            Defaults for every repository card. A card can override each one.
           </p>
           <AgentPicker
-            label="Agent CLI"
+            label="Agent"
             value={String(gh.issue_agent || "")}
             choices={agentChoices}
             onChange={(v) => s.saveField("github", "issue_agent", v)}
-            hint={
-              <>
-                Which coding CLI runs issue-handling sessions by default. Independent of PR
-                review's — setting one does not change the other. A repository card can
-                override it.
-              </>
-            }
+            hint={<>Which agent works new issues. Separate from the GitHub PRs tab's.</>}
           />
           <label className="set-row">
             <span className="set-label">Min issue age (minutes)</span>
             <SettingField group="github" field="issue_min_age_minutes" type="number" placeholder="15" />
             <span className="set-hint">
-              Grace period after an issue opens before work starts, so you can finish
-              writing it. Default 15. Independent of PR review's setting; a repository card
-              can override it.
+              Wait this long after an issue opens, so its author can finish writing. Default 15.
             </span>
           </label>
           <label className="set-row">
             <span className="set-label">Poll every (seconds)</span>
             <SettingField group="github" field="issue_poll_interval_seconds" type="number" placeholder="60" />
             <span className="set-hint">
-              How often to check GitHub for new issues. Default 60. One poll loop covers
-              every repository, so this one is not per-card.
+              How often to check GitHub. Default 60. Applies to every repository.
             </span>
           </label>
           <label className="set-row">
-            <span className="set-label">Skip authors</span>
+            <span className="set-label">Ignore issues from</span>
             <input
               type="text"
               id="gh-issue-skip-authors"
@@ -348,13 +338,10 @@ export function IssuesTab({ gotoTab }: TabProps) {
               onChange={(e) => setSkipDraft(e.target.value)}
               onBlur={() => {
                 const list = skipDraft.split(",").map((x) => x.trim()).filter(Boolean);
-                saveGithub({ issue_skip_authors: list }, "Saved skip authors");
+                saveGithub({ issue_skip_authors: list }, "Saved");
               }}
             />
-            <span className="set-hint">
-              Comma-separated GitHub logins whose issues are ignored. Independent of PR
-              review's list; a repository card can override it.
-            </span>
+            <span className="set-hint">GitHub logins, comma-separated.</span>
           </label>
           <div className="set-row">
             <span className="set-label">GitHub connection</span>
@@ -369,10 +356,7 @@ export function IssuesTab({ gotoTab }: TabProps) {
               </button>
             </span>
             <span className="set-hint">
-              The same sign-in PR review uses — it authenticates the same account (Settings →
-              Connections → GitHub → Connect). A GitHub Issues source from an older release
-              that still carries its own token keeps working this release with a notice in
-              Settings → Connections; move it here.
+              The same GitHub sign-in the GitHub PRs tab uses.
             </span>
           </div>
         </div>

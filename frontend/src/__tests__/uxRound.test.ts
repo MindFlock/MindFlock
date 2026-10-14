@@ -100,7 +100,8 @@ describe("session rename (alias)", () => {
     // Rename surfaced in the row menu and the palette (one table row both read).
     expect(SESSION_ACTIONS.rename.label).toBe("Rename…");
     expect(normCode("components/palette/CommandPalette.tsx")).toContain('"rename",');
-    expect(ROW).toContain('"rename",');
+    expect(normCode("lib/sessionMenu.ts")).toContain('fromTable("rename")');
+    expect(ROW).toContain("<SessionMenu");
     // Rows carry the stable title as a data attr (so focus/lookup don't depend
     // on the displayed text, which may be an alias).
     expect(has(ROW, "data-title={title}")).toBe(true);
@@ -217,11 +218,14 @@ describe("undo toasts, favicon dot, no maximize", () => {
 });
 
 describe("New-session dialog progressive disclosure", () => {
-  it("folds the git/workspace options, open by default", () => {
+  it("shows Works in on the form and folds the rest under More options", () => {
     const fold = normCode("components/dialogs/newSession/WorkspaceFold.tsx");
-    expect(has(fold, 'id="new-advanced" className="nf-advanced"')).toBe(true);
-    expect(has(fold, 'id="new-in-place"')).toBe(true); // work-in-place toggle
+    expect(has(fold, 'id="new-in-place"')).toBe(true); // this folder directly
+    expect(has(fold, 'id="new-worktree"')).toBe(true); // separate worktree
     expect(has(fold, 'id="new-init-repo"')).toBe(true); // git init lives here
+    const dlg = normCode("components/dialogs/NewSessionDialog.tsx");
+    expect(has(dlg, 'id="new-advanced" className="nf-advanced"')).toBe(true);
+    expect(dlg).toContain("More options");
   });
 
   it("picks the agent from the configured providers, with a Manage link to Coding CLI", () => {
@@ -237,9 +241,12 @@ describe("New-session dialog progressive disclosure", () => {
     expect(has(strip, 'id="new-templates"')).toBe(true);
     expect(has(strip, 'id="new-templates-list"')).toBe(true);
     expect(has(strip, 'id="new-templates-manage"')).toBe(true);
-    // A chip prefills the form; Manage… opens the templates editor.
-    expect(has(strip, "onClick={() => fillFromTemplate(t)}")).toBe(true);
-    expect(has(strip, 'useUi.getState().openDialogFor("templates", "new");')).toBe(true);
+    // A chip's name prefills the form (▶ runs it, ⏰ schedules it); All
+    // templates… opens the templates editor.
+    expect(has(strip, "onClick={() => onPick(t)}")).toBe(true);
+    expect(has(strip, "onClick={() => onRun(t)}")).toBe(true);
+    expect(has(strip, "onClick={() => onSchedule(t)}")).toBe(true);
+    expect(has(strip, 'useUi.getState().openDialogFor("templates", templatesTarget({ fromNew: true, schedule: null }))')).toBe(true);
     expect(normCode("components/dialogs/NewSessionDialog.tsx")).toContain('"/api/templates"');
     // A plain folder works — git is offered as an init-repo toggle.
     expect(normCode("components/dialogs/newSession/WorkspaceFold.tsx")).toContain('id="new-init-repo"');

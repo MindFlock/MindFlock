@@ -14,9 +14,10 @@
 
 /* The full form (Session page 2) is centred like every other modal, at ONE
    fixed height (--nf-card-h, scrolling inside), so opening a fold never moves
-   it; 86vh keeps it inside a short window. */
+   it; 90vh keeps it inside a short window, and on a 900px one the form with
+   More options shut fits without a scroll. */
 #new-dialog {
-  --nf-card-h: min(86vh, 620px);
+  --nf-card-h: min(90vh, 760px);
 }
 
 /* The two LANDING panes — Session page 1 and the Ticket tab — have ONE fixed
@@ -662,6 +663,7 @@
   font-size: 12px;
   cursor: pointer;
   flex: none;
+  white-space: nowrap;
   /* Overrides the row's align-items:center for this one item, so the button
      matches the input's height exactly the way Browse… matches the Folder
      field's — a control half the height of the box it belongs to reads as an
@@ -782,7 +784,8 @@
 
 .nf-suggest-label {
   flex: none;
-  width: 46px;
+  min-width: 46px;
+  white-space: nowrap;
   font-size: 11px;
   color: var(--muted);
   cursor: help;
@@ -1169,10 +1172,51 @@
    above up by itself: it is type="button" on purpose, since a submit here
    would create a session from whatever the form happened to be holding rather
    than from the plan. */
-#new-describe-start {
+/* Page 1's PRIMARY is "Review details first": it is what Enter does, so the
+   accent and the ↵ sit on one control. "Create session" (the same POST as
+   page 2's Create, reached without the form) is the secondary. */
+#new-describe-go {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
+}
+
+#new-describe-go:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+#new-describe-start {
+  border-radius: 7px;
+  padding: 7px 12px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+#new-describe-start:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+/* The elapsed clock on whichever page-1 button is reading. */
+.nf-elapsed {
+  font-variant-numeric: tabular-nums;
+  opacity: .8;
+  margin-left: 2px;
+}
+
+/* "Fill the form with what I typed" — the way out of a read that failed or
+   ran out of time, right after the sentence saying so. */
+.nf-fallback {
+  margin-left: 6px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
 }
 
 #new-describe-start:disabled {
@@ -1500,7 +1544,7 @@
   overflow: hidden;
 }
 
-:is(#new-form, #commit-form) .rt-seg button {
+:is(#new-form, #commit-form, .tpl-editor) .rt-seg button {
   border: none;
   border-left: 1px solid var(--border);
   border-radius: 0;
@@ -1512,32 +1556,32 @@
   white-space: nowrap;
 }
 
-:is(#new-form, #commit-form) .rt-seg button:first-child {
+:is(#new-form, #commit-form, .tpl-editor) .rt-seg button:first-child {
   border-left: none;
 }
 
-:is(#new-form, #commit-form) .rt-seg button:hover:not(.on):not(:disabled) {
+:is(#new-form, #commit-form, .tpl-editor) .rt-seg button:hover:not(.on):not(:disabled) {
   background: var(--panel-2);
 }
 
 /* A choice an older server can't take (caps.team_runs): shown, not offered. */
-:is(#new-form, #commit-form) .rt-seg button:disabled {
+:is(#new-form, #commit-form, .tpl-editor) .rt-seg button:disabled {
   color: var(--muted);
   cursor: not-allowed;
   opacity: 0.6;
 }
 
-:is(#new-form, #commit-form) .rt-seg button.on {
+:is(#new-form, #commit-form, .tpl-editor) .rt-seg button.on {
   background: var(--accent);
   color: #fff;
 }
 
-#new-form label.check.rt-ask {
+:is(#new-form, .tpl-editor) label.check.rt-ask {
   font-size: 12.5px;
   color: var(--text);
 }
 
-#new-form label.check.rt-ask.disabled {
+:is(#new-form, .tpl-editor) label.check.rt-ask.disabled {
   color: var(--muted);
   cursor: not-allowed;
 }
@@ -1769,14 +1813,17 @@
 
 .tpl-card-top {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px 10px;
 }
 
+/* At least this wide before the buttons give way: when the card is narrow
+   they wrap UNDER the meta line instead of squeezing it into a column. */
 .tpl-card-text {
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 1 1 260px;
 }
 
 .tpl-name {
@@ -1886,10 +1933,22 @@
 
 .tpl-mode {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
-  align-items: center;
+  flex-direction: column;
+  gap: 6px;
   font-size: 12px;
+}
+
+.tpl-mode-label,
+.tpl-ft-label {
+  color: var(--muted);
+}
+
+/* Provision (and its strategy) sit under the worktree answer they modify. */
+.tpl-mode-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 22px;
 }
 
 /* Schedule: a checkbox, then "Every day ▾ at 21:00" on one row once on. */
@@ -2012,4 +2071,290 @@
   font-weight: 400;
   color: var(--muted);
   margin-left: 4px;
+}
+
+
+/* --- Round 2: Task, Works in, More options, Save as template ------------- */
+
+/* The Task box: on the form, never folded. The head carries the label and,
+   on the right, the saved-prompt picker. */
+.nf-task {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.nf-task-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 10px;
+  font-size: 12px;
+}
+
+.nf-task-head .preset-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nf-task-head select {
+  width: auto;
+  max-width: 230px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+/* "Works in": two radios, the recommended one first and marked. */
+.rt-label#new-mode-label {
+  padding-top: 1px;
+}
+
+.nf-works-in .nf-mode {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border-left: none;
+}
+
+.nf-rec {
+  display: inline-block;
+  margin: 0 2px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 10.5px;
+  line-height: 16px;
+  vertical-align: 1px;
+}
+
+/* The branch the worktree will be cut on, under its radio. */
+.nf-branch-line {
+  margin: -3px 0 2px 24px;
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.nf-branch-line code {
+  color: var(--text);
+  font-size: 11.5px;
+}
+
+.nf-works-in .nf-git-nudge {
+  margin: -2px 0 2px 24px;
+}
+
+.nf-share-warn,
+.nf-agent-missing {
+  color: var(--amber, #d29922);
+}
+
+/* More options' git extras. */
+.nf-git-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* "Save as template…" name row, above the action row. */
+.nf-save-tpl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2, var(--panel));
+}
+
+#new-form .nf-save-tpl input {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.nf-save-tpl-hint {
+  flex-basis: 100%;
+  font-size: 11.5px;
+}
+
+/* Narrow windows: the Works-in label stacks over its radios, and the
+   segmented Fast-track control wraps instead of clipping its last choices. */
+@media (max-width: 520px) {
+  .nf-works-in,
+  #new-ft-row {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 6px;
+  }
+
+  .nf-works-in > .rt-label,
+  #new-ft-row > .rt-label {
+    padding-top: 0;
+  }
+
+  /* The segmented control wraps onto a second line rather than clipping
+     "Merge when green" off the card. */
+  #new-ft-row .rt-seg {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  #new-form #new-ft-row .rt-seg button {
+    flex: 1 1 auto;
+    padding: 5px 8px;
+  }
+
+  .nf-actions {
+    flex-wrap: wrap;
+  }
+}
+
+/* The full form (page 2): anchored at the top like the landing panes, as
+   tall as its content up to the window. */
+#new-dialog.nf-landing.nf-form-page {
+  --nf-anchor-h: min(90vh, 640px);
+}
+
+#new-dialog.nf-form-page #new-form {
+  height: auto;
+}
+
+/* The Task head: its label and the saved-prompt picker on one line. */
+#new-form .nf-task-head label {
+  display: block;
+  font-size: 12px;
+}
+
+#new-form .nf-task-head select {
+  width: auto;
+  max-width: 230px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+/* Templates: a Run now that can't run LOOKS it — dimmed, its accent dropped —
+   and the reason is a line on the card, not only a hover title. */
+.tpl-run:disabled {
+  border-color: var(--border);
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.tpl-needs {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--amber, #d29922);
+}
+
+.tpl-needs .linklike {
+  font-size: 11.5px;
+}
+
+.tpl-ft {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  font-size: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+/* A template in New's strip: its name (fills the form) joined to ▶ (run it
+   now) and ⏰ (its schedule), as one pill — the actions belong to it. */
+.new-templates .nt-tpl {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.new-templates .nt-tpl-acts .nt-chip {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  min-width: 0;
+}
+
+.new-templates .nt-act {
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-left: none;
+  background: var(--panel);
+  color: var(--muted);
+  border-radius: 0;
+}
+
+.new-templates .nt-act:last-child {
+  border-top-right-radius: 999px;
+  border-bottom-right-radius: 999px;
+  padding-right: 10px;
+}
+
+.new-templates .nt-act:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.new-templates .nt-act:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.new-templates .nt-act.nt-sched.on {
+  color: var(--accent);
+}
+
+/* On the landing it sits under the describe box: a second door, quieter. */
+.new-templates.nt-landing {
+  margin-top: 10px;
+}
+
+/* One plain line under an option whose label alone doesn't say what it does
+   (Auto-split). */
+.nf-opt-help {
+  margin: 2px 0 0 24px;
+  font-size: 11.5px;
+}
+
+/* Clear: a quiet word beside the box (and beside ← Back on the form) — the
+   way to drop a draft that otherwise waits for you between openings. */
+#new-form #new-clear,
+#new-form #new-clear-form {
+  font-size: 12px;
+  color: var(--muted);
+  flex: none;
+}
+
+#new-form #new-clear {
+  align-self: flex-start;
+  margin-top: 6px;
+}
+
+#new-form #new-clear-form {
+  margin-right: 6px;
+}
+
+#new-form #new-clear:hover,
+#new-form #new-clear-form:hover {
+  color: var(--accent);
+}
+
+@media (max-width: 480px) {
+  #new-form #new-clear {
+    align-self: flex-end;
+    margin-top: 0;
+  }
+}
+
+/* The folder Create session starts in, named in the help line. */
+.nf-describe-help .nf-starts-in {
+  font-weight: 600;
 }

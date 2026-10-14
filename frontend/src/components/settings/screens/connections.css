@@ -98,3 +98,55 @@
     justify-content: flex-start;
   }
 }
+
+/* Not your concern (an agent you never set up, a sign-in nobody can check
+   from here): quiet grey, never the warning gold. */
+.conn-pill.conn-neutral {
+  color: var(--muted);
+  background: transparent;
+  border-style: dashed;
+}
+
+#connections-other-agents > .set-adv-fold-body,
+#connections-advanced > .set-adv-fold-body {
+  gap: 12px;
+}
+
+/* The sign-in window's steps: what the terminal below will ask, in order. */
+.signin-steps {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.signin-ok {
+  color: var(--green);
+  font-weight: 600;
+}
+#signin-close.signin-done {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* The agent card's one next action, when it is Install: the same button
+   (and fold) as the Setup checklist's step ①. */
+.conn-install .doctor-install {
+  margin-top: 6px;
+}
+/* The card already names the agent: no "agent CLI (claude)" summary beside
+   its Install button. */
+.conn-install .doctor-install > .set-hint {
+  display: none;
+}
+
+/* "Change agent" on the default agent's card: a quiet link, not a second
+   primary action beside Test. */
+.conn-actions .conn-link {
+  font-size: 12px;
+}
+
+/* Settings → Agents: the extra flags let the agent act without asking. */
+.flags-danger {
+  color: var(--red);
+}

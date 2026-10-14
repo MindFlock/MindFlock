@@ -90,8 +90,14 @@ describe("pickerOptions", () => {
   it("lists every provider and disables the absent ones with the reason", () => {
     const opts = pickerOptions([base, { ...base, name: "aider", installed: false }]);
     expect(opts).toEqual([
-      { name: "codex", disabled: false, label: "codex" },
-      { name: "aider", disabled: true, label: "aider — not installed" },
+      { name: "codex", disabled: false, label: "Codex" },
+      { name: "aider", disabled: true, label: "Aider — not installed" },
     ]);
+  });
+
+  it("shows product names, never raw ids, and keeps the id as the value", () => {
+    const opts = pickerOptions([{ ...base, name: "claude" }, { ...base, name: "my-cli" }]);
+    expect(opts.map((o) => o.label)).toEqual(["Claude Code", "My-cli"]);
+    expect(opts.map((o) => o.name)).toEqual(["claude", "my-cli"]);
   });
 });

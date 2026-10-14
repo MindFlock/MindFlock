@@ -540,10 +540,35 @@ def check_repo(path: str) -> dict:
         }
     is_dir = os.path.isdir(full)
     is_git = is_dir and _is_git_repo(full)
-    return {
+    out = {
         "path": full,
         "exists": os.path.exists(full),
         "is_dir": is_dir,
         "is_git": is_git,
         "has_commits": is_git and _git_has_commits(full),
     }
+    if is_git:
+        # What a new worktree's branch starts with (``<prefix><name>``), so
+        # the New dialog can show the branch it will create before Create.
+        out["branch_prefix"] = _branch_prefix()
+    return out
+
+
+def _branch_prefix() -> str:
+    """The configured branch prefix ("me/"), "" when unknown. READ-ONLY: not
+    ``LoadConfig``, which writes a default config when there is none — a
+    keystroke probe must never create files."""
+    try:
+        import json
+
+        from backend.config import config as _config
+
+        path = os.path.join(_config.GetConfigDir(), _config.ConfigFileName)
+        try:
+            with open(path, "rb") as f:
+                data = json.loads(f.read() or b"{}")
+        except FileNotFoundError:
+            return _config.DefaultConfig().branch_prefix or ""
+        return str((data or {}).get("branch_prefix", "") or "")
+    except Exception:  # noqa: BLE001 — a preview, never a reason to fail
+        return ""

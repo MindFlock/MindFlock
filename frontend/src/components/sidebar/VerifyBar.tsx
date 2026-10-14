@@ -30,7 +30,7 @@ import { errMsg } from "../../lib/format";
 import { useTestPlans } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
-import { dueCount, verdictOf } from "../dialogs/verify";
+import { dueCount, failingCount } from "../dialogs/verify";
 
 interface RepositorySettings {
   verify_enabled?: boolean;
@@ -78,12 +78,10 @@ export function VerifyBar() {
   const due = dueCount(plans);
   const running = plans.some((p) => p.state === "running");
   // SOMETHING PUSHED AND IS BROKEN — the most valuable thing this feature
-  // produces, and the only state of it that never left the dialog. `dueCount`
-  // deliberately excludes a recorded failure (a fail IS an answer, so the plan
-  // is not "not checked yet"), and the loud red group lives inside a modal
-  // nobody has open. So the bar said "on, nothing outstanding" over a checklist
-  // that had found a real defect.
-  const broken = plans.filter((p) => verdictOf(p) === "fail").length;
+  // produces. The top bar's badge counts it among "needs you or failed"; this
+  // red pill says how many of those are failures: failed steps AND checklists
+  // that couldn't be written — the "Failed" group, by the same rule.
+  const broken = failingCount(plans);
 
   if (!repo || (repos.length === 0 && plans.length === 0)) return null;
 
@@ -106,11 +104,10 @@ export function VerifyBar() {
     <div
       id="verify-bar"
       title={
-        "Verify — writes a checklist when a session branch is pushed, then hands you " +
-        "the steps an agent cannot honestly check. " +
+        "Verify — a checklist for each pushed branch; the agent checks what it can, the rest are yours. " +
         (repos.length
-          ? `Tracking ${repos.length} ${repos.length === 1 ? "repository" : "repositories"}.`
-          : "No repositories tracked; the checklists here were asked for by hand or by a repo's own .mindflock.toml.")
+          ? `Watching ${repos.length} ${repos.length === 1 ? "repository" : "repositories"}.`
+          : "No repositories watched.")
       }
     >
       <span
@@ -132,28 +129,25 @@ export function VerifyBar() {
           running
             ? "Verify: an agent is checking a checklist"
             : broken
-              ? "Verify: " + broken + " pushed " + (broken === 1 ? "change" : "changes") +
-                " failed its checklist"
+              ? "Verify: " + broken + (broken === 1 ? " checklist" : " checklists") + " failed"
               : !on
                 ? "Verify: switched off"
-                : "Verify: on, " + (due ? due + " not checked yet" : "nothing outstanding")
+                : "Verify: on, " + (due ? due + " need you" : "nothing outstanding")
         }
         title={
           running
             ? "An agent is working through a checklist right now"
             : broken
-              ? broken + (broken === 1 ? " pushed change" : " pushed changes") +
-                " did not do what its checklist expected — open Verify to see" +
-                " which step, and what was observed"
+              ? broken + (broken === 1 ? " checklist" : " checklists") +
+                " failed — open Verify to see which"
               : !on
                 ? // Deliberately not the word a removed status line used: a blunt
                   // bundle-wide guard in test_pr_review_settings.py watches for it
                   // coming back, and this tooltip is not what it is guarding.
-                  "Switched off — nothing is written when a branch is pushed, and nothing new turns up to check"
+                  "Paused: no new checklists on push"
                 : due
-                  ? due + (due === 1 ? " pushed change has" : " pushed changes have") +
-                    " not been checked"
-                  : "On, and nothing is outstanding — a checklist appears here when a branch is pushed"
+                  ? due + (due === 1 ? " checklist needs" : " checklists need") + " you"
+                  : "On — nothing to check right now"
         }
       />
       {/* The bar's name IS its door (the pattern every automation bar shares):
@@ -182,8 +176,8 @@ export function VerifyBar() {
           <span
             className="dc-count dc-count-bad"
             title={
-              broken + (broken === 1 ? " checklist has" : " checklists have") +
-              " a step that failed"
+              broken + (broken === 1 ? " checklist" : " checklists") +
+              " failed — a step failed, or it couldn't be written"
             }
           >
             {"\u2717" + broken}
@@ -191,7 +185,7 @@ export function VerifyBar() {
         ) : null}
         <label
           className="dc-switch"
-          title="Flip to pause automatic checking — your repositories, checklists and answers are kept either way, and writing one by hand, running and answering all still work"
+          title="Pause or resume new checklists on push — nothing is deleted"
         >
           <input
             type="checkbox"

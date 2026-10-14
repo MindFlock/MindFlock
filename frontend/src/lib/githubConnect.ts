@@ -19,12 +19,6 @@ export function openConnectGitHub(): void {
   window.dispatchEvent(new CustomEvent(OPEN_CONNECT_GITHUB_EVENT));
 }
 
-/** Shown instead of a dead "Sign in with GitHub" button while the build ships
- * no OAuth App client id (backend DEFAULT_GITHUB_OAUTH_CLIENT_ID is empty and
- * neither github.oauth_client_id nor MINDFLOCK_GITHUB_CLIENT_ID is set). */
-export const DEVICE_FLOW_UNCONFIGURED =
-  "Device flow is not configured in this build; paste a token or use gh";
-
 /** The POST /api/settings/test/github payload: a real GET /user plus one
  * repo-access check against the first configured repository. */
 export interface ConnectionTest {

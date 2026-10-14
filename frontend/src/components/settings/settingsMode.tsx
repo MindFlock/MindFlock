@@ -5,7 +5,8 @@
  * internals, orchestration, extensions, troubleshooting) are real features
  * but noise on day one. So the nav shows the basic screens until the person
  * flips "Show advanced settings" at its foot, and the advanced controls that
- * live ON a basic screen sit in a collapsed <AdvancedFold> there.
+ * live ON a basic screen sit in an <AdvancedFold> there, which basic mode
+ * does not render at all.
  *
  * The choice is a synced pref (`prefs.settings_advanced`, localStorage
  * `mf_settings_advanced` as the cache — lib/prefs.ts), so it follows the
@@ -14,8 +15,10 @@
  *
  * A deep link (palette, a Connections card, gotoScreen, lib/openSettings)
  * to an advanced screen still lands on it in basic mode: the active screen
- * is always in the nav, under an "Advanced" heading, without flipping the
- * saved mode. */
+ * is always in the nav — at the END, under an "Advanced" heading — without
+ * flipping the saved mode. At the end, because in its usual place the
+ * heading sat above it and every basic screen after it (Workspace and
+ * Appearance read as advanced ones). */
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { lsKeyFor, notePrefWrite, readLocal, writeLocal, type KV } from "../../lib/prefs";
@@ -44,10 +47,14 @@ export interface ModeScreen {
 }
 
 /** The screens the nav lists: every screen in advanced mode; in basic mode
- * the basic ones plus the active screen when it is advanced (a deep link
- * landed there — the nav must show where you are). Order never changes. */
+ * the basic ones, in order, then the active screen when it is advanced (a
+ * deep link landed there — the nav must show where you are) last, so its
+ * "Advanced" heading never sits over a basic screen. */
 export function navScreens<T extends ModeScreen>(screens: readonly T[], advanced: boolean, active: string): T[] {
-  return screens.filter((s) => advanced || !s.advanced || s.key === active);
+  if (advanced) return [...screens];
+  const basic = screens.filter((s) => !s.advanced);
+  const peek = screens.find((s) => s.advanced && s.key === active);
+  return peek ? [...basic, peek] : basic;
 }
 
 /** The heading to draw before nav item `i` of `shown`, or "" for none. In
@@ -96,22 +103,44 @@ export function AdvancedToggle({
   );
 }
 
-/** A collapsed "Advanced" section on a basic screen: what most people never
- * need, still one click away. Open by default in advanced mode; the person
- * can fold or unfold it either way. Its controls stay mounted while folded,
- * so their ids and loads behave as before. */
+/** A "Learn more" fold under a control: the one plain line stays on the
+ * screen, the rest of the explanation waits one click away (GLOSSARY: one
+ * plain line per control). */
+export function LearnMore({ children }: { children: ReactNode }) {
+  return (
+    <details className="set-learn-more">
+      <summary>Learn more</summary>
+      <div className="set-learn-more-body">{children}</div>
+    </details>
+  );
+}
+
+/** An "Advanced" section on a basic screen: power-user rows that only exist
+ * in advanced mode. Basic mode renders NOTHING for it — not a closed fold —
+ * so a newcomer never meets "Merge when green" or pre-commit hook ids one
+ * click away; there is one advanced mechanism (the nav's "Show advanced
+ * settings"), not two. In advanced mode it is an open fold the person can
+ * collapse.
+ *
+ * `basic` keeps it on basic screens as a CLOSED fold instead — for a part
+ * that is optional rather than expert (Notifications' phone alerts and its
+ * longer alert list). */
 export function AdvancedFold({
   id,
   summary = "Advanced",
+  basic = false,
   children,
 }: {
   id: string;
   summary?: string;
+  /** Show it (folded) in basic mode too. */
+  basic?: boolean;
   children: ReactNode;
 }) {
   const advanced = useAdvancedSettings();
   const [open, setOpen] = useState(advanced);
   useEffect(() => setOpen(advanced), [advanced]);
+  if (!advanced && !basic) return null;
   return (
     <details
       className="pr-advanced set-adv-fold"

@@ -20,6 +20,7 @@ import { closeExtPaneByKey } from "../../extensions/host";
 import { selectWindow } from "../../lib/sessionActions";
 import { rowDndProps, type RowDndCallbacks } from "./rowDnd";
 import { AssistantChip } from "../AssistantChip";
+import { useAssistantActivity } from "../../state/queries";
 
 const FIXED_TITLES: Record<SpecialKind, string> = {
   logs: "MindFlock logs",
@@ -75,6 +76,8 @@ export function windowRows(s: {
 interface ItemProps extends RowDndCallbacks {
   row: WindowRow;
   idx: number;
+  /** Draw the Alt+N number (off in the calm first hour). */
+  numbered?: boolean;
   onScreen: boolean;
   dropCue: "above" | "below" | null;
 }
@@ -82,8 +85,8 @@ interface ItemProps extends RowDndCallbacks {
 /** One window row — the same shape as a session row (grip, Alt+N number,
  * status lane, title, chip, ✕), minus everything that only means anything for
  * a session (stage chips, the actions menu, rename). */
-export function WindowRowItem({ row, idx, onScreen, dropCue, ...dnd }: ItemProps) {
-  const num = idx < 9 ? String(idx + 1) : "";
+export function WindowRowItem({ row, idx, numbered = true, onScreen, dropCue, ...dnd }: ItemProps) {
+  const num = numbered && idx < 9 ? String(idx + 1) : "";
   return (
     <li
       className={
@@ -108,7 +111,7 @@ export function WindowRowItem({ row, idx, onScreen, dropCue, ...dnd }: ItemProps
             you a question / done. Same chip a session row wears, in the same
             slot — the row is in the same list, and "running" has to mean the
             same thing whichever row you read it on. */}
-        {row.key === windowKey("chat") && <AssistantChip />}
+        {row.key === windowKey("chat") && <AssistantRowChip />}
         {row.kind && <span className="stagechip win-kind">{row.kind}</span>}
         <button
           className="kill"
@@ -123,4 +126,15 @@ export function WindowRowItem({ row, idx, onScreen, dropCue, ...dnd }: ItemProps
       </div>
     </li>
   );
+}
+
+/** The Assistant row's chip — except "Offline". The row exists exactly while
+ * its window is open, and opening the window starts the assistant, so an
+ * "Offline" reading here is a probe that lagged the launch (it read as a dead
+ * session sitting among the work). Nothing is better than a wrong claim; a
+ * real answer (running, waiting on you, done) still shows. */
+function AssistantRowChip() {
+  const { data } = useAssistantActivity();
+  if (!data || data.activity === "offline") return null;
+  return <AssistantChip />;
 }

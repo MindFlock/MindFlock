@@ -616,13 +616,14 @@ foreground.
 
 ## Connection: install detection and sign-in
 
-Settings → **Agent providers** shows one row per registered provider (built-in
-and custom), from `GET /api/providers/status`: whether its binary is installed
-(with the resolved path), whether it looks **signed in** (the provider's own
-`auth_evidence`, with the evidence spelled out; *no sign-in needed* for a CLI
-that declares no login step, *sign-in unknown* for one that keeps its token
-where MindFlock never looks), a **Sign in** button that runs the CLI's login in
-an in-app terminal, the copy-paste install command when the CLI is missing,
+Settings → **Custom agents** (key `providers`) shows one row per registered
+provider (built-in and custom), from `GET /api/providers/status`: its **agent
+card** — the same card Connections, Settings → Agents and the Setup checklist
+show (`GET /api/connections`'s agent row): installed or not, whether it looks
+**signed in** (the provider's own `auth_evidence`; *no sign-in needed* for a
+CLI that declares no login step, *can't check* for one that keeps its token
+where MindFlock never looks), and ONE next action — **Install** → **Sign in**
+(the CLI's login in an in-app terminal) → **Test** — then where it runs from,
 and a **Binary path** field for EVERY provider — built-ins included — that
 writes this device's `coding_cli.binary_paths[name]` (cleared when emptied;
 `PUT /api/providers/{name}/binary-path`). That field is device-local and never
@@ -635,10 +636,12 @@ of a provider that silently isn't there. MindFlock never stores credentials.
 It does read Claude Code's *existing* OAuth token read-only, solely to display
 live plan usage (see **Live usage & limit state** below). Install detection is
 the same `shutil.which` / explicit-path check the backend uses to gate the
-default provider (below). Settings → **Agent CLI**'s default picker lists
-every provider too, with the absent ones disabled and saying why, and its
-**Test agent CLI** takes a provider picker (`POST /api/settings/test/agent`
-with `{provider}`).
+default provider (below). Settings → **Agents**' default picker lists every
+provider too (product names), with the absent ones disabled and saying why;
+under it sits the default's agent card, and its Advanced fold's **Set up
+another agent** picker shows any other agent's card. A card's **Test** is
+`POST /api/connections/test/agent {provider}`, which answers in words (*Signed
+in as you@example.com*) rather than with the file the login was found in.
 
 `BaseProvider.install_hint()` backs the install command the doctor RUNS (in the
 one-shot install script and `doctor --fix`), best-effort and wrapped so one
@@ -672,8 +675,8 @@ bare program) and `auth_evidence()` (a human string when the CLI *looks* logged
 in, else `""`, reported as "login status unknown" rather than "logged out" so a
 version-fragile credential probe never false-negatives) feed the doctor's
 `agent-auth` row and the Providers screen's sign-in chip. When no login was
-found and the provider declares a login flow, Setup's *Sign in to your agent*
-step, the doctor row, and the provider's row in Settings → Agent providers
+found and the provider declares a login flow, every agent card (Setup's *Sign
+in to your agent* step, Connections, Agents, Custom agents) and the doctor row
 offer **Sign in**, which opens `WS /api/providers/{name}/login-terminal`
 (`web/core/provider_login.py` — tmux, or a plain PTY when tmux is missing) in
 a window; closing it calls `POST …/login-close` and re-runs whatever reported

@@ -31,6 +31,8 @@ import { toast } from "../../lib/toast";
 import { useAgentChoices } from "../settings/screens/AgentPicker";
 import { SourceCard, TestButton } from "./kit";
 import { LANE_LABEL, SOURCE_DEPTHS } from "../../lib/autopilot";
+import { openConnectGitHub } from "../../lib/githubConnect";
+import { useGithubConnected } from "../../state/queries";
 
 export const REPO_RE = /^[^\s/]+\/[^\s/]+$/;
 
@@ -169,6 +171,9 @@ export function RepoSourceList({
   // in step for the rest of the app's life, which is the more expensive of the
   // two costs by some distance.
   const agents = useAgentChoices();
+  // Verify only: a repository here does nothing without a GitHub token, and
+  // the form used to say so only after + Add and Test access. Asked up front.
+  const gh = useGithubConnected(surface === "verify");
   const [cards, setCards] = useState<Card[]>(() =>
     repos.map((r) => ({ key: nextKey++, repo: r }))
   );
@@ -181,6 +186,10 @@ export function RepoSourceList({
   // arrived unlisted, i.e. expanded. Keyed by `cardKey` so a draft is distinct
   // from every other draft and survives being named.
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  // Cards whose Repository box was left EMPTY on blur. "Required" is said only
+  // then: shouting it at a card that was opened a second ago, before anything
+  // could have been typed, reads as an error the user already made.
+  const [leftEmpty, setLeftEmpty] = useState<Set<number>>(() => new Set());
   // The card list and the override table are both held locally and reconciled
   // against the store, rather than read straight from the props. Two reasons,
   // and they are the same reason: our own save's echo must not rebuild the cards
@@ -410,7 +419,7 @@ export function RepoSourceList({
                     spellCheck={false}
                     required
                     data-repo-field="repo"
-                    className={card.repo ? "" : "field-missing"}
+                    className={!card.repo && leftEmpty.has(card.key) ? "field-missing" : ""}
                     placeholder="owner/name — e.g. mindflockai/MindFlock"
                     defaultValue={card.repo}
                     onBlur={(e) => {
@@ -418,28 +427,37 @@ export function RepoSourceList({
                       // hand — otherwise the field keeps showing a slug that
                       // was never saved.
                       e.target.value = rename(card.key, e.target.value);
+                      const empty = !e.target.value.trim();
+                      setLeftEmpty((prev) => {
+                        if (prev.has(card.key) === empty) return prev;
+                        const next = new Set(prev);
+                        if (empty) next.add(card.key);
+                        else next.delete(card.key);
+                        return next;
+                      });
                     }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") (e.target as HTMLInputElement).blur();
                     }}
                   />
-                  <span className="set-hint">
-                    Required — press Enter or click away to save.{" "}
-                    {surface === "verify"
-                      ? // Verify's list is not one of the Intake tabs' and does not
-                        // read like one, so it gets the sentence that actually
-                        // matters here: how a checkout on this machine is matched
-                        // to the name you typed. It is the remote, not the path —
-                        // which is the whole reason this list is slugs.
-                        "A checkout counts as this repo when its origin points here, so it works" +
-                        " wherever you cloned it and on every machine in the flock."
-                      : "This list is separate from the other GitHub tab's; a repo can be on either, or both."}
-                  </span>
+                  {!card.repo && leftEmpty.has(card.key) ? (
+                    <span className="set-hint ik-field-error" role="alert">
+                      Required — type owner/name, then press Enter.
+                    </span>
+                  ) : (
+                    <span className="set-hint">
+                      {surface === "verify"
+                        ? // How a checkout is matched to the name: by its remote,
+                          // not its path — the reason this list is slugs.
+                          "Any clone of it counts."
+                        : "Press Enter to save. Separate from the other GitHub tab's list."}
+                    </span>
+                  )}
                 </label>
                 {surface === "verify" && (
                   <>
                     <label className="set-row">
-                      <span className="set-label">Live branch</span>
+                      <span className="set-label">Branch that ships</span>
                       <input
                         // Keyed by the slug, not just by the card, so naming a
                         // card REMOUNTS this box. These fields are uncontrolled
@@ -470,15 +488,11 @@ export function RepoSourceList({
                         }}
                       />
                       <span className="set-hint">
-                        Which branch counts as shipped <em>for this repo</em>: a plan
-                        written here goes due when its commit lands on it. Blank inherits{" "}
-                        <code>{defaults.liveBranch || "the flock-wide setting"}</code> —
-                        Settings → Workspace, falling through the PR base and the base
-                        branch to <code>main</code>.
+                        Blank uses <code>{defaults.liveBranch || "main"}</code>.
                       </span>
                     </label>
                     <label className="set-row">
-                      <span className="set-label">Deploy takes (minutes)</span>
+                      <span className="set-label">Wait after merge (minutes)</span>
                       <input
                         // Remounted on rename for the same reason as the branch
                         // box above.
@@ -503,11 +517,7 @@ export function RepoSourceList({
                         }}
                       />
                       <span className="set-hint">
-                        How long after merging before the change is actually running.
-                        A checklist waits that long before it turns up to be checked —
-                        merged is not deployed, and checking too early records a
-                        failure against code that is fine. <code>0</code> if merging is
-                        shipping here. Blank inherits{" "}
+                        Time to deploy before checking; 0 = no deploy. Blank uses{" "}
                         <code>{defaults.deployDelay || "5"}</code>.
                       </span>
                     </label>
@@ -534,18 +544,11 @@ export function RepoSourceList({
                         }}
                       />
                       <span className="set-hint">
-                        The deployment this repo's users actually reach. THE knob that
-                        decides what "it works" is checked against: with it set, both the
-                        checklist and the agent that works it are aimed at{" "}
-                        <em>that running system</em>. Blank is a real answer, not a missing
-                        one — a library, a CLI or anything with no environment to point at
-                        is checked against a fresh checkout of the live branch on this
-                        machine, and a checklist for one says so rather than pretending
-                        otherwise.
+                        URL and test login the checks use. Blank checks a fresh checkout.
                       </span>
                     </label>
                     <label className="set-row">
-                      <span className="set-label">Extra instructions (optional)</span>
+                      <span className="set-label">Notes for the checklist writer (optional)</span>
                       <textarea
                         // Remounted on rename for the same reason as the branch
                         // box above.
@@ -575,16 +578,7 @@ export function RepoSourceList({
                             patch(card.repo, "prompt", e.target.value);
                         }}
                       />
-                      <span className="set-hint">
-                        Folded into the prompt that writes a plan <em>for this repo</em>, so
-                        the things that are true of every change here — where the app runs,
-                        what to always check, what to ignore — do not have to be retyped into
-                        each plan. It steers <em>what</em> gets tested; it cannot change the
-                        format the generator must answer in, so a note here can never break
-                        plan writing. Click away to save. Up to{" "}
-                        {VERIFY_PROMPT_MAX.toLocaleString()} characters — the box stops there
-                        rather than letting you paste a page that would be trimmed on save.
-                      </span>
+                      <span className="set-hint">Added to every checklist for this repo.</span>
                     </label>
                   </>
                 )}
@@ -598,7 +592,7 @@ export function RepoSourceList({
                 {surface !== "verify" && (
                   <>
                     <label className="set-row">
-                      <span className="set-label">Agent CLI</span>
+                      <span className="set-label">Agent</span>
                       <select
                         data-repo-field="agent"
                         value={agent}
@@ -615,9 +609,7 @@ export function RepoSourceList({
                         ))}
                       </select>
                       <span className="set-hint">
-                        Which coding CLI this repository's sessions run. Route one repo to a
-                        cloud CLI and another to a local model — pick a provider whose
-                        Connections row is green, or inherit the tab's default.
+                        Which agent works this repository's sessions.
                       </span>
                     </label>
                     <label className="set-row">
@@ -639,8 +631,7 @@ export function RepoSourceList({
                         ))}
                       </select>
                       <span className="set-hint">
-                        How far each item goes after its agent finishes. Merge is per-item
-                        only — a repo default runs with nobody watching.
+                        What happens when the agent finishes. Merge is picked per item only.
                       </span>
                     </label>
                     {surface === "pr" && (
@@ -660,11 +651,7 @@ export function RepoSourceList({
                           }}
                         />
                         <span className="set-hint">
-                          Only PRs targeting this branch are auto-reviewed here. Blank inherits
-                          the tab default — which is <em>not</em> "every branch": it falls
-                          through to your repository's configured base branch. A PR into any
-                          other branch is still listed below, with a chip saying so, and{" "}
-                          <strong>Begin review</strong> works on it.
+                          Only PRs into this branch auto-start. Blank uses the tab default.
                         </span>
                       </label>
                     )}
@@ -687,12 +674,14 @@ export function RepoSourceList({
                         }}
                       />
                       <span className="set-hint">
-                        Grace period after it opens before work starts, so you can finish
-                        pushing or writing. Blank inherits the tab default.
+                        Wait this long after it opens before starting. Blank uses the tab
+                        default.
                       </span>
                     </label>
                     <label className="set-row">
-                      <span className="set-label">Skip authors</span>
+                      <span className="set-label">
+                        {surface === "pr" ? "Ignore comments from" : "Ignore issues from"}
+                      </span>
                       <input
                         type="text"
                         autoComplete="off"
@@ -707,11 +696,9 @@ export function RepoSourceList({
                         }}
                       />
                       <span className="set-hint">
-                        Comma-separated GitHub logins.{" "}
-                        {surface === "pr"
-                          ? "Review only ever takes your own PRs, so this drops their review comments instead — the bots whose feedback you don't want acted on."
-                          : "Issues opened by these accounts are ignored."}{" "}
-                        Blank inherits the tab default.
+                        GitHub logins, comma-separated
+                        {surface === "pr" ? " — e.g. bots whose comments you don't want acted on" : ""}
+                        . Blank uses the tab default.
                       </span>
                     </label>
                   </>
@@ -725,6 +712,14 @@ export function RepoSourceList({
         <button type="button" id={addId} className="btn-primary" onClick={add}>
           {addLabel}
         </button>
+        {surface === "verify" && gh.data === false ? (
+          <span className="set-hint ik-gh-needed" role="note">
+            Needs GitHub connected —{" "}
+            <button type="button" className="test-btn" onClick={() => openConnectGitHub()}>
+              Connect GitHub
+            </button>
+          </span>
+        ) : null}
       </div>
       <span className="set-hint">{hint}</span>
     </div>

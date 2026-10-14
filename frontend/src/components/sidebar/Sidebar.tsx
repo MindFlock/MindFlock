@@ -10,7 +10,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Instance, RunTask } from "../../api/types";
 import { api } from "../../api/client";
 import { refreshInstances, useConfig, useDevices, useInstances } from "../../state/queries";
-import { useUi, windowKey, type ViewMode } from "../../state/store";
+import { effectiveViewMode, useUi, windowKey, type ViewMode } from "../../state/store";
 import { toast } from "../../lib/toast";
 import { canDisconnect } from "../../lib/devices";
 import { viewCap } from "../grid/layout";
@@ -51,8 +51,11 @@ import { Hint } from "../onboarding/Hint";
 import { sidebarDeviceNote } from "../../lib/fleet";
 import { openDevicesFor } from "../../lib/deviceActions";
 import { SetupChip } from "../setup/SetupChip";
-import { showSetupCard } from "../setup/setupModel";
+import { setupCount, showSetupCard, showSetupChip } from "../setup/setupModel";
 import { useSetup } from "../setup/useSetup";
+import { useCalm } from "../../lib/useCalm";
+import { CALM_HIDDEN_BARS, calmHidesBar } from "../../lib/calm";
+import { setCalmBarDefaults } from "./barDefs";
 
 /** No folds (while a search filter is on). */
 const NO_FOLDS: ReadonlySet<string> = new Set();
@@ -107,6 +110,18 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   // orderedSections call so they order and drag like the built-ins.
   const extBars = useExtensionBarDefs();
   const extKeys = useMemo(() => extBars.map((b) => b.key), [extBars]);
+  // The calm first hour (lib/calm.ts): a newcomer with under three sessions
+  // gets sessions, + New and Setup — the Assistant, the usage strip and the
+  // extensions' bars join the DEFAULT hidden set (never a set the person chose
+  // in Customize, where each one is a checkbox away), and the View presets,
+  // the "more bars" hint and the row numbers wait too.
+  const calm = useCalm();
+  const extSig = extKeys.join("\n");
+  useEffect(() => {
+    setCalmBarDefaults(calm ? [...CALM_HIDDEN_BARS, ...extKeys] : []);
+    useUi.getState().applyDefaultBars();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calm, extSig, ui.barsExplicit]);
 
   // Sessions the rail is FOR: the user's work. A verify run is a real session
   // (it needs a worktree and an agent that can run commands) but it is not work
@@ -203,12 +218,12 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
       new Set(
         computeVisible(instances, {
           hidden: ui.hidden,
-          viewMode: ui.viewMode,
+          viewMode: effectiveViewMode(ui),
           mru: ui.mru,
           order: ui.order,
         }).map((i) => i.title)
       ),
-    [instances, ui.hidden, ui.viewMode, ui.mru, ui.order]
+    [instances, ui.hidden, ui.viewMode, ui.narrow, ui.mru, ui.order]
   );
 
   // Device grouping: only when other MindFlock devices exist on the tailnet.
@@ -392,6 +407,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
           key={r.key}
           inst={r.inst}
           idx={rowIdx}
+          numbered={!calm}
           onScreen={onScreen.has(r.key)}
           dropCue={cueFor(r.key)}
           nest={stableNest(r.key, nest[i])}
@@ -406,6 +422,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
           key={r.key}
           row={r.win!}
           idx={rowIdx}
+          numbered={!calm}
           onScreen={winOnScreen.has(r.key)}
           dropCue={cueFor(r.key)}
           {...rowProps}
@@ -438,7 +455,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
     </>
   );
 
-  const cap = viewCap(ui.viewMode);
+  const cap = viewCap(effectiveViewMode(ui));
   // Counted off `listed`, not `instances`: the footer says how many sessions
   // you have, and a verify run the rail deliberately does not show must not be
   // one of them — "6 sessions" over a list of four is the bug the filter above
@@ -451,10 +468,22 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
 
   // Customize → "Filter box" decides; with it off, "/" still summons the box
   // for one search (filterPeek), and an active filter always keeps it shown.
-  const searchVisible = ui.showFilter || ui.filterPeek || !!ui.filter;
+  // Nothing to filter in a calm first hour (two sessions at most): "/" still
+  // summons it.
+  const searchVisible = (ui.showFilter && !calm) || ui.filterPeek || !!ui.filter;
   // The grid's first-run card (the setup checklist) — TerminalGrid's own test,
   // off the same GET /api/setup the footer's Setup chip reads.
   const firstRunCard = showSetupCard({
+    sessions: instances.length,
+    status: setup,
+    onboarded: config?.onboarded,
+  });
+  // ONE setup signal in the footer: while the "Setup 1 of 3" chip is up, the
+  // doctor's "setup issues" line is the same checklist said twice (with a
+  // different count) — the chip opens the same modal, which lists the issue.
+  const setupReq = setupCount(setup);
+  const setupReqDone = !!setup && setupReq.total > 0 && setupReq.done === setupReq.total;
+  const setupChip = showSetupChip({
     sessions: instances.length,
     status: setup,
     onboarded: config?.onboarded,
@@ -568,7 +597,9 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
             </div>
           );
         }
-        if (ui.hiddenBars.has(key)) return null;
+        // (The calm check covers the first render, before the effect above
+        // has folded the calm defaults into hiddenBars.)
+        if (ui.hiddenBars.has(key) || (calm && !ui.barsExplicit && calmHidesBar(key))) return null;
         return (
           <BarSlot
             key={key}
@@ -594,7 +625,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
             grid's first-run card — that card IS the checklist, and a second
             "setup issues" line beside it is noise. */}
         <div className="foot-row foot-setup">
-          {doctorWarn.failing && !doctorWarn.dismissed && !firstRunCard && (
+          {doctorWarn.failing && !doctorWarn.dismissed && !firstRunCard && !setupChip && (
             <div id="doctor-warn">
               <span className="dw-text">⚠ setup issues —</span>
               <button
@@ -616,8 +647,15 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
               </button>
             </div>
           )}
-          <SetupChip />
+          {/* Amber while a REQUIRED step is left; quiet once only optional
+              ones remain — done is not a warning (Sidebar.css). */}
+          <span className={"setup-chip-slot" + (setupReqDone ? " req-done" : "")}>
+            <SetupChip />
+          </span>
         </div>
+        {/* A set-once preference that means nothing with one or two panes:
+            the calm first hour leaves it out unless it was already changed. */}
+        {(!calm || ui.viewMode !== "auto") && (
         <div
           id="view-modes"
           title="Grid view — Auto grows with sessions; 1/2/4/9 show only the top N panes, the rest stay running but hidden until reordered into the top slots"
@@ -635,9 +673,13 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
             </button>
           ))}
         </div>
-        <Hint id="customize" className="hint-footer">
-          More sidebar bars — like <b>Prompts</b> — are under <b>⚙ Customize</b>.
-        </Hint>
+        )}
+        {/* "Add more bars" is the opposite of what a first hour needs. */}
+        {!calm && (
+          <Hint id="customize" className="hint-footer">
+            More sidebar bars — like <b>Prompts</b> — are under <b>⚙ Customize</b>.
+          </Hint>
+        )}
         <div className="foot-row foot-tools">
           <span id="session-count">{countHead}</span>
           <FooterCustomize />

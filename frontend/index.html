@@ -6,8 +6,9 @@
   <title>MindFlock</title>
   <link rel="icon" href="/favicon.png" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-  <!-- Apply the saved theme before first paint so light mode never flashes dark. -->
-  <script>try{if(localStorage.getItem('cs_theme')==='light')document.documentElement.classList.add('light');var _a=localStorage.getItem('cs_accent');if(_a)document.documentElement.setAttribute('data-accent',_a);var _s=localStorage.getItem('cs_surface');if(_s)document.documentElement.setAttribute('data-surface',_s);}catch(e){}</script>
+  <!-- Apply the saved theme before first paint so light mode never flashes dark.
+       Never chosen (no cs_theme) = follow the OS colour scheme. -->
+  <script>try{var _t=localStorage.getItem('cs_theme');if(_t==='light'||(!_t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches))document.documentElement.classList.add('light');var _a=localStorage.getItem('cs_accent');if(_a)document.documentElement.setAttribute('data-accent',_a);var _s=localStorage.getItem('cs_surface');if(_s)document.documentElement.setAttribute('data-surface',_s);}catch(e){}</script>
   <!-- Theme palettes shared with the mobile page — a runtime link, not bundled. -->
   <link rel="stylesheet" href="/theme.css" />
 </head>

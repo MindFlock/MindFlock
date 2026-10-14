@@ -83,7 +83,7 @@ describe("the second-window rule", () => {
     toast.mockReset();
     await writePlanFor("bot7-copy");
     expect(toast).toHaveBeenCalledWith(
-      "bot7-copy's branch already has a checklist — it's under bot7 — it is in the list below"
+      "bot7-copy's branch already has a checklist — it's under bot7 — it's in Verify"
     );
   });
 });

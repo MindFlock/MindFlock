@@ -194,6 +194,7 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
         "idle_after",
         "hints",
         "map_tour",
+        "welcome_tour",
         "settings_advanced",
     ),
     # The person all these devices share (docs/people.md). Its ``id`` is not
@@ -221,6 +222,8 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         "serve_mode",
         "shared_link",
         "ingestion_autostart",
+        # What Pause intake turned off — pauses this device's ticket switch.
+        "intake_paused",
         "setup_devices",
         # What THIS machine relaunches when its own server boots.
         "revive_on_start",
@@ -406,6 +409,7 @@ LABELS: Dict[str, str] = {
     "prefs.idle_after": "Idle flock delay",
     "prefs.hints": "Hints",
     "prefs.map_tour": "Map tour seen",
+    "prefs.welcome_tour": "Welcome tour seen",
     "prefs.settings_advanced": "Advanced settings shown",
     "person.name": "Your name",
     "person.git_name": "Git author name",

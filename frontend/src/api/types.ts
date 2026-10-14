@@ -265,6 +265,11 @@ export interface Instance {
   /** The same prompt's whole body (capped ~4000 chars) — the pin's
    * hover/click expansion. */
   last_prompt_full?: string | null;
+  /** What the session was asked to do when it was created (the create
+   * prompt, trimmed; first line is what the UI shows) — the pane's "Task:"
+   * line until the transcript names a newer prompt. Null when it was started
+   * without one. Optional: an older server doesn't send it. */
+  task?: string | null;
   setup: SetupSummary | null;
   check: SetupSummary | null;
   ports: { base: number; count: number } | null;
@@ -1219,8 +1224,9 @@ export interface TicketingCatalogField {
   /** "state" = multi workflow-state filter, "state_one" = a single
    * workflow-state destination, "choice" = <select> over `options`. */
   type?: string;
-  /** "choice" only. */
-  options?: { value: string; label: string }[];
+  /** "choice" only. An option's `hint` explains that option; the form shows
+   * the selected option's hint in place of the field's. */
+  options?: { value: string; label: string; hint?: string }[];
   hint?: string;
   /** The server refuses to save the source without it (PUT → 400 per field)
    * — unless `auto` is also set, in which case Test fills it in and it is
@@ -1433,11 +1439,18 @@ export interface TestRun {
    * what still needs a human. */
   results: Record<string, TestStepResultEntry>;
   verdict: "pass" | "fail" | "partial";
+  /** A check of the BRANCH, made before the work merged ("Check now" before
+   * merge). Absent on an older store: an ordinary run. */
+  prelive?: boolean;
 }
 
 export interface TestPlan {
   id: string;
   title: string;
+  /** "manual": created empty on purpose (`POST /api/test-plans/branch` with
+   * `empty: true`) — a person writes its steps, no model call was made. ""
+   * for a generated checklist. Optional: an older server doesn't send it. */
+  origin?: "" | "manual";
   /** The MAIN repo, never the session's worktree: worktrees get reclaimed, and a
    * plan outlives the session that produced it. */
   repo_root: string;

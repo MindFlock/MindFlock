@@ -9,6 +9,8 @@ the first step a ticket takes before it launches: pick the repo(s) it needs.
 The order, cheapest and most predictable first:
 
 1. **One repo** — nothing to decide; nothing changes (no routing, no record).
+   **A repo picked on the Intake row** (``method = "manual"``) comes next and
+   outranks everything below: a person chose it, so it sticks for that ticket.
 2. **Labels** — a ticket label that names a repo: its full name
    (``vnext-frontend``), a word of its name no other repo of the source shares
    (``frontend``), or one of its hint words. Labels are what a person puts on a
@@ -63,6 +65,8 @@ METHOD_LABEL = "label"
 METHOD_TITLE = "title"
 METHOD_LLM = "llm"
 METHOD_FALLBACK = "fallback"
+#: Picked by a person on the Intake row (``POST /api/tickets/start`` ``repo``).
+METHOD_MANUAL = "manual"
 
 Ask = Callable[[str], str]
 
@@ -411,11 +415,13 @@ def route(
         return RouteDecision(repos=[], reason="", method=METHOD_FALLBACK)
     if len(targets) == 1:
         return RouteDecision(repos=[targets[0].url], reason="", method="single")
+    urls = {t.url for t in targets}
+    prev = RouteDecision.from_dict(stored or {})
+    if prev is not None and prev.method == METHOD_MANUAL and set(prev.repos) <= urls:
+        return prev
     decided = route_deterministic(story, targets)
     if decided is not None:
         return decided
-    urls = {t.url for t in targets}
-    prev = RouteDecision.from_dict(stored or {})
     if prev is not None and prev.method == METHOD_LLM and set(prev.repos) <= urls:
         return prev
     if ask is not None:
@@ -468,7 +474,7 @@ def apply_route(
     targets = targets_of(src) if src is not None else []
     if len(targets) < 2:
         return None
-    from backend.ticket_ingestion.state import load_ticket_routes, record_ticket_route
+    from backend.ticket_ingestion.state import load_ticket_routes
 
     slug = _slug(story)
     try:
@@ -478,6 +484,39 @@ def apply_route(
     if ask is None and use_model:
         ask = lambda prompt: ask_cli(prompt, program)  # noqa: E731
     decision = route(story, targets, ask=ask, stored=stored)
+    _stamp(story, targets, decision, state_dir)
+    return decision
+
+
+def pick_target(src, repo: str) -> Optional[str]:
+    """The URL of ``src``'s repo that ``repo`` names — its URL or its short
+    name (``vnext-frontend``) — or ``None`` when it names none of them."""
+    want = str(repo or "").strip()
+    if not want:
+        return None
+    for t in targets_of(src) if src is not None else []:
+        if want == t.url or _norm(want) == _norm(repo_name(t.url)):
+            return t.url
+    return None
+
+
+def apply_manual_route(story, src, repo_url: str, *, state_dir) -> RouteDecision:
+    """Stamp a repo picked on the Intake row onto ``story`` — no routing, no
+    model — and record it, so the row and any later start keep it.
+    ``repo_url`` must already be one of ``src``'s repos (:func:`pick_target`)."""
+    decision = RouteDecision(
+        repos=[repo_url], reason="picked on the row", method=METHOD_MANUAL
+    )
+    _stamp(story, targets_of(src), decision, state_dir)
+    return decision
+
+
+def _stamp(story, targets, decision: RouteDecision, state_dir) -> None:
+    """Point ``story`` at ``decision`` (primary repo + the prompt's route
+    block) and record the decision for the ticket."""
+    from backend.ticket_ingestion.state import record_ticket_route
+
+    slug = _slug(story)
     story.repo_url = decision.primary
     extra = []
     for url in decision.extra:
@@ -499,24 +538,27 @@ def apply_route(
     except Exception as err:  # noqa: BLE001 — the launch matters more
         _logger.warning("Could not record the repo route for %s: %s", slug, err)
     _logger.info("Routed ticket %s → %s", slug, decision.summary())
-    return decision
 
 
 def preview(story, src, stored_routes: dict) -> Optional[dict]:
-    """The route a ticket row shows, WITHOUT asking a model: the recorded
-    decision when there is one (and a label or the title doesn't now say
-    otherwise), else the deterministic one, else ``pending``. ``None`` for a
-    one-repo source. ``{"repos": [names], "repo_url", "reason", "method",
-    "summary"}``."""
+    """The route a ticket row shows, WITHOUT asking a model: a repo picked on
+    the row, else the recorded decision when there is one (and a label or the
+    title doesn't now say otherwise), else the deterministic one, else
+    ``pending``. ``None`` for a one-repo source. ``{"repos": [names],
+    "repo_url", "reason", "method", "summary", "choices": [{name, url}]}`` —
+    ``choices`` is every repo of the source, for the row's Repo picker."""
     targets = targets_of(src) if src is not None else []
     if len(targets) < 2:
         return None
     urls = {t.url for t in targets}
-    decision = route_deterministic(story, targets)
+    # Every repo of the source, for the row's Repo picker.
+    choices = [{"name": repo_name(t.url), "url": t.url} for t in targets]
+    prev = RouteDecision.from_dict((stored_routes or {}).get(_slug(story)) or {})
+    if prev is not None and not set(prev.repos) <= urls:
+        prev = None
+    decision = prev if prev is not None and prev.method == METHOD_MANUAL else None
     if decision is None:
-        prev = RouteDecision.from_dict((stored_routes or {}).get(_slug(story)) or {})
-        if prev is not None and set(prev.repos) <= urls:
-            decision = prev
+        decision = route_deterministic(story, targets) or prev
     if decision is None:
         return {
             "repos": [],
@@ -524,6 +566,7 @@ def preview(story, src, stored_routes: dict) -> Optional[dict]:
             "reason": "picked when it starts",
             "method": "pending",
             "summary": "repo picked when it starts",
+            "choices": choices,
         }
     return {
         "repos": [repo_name(u) for u in decision.repos],
@@ -531,6 +574,7 @@ def preview(story, src, stored_routes: dict) -> Optional[dict]:
         "reason": decision.reason,
         "method": decision.method,
         "summary": decision.summary(),
+        "choices": choices,
     }
 
 

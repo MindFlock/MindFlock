@@ -126,7 +126,8 @@ describe("no Outbox: the bell and the group header", () => {
     const p = top.indexOf('id="palette-btn"');
     expect(i).toBeGreaterThanOrEqual(0);
     expect(i < v && v < s && s < p).toBe(true);
-    expect(has(top, 'title="Command palette — Ctrl+P / ⌘P"')).toBe(true);
+    // The shortcut comes from the live keymap, never a hand-typed string.
+    expect(has(top, 'title={"Command palette" + keys("palette")}')).toBe(true);
     expect(top).not.toContain("waitingCount");
     expect(top).not.toContain("useOutbox");
     // Always rendered: no earn-its-slot gate, no per-device memory of one.
@@ -443,7 +444,7 @@ describe("phase 3: split and one for all", () => {
     // now turns fast-track off rather than sitting disabled.
     expect(has(normCode("lib/newSessionSubmit.ts"), "inPlace: inPlace && !laneNeedsWorktree")).toBe(true);
     expect(normCode("components/dialogs/newSession/WorkspaceFold.tsx")).toContain(
-      "turns fast-track off — it commits for this session"
+      "turns fast-track off (it commits for this session"
     );
     expect(allCode()).not.toContain("not with a lane");
   });

@@ -218,6 +218,36 @@ export function runProblem(t: Template): string {
   return !(t.repo_path || "").trim() && !t.provisioned ? "Pick a folder for this template first" : "";
 }
 
+/** Who opened the Templates dialog and for what, as the store's
+ * dialogTarget carries it: "new" (from New — Close hands back to it),
+ * "schedule" (the palette's "Schedule a session…": a new template, schedule
+ * on), and "new|schedule:<name>" (a template chip's Schedule… in New). */
+export interface TemplatesTarget {
+  fromNew: boolean;
+  /** null = just the list; "" = a NEW template's editor, schedule on; a
+   * name = that template's editor, schedule on. */
+  schedule: string | null;
+}
+
+export function templatesTarget(t: TemplatesTarget): string {
+  const sched = t.schedule === null ? "" : t.schedule ? "schedule:" + t.schedule : "schedule";
+  if (t.fromNew) return sched ? "new|" + sched : "new";
+  return sched;
+}
+
+export function readTemplatesTarget(target: string | null | undefined): TemplatesTarget {
+  let rest = String(target || "");
+  let fromNew = false;
+  if (rest === "new") return { fromNew: true, schedule: null };
+  if (rest.startsWith("new|")) {
+    fromNew = true;
+    rest = rest.slice(4);
+  }
+  if (rest === "schedule") return { fromNew, schedule: "" };
+  if (rest.startsWith("schedule:")) return { fromNew, schedule: rest.slice(9) };
+  return { fromNew, schedule: null };
+}
+
 /** Whether a template starts itself. */
 export function hasSchedule(t: Template): boolean {
   return !!(t.schedule && (t.schedule.at || t.schedule.cron));
@@ -271,7 +301,11 @@ export function isPromptOnly(t: Template): boolean {
     !t.repo_path &&
     !t.provisioned &&
     !t.in_place &&
-    !t.init_repo
+    !t.init_repo &&
+    // An autopilot or a schedule is session setup: that is a template, even
+    // with no folder in it — offering it as a snippet to paste would drop both.
+    !t.autopilot &&
+    !t.schedule
   );
 }
 

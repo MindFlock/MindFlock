@@ -100,9 +100,10 @@ def test_a_stored_agent_rung_reads_as_off():
 
 def test_ticket_fast_track_hint_is_one_sentence_pair():
     src = re.sub(r"\s+", " ", _read(_INTAKE / "TicketsTab.tsx"))
+    # Plain words (round 2): what happens, and why Merge isn't offered here.
     assert (
-        "How far each ticket goes after its agent finishes. Merge is per-ticket only — "
-        "a source default runs with nobody watching." in src
+        "What happens after the agent finishes: commit, push, open a PR. Merge can only "
+        "be picked per ticket, so nothing merges unattended." in src
     )
 
 
@@ -274,9 +275,9 @@ def test_settings_nav_order_and_groups():
     assert groups["extensions"] == "Extensions"
     for k in ("doctor", "logs", "advanced", "traffic"):
         assert groups[k] == "Troubleshooting", k
-    # `group` comes AFTER label, so `{ key: "coding", label: "Agent CLI"` stays
-    # one contiguous phrase.
-    assert '{ key: "coding", label: "Agent CLI", group: "Agents"' in block
+    # `group` comes AFTER label, so `{ key: "coding", label: "Agents"` stays
+    # one contiguous phrase (round 2: "Agent CLI" became "Agents", GLOSSARY).
+    assert '{ key: "coding", label: "Agents", group: "Agents"' in block
 
 
 def test_settings_nav_draws_a_heading_per_group():
@@ -312,7 +313,8 @@ def test_settings_copy_fixes():
     assert '"IDE auto-adopt on"' in _read(screens / "Ide.tsx")
     assert "Cursor auto-adopt on" not in _read(screens / "Ide.tsx")
     ws = re.sub(r"\s+", " ", _read(screens / "Workspace.tsx"))
-    assert "ticket source (Intake → Tickets)" in ws
+    # Round 2: the intro says what the screen is for, not what isn't on it.
+    assert "nothing to set here per repo" not in ws
     assert "Ticketing source" not in ws
     assert 'toast("Saved");' in _read(_SETTINGS / "useSettings.tsx")
     ext = _read(screens / "Extensions.tsx")

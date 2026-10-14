@@ -14,24 +14,21 @@ import {
 import { rowDndProps } from "./rowDnd";
 import type { NestInfo } from "./ordering";
 import type { Instance } from "../../api/types";
-import { instApi } from "../../api/client";
-import { queryClient, refreshInstances, useConfig } from "../../state/queries";
+import { queryClient, useConfig } from "../../state/queries";
 import { useUi } from "../../state/store";
-import { copyText } from "../../lib/clipboard";
-import { errorPop } from "../../lib/errorPop";
-import { errMsg } from "../../lib/format";
 import { chipState, checkChip, effectiveActivity } from "../../lib/stage";
-import { deriveSessionState } from "../../lib/sessionState";
+import { agentBlocked, agentBlockedLine, agentBlockedState, deriveSessionState } from "../../lib/sessionState";
+import { AgentBlockedChip } from "../setup/AgentBlocked";
+import { useSetup } from "../setup/useSetup";
 import { reviveSession } from "../../lib/revive";
 import { wakeSession } from "../../lib/wake";
 import { backgroundChip } from "../../lib/backgroundJobs";
 import { stopBackgroundJob } from "../../lib/stopBackgroundJob";
 import { sessionLabel } from "../../lib/sessionLabel";
 import { useNow } from "../../lib/useNow";
+import { firstLine } from "../../lib/format";
 import {
-  PR_FALLBACK_HINT,
   cleanupMissing,
-  deleteSession,
   folderInUseText,
   ideSession,
   selectSession,
@@ -56,23 +53,15 @@ import { AnswerStrip, type AnswerStripHandle } from "../AnswerStrip";
 import { leadChip, leadLine, railExtraChips } from "../../lib/splitRun";
 import { RUN_DONE_STATES, type RunInfo } from "../../lib/runs";
 import type { RunDTO } from "../../api/types";
-import { SessionRowItems } from "./SessionRowItems";
+import { SessionMenu } from "./SessionMenu";
+import { MidName } from "./MidName";
+import { sessionMenu } from "../../lib/sessionMenu";
 import { PresenceDots } from "../presence/Presence";
 import { useMe } from "../../lib/presence";
-import { PEER_SANDBOX_HINT, PEER_SCREEN, peerChip } from "../../lib/peer";
-import {
-  SESSION_ACTIONS,
-  actionCtx,
-  actionLabel,
-  actionNote,
-  sessionAction,
-  type SessionActionId,
-} from "../../lib/sessionActionTable";
+import { PEER_SCREEN, peerChip } from "../../lib/peer";
+import { actionCtx, sessionAction } from "../../lib/sessionActionTable";
 import { openSettings } from "../../lib/openSettings";
-
-/** The row menu's table-driven groups, in menu order. */
-const ROW_GIT: SessionActionId[] = ["commit", "push", "pr", "merge", "viewPr"];
-const ROW_SESSION: SessionActionId[] = ["rename", "duplicate", "ide"];
+import { VerdictChip } from "../dialogs/VerdictChip";
 
 /** How long a click on the selected row waits for a second click before it
  * turns into an inline rename. Under the browser's ~500ms dblclick ceiling,
@@ -124,6 +113,8 @@ const NO_KIDS: Instance[] = [];
 interface Props {
   inst: Instance;
   idx: number;
+  /** Draw the Alt+N number (off in the calm first hour — lib/calm.ts). */
+  numbered?: boolean;
   onScreen: boolean;
   dropCue: "above" | "below" | null;
   onDragState(title: string | null): void;
@@ -144,6 +135,7 @@ interface Props {
 export const SidebarRow = memo(function SidebarRow({
   inst,
   idx,
+  numbered = true,
   onScreen,
   dropCue,
   onDragState,
@@ -156,10 +148,9 @@ export const SidebarRow = memo(function SidebarRow({
   leadRun = null,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
-  // "Delete…" asks in place (the desktop app has no confirm()): the first
-  // click turns the item into a confirm strip, Delete on it does it. Closing
-  // the menu disarms.
-  const [deleteArmed, setDeleteArmed] = useState(false);
+  // The row's ✕ on a session with uncommitted changes asks first, on a strip
+  // under the row (never confirm(): the desktop app has none).
+  const [closeArmed, setCloseArmed] = useState(false);
   // The sessions holding this row's folder when a Delete 409ed ("Duplicate
   // session" runs in place). Drawn as a card under the row, outside the menu,
   // so it survives the menu closing; dismissed by its ✕ or by a later success.
@@ -193,9 +184,16 @@ export const SidebarRow = memo(function SidebarRow({
   const pending = !!inst.pending;
   const caps = config?.caps ?? { git: true, tailscale: true, ticketing: true, github: true };
   const ideName = config?.ide_name || "Cursor";
+  // Files with uncommitted changes (what the ✕ asks about before it closes).
+  const uncommitted = Number(inst.diff_stat?.uncommitted?.files) || 0;
   // ONE session state for the row (lib/sessionState): the dot and the chip
   // below are painted from this same object, so they can never disagree.
-  const ss = deriveSessionState(inst);
+  // …unless its agent isn't installed here or isn't signed in: then nothing
+  // about it is Idle or Offline — it can't start, and Install / Sign in is
+  // the one thing that helps (components/setup/AgentBlocked).
+  const { data: setupStatus } = useSetup();
+  const noAgent = agentBlocked(inst, setupStatus?.logins);
+  const ss = noAgent ? agentBlockedState(noAgent) : deriveSessionState(inst);
   const me = useMe();
   // A one-for-all / split piece that MindFlock merged back into its lead's
   // branch: that is its stage now, whatever its own branch says ("committed").
@@ -207,7 +205,7 @@ export const SidebarRow = memo(function SidebarRow({
         : { ...chip0, label: "merged", cls: "s-committed", title: "Merged back into its lead's branch" }
       : chip0;
   const check = checkChip(inst);
-  const num = idx < 9 ? String(idx + 1) : "";
+  const num = numbered && idx < 9 ? String(idx + 1) : "";
   // Ticket/PR/issue sessions read as "(tix) add-dark-mode/sc-12345" instead of
   // the bare slug; a hand-made session's title is passed through unchanged.
   const label = sessionLabel(displayTitle(inst), inst.branch || "");
@@ -298,11 +296,15 @@ export const SidebarRow = memo(function SidebarRow({
   // 1–9 press them while the ROW has focus.
   const answering =
     (inFamily(inst, isWorker, kids.length) || shipLane) && activity === "clarify" && !missing && !paused;
-  const subline = !editing && (ship || wline || roll || lline || lineage);
+  // What the session was asked to do, under its name — the first line of its
+  // newest prompt — when nothing more pressing (a ship line, a family line)
+  // has the slot. "untitled · Idle" said nothing about the work.
+  const task = String(inst.last_prompt || firstLine(inst.task) || "").trim();
+  const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !!task;
+  const subline = !editing && (ship || wline || roll || lline || lineage || taskLine || !!noAgent);
   // "working · 6m" counts up by itself: a busy worker's row data can sit
   // unchanged between polls, and memo would freeze the minutes.
   useNow(wline?.state === "working" || ship?.state === "working" ? 30_000 : false);
-  const folder = inst.folder || inst.path || "";
   // Subscribed (not a render-time snapshot): the row must clear its red dot
   // the moment the agent socket connects, not on the next instances poll.
   const agentWs = useSyncExternalStore(
@@ -337,28 +339,9 @@ export const SidebarRow = memo(function SidebarRow({
     await fn();
   };
 
-  // The › menu's verbs come from the session action table — the same rows
-  // the palette and the Ctrl+K chords read. This row only orders them.
+  // The ⋯ menu's verbs come from the session action table — the same rows
+  // the palette and the Ctrl+K chords read — grouped by lib/sessionMenu.
   const ctx = actionCtx(title, { inst, caps, ideName, hidden });
-  const rowItem = (id: SessionActionId) => {
-    const a = sessionAction(id);
-    if (!a.enabled(ctx)) return null;
-    // No gh/token: it ends on GitHub's own page, and says so.
-    const ext = !!a.external?.(ctx);
-    const keys = id === "hide" && hidden ? undefined : a.keys;
-    return (
-      <button key={id} title={ext ? PR_FALLBACK_HINT : undefined} onClick={(e) => act(() => a.run(title), e)}>
-        {actionLabel(id, ctx)}
-        {ext ? " ↗" : ""}
-        {keys && <span className="kbd">{keys}</span>}
-      </button>
-    );
-  };
-  // Pause or Resume, whichever applies — Pause stays (greyed) on a shared
-  // folder, which can be resumed but not paused.
-  const pauseId: SessionActionId = sessionAction("resume").enabled(ctx) ? "resume" : "pause";
-  const pauseOff = !sessionAction(pauseId).enabled(ctx);
-
   const clearRenameTimer = () => {
     if (renameTimer.current !== null) {
       clearTimeout(renameTimer.current);
@@ -366,9 +349,6 @@ export const SidebarRow = memo(function SidebarRow({
     }
   };
   useEffect(() => clearRenameTimer, []);
-  useEffect(() => {
-    if (!expanded) setDeleteArmed(false);
-  }, [expanded]);
 
   /** Click on the row that's ALREADY selected → edit the name in place. The
    * second click of a double-click also lands here, so the edit is held for
@@ -468,17 +448,32 @@ export const SidebarRow = memo(function SidebarRow({
         <span className="idx" title={num ? `Ctrl+${num} / Alt+${num} to focus` : ""}>
           {picking ? (picked ? "✓" : "") : num}
         </span>
+        {/* The chip already says the state: the dot draws only where it says
+            something the chip doesn't — a dropped terminal socket, or a node
+            of a family tree (whose connector lines meet it). */}
         <span
-          className={"dot tone-" + ss.tone + " st-" + ss.state + (disconnected ? " disconnected" : "")}
+          className={
+            "dot tone-" +
+            ss.tone +
+            " st-" +
+            ss.state +
+            (disconnected ? " disconnected" : "") +
+            (disconnected || nested || nest.stem || lchip || pchip ? "" : " dot-quiet")
+          }
           title={disconnected ? "Terminal socket lost — reconnecting" : ss.label}
         />
         {!pending && (
+          // ⋯, not ›: a chevron reads as expand/collapse, and this opens the
+          // session's actions (the same menu as the pane header's ⋯).
           <button
             className={"chevron" + (expanded ? " open" : "")}
-            title="Actions"
+            title="Actions for this session"
+            aria-label="Actions for this session"
+            aria-haspopup="menu"
+            aria-expanded={expanded}
             onClick={(e) => act(() => setExpanded((v) => !v), e)}
           >
-            ›
+            ⋯
           </button>
         )}
         <span className={"meta" + (subline ? " has-lineage" : "")}>
@@ -523,7 +518,8 @@ export const SidebarRow = memo(function SidebarRow({
                 .filter(Boolean)
                 .join("\n")}
             >
-              {shown}
+              {/* Middle-truncated: a "-2" suffix is what tells two rows apart. */}
+              <MidName text={shown} />
             </span>
           )}
           {!editing && ship && (
@@ -599,6 +595,16 @@ export const SidebarRow = memo(function SidebarRow({
               {wline.text}
             </span>
           )}
+          {!editing && noAgent && (
+            <span className="lineage noagent-line" title={ss.hint}>
+              {agentBlockedLine(noAgent)}
+            </span>
+          )}
+          {!editing && taskLine && (
+            <span className="lineage task-line" title={String(inst.last_prompt_full || task)}>
+              {task}
+            </span>
+          )}
           {!editing && !ship && !lline && !wline && lineage && (
             <span
               className={"lineage" + (lineage.spawned ? " spawned" : "")}
@@ -663,6 +669,8 @@ export const SidebarRow = memo(function SidebarRow({
           <span className={"stagechip " + pchip.cls} title={pchip.title}>
             {pchip.label}
           </span>
+        ) : noAgent ? (
+          <AgentBlockedChip block={noAgent} title={title} className={"stagechip chip-restart " + chip.cls} hint={ss.hint} />
         ) : ss.state === "offline" && ss.restartable && !paused ? (
           // Offline carries its remedy: Restart relaunches the agent (the same
           // lazy revive a terminal attach or a sent prompt does).
@@ -709,6 +717,8 @@ export const SidebarRow = memo(function SidebarRow({
             {extra.check.label}
           </span>
         )}
+        {/* Verify's verdict for this branch; opens its checklist. */}
+        {!pending && <VerdictChip inst={inst} where="row" />}
         {bg &&
           (bg.stopPid ? (
             <button
@@ -761,12 +771,21 @@ export const SidebarRow = memo(function SidebarRow({
         {!pending && (
           <button
             className={"kill" + (missing ? " cleanup" : "")}
+            aria-label={missing ? "Delete session" : "Close session"}
             title={
               missing
                 ? "Delete — its workspace is gone; this removes the session"
                 : "Close session — stops the agent and moves it to Recently closed (Ctrl+W / Del; reopen with Ctrl+Shift+T)"
             }
-            onClick={(e) => act(() => (missing ? cleanupMissing(title) : sessionAction("close").run(title)), e)}
+            onClick={(e) =>
+              act(() => {
+                if (missing) return cleanupMissing(title);
+                // Uncommitted work: say so before the agent stops.
+                if (uncommitted > 0 && !closeArmed) return setCloseArmed(true);
+                setCloseArmed(false);
+                sessionAction("close").run(title);
+              }, e)
+            }
           >
             {missing ? "Delete" : "✕"}
           </button>
@@ -776,6 +795,31 @@ export const SidebarRow = memo(function SidebarRow({
           stay inside, where the family connector is drawn through them. */}
       <div className="inst-tail">
         {(nested || nest.stem) && <NestLines nest={nest} part="tail" />}
+        {closeArmed && !missing && (
+          <div className="close-confirm" role="group" aria-label={`Close ${shown}?`}>
+            <span className="del-q">
+              Close session? Its {uncommitted} uncommitted change{uncommitted === 1 ? "" : "s"} stay in its
+              folder — reopen it from Recently closed.
+            </span>
+            <span className="del-acts">
+              <button
+                type="button"
+                className="danger"
+                onClick={(e) =>
+                  act(() => {
+                    setCloseArmed(false);
+                    sessionAction("close").run(title);
+                  }, e)
+                }
+              >
+                Close session
+              </button>
+              <button type="button" autoFocus onClick={(e) => act(() => setCloseArmed(false), e)}>
+                Cancel
+              </button>
+            </span>
+          </div>
+        )}
         {answering && (
           <AnswerStrip
             ref={strip}
@@ -789,179 +833,20 @@ export const SidebarRow = memo(function SidebarRow({
           />
         )}
         {expanded && !pending && (
-          <div className="inst-actions">
-            <div className="folder-row">
-              <span className="folder-path" title={folder}>{inst.folder_label || folder || "—"}</span>
-              <button
-                className="folder-copy"
-                title="Copy full folder path"
-                onClick={(e) =>
-                  act(async () => {
-                    if (!folder) return;
-                    if (await copyText(folder)) toast("Copied path");
-                  }, e)
-                }
-              >
-                Copy path
-              </button>
-            </div>
-            <div className="menu-sep" />
-            {missing ? (
-              <button className="danger" onClick={() => cleanupMissing(title)}>
-                Delete — remove session
-              </button>
-            ) : (
-              <>
-                {peer && (
-                  <>
-                    <button
-                      title="Checkpoint the shared folder and bring it into your own repo as a peer/… branch"
-                      onClick={() => openSettings(PEER_SCREEN)}
-                    >
-                      Bring work home…
-                    </button>
-                    <div className="menu-sep" />
-                  </>
-                )}
-                {ROW_GIT.some((id) => sessionAction(id).enabled(ctx)) && (
-                  <>
-                    {ROW_GIT.map(rowItem)}
-                    <div className="menu-sep" />
-                  </>
-                )}
-                {/* Hand-offs: Fast-track… (the ⏩ picker), Split into parallel
-                    pieces…, Move out of a group, Message… — with a separator
-                    of its own. */}
-                <SessionRowItems inst={inst} />
-                {inst.setup?.state === "failed" && !peer && (
-                  <button
-                    onClick={(e) =>
-                      act(async () => {
-                        try {
-                          await instApi(title, "/setup/rerun", { method: "POST" });
-                          toast("Worktree setup re-running — watch the setup chip");
-                        } catch (err) {
-                          errorPop("Setup re-run failed", errMsg(err));
-                        }
-                        await refreshInstances();
-                      }, e)
-                    }
-                  >
-                    Re-run worktree setup
-                  </button>
-                )}
-                {inst.check && inst.check.state !== "running" && !peer && (
-                  <button
-                    onClick={(e) =>
-                      act(async () => {
-                        try {
-                          await instApi(title, "/check", { method: "POST" });
-                          toast("Checks running…");
-                        } catch (err) {
-                          errorPop("Check run failed", errMsg(err));
-                        }
-                        await refreshInstances();
-                      }, e)
-                    }
-                  >
-                    Run checks now
-                  </button>
-                )}
-                {/* Rename, copies and the IDE are refused for a shared
-                    (sandboxed) folder — not offered rather than 409ing. */}
-                {ROW_SESSION.map(rowItem)}
-                <button
-                  onClick={(e) =>
-                    act(() => {
-                      useUi.getState().pickRow(title, false);
-                      setExpanded(false);
-                    }, e)
-                  }
-                >
-                  {picked ? "Unselect" : "Select"}
-                  <span className="kbd">Ctrl+click</span>
-                </button>
-                {/* Hidden, the session can't be focused, so its chord can't
-                    reach it: the shortcut is drawn only for Hide. */}
-                {rowItem("hide")}
-                {inst.ports?.base ? (
-                  <button
-                    onClick={(e) =>
-                      act(
-                        () =>
-                          void window.open(
-                            `http://${location.hostname}:${inst.ports!.base}/`,
-                            "_blank"
-                          ),
-                        e
-                      )
-                    }
-                  >
-                    Open preview ↗<span className="kbd">:{inst.ports.base}</span>
-                  </button>
-                ) : null}
-                {/* Pause and Close both stop the agent; where the session
-                    goes is the difference, so each says it under the verb. */}
-                <button
-                  className="end-pause"
-                  disabled={pauseOff}
-                  title={pauseOff && peer ? PEER_SANDBOX_HINT : undefined}
-                  onClick={(e) => act(() => sessionAction(pauseId).run(title), e)}
-                >
-                  <span className="end-verb">{actionLabel(pauseId, ctx)}</span>
-                  <span className="end-sub">{actionNote(pauseId, ctx)}</span>
-                </button>
-                <div className="menu-sep" />
-                {/* The two ways a session ends, and only these two. Close is
-                    the ✕ / Ctrl+W verb; Delete asks on a strip in place of its
-                    item (never a native confirm(): the desktop app has none). */}
-                <button
-                  className="end-close"
-                  title="Stops the agent and moves the session to Recently closed; reopen it from there (Ctrl+Shift+T)"
-                  onClick={(e) => act(() => sessionAction("close").run(title), e)}
-                >
-                  <span className="end-verb">
-                    ✕ {SESSION_ACTIONS.close.short}<span className="kbd">{SESSION_ACTIONS.close.keys}</span>
-                  </span>
-                  <span className="end-sub">{actionNote("close", ctx)}</span>
-                </button>
-                {sessionAction("delete").enabled(ctx) &&
-                  (deleteArmed ? (
-                    <div className="del-confirm" role="group" aria-label={`Delete ${shown}?`}>
-                      <span className="del-q">Removes the worktree and branch</span>
-                      <span className="del-acts">
-                        <button
-                          type="button"
-                          className="danger"
-                          onClick={(e) =>
-                            act(async () => {
-                              setDeleteArmed(false);
-                              const r = await deleteSession(title, true);
-                              if (r && r !== "done") setInUse(r.inUse);
-                              else if (r === "done") setInUse(null);
-                            }, e)
-                          }
-                        >
-                          Delete
-                        </button>
-                        {/* Focus lands on the harmless answer: a second
-                            Enter on the item never deletes. */}
-                        <button type="button" autoFocus onClick={() => setDeleteArmed(false)}>
-                          Cancel
-                        </button>
-                      </span>
-                    </div>
-                  ) : (
-                    <button
-                      className="danger end-delete"
-                      title="Removes the worktree and branch (asks first)"
-                      onClick={() => setDeleteArmed(true)}
-                    >
-                      {SESSION_ACTIONS.delete.short}
-                    </button>
-                  ))}
-              </>
-            )}
+          // THE per-session menu (lib/sessionMenu) — the pane header's ⋯
+          // draws the same model.
+          <div className="inst-actions" role="menu" aria-label={"Actions for " + shown}>
+            <SessionMenu
+              model={sessionMenu(inst, ctx, {
+                onSelect: () => {
+                  useUi.getState().pickRow(title, false);
+                  setExpanded(false);
+                },
+                picked,
+              })}
+              onInUse={setInUse}
+              onDone={() => setExpanded(false)}
+            />
           </div>
         )}
         {inUse && (

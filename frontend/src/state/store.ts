@@ -197,6 +197,16 @@ interface UiState {
   collapsedFamilies: Set<string>;
   /** Sidebar bars hidden via the footer Customize menu (keys in BAR_KEYS). */
   hiddenBars: Set<string>;
+  /** The person chose `hiddenBars` (Customize, here or on another device);
+   * false = they are the defaults, which the calm first hour may extend
+   * (lib/calm.ts, barDefs.setCalmBarDefaults). */
+  barsExplicit: boolean;
+  /** Re-derive `hiddenBars` from the defaults — only while not explicit. */
+  applyDefaultBars(): void;
+  /** The window is phone-narrow (App watches it): the sidebar becomes an
+   * overlay that starts closed, and "Auto" view shows one pane. */
+  narrow: boolean;
+  setNarrow(on: boolean): void;
   /** Customize → "Filter box": show the session filter above the list. Off,
    * "/" still opens it for one search (filterPeek). */
   showFilter: boolean;
@@ -224,9 +234,17 @@ interface UiState {
   /** Hint keys the user has dismissed (hidden even while hints are enabled). */
   dismissedHints: Set<string>;
   /** The walkthrough overlay is currently open (transient, not persisted).
-   * It never opens by itself: the palette's "Tour", the ? sheet and
-   * Settings → General's Replay open it. */
+   * The palette's "Tour", the ? sheet and Settings → General's Replay open
+   * it; it opens by itself once, on a first launch (onboarding/WelcomeTour's
+   * useFirstLaunchTour), until `welcomeTourSeen`. */
   tourOpen: boolean;
+  /** The welcome tour has been shown (synced pref `welcome_tour`). */
+  welcomeTourSeen: boolean;
+  /** Light mode is on (the <html> `light` class; synced pref `theme`). Change
+   * it with lib/theme.ts `setTheme`, never by toggling the class directly. */
+  themeLight: boolean;
+  /** Remember the welcome tour as shown — on every device. */
+  markWelcomeTourSeen(): void;
   /** The Map tab's tour has been seen (synced pref `map_tour`): it opens itself on a first Map only until then. */
   mapTourSeen: boolean;
   /** Remember the Map tour as seen (Done / Skip / Esc). */
@@ -379,6 +397,8 @@ export const useUi = create<UiState>((set, get) => ({
   // Fresh users start with the essentials (Usage + Tickets + Assistant)
   // so a first run isn't overwhelming; the rest are one click away in Customize.
   // Once the user touches Customize the saved set wins, empty included.
+  barsExplicit: !firstRun("mf_hiddenbars"),
+  narrow: false,
   hiddenBars: new Set(
     firstRun("mf_hiddenbars") ? defaultHiddenBars() : load<string[]>("mf_hiddenbars", [])
   ),
@@ -394,6 +414,10 @@ export const useUi = create<UiState>((set, get) => ({
   dismissedHints: new Set(load<string[]>("mf_hints_seen", [])),
   tourOpen: false,
   mapTourSeen: load<boolean>("mf_map_tour", false) === true,
+  welcomeTourSeen: load<boolean>("mf_welcome_tour", false) === true,
+  // index.html's pre-paint script has already decided (saved choice, else the
+  // OS colour scheme), so the class is the answer.
+  themeLight: typeof document !== "undefined" && document.documentElement.classList.contains("light"),
   lastTab: load<Record<string, string>>("cs_lasttab", {}),
   openDialog: null,
   dialogTarget: null,
@@ -423,7 +447,9 @@ export const useUi = create<UiState>((set, get) => ({
   },
   toggleSidebar: () => {
     const hidden = !get().sidebarHidden;
-    save("cs_sidebar", hidden ? "hidden" : "", false);
+    // A narrow window's overlay opens and closes without touching the saved
+    // wide-window choice.
+    if (!get().narrow) save("cs_sidebar", hidden ? "hidden" : "", false);
     set({ sidebarHidden: hidden });
   },
   setSidebarWidth: (px) => {
@@ -574,7 +600,21 @@ export const useUi = create<UiState>((set, get) => ({
     if (next.has(key)) next.delete(key);
     else next.add(key);
     save("mf_hiddenbars", [...next]);
+    set({ hiddenBars: next, barsExplicit: true });
+  },
+  applyDefaultBars: () => {
+    if (get().barsExplicit) return;
+    const next = new Set(defaultHiddenBars());
+    const cur = get().hiddenBars;
+    if (next.size === cur.size && [...next].every((k) => cur.has(k))) return;
     set({ hiddenBars: next });
+  },
+  setNarrow: (on) => {
+    if (on === get().narrow) return;
+    // Narrow: the sidebar starts closed (an overlay you open with ▯), and
+    // nothing is saved — widen the window and your own choice is back.
+    if (on) set({ narrow: true, sidebarHidden: true });
+    else set({ narrow: false, sidebarHidden: load<string>("cs_sidebar", "", false) === "hidden" });
   },
   setBarOrder: (order) => {
     save("mf_barorder", order);
@@ -622,6 +662,11 @@ export const useUi = create<UiState>((set, get) => ({
     if (get().mapTourSeen) return;
     save("mf_map_tour", true);
     set({ mapTourSeen: true });
+  },
+  markWelcomeTourSeen: () => {
+    if (get().welcomeTourSeen) return;
+    save("mf_welcome_tour", true);
+    set({ welcomeTourSeen: true });
   },
   openTour: () => set({ tourOpen: true }),
   finishTour: () => set({ tourOpen: false }),
@@ -673,6 +718,12 @@ export const useUi = create<UiState>((set, get) => ({
 }));
 
 /** Display name helper: alias if set, else the raw title. */
+/** The view the grid actually uses: "Auto" means one pane in a narrow
+ * window (two terminals side by side at phone width are a word per line). */
+export function effectiveViewMode(s: { viewMode: ViewMode; narrow: boolean }): ViewMode {
+  return s.narrow && s.viewMode === "auto" ? ("1" as ViewMode) : s.viewMode;
+}
+
 export function displayName(title: string): string {
   return useUi.getState().aliases[title] || title;
 }

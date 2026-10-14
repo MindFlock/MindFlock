@@ -96,7 +96,7 @@ describe("the workspace mode is a choice with something always selected", () => 
   // are radios sharing one name — exactly one of them is always on.
   // Provisioning is the THIRD answer to the same question (the worktree answer
   // plus setup), not a checkbox beside it.
-  it.each(["new-worktree", "new-in-place", "new-provision"])("%s is a radio of new-workspace-mode", (id) => {
+  it.each(["new-worktree", "new-in-place"])("%s is a radio of new-workspace-mode", (id) => {
     for (const t of tags(WORKSPACE, id)) {
       expect(t.name).toBe("input");
       expect(attr(t, "type")).toBe("radio");
@@ -104,9 +104,23 @@ describe("the workspace mode is a choice with something always selected", () => 
     }
   });
 
+  it("provisioning is a box on top of the separate worktree, not a third answer", () => {
+    // Round 4: one ProvisionCheck, drawn by the New form AND the Templates
+    // editor, so the two can't describe it differently.
+    const [t] = tags(WORKSPACE, "new-provision");
+    expect(t.name).toBe("ProvisionCheck");
+    const check = WORKSPACE.slice(WORKSPACE.indexOf("export function ProvisionCheck("));
+    expect(check.slice(0, check.indexOf("</label>"))).toContain('<input type="checkbox" id={id}');
+    // Ticking it picks the worktree.
+    expect(WORKSPACE).toContain("if (on) setInPlace(false);");
+  });
+
   it("reads as one labelled question, and the radios are styled", () => {
-    expect(WORKSPACE).toContain("Where the work happens");
-    expect(WORKSPACE).toContain("New worktree");
+    expect(WORKSPACE).toContain("Works in");
+    expect(WORKSPACE).toContain("Separate worktree");
+    expect(WORKSPACE).toContain("This folder directly");
+    // The default is marked, and it is the default in the dialog's state.
+    expect(WORKSPACE).toContain('<span className="nf-rec">recommended</span>');
     expect(cssRule(CSS, ".nf-mode")).not.toBe("");
     // Without a radio rule these render as raw browser chrome beside the
     // accent-styled checkbox directly under them.

@@ -18,6 +18,7 @@ and friends), which the frontend calls directly. The row contract is
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from typing import List, Optional
@@ -205,6 +206,87 @@ def _agent_label(name: str) -> str:
     return name[:1].upper() + name[1:] if name else "Agent"
 
 
+#: Each shipped agent's product name, as every surface says it (the frontend's
+#: lib/agentNames.ts carries the same map). A custom agent reads as its id.
+AGENT_NAMES = {
+    "claude": "Claude Code",
+    "codex": "Codex",
+    "aider": "Aider",
+    "antigravity": "Antigravity",
+    "opencode": "OpenCode",
+    "cline": "Cline",
+    "goose": "Goose",
+}
+
+
+def agent_product_name(name: str) -> str:
+    return AGENT_NAMES.get(name) or _agent_label(name)
+
+
+def _agent_account(name: str) -> str:
+    """The account an agent is signed in as, when its own config names one
+    (Claude Code's ``oauthAccount.emailAddress``), else ``""``. A read of a
+    file the CLI already wrote: never a network call, never raises."""
+    if name != "claude":
+        return ""
+    import json
+    from pathlib import Path
+
+    paths = []
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR")
+    if cfg:
+        paths.append(Path(cfg) / ".claude.json")
+    paths.append(Path.home() / ".claude.json")
+    for path in paths:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        acct = data.get("oauthAccount") if isinstance(data, dict) else None
+        if isinstance(acct, dict):
+            email = str(acct.get("emailAddress") or "").strip()
+            if email:
+                return email
+    return ""
+
+
+def agent_test_line(
+    name: str, cli_status: str, auth_status: str, auth_detail: str
+) -> str:
+    """The one plain sentence an agent's Test answers — the account it is
+    signed in as, never the file the login was found in (that stays in the
+    ``auth`` detail for anyone who looks)."""
+    label = agent_product_name(name)
+    if cli_status != "ok":
+        return label + " isn't installed"
+    if auth_status == "ok":
+        account = _agent_account(name)
+        if account:
+            return "Signed in as " + account
+        if "API_KEY" in auth_detail:
+            return "Signed in with an API key"
+        return "Signed in"
+    if auth_status == "warn":
+        return "Installed, not signed in yet"
+    return "Installed. MindFlock can't check its sign-in — fine if it works."
+
+
+def _agent_auth_fix(name: str, binary: str) -> tuple:
+    """``(fix line, runnable command)`` the doctor gives a logged-out agent
+    (``doctor._login_fix``: its login command, else the API keys it reads).
+    ``("", "")`` when the registry can't produce the provider."""
+    try:
+        from backend import doctor
+
+        provider = doctor._agent_provider(name)
+        if provider is None:
+            return "", ""
+        base = os.path.basename((binary.split() or [name])[0]) or name
+        return doctor._login_fix(provider, base)
+    except Exception:  # noqa: BLE001 — a fix line must never break the row
+        return "", ""
+
+
 def _agent_row(st: dict) -> dict:
     """One provider's row. Connected = installed and signed in (or nothing to
     sign in to, or no way to tell); needs attention = installed but its login
@@ -220,7 +302,7 @@ def _agent_row(st: dict) -> dict:
     path = str(st.get("path") or "")
     hint = str(st.get("install_hint") or "")
     login = str(st.get("login_command") or "")
-    test = _test("/api/settings/test/agent", {"provider": name})
+    test = _test("/api/connections/test/agent", {"provider": name})
     screen = "coding" if default else "providers"
     common = dict(
         purpose="Runs your sessions — the CLI each agent window drives.",
@@ -244,17 +326,42 @@ def _agent_row(st: dict) -> dict:
             STATE_NEEDS_ATTENTION if default else STATE_OFF,
             "not installed — " + why,
             (
-                _action("Copy install command", "copy", hint)
-                if hint
-                else _action("Set up", "screen", "providers")
+                # The default agent is in the doctor's install plan: the same
+                # one-click Install the Setup checklist offers (the frontend
+                # falls back to the copy line when the plan lacks it).
+                _action("Install", "dialog", "agent-install", provider=name)
+                if hint and default
+                else (
+                    _action("Copy install command", "copy", hint)
+                    if hint
+                    else _action("Set up", "screen", "providers")
+                )
             ),
             fix=("install it: " + hint) if hint else why,
             fix_command=hint,
             **common,
         )
     where = path or "installed"
+    account = ""
     if authed:
         detail = f"signed in ({st.get('auth_detail')}) · {where}"
+        account = _agent_account(name)
+    elif probe and not has_login:
+        # It named where its credentials live (aider: API-key env vars) and
+        # none are there. No login flow to offer — a "Sign in" button would
+        # only open the agent's REPL — so the doctor's own fix says what to set.
+        fix, fix_cmd = _agent_auth_fix(name, str(st.get("binary") or ""))
+        return _row(
+            rid,
+            rname,
+            "agent",
+            STATE_NEEDS_ATTENTION,
+            f"installed, not signed in · {where}",
+            _action("Set up", "screen", screen),
+            fix=fix or "sign in to " + label,
+            fix_command=fix_cmd,
+            **common,
+        )
     elif not has_login:
         detail = f"no sign-in needed · {where}"
     elif not probe:
@@ -280,14 +387,18 @@ def _agent_row(st: dict) -> dict:
             fix_command=login,
             **common,
         )
+    # Connected: the card's own action is Test. The default agent's row also
+    # leads to Settings → Agents, where you change WHICH agent new sessions
+    # use — not to a second copy of this same card.
     return _row(
         rid,
         rname,
         "agent",
         STATE_CONNECTED,
         detail,
-        _action("Manage", "screen", screen),
+        _action("Change agent", "screen", "coding") if default else None,
         **common,
+        **({"account": account} if account else {}),
     )
 
 
@@ -539,7 +650,9 @@ def _tracker_action(source_id: str = "") -> dict:
     )
 
 
-_TRACKER_PURPOSE = "Auto-create a session for each ticket assigned to you."
+_TRACKER_PURPOSE = (
+    "Start sessions from tickets in Shortcut, Jira, Linear, Asana or GitHub Issues."
+)
 
 
 def _source_connection(source, only: bool) -> dict:
@@ -1176,6 +1289,28 @@ class ConnectionsAddon(Addon):
             # sync def → FastAPI threadpool, so the bounded doctor subprocess
             # probes never block the event loop. Cached ~4s (refresh=1 bypasses).
             return JSONResponse(cached_payload(refresh=refresh))
+
+        @router.post("/test/agent")
+        def test_agent(body: Optional[dict] = None) -> JSONResponse:
+            """An agent card's Test: is it installed, is it signed in — as
+            one plain ``detail`` ("Signed in as you@example.com"), with the
+            doctor's own ``cli`` / ``auth`` rows beside it. ``{"provider":
+            name}`` picks one; the default otherwise."""
+            name = str((body or {}).get("provider") or "").strip().lower()
+            name = name or doctor._default_provider_name()
+            cli = doctor.check_agent_cli_for(name)
+            auth = doctor.check_agent_auth_for(name)
+            ok = cli.status == "ok" and auth.status in ("ok", "info")
+            return JSONResponse(
+                {
+                    "ok": ok,
+                    "detail": agent_test_line(
+                        name, cli.status, auth.status, auth.detail or ""
+                    ),
+                    "cli": cli.to_dict(),
+                    "auth": auth.to_dict(),
+                }
+            )
 
         return router
 

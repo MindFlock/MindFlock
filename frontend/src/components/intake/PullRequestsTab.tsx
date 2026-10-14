@@ -1,5 +1,11 @@
-/** Intake → Pull requests: MindFlock watches your own open PRs and spins up a
- * session to address review comments.
+/** Intake → Pull requests: MindFlock watches your own open PRs and, when a
+ * reviewer comments, starts a session that addresses the comments. It does not
+ * review other people's PRs — every word on the tab says "address comments",
+ * never "review", because "Automated review" read as the opposite feature.
+ *
+ * Off until switched on, like Issues. Saved settings from before that default
+ * keep their meaning (unset with repos = on — see pause.ts `prsOn`); a fresh
+ * setup's first repository is saved with an explicit off.
  *
  * Same anatomy as the other two tabs (see ./kit.tsx): master switch, one card
  * per watched repository, then every open PR grouped by the repository it came
@@ -11,7 +17,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
-import { refreshInstances, usePanelQuery } from "../../state/queries";
+import { refreshInstances, usePanelQuery, useTicketingSources } from "../../state/queries";
 import { SettingField, useSettings } from "../settings/useSettings";
 import { AgentPicker, useAgentChoices } from "../settings/screens/AgentPicker";
 import { openConnectGitHub } from "../../lib/githubConnect";
@@ -28,6 +34,7 @@ import {
   type ItemWorkspace,
 } from "./kit";
 import { RepoSourceList, type RepoOverrides } from "./RepoSources";
+import { prsOn, useIntakePause } from "./pause";
 import { prMatches } from "./search";
 import type { TabProps } from "./IntakeDialog";
 
@@ -68,9 +75,13 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
     min_age_minutes?: number | string;
     skip_authors?: string[] | string;
   };
-  // Absent => on (the default once repos exist); explicit false => paused.
-  const enabled = gh.enabled !== false;
   const repos = Array.isArray(gh.repos) ? gh.repos : [];
+  // Explicit true, or unset with repos already watched (settings from before
+  // the off-by-default change); explicit false => off.
+  const enabled = prsOn(gh);
+  // Off because Pause intake turned it off (it will come back on Resume).
+  const pause = useIntakePause((useTicketingSources(true).data || []).length);
+  const pausedOff = !enabled && repos.length > 0 && pause.pausedKind("prs");
   const overrides = (gh.repo_settings || {}) as RepoOverrides;
   const skipAuthors = Array.isArray(gh.skip_authors)
     ? gh.skip_authors.join(", ")
@@ -136,7 +147,16 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
       repos={repos}
       overrides={overrides}
       onSave={(list, next, msg) =>
-        saveGithub({ repos: list, repo_settings: next }, msg)
+        saveGithub(
+          {
+            repos: list,
+            repo_settings: next,
+            // The first repository on a setup that never chose: saved OFF, so
+            // adding one never starts acting on comments by surprise.
+            ...(gh.enabled == null && !repos.length && list.length ? { enabled: false } : {}),
+          },
+          msg
+        )
       }
       defaults={{
         agent: String(gh.agent || agentChoices.fallback || ""),
@@ -151,12 +171,11 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
       listId="gh-repos-list"
       addId="gh-repo-add-btn"
       addLabel="+ Add repository"
-      emptyText="No repositories yet — add one below to start reviewing your PRs."
+      emptyText="No repositories yet — add one you open PRs on."
       hint={
         <>
-          Each card is one repository, with its own agent CLI and filters. Blank fields
-          inherit the tab defaults under <strong>Advanced options</strong>. Adding a
-          repository turns review on; remove them all to turn it off.
+          Each card is one repository, with its own agent and filters. Blank fields use the
+          defaults under <strong>Advanced options</strong>.
         </>
       }
     />
@@ -165,7 +184,7 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
   const workList = (
     <WorkListPanel
       key="work"
-      label="Open pull requests"
+      label="Your open pull requests"
       onRefresh={loadOpenPrs}
       note={prsNote}
       rowId="gh-open-prs-row"
@@ -175,10 +194,8 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
       toolbarExtra={prs && prs.length ? filter.control : undefined}
       hint={
         <>
-          Every non-draft open PR on your watched repositories, grouped by repository,
-          with why auto review has or hasn't
-          picked it up. <strong>Begin review</strong> starts a review session for that PR
-          right now, bypassing the author / age / base-branch / already-reviewed filters.
+          Each row says whether auto-start will take it. <strong>Start</strong> addresses a
+          PR's comments now, whatever the filters say.
         </>
       }
     >
@@ -218,10 +235,13 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
                     meta={`by ${p.author || "?"} · ${ageText(p.created_at)} · into ${p.base_ref || "?"}`}
                     hasSession={p.has_session}
                     eligible={p.eligible}
-                    eligibleLabel="queued for auto review"
+                    eligibleLabel={
+                      enabled ? "will auto-start" : pausedOff ? "auto-start paused" : "auto-start off"
+                    }
+                    eligibleOn={enabled}
                     reasons={p.reasons}
-                    actionLabel="Begin review"
-                    failPrefix="Begin review failed"
+                    actionLabel="Start"
+                    failPrefix="Start failed"
                     workspace={p.workspace}
                     onReopen={async () => {
                       const title = await reopenIntakeItem({
@@ -252,7 +272,7 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
                       // instead of leaving the sidebar blank through the PR clone.
                       refreshInstances();
                       setTimeout(relistPrs, 5000);
-                      return "Review session " + (r?.title || "");
+                      return { message: "Session " + (r?.title || ""), title: r?.title };
                     }}
                   />
                 ))
@@ -278,43 +298,38 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
     <>
       <div className="caps-gate" data-caps-gate="git">
         <p>
-          Install <strong>Git</strong> to get access to these features — automated PR review
-          checks out and works on your pull-request branches, which needs git. Install it (e.g.{" "}
-          <code>sudo apt install git</code> / <code>brew install git</code>), then reload this
-          page.
-        </p>
-      </div>
-      <div className="caps-gate" data-caps-gate="ticketing">
-        <p>
-          Connect a <strong>ticketing tool</strong> to get access to these features — automated
-          PR review runs alongside ticket ingestion, which needs a connected ticketing source
-          (Jira, Linear, GitHub Issues, Shortcut or Asana).
-        </p>
-        <p>
-          <button type="button" className="linklike" data-goto-tab="tickets" onClick={() => gotoTab("tickets")}>
-            Connect one on the Tickets tab
-          </button>
+          Install <strong>Git</strong> to use this — a session checks out your PR's branch.
+          Install it (e.g. <code>sudo apt install git</code> / <code>brew install git</code>),
+          then reload this page.
         </p>
       </div>
       <p className="set-hint set-block-hint">
-        MindFlock watches <em>your own</em> open pull requests on the repositories below and
-        spins up a session to address review comments. Runs while ingestion is active.
+        When a reviewer comments on one of <em>your own</em> open PRs, MindFlock starts a
+        session that addresses the comments. It doesn't review other people's PRs.
       </p>
 
       <AutomationSwitch
-        label="Automated review"
-        title="Turn automated PR review on or off — your repositories are kept either way"
+        label="Auto-address review comments"
+        title="Start a session on its own when one of your PRs gets review comments — your repositories are kept either way"
         rowId="gh-pr-toggle-row"
         inputId="gh-pr-enabled"
         statusId="gh-pr-status"
         checked={enabled}
+        paused={pausedOff}
+        disabled={!n}
         onChange={(next) =>
           saveGithub(
             { enabled: next },
-            next ? "Automated review on" : "Automated review paused"
+            next ? "Auto-address review comments on" : "Auto-address review comments off"
           )
         }
-        note={n ? undefined : "Add a repository below and this starts reviewing your PRs on it"}
+        note={
+          !n
+            ? "Add a repository below first"
+            : pausedOff
+              ? "Intake is paused — Resume intake at the top turns it back on"
+              : undefined
+        }
       />
 
       {/* WORK FIRST once a repository is watched: the PRs are the reason you
@@ -330,51 +345,39 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
         <summary>Advanced options</summary>
         <div className="pr-advanced-body">
           <p className="set-hint set-block-hint">
-            The defaults every repository card inherits, plus the settings that are
-            genuinely one-per-app (the poll loop).
+            Defaults for every repository card. A card can override each one.
           </p>
           <AgentPicker
-            label="Agent CLI"
+            label="Agent"
             value={String(gh.agent || "")}
             choices={agentChoices}
             onChange={(v) => s.saveField("github", "agent", v)}
-            hint={
-              <>
-                Which coding CLI runs PR-review sessions by default. Independent of issue
-                handling's — pick a provider whose Connections row is green, or leave it on
-                the app default. A repository card can override it.
-              </>
-            }
+            hint={<>Which agent addresses the comments.</>}
           />
           <label className="set-row">
             <span className="set-label">Base branch</span>
             <SettingField group="github" field="base_branch" placeholder="e.g. main" />
             <span className="set-hint">
-              Only PRs targeting this branch are auto-reviewed. Blank is <em>not</em> "every
-              branch" — it falls through to <code>[repository].base_branch</code> and then to{" "}
-              <code>main</code>, so set it explicitly if your repos disagree about their
-              default branch (or override it per repository on its card). A PR into any other
-              branch is still listed above with a chip saying so.
+              Only PRs into this branch auto-start. Blank = the repo's default branch (else
+              main).
             </span>
           </label>
           <label className="set-row">
             <span className="set-label">Min PR age (minutes)</span>
             <SettingField group="github" field="min_age_minutes" type="number" placeholder="15" />
             <span className="set-hint">
-              Grace period after a PR opens before review starts, so you can finish pushing.
-              Default 15. A repository card can override it.
+              Wait this long after a PR opens, so you can finish pushing. Default 15.
             </span>
           </label>
           <label className="set-row">
             <span className="set-label">Poll every (seconds)</span>
             <SettingField group="github" field="poll_interval_seconds" type="number" placeholder="60" />
             <span className="set-hint">
-              How often to check GitHub for new PRs. Default 60. One poll loop covers every
-              repository, so this one is not per-card.
+              How often to check GitHub. Default 60. Applies to every repository.
             </span>
           </label>
           <label className="set-row">
-            <span className="set-label">Skip authors</span>
+            <span className="set-label">Ignore comments from</span>
             <input
               type="text"
               id="gh-skip-authors"
@@ -384,13 +387,11 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
               onChange={(e) => setSkipDraft(e.target.value)}
               onBlur={() => {
                 const list = skipDraft.split(",").map((x) => x.trim()).filter(Boolean);
-                saveGithub({ skip_authors: list }, "Saved skip authors");
+                saveGithub({ skip_authors: list }, "Saved");
               }}
             />
             <span className="set-hint">
-              Comma-separated GitHub logins whose <em>review comments</em> are ignored —
-              review only ever takes your own PRs, so this is the bot feedback you don't
-              want acted on, not a list of authors to skip. A repository card can override it.
+              GitHub logins, comma-separated — e.g. bots whose comments you don't want acted on.
             </span>
           </label>
           <div className="set-row">
@@ -406,11 +407,7 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
               </button>
             </span>
             <span className="set-hint">
-              One sign-in for PR review, issue handling and Open PR, shared with your other
-              devices (Settings → Connections → GitHub → Connect). Its <strong>Test</strong>{" "}
-              asks GitHub who the token is and whether it reaches your first repository; a
-              card's <strong>Test access</strong> checks one repository. Pushing never needs
-              it — that is plain git over your own remote.
+              One GitHub sign-in for PRs, issues and Open PR, shared with your devices.
             </span>
           </div>
         </div>

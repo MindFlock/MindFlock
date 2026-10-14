@@ -742,7 +742,6 @@ function bridgeTestPlanEvents() {
     refreshTestPlans();
   };
   ev.subscribe("session.test_plan_ready", bump);
-  ev.subscribe("session.test_plan_due", bump);
 
   /** ...and SAY so, for the two endings that were silent.
    *
@@ -769,6 +768,18 @@ function bridgeTestPlanEvents() {
         (n === 1 ? " step" : " steps")
       );
     })
+  );
+  // "Your turn": the work shipped and its checklist came due. Said where the
+  // user is, not only as a number on the Verify badge.
+  ev.subscribe("session.test_plan_due", (env) =>
+    say(
+      env,
+      (d) =>
+        String(d.title || d.plan || "A change") +
+        " shipped to " +
+        String(d.live_branch || "the live branch") +
+        " — its checklist is ready in Verify",
+    ),
   );
   ev.subscribe("session.test_plan_failed", (env) =>
     say(
@@ -815,24 +826,43 @@ function bridgeTestPlanEvents() {
         String(d.title || d.plan || "a checklist") +
         " — " +
         String(d.run_session || "the session") +
-        " never wrote its answers. Run it again.",
+        " never wrote its answers. Press Check now to try again.",
     ),
   );
-  ev.subscribe("session.test_plan_checked", (env) =>
-    say(env, (d) => {
-      const failed = Number(d.failed) || 0;
-      const mine = Number(d.needs_you) || 0;
-      const bits = [
-        failed ? failed + (failed === 1 ? " step failed" : " steps failed") : "",
-        mine ? mine + (mine === 1 ? " step needs you" : " steps need you") : "",
-      ].filter(Boolean);
-      return (
-        String(d.title || d.plan || "A checklist") +
-        " checked" +
-        (bits.length ? " — " + bits.join(", ") : " — everything passed")
-      );
-    })
+  ev.subscribe("session.test_plan_checked", (env) => say(env, checkedToastText));
+}
+
+/** The toast for `session.test_plan_checked`. A check run before the merge
+ * (`before_merge: true`) ran on the branch, not on what shipped — it says so. */
+export function checkedToastText(d: Record<string, unknown>): string {
+  const failed = Number(d.failed) || 0;
+  const mine = Number(d.needs_you) || 0;
+  const bits = [
+    failed ? failed + (failed === 1 ? " step failed" : " steps failed") : "",
+    mine ? mine + (mine === 1 ? " step needs you" : " steps need you") : "",
+  ].filter(Boolean);
+  return (
+    String(d.title || d.plan || "A checklist") +
+    (d.before_merge === true ? " checked on the branch" : " checked") +
+    (bits.length ? " — " + bits.join(", ") : " — everything passed")
   );
+}
+
+/** Whether GitHub is connected here (`GET /api/github/status`), for forms that
+ * need a token — Verify's repository list warns before you add one, rather
+ * than after Test access. Read rarely: the answer changes when somebody signs
+ * in, and the Connect dialog refreshes it then. */
+export function useGithubConnected(enabled = true) {
+  return useQuery({
+    queryKey: ["github-status"],
+    queryFn: async () => {
+      const r = await api<{ connected?: boolean }>("/api/github/status");
+      return !!r?.connected;
+    },
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  });
 }
 
 /** The Verify dialog's list, and the top bar's due count.

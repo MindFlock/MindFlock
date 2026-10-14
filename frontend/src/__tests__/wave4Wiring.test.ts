@@ -24,7 +24,7 @@ describe("J2 — command palette (Ctrl+P / Ctrl+Shift+P)", () => {
     expect(top).toContain('"palette-btn"');
     // Ctrl+P / Ctrl+Shift+P (Cmd on Mac); Ctrl+K is the chord prefix for
     // focused-session git actions.
-    expect(top).toContain("Ctrl+P");
+    expect(top).toContain('keys("palette")');
   });
 
   it("toggles through the capture-phase keymap, so it works over a terminal", () => {
@@ -107,11 +107,15 @@ describe("J3 — session context line (diff stat)", () => {
 });
 
 describe("J4 — prompt presets in the New-session dialog", () => {
-  it("renders the prompt box and the preset picker / save / delete", () => {
+  it("renders the Task box and the saved-prompt picker (saving lives in Prompts)", () => {
     const fold = code("components/dialogs/newSession/PromptFold.tsx");
-    for (const id of ['"new-prompt"', '"new-preset"', '"preset-save"', '"preset-del"']) {
+    for (const id of ['"new-prompt"', '"new-preset"', '"preset-manage"']) {
       expect(fold, id).toContain(id);
     }
+    // One save on the New form: "Save as template…" (the whole setup). Saved
+    // prompts are added and removed in the Prompts dialog.
+    for (const id of ['"preset-save"', '"preset-del"']) expect(fold, id).not.toContain(id);
+    expect(code("components/dialogs/newSession/FooterActions.tsx")).toContain('id="new-save-tpl"');
   });
 
   it("ships the four built-ins under the documented key", () => {
@@ -125,10 +129,10 @@ describe("J4 — prompt presets in the New-session dialog", () => {
     for (const p of BUILTIN_PRESETS) expect(p.prompt.length).toBeGreaterThan(0);
   });
 
-  it("save / delete affordances and the seed prompt on the create payload", () => {
+  it("Manage… hands over to Prompts, and the seed prompt rides the create payload", () => {
     const fold = code("components/dialogs/newSession/PromptFold.tsx");
-    expect(fold).toContain("loadUserPresets");
-    expect(fold).toContain("saveUserPresets");
+    expect(fold).toContain('openDialogFor("prompts", "new")');
+    expect(code("components/dialogs/PromptsDialog.tsx")).toContain("saveUserPresets");
     expect(code("lib/newSessionSubmit.ts")).toContain("body.prompt = promptVal");
   });
 });

@@ -163,7 +163,7 @@ def test_agent_one_row_per_provider_default_first_and_marked(quiet):
     assert rows[0]["name"].lower().startswith("coding")  # the e2e journey pin
     assert rows[0]["required"] is True
     assert rows[0]["test"] == {
-        "endpoint": "/api/settings/test/agent",
+        "endpoint": "/api/connections/test/agent",
         "method": "POST",
         "body": {"provider": "claude"},
     }
@@ -177,10 +177,40 @@ def test_agent_signed_in_is_connected_with_no_fix(quiet):
 
 
 def test_agent_with_nothing_to_sign_in_to_is_connected(quiet):
-    _stub_providers(quiet, _provider(authenticated=False, has_login=False))
+    # No login flow and nowhere it says credentials live: nothing to check.
+    _stub_providers(
+        quiet, _provider(authenticated=False, has_login=False, auth_probe=False)
+    )
     r = connections._agent_connections()[0]
     assert r["status"] == "connected"
     assert "no sign-in needed" in r["detail"]
+
+
+def test_api_key_agent_without_a_key_needs_attention_with_the_doctors_fix(quiet):
+    """Aider: no login flow, but it names the API-key env vars it reads and
+    none is set — not "no sign-in needed · Connected"."""
+    _stub_providers(
+        quiet,
+        _provider("claude"),
+        _provider(
+            "aider",
+            is_default=False,
+            authenticated=False,
+            auth_probe=True,
+            has_login=False,
+            login_command="",
+        ),
+    )
+    r = next(r for r in connections._agent_connections() if r["id"] == "agent:aider")
+    assert r["status"] == "needs_attention"
+    assert "not signed in" in r["detail"]
+    assert "no sign-in needed" not in r["detail"]
+    # The doctor's own remedy: the API keys it reads, nothing to run.
+    assert r["fix"].startswith("set one of the API keys `aider` reads (")
+    assert r["fix_command"] == ""
+    # No Sign in button: there is no login flow to open.
+    assert r["action"]["label"] != "Sign in"
+    assert r["action"] == {"label": "Set up", "kind": "screen", "target": "providers"}
 
 
 def test_agent_installed_not_signed_in_needs_attention_with_sign_in(quiet):
@@ -199,6 +229,92 @@ def test_agent_installed_not_signed_in_needs_attention_with_sign_in(quiet):
         "provider": "codex",
     }
     assert r["fix_command"] == "codex login"
+
+
+# --- the agent card: one next action, the account in words (round 4) ------
+def test_default_agent_not_installed_offers_the_one_click_install(quiet):
+    _stub_providers(quiet, _provider(installed=False, authenticated=False))
+    r = connections._agent_connections()[0]
+    assert r["status"] == "needs_attention"
+    assert r["action"] == {
+        "label": "Install",
+        "kind": "dialog",
+        "target": "agent-install",
+        "provider": "claude",
+    }
+    # The copy line stays on the row as the fallback when the plan lacks it.
+    assert r["fix_command"] == "npm i -g claude"
+
+
+def test_other_agent_not_installed_keeps_the_copy_command(quiet):
+    _stub_providers(
+        quiet,
+        _provider("claude"),
+        _provider("codex", is_default=False, installed=False),
+    )
+    r = next(r for r in connections._agent_connections() if r["id"] == "agent:codex")
+    assert r["action"]["kind"] == "copy"
+
+
+def test_connected_default_leads_to_change_agent_not_a_second_card(quiet):
+    _stub_providers(quiet, _provider("claude"), _provider("codex", is_default=False))
+    rows = {r["id"]: r for r in connections._agent_connections()}
+    assert rows["agent"]["action"] == {
+        "label": "Change agent",
+        "kind": "screen",
+        "target": "coding",
+    }
+    # Another agent's card has Test and nothing else to press.
+    assert rows["agent:codex"]["action"] is None
+
+
+def test_signed_in_claude_names_its_account(quiet, tmp_path, monkeypatch):
+    (tmp_path / ".claude.json").write_text(
+        '{"oauthAccount": {"emailAddress": "me@example.com"}}', encoding="utf-8"
+    )
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    r = connections._agent_connections()[0]
+    assert r["account"] == "me@example.com"
+    assert (
+        connections.agent_test_line("claude", "ok", "ok", "")
+        == "Signed in as me@example.com"
+    )
+
+
+def test_agent_test_line_is_plain_words_never_a_path():
+    # Only Claude Code's own config names an account; the rest read "Signed in".
+    line = connections.agent_test_line
+    assert line("codex", "ok", "ok", "login state found in /x/auth.json") == "Signed in"
+    assert (
+        line("codex", "ok", "ok", "OPENAI_API_KEY is set")
+        == "Signed in with an API key"
+    )
+    assert line("claude", "fail", "warn", "") == "Claude Code isn't installed"
+    assert line("codex", "ok", "warn", "") == "Installed, not signed in yet"
+    assert "can't check" in line("goose", "ok", "info", "")
+
+
+def test_agent_test_route_answers_in_words(monkeypatch):
+    monkeypatch.setattr(
+        doctor,
+        "check_agent_cli_for",
+        lambda name: types.SimpleNamespace(
+            status="ok", detail="/usr/bin/codex", to_dict=lambda: {"status": "ok"}
+        ),
+    )
+    monkeypatch.setattr(
+        doctor,
+        "check_agent_auth_for",
+        lambda name: types.SimpleNamespace(
+            status="ok",
+            detail="login state found in /home/me/.codex/auth.json",
+            to_dict=lambda: {"status": "ok"},
+        ),
+    )
+    d = client.post("/api/connections/test/agent", json={"provider": "codex"}).json()
+    assert d["ok"] is True
+    assert d["detail"] == "Signed in"
+    assert "auth.json" not in d["detail"]
 
 
 def test_agent_sign_in_carries_the_default_account_profile(quiet):

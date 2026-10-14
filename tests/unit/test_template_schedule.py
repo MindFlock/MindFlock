@@ -317,6 +317,33 @@ def test_loop_is_off_under_pytest():
 
 
 # --------------------------------------------------------------------------- #
+# Autopilot on a template: its run never shares a checkout
+# --------------------------------------------------------------------------- #
+def test_an_autopilot_template_never_runs_in_place(stores, fake_create, monkeypatch):
+    monkeypatch.setattr(ts, "_arm_autopilot", lambda title, depth: depth)
+    status, _ = asyncio.run(
+        ts.fire(tpl(schedule=None, in_place=True, autopilot="pr"), "manual")
+    )
+    assert status == 202
+    # It commits for THIS session, so never in a checkout others share.
+    assert "in_place" not in fake_create[0]
+    # Without one in_place is kept.
+    asyncio.run(ts.fire(tpl("plain", schedule=None, in_place=True), "manual"))
+    assert fake_create[1]["in_place"] is True
+
+
+def test_status_names_the_time_zone(ny_tz, stores, fake_create):
+    from backend.web.addons import templates
+
+    templates.save_template(tpl())
+    st = ts.status_for(templates.list_templates(), now=at(2026, 10, 13, 12, 0))
+    assert st["runs"]["nightly"]["tz"] == "EDT"
+    assert st["tz"] == "EDT"
+    st = ts.status_for(templates.list_templates(), now=at(2026, 12, 1, 12, 0))
+    assert st["runs"]["nightly"]["tz"] == "EST"
+
+
+# --------------------------------------------------------------------------- #
 # Cron schedules
 # --------------------------------------------------------------------------- #
 CRON_30 = {"cron": "*/30 * * * *"}

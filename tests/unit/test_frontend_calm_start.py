@@ -55,12 +55,13 @@ class TestNewDialog:
         code = _code(_new())
         assert "window.prompt" not in code
         assert not re.search(r"(?<![\w.])prompt\(", code)
-        # The replacement is an inline row under the select.
-        assert 'id="preset-name"' in code
-        assert 'id="preset-name-save"' in code
-        assert 'id="preset-name-cancel"' in code
-        assert "Saved prompt…" in code
-        assert 'openDialogFor("prompts")' in code
+        # The form's one save is "Save as template…", an inline name row
+        # (never a prompt()); prompts themselves are added in the Prompts
+        # dialog, which New's Manage… opens and which hands back to New.
+        assert 'id="new-save-tpl-name"' in code
+        assert 'id="new-save-tpl-save"' in code
+        assert "Insert a prompt…" in code
+        assert 'openDialogFor("prompts", "new")' in code
 
     def test_the_tab_strip_waits_for_a_tracker(self):
         code = _code(_new())
@@ -88,8 +89,9 @@ class TestNewDialog:
         code = _code(_new())
         i = code.index("<RunOptions")
         assert "{batch && (" in code[i - 400 : i]
+        # Fast-track and Auto-split sit under the form's More options.
+        assert code.index('id="new-advanced"') < code.index('id="new-ft-row"')
         assert code.index('id="new-ft-row"') < code.index('id="new-split-row"')
-        assert code.index('id="new-split-row"') < code.index('id="new-advanced"')
         # Review details first is back for every single-session prompt.
         assert "const runMode = (page === 1 && draft.listMode) || splitOn;" in code
 
@@ -143,7 +145,10 @@ class TestFirstRun:
         model = _read("components/setup/setupModel.ts")
         assert 'v !== "1" && v !== "install"' in model
 
-    def test_the_tour_no_longer_opens_itself(self):
+    def test_app_never_opens_the_tour(self):
+        """App never opens it; the one automatic opening is WelcomeTour's
+        first-launch hook on the synced `welcome_tour` pref (pinned in
+        onboarding.test.ts), never a per-browser flag."""
         app = _code(_read("App.tsx"))
         assert "tourDecision" not in app and "openTour" not in app
         store = _code(_read("state/store.ts"))
@@ -174,8 +179,10 @@ class TestFirstRun:
         # Both surfaces render the same component.
         assert "<SetupChecklist />" in _read("components/grid/TerminalGrid.tsx")
         assert "<SetupChecklist />" in _read("components/dialogs/SetupDialog.tsx")
-        # The phone extra: Install Tailscale OR the QR.
-        assert 'data-phone="install-tailscale"' in src and 'data-phone="qr"' in src
+        # The phone extra: Install Tailscale (or start it, when it's installed
+        # but not answering) OR the QR.
+        assert '"install-tailscale"' in src and '"fix-tailscale"' in src
+        assert 'data-phone="qr"' in src
 
     def test_grid_card_says_get_set_up(self):
         src = _read("components/grid/TerminalGrid.tsx")

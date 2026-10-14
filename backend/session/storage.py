@@ -293,6 +293,10 @@ class InstanceData:
     # (sandboxed; see docs/peer-link.md). "" for every ordinary session. Only
     # emitted when set, so ordinary entries serialize unchanged.
     peer_share: str = ""
+    # What the session was asked to do at create time (the UI's "Task:"
+    # line). Set once at create time. Only emitted when set, so pre-feature
+    # entries serialize unchanged.
+    task: str = ""
 
     def to_dict(self) -> dict:
         """Build the JSON-ready dict, preserving Go field order exactly."""
@@ -331,6 +335,8 @@ class InstanceData:
             d["playbook"] = self.playbook
         if self.peer_share:
             d["peer_share"] = self.peer_share
+        if self.task:
+            d["task"] = self.task
         return d
 
     @classmethod
@@ -369,6 +375,7 @@ class InstanceData:
             peer_share=(
                 d.get("peer_share") if isinstance(d.get("peer_share"), str) else ""
             ),
+            task=(d.get("task") if isinstance(d.get("task"), str) else ""),
         )
 
 
