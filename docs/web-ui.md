@@ -1446,11 +1446,15 @@ notification fires either way.
   open on a secure origin (HTTPS or localhost), so it is silent on a plain-http
   tailnet URL and says so in the toggle's status line.
 - **Phone push (ntfy)** — optional, off until you turn it on, in the
-  screen's **Advanced** fold. The *server*
+  screen's **Phone alerts (ntfy)** fold. The *server*
   publishes to an [ntfy](https://ntfy.sh) topic your phone subscribes to, so an
-  alert reaches you with MindFlock closed and no tab anywhere. Set a topic
-  (**Generate** offers a random one), scan the QR into the ntfy app, and
-  **Send a test** confirms the round trip; the row afterwards reports the last
+  alert reaches you with MindFlock closed and no tab anywhere. **Set up** (the
+  Phone alerts row) generates a long random topic AND saves it when none is
+  saved, so the topic and its QR stay the same on every visit (**Generate**
+  picks a new one; the empty field's grey text is just "press Generate",
+  never an unsaved name). Scan the QR into the ntfy app, and
+  **Send a test** confirms the round trip (with no topic it is disabled and
+  says *Needs a topic first: press Generate.*); the row afterwards reports the last
   push (or why it failed). Point **Server** at your own ntfy instance to keep
   everything in-house, and give **Access token** a value only if the topic is
   protected — **Clear** beside it removes a saved one, since blanking the field
@@ -3434,15 +3438,18 @@ advanced settings** at the foot of the nav (`#settings-advanced-toggle`, with
 "*N* more screens" under it) reveals every other screen; **Hide advanced
 settings** puts them away again. The choice is the synced pref
 `prefs.settings_advanced` (cached in localStorage `mf_settings_advanced`), so it
-follows the person to all their devices, like the theme. The controls on a
-basic screen that only some people need sit in a collapsed **Advanced** fold
-on that screen (open by default in advanced mode): General's plan window
-budget and terminal scroll speed, Notifications' phone alerts (ntfy) and its
-expert alerts, Agents' keep-usage-windows-warm schedule and **Check another
-agent**, Workspace's live branch, fast-track depth and retryable pre-commit
-hooks, and Connections' other agents and its rows beyond what you use
-(devices and people, orchestration, databases, phone push, extensions,
-system). A control's long explanation sits in a small **Learn more** fold
+follows the person to all their devices, like the theme. There is ONE
+advanced mechanism: the power-user controls that live on a basic screen sit
+in an **Advanced** section (`AdvancedFold`) that basic mode does not render
+at all, and advanced mode shows as an open fold — General's plan window
+budget and terminal scroll speed, Agents' keep-usage-windows-warm schedule
+and **Check another agent**, Workspace's live branch, fast-track depth and
+retryable pre-commit hooks, and Connections' other agents and its rows beyond
+what you use (devices and people, orchestration, databases, phone push,
+extensions, system — so basic mode never calls a merely enabled extension
+"Connected"). Only Notifications' two optional folds — **Phone alerts
+(ntfy)** and **More alerts** — opt back into basic mode (`basic`), as closed
+folds. A control's long explanation sits in a small **Learn more** fold
 under its one-line hint (`LearnMore` in settingsMode.tsx). A deep link to an
 advanced screen — the palette, a Connections card, an in-screen link,
 `openSettings(...)`, a legacy key — still opens it in basic mode: the open
@@ -3483,8 +3490,17 @@ A few screens got quieter:
 - **Security**'s turn-off and **Regenerate**, and **Accounts**' **Remove
   anyway**, confirm in an inline row with **Cancel**. They used to be browser
   `confirm()`s, which do nothing in the desktop app.
-- Saving any screen toasts **Saved**, and the IDE toggle toasts *IDE
-  auto-adopt on* / *off*.
+- **Every save says "✓ Saved" right by the control** — text fields, numbers,
+  selects and toggles alike (`savedCue.ts`: the screens pane notes the control
+  last changed or left, and the save marks its label for a moment; a toast
+  only when no such control is on screen). A number field refuses a value it
+  can't take (below 0) with the reason under it — *Enter a number, 0 or more,
+  or leave it blank for no limit.* — instead of saving `-2` as "no limit".
+- **Search settings…** heads the nav (`#settings-search`, on the command
+  palette's own index, `palette/settingsSearch.ts`, synonyms included): the
+  matches list under the box as you type; ↑/↓ and Enter (or a click) open the
+  screen, scroll to the control (opening a fold around it) and outline it for
+  a moment; Escape clears the box before it closes Settings.
 - **Notifications** opens on **Where alerts go**: In MindFlock (the bell,
   always on), **Desktop notifications** (the only desktop on/off toggle; the
   bell carries no copy) and **Phone alerts** (**Set up** opens the ntfy fold),
@@ -3519,17 +3535,36 @@ A few screens got quieter:
 - **Connect GitHub** never shows "device flow is not configured": without a
   device flow the token path leads (the `repo` and `read:org` scopes named,
   the link opening GitHub's token page with both ticked), with the gh CLI
-  sign-in as a second button when gh is installed. **Test** and **Check I
-  can push** stay disabled until a credential is saved.
+  sign-in as a second button when gh is installed. The token path is three
+  numbered steps — **1** make a token (**Open GitHub ↗**), **2** paste it,
+  **3** **Save & test** (disabled with *Paste a token first.* beside it) — and
+  the answer appears right under step 3: *✓ Connected as @you* (then the Test
+  result) or *✗ Token rejected — GitHub says it is mistyped, expired or
+  revoked*. **Test** appears once connected (before that, step 3 is the test);
+  **Check I can push** is always available — it asks the repository's remote
+  with git and needs no token. Connected, the steps fold under **Use a
+  different token**.
+- **Workspace** answers *where do my worktrees live?* in one place (**Where
+  your worktrees live**, `GET /api/settings/workspace-paths`): the absolute
+  folder for **Sessions you start** (`<config dir>/worktrees`) and for
+  **Ticket and PR sessions** (the **Workspace folder** field — a relative one
+  anchored where the ticket pipeline runs, `~` expanded and stored expanded),
+  each with **Copy**. The folder is checked as you type: a missing one *will
+  be created*, an unwritable one or a file is flagged in red under the field,
+  and `MINDFLOCK_WORKSPACE_DIR` is named when it overrides the field. **How
+  ticket sessions copy the repo** (worktree or full clone, `engine.mode`)
+  moved here from Engine & updates.
 
 **Spacing.** Every screen runs on one rhythm (`--set-rhythm`, 24px, on
 `#settings-panel`): a field's label, control and hint sit 6px apart, the next
 field starts 24px below, so a hint always reads as part of the field above it.
 Section titles get 40px above and 16px below; cards and inline button rows
 use the same 4/8/12/16/24 scale. In a window narrower than 600px the nav
-wraps into a few short rows of tabs above the screen (group headings hidden;
-advanced mode's long list scrolls inside a capped height) and the ntfy fields
-stack their labels above the inputs.
+becomes a short stack above the screen — the search box, one `<select>` of
+the screens (`#settings-nav-select`, the same list as the buttons) and the
+advanced switch on its own line — instead of a wrap of tabs that re-flowed
+whenever the bold active tab changed width; the ntfy fields stack their
+labels above the inputs.
 
 - **Cursor auto-adopt** — adopt Cursor-opened workspaces as sessions.
 - **Per-session budget (USD, 0 = off)** (General) — cost guardrail: when a session's
