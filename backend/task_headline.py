@@ -712,6 +712,41 @@ _RESUME_HEADS = (
     "your usage limit has reset",
 )
 
+#: Claude Code's context-compaction hand-off ("This session is being continued
+#: from a previous conversation that ran out of context. The summary below
+#: …"). Machine text, but it carries the task: the summary has a section on
+#: what the user asked, usually quoting them. Its headings are free-form
+#: ("Primary Request and Intent", "What the user asked (their exact words)",
+#: "## Task (…)"). "Who/what I am" sections describe the session, not the
+#: ask, and are skipped, so a section is found by these words in its
+#: heading line.
+_COMPACTION_HEAD = "this session is being continued from a previous conversation"
+_ASK_HEADING = re.compile(
+    # A heading line (markdown "#", "1.", "**", or a short line ending in ":")
+    # whose words are about the user's ask — never a prose sentence that
+    # merely contains "task".
+    r"^[ \t]*(?:(?:#+|\d+\.|\*\*)[ \t]*[^\n]{0,40}?"
+    r"\b(?:primary request|user (?:asked|wants|requested)|what the user|request|task)\b[^\n]*"
+    r"|[^\n]{0,40}?\b(?:primary request|user (?:asked|wants|requested)|what the user|request|task)\b[^\n]{0,40}:[ \t]*)$",
+    re.I | re.M,
+)
+#: The next heading — where an ask section ends.
+_NEXT_HEADING = re.compile(
+    r"^[ \t]*(?:#+[ \t]|\d+\.[ \t]+[A-Z][^\n]{0,60}:[ \t]*$)", re.M
+)
+#: Quoted user words: "…" (straight or curly) that OPEN a statement — at a
+#: line start, after a colon, "> " or a list dash. A quote inside a sentence
+#: (a "minimap" of the code …) would otherwise pair one quote's close with
+#: the next one's open.
+_QUOTED = re.compile(r"(?:^|[:>]|^\s*[-*]|\d\.)\s*[\"“]([^\"”\n]{12,600})[\"”]", re.M)
+#: The summary's third-person framing in front of the request itself.
+_ASK_FRAMING = re.compile(
+    r"^(?:[-*\s]*)(?:\*\*[^*]{0,40}\*\*:?\s*)?(?:original(?:\s*\([^)]*\))?:\s*)?"
+    r"(?:the user(?:'s)?\s+(?:initially\s+|originally\s+|then\s+|first\s+)?"
+    r"(?:asked|wants|wanted|requested|request(?:ed)?|is asking|needs)\s+(?:me\s+|for\s+)?(?:to\s+)?)?",
+    re.I,
+)
+
 # --------------------------------------------------------------------------- #
 # Verb inflections (built once from the tables above)
 # --------------------------------------------------------------------------- #
@@ -2619,6 +2654,57 @@ def headline(text: Optional[str]) -> Headline:
         return Headline("", False)
 
 
+def _compaction_ask(summary: str) -> str:
+    """The user's request as a compaction summary records it: the section on
+    what the user asked — its quoted latest message, else its first quote,
+    else its first sentence without the "The user asked me to" framing.
+    "" when the summary has no such section."""
+    m = _ASK_HEADING.search(summary)
+    if not m:
+        return ""
+    body = summary[m.end() :]
+    end = _NEXT_HEADING.search(body)
+    if end:
+        body = body[: end.start()]
+    # The heading line itself may carry the ask after a colon
+    # ("Primary Request and Intent: - Original: build …").
+    head_tail = m.group(0).split(":", 1)[1] if ":" in m.group(0) else ""
+    section = (head_tail + "\n" + body).strip()
+    latest = re.search(r"latest[^\n]{0,80}", section, re.I)
+    if latest:
+        q = _QUOTED.search(section, latest.start())
+        if q:
+            return q.group(1)
+    q = _QUOTED.search(section)
+    if q:
+        return q.group(1)
+    # Else the first substantive line: not a bare list marker, not an intro
+    # that only announces what follows ("The user's instructions …:").
+    for line in section.splitlines():
+        line = line.strip().lstrip("-*> \t")
+        if len(line) < 12 or line.rstrip().endswith(":"):
+            continue
+        first = re.split(r"(?<=[.!?])\s", line, maxsplit=1)[0]
+        return _ASK_FRAMING.sub("", first).strip()
+    return ""
+
+
+def _compaction(raw: str) -> Headline:
+    """A context-compaction hand-off: the headline of the request its summary
+    records, NOT meaningful (machine text — a session's remembered headline
+    still wins; this shows only when there is nothing better). "Continue"
+    when the summary names no request."""
+    ask = _compaction_ask(raw[: MAX_INPUT_CHARS * 4])
+    # The first two sentences carry the ask; a long quote's later sentences
+    # are detail that pulls the reading off course.
+    ask = " ".join(re.split(r"(?<=[.!?])\s+", ask.strip())[:2])
+    if ask and not ask.lower().startswith(_COMPACTION_HEAD):
+        inner = _headline(ask)
+        if inner.text:
+            return Headline(inner.text, False, inner.confident)
+    return Headline("Continue", False)
+
+
 def task_headline(text: Optional[str]) -> str:
     """``text`` (a prompt) as a ~2–6 word verb phrase, sentence case, no
     trailing punctuation; "" when there is nothing to say."""
@@ -2642,6 +2728,8 @@ def _headline(text: Optional[str]) -> Headline:
         raw = _REPLY_HINT.sub("", raw[m.end() :]).strip()
     if raw.lower().startswith(_RESUME_HEADS):
         return Headline("Continue", False)
+    if raw.lower().startswith(_COMPACTION_HEAD):
+        return _compaction(raw)
     has_image = bool(_PLACEHOLDER.search(raw))
     clean = _normalise(raw)
     canned = _canned(clean)
@@ -2652,6 +2740,8 @@ def _headline(text: Optional[str]) -> Headline:
         words = _own_words(clean)
         return Headline(words, meaningful and _fallback_meaningful(clean, words), False)
     out, weak, confident = best
+    if confident and _echoes_its_verb(out, clean):
+        confident = False
     if (
         weak
         and has_image
@@ -2666,6 +2756,16 @@ def _headline(text: Optional[str]) -> Headline:
         if words:
             return Headline(words, meaningful and not weak, False)
     return Headline(out, meaningful and not weak, confident)
+
+
+def _echoes_its_verb(out: str, clean: str) -> bool:
+    """Whether a headline's object is only the prompt's own opening verb or a
+    question word — "Find out why and fix it" read as "Investigate Find": the
+    phrase verb took "find out", "why" was dropped as a question word, and the
+    verb itself was left as the object. Not a real object, so not confident."""
+    rest = [w.lower() for w in out.split()[1:]]
+    first = (clean.split() or [""])[0].lower().strip(".,:;!?")
+    return bool(rest) and all(w == first or w in _WH for w in rest)
 
 
 #: Verbs that are a whole task without an object.

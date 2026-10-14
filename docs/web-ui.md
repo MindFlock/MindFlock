@@ -534,7 +534,11 @@ drawing below terminal**, "why is the server using so much memory" reads
 when no rule reads the prompt cleanly the line shows your own words instead —
 its first sentence, cleaned and cut to 8 words with "…". A reply that carries
 no task ("continue", "yes", "commit and push", the revive prompt, a status
-ping) leaves the previous headline in place. Hover the line for the prompt
+ping) leaves the previous headline in place. Claude Code's context-compaction
+hand-off ("This session is being continued from a previous conversation…") is
+read through: the headline comes from the request its summary records (the
+user's quoted words, latest first), and still never replaces a remembered one.
+Hover the line for the prompt
 that headline came from, as typed. This bar does not condense: it shows the
 newest thing you actually asked.
 
