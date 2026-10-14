@@ -12,7 +12,8 @@ import { toast } from "../../../lib/toast";
 import { useUi } from "../../../state/store";
 import { SettingField, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
-import { AdvancedFold, LearnMore } from "../settingsMode";
+import { InfoTip } from "../../InfoTip";
+import { AdvancedFold } from "../settingsMode";
 import { flashSaved } from "../savedCue";
 
 export function General(_: ScreenProps) {
@@ -60,12 +61,12 @@ function ResumeOnUsageResetRow() {
         <span className="set-label">Resume sessions when usage comes back</span>
         <span className="set-hint notif-rule-desc">
           Tell a session that ran out of usage to carry on once your usage resets.
+          <InfoTip>
+            An agent that runs out of usage waits on its limit screen, even after the window
+            resets. With this on, MindFlock tells it to continue the moment usage returns.
+            Sessions with something queued resume either way.
+          </InfoTip>
         </span>
-        <LearnMore>
-          An agent that runs out of usage waits on its limit screen, even after the window
-          resets. With this on, MindFlock tells it to continue the moment usage returns.
-          Sessions with something queued resume either way.
-        </LearnMore>
       </span>
       {/* label wraps only the switch, so clicking the row text no longer flips it */}
       <label className="ca-switch">
@@ -99,12 +100,12 @@ function ReviveOnStartRow() {
         <span className="set-hint notif-rule-desc">
           Restart running agents on their own after MindFlock restarts, or after
           the system kills one for memory.
+          <InfoTip>
+            Without this, they wait as Offline until you click Restart. An agent killed
+            for running out of memory comes back once memory recovers, at most 3 times an
+            hour. Paused sessions and sessions out of usage are left alone.
+          </InfoTip>
         </span>
-        <LearnMore>
-          Without this, they wait as Offline until you click Restart. An agent killed
-          for running out of memory comes back once memory recovers, at most 3 times an
-          hour. Paused sessions and sessions out of usage are left alone.
-        </LearnMore>
       </span>
       {/* label wraps only the switch, so clicking the row text doesn't flip it */}
       <label className="ca-switch">

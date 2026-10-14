@@ -1905,23 +1905,30 @@ and **Clear** — beside the box on page 1 and beside **← Back** on the form,
 shown while something typed is in it — empties it on purpose. A Task the
 opening's own last-used template wrote doesn't count as typed.
 
-Every pane hangs from a fixed top edge and is its own natural height, so
-switching tabs or opening a fold never moves the card's top: a centred card
-shifts by half of any height change. Session page 1 and the Ticket tab share
-one anchor (`--nf-anchor-h`, `min(86vh, 400px)`); the full form (page 2,
-`.nf-form-page`) has a higher one (`min(90vh, 640px)`) and grows downward when
-**More options** opens, scrolling inside once it reaches the bottom of the
-window. With More options shut the form fits a 900 px window without a
-scroll; at 420 px the fields stack and Fast-track's choices wrap.
+Every pane — Session page 1, the full form and the Ticket tab — hangs from
+ONE fixed top edge at its own natural height, so switching tabs or opening a
+fold never moves the card's top (a centred card shifts by half of any height
+change). The edge is placed so the tallest common pane, the full form with
+More options shut (`--nf-anchor-h`, 620 px), reads as centred; the shorter
+panes sit a little high, like a launcher. It is floored 16 px below the top
+bar (which draws over every modal), so on a short window — the desktop app at
+125 % zoom is ~723 px — the card never starts under or against it; on a phone
+it sits straight under the bar. A card grows downward to 24 px above the
+window's bottom and then scrolls inside. With More options shut the form fits
+a 723 px window without a scroll; at 420 px the fields stack and Fast-track's
+choices wrap.
 
 **The form, in order:** the **Templates** strip (only once a template exists),
 **Folder** and **Agent**, **Task**, **Works in**, then **More options** (shut).
 The footer has **Save as template…**, **Clear** (while there is a draft),
 **← Back** and **Create**.
 
-- **Folder** — with *Folders you might mean — click one to use it* under it
-  (**Recent**, **Started in** = the folder MindFlock was started in, **Home**;
-  the 📦 git repo / 📁 plain folder legend is the head's tooltip). The box is
+- **Folder** — with one quiet line of suggestion chips under it: recent
+  folders first, each run headed by a muted **Recent** / **Started in** (the
+  folder MindFlock was started in) / **Home**, 📦 for a git repo and 📁 for a
+  plain folder. Whole chips that don't fit are hidden and the last chip says
+  how many (*8 more…*); it unfolds the line into all of them, one run per
+  line (**Fewer** folds it back; picking a chip folds it too). The line is
   left out when its only suggestion is the folder already in the field.
 - **Agent** — the agents this device has; one that isn't installed reads
   *codex (not installed)* (`GET /api/providers/status`, this device only — an
@@ -1934,23 +1941,27 @@ The footer has **Save as template…**, **Clear** (while there is a draft),
   signed in yet — a session would stop at its sign-in screen.* **Sign in…**
   (Settings → Agents) — under the field and on page 1. A note, not a block.
 - **Task** — what the agent starts on (blank starts it idle), always on the
-  form, with **Insert a prompt…** (built-ins first, then yours) and
+  form — two rows to start, growing with its text up to 220 px, then
+  scrolling — with **Insert a prompt…** (built-ins first, then yours) and
   **Manage…**, which opens the Prompts dialog and comes back to this form as
   it was — there, clicking a prompt puts it in this Task box (no *Paste
   into*: you are making a new session, not talking to a running one).
-- **Works in** — two radios, on the form: **Separate worktree** `recommended`
-  (*— its own branch, so several sessions can run at once*) — **the default** —
-  and **This folder directly** (*— edits your checkout as it is, on its current
-  branch*). Under the worktree, for a git folder, the branch it will cut:
-  *New branch `me/add-readme-section-about-setup` from main* (the configured
+- **Works in** — two radios, on the form, each an answer in two lines beside
+  its radio (title, then one muted line, both on the same hung edge — never
+  wrapping back under the radio): **Separate worktree** `recommended` / *Its
+  own branch, so several sessions can run at once* — **the default** — and
+  **This folder directly** / *Edits your checkout as it is, on its current
+  branch*. Under the worktree, for a git folder, the branch it will cut, on ONE
+  line hung on the same edge (ellipsised when long, the whole of it in its
+  tooltip): *New branch `me/add-readme-section-about-setup` · cut from `main`* (the configured
   prefix from `GET /api/repos/check`'s `branch_prefix`, plus the Name or the
   name made from the Task). It is the **real** name: a name made from the task
   that another session already has is numbered here exactly as the server
   numbers it (`session_create.free_title` — titles and renames), *New branch
-  `me/add-readme-section-about-setup-2` from main — “add-readme-section-about-setup”
+  `me/add-readme-section-about-setup-2` · cut from `main` · “add-readme-section-about-setup”
   is taken, so this one is numbered*. A typed Name another session has says so
-  (the server refuses it). With no Task yet it reads *New branch `me/…` named
-  from your task*. When other sessions on this device already work in this
+  (the server refuses it). With no Task yet it reads *New branch `me/…` from
+  your task · cut from `main`*. When other sessions on this device already work in this
   repo (any way; Verify's runs aside), one line says who: *“<session>” is
   already working in this repo — a separate worktree keeps you apart.* For a
   folder with no repo it says the session will run in the folder itself
@@ -3369,8 +3380,9 @@ is `frontend/src/components/sidebar/VerifyBar.tsx` and the store is
 the store file and the settings keys — it never appears on screen, because to a
 developer it reads as pytest.
 
-**Two moments, one line each** — the dialog's intro says exactly this, and folds
-it into **How Verify works** once there are checklists to work:
+**Two moments, one line each** — the dialog's intro says exactly this, and moves
+it into the ⓘ beside the title (*How Verify works*, an InfoTip) once there are
+checklists to work:
 
 - **Before merge** — press **Check now** to check the branch. Every step passed
   reads **Verified on branch**.
@@ -3864,8 +3876,15 @@ what you use (devices and people, orchestration, databases, phone push,
 extensions, system — so basic mode never calls a merely enabled extension
 "Connected"). Only Notifications' two optional folds — **Phone alerts
 (ntfy)** and **More alerts** — opt back into basic mode (`basic`), as closed
-folds. A control's long explanation sits in a small **Learn more** fold
-under its one-line hint (`LearnMore` in settingsMode.tsx). A deep link to an
+folds. A control's long explanation sits behind a small circled-i at the end
+of its one-line hint (`InfoTip`, components/InfoTip.tsx): hovering or
+focusing it shows the text in a bubble in the app's popover style (a 100 ms
+grace lets the pointer cross onto it), Escape or leaving closes it, and on a
+phone a tap toggles it and a tap elsewhere closes it. The bubble is drawn on
+`<body>` with fixed positioning — flipping above the icon near the bottom of
+the window and shifting sideways near an edge, so a scrolling screen never
+clips it — and the text also stays in place, visually hidden, as the
+button's description. A deep link to an
 advanced screen — the palette, a Connections card, an in-screen link,
 `openSettings(...)`, a legacy key — still opens it in basic mode: the open
 screen is added at the END of the nav under an **Advanced** heading (so the

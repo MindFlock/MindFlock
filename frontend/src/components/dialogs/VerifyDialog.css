@@ -1521,15 +1521,10 @@
    ------------------------------------------------------------------------- */
 
 /* Before merge / after merge, one plain line each. Shown open on a first
-   visit; folded into "How Verify works" once there are checklists to work. */
+   visit; once there are checklists to work it moves into the ⓘ beside the
+   title (#verify-how, InfoTip). */
 .vf-intro {
   font-size: 12px;
-  color: var(--muted);
-}
-
-.vf-intro > summary {
-  cursor: pointer;
-  font-size: 11.5px;
   color: var(--muted);
 }
 
@@ -1556,6 +1551,15 @@
 .vf-empty code {
   font-family: var(--mono, monospace);
   color: var(--text);
+}
+
+/* The two moments inside the title's ⓘ bubble: the bubble's own size and
+   ink, not the muted 12px of the intro they replace. */
+.infotip .vf-moments {
+  margin: 0;
+  gap: 6px;
+  font-size: 13px;
+  color: inherit;
 }
 
 /* The same two moments, said inside one checklist: what an answer here is

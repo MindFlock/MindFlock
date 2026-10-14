@@ -14,7 +14,8 @@ import { copyText } from "../../../lib/clipboard";
 import { toast } from "../../../lib/toast";
 import { SettingField, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
-import { AdvancedFold, LearnMore } from "../settingsMode";
+import { InfoTip } from "../../InfoTip";
+import { AdvancedFold } from "../settingsMode";
 
 /** GET /api/settings/workspace-paths. */
 export interface WorkspacePaths {
@@ -204,13 +205,13 @@ export function Workspace({ gotoScreen }: ScreenProps) {
           <span className="set-hint">
             <strong>New sessions start Off; batches and ticket runs start at this default.</strong>{" "}
             Change one session any time with its <strong>⏩</strong> button.
+            <InfoTip>
+              A batch is a list in the New dialog or Intake's <em>Start together</em>. Fast-track
+              waits for the agent to finish, then commits, pushes and carries on to this step. A
+              ticket source keeps its own <em>Fast-track tickets to</em> (Intake), which never
+              merges.
+            </InfoTip>
           </span>
-          <LearnMore>
-            A batch is a list in the New dialog or Intake's <em>Start together</em>. Fast-track
-            waits for the agent to finish, then commits, pushes and carries on to this step. A
-            ticket source keeps its own <em>Fast-track tickets to</em> (Intake), which never
-            merges.
-          </LearnMore>
         </label>
         <label className="set-row">
           <span className="set-label">Retryable pre-commit hooks</span>
@@ -221,13 +222,13 @@ export function Workspace({ gotoScreen }: ScreenProps) {
           />
           <span className="set-hint">
             Hooks fast-track may skip when they fail without changing any files.
+            <InfoTip>
+              Comma-separated pre-commit hook <strong>IDs</strong> (not display names:{" "}
+              <code>Black format</code> is the hook <code>black</code>). Fast-track retries the
+              commit once, then re-runs it with <code>SKIP=&lt;id&gt;</code> and says which hook it
+              skipped. Test and secret-scanning hooks are refused here.
+            </InfoTip>
           </span>
-          <LearnMore>
-            Comma-separated pre-commit hook <strong>IDs</strong> (not display names:{" "}
-            <code>Black format</code> is the hook <code>black</code>). Fast-track retries the
-            commit once, then re-runs it with <code>SKIP=&lt;id&gt;</code> and says which hook it
-            skipped. Test and secret-scanning hooks are refused here.
-          </LearnMore>
         </label>
         <FailureNotesRow />
       </AdvancedFold>

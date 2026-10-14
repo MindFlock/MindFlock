@@ -92,6 +92,8 @@
 @import "../extensions/extensions.css" layer(components); /* 310 — after
    Pane.css (.pane-head .act) and screens.css (.prov-conn), both of which the
    extension host chrome extends */
+@import "../components/InfoTip.css" layer(components); /* 320 — after
+   smallDialogs.css, whose `.ws-head button` pill the icon must not wear */
 
 @import "./regions.css" layer(theme);
 @import "./theme-light.css" layer(theme); /* 190 */

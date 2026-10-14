@@ -54,7 +54,14 @@ import {
 import { runTemplateNow } from "../../lib/templateRun";
 import { api } from "../../api/client";
 import { leafName, newSessionResume } from "./newSession";
-import { IN_PLACE_HINT, InitRepoCheck, ProvisionCheck, StrategyPicker, WorktreeText } from "./newSession/WorkspaceFold";
+import {
+  IN_PLACE_HINT,
+  InitRepoCheck,
+  ModeText,
+  ProvisionCheck,
+  StrategyPicker,
+  WorktreeText,
+} from "./newSession/WorkspaceFold";
 
 /** A run row, with the time zone the schedule's "at" is in. */
 type RunInfoX = TemplateRunInfo & { tz?: string };
@@ -421,7 +428,7 @@ export function TemplatesDialogView(p: ViewProps) {
           and "Provision the worktree" as a box on the worktree, not a third. */}
       <div className="tpl-mode" role="radiogroup" aria-label="Works in">
         <span className="tpl-mode-label">Works in</span>
-        <label className="check">
+        <label className="check nf-opt">
           <input
             type="radio"
             name="tpl-mode"
@@ -429,9 +436,7 @@ export function TemplatesDialogView(p: ViewProps) {
             checked={form.mode !== "in_place"}
             onChange={() => p.onForm({ mode: "worktree" })}
           />
-          <span>
-            <WorktreeText />
-          </span>
+          <WorktreeText />
         </label>
         {form.mode !== "in_place" && (
           <div className="tpl-mode-sub">
@@ -449,7 +454,7 @@ export function TemplatesDialogView(p: ViewProps) {
             )}
           </div>
         )}
-        <label className="check">
+        <label className="check nf-opt">
           <input
             type="radio"
             name="tpl-mode"
@@ -459,14 +464,14 @@ export function TemplatesDialogView(p: ViewProps) {
             // shared checkout — the same rule as the New form.
             onChange={() => p.onForm({ mode: "in_place", autopilot: "" })}
           />
-          <span>
-            This folder directly{" "}
-            <span className="muted">
-              {form.autopilot
-                ? "— turns the autopilot off (it commits for this session, so it needs its own worktree)"
-                : IN_PLACE_HINT}
-            </span>
-          </span>
+          <ModeText
+            title="This folder directly"
+            desc={
+              form.autopilot
+                ? "Turns the autopilot off (it commits for this session, so it needs its own worktree)"
+                : IN_PLACE_HINT
+            }
+          />
         </label>
         <InitRepoCheck id="tpl-init" checked={form.init_repo} onChange={(on) => p.onForm({ init_repo: on })} />
       </div>

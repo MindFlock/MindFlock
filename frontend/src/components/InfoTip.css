@@ -1,0 +1,161 @@
+/* InfoTip (InfoTip.tsx): a circled-i after a label or hint, and the bubble it
+   shows while hovered or focused.
+
+   The icon rides the text it follows — inline, sized to the line, muted until
+   you reach for it — so a row reads as one plain line with a quiet "there is
+   more" at its end, not as a row plus a widget. `button.infotip-btn` beats the
+   header rule that paints every button in a dialog head as a pill
+   (`.ws-head button`, smallDialogs.css) by coming later at equal specificity. */
+button.infotip-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin: 0 0 0 4px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  vertical-align: -4px;
+  cursor: help;
+  opacity: 0.85;
+  transition: color 0.12s, opacity 0.12s, background 0.12s;
+}
+
+button.infotip-btn:hover,
+button.infotip-btn.open {
+  color: var(--accent);
+  opacity: 1;
+  border-color: transparent;
+}
+
+button.infotip-btn:focus {
+  outline: none;
+}
+
+button.infotip-btn:focus-visible {
+  color: var(--accent);
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The in-place copy of the text: the button's description for a screen
+   reader, never drawn. */
+.infotip-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The bubble: the app's popover card (the bell's and the usage pop's panel,
+   border and shadow), sized for a few sentences. Fixed and on <body>, so
+   nothing it sits over can clip it; above every dialog. */
+.infotip {
+  position: fixed;
+  z-index: 5000;
+  box-sizing: border-box;
+  max-width: min(320px, calc(100vw - 16px));
+  width: max-content;
+  padding: 9px 12px 10px;
+  /* A shade off the panel border toward the ink, so the edge holds against
+     the dialog behind it in both themes. */
+  --infotip-edge: color-mix(in srgb, var(--app-border, var(--border)) 72%, var(--app-text, var(--text)));
+  border: 1px solid var(--infotip-edge);
+  border-radius: 8px;
+  background: var(--app-panel-2, var(--panel-2));
+  color: var(--app-text, var(--text));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.3);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: normal;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: break-word;
+  animation: infotip-in 0.12s ease-out;
+}
+
+/* The arrow: a square turned 45°, the bubble's own fill with its border on
+   the two sides that face out, centred on the icon (--infotip-arrow-x). */
+.infotip::before {
+  content: "";
+  position: absolute;
+  left: var(--infotip-arrow-x, 16px);
+  width: 9px;
+  height: 9px;
+  margin-left: -5px;
+  background: inherit;
+  border: 1px solid var(--infotip-edge);
+  transform: rotate(45deg);
+}
+
+.infotip[data-side="below"]::before {
+  top: -6px;
+  border-right: none;
+  border-bottom: none;
+}
+
+.infotip[data-side="above"]::before {
+  bottom: -6px;
+  border-left: none;
+  border-top: none;
+}
+
+.infotip code {
+  font-size: 12px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--app-panel, var(--panel));
+}
+
+.infotip strong {
+  font-weight: 600;
+}
+
+.infotip a {
+  color: var(--accent);
+}
+
+/* A list in a bubble (Verify's two moments): tight, the bubble's own size. */
+.infotip ul {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+@keyframes infotip-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+}
+
+.infotip[data-side="above"] {
+  animation-name: infotip-in-above;
+}
+
+@keyframes infotip-in-above {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .infotip,
+  .infotip[data-side="above"] {
+    animation: none;
+  }
+}

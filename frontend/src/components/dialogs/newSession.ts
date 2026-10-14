@@ -140,6 +140,31 @@ export function fitsWithin(childRight: number, rowRight: number): boolean {
   return childRight <= rowRight + 0.5;
 }
 
+/** Which children of the one-line folder row to hide (true = hidden), given
+ * each child's right edge as laid out with nothing hidden.
+ *
+ * Everything fits: nothing hides and the row needs no "N more…" chip. Else
+ * room is kept for that chip (`moreWidth`, its gap included) and every child
+ * past the shortened edge hides — in a no-wrap row hiding a later child never
+ * moves an earlier one, so one pass settles it. Then a group label left with
+ * no visible chip after it hides too: "Home" alone at the end of the row is a
+ * heading over nothing. */
+export function foldChipRow(
+  kids: ReadonlyArray<{ label: boolean; right: number }>,
+  rowRight: number,
+  moreWidth: number
+): boolean[] {
+  if (kids.every((k) => fitsWithin(k.right, rowRight))) return kids.map(() => false);
+  const hidden = kids.map((k) => !fitsWithin(k.right, rowRight - moreWidth));
+  for (let i = 0; i < kids.length; i++) {
+    if (!kids[i].label || hidden[i]) continue;
+    let j = i + 1;
+    while (j < kids.length && !kids[j].label && hidden[j]) j++;
+    if (j === kids.length || kids[j].label) hidden[i] = true;
+  }
+  return hidden;
+}
+
 /** A no-wrap chip row that hides whatever doesn't fit, whole chips only.
  *
  * The row is one line by design (see NewSessionDialog.css), and `overflow:

@@ -119,7 +119,7 @@ describe("a second session on the same repo", () => {
     expect(typed.branch).toBe("add-readme-section-about-setup");
     // Nothing typed yet: the name will come from the task.
     expect(plannedName({ prefix: "me/", title: "", prompt: "", taken }).from).toBe("none");
-    expect(WORKSPACE).toContain("named from your task");
+    expect(WORKSPACE).toContain('" from your task"');
     expect(WORKSPACE).toContain('id="new-name-clash"');
   });
 

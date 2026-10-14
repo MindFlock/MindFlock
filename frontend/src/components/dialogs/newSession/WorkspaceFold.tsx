@@ -8,7 +8,7 @@
  *   top of the separate worktree), the Base branch picker, and git init for
  *   a folder that has no repo yet. */
 
-import { useEffect, type Dispatch, type SetStateAction } from "react";
+import { useEffect, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import type { RepoBranches } from "../../../api/types";
 import type { deviceApi } from "../../../lib/devices";
 import type { RunDraft } from "../NewList";
@@ -75,13 +75,33 @@ export function useBaseBranches({
    Templates editor both draw these, so a template can never describe the
    same choice in other words (or with another kind of control). */
 
+/** One answer to "Works in", in the column right of its radio: the title
+ * (and any badge) on the first line, one short muted line under it. Laid out
+ * as two lines on purpose — the title and its explanation used to run on as
+ * one sentence, and a long one wrapped back under the radio mid-phrase. */
+export function ModeText({ title, desc }: { title: ReactNode; desc: ReactNode }) {
+  return (
+    <span className="nf-opt-text">
+      <span className="nf-opt-title">{title}</span>
+      <span className="nf-opt-desc">{desc}</span>
+    </span>
+  );
+}
+
+/** "Separate worktree"'s plain line. */
+export const WORKTREE_HINT = "Its own branch, so several sessions can run at once";
+
 /** "Separate worktree": the recommended answer for a git repo. */
 export function WorktreeText() {
   return (
-    <>
-      Separate worktree <span className="nf-rec">recommended</span>{" "}
-      <span className="muted">— its own branch, so several sessions can run at once</span>
-    </>
+    <ModeText
+      title={
+        <>
+          Separate worktree <span className="nf-rec">recommended</span>
+        </>
+      }
+      desc={WORKTREE_HINT}
+    />
   );
 }
 
@@ -146,9 +166,23 @@ export function InitRepoCheck({
   );
 }
 
-/** "This folder directly"'s plain hint (the New form swaps it for a warning
+/** "This folder directly"'s plain line (the New form swaps it for a warning
  * when picking it would turn fast-track or auto-split off). */
-export const IN_PLACE_HINT = "— edits your checkout as it is, on its current branch";
+export const IN_PLACE_HINT = "Edits your checkout as it is, on its current branch";
+
+/** The line under "Separate worktree" naming the branch Create will cut: ONE
+ * line, ellipsised when long (the full text is its title) — a branch name
+ * wrapping mid-segment onto a second line read as a layout fault. `parts`
+ * alternate prose and code: [prose, code, prose, code…]. */
+function BranchLine({ parts, muted }: { parts: string[]; muted?: string }) {
+  const full = parts.join("") + (muted ? " · " + muted : "");
+  return (
+    <p className="nf-opt-sub nf-branch-line" id="new-branch-preview" title={full}>
+      {parts.map((t, i) => (!t ? null : i % 2 ? <code key={i}>{t}</code> : t))}
+      {muted ? <span className="muted"> · {muted}</span> : null}
+    </p>
+  );
+}
 
 export interface WorksInProps {
   inPlace: boolean;
@@ -165,7 +199,7 @@ export interface WorksInProps {
   /** What Create will name the session and the branch it cuts (null = not
    * known yet: no repo, or the folder not checked). */
   name: PlannedName | null;
-  /** The branch prefix, for the "named from your task" line. */
+  /** The branch prefix, for the "New branch me/… from your task" line. */
   prefix: string;
   /** What it is cut from ("" = the server's pick). */
   baseLabel: string;
@@ -209,7 +243,7 @@ export function WorksIn({
         Works in
       </span>
       <div className="rt-ctl nf-mode" role="radiogroup" aria-labelledby="new-mode-label">
-        <label className="check">
+        <label className="check nf-opt">
           <input
             type="radio"
             name="new-workspace-mode"
@@ -220,42 +254,34 @@ export function WorksIn({
           <WorktreeText />
         </label>
         {worktree && isGit && !worktreeClamped && (name || continueBranch) && (
-          <p className="nf-branch-line" id="new-branch-preview">
-            {continueBranch ? (
-              <>
-                Works on <code>{continueBranch}</code> itself (shared with whoever pushed it)
-              </>
-            ) : name && name.from === "none" ? (
-              // Nothing typed yet: the name comes from the task, so say that
-              // rather than preview an "untitled" nobody means to make.
-              <>
-                New branch <code>{prefix}…</code> named from your task
-                {baseLabel ? <> (cut from {baseLabel})</> : null}
-              </>
-            ) : name ? (
-              <>
-                New branch <code>{name.branch}</code>
-                {baseLabel ? <> from {baseLabel}</> : null}
-                {name.renumbered && (
-                  <span className="muted"> — “{name.renumbered}” is taken, so this one is numbered</span>
-                )}
-              </>
-            ) : null}
-          </p>
+          continueBranch ? (
+            <BranchLine parts={["Works on ", continueBranch, " itself"]} muted="shared with whoever pushed it" />
+          ) : name && name.from === "none" ? (
+            // Nothing typed yet: the name comes from the task, so say that
+            // rather than preview an "untitled" nobody means to make.
+            <BranchLine
+              parts={["New branch ", prefix + "…", " from your task" + (baseLabel ? " · cut from " : ""), baseLabel]}
+            />
+          ) : name ? (
+            <BranchLine
+              parts={["New branch ", name.branch, baseLabel ? " · cut from " : "", baseLabel]}
+              muted={name.renumbered ? "“" + name.renumbered + "” is taken, so this one is numbered" : ""}
+            />
+          ) : null
         )}
         {name?.clash && (
-          <p className="nf-git-nudge" id="new-name-clash" role="status">
+          <p className="nf-opt-sub nf-git-nudge" id="new-name-clash" role="status">
             A session called “{name.title}” already exists — give this one another name under More
             options, or clear it to name it from the task.
           </p>
         )}
         {othersLine && (
-          <p className="nf-branch-line nf-others" id="new-others" role="status">
+          <p className="nf-opt-sub nf-branch-line nf-others" id="new-others" role="status">
             {othersLine}
           </p>
         )}
-        {worktree && worktreeClamped && <p className="nf-git-nudge">{worktreeClamped}</p>}
-        <label className="check">
+        {worktree && worktreeClamped && <p className="nf-opt-sub nf-git-nudge">{worktreeClamped}</p>}
+        <label className="check nf-opt">
           <input
             type="radio"
             name="new-workspace-mode"
@@ -271,17 +297,19 @@ export function WorksIn({
               setProvision(false);
             }}
           />
-          This folder directly{" "}
-          <span className="muted">
-            {splitOn
-              ? "— turns auto-split off (a split works in its own worktree)"
-              : laneNeedsWorktree
-              ? "— turns fast-track off (it commits for this session, so it needs its own worktree)"
-              : IN_PLACE_HINT}
-          </span>
+          <ModeText
+            title="This folder directly"
+            desc={
+              splitOn
+                ? "Turns auto-split off — a split works in its own worktree"
+                : laneNeedsWorktree
+                ? "Turns fast-track off (it commits for this session, so it needs its own worktree)"
+                : IN_PLACE_HINT
+            }
+          />
         </label>
         {warn && !worktree && (
-          <p className="nf-git-nudge nf-share-warn" id="new-share-warn" role="status">
+          <p className="nf-opt-sub nf-git-nudge nf-share-warn" id="new-share-warn" role="status">
             {warn}
           </p>
         )}

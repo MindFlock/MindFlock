@@ -1412,13 +1412,10 @@ export function NewSessionDialog() {
   return (
     <div
       id="new-dialog"
-      // The two landing panes — page 1 and the Ticket tab — share one fixed
-      // top edge and are each their own natural height (NewSessionDialog.css),
-      // so a tab click never moves the card; the full form is centred.
-      // The full form too, since round 2: its own natural height under a
-      // fixed top edge (.nf-form-page), so More options grows it downward
-      // instead of leaving a tall card mostly empty.
-      className={"modal nf-landing" + (shownTab === "ticket" || page === 1 ? "" : " nf-form-page")}
+      // Every pane — page 1, the full form and the Ticket tab — hangs from
+      // one fixed top edge at its own natural height (NewSessionDialog.css),
+      // so neither a tab click nor More options ever moves the card's top.
+      className="modal nf-landing"
       ref={rootRef}
       onClick={(e) => {
         if (e.target === e.currentTarget) closeDialog();
@@ -1457,12 +1454,7 @@ export function NewSessionDialog() {
       <form
         id="new-form"
         ref={dropZoneRef}
-        // Page 1 is one question and three buttons. The fixed height of page 2
-        // exists so that opening a fold scrolls inside .nf-body instead of
-        // growing the card and re-centering it under the pointer — there are
-        // no folds here, and holding 620px up over a single input left most of
-        // the card empty.
-        className={"ta-drop" + (page === 1 ? " nf-ask" : "")}
+        className="ta-drop"
         onSubmit={(e) => {
           e.preventDefault();
           submit();

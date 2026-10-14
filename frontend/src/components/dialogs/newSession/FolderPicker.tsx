@@ -8,6 +8,7 @@ import {
   useEffect,
   useLayoutEffect,
   useRef,
+  useState,
   type Dispatch,
   type MutableRefObject,
   type ReactNode,
@@ -19,7 +20,7 @@ import {
   SEARCH_DEBOUNCE_MS,
   SEARCH_MIN_CHARS,
   SUGGEST_SOURCES,
-  fitsWithin,
+  foldChipRow,
   homeRelative,
   isNameQuery,
   looksLikePath,
@@ -202,27 +203,58 @@ export function matchPicker(folderDo: Dispatch<FolderAction>, setSearchOpen: Set
   };
 }
 
-/** A no-wrap chip row that hides whatever doesn't fit, whole chips only.
+/** The folder suggestions: ONE quiet line of chips under the Folder row —
+ * recent folders first, then the rest, each run headed by a small label
+ * ("Recent", "Home") — and an "N more…" chip that unfolds the line into all
+ * of them. It used to be a filled card with a heading and one row per source,
+ * the heaviest thing on the form, for what is a shortcut: the list arrives
+ * ranked, so the folder you want is at the left, and Browse… is right there.
  *
- * The row is one line by design (see NewSessionDialog.css), and `overflow:
- * hidden` alone cuts the last pill down the middle — a chopped-off folder name
- * reads as a rendering fault, not as "there are more". Only measurement can
- * tell a chip that fits from one that doesn't, so after layout each child is
- * checked against the container's right edge and the ones past it are hidden
- * outright. Hiding a later child never moves an earlier one in a no-wrap row,
- * so this settles in a single pass; a ResizeObserver redoes it when the dialog
- * is resized.
- */
-function FitRow({ children }: { children: React.ReactNode }) {
+ * Folded, the line is one line by design, and `overflow: hidden` alone cuts
+ * the last pill down the middle — a chopped-off folder name reads as a
+ * rendering fault, not as "there are more". Only measurement can tell a chip
+ * that fits from one that doesn't, so after layout every child is measured
+ * against the row's right edge and foldChipRow (newSession.ts) picks the ones
+ * to hide; the "N more…" chip's count is written in the same pass, so the
+ * row settles without a second render. A ResizeObserver redoes it when the
+ * dialog is resized. */
+function SuggestRow({
+  suggestions,
+  folderPath,
+  folderDo,
+}: {
+  suggestions: RepoSuggestion[];
+  folderPath: string;
+  folderDo: Dispatch<FolderAction>;
+}) {
+  const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
+  const moreRef = useRef<HTMLButtonElement | null>(null);
+  // Empty groups drop out, so a machine with no recent sessions starts at
+  // "Home" instead of a label over nothing.
+  const groups = SUGGEST_SOURCES.map((g) => ({
+    ...g,
+    items: suggestions.filter((s) => s.source === g.key),
+  })).filter((g) => g.items.length > 0);
+  const total = groups.reduce((n, g) => n + g.items.length, 0);
+
   useLayoutEffect(() => {
     const el = ref.current;
-    if (!el) return;
+    const more = moreRef.current;
+    if (!el || !more) return;
+    // The line breaks only exist unfolded (display: none folded): never measured.
+    const kids = Array.from(el.children).filter(
+      (k) => k !== more && !k.classList.contains("nf-suggest-break")
+    ) as HTMLElement[];
     const fit = () => {
-      const kids = Array.from(el.children) as HTMLElement[];
       // Unhide first: the row may have grown, and a chip hidden at the old
       // width has no geometry to measure at the new one.
       for (const k of kids) k.classList.remove("nt-clipped");
+      more.classList.remove("nt-clipped");
+      if (open) {
+        more.textContent = "Fewer";
+        return;
+      }
       // Viewport coordinates for BOTH sides. offsetLeft looked like the
       // obvious measure and is a trap here: it is relative to offsetParent,
       // which for these chips is .modal (position: fixed), so each chip's
@@ -230,22 +262,70 @@ function FitRow({ children }: { children: React.ReactNode }) {
       // every one of them compared as overflowing — the rows rendered empty.
       const right = el.getBoundingClientRect().right;
       if (!(right > 0)) return; // not laid out yet; hide nothing
-      for (const k of kids) {
-        // Half a pixel of slack: sub-pixel layout would otherwise drop a chip
-        // that lands exactly on the edge.
-        if (!fitsWithin(k.getBoundingClientRect().right, right)) {
-          k.classList.add("nt-clipped");
-        }
-      }
+      more.textContent = total + " more…"; // the widest it will need to be
+      const gap = parseFloat(getComputedStyle(el).columnGap) || 0;
+      const hidden = foldChipRow(
+        kids.map((k) => ({ label: k.classList.contains("nf-suggest-label"), right: k.getBoundingClientRect().right })),
+        right,
+        more.getBoundingClientRect().width + gap
+      );
+      kids.forEach((k, i) => k.classList.toggle("nt-clipped", hidden[i]));
+      const n = kids.filter((k, i) => hidden[i] && !k.classList.contains("nf-suggest-label")).length;
+      if (n) more.textContent = n + " more…";
+      else more.classList.add("nt-clipped");
     };
     fit();
     const ro = new ResizeObserver(fit);
     ro.observe(el);
     return () => ro.disconnect();
   });
+
   return (
-    <div className="nt-list" ref={ref}>
-      {children}
+    <div
+      id="new-suggest"
+      ref={ref}
+      className={"nf-suggest nf-folders" + (open ? " open" : "")}
+      role="group"
+      aria-label="Folders you might mean"
+    >
+      {groups.flatMap((g, gi) => [
+        // Unfolded, each run starts its own line, so a label never dangles at
+        // the end of the previous run's line.
+        ...(gi ? [<span key={"b:" + g.key} className="nf-suggest-break" aria-hidden="true" />] : []),
+        <span key={"l:" + g.key} className="nf-suggest-label" title={g.hint}>
+          {g.label}
+        </span>,
+        ...g.items.map((s) => {
+          const active = folderPath === s.path;
+          return (
+            <button
+              key={s.path}
+              type="button"
+              className={"nt-chip" + (s.is_git ? " is-git" : "") + (active ? " active" : "")}
+              data-path={s.path}
+              aria-pressed={active}
+              title={s.path + (s.is_git ? "" : "\nno git repo here yet")}
+              onClick={() => {
+                folderDo({ t: "user-set", path: s.path });
+                setOpen(false);
+              }}
+            >
+              {(s.is_git ? "📦 " : "📁 ") + s.name}
+            </button>
+          );
+        }),
+      ])}
+      {/* Its text is written by the fit pass above (the count is only known
+          after measuring), so React renders it empty and never touches it. */}
+      <button
+        type="button"
+        ref={moreRef}
+        className="nt-chip nf-more"
+        id="new-suggest-more"
+        aria-expanded={open}
+        title={open ? "Back to one line" : "Show all " + total + " folders"}
+        onClick={() => setOpen((o) => !o)}
+      />
     </div>
   );
 }
@@ -428,13 +508,7 @@ export function FolderAids({
   browserOpen: boolean;
   device: string;
 }) {
-  // Empty groups drop out, so a machine with no recent sessions shows "Nearby"
-  // alone instead of two blank label columns.
-  const suggestRows = SUGGEST_SOURCES.map((g) => ({
-    ...g,
-    items: suggestions.filter((s) => s.source === g.key),
-  })).filter((g) => g.items.length > 0);
-  // A box whose only suggestion is the folder already in the field repeats
+  // A row whose only suggestion is the folder already in the field repeats
   // the field above it: nothing to choose, so nothing drawn.
   const onlyCurrent =
     suggestions.length > 0 && suggestions.every((s) => s.path === folderPath);
@@ -559,42 +633,8 @@ export function FolderAids({
         </p>
       )}
 
-      {suggestRows.length > 0 && !onlyCurrent && (
-        /* Wears .new-templates as well as its own class on purpose: this is
-           the same chip strip as Templates, filled from a different source,
-           and sharing the class is what stops the two from drifting apart. */
-        <div id="new-suggest" className="new-templates nf-suggest">
-          <div className="nt-head">
-            <span title="📦 a git repo · 📁 a plain folder">Folders you might mean — click one to use it</span>
-          </div>
-          {suggestRows.map((g) => (
-            <div key={g.key} className="nf-suggest-row">
-              <span className="nf-suggest-label" title={g.hint}>
-                {g.label}
-              </span>
-              <FitRow>
-                {g.items.map((s) => {
-                  const active = folderPath === s.path;
-                  return (
-                    <button
-                      key={s.path}
-                      type="button"
-                      className={
-                        "nt-chip" + (s.is_git ? " is-git" : "") + (active ? " active" : "")
-                      }
-                      data-path={s.path}
-                      aria-pressed={active}
-                      title={s.path + (s.is_git ? "" : "\nno git repo here yet")}
-                      onClick={() => folderDo({ t: "user-set", path: s.path })}
-                    >
-                      {(s.is_git ? "📦 " : "📁 ") + s.name}
-                    </button>
-                  );
-                })}
-              </FitRow>
-            </div>
-          ))}
-        </div>
+      {suggestions.length > 0 && !onlyCurrent && (
+        <SuggestRow suggestions={suggestions} folderPath={folderPath} folderDo={folderDo} />
       )}
 
       {browserOpen && (
