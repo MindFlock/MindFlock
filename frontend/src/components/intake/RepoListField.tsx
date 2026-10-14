@@ -8,7 +8,8 @@
  * (backend/ticket_ingestion/repo_routing.py). Storage and back-compat live in
  * `repoList.ts`. */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useAutosave } from "./autosave";
 import type { TicketingSource } from "../../api/types";
 import {
   addRepoRow,
@@ -37,26 +38,52 @@ function rowsFor(source: TicketingSource): RepoEntry[] {
 export function RepoListField({
   source,
   onChange,
+  onPending,
+  onSettled,
 }: {
   source: TicketingSource;
   onChange(patch: Record<string, string | null>): void;
+  /** Typed text is waiting to be saved (the card says "Saving…"). */
+  onPending?(): void;
+  /** A pending edit turned out to change nothing (typed, then typed back). */
+  onSettled?(): void;
 }) {
   const stored = sourceRepos(source);
+  const storedRef = useRef(stored);
+  storedRef.current = stored;
   const [rows, setRows] = useState<RepoEntry[]>(() => rowsFor(source));
+  // Saved as you type (a short pause), on blur and on Enter — never only on
+  // blur, which left a typed URL unsaved under a card reading "Saved ✓".
+  const save = useAutosave<RepoEntry[]>((next) => {
+    if (!sameRepos(cleanRepos(next), storedRef.current)) onChange(reposPatch(next));
+    else onSettled?.();
+  }, onPending);
   // A save elsewhere (another tab, settings sync) re-seeds the rows, unless
-  // they already say the same thing — then a half-typed blank row survives.
+  // they already say the same thing — then a half-typed blank row survives —
+  // or text typed here is still on its way to the server.
   const storedKey = JSON.stringify(stored);
   useEffect(() => {
+    if (save.isPending()) return;
     setRows((prev) => (sameRepos(cleanRepos(prev), stored) ? prev : rowsFor(source)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storedKey]);
 
   const commit = (next: RepoEntry[]) => {
     setRows(next);
-    if (!sameRepos(cleanRepos(next), stored)) onChange(reposPatch(next));
+    save.schedule(next);
+    save.flush();
   };
-  const edit = (index: number, patch: Partial<RepoEntry>) =>
-    setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  const edit = (index: number, patch: Partial<RepoEntry>) => {
+    const next = rows.map((r, i) => (i === index ? { ...r, ...patch } : r));
+    setRows(next);
+    save.schedule(next);
+  };
+  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      save.flush();
+    }
+  };
 
   const many = rows.length > 1;
   const missing = cleanRepos(rows).length === 0;
@@ -81,7 +108,8 @@ export function RepoListField({
             placeholder="git@github.com:org/repo.git"
             value={r.url}
             onChange={(e) => edit(i, { url: e.target.value })}
-            onBlur={() => commit(rows)}
+            onBlur={save.flush}
+            onKeyDown={onKey}
           />
           {many && (
             <input
@@ -92,7 +120,8 @@ export function RepoListField({
               placeholder="hint, e.g. frontend, ui (optional)"
               value={r.hint || ""}
               onChange={(e) => edit(i, { hint: e.target.value })}
-              onBlur={() => commit(rows)}
+              onBlur={save.flush}
+              onKeyDown={onKey}
             />
           )}
           {many && (

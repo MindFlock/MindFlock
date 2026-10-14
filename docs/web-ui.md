@@ -186,7 +186,10 @@ implement). The **Verify** bar's label opens Verify the same way. Turning a
 feature's bar on is still how you get an at-a-glance dot for PR review and
 issue handling once you've connected them. The **Tickets** bar also carries
 Intake's **Pause intake** as a small ⏸ (▶ **Resume intake** while paused) —
-the same control as the band at the top of the Intake dialog.
+the same control as the band at the top of the Intake dialog, always shown
+(disabled, saying why, while nothing auto-starts). The bars' labels read
+**GitHub PRs** / **GitHub issues**, like the Intake tabs, and a switch that is
+off because intake is paused is drawn striped amber, not plain off.
 
 **Window rows** — every open non-session window (MindFlock logs, System
 logs, the Assistant chat, a verify watch window, an extension pane such as a
@@ -2440,19 +2443,21 @@ ingestion has queued it, so `queued` narrows a repo to what is about to start on
 its own and `already handled` finds what it skipped. **Filtering happens before
 grouping**, so every heading's count describes what is under it and a repo or a
 workflow state with no match drops out instead of leaving an empty group behind.
-The one number that ignores the filter is the **+ Add bucket…** menu's per-state
+The one number that ignores the filter is the **+ Show state…** menu's per-state
 count, because that menu is a standing choice about which states this panel
 shows at all (`intake/search.ts` holds the four rules, one per list).
 
-**Tab strip with live counts** — **Tickets**, **Pull requests**, **Issues**,
-**Auto-start** (keys `tickets` | `prs` | `issues` | `autostart`), a horizontal
+**Tab strip with live counts** — **Tickets**, **GitHub PRs**, **GitHub issues**,
+**Auto-start** (keys `tickets` | `prs` | `issues` | `autostart`, unchanged — the
+GitHub tabs say "GitHub" so they no longer read as a second home for the GitHub
+Issues ticket provider), a horizontal
 strip rather than Settings' long left nav because they are peers you flip
 between while reading. Each badge counts what needs you: the rows on that tab
 that are **ready to start** (what auto-start would take), not every row listed —
-and the **Auto-start** badge turns grey when nothing is switched on, since those
-rows are waiting rather than about to go. It is still never a total. That distinction is
+and the **Auto-start** badge turns grey and says *N waiting* when nothing is
+switched on, since those rows are waiting rather than about to go. It is still never a total. That distinction is
 the whole of it: counting every ticket the provider ever assigned you read `1221`
-over a list of 52, because done states are parked behind **+ Add bucket…**, so
+over a list of 52, because done states are parked behind **+ Show state…**, so
 the badge and the panel go through one shared bucket filter (`intake/buckets.ts`)
 and cannot disagree. A tab with nothing (or an unconfigured integration, which
 502s) shows no badge at all rather than a `0` that turns into `12` a second
@@ -2468,11 +2473,19 @@ moving the tab strip under the cursor.
 **Pause intake.** A band above the tabs says what auto-starts right now
 (*Auto-start is on for tickets and PR comments.*) with one **Pause intake**
 button that turns every switch that is on OFF — tickets, PR comments and issues
-at once — and remembers (per device) which were on; **Resume intake** turns
-exactly those back on. Paused is "Pause was pressed and nothing is on since",
-never just "everything is off": a setup that was never switched on is *off*, not
-paused. While paused the band is amber, the PR / Issues switches say *Intake is
-paused*, and every row chip reads *auto-start paused* (`intake/pause.ts`).
+at once — and records which were on in the server's settings
+(`general.intake_paused`, per device like the ticket switch), so a reload, the
+desktop app or another browser on this machine all still read *paused*;
+**Resume intake** turns exactly those back on and clears the record. Paused is
+"Pause was pressed and nothing is on since", never just "everything is off": a
+setup that was never switched on is *off*, not paused, and turning a switch back
+on by hand ends the pause. The button is always on screen — disabled, saying
+why, while nothing auto-starts — and with everything off the band offers
+**Turn on…**, which goes to the tab whose switch does it. While paused the band
+is amber, the switches (here and in the sidebar) are striped amber with *Intake
+is paused — Resume intake at the top turns it back on*, and every row chip
+reads *auto-start paused* (`intake/pause.ts`). **New → Ticket** reads the same
+switch and pause, so it never says auto-start is on while Intake says off.
 
 **Chips follow the switches.** A row that passes every filter says
 **will auto-start** only while its kind's switch is on; otherwise it reads
@@ -2605,19 +2618,42 @@ credential.
   **Claim label (on start)** — whose hint says it assigns the ticket to you,
   except on an *Anyone's* source where it only labels it — the optional
   Test-filled account ids, Jira's **Project key**). The card's footer is its save
-  line (*Saving…* / *Saved ✓* / *Not saved*, every edit) and **Remove**; its pill
+  line (*Saving…* / *Saved ✓* / *Not saved*) and **Remove**; its pill
   reads *Can't connect* with the reason when the last Test failed or the listing
-  couldn't reach it. Until a Test has passed the state picker is disabled and says
-  *Run Test to load your workflow states*; a saved state whose name isn't known
-  yet shows as *Saved state*, and a chip's ✕ reads *Stop auto-starting
-  "Ready for MindFlock"*, never the state's id. The work list reads each source's
+  couldn't reach it. Text fields **save as you type** (on a short pause, on blur,
+  on Enter, and when the dialog closes — `intake/autosave.ts`), and the save line
+  reads *Saving…* while any field holds text not sent yet, never *Saved ✓*.
+  **+ Add ticket source** preselects no tracker (*Choose a tracker…*); the rest
+  of the card appears once one is picked, and picking **GitHub Issues** points at
+  the **GitHub issues** tab for "every new issue in a repo". **The safe
+  default:** a source added here auto-starts **nothing** until at least one
+  auto-start state (or label) is picked (`needs_filter` on the source; the card
+  says *None picked — nothing auto-starts from this source yet*, rows say *no
+  auto-start state picked yet*, and the pipeline's scan skips the source —
+  `providers.base.auto_start_waiting`). **Any state — start every ticket assigned
+  to me** stays in the state menu as an explicit choice; sources saved before
+  this keep their old "empty = every state" rule. Until a Test has passed a
+  state can be **typed** (*Type a state name*); it is swapped for the tracker's
+  real state once a Test lists one by that name, a typed name the tracker lacks
+  shows as a red chip, and the server starts nothing on a name it can't match
+  (Shortcut would otherwise drop it and search every state). A saved state whose
+  name isn't known yet shows as *Saved state*, and a chip's ✕ reads *Stop
+  auto-starting "Ready for MindFlock"*, never the state's id. **Whose tickets**
+  shows the hint for the option that is selected. The work list reads each source's
   auto-start filter from its **saved** settings, so a source the tracker can't
   reach still says *Auto-start only takes tickets in 1 saved state* — never "no
   filter is set". A source that can't be listed is said once, in its own group,
   by its name, in words (*Shortcut rejected the token — open its card below to fix
   it*) — no raw API JSON, no internal id like `sc`, and no group at all for a card
-  that hasn't been saved yet. Rows say **Start**; **Merge into…** lives under the
-  row's **⋯**. Then
+  that hasn't been saved yet. Rows say **Start** — the quiet weight on a row that
+  will auto-start anyway, so the *will auto-start* chip carries it — and every
+  row names its repo (*→ payments-api*; on a several-repo source, which one and
+  why, with a **Repo** pick under **Options**). **Combine with another ticket
+  (deletes this one)…** lives at the bottom of the row's **Options**, under *On
+  the tracker*, never beside Start; Escape closes that drawer, then the row's
+  Options, before the dialog. A Start the tracker refuses says so in one
+  sentence (*Shortcut rejected the API token. Fix it in Intake → Tickets…*),
+  never its raw JSON. Then
   **Assigned tickets** — the slowest of the three fan-outs (~3 s: a provider
   search per source plus a `git ls-remote` per repo). A **Shortcut** source
   lists what Shortcut's own boards show: archived stories, and stories under an
@@ -2788,7 +2824,7 @@ heading read as a stray line of copy and people did not find the tickets under i
 `GET /api/tickets` carries a `bucket_meta` map (`{bucket: {group, label}}`) so the
 UI nests without splitting strings: the provider reports the workflow (`group`)
 and the unqualified state (`label`) alongside the composite `name`, which stays
-the unique bucket key that `+ Add bucket…` / ✕ and `done_buckets` are indexed by
+the unique bucket key that `+ Show state…` / ✕ and `done_buckets` are indexed by
 (see `TicketProvider.list_states`). A provider with one workflow — or none, like
 Jira and Linear — reports an empty `group`, the level doesn't render, and the
 bucket keeps its own name. The two GitHub tabs have no analogous middle level:
@@ -2801,7 +2837,7 @@ is also why `GET /api/tickets` gained a top-level `source_labels` map covering
 **every** configured source — one that returned nothing, or errored, still needs
 a heading to say so under. Bucket **show/hide** is app-wide by name (choosing
 "I don't care about Completed" means it everywhere; done-type buckets start
-parked behind **+ Add bucket…**), while a bucket's **open/closed** state is per
+parked behind **+ Show state…**), while a bucket's **open/closed** state is per
 source, keyed `source::bucket`. Both live in `localStorage`
 (`mf_ticket_buckets`, `mf_ticket_buckets_open`, `mf_work_ticket_sources`;
 `mf_work_pr_groups` / `mf_work_issue_groups` for the repo groups) rather than
@@ -2855,9 +2891,11 @@ was. Every part of the probe is read-only and best-effort, and any failure answe
 **Duplicate tickets are merged away, in the tracker.** Two people file the same
 task constantly, and until this existed the queue's only answers were to start
 two sessions on it or to remember forever that sc-41 is "really" sc-38 — neither
-of which is visible to the person who filed the second one. So a ticket row
-carries a **Merge into…** button, under **Begin work** in the row's action
-column: pick another ticket from the *same* source, and
+of which is visible to the person who filed the second one. So a ticket row's
+**Options** end with **Combine with another ticket (deletes this one)…**, under
+an *On the tracker* heading (tracker housekeeping, kept away from **Start**):
+pick the ticket to keep from the *same* source, confirm (*Confirm — delete
+sc-41, keep sc-38*), and
 everything the duplicate has — description, acceptance criteria, comments and
 attached files — is appended to the survivor's description, a comment on the
 survivor records where it came from, and the duplicate is **deleted from the

@@ -55,7 +55,10 @@ def test_every_server_required_field_is_marked_in_the_catalog():
     # Filled by Test, still required before the source counts as connected.
     assert by_id["shortcut"]["member_id"]["required"] is True
     assert by_id["shortcut"]["member_id"]["auto"] is True
-    assert "filled by Test" in by_id["shortcut"]["member_id"]["placeholder"]
+    # Said once, by the marker the form derives from `auto` — not again in
+    # the placeholder (round 3: "filled by Test" three times on one field).
+    assert "filled by Test" not in by_id["shortcut"]["member_id"]["placeholder"]
+    assert by_id["shortcut"]["member_id"]["hint"]
     for key in ("base_url", "email", "api_token"):
         assert by_id["jira"][key]["required"] is True
     assert by_id["linear"]["api_token"]["required"] is True
@@ -181,7 +184,10 @@ def test_anyone_needs_an_ingest_state_per_field():
     base = {"provider": "shortcut", "api_token": "t", "assignee_scope": "anyone"}
     err = validate_source(base)
     assert set(err) == {"assignee_scope"}
-    assert "ingest states" in err["assignee_scope"] and "label" in err["assignee_scope"]
+    assert (
+        "auto-start states" in err["assignee_scope"]
+        and "label" in err["assignee_scope"]
+    )
     assert validate_source({**base, "workflow_state": "500"}) == {}
     # Shortcut can bound Anyone's with a label instead.
     assert validate_source({**base, "ingest_labels": "mindflock"}) == {}

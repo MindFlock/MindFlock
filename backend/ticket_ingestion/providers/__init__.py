@@ -57,11 +57,10 @@ PROVIDER_REGISTRY: dict[str, Type[TicketProvider]] = {
 # them under "Advanced options", opened on its own once one holds a value.
 # Never mark a ``required`` field advanced — a hidden field can't be filled.
 #
-# ORDER MATTERS: the Settings UI defaults a newly added source to the first
-# entry, so GitHub Issues leads. It is the widest surface (every OSS maintainer
-# already has issues assigned to them) and the only source that needs no input at
-# all — the token comes from `gh auth login` and the repo from `origin` — so it
-# is the on-ramp a first-time user should land on.
+# Order is the order of Intake's Provider select. A new source preselects none
+# of them — the user picks their tracker — so GitHub Issues leading no longer
+# makes it the default; it leads because it needs no input at all (the token
+# is the GitHub connection, the repo the source's Repo URL).
 def _scope_field(anyone_label: str, hint: str) -> dict:
     """The "whose tickets" picker, for a provider that can search without an
     assignee. QA queues are picked up by state — the tickets in them belong to
@@ -74,9 +73,16 @@ def _scope_field(anyone_label: str, hint: str) -> dict:
         "type": "choice",
         "secret": False,
         "required": False,
+        # Each option carries the hint for itself: the form shows the one for
+        # the option that is selected, so "Assigned to me" is never explained
+        # with a sentence about "Anyone's". ``hint`` stays for older forms.
         "options": [
-            {"value": "", "label": "Assigned to me"},
-            {"value": "anyone", "label": anyone_label},
+            {
+                "value": "",
+                "label": "Assigned to me",
+                "hint": "Only tickets assigned to you.",
+            },
+            {"value": "anyone", "label": anyone_label, "hint": hint},
         ],
         "hint": hint,
     }
@@ -162,8 +168,8 @@ PROVIDER_META: list[dict] = [
         "id": "github_issues",
         "label": "GitHub Issues",
         "blurb": (
-            "Zero config: uses your GitHub connection (Settings → Connections → "
-            "GitHub) and this repo. Starts a session for each issue assigned to you."
+            "Uses your GitHub connection (Settings → Connections → GitHub). "
+            "Starts a session for each issue assigned to you in the repo below."
         ),
         "fields": [
             {
@@ -171,7 +177,7 @@ PROVIDER_META: list[dict] = [
                 "label": "Repository",
                 "secret": False,
                 "required": False,
-                "placeholder": "auto-detected from this repo — or owner/repo",
+                "placeholder": "owner/repo — blank = the Repo URL below",
                 "auto": True,
                 # A person's override: blank means "back to auto-detect", so a
                 # save that sends it blank clears it (unlike fields Test fills).
@@ -208,7 +214,9 @@ PROVIDER_META: list[dict] = [
                 "label": "Member ID",
                 "secret": False,
                 "required": True,
-                "placeholder": "filled by Test",
+                # Said once, by the field's marker: no placeholder repeating it.
+                "placeholder": "",
+                "hint": "Who “assigned to you” means on Shortcut.",
                 "auto": True,
             },
             _scope_field(
@@ -520,12 +528,12 @@ def validate_source(values: dict, *, for_save: bool = True) -> dict[str, str]:
                     for f in meta["fields"]
                     if f["key"] == "workflow_state"
                 ),
-                "ingest states",
+                "auto-start states",
             )
             errors["assignee_scope"] = (
                 f"Anyone's needs at least one of the {noun}"
                 + (
-                    " (or an ingest label)"
+                    " (or an auto-start label)"
                     if provider in LABEL_FILTER_PROVIDERS
                     else ""
                 )

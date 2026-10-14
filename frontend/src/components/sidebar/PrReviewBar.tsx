@@ -10,7 +10,10 @@
  * can't run with an empty repo list. */
 
 import { useUi } from "../../state/store";
+import { useTicketingSources } from "../../state/queries";
 import { useGithubToggleBar } from "./useGithubToggleBar";
+import { useIntakePause } from "../intake/pause";
+import "../intake/pauseButton.css";
 
 export function PrReviewBar() {
   const openDialogFor = useUi((s) => s.openDialogFor);
@@ -22,13 +25,16 @@ export function PrReviewBar() {
     activeFlag: "pr_active",
     toggleLabel: "Auto-address review comments",
   });
+  // Off because Pause intake turned it off: drawn striped amber, not plain off.
+  const pause = useIntakePause((useTicketingSources(true).data || []).length);
+  const paused = !on && pause.pausedKind("prs");
   if (!visible) return null;
 
   return (
     <div
       id="pr-review-bar"
       title={
-        `Pull requests — addresses review comments on your open PRs in ${repos.length} ` +
+        `GitHub PRs — addresses review comments on your open PRs in ${repos.length} ` +
         `${repos.length === 1 ? "repository" : "repositories"}.`
       }
     >
@@ -51,15 +57,15 @@ export function PrReviewBar() {
         id="pr-review-prs-btn"
         type="button"
         className="dc-label dc-open"
-        title="Open Intake → Pull requests"
+        title="Open Intake → GitHub PRs"
         onClick={() => openDialogFor("intake", "prs")}
       >
-        Pull requests
+        GitHub PRs
       </button>
       <span className="dc-actions">
         <label
-          className="dc-switch"
-          title="Auto-address review comments — the same switch as Intake → Pull requests (your repositories are kept either way)"
+          className={"dc-switch" + (paused ? " paused" : "")}
+          title="Auto-address review comments — the same switch as Intake → GitHub PRs (your repositories are kept either way)"
         >
           <input
             type="checkbox"

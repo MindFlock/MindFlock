@@ -192,6 +192,20 @@
   min-width: 0;
 }
 
+/* Off because Pause intake turned it off: amber and striped, never the plain
+   grey of "off" — a paused switch comes back on Resume, an off one doesn't. */
+.ik-switch.paused {
+  border-color: color-mix(in srgb, var(--gold) 55%, var(--border));
+  background: color-mix(in srgb, var(--gold) 7%, var(--panel-2));
+}
+.ik-switch.paused .ca-slider {
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--gold) 45%, transparent) 0 4px,
+    color-mix(in srgb, var(--gold) 18%, transparent) 4px 8px
+  );
+}
+
 /* Source cards stack in their own column so the "+ Add" button below them is
    not mistaken for part of the last card. */
 .ik-cards {
@@ -1089,6 +1103,12 @@
 .ik-pause-btn {
   flex: none;
 }
+.ik-pause-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
 
 /* A badge for rows that will NOT start on their own (auto-start off): grey,
    so the accent stays reserved for "this needs you / this will happen". */
@@ -1125,6 +1145,31 @@
   font-size: 11px;
   color: var(--muted);
   line-height: 1.4;
+}
+
+/* Tracker housekeeping (Combine with another ticket…) at the bottom of a row's
+   Options: its own heading and a rule above it, so a destructive tracker
+   action never reads as one more start option. */
+.ik-item-start .ik-item-housekeeping {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+.ik-item-start .ik-item-housekeeping .ik-item-pick-label {
+  margin-right: auto;
+}
+
+/* Start on a row that will auto-start anyway: quiet, so a list of them is not
+   a wall of identical purple buttons and the "will auto-start" chip carries
+   the row. Same hug-and-right-align as the primary button. */
+.ik-item-start .ik-start-quiet {
+  align-self: flex-end;
 }
 
 /* The row's ⋯ menu: housekeeping (Merge into…) kept off the main column. */
@@ -1209,4 +1254,22 @@
   .ik-pause {
     flex-wrap: wrap;
   }
+}
+
+/* The row's answer to "will this start on its own?" is the chip, so it gets
+   the weight the (now quieter) Start button gave up. */
+#intake-panel .pr-open-meta .pr-open-chip.ok {
+  font-weight: 600;
+}
+
+/* Typing an auto-start state before Test can list them: the box takes the
+   row, the Add button hugs it. */
+#intake-panel .tk-state-type {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+#intake-panel .tk-state-type .tk-state-typed {
+  flex: 1 1 auto;
+  min-width: 0;
 }

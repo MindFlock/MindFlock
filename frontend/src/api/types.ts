@@ -1199,8 +1199,9 @@ export interface TicketingCatalogField {
   /** "state" = multi workflow-state filter, "state_one" = a single
    * workflow-state destination, "choice" = <select> over `options`. */
   type?: string;
-  /** "choice" only. */
-  options?: { value: string; label: string }[];
+  /** "choice" only. An option's `hint` explains that option; the form shows
+   * the selected option's hint in place of the field's. */
+  options?: { value: string; label: string; hint?: string }[];
   hint?: string;
   /** The server refuses to save the source without it (PUT → 400 per field)
    * — unless `auto` is also set, in which case Test fills it in and it is
