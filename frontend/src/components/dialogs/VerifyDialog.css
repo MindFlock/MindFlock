@@ -242,8 +242,9 @@
   grid-column: 2;
   grid-row: 2;
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 12px;
+  gap: 2px 12px;
   min-width: 0;
 }
 
@@ -1468,4 +1469,176 @@
 .vf-runwatch-state[data-state="disconnected"],
 .vf-runwatch-state[data-state="error"] {
   color: var(--red);
+}
+
+/* ===========================================================================
+   ROUND 2 — the two moments, the deep link, and finishing in place
+   ------------------------------------------------------------------------- */
+
+/* Before merge / after merge, one plain line each. Shown open on a first
+   visit; folded into "How Verify works" once there are checklists to work. */
+.vf-intro {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.vf-intro > summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.vf-intro > .set-hint {
+  margin: 0 0 4px;
+}
+
+.vf-moments {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.vf-moments strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.vf-moments code,
+.vf-empty code {
+  font-family: var(--mono, monospace);
+  color: var(--text);
+}
+
+/* The same two moments, said inside one checklist: what an answer here is
+   about, or what the check before merge found. */
+.vf-moment {
+  border-left: 2px solid var(--border);
+  padding-left: 8px;
+}
+
+/* A label that makes the select-all box say what it is. */
+.vf-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* "moved to Checked" — drawn where the checklist was, so finishing one is an
+   outcome you can see rather than a row vanishing from under the pointer. */
+.vf-moved {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--green) 45%, var(--border));
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+.vf-moved[data-to="fail"] {
+  border-color: color-mix(in srgb, var(--red, #d33) 45%, var(--border));
+}
+
+.vf-moved > span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.vf-moved-x {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+/* A deep link to a branch with no checklist yet. */
+.vf-missing {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 4px 0 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+.vf-missing code {
+  font-family: var(--mono, monospace);
+}
+
+/* "Fix this…" beside a failed step — the next move, where the failure is. */
+.vf-fix-step {
+  font-size: 11px;
+  padding: 1px 8px;
+}
+
+/* New checklist: two rows, ask the agent / write steps yourself. */
+.vf-new .vf-newplan + .vf-newplan {
+  margin-top: 10px;
+}
+
+/* The no-GitHub-remote opt-in: a snippet to commit, with a Copy button. */
+.vf-snippet {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.vf-snippet pre {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--mono, monospace);
+  font-size: 11.5px;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--text);
+}
+
+/* NARROW WINDOWS. The subtitle and the header line give way first; the
+   branch on a row wraps rather than truncating to "emandel2630/add…". */
+@media (max-width: 600px) {
+  #verify-panel .ws-head .ik-subtitle,
+  #verify-panel .ws-head .vf-live {
+    display: none;
+  }
+
+  .vf-plan-meta {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+
+  .vf-plan-meta-text {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .vf-plan-landed {
+    max-width: none;
+  }
+
+  .vf-plan-line {
+    flex-wrap: wrap;
+  }
+
+  .vf-plan-tally {
+    margin-left: 0;
+  }
 }

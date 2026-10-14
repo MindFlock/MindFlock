@@ -4,14 +4,22 @@
  *
  * Split out of VerifyDialog.tsx; a checklist row itself is VerifyPlan.tsx. */
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { TestPlan } from "../../api/types";
+import { copyText } from "../../lib/clipboard";
+import { toast } from "../../lib/toast";
 import { writePlanFor } from "../../lib/verifyActions";
 import { AutomationSwitch, WorkGroup, useToggleSet } from "../intake/kit";
 import { RepoSourceList, type RepoOverrides } from "../intake/RepoSources";
 import { useSettings } from "../settings/useSettings";
 import type { RowSelection } from "./rowSelect";
-import { groupPlans } from "./verify";
+import {
+  type ChecklistTarget,
+  GROUP_KEYS,
+  groupLabel,
+  groupPlans,
+  planName,
+} from "./verify";
 import { PlanRow } from "./VerifyPlan";
 
 /** Per-device UI state, same reasoning as Intake's group toggles (kit.tsx):
@@ -27,6 +35,27 @@ import { PlanRow } from "./VerifyPlan";
 const GROUPS_KEY = "mf_verify_groups";
 const PLANS_KEY = "mf_verify_plans";
 
+/** How long "moved to Checked" stays where the checklist was. */
+const MOVED_NOTICE_MS = 8000;
+
+/** A request to bring one checklist into view — from a deep link
+ * (`openDialogFor("verify", <branch>)`), from "Write steps yourself", or from a
+ * "moved to …" notice. `nonce` changes per request. */
+export interface PlanReveal {
+  planId: string;
+  nonce: number;
+  /** Also open its Add a step form and put the caret in it. */
+  addStep?: boolean;
+}
+
+interface MovedNotice {
+  id: string;
+  name: string;
+  /** The group it LEFT — the notice is drawn where the reader was looking. */
+  from: string;
+  to: string;
+}
+
 /** The grouped list.
  *
  * Its own component so the two toggle sets are one hook pair rather than one
@@ -35,12 +64,14 @@ export function PlanList({
   plans,
   liveBranch,
   selection,
+  reveal,
 }: {
   plans: TestPlan[];
   liveBranch: string;
   /** Absent when nothing can be selected (there is no such caller today, but a
    * row that cannot be picked must not render a box that does nothing). */
   selection?: RowSelection;
+  reveal?: PlanReveal | null;
 }) {
   const groups = useToggleSet(GROUPS_KEY, true);
   // Plans default CLOSED and the set holds the ones you opened — one polarity,
@@ -48,125 +79,254 @@ export function PlanList({
   // whatever my group implies" and a plan you had deliberately collapsed
   // re-opened itself when it changed group.
   const opened = useToggleSet(PLANS_KEY);
+  const grouped = useMemo(() => groupPlans(plans), [plans]);
+  const [localReveal, setLocalReveal] = useState<PlanReveal | null>(null);
+  const shownReveal =
+    localReveal && (!reveal || localReveal.nonce > reveal.nonce) ? localReveal : reveal || null;
+
+  // A REVEAL OPENS WHAT IT POINTS AT: the checklist itself, and the group it
+  // sits in, so "Checklist" on a session row lands on the steps, not on a
+  // collapsed heading.
+  useEffect(() => {
+    if (!shownReveal) return;
+    const g = grouped.find((x) => x.plans.some((p) => p.id === shownReveal.planId));
+    if (g && !groups.isOpen(g.key)) groups.toggle(g.key);
+    if (!opened.isOpen(shownReveal.planId)) opened.toggle(shownReveal.planId);
+    // Only on a NEW request — toggling is not idempotent.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shownReveal?.nonce]);
+
+  // A FINISHED CHECKLIST DOESN'T JUST VANISH. Answering the last step re-files
+  // the plan under another heading — usually far down the list — and the row you
+  // were working in disappeared from under the pointer. A notice stays where it
+  // was, says where it went, and offers to follow it.
+  const lastGroup = useRef(new Map<string, string>());
+  const [moved, setMoved] = useState<MovedNotice[]>([]);
+  useEffect(() => {
+    const next = new Map<string, string>();
+    const arrivals: MovedNotice[] = [];
+    for (const g of grouped) {
+      for (const p of g.plans) {
+        next.set(p.id, g.key);
+        const was = lastGroup.current.get(p.id);
+        if (was && was !== g.key && opened.isOpen(p.id))
+          arrivals.push({ id: p.id, name: planName(p), from: was, to: g.key });
+      }
+    }
+    lastGroup.current = next;
+    if (arrivals.length)
+      setMoved((prev) => [...prev.filter((m) => !arrivals.some((a) => a.id === m.id)), ...arrivals]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grouped]);
+  useEffect(() => {
+    if (!moved.length) return;
+    const id = window.setTimeout(() => setMoved((prev) => prev.slice(1)), MOVED_NOTICE_MS);
+    return () => window.clearTimeout(id);
+  }, [moved]);
+
+  const present = new Set(grouped.map((g) => g.key));
+  const keys = GROUP_KEYS.filter((k) => present.has(k) || moved.some((m) => m.from === k));
 
   return (
     <>
-      {groupPlans(plans).map((g) => (
-        <WorkGroup
-          key={g.key}
-          heading
-          name={g.label}
-          count={g.plans.length}
-          detail={g.detail}
-          open={groups.isOpen(g.key)}
-          onToggle={() => groups.toggle(g.key)}
-        >
-          {g.plans.map((plan) => (
-            <PlanRow
-              key={plan.id}
-              plan={plan}
-              liveBranch={liveBranch}
-              selection={selection}
-              expanded={opened.isOpen(plan.id)}
-              onToggle={() => opened.toggle(plan.id)}
-              onExpand={() => {
-                if (!opened.isOpen(plan.id)) opened.toggle(plan.id);
-              }}
-            />
-          ))}
-        </WorkGroup>
-      ))}
+      {keys.map((key) => {
+        const g = grouped.find((x) => x.key === key);
+        const here = moved.filter((m) => m.from === key);
+        return (
+          <WorkGroup
+            key={key}
+            heading
+            name={g?.label || groupLabel(key)}
+            count={g?.plans.length || 0}
+            detail={g?.detail}
+            open={groups.isOpen(key)}
+            onToggle={() => groups.toggle(key)}
+          >
+            {here.map((m) => (
+              <div key={"moved:" + m.id} className="vf-moved" role="status" data-to={m.to}>
+                <span>
+                  {m.to === "done" ? "\u2713 " : m.to === "fail" ? "\u2717 " : ""}
+                  <strong>{m.name}</strong> moved to {groupLabel(m.to)}.
+                </span>
+                <button
+                  type="button"
+                  className="test-btn"
+                  onClick={() => {
+                    setMoved((prev) => prev.filter((x) => x.id !== m.id));
+                    setLocalReveal({ planId: m.id, nonce: Date.now() });
+                  }}
+                >
+                  Show
+                </button>
+                <button
+                  type="button"
+                  className="vf-moved-x"
+                  aria-label="Dismiss"
+                  onClick={() => setMoved((prev) => prev.filter((x) => x.id !== m.id))}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+            {(g?.plans || []).map((plan) => (
+              <PlanRow
+                key={plan.id}
+                plan={plan}
+                liveBranch={liveBranch}
+                selection={selection}
+                expanded={opened.isOpen(plan.id)}
+                onToggle={() => opened.toggle(plan.id)}
+                onExpand={() => {
+                  if (!opened.isOpen(plan.id)) opened.toggle(plan.id);
+                }}
+                reveal={
+                  shownReveal && shownReveal.planId === plan.id
+                    ? { nonce: shownReveal.nonce, addStep: shownReveal.addStep }
+                    : undefined
+                }
+              />
+            ))}
+          </WorkGroup>
+        );
+      })}
     </>
   );
 }
 
-/** "Write a plan for…" — the button, and the normal way a plan comes to exist.
+/** "Ask the agent for a checklist" and "Write steps yourself" — the two ways a
+ * checklist comes to exist when nobody configured a repository.
  *
- * Automatic generation is opt-in per repo (the Repositories list beside it, or
- * the repo's own committed `.mindflock.toml`) and off everywhere else, because
- * writing a plan costs a real model call and a Verify list that fills itself
- * destroys the one number this surface exists to show. That leaves a
- * chicken-and-egg problem this bar is the answer to: nobody opts a repo in to
- * something they have never watched work, so there has to be a way to ask for
- * exactly one plan, by name, with nothing configured.
+ * It used to be one fold called "Write a checklist by hand" whose body asked the
+ * MODEL to write one, while the real by-hand control ("Add a step") was inside
+ * each checklist. Now the fold says both, one row each, and each does what its
+ * label says.
  *
- * Only sessions with a branch and no plan yet are offered (`planTargets` picks
- * them). It renders even when that list is empty — disabled, saying why —
- * because a control that disappears makes the dialog a different shape on
- * different visits, and the empty state then has to carry a second variant
- * purely to avoid pointing at furniture that is not on the screen. */
-function NewPlanBar({
-  candidates,
-  closed,
+ * The picker lists EVERY session with a branch, open or closed. One that can't
+ * be picked stays listed, greyed, saying why ("has a checklist", "on main —
+ * nothing to compare"): the old picker dropped them silently under help text
+ * promising closed sessions were offered. */
+export function VerifyNewChecklist({
+  targets,
   reason,
+  plans,
+  preselect,
+  open,
+  onToggle,
+  onReveal,
 }: {
-  candidates: string[];
-  /** Which candidates are closed sessions — labelled, because "this will not
-   * open a window" is worth knowing before pressing the button. */
-  closed: Set<string>;
+  targets: ChecklistTarget[];
+  /** Why there is nothing to pick at all, from `noTargetsReason`; "" when there is. */
   reason: string;
+  plans: TestPlan[];
+  /** A session title to select (a deep link for a branch with no checklist). */
+  preselect?: string;
+  open: boolean;
+  onToggle(open: boolean): void;
+  onReveal(planId: string, addStep: boolean): void;
 }) {
-  const [busy, setBusy] = useState("");
+  const [busy, setBusy] = useState(false);
   const [picked, setPicked] = useState("");
+  const [pickedPlan, setPickedPlan] = useState("");
+  const pickable = targets.filter((t) => !t.reason);
 
-  // The picker holds a stale title once that session gets a plan (it leaves
-  // `candidates` but stays in state), so resolve against the live list rather
-  // than trusting it.
-  const target = candidates.includes(picked) ? picked : candidates[0] || "";
+  useEffect(() => {
+    if (preselect) setPicked(preselect);
+  }, [preselect]);
 
-  // "Writing…" while the request is out; what the press then says (written,
-  // or already there under which name) is `writePlanFor`'s.
-  async function write() {
-    setBusy(target);
+  // A pick that stopped being pickable (it just got its checklist) falls back
+  // to the first one that still can be — never to a greyed entry.
+  const target = pickable.some((t) => t.title === picked)
+    ? picked
+    : pickable[0]?.title || "";
+  const planTarget = plans.some((p) => p.id === pickedPlan) ? pickedPlan : plans[0]?.id || "";
+
+  async function ask() {
+    if (!target) return;
+    setBusy(true);
     try {
       await writePlanFor(target);
     } finally {
-      setBusy("");
+      setBusy(false);
     }
   }
 
   return (
-    <div className="vf-newplan">
-      <label htmlFor="vf-newplan-pick">Write a checklist for</label>
-      <select
-        id="vf-newplan-pick"
-        value={target}
-        disabled={!!busy || !candidates.length}
-        onChange={(e) => setPicked(e.target.value)}
-      >
-        {/* An empty select when there is nothing to offer, rather than an
-            <option> carrying a sentence. A disabled dropdown whose only entry is
-            a paragraph reads as a broken list of one; the reason belongs in the
-            hint below, which is where this control already explains itself. */}
-        {candidates.map((t) => (
-          <option key={t} value={t}>
-            {t}
-            {closed.has(t) ? " (closed)" : ""}
-          </option>
-        ))}
-      </select>
-      <button
-        type="button"
-        id="vf-newplan-go"
-        className="test-btn"
-        disabled={!!busy || !candidates.length}
-        onClick={() => void write()}
-      >
-        {busy ? (
-          <>
-            <span className="btn-spin" aria-hidden="true" /> Writing…
-          </>
-        ) : (
-          "Write it"
-        )}
-      </button>
-      {/* Why you cannot, when you cannot — and it is three different reasons.
-          One sentence covered all of them and was simply false for the commonest
-          one: telling somebody with five open sessions to start a session. */}
-      <span className="set-hint">
-        {reason || "Reads the branch's diff and writes a checklist of what to check."}
-      </span>
-    </div>
+    <details
+      className="pr-advanced vf-new"
+      open={open}
+      onToggle={(e) => onToggle((e.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary>New checklist</summary>
+      <div className="pr-advanced-body">
+        <div className="vf-newplan" id="vf-ask">
+          <label htmlFor="vf-newplan-pick">Ask the agent for a checklist</label>
+          <select
+            id="vf-newplan-pick"
+            value={target}
+            disabled={busy || !pickable.length}
+            onChange={(e) => setPicked(e.target.value)}
+          >
+            {targets.map((t) => (
+              <option key={t.title} value={t.title} disabled={!!t.reason}>
+                {t.branch}
+                {t.title !== t.branch ? " — " + t.title : ""}
+                {t.closed ? " (closed)" : ""}
+                {t.reason ? " · " + t.reason : ""}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            id="vf-newplan-go"
+            className="test-btn"
+            disabled={busy || !target}
+            onClick={() => void ask()}
+          >
+            {busy ? (
+              <>
+                <span className="btn-spin" aria-hidden="true" /> Asking…
+              </>
+            ) : (
+              "Ask the agent"
+            )}
+          </button>
+          <span className="set-hint">
+            {reason ||
+              "The agent reads the branch's changes and writes the steps — about three minutes. Closed sessions are listed too."}
+          </span>
+        </div>
+        <div className="vf-newplan" id="vf-write">
+          <label htmlFor="vf-write-pick">Write steps yourself</label>
+          <select
+            id="vf-write-pick"
+            value={planTarget}
+            disabled={!plans.length}
+            onChange={(e) => setPickedPlan(e.target.value)}
+          >
+            {plans.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.branch ? p.branch + " — " : ""}
+                {planName(p)}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            id="vf-write-go"
+            className="test-btn"
+            disabled={!planTarget}
+            onClick={() => onReveal(planTarget, true)}
+          >
+            Add a step
+          </button>
+          <span className="set-hint">
+            {plans.length
+              ? "Opens the checklist with its Add a step form."
+              : "Steps are added to a checklist — ask the agent for one first."}
+          </span>
+        </div>
+      </div>
+    </details>
   );
 }
 
@@ -203,9 +363,10 @@ function NewPlanBar({
  * A checkout with no GitHub origin cannot be named here at all — there is no
  * slug to type. Its opt-in is the repo's own committed `.mindflock.toml`
  * (`[workspace] verify_on_push = true`), which is path-based, travels with the
- * code, and is OR'd with this list; neither can switch the other off. The
- * footnote below says so, because a user whose repo cannot appear here needs to
- * be told where else to look rather than left clicking Add.
+ * code, and is OR'd with this list; neither can switch the other off. There is
+ * no setting the dialog could write for it, so the fold under the list hands
+ * over the snippet to commit — copyable, with one sentence saying what it does —
+ * instead of a config key in the middle of a hint.
  */
 export function VerifySources({
   liveBranch,
@@ -224,6 +385,7 @@ export function VerifySources({
   const overrides = (repo.verify_repo_settings || {}) as RepoOverrides;
 
   return (
+    <>
     <RepoSourceList
       surface="verify"
       // "Sources", the word the two Intake tabs' equivalent block is called in
@@ -254,22 +416,42 @@ export function VerifySources({
       listId="vf-repos-list"
       addId="vf-repo-add-btn"
       addLabel="+ Add repository"
-      emptyText="No repositories yet — add one and every session branch pushed in it gets a checklist."
-      // Trimmed to the length of Intake's, which is the length a hint under an
-      // always-visible section can be before it outweighs the cards above it.
-      // The committed-opt-in story it used to carry in full is in web-ui.md and
-      // configuration.md now; what survives is the pointer, because a user whose
-      // repo has no GitHub slug has to be told this list is not their door.
-      hint={
-        <>
-          Each card is one GitHub repository, matched to your checkouts by their{" "}
-          <code>origin</code>, with its own live branch. Being on this list is the opt-in:
-          the first push of a session branch in these repos gets a checklist. A repo with
-          no GitHub remote opts in with <code>[workspace] verify_on_push = true</code> in
-          its own <code>.mindflock.toml</code> instead.
-        </>
-      }
+      emptyText="No repositories yet."
+      hint="Each new branch pushed in these GitHub repositories gets a checklist."
     />
+    <NoRemoteOptIn />
+    </>
+  );
+}
+
+/** The opt-in for a repo with no GitHub remote: a file to commit. */
+const OPT_IN_SNIPPET = "[workspace]\nverify_on_push = true\n";
+
+function NoRemoteOptIn() {
+  return (
+    <details className="pr-advanced vf-optin">
+      <summary>Repository without a GitHub remote?</summary>
+      <div className="pr-advanced-body">
+        <p className="set-hint">
+          Commit this as <code>.mindflock.toml</code> at the repository's root — each new
+          branch pushed there then gets a checklist.
+        </p>
+        <div className="vf-snippet">
+          <pre>{OPT_IN_SNIPPET}</pre>
+          <button
+            type="button"
+            className="test-btn"
+            onClick={() =>
+              void copyText(OPT_IN_SNIPPET).then((ok) =>
+                toast(ok ? "Copied" : "Couldn't copy — select the text instead"),
+              )
+            }
+          >
+            Copy
+          </button>
+        </div>
+      </div>
+    </details>
   );
 }
 
@@ -280,7 +462,7 @@ export function VerifySources({
  * appearing?", so it costs its own band at the top. Everything else that is
  * configuration is :func:`VerifySources` below it and :func:`VerifyByHand`
  * under the work, which is where Intake keeps the same two things. */
-export function VerifySwitch() {
+export function VerifySwitch({ hasPlans }: { hasPlans: boolean }) {
   const s = useSettings();
   const repo = (s.settings.repository || {}) as {
     verify_repos?: string[];
@@ -290,11 +472,15 @@ export function VerifySwitch() {
   // Absent => on, matching the backend default: the real gate is membership, so
   // an older settings file with no key behaves exactly as it did.
   const on = repo.verify_enabled !== false;
+  // NOTHING TO SWITCH YET. A fresh install showed this ON above an empty list,
+  // and nobody could tell what it governed. Until there is a repository or a
+  // checklist it governs nothing, and the empty state already says what to do.
+  if (!n && !hasPlans) return null;
 
   return (
     <AutomationSwitch
       label="Check what ships, automatically"
-      title="Turn automatic checking on or off — your repositories, checklists and answers are kept either way"
+      title="Pause or resume new checklists on push — nothing is deleted"
       rowId="vf-toggle-row"
       inputId="vf-enabled"
       statusId="vf-status"
@@ -309,90 +495,38 @@ export function VerifySwitch() {
       // The one thing a switch genuinely cannot say for itself: it is ON and it
       // is watching nothing, which is the state every new install starts in and
       // the reason the list below is empty. Never shown to narrate on/off.
-      note={
-        n
-          ? undefined
-          : "Add a repository below and every session branch pushed in it gets a checklist"
-      }
+      note={n ? undefined : on ? "On — no repository to watch yet" : undefined}
     />
   );
 }
 
-/** The by-hand writer, in the fold Intake keeps its once-a-month settings in.
- *
- * `.pr-advanced` is REUSED rather than re-cut, because it is the same kind of
- * thing in the same place: a `<details>` after the work list holding what you
- * touch rarely (PullRequestsTab.tsx / IssuesTab.tsx put theirs at the bottom of
- * the tab, and the rules live in screens.css). Borrowing the class means the two
- * surfaces cannot drift apart by a padding value.
- *
- * The sources above are how a checklist normally comes to exist. This is the
- * escape hatch, and it earns its place for one reason: nobody opts a repository
- * in to something they have never watched work, so there has to be a way to ask
- * for exactly one checklist, by name, with nothing configured. That is a
- * once-per-lifetime need, which is precisely what a fold is for.
- */
-export function VerifyByHand({
-  candidates,
-  closed,
-  reason,
-}: {
-  candidates: string[];
-  /** Which candidates are closed sessions, so the picker can say so. */
-  closed: Set<string>;
-  /** Why `candidates` is empty, from `noTargetsReason`; "" when it isn't. */
-  reason: string;
-}) {
-  return (
-    <details className="pr-advanced">
-      <summary>Write a checklist by hand</summary>
-      <div className="pr-advanced-body">
-        <p className="set-hint set-block-hint">
-          Reads a session branch's diff and writes a checklist for it now, without
-          tracking its repository. Useful once, to see what the checklists look like
-          before opting a repository in. Sessions you have already{" "}
-          <strong>closed</strong> are offered too — asking for a checklist is
-          something you do when the work is finished and the window has been put
-          away, so refusing there made the button useless at the one moment you
-          want it.
-        </p>
-        <NewPlanBar candidates={candidates} closed={closed} reason={reason} />
-      </div>
-    </details>
-  );
-}
-
-/** The first thing anybody sees, and for a while the only thing.
- *
- * Not "nothing here": a surface nobody has fed yet looks broken, and the honest
- * answer is that nothing has shipped. What follows is the chain — which is
- * stated NOWHERE else in the product, in the UI or in the docs — because every
- * question a new user has about Verify is really "what has to happen before a
- * row appears here?", and it is three things in a fixed order.
- *
- * It points UP at Sources rather than carrying its own button. It used to have
- * one, because the repository list was behind a collapsed fold and a direction
- * to a fold is a direction to something the reader cannot see; now the list is
- * an always-visible section a few lines above, exactly as it is on the Intake
- * tabs, so naming it is enough and a second Add control would be two doors onto
- * one room. */
-export function VerifyEmpty({ liveBranch }: { liveBranch: string }) {
+/** The empty list: what to do to get a checklist. The two moments (before /
+ * after merge) are in the intro right above it, so they are not repeated. */
+export function VerifyEmpty() {
   return (
     <div className="repo-empty vf-empty">
       <p>
-        <strong>Nothing has shipped that needs checking yet.</strong>
+        <strong>No checklists yet.</strong>
       </p>
-      <ol className="vf-howto">
-        <li>
-          Add a repository under <strong>Sources</strong> above — every session branch
-          pushed in it gets a checklist.
-        </li>
-        <li>The checklist waits while the branch is reviewed and merged.</li>
-        <li>
-          When that work reaches <code>{liveBranch || "the live branch"}</code>, it turns up
-          here for you to check.
-        </li>
-      </ol>
+      <p>
+        Add a repository under <strong>Sources</strong>, or ask for one under{" "}
+        <strong>New checklist</strong> below.
+      </p>
     </div>
+  );
+}
+
+/** The two moments, one plain line each — the whole model of the surface. */
+export function VerifyMoments({ liveBranch }: { liveBranch: string }) {
+  return (
+    <ul className="vf-moments">
+      <li>
+        <strong>Before merge</strong> — press <strong>Check now</strong> to check the branch.
+      </li>
+      <li>
+        <strong>After merge</strong> — it comes back here to be checked again on{" "}
+        <code>{liveBranch || "the branch you ship from"}</code>.
+      </li>
+    </ul>
   );
 }

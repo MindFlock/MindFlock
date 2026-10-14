@@ -180,6 +180,8 @@ export function StepRow({
   running,
   onRemove,
   onEdit,
+  onFix,
+  fixing,
 }: {
   step: TestStep;
   index: number;
@@ -196,8 +198,18 @@ export function StepRow({
   /** Change this step's wording or who answers it. Absent while a run is in
    * flight — the agent is working from these sentences right now. */
   onEdit?: (step: TestStep, fields: Partial<TestStep>) => Promise<void>;
+  /** Open a session to fix this failed step. Absent while nothing can start
+   * one (a run in flight, or another action busy on the plan). */
+  onFix?: (step: TestStep) => void;
+  /** This row's own fix is starting. */
+  fixing?: boolean;
 }) {
   const [pending, setPending] = useState<TestStepResult | null>(null);
+  // The answer you just gave, until the plan's own copy says the same. Without
+  // it the row reads the PREVIOUS answer for the moment between the POST
+  // returning and the list catching up — long enough for the note box that a
+  // Fail opens to say "pick an answer" about the answer you had just picked.
+  const [justGiven, setJustGiven] = useState<TestStepResult | null>(null);
   // Seeded from the draft map and written back through, so the composer is
   // where you left it even if the row was re-parented under another heading
   // between two keystrokes — see NOTE_DRAFTS.
@@ -224,12 +236,19 @@ export function StepRow({
 
   const entry = stepResult(plan, step.id);
   const check = stepCheck(plan, step.id);
-  const shown = pending ?? entry?.result ?? "";
+  const caughtUp = justGiven !== null && (entry?.result ?? "") === justGiven;
+  const given = caughtUp ? null : justGiven;
+  // Once the list agrees, forget it — a later change (an agent's re-check, an
+  // answer from another window) must show through.
+  useEffect(() => {
+    if (caughtUp) setJustGiven(null);
+  }, [caughtUp]);
+  const shown = pending ?? given ?? entry?.result ?? "";
   // Who the answer on screen belongs to. While a POST is in flight the answer
   // being shown is the one YOU just gave, whatever the stored entry says — so a
   // Can't check settles the row instantly rather than un-highlighting a beat
   // later when the server's copy arrives.
-  const shownBy = pending !== null ? "human" : entry?.by || "";
+  const shownBy = pending !== null || given !== null ? "human" : entry?.by || "";
   // One rule, shared with the plan-level rules in verify.ts, so a step can
   // never look answered to the row and unanswered to the badge (or the other
   // way round). Pass, Fail, or a Can't check that YOU recorded — see
@@ -274,7 +293,7 @@ export function StepRow({
   // that needs a sentence), and with the old pass/fail-only test there was no
   // Save, blur saved nothing and Enter saved nothing — so the reason you typed
   // was thrown away by the surface that had just asked you for it.
-  const mayResave = answered && (!entry || entry.by === "human");
+  const mayResave = answered && (given !== null || !entry || entry.by === "human");
 
   const record = async (result: TestStepResult) => {
     setPending(result);
@@ -286,6 +305,7 @@ export function StepRow({
       // step (plus re-seeded into the composer) on the next paint. Undo takes
       // this path too, so it sheds the same stale sentence.
       await onRecord(step, result, result === "" ? "" : note.trim());
+      setJustGiven(result);
       // ONE RULE, out in verify.ts where a test can reach it: un-answering
       // sheds the sentence, a fail or blocked with no sentence opens an EMPTY
       // box asking for one, and a note that rode along with the answer stops
@@ -329,8 +349,8 @@ export function StepRow({
   if (!mine && onRunStep)
     stepMenu.push({
       key: "recheck",
-      label: running ? "Re-checking…" : "Re-check this step",
-      title: "Start a session that checks only this step",
+      label: running ? "Checking…" : "Check this step again",
+      title: "An agent checks only this step",
       // A no-op while its own re-check is already starting: the item stays for
       // the label, not for a second press.
       onSelect: () => {
@@ -348,10 +368,7 @@ export function StepRow({
     stepMenu.push({
       key: "edit",
       label: "Edit this step",
-      title:
-        "Change the wording. It becomes yours, so the next rewrite keeps it — " +
-        "and any answer already recorded against it is cleared, because the " +
-        "question changed.",
+      title: "Change the wording — clears any answer on it",
       onSelect: () => setEditing(true),
     });
     stepMenu.push({
@@ -361,10 +378,7 @@ export function StepRow({
       // unrecognised actor is coerced to "human", and the run route refuses a
       // plan where every step is a person's), and it costs no answers.
       label: mine ? "Let the agent check this" : "I'll check this one",
-      title: mine
-        ? "An agent will settle it from a shell on the next run. Answers already " +
-          "recorded are kept — only who answers changes."
-        : "Take it off the agent — a run will leave it for you.",
+      title: mine ? "The agent checks it next time" : "The agent leaves it for you",
       onSelect: () =>
         void onEdit(step, { actor: mine ? "agent" : "human" }),
     });
@@ -373,7 +387,7 @@ export function StepRow({
     stepMenu.push({
       key: "remove",
       label: "Remove this step",
-      title: "You added this one, so nothing will bring it back",
+      title: "Delete this step for good",
       danger: true,
       onSelect: () => void onRemove(step),
     });
@@ -447,16 +461,10 @@ export function StepRow({
         className={"vf-step-who" + (mine ? " vf-who-you" : "")}
         title={
           handed
-            ? "The agent's step, handed back: it went and tried, and said it " +
-              "couldn't settle this one — the reason is on the row. It is yours " +
-              "now. A later run has another go at it."
+            ? "The agent couldn't check this one — it's yours now"
             : mine
-              ? "Only a person can answer this — visual judgement, a real browser, " +
-                "or a service the agent has no tool for. A verify run leaves it " +
-                "blocked with a reason."
-              : "The agent's — checkable from a shell or its own tools (log " +
-                "searches and dashboards included), so a verify run settles it " +
-                "without you. You can still override its answer."
+              ? "Only a person can check this"
+              : "The agent checks this — you can still answer it yourself"
         }
       >
         {mine ? "you" : "agent"}
@@ -578,7 +586,7 @@ export function StepRow({
                   type="button"
                   className="vf-undo"
                   disabled={pending !== null || saving}
-                  title="Take this answer back — the step goes back to unchecked"
+                  title="Take this answer back"
                   onClick={() => void record("")}
                 >
                   Undo
@@ -595,6 +603,20 @@ export function StepRow({
                 }}
               >
                 + note
+              </button>
+            ) : null}
+            {/* THE NEXT MOVE ON A FAILED STEP, beside it rather than in the
+                checklist's ⋯: open a session to fix it. The session is told to
+                reproduce the failure first. */}
+            {shown === "fail" && onFix ? (
+              <button
+                type="button"
+                className="test-btn vf-fix-step"
+                disabled={fixing}
+                title="Start a session to fix this step"
+                onClick={() => onFix(step)}
+              >
+                {fixing ? "Starting…" : "Fix this…"}
               </button>
             ) : null}
           </span>
@@ -655,7 +677,9 @@ export function StepRow({
               // Phrased as the instruction it is. "goes with the answer you
               // pick" describes the mechanism and leaves the reader to work out
               // that they are supposed to do something.
-              <span className="vf-note-hint">pick an answer — this saves with it</span>
+              <span className="vf-note-hint">
+                Pick Pass, Fail or Can't check to save it
+              </span>
             )}
           </div>
         ) : null}
@@ -940,8 +964,8 @@ export function AddStep({ plan, onAdded }: { plan: TestPlan; onAdded(next: TestP
         disabled={busy}
         onChange={(e) => setActor(e.target.value as TestStepActor)}
       >
-        <option value="agent">the agent</option>
-        <option value="human">me</option>
+        <option value="agent">Agent checks it</option>
+        <option value="human">You check it</option>
       </select>
       <button
         type="button"

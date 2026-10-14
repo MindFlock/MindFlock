@@ -1227,6 +1227,9 @@ def _announce_test_plan_checked(plan: dict) -> None:
                 "title": plan.get("title") or pid,
                 "failed": failed,
                 "needs_you": needs_you,
+                # A check of the BRANCH, before merge: the plan stays open and
+                # comes back after merge, so a toast must not read as "done".
+                "before_merge": bool(run.get("prelive")),
             },
         )
     except Exception:  # noqa: BLE001 — an announcement must never stop the pass

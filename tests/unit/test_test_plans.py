@@ -2371,7 +2371,9 @@ def test_verdict(store, results, verdict):
 
 
 def test_finish_run_folds_into_the_open_run_and_closes_the_plan(store):
-    tp.upsert(_plan("sc-1"))
+    # SHIPPED: only shipped work closes. A check before merge keeps the plan
+    # waiting — see the "check before merge" tests below.
+    tp.upsert(_plan("sc-1", state="due", live_at=50.0))
     tp.start_run("sc-1", "verify-sc-1")
     plan = tp.finish_run(
         "sc-1",
@@ -5386,10 +5388,20 @@ def test_a_due_checklist_with_an_answer_keeps_its_branch(store):
 
 
 def test_a_checklist_somebody_has_answered_is_never_re_aimed(store):
-    tp.upsert(_plan("sc-1", state="generated", live_branch="staging"))
+    tp.upsert(_plan("sc-1", state="due", live_at=50.0, live_branch="staging"))
     tp.record_result("sc-1", "s1", "pass")
     assert tp.retarget_live_branch("sc-1", "main") is None
     assert tp.get("sc-1")["live_branch"] == "staging"
+
+
+def test_a_check_before_merge_does_not_pin_the_live_branch(store):
+    """Answers given before merge are about the BRANCH, not about the branch the
+    repo ships from — so they must not stop the after-merge check following the
+    repo's setting."""
+    tp.upsert(_plan("sc-1", state="generated", live_branch="staging"))
+    tp.record_result("sc-1", "s1", "pass")
+    moved = tp.retarget_live_branch("sc-1", "main")
+    assert moved is not None and moved["live_branch"] == "main"
 
 
 def test_answers_clicked_back_off_do_not_pin_a_checklist(store):
@@ -8014,3 +8026,120 @@ def test_the_example_models_the_shape_the_rules_ask_for(store):
     assert steps[2]["text"].lower().startswith("on a deployment where")
     assert "log explorer" in steps[2]["text"].lower()
     assert steps[3]["text"].lower().startswith("on an order that already has")
+
+
+# --------------------------------------------------------------------------- #
+# Check before merge — checking the branch must not cost the check after merge
+# --------------------------------------------------------------------------- #
+def test_a_run_before_merge_keeps_the_plan_waiting(store):
+    """A run on a plan whose work has not shipped is a check of the branch. It
+    used to close the plan (`done`), and the liveness loop only re-asks plans in
+    `generated` — so checking before merge cost the check after it."""
+    tp.upsert(_plan("sc-1"))
+    tp.start_run("sc-1", "verify-sc-1")
+    assert tp.get("sc-1")["runs"][-1]["prelive"] is True
+    plan = tp.finish_run(
+        "sc-1",
+        [{"id": "s1", "result": "pass"}, {"id": "s2", "result": "pass"}],
+    )
+    assert plan["state"] == "generated" and plan["run_session"] == ""
+    assert plan["runs"][-1]["verdict"] == "partial"  # s2 is a person's step
+
+
+def test_the_plan_comes_back_after_merge_even_when_the_branch_check_passed(store):
+    tp.upsert(_plan("sc-1"))
+    tp.record_result("sc-1", "s1", "pass")
+    tp.record_result("sc-1", "s2", "pass")
+    # Every step answered — on the branch. Still waiting for the merge.
+    assert tp.get("sc-1")["state"] == "generated"
+    plan = tp.mark_due("sc-1")
+    # Shipped: the branch's answers are history, not the answer.
+    assert plan["state"] == "due"
+    assert plan["runs"][-1]["prelive"] is True
+
+
+def test_the_first_answer_after_merge_opens_a_new_run(store):
+    tp.upsert(_plan("sc-1"))
+    tp.record_result("sc-1", "s1", "pass")
+    tp.record_result("sc-1", "s2", "pass")
+    tp.mark_due("sc-1")
+    plan = tp.record_result("sc-1", "s2", "pass")
+    assert len(plan["runs"]) == 2
+    assert plan["runs"][0]["prelive"] is True
+    assert plan["runs"][-1]["prelive"] is False
+    assert set(plan["runs"][-1]["results"]) == {"s2"}
+    assert plan["state"] == "due"  # s1 not answered after merge yet
+    plan = tp.record_result("sc-1", "s1", "pass")
+    assert plan["state"] == "done"
+
+
+def test_a_run_after_merge_does_not_carry_answers_from_before_it(store):
+    """What a person saw on the branch is not an observation about what
+    shipped, so it is not copied into the after-merge run."""
+    tp.upsert(_plan("sc-1"))
+    tp.record_result("sc-1", "s2", "pass")
+    tp.mark_due("sc-1")
+    plan = tp.start_run("sc-1", "verify-sc-1")
+    assert plan["runs"][-1]["results"] == {}
+    assert plan["runs"][-1]["prelive"] is False
+
+
+def test_a_run_before_merge_that_cannot_start_goes_back_to_waiting(store):
+    tp.upsert(_plan("sc-1"))
+    tp.start_run("sc-1", "verify-sc-1")
+    plan = tp.fail_run("sc-1", "verify-sc-1", "worktree busy")
+    assert plan["state"] == "generated"
+    assert not plan["live_at"]
+
+
+def test_prune_returns_a_run_before_merge_to_waiting(store):
+    tp.upsert(_plan("sc-1"))
+    tp.start_run("sc-1", "verify-sc-1")
+    tp.prune(live_titles=["something-else"])
+    assert tp.get("sc-1")["state"] == "generated"
+
+
+def test_cancelling_a_run_before_merge_goes_back_to_waiting(store):
+    tp.upsert(_plan("sc-1"))
+    tp.start_run("sc-1", "verify-sc-1")
+    assert tp.cancel_run("sc-1")["state"] == "generated"
+
+
+def test_adding_a_step_to_a_checklist_that_could_not_be_written(store):
+    """The model failed and a person wrote a step: that is a working checklist,
+    not a failed one, and the model's failure no longer describes it."""
+    tp.upsert(_plan("sc-1", state="failed", steps=[], error="claude did not answer"))
+    plan = tp.add_step("sc-1", "Open the page", "It loads")
+    assert plan["state"] == "generated"
+    assert plan["error"] == ""
+    assert len(plan["steps"]) == 1
+
+
+def test_adding_a_step_to_a_shipped_checklist_that_could_not_be_written(store):
+    tp.upsert(_plan("sc-1", state="failed", steps=[], live_at=50.0, error="x"))
+    assert tp.add_step("sc-1", "Open the page")["state"] == "due"
+
+
+def test_older_runs_without_the_flag_read_as_after_merge(store):
+    """A run stored before the flag existed is not a check before merge."""
+    tp.upsert(
+        _plan(
+            "sc-1",
+            state="done",
+            live_at=50.0,
+            runs=[
+                {
+                    "at": 60.0,
+                    "by": "human",
+                    "session": "",
+                    "results": {
+                        "s1": {"result": "pass", "by": "human", "at": 61.0},
+                        "s2": {"result": "pass", "by": "human", "at": 62.0},
+                    },
+                }
+            ],
+        )
+    )
+    plan = tp.get("sc-1")
+    assert plan["runs"][-1]["prelive"] is False
+    assert tp.mark_due("sc-1")["state"] == "done"

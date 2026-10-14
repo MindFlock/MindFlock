@@ -106,11 +106,10 @@ export function VerifyBar() {
     <div
       id="verify-bar"
       title={
-        "Verify — writes a checklist when a session branch is pushed, then hands you " +
-        "the steps an agent cannot honestly check. " +
+        "Verify — a checklist for each pushed branch; the agent checks what it can, the rest are yours. " +
         (repos.length
-          ? `Tracking ${repos.length} ${repos.length === 1 ? "repository" : "repositories"}.`
-          : "No repositories tracked; the checklists here were asked for by hand or by a repo's own .mindflock.toml.")
+          ? `Watching ${repos.length} ${repos.length === 1 ? "repository" : "repositories"}.`
+          : "No repositories watched.")
       }
     >
       <span
@@ -142,18 +141,16 @@ export function VerifyBar() {
           running
             ? "An agent is working through a checklist right now"
             : broken
-              ? broken + (broken === 1 ? " pushed change" : " pushed changes") +
-                " did not do what its checklist expected — open Verify to see" +
-                " which step, and what was observed"
+              ? broken + (broken === 1 ? " checklist has" : " checklists have") +
+                " a failed step — open Verify to see which"
               : !on
                 ? // Deliberately not the word a removed status line used: a blunt
                   // bundle-wide guard in test_pr_review_settings.py watches for it
                   // coming back, and this tooltip is not what it is guarding.
-                  "Switched off — nothing is written when a branch is pushed, and nothing new turns up to check"
+                  "Paused: no new checklists on push"
                 : due
-                  ? due + (due === 1 ? " pushed change has" : " pushed changes have") +
-                    " not been checked"
-                  : "On, and nothing is outstanding — a checklist appears here when a branch is pushed"
+                  ? due + (due === 1 ? " checklist needs" : " checklists need") + " checking"
+                  : "On — nothing to check right now"
         }
       />
       {/* The bar's name IS its door (the pattern every automation bar shares):
@@ -191,7 +188,7 @@ export function VerifyBar() {
         ) : null}
         <label
           className="dc-switch"
-          title="Flip to pause automatic checking — your repositories, checklists and answers are kept either way, and writing one by hand, running and answering all still work"
+          title="Pause or resume new checklists on push — nothing is deleted"
         >
           <input
             type="checkbox"

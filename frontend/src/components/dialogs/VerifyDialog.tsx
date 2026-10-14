@@ -68,7 +68,7 @@
  * menu — lives in VerifyDialog.css under `vf-`.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { TestPlan } from "../../api/types";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
@@ -83,7 +83,7 @@ import { toast } from "../../lib/toast";
 // Failures go to the bottom-right cards, never a toast — see lib/verifyActions.ts.
 import { errorPop } from "../../lib/errorPop";
 import { errMsg } from "../../lib/format";
-import { requestPlanDelete, requestPlanRun } from "../../lib/verifyActions";
+import { requestPlanDelete, requestPlanRun, writePlanFor } from "../../lib/verifyActions";
 // THE LIST DIALOGS' OWN KIT, not a second one. Recently-closed and Workspaces
 // already have a Ctrl+F filter and checkbox multi-select; a checklist list that
 // grows without bound needs both for the same reason, and inventing a Verify
@@ -99,18 +99,30 @@ import { Modal } from "../Modal";
 import {
   type ClosedTarget,
   canRunNow,
-  closedTargets,
+  checklistTargets,
   liveBranchOverridden,
   noTargetsReason,
   planMatches,
   planName,
-  planTargets,
+  verifyDeepLinkPlan,
 } from "./verify";
 import { forgetNoteDrafts } from "./VerifyStep";
-import { PlanList, VerifyByHand, VerifyEmpty, VerifySources, VerifySwitch } from "./VerifyChrome";
+import {
+  type PlanReveal,
+  PlanList,
+  VerifyEmpty,
+  VerifyMoments,
+  VerifyNewChecklist,
+  VerifySources,
+  VerifySwitch,
+} from "./VerifyChrome";
+
+// The deep link — `openDialogFor("verify", <branch>)` — is resolved by
+// `verifyDeepLinkPlan` in verify.ts; its contract is documented there.
 
 export function VerifyDialog() {
   const open = useUi((s) => s.openDialog === "verify");
+  const target = useUi((s) => (s.openDialog === "verify" ? s.dialogTarget : null)) || "";
   const closeDialog = useUi((s) => s.closeDialog);
   // Polls only while the dialog is up; the top bar's badge keeps its own copy
   // of the same query alive for the count.
@@ -166,6 +178,13 @@ export function VerifyDialog() {
   );
   const [bulk, setBulk] = useState("");
   const [confirmBulk, setConfirmBulk] = useState(false);
+  // The deep link's work, done once per (open, target) after the list loads.
+  const [reveal, setReveal] = useState<PlanReveal | null>(null);
+  const [missingBranch, setMissingBranch] = useState("");
+  const [newOpen, setNewOpen] = useState(false);
+  const [preselect, setPreselect] = useState("");
+  const [asking, setAsking] = useState(false);
+  const linked = useRef("");
 
   // Half-typed step notes belong to the visit, not to the app: drop them when
   // the dialog shuts so nothing reappears in a row a week later. The filter and
@@ -177,7 +196,33 @@ export function VerifyDialog() {
     setQuery("");
     setConfirmBulk(false);
     sel.clear();
+    setReveal(null);
+    setMissingBranch("");
+    setNewOpen(false);
+    setPreselect("");
+    linked.current = "";
   }, [open, sel]);
+
+  // `openDialogFor("verify", <branch>)` — see `verifyDeepLinkPlan`. Waits for
+  // the list (and the closed sessions, which the ask picker needs) to load.
+  const plansLoaded = !!plansQ.data;
+  useEffect(() => {
+    if (!open || !target || !plansLoaded || linked.current === target) return;
+    linked.current = target;
+    const plan = verifyDeepLinkPlan(allPlans, target);
+    if (plan) {
+      setMissingBranch("");
+      setQuery(plan.branch || plan.id);
+      setReveal({ planId: plan.id, nonce: Date.now() });
+      return;
+    }
+    setMissingBranch(target);
+    const session = [...(instancesQ.data || []), ...(closedQ.data || [])].find(
+      (x) => x.branch === target || x.title === target,
+    );
+    setPreselect(session?.title || "");
+    setNewOpen(true);
+  }, [open, target, plansLoaded, allPlans, instancesQ.data, closedQ.data]);
 
   // Put the caret somewhere sensible on open. Without this, a keyboard user
   // arriving via Alt+V has focus still on whatever was behind the modal, so the
@@ -237,8 +282,11 @@ export function VerifyDialog() {
     repoCfg.verify_repo_settings
   );
   const closed = closedQ.data || [];
-  const targets = planTargets(instancesQ.data || [], plans, closed);
-  const closedNames = closedTargets(instancesQ.data || [], closed);
+  const targets = checklistTargets(instancesQ.data || [], plans, closed, liveBranch);
+  // The session a deep link for an uncovered branch would ask for.
+  const missingTarget = missingBranch
+    ? targets.find((t) => !t.reason && (t.branch === missingBranch || t.title === missingBranch))
+    : undefined;
 
   /** Fan a per-plan endpoint out over the selection, then reload once.
    *
@@ -318,11 +366,16 @@ export function VerifyDialog() {
       toolbarExtra={
         plans.length ? (
           <>
-            <SelectAllCheck
-              state={sel.allState}
-              onChange={sel.setAllVisible}
-              label="Select every checklist shown"
-            />
+            {/* Labelled on its face: an unlabelled box beside Refresh read as
+                anything but "select all". */}
+            <label className="vf-select-all">
+              <SelectAllCheck
+                state={sel.allState}
+                onChange={sel.setAllVisible}
+                label="Select every checklist shown"
+              />
+              <span aria-hidden="true">Select</span>
+            </label>
             <DialogFilter
               id="vf-plans-filter"
               value={query}
@@ -340,17 +393,44 @@ export function VerifyDialog() {
       hint={
         plans.length ? (
           <>
-            Steps marked <strong>you</strong> are the job — an agent settles the rest.
+            Steps marked <strong>you</strong> need a person — the agent checks the rest.
           </>
         ) : undefined
       }
     >
       {error ? (
         <div className="repo-empty">{error}</div>
-      ) : !plansQ.data ? null : !plans.length ? (
-        <VerifyEmpty liveBranch={liveBranch} />
+      ) : !plansQ.data ? null : !plans.length && !missingBranch ? (
+        <VerifyEmpty />
       ) : (
         <>
+          {missingBranch ? (
+            <div className="vf-missing" role="status">
+              <span>
+                No checklist for <code>{missingBranch}</code> yet.
+              </span>
+              {missingTarget ? (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled={asking}
+                  onClick={async () => {
+                    setAsking(true);
+                    try {
+                      await writePlanFor(missingTarget.title);
+                      setMissingBranch("");
+                    } finally {
+                      setAsking(false);
+                    }
+                  }}
+                >
+                  {asking ? "Asking…" : "Ask the agent for one"}
+                </button>
+              ) : (
+                <span className="muted">No session is on this branch.</span>
+              )}
+            </div>
+          ) : null}
           {picked.length ? (
             <BulkRowBar
               count={picked.length}
@@ -363,8 +443,8 @@ export function VerifyDialog() {
                 disabled={!runnable.length || bulk !== ""}
                 title={
                   runnable.length
-                    ? "Start a verify session for each — minutes of a real agent apiece"
-                    : "None of the selected checklists is one an agent can run"
+                    ? "An agent checks each one — a few minutes apiece"
+                    : "None of the selected checklists has a step an agent can check"
                 }
                 onClick={() =>
                   void fanOut(runnable, "Started", (plan) => requestPlanRun(plan.id))
@@ -378,7 +458,7 @@ export function VerifyDialog() {
                     a run can be cancelled from the row it starts. */}
                 {bulk === "Started"
                   ? "Starting…"
-                  : "Run " +
+                  : "Check " +
                     runnable.length +
                     (runnable.length === picked.length
                       ? ""
@@ -419,12 +499,12 @@ export function VerifyDialog() {
             />
           ) : null}
           {shown.length ? (
-            <PlanList plans={shown} liveBranch={liveBranch} selection={sel} />
-          ) : (
+            <PlanList plans={shown} liveBranch={liveBranch} selection={sel} reveal={reveal} />
+          ) : plans.length ? (
             <p className="muted vf-nomatch">
               No checklist matches “{query}”.
             </p>
-          )}
+          ) : null}
         </>
       )}
     </WorkListPanel>
@@ -444,26 +524,24 @@ export function VerifyDialog() {
         <div id="verify-panel">
           <div className="ws-head">
             <h2 id="verify-title">Verify</h2>
-            <span className="ik-subtitle">What shipped, and does it work?</span>
-            {/* The live branch, named out loud. "Live" is the entire premise of
-                this surface — a plan is due because its commit reached THIS
-                branch — and leaving the reader to guess which one it resolved to
-                would make every row an assertion they cannot check. Shown only
-                once the server has answered: guessing "main" here would be the
-                one lie the surface cannot afford — and so is stating one branch
-                for the whole flock when a repo in Sources has been given its own. */}
+            <span className="ik-subtitle">Does the change work?</span>
+            {/* The two moments, compressed: what a checklist is checked against
+                before merge and after. The branch is named only once the server
+                has answered — guessing "main" would be the one lie this surface
+                cannot afford — and "some repos differ" is said when a repo in
+                Sources ships from another branch. */}
             {liveBranch ? (
               <span
                 className="vf-live"
                 title={
-                  "A checklist sits quiet until its commit reaches this branch, then turns " +
-                  "up here to be checked." +
-                  (overridden
-                    ? " Some repos ship from another branch — each checklist's own is on its row."
-                    : "")
+                  "Before merge a checklist is checked on its branch; after merge it " +
+                  "comes back to be checked on " +
+                  liveBranch +
+                  "." +
+                  (overridden ? " Some repos ship from another branch — it's on each checklist." : "")
                 }
               >
-                checked once work reaches <code>{liveBranch}</code>
+                before merge: the branch · after merge: <code>{liveBranch}</code>
                 {overridden ? <span className="vf-live-more"> · some repos differ</span> : null}
               </span>
             ) : null}
@@ -473,28 +551,44 @@ export function VerifyDialog() {
           </div>
 
           <div id="verify-body">
-            {/* INTAKE'S ANATOMY, in Intake's order: a sentence saying what the
-                automation does, the master switch, the work those sources
-                produced, the SOURCES it watches, and a fold at the bottom for
-                what you touch once. Work leads once there is any to show (a
-                tracked repo or a checklist); before that the empty Sources
-                list and its + Add lead, exactly as on the Tickets, Pull
-                requests and Issues tabs — this is the fourth surface of the
-                same kind and it should not have to be learned separately. */}
-            <p className="set-hint set-block-hint">
-              MindFlock writes a checklist for every session branch pushed in the
-              repositories below, and brings it here to be checked once that work
-              reaches the branch you ship from. An agent settles the steps a shell can
-              settle; the rest are yours.
-            </p>
-            <VerifySwitch />
+            {/* INTAKE'S ANATOMY, in Intake's order: what this does, the master
+                switch, the work, the SOURCES it watches, and a fold at the
+                bottom for what you touch once. Work leads once there is any to
+                show (a tracked repo or a checklist); before that Sources and its
+                + Add lead, as on the Tickets, Pull requests and Issues tabs.
+
+                The intro is two lines — before merge, after merge — and folds
+                away once there are checklists to work: it is what a first visit
+                needs and what the fiftieth scrolls past. */}
+            {plans.length ? (
+              <details className="vf-intro">
+                <summary>How Verify works</summary>
+                <VerifyMoments liveBranch={liveBranch} />
+              </details>
+            ) : (
+              <div className="vf-intro">
+                <p className="set-hint set-block-hint">
+                  Each pushed branch gets a checklist of real-world checks — the agent
+                  does the ones it can, the rest are yours.
+                </p>
+                <VerifyMoments liveBranch={liveBranch} />
+              </div>
+            )}
+            <VerifySwitch hasPlans={plans.length > 0} />
             {/* Keyed, so the swap MOVES the two instead of remounting them
                 (adding the first repo flips it mid-edit; see PullRequestsTab). */}
             {workFirst ? [checklists, sources] : [sources, checklists]}
-            <VerifyByHand
-              candidates={targets}
-              closed={closedNames}
+            <VerifyNewChecklist
+              targets={targets}
               reason={noTargetsReason(instancesQ.data || [], plans, closed)}
+              plans={plans}
+              preselect={preselect}
+              open={newOpen}
+              onToggle={setNewOpen}
+              onReveal={(planId, addStep) => {
+                setQuery("");
+                setReveal({ planId, nonce: Date.now(), addStep });
+              }}
             />
           </div>
         </div>
