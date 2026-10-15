@@ -26,6 +26,9 @@ export function replayTour(id: TourId): void {
   if (id === "settings") {
     // On Connections: the tour's status-page and GitHub steps point there.
     openSettings("connections");
+  } else if (id === "people") {
+    // People is a Settings screen (key "peer"), not a top-bar dialog.
+    openSettings("peer");
   } else {
     ui.openDialogFor(SURFACE[id]!);
   }
