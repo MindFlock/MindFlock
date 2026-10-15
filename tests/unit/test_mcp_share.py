@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import subprocess
 import sys
 
@@ -247,10 +248,26 @@ def test_a_sharing_failure_never_fails_the_launch(monkeypatch, tmp_path):
 # --------------------------------------------------------------------------- #
 # The real bridge process: start, reuse, same port after a restart, stop
 # --------------------------------------------------------------------------- #
+def _bridge_log() -> str:
+    """The bridge's own log (its stdout/stderr), for a failure message: the
+    one place a start that never came up says why."""
+    path = os.path.join(mcp_share.state_dir(), "logs", "bridge.log")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()[-4000:]
+    except OSError as err:
+        return "(no bridge log: %s)" % err
+
+
 def test_bridge_lifecycle(tmp_path):
     first = mcp_share.ensure_bridge()
     try:
-        assert first and first["port"] and first["token"]
+        assert (
+            first and first["port"] and first["token"]
+        ), "the bridge never came up; bridge.json=%r\nlog:\n%s" % (
+            mcp_share._read_json(os.path.join(mcp_share.state_dir(), "bridge.json")),
+            _bridge_log(),
+        )
         assert mcp_share.ensure_bridge()["pid"] == first["pid"]  # reused, not restarted
         state = mcp_share.state_dir()
         assert oct(os.stat(state).st_mode & 0o777) == "0o700"
@@ -258,7 +275,12 @@ def test_bridge_lifecycle(tmp_path):
             oct(os.stat(os.path.join(state, "bridge.json")).st_mode & 0o777) == "0o600"
         )
         assert mcp_share.bridge_status()["running"]
+        # Stops promptly: the bridge is this process's child, so it must be
+        # reaped while waiting — a zombie still answers kill(pid, 0), which
+        # ran the full timeout and then (on macOS) failed the SIGKILL.
+        t0 = time.monotonic()
         assert mcp_share.stop_bridge()
+        assert time.monotonic() - t0 < 3.0
         assert mcp_share.bridge_pid() is None
         # A restarted bridge answers at the SAME url with the SAME token, so
         # the run files of windows already open stay valid.

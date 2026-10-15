@@ -269,15 +269,20 @@ def _pid_alive(pid) -> bool:
     return True
 
 
+#: Loopback only, so never through a proxy: ``urlopen``'s default opener reads
+#: the proxy settings (the environment, and on macOS the system's), and one
+#: that doesn't exempt 127.0.0.1 would swallow every health check — the
+#: bridge would read as never started.
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def _health(port: int, token: str, timeout: float = HEALTH_TIMEOUT_S) -> Optional[dict]:
     req = urllib.request.Request(
         "http://127.0.0.1:%d/health" % port,
         headers={"Authorization": "Bearer " + token},
     )
     try:
-        with urllib.request.urlopen(
-            req, timeout=timeout
-        ) as resp:  # noqa: S310 — loopback
+        with _DIRECT.open(req, timeout=timeout) as resp:  # noqa: S310 — loopback
             data = json.loads(resp.read() or b"{}")
     except (OSError, ValueError, urllib.error.URLError):
         return None
@@ -475,10 +480,19 @@ def stop_bridge(timeout: float = 5.0) -> bool:
             return False
         os.kill(pid, signal.SIGTERM)
         deadline = time.time() + timeout
+        # Reap while waiting: a bridge this process started stays a zombie
+        # until reaped, and kill(pid, 0) still succeeds on a zombie — so the
+        # wait would run its full timeout, then SIGKILL a dead process group
+        # (which macOS refuses with EPERM).
+        _reap_spawned()
         while time.time() < deadline and _pid_alive(pid):
             time.sleep(0.1)
+            _reap_spawned()
         if _pid_alive(pid):
-            os.killpg(pid, signal.SIGKILL)
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass  # gone meanwhile (or a zombie macOS won't signal)
         _reap_spawned()
         return True
     except Exception:  # noqa: BLE001

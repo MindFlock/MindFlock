@@ -1099,11 +1099,28 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, replies if as_list else replies[0])
 
 
+class _LoopbackHTTPServer(ThreadingHTTPServer):
+    """``ThreadingHTTPServer`` without the reverse-DNS lookup in
+    ``server_bind``: the stock one sets ``server_name = socket.getfqdn(host)``,
+    which on macOS can stall for many seconds — longer than the launch side
+    waits for the bridge to come up (seen on the macOS CI runner: the bridge
+    started, wrote nothing, and read as never started). The name is only
+    cosmetic here; the bridge only ever serves the loopback address."""
+
+    def server_bind(self) -> None:
+        import socketserver
+
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = str(host)
+        self.server_port = port
+
+
 def make_server(
     hub: Hub, token: str, host: str = "127.0.0.1", port: int = 0
 ) -> ThreadingHTTPServer:
     handler = type("BridgeHandler", (_Handler,), {"hub": hub, "token": token})
-    srv = ThreadingHTTPServer((host, port), handler)
+    srv = _LoopbackHTTPServer((host, port), handler)
     srv.daemon_threads = True
     return srv
 
