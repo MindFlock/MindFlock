@@ -1254,12 +1254,52 @@ def _agent_activity_cached(inst, title: str) -> str:
 def _background_jobs(inst, title: str) -> Optional[list]:
     """The background jobs the session's CLI left running past its turn, as
     the activity probe last classified them (running / waiting / stuck), or
-    None. Read after the activity probe, never a fresh process walk."""
+    None. Read after the activity probe, never a fresh process walk.
+
+    Runs on every snapshot, so it is also where a job that first passes its
+    expected duration is announced: ``session.job_past_expected``, once per
+    job (claude_background.announce_past_expected dedupes it)."""
     try:
         provider = providers.resolve(getattr(inst, "Program", "") or "")
-        return provider.background_jobs(tmux.to_mindflock_tmux_name(title)) or None
+        jobs = provider.background_jobs(tmux.to_mindflock_tmux_name(title)) or None
     except Exception:  # noqa: BLE001 — a probe never fails a poll
         return None
+    if jobs:
+        _announce_jobs_past_expected(title, jobs)
+    return jobs
+
+
+def _announce_jobs_past_expected(title: str, jobs: list) -> None:
+    """Emit ``session.job_past_expected`` for each job in ``jobs`` that just
+    passed its expected duration (never twice for one job). Never raises."""
+    try:
+        from backend.providers import claude_background as _bg
+
+        due = _bg.announce_past_expected(jobs)
+    except Exception:  # noqa: BLE001 — a probe never fails a poll
+        return
+    for job in due:
+        expect_s = float(job.get("expect_s") or 0)
+        elapsed = max(0.0, time.time() - float(job.get("started") or 0))
+        head = (job.get("command") or "").strip().splitlines()[:1]
+        _events.BUS.emit(
+            "session.job_past_expected",
+            session=title,
+            data={
+                "title": title,
+                "job_id": job.get("id"),
+                "command_head": (head[0] if head else "")[:80],
+                "expect_s": expect_s,
+                "elapsed_s": round(elapsed, 1),
+                "state": job.get("state"),
+                "detail": "Job on %s is past its expected ~%s — %s"
+                % (
+                    title,
+                    _bg.format_duration(expect_s),
+                    "still running" if job.get("state") == "running" else "still quiet",
+                ),
+            },
+        )
 
 
 def _session_last_turn_cached(inst) -> Optional[str]:
@@ -4060,6 +4100,116 @@ async def instance_background_stop(title: str, pid: int) -> JSONResponse:
             {"error": "no such background job in this session"}, status_code=409
         )
     return JSONResponse({"title": title, "pid": pid, "stopped": True})
+
+
+_JOB_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+async def _current_job(title: str, job_id: str):
+    """``(inst, job, error response)`` for one background job of ``title``
+    (a fresh scan): 404 for an unknown session or a job it isn't running."""
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return None, None, err
+    from backend.providers import claude_background as _bg
+
+    job = None
+    if _JOB_ID_RE.fullmatch(job_id or ""):
+        job = await asyncio.to_thread(
+            _bg.find_job, tmux.to_mindflock_tmux_name(title), job_id
+        )
+    if job is None:
+        return (
+            inst,
+            None,
+            JSONResponse(
+                {"error": "no such background job in this session"}, status_code=404
+            ),
+        )
+    return inst, job, None
+
+
+def _job_expect_answer(title: str, job_id: str, ok: bool) -> dict:
+    """The route's answer from a fresh look at the job, which also refreshes
+    the session's cached scan so the next snapshot carries the change."""
+    from backend.providers import claude_background as _bg
+
+    name = tmux.to_mindflock_tmux_name(title)
+    if _bg.recent(name) is not None:
+        _bg.scan(name)
+    job = _bg.find_job(name, job_id) or {}
+    return {
+        "ok": ok,
+        "title": title,
+        "job_id": job_id,
+        "expect_s": job.get("expect_s"),
+        "expected_by": job.get("expected_by"),
+        "eta": job.get("eta"),
+        "state": job.get("state"),
+        "reason": job.get("reason"),
+    }
+
+
+@app.post("/api/instances/{title}/jobs/{job_id}/expect")
+async def instance_job_expect(
+    title: str, job_id: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Say how long one background job should take, so it isn't called stuck
+    while inside that window: ``{"duration": "6h" | "1h30m" | "2d" | seconds,
+    "by": "you" (default) | "agent"}``. The job id is the one Claude Code
+    printed when it backgrounded the command (``background[].id``). Its stuck
+    threshold becomes at least 1.5 × the duration (claude_background). A
+    person's expectation stands against the agent's: the agent's write is
+    then ``ok: false`` and the answer carries the person's. → ``{ok, title,
+    job_id, expect_s, expected_by, eta, state, reason}``; 404 unknown session
+    or job, 400 bad duration (1 min to 14 days)."""
+    from backend.providers import claude_background as _bg
+
+    body = payload or {}
+    by = body.get("by") or "you"
+    if by not in ("you", "agent"):
+        return JSONResponse({"error": "by must be 'you' or 'agent'"}, status_code=400)
+    _inst, job, err = await _current_job(title, job_id)
+    if err is not None:
+        return err
+    secs = _bg.parse_duration(body.get("duration"))
+    if secs is None:
+        return JSONResponse(
+            {
+                "error": "duration must be like 90m, 6h, 1h30m or 2d (or seconds), "
+                "between 1 minute and 14 days"
+            },
+            status_code=400,
+        )
+    try:
+        ok, _entry = await asyncio.to_thread(
+            _bg.set_expectation, job_id, secs, by, title
+        )
+    except OSError as e:
+        return JSONResponse(
+            {"error": "couldn't save the expectation: %s" % e}, status_code=500
+        )
+    return JSONResponse(await asyncio.to_thread(_job_expect_answer, title, job_id, ok))
+
+
+@app.delete("/api/instances/{title}/jobs/{job_id}/expect")
+async def instance_job_expect_clear(title: str, job_id: str) -> JSONResponse:
+    """Clear a background job's expected duration (the person's or the
+    agent's; a ``MINDFLOCK_EXPECT=`` in its command still applies). → the
+    same shape as POST, ``ok`` false when nothing was set; 404 unknown
+    session or job."""
+    from backend.providers import claude_background as _bg
+
+    _inst, job, err = await _current_job(title, job_id)
+    if err is not None:
+        return err
+    try:
+        ok = await asyncio.to_thread(_bg.clear_expectation, job_id)
+    except OSError as e:
+        return JSONResponse(
+            {"error": "couldn't save the expectation: %s" % e}, status_code=500
+        )
+    return JSONResponse(await asyncio.to_thread(_job_expect_answer, title, job_id, ok))
 
 
 @app.post("/api/instances/{title}/revive")

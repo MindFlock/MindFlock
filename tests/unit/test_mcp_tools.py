@@ -40,7 +40,7 @@ def _ctx(clock, **kw):
 # Text budgets and registry
 # --------------------------------------------------------------------------- #
 class TestRegistry:
-    def test_twenty_seven_tools_with_annotations(self):
+    def test_twenty_eight_tools_with_annotations(self):
         box, _, _ = make_box(_tree())
         tools = build_tools(box)
         assert [t.name for t in tools] == [
@@ -60,6 +60,7 @@ class TestRegistry:
             "set_parent",
             "fence_session",
             "set_order",
+            "expect_background_job",
             "list_tickets",
             "spawn_ticket_session",
             "ship_session",
@@ -92,6 +93,7 @@ class TestRegistry:
             "spawn_session",
             "fence_session",
             "set_order",
+            "expect_background_job",
         ):
             assert by[name].annotations["destructiveHint"] is False
             assert by[name].annotations["openWorldHint"] is False
@@ -115,7 +117,7 @@ class TestRegistry:
 
     def test_text_budgets(self):
         box, _, _ = make_box(_tree())
-        assert len(INSTRUCTIONS) <= 1900
+        assert len(INSTRUCTIONS) <= 2000  # Claude truncates at 2048
         for t in build_tools(box):
             assert len(t.description) <= 1500, t.name
             assert t.input_schema["type"] == "object"
