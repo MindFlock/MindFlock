@@ -413,6 +413,7 @@ def test_validate_args_defaults():
         "checkpoint",
         "contract",
         "joint",
+        "check",
     }
 
 

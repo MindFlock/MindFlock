@@ -1921,6 +1921,7 @@ settings file:
 | `checkpoint` | commit OUR shared folder (what the peer's diff and export see) |
 | `peer_contract` | a joint task's contract: `action: "read"` → `{rev, text, open_proposals}`; `action: "propose"` + `text` (the whole new contract) → `{proposal_id}`. A person accepts or rejects it in People — agents never do; never edit `CONTRACT.md` directly |
 | `peer_joint` | the joint task → `{id, brief, state, mine, theirs}` (re-read the brief) |
+| `peer_check` | the joint checklist: `action: "read"` → `{id, verdict, asking, steps, results}` (`results` = this side's); `action: "record"` + `step_id`, `result` (`pass`\|`fail`\|`blocked`), `note?` → `{ok, verdict}` — only this side's agent steps (the other side's steps and a person's steps are refused); `action: "write"` + `steps` (a list of `{text, expect, actor, side}`, or text holding a fenced JSON list) → `{ok, steps}` — only while the user's **Ask my agent** is open |
 
 Attach (`mcp_attach.peer_attach_args` / `peer_attach_env`, asked of the
 provider's `peer_mcp_args` / `peer_mcp_env` with a `PeerMcpSpec`): Claude gets

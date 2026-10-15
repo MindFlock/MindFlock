@@ -266,9 +266,12 @@ describe("active", () => {
       })
     );
     expect(html).toContain('class="peer-joint-check" data-verdict="needs_you"');
-    expect(html).toContain("Needs you");
-    expect(html).toContain("You · agent");
-    expect(html).toContain("Bea · person");
+    // The joint check's card (JointCheck.tsx, r6w-joint-verify): steps by
+    // side with who checks them; read-only without a link id.
+    expect(html).toContain("Needs Bea — 1 step");
+    expect(html).toContain("Your side");
+    expect(html).toContain("Bea&#x27;s side");
+    expect(html).toMatch(/peer-joint-actor-human">person</);
     expect(html).toMatch(/peer-joint-step-pass[\s\S]*>Pass</);
     expect(html).toMatch(/peer-joint-step-blank[\s\S]*>Not yet</);
   });

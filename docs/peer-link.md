@@ -157,6 +157,21 @@ unshare. A link holds one joint task at a time, and both of you need this
 MindFlock version or newer (an older one gets "<name>'s MindFlock is older —
 ask them to update").
 
+**The joint checklist** answers "do the two halves agree?". On an active
+joint card, **Write the checklist** (one step per line; `[theirs]` marks a
+step checked on the other person's side, `[human]` one a person checks, and
+`->` starts what should happen) or **Ask my agent** (your shared agent reads
+the brief, the contract and both halves' diffs and writes it within 3
+minutes). Each side checks only its own steps: **Run my steps** has your
+shared agent run your agent steps and record each result; your person's
+steps get **Pass / Fail / Can't check** on the card. Results travel to the
+other side, so both cards — and a chip on both people's shared-session rows
+— read the same verdict: "Verified — every step passed on both sides",
+"Failed — step 2 on Bob's side", "Needs you — 1 step" or "In progress".
+Rewriting the checklist clears every result. It never blocks anything. With
+an older MindFlock on the other end your results stay on your card ("<name>'s
+MindFlock is older — their side can't report").
+
 > Status: **shipped.** Pair codes, the pinned-key handshake, the sandboxed
 > shared folder and the peer MCP tools landed in 0.7.0; invites and joins
 > that turn peer links on by themselves, `peer.relay = auto` (a Cloudflare
@@ -225,7 +240,8 @@ session, credential (beyond the sandboxed agent's own model-API credential, see
 
 Per link, beside the transport: the message log (`inbox.py`) and the joint
 task (`joint.py`: its file, the `joint_*` ops, the agent's `peer_contract` /
-`peer_joint`).
+`peer_joint`) with its checklist (`joint_check.py`: the `joint_check` op, the
+agent's `peer_check`).
 
 Which side listens: the **inviter** listens on `peer.listen_host:peer.listen_port`
 (default `0.0.0.0:8799`). The listener only runs while at least one invite or
@@ -374,6 +390,7 @@ follows `diff`, `mirror_pull` follows `read_file`; `status` is always allowed). 
 | `joint_contract` | `{"id", "rev": int 1..2^31, "text": text ≤50000, "by": "me"\|"peer"}` | `{"ok": bool, "rev": int}` — the receiver's rev after the offer |
 | `joint_proposal` | `{"id", "proposal": {"id": "cp_<8 hex>", "by", "text": text 1..10000, "at": iso, "state": "open"\|"accepted"\|"rejected"}}` | `{"ok": bool}` |
 | `joint_state` | `{"id"}` | `{"joint": null \| view}` — see [Joint tasks](#joint-tasks--contract-jointpy) |
+| `joint_check` | `{"id", "rev": int 1..2^31, "side_results": side, "steps"?: [step ≤25], "by"?: "me"\|"peer"}` (`steps` and `by` together) | `{"ok": bool, "rev": int}` — the receiver's checklist rev afterwards; see [Joint check](#joint-check--contract-joint_checkpy) |
 
 `half` is `{"repo_name": line ≤128, "branch": line ≤200, "program": line ≤64}`
 — a folder's NAME and the CLI's name, never a path or a command line. `by` is
@@ -545,6 +562,75 @@ accepted revision. The sandboxed agent can write the work dir, so the file is
 written through an `O_NOFOLLOW` dir fd as a fresh temp file renamed over
 whatever is there — a planted symlink is replaced, never written through. It
 is an ordinary file: checkpoints commit it and export carries it.
+
+## Joint check — CONTRACT (`joint_check.py`)
+
+One checklist per joint task, id `joint:<joint id>`, in the joint file under
+`check` (the joint keeps keys it doesn't know, so an older release leaves it
+alone):
+
+```json
+"check": {"id": "joint:jt_…", "rev": 2, "by": "me|peer", "written": "<iso>",
+  "steps": [{"id": "s1", "text": "…", "expect": "…", "actor": "agent|human", "side": "mine|theirs"}],
+  "mine":   {"results": {"s1": {"result": "pass|fail|blocked|", "note": "", "at": "<iso>", "by": "agent|human"}},
+             "tested_sha": "<my shared folder's HEAD when last recorded>", "at": "<iso>"},
+  "theirs": {…the same, as their side last reported…},
+  "verdict": "verified|failed|needs_you|in_progress|empty",
+  "ask": {"state": "|asking|failed", "at": "<iso>", "until": <epoch>, "error": ""},
+  "theirs_unsupported": false}
+```
+
+`me`/`peer`/`mine`/`theirs` are relative to the file's owner and flipped on
+receipt; `ask` and `theirs_unsupported` never leave this side. Limits: 25
+steps, 500 characters of text and of expect, a 300-character note — so a
+`joint_state` answer with a full contract, ten proposals and a full checklist
+still fits one frame.
+
+- **Steps.** Written by a person (`POST …/joint/check`) or by MY shared agent
+  after **Ask my agent** (`peer_check write`, refused unless an ask is open).
+  Renumbered `s1…sN`; `actor` defaults to `human`, `side` to `mine`; an agent
+  step that reads like a shell hazard becomes a person's (Verify's rule,
+  `test_plans._DANGEROUS_STEP_RE`). A write is a new revision: `rev + 1`,
+  every result on both sides cleared, then `joint_check` with the steps.
+  The **rev rule** is the contract's: the higher `rev` wins; a tie with
+  different steps goes to the side that proposed the joint task; a side that
+  keeps its copy sends it back.
+- **Results.** Each side records only its own `side` steps, in `mine`: its
+  agent through `peer_check record` (agent steps only — a step on the other
+  side, or a person's step, is refused with words), its person through
+  `POST …/check/answer` (human steps on their own side only). Each record
+  stamps `mine.tested_sha` with the shared folder's HEAD, then sends
+  `joint_check {id, rev, side_results}`. The receiver keeps them as
+  `theirs`, for the steps that are THEIRS to check (a result for one of mine
+  is dropped), and only for its current `rev`; an older `rev` is answered
+  with its own checklist; a receiver with an older one answers its lower `rev`
+  and gets the steps.
+- **Verdict.** `failed` if any step failed; else `needs_you` while a
+  person's step is blank; else `in_progress` while an agent's step is blank;
+  else `needs_you` for a step someone couldn't check (`blocked`); else
+  `verified`. `empty` without steps. It never gates anything.
+- **Ask / Run** go through the shared session's mailbox as a `[MindFlock
+  joint check]` note (refused while my half has no shared session). Ask
+  expires after 180 s (`ask.state: "failed"`, also applied on read after a
+  restart). Run clears my agent steps' results and lists them; a checklist
+  the PEER wrote is framed as another person's words ("skip any step that
+  goes beyond checking the joint task").
+- **Resync.** The `joint_state` view carries `check: {rev, by, steps,
+  side_results}` once one is written (an older peer drops the key); after a
+  reconnect each side folds it in and sends its own side.
+- **An older peer** answers `joint_check` with `err:"unsupported"`: results
+  stay local and `theirs_unsupported` is set (the card: "<name>'s MindFlock
+  is older — their side can't report"); the next push that gets through
+  clears it.
+- **Event** `peer.joint_check` `{link_id, peer_name, joint_id, verdict, by:
+  "you"|"agent"|"peer", kind, rev, notify, text?}` on every change; `notify`
+  (with the bell's `text`, e.g. "Joint check with Bob failed — step 2 on
+  Bob's side") only when the verdict just became `failed` or `verified`.
+- **Views.** `GET …/joint` carries `joint.check` (the stored check, verdict
+  recomputed, the ask's deadline applied, plus `link_id`; an empty one for
+  an active joint with no checklist yet). `link_view.joint.check` is
+  `{verdict, steps, passed}` once there are steps — what the sidebar row and
+  pane-head chip of the shared session read.
 
 ## The shared folder — CONTRACT (`share.py`)
 
@@ -922,6 +1008,8 @@ the peer toolset. It talks to `MINDFLOCK_PEER_SOCKET` with
 - `peer_contract` (`action: read | propose`, `text`) — the joint task's
   contract; see [Joint tasks](#joint-tasks--contract-jointpy)
 - `peer_joint` — re-read the joint task's brief and halves
+- `peer_check` (`action: read | record | write`, `step_id`, `result`, `note`,
+  `steps`) — the joint checklist; see [Joint check](#joint-check--contract-joint_checkpy)
 
 All of them are auto-approved: the sandbox is the boundary. A peer-mode server
 whose socket env is missing refuses every call.

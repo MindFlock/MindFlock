@@ -74,6 +74,7 @@ OPS = (
     "joint_contract",
     "joint_proposal",
     "joint_state",
+    "joint_check",
 )
 
 MAX_NAME = 128  # on the wire; stores sanitize further to 32
@@ -97,6 +98,14 @@ MAX_JOINT_PROPOSAL = 10_000
 MAX_JOINT_PROPOSALS = 10
 MAX_JOINT_REASON = 200
 MAX_JOINT_REV = 2**31
+# The joint check (backend.peer.joint_check): capped so a joint_state answer
+# carrying a full checklist still fits one frame next to a full contract.
+MAX_CHECK_STEPS = 25
+MAX_CHECK_TEXT = 500
+MAX_CHECK_NOTE = 300
+CHECK_ACTORS = ("agent", "human")
+CHECK_SIDES = ("mine", "theirs")
+CHECK_RESULTS = ("pass", "fail", "blocked", "")
 
 
 class ProtocolError(Exception):
@@ -136,6 +145,7 @@ _CAP_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,31}\Z")
 _JOINT_ID_RE = re.compile(r"^jt_[0-9a-f]{12}\Z")
 _PROPOSAL_ID_RE = re.compile(r"^cp_[0-9a-f]{8}\Z")
 _ISO_RE = re.compile(r"^[0-9][0-9T:.+Z-]{0,39}\Z")
+_STEP_ID_RE = re.compile(r"^s[0-9]{1,3}\Z")
 JOINT_STATES = ("proposed", "active", "done", "cancelled")
 PROPOSAL_STATES = ("open", "accepted", "rejected")
 JOINT_BYS = ("me", "peer")
@@ -421,6 +431,81 @@ def _req_joint_state(p, strict) -> dict:
     return p
 
 
+def _iso_or_empty(v, what: str) -> None:
+    if v != "":
+        _iso(v, what)
+
+
+def _check_step(v, strict) -> dict:
+    """One joint-check step, ``side`` in the SENDER's terms."""
+    v = _keys(v, ("id", "text", "expect", "actor", "side"), (), strict)
+    if not isinstance(v["id"], str) or not _STEP_ID_RE.match(v["id"]):
+        _fail("bad step id")
+    if not _str(v["text"], 1, MAX_CHECK_TEXT, _BAD_TEXT):
+        _fail("bad step text")
+    if not _str(v["expect"], 0, MAX_CHECK_TEXT, _BAD_TEXT):
+        _fail("bad step expect")
+    if v["actor"] not in CHECK_ACTORS:
+        _fail("bad step actor")
+    if v["side"] not in CHECK_SIDES:
+        _fail("bad step side")
+    return v
+
+
+def _check_steps(v, strict) -> list:
+    if not isinstance(v, list) or len(v) > MAX_CHECK_STEPS:
+        _fail("bad steps")
+    steps = [_check_step(x, strict) for x in v]
+    if len({s["id"] for s in steps}) != len(steps):
+        _fail("duplicate step id")
+    return steps
+
+
+def _check_side_results(v, strict) -> dict:
+    """The sender's own side: ``{results: {step_id: cell}, tested_sha, at}``."""
+    v = _keys(v, ("results", "tested_sha", "at"), (), strict)
+    res = v["results"]
+    if not isinstance(res, dict) or len(res) > MAX_CHECK_STEPS:
+        _fail("bad results")
+    out = {}
+    for sid, cell in res.items():
+        if not isinstance(sid, str) or not _STEP_ID_RE.match(sid):
+            _fail("bad step id")
+        cell = _keys(cell, ("result", "note", "at", "by"), (), strict)
+        if cell["result"] not in CHECK_RESULTS:
+            _fail("bad result")
+        if not _str(cell["note"], 0, MAX_CHECK_NOTE, _BAD_TEXT):
+            _fail("bad note")
+        _iso_or_empty(cell["at"], "at")
+        if cell["by"] not in CHECK_ACTORS:
+            _fail("bad by")
+        out[sid] = cell
+    v["results"] = out
+    if v["tested_sha"] != "" and not (
+        isinstance(v["tested_sha"], str) and _SHA_RE.match(v["tested_sha"])
+    ):
+        _fail("bad tested_sha")
+    _iso_or_empty(v["at"], "at")
+    return v
+
+
+def _req_joint_check(p, strict) -> dict:
+    """``{id, rev, side_results, steps?, by?}`` — the sender's results for its
+    own side; the whole step list (and who wrote it) when it changed."""
+    p = _keys(p, ("id", "rev", "side_results"), ("steps", "by"), strict)
+    _joint_id(p["id"])
+    if not _int(p["rev"], 1, MAX_JOINT_REV):
+        _fail("bad rev")
+    p["side_results"] = _check_side_results(p["side_results"], strict)
+    if ("steps" in p) != ("by" in p):
+        _fail("steps and by go together")
+    if "steps" in p:
+        p["steps"] = _check_steps(p["steps"], strict)
+        if p["by"] not in JOINT_BYS:
+            _fail("bad by")
+    return p
+
+
 _REQUESTS = {
     "msg": _req_msg,
     "diff": _req_diff,
@@ -435,6 +520,7 @@ _REQUESTS = {
     "joint_contract": _req_joint_contract,
     "joint_proposal": _req_joint_proposal,
     "joint_state": _req_joint_state,
+    "joint_check": _req_joint_check,
 }
 
 
@@ -616,7 +702,7 @@ def _joint_wire_view(j, strict) -> dict:
             "contract",
             "proposals",
         ),
-        (),
+        ("check",),
         strict,
     )
     _joint_id(j["id"])
@@ -642,7 +728,22 @@ def _joint_wire_view(j, strict) -> dict:
     if not isinstance(props, list) or len(props) > MAX_JOINT_PROPOSALS:
         _fail("bad proposals")
     j["proposals"] = [_joint_proposal_obj(x, strict) for x in props]
+    if "check" in j and j["check"] is not None:
+        j["check"] = _joint_check_view(j["check"], strict)
     return j
+
+
+def _joint_check_view(v, strict) -> dict:
+    """The joint check inside a ``joint_state`` answer (sender's terms):
+    ``{rev, by, steps, side_results}`` — an older peer drops the key."""
+    v = _keys(v, ("rev", "by", "steps", "side_results"), (), strict)
+    if not _int(v["rev"], 1, MAX_JOINT_REV):
+        _fail("bad check rev")
+    if v["by"] not in JOINT_BYS:
+        _fail("bad check by")
+    v["steps"] = _check_steps(v["steps"], strict)
+    v["side_results"] = _check_side_results(v["side_results"], strict)
+    return v
 
 
 def _res_joint_state(p, req, strict) -> dict:
@@ -666,6 +767,7 @@ _RESPONSES = {
     "joint_contract": _res_joint_contract,
     "joint_proposal": _res_joint_ok,
     "joint_state": _res_joint_state,
+    "joint_check": _res_joint_contract,
 }
 
 

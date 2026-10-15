@@ -43,6 +43,7 @@ PEER_TOOL_NAMES = (
     "checkpoint",
     "peer_contract",
     "peer_joint",
+    "peer_check",
 )
 
 #: Max bytes of one response line from the agent API (a 512 KiB file read
@@ -82,7 +83,9 @@ PEER_INSTRUCTIONS = (
     "is CONTRACT.md in your folder. Follow it. To change it, call "
     "peer_contract with action=propose and the whole new text — never edit "
     "the file; a person accepts or rejects proposals, never an agent. "
-    "peer_joint re-reads the brief."
+    "peer_joint re-reads the brief. peer_check reads the joint checklist and "
+    "records YOUR side's agent steps (action=record); write one only when your "
+    "user asked you to (action=write)."
 )
 
 _READ = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": True}
@@ -241,6 +244,27 @@ def build_peer_tools(client: PeerClient) -> List[Tool]:
     def peer_joint(args: dict, ctx: ToolContext):
         return client.call("joint", {})
 
+    def peer_check(args: dict, ctx: ToolContext):
+        action = args.get("action") or "read"
+        if action == "read":
+            return client.call("check", {"action": "read"})
+        if action == "record":
+            if not args.get("step_id") or not args.get("result"):
+                raise ToolError("record needs step_id and result")
+            p = {
+                "action": "record",
+                "step_id": args["step_id"],
+                "result": args["result"],
+            }
+            if args.get("note"):
+                p["note"] = args["note"]
+            return client.call("check", p)
+        if action == "write":
+            if not args.get("steps"):
+                raise ToolError("write needs steps: the JSON list of the checklist")
+            return client.call("check", {"action": "write", "steps": args["steps"]})
+        raise ToolError("action must be read, record or write")
+
     return [
         Tool(
             "whoami",
@@ -364,6 +388,43 @@ def build_peer_tools(client: PeerClient) -> List[Tool]:
             _obj({}),
             peer_joint,
             {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
+        ),
+        Tool(
+            "peer_check",
+            "Joint checklist",
+            "The joint task's checklist: do the two halves agree? action=read → "
+            "{id, verdict, asking, steps, results} (results = your side's). "
+            "action=record with step_id, result pass|fail|blocked and a one-line "
+            "note records one of YOUR side's agent steps (the other side's steps "
+            "and a person's steps are refused). action=write with steps = a "
+            "list of {text, expect, actor: agent|human, side: mine|theirs} — only "
+            "when your user asked you to write the checklist.",
+            _obj(
+                {
+                    "action": {"type": "string", "enum": ["read", "record", "write"]},
+                    "step_id": {"type": "string", "minLength": 1, "maxLength": 16},
+                    "result": {"type": "string", "enum": ["pass", "fail", "blocked"]},
+                    "note": {"type": "string", "maxLength": 300},
+                    "steps": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 25,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "text": {"type": "string", "maxLength": 500},
+                                "expect": {"type": "string", "maxLength": 500},
+                                "actor": {"type": "string", "enum": ["agent", "human"]},
+                                "side": {"type": "string", "enum": ["mine", "theirs"]},
+                            },
+                            "required": ["text"],
+                        },
+                    },
+                },
+                ("action",),
+            ),
+            peer_check,
+            _LOCAL,
         ),
     ]
 

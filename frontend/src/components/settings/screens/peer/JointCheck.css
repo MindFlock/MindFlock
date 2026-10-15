@@ -1,0 +1,171 @@
+/* The joint checklist on an active joint card (JointCheck.tsx). The verdict
+   pill reuses Verify's `.vchip` (dialogs/VerifyDialog.css); everything here
+   is layout only, coloured by meaning through the theme tokens. Every rule is
+   scoped under `.peer-joint-check`, so it out-ranks the older read-only
+   slot's `.peer-joint-step*` rules in PeerLinks.css whatever the load order. */
+.peer-joint-check {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.peer-joint-check .peer-joint-check-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.peer-joint-check .peer-joint-verdict {
+  white-space: normal;
+}
+
+.peer-joint-check .peer-joint-side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.peer-joint-check .peer-joint-side-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.peer-joint-check .peer-joint-sha {
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.peer-joint-check .peer-joint-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.peer-joint-check .peer-joint-step {
+  display: grid;
+  /* number | text | who checks it; the result (or my answer buttons) on
+     the row under the text — the settings panel is narrow at any width. */
+  grid-template-columns: 1.5em minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 4px 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12.5px;
+}
+
+.peer-joint-check .peer-joint-step-n {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.peer-joint-check .peer-joint-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.peer-joint-check .peer-joint-step-expect,
+.peer-joint-check .peer-joint-step-note {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.peer-joint-check .peer-joint-actor {
+  justify-self: start;
+  align-self: start;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.peer-joint-check .peer-joint-actor-human {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.peer-joint-check .peer-joint-answer,
+.peer-joint-check .peer-joint-step-result {
+  grid-column: 2 / -1;
+}
+
+.peer-joint-check .peer-joint-step-result {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.peer-joint-check .peer-joint-step-pass .peer-joint-step-result {
+  color: var(--green);
+}
+
+.peer-joint-check .peer-joint-step-fail {
+  border-color: color-mix(in srgb, var(--red) 55%, transparent);
+}
+
+.peer-joint-check .peer-joint-step-fail .peer-joint-step-result {
+  color: var(--red);
+}
+
+.peer-joint-check .peer-joint-answer {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.peer-joint-check .peer-joint-answer-btn {
+  padding: 1px 7px;
+  font-size: 11px;
+}
+
+.peer-joint-check .peer-joint-answer-btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.peer-joint-check .peer-joint-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.peer-joint-check .peer-joint-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.peer-joint-check .peer-joint-editor-text {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 12.5px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  resize: vertical;
+}
+
+.peer-joint-check .peer-joint-error {
+  color: var(--red);
+}
