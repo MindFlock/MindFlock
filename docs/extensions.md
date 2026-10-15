@@ -1202,8 +1202,7 @@ either way. With the switch on, the report is the full wall clock (pinned by
 a golden file).
 
 **Any phase can be hidden.** Each chip in the legend under the
-time-to-commit bar (and, in the *After the commit* view, under its table)
-is a switch: click it to hide that phase, click the struck-out chip to
+time-to-commit bar is a switch: click it to hide that phase, click the struck-out chip to
 bring it back — for when only some parts matter (say, just the agent
 writing code and the pre-commit hooks). A hidden phase is cut out exactly
 like your own time: out of every duration, median, share, group, advice
@@ -1213,8 +1212,20 @@ report adds `hidden: {phases, total_s}`. The person phases keep their own
 switch: hiding one while your time is already left out changes nothing.
 Hiding nothing is the report unchanged.
 
-Both are the extension's settings, `include_me` (default `false`) and
-`hidden` (phase ids, default none; unknown ids are ignored),
+**The handoffs after the commit can be counted too.** The same legend ends
+with *After the commit:* chips for `analysis.AFTER_PHASES` (Committed, not
+pushed · Pushed, no PR yet · PR open — waiting), **off by default**.
+Switching one on (`count_after`) adds its waits — the same seconds the
+*After the commit* table shows for each committed unit — to that unit's
+clock: its `to_commit`, lead time and timeline (placed right after the
+commit, `at` keeping the real start), so they join the bar, the groups,
+the KPIs ("…, plus committed, not pushed") and the trend. The *After the
+commit* table keeps every handoff either way; a hidden phase is never
+counted. The report then carries `count_after`; empty, it is unchanged.
+
+These are the extension's settings, `include_me` (default `false`),
+`hidden` and `count_after` (phase ids, default none; unknown ids are
+ignored),
 in its own file beside the timeline,
 `~/.mindflock/workflow_optimizer.settings.json` (mode 0600, written
 atomically; it follows `$MINDFLOCK_WORKFLOW_FILE`'s directory) — never in
@@ -1269,9 +1280,9 @@ PR (autopilot depth "push" / "pr" ships it on its own).
 
 | Route | Purpose |
 |---|---|
-| `GET /summary?range=7d\|30d\|90d[&include_me=0\|1][&hide=<phase>,…]` | `{now, range, include_me, hide, period_s, tracking_since, phases, groups, kpi: {items, committed, estimated, median_to_commit, p90_to_commit, median_active_to_commit, in_progress}, basis, to_commit: [{phase, label, group, total_s, share, median_s, p90_s, items}], to_commit_groups, after_commit, advice: [{phase, level, title, detail, at_stake_s, share}], trend: [{start, end, items, median_to_commit}], items, excluded?: {phases, total_s}, hidden?: {phases, total_s}}` — units without their timelines. `basis` is `"committed"` (the units committed in the range) or `"all"` when none was. `include_me` is the saved setting unless the query overrides it; `excluded` is there only when your time is left out. `hide` is the hidden phases in effect (the saved setting unless `hide=` overrides it; `hide=` empty shows all); `hidden` is there only when one is. Never 500s. |
-| `GET /item?id=<repo@branch#n>[&include_me=0\|1][&hide=…]` | One unit with its `timeline: [{ph, start, end}]` (`at` too when compressed; 404 when unknown). |
-| `GET /settings` · `POST /settings {include_me?, hidden?}` | The extension's settings (`{include_me: false, hidden: []}` by default); a POST merges the known keys of the right type and returns the result. |
+| `GET /summary?range=7d\|30d\|90d[&include_me=0\|1][&hide=<phase>,…][&count_after=<phase>,…]` | `{now, range, include_me, hide, count_after, period_s, tracking_since, phases, groups, kpi: {items, committed, estimated, median_to_commit, p90_to_commit, median_active_to_commit, in_progress}, basis, to_commit: [{phase, label, group, total_s, share, median_s, p90_s, items}], to_commit_groups, after_commit, advice: [{phase, level, title, detail, at_stake_s, share}], trend: [{start, end, items, median_to_commit}], items, excluded?: {phases, total_s}, hidden?: {phases, total_s}}` — units without their timelines. `basis` is `"committed"` (the units committed in the range) or `"all"` when none was. `include_me` is the saved setting unless the query overrides it; `excluded` is there only when your time is left out. `hide` is the hidden phases in effect (the saved setting unless `hide=` overrides it; `hide=` empty shows all); `hidden` is there only when one is. `count_after` is the after-commit handoffs counted in the headline (saved setting unless overridden). Never 500s. |
+| `GET /item?id=<repo@branch#n>[&include_me=0\|1][&hide=…][&count_after=…]` | One unit with its `timeline: [{ph, start, end}]` (`at` too when compressed; 404 when unknown). |
+| `GET /settings` · `POST /settings {include_me?, hidden?, count_after?}` | The extension's settings (`{include_me: false, hidden: [], count_after: []}` by default); a POST merges the known keys of the right type and returns the result. |
 
 ### A minimal third-party extension
 

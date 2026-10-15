@@ -155,6 +155,9 @@ _ACTIVE = frozenset({"agent", "rework", "setup", "precommit", "hook_fix", "quest
 #: The handoffs after a commit, in the order work moves through them (a merge
 #: is 4). A wait counts only when the work later reached a higher one.
 _HANDOFF_RANK = {"to_push": 1, "to_pr": 2, "review": 3}
+#: The handoffs after a commit, which the person can opt to count toward
+#: the headline (``count_after``): off, they live only in ``after_commit``.
+AFTER_PHASES = tuple(_HANDOFF_RANK)
 #: What a phase says about the branch's stage when the commit has to be
 #: estimated (no ``commit`` rows yet): 0 = nothing committed on it (an idle
 #: agent on a branch with no commit reads "your turn"), else its handoff
@@ -177,6 +180,11 @@ def hidden_phases(raw: Iterable[str]) -> frozenset:
     if isinstance(raw, str) or raw is None:
         return frozenset()
     return frozenset(p for p in raw if isinstance(p, str) and p in GROUP_OF)
+
+
+def after_phases(raw: Iterable[str]) -> frozenset:
+    """The after-commit handoffs in ``raw`` (anything else dropped)."""
+    return hidden_phases(raw) & frozenset(AFTER_PHASES)
 
 
 # --------------------------------------------------------------------------- #
@@ -473,7 +481,12 @@ def _in_unit(timeline: List[dict]) -> List[dict]:
     return out
 
 
-def _after_commit(gap: List[dict], merged: bool, still_open: bool) -> dict:
+def _after_commit(
+    gap: List[dict],
+    merged: bool,
+    still_open: bool,
+    keep: Optional[List[dict]] = None,
+) -> dict:
     """Seconds per handoff phase after a unit's commit, up to the next unit
     or the merge (``merged``: the gap ends at one). A wait counts when the
     work later reached a further handoff (a push, a PR, the merge) — or when
@@ -490,6 +503,8 @@ def _after_commit(gap: List[dict], merged: bool, still_open: bool) -> dict:
         waiting = still_open and all(ph == sg["ph"] for ph in rest)
         if waiting or (later and max(later) > r):
             tot[sg["ph"]] = tot.get(sg["ph"], 0.0) + (sg["end"] - sg["start"])
+            if keep is not None:
+                keep.append(sg)
     return tot
 
 
@@ -508,15 +523,19 @@ def build_items(
     live_sessions: Optional[Iterable[str]] = None,
     include_me: bool = False,
     hidden: Iterable[str] = (),
+    count_after: Iterable[str] = (),
 ) -> List[dict]:
     """Every unit of work in ``rows``, newest first (see the module
     docstring). ``live_sessions``: titles that still exist (an open unit none
     of whose sessions does is ``abandoned``). ``include_me`` False cuts
     :data:`PERSON_PHASES` out of every unit's clock; ``hidden`` (phase ids
-    the person chose not to see) is cut out the same way. The units
-    themselves (ids, boundaries, status, epochs) are the same either way."""
+    the person chose not to see) is cut out the same way; ``count_after``
+    (after-commit handoffs the person opted into) adds those waits to each
+    committed unit's clock. The units themselves (ids, boundaries, status,
+    epochs) are the same either way."""
     skip = frozenset() if include_me else PERSON_PHASES
     hide = hidden_phases(hidden) - skip
+    add = after_phases(count_after) - hide
     seg = session_segments(rows, now)
     live = set(live_sessions or [])
     by_key: Dict[str, List[dict]] = {}
@@ -569,6 +588,7 @@ def build_items(
                     live,
                     skip,
                     hide,
+                    add,
                 )
             )
             idx += 1
@@ -590,6 +610,7 @@ def build_items(
                     live,
                     skip,
                     hide,
+                    add,
                 )
             )
     items.sort(key=lambda it: it["end"], reverse=True)
@@ -614,6 +635,33 @@ def _compress(tl: List[dict], skip: frozenset) -> List[dict]:
     return out
 
 
+def _timeline(tl: List[dict], cut: frozenset, tail: List[dict]) -> List[dict]:
+    """A unit's timeline as sent: as recorded when nothing is cut or added;
+    else compressed (:func:`_compress`) with the counted after-commit
+    ``tail`` placed right after it, every piece keeping its real start as
+    ``at``. The last 400 pieces."""
+    if not cut and not tail:
+        return [
+            {"ph": sg["ph"], "start": round(sg["start"], 1), "end": round(sg["end"], 1)}
+            for sg in tl[-400:]
+        ]
+    out = _compress(tl, cut)
+    cur = out[-1]["end"] if out else (tail[0]["start"] if tail else 0.0)
+    for sg in tail:
+        d = sg["end"] - sg["start"]
+        out.append({"ph": sg["ph"], "start": cur, "end": cur + d, "at": sg["start"]})
+        cur += d
+    return [
+        {
+            "ph": sg["ph"],
+            "start": round(sg["start"], 1),
+            "end": round(sg["end"], 1),
+            "at": round(sg["at"], 1),
+        }
+        for sg in out[-400:]
+    ]
+
+
 def _item(
     key,
     idx,
@@ -625,32 +673,44 @@ def _item(
     live,
     skip=frozenset(),
     hide=frozenset(),
+    add=frozenset(),
 ) -> dict:
     """One unit. ``bounds``: ``(start, commit_at, estimated, gap_end,
     still_open)`` — ``commit_at`` None for the open unit at the end, and the
     gap after the commit runs to ``gap_end`` (the next unit's start, or the
     end of the record when ``still_open``). ``skip`` (the person's phases)
     and ``hide`` (phases hidden from view) are both cut out of the clock;
-    their seconds are ``your_time_s`` and ``hidden_s``."""
+    their seconds are ``your_time_s`` and ``hidden_s``. ``add`` (handoffs
+    after the commit the person counts) joins the clock after the commit:
+    in ``to_commit``, the lead time and the timeline (placed right after
+    the commit, each piece keeping its real start as ``at``)."""
     start, commit_at, estimated, gap_end, still_open = bounds
     end = commit_at if commit_at is not None else gap_end
     tl = _in_unit(_clip_tl(timeline, start, end))
     to_commit = _totals(tl, start, end)
     after: Dict[str, float] = {}
+    kept: List[dict] = []
     if commit_at is not None:
         # The handoffs end at the merge: what follows it is no wait.
         merged = [m for m in merges if commit_at <= m <= gap_end + 1e-6]
         if merged:
             gap_end, still_open = min(merged), False
         after = _after_commit(
-            _clip_tl(timeline, commit_at, gap_end), bool(merged), still_open
+            _clip_tl(timeline, commit_at, gap_end),
+            bool(merged),
+            still_open,
+            kept,
         )
     mine = sum(v for k, v in to_commit.items() if k in skip)
     hid = sum(v for k, v in to_commit.items() if k in hide)
     cut = skip | hide
     to_commit = {k: v for k, v in to_commit.items() if k not in cut}
     after = {k: v for k, v in after.items() if k not in hide}
-    elapsed = max(0.0, round(end - start - mine - hid, 1))
+    added = {k: v for k, v in after.items() if k in add}
+    for k, v in added.items():
+        to_commit[k] = to_commit.get(k, 0.0) + v
+    elapsed = max(0.0, round(end - start - mine - hid + sum(added.values()), 1))
+    tail = [sg for sg in kept if sg["ph"] in added]
     runs = fails = 0
     prev = ""
     for sg in tl:
@@ -690,26 +750,7 @@ def _item(
         "after_commit": {k: round(v, 1) for k, v in after.items()},
         "hook_runs": runs,
         "hook_failures": fails,
-        "timeline": (
-            [
-                {
-                    "ph": sg["ph"],
-                    "start": round(sg["start"], 1),
-                    "end": round(sg["end"], 1),
-                }
-                for sg in tl[-400:]
-            ]
-            if not cut
-            else [
-                {
-                    "ph": sg["ph"],
-                    "start": round(sg["start"], 1),
-                    "end": round(sg["end"], 1),
-                    "at": round(sg["at"], 1),
-                }
-                for sg in _compress(tl, cut)[-400:]
-            ]
-        ),
+        "timeline": _timeline(tl, cut, tail),
         **({"your_time_s": round(mine, 1)} if skip else {}),
         **({"hidden_s": round(hid, 1)} if hide else {}),
     }
@@ -968,6 +1009,7 @@ def report(
     live_sessions: Optional[Iterable[str]] = None,
     include_me: bool = False,
     hidden: Iterable[str] = (),
+    count_after: Iterable[str] = (),
 ) -> dict:
     """The dashboard payload for the last ``period`` seconds.
 
@@ -981,12 +1023,18 @@ def report(
     ``hidden`` phases (the person's own pick of what not to look at) are cut
     out the same way, but stay in ``phases`` so the legend can offer them
     back; the report adds ``hidden: {phases, total_s}``. Empty, the report
-    is exactly what it was without it."""
+    is exactly what it was without it.
+
+    ``count_after`` (after-commit handoffs: :data:`AFTER_PHASES`) adds those
+    waits to the committed units' clocks, so they join ``to_commit``, its
+    groups, the KPIs and the trend; ``after_commit`` keeps every handoff
+    either way. The report then says ``count_after``. Empty, unchanged."""
     now = time.time() if now is None else now
     since = now - period
     skip = frozenset() if include_me else PERSON_PHASES
     hide = hidden_phases(hidden) - skip
-    all_items = build_items(rows, now, live_sessions, include_me, hide)
+    add = after_phases(count_after) - hide
+    all_items = build_items(rows, now, live_sessions, include_me, hide, add)
     items = [it for it in all_items if it["end"] >= since]
     committed = [
         it
@@ -1038,6 +1086,8 @@ def report(
             "phases": [p for p in PHASE_IDS if p in skip],
             "total_s": round(sum(it.get("your_time_s", 0.0) for it in basis), 1),
         }
+    if add:
+        out["count_after"] = [p for p in AFTER_PHASES if p in add]
     if hide:
         out["hidden"] = {
             "phases": [p for p in PHASE_IDS if p in hide],

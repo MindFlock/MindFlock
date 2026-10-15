@@ -22,7 +22,9 @@ the home guard refuses the real one under pytest).
 
 The extension's settings — ``include_me``, whether the person's own time
 counts toward bottlenecks (default off), and ``hidden``, the phase ids the
-person chose not to look at (default none) — live beside the store in
+person chose not to look at (default none), and ``count_after``, the
+handoffs after the commit (pushing, the PR, review) the person counts
+toward the headline (default none) — live beside the store in
 ``workflow_optimizer.settings.json`` (mode 0600, written atomically): an
 extension's state is its own file, never a group in settings.json, so it is
 this device's, like the timeline it reads.
@@ -55,7 +57,7 @@ __all__ = [
 _FILE = "workflow_optimizer.jsonl"
 _SETTINGS_FILE = "workflow_optimizer.settings.json"
 #: Every setting at its default; a missing / unreadable file means these.
-DEFAULT_SETTINGS = {"include_me": False, "hidden": []}
+DEFAULT_SETTINGS = {"include_me": False, "hidden": [], "count_after": []}
 #: Rows older than this are dropped at compaction: a 90-day view plus the
 #: work items that straddle its edge.
 RETENTION_S = 100 * 86400.0
@@ -198,8 +200,9 @@ def _clean(raw) -> dict:
     }
     if isinstance(raw, dict) and isinstance(raw.get("include_me"), bool):
         out["include_me"] = raw["include_me"]
-    if isinstance(raw, dict) and _ids(raw.get("hidden")) is not None:
-        out["hidden"] = _ids(raw.get("hidden"))
+    for k in ("hidden", "count_after"):
+        if isinstance(raw, dict) and _ids(raw.get(k)) is not None:
+            out[k] = _ids(raw.get(k))
     return out
 
 
@@ -221,8 +224,9 @@ def save_settings(patch: dict) -> dict:
         patch = patch if isinstance(patch, dict) else {}
         if isinstance(patch.get("include_me"), bool):
             cur["include_me"] = patch["include_me"]
-        if _ids(patch.get("hidden")) is not None:
-            cur["hidden"] = _ids(patch.get("hidden"))
+        for k in ("hidden", "count_after"):
+            if _ids(patch.get(k)) is not None:
+                cur[k] = _ids(patch.get(k))
         p = settings_path()
         os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
         atomic_write_text(

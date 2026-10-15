@@ -916,8 +916,8 @@ def _store_person_scenario(tmp_path, monkeypatch):
 def test_include_me_setting_defaults_off_and_persists(tmp_path, monkeypatch):
     p = _store_person_scenario(tmp_path, monkeypatch)
     sp = tmp_path / "workflow_optimizer.settings.json"
-    off = {"include_me": False, "hidden": []}
-    on = {"include_me": True, "hidden": []}
+    off = {"include_me": False, "hidden": [], "count_after": []}
+    on = {"include_me": True, "hidden": [], "count_after": []}
     assert store.settings_path() == str(sp)
     assert store.load_settings() == off and not sp.exists()
     assert client.get("/api/workflow/settings").json() == off
@@ -941,15 +941,21 @@ def test_hidden_setting_keeps_strings_only_and_merges_alone(tmp_path, monkeypatc
         json={"hidden": ["precommit", 3, "", "precommit", "bogus"]},
     ).json()
     # strings kept (deduplicated); the analysis drops ids it doesn't know
-    assert body == {"include_me": False, "hidden": ["precommit", "bogus"]}
+    assert body == {
+        "include_me": False,
+        "hidden": ["precommit", "bogus"],
+        "count_after": [],
+    }
     assert client.post("/api/workflow/settings", json={"include_me": True}).json() == {
         "include_me": True,
         "hidden": ["precommit", "bogus"],
+        "count_after": [],
     }
     assert client.get("/api/workflow/summary").json()["hide"] == ["precommit"]
     assert client.post("/api/workflow/settings", json={"hidden": []}).json() == {
         "include_me": True,
         "hidden": [],
+        "count_after": [],
     }
 
 
@@ -1050,3 +1056,42 @@ def test_hiding_a_person_phase_is_left_to_include_me():
     )
     assert on["hidden"]["phases"] == ["your_turn"]
     assert "your_turn" not in {r["phase"] for r in on["to_commit"]}
+
+
+def test_after_commit_handoffs_count_only_when_asked(tmp_path, monkeypatch):
+    """Pushing, the PR and review stay out of the headline by default; each
+    one counted adds its waits to the committed units' clocks (and their
+    timelines, right after the commit), while ``after_commit`` keeps every
+    handoff either way."""
+    _store_person_scenario(tmp_path, monkeypatch)
+    base = client.get("/api/workflow/summary?range=7d").json()
+    assert base["count_after"] == [] and "count_after" not in A.report([], T)
+    after = {r["phase"]: r["total_s"] for r in base["after_commit"]}
+    assert after, "the scenario needs a handoff after a commit"
+    ph = max(after, key=after.get)
+    assert ph not in {r["phase"] for r in base["to_commit"]}
+    body = client.get(
+        "/api/workflow/summary", params={"range": "7d", "count_after": ph + ",agent"}
+    ).json()
+    assert body["count_after"] == [ph]
+    assert {r["phase"]: r["total_s"] for r in body["to_commit"]}[ph] == after[ph]
+    assert body["after_commit"] == base["after_commit"]
+    lead = {it["id"]: it["lead_to_commit"] for it in base["items"]}
+    grew = [
+        it
+        for it in body["items"]
+        if it["after_commit"].get(ph)
+        and it["lead_to_commit"] == lead[it["id"]] + it["after_commit"][ph]
+    ]
+    assert grew
+    tl = client.get(
+        "/api/workflow/item", params={"id": grew[0]["id"], "count_after": ph}
+    ).json()["timeline"]
+    assert tl[-1]["ph"] == ph and tl[-1]["at"] >= grew[0]["commit_at"]
+    # saved, it is the default; hiding a phase wins over counting it
+    store.save_settings({"count_after": [ph]})
+    assert client.get("/api/workflow/summary").json()["count_after"] == [ph]
+    both = client.get("/api/workflow/summary", params={"hide": ph}).json()
+    assert both["count_after"] == [ph] and ph not in {
+        r["phase"] for r in both["to_commit"]
+    }

@@ -66,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and *Pre-commit hooks*) to hide it, and its time leaves every number, the
   same way your own time does — click the struck-out chip to bring it back.
   The choice is remembered.
+- **Workflow Optimizer: count pushing, the PR and review when you want.**
+  The legend under the bar ends with *After the commit:* chips (Committed,
+  not pushed · Pushed, no PR yet · PR open — waiting), off by default;
+  switch one on and its waits join the headline time. Clicking any chip,
+  view button or unit no longer scrolls the panel back to the top.
 
 Round 5 of the fresh-eyes UX lab: seven judges who could only use the UI walked
 0.8.7 as first-time users, and every surface was then simplified first and

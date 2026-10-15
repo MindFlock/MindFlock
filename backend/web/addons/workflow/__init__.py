@@ -76,6 +76,14 @@ def _hidden(override: Optional[List[str]]) -> List[str]:
     return [p for p in analysis.PHASE_IDS if p in keep]
 
 
+def _count_after(override: Optional[List[str]]) -> List[str]:
+    """The after-commit handoffs counted toward the headline: the explicit
+    override when given, else the saved setting; in their order."""
+    raw = store.load_settings()["count_after"] if override is None else override
+    keep = analysis.after_phases(raw)
+    return [p for p in analysis.AFTER_PHASES if p in keep]
+
+
 def _ids(raw: Optional[str]) -> Optional[List[str]]:
     """A query-string id list (``a,b``; empty = none); absent = no override."""
     if raw is None:
@@ -99,19 +107,25 @@ def build_summary(
     now: Optional[float] = None,
     include_me: Optional[bool] = None,
     hidden: Optional[List[str]] = None,
+    count_after: Optional[List[str]] = None,
 ) -> dict:
     """The dashboard payload (items without their timelines — those come one
-    at a time from :func:`build_item`). ``include_me`` / ``hidden`` ``None``
-    = the saved setting; the answer says which it used (``hide``)."""
+    at a time from :func:`build_item`). ``include_me`` / ``hidden`` /
+    ``count_after`` ``None`` = the saved setting; the answer says which it
+    used (``include_me``, ``hide``, ``count_after``)."""
     now = time.time() if now is None else now
     range_key = range_key if range_key in RANGES else "7d"
     period = RANGES[range_key]
     mine = _include_me(include_me)
     hide = _hidden(hidden)
-    rep = analysis.report(_rows(period, now), now, period, _live_titles(), mine, hide)
+    add = _count_after(count_after)
+    rep = analysis.report(
+        _rows(period, now), now, period, _live_titles(), mine, hide, add
+    )
     rep["range"] = range_key
     rep["include_me"] = mine
     rep["hide"] = hide
+    rep["count_after"] = add
     rep["items"] = [
         {k: v for k, v in it.items() if k != "timeline"} for it in rep["items"]
     ]
@@ -124,6 +138,7 @@ def build_item(
     now: Optional[float] = None,
     include_me: Optional[bool] = None,
     hidden: Optional[List[str]] = None,
+    count_after: Optional[List[str]] = None,
 ) -> Optional[dict]:
     """One work item with its phase timeline (``None`` when unknown) —
     compressed, without the person's phases unless their time counts, and
@@ -132,7 +147,8 @@ def build_item(
     rows = store.read(since=now - store.RETENTION_S)
     mine = _include_me(include_me)
     hide = _hidden(hidden)
-    for it in analysis.build_items(rows, now, _live_titles(), mine, hide):
+    add = _count_after(count_after)
+    for it in analysis.build_items(rows, now, _live_titles(), mine, hide, add):
         if it["id"] == item_id:
             return it
     return None
@@ -209,11 +225,17 @@ class WorkflowAddon(Addon):
             range: str = "7d",  # noqa: A002
             include_me: Optional[str] = None,
             hide: Optional[str] = None,
+            count_after: Optional[str] = None,
         ) -> JSONResponse:
             try:
                 return JSONResponse(
                     await asyncio.to_thread(
-                        build_summary, range, None, _flag(include_me), _ids(hide)
+                        build_summary,
+                        range,
+                        None,
+                        _flag(include_me),
+                        _ids(hide),
+                        _ids(count_after),
                     )
                 )
             except Exception as err:  # noqa: BLE001 — never 500 the dashboard
@@ -224,9 +246,15 @@ class WorkflowAddon(Addon):
             id: str = "",  # noqa: A002
             include_me: Optional[str] = None,
             hide: Optional[str] = None,
+            count_after: Optional[str] = None,
         ) -> JSONResponse:
             it = await asyncio.to_thread(
-                build_item, id, None, _flag(include_me), _ids(hide)
+                build_item,
+                id,
+                None,
+                _flag(include_me),
+                _ids(hide),
+                _ids(count_after),
             )
             if it is None:
                 return JSONResponse({"error": "no such work item"}, status_code=404)
@@ -238,8 +266,8 @@ class WorkflowAddon(Addon):
 
         @router.post("/settings")
         async def post_settings(body: dict) -> JSONResponse:
-            """Merge ``{include_me: bool, hidden: [phase id]}``; other keys /
-            types are ignored."""
+            """Merge ``{include_me: bool, hidden: [phase id], count_after:
+            [phase id]}``; other keys / types are ignored."""
             try:
                 return JSONResponse(await asyncio.to_thread(store.save_settings, body))
             except OSError as err:
