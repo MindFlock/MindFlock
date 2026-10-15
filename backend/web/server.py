@@ -825,7 +825,8 @@ async def lifespan(app: FastAPI):
         # the access token (or a QR encoding it) must never land there.
         try:
             banner = await asyncio.to_thread(_mobile_banner)
-            print(banner, flush=True)
+            if banner:  # local mode prints no mobile box (see _mobile_banner)
+                print(banner, flush=True)
             if log.ErrorLog is not None:
                 try:
                     log.ErrorLog.Printf(

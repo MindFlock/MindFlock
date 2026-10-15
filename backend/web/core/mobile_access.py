@@ -250,13 +250,11 @@ def _mobile_banner(*, for_log: bool = False) -> str:
         lines.append("  └────────────────────────────────────────────────────────")
         return "\n".join(lines + _banner_signin(srv, shared, for_log, shared=True))
     if srv._local_only_mode():
-        # Bound to 127.0.0.1: no tailnet URL (or QR) can reach this server —
-        # printing them would just be wrong. Point at tailscale mode instead.
-        lines.append("  │  (local mode — run `mindflock serve tailscale`")
-        lines.append("  │   for phone/tailnet access)")
-        lines.append("  └────────────────────────────────────────────────────────")
-        lines.append("")
-        return "\n".join(lines)
+        # Bound to 127.0.0.1: no tailnet URL (or QR) can reach this server,
+        # and the boxed /m link only sent first-run users to the phone view
+        # with no setup checklist. The "three steps" block above already ends
+        # on "Phone: mindflock serve tailscale", so local mode prints nothing.
+        return ""
     name, ip = srv._tailscale_info()
     # The URL we encode in the QR — the best one a phone on the tailnet can use.
     qr_url = None
