@@ -10,7 +10,11 @@ import { PathField } from "../../../PathField";
 import { defaultMirrorBranch, mirrorStatusText, type PeerLink } from "../../../../lib/peer";
 import { useAct } from "./useAct";
 
-export function MirrorRow(props: { link: Pick<PeerLink, "link_id" | "peer_name" | "mirror">; reload(): void; now?: number }) {
+export function MirrorRow(props: {
+  link: Pick<PeerLink, "link_id" | "peer_name" | "mirror" | "sas_verified">;
+  reload(): void;
+  now?: number;
+}) {
   const { link, reload, now } = props;
   const m = link.mirror || null;
   const base = "/api/peer/links/" + encodeURIComponent(link.link_id) + "/mirror";
@@ -19,6 +23,9 @@ export function MirrorRow(props: { link: Pick<PeerLink, "link_id" | "peer_name" 
   const [branch, setBranch] = useState(m?.branch || defaultMirrorBranch(link.peer_name));
   const on = !!m?.enabled;
   const branchOk = branch.startsWith("peer/") && branch.length > 5;
+  // Nothing of theirs crosses before the safety number is confirmed (the
+  // server answers 409); an older server doesn't send the flag.
+  const verified = link.sas_verified !== false;
 
   return (
     <div className="peer-mirror" data-mirror={on ? "on" : "off"}>
@@ -50,7 +57,8 @@ export function MirrorRow(props: { link: Pick<PeerLink, "link_id" | "peer_name" 
           <button
             type="button"
             className="test-btn peer-mirror-enable"
-            disabled={!!busy || !repo.trim() || !branchOk}
+            disabled={!!busy || !verified || !repo.trim() || !branchOk}
+            title={verified ? undefined : `Confirm the safety number with ${link.peer_name} first.`}
             onClick={() =>
               act(
                 "mirror",
@@ -62,6 +70,9 @@ export function MirrorRow(props: { link: Pick<PeerLink, "link_id" | "peer_name" 
             {busy === "mirror" ? "Turning on…" : "Enable"}
           </button>
         </div>
+      )}
+      {!on && !verified && (
+        <span className="set-hint peer-gate">Confirm the safety number with {link.peer_name} first.</span>
       )}
       {!on && !branchOk && <span className="set-hint">The branch name starts with peer/.</span>}
       {m?.last_error && (

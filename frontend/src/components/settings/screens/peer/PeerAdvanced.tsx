@@ -1,12 +1,14 @@
 /** People → Advanced: the peer-links switch, your name, how people on other
  * networks reach you (relay / port / address), what the shared agent may
- * reach, and the status line. Split out of PeerLinks.tsx unchanged. */
+ * reach, and the status line (where the listener really is: `listen.bound`).
+ * The switch itself is the screen's: off asks first, then POST
+ * /api/peer/disable. */
 
 import { useState } from "react";
 import { copyText } from "../../../../lib/clipboard";
 import { toast } from "../../../../lib/toast";
 import { InlineConfirm, SettingField } from "../../useSettings";
-import type { PeerStatus } from "../../../../lib/peer";
+import { disableConfirmText, listenText, type PeerStatus } from "../../../../lib/peer";
 
 const RELAY_OPTIONS = [
   { value: "auto", label: "Automatic — through Cloudflare when cloudflared is installed" },
@@ -15,13 +17,25 @@ const RELAY_OPTIONS = [
   { value: "url", label: "My own HTTPS relay (relay URL below)" },
 ];
 
-export function PeerAdvanced({ on, onToggle, st }: { on: boolean; onToggle(on: boolean): void; st: PeerStatus | null }) {
+export function PeerAdvanced({
+  on,
+  onToggle,
+  st,
+  busy,
+  error,
+}: {
+  on: boolean;
+  onToggle(on: boolean): void;
+  st: PeerStatus | null;
+  busy?: boolean;
+  error?: string;
+}) {
   const relayAddr = st?.relay?.address || "";
-  // Turning it off drops every connection and stops shared sessions: ask
-  // first, naming what stops, whenever there is anything to stop.
+  // Turning it off drops every connection and closes the open shared
+  // sessions (their folders are kept): ask first, naming who and how many,
+  // whenever there is anyone to drop.
   const [asking, setAsking] = useState(false);
   const people = st?.links.length || 0;
-  const shares = st?.links.filter((l) => l.shared).length || 0;
   return (
     <details className="peer-advanced" id="peer-advanced">
       <summary>Advanced</summary>
@@ -32,6 +46,7 @@ export function PeerAdvanced({ on, onToggle, st }: { on: boolean; onToggle(on: b
             type="checkbox"
             id="peer-enabled"
             checked={on}
+            disabled={busy}
             onChange={(e) => {
               if (!e.target.checked && people > 0) setAsking(true);
               else onToggle(e.target.checked);
@@ -44,15 +59,12 @@ export function PeerAdvanced({ on, onToggle, st }: { on: boolean; onToggle(on: b
           nobody.
         </span>
       </div>
-      {asking && (
+      {error && <p className="error peer-toggle-error">{error}</p>}
+      {asking && st && (
         <InlineConfirm
-          title="Turn off connections to people?"
+          title={disableConfirmText(st.links)}
           body={
-            <span>
-              You disconnect from {people === 1 ? "1 person" : people + " people"}
-              {shares ? ` and ${shares === 1 ? "1 shared session stops" : shares + " shared sessions stop"}` : ""} until you turn
-              it back on.
-            </span>
+            <span>Shared folders and connections are kept. To pick up again, turn this on and press Reopen on a card.</span>
           }
           confirmLabel="Turn off"
           onCancel={() => setAsking(false)}
@@ -132,7 +144,8 @@ export function PeerAdvanced({ on, onToggle, st }: { on: boolean; onToggle(on: b
               {" · "}this computer's key <code>{st.fingerprint}</code>
             </>
           )}
-          {" · "}direct connections {st.listen.listening ? "open" : "closed"} ({st.listen.host}:{st.listen.port})
+          {" · "}
+          <span id="peer-listen-state">{listenText(st.listen)}</span>
           {st.relay && st.relay.mode !== "off" && (
             <>
               {" · "}relay <span id="peer-relay-state">{st.relay.running ? "up" : "down"}</span>

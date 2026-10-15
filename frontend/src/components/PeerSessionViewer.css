@@ -60,6 +60,13 @@
   color: var(--accent);
 }
 
+/* Off until the safety number is confirmed (the body says why). */
+#peer-session-dialog .psv-tab:disabled {
+  cursor: default;
+  opacity: 0.5;
+  border-style: dashed;
+}
+
 #peer-session-dialog .psv-close {
   font-size: 15px;
   line-height: 1;
