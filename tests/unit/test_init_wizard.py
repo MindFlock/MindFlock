@@ -924,7 +924,7 @@ class TestServeBanner:
         monkeypatch.setattr(run, "_is_onboarded", lambda: False)
         monkeypatch.setattr(init_wizard, "report", _report)
         run.main([])
-        out = _drain(capsys, "Phone:")
+        out = _drain(capsys, "Optional, later")
         assert "Three steps to your first agent:\nsecond line\n" in out
         assert out.index("Press Ctrl-C") < out.index("Three steps")
 
@@ -934,25 +934,25 @@ class TestServeBanner:
         _checks(monkeypatch, _GIT_OK, _AGENT_OK, _AUTH_WARN)
         monkeypatch.setattr(run, "_is_onboarded", lambda: False)
         run.main(["9123"])
-        out = _drain(capsys, "Phone:")
+        out = _drain(capsys, "Optional, later")
         assert "MindFlock is running  ->  http://127.0.0.1:9123" in out
         assert "│ 3. Open http://127.0.0.1:9123 in your browser" in out
         assert "✗ 2. Sign in to your agent" in out
-        assert "  Phone: mindflock serve tailscale" in out
         # Gone: the duplicated first-run report and the misleading folder line.
         assert "First run" not in out and "Managing git repo" not in out
         assert "mindflock new" not in out
         # GET /api/setup shows what the desktop app's log hides.
         assert "Three steps to your first agent:" in setup_steps.first_run_report()
 
-    def test_tailscale_mode_has_no_phone_line(self, monkeypatch, capsys, uvicorn_spy):
+    def test_tailscale_mode_still_gets_the_steps(
+        self, monkeypatch, capsys, uvicorn_spy
+    ):
         _checks(monkeypatch, *_READY)
         monkeypatch.setattr(run, "_is_onboarded", lambda: True)
         monkeypatch.setattr(run._tailnet_bind, "plan", lambda mode: (["127.0.0.1"], ""))
         run.main(["tailscale"])
         out = _drain(capsys, "in your browser")
         assert "in your browser" in out
-        assert "Phone:" not in out
 
     def test_a_later_serve_with_tmux_missing_still_says_so(
         self, monkeypatch, capsys, uvicorn_spy
@@ -960,7 +960,7 @@ class TestServeBanner:
         _checks(monkeypatch, _GIT_OK, _TMUX_MISSING)
         monkeypatch.setattr(run, "_is_onboarded", lambda: True)
         run.main([])
-        out = _drain(capsys, "Phone:")
+        out = _drain(capsys, "Optional, later")
         assert "✗ 1. Install the tools" in out and "missing tmux" in out
 
     def test_a_set_up_machine_gets_just_the_address(
@@ -970,7 +970,7 @@ class TestServeBanner:
         settings_mod.update_settings(general={"last_repo_path": str(tmp_path)})
         monkeypatch.setattr(run, "_is_onboarded", lambda: True)
         run.main([])
-        out = _drain(capsys, "Phone:")
+        out = _drain(capsys, "Optional, later")
         assert "Open http://127.0.0.1:8765 in your browser" in out
         assert "Three steps" not in out
 

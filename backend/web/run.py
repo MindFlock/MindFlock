@@ -323,7 +323,6 @@ def main(argv: Optional[List[str]] = None) -> None:
     # and a serve that waited on stdin before binding its port would look like
     # a hung app. `mindflock serve --setup` runs the wizard above instead.
     first_run = not _is_onboarded()
-    phone_line = "Phone: mindflock serve tailscale" if mode == "local" else ""
 
     # On a background thread so binding isn't delayed: even the `run` checks
     # shell out (git, tmux, the agent and its sign-in), and on a cold box or a
@@ -339,8 +338,6 @@ def main(argv: Optional[List[str]] = None) -> None:
             buf = io.StringIO()
             init_wizard.report(buf, serving=True, url=url)
             text = buf.getvalue()
-            if phone_line:
-                text += "  " + phone_line + "\n"
             if first_run:
                 # Keep it for GET /api/setup: when the desktop app starts this
                 # server the text lands in ~/.mindflock/desktop-server.log,
