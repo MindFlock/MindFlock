@@ -61,6 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Idle time between turns on a branch that already had a commit no longer
   reads as a "Committed, not pushed" handoff — it's your time, left out by
   default like any other turn of yours.
+- **Workflow Optimizer: show only the phases you care about.** Every chip in
+  the legend is now a switch: click one (say, everything but *Agent working*
+  and *Pre-commit hooks*) to hide it, and its time leaves every number, the
+  same way your own time does — click the struck-out chip to bring it back.
+  The choice is remembered.
 
 Round 5 of the fresh-eyes UX lab: seven judges who could only use the UI walked
 0.8.7 as first-time users, and every surface was then simplified first and

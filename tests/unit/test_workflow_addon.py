@@ -916,24 +916,41 @@ def _store_person_scenario(tmp_path, monkeypatch):
 def test_include_me_setting_defaults_off_and_persists(tmp_path, monkeypatch):
     p = _store_person_scenario(tmp_path, monkeypatch)
     sp = tmp_path / "workflow_optimizer.settings.json"
+    off = {"include_me": False, "hidden": []}
+    on = {"include_me": True, "hidden": []}
     assert store.settings_path() == str(sp)
-    assert store.load_settings() == {"include_me": False} and not sp.exists()
-    assert client.get("/api/workflow/settings").json() == {"include_me": False}
-    assert client.post("/api/workflow/settings", json={"include_me": True}).json() == {
-        "include_me": True
-    }
-    assert json.loads(sp.read_text()) == {"include_me": True}
+    assert store.load_settings() == off and not sp.exists()
+    assert client.get("/api/workflow/settings").json() == off
+    assert client.post("/api/workflow/settings", json={"include_me": True}).json() == on
+    assert json.loads(sp.read_text()) == on
     assert oct(sp.stat().st_mode & 0o777) == "0o600"
     # wrong types and unknown keys change nothing
     body = client.post(
-        "/api/workflow/settings", json={"include_me": "no", "x": 1}
+        "/api/workflow/settings", json={"include_me": "no", "hidden": "x", "x": 1}
     ).json()
-    assert body == {"include_me": True} and store.load_settings() == {
-        "include_me": True
-    }
+    assert body == on and store.load_settings() == on
     sp.write_text("{torn")
-    assert store.load_settings() == {"include_me": False}
+    assert store.load_settings() == off
     assert p.exists()
+
+
+def test_hidden_setting_keeps_strings_only_and_merges_alone(tmp_path, monkeypatch):
+    _store_person_scenario(tmp_path, monkeypatch)
+    body = client.post(
+        "/api/workflow/settings",
+        json={"hidden": ["precommit", 3, "", "precommit", "bogus"]},
+    ).json()
+    # strings kept (deduplicated); the analysis drops ids it doesn't know
+    assert body == {"include_me": False, "hidden": ["precommit", "bogus"]}
+    assert client.post("/api/workflow/settings", json={"include_me": True}).json() == {
+        "include_me": True,
+        "hidden": ["precommit", "bogus"],
+    }
+    assert client.get("/api/workflow/summary").json()["hide"] == ["precommit"]
+    assert client.post("/api/workflow/settings", json={"hidden": []}).json() == {
+        "include_me": True,
+        "hidden": [],
+    }
 
 
 def test_summary_and_item_follow_the_setting_and_the_override(tmp_path, monkeypatch):
@@ -975,3 +992,61 @@ def test_summary_and_item_follow_the_setting_and_the_override(tmp_path, monkeypa
         client.get("/api/workflow/summary?include_me=bogus").json()["include_me"]
         is False
     )
+
+
+def test_a_hidden_phase_is_cut_out_like_your_time(tmp_path, monkeypatch):
+    """Hiding a phase takes it out of every number (not just the legend), keeps
+    it in ``phases`` so the legend can offer it back, and says how much went."""
+    _store_person_scenario(tmp_path, monkeypatch)
+    base = client.get("/api/workflow/summary?range=7d&hide=").json()
+    assert base["hide"] == [] and "hidden" not in base
+    row = max(base["to_commit"], key=lambda r: r["total_s"])
+    ph = row["phase"]
+    assert ph not in A.PERSON_PHASES
+    body = client.get(
+        "/api/workflow/summary", params={"range": "7d", "hide": ph}
+    ).json()
+    assert body["hide"] == [ph]
+    assert ph not in {r["phase"] for r in body["to_commit"]}
+    assert ph in {p["id"] for p in body["phases"]}
+    assert body["hidden"] == {"phases": [ph], "total_s": row["total_s"]}
+    assert body["kpi"]["median_to_commit"] < base["kpi"]["median_to_commit"]
+    assert body["kpi"]["committed"] == base["kpi"]["committed"]
+    assert body["advice"] == [a for a in body["advice"] if a["phase"] != ph]
+    it = next(x for x in body["items"] if x["to_commit"] or x.get("hidden_s"))
+    assert ph not in it["to_commit"]
+    tl = client.get("/api/workflow/item", params={"id": it["id"], "hide": ph}).json()
+    assert ph not in {sg["ph"] for sg in tl["timeline"]} and "at" in tl["timeline"][0]
+    # the saved setting is the default; an explicit empty override shows all
+    store.save_settings({"hidden": [ph]})
+    assert client.get("/api/workflow/summary?range=7d").json()["hide"] == [ph]
+    assert client.get("/api/workflow/summary?range=7d&hide=").json()["hide"] == []
+
+
+def test_hiding_nothing_is_the_report_unchanged():
+    for mine in (False, True):
+        a = A.report(
+            scenario(), T + 26000, 7 * 86400, ["s1", "s1-copy"], include_me=mine
+        )
+        b = A.report(
+            scenario(),
+            T + 26000,
+            7 * 86400,
+            ["s1", "s1-copy"],
+            include_me=mine,
+            hidden=["not-a-phase"],
+        )
+        assert a == b
+
+
+def test_hiding_a_person_phase_is_left_to_include_me():
+    """Your own phases have their own switch: hiding one while it is already
+    cut changes nothing, and with your time counted it is cut like any other."""
+    rows, now = person_scenario(), T + 9000
+    off = A.report(rows, now, 7 * 86400, PERSON_LIVE)
+    assert A.report(rows, now, 7 * 86400, PERSON_LIVE, hidden=["your_turn"]) == off
+    on = A.report(
+        rows, now, 7 * 86400, PERSON_LIVE, include_me=True, hidden=["your_turn"]
+    )
+    assert on["hidden"]["phases"] == ["your_turn"]
+    assert "your_turn" not in {r["phase"] for r in on["to_commit"]}

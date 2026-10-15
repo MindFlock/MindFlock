@@ -14,12 +14,20 @@
  * out of every number, so only agent, tooling and limit time counts toward
  * the commit. Flipping it saves the setting and reloads at once with an
  * explicit include_me= override, keeping the old numbers on screen until
- * the new ones land (no blank flash, no layout jump). */
+ * the new ones land (no blank flash, no layout jump).
+ *
+ * The legend's chips are switches too: click a phase to hide it (the
+ * `hidden` setting, same endpoint). A hidden phase is cut out of every
+ * number the way your own time is — the medians are then the time of what
+ * is left showing — and its chip stays, struck through, to bring it back. */
 
 const REFRESH_MS = 60000;
 const RANGES = ["7d", "30d", "90d"];
 const HINT_OFF = "Off: assumes you respond instantly — only agent, tooling and limit time count.";
 const HINT_ON = "On: your answers, your turns and time away count too.";
+// The handoffs after a commit (analysis._HANDOFF_RANK): their chips live
+// with the "After the commit" table, not under the time-to-commit bar.
+const AFTER_PHASES = new Set(["to_push", "to_pr", "review"]);
 const STATUS_WORDS = {
   committed: "committed",
   in_progress: "in progress",
@@ -103,11 +111,29 @@ export function timelineStrip(timeline, labels) {
   return strip;
 }
 
-function legend(phases, present) {
+/** The phases in `present` plus the hidden ones, each a switch: click to
+ * hide or show it (`onToggle(id)`). */
+function legend(phases, present, hidden, onToggle) {
+  const shown = phases.filter((p) => present.has(p.id) || hidden.has(p.id));
+  if (!shown.length) return null;
   return el(
     "div",
     { class: "wf-legend" },
-    phases.filter((p) => present.has(p.id)).map((p) => el("span", { class: "wf-key", title: p.hint }, el("i", { class: "wf-swatch ph-" + p.id }), p.label))
+    shown.map((p) => {
+      const off = hidden.has(p.id);
+      return el(
+        "button",
+        {
+          class: "wf-key wf-key-btn" + (off ? " off" : ""),
+          type: "button",
+          "aria-pressed": off ? "false" : "true",
+          title: (off ? "Hidden — click to show it again: " : "Click to hide it and leave its time out: ") + p.hint,
+          onClick: () => onToggle(p.id),
+        },
+        el("i", { class: "wf-swatch ph-" + p.id }),
+        p.label
+      );
+    })
   );
 }
 
@@ -221,6 +247,7 @@ export function renderBoard(api, host, opts) {
   if (view !== "to_commit" && view !== "after_commit") view = "to_commit";
   // null until the server says (the saved setting); then what this view shows.
   let includeMe = null;
+  let hidden = null;
   let data = null;
   let timer = null;
   let disposed = false;
@@ -267,8 +294,22 @@ export function renderBoard(api, host, opts) {
     }
   }
 
+  async function toggleHidden(id) {
+    hidden = new Set(hidden || []);
+    if (hidden.has(id)) hidden.delete(id);
+    else hidden.add(id);
+    details.clear();
+    void load(true);
+    try {
+      await api.request("/api/workflow/settings", { json: { hidden: [...hidden] } });
+    } catch (err) {
+      api.log.error("settings", err);
+      status.textContent = "could not save the setting";
+    }
+  }
+
   function meParam() {
-    return includeMe === null ? "" : "&include_me=" + (includeMe ? "1" : "0");
+    return (includeMe === null ? "" : "&include_me=" + (includeMe ? "1" : "0")) + (hidden === null ? "" : "&hide=" + encodeURIComponent([...hidden].join(",")));
   }
 
   function rangeLabel() {
@@ -364,6 +405,10 @@ export function renderBoard(api, host, opts) {
     const totals = {};
     for (const r of data.to_commit || []) totals[r.phase] = r.total_s;
     const present = new Set((data.to_commit || []).map((r) => r.phase));
+    const off = hidden || new Set();
+    const beforeOff = new Set([...off].filter((p) => !AFTER_PHASES.has(p)));
+    const afterOff = new Set([...off].filter((p) => AFTER_PHASES.has(p)));
+    const afterPresent = new Set((data.after_commit || []).map((r) => r.phase));
     const n = data.kpi.committed || 0;
     const basisNote =
       data.basis === "committed"
@@ -374,6 +419,9 @@ export function renderBoard(api, host, opts) {
       data.include_me === false
         ? "Your own time is left out" + (data.excluded && data.excluded.total_s ? " (" + fmtDur(data.excluded.total_s) + " of answers, turns and time away)" : "") + ", as if you answered instantly. Pushing, the PR and review come after the commit — see “After the commit”."
         : "Includes your own time: answering questions, your turns and time away. Pushing, the PR and review come after the commit — see “After the commit”.";
+    const hiddenNote = beforeOff.size
+      ? " Hidden (click a struck-out phase to bring it back): " + [...beforeOff].map((p) => lab[p] || p).join(", ") + (data.hidden && data.hidden.total_s ? " — " + fmtDur(data.hidden.total_s) + " left out." : ".")
+      : " Click a phase below to hide it.";
     const viewBtns = [
       ["to_commit", "Until the commit"],
       ["after_commit", "After the commit"],
@@ -391,9 +439,9 @@ export function renderBoard(api, host, opts) {
     );
     const parts = [
       kpis(data, rangeLabel()),
-      el("div", { class: "wf-card" }, el("h4", { text: "Where time to commit goes" }), el("p", { class: "muted", text: basisNote + " " + meNote }), phaseBar(totals, lab, "wf-big-bar"), groupLine(data.to_commit_groups), legend(data.phases || [], present)),
+      el("div", { class: "wf-card" }, el("h4", { text: "Where time to commit goes" }), el("p", { class: "muted", text: basisNote + " " + meNote + hiddenNote }), phaseBar(totals, lab, "wf-big-bar"), groupLine(data.to_commit_groups), legend(data.phases || [], present, beforeOff, toggleHidden)),
       data.advice && data.advice.length ? el("div", { class: "wf-card" }, el("h4", { text: "Bottlenecks — what to change" }), adviceList(data.advice)) : null,
-      el("div", { class: "wf-card" }, el("div", { class: "wf-card-head" }, el("h4", { text: "Phases" }), el("div", { class: "wf-seg-btns" }, ...viewBtns)), phaseTable(stats)),
+      el("div", { class: "wf-card" }, el("div", { class: "wf-card-head" }, el("h4", { text: "Phases" }), el("div", { class: "wf-seg-btns" }, ...viewBtns)), phaseTable(stats), view === "after_commit" ? legend(data.phases || [], afterPresent, afterOff, toggleHidden) : null),
       trendChart(data.trend || []),
       el("div", { class: "wf-card" }, el("h4", { text: "Units of work (" + items.length + ")" }), el("div", { class: "wf-items" }, items.map(itemRow))),
     ];
@@ -405,17 +453,19 @@ export function renderBoard(api, host, opts) {
     if (disposed) return;
     status.textContent = manual ? "refreshing…" : "";
     try {
-      const asked = includeMe;
-      const r = await api.request("/api/workflow/summary?range=" + encodeURIComponent(range) + meParam());
+      const asked = meParam();
+      const r = await api.request("/api/workflow/summary?range=" + encodeURIComponent(range) + asked);
       if (disposed) return;
       if (r && r.error) throw new Error(r.error);
-      // A flip while this was in flight: its own load is coming.
-      if (asked !== includeMe) return;
+      // A flip (your time, a phase) while this was in flight: its own load
+      // is coming.
+      if (asked !== meParam()) return;
       data = r;
       if (typeof r.include_me === "boolean" && includeMe === null) {
         includeMe = r.include_me;
         showIncludeMe();
       }
+      if (Array.isArray(r.hide) && hidden === null) hidden = new Set(r.hide);
       details.clear();
       draw();
       // Re-fetch the timelines of the items left open (a snapshot of the

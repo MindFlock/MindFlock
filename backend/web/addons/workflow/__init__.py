@@ -68,6 +68,21 @@ def _include_me(override: Optional[bool]) -> bool:
     return bool(store.load_settings()["include_me"])
 
 
+def _hidden(override: Optional[List[str]]) -> List[str]:
+    """The explicit override when given, else the saved setting; known phase
+    ids only, in the catalog's order."""
+    raw = store.load_settings()["hidden"] if override is None else override
+    keep = analysis.hidden_phases(raw)
+    return [p for p in analysis.PHASE_IDS if p in keep]
+
+
+def _ids(raw: Optional[str]) -> Optional[List[str]]:
+    """A query-string id list (``a,b``; empty = none); absent = no override."""
+    if raw is None:
+        return None
+    return [x for x in (s.strip() for s in str(raw).split(",")) if x]
+
+
 def _flag(raw: Optional[str]) -> Optional[bool]:
     """A query-string bool (``1``/``true``/``on``, ``0``/``false``/``off``);
     anything else is no override."""
@@ -83,17 +98,20 @@ def build_summary(
     range_key: str = "7d",
     now: Optional[float] = None,
     include_me: Optional[bool] = None,
+    hidden: Optional[List[str]] = None,
 ) -> dict:
     """The dashboard payload (items without their timelines — those come one
-    at a time from :func:`build_item`). ``include_me`` ``None`` = the saved
-    setting; the answer says which it used."""
+    at a time from :func:`build_item`). ``include_me`` / ``hidden`` ``None``
+    = the saved setting; the answer says which it used (``hide``)."""
     now = time.time() if now is None else now
     range_key = range_key if range_key in RANGES else "7d"
     period = RANGES[range_key]
     mine = _include_me(include_me)
-    rep = analysis.report(_rows(period, now), now, period, _live_titles(), mine)
+    hide = _hidden(hidden)
+    rep = analysis.report(_rows(period, now), now, period, _live_titles(), mine, hide)
     rep["range"] = range_key
     rep["include_me"] = mine
+    rep["hide"] = hide
     rep["items"] = [
         {k: v for k, v in it.items() if k != "timeline"} for it in rep["items"]
     ]
@@ -102,14 +120,19 @@ def build_summary(
 
 
 def build_item(
-    item_id: str, now: Optional[float] = None, include_me: Optional[bool] = None
+    item_id: str,
+    now: Optional[float] = None,
+    include_me: Optional[bool] = None,
+    hidden: Optional[List[str]] = None,
 ) -> Optional[dict]:
     """One work item with its phase timeline (``None`` when unknown) —
-    compressed, without the person's phases, unless their time counts."""
+    compressed, without the person's phases unless their time counts, and
+    without the hidden ones."""
     now = time.time() if now is None else now
     rows = store.read(since=now - store.RETENTION_S)
     mine = _include_me(include_me)
-    for it in analysis.build_items(rows, now, _live_titles(), mine):
+    hide = _hidden(hidden)
+    for it in analysis.build_items(rows, now, _live_titles(), mine, hide):
         if it["id"] == item_id:
             return it
     return None
@@ -185,11 +208,12 @@ class WorkflowAddon(Addon):
         async def summary(
             range: str = "7d",  # noqa: A002
             include_me: Optional[str] = None,
+            hide: Optional[str] = None,
         ) -> JSONResponse:
             try:
                 return JSONResponse(
                     await asyncio.to_thread(
-                        build_summary, range, None, _flag(include_me)
+                        build_summary, range, None, _flag(include_me), _ids(hide)
                     )
                 )
             except Exception as err:  # noqa: BLE001 — never 500 the dashboard
@@ -199,8 +223,11 @@ class WorkflowAddon(Addon):
         async def item(
             id: str = "",  # noqa: A002
             include_me: Optional[str] = None,
+            hide: Optional[str] = None,
         ) -> JSONResponse:
-            it = await asyncio.to_thread(build_item, id, None, _flag(include_me))
+            it = await asyncio.to_thread(
+                build_item, id, None, _flag(include_me), _ids(hide)
+            )
             if it is None:
                 return JSONResponse({"error": "no such work item"}, status_code=404)
             return JSONResponse(it)
@@ -211,7 +238,8 @@ class WorkflowAddon(Addon):
 
         @router.post("/settings")
         async def post_settings(body: dict) -> JSONResponse:
-            """Merge ``{include_me: bool}``; other keys / types are ignored."""
+            """Merge ``{include_me: bool, hidden: [phase id]}``; other keys /
+            types are ignored."""
             try:
                 return JSONResponse(await asyncio.to_thread(store.save_settings, body))
             except OSError as err:

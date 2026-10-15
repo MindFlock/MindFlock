@@ -172,6 +172,13 @@ ALIVE_S = 480.0
 BASE_BRANCHES = frozenset({"main", "master", "develop", "trunk"})
 
 
+def hidden_phases(raw: Iterable[str]) -> frozenset:
+    """The known phase ids in ``raw`` (junk and unknown ids dropped)."""
+    if isinstance(raw, str) or raw is None:
+        return frozenset()
+    return frozenset(p for p in raw if isinstance(p, str) and p in GROUP_OF)
+
+
 # --------------------------------------------------------------------------- #
 # Small helpers
 # --------------------------------------------------------------------------- #
@@ -500,13 +507,16 @@ def build_items(
     now: float,
     live_sessions: Optional[Iterable[str]] = None,
     include_me: bool = False,
+    hidden: Iterable[str] = (),
 ) -> List[dict]:
     """Every unit of work in ``rows``, newest first (see the module
     docstring). ``live_sessions``: titles that still exist (an open unit none
     of whose sessions does is ``abandoned``). ``include_me`` False cuts
-    :data:`PERSON_PHASES` out of every unit's clock; the units themselves
-    (ids, boundaries, status, epochs) are the same either way."""
+    :data:`PERSON_PHASES` out of every unit's clock; ``hidden`` (phase ids
+    the person chose not to see) is cut out the same way. The units
+    themselves (ids, boundaries, status, epochs) are the same either way."""
     skip = frozenset() if include_me else PERSON_PHASES
+    hide = hidden_phases(hidden) - skip
     seg = session_segments(rows, now)
     live = set(live_sessions or [])
     by_key: Dict[str, List[dict]] = {}
@@ -558,6 +568,7 @@ def build_items(
                     sessions,
                     live,
                     skip,
+                    hide,
                 )
             )
             idx += 1
@@ -578,6 +589,7 @@ def build_items(
                     sessions,
                     live,
                     skip,
+                    hide,
                 )
             )
     items.sort(key=lambda it: it["end"], reverse=True)
@@ -603,12 +615,23 @@ def _compress(tl: List[dict], skip: frozenset) -> List[dict]:
 
 
 def _item(
-    key, idx, timeline, bounds, merges, meta, sessions, live, skip=frozenset()
+    key,
+    idx,
+    timeline,
+    bounds,
+    merges,
+    meta,
+    sessions,
+    live,
+    skip=frozenset(),
+    hide=frozenset(),
 ) -> dict:
     """One unit. ``bounds``: ``(start, commit_at, estimated, gap_end,
     still_open)`` — ``commit_at`` None for the open unit at the end, and the
     gap after the commit runs to ``gap_end`` (the next unit's start, or the
-    end of the record when ``still_open``)."""
+    end of the record when ``still_open``). ``skip`` (the person's phases)
+    and ``hide`` (phases hidden from view) are both cut out of the clock;
+    their seconds are ``your_time_s`` and ``hidden_s``."""
     start, commit_at, estimated, gap_end, still_open = bounds
     end = commit_at if commit_at is not None else gap_end
     tl = _in_unit(_clip_tl(timeline, start, end))
@@ -623,8 +646,11 @@ def _item(
             _clip_tl(timeline, commit_at, gap_end), bool(merged), still_open
         )
     mine = sum(v for k, v in to_commit.items() if k in skip)
-    to_commit = {k: v for k, v in to_commit.items() if k not in skip}
-    elapsed = max(0.0, round(end - start - mine, 1))
+    hid = sum(v for k, v in to_commit.items() if k in hide)
+    cut = skip | hide
+    to_commit = {k: v for k, v in to_commit.items() if k not in cut}
+    after = {k: v for k, v in after.items() if k not in hide}
+    elapsed = max(0.0, round(end - start - mine - hid, 1))
     runs = fails = 0
     prev = ""
     for sg in tl:
@@ -673,7 +699,7 @@ def _item(
                 }
                 for sg in tl[-400:]
             ]
-            if not skip
+            if not cut
             else [
                 {
                     "ph": sg["ph"],
@@ -681,10 +707,11 @@ def _item(
                     "end": round(sg["end"], 1),
                     "at": round(sg["at"], 1),
                 }
-                for sg in _compress(tl, skip)[-400:]
+                for sg in _compress(tl, cut)[-400:]
             ]
         ),
         **({"your_time_s": round(mine, 1)} if skip else {}),
+        **({"hidden_s": round(hid, 1)} if hide else {}),
     }
 
 
@@ -940,6 +967,7 @@ def report(
     period: float = 7 * 86400.0,
     live_sessions: Optional[Iterable[str]] = None,
     include_me: bool = False,
+    hidden: Iterable[str] = (),
 ) -> dict:
     """The dashboard payload for the last ``period`` seconds.
 
@@ -948,11 +976,17 @@ def report(
     time (:data:`PERSON_PHASES`) out of everything — durations, stats,
     groups, advice, the trend and the ``phases`` / ``groups`` lists — and
     adds ``excluded: {phases, total_s}`` (how much of it the basis units
-    had). True is the full wall clock, the report unchanged."""
+    had). True is the full wall clock, the report unchanged.
+
+    ``hidden`` phases (the person's own pick of what not to look at) are cut
+    out the same way, but stay in ``phases`` so the legend can offer them
+    back; the report adds ``hidden: {phases, total_s}``. Empty, the report
+    is exactly what it was without it."""
     now = time.time() if now is None else now
     since = now - period
     skip = frozenset() if include_me else PERSON_PHASES
-    all_items = build_items(rows, now, live_sessions, include_me)
+    hide = hidden_phases(hidden) - skip
+    all_items = build_items(rows, now, live_sessions, include_me, hide)
     items = [it for it in all_items if it["end"] >= since]
     committed = [
         it
@@ -993,7 +1027,7 @@ def report(
         "to_commit": stats,
         "to_commit_groups": group_stats(stats),
         "after_commit": after_stats,
-        "advice": advice(basis, stats, skip, after_stats),
+        "advice": advice(basis, stats, skip | hide, after_stats),
         "trend": weekly_trend(
             all_items, now, max(1, min(13, int(round(period / (7 * 86400.0))) or 1))
         ),
@@ -1003,5 +1037,10 @@ def report(
         out["excluded"] = {
             "phases": [p for p in PHASE_IDS if p in skip],
             "total_s": round(sum(it.get("your_time_s", 0.0) for it in basis), 1),
+        }
+    if hide:
+        out["hidden"] = {
+            "phases": [p for p in PHASE_IDS if p in hide],
+            "total_s": round(sum(it.get("hidden_s", 0.0) for it in basis), 1),
         }
     return out

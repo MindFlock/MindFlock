@@ -1201,13 +1201,26 @@ reads 0 s to commit. Unit ids, boundaries, status and epochs are the same
 either way. With the switch on, the report is the full wall clock (pinned by
 a golden file).
 
-The switch is the extension's one setting, `include_me` (default `false`),
+**Any phase can be hidden.** Each chip in the legend under the
+time-to-commit bar (and, in the *After the commit* view, under its table)
+is a switch: click it to hide that phase, click the struck-out chip to
+bring it back — for when only some parts matter (say, just the agent
+writing code and the pre-commit hooks). A hidden phase is cut out exactly
+like your own time: out of every duration, median, share, group, advice
+item and the trend, with timelines compressed. It stays in `phases` (so
+the legend can offer it back), each unit carries `hidden_s`, and the
+report adds `hidden: {phases, total_s}`. The person phases keep their own
+switch: hiding one while your time is already left out changes nothing.
+Hiding nothing is the report unchanged.
+
+Both are the extension's settings, `include_me` (default `false`) and
+`hidden` (phase ids, default none; unknown ids are ignored),
 in its own file beside the timeline,
 `~/.mindflock/workflow_optimizer.settings.json` (mode 0600, written
 atomically; it follows `$MINDFLOCK_WORKFLOW_FILE`'s directory) — never in
-settings.json, so it is per device, like the timeline it reads. Flipping it
-saves the setting and reloads with an explicit `include_me=` override, so
-the numbers change at once without a blank flash.
+settings.json, so they are per device, like the timeline they read. A flip
+saves the setting and reloads with an explicit `include_me=` / `hide=`
+override, so the numbers change at once without a blank flash.
 
 **Units of work** (`analysis.build_items`). A unit runs from the first real
 work (agent, setup, hooks, a question) to the **commit** that finishes it.
@@ -1256,9 +1269,9 @@ PR (autopilot depth "push" / "pr" ships it on its own).
 
 | Route | Purpose |
 |---|---|
-| `GET /summary?range=7d\|30d\|90d[&include_me=0\|1]` | `{now, range, include_me, period_s, tracking_since, phases, groups, kpi: {items, committed, estimated, median_to_commit, p90_to_commit, median_active_to_commit, in_progress}, basis, to_commit: [{phase, label, group, total_s, share, median_s, p90_s, items}], to_commit_groups, after_commit, advice: [{phase, level, title, detail, at_stake_s, share}], trend: [{start, end, items, median_to_commit}], items, excluded?: {phases, total_s}}` — units without their timelines. `basis` is `"committed"` (the units committed in the range) or `"all"` when none was. `include_me` is the saved setting unless the query overrides it; `excluded` is there only when your time is left out. Never 500s. |
-| `GET /item?id=<repo@branch#n>[&include_me=0\|1]` | One unit with its `timeline: [{ph, start, end}]` (`at` too when compressed; 404 when unknown). |
-| `GET /settings` · `POST /settings {include_me}` | The extension's setting (`{include_me: false}` by default); a POST merges the known keys of the right type and returns the result. |
+| `GET /summary?range=7d\|30d\|90d[&include_me=0\|1][&hide=<phase>,…]` | `{now, range, include_me, hide, period_s, tracking_since, phases, groups, kpi: {items, committed, estimated, median_to_commit, p90_to_commit, median_active_to_commit, in_progress}, basis, to_commit: [{phase, label, group, total_s, share, median_s, p90_s, items}], to_commit_groups, after_commit, advice: [{phase, level, title, detail, at_stake_s, share}], trend: [{start, end, items, median_to_commit}], items, excluded?: {phases, total_s}, hidden?: {phases, total_s}}` — units without their timelines. `basis` is `"committed"` (the units committed in the range) or `"all"` when none was. `include_me` is the saved setting unless the query overrides it; `excluded` is there only when your time is left out. `hide` is the hidden phases in effect (the saved setting unless `hide=` overrides it; `hide=` empty shows all); `hidden` is there only when one is. Never 500s. |
+| `GET /item?id=<repo@branch#n>[&include_me=0\|1][&hide=…]` | One unit with its `timeline: [{ph, start, end}]` (`at` too when compressed; 404 when unknown). |
+| `GET /settings` · `POST /settings {include_me?, hidden?}` | The extension's settings (`{include_me: false, hidden: []}` by default); a POST merges the known keys of the right type and returns the result. |
 
 ### A minimal third-party extension
 
