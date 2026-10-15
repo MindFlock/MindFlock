@@ -37,6 +37,7 @@ import { approvableRequest, deviceEventNote, updateNote } from "../lib/fleet";
 import { approveJoinRequest } from "../lib/deviceActions";
 import { PEER_SCREEN, peerEventNote } from "../lib/peer";
 import { openSettings, type SettingsScreen } from "../lib/openSettings";
+import { jobPastExpectedRow } from "../lib/jobExpectation";
 
 const NOTIF_CAP = 100;
 const NOTIF_SEEN_KEY = "mf_notif_seen_ts";
@@ -183,6 +184,17 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
       const secs = Math.round(Number((d as { idle_for?: number }).idle_for) || 0);
       const held = secs >= 90 ? Math.round(secs / 60) + "m" : secs + "s";
       return { text: secs ? "finished — idle " + held : "finished", cls: "n-done" };
+    }
+    // A background job ran past the time it was expected to take (lib/
+    // jobExpectation) — once per job. It isn't stuck yet (the rail chip says
+    // that); this is the heads-up.
+    case "session.job_past_expected": {
+      const dd = d as { job_id?: string; expect_s?: number };
+      return {
+        text: jobPastExpectedRow(Number(dd.expect_s) || 0),
+        cls: "n-warn",
+        dedupe: "job-past:" + String(env.session || "") + ":" + String(dd.job_id || ""),
+      };
     }
     case "session.stage_changed":
       return { text: STAGE_WORDS[String(env.new || "")] || String(env.new || ""), cls: "n-info" };

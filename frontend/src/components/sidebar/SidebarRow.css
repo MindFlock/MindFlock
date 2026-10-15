@@ -815,7 +815,8 @@
 }
 
 /* A job the agent backgrounded and left running past its turn
-   (lib/backgroundJobs): waiting is informational, stuck is a Stop button. */
+   (lib/backgroundJobs): waiting is quiet, stuck is red; both open the job's
+   menu on this device's rows. */
 .stagechip.bgchip {
   font-size: 10px;
   padding: 1px 6px;
@@ -833,14 +834,80 @@
 .stagechip.bgchip.bg-stuck {
   background: color-mix(in srgb, var(--red) 18%, transparent);
 }
-button.stagechip.bgchip.bg-stuck {
+/* Past its expected duration but not yet stuck (lib/jobExpectation): the
+   waiting chip with an amber dot. */
+.stagechip.bgchip.bg-past::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: var(--gold);
+  vertical-align: 1px;
+}
+/* On this device's rows the chip opens its menu (JobMenu in SidebarRow.tsx). */
+button.stagechip.bgchip {
   cursor: pointer;
 }
-button.stagechip.bgchip.bg-stuck:hover {
+button.stagechip.bgchip:hover {
   filter: brightness(1.15);
 }
-.stagechip.bgchip.bg-stuck:focus-visible {
-  outline: 1px solid var(--red);
+button.stagechip.bgchip:focus-visible {
+  outline: 1px solid var(--accent);
+}
+button.stagechip.bgchip.bg-stuck:focus-visible {
+  outline-color: var(--red);
+}
+
+/* The job menu: its command, one muted line, then the actions; Custom… is
+   one inline field (never prompt()). */
+.job-menu {
+  max-width: 300px;
+}
+.job-menu .job-menu-cmd {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  padding: 0 10px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.job-menu .job-expect-custom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+}
+.job-menu .job-expect-custom input {
+  flex: 1 1 110px;
+  min-width: 0;
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 6px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.job-menu .job-expect-custom input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.job-menu .job-expect-custom input[aria-invalid="true"] {
+  border-color: var(--red);
+}
+.session-menu.job-menu .job-expect-custom .job-expect-set {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.job-menu .job-expect-bad {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--red);
 }
 
 /* Presence (lib/presence.ts, components/presence): who else is on the

@@ -2,10 +2,11 @@
  * and left running after its turn (backend/providers/claude_background.py).
  *
  * Pinned: running jobs get no chip (the row already reads Working); a waiting
- * job is an informational chip; a stuck job is the Stop button and names the
+ * job is a quiet chip; a stuck job's chip opens a menu whose Stop names the
  * pid it stops; stuck outranks waiting; junk/absent fields are no chip; the
  * state chip's tooltip carries the job; and the chip is wired on the rail row
- * through the stop action. */
+ * through the stop action (inside its menu, JobMenu). The words with an
+ * expected duration: jobExpectation.test.ts. */
 
 import { describe, expect, it } from "vitest";
 import type { BackgroundJob, Instance } from "../api/types";
@@ -41,7 +42,7 @@ describe("backgroundChip", () => {
     expect(c.title).toContain("resumes when it finishes");
   });
 
-  it("a stuck job is the Stop button and outranks waiting", () => {
+  it("a stuck job's chip carries Stop and outranks waiting", () => {
     const c = backgroundChip({ background: [job("waiting", { pid: 1 }), job("stuck", { pid: 2 })] })!;
     expect(c.cls).toContain("bg-stuck");
     expect(c.stopPid).toBe(2);
@@ -62,7 +63,7 @@ describe("the state chip's tooltip", () => {
   it("idle names the job it is waiting on, without the click text", () => {
     const ss = deriveSessionState({ ...base, background: [job("stuck")] }, { activity: "idle" });
     expect(ss.label).toBe("Idle");
-    expect(ss.hint).toContain("can't finish");
+    expect(ss.hint).toContain("Background job stuck (no CPU or output for 37m)");
     expect(ss.hint).not.toContain("click");
   });
 
@@ -77,7 +78,8 @@ describe("rail wiring", () => {
   it("the row renders the chip and stops through the server route", () => {
     const row = normCode("components/sidebar/SidebarRow.tsx");
     expect(row).toContain("backgroundChip(inst)");
-    expect(row).toContain("stopBackgroundJob(title, bg.stopPid");
+    expect(row).toContain("<JobMenu title={title} job={bg.job} stopPid={bg.stopPid}");
+    expect(row).toContain("stopBackgroundJob(title, stopPid)");
     const stop = normCode("lib/stopBackgroundJob.ts");
     expect(stop).toContain('"/background/" + pid + "/stop"');
   });

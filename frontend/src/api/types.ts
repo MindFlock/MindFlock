@@ -155,6 +155,20 @@ export interface BackgroundJob {
   reason: string;
   started: number;
   quiet_s: number;
+  /** How long it is expected to take, in seconds (lib/jobExpectation). The
+   * fields below are optional: an older server doesn't send them. */
+  expect_s?: number | null;
+  /** Who said so — a person beats the agent beats the command's
+   * `MINDFLOCK_EXPECT=6h` prefix. */
+  expected_by?: "agent" | "you" | "command" | null;
+  /** Epoch seconds it should be done by (started + expect_s). */
+  eta?: number | null;
+  /** The longest quiet stretch it has come back from (learned). */
+  longest_gap_s?: number;
+  /** Quiet this long and it is called stuck. */
+  threshold_s?: number;
+  /** Running longer than expect_s (only with an expectation). */
+  past_expected?: boolean;
 }
 
 /** Why and since when a session's agent is asleep (Instance.sleeping). */
