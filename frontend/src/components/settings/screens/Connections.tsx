@@ -223,8 +223,10 @@ export interface TestOutcome {
 /** One line out of whatever a row's Test endpoint answered: the agent probe
  * ({ok, cli, auth}), GitHub ({ok, detail}), a ticket source ({ok, message} /
  * {ok, error}), a database ({ok, server} / {ok, error}), ntfy ({ok, error}). */
-export function describeTestResult(res: unknown): TestOutcome {
+export function describeTestResult(res: unknown, ms?: number): TestOutcome {
   const r = (res && typeof res === "object" ? res : {}) as Record<string, unknown>;
+  const agent = describeAgentTest(r, ms);
+  if (agent) return agent;
   const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
   const sub = (k: string) => {
     const v = r[k];
@@ -243,11 +245,41 @@ export function describeTestResult(res: unknown): TestOutcome {
   return { ok, text: text || (ok ? "Works" : "Failed") };
 }
 
+/** "answered in 0.4 s" — how long a Test took, rounded for reading. */
+export function answeredIn(ms: number): string {
+  const s = Math.max(0, ms) / 1000;
+  return "answered in " + (s < 10 ? s.toFixed(1) : String(Math.round(s))) + " s";
+}
+
+/** An agent card's Test, in words: where the agent was found, how it is
+ * signed in, and how long it took — "Found at /usr/bin/claude · signed in
+ * as you@example.com · answered in 0.4 s" — instead of "✓ Checked just now",
+ * which said when it checked but not what. `null` for any other test. */
+export function describeAgentTest(r: Record<string, unknown>, ms?: number): TestOutcome | null {
+  const cli = r.cli && typeof r.cli === "object" ? (r.cli as Record<string, unknown>) : null;
+  if (!cli) return null;
+  const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  const ok = r.ok === true;
+  const bits: string[] = [];
+  if (cli.status === "ok") {
+    // The doctor's detail is "<path> — <version>".
+    const path = str(cli.detail).split(" — ")[0];
+    if (path) bits.push("found at " + path);
+  }
+  const line = str(r.detail);
+  if (line) bits.push(bits.length ? line.charAt(0).toLowerCase() + line.slice(1) : line);
+  if (typeof ms === "number" && ok) bits.push(answeredIn(ms));
+  const text = bits.join(" · ");
+  if (!text) return null;
+  return { ok, text: text.charAt(0).toUpperCase() + text.slice(1) };
+}
+
 /** Run a row's Test. Never throws: a refused or failed call is a failed test. */
 export async function runTest(t: ConnectionTestSpec): Promise<TestOutcome> {
+  const t0 = Date.now();
   try {
     const res = await api<unknown>(t.endpoint, { method: t.method || "POST", json: t.body });
-    return describeTestResult(res);
+    return describeTestResult(res, Date.now() - t0);
   } catch (err) {
     return { ok: false, text: err instanceof Error ? err.message : String(err) };
   }
@@ -353,6 +385,7 @@ export function ConnectionRowView({
   testing,
   onTest,
   onChanged,
+  tourNext = false,
 }: {
   c: ConnectionRow;
   deps: ActionDeps;
@@ -360,6 +393,8 @@ export function ConnectionRowView({
   testing?: boolean;
   onTest?(): void;
   onChanged(): void;
+  /** The row's action is the setup checklist's next step (its tour hook). */
+  tourNext?: boolean;
 }) {
   const shown = shownStatus(c, result);
   const status = shown.status;
@@ -420,12 +455,19 @@ export function ConnectionRowView({
           </button>
         )}
         {a?.kind === "dialog" && a.target === "agent-sign-in" && a.provider ? (
-          <AgentSignIn provider={a.provider} profile={a.profile} label={a.label || "Sign in"} onDone={onChanged} />
+          <AgentSignIn
+            provider={a.provider}
+            profile={a.profile}
+            label={a.label || "Sign in"}
+            onDone={onChanged}
+            dataTour={tourNext ? "setup-next" : undefined}
+          />
         ) : null}
         {handler && (
           <button
             type="button"
             className={stage && a!.kind === "screen" ? "linklike conn-configure conn-link" : "test-btn conn-configure"}
+            data-tour={tourNext ? "setup-next" : undefined}
             onClick={handler}
           >
             {a!.label}
@@ -549,7 +591,9 @@ export function Connections({ gotoScreen }: ScreenProps) {
               </details>
             ) : null}
             {more.length ? (
-              <AdvancedFold id="connections-advanced" summary="More connections">
+              // Folded even in advanced mode: the rows above are what you
+              // use; these are there when you go looking.
+              <AdvancedFold id="connections-advanced" summary="More connections" defaultOpen={false}>
                 {more.map(renderGroup)}
               </AdvancedFold>
             ) : null}

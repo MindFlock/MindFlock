@@ -64,6 +64,9 @@ def test_starts_the_plan_script_and_records_its_exit(fake):
     (wrapped,) = fake["created"]
     assert "setup-install.sh" in wrapped
     assert "echo $? > " in wrapped and "setup-install.status" in wrapped
+    # A success idles the pane (no prompt under "✓ installed"); a failure
+    # leaves a shell for the manual commands.
+    assert wrapped.endswith("= 0 ] && exec tail -f /dev/null; exec ${SHELL:-/bin/sh}")
     assert _rs(setup_install.state()) == {"running": True, "exit_code": None}
 
 

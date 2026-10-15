@@ -14,6 +14,7 @@ import { api } from "../../api/client";
 import type { ConnectionRow, ConnectionsResponse } from "../../api/types";
 import { useUi } from "../../state/store";
 import { openSettings, type SettingsScreen } from "../../lib/openSettings";
+import { agentName } from "../../lib/agentNames";
 import {
   CONNECTIONS_CHANGED_EVENT,
   ConnectionRowView,
@@ -50,6 +51,7 @@ export function AgentCard({
   here,
   gotoScreen,
   onChanged,
+  tourNext = false,
 }: {
   /** The agent ("" = the default). */
   provider: string;
@@ -60,6 +62,8 @@ export function AgentCard({
   gotoScreen?: (name: string) => void;
   /** After a sign-in, install or Test. */
   onChanged?(): void;
+  /** Its action is the setup checklist's next step (`data-tour="setup-next"`). */
+  tourNext?: boolean;
 }) {
   const [row, setRow] = useState<ConnectionRow | null | undefined>(undefined);
   const [result, setResult] = useState<TestOutcome | undefined>();
@@ -89,7 +93,12 @@ export function AgentCard({
     return () => window.removeEventListener(CONNECTIONS_CHANGED_EVENT, on);
   }, [load]);
 
-  if (row === undefined) return <p className="set-hint agent-card-loading">Checking…</p>;
+  if (row === undefined)
+    return (
+      <div className="agent-card agent-card-loading" aria-busy="true">
+        <span className="set-hint">Checking {agentName(provider || "claude")}…</span>
+      </div>
+    );
   if (row === null) return null;
   const toHere = !!here && row.action?.kind === "screen" && row.action.target === here;
   const shown: ConnectionRow = toHere ? { ...row, action: null, settings_screen: "" } : row;
@@ -101,6 +110,7 @@ export function AgentCard({
         deps={{ gotoScreen: go, openDialogFor, closeDialog }}
         result={result}
         testing={testing}
+        tourNext={tourNext}
         onTest={
           row.test
             ? async () => {

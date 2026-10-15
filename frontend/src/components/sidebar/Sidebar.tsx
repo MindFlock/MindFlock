@@ -51,6 +51,7 @@ import { Hint } from "../onboarding/Hint";
 import { sidebarDeviceNote } from "../../lib/fleet";
 import { openDevicesFor } from "../../lib/deviceActions";
 import { SetupChip } from "../setup/SetupChip";
+import { MODAL_OPEN_EVENT } from "../Modal";
 import { setupCount, showSetupCard, showSetupChip } from "../setup/setupModel";
 import { useSetup } from "../setup/useSetup";
 import { useCalm } from "../../lib/useCalm";
@@ -70,7 +71,23 @@ interface Props {
  * control. */
 const VIEW_MODES: ViewMode[] = ["auto", "1" as ViewMode, "2", "4", "9"];
 
+/** A dialog opened while the sidebar is a narrow window's drawer closes the
+ * drawer: the drawer is drawn over the page (Sidebar.css, z-index 60), so a
+ * dialog opened from it — the Setup chip, Shortcuts — sat under it and could
+ * not be clicked. Returns whether it closed it. */
+export function closeDrawerForModal(): boolean {
+  const ui = useUi.getState();
+  if (!ui.narrow || ui.sidebarHidden) return false;
+  ui.toggleSidebar();
+  return true;
+}
+
 export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
+  useEffect(() => {
+    const on = () => void closeDrawerForModal();
+    window.addEventListener(MODAL_OPEN_EVENT, on);
+    return () => window.removeEventListener(MODAL_OPEN_EVENT, on);
+  }, []);
   const { data: instances = [] } = useInstances();
   const { data: devices } = useDevices();
   const ui = useUi();

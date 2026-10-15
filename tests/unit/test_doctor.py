@@ -901,6 +901,9 @@ class TestDoctorApi:
             "install",
             "provider",
             "group",
+            # Added by the doctor addon (setup_steps.tag_required): whether the
+            # row can block getting started — the Setup checklist's "All checks".
+            "required",
         }
 
         # Without ?refresh the cached payload is served (run_checks not re-run).

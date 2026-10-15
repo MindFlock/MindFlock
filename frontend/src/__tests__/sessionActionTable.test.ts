@@ -113,8 +113,9 @@ describe("openSettings", () => {
     openSettings("devices");
     expect(useUi.getState().openDialog).toBe("settings");
     expect(useUi.getState().dialogTarget).toBe("devices");
+    // No screen named: Connections, the first-hour status page (r5 settings #4).
     openSettings();
-    expect(useUi.getState().dialogTarget).toBeNull();
+    expect(useUi.getState().dialogTarget).toBe("connections");
     useUi.getState().closeDialog();
   });
 

@@ -109,10 +109,25 @@ function CopyRow({ text }: { text: string }) {
   );
 }
 
+/** An issue's sentence as prose. The server words a fix into the message
+ * ("… isn't answering — start it with `sudo systemctl …`.") AND hands it over
+ * as `fix`, which the card shows in a Copy box: said twice, once with raw
+ * backticks. The clause that quotes the fix goes; any other backticks are
+ * dropped. */
+export function plainIssueMessage(message: string, fix?: string): string {
+  let m = message || "";
+  if (fix && m.includes("`" + fix + "`")) {
+    const parts = m.split(/\s+—\s+|;\s+/);
+    const kept = parts.filter((p) => !p.includes("`" + fix + "`"));
+    if (kept.length && kept.length < parts.length) m = kept.join(" — ").replace(/[.\s]*$/, "") + ".";
+  }
+  return m.replace(/`([^`]*)`/g, "$1");
+}
+
 function Issue({ issue }: { issue: TailscaleIssue }) {
   return (
     <li className={"ts-issue ts-" + issue.level} data-issue={issue.id}>
-      <p>{issue.message}</p>
+      <p>{plainIssueMessage(issue.message, issue.fix)}</p>
       {issue.fix && <CopyRow text={issue.fix} />}
       {issue.id === "wsl_windows_only" && <WslOptions />}
       {issue.docs && (
