@@ -331,7 +331,7 @@ export const SidebarRow = memo(function SidebarRow({
   // "working · 6m" counts up by itself: a busy worker's row data can sit
   // unchanged between polls, and memo would freeze the minutes.
   useNow(wline?.state === "working" || ship?.state === "working" ? 30_000 : false);
-  // "job running · 2h 10m of ~6h" counts up by itself too.
+  // "waiting on job · 2h 10m of ~6h" counts up by itself too.
   useNow(backgroundJobs(inst).some((j) => expectOf(j)) ? 60_000 : false);
   // Subscribed (not a render-time snapshot): the row must clear its red dot
   // the moment the agent socket connects, not on the next instances poll.

@@ -105,8 +105,9 @@ export interface JobChipText {
 /** One job, said as the rail chip says it (`now` in epoch seconds):
  *  - stuck → "job stuck ✕", the tooltip its reason;
  *  - past its expectation, not yet stuck → "job past ~6h" (amber dot);
- *  - waiting inside its expectation → "job running · 2h 10m of ~6h", the
- *    tooltip the ETA as a clock time;
+ *  - waiting inside its expectation → "waiting on job · 2h 10m of ~6h"
+ *    (the agent's turn is over: it is the job that runs, not the session),
+ *    the tooltip the ETA as a clock time;
  *  - waiting otherwise → "job waiting", the tooltip the reason when it is
  *    judged by its own rhythm (it has come back from long quiets before);
  *  - running → "job running" (the rail draws no chip for it: the row reads
@@ -153,7 +154,7 @@ export function jobChipText(job: BackgroundJob, now: number): JobChipText {
   if (expect && progress)
     return {
       kind: "waiting",
-      label: "job running · " + progress,
+      label: "waiting on job · " + progress,
       cls: "bgchip bg-waiting",
       title:
         "Expected to take " + expectWords(expect, job.expected_by) + (eta ? " — done about " + etaClock(eta, now) : "") +
