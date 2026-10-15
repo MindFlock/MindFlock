@@ -408,6 +408,17 @@ def main(argv: Optional[List[str]] = None) -> None:
     except OSError as err:
         print(f"Couldn't bind {bind} port {port}: {err}", file=sys.stderr)
         raise SystemExit(1) from err
+    # An adapter MTU with no room for Tailscale's headers blackholes large
+    # responses to other devices: cap the tailnet sockets' segment size
+    # before uvicorn listens on them (core/tailnet_mtu; loopback untouched).
+    try:
+        from backend.web.core import tailnet_mtu as _tailnet_mtu
+
+        clamped = _tailnet_mtu.clamp_listeners(socks)
+    except Exception:  # noqa: BLE001 — never block the boot on a tuning knob
+        clamped = ""
+    if clamped:
+        print("  " + clamped, flush=True)
     _serve_sockets(app, socks)
 
 

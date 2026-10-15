@@ -145,6 +145,7 @@ EXTRA_CHECKS = frozenset(
         "cloudflared",
         "local-model",
         "cache-seeds",
+        "tailnet-mtu",
         "clipboard",
         "gh",
     }

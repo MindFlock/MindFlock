@@ -275,6 +275,12 @@ def _no_tailnet_side_effects(monkeypatch):
     # and the fallback flag it exports never outlives the test.
     monkeypatch.setattr(tailnet_bind, "tailnet_ips", lambda: [])
     monkeypatch.setenv(tailnet_bind.FALLBACK_ENV, "")
+    # No machine MTUs either: the tailnet MSS clamp (and its doctor row) see
+    # no Tailscale interface unless a test hands in a fake tree.
+    from backend.web.core import tailnet_mtu
+
+    monkeypatch.setattr(tailnet_mtu, "detect", lambda **_kw: tailnet_mtu.Plan())
+    monkeypatch.setattr(tailnet_mtu, "_CURRENT", None)
     monkeypatch.setattr(server, "_tailscale_serves_port", lambda port: False)
     monkeypatch.setattr(mobile_access, "_tailscale_login", lambda: "")
     # auth.host_ok's own names in an exposed mode: never read from the real

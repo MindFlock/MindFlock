@@ -497,7 +497,11 @@ async def _http_session() -> "aiohttp.ClientSession":
     if _HTTP is None or _HTTP.closed:
         async with _HTTP_LOCK:
             if _HTTP is None or _HTTP.closed:
-                _HTTP = aiohttp.ClientSession()
+                # Tailnet connections carry the MSS clamp when this
+                # machine's adapter MTU needs it (core/tailnet_mtu).
+                from backend.web.core import tailnet_mtu as _tailnet_mtu
+
+                _HTTP = aiohttp.ClientSession(connector=_tailnet_mtu.client_connector())
     return _HTTP
 
 

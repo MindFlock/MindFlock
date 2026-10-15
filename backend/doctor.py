@@ -951,6 +951,46 @@ def check_tailscale() -> Check:
     return Check("tailscale", "tailscale", "ok", where + (" — " + who if who else ""))
 
 
+def check_tailnet_mtu() -> Optional[Check]:
+    """Whether Tailscale's tunnel fits inside the network adapter's MTU
+    (:mod:`backend.web.core.tailnet_mtu`). When it doesn't, other devices can
+    reach this one but its large responses are silently dropped. ``None``
+    (left out) off Linux or without a local Tailscale interface."""
+    from backend.web.core import tailnet_mtu
+
+    p = tailnet_mtu.plan()
+    if not p.tunnel_if or not p.underlay_mtu:
+        return None
+    label = "tailnet MTU"
+    if not p.mismatch:
+        return Check(
+            "tailnet-mtu",
+            label,
+            "ok",
+            "%s %d fits inside %s %d"
+            % (p.tunnel_if, p.tunnel_mtu, p.underlay_if, p.underlay_mtu),
+        )
+    target = p.underlay_mtu - tailnet_mtu.OVERHEAD
+    if p.source == "off":
+        ours = "MindFlock's own clamp is off (%s=0)" % tailnet_mtu.ENV
+    else:
+        ours = "MindFlock caps its own tailnet connections (TCP MSS %d)" % p.mss
+    return Check(
+        "tailnet-mtu",
+        label,
+        "warn",
+        "%s MTU %d over %s MTU %d leaves no room for Tailscale's headers, so "
+        "large responses to other devices are dropped. %s; other tailnet "
+        "traffic from this machine still stalls."
+        % (p.tunnel_if, p.tunnel_mtu, p.underlay_if, p.underlay_mtu, ours),
+        fix=(
+            "sudo ip link set dev %s mtu %d (until reboot); to keep it, add "
+            "TS_DEBUG_MTU=%d to /etc/default/tailscaled and run "
+            "sudo systemctl restart tailscaled" % (p.tunnel_if, target, target)
+        ),
+    )
+
+
 def _peer_settings() -> dict:
     """``peer.*`` as the engine reads it (``{}`` when settings can't load)."""
     try:
@@ -1324,6 +1364,7 @@ CHECKS_BY_ID: dict[str, Callable[[], "Optional[Check] | List[Check]"]] = {
     "uv": check_uv,
     "clipboard": check_clipboard,
     "tailscale": check_tailscale,
+    "tailnet-mtu": check_tailnet_mtu,
     "bwrap": check_bwrap,
     "cloudflared": check_cloudflared,
     "state-schema": check_state_schema,
