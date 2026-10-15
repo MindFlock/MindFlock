@@ -380,7 +380,8 @@ describe("list mode: tasks start in ANY folder", () => {
   it("Browse… opens the inline folder browser, never a prompt", () => {
     const src = dialogSrc;
     expect(src).toContain("BROWSE_VALUE");
-    const at = src.indexOf("{runMode && runBrowse && (");
+    // Round 5: one session's "Runs in" → Browse… opens the same browser.
+    const at = src.indexOf("{runBrowse && (");
     expect(at).toBeGreaterThan(0);
     const block = src.slice(at, src.indexOf("{planNoteShown && (", at));
     expect(block).toContain("<FolderBrowser");

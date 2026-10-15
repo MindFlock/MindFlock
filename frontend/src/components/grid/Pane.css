@@ -1276,3 +1276,10 @@
   font: inherit;
   cursor: pointer;
 }
+
+/* The New tour's ring target around ⋯ — a box of its own (not display:
+   contents, which has no rect to ring), shaped like the button it holds. */
+.pane-menu-hook {
+  display: inline-flex;
+  align-items: center;
+}

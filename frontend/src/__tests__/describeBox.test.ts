@@ -84,9 +84,12 @@ describe("the fill button", () => {
   it("is labelled, and says it is still working on a slow start", () => {
     // A button with no label is not an affordance, and both busy labels ship:
     // the ring alone reads as a hang long before the server's 75s budget.
-    expect(FOOTER).toContain("Review details first");
-    expect(FOOTER).toContain('"Reading…"');
-    expect(FOOTER).toContain('"Still reading…"');
+    // Round 5: the secondary "Let the agent set it up…"; the line under the
+    // box says who is asked and the cap ("Asking Claude Code to fill in the
+    // details… 0:01 (up to 30 s)").
+    expect(FOOTER).toContain("Let the agent set it up…");
+    expect(FOOTER).toContain('"Asking…"');
+    expect(FOOTER).toContain('"Still asking…"');
   });
 });
 
@@ -146,14 +149,16 @@ describe("the dialog is two pages with the sentence first", () => {
     }
   });
 
-  it("starts immediately from a BUTTON labelled Create session", async () => {
-    // The immediate path is a button, never the Enter key: Enter in the box
-    // has meant "read this" since the box existed.
+  it("starts immediately from a BUTTON labelled Start (Enter does the same)", async () => {
+    // Round 5: Start ↵ is page 1's one primary; a batch's still reads
+    // "Start N sessions".
     const { startLabel } = await import("../lib/runStart");
-    expect(startLabel(1)).toBe("Create session");
+    expect(startLabel(3)).toBe("Start 3 sessions");
     const start = tags(FOOTER, "new-describe-start")[0];
     expect(attr(start, "type")).toBe("button");
-    expect(FOOTER).toContain("startLabel(draft.listMode ? draft.count : 1)");
+    expect(FOOTER).toContain("draft.listMode && draft.count >= 2 ? (");
+    expect(FOOTER).toContain("startLabel(draft.count)");
+    expect(FOOTER).toContain("{START_LABEL}");
   });
 });
 

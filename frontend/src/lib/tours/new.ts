@@ -1,7 +1,8 @@
-/** The New tour: the task, where it runs, Start, and what the rest is.
- * Seeded from the r5-new judge's tutorial draft. `new-folder`, `new-start`
- * and `new-more` are hooks the New dialog's owner adds; until then each step
- * falls back to today's ids (or centres). */
+/** The New tour: the task, where it runs, Start, and what to do with the
+ * session afterwards — the r5-new judge's four steps. Steps 1–3 point at the
+ * New dialog's own hooks (`new-task`, `new-folder`, `new-start`); step 4 at
+ * a session pane's Agent/Diff tabs and its ⋯ menu (`pane-tabs`,
+ * `pane-menu`), and centres when no session is open yet. */
 import type { TourDef } from ".";
 
 export const NEW_TOUR: TourDef = {
@@ -14,7 +15,7 @@ export const NEW_TOUR: TourDef = {
       body: "Describe one task in plain words — the agent starts on exactly this.",
     },
     {
-      target: '[data-tour="new-folder"]',
+      target: '[data-tour="new-folder"], #new-describe-folder',
       title: "Where it works",
       body: "This is the repo it works in; each session gets its own branch, so your checkout is never touched.",
     },
@@ -24,9 +25,9 @@ export const NEW_TOUR: TourDef = {
       body: "Start begins the session now — watch, steer or stop it from its pane.",
     },
     {
-      target: '[data-tour="new-more"], #new-describe-skip, #new-advanced-sum',
-      title: "Everything else is optional",
-      body: "More options holds the agent, branch and Fast-track; the defaults are safe.",
+      target: '[data-tour="pane-tabs"], [data-tour="pane-menu"]',
+      title: "Then, in its pane",
+      body: "Diff shows what changed; when the agent stops, ⋯ → Push or Open PR ships it, and ✕ closes it (reopen it from Recently closed).",
     },
   ],
 };

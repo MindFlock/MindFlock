@@ -8,7 +8,7 @@ import { ApiError, api, instApi } from "../api/client";
 import type { Caps, Config, Instance } from "../api/types";
 import { computeVisibleSlots } from "../components/grid/layout";
 import { orderWithAfter } from "../components/sidebar/ordering";
-import { patchInstance, queryClient, refreshInstances } from "../state/queries";
+import { patchInstance, queryClient, refreshInstances, refreshRecentlyClosed } from "../state/queries";
 import { freshStage } from "./stageWatch";
 import { displayName, effectiveViewMode, setSessionSelector, useUi, windowKey } from "../state/store";
 import { toast } from "./toast";
@@ -243,11 +243,34 @@ export async function closeSession(title: string) {
   forgetLocally(title);
   closeUndo.push(title);
   const kept = keptRunningText(r);
-  toast(
-    "Session closed — reopen it from Recently closed (Ctrl+Shift+T)" + (kept ? " · " + kept : ""),
-    kept ? { duration: 5000 } : undefined
-  );
+  // The toast IS the Undo: a click on it reopens exactly this session (the
+  // same path as Ctrl+Shift+T), and it stays up long enough to be clicked.
+  toast(closedToastText(displayName(title), kept), { onClick: () => void undoLastClose(), duration: 7000 });
+  void refreshRecentlyClosed();
   await refreshInstances();
+}
+
+/** The Close toast's words: what closed, the Undo the toast itself is, and
+ * where it lives afterwards. */
+export function closedToastText(name: string, kept?: string | null): string {
+  return (
+    "Closed “" + name + "” — click to Undo (Ctrl+Shift+T)" +
+    (kept ? " · " + kept : "")
+  );
+}
+
+/** Delete's question, wherever it is asked (the menu's inline strip, the
+ * corner card): what goes, that uncommitted work goes with it, and that Close
+ * is the keeping alternative. */
+export function deleteConfirmText(inst: { branch?: string; in_place?: boolean } | undefined): string {
+  if (inst?.in_place)
+    return "Removes this session. Its folder and branch stay as they are; Close keeps the session to reopen.";
+  const branch = inst?.branch ? " “" + inst.branch + "”" : "";
+  return (
+    "Deletes the folder and branch" +
+    branch +
+    ", including uncommitted changes. This can't be undone — use Close to keep it."
+  );
 }
 
 /** Delete: remove the worktree and the branch. Asks first unless `confirmed`
@@ -265,7 +288,7 @@ export async function deleteSession(
   if (!confirmed) {
     confirmPop(
       "Delete " + displayName(title) + "?",
-      "Removes the worktree and branch. Close instead keeps the worktree (reopen it from Recently closed).",
+      deleteConfirmText(instances().find((i) => i.title === title)),
       [
         {
           label: "Delete",
@@ -353,6 +376,7 @@ export async function undoLastClose() {
         "/api/recently-closed/" + encodeURIComponent(ent.id) + "/reopen",
         { method: "POST" }
       );
+      void refreshRecentlyClosed();
       await refreshInstances();
       if (inst?.title) selectSession(inst.title);
       toast("Reopened " + (ent.title ? displayName(ent.title) : "session"));

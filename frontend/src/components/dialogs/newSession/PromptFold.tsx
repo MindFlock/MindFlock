@@ -22,7 +22,7 @@ export interface TaskFieldProps {
   placeholder?: string;
   prompt: string;
   setPrompt: Set<string>;
-  /** The "Insert a prompt…" picker — the New form's; a form without it (a
+  /** The "Insert saved text…" picker — the New form's; a form without it (a
    * template's, whose Manage… could not hand back to it) leaves these out. */
   presetValue?: string;
   setPresetValue?: Set<string>;
@@ -63,8 +63,8 @@ export function TaskField({
           <span className="preset-row">
             <select
               id="new-preset"
-              aria-label="Insert a prompt"
-              title="Put one of your prompts in the Task box (you can edit it after)"
+              aria-label="Insert saved text"
+              title="Put one of your saved prompts in the Task box (you can edit it after)"
               value={presetValue}
               onChange={(e) => {
                 setPresetValue(e.target.value);
@@ -72,7 +72,7 @@ export function TaskField({
                 if (p) setPrompt(p.prompt);
               }}
             >
-              <option value="">Insert a prompt…</option>
+              <option value="">Insert saved text…</option>
               {BUILTIN_PRESETS.length > 0 && (
                 <optgroup label="Built-in">
                   {BUILTIN_PRESETS.map((p) => (

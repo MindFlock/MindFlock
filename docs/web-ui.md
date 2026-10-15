@@ -762,7 +762,11 @@ it. The items, in groups:
 
 - **Work** — **Message…** (`Ctrl+K S`) · **Queue prompt…** *runs when idle*
 - **Ship** — **Commit…** (only once there is something to commit) · **Push** ·
-  **Open PR** · **Merge PR** once there is a PR · **View PR ↗** ·
+  **Open PR** · **Merge PR** once there is a PR · **View PR ↗** (while the
+  session's diff-stat reads zero, **Push** and **Open PR** stay in place
+  greyed, noted *Nothing to push yet*; without GitHub connected **Open PR**
+  and **Merge PR** are greyed *Connect GitHub to open PRs* — the pane's guided
+  button and the `Ctrl+K` chords still answer) ·
   **Fast-track…** (opens the pane's [⏩ picker](#fast-track-), with the current
   choice under it) · **Checklist…** (when the session has a branch: Verify on
   that branch's checklist, `openDialogFor("verify", branch)`) · **Run checks
@@ -776,7 +780,8 @@ it. The items, in groups:
   run}** for a team run member · **Duplicate session** (`Ctrl+K D`; a second
   in-place session on the same worktree) · **Branch session** (`Ctrl+K B`;
   see [Branch session](#branch-session)) · **Open in <IDE>** *your code editor*
-  (`Ctrl+K O`; row double-click does the same) · **Open preview ↗** `:port`
+  (`Ctrl+K O`; row double-click does the same; left out once `GET /api/ides`
+  says the configured editor isn't installed here) · **Open preview ↗** `:port`
   when the session serves one · **Select** (`Ctrl+click`) · **Hide/Show
   window** (`Ctrl+K H`; the session keeps running) · **Re-run worktree setup**
   after a failed one · **Copy folder path**
@@ -841,10 +846,18 @@ the verb (*stops the agent and moves it to Recently closed*). The row's ✕ is
 labelled *Close session*, and on a session with uncommitted changes it asks
 first, on a strip under the row: *Close session? Its N uncommitted changes
 stay in its folder — reopen it from Recently closed.* **Close session** /
-**Cancel** (focus on Cancel). **Delete…** removes the worktree and its branch; the
-first click turns the item into an inline strip — *Removes the worktree and
-branch* with **Delete** and **Cancel** (focus lands on Cancel, so a second
-Enter never deletes). Both land in [Recently closed](#recently-closed); only a
+**Cancel** (focus on Cancel). The Close toast is its own **Undo**: *Closed
+“<name>” — click to Undo (Ctrl+Shift+T)* — a click reopens exactly that
+session, and **Recently closed (n)** refreshes on the close and on the undo.
+After a ✕ the next row slides up under the pointer, so the row's ✕ ignores a
+second click within 400 ms. **Delete…** removes the worktree and its branch; the
+first click turns the item into an inline strip — *Deletes the folder and
+branch “<branch>”, including uncommitted changes. This can't be undone — use
+Close to keep it.* (an in-place session: *Removes this session. Its folder and
+branch stay as they are…*) with **Delete** and **Cancel** (focus lands on
+Cancel, so a second Enter never deletes). The pane's ⋯ is named *Actions for
+this session* and the row's ⋮ *Session menu for <name>*, so a screen reader
+can tell them apart. Both land in [Recently closed](#recently-closed); only a
 closed one can be reopened. The words *End* and *Delete + wipe* are gone from
 the app: a session is closed or deleted, nothing else.
 
@@ -1981,17 +1994,17 @@ because it is the hot path. Ticket is described further down.
 The Session tab is two pages, as in v0.7: a compact **Describe** card it opens
 on (*What do you want to work on?* — see
 [describe it in a sentence](#new-session-dialog-describe-it-in-a-sentence)),
-and the full form behind it (**Set it up myself instead**, which carries what
-you typed into the Task, or **Review details first** to have the model fill it
-in). The form has **← Back** to the sentence. The caret starts in the sentence
+and the full form behind it (**More options** or the line's **change**, which
+carry what you typed into the Task, or **Let the agent set it up…** to have the
+model fill it in). The dialog is a `role="dialog"` with `aria-modal`. The form has **← Back** to the sentence. The caret starts in the sentence
 box; after a refused create the dialog reopens on the form with the caret in
 **Name**, since the form is what needs fixing.
 
 **What you type is never thrown away.** Closing New — or a trip to Intake,
 Settings or anywhere else — keeps the sentence, the form and the page you were
-on; the next opening shows them as you left them. Only a **Create** (or
+on; the next opening shows them as you left them. Only a **Start** (or
 Intake's **Start together…**, which opens New on its own list) starts fresh,
-and **Clear** — beside the box on page 1 and beside **← Back** on the form,
+and **Clear** — beside the box on page 1 (the form's **← Back** leads there),
 shown while something typed is in it — empties it on purpose. A Task the
 opening's own last-used template wrote doesn't count as typed.
 
@@ -2013,9 +2026,10 @@ a 723 px window without a scroll; at 420 px the fields stack and Fast-track's
 choices wrap.
 
 **The form, in order:** the **Templates** strip (only once a template exists),
-**Folder** and **Agent**, **Task**, **Works in**, then **More options** (shut).
-The footer has **Save as template…**, **Clear** (while there is a draft),
-**← Back** and **Create**.
+with one muted line under it — *Templates save this whole form (folder, agent,
+task, fast-track) to run again or schedule.* — then **Folder** and **Agent**,
+**Task**, **Works in**, then **More options** (shut). The footer has
+**← Back** and **Start ↵** (the button names what Enter does).
 
 - **Folder** — with one quiet line of suggestion chips under it: recent
   folders first, each run headed by a muted **Recent** / **Started in** (the
@@ -2024,19 +2038,28 @@ The footer has **Save as template…**, **Clear** (while there is a draft),
   how many (*8 more…*); it unfolds the line into all of them, one run per
   line (**Fewer** folds it back; picking a chip folds it too). The line is
   left out when its only suggestion is the folder already in the field.
-- **Agent** — the agents this device has; one that isn't installed reads
+  "Recent" is the server's list: only folders a session was actually started
+  in. While the field isn't being edited it shows the END of the path (the
+  repo's name), the whole path in its tooltip. **A folder is never made by
+  itself:** a path that doesn't exist reads *No folder at <path>.* in red with
+  **Create this folder**, and both Starts stay off until it exists — the
+  button makes exactly that folder (`POST /api/mkdir`, the parent must exist)
+  and the form then reads it as an empty folder with no repo. A plan from
+  **Let the agent set it up…** that proposes a new folder asks the same way.
+- **Agent** — the agents this device has; the ones that aren't installed fold
+  behind a last row, *More agents… (6 not installed)*, which lists them as
   *codex (not installed)* (`GET /api/providers/status`, this device only — an
-  unknown answer never blocks). The default never starts on a missing agent
+  unknown answer never blocks; the chosen agent always shows). The default never starts on a missing agent
   when another is installed. Picking a missing one shows *<agent> isn't
   installed on this device. Install it in Settings → Agents, or pick another
-  agent.* under the field, and **Create** (and page 1's **Create session**)
+  agent.* under the field, and **Start** (on either page)
   refuses — a session would otherwise sit "Idle" on *command not found*. An
   installed agent `GET /api/setup` knows is NOT signed in gets *<agent> isn't
   signed in yet — a session would stop at its sign-in screen.* **Sign in…**
   (Settings → Agents) — under the field and on page 1. A note, not a block.
 - **Task** — what the agent starts on (blank starts it idle), always on the
   form — two rows to start, growing with its text up to 220 px, then
-  scrolling — with **Insert a prompt…** (built-ins first, then yours) and
+  scrolling — with **Insert saved text…** (built-ins first, then yours) and
   **Manage…**, which opens the Prompts dialog and comes back to this form as
   it was — there, clicking a prompt puts it in this Task box (no *Paste
   into*: you are making a new session, not talking to a running one).
@@ -2064,18 +2087,33 @@ The footer has **Save as template…**, **Clear** (while there is a draft),
   already edits that folder directly warns *“<session>” is already editing
   this folder directly. Pick “Separate worktree” so they don't overwrite each
   other.*
-- **More options** — its summary names anything in it that isn't the default
-  (*named x · fast-track on · from main · flags*), else *name, fast-track,
-  base branch, flags*. Inside: **Name** (*optional; empty names it from the
-  task* — see below), **Fast-track to** (*Ask me before it ships* reads
-  *(needs fast-track)* while it is Off), **Auto-split** (*Lets the agent break
-  a big task into up to 3 parallel sessions — you approve the split first.*),
-  **Provision the worktree** (*also run the repo's setup and warm test caches*
-  — a box on top of the separate worktree, with the workspace strategy),
-  **Base branch** (drawn at once, *Loading branches…* until the list lands),
-  **Create a git repo in this folder** (only for a folder that isn't a repo
-  yet), **Plan first** (*— the agent lists the files it will change and waits
-  for your OK (Map tab)*) and the **Launch flags** fold.
+  For a real folder with **no git repo**, Works in asks that one question
+  instead: **Make it a git repo first** `recommended` / *Turns on diff, commit
+  and PR — git init and a first commit here* or **Just run in the folder** /
+  *The agent edits the files as they are; no diff, commit or PR* (the default —
+  nothing is git-inited unasked). Fast-track's rungs past Off are greyed until
+  it is a repo.
+- **More options** — only what a first session may want: **Name** (*optional;
+  empty names it from the task* — the placeholder is the name it will get),
+  **Fast-track** (*Off / Commit / Push / Open PR / Merge when green*; without
+  GitHub connected **Open PR** and **Merge when green** are greyed with the
+  session menu's own sentence, *MindFlock can’t open or merge the PR for you
+  yet — …*) and **Save as template…**. Its summary names anything in it that
+  isn't the default (*named x · Fast-track: Commit · from main · flags*), else
+  *name, Fast-track, save as template*. Inside it, one more fold,
+  **Advanced**, holds what a first-hour session can't use yet, its summary
+  naming only what is in it: **Ask me before it ships** (*(needs Fast-track)*
+  while it is Off), **Auto-split** (*Lets the agent break a big task into up to
+  3 parallel sessions — you approve the split first.*), **Provision the
+  worktree** (*also run the repo's setup and warm test caches* — with the
+  workspace strategy), **Base branch** (only while there is a branch to pick;
+  *Loading branches…* until the list lands), **Plan first** (*— the agent
+  lists the files it will change and waits for your OK (Map tab)*) and the
+  **Launch flags** fold. A flag that turns the agent's permission prompts off
+  (`--dangerously-skip-permissions` and its kin) adds a line under the chips:
+  *⚠ Skip permission prompts — the agent runs commands and edits files without
+  asking you.* (the label and tooltip are `SKIP_PERMS_LABEL` /
+  `SKIP_PERMS_TITLE` in `lib/vocab.ts`, for the chip itself too).
 
 **Names come from the task.** With the Name empty, a session is named from
 its Task: the first line's first few words, filler dropped, lowercased and
@@ -2100,7 +2138,7 @@ after the Folder settles; the first 200). Leaving it on the first row keeps
 the server's own choice; any other row is sent as `base_ref` + `base_branch`
 on create. **Ctrl/Cmd+Enter** submits the dialog from anywhere in it.
 
-**Save as template…** opens an inline name row above the footer (Enter saves,
+**Save as template…** (under More options) opens an inline name row in place (Enter saves,
 Esc cancels without closing the dialog; never a `prompt()`) and saves the
 **whole form**: folder, agent, where it works, provisioning, git init, Task and
 fast-track — stored as the template's autopilot (*Commit*, *Commit + push* or
@@ -2335,54 +2373,50 @@ text box — and the full form is page 2. The box is the widest of the three way
 to fill the form in (a sentence, a template chip, or by hand), and **nothing in
 it is submitted**: it wears the same card as the Templates and folder-suggestion
 strips rather than looking like a second form stacked on the first. Under it,
-*__Create session__ starts it now in **<folder>**, with what you typed as its
-task. __Review details first__ has your agent pick the folder, name and
-options, and shows them to you before anything starts.* — the folder named is
-the one the form holds (the last-used or best suggestion; with none, *needs a
-folder — it opens the form with what you typed as the task*) — then two
-examples (*Examples: start a new project called invoice-parser · add metrics
-to billing, in a worktree*) and *Starting from a ticket, pull request or
-issue? **Open Intake***.
+ONE line says where **Start** runs it: *Runs in [📦 repo ▾] · own branch
+`me/add-readme-section…` · change*. The folder is a real picker (`#new-describe-folder`,
+the New tour's `new-folder` hook): **Recent folders** (only ones a session was
+started in), the other suggestions, then **Browse…**, which opens the inline
+folder browser under the box. A folder with no repo reads *· in the folder
+itself (no git, so no diff or PR)*; a path that doesn't exist reads *No folder
+at …* with **Create this folder**, and Start stays off. **change** opens the
+form. Then *Starting from a ticket, pull request or issue? **Open Intake***. A
+path typed into the sentence is not read as the folder — the line is the
+folder.
 
-Three actions sit under it, in increasing order of commitment, each named for
-its outcome rather than for the app's own vocabulary:
+Three actions sit under it — ONE primary:
 
-- **Set it up myself instead** — straight to page 2, with what you typed as the
-  Task (a Task you edited since an earlier trip is kept). Nothing is read and
-  no model runs. It cannot be dropped: it is the only route to the form for
-  someone with no coding CLI installed.
-- **Review details first ↵** — the primary (accent) button, because it is
-  what Enter in the box does (hidden for an
-  Intake batch, which has no single form to fill in). Sends the sentence to
-  [`POST /api/session-plan`](web-api.md#post-apisession-plan--200), which walks
-  the filesystem, asks one headless model turn, and fills in page 2 for you to
-  change before anything is created — Folder, Name (when the plan has one),
-  Task, and the Works in choice (*this folder directly*, *Create a git repo*),
-  opening those folds — then moves the caret to Folder. It leaves the agent,
-  account, launch flags and Plan first alone. Enter here has always meant "read
-  this", and `preventDefault` keeps it that way — the box lives inside the form,
-  so without it a sentence nobody has resolved yet would become a create in
-  whatever folder the pre-fill left behind. The button is **`type="button"`**
-  for the same reason. Shift+Enter starts another line.
-- **Create session** — the secondary button: starts the session **now**, in
-  the folder the help line names, with the sentence as typed as its Task, the
-  form's other choices as they stand, and the name made from the task — no
-  model turn, nothing to wait for (pressed during a Review read, it drops the
-  read). A refusal (no folder, a missing agent, a folder to confirm) opens the
-  form with the sentence already in Task. After **Review details first** and
-  **← Back**, it acts on that plan instead of reading again.
+- **More options** — quiet, far left: straight to page 2, with what you typed
+  as the Task (a Task you edited since an earlier trip is kept). Nothing is
+  read and no model runs; it is the only route to the form for someone with no
+  coding CLI installed.
+- **Let the agent set it up…** — secondary (hidden for an Intake batch). Sends
+  the sentence to [`POST /api/session-plan`](web-api.md#post-apisession-plan--200),
+  which walks the filesystem, asks one headless model turn, and fills in page 2
+  for you to change before anything starts — Folder, Name (when the plan has
+  one), Task, and the Works in choice — then moves the caret to Folder. It
+  leaves the agent, account, launch flags and Plan first alone. The button is
+  **`type="button"`**: the box lives inside the form.
+- **Start ↵** — the primary (accent), and what **Enter** in the box (and
+  **Ctrl/Cmd+Enter** on page 1) does: starts the session **now**, in the
+  folder the line names, with the sentence as typed as its Task, the form's
+  other choices as they stand, and the name made from the task — no model
+  turn (pressed during a read, it drops the read). A refusal (no folder, a
+  missing agent) opens the form with the sentence already in Task. After
+  **Let the agent set it up…** and **← Back**, it acts on that plan instead of
+  reading again. Shift+Enter starts another line.
 
-While a turn is in flight **the button that was pressed** shows a ring, a word
-and a clock — **Reading… 0:04**, then **Still reading… 0:09** after 8 s. The
-read gives up at **30 s** (the server's own budget, `session_plan.TIMEOUT_PLAN`,
-is the same): *The agent didn't answer within 30 seconds.* with **Fill the form
-with what I typed**, which opens the form with the sentence as its Task. Any
-other failure says why and offers the same button — a CLI known not to be
-signed in says *claude isn't signed in yet — sign in under Settings → Agents*
-rather than *claude exited 1*.
-A **Cancel** link appears beside the box, which goes read-only rather than
-disabled so the caret and the selection survive the wait. Create on the form is
-held while a turn is reading.
+While a turn is in flight the button shows a ring and **Asking…** (**Still
+asking…** after 8 s), and a line under the box says who and for how long at
+most: *Asking Claude Code to fill in the details… 0:04 (up to 30 s)*. The read
+gives up at **30 s** (the server's own budget, `session_plan.TIMEOUT_PLAN`, is
+the same): *The agent didn't answer within 30 seconds.* with ONE recovery,
+**Start it in <folder> instead** (with no folder: **Pick a folder…**, the
+form). Any other failure says why and offers the same button — a CLI known not
+to be signed in says *claude isn't signed in yet — sign in under Settings →
+Agents* rather than *claude exited 1*. A **Cancel** link appears beside the
+box, which goes read-only rather than disabled so the caret and the selection
+survive the wait. Start on the form is held while a turn is reading.
 
 **One prompt, however many lines; batches come from Intake.** The box is a
 textarea and stays ONE prompt however many lines it holds — **Fast-track to**
@@ -2481,7 +2515,7 @@ server and follow you between devices. They have three doors, one job each:
   more are running ("running" = status `running` or started, but not paused;
   verify sessions are left out; *All* sends once per session). Both surfaces
   use one paste path, `lib/promptPaste.ts`.
-- **New's Task box** can start from one: **Insert a prompt…** sits
+- **New's Task box** can start from one: **Insert saved text…** sits
   beside the **Task** label. Built-ins ship for the common loops — *Fix
   failing tests*, *Address PR review comments*, *Write tests for recent
   changes*, *Refactor for clarity — no behavior change*. Picking one fills the
@@ -2678,7 +2712,10 @@ centres the card and still shows. `Esc` ends it; the arrow keys page.
 There are six (`lib/tours/`, one file per tour, `TOURS` in `index.ts`):
 **Welcome** (over the Get set up checklist: the *next:* line, ① Install
 Claude Code, ② Sign in to your agent, ③ Start your first session, then the
-first sidebar row), **New**, **Intake**, **Verify**, **Schedule** and
+first sidebar row), **New** (the task box, the *Runs in* folder picker,
+**Start**, then a session pane's Agent / Diff tabs and its ⋯ — hooks
+`new-task`, `new-folder`, `new-start`, `pane-tabs`, `pane-menu`; the last
+step centres when no session is open), **Intake**, **Verify**, **Schedule** and
 **Settings**. A step's target is a CSS selector, usually a stable id or a
 `data-tour="<surface>-<thing>"` hook (with today's id as a fallback in the
 same selector list).

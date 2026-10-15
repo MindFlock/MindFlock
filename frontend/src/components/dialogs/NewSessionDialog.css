@@ -1177,35 +1177,36 @@
   color: #fff;
 }
 
-/* Page 1's headline action wears what Create wears on page 2, because it IS
-   Create — the same POST, reached without the form. It cannot pick the rule
-   above up by itself: it is type="button" on purpose, since a submit here
-   would create a session from whatever the form happened to be holding rather
-   than from the plan. */
-/* Page 1's PRIMARY is "Review details first": it is what Enter does, so the
-   accent and the ↵ sit on one control. "Create session" (the same POST as
-   page 2's Create, reached without the form) is the secondary. */
-#new-describe-go {
+/* Page 1's ONE primary is Start: it is what Enter does, so the accent and the
+   ↵ sit on one control, and it wears what the form's Start wears because it
+   is the same POST reached without the form. "Let the agent set it up…" (a
+   model turn) is the secondary beside it. */
+#new-describe-start {
+  border-radius: 7px;
+  padding: 7px 14px;
+  font-size: 12px;
+  white-space: nowrap;
   background: var(--accent);
-  border-color: var(--accent);
+  border: 1px solid var(--accent);
   color: #fff;
 }
 
-#new-describe-go:hover:not(:disabled) {
+#new-describe-start:hover:not(:disabled) {
   filter: brightness(1.08);
 }
 
-#new-describe-start {
-  border-radius: 7px;
-  padding: 7px 12px;
-  font-size: 12px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
-  white-space: nowrap;
+#new-describe-start .nf-key,
+#new-create .nf-key {
+  border-color: rgba(255, 255, 255, 0.55);
 }
 
-#new-describe-start:hover:not(:disabled) {
+#new-describe-go {
+  background: var(--panel-2);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+#new-describe-go:hover:not(:disabled) {
   border-color: var(--accent);
 }
 
@@ -2454,4 +2455,103 @@
 /* The folder Create session starts in, named in the help line. */
 .nf-describe-help .nf-starts-in {
   font-weight: 600;
+}
+
+/* Page 1's "Runs in [folder ▾] · own branch me/… · change": where Start goes,
+   on one line under the box. The folder is a real picker, sized like a chip
+   so it reads as part of the sentence. */
+.nf-starts-line {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 4px;
+}
+
+#new-form .nf-starts-line .nf-folder-chip {
+  width: auto;
+  height: 24px;
+  min-height: 0;
+  max-width: 220px;
+  padding: 0 6px;
+  line-height: 22px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+#new-form .nf-starts-line .nf-folder-chip:hover,
+#new-form .nf-starts-line .nf-folder-chip:focus-visible {
+  border-color: var(--accent);
+}
+
+.nf-starts-sub code {
+  font-size: 11.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+/* "No folder at …" — red, with its one way out. Start is off meanwhile. */
+.nf-folder-missing {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--red);
+}
+
+.nf-folder-missing .nf-fallback {
+  margin-left: 4px;
+}
+
+.nf-folder-missing-err {
+  color: var(--red);
+}
+
+/* Who is doing what while "Let the agent set it up…" waits, and for how long
+   at most. */
+.nf-describe-wait {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.nf-tpl-hint {
+  margin: -4px 0 6px;
+  font-size: 11.5px;
+}
+
+/* More options → Advanced: a fold inside the fold, set in a little. */
+.nf-deep {
+  margin-top: 6px;
+}
+
+.nf-save-tpl-wrap {
+  margin: 2px 0;
+}
+
+#new-form #new-save-tpl {
+  font-size: 12px;
+  align-self: flex-start;
+}
+
+/* Start can't go (the folder isn't there): it says so, greyed. */
+#new-form #new-create:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.nf-skip-perms {
+  margin-top: 4px;
 }

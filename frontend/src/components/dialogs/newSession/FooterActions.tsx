@@ -1,14 +1,15 @@
-/** The New dialog's action row: page 1's three ways out (one session, or an
- * Intake batch's run), or the form's Save as template… / Back / Create, with
- * the error line beside them. */
+/** The New dialog's action row: page 1's ONE primary (Start ↵) with "More
+ * options" and "Let the agent set it up…" beside it (or an Intake batch's
+ * Start N), or the form's ← Back / Start, with the error line beside them.
+ * "Save as template…" lives in the form's More options. */
 
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { startLabel } from "../../../lib/runStart";
 import type { RunDraft } from "../NewList";
-import { elapsedLabel } from "../newSession";
+import { START_LABEL, elapsedLabel } from "../newSession";
 
 /** Seconds since `since`, ticking once a second while mounted. */
-function Elapsed({ since }: { since: number }) {
+export function Elapsed({ since }: { since: number }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const h = window.setInterval(() => setNow(Date.now()), 1000);
@@ -17,12 +18,13 @@ function Elapsed({ since }: { since: number }) {
   return <span className="nf-elapsed">{elapsedLabel((now - since) / 1000)}</span>;
 }
 
-/** The ring, a word and the clock — on the button that was pressed. */
-function Reading({ slow, since }: { slow: boolean; since: number }) {
+/** The ring and a word on the button that was pressed; the line under the
+ * box ("Asking Claude Code to fill in the details… 0:04 (up to 30 s)") says
+ * who is doing what, and for how long at most. */
+function Reading({ slow }: { slow: boolean }) {
   return (
     <>
-      <span className="btn-spin" aria-hidden="true" /> {slow ? "Still reading…" : "Reading…"}{" "}
-      <Elapsed since={since} />
+      <span className="btn-spin" aria-hidden="true" /> {slow ? "Still asking…" : "Asking…"}
     </>
   );
 }
@@ -45,14 +47,12 @@ export function FooterActions({
   describing,
   describeSlow,
   describeMode,
-  describeSince,
   draft,
   runDescribe,
   startRun,
   startNow,
   setUpMyself,
-  onClear,
-  saveTpl,
+  startBlocked = "",
 }: {
   error: string;
   page: number;
@@ -62,23 +62,137 @@ export function FooterActions({
   describeSlow: boolean;
   /** Which button started the read in flight. */
   describeMode: "fill" | "start";
-  /** When it started (epoch ms). */
-  describeSince: number;
   draft: RunDraft;
   runDescribe(mode?: "fill" | "start"): Promise<void>;
   startRun(): Promise<void>;
   startNow(): void;
   /** To the form, carrying what was typed as the Task. */
   setUpMyself(): void;
-  /** Clear the draft (shown on the form while something typed is in it). */
-  onClear?: () => void;
-  saveTpl: SaveTemplateUi;
+  /** Why Start / the form's Start can't go yet ("" = it can): the folder
+   * named doesn't exist. Said on the button's tooltip; the red line under
+   * the folder says it on screen. */
+  startBlocked?: string;
 }) {
   return (
     <>
-      {page === 2 && saveTpl.name !== null && (
-        /* Inline, not a prompt(): Electron has no window.prompt. Saves the
-           WHOLE form — folder, agent, works in, task, fast-track. */
+      <div className="modal-actions nf-actions">
+        <p id="new-error" className="error">{error}</p>
+        {page === 1 ? (
+          <>
+            {/* ONE primary. "More options" (the full form, nothing read) is
+                quiet and far left; "Let the agent set it up…" — a model
+                turn that fills the form in for review — is secondary; Start
+                (accent, ↵ — what Enter does) starts it now where the "Runs
+                in" line says. */}
+            <button
+              type="button"
+              id="new-describe-skip"
+              className="nf-quiet"
+              data-tour="new-more"
+              title="The full form — folder, agent, task, name and Fast-track — with what you typed as the task"
+              onClick={setUpMyself}
+            >
+              More options
+            </button>
+            {/* For ONE session only: a list (or a split) starts from the rows
+                and choices above, so in run mode it is not drawn. */}
+            {!runMode && (
+              <button
+                // type="button" is load-bearing: the default is "submit",
+                // which would create a session from whatever the form holds.
+                type="button"
+                id="new-describe-go"
+                disabled={describing}
+                aria-busy={(describing && describeMode === "fill") || undefined}
+                title="Your agent picks the folder, name and options from what you typed; you check them before anything starts."
+                onClick={() => void runDescribe("fill")}
+              >
+                {describing && describeMode === "fill" ? <Reading slow={describeSlow} /> : "Let the agent set it up…"}
+              </button>
+            )}
+            {/* Never waits on the agent: pressed during a read, it drops the
+                read and starts from the words as typed. */}
+            <button
+              type="button"
+              id="new-describe-start"
+              data-tour="new-start"
+              disabled={draft.starting || (runMode && describing) || (!runMode && !!startBlocked)}
+              aria-busy={(describing && describeMode === "start") || draft.starting || undefined}
+              title={
+                runMode
+                  ? "Start them now. MindFlock queues the rest and ships each one as chosen above, and the bell shows anything that needs you."
+                  : startBlocked || "Start it now in the folder shown, with what you typed as its task (Enter)"
+              }
+              onClick={runMode ? () => void startRun() : startNow}
+            >
+              {describing && describeMode === "start" ? (
+                <Reading slow={describeSlow} />
+              ) : draft.starting ? (
+                "Starting…"
+              ) : draft.listMode && draft.count >= 2 ? (
+                startLabel(draft.count)
+              ) : (
+                <>
+                  {START_LABEL}{" "}
+                  <span className="nf-key" aria-hidden="true">
+                    ↵
+                  </span>
+                </>
+              )}
+            </button>
+          </>
+        ) : (
+          <>
+            {/* Back, not Cancel: page 1 still holds the sentence (and its
+                Clear), and a start that has not happened yet is not
+                something to undo. */}
+            <button type="button" id="new-back" className="nf-quiet" onClick={() => setPage(1)}>
+              ← Back
+            </button>
+            <button
+              type="submit"
+              id="new-create"
+              data-tour="new-start"
+              disabled={draft.starting || describing || !!startBlocked}
+              aria-busy={draft.starting || undefined}
+              title={describing ? "Waiting for the agent to fill in the details" : startBlocked || "Start it now (Enter)"}
+            >
+              {draft.starting ? (
+                "Starting…"
+              ) : (
+                <>
+                  {START_LABEL}{" "}
+                  <span className="nf-key" aria-hidden="true">
+                    ↵
+                  </span>
+                </>
+              )}
+            </button>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+/** More options → "Save as template…": the button, and the inline name row
+ * it opens. Saves the WHOLE form — folder, agent, works in, task, Fast-track. */
+export function SaveTemplateRow({ saveTpl }: { saveTpl: SaveTemplateUi }) {
+  return (
+    <div className="nf-save-tpl-wrap">
+      {saveTpl.name === null ? (
+        <button
+          type="button"
+          id="new-save-tpl"
+          className="linklike"
+          aria-expanded={false}
+          title="Save this whole setup — folder, agent, where it works, task and Fast-track — to start again in one click or on a schedule"
+          onClick={() => saveTpl.setName("")}
+        >
+          Save as template…
+        </button>
+      ) : (
+        /* Inline, not a prompt(): Electron has no window.prompt. */
         <div className="nf-save-tpl" id="new-save-tpl-row" role="group" aria-label="Save as template">
           <input
             id="new-save-tpl-name"
@@ -92,7 +206,7 @@ export function FooterActions({
             onChange={(e) => saveTpl.setName(e.target.value)}
             onKeyDown={(e) => {
               // Kept to this row: Enter must not submit the form (that
-              // creates the session) and Escape must not close the dialog.
+              // starts the session) and Escape must not close the dialog.
               e.stopPropagation();
               if (e.key === "Enter") {
                 e.preventDefault();
@@ -116,118 +230,10 @@ export function FooterActions({
           </button>
           <span className="muted nf-save-tpl-hint">
             {saveTpl.blocked ||
-              "Saves the folder, agent, where it works, task and fast-track. Run it from Templates, now or on a schedule."}
+              "Saves the folder, agent, where it works, task and Fast-track. Run it from Templates, now or on a schedule."}
           </span>
         </div>
       )}
-      <div className="modal-actions nf-actions">
-        <p id="new-error" className="error">{error}</p>
-        {page === 1 ? (
-          <>
-            {/* THREE actions, in increasing order of commitment. The escape is
-                first, quiet, and pushed to the far left: page 1 is where every
-                opening lands, so it is the only route to the form for someone
-                who does not want to describe anything — or has no agent
-                installed to describe it to. */}
-            <button
-              type="button"
-              id="new-describe-skip"
-              className="nf-quiet"
-              title="Go to the form with what you typed as the task, and choose the folder and options yourself. Nothing is read."
-              onClick={setUpMyself}
-            >
-              Set it up myself instead
-            </button>
-            {/* Review is for ONE session: a list (or a split) starts from the
-                rows and choices above, so in run mode it is not drawn. It is
-                the PRIMARY button, because it is what Enter does — the ↵ and
-                the accent sit on the same control. */}
-            {!runMode && (
-              <button
-                // type="button" is load-bearing: the default is "submit",
-                // which would create a session from whatever the form holds.
-                type="button"
-                id="new-describe-go"
-                disabled={describing}
-                aria-busy={(describing && describeMode === "fill") || undefined}
-                title="Your agent fills in the folder, name and task; you check them before anything is created."
-                onClick={() => void runDescribe("fill")}
-              >
-                {describing && describeMode === "fill" ? (
-                  <Reading slow={describeSlow} since={describeSince} />
-                ) : (
-                  <>
-                    Review details first{" "}
-                    <span className="nf-key" aria-hidden="true">
-                      ↵
-                    </span>
-                  </>
-                )}
-              </button>
-            )}
-            {/* Never waits on the agent: pressed during a Review read, it drops
-                the read and starts from the words as typed. */}
-            <button
-              type="button"
-              id="new-describe-start"
-              disabled={draft.starting || (runMode && describing)}
-              aria-busy={(describing && describeMode === "start") || draft.starting || undefined}
-              title={
-                runMode
-                  ? "Start them now. MindFlock queues the rest and ships each one as chosen above, and the bell shows anything that needs you."
-                  : "Start the session now in the folder shown, with what you typed as its task — nothing to review."
-              }
-              onClick={runMode ? () => void startRun() : startNow}
-            >
-              {describing && describeMode === "start" ? (
-                <Reading slow={describeSlow} since={describeSince} />
-              ) : draft.starting ? (
-                "Starting…"
-              ) : (
-                startLabel(draft.listMode ? draft.count : 1)
-              )}
-            </button>
-          </>
-        ) : (
-          <>
-            <button
-              type="button"
-              id="new-save-tpl"
-              className="nf-quiet"
-              aria-expanded={saveTpl.name !== null}
-              title="Save this whole setup — folder, agent, where it works, task and fast-track — to start again in one click or on a schedule"
-              onClick={() => saveTpl.setName((cur) => (cur === null ? "" : null))}
-            >
-              Save as template…
-            </button>
-            {onClear && (
-              <button
-                type="button"
-                id="new-clear-form"
-                className="linklike"
-                title="Empty the form and start over — what you type here otherwise stays until you Create"
-                onClick={onClear}
-              >
-                Clear
-              </button>
-            )}
-            {/* Back, not Cancel: page 1 still holds the sentence, and a
-                create that has not happened yet is not something to undo. */}
-            <button type="button" id="new-back" className="linklike" onClick={() => setPage(1)}>
-              ← Back
-            </button>
-            <button
-              type="submit"
-              id="new-create"
-              disabled={draft.starting || describing}
-              aria-busy={draft.starting || undefined}
-              title={describing ? "Waiting for the description to be read" : undefined}
-            >
-              {draft.starting ? "Starting…" : "Create"}
-            </button>
-          </>
-        )}
-      </div>
-    </>
+    </div>
   );
 }

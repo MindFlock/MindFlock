@@ -86,6 +86,26 @@ export const DESCRIBE_SLOW_MS = 8000;
  * Long enough to catch that, far short of the time it takes to read a note. */
 export const SUBMIT_ARM_MS = 500;
 
+/** The New dialog's one starting verb (GLOSSARY "Start"): page 1's primary,
+ * the form's submit, and every sentence that names either. */
+export const START_LABEL = "Start";
+
+/** The first sentence of the PR tooltip (lib/sessionActions PR_FALLBACK_HINT):
+ * why Fast-track's Open PR / Merge rungs can't be picked while GitHub is not
+ * connected — the same words the session menu uses. */
+export function prNeedsGithubReason(fallbackHint: string): string {
+  return fallbackHint.split("\n")[0];
+}
+
+/** "Advanced"'s fold summary: the names of what is actually inside it, in
+ * order, so it never promises a control that isn't there. */
+export function advancedSummary(parts: Array<[string, boolean]>): string {
+  return parts
+    .filter(([, shown]) => shown)
+    .map(([name]) => name)
+    .join(", ");
+}
+
 /** Whether what is in the Folder field is a PATH rather than a name to look up.
  *
  * This one predicate is what lets the field become a combobox without ceasing
@@ -354,7 +374,9 @@ export function immediateStartBlockReason(where: {
   return (
     "One thing first: " +
     where.folderLabel +
-    " does not exist yet. Tick the box, then press Create session again."
+    " does not exist yet. Press \u201CCreate this folder\u201D, then " +
+    START_LABEL +
+    " again."
   );
 }
 
@@ -380,7 +402,7 @@ export function worktreeClampReason(where: {
   if (!where.plainFolder || where.initRepo) return "";
   return (
     "There is no git repo in that folder, so this will run in the folder itself " +
-    "\u2014 tick \u201CCreate a git repo in this folder\u201D below to get a real worktree."
+    "\u2014 pick \u201CMake it a git repo first\u201D to get a real worktree."
   );
 }
 
@@ -637,12 +659,9 @@ export function newFolderGate(where: {
 export function newFolderBlockReason(where: { gate: string; confirmed: boolean }): string {
   if (!where.gate || where.confirmed) return "";
   return (
-    "There is no folder at " +
+    "No folder at " +
     where.gate +
-    " yet — tick “Yes, create " +
-    where.gate +
-    "” under Folder to have Create make it, or put a folder that " +
-    "already exists in Folder."
+    " — press “Create this folder” under Folder, or pick a folder that already exists."
   );
 }
 
@@ -714,32 +733,32 @@ export function rememberedProfileVerdict(
 }
 
 /** What the form's Name → Enter does, and what page 1's sentence box's Enter
- * does: the two never share a key. Pure, so both are pinned by a test: Enter
- * in Name submits the form (one POST /api/instances, no model turn); Enter in
- * the sentence box is "Review details first" — the model turn that fills the
- * form in — and never creates; Shift+Enter (and any Enter in a batch's list)
- * is a new line. */
+ * does. Pure, so both are pinned by a test: Enter in Name submits the form
+ * (one POST /api/instances, no model turn); Enter in the sentence box is
+ * Start — the primary, which starts it now in the folder the line under the
+ * box names (the folder is on screen there as a picker, so nothing starts
+ * unseen); Shift+Enter (and any Enter in a batch's list) is a new line.
+ * "Let the agent set it up…" — the model turn — is a click, never a key. */
 export function enterAction(where: {
   field: "name" | "describe" | "other";
   shift: boolean;
   runMode: boolean;
-}): "create" | "describe" | "newline" | "none" {
-  if (where.field === "describe") return where.shift || where.runMode ? "newline" : "describe";
+}): "create" | "start" | "newline" | "none" {
+  if (where.field === "describe") return where.shift || where.runMode ? "newline" : "start";
   if (where.shift) return "none";
   return "create";
 }
 
 /** What Ctrl/Cmd+Enter does anywhere in the New dialog's Session tab.
  *
- * On page 1 (the sentence card) the form is not on screen: its Name is empty
- * and its Folder is only last time's default. Submitting it from here created
- * an "untitled" session in whatever folder was last used, with the sentence
- * thrown away. So on page 1 the shortcut reads the sentence, exactly like
- * Enter and "Review details first", and nothing is created unseen. A list
- * (run mode) keeps starting its rows, as its own Start button does. Page 2
- * submits the form the user is looking at. */
-export function ctrlEnterAction(where: { page: number; runMode: boolean }): "describe" | "submit" {
-  if (where.page === 1 && !where.runMode) return "describe";
+ * On page 1 (the sentence card) the form is not on screen, and submitting it
+ * once created an "untitled" session with the sentence thrown away. So on
+ * page 1 the shortcut is Start, exactly like Enter: the sentence as the task,
+ * in the folder the line under the box shows. A list (run mode) keeps
+ * starting its rows, as its own Start button does. Page 2 submits the form
+ * the user is looking at. */
+export function ctrlEnterAction(where: { page: number; runMode: boolean }): "start" | "submit" {
+  if (where.page === 1 && !where.runMode) return "start";
   return "submit";
 }
 
