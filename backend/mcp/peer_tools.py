@@ -41,6 +41,8 @@ PEER_TOOL_NAMES = (
     "peer_read_file",
     "peer_list_files",
     "checkpoint",
+    "peer_contract",
+    "peer_joint",
 )
 
 #: Max bytes of one response line from the agent API (a 512 KiB file read
@@ -74,7 +76,13 @@ PEER_INSTRUCTIONS = (
     "Git in here is read-only: use checkpoint to commit your work in the "
     "shared folder (it commits everything; nested repos are skipped). You "
     "cannot push, open PRs or start other sessions; your user exports the "
-    "work into their real repo."
+    "work into their real repo.\n"
+    "\n"
+    "JOINT TASK: when your two halves build one feature, the agreed contract "
+    "is CONTRACT.md in your folder. Follow it. To change it, call "
+    "peer_contract with action=propose and the whole new text — never edit "
+    "the file; a person accepts or rejects proposals, never an agent. "
+    "peer_joint re-reads the brief."
 )
 
 _READ = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": True}
@@ -220,6 +228,19 @@ def build_peer_tools(client: PeerClient) -> List[Tool]:
             timeout=180,
         )
 
+    def peer_contract(args: dict, ctx: ToolContext):
+        action = args.get("action") or "read"
+        if action == "propose":
+            if not args.get("text"):
+                raise ToolError("propose needs text: the whole new contract")
+            return client.call("contract", {"action": "propose", "text": args["text"]})
+        if action != "read":
+            raise ToolError("action must be read or propose")
+        return client.call("contract", {"action": "read"})
+
+    def peer_joint(args: dict, ctx: ToolContext):
+        return client.call("joint", {})
+
     return [
         Tool(
             "whoami",
@@ -317,6 +338,32 @@ def build_peer_tools(client: PeerClient) -> List[Tool]:
             _obj({"message": {"type": "string", "maxLength": 2000}}),
             checkpoint,
             _LOCAL,
+        ),
+        Tool(
+            "peer_contract",
+            "Joint contract",
+            "The joint task's shared contract (CONTRACT.md). action=read → "
+            "{rev, text, open_proposals}; action=propose with text = the WHOLE "
+            "new contract → {proposal_id}. The people accept or reject a "
+            "proposal; agents never do. Never edit CONTRACT.md yourself.",
+            _obj(
+                {
+                    "action": {"type": "string", "enum": ["read", "propose"]},
+                    "text": {"type": "string", "minLength": 1, "maxLength": 10000},
+                },
+                ("action",),
+            ),
+            peer_contract,
+            _WRITE,
+        ),
+        Tool(
+            "peer_joint",
+            "Joint task",
+            "This link's joint task: {id, brief, state, mine, theirs} — re-read "
+            "the brief and who builds which half.",
+            _obj({}),
+            peer_joint,
+            {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
         ),
     ]
 

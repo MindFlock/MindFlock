@@ -138,6 +138,9 @@ def test_event_names_vocabulary_is_complete():
         "peer.progress",
         "peer.message",
         "peer.relay_changed",
+        "peer.joint_proposed",
+        "peer.joint_state",
+        "peer.joint_contract",
         "update.available",
         "system.memory_changed",
     }

@@ -713,6 +713,8 @@ _PEER_TOOLS_FALLBACK = (
     "peer_read_file",
     "peer_list_files",
     "checkpoint",
+    "peer_contract",
+    "peer_joint",
 )
 
 #: The run-dir file name of a share's Claude MCP config.

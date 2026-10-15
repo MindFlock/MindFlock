@@ -103,6 +103,24 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
     gives you both a new safety number to compare. The box also takes a bare
     `wss://…` or `host:port` address.
 
+**Joint tasks** — two people, two repos, one feature. Once the safety number
+matches, either of you can **Start a joint task** on the link: a brief, your
+folder (optional — leave it empty to use the folder the link already shares),
+branch, agent, and a starter contract (`## What we're building / ## Interfaces
+between the halves / ## Who owns what / ## Done means`). The other person sees
+the proposal and **Accepts with…** their own folder, or **Declines**. On
+accept, each side that chose a folder gets its shared session, started with
+the brief and a hand-off: the agreed contract is `CONTRACT.md` at the root of
+the shared folder, read it first, follow it, and propose changes with
+`peer_contract` instead of editing it. Either person can edit the contract
+(every revision lands in both folders' `CONTRACT.md`); either agent can
+*propose* a change, which the other agent sees as untrusted peer input and a
+person **Accepts** or **Rejects** in People — agents never accept. **Done** or
+**Cancel** ends it on both sides; the shared sessions keep running until you
+unshare. A link holds one joint task at a time, and both of you need this
+MindFlock version or newer (an older one gets "<name>'s MindFlock is older —
+ask them to update").
+
 > Status: **shipped.** Pair codes, the pinned-key handshake, the sandboxed
 > shared folder and the peer MCP tools landed in 0.7.0; invites and joins
 > that turn peer links on by themselves, `peer.relay = auto` (a Cloudflare
@@ -167,6 +185,10 @@ session, credential (beyond the sandboxed agent's own model-API credential, see
  │ └────────────────────────────────┘ │            │ └────────────────────────────────┘ │
  └────────────────────────────────────┘            └────────────────────────────────────┘
 ```
+
+Per link, beside the transport: the message log (`inbox.py`) and the joint
+task (`joint.py`: its file, the `joint_*` ops, the agent's `peer_contract` /
+`peer_joint`).
 
 Which side listens: the **inviter** listens on `peer.listen_host:peer.listen_port`
 (default `0.0.0.0:8799`). The listener only runs while at least one invite or
@@ -304,10 +326,21 @@ unknown keys):
 | `list_files` | `{}` | `{"files": [str], "truncated": bool}` |
 | `status` | `{}` | `{"shared": bool, "agent": "running"\|"stopped"\|"none", "name": str}` |
 | `screen` | `{}` | `{"text": str ≤200000, "cols": int 0..1000, "rows": int 0..1000, "agent": "running"\|"stopped"\|"none"}` — the shared session's visible screen (`tmux capture-pane -p -e`), escapes included |
+| `joint_propose` | `{"id": "jt_<12 hex>", "brief": text 1..4000, "contract_text": text ≤50000, "mine": half}` | `{"ok": bool}` |
+| `joint_accept` | `{"id", "mine": half}` | `{"ok": bool}` |
+| `joint_cancel` | `{"id", "reason": line ≤200}` (`"done"` = finished) | `{"ok": bool}` |
+| `joint_contract` | `{"id", "rev": int 1..2^31, "text": text ≤50000, "by": "me"\|"peer"}` | `{"ok": bool, "rev": int}` — the receiver's rev after the offer |
+| `joint_proposal` | `{"id", "proposal": {"id": "cp_<8 hex>", "by", "text": text 1..10000, "at": iso, "state": "open"\|"accepted"\|"rejected"}}` | `{"ok": bool}` |
+| `joint_state` | `{"id"}` | `{"joint": null \| view}` — see [Joint tasks](#joint-tasks--contract-jointpy) |
+
+`half` is `{"repo_name": line ≤128, "branch": line ≤200, "program": line ≤64}`
+— a folder's NAME and the CLI's name, never a path or a command line. `by` is
+relative to the sender (the receiver flips it).
 
 Each side enforces its **own** permissions on inbound ops (`link.perms`:
 `messages`, `diff`, `read_file`; `list_files` follows `read_file`, `screen`
-follows `diff`; `status` is always allowed). A refused op returns
+follows `diff`, every `joint_*` op follows `messages`; `status` is always
+allowed). A refused op returns
 `ok:false, err:"not permitted"`. With no share bound,
 `diff`/`read_file`/`list_files`/`screen` return `err:"no shared folder"`.
 `screen` captures only the link's own shared session (named from the link
@@ -366,6 +399,103 @@ on load rather than condemning the file, so a downgrade keeps every link.
 Methods: `list()`, `get(link_id)`, `add(link)`, `update(link_id, **fields)`,
 `remove(link_id)`. `peer_name` is sanitized to `[A-Za-z0-9 ._-]{1,32}`, and an
 empty result becomes `peer`.
+
+Per-link state that grows with new features lives in its OWN file next to the
+links, never in `Link` (an older release's `validate()` that rejects a value
+moves the whole links file aside): the message log
+(`messages/<link_id>.json`, `inbox.py`) and the joint task
+(`joint/<link_id>.json`, `joint.py`). Both are dropped when the link goes.
+
+## Joint tasks — CONTRACT (`joint.py`)
+
+A link holds at most ONE joint task: one feature, built by both agents, each
+in its own shared folder. `JointStore(root=<peer root>/joint)` keeps it in
+`<link_id>.json` (0600, atomic tmp + `os.replace`, a thread lock; a corrupt
+file reads as no joint):
+
+```json
+{"version": 1,
+ "joint": {
+   "id": "jt_<12 hex>", "brief": "…", "proposed_by": "me|peer", "created": "<iso>",
+   "state": "proposed|active|done|cancelled", "reason": "",
+   "mine":   {"repo_path": "", "repo_name": "", "branch": "", "program": "",
+              "share_id": "", "session_title": "", "error": ""},
+   "theirs": {"repo_name": "", "branch": "", "program": "", "shared": false},
+   "contract": {"text": "…", "rev": 3, "updated": "<iso>", "by": "me|peer"},
+   "proposals": [{"id": "cp_<8 hex>", "by": "me|peer", "text": "…", "at": "<iso>",
+                  "state": "open|accepted|rejected"}]}}
+```
+
+`me`/`peer` are relative to the file's owner. Keys this version doesn't know
+(a later `check`) are kept untouched. `mine.error` is why my half's shared
+session didn't start (shown on the card); `reason` is the cancel reason.
+Limits: brief 4,000, contract 50,000, a proposal 10,000 characters; at most
+10 proposals (every open one, then the newest decided), so a whole
+`joint_state` answer stays under one frame.
+
+**State machine.** Every op is refused unless the link's `perms.messages`
+allows it, and the SENDER's routes require `sas_verified` (propose, accept,
+contract edits, accepting a proposal):
+
+- `propose` (route `POST …/joint`): stores `proposed` (`proposed_by: me`),
+  then sends `joint_propose`; a refusal rolls it back. 409 while a proposed or
+  active joint exists (a done/cancelled one is replaced). The receiver stores
+  `proposed_by: peer` (a retry with the same id is a no-op; a different open
+  one → `err:"joint task exists"`) and emits `peer.joint_proposed`.
+- `accept` (route `…/joint/accept`): only a `proposed` joint from the peer;
+  sends `joint_accept`, then goes `active` and starts my share. The proposer
+  goes `active` on receipt and starts its share in the background.
+- `cancel` (route `…/joint/cancel`, `reason: "done"` → `done`): local at once,
+  `joint_cancel` best effort. Shares are left running (the person unshares).
+- **Contract rev rule** (`joint_contract`, `apply_contract`): the higher
+  `rev` wins; a tie with different text goes to the proposer's copy. A side
+  that keeps its own copy over an offer sends its copy back, so both
+  converge. A person's edit (`PUT …/joint/contract`) or an accepted proposal
+  bumps `rev` by one.
+- **Proposals** (`joint_proposal`): the whole new contract text, proposed by
+  either person (`POST …/joint/proposals`) or either agent (`peer_contract`);
+  a proposal from the peer reaches my shared agent as an untrusted PEER
+  message (`data.peer_kind: "contract_proposal"`, `proposal_id`, `joint_id`).
+  Either PERSON accepts (its text becomes the contract, `rev + 1`, then
+  `joint_proposal` + `joint_contract`) or rejects it. A decision is final: an
+  old open copy never reopens it.
+- **Resync** (`joint_state`): when a link comes up (`on_state(connected)`)
+  each side asks for the peer's view and reconciles: state only moves
+  forward (`proposed` → `active` → `done`|`cancelled`; a terminal state of
+  mine is sent back as `joint_cancel`), `theirs` follows their `mine`, the
+  contract follows the rev rule, proposals are a union (anything open of mine
+  they lack is sent). A peer that has no copy of my open joint makes it
+  `cancelled` (reason "gone on their side"); one that answers `unsupported`
+  changes nothing.
+- A peer one release older answers `err:"unsupported"`: the routes answer
+  **409** "<name>'s MindFlock is older — ask them to update".
+
+**The `joint_state` view** carries no local path, share id or session title:
+`{id, brief, proposed_by, created, state, mine: {repo_name, branch, program,
+shared}, theirs: {…same}, contract: {text, rev, updated, by}, proposals: [≤10]}`.
+
+**The share a joint starts** is `PeerService.share(...)` with my half's
+folder/branch/program, a `seed` that writes `CONTRACT.md` into the work dir
+BEFORE the session starts, and a prompt (after the share's own intro) that is
+the brief plus the hand-off:
+
+```
+[MindFlock joint task <id>] <brief>
+Your half runs in this folder; <peer name>'s half runs in their repo <repo_name>.
+The shared contract is in CONTRACT.md at the root of this folder — read it
+first, follow it, and when it must change use peer_contract (propose) rather
+than editing the file. Talk to the other agent with peer_send / peer_inbox;
+read their files with peer_read_file. Checkpoint when a piece is done.
+```
+
+A brief the PEER wrote is labelled `(brief written by <name>, accepted by your
+user)`. With no folder chosen and a folder the link already shares, that
+share is adopted: `CONTRACT.md` is written there and the hand-off is typed in
+as a `[MindFlock note …]`. `CONTRACT.md` is rewritten (both sides) on every
+accepted revision. The sandboxed agent can write the work dir, so the file is
+written through an `O_NOFOLLOW` dir fd as a fresh temp file renamed over
+whatever is there — a planted symlink is replaced, never written through. It
+is an ordinary file: checkpoints commit it and export carries it.
 
 ## The shared folder — CONTRACT (`share.py`)
 
@@ -645,6 +775,8 @@ Ops:
 | `peer_read_file` | `{path}` | proxied `read_file` |
 | `peer_list_files` | `{}` | proxied `list_files` |
 | `checkpoint` | `{message}` | `share.checkpoint` on OUR share → `{sha}` |
+| `contract` | `{action: "read"\|"propose", text? 1..10000}` | read → `{rev, text, open_proposals: [{id, by, text, at}]}`; propose (the whole new text) → `{proposal_id}` — a person decides it; agents never accept |
+| `joint` | `{}` | this link's joint task → `{id, brief, state, mine, theirs}` (halves by name) |
 
 **Peer-mode MCP.** When `MINDFLOCK_MCP_MODE=peer`, `backend/mcp` serves ONLY
 the peer toolset. It talks to `MINDFLOCK_PEER_SOCKET` with
@@ -657,6 +789,9 @@ the peer toolset. It talks to `MINDFLOCK_PEER_SOCKET` with
 - `peer_read_file`
 - `peer_list_files`
 - `checkpoint`
+- `peer_contract` (`action: read | propose`, `text`) — the joint task's
+  contract; see [Joint tasks](#joint-tasks--contract-jointpy)
+- `peer_joint` — re-read the joint task's brief and halves
 
 All of them are auto-approved: the sandbox is the boundary. A peer-mode server
 whose socket env is missing refuses every call.
@@ -726,6 +861,18 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   | `GET` | `/api/peer/links/{id}/their-screen` | their shared session's screen now → `{text, cols, rows, agent}` (`text` keeps colours only) |
   | `GET` | `/api/peer/links/{id}/their-files` | their shared folder's files → `{files, truncated}` |
   | `GET` | `/api/peer/links/{id}/their-file?path=` | one of those files → `{path, size, encoding, content, truncated}` |
+  | `GET` | `/api/peer/links/{id}/joint` | `{joint: <the joint file's joint> \| null}` (`theirs.shared` refreshed from their `status` while active) |
+  | `POST` | `/api/peer/links/{id}/joint` | `{brief, repo_path?, branch?, program?, contract_text?}` → 201 `{joint}`; 409 while one is open, before *It matches*, without a sandbox for a chosen folder, or for an older peer |
+  | `POST` | `/api/peer/links/{id}/joint/accept` | `{repo_path?, branch?, program?}` → `{joint, session?}` (my share starts; a failure lands in `joint.mine.error`, still 200) |
+  | `POST` | `/api/peer/links/{id}/joint/cancel` | `{reason?}` (`"done"` finishes it) → `{joint, synced}` |
+  | `PUT` | `/api/peer/links/{id}/joint/contract` | `{text}` → `{joint, synced}` (rev + 1) |
+  | `POST` | `/api/peer/links/{id}/joint/proposals` | `{text}` → 201 `{proposal_id, synced, joint}` |
+  | `POST` | `/api/peer/links/{id}/joint/proposals/{pid}/accept` · `…/reject` | → `{joint, synced}`; 404 unknown, 409 already decided |
+
+  Each link in `GET /api/peer` also carries `joint`: `{id, state,
+  brief_head, contract_rev, open_proposals, mine_shared, theirs_shared}` or
+  `null` (a `done`/`cancelled` one stays listed until a new one replaces it).
+  `synced: false` means the peer was offline: the reconnect resync catches up.
 
   Each link in `GET /api/peer` also carries `their_share`: `{shared, agent}`
   as the peer last answered `status` (re-asked in the background every 10 s
@@ -737,8 +884,15 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   and `op_id`; `POST /api/peer/join` takes `op_id` and answers
   `reconnected`. With an `op_id`, slow steps emit `peer.progress`. Events:
   `peer.link_added`, `peer.link_removed`, `peer.state`, `peer.progress`,
-  `peer.message`, `peer.relay_changed` (docs/extensions.md); none carries a
-  key, code or relay token.
+  `peer.message`, `peer.relay_changed` (docs/extensions.md), and for joint
+  tasks (each with `link_id`, `peer_name`, `joint_id`):
+  `peer.joint_proposed` (+ `brief`, 200 chars — bell: "<name> proposes a
+  joint task — accept in People"), `peer.joint_state` (+ `state`, `by`:
+  `you`|`peer`, optional `reason`, `mine_shared`, `error`) and
+  `peer.joint_contract` (+ `kind`: `revision`|`proposal`, `rev`, `by`:
+  `you`|`peer`|`agent`, `open`, and for a proposal `proposal_id`, `state` —
+  bell only when `open` and `by: "peer"`: "<name>'s agent proposes a
+  contract change"); none carries a key, code or relay token.
 - Settings (`peer` group):
   - `enabled` (false)
   - `listen_host` (`0.0.0.0`)
@@ -774,6 +928,12 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   the listener closes when no invites or listener links remain. Through a
   relay, the stranger first needs the ingress token from a code; the relay
   operator itself can always deny service.
+- **A joint task's words.** The brief and the starting contract of a joint
+  task the peer proposed become your agent's starting prompt and its
+  `CONTRACT.md` once you accept — labelled as the peer's, but followed. Read
+  both before *Accept with…*. Later contract changes only take effect when a
+  person accepts them; the peer's agent's proposals reach your agent framed
+  as untrusted input.
 - **The relay** (only with `peer.relay` on): see
   [Relay residual risks](#relay-residual-risks).
 - **Platform.** The sandbox is bubblewrap + seccomp on Linux and a Seatbelt

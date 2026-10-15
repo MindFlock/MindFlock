@@ -278,3 +278,93 @@ async def peer_export(link_id: str, request: Request) -> JSONResponse:
         str(body.get("target_repo") or ""),
         str(body.get("branch_name") or ""),
     )
+
+
+# -- joint tasks (backend.peer.joint; docs/peer-link.md "Joint tasks") -------
+
+
+def _joint():
+    return _service().joint
+
+
+@router.get("/api/peer/links/{link_id}/joint")
+async def peer_joint(link_id: str, request: Request) -> JSONResponse:
+    """The link's joint task → ``{joint: {…} | null}`` (this side's copy)."""
+    return await _peer_call(request, lambda: _joint().get(link_id))
+
+
+@router.post("/api/peer/links/{link_id}/joint")
+async def peer_joint_propose(link_id: str, request: Request) -> JSONResponse:
+    """``{brief, repo_path?, branch?, program?, contract_text?}`` — propose a
+    joint task to the peer (my half's share starts when they accept). 409
+    while one is open, before the safety number matches, or for an older
+    peer."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _joint().propose,
+        link_id,
+        body.get("brief"),
+        str(body.get("repo_path") or ""),
+        body.get("branch") or None,
+        str(body.get("program") or ""),
+        body.get("contract_text"),
+        status=201,
+    )
+
+
+@router.post("/api/peer/links/{link_id}/joint/accept")
+async def peer_joint_accept(link_id: str, request: Request) -> JSONResponse:
+    """``{repo_path?, branch?, program?}`` — accept their proposal; starts my
+    half's shared session → ``{joint, session?}``."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _joint().accept,
+        link_id,
+        str(body.get("repo_path") or ""),
+        body.get("branch") or None,
+        str(body.get("program") or ""),
+    )
+
+
+@router.post("/api/peer/links/{link_id}/joint/cancel")
+async def peer_joint_cancel(link_id: str, request: Request) -> JSONResponse:
+    """``{reason?}`` — decline, cancel, or (``reason: "done"``) finish it.
+    Shared folders keep running → ``{joint, synced}``."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request, _joint().cancel, link_id, str(body.get("reason") or "")
+    )
+
+
+@router.put("/api/peer/links/{link_id}/joint/contract")
+async def peer_joint_contract(link_id: str, request: Request) -> JSONResponse:
+    """``{text}`` — a new revision of the contract (rev + 1, synced)."""
+    body = await _peer_body(request)
+    return await _peer_call(request, _joint().set_contract, link_id, body.get("text"))
+
+
+@router.post("/api/peer/links/{link_id}/joint/proposals")
+async def peer_joint_propose_edit(link_id: str, request: Request) -> JSONResponse:
+    """``{text}`` — propose a contract change (the whole new text) →
+    ``{proposal_id, synced, joint}``."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request, _joint().propose_edit, link_id, body.get("text"), status=201
+    )
+
+
+@router.post("/api/peer/links/{link_id}/joint/proposals/{proposal_id}/accept")
+async def peer_joint_accept_edit(
+    link_id: str, proposal_id: str, request: Request
+) -> JSONResponse:
+    """Accept a proposal: its text becomes the contract (rev + 1)."""
+    return await _peer_call(request, _joint().decide, link_id, proposal_id, True)
+
+
+@router.post("/api/peer/links/{link_id}/joint/proposals/{proposal_id}/reject")
+async def peer_joint_reject_edit(
+    link_id: str, proposal_id: str, request: Request
+) -> JSONResponse:
+    return await _peer_call(request, _joint().decide, link_id, proposal_id, False)

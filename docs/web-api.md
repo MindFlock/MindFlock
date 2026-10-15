@@ -1832,6 +1832,29 @@ git_email}`, and so does the `POST /api/fleet/adopt` body; the joiner adopts the
 id. The settings-sync export (`GET /api/settings/sync/export`) carries
 `"person": {"id": …}` for the tie-break.
 
+### Peer links — joint tasks
+
+Peer-link routes live under `/api/peer` and are specified in
+[peer-link.md](peer-link.md#engine-integration--contract-servicepy--existing-modules)
+(403 for a request relayed by another device; writes need `may_configure`).
+A link's joint task — one feature, both agents, one contract
+([peer-link.md → Joint tasks](peer-link.md#joint-tasks--contract-jointpy)):
+
+| Method | Path | Behavior |
+|---|---|---|
+| GET | `/api/peer/links/{id}/joint` | `{joint: null \| {id, brief, proposed_by: "me"\|"peer", created, state: "proposed"\|"active"\|"done"\|"cancelled", reason, mine: {repo_path, repo_name, branch, program, share_id, session_title, error}, theirs: {repo_name, branch, program, shared}, contract: {text, rev, updated, by}, proposals: [{id, by, text, at, state: "open"\|"accepted"\|"rejected"}]}}` |
+| POST | `/api/peer/links/{id}/joint` → **201** | `{brief, repo_path?, branch?, program?, contract_text?}` — propose (an empty `contract_text` gets the starter headings; an empty `repo_path` = use the folder the link already shares, or none). → `{joint}`. **409** while one is proposed/active, before the safety number matches, a folder without a working sandbox, a folder while the link already shares one, or `"<name>'s MindFlock is older — ask them to update"`; **400** missing brief / bad folder or branch; **502** peer offline |
+| POST | `/api/peer/links/{id}/joint/accept` | `{repo_path?, branch?, program?}` → `{joint, session?}` — goes active on both sides and starts my half's shared session (a failure is `joint.mine.error`, still 200). **409** no proposal from them |
+| POST | `/api/peer/links/{id}/joint/cancel` | `{reason?}` — decline / cancel; `reason: "done"` finishes it → `{joint, synced}` |
+| PUT | `/api/peer/links/{id}/joint/contract` | `{text}` → `{joint, synced}` — a new revision (rev + 1), written to both shared folders' `CONTRACT.md` |
+| POST | `/api/peer/links/{id}/joint/proposals` → **201** | `{text}` (the whole new contract) → `{proposal_id, synced, joint}` |
+| POST | `/api/peer/links/{id}/joint/proposals/{pid}/accept` · `…/reject` | → `{joint, synced}`; accept makes it the contract (rev + 1). **404** unknown, **409** already decided |
+
+`synced: false` = the peer was offline; the reconnect resync catches up. Each
+link in `GET /api/peer` carries `joint: {id, state, brief_head, contract_rev,
+open_proposals, mine_shared, theirs_shared} | null`. Events:
+`peer.joint_proposed`, `peer.joint_state`, `peer.joint_contract`.
+
 ## Config, providers, usage, settings
 
 | Method | Path | Returns / accepts |
@@ -2484,7 +2507,8 @@ websockets alike — via one ASGI middleware (`web/core/auth.py`).
   of the batch is saved, and the answer names them in `refused`), `POST /api/notify/ntfy`,
   `POST /api/notify/rules/{id}`, the repo-scope `/api/red-zones` writes
   (add, delete, companions, plan-first), `POST /api/cursor/autoadopt`, the
-  `/api/peer` writes (invites, join, unlink, address, perms, share, export)
+  `/api/peer` writes (invites, join, unlink, address, perms, share, export,
+  joint tasks)
   and `POST /api/settings/sync{,/now,/resume,/pin}`, plus `POST
   /api/settings/auth-token/rotate`, `POST /api/providers/{name}/login-close`,
   the stored-secret Test routes and a session's repo-scope red-zone writes —

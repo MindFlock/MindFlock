@@ -120,6 +120,8 @@ _OP_PERM = {
     "status": None,
     # Watching the shared session's screen shows what its diff and files do.
     "screen": "diff",
+    # Joint tasks talk, like messages (backend.peer.joint).
+    **{op: "messages" for op in wire.OPS if op.startswith("joint_")},
 }
 
 

@@ -60,7 +60,20 @@ HANDSHAKE_MAX_FRAME = 4096
 MAX_DEPTH = 16
 MAX_ID = 2**53
 PROTOCOL_VERSION = 1
-OPS = ("msg", "diff", "read_file", "list_files", "status", "screen")
+OPS = (
+    "msg",
+    "diff",
+    "read_file",
+    "list_files",
+    "status",
+    "screen",
+    "joint_propose",
+    "joint_accept",
+    "joint_cancel",
+    "joint_contract",
+    "joint_proposal",
+    "joint_state",
+)
 
 MAX_NAME = 128  # on the wire; stores sanitize further to 32
 MAX_MSG_TEXT = 20_000
@@ -73,6 +86,14 @@ MAX_LIST_ITEMS = 20_000
 MAX_STAT_STR = 4096
 MAX_SCREEN_CHARS = 200_000  # backend.peer.screen.MAX_SCREEN_CHARS
 MAX_SCREEN_DIM = 1000
+# Joint tasks (backend.peer.joint): one per link, sized so a whole joint_state
+# answer stays far under MAX_FRAME even at 4 bytes per character.
+MAX_JOINT_BRIEF = 4000
+MAX_JOINT_CONTRACT = 50_000
+MAX_JOINT_PROPOSAL = 10_000
+MAX_JOINT_PROPOSALS = 10
+MAX_JOINT_REASON = 200
+MAX_JOINT_REV = 2**31
 
 
 class ProtocolError(Exception):
@@ -109,6 +130,12 @@ _B64_RE = re.compile(r"^[A-Za-z0-9+/]*={0,2}\Z")
 _SAS_RE = re.compile(r"^[0-9]{3}-[0-9]{3}-[0-9]{3}-[0-9]\Z")
 _OP_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
 _CAP_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,31}\Z")
+_JOINT_ID_RE = re.compile(r"^jt_[0-9a-f]{12}\Z")
+_PROPOSAL_ID_RE = re.compile(r"^cp_[0-9a-f]{8}\Z")
+_ISO_RE = re.compile(r"^[0-9][0-9T:.+Z-]{0,39}\Z")
+JOINT_STATES = ("proposed", "active", "done", "cancelled")
+PROPOSAL_STATES = ("open", "accepted", "rejected")
+JOINT_BYS = ("me", "peer")
 MAX_APP = 64
 MAX_CAPS = 32
 
@@ -282,6 +309,100 @@ def _req_empty(p, strict) -> dict:
     return _keys(p, (), (), strict)
 
 
+# -- joint tasks (docs/peer-link.md "Joint tasks — CONTRACT") ------------------
+
+
+def _joint_id(v) -> None:
+    if not isinstance(v, str) or not _JOINT_ID_RE.match(v):
+        _fail("bad joint id")
+
+
+def _iso(v, what: str) -> None:
+    if not isinstance(v, str) or not _ISO_RE.match(v):
+        _fail("bad " + what)
+
+
+def _joint_half(h, strict, with_shared: bool = False) -> dict:
+    """One side's half as the wire carries it: ``{repo_name, branch,
+    program}`` (+ ``shared`` inside a ``joint_state`` answer). Never a path."""
+    req = ("repo_name", "branch", "program") + (("shared",) if with_shared else ())
+    h = _keys(h, req, (), strict)
+    if not _str(h["repo_name"], 0, MAX_NAME):
+        _fail("bad repo_name")
+    if not _str(h["branch"], 0, 200):
+        _fail("bad branch")
+    if not _str(h["program"], 0, 64):
+        _fail("bad program")
+    if with_shared and not isinstance(h["shared"], bool):
+        _fail("bad shared")
+    return h
+
+
+def _joint_proposal_obj(v, strict) -> dict:
+    v = _keys(v, ("id", "by", "text", "at", "state"), (), strict)
+    if not isinstance(v["id"], str) or not _PROPOSAL_ID_RE.match(v["id"]):
+        _fail("bad proposal id")
+    if v["by"] not in JOINT_BYS:
+        _fail("bad by")
+    if not _str(v["text"], 1, MAX_JOINT_PROPOSAL, _BAD_TEXT):
+        _fail("bad proposal text")
+    _iso(v["at"], "at")
+    if v["state"] not in PROPOSAL_STATES:
+        _fail("bad proposal state")
+    return v
+
+
+def _req_joint_propose(p, strict) -> dict:
+    p = _keys(p, ("id", "brief", "contract_text", "mine"), (), strict)
+    _joint_id(p["id"])
+    if not _str(p["brief"], 1, MAX_JOINT_BRIEF, _BAD_TEXT):
+        _fail("bad brief")
+    if not _str(p["contract_text"], 0, MAX_JOINT_CONTRACT, _BAD_TEXT):
+        _fail("bad contract_text")
+    p["mine"] = _joint_half(p["mine"], strict)
+    return p
+
+
+def _req_joint_accept(p, strict) -> dict:
+    p = _keys(p, ("id", "mine"), (), strict)
+    _joint_id(p["id"])
+    p["mine"] = _joint_half(p["mine"], strict)
+    return p
+
+
+def _req_joint_cancel(p, strict) -> dict:
+    p = _keys(p, ("id", "reason"), (), strict)
+    _joint_id(p["id"])
+    if not _str(p["reason"], 0, MAX_JOINT_REASON):
+        _fail("bad reason")
+    return p
+
+
+def _req_joint_contract(p, strict) -> dict:
+    p = _keys(p, ("id", "rev", "text", "by"), (), strict)
+    _joint_id(p["id"])
+    if not _int(p["rev"], 1, MAX_JOINT_REV):
+        _fail("bad rev")
+    if not _str(p["text"], 0, MAX_JOINT_CONTRACT, _BAD_TEXT):
+        _fail("bad text")
+    if p["by"] not in JOINT_BYS:
+        _fail("bad by")
+    return p
+
+
+def _req_joint_proposal(p, strict) -> dict:
+    p = _keys(p, ("id", "proposal"), (), strict)
+    _joint_id(p["id"])
+    p["proposal"] = _joint_proposal_obj(p["proposal"], strict)
+    return p
+
+
+def _req_joint_state(p, strict) -> dict:
+    p = _keys(p, ("id",), (), strict)
+    _joint_id(p["id"])
+    return p
+
+
 _REQUESTS = {
     "msg": _req_msg,
     "diff": _req_diff,
@@ -289,6 +410,12 @@ _REQUESTS = {
     "list_files": _req_empty,
     "status": _req_empty,
     "screen": _req_empty,
+    "joint_propose": _req_joint_propose,
+    "joint_accept": _req_joint_accept,
+    "joint_cancel": _req_joint_cancel,
+    "joint_contract": _req_joint_contract,
+    "joint_proposal": _req_joint_proposal,
+    "joint_state": _req_joint_state,
 }
 
 
@@ -410,6 +537,74 @@ def _res_screen(p, req, strict) -> dict:
     return p
 
 
+def _res_joint_ok(p, req, strict) -> dict:
+    p = _keys(p, ("ok",), (), strict)
+    if not isinstance(p["ok"], bool):
+        _fail("bad ok")
+    return p
+
+
+def _res_joint_contract(p, req, strict) -> dict:
+    p = _keys(p, ("ok", "rev"), (), strict)
+    if not isinstance(p["ok"], bool):
+        _fail("bad ok")
+    if not _int(p["rev"], 0, MAX_JOINT_REV):
+        _fail("bad rev")
+    return p
+
+
+def _joint_wire_view(j, strict) -> dict:
+    """The joint as one side sees it (``joint_state``): halves by name only,
+    never a local path, share id or session title."""
+    j = _keys(
+        j,
+        (
+            "id",
+            "brief",
+            "proposed_by",
+            "created",
+            "state",
+            "mine",
+            "theirs",
+            "contract",
+            "proposals",
+        ),
+        (),
+        strict,
+    )
+    _joint_id(j["id"])
+    if not _str(j["brief"], 1, MAX_JOINT_BRIEF, _BAD_TEXT):
+        _fail("bad brief")
+    if j["proposed_by"] not in JOINT_BYS:
+        _fail("bad proposed_by")
+    _iso(j["created"], "created")
+    if j["state"] not in JOINT_STATES:
+        _fail("bad state")
+    for half in ("mine", "theirs"):
+        j[half] = _joint_half(j[half], strict, with_shared=True)
+    c = _keys(j["contract"], ("text", "rev", "updated", "by"), (), strict)
+    if not _str(c["text"], 0, MAX_JOINT_CONTRACT, _BAD_TEXT):
+        _fail("bad contract text")
+    if not _int(c["rev"], 0, MAX_JOINT_REV):
+        _fail("bad contract rev")
+    _iso(c["updated"], "updated")
+    if c["by"] not in JOINT_BYS:
+        _fail("bad contract by")
+    j["contract"] = c
+    props = j["proposals"]
+    if not isinstance(props, list) or len(props) > MAX_JOINT_PROPOSALS:
+        _fail("bad proposals")
+    j["proposals"] = [_joint_proposal_obj(x, strict) for x in props]
+    return j
+
+
+def _res_joint_state(p, req, strict) -> dict:
+    p = _keys(p, ("joint",), (), strict)
+    if p["joint"] is not None:
+        p["joint"] = _joint_wire_view(p["joint"], strict)
+    return p
+
+
 _RESPONSES = {
     "msg": _res_msg,
     "diff": _res_diff,
@@ -417,6 +612,12 @@ _RESPONSES = {
     "list_files": _res_list_files,
     "status": _res_status,
     "screen": _res_screen,
+    "joint_propose": _res_joint_ok,
+    "joint_accept": _res_joint_ok,
+    "joint_cancel": _res_joint_ok,
+    "joint_contract": _res_joint_contract,
+    "joint_proposal": _res_joint_ok,
+    "joint_state": _res_joint_state,
 }
 
 

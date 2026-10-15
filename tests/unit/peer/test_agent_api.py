@@ -411,6 +411,8 @@ def test_validate_args_defaults():
         "peer_read_file",
         "peer_list_files",
         "checkpoint",
+        "contract",
+        "joint",
     }
 
 
