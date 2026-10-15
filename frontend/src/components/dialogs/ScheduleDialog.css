@@ -242,3 +242,110 @@
 .sch-empty .tpl-run:hover {
   background: var(--accent-deep);
 }
+
+/* --- The template editor, round 5 ---------------------------------------- */
+
+/* Save never sits below the fold: the footer sticks to the bottom of the
+   scrolling list while the form is taller than it. The negative margins
+   cover the card's own bottom padding so nothing peeks under it. */
+.tpl-card-editing .tpl-row-actions.tpl-sticky {
+  position: sticky;
+  bottom: -14px;
+  z-index: 1;
+  margin: 0 -18px -14px;
+  padding: 12px 18px 14px;
+  background: var(--panel-2);
+  border-radius: 0 0 10px 10px;
+}
+
+/* Folder wraps FolderField so "Add one" can ring it (and the tour can find
+   it); it takes the field's place in the Folder + Agent row. */
+.tpl-editor .nf-quick .tpl-folder-wrap {
+  display: flex;
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.tpl-editor .nf-quick .tpl-folder-wrap > * {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tpl-folder-wrap.tpl-flash {
+  border-radius: 9px;
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  animation: tpl-flash 1.6s ease-out 1;
+}
+
+@keyframes tpl-flash {
+  0% { outline-color: transparent; }
+  25% { outline-color: var(--accent); }
+}
+
+/* "Use: 📦 repo" — one line of one-click folders under Folder. */
+.tpl-editor .tpl-use {
+  margin-top: -6px;
+}
+
+.tpl-agent-missing,
+.tpl-gh-needed {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tpl-agent-missing {
+  margin-top: -6px;
+}
+
+/* Fast-track: the select, its one-line helper above it, and the GitHub note. */
+.tpl-editor .rt-ctl.tpl-fast-track {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* The 24-hour time field: five characters wide, not a full input. */
+.tpl-schedule-when #tpl-at {
+  box-sizing: content-box;
+  width: 5.5ch;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Schedule… / Change schedule: the compact row inside the card. */
+.tpl-sched-row {
+  padding: 10px 12px 8px;
+  border-radius: 9px;
+  border: 1px solid var(--accent);
+  background: var(--panel);
+}
+
+.tpl-sched-editor {
+  gap: 8px;
+}
+
+.tpl-sched-editor .tpl-schedule-when,
+.tpl-sched-editor .tpl-cron-preview {
+  padding-left: 0;
+}
+
+.tpl-sched-editor .tpl-row-actions {
+  padding-top: 8px;
+}
+
+.tpl-row-actions button.tpl-stop {
+  margin-right: auto;
+}
+
+/* A run's session: a link while it exists, "(closed)" after. */
+.tpl-session-link {
+  font: inherit;
+}
+
+/* New's template chip says its time on its face: "⏰ 07:30". */
+.new-templates .nt-act.nt-sched .nt-sched-at {
+  font-variant-numeric: tabular-nums;
+}

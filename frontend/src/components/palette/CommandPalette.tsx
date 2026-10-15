@@ -155,20 +155,22 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     acts.push({ label: "Prompts…", hint: "manage saved prompts", run: () => ui.openDialogFor("prompts") });
     // Schedule is the top bar's; "Templates…" is the name it had, kept as a
     // row so the word people learned still finds it.
-    acts.push({ label: "Templates…", hint: "saved setups — in Schedule", run: () => ui.openDialogFor("schedule") });
+    acts.push({ label: "Templates…", hint: "your templates — in Schedule", run: () => ui.openDialogFor("schedule") });
+    // A NEW template's form with its schedule on — it says template, because
+    // that is what it makes ("Schedule a session…" still finds it).
     acts.push({
-      label: "Schedule a session…",
-      hint: "daily or weekdays",
-      keywords: "recurring cron every day nightly weekly",
+      label: "New scheduled template…",
+      hint: "daily, weekdays or cron",
+      keywords: "schedule a session recurring cron every day nightly weekly",
       run: () => ui.openDialogFor("schedule", "schedule"),
     });
-    // Run now: a fresh session from a template, its prompt already sent —
+    // Run now: a fresh session from a template, its task already sent —
     // one row per template that can start one on its own (it has a folder).
     for (const tpl of templatesNow()) {
       if (runProblem(tpl)) continue;
       acts.push({
         label: "Run template: " + tpl.name,
-        hint: "fresh session, prompt sent",
+        hint: "fresh session, task sent",
         run: () => void runTemplateNow(tpl.name),
       });
     }

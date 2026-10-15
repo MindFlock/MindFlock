@@ -402,16 +402,29 @@ async def fire(
     taken: Optional[Callable[[str], bool]] = None,
 ) -> Tuple[int, dict]:
     """Start a session from ``tpl`` and record it. ``(status, body)`` — the
-    create's own answer (202 + the new row), or 400 for a template that
-    can't run. ``trigger`` is ``"manual"`` or ``"schedule"``."""
+    create's own answer (202 + the new row), or 409 ``{error, detail,
+    reason}`` for a template that can't launch (no folder, its agent not
+    installed), recorded as a FAILED run before any session is made — a
+    scheduled fire with nobody watching must never read as a success.
+    ``trigger`` is ``"manual"`` or ``"schedule"``."""
+    from backend.web.addons import templates as _t
+
     now = time.time() if now is None else now
     create = create or _default_create
     key = _key(tpl.get("name"))
-    problem = run_problem(tpl)
-    if problem:
+    refusal = await asyncio.to_thread(_t.launch_refusal, tpl)
+    if refusal:
+        await asyncio.to_thread(_t.record_refused_run, tpl, refusal, trigger)
         if trigger == "schedule":
-            _note_failure(tpl, trigger, now, problem)
-        return 400, {"error": problem}
+            _emit(
+                "template.run_failed",
+                tpl,
+                trigger,
+                error=str(refusal.get("error") or ""),
+                reason=str(refusal.get("reason") or ""),
+                detail=str(refusal.get("detail") or ""),
+            )
+        return 409, refusal
     sched = schedule_or_none(tpl.get("schedule"))
     base = session_title(
         tpl.get("name", ""),

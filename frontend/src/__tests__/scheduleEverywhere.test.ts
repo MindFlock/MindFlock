@@ -69,8 +69,9 @@ describe("wiring", () => {
     expect(SCHEDULED).toContain("Open Schedule ›");
   });
 
-  it("the palette's Schedule a session… opens a new template with its schedule on", () => {
-    expect(PALETTE).toContain('label: "Schedule a session…"');
+  it("the palette's New scheduled template… opens a new template with its schedule on", () => {
+    expect(PALETTE).toContain('label: "New scheduled template…"');
+    expect(PALETTE).toContain('hint: "daily, weekdays or cron"');
     expect(PALETTE).toContain('ui.openDialogFor("schedule", "schedule")');
     // "schedule" = a new template; New's ⏰ on a chip names one (lib/templates'
     // readTemplatesTarget, pinned in newSessionDraft.test.ts).

@@ -262,10 +262,11 @@ first and the jump rows last: **New session…**, then the dialog openers — Op
 Intake (plus **Intake: Tickets** / **Intake: GitHub PRs** / **Intake:
 GitHub issues** — the tabs' own names — so typing "issues" lands on that queue instead of on a dialog you then
 have to navigate), **Verify — check that pushed changes work**, **Customize…**, **Prompts…** (*manage saved prompts*),
-**Schedule…** (`Alt+S`; also on the short menu), **Templates…** (*saved setups — in
-Schedule*, the name it had, kept so the word still finds it), **Schedule a session…**
-(opens Schedule on a new template with **Run on a schedule** ticked), one **Run template:
-<name>** (*fresh session, prompt sent*) per template that has a folder,
+**Schedule…** (`Alt+S`; also on the short menu), **Templates…** (*your templates — in
+Schedule*, the name it had, kept so the word still finds it), **New scheduled template…**
+(*daily, weekdays or cron* — opens Schedule on a new template with **Run on a schedule**
+ticked; *schedule a session* still finds it), one **Run template:
+<name>** (*fresh session, task sent*) per template that has a folder,
 **Assistant instructions (agent file)…**,
 **Recently closed…**, Open Settings / Doctor / **Open Setup checklist**,
 **Settings → …** rows for what you typed (`palette/settingsSearch.ts`: one
@@ -2121,7 +2122,10 @@ also moves to the form; a template with no task takes the sentence); the Name
 is left empty so the session is named from its task. **▶** starts a new
 session from it now (`POST /api/templates/{name}/run`, greyed with the reason
 when it has no folder) and New steps aside, keeping your draft; **⏰** opens
-[Schedule](#schedule) on that template's editor with its schedule on.
+[Schedule](#schedule) on that template's editor with its schedule on. A
+scheduled template's ⏰ says its time on its face (*⏰ 07:30*, *⏰ paused*) and
+its tooltip is the same one schedule line the Schedule card shows (*Weekdays
+at 07:30 EDT · next tomorrow 07:30 — change or stop it*).
 **All templates…** opens **Schedule** (also the top bar's **Schedule**, `Alt+S`,
 and the palette's **Schedule…** / **Templates…**). ▶ and ⏰ are this device's: they are not drawn when the
 session would run on another device.
@@ -2137,39 +2141,48 @@ and *To send text to a session that's already running, use Prompts.*, with
 
 - **Next** — one band: *NEXT nightly-deps in 2h — today 21:00*, the soonest
   run of any schedule that isn't paused (or *Schedules start on mac-mini —
-  the device that runs automation.* when another device fires them).
+  the computer that runs schedules.* when another device fires them).
 - **Scheduled (n)** — the scheduled templates, soonest next run first, then
-  any with no next run, paused ones last. Each card's **strip** holds its
-  cadence in this device's zone (*Every day at 21:00 EDT*, *Every 4 hours*),
-  when it runs next (*Next today 21:00 · in 2h*, *Paused*, *Starts on
-  mac-mini*) and its three switches: **Change schedule** (the editor, schedule
-  on), **Skip next** (*Let today 21:00 pass without a session — the one after
-  runs as usual*; the card then says *Skipping today 21:00 — you asked to
-  skip it* and offers **Undo skip**) and **Pause** / **Resume** (keeps the
-  cadence, starts nothing; the cadence is struck through and the strip says
-  *Paused*). Under it: the last run (*Last run yesterday 21:00 · scheduled →
-  nightly-deps-oct13*), or *Last run failed: …* (the card's border turns red,
-  and the top bar counts it), or *Skipped …: the previous run is still
-  working*, and the **Recent runs (n)** fold. With nothing scheduled the
-  section says *Nothing runs by itself yet — Schedule… on a setup below
-  starts it every day, weekday or on any cron.*
-- **Saved setups (n)** *run now or add a schedule* — the templates without a
+  any with no next run, paused ones last. Each card's **strip** holds THE
+  one schedule line — `templateScheduleLine()` in `lib/templates.ts`, the
+  same words New's ⏰ chip and Intake's Auto-start show: *Every day at 07:30
+  EDT · next Fri 07:30 (tomorrow skipped)*, *(mac-mini's time)* after the
+  zone when another device fires schedules — then how far off that is (*in
+  2h*), and its three switches: **Change schedule** (the compact schedule
+  row, below), **Skip next** (*Let today 21:00 pass without a session — the
+  one after runs as usual*; the line then says *(today skipped)* and the
+  strip offers **Undo skip**) and **Pause** / **Resume** (keeps the cadence,
+  starts nothing; the strip says *Paused*). Under it: the last run (*Last run
+  yesterday 21:00 · scheduled → nightly-deps-oct13*, the session name a link
+  that closes Schedule and shows that session, or *nightly-deps-oct13
+  (closed)* once it's gone — the same in **Recent runs**), or *Last run
+  failed: …* in red (the card's border turns red, and the top bar counts a
+  scheduled one), or *Skipped …: the previous run is still working*, and the
+  **Recent runs (n)** fold. With nothing scheduled the section says *Nothing
+  runs by itself yet — Schedule… on a template below starts it every day,
+  weekday or on any cron.*
+- **Not scheduled (n)** *run now or add a schedule* — the templates without a
   schedule, each with **▶ Run now**, **Schedule…**, **Edit** and **Delete**.
 
 Every card has **▶ Run now**, **Edit** and **Delete** at its top right.
-With no templates at all the surface is one dashed panel: *Save a session
-setup once, then start it with one click — or every night by itself.* and a
+With no templates at all the surface is one dashed panel: *Save a session as
+a template once, then start it with one click — or every night by itself.* and a
 **Create a template** button (the new-template editor). **Edit** opens the
 editor inline in the card — the New form's own parts, laid out the way New
 lays them out (`TemplateEditor.tsx`; `scope="tpl"` ids): **Name**; then the
-New form's Folder row — **Folder** (placeholder *Needed to Run now or
-schedule*; the field also takes a folder name to look up, as in New) with
+New form's Folder row — **Folder** (placeholder *The repo it works in*; a
+NEW template starts on the most recent repo, so it can run as soon as it's
+saved; the field also takes a folder name to look up, as in New) with
 **Browse…** (the same inline folder browser; Escape puts the old folder back
 before it closes the editor) beside **Agent** (New's picker — this device's
-agents with *Your default agent* first, and its **Manage** link), the two on
-one baseline and one height; under them New's one line of **Recent** / **Home**
-folder chips with its *N more…* chip, and New's *No git repo in this folder…
-Create one* line for a plain folder; **Task** (*— what each session from it
+agents with *Your default agent* first, one this device lacks tagged *(not
+installed)* as in New, and its **Manage** link), the two on one baseline and
+one height; under them one line of one-click folders — *Use: 📦 repo* (repos
+and recent folders, up to three) — and New's *No git repo in this folder…
+Create one* line for a plain folder; a missing agent says *codex isn't
+installed — **Install** or pick another agent* under them (red, and Save
+refuses, once the template is scheduled: it would fail every night with
+nobody watching); **Task** (*— what each session from it
 starts on*), New's box that starts at two rows and grows. Below a rule, New's
 label column: **Works in** — New's own row: **Separate worktree**
 `recommended` with **Provision the worktree** (*Also runs the repo's setup and
@@ -2177,13 +2190,20 @@ warms test caches*, and its workspace strategy once ticked) hung under it,
 **This folder directly**, and **Create a git repo in this folder** (*git init +
 first commit — turns on diff, commit and PR*; not offered for a folder that is
 already a repo); **Schedule** — **Run on a schedule** (*Starts a new session
-from it, by itself*); and **When a run's turn ends** (*Leave it for me* /
-*Commit* / *Commit + push* / *Open a PR*), the template's autopilot — picking
-one moves *This folder directly* to the worktree and the other way round, as
-in New. **Cancel** / **Save** close the card, with a refused save's reason on
-the left of that row. **Delete** asks on an inline row — *Delete
-“<name>”? It goes from every device.* **Delete** / **Keep** — and checks the
-delete happened (*“<name>” was already gone*). **+ New template** adds one.
+from it, by itself*); and **Fast-track** (*When the agent stops. Applies to
+Run now and to scheduled runs.* — *Off* / *Commit* / *Push* / *Open PR*, the
+ladder's own words; never *Merge when green*: a template's runs are
+unattended), the template's autopilot — picking one moves *This folder
+directly* (whose line then reads *Can't commit or open a PR for you — needs
+its own worktree*) to the worktree and the other way round, as in New. *Open
+PR* with GitHub not connected says *Needs GitHub — **Connect GitHub*** under
+it (the server refuses that save with `github_required`). **Cancel** /
+**Save** sit in a footer that sticks to the bottom of the list while the form
+scrolls, with a refused save's reason (the server's own sentence) on the
+left of that row. **Delete** asks on an inline row — *Delete “<name>”?* plus
+*This also removes it from your other linked devices.* only when there are
+other linked devices — **Delete** / **Keep** — and checks the delete
+happened (*“<name>” was already gone*). **+ New template** adds one.
 Templates live on the server (`/api/templates`, synced between devices).
 
 **Run now and schedules.** **▶ Run now** (*Run now — starts a new session from
@@ -2191,19 +2211,31 @@ this template*) starts a fresh session — the template's agent, folder and
 workspace — with its Task already sent, titled after the template and the date
 (`rivian-update-oct13`, `-2` for a second run that day, so a nightly
 template's sessions sort together), and focuses it (Schedule steps aside). The
-palette offers the same as **Run template: <name>**. A template with no folder
-can't start a session on its own: Run now is visibly disabled and the card
-says *Run now and schedules need a folder.* **Add one** (opens Edit); the
-palette leaves it out. **Schedule…** (or a scheduled card's **Change schedule**) opens the editor with **Run on
-a schedule** already ticked: **Every day** / **Weekdays** **at** a time, in
-this device's zone (*EDT — this device's time*), or **Custom (cron)**: a
-5-field cron expression (`*/30 * * * *`, `0 21 * * 1-5`, `@weekly`) with the
-server's reading under it as you type (*Every 30 minutes — next today 10:30,
-today 11:00, today 11:30*, or why it can't be saved — nothing more often than
-every 15 minutes). A scheduled template needs a folder and a Task. **When a
-run's turn ends** (*Leave it for me* / *Commit* / *Commit + push* / *Open a
-PR*) arms each Run now and scheduled run with that autopilot depth, so a
-nightly chore can end in a PR. The card then reads *Weekdays at 21:00 EDT ·
+palette offers the same as **Run template: <name>**. When the server refuses
+(its agent isn't installed, no folder — a 409 recorded as a failed run) the
+toast is its own sentence — *Couldn't start pr-bot: codex isn't installed* —
+never *Started…*, nothing is focused, and the card turns red with *Last run
+failed: codex isn't installed*. A template with no folder can't start a
+session on its own: saving one says *Saved — add a folder to run it*, Run now
+is visibly disabled and the card says *Run now and schedules need a folder.*
+**Add one** (opens Edit with the caret in Folder and the field ringed); the
+palette leaves it out. **Schedule…** (or a scheduled card's **Change
+schedule**) opens a compact row inside the card — just the schedule, **Save**
+and **Cancel** (and **Stop schedule** on a scheduled one, which saves it
+unscheduled); **Edit** keeps the whole form. Either way the schedule is
+**Every day** / **Weekdays** **at** a 24-hour time (a text field, *07:30* —
+one format everywhere; *7:30* and *730* are read as 07:30), or **Custom
+(cron)**: a 5-field cron expression (`*/30 * * * *`, `0 21 * * 1-5`,
+`@weekly`) that starts from the days and time on screen (*Every day 07:30* →
+`30 7 * * *`, *Weekdays* → `30 7 * * 1-5`; switching back keeps a simple
+cron's time). Every mode shows the server's reading under it as you type,
+with the zone of the computer that runs schedules: *Every day at 07:30 EDT —
+next tomorrow 07:30, Fri 07:30, Sat 07:30*, *Every 30 minutes — next today
+10:30, today 11:00, today 11:30*, *Every Feb 29 at 00:00 EDT — next Feb 29
+2028, 2032, 2036* (dates in another year name it), or why it can't be saved
+— nothing more often than every 15 minutes. A scheduled template needs a
+folder and a Task. **Fast-track** arms each Run now and scheduled run with
+that autopilot depth, so a nightly chore can end in a PR. The card then reads *Weekdays at 21:00 EDT ·
 next today 21:00 · last yesterday 21:00 (scheduled) → rivian-update-oct12*
 (*by hand* for a Run now; *starts on <device>* when another device in the
 group runs automation and fires schedules), *Last run failed: …* when the
@@ -2678,7 +2710,11 @@ centres the card and still shows. `Esc` ends it; the arrow keys page.
 There are six (`lib/tours/`, one file per tour, `TOURS` in `index.ts`):
 **Welcome** (over the Get set up checklist: the *next:* line, ① Install
 Claude Code, ② Sign in to your agent, ③ Start your first session, then the
-first sidebar row), **New**, **Intake**, **Verify**, **Schedule** and
+first sidebar row), **New**, **Intake**, **Verify**, **Schedule** (six
+steps: the top-bar **Schedule** — or **Create a template** while that item is
+still hidden — then Create a template, Name + Folder, Task, Run on a schedule
+and its next-runs line, **▶ Run now**; hooks `schedule-new`, `schedule-name`,
+`schedule-folder`, `schedule-task`, `schedule-when`, `schedule-run`) and
 **Settings**. A step's target is a CSS selector, usually a stable id or a
 `data-tour="<surface>-<thing>"` hook (with today's id as a fallback in the
 same selector list).

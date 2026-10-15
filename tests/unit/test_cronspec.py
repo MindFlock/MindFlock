@@ -125,6 +125,8 @@ def test_too_frequent():
         ("0 9 * * mon", "Every Mon at 09:00"),
         ("30 8 * * 1,3,5", "Mon, Wed, Fri at 08:30"),
         ("0 9 1 * *", "Monthly on day 1 at 09:00"),
+        ("0 0 29 2 *", "Every Feb 29 at 00:00"),
+        ("30 7 25 dec *", "Every Dec 25 at 07:30"),
         ("*/30 * * * *", "Every 30 minutes"),
         ("15 * * * *", "Every hour at :15"),
         ("0 */6 * * *", "Every 6 hours"),

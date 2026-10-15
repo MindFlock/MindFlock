@@ -121,13 +121,17 @@ describe("the palette", () => {
     expect(rankActions(actions, "install").map((a) => a.label).sort()).toEqual(["Open Doctor", "Open Setup checklist"]);
   });
 
-  it("finds Schedule a session… by the words people use for it, phrases too", () => {
-    const sched = act("Schedule a session…", { keywords: "recurring cron every day nightly weekly" });
+  it("finds New scheduled template… by the words people use for it, phrases too", () => {
+    const sched = act("New scheduled template…", { keywords: "schedule a session recurring cron every day nightly weekly" });
     const actions = [act("New session…"), sched, act("Templates…")];
     for (const q of ["recurring", "cron", "every day", "nightly", "weekly", "Every Day"])
-      expect(rankActions(actions, q)[0]?.label, q).toBe("Schedule a session…");
-    expect(rankActions(actions, "every night").map((a) => a.label)).not.toContain("Schedule a session…");
-    expect(code("components/palette/CommandPalette.tsx")).toContain('keywords: "recurring cron every day nightly weekly"');
+      expect(rankActions(actions, q)[0]?.label, q).toBe("New scheduled template…");
+    // The old label still finds it
+    expect(rankActions(actions, "schedule a session")[0]?.label).toBe("New scheduled template…");
+    expect(rankActions(actions, "every night").map((a) => a.label)).not.toContain("New scheduled template…");
+    expect(code("components/palette/CommandPalette.tsx")).toContain(
+      'keywords: "schedule a session recurring cron every day nightly weekly"'
+    );
   });
 
   it("opens on a short menu plus All commands…, not the whole index", () => {

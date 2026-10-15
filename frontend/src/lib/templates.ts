@@ -12,6 +12,7 @@
 
 import { api } from "../api/client";
 import { presetKey, writeLocal } from "./prefs";
+import { LANE_CHOICES, LANE_LABEL } from "./autopilot";
 
 export interface Template {
   name: string;
@@ -27,9 +28,12 @@ export interface Template {
    * hand. */
   schedule?: TemplateSchedule;
   /** How far each run (Run now or scheduled) carries its work on its own
-   * once its turn ends — the ⏩ autopilot. Absent = it stops where the
-   * agent leaves it. */
+   * once the agent stops — its Fast-track. Absent = it stops where the agent
+   * leaves it. */
   autopilot?: TemplateAutopilot;
+  /** GET /api/templates only: whether its agent can launch on this device
+   * (absent = unknown, an older server). */
+  agent_installed?: boolean;
 }
 
 /** Either `{at, days}` or `{cron}` (5-field, local time), plus two
@@ -46,13 +50,22 @@ export interface TemplateSchedule {
 
 export type TemplateAutopilot = "commit" | "push" | "pr";
 
-/** The autopilot choices, in ladder order, with the editor's words. */
-export const AUTOPILOT_CHOICES: Array<[TemplateAutopilot | "", string]> = [
-  ["", "Leave it for me"],
-  ["commit", "Commit"],
-  ["push", "Commit + push"],
-  ["pr", "Open a PR"],
-];
+/** The template editor's Fast-track choices: the one ladder and its words
+ * (lib/autopilot's LANE_CHOICES + LANE_LABEL — the same list as lib/vocab's
+ * FAST_TRACK_LEVELS: "Off / Commit / Push / Open PR"), with Off stored as no
+ * autopilot at all. Merge when green is left out on purpose: a template's
+ * runs are unattended (a schedule fires with nobody watching), and merging is
+ * the one rung that can't be undone — New's "Save as template…" saves it as
+ * Open PR for the same reason (and Intake's source defaults leave it out). */
+export const AUTOPILOT_CHOICES: Array<[TemplateAutopilot | "", string]> = LANE_CHOICES.filter(
+  (lane) => lane !== "merge"
+).map((lane) => [lane === "leave" ? "" : (lane as TemplateAutopilot), LANE_LABEL[lane]]);
+
+/** The levels that end on GitHub — refused without it (the server's 409
+ * `github_required`). */
+export function fastTrackNeedsGitHub(level: string | null | undefined): boolean {
+  return level === "pr" || level === "merge";
+}
 
 /** One run in a template's history (newest first): started (`session`),
  * failed (`error`) or skipped (`skipped` — the previous run hadn't
@@ -64,6 +77,10 @@ export interface TemplateRunEntry {
   error?: string;
   skipped?: string;
   autopilot?: string;
+  /** "started" | "failed" | "skipped" (round-5 servers say it on every row). */
+  status?: string;
+  /** Why a run never started: "agent_missing" | "no_folder" | "launch_failed". */
+  reason?: string;
 }
 
 /** This device's record of a template's runs (GET /api/templates `runs`,
@@ -74,6 +91,12 @@ export interface TemplateRunInfo {
   last_session?: string;
   last_trigger?: string;
   last_error?: string;
+  /** The newest history row's status ("started" | "failed" | "skipped"). */
+  last_status?: string;
+  /** When last_status is "failed": "agent_missing" | "no_folder" | "launch_failed". */
+  last_reason?: string;
+  /** The zone the schedule's time is in, as of its next run ("EDT"). */
+  tz?: string;
   /** The server's words for the schedule ("Every 30 minutes"). */
   schedule_label?: string;
   /** A scheduled run skipped since the last start: why. */
@@ -93,6 +116,8 @@ export interface TemplateRunsStatus {
   runs_here: boolean;
   /** Else the device that fires them. */
   runs_on: string;
+  /** The server's own zone right now ("EDT"). */
+  tz?: string;
 }
 
 /** Fired on document after every change to the list, cache or server. The
@@ -191,6 +216,7 @@ export function ensureTemplates(force = false): Promise<Template[]> {
         runs: (d.runs && typeof d.runs === "object" ? d.runs : {}) as Record<string, TemplateRunInfo>,
         runs_here: d.runs_here !== false,
         runs_on: String(d.runs_on || ""),
+        tz: String(d.tz || ""),
       };
       let list = setTemplates(d.templates || []);
       if (await migratePresetsOnce(list)) {
@@ -274,8 +300,16 @@ function infoOf(t: Template, status: Pick<TemplateRunsStatus, "runs">): Template
  * isn't going to try again until you resume it, which is a choice, not news. */
 export function failingSchedules(templates: Template[], status: Pick<TemplateRunsStatus, "runs">): string[] {
   return templates
-    .filter((t) => hasSchedule(t) && !t.schedule?.paused && !!infoOf(t, status).last_error)
+    .filter((t) => hasSchedule(t) && !t.schedule?.paused && lastRunFailed(infoOf(t, status)))
     .map((t) => t.name);
+}
+
+/** Whether a template's LAST run failed — refused up front (agent missing, no
+ * folder) or its launch broke. Round-5 servers say it (`last_status`); an
+ * older one only left `last_error`, which a good run clears. */
+export function lastRunFailed(info: TemplateRunInfo): boolean {
+  if (info.last_status) return info.last_status === "failed" && !!info.last_error;
+  return !!info.last_error;
 }
 
 /** What runs next across every schedule: the earliest `next_at` of a
@@ -320,6 +354,37 @@ export function withScheduleFlags(
   return { ...t, schedule: sched };
 }
 
+/** The cron expression a days + time schedule is ("07:30" daily →
+ * "30 7 * * *", weekdays → "30 7 * * 1-5"): what Custom (cron) starts from,
+ * so switching to it keeps the schedule on screen. "" for a time that isn't
+ * one. */
+export function cronOf(at: string, days: string): string {
+  const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec((at || "").trim());
+  if (!m) return "";
+  return Number(m[2]) + " " + Number(m[1]) + " * * " + (days === "weekdays" ? "1-5" : "*");
+}
+
+/** The days + time a simple cron is ("30 7 * * 1-5" → 07:30 weekdays), so
+ * switching back from Custom (cron) keeps what was typed there; null for any
+ * other shape. */
+export function atOfCron(cron: string): { at: string; days: "daily" | "weekdays" } | null {
+  const m = /^(\d{1,2}) (\d{1,2}) \* \* (\*|1-5)$/.exec((cron || "").trim().replace(/\s+/g, " "));
+  if (!m || Number(m[1]) > 59 || Number(m[2]) > 23) return null;
+  return {
+    at: m[2].padStart(2, "0") + ":" + m[1].padStart(2, "0"),
+    days: m[3] === "1-5" ? "weekdays" : "daily",
+  };
+}
+
+/** A typed time as the schedule stores it: "7:30" / "730" / "0730" →
+ * "07:30"; anything else unchanged (the form then says what's wrong). */
+export function normalizeAt(raw: string): string {
+  const t = (raw || "").trim();
+  const m = /^(\d{1,2}):?(\d{2})$/.exec(t);
+  if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) return t;
+  return m[1].padStart(2, "0") + ":" + m[2];
+}
+
 /** "Every day at 21:00" / "Weekdays at 21:00" / "Cron 0 9 1 * mon" (the
  * server's `schedule_label` says common cron shapes in words). */
 export function scheduleLabel(s: TemplateSchedule | undefined | null): string {
@@ -341,19 +406,139 @@ export async function cronPreview(expr: string): Promise<CronPreview> {
   return api<CronPreview>("/api/templates/cron-preview?expr=" + encodeURIComponent(expr));
 }
 
+/** "07:30" — the one time format Schedule uses (24 h). */
+function hhmm(d: Date): string {
+  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+
+/** "Feb 29", or "Feb 29 2028" when it isn't this year. */
+function dateLabel(d: Date, now: Date): string {
+  const md = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return d.getFullYear() === now.getFullYear() ? md : md + " " + d.getFullYear();
+}
+
 /** A run time for a card: "today 21:00", "tomorrow 21:00", "Mon 21:00", or
- * a date further out. `now` is injectable for tests. */
+ * a date further out ("Nov 3 21:00", "Feb 29 2028 00:00" in another year).
+ * `now` is injectable for tests. */
 export function whenLabel(epochSec: number | null | undefined, now: Date = new Date()): string {
   if (!epochSec) return "";
   const d = new Date(epochSec * 1000);
-  const hm = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  const hm = hhmm(d);
   const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const diff = Math.round((day(d) - day(now)) / 86400000);
   if (diff === 0) return "today " + hm;
   if (diff === 1) return "tomorrow " + hm;
   if (diff === -1) return "yesterday " + hm;
-  if (Math.abs(diff) < 7) return d.toLocaleDateString(undefined, { weekday: "short" }) + " " + hm;
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + hm;
+  if (Math.abs(diff) < 7) return d.toLocaleDateString("en-US", { weekday: "short" }) + " " + hm;
+  return dateLabel(d, now) + " " + hm;
+}
+
+/** The next runs, for a preview line: "tomorrow 21:00, Fri 21:00, Mon 21:00".
+ * Runs a year or more apart on the same date and time — "0 0 29 2 *" — say
+ * the date once and then just the years ("Feb 29 2028, 2032, 2036"): three
+ * identical "Feb 29 00:00"s read like a bug. */
+export function nextRunsLabel(epochs: number[] | null | undefined, now: Date = new Date()): string {
+  const ds = (epochs || []).filter(Boolean).map((e) => new Date(e * 1000));
+  if (!ds.length) return "";
+  const sameSlot = (a: Date, b: Date) =>
+    a.getMonth() === b.getMonth() && a.getDate() === b.getDate() && hhmm(a) === hhmm(b);
+  if (ds.length > 1 && ds.every((d, i) => i === 0 || (sameSlot(d, ds[0]) && d.getFullYear() !== ds[i - 1].getFullYear()))) {
+    const first = ds[0];
+    const head =
+      first.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " " + first.getFullYear();
+    return [head, ...ds.slice(1).map((d) => String(d.getFullYear()))].join(", ");
+  }
+  return ds.map((d) => whenLabel(d.getTime() / 1000, now)).join(", ");
+}
+
+/** The schedule preview line under the editor's When — in every mode, from
+ * the server's reading of the cron (days + time asks as its cron): "Weekdays
+ * at 21:00 — next tomorrow 21:00, Fri 21:00, Mon 21:00", or why it can't be
+ * saved ("" while nothing is known yet). */
+export function schedulePreviewLine(
+  pv: CronPreview | null | undefined,
+  now: Date = new Date(),
+  zone = ""
+): string {
+  if (!pv) return "";
+  if (!pv.ok) return pv.error || "Not a cron expression";
+  const next = nextRunsLabel(pv.next, now);
+  const label = (pv.label || "") + (zone && /\d\d:\d\d/.test(pv.label || "") ? zone : "");
+  return label + (next ? " — next " + next : "");
+}
+
+/** Where a schedule's clock is: " EDT" on the device that runs schedules,
+ * " EDT (mac-mini's time)" when another one does. */
+export function zoneSuffix(tz: string, status: Pick<TemplateRunsStatus, "runs_here" | "runs_on">): string {
+  const other = !status.runs_here && status.runs_on ? " (" + status.runs_on + "'s time)" : "";
+  return (tz ? " " + tz : "") + other;
+}
+
+/** A scheduled template's cadence with its clock: "Every day at 07:30 EDT",
+ * "Weekdays at 21:00 EDT (mac-mini's time)", "Every 30 minutes". */
+export function cadenceText(
+  t: Template,
+  info: TemplateRunInfo = runInfoFor(t.name),
+  status: Pick<TemplateRunsStatus, "runs_here" | "runs_on" | "tz"> = runsStatus
+): string {
+  const words = info.schedule_label || scheduleLabel(t.schedule);
+  if (!words) return "";
+  // Only a time of day has a zone worth naming; "Every 30 minutes" doesn't.
+  const timed = /\d\d:\d\d/.test(words);
+  return words + (timed ? zoneSuffix(info.tz || status.tz || "", status) : "");
+}
+
+/** THE one-line summary of a template's schedule — the Schedule card, New's
+ * template chip (its ⏰ tooltip) and Intake's Auto-start list all say it the
+ * same way: "Every day at 07:30 EDT · next Fri 07:30 (tomorrow skipped)",
+ * "… · paused", "… · next tomorrow 07:30 · last run failed". "" for a
+ * template with no schedule. */
+export function templateScheduleLine(
+  t: Template,
+  status: TemplateRunsStatus = runsStatus,
+  now: Date = new Date()
+): string {
+  if (!hasSchedule(t)) return "";
+  const info = infoOf(t, status);
+  const bits = [cadenceText(t, info, status)];
+  if (t.schedule?.paused || info.paused) bits.push("paused");
+  else if (info.next_at) {
+    const skip = info.skipping_at ? " (" + dayWord(info.skipping_at, now) + " skipped)" : "";
+    bits.push("next " + whenLabel(info.next_at, now) + skip);
+  }
+  if (lastRunFailed(info)) bits.push("last run failed");
+  return bits.filter(Boolean).join(" · ");
+}
+
+/** "tomorrow", "Fri", "Nov 3" — a slot's day without its time (the time is in
+ * the cadence already). */
+function dayWord(epochSec: number, now: Date): string {
+  const w = whenLabel(epochSec, now);
+  return w.replace(/ \d\d:\d\d$/, "");
+}
+
+/** A refused save or Run now, as the server explains it (409 `{error, detail,
+ * reason, agent?}`): the sentence to show and what would fix it. */
+export interface TemplateRefusal {
+  text: string;
+  /** "agent_missing" | "github_required" | "no_folder" | "launch_failed" | "" */
+  reason: string;
+  agent: string;
+}
+
+export function templateRefusal(err: unknown, fallback = ""): TemplateRefusal {
+  // An ApiError's parsed body, read by shape (no instanceof: tests mock the
+  // client module, and any thrown thing may arrive here).
+  const raw = (err as { body?: unknown } | null)?.body;
+  const body = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const detail = str(body.detail);
+  const msg = (err as Error)?.message || "";
+  return {
+    text: detail || (fallback ? fallback + (msg ? ": " + msg : "") : msg || "error"),
+    reason: str(body.reason),
+    agent: str(body.agent),
+  };
 }
 
 /** The templates that are a prompt — what the saved-prompt surfaces list. */

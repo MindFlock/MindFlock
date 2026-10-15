@@ -2,7 +2,7 @@
  * red count only for scheduled runs that FAILED), the old "templates" name
  * still landing on it, and the surface's sections — what runs next, the
  * scheduled templates with their strip (Change schedule / Skip next / Pause),
- * then the saved setups — plus the pure helpers behind them. */
+ * then the ones not scheduled — plus the pure helpers behind them. */
 
 /// <reference types="vite/client" />
 import { createElement } from "react";
@@ -102,7 +102,7 @@ describe("the old name still lands", () => {
   it("the palette has Schedule… (on the short menu) and keeps Templates… as a way in", () => {
     expect(PALETTE).toContain('label: "Schedule…"');
     expect(PALETTE).toContain("top: TOP.schedule");
-    expect(PALETTE).toMatch(/label: "Templates…", hint: "saved setups — in Schedule", run: \(\) => ui\.openDialogFor\("schedule"\)/);
+    expect(PALETTE).toMatch(/label: "Templates…", hint: "your templates — in Schedule", run: \(\) => ui\.openDialogFor\("schedule"\)/);
     expect(PALETTE).not.toContain('openDialogFor("templates"');
   });
 
@@ -113,7 +113,7 @@ describe("the old name still lands", () => {
 });
 
 describe("the surface", () => {
-  it("is titled Schedule: next up, then Scheduled, then Saved setups", () => {
+  it("is titled Schedule: next up, then Scheduled, then Not scheduled", () => {
     const html = view();
     expect(html).toContain('<h2 id="templates-title">Schedule</h2>');
     const next = html.indexOf('id="schedule-next"');
@@ -126,7 +126,9 @@ describe("the surface", () => {
     // Scheduled: soonest first, paused last; the unscheduled one is below.
     const order = ["standup", "nightly", "held", "loose"].map((n) => html.indexOf('data-name="' + n + '"'));
     expect(order.every((x, i) => x > 0 && (i === 0 || x > order[i - 1]))).toBe(true);
+    expect(html.slice(saved)).toContain("Not scheduled");
     expect(html.slice(saved)).toContain("run now or add a schedule");
+    expect(html).not.toMatch(/Saved setups|on a setup/);
   });
 
   it("a scheduled card has its strip; paused says Resume, a skip says Undo skip", () => {
@@ -142,7 +144,8 @@ describe("the surface", () => {
     expect(html).toContain('class="tpl-card is-scheduled is-failing" data-name="nightly"');
     expect(html).toContain('class="tpl-card is-scheduled is-paused" data-name="held"');
     expect(card("standup")).toContain(">Undo skip<");
-    expect(card("standup")).toContain("Skipping today 11:00");
+    // The skip rides THE schedule line: "… · next … (today skipped)"
+    expect(card("standup")).toMatch(/class="sch-cadence">Weekdays at 11:00[^<]* · next [^<]*\(today skipped\)</);
     expect(card("held")).toContain(">Resume<");
     expect(card("held")).toContain(">Paused<");
     expect(card("held")).not.toContain("Skip next");
