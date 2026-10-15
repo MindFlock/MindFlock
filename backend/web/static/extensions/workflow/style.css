@@ -313,6 +313,11 @@
   opacity: 0.3;
 }
 
+.mfx-workflow .wf-legend-sep {
+  margin-left: 10px;
+  padding: 1px 0;
+}
+
 .mfx-workflow .wf-group b {
   font-variant-numeric: tabular-nums;
 }
