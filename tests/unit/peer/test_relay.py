@@ -260,7 +260,14 @@ async def relay_paired(a, b, ingresses, evil, **ing_kw):
     assert await eventually(
         lambda: a.t.is_connected(link.link_id) and b.t.is_connected(link.link_id)
     )
+    confirm(a, b, link)
     return link, mitm, ing
+
+
+def confirm(a, b, link):
+    """Both pressed It matches (share ops need it: transport._SAS_OPS)."""
+    a.store.update(link.link_id, sas_verified=True)
+    b.store.update(link.link_id, sas_verified=True)
 
 
 # -- end to end ------------------------------------------------------------------
@@ -318,6 +325,7 @@ async def test_relay_never_sees_plaintext_or_secrets(make_node, ingresses, evil)
     info = parse_code(code)
     link = await b.t.pair(code)
     assert await eventually(lambda: a.t.is_connected(link.link_id))
+    confirm(a, b, link)
     marker = "TOP-SECRET-MARKER-" + os.urandom(8).hex()
     await b.t.request(link.link_id, "msg", {"msg_id": "m1", "text": marker})
 
@@ -926,7 +934,11 @@ def test_upgrade_check_rejects_arbitrary_heads(data):
     path=st.text(max_size=80),
     extra=st.lists(
         st.tuples(
-            st.text("abcdefghijklmnopqrstuvwxyz-", min_size=1, max_size=20),
+            st.text(
+                "abcdefghijklmnopqrstuvwxyz-",  # pragma: allowlist secret
+                min_size=1,
+                max_size=20,
+            ),
             st.text(max_size=40),
         ),
         max_size=6,

@@ -101,6 +101,14 @@ async def peer_enable(request: Request) -> JSONResponse:
     return await _peer_call(request, _service().enable)
 
 
+@router.post("/api/peer/disable")
+async def peer_disable(request: Request) -> JSONResponse:
+    """Turn peer links off → ``{enabled: false, closed, links}``: the listener
+    and connections stop and each shared session is closed (folder kept);
+    every link and share stays listed for when they're turned on again."""
+    return await _peer_call(request, _service().disable)
+
+
 @router.post("/api/peer/invites")
 async def peer_create_invite(request: Request) -> JSONResponse:
     """``{ttl_s?, advertise_host?, reach?, op_id?}`` → ``{invite_id, code,
@@ -145,8 +153,9 @@ async def peer_join(request: Request) -> JSONResponse:
 
 @router.delete("/api/peer/links/{link_id}")
 async def peer_unlink(link_id: str, request: Request) -> JSONResponse:
-    """Unlink: stop the shared session, forget the pinned key, close the
-    connection. ``?delete_files=1`` also deletes the shared folder."""
+    """Unlink: close the shared session (its folder kept), forget the pinned
+    key, close the connection. Only ``?delete_files=1`` deletes the folder
+    (and the session); the peer's side closes theirs, never deletes it."""
     delete = request.query_params.get("delete_files", "") in ("1", "true", "yes")
     return await _peer_call(request, _service().unlink, link_id, delete_files=delete)
 
@@ -259,9 +268,25 @@ async def peer_share(link_id: str, request: Request) -> JSONResponse:
     )
 
 
+@router.post("/api/peer/links/{link_id}/share/reopen")
+async def peer_reopen_share(link_id: str, request: Request) -> JSONResponse:
+    """``{program?}`` → ``{link, session}``: start a new sandboxed session in
+    the link's kept shared folder (its session was closed — peer links were
+    off, or Close). 409 when nothing is shared, it's open, or it's gone."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _service().reopen_share,
+        link_id,
+        str(body.get("program") or ""),
+        status=201,
+    )
+
+
 @router.delete("/api/peer/links/{link_id}/share")
 async def peer_unshare(link_id: str, request: Request) -> JSONResponse:
-    """Stop the shared session; ``?delete_files=1`` also deletes the folder."""
+    """Stop sharing: close the shared session (folder kept, ``{folder}``);
+    ``?delete_files=1`` deletes the session and the folder instead."""
     delete = request.query_params.get("delete_files", "") in ("1", "true", "yes")
     return await _peer_call(request, _service().unshare, link_id, delete_files=delete)
 
@@ -269,7 +294,9 @@ async def peer_unshare(link_id: str, request: Request) -> JSONResponse:
 @router.post("/api/peer/links/{link_id}/export")
 async def peer_export(link_id: str, request: Request) -> JSONResponse:
     """``{target_repo, branch_name}`` — checkpoint the share, then fetch it into
-    your own repo as ``branch_name`` (must start with ``peer/``)."""
+    your own repo as ``branch_name`` (must start with ``peer/``) →
+    ``{branch, repo_path, commits, sha, target}``. 409 (one sentence) until
+    the safety number is confirmed, or when the repo won't take it."""
     body = await _peer_body(request)
     return await _peer_call(
         request,

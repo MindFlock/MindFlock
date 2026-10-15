@@ -1332,18 +1332,65 @@ def fetch_into(
         raise ShareError("%s failed: branch not updated" % what)
 
 
+#: :func:`export` into a repo without the commits a shallow share starts
+#: from (git would refuse the ref silently).
+NO_SHARED_HISTORY = "target lacks the shared folder's history"
+
+
+def _shallow_base_missing(share: Share, target: str) -> bool:
+    """A git share is a shallow clone: fetching it into a repo that lacks
+    its base commits leaves the branch unmoved (``fetch`` refuses refs that
+    would need ``.git/shallow`` updated, and exits 0). True when ``target``
+    lacks one — only the repo the folder was shared from, or a clone of it,
+    has them. A snapshot share has no shallow base."""
+    try:
+        with open(os.path.join(share.gitdir, "shallow"), "rb") as fh:
+            bases = [ln.strip().decode("ascii", "replace") for ln in fh]
+    except OSError:
+        return False
+    for sha in bases:
+        if not _SHA_RE.match(sha):
+            continue
+        probe = _target_git(target, "cat-file", "-e", sha + "^{commit}", timeout=30)
+        if probe.returncode != 0:
+            return True
+    return False
+
+
+def _commits_brought(target: str, sha: str, ref: str, old: str) -> int:
+    """How many commits on ``ref`` (now at ``sha``) the fetch brought: not on
+    the branch before (``old``) nor on any other ref of ``target``."""
+    args = ["rev-list", "--count", sha]
+    if old:
+        args.append("^" + old)
+    args += ["--not", "--exclude=" + ref, "--all"]
+    got = _target_git(target, *args, timeout=60)
+    try:
+        return int(got.stdout.decode("ascii", "replace").strip() or 0)
+    except ValueError:
+        return 0
+
+
 def export(share: Share, target_repo: str, branch_name: str) -> dict:
     """Checkpoint the share, then fetch its HEAD into the user's TRUSTED
     ``target_repo`` as ``refs/heads/<branch_name>`` (which must start with
     ``peer/``). Nothing from the share is checked out or executed there.
-    → ``{branch, sha, target}``."""
+    → ``{branch, sha, target, commits}`` — ``commits``: how many the branch
+    gained that ``target`` didn't already have (0: nothing new)."""
     target = check_target(target_repo, branch_name, share)
+    if _shallow_base_missing(share, target):
+        raise ShareError(NO_SHARED_HISTORY)
+    ref = "refs/heads/" + branch_name
+    before = _target_git(target, "rev-parse", "--verify", "-q", ref + "^{commit}")
+    old = before.stdout.decode("ascii", "replace").strip()
+    old = old if before.returncode == 0 and _SHA_RE.match(old) else ""
     with _lock(share):  # HEAD can't move between the commit and the fetch
         sha = _checkpoint_locked(
             share, "peer export to %s" % branch_name, author=_export_author()
         )
         fetch_into(target, share.gitdir, "HEAD", branch_name, sha)
-    return {"branch": branch_name, "sha": sha, "target": target}
+    commits = _commits_brought(target, sha, ref, old)
+    return {"branch": branch_name, "sha": sha, "target": target, "commits": commits}
 
 
 # --------------------------------------------------------------------------- #

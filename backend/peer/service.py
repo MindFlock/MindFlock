@@ -72,6 +72,19 @@ _OP_PERM = {
     "joint_state": "messages",
 }
 _SHARE_OPS = ("diff", "read_file", "list_files")
+#: Each permission as the People screen labels it (refusals name it).
+_PERM_LABEL = {
+    "messages": "message me",
+    "diff": "see my changes",
+    "read_file": "read my files",
+}
+#: Ops that hand over what is IN the shared folder: refused to a peer whose
+#: safety number is not confirmed on THIS side (``sas_verified``), whatever
+#: the perms say. ``msg`` stays open: people read the number to each other
+#: over it. Keep in step with transport._SAS_OPS.
+_SAS_OPS = frozenset(("diff", "read_file", "list_files", "screen", "mirror_pull"))
+#: The refusal those ops get before *It matches* (the requester's UI words it).
+NOT_VERIFIED_ERR = "not permitted: safety number not confirmed"
 #: Seconds a peer's reported share status is reused before re-asking.
 _THEIR_STATUS_TTL = 10.0
 
@@ -115,16 +128,24 @@ _RELAY_TOKEN_RE = re.compile(r"^[a-z2-7]{26}\Z")
 _CODE_IN_TEXT_RE = re.compile(r"mfp[12]:[a-z2-7]+-[a-z2-7]{4}", re.I)
 
 
-def invite_message(code: str, expires_in: int) -> str:
+def invite_message(code: str, expires_in: int, direct: bool = False) -> str:
     """The text "Copy invite" puts on the clipboard: the code plus the one
     thing the other person has to do with it, so the code can go over any chat
     with no explaining. :meth:`PeerService.join` accepts this whole message
-    back, so pasting all of it works."""
+    back, so pasting all of it works. A ``direct`` invite names this machine,
+    so it says it only reaches someone on the same network or Tailscale."""
     minutes = max(1, round(int(expires_in or 0) / 60))
+    reach = (
+        " It only works if you're on the same network as me (or the same "
+        "Tailscale network)."
+        if direct
+        else ""
+    )
     return (
-        'Join me on MindFlock: in MindFlock choose "Join a peer" and paste '
-        "this whole message.\n\n%s\n\n(Works once, expires in %d min. From a "
-        "terminal: mindflock peer join <the code above>)" % (code, minutes)
+        "Join me on MindFlock: open Settings → People (or press Ctrl+P and "
+        'type "people"), press Join someone and paste this whole message.%s'
+        "\n\n%s\n\n(Works once, expires in %d min. From a terminal: "
+        "mindflock peer join <the code above>)" % (reach, code, minutes)
     )
 
 
@@ -160,6 +181,40 @@ def _peer_op_error(message: str) -> Exception:
         except Exception:  # noqa: BLE001
             continue
     return _FallbackPeerOpError(message)
+
+
+def _export_error(err: BaseException, branch: str) -> str:
+    """A failed export (``share.export``) as one sentence that says what to
+    do — never "export failed: export failed: …"."""
+    text = str(err)
+    if "shared folder's history" in text:
+        return (
+            "That repo doesn't have the history the shared folder started "
+            "from — pick the repo you shared from, or a clone of it."
+        )
+    if text == "target is not a git repository":
+        return (
+            "That folder isn't a git repository — pick the repo to bring the work into."
+        )
+    if text in ("target repo is not a directory", "bad target repo"):
+        return "That folder doesn't exist — pick the repo to bring the work into."
+    if "inside the peer folder" in text:
+        return "Pick one of your own repos — not a folder inside the shared folder."
+    if "checked out in the target" in text:
+        return (
+            "%s is checked out in that repo — switch it to another branch, "
+            "or bring the work home under a different name." % branch
+        )
+    if text in ("bad branch name", "branch name must start with peer/"):
+        return 'The branch name must start with "peer/" (letters, digits, . _ - /).'
+    detail = text
+    for prefix in ("export failed: ", "export failed"):
+        if detail.startswith(prefix):
+            detail = detail[len(prefix) :]
+    detail = detail.strip().rstrip(".")
+    if detail == "branch not updated":
+        detail = "the branch didn't move"
+    return "Couldn't bring the work home: %s." % (detail or "git failed")
 
 
 def _transport_error_status(err: BaseException) -> int:
@@ -388,6 +443,7 @@ class PeerService:
                 except Exception as err:  # noqa: BLE001
                     _log.warning("peer: listener sync failed: %s", err)
         elif self._started or self._transport is not None or self._runtimes:
+            await self._close_shared_sessions()
             await self.stop()
 
     async def stop(self) -> None:
@@ -460,7 +516,8 @@ class PeerService:
             await self._stop_relay()
             return
         t = self.transport
-        listening = bool(getattr(t, "listening", False))
+        bound = getattr(t, "listening", None)
+        listening = bool(bound)
         relay_on = self.relay_mode() != "off"
         want_direct, want_relay = False, False
         if needed:
@@ -468,8 +525,12 @@ class PeerService:
                 want_direct, want_relay = self._carriers_needed()
             else:
                 want_direct = True
+        s = self.settings()
+        if want_direct and listening and self._moved(bound, s):
+            # The port (or address) changed in Settings: listen on the new one.
+            await _maybe_await(t.stop_listener())
+            listening = False
         if want_direct and not listening:
-            s = self.settings()
             await _maybe_await(
                 t.start_listener(s["listen_host"], int(s["listen_port"]))
             )
@@ -483,6 +544,25 @@ class PeerService:
                 _log.warning("peer: relay not available: %s", err.message)
         else:
             await self._stop_relay()
+
+    def _bound_address(self):
+        bound = getattr(self._transport, "listening", None) if self._transport else None
+        if isinstance(bound, tuple) and len(bound) >= 2:
+            return "%s:%s" % (bound[0], bound[1])
+        return None
+
+    @staticmethod
+    def _moved(bound, s: dict) -> bool:
+        """The running listener's port is not the one Settings say (port 0,
+        or a fake's bare True, never counts; the host isn't compared — a
+        name and the address it binds differ)."""
+        if not isinstance(bound, tuple) or len(bound) < 2:
+            return False
+        try:
+            port = int(s.get("listen_port") or 0)
+            return bool(port) and int(bound[1]) != port
+        except (TypeError, ValueError):
+            return False
 
     # ------------------------------------------------------------------ #
     # The relay (peer.relay = cloudflare | url)
@@ -797,6 +877,16 @@ class PeerService:
         perms = _get(link, "perms") or {}
         return _get(perms, key, False) is True
 
+    @classmethod
+    def _refusal(cls, link, op: str) -> str:
+        """Why ``op`` is refused to this link's peer, or ``""``: the link's
+        perms, then the safety-number rule (:data:`_SAS_OPS`)."""
+        if not cls._permitted(link, op):
+            return "not permitted"
+        if op in _SAS_OPS and _get(link, "sas_verified") is not True:
+            return NOT_VERIFIED_ERR
+        return ""
+
     def _screen_op(self, link) -> dict:
         """The shared session's visible screen (backend.peer.screen). Only
         ever this link's own shared session — named from the link record."""
@@ -844,8 +934,9 @@ class PeerService:
         """One inbound request from the peer, already schema-validated by the
         transport. Raises the transport's ``PeerOpError`` to refuse."""
         link = self._fresh_link(link)
-        if not self._permitted(link, op):
-            raise _peer_op_error("not permitted")
+        refused = self._refusal(link, op)
+        if refused:
+            raise _peer_op_error(refused)
         if op == "msg":
             return await self._in_thread(link, self._inbound_msg, link, p)
         if op.startswith("joint_"):
@@ -986,16 +1077,19 @@ class PeerService:
         try:
             from backend.web.core import mailbox
 
-            preview = mailbox.sanitize(text)[:200]
+            preview = " ".join(mailbox.sanitize(text).split())[:200]
         except Exception:  # noqa: BLE001
             preview = ""
+        # Every incoming message, delivered or waiting: the bell shows it.
         self._emit(
             "peer.message",
             {
                 "link_id": lid,
                 "peer_name": str(_get(link, "peer_name") or "peer"),
+                "text_head": preview,
                 "text": preview,
                 "stored": not title,
+                "delivered_to": title or None,
             },
         )
         return {"accepted": True}
@@ -1063,45 +1157,102 @@ class PeerService:
 
     def on_link_repaired(self, link) -> None:
         """The same person paired again: same link (share and perms kept),
-        new safety number to compare."""
+        new safety number to compare. The transport already reset
+        ``sas_verified``, so the folder's content is refused to them again
+        until both press It matches (_SAS_OPS)."""
         self._emit("peer.link_added", self._link_event(link, True))
+        self._sas_changed(link)
         self._schedule(self.sync_listener())
 
-    async def on_link_removed(self, link) -> None:
-        """The peer unlinked (the transport already forgot its key): stop the
-        shared session and its runtime like ``unshare``, keeping the folder."""
+    def _sas_changed(self, link) -> None:
+        """Say a link's safety number changed (a re-pair): ``peer.state``
+        with ``sas_changed`` — the bell asks to compare it again."""
         self._emit(
-            "peer.link_removed",
+            "peer.state",
             {
                 "link_id": _get(link, "link_id"),
                 "peer_name": str(_get(link, "peer_name") or "peer"),
-                "by": "peer",
+                "connected": True,
+                "sas_changed": True,
+                "sas": str(_get(link, "sas") or ""),
             },
         )
+
+    async def on_link_removed(self, link) -> None:
+        """The peer unlinked (the transport already forgot its key), or the
+        connection reported the link gone: CLOSE the shared session — its
+        agent stops, its folder stays, like Close — and stop its runtime.
+        Never delete: the folder is this side's work (docs/peer-link.md)."""
+        lid = str(_get(link, "link_id") or "")
         try:
             from backend.peer import inbox, mirror
 
-            inbox.drop(str(_get(link, "link_id") or ""))
-            mirror.drop(str(_get(link, "link_id") or ""))
-            self.joint.store.drop(str(_get(link, "link_id") or ""))
+            inbox.drop(lid)
+            mirror.drop(lid)
+            self.joint.store.drop(lid)
         except Exception:  # noqa: BLE001
             pass
         share_id = _get(link, "share_id")
+        kept = None
         if share_id:
             async with self._lock:
-                title = _get(link, "session_title") or ""
-                srv = self.server
-                inst = srv.ENGINE.instances.get(title) if title else None
-                if inst is not None and getattr(inst, "PeerShare", "") == share_id:
+                title = self._share_session(link)
+                if title:
                     try:
-                        await srv.delete_instance(title)
+                        await self._close_session(title)
                     except Exception as err:  # noqa: BLE001
                         _log.warning("peer: shared session not stopped: %s", err)
                 await self._stop_runtime(share_id)
+            kept = self._kept_folder(share_id)
+        self._emit(
+            "peer.link_removed",
+            {
+                "link_id": lid,
+                "peer_name": str(_get(link, "peer_name") or "peer"),
+                "by": "peer",
+                "kept_folder": kept,
+            },
+        )
         try:
             await self.sync_listener()
         except Exception as err:  # noqa: BLE001
             _log.warning("peer: listener sync failed: %s", err)
+
+    async def _close_session(self, title: str) -> bool:
+        """End a shared session the way Close does: its agent stops, its
+        folder (the share's ``work/``) stays. False when the close failed."""
+        resp = await self.server.close_instance(title)
+        return getattr(resp, "status_code", 200) < 400
+
+    @staticmethod
+    def _kept_folder(share_id: str):
+        """The share's folder when it is still on disk, else None."""
+        try:
+            work = paths.share_paths(share_id)["work"]
+        except Exception:  # noqa: BLE001
+            return None
+        return work if os.path.isdir(work) else None
+
+    async def _close_shared_sessions(self) -> list:
+        """Peer links turned off: close every shared session (kept, like
+        Close); every link and its share record stay, so turning links on
+        again lists them as they were and reopens nothing by itself."""
+        closed = []
+        try:
+            links = list(self.store.list())
+        except Exception:  # noqa: BLE001
+            return closed
+        async with self._lock:
+            for link in links:
+                title = self._share_session(link)
+                if not title:
+                    continue
+                try:
+                    if await self._close_session(title):
+                        closed.append(title)
+                except Exception as err:  # noqa: BLE001
+                    _log.warning("peer: shared session not closed: %s", err)
+        return closed
 
     def on_state(self, link_id: str, connected: bool) -> None:
         try:
@@ -1187,11 +1338,25 @@ class PeerService:
     # ------------------------------------------------------------------ #
     # The people's side of a link (no shared session needed)
     # ------------------------------------------------------------------ #
-    def _peer_error(self, link, err: BaseException) -> PeerServiceError:
-        """A failed request to the peer, in words that say what to do."""
+    def _peer_error(self, link, err: BaseException, op: str = "") -> PeerServiceError:
+        """A failed request to the peer, in words that say what to do. ``op``
+        (the request made) names the permission a refusal is about."""
         name = str(_get(link, "peer_name") or "they")
         text = str(err)
+        if "safety number not confirmed" in text:
+            return PeerServiceError(
+                "%s hasn't confirmed the safety number yet — compare it with "
+                "them, then you both press It matches" % name,
+                403,
+            )
         if "not permitted" in text:
+            perm = _PERM_LABEL.get(_OP_PERM.get(op, ""))
+            if perm:
+                return PeerServiceError(
+                    "%s turned off “%s” on this link — ask them to "
+                    "turn it on in People" % (name, perm),
+                    403,
+                )
             return PeerServiceError("%s doesn't allow that on this link" % name, 403)
         if "no shared folder" in text:
             return PeerServiceError("%s hasn't shared a folder yet" % name, 409)
@@ -1227,7 +1392,7 @@ class PeerService:
         except PeerServiceError:
             raise
         except Exception as err:  # noqa: BLE001 — PeerUnavailable, PeerOpError
-            raise self._peer_error(link, err) from err
+            raise self._peer_error(link, err, "msg") from err
 
     def messages(self, link_id: str, limit: int = 100) -> dict:
         """The link's message log, both directions (no side effects)."""
@@ -1250,7 +1415,7 @@ class PeerService:
         try:
             return await self.request(link_id, "diff", {"max_chars": 100000})
         except Exception as err:  # noqa: BLE001
-            raise self._peer_error(link, err) from err
+            raise self._peer_error(link, err, "diff") from err
 
     async def their_screen(self, link_id: str) -> dict:
         """What the peer's shared session shows right now (their ``screen``
@@ -1262,7 +1427,7 @@ class PeerService:
         try:
             res = await self.request(link_id, "screen", {}, timeout=15.0)
         except Exception as err:  # noqa: BLE001
-            raise self._peer_error(link, err) from err
+            raise self._peer_error(link, err, "screen") from err
         return {
             "text": screen.sanitize(str(res.get("text") or "")),
             "cols": int(res.get("cols") or 0),
@@ -1277,7 +1442,7 @@ class PeerService:
         try:
             return await self.request(link_id, "list_files", {})
         except Exception as err:  # noqa: BLE001
-            raise self._peer_error(link, err) from err
+            raise self._peer_error(link, err, "list_files") from err
 
     async def their_file(self, link_id: str, path) -> dict:
         """One file from the peer's shared folder (their ``read_file`` op)."""
@@ -1288,7 +1453,7 @@ class PeerService:
         try:
             return await self.request(link_id, "read_file", {"path": path})
         except Exception as err:  # noqa: BLE001
-            raise self._peer_error(link, err) from err
+            raise self._peer_error(link, err, "read_file") from err
 
     async def _refresh_their_status(self, link_id: str) -> None:
         if link_id in self._their_status_inflight:
@@ -1362,6 +1527,9 @@ class PeerService:
             "sas": _get(link, "sas") or "",
             "perms": {k: _get(perms, k, False) is True for k in PERM_KEYS},
             "shared": bool(_get(link, "share_id")),
+            # The shared session is open now (False: closed — peer links were
+            # off, or it was closed — reopen it from the card).
+            "share_open": bool(self._share_session(link)),
             "share_id": _get(link, "share_id") or None,
             "session_title": _get(link, "session_title") or None,
             "connected": self.is_connected(lid),
@@ -1421,6 +1589,8 @@ class PeerService:
                     self._transport is not None
                     and getattr(self._transport, "listening", False)
                 ),
+                # Where it really listens now ("host:port"), or None.
+                "bound": self._bound_address(),
             },
             "fingerprint": None,
             "links": [],
@@ -1431,6 +1601,9 @@ class PeerService:
             "agents": self._shareable_agents(),
         }
         if not s.get("enabled"):
+            # Off keeps every link and share: still listed (not connected),
+            # so turning links on again finds them where they were.
+            out["links"] = self._links_while_off()
             return out
         try:
             out["fingerprint"] = bytes(self.identity.fingerprint()).hex()
@@ -1445,6 +1618,18 @@ class PeerService:
         except Exception:  # noqa: BLE001
             out["invites"] = []
         return out
+
+    def _links_while_off(self) -> list:
+        """The link views with peer links off — no identity, transport or
+        file is created for it (an install that never paired lists none)."""
+        try:
+            store = self.store
+            path = getattr(store, "path", None)
+            if isinstance(path, str) and not os.path.exists(path):
+                return []
+            return [self.link_view(l) for l in store.list()]
+        except Exception:  # noqa: BLE001
+            return []
 
     @staticmethod
     def _shareable_agents() -> list:
@@ -1478,6 +1663,18 @@ class PeerService:
         if not self.enabled():
             raise PeerServiceError(
                 "peer links are off — turn them on in Settings → Peer links", 409
+            )
+
+    @staticmethod
+    def _require_verified(link) -> None:
+        """Nothing that hands over or brings in a shared folder's content
+        (share, mirror, export) before *It matches* on this side — a
+        re-pair un-confirms it (docs/peer-link.md, Threat model)."""
+        if _get(link, "sas_verified") is not True:
+            raise PeerServiceError(
+                "Confirm the safety number with %s first"
+                % (_get(link, "peer_name") or "them"),
+                409,
             )
 
     def _turn_on(self) -> None:
@@ -1578,6 +1775,26 @@ class PeerService:
         self._turn_on()
         return {"enabled": True}
 
+    async def disable(self) -> dict:
+        """Turn peer links off: stop the listener, relay and connections, and
+        close every shared session (its folder kept, like Close). Every link
+        and its share record stay — turning links on again lists them as
+        they were and reopens nothing by itself (Reopen on the card).
+        → ``{enabled: false, closed: [session titles], links: n}``."""
+        if self._settings_setter is not None:
+            self._settings_setter({"enabled": False})
+        elif self._settings_getter is None:
+            from backend.config import settings as _settings
+
+            _settings.update_settings(peer={"enabled": False})
+        closed = await self._close_shared_sessions()
+        await self.stop()
+        return {
+            "enabled": False,
+            "closed": closed,
+            "links": len(self._links_while_off()),
+        }
+
     async def create_invite(
         self, ttl_s=None, host: str = "", reach: str = "auto", op_id: str = ""
     ) -> dict:
@@ -1636,7 +1853,7 @@ class PeerService:
         out = {
             "invite_id": iid,
             "code": _get(inv, "code"),
-            "message": invite_message(_get(inv, "code"), ttl),
+            "message": invite_message(_get(inv, "code"), ttl, direct=True),
             "expires_in": ttl,
             "host": adv,
             "port": port,
@@ -1738,11 +1955,16 @@ class PeerService:
         linked reconnects that link — same id, share and permissions, a new
         safety number — and the result says ``reconnected: true``."""
         if not isinstance(code, str) or not code.strip() or len(code) > 4096:
-            raise PeerServiceError("paste the invite code")
+            raise PeerServiceError("Paste the invite message you were sent.")
         found = self._extract_code(code)
         if not found:
+            if re.search(r"mfp[12]:", code, re.I):
+                raise PeerServiceError(
+                    "That code is cut off — paste the whole invite message."
+                )
             raise PeerServiceError(
-                "that doesn't contain an invite code (it starts with mfp1: or mfp2:)"
+                "That doesn't contain an invite code — paste the whole message "
+                "you were sent (the code starts with mfp1: or mfp2:)."
             )
         from backend.peer.invite import parse_code
 
@@ -1776,6 +1998,7 @@ class PeerService:
         if await self._adopt_old_links(link):
             reconnected = True
             link = self.store.get(lid) or link
+            self._sas_changed(link)  # a new link for them: a new number too
         stage("done")
         out = self.link_view(link)
         out["reconnected"] = reconnected
@@ -1874,9 +2097,13 @@ class PeerService:
         return self.link_view(self.store.get(link_id))
 
     async def unlink(self, link_id: str, delete_files: bool = False) -> None:
+        """Forget the peer. My shared session is closed (folder kept) unless
+        ``delete_files``; the peer's side closes theirs, never deletes it."""
         link = self._link_or_404(link_id)
+        kept = None
         if _get(link, "share_id"):
-            await self.unshare(link_id, delete_files=delete_files)
+            out = await self.unshare(link_id, delete_files=delete_files)
+            kept = out.get("folder")
         if self._transport is not None or self.enabled():
             try:
                 t = await self._ensure_transport()
@@ -1899,6 +2126,7 @@ class PeerService:
                 "link_id": link_id,
                 "peer_name": str(_get(link, "peer_name") or "peer"),
                 "by": "you",
+                "kept_folder": kept,
             },
         )
         await self.sync_listener()
@@ -2025,6 +2253,7 @@ class PeerService:
         self._require_enabled()
         async with self._lock:
             link = self._link_or_404(link_id)
+            self._require_verified(link)
             if _get(link, "share_id"):
                 raise PeerServiceError(
                     "this link already has a shared folder — unshare it first", 409
@@ -2105,6 +2334,84 @@ class PeerService:
                 _log.warning("peer: waiting messages not delivered: %s", err)
             return {"link": self.link_view(self.store.get(link_id)), "session": body}
 
+    async def reopen_share(self, link_id: str, program: str = "") -> dict:
+        """Start a new sandboxed session in the link's KEPT shared folder
+        (its session was closed: peer links were turned off, or Close).
+        → ``{link, session}``. 409 when nothing is shared, it is open
+        already, or the folder is gone."""
+        self._require_enabled()
+        async with self._lock:
+            link = self._link_or_404(link_id)
+            self._require_verified(link)
+            share_id = _get(link, "share_id")
+            if not share_id:
+                raise PeerServiceError(
+                    "This link has no shared folder — share one first.", 409
+                )
+            if self._share_session(link):
+                raise PeerServiceError("The shared session is already open.", 409)
+            if self._kept_folder(share_id) is None:
+                raise PeerServiceError(
+                    "The shared folder is gone — stop sharing, then share again.",
+                    409,
+                )
+            try:
+                peer_launch.check_sandbox()
+            except peer_launch.PeerLaunchError as err:
+                raise PeerServiceError(str(err), 409) from err
+            srv = self.server
+            title = _get(link, "session_title") or ""
+            program = (
+                (program or "").strip()
+                or self._closed_program(title)
+                or srv.ENGINE.default_program()
+            )
+            try:
+                provider = peer_launch.provider_name(program)
+            except peer_launch.PeerLaunchError as err:
+                raise PeerServiceError(str(err)) from err
+            if not title or title in srv.ENGINE.instances:
+                title = self._unique_title(_get(link, "peer_name") or "", share_id)
+            share = self._share_obj(share_id)
+            self.store.update(link_id, session_title=title)
+            try:
+                await self._start_runtime(link, share, provider, title)
+                status, body = await srv._session_create.create_result(
+                    {
+                        "title": title,
+                        "program": program,
+                        "repo_path": _get(share, "work"),
+                        "in_place": True,
+                        "prompt": self._intro_prompt(_get(link, "peer_name") or ""),
+                    },
+                    peer_share=share_id,
+                )
+                if status >= 300:
+                    raise PeerServiceError(
+                        "the shared session could not start: %s"
+                        % (body.get("error") or status),
+                        status if 400 <= status < 500 else 500,
+                    )
+            except BaseException:
+                await self._stop_runtime(share_id)
+                raise
+            with contextlib.suppress(Exception):
+                self._deliver_backlog(link_id)
+            return {"link": self.link_view(self.store.get(link_id)), "session": body}
+
+    def _closed_program(self, title: str) -> str:
+        """The agent a closed shared session ran (its Recently closed
+        record), or ""."""
+        if not title:
+            return ""
+        try:
+            for e in self.server._load_recently_closed():
+                if e.get("title") == title:
+                    return str((e.get("data") or {}).get("program") or "")
+        except Exception:  # noqa: BLE001
+            pass
+        return ""
+
     def _share_session_running(self, title: str) -> bool:
         if not title:
             return False
@@ -2122,10 +2429,15 @@ class PeerService:
                 raise PeerServiceError("this link has no shared folder", 409)
             title = _get(link, "session_title") or ""
             srv = self.server
-            inst = srv.ENGINE.instances.get(title) if title else None
-            if inst is not None and getattr(inst, "PeerShare", "") == share_id:
-                resp = await srv.delete_instance(title)
-                if getattr(resp, "status_code", 200) >= 400:
+            if self._share_session(link):
+                # Closed (agent stopped, folder kept) unless the person ticked
+                # "delete": only that tick ever deletes.
+                if delete_files:
+                    resp = await srv.delete_instance(title)
+                    ok = getattr(resp, "status_code", 200) < 400
+                else:
+                    ok = await self._close_session(title)
+                if not ok:
                     raise PeerServiceError("could not stop the shared session", 409)
             await self._stop_runtime(share_id)
             deleted = False
@@ -2148,21 +2460,34 @@ class PeerService:
             }
 
     async def export(self, link_id: str, target_repo: str, branch_name: str) -> dict:
+        """Bring my shared folder's work home: checkpoint it and fetch it into
+        ``target_repo`` as ``branch_name`` → ``{branch, repo_path, commits,
+        sha, target}`` (``commits``: how many the branch brought, 0 = nothing
+        new). Every refusal is one sentence that says what to do."""
         link = self._link_or_404(link_id)
+        self._require_verified(link)
         share_id = _get(link, "share_id")
         if not share_id:
-            raise PeerServiceError("this link has no shared folder", 409)
+            raise PeerServiceError("This link has no shared folder to bring home.", 409)
         target = os.path.realpath(os.path.expanduser(str(target_repo or "").strip()))
-        if not target_repo or not os.path.isdir(target):
-            raise PeerServiceError("target_repo must be an existing repository")
+        if not str(target_repo or "").strip():
+            raise PeerServiceError("Pick the repo to bring the work into.")
+        if not os.path.isdir(target):
+            raise PeerServiceError(
+                "That folder doesn't exist — pick the repo to bring the work into."
+            )
         if paths.is_inside_peer_root(target):
-            raise PeerServiceError("can't export into the peer root")
+            raise PeerServiceError(
+                "Pick one of your own repos — not a folder inside the shared folder."
+            )
         if (
             not isinstance(branch_name, str)
             or not branch_name.startswith("peer/")
             or not _BRANCH_RE.match(branch_name)
         ):
-            raise PeerServiceError('branch_name must start with "peer/"')
+            raise PeerServiceError(
+                'The branch name must start with "peer/" (letters, digits, . _ - /).'
+            )
         from backend.peer import share as share_mod
 
         try:
@@ -2170,8 +2495,13 @@ class PeerService:
                 share_mod.export, self._share_obj(share_id), target, branch_name
             )
         except Exception as err:  # noqa: BLE001
-            raise PeerServiceError("export failed: %s" % err, 409) from err
-        return result if isinstance(result, dict) else {"ok": True}
+            raise PeerServiceError(_export_error(err, branch_name), 409) from err
+        out = dict(result) if isinstance(result, dict) else {}
+        out.setdefault("branch", branch_name)
+        out.setdefault("target", target)
+        out["repo_path"] = out.get("target") or target
+        out["commits"] = int(out.get("commits") or 0)
+        return out
 
     # ------------------------------------------------------------------ #
     # The standing mirror (backend.peer.mirror, docs/peer-link.md)
@@ -2182,6 +2512,7 @@ class PeerService:
         from backend.peer import mirror
 
         link = self._link_or_404(link_id)
+        self._require_verified(link)
         name = str(_get(link, "peer_name") or "peer")
         try:
             await asyncio.to_thread(mirror.enable, link_id, repo_path, branch, name)
@@ -2236,7 +2567,7 @@ class PeerService:
                 link_id,
                 pull=lambda p: self.request(link_id, "mirror_pull", p, timeout=60.0),
                 peer_name=str(_get(link, "peer_name") or "peer"),
-                describe=lambda err: str(self._peer_error(link, err)),
+                describe=lambda err: str(self._peer_error(link, err, "mirror_pull")),
             )
         except Exception as err:  # noqa: BLE001
             _log.warning("peer: mirror update failed: %s", err)

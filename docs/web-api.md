@@ -1832,6 +1832,47 @@ git_email}`, and so does the `POST /api/fleet/adopt` body; the joiner adopts the
 id. The settings-sync export (`GET /api/settings/sync/export`) carries
 `"person": {"id": …}` for the tie-break.
 
+### Peer links — the safety number, unlinking, the off switch, export
+
+The routes are specified in
+[peer-link.md](peer-link.md#engine-integration--contract-servicepy--existing-modules);
+the rules a client must expect from them:
+
+- **Before *It matches*** (`sas_verified` on the link), `POST
+  /api/peer/links/{id}/share`, `…/share/reopen`, `…/mirror` and `…/export`
+  answer **409** `{"error": "Confirm the safety number with <name> first"}`.
+  Their side refuses `…/diff`, `…/their-screen`, `…/their-files` and
+  `…/their-file` until *they* confirmed it: **403** `"<name> hasn't confirmed
+  the safety number yet — compare it with them, then you both press It
+  matches"`. Messages work either way. A re-pair (a fresh invite from someone
+  already linked) un-confirms it on both sides and emits `peer.state` with
+  `sas_changed: true`.
+- A refusal by their permissions names the switch: **403** `"<name> turned
+  off “see my changes” on this link — ask them to turn it on in People"`
+  (`read my files` for the files routes).
+- `DELETE /api/peer/links/{id}` and `DELETE /api/peer/links/{id}/share`
+  **close** the shared session (agent stopped, folder kept — `unshare`
+  answers `{link, deleted: false, folder}`); only `?delete_files=1` deletes
+  the session and its folder. When the *peer* unlinks, this side's shared
+  session is closed the same way, never deleted; `peer.link_removed` carries
+  `by` and `kept_folder`.
+- `POST /api/peer/disable` → `{enabled: false, closed: [titles], links: n}`:
+  peer links off — listener, relay and connections stop, every shared session
+  is closed (kept); every link and share record stays and `GET /api/peer`
+  still lists them (`connected: false`). Turning the `peer.enabled` setting
+  off and calling any `/api/peer` route does the same. On again, nothing
+  reopens by itself: a link whose share is kept shows `shared: true,
+  share_open: false`, and `POST /api/peer/links/{id}/share/reopen
+  {program?}` → **201** `{link, session}` starts a new sandboxed session in
+  that folder (409 when nothing is shared, it's open, or the folder is gone).
+- `POST /api/peer/links/{id}/export` → `{branch, repo_path, commits, sha,
+  target}`; `commits` is how many commits the branch brought that the repo
+  didn't have (0 = nothing new). Every refusal is one sentence, e.g. "That
+  repo doesn't have the history the shared folder started from — pick the
+  repo you shared from, or a clone of it."
+- `GET /api/peer` → `listen.bound`: where the listener really is now
+  (`"host:port"`, or `null`); a changed `peer.listen_port` re-binds it.
+
 ### Peer links — joint tasks
 
 Peer-link routes live under `/api/peer` and are specified in

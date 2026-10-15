@@ -362,13 +362,18 @@ async def test_service_stops_the_shared_session_when_the_peer_unlinks(
     engine["peer-bob-abab"] = mk_inst(
         "peer-bob-abab", str(tmp_path / "w"), peer_share=SHARE_ID
     )
-    deleted, stopped = [], []
+    closed, stopped = [], []
 
-    async def fake_delete(title):
-        deleted.append(title)
+    async def fake_close(title):
+        closed.append(title)
         engine.pop(title, None)
 
-    monkeypatch.setattr(server, "delete_instance", fake_delete)
+    async def no_delete(title):
+        pytest.fail("the peer unlinking must never delete my shared session")
+
+    # Closed like Close (agent stopped, folder kept), never deleted.
+    monkeypatch.setattr(server, "close_instance", fake_close)
+    monkeypatch.setattr(server, "delete_instance", no_delete)
     monkeypatch.setattr(
         share_mod, "remove_share", lambda *a, **k: pytest.fail("folder must be kept")
     )
@@ -377,5 +382,5 @@ async def test_service_stops_the_shared_session_when_the_peer_unlinks(
     part = SimpleNamespace(stop=lambda: stopped.append(1))
     svc._runtimes[SHARE_ID] = svc_mod._ShareRuntime(object(), "t" * 32, part, part)
     await svc.on_link_removed(lnk)
-    assert deleted == ["peer-bob-abab"]
+    assert closed == ["peer-bob-abab"]
     assert SHARE_ID not in svc._runtimes and len(stopped) == 2

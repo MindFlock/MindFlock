@@ -774,7 +774,7 @@ control) can't change this group: `POST /api/settings` answers 403 for it.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `enabled` | `false` | Whether peer links are on. Off: no listener, no dialing, no shared sessions start. Not a gate you have to open first: **Invite someone** and **Join a peer** (and `mindflock peer invite` / `join`) turn it on by themselves (since 0.7.1); turning it off again is the deliberate step, under Settings → People → *Advanced*. |
+| `enabled` | `false` | Whether peer links are on. Off: no listener, no dialing, no shared sessions start. Not a gate you have to open first: **Invite someone** and **Join someone** (and `mindflock peer invite` / `join`) turn it on by themselves (since 0.7.1); turning it off again is the deliberate step, under Settings → People → *Advanced* (or `POST /api/peer/disable`). Off closes each shared session (its folder kept) but keeps every link and share — they stay listed and reopen from the link card when it's back on. |
 | `listen_host` | `0.0.0.0` | Where the inviter's TLS listener binds. It runs only while an invite or a link you accepted exists. |
 | `listen_port` | `8799` | The listener's port — must be reachable by the joiner (Tailscale recommended). |
 | `advertise_host` | `""` | The address written into invite codes. Blank = this machine's Tailscale IPv4, else its LAN address. |
