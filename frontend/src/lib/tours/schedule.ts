@@ -13,7 +13,7 @@ export const SCHEDULE_TOUR: TourDef = {
   title: "Schedule",
   steps: [
     {
-      target: '#schedule-btn, [data-tour="schedule-new"], #templates-new, #schedule-empty-create',
+      target: '#schedule-btn, #more-btn, [data-tour="schedule-new"], #templates-new, #schedule-empty-create',
       title: "Sessions you'll want again",
       body: "Schedule keeps templates — a folder, an agent and a task — so a session starts with one click, or by itself.",
     },

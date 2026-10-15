@@ -325,7 +325,8 @@ def test_general_leads_with_getting_started_and_the_mcp_has_its_own_screen():
     src = _read(_SETTINGS / "screens" / "General.tsx")
     body = src[src.index("export function General(") :]
     body = body[: body.index("\n}\n")]
-    assert body.index("<Tours />") < body.index('<AdvancedFold id="general-advanced"')
+    # Round 5 follow-up: Tours live at the BOTTOM of General, under "Help".
+    assert body.index("<Tours />") > body.index('<AdvancedFold id="general-advanced"')
     # The MCP rows moved out of General's fold to Agents → Agent orchestration.
     assert "Agent orchestration (MindFlock MCP)" not in src
     assert "AgentMcpRows" not in src
