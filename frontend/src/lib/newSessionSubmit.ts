@@ -118,6 +118,7 @@ export function newSessionSubmit(ctx: NewSessionSubmitCtx) {
       split: splitOn,
       maxPieces: clampSplit(maxPieces, splitLimit),
       name: title.trim(),
+      initRepo,
     });
     if (!r.ok) {
       if (r.error) fail(r.error);
