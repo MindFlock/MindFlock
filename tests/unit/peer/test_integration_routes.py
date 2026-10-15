@@ -104,6 +104,9 @@ def link(lid="ab" * 16, role="listener", **kw):
         perms={"messages": True, "diff": True, "read_file": True},
         share_id=None,
         session_title=None,
+        # Both pressed It matches: the folder's content may cross (an
+        # unconfirmed link is refused it — test_service_safety.py).
+        sas_verified=True,
     )
     base.update(kw)
     return SimpleNamespace(**base)

@@ -272,18 +272,23 @@ EVENT_NAMES = (
     # "repaired": bool}).
     "peer.link_added",
     # A link is gone (data: {"link_id", "peer_name", "by": "peer" — they
-    # unlinked | "you" — unlinked here}).
+    # unlinked | "you" — unlinked here, "kept_folder": the folder of this
+    # side's shared session, CLOSED and never deleted — or null}).
     "peer.link_removed",
     # A link's connection came up or dropped (data: {"link_id", "peer_name",
-    # "connected": bool}). For UI refetch only; no rule notifies on it.
+    # "connected": bool}). For UI refetch only; no rule notifies on it —
+    # except a re-pair: + "sas_changed": true, "sas" — a new safety number,
+    # un-confirmed on both sides ("confirm it with <name> again").
     "peer.state",
     # A slow invite or join moved on a stage (data: {"op_id" — the id the
     # request carried, "op": "invite"|"join", "stage", "text" — the line to
     # show}). For the screen that asked; no rule notifies on it.
     "peer.progress",
-    # A message from the peer arrived (data: {"link_id", "peer_name",
-    # "text" — first 200 chars, one line, "stored": bool — true when no
-    # shared session took it, so it waits in the link's messages for you}).
+    # A message from the peer arrived — every one (data: {"link_id",
+    # "peer_name", "text_head" — first 200 chars, one line ("text": the same,
+    # for older listeners), "stored": bool — true when no shared session took
+    # it, so it waits in the link's messages for you, "delivered_to": the
+    # shared session that took it, or null}).
     "peer.message",
     # This computer's relay got a new public address while people who joined
     # through the old one still exist — they need a fresh invite to

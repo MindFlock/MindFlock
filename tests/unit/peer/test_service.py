@@ -232,7 +232,14 @@ def test_msg_without_bound_session_is_kept_not_dropped(engine):
     assert emitted == [
         (
             "peer.message",
-            {"link_id": LID, "peer_name": "Bob", "text": "x", "stored": True},
+            {
+                "link_id": LID,
+                "peer_name": "Bob",
+                "text_head": "x",
+                "text": "x",
+                "stored": True,
+                "delivered_to": None,
+            },
         )
     ]
     assert svc.mark_messages_read(LID) == {"unread": 0}
@@ -421,7 +428,10 @@ def test_disabled_service_constructs_nothing(engine):
     svc = make_service(enabled=False)
     run(svc.start())
     assert svc._transport is None and svc._identity is None
-    assert svc.status()["links"] == []
+    # Off keeps the links listed (not connected) — none is lost.
+    (view,) = svc.status()["links"]
+    assert view["link_id"] == LID and view["connected"] is False
+    assert svc._transport is None and svc._identity is None
 
 
 def test_a_message_that_waited_is_delivered_when_a_share_is_bound(

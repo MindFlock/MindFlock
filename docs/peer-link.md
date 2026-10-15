@@ -60,7 +60,11 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
 5. **Verify the safety number.** Both sides show one like `482-019-337-5`
    (People, `mindflock peer links`). Read it to each other by
    voice or chat and press **It matches**. If it differs, someone is in the
-   middle: **unlink now**.
+   middle: **unlink now**. Until *you* press it, nothing in your shared
+   folder goes to them — its diff, files, screen and mirror answer "safety
+   number not confirmed" — and you can't share, mirror or export on that link
+   ("Confirm the safety number with *B* first"); messages work, so you can
+   compare the number over them.
 6. **Share a folder.** On the link: the folder (type it, or **Browse…** —
    any folder: a git repository is cloned, anything else is shared as a
    snapshot of its files, see [The shared folder](#the-shared-folder--contract-sharepy)),
@@ -90,7 +94,10 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    diff*, *read my files* (`POST /api/peer/links/<id>/perms`).
 9. **Bring the work home.** *Export* (or `mindflock peer export <link>
    <your repo> peer/<branch>`) checkpoints the shared folder and fetches it into
-   your own repo as a `peer/…` branch. Review it there like any branch — don't
+   your own repo as a `peer/…` branch, and says how many commits came (0:
+   nothing new yet). Pick the repo you shared from (or a clone of it): a git
+   share is a shallow copy, so a repo without its history is refused, in
+   those words. Review it there like any branch — don't
    run the shared folder's code outside the sandbox.
 
    **Mirror their work.** Export brings home *your* shared folder; to keep
@@ -106,15 +113,28 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    need this MindFlock version or newer — an older peer never reports a
    head, so its mirror simply never updates. **Stop mirroring** keeps the
    branch.
-10. **Stop.** *Unshare* stops the session (keeps the folder unless you tick
-   *delete*); *Unlink* also forgets the peer's key and closes the connection.
-   Either side can unlink at any time.
+10. **Stop.** *Unshare* closes the shared session — its agent stops, its
+   folder stays, like Close — unless you tick *delete*; *Unlink* does the
+   same and also forgets the peer's key and closes the connection. Either
+   side can unlink at any time, and **an unlink never destroys the other
+   side's work**: when *they* unlink, your shared session is closed (never
+   deleted) and the bell says "*B* unlinked — your shared folder is kept at
+   *path*". Only your own *delete* tick deletes a folder.
+
+    **Turning peer links off** (People → Advanced) stops the listener, the
+    relay and every connection and closes each shared session (kept); every
+    link and its shared folder stay listed. Turning them on again reopens
+    nothing by itself — **Reopen** on the card starts a new session in the
+    kept folder (`POST /api/peer/links/<id>/share/reopen`).
 11. **Reconnect.** If a link you joined stays offline (the inviter restarted
     and their quick tunnel got a new address — they get a bell item saying
     so), paste a fresh invite from them into the link's **Reconnect** box (or
     **Join**, or `peer join`). Pairing again with someone you're already
     linked to keeps the link — its id, permissions and shared folder — and
-    gives you both a new safety number to compare. The box also takes a bare
+    gives you both a **new safety number**: it is un-confirmed on both sides
+    (the bell says "New safety number after reconnecting — confirm it with
+    *B* again"), and the shared folder's content stops crossing until you
+    both press *It matches* again. The box also takes a bare
     `wss://…` or `host:port` address.
 
 **Joint tasks** — two people, two repos, one feature. Once the safety number
@@ -180,7 +200,8 @@ session, credential (beyond the sandboxed agent's own model-API credential, see
 | Agent planting git config to run code on the host | The folder's `.git` is a gitfile pointing to `repo.git/`, which is **read-only inside the sandbox**. Both the gitfile and `repo.git` are bind-mounted read-only, so they can't be replaced. Host git on the share runs with `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, hooks off, fsmonitor off, and submodules ignored. `repo.git/info/attributes` unsets filter/diff/merge drivers for every path, so a planted `.gitattributes` can't name one. The engine's own git calls on a share folder (status polling, diff stats) add `--ignore-submodules=all` and the same `-c` hardening, and refuse `add`. The trusted index never holds a gitlink: stripped at creation and at every checkpoint. |
 | Host features executing folder content | Shared sessions refuse: ship/push/PR/Fast-track, worktree setup scripts, IDE launch, spawning, team runs, and an unsandboxed shell pane. No other session may be created on a path under the peer root. |
 | An untrusted relay in the path (`peer.relay`) | The same pinned-key TLS 1.3 runs end to end *inside* the relay's WebSocket; the relay's own TLS is not trusted. A 128-bit ingress token in the relay path keeps scanners off the handshake, and everything else gets one constant `404`. See [Connecting across networks](#connecting-across-networks). |
-| Stale or leaked links | Either side can unlink. The unlinking side sends an authenticated `bye "unlinked"`; the receiving side then removes the link and its pinned key too, stops dialing, and stops that link's shared session (the folder is kept). Links have an idle expiry (30 days). |
+| Stale or leaked links | Either side can unlink. The unlinking side sends an authenticated `bye "unlinked"`; the receiving side then removes the link and its pinned key too, stops dialing, and closes that link's shared session (agent stopped, folder kept — never deleted). Links have an idle expiry (30 days). |
+| A safety number nobody compared | The pinned key already stops a MITM after the first connection, but only the people comparing the number prove the *first* one was them. So the shared folder's content (`diff`, `read_file`, `list_files`, `screen`, `mirror_pull`) is refused — `err: "not permitted: safety number not confirmed"` — to a peer whose link is not `sas_verified` on the serving side, whatever the perms say; share, mirror and export answer 409 until it is. Pairing again resets it on both sides. `msg` and `status` stay open: the number is compared over them. |
 
 ## Components
 
@@ -360,7 +381,12 @@ Each side enforces its **own** permissions on inbound ops (`link.perms`:
 `messages`, `diff`, `read_file`; `list_files` follows `read_file`, `screen`
 follows `diff`, every `joint_*` op follows `messages`; `status` is always
 allowed). A refused op returns
-`ok:false, err:"not permitted"`. With no share bound,
+`ok:false, err:"not permitted"`. On top of the perms, the content ops —
+`diff`, `read_file`, `list_files`, `screen`, `mirror_pull`
+(`transport._SAS_OPS`, mirrored in `service._SAS_OPS`) — are refused with
+`err:"not permitted: safety number not confirmed"` while the serving side's
+link is not `sas_verified` (an older requester reads it as "not
+permitted"). With no share bound,
 `diff`/`read_file`/`list_files`/`screen`/`mirror_pull` return `err:"no shared folder"`.
 `screen` captures only the link's own shared session (named from the link
 record, never from the request), and the VIEWER's side strips everything but
@@ -410,6 +436,8 @@ empty and is backed up to `links.json.corrupt-<ts>`.
   (updated on every pair/auth) or how a dialer link dials. `""` — a link from
   before this field — counts as both until it connects.
 - `sas_verified` (bool): the user pressed *It matches*; a re-pair resets it.
+  While false, the content ops are refused to the peer and share / mirror /
+  export are refused here (see Threat model).
 
 A field this version doesn't know (written by a newer MindFlock) is dropped
 on load rather than condemning the file, so a downgrade keeps every link.
@@ -946,15 +974,17 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   | `POST` | `/api/peer/invites` | `{ttl_s?}` → `{invite_id, code, expires_in}`; the only response that contains the code |
   | `DELETE` | `/api/peer/invites/{id}` | |
   | `POST` | `/api/peer/join` | `{code}` → link with SAS |
-  | `DELETE` | `/api/peer/links/{id}` | |
+  | `DELETE` | `/api/peer/links/{id}` | closes my shared session (folder kept); `?delete_files=1` deletes it and the folder |
   | `POST` | `/api/peer/links/{id}/perms` | |
-  | `POST` | `/api/peer/links/{id}/share` | `{repo_path, branch?, program?}` → creates the share and the sandboxed session |
-  | `DELETE` | `/api/peer/links/{id}/share` | `?delete_files=1` |
-  | `POST` | `/api/peer/links/{id}/export` | `{target_repo, branch_name}` |
+  | `POST` | `/api/peer/links/{id}/share` | `{repo_path, branch?, program?}` → creates the share and the sandboxed session; 409 "Confirm the safety number with <name> first" before *It matches* |
+  | `POST` | `/api/peer/links/{id}/share/reopen` | `{program?}` → 201 `{link, session}`: a new sandboxed session in the link's KEPT folder (closed by turning links off, or Close); 409 before *It matches*, with nothing shared, already open, or the folder gone |
+  | `DELETE` | `/api/peer/links/{id}/share` | closes the shared session → `{link, deleted: false, folder}`; `?delete_files=1` deletes the session and the folder |
+  | `POST` | `/api/peer/links/{id}/export` | `{target_repo, branch_name}` → `{branch, repo_path, commits, sha, target}` (`commits`: how many the branch brought, 0 = nothing new); every refusal one sentence; 409 before *It matches* |
   | `POST` | `/api/peer/links/{id}/mirror` | `{repo_path, branch?}` → `{link}`: mirror THEIR share into `repo_path` as `branch` (default `peer/<their name>`); fetches at once when connected. 400 with the reason when the repo or branch won't do |
   | `DELETE` | `/api/peer/links/{id}/mirror` | → `{link}`; stop mirroring (the branch stays) |
   | `POST` | `/api/peer/links/{id}/address` | `{address}`: re-point a link we joined (`host:port` or `wss://…`) |
   | `POST` | `/api/peer/enable` | turn peer links on without an invite (the "somewhere else" step, so the doctor offers cloudflared) |
+  | `POST` | `/api/peer/disable` | → `{enabled: false, closed: [titles], links: n}`: listener, relay and connections stop, every shared session is closed (kept); links and shares stay (and stay listed in `GET /api/peer`, `connected: false`) |
   | `POST` | `/api/peer/links/{id}/verified` | `{verified: bool}` — *It matches* |
   | `GET` | `/api/peer/links/{id}/messages` | the link's message log `{messages: [{id, dir, by, text, ts, delivered_to, read}], unread}` |
   | `POST` | `/api/peer/links/{id}/messages/read` | mark them read |
@@ -988,10 +1018,15 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   `POST /api/peer/invites` also takes `reach` (`auto` | `tunnel` | `direct`)
   and `op_id`; `POST /api/peer/join` takes `op_id` and answers
   `reconnected`. With an `op_id`, slow steps emit `peer.progress`. Events:
-  `peer.link_added`, `peer.link_removed`, `peer.state`, `peer.progress`,
-  `peer.message`, `peer.relay_changed`, `peer.mirror_updated`,
+  `peer.link_added`, `peer.link_removed` (`by`: `you`|`peer`, `kept_folder`:
+  the closed share's folder or `null`), `peer.state` (`connected`; on a
+  re-pair also `sas_changed: true` + the new `sas`), `peer.progress`,
+  `peer.message` (every incoming one: `text_head` — 200 chars, one line —
+  `stored`, `delivered_to`), `peer.relay_changed`, `peer.mirror_updated`,
   `peer.mirror_failed` (docs/extensions.md); none carries a key, code or
-  relay token.
+  relay token. Each link in `GET /api/peer` also carries `share_open` (its
+  shared session exists now), and `listen.bound` is where the listener
+  really is (a changed `listen_port` re-binds it).
   `peer.message`, `peer.relay_changed` (docs/extensions.md), and for joint
   tasks (each with `link_id`, `peer_name`, `joint_id`):
   `peer.joint_proposed` (+ `brief`, 200 chars — bell: "<name> proposes a

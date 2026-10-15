@@ -177,14 +177,19 @@ async def eventually(cond, timeout: float = 3.0, interval: float = 0.01):
     return cond()
 
 
-async def paired(a: Node, b: Node):
-    """B joins A's invite; returns the dialer-side Link once both are up."""
+async def paired(a: Node, b: Node, verified: bool = True):
+    """B joins A's invite; returns the dialer-side Link once both are up.
+    ``verified``: both people pressed It matches (the share ops need it —
+    transport._SAS_OPS); False leaves the fresh link unconfirmed."""
     if a.port is None:
         await a.listen()
     link = await b.t.pair(a.code())
     assert await eventually(
         lambda: a.t.is_connected(link.link_id) and b.t.is_connected(link.link_id)
     )
+    if verified:
+        a.store.update(link.link_id, sas_verified=True)
+        link = b.store.update(link.link_id, sas_verified=True) or link
     return link
 
 
