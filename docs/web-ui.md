@@ -757,13 +757,17 @@ A session has **one menu**, opened from its sidebar row or the pane header's
   through the items; **Esc** closes it and returns focus to the ⋮.
 
 Both hosts draw it as a popover over the whole window (`sidebar/RowMenu.tsx`
-for the row, portalled to `<body>`), placed by `lib/menuPlace.ts` so all of
-it is on screen: under the ⋮ with right edges aligned, or at the pointer;
-flipped above when there is no room below (and to the pointer's left when
-there is none to its right), nudged — never flipped — when **More ▸** or an
-armed **Delete…** grows it, and scrolling only when the window is shorter than
-the menu. A click outside, scrolling the list or resizing the window closes
-it. The items, in groups:
+for the row, `grid/PaneMoreMenu.tsx` for the pane, both portalled to
+`<body>`), measured hidden for one layout pass and then placed by
+`lib/menuPlace.ts` so all of it is on screen: under the ⋮ / ⋯ with right
+edges aligned, or at the pointer; flipped above when there is no room below
+(and to the pointer's left when there is none to its right), nudged — never
+flipped — when **More ▸** or an armed **Delete…** grows it, and scrolling
+only when the window is shorter than the menu. While it scrolls, **✕ Close**
+and **Delete…** stay pinned at its foot, and unfolding **More ▸** scrolls its
+items into sight above them (a 1280×720 window shows every item of the
+unfolded fold at once). A click outside, scrolling the list or resizing the
+window closes it. The items, in groups:
 
 - **Work** — **Message…** (`Ctrl+K S`) · **Queue prompt…** *runs when idle*
 - **Ship** — **Commit…** (only once there is something to commit) · **Push** ·

@@ -50,7 +50,8 @@ export function RowMenu({
     focused.current = false;
     const fit = () => {
       const w = el.offsetWidth;
-      const h = el.scrollHeight;
+      // Its full height, borders included, however much of it scrolls.
+      const h = el.offsetHeight - el.clientHeight + el.scrollHeight;
       const next = placed.current
         ? refitMenu(placed.current, w, h, window.innerWidth, window.innerHeight)
         : placeMenu(at, w, h, window.innerWidth, window.innerHeight);

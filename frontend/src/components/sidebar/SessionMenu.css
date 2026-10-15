@@ -145,9 +145,23 @@
   border-color: var(--red);
 }
 
-/* In the pane popover: tall menus scroll instead of running off the screen. */
+/* In the pane popover: the popover's max-height (PaneMoreMenu, placed by
+   lib/menuPlace) caps it at the window, and the items scroll under the
+   summary line instead of running off the screen. */
 .pane-more-menu .session-menu {
-  max-height: calc(100vh - 120px);
+  min-height: 0;
   overflow-y: auto;
   min-width: 220px;
+}
+
+/* A window too short for the whole menu (More ▸ unfolded on a laptop
+   screen): Close and Delete… stay pinned at its foot while the rest scrolls,
+   so the two ends are never below the fold. Opaque, so what scrolls under
+   them doesn't show through, and its shadow fills the row popover's bottom
+   padding, which would otherwise show a sliver of what scrolls under it. */
+.session-menu .sm-danger {
+  position: sticky;
+  bottom: 0;
+  background: var(--panel);
+  box-shadow: 0 4px 0 var(--panel);
 }
