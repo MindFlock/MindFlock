@@ -417,3 +417,21 @@ def test_definition_digest_is_stable_and_field_sensitive():
         dict(d, type="stdio")
     )
     assert bridge.definition_digest(d) != bridge.definition_digest(dict(d, args=["b"]))
+
+
+def test_binding_never_does_a_reverse_dns_lookup(monkeypatch, tmp_path):
+    """The stock HTTPServer.server_bind calls socket.getfqdn(host); on macOS
+    that can stall past the launcher's start timeout (the bridge then reads as
+    never started). Binding must not touch it."""
+    from backend.mcp import bridge
+
+    def _boom(*_a, **_k):
+        raise AssertionError("make_server did a reverse-DNS lookup")
+
+    monkeypatch.setattr(socket, "getfqdn", _boom)
+    srv = bridge.make_server(bridge.Hub(str(tmp_path)), "tok")
+    try:
+        assert srv.server_name == "127.0.0.1"
+        assert srv.server_port == srv.server_address[1] > 0
+    finally:
+        srv.server_close()
