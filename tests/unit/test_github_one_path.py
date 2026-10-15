@@ -323,11 +323,16 @@ class TestConfigTomlOnlyIsSeenEverywhere:
 
 
 # --------------------------------------------------------------------------- #
-# 3. The device-flow client id ships as a constant (empty until registered)
+# 3. The device-flow client id ships as a constant (the MindFlock OAuth App)
 # --------------------------------------------------------------------------- #
 class TestClientId:
     def test_env_then_settings_then_the_build_constant(self, monkeypatch):
-        assert web_auth.DEFAULT_GITHUB_OAUTH_CLIENT_ID == ""
+        # The shipped id is the registered "MindFlock" OAuth App: every install
+        # gets "Sign in with GitHub" without configuring anything. It is a
+        # public identifier (no secret ships), never a token.
+        assert web_auth.DEFAULT_GITHUB_OAUTH_CLIENT_ID == "Ov23liG6WFfcz4gXLwks"
+        assert web_auth.client_id() == "Ov23liG6WFfcz4gXLwks"
+        monkeypatch.setattr(web_auth, "DEFAULT_GITHUB_OAUTH_CLIENT_ID", "")
         assert web_auth.client_id() == ""
         monkeypatch.setattr(web_auth, "DEFAULT_GITHUB_OAUTH_CLIENT_ID", "Iv1.built")
         assert web_auth.client_id() == "Iv1.built"
@@ -339,6 +344,7 @@ class TestClientId:
     def test_status_says_whether_the_device_flow_is_configured(self, monkeypatch):
         monkeypatch.setattr(web_auth, "gh_path", lambda: "")
         monkeypatch.setattr(web_auth, "credential_helper", lambda: "")
+        monkeypatch.setattr(web_auth, "DEFAULT_GITHUB_OAUTH_CLIENT_ID", "")
         st = web_auth.status(check_user=False)
         assert st["device_flow_configured"] is False
         assert "device" not in st["methods"]

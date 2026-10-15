@@ -78,12 +78,13 @@ SCOPES = "repo read:org"
 CLIENT_ID_ENV = "MINDFLOCK_GITHUB_CLIENT_ID"
 #: The OAuth App client id this build ships for Setup's device flow, used when
 #: neither ``$MINDFLOCK_GITHUB_CLIENT_ID`` nor ``github.oauth_client_id`` is
-#: set. EMPTY until the owner registers the app: on github.com go to Settings
-#: → Developer settings → OAuth Apps → New OAuth App, tick **Enable Device
-#: Flow**, and paste the app's Client ID (not the secret — the device flow
-#: needs none) here. While it is empty the Connect GitHub dialog says the
-#: device flow is not configured in this build and offers gh or a token.
-DEFAULT_GITHUB_OAUTH_CLIENT_ID = ""
+#: set: the "MindFlock" OAuth App registered 2026-10-15 (github.com → Settings
+#: → Developer settings → OAuth Apps, **Enable Device Flow** ticked). A client
+#: id is public by design — the device flow needs no secret, and none ships.
+#: Each person authorizes the app on their own account and can revoke it from
+#: their GitHub settings. Set it to ``""`` to build without a device flow: the
+#: Connect GitHub dialog then leads with the token path and offers gh.
+DEFAULT_GITHUB_OAUTH_CLIENT_ID = "Ov23liG6WFfcz4gXLwks"
 #: Where an operator's ``config.toml`` token stands in the chain. Named so the
 #: deprecation warning and the UI can say the same thing.
 SOURCE_CONFIG_TOML = "config.toml"

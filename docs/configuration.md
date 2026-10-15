@@ -649,7 +649,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_REPO_ROOT` | — | Where the web server resolves the pipeline's repo root (`config.toml`, `state.json`); unset → nearest ancestor with `config.toml` → cwd. Set it for installed (uv-tool/pipx) copies — a wrong root splits the processed-story ledger |
 | `MINDFLOCK_TICKET_PROVIDER` | — | Pins the pipeline to ONE ticketing source built from `MINDFLOCK_TICKET_TOKEN` / `_BASE_URL` / `_EMAIL` / `_MEMBER_ID` / `_PROJECT` / `_AGENT`, hiding every source saved in Intake; the status payload carries `env_override` while it is set |
 | `MINDFLOCK_PIPELINE_AUTOMATION` | set by the server | `1` / `0`: whether this device runs PR review and issue handling (see `github.automation_device`), passed by the web server to the pipeline it starts — the pipeline can't tell which of your devices it is on, and is restarted when the answer changes. Unset (a pipeline started by hand) → decided from `settings.json` |
-| `MINDFLOCK_GITHUB_CLIENT_ID` | unset | A GitHub OAuth App client id (device flow enabled) for **Connect GitHub** — wins over `github.oauth_client_id` and the build's `DEFAULT_GITHUB_OAUTH_CLIENT_ID`. `mindflock serve --github-client-id ID` sets it for that server. Unset everywhere: the dialog says the device flow is not configured in this build and offers `gh auth login --web` or a pre-filled token page |
+| `MINDFLOCK_GITHUB_CLIENT_ID` | unset | A GitHub OAuth App client id (device flow enabled) for **Connect GitHub** — wins over `github.oauth_client_id` and the build's `DEFAULT_GITHUB_OAUTH_CLIENT_ID`. `mindflock serve --github-client-id ID` sets it for that server. Unset: the build's own MindFlock OAuth App id is used, so **Sign in with GitHub** works out of the box; only a build with an empty constant falls back to the token path and `gh auth login --web` |
 | `MINDFLOCK_PIPELINE_FLEET` | set by the server | `1` / `0`: whether this device is in a group of "Your devices" with another live member, passed by the web server to the pipeline it starts. When `1`, a PR review / issue handling loop that has never run on this device seeds its ledger with what is open before its first scan (see [ingestion-pipeline.md](ingestion-pipeline.md#state-and-files)). Unset (a pipeline started by hand) → read from the fleet store |
 | `MINDFLOCK_REPO_URL` | — | Overrides `[repository].url` — the repo provisioning clones/worktrees from (engine + pipeline) |
 | `MINDFLOCK_WORKSPACE_DIR` | `./workspaces` | Overrides `[repository].workspace_dir` — where per-session workspaces are created |
@@ -919,11 +919,11 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   GitHub OAuth App with the device flow enabled (github.com → Settings →
   Developer settings → OAuth Apps → *Enable Device Flow*). When one resolves,
   **Connect GitHub** signs in with a code typed at github.com/login/device.
-  With none (the shipped constant is empty until the owner registers the
-  app), the dialog says "Device flow is not configured in this build; paste a
-  token or use gh" and offers `gh auth login --web` when gh is installed,
-  else a pre-filled token page and a paste box. Either way the token lands in
-  `github.token`.
+  The shipped constant is the registered "MindFlock" OAuth App's client id
+  (public by design; no secret ships), so every install has the one-button
+  sign-in. A build with the constant emptied leads with the pre-filled token
+  page and a paste box, and offers `gh auth login --web` when gh is
+  installed. Either way the token lands in `github.token`.
 - **Settings sync** (Settings → Your devices → **Settings sync**; state in
   `settings_sync.json` beside `settings.json`, not a setting itself): keeps the
   shareable settings identical on every one of "Your devices" — two-way, last

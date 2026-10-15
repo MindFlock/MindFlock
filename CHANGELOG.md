@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Sign in with GitHub, out of the box.** MindFlock ships the client id of
+  its registered GitHub OAuth App, so Connect GitHub leads with one **Sign in
+  with GitHub** button (a code typed at github.com/login/device) on every
+  install. You authorize the app on your own account and can revoke it from
+  GitHub → Settings → Applications. The token path and gh are still there,
+  folded under *Or paste a token*; `MINDFLOCK_GITHUB_CLIENT_ID` or
+  `github.oauth_client_id` still override the shipped app.
+
 Round 5 of the fresh-eyes UX lab: seven judges who could only use the UI walked
 0.8.7 as first-time users, and every surface was then simplified first and
 given a short, replayable tour second.
