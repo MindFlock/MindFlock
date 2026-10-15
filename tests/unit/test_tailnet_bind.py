@@ -15,7 +15,9 @@ from backend.web.core import restart, tailnet_bind
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
-    monkeypatch.delenv(tailnet_bind.BIND_ALL_ENV, raising=False)
+    # setenv, not delenv: run.main sets it in os.environ directly (`all`), and
+    # a delenv of an absent key restores nothing — it leaked into later tests.
+    monkeypatch.setenv(tailnet_bind.BIND_ALL_ENV, "")
     monkeypatch.setenv(tailnet_bind._REBINDS_ENV, "")
 
 

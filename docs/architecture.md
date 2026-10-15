@@ -137,6 +137,23 @@ FastAPI app `backend.web.server:app`. Key pieces:
   servers via `tailscale status`, namespaces their sessions `<device>::<title>`,
   and proxies every per-session route to the owning device (gated by the
   `general.remote_control` setting, tokens in `~/.mindflock/remote_devices.json`).
+- **`core/tailnet_mtu.py`** — the tailnet MSS clamp. Tailscale adds up to 80
+  bytes (WireGuard + UDP + an outer IPv6 header) to every tunnel packet, so a
+  `tailscale0` at its default MTU 1280 doesn't fit on an adapter whose own MTU
+  is 1280 (WSL2's NAT'd `eth0` is a measured case). With no path-MTU feedback
+  through the NAT the oversized packets just vanish: other devices see this
+  one (`/api/remote/hello` is small) but time out loading its sessions
+  (`/api/instances` isn't). On Linux, when the tunnel MTU + 80 exceeds the
+  MTU of the default-route interface, `run.py` sets `TCP_MAXSEG` (underlay −
+  120, floor 536; 20 less on IPv6) on the tailnet listening sockets before
+  uvicorn listens, which the kernel copies to every accepted connection, and
+  `core/remote.py`'s shared aiohttp session clamps its own tailnet
+  connections the same way (a `TCPConnector` `socket_factory`). Loopback is
+  never clamped; a single `0.0.0.0` bind (the fallbacks) isn't either.
+  `MINDFLOCK_TAILNET_MSS` turns it off or forces a value, and `mindflock
+  doctor` (`tailnet-mtu`) names the machine-wide fix — lowering the tunnel
+  MTU to underlay − 80 (below 1280 the kernel drops IPv6 on `tailscale0`;
+  the IPv4 tailnet address keeps working).
 - **`core/shared_link.py`** — the shared phone link: advertises this device
   as a host of one Tailscale Service (`general.shared_link`) so the phone's
   `/m` URL names no machine and opens on whichever device is up; withdrawn on

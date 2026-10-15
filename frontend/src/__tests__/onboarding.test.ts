@@ -155,7 +155,7 @@ describe("step helpers", () => {
     expect(isEssentialCheck({ id: "tmux", status: "fail" })).toBe(true);
     expect(isEssentialCheck({ id: "git-identity", status: "warn" })).toBe(true);
     expect(isEssentialCheck({ id: "git", status: "ok" })).toBe(false);
-    for (const id of ["tailscale", "bwrap", "cloudflared", "local-model", "cache-seeds", "gh"])
+    for (const id of ["tailscale", "bwrap", "cloudflared", "local-model", "cache-seeds", "tailnet-mtu", "gh"])
       expect(isEssentialCheck({ id, status: "warn" })).toBe(false);
     // Sign-in is step ②'s, not a missing tool.
     expect(isEssentialCheck({ id: "agent-auth", status: "warn" })).toBe(false);

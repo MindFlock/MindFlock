@@ -42253,6 +42253,7 @@ var EXTRA_CHECKS = /* @__PURE__ */ new Set([
 	"cloudflared",
 	"local-model",
 	"cache-seeds",
+	"tailnet-mtu",
 	"clipboard",
 	"gh"
 ]);

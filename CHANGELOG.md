@@ -130,6 +130,11 @@ fresh-eyes testers who could only use the UI (never the code or docs).
   ordinary words, and never makes Push/Merge/Delete the Enter default.
 - Esc closes the Shortcuts sheet; top-bar tooltips show the shortcut that
   actually works (Alt+N in a browser tab).
+- Devices on a WSL2 (or any) machine whose network adapter's MTU leaves no
+  room for Tailscale's headers could see each other but never load each
+  other's sessions — large responses were silently dropped. MindFlock now
+  caps its tailnet TCP segment size there, and `mindflock doctor` explains
+  the machine-wide fix.
 
 
 ## [0.8.6] - 2026-10-13

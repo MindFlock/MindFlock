@@ -154,6 +154,7 @@ export const EXTRA_CHECKS = new Set([
   "cloudflared",
   "local-model",
   "cache-seeds",
+  "tailnet-mtu",
   "clipboard",
   "gh",
 ]);
