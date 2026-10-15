@@ -290,7 +290,10 @@ describe("the row menu ends a session in exactly two ways", () => {
     const del = danger()[1];
     expect(del.label).toBe("Delete…");
     expect(del.danger).toBe(true);
-    expect(del.confirm).toBe("Removes the worktree and branch");
+    // Round 5: names the branch, says uncommitted work goes, and that it
+    // can't be undone — Close is the keeping alternative.
+    expect(del.confirm).toContain("Deletes the folder and branch");
+    expect(del.confirm).toContain("including uncommitted changes. This can't be undone — use Close to keep it.");
     // Already asked (the strip): it deletes for real.
     expect(read("lib/sessionMenu.ts")).toContain("run: () => deleteSession(title, true)");
     const armed = menuSrc.slice(menuSrc.indexOf("it.confirm && deleteArmed ? ("), menuSrc.indexOf(") : (", menuSrc.indexOf("it.confirm && deleteArmed ? (")));

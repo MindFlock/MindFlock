@@ -58,8 +58,10 @@ describe("never throw away typed text", () => {
     const sub = DIALOG.slice(DIALOG.indexOf("} = newSessionSubmit({"));
     expect(sub.slice(0, sub.indexOf("});"))).toContain("draftSpent.current = true;");
     expect(DIALOG).toContain("onClear: draftTyped ? clearDraft : undefined");
+    // Round 5: Clear lives with the box on page 1; the form's ← Back leads
+    // to it (one way to leave, one way to reset).
     expect(DESCRIBE).toContain('id="new-clear"');
-    expect(FOOTER).toContain('id="new-clear-form"');
+    expect(FOOTER).not.toContain('id="new-clear-form"');
     expect(DIALOG).toContain('resetForm("");');
   });
 
@@ -88,11 +90,11 @@ describe("Create session starts now, from the words as typed", () => {
     expect(SUBMIT).toContain("prompt: over.prompt ?? prompt,");
   });
 
-  it("says what each button does, and where Create session starts it", () => {
+  it("says where Start runs it, on one line under the box", () => {
     expect(DESCRIBE).not.toContain("starts right away");
-    expect(DESCRIBE).toContain("starts it now in");
-    expect(DESCRIBE).toContain("{leafName(repoPath.trim())}");
-    expect(FOOTER).toContain("Start the session now in the folder shown");
+    expect(DESCRIBE).toContain("Runs in");
+    expect(DESCRIBE).toContain('{"📁 " + leafName(path)}');
+    expect(FOOTER).toContain("Start it now in the folder shown, with what you typed as its task (Enter)");
   });
 
   it("points at Intake for work that starts from a ticket, PR or issue", () => {
@@ -211,8 +213,10 @@ describe("one vocabulary and one set of controls, New and Templates", () => {
     expect(PROMPT).toContain("the agent lists the files it will change and waits for your OK");
   });
 
-  it("New's Task picker says prompt, not saved prompt", () => {
-    expect(PROMPT).toContain("Insert a prompt…");
+  it("New's Task picker says saved text, not saved prompt", () => {
+    // Round 5 (r5-new finding 15): templates and prompts read alike; the
+    // picker says what it inserts.
+    expect(PROMPT).toContain("Insert saved text…");
     expect(PROMPT).not.toContain("Insert a saved prompt");
   });
 

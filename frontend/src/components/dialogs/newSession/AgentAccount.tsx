@@ -1,13 +1,16 @@
 /** The New form's Agent / Account / Model fields, and the account pick that
  * steers the agent. */
 
-import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+import { useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { api } from "../../../api/client";
 import type { AuthProfile, AuthProfilesResponse } from "../../../api/types";
 import { openSettings } from "../../../lib/openSettings";
 import type { InstalledMap, Provider } from "../newSession";
 
 type Set<T> = Dispatch<SetStateAction<T>>;
+
+/** The Agent list's "More agents…" row (never a provider name). */
+const MORE_AGENTS = "\u0000more-agents";
 
 export interface AccountCtx {
   authProfiles: AuthProfilesResponse | undefined;
@@ -82,7 +85,12 @@ export function AgentFields({
   pendingProfile,
   setAccount,
   closeDialog,
+  foldMissing = false,
 }: {
+  /** List only the agents installed here (and the one chosen), with a
+   * "More agents…" row that shows the rest — a fresh machine has one agent
+   * and six "(not installed)" rows otherwise. */
+  foldMissing?: boolean;
   /** Whose fields: "new" (the New form) or "tpl" (a template's editor). */
   scope?: string;
   /** A first "" row ("Your default agent") for a form that may leave the
@@ -103,6 +111,11 @@ export function AgentFields({
   setAccount?(id: string, agentNow?: string): void;
   closeDialog(): void;
 }) {
+  const [showAll, setShowAll] = useState(false);
+  const hidden = (p: Provider) =>
+    foldMissing && !showAll && !!installed && installed[p.name] === false && p.name !== program;
+  const shown = providers.filter((p) => !hidden(p));
+  const folded = providers.length - shown.length;
   return (
     <>
       <label className="nf-agent">
@@ -125,18 +138,25 @@ export function AgentFields({
           id={scope + "-program"}
           title={defaultLabel ? "The agent each session from this template runs" : "The agent this session runs"}
           value={program}
-          onChange={(e) => setAgent(e.target.value)}
+          onChange={(e) => {
+            if (e.target.value === MORE_AGENTS) {
+              setShowAll(true);
+              return;
+            }
+            setAgent(e.target.value);
+          }}
         >
           {defaultLabel !== undefined && <option value="">{defaultLabel}</option>}
           {!providers.some((p) => p.name === program) && program && (
             <option value={program}>{program}</option>
           )}
-          {providers.map((p) => (
+          {shown.map((p) => (
             <option key={p.name} value={p.name}>
               {p.name}
               {installed && installed[p.name] === false ? " (not installed)" : ""}
             </option>
           ))}
+          {folded > 0 && <option value={MORE_AGENTS}>More agents… ({folded} not installed)</option>}
         </select>
       </label>
       {/* Accounts are THIS device's logins; a session on another

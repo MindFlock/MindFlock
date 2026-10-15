@@ -134,6 +134,17 @@ interface Props {
   leadRun?: RunInfo | null;
 }
 
+/** The row ✕'s double-click guard: after a ✕, the next row slides up under
+ * the pointer, so a second ✕ within this window is ignored. */
+export const CLOSE_GUARD_MS = 400;
+let lastCloseClick = 0;
+/** True (ignore it) when a ✕ lands within CLOSE_GUARD_MS of the last one. */
+export function closeGuarded(now: number): boolean {
+  if (now - lastCloseClick < CLOSE_GUARD_MS) return true;
+  lastCloseClick = now;
+  return false;
+}
+
 export const SidebarRow = memo(function SidebarRow({
   inst,
   idx,
@@ -811,7 +822,7 @@ export const SidebarRow = memo(function SidebarRow({
               type="button"
               className={"row-kebab" + (expanded ? " open" : "")}
               title="Actions for this session (or right-click the row)"
-              aria-label="Actions for this session"
+              aria-label={"Session menu for " + shown}
               aria-haspopup="menu"
               aria-expanded={expanded}
               aria-controls={expanded ? menuId : undefined}
@@ -834,6 +845,10 @@ export const SidebarRow = memo(function SidebarRow({
               }
               onClick={(e) =>
                 act(() => {
+                  // A close slides the next row up under the pointer: a
+                  // second ✕ inside the guard is the same double-click, not a
+                  // second close.
+                  if (closeGuarded(Date.now())) return;
                   if (missing) return cleanupMissing(title);
                   // Uncommitted work: say so before the agent stops.
                   if (uncommitted > 0 && !closeArmed) return setCloseArmed(true);

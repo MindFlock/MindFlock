@@ -73,7 +73,8 @@ describe("Works in: two structured answers", () => {
   it("draws title and one muted line in a column beside the radio", () => {
     expect(WORKSPACE).toContain('<span className="nf-opt-title">{title}</span>');
     expect(WORKSPACE).toContain('<span className="nf-opt-desc">{desc}</span>');
-    expect(WORKSPACE.split('<label className="check nf-opt">').length - 1).toBe(2);
+    // Two in WorksInGroup, two in PlainWorksIn (a folder with no repo).
+    expect(WORKSPACE.split('<label className="check nf-opt">').length - 1).toBe(4);
     const opt = squash(CSS).split(":is(#new-form, .tpl-editor) label.check.nf-opt {")[1].split("}")[0];
     expect(opt).toContain("display: grid;");
     expect(opt).toContain("grid-template-columns: 16px minmax(0, 1fr);");

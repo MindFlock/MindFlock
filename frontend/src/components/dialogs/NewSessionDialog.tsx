@@ -67,7 +67,17 @@ import { useFileDropTextarea } from "../../lib/fileDropTextarea";
 import { NewTicketPane } from "./NewTicketPane";
 import { SplitCheck } from "./SplitCheck";
 import { useRunDraft } from "./NewList";
-import { FastTrackChoice } from "./FastTrackChoice";
+import { Seg } from "./FastTrackChoice";
+import {
+  ASK_FIRST_DESC,
+  ASK_FIRST_LABEL,
+  LANE_DESC,
+  LANE_LABEL,
+  askFirstApplies,
+} from "../../lib/laneActions";
+import { FAST_TRACK_LEVELS } from "../../lib/vocab";
+import { PR_FALLBACK_HINT, hasPrSupport } from "../../lib/sessionActions";
+import { agentName } from "../../lib/agentNames";
 import { splitGate } from "../../lib/playbooks";
 import {
   SERVER_NO_SPLIT,
@@ -83,6 +93,10 @@ import { newSessionSubmit } from "../../lib/newSessionSubmit";
 import {
   DESCRIBE_MAX_CHARS,
   FOLDER_INIT,
+  START_LABEL,
+  advancedSummary,
+  homeRelative,
+  prNeedsGithubReason,
   NEW_TABS,
   PLAN_FOLDER_NONE,
   cancelPlanRun,
@@ -114,14 +128,21 @@ import {
   type Provider,
   type RepoSuggestion,
 } from "./newSession";
-import { DescribeSection, NewFolderRow, describeFlow, useDescribeFocus } from "./newSession/DescribeSection";
+import { DescribeSection, describeFlow, useDescribeFocus } from "./newSession/DescribeSection";
 import { TemplatesStrip, templateFiller } from "./newSession/TemplatesStrip";
-import { FolderAids, FolderField, matchPicker, useFolderLookups, type FolderCheck } from "./newSession/FolderPicker";
+import {
+  FolderAids,
+  FolderField,
+  MissingFolderRow,
+  matchPicker,
+  useFolderLookups,
+  type FolderCheck,
+} from "./newSession/FolderPicker";
 import { AgentFields, ModelRow, accountSetter } from "./newSession/AgentAccount";
 import { GitOptions, WorksIn, useBaseBranches } from "./newSession/WorkspaceFold";
 import { PlanFirstRow, TaskField } from "./newSession/PromptFold";
 import { LaunchFold } from "./newSession/LaunchFold";
-import { FooterActions } from "./newSession/FooterActions";
+import { FooterActions, SaveTemplateRow } from "./newSession/FooterActions";
 import { TourButton } from "../onboarding/TourButton";
 import { useAutoTour } from "../onboarding/useAutoTour";
 
@@ -197,6 +218,13 @@ export function NewSessionDialog() {
   // of the dialog.
   const [advancedOpen, setAdvancedOpen] = useState(true);
   const [launchOpen, setLaunchOpen] = useState(false);
+  /** More options → "Advanced": what a first-hour session can't use yet
+   * (ask-first, auto-split, provisioning, plan first, base branch, launch
+   * flags). Shut by default, its own summary naming what is inside. */
+  const [deepOpen, setDeepOpen] = useState(false);
+  /** "Create this folder": in flight, and why the last one failed. */
+  const [mkBusy, setMkBusy] = useState(false);
+  const [mkError, setMkError] = useState("");
   // The Task box is always on the form now (it is what a session is for), so
   // the plan and submit code's "open the Prompt fold" has nothing to open.
   const setPromptOpen: Dispatch<SetStateAction<boolean>> = () => {};
@@ -599,6 +627,9 @@ export function NewSessionDialog() {
     // this reset runs on every fresh open.
     setAdvancedOpen(false);
     setLaunchOpen(false);
+    setDeepOpen(false);
+    setMkBusy(false);
+    setMkError("");
     folderDo({ t: "reopen" });
     // Last opening's matches answered last opening's query, and the reducer's
     // "reopen" keeps the folder itself — so the list would come back up over a
@@ -1065,6 +1096,13 @@ export function NewSessionDialog() {
     taken: device ? new Set<string>() : takenNames(liveRows || [], aliases),
   });
   const branchKnown = isGit && folderCheck?.branchPrefix !== undefined;
+  /** Page 1's branch: named from the sentence, as Start would name it. */
+  const planned1 = plannedName({
+    prefix: (folderCheck?.asked === folderPath && folderCheck?.branchPrefix) || "",
+    title: "",
+    prompt: describe,
+    taken: device ? new Set<string>() : takenNames(liveRows || [], aliases),
+  });
   /** Sessions on this device already working in this repo, any way. */
   const others = device
     ? []
@@ -1077,16 +1115,43 @@ export function NewSessionDialog() {
   /** More options' summary line: what in it is NOT the default. */
   const moreBits: string[] = [];
   if (title.trim()) moreBits.push("named " + title.trim());
-  if (draft.lane !== "leave") moreBits.push("fast-track on");
+  if (draft.lane !== "leave") moreBits.push("Fast-track: " + LANE_LABEL[draft.lane]);
   if (splitOn) moreBits.push("auto-split");
   if (provisionOn) moreBits.push("provisioned");
   if (baseBranch) moreBits.push("from " + baseBranch);
-  if (initRepo) moreBits.push("git init");
   if (planFirst && planOk) moreBits.push("plan first");
   if (launchArgs.trim()) moreBits.push("flags");
-  const moreSummary = moreBits.length
-    ? moreBits.join(" · ")
-    : "name, fast-track, base branch, flags";
+  const moreSummary = moreBits.length ? moreBits.join(" · ") : "name, Fast-track, save as template";
+  const gitOn = config?.caps?.git !== false;
+  /** Open PR / Merge can be done for you (GitHub connected) — another
+   * device's session is that device's business, so never greyed there. */
+  const prOk = !!device || hasPrSupport(config?.caps);
+  const prWhy = prNeedsGithubReason(PR_FALLBACK_HINT);
+  /** Why a Fast-track rung can't be picked here ("" = it can). */
+  const laneWhy = (lane: string): string =>
+    plainFolder && !initRepo && lane !== "leave"
+      ? "No git repo here, so nothing to commit — pick “Make it a git repo first” to use Fast-track"
+      : splitOn && lane === "leave"
+      ? "An auto-split commits each piece into its branch — Commit keeps it all on this machine"
+      : !prOk && (lane === "pr" || lane === "merge")
+      ? prWhy
+      : "";
+  /** Why "Ask me before it ships" can't be used ("" = it can). */
+  const askWhy = splitOn
+    ? "An auto-split always asks you before anything leaves this machine"
+    : askFirstApplies(draft.lane)
+    ? ""
+    : "Fast-track is off: nothing is committed, pushed or merged for you";
+  const deepSummary = advancedSummary([
+    ["ask me first", gitOn],
+    ["auto-split", gitOn && mcpOk.reason !== SERVER_NO_SPLIT],
+    ["provisioning", gitOn && offerProvision],
+    // Only while the picker is (or is about to be) drawn: a repo whose one
+    // branch is the checked-out one has nothing to pick.
+    ["base branch", gitOn && worktreeMode && isGit && (branches === null || (!!branches.is_git && branches.branches.length > 0))],
+    ["plan first", true],
+    ["launch flags", true],
+  ]);
   // Computed once for both readers: the aside inside the Git & workspace fold,
   // and submit's refusal to post a create the server is certain to refuse.
   const provisionBlocked = provisionBlockReason({
@@ -1121,21 +1186,6 @@ export function NewSessionDialog() {
     gate: newFolderAsk,
     confirmed: newFolderOk,
   });
-  /* The confirm row, built once and drawn on BOTH pages: under the sentence on
-     page 1, and under the Folder field on page 2. It used to live only in the
-     Describe strip, which "Review details first" leaves behind — so a plan that
-     proposed a new folder landed on a page whose Create refused, naming a tick
-     that was on the other page. The one control in this dialog whose "no" is
-     the safe answer, so it is drawn as a question and not as a fourth checkbox:
-     a folder is the only thing a plan proposes that survives the session, and
-     an option row reads as something you may skim past.
-
-     It is announced as well as the note above it. Two polite regions firing
-     together is a little chatty; a gate a screen reader never mentioned, on a
-     form whose Create then refuses, is worse. */
-  const newFolderRow = (
-    <NewFolderRow ask={newFolderAsk} ok={newFolderOk} onOk={setNewFolderOk} />
-  );
   // The note is derived from the same fact as the gate above, and for the same
   // reason: nothing cleared it when the Folder field moved off the plan's path,
   // so a suggestion chip clicked after a `new:` plan left a muted line still
@@ -1148,6 +1198,58 @@ export function NewSessionDialog() {
   });
 
   const pickMatch = matchPicker(folderDo, setSearchOpen);
+
+  /** The Folder field names a path that is not there (the server's check, for
+   * the text now in the field). Start stays off until "Create this folder"
+   * makes it — a mistyped path must never quietly become a new repo. */
+  const folderMissing = folderCheck?.asked === folderPath && !!folderCheck?.missing;
+  const missingLabel = homeRelative(
+    (folderCheck?.asked === folderPath && folderCheck?.resolved) || folderPath,
+    homePath
+  );
+  /** A plan's proposed folder still waiting to be made reads the same way. */
+  const askFolder = newFolderAsk && !newFolderOk ? newFolderAsk : folderMissing ? missingLabel : "";
+  const startBlocked =
+    askFolder && !runMode
+      ? "No folder at " + askFolder + " — press “Create this folder”, or pick a folder that already exists."
+      : "";
+  const createFolder = async () => {
+    const full = ((folderCheck?.asked === folderPath && folderCheck?.resolved) || folderPath).replace(/\/+$/, "");
+    const cut = full.lastIndexOf("/");
+    const parent = cut > 0 ? full.slice(0, cut) : "/";
+    const name = full.slice(cut + 1);
+    if (!name || mkBusy) return;
+    setMkBusy(true);
+    setMkError("");
+    try {
+      const r = await dapi<{ path: string }>("/api/mkdir", { json: { path: parent, name } });
+      // Exactly that folder now exists, empty and without git: the form reads
+      // it as one (the non-git question appears), and a plan that proposed it
+      // has had its yes.
+      setFolderCheck({ asked: folderPath, plain: true, isGit: false, missing: false, resolved: r.path || full });
+      if (newFolderAsk) setNewFolderOk(true);
+      setError("");
+      setPlanError("");
+      // The button that had the caret is gone with the question: keep the
+      // caret in the dialog (Esc, Enter) — on the field it was about, or on
+      // page 1's sentence box.
+      (page === 2 ? repoRef.current : describeRef.current)?.focus({ preventScroll: true });
+    } catch (err) {
+      const msg = errMsg(err);
+      setMkError(
+        /not a directory/i.test(msg)
+          ? "The folder it would go in doesn't exist either — use Browse… to pick a place."
+          : /already exists/i.test(msg)
+          ? "Something is already there — pick it with Browse…."
+          : "Couldn't create it: " + msg
+      );
+    } finally {
+      setMkBusy(false);
+    }
+  };
+  const missingRow = askFolder ? (
+    <MissingFolderRow label={askFolder} onCreate={() => void createFolder()} busy={mkBusy} error={mkError} />
+  ) : null;
 
   const {
     buildBody,
@@ -1199,10 +1301,14 @@ export function NewSessionDialog() {
   // Never launch an agent this device doesn't have: the session would sit
   // "Idle" on "command not found". Said where the button was pressed.
   const submit = () => {
+    if (startBlocked) {
+      setError(startBlocked);
+      return;
+    }
     if (agentMissing && !runMode) {
       // The why is already under the Agent field; this says it was Create
       // that refused.
-      setError("Can't create yet — pick an agent that's installed.");
+      setError("Can't start yet — pick an agent that's installed.");
       return;
     }
     void submitRaw();
@@ -1281,12 +1387,16 @@ export function NewSessionDialog() {
     carried.current = text;
     if (!folderPath) {
       setPage(2);
-      setError("Pick a folder for it, then Create.");
+      setError("Pick a folder for it, then " + START_LABEL + ".");
+      return;
+    }
+    if (startBlocked) {
+      setPlanError(startBlocked);
       return;
     }
     if (agentMissing) {
       setPage(2);
-      setError("Can't create yet — pick an agent that's installed.");
+      setError("Can't start yet — pick an agent that's installed.");
       return;
     }
     void submitRaw({ prompt: text }).then((sent) => {
@@ -1357,6 +1467,19 @@ export function NewSessionDialog() {
     </p>
   );
 
+  /** What page 1's "Runs in [folder]" line says after the folder: the branch
+   * a worktree session gets, or that it runs in the folder itself. */
+  const startsIn = !folderPath ? null : plainFolder ? (
+    <span className="nf-starts-sub"> · in the folder itself (no git, so no diff or PR)</span>
+  ) : branchKnown ? (
+    <span className="nf-starts-sub">
+      {" · own branch "}
+      <code title={planned1.branch}>
+        {planned1.from === "none" ? (folderCheck?.branchPrefix || "") + "…" : planned1.branch}
+      </code>
+    </span>
+  ) : null;
+
   /** Page 1's sentence box. */
   const describeProps = {
     batch,
@@ -1373,7 +1496,7 @@ export function NewSessionDialog() {
     setPlanError,
     describeFailed,
     fillFormInstead: setUpMyself,
-    newFolderRow,
+    newFolderRow: missingRow,
     runBrowse,
     setRunBrowse,
     runBrowseRef,
@@ -1384,6 +1507,11 @@ export function NewSessionDialog() {
     homePath,
     onClear: draftTyped ? clearDraft : undefined,
     agentNote: agentSignedOut ? signedOutNote : null,
+    startsIn,
+    agentLabel: agentName(canonAgent(program)),
+    describeSince,
+    startInstead: startRaw,
+    onEnterStart: startNow,
   };
 
   /** The template strip's ▶ and ⏰ (this device's list only — another
@@ -1439,9 +1567,10 @@ export function NewSessionDialog() {
           // out from under a tab that is not showing one.
           if (shownTab !== "session") return;
           e.preventDefault();
-          // Page 1 has no visible form to submit: read the sentence instead
-          // (see ctrlEnterAction), never create an unseen "untitled" session.
-          if (ctrlEnterAction({ page, runMode }) === "describe") void runDescribe("fill");
+          // Page 1 has no visible form to submit: Start from the sentence in
+          // the folder its line shows (see ctrlEnterAction), never an unseen
+          // "untitled" session.
+          if (ctrlEnterAction({ page, runMode }) === "start") startNow();
           else submit();
         }
       }}
@@ -1451,7 +1580,14 @@ export function NewSessionDialog() {
            is invalid HTML, and hanging the ticket pane off #new-form's submit
            would mean its Enter key and its validation belong to a form whose
            fields are not on screen. The two panes share only the head. */
-        <div id="new-ticket-form" className="ta-drop" ref={dropZoneRef}>
+        <div
+          id="new-ticket-form"
+          className="ta-drop"
+          ref={dropZoneRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="new-dialog-title"
+        >
           <NewHead tab={shownTab} tabs={ticketingOk} onTab={setTab} onClose={closeDialog} />
           <NewTicketPane />
         </div>
@@ -1460,6 +1596,9 @@ export function NewSessionDialog() {
         id="new-form"
         ref={dropZoneRef}
         className="ta-drop"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-dialog-title"
         onSubmit={(e) => {
           e.preventDefault();
           submit();
@@ -1517,6 +1656,9 @@ export function NewSessionDialog() {
                 onRun={runTpl}
                 onSchedule={scheduleTpl}
               />
+              <p className="nf-tpl-hint muted" id="new-templates-hint">
+                Templates save this whole form (folder, agent, task, fast-track) to run again or schedule.
+              </p>
 
               <div className="nf-quick">
                 <FolderField
@@ -1544,6 +1686,7 @@ export function NewSessionDialog() {
                   pendingProfile={pendingProfile}
                   setAccount={setAccount}
                   closeDialog={closeDialog}
+                  foldMissing
                 />
               </div>
               {agentMissing && (
@@ -1570,7 +1713,8 @@ export function NewSessionDialog() {
                 setSearchSel={setSearchSel}
                 pickMatch={pickMatch}
                 homePath={homePath}
-                newFolderRow={newFolderRow}
+                newFolderRow={missingRow}
+                gitAsked={config?.caps?.git !== false}
                 plainFolder={plainFolder}
                 initRepo={initRepo}
                 armInitRepo={armInitRepo}
@@ -1607,6 +1751,9 @@ export function NewSessionDialog() {
                   continueBranch={continueBranch}
                   sharers={sharers}
                   others={others}
+                  plainFolder={plainFolder}
+                  initRepo={initRepo}
+                  setInitRepo={setInitRepo}
                 />
               )}
 
@@ -1643,111 +1790,162 @@ export function NewSessionDialog() {
                       id="new-title"
                       ref={titleRef}
                       autoComplete="off"
-                      placeholder={
-                        (planned.from === "none" ? "named from the task" : planned.title) + " — Enter creates it"
-                      }
+                      placeholder={planned.from === "none" ? "named from the task" : planned.title}
                       value={title}
                       onChange={(e) => setTitle(e.target.value)}
                     />
                   </label>
 
-                  {config?.caps?.git !== false && (
-                    // The one fast-track choice for a single session: a
+                  {gitOn && (
+                    // The one Fast-track choice for a single session: a
                     // session made from the form goes as far as this says.
+                    // Open PR / Merge need GitHub: greyed, with the menu's
+                    // own sentence as the reason, until it is connected.
                     <div id="new-ft-row" className="rt-row rt-row-top" data-caps="git">
-                      <span className="rt-label">Fast-track to</span>
+                      <span className="rt-label">Fast-track</span>
                       <div className="rt-ctl">
-                        <FastTrackChoice
+                        <Seg
                           id="new-lane-form"
-                          label="Fast-track to"
+                          label="Fast-track"
                           value={draft.lane}
                           onChange={draft.setLane}
-                          askFirst={draft.askFirst}
-                          onAskFirst={draft.setAskFirst}
-                          // A split commits each piece into the group's branch,
-                          // so Off reads Commit and the release always asks.
-                          disabledReason={
-                            splitOn
-                              ? { leave: "An auto-split commits each piece into its branch — Commit keeps it all on this machine" }
-                              : undefined
-                          }
-                          askReason={
-                            splitOn ? "An auto-split always asks you before anything leaves this machine" : undefined
-                          }
+                          options={FAST_TRACK_LEVELS.map(({ lane, label }) => {
+                            const why = laneWhy(lane);
+                            return { v: lane, label, title: why || LANE_DESC[lane], disabled: !!why };
+                          })}
                         />
+                        {!prOk && (
+                          <p className="nf-opt-help muted" id="new-ft-github" title={prWhy}>
+                            Open PR and Merge when green need GitHub — connect it in Settings → Connections.
+                          </p>
+                        )}
                       </div>
                     </div>
                   )}
 
-                  {config?.caps?.git !== false && (
-                    // "Auto-split into up to N sessions if it's worth it": the
-                    // form's folder and Task become the lead's.
-                    <div id="new-split-row" data-caps="git">
-                      <SplitCheck
-                        id="new-split"
-                        split={split}
-                        onSplit={toggleSplit}
-                        gate={mcpOk}
-                        maxPieces={clampSplit(maxPieces, splitLimit)}
-                        onMaxPieces={(n) => setMaxPieces(clampSplit(n, splitLimit))}
-                        limit={splitLimit}
-                        text={prompt || describe}
+                  <SaveTemplateRow
+                    saveTpl={{
+                      name: saveTplName,
+                      setName: setSaveTplName,
+                      busy: saveTplBusy,
+                      save: () => void saveAsTemplate(),
+                      blocked: saveTplBlocked,
+                    }}
+                  />
+
+                  {/* What a first-hour session can't use yet, folded once
+                      more. The summary names only what is inside. */}
+                  <details
+                    id="new-deep"
+                    className="nf-advanced nf-deep"
+                    open={deepOpen}
+                    onToggle={(e) => {
+                      const el = e.target as HTMLDetailsElement;
+                      // A <details> inside a <details>: the inner one's
+                      // toggle bubbles to the outer handler, so only ours.
+                      e.stopPropagation();
+                      setDeepOpen(el.open);
+                      if (el.open && typeof el.scrollIntoView === "function")
+                        el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                    }}
+                  >
+                    <summary>
+                      Advanced
+                      <span className="nf-fold-sum" id="new-deep-sum">
+                        — {deepSummary}
+                      </span>
+                    </summary>
+                    <div className="nf-advanced-body">
+                      {gitOn && (
+                        <label
+                          className={"check rt-ask" + (askWhy ? " disabled" : "")}
+                          id="new-ask-row"
+                          title={askWhy || ASK_FIRST_DESC}
+                        >
+                          <input
+                            type="checkbox"
+                            id="new-lane-form-ask"
+                            checked={!askWhy && draft.askFirst}
+                            disabled={!!askWhy}
+                            onChange={(e) => draft.setAskFirst(e.target.checked)}
+                          />
+                          {ASK_FIRST_LABEL}
+                          {askWhy && !splitOn && <span className="muted"> (needs Fast-track)</span>}
+                        </label>
+                      )}
+
+                      {gitOn && (
+                        // "Auto-split into up to N sessions if it's worth it":
+                        // the form's folder and Task become the lead's.
+                        <div id="new-split-row" data-caps="git">
+                          <SplitCheck
+                            id="new-split"
+                            split={split}
+                            onSplit={toggleSplit}
+                            gate={mcpOk}
+                            maxPieces={clampSplit(maxPieces, splitLimit)}
+                            onMaxPieces={(n) => setMaxPieces(clampSplit(n, splitLimit))}
+                            limit={splitLimit}
+                            text={prompt || describe}
+                          />
+                          {!splitOn && mcpOk.reason !== SERVER_NO_SPLIT && (
+                            <p className="nf-opt-help muted" id="new-split-help">
+                              Lets the agent break a big task into up to {clampSplit(maxPieces, splitLimit)} parallel
+                              sessions — you approve the split first.
+                            </p>
+                          )}
+                          {splitSum && (
+                            <p className="rt-sum" aria-live="polite">
+                              {splitSum.lead} {splitSum.tail && <span className="muted">{splitSum.tail}</span>}{" "}
+                              <span className="muted">
+                                The account, plan-first, launch flags and git options don't apply to a split.
+                              </span>
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {gitOn && (
+                        <GitOptions
+                          provision={provision}
+                          setProvision={setProvision}
+                          setInPlace={setInPlace}
+                          provisionOn={provisionOn}
+                          offerProvision={offerProvision}
+                          provisionBlocked={provisionBlocked}
+                          armInitRepo={armInitRepo}
+                          strategy={strategy}
+                          setStrategy={setStrategy}
+                          worktreeMode={worktreeMode}
+                          branches={branches}
+                          baseBranch={baseBranch}
+                          setBaseBranch={setBaseBranch}
+                          canContinue={canContinue}
+                          continueOn={continueOn}
+                          setContinueOn={setContinueOn}
+                          initRepo={initRepo}
+                          setInitRepo={setInitRepo}
+                          isGit={isGit}
+                          plainFolder={plainFolder}
+                        />
+                      )}
+
+                      <PlanFirstRow
+                        prompt={prompt}
+                        planOk={planOk}
+                        planFirst={planFirst}
+                        setPlanFirst={setPlanFirst}
                       />
-                      {!splitOn && mcpOk.reason !== SERVER_NO_SPLIT && (
-                        <p className="nf-opt-help muted" id="new-split-help">
-                          Lets the agent break a big task into up to {clampSplit(maxPieces, splitLimit)} parallel
-                          sessions — you approve the split first.
-                        </p>
-                      )}
-                      {splitSum && (
-                        <p className="rt-sum" aria-live="polite">
-                          {splitSum.lead} {splitSum.tail && <span className="muted">{splitSum.tail}</span>}{" "}
-                          <span className="muted">
-                            The account, plan-first, launch flags and git options don't apply to a split.
-                          </span>
-                        </p>
-                      )}
+
+                      <LaunchFold
+                        launchOpen={launchOpen}
+                        setLaunchOpen={setLaunchOpen}
+                        launchArgs={launchArgs}
+                        setLaunchArgs={setLaunchArgs}
+                        program={program}
+                      />
                     </div>
-                  )}
-
-                  {config?.caps?.git !== false && (
-                    <GitOptions
-                      provision={provision}
-                      setProvision={setProvision}
-                      setInPlace={setInPlace}
-                      provisionOn={provisionOn}
-                      offerProvision={offerProvision}
-                      provisionBlocked={provisionBlocked}
-                      armInitRepo={armInitRepo}
-                      strategy={strategy}
-                      setStrategy={setStrategy}
-                      worktreeMode={worktreeMode}
-                      branches={branches}
-                      baseBranch={baseBranch}
-                      setBaseBranch={setBaseBranch}
-                      canContinue={canContinue}
-                      continueOn={continueOn}
-                      setContinueOn={setContinueOn}
-                      initRepo={initRepo}
-                      setInitRepo={setInitRepo}
-                      isGit={isGit}
-                    />
-                  )}
-
-                  <PlanFirstRow
-                    prompt={prompt}
-                    planOk={planOk}
-                    planFirst={planFirst}
-                    setPlanFirst={setPlanFirst}
-                  />
-
-                  <LaunchFold
-                    launchOpen={launchOpen}
-                    setLaunchOpen={setLaunchOpen}
-                    launchArgs={launchArgs}
-                    setLaunchArgs={setLaunchArgs}
-                    program={program}
-                  />
+                  </details>
                 </div>
               </details>
             </>
@@ -1761,20 +1959,12 @@ export function NewSessionDialog() {
           describing={describing}
           describeSlow={describeSlow}
           describeMode={describeMode}
-          describeSince={describeSince}
           draft={draft}
           runDescribe={runDescribe}
           startRun={startRun}
           startNow={startNow}
           setUpMyself={setUpMyself}
-          onClear={draftTyped ? clearDraft : undefined}
-          saveTpl={{
-            name: saveTplName,
-            setName: setSaveTplName,
-            busy: saveTplBusy,
-            save: () => void saveAsTemplate(),
-            blocked: saveTplBlocked,
-          }}
+          startBlocked={startBlocked}
         />
       </form>
       )}
@@ -1806,7 +1996,7 @@ function NewHead({
 }) {
   return (
     <div className="ws-head nf-head">
-      <h2>New</h2>
+      <h2 id="new-dialog-title">New</h2>
       {tabs && (
       <nav className="nf-tabs" aria-label="New">
         {NEW_TABS.map((t) => (

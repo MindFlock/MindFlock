@@ -71,8 +71,8 @@ describe("fast path — Name → Enter creates, no model turn", () => {
   it("Enter in Name is the form's submit, never a describe call", () => {
     expect(enterAction({ field: "name", shift: false, runMode: false })).toBe("create");
     expect(enterAction({ field: "other", shift: false, runMode: false })).toBe("create");
-    // the only Enter that runs the model is the describe box's own
-    expect(enterAction({ field: "describe", shift: false, runMode: false })).toBe("describe");
+    // round 5: Enter in the box is Start — no Enter runs the model any more
+    expect(enterAction({ field: "describe", shift: false, runMode: false })).toBe("start");
     expect(enterAction({ field: "describe", shift: true, runMode: false })).toBe("newline");
     expect(enterAction({ field: "describe", shift: false, runMode: true })).toBe("newline");
   });
@@ -111,20 +111,23 @@ describe("fast path — Name → Enter creates, no model turn", () => {
 });
 
 describe("page 1 — the sentence card, as in v0.7", () => {
-  it("draws the box, its explanation and examples, and nothing of the form", () => {
+  it("draws the box and ONE line saying where Start runs, and nothing of the form", () => {
     expect(DESCRIBE).toContain('"What do you want to work on?"');
     expect(DESCRIBE).toContain('placeholder="e.g. fix the login bug in acme-api"');
-    // Says what each button does rather than "nothing is created until…"
-    // (one of those buttons IS Create) — and only what it really does:
-    // Create session starts now from the words as typed, in the folder named
-    // right there; Review is the one that has the agent read them.
-    expect(DESCRIBE).toContain("<b>Create session</b>");
-    expect(DESCRIBE).toContain("starts it now in");
-    expect(DESCRIBE).toContain("with what you typed as its task.");
-    expect(DESCRIBE).toContain("<b>Review details first</b> has your agent pick the folder");
-    expect(DESCRIBE).not.toContain("starts right away");
-    expect(DESCRIBE).not.toContain("Nothing is created until");
-    expect(DESCRIBE).toContain("Examples:");
+    // Round 5: "Runs in [folder ▾] · own branch … · change" — the folder is
+    // a real picker (recent folders + Browse…) and "change" opens the form.
+    expect(DESCRIBE).toContain("<StartsInLine");
+    expect(DESCRIBE).toContain("Runs in");
+    expect(DESCRIBE).toContain('id="new-describe-folder"');
+    expect(DESCRIBE).toContain('data-tour="new-folder"');
+    expect(DESCRIBE).toContain('"Recent folders"');
+    expect(DESCRIBE).toContain('<option value={BROWSE_VALUE}>Browse…</option>');
+    expect(DESCRIBE).toContain('id="new-describe-change"');
+    expect(DIALOG).toContain('" · own branch "');
+    // The paragraph that explained three buttons is gone with them.
+    expect(DESCRIBE).not.toContain("<b>Review details first</b>");
+    expect(DESCRIBE).not.toContain("<b>Create session</b>");
+    expect(DESCRIBE).not.toContain("Examples:");
     // The form's own sections are page 2's alone — the box is not on the form.
     const p1 = DIALOG.slice(DIALOG.indexOf("{page === 1 ? ("), DIALOG.indexOf("<TemplatesStrip"));
     expect(p1).toContain("<DescribeSection {...describeProps} />");
@@ -135,35 +138,42 @@ describe("page 1 — the sentence card, as in v0.7", () => {
     expect(SRC).not.toContain("Describe it instead…");
   });
 
-  it("has v0.7's three buttons in increasing order of commitment", () => {
+  it("has ONE primary, Start ↵, with More options and Let the agent set it up… beside it", () => {
     const skip = FOOTER.indexOf('id="new-describe-skip"');
     const go = FOOTER.indexOf('id="new-describe-go"');
     const start = FOOTER.indexOf('id="new-describe-start"');
     expect(skip).toBeGreaterThan(-1);
     expect(skip).toBeLessThan(go);
     expect(go).toBeLessThan(start);
-    // Set it up myself → the form, with what was typed as its Task, no
-    // model turn (round 4: it used to arrive empty).
+    // More options → the form, with what was typed as its Task, no model turn.
     const skipBtn = FOOTER.slice(skip, go);
     expect(skipBtn).toContain('className="nf-quiet"');
     expect(skipBtn).toContain("onClick={setUpMyself}");
-    expect(skipBtn).toContain("Set it up myself instead");
-    // Review details first ↵ → the model fills the form in; ↵ says Enter does it.
+    expect(skipBtn).toContain("More options");
+    expect(FOOTER).not.toContain("Set it up myself instead");
+    // Let the agent set it up… → the model fills the form in; a click, not Enter.
     const goBtn = FOOTER.slice(go, start);
     expect(goBtn).toContain('onClick={() => void runDescribe("fill")}');
-    expect(goBtn).toContain("Review details first");
-    expect(goBtn).toContain("↵");
-    // Create session (startLabel(1)) → create now, without the form and
-    // without waiting on the agent (it is not disabled by a Review read).
-    expect(FOOTER.slice(start)).toContain("onClick={runMode ? () => void startRun() : startNow}");
-    expect(FOOTER.slice(start)).toContain("disabled={draft.starting || (runMode && describing)}");
+    expect(goBtn).toContain("Let the agent set it up…");
+    expect(goBtn).not.toContain("↵");
+    expect(FOOTER).not.toContain("Review details first");
+    // Start ↵ → create now, without the form and without waiting on the agent
+    // (it is not disabled by a read) — only by a folder that isn't there.
+    const startBtn = FOOTER.slice(start);
+    expect(startBtn).toContain("onClick={runMode ? () => void startRun() : startNow}");
+    expect(startBtn).toContain("disabled={draft.starting || (runMode && describing) || (!runMode && !!startBlocked)}");
+    expect(startBtn).toContain("{START_LABEL}");
+    expect(startBtn).toContain("↵");
+    // The accent is Start's (NewSessionDialog.css).
   });
 
-  it("Enter in the box is Review details first; Shift+Enter (and a list's Enter) a new line", () => {
+  it("Enter in the box is Start; Shift+Enter (and a list's Enter) a new line", () => {
     const key = DESCRIBE.slice(DESCRIBE.indexOf("onKeyDown={(e) => {"), DESCRIBE.indexOf("{describing && ("));
     expect(key).toContain('enterAction({ field: "describe", shift: e.shiftKey, runMode }) === "newline"');
-    expect(key).toContain('void runDescribe("fill")');
+    expect(key).toContain("onEnterStart();");
+    expect(key).not.toContain("runDescribe");
     expect(key).toContain("e.preventDefault();");
+    expect(DIALOG).toContain("onEnterStart: startNow,");
   });
 
   it("the plan lands on page 2 for review, and Create waits for a breath", () => {
@@ -177,19 +187,20 @@ describe("page 1 — the sentence card, as in v0.7", () => {
     expect(run).toContain("setDescribeFailed(true);");
   });
 
-  it("page 2 has ← Back to the sentence, and Create is held while the model is reading", () => {
+  it("page 2 has ← Back to the sentence, and Start is held while the model is reading", () => {
     const form = FOOTER.slice(FOOTER.indexOf(") : ("));
     expect(form).toContain('id="new-back"');
     expect(form).toContain("onClick={() => setPage(1)}");
-    // Back for every opening, not only a batch.
+    // Back for every opening, not only a batch; Clear lives on page 1 only.
     expect(form).not.toContain("{batch && (");
-    expect(SRC).toContain("disabled={draft.starting || describing}");
+    expect(form).not.toContain('id="new-clear-form"');
+    expect(SRC).toContain("disabled={draft.starting || describing || !!startBlocked}");
   });
 });
 
 describe("Ctrl/Cmd+Enter never creates a session nobody has seen", () => {
-  it("on page 1 reads the sentence (like Enter); a list keeps starting its rows; page 2 submits the form", () => {
-    expect(ctrlEnterAction({ page: 1, runMode: false })).toBe("describe");
+  it("on page 1 is Start (like Enter); a list keeps starting its rows; page 2 submits the form", () => {
+    expect(ctrlEnterAction({ page: 1, runMode: false })).toBe("start");
     expect(ctrlEnterAction({ page: 1, runMode: true })).toBe("submit");
     expect(ctrlEnterAction({ page: 2, runMode: false })).toBe("submit");
     expect(ctrlEnterAction({ page: 2, runMode: true })).toBe("submit");
@@ -200,7 +211,8 @@ describe("Ctrl/Cmd+Enter never creates a session nobody has seen", () => {
     expect(at).toBeGreaterThan(-1);
     const branch = DIALOG.slice(at, at + 700);
     expect(branch).toContain("ctrlEnterAction({ page, runMode })");
-    expect(branch).toContain('void runDescribe("fill")');
+    expect(branch).toContain("startNow()");
+    expect(branch).not.toContain("runDescribe");
     expect(branch.indexOf("ctrlEnterAction")).toBeLessThan(branch.indexOf("submit()"));
   });
 });

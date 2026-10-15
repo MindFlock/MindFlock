@@ -21,6 +21,7 @@ import {
   submitHoldReason,
   immediateStartBlockReason,
   worktreeClampReason,
+  START_LABEL,
   type FolderAction,
   type FolderState,
   type PlanFolder,
@@ -509,13 +510,14 @@ describe("newFolderGate — the folder a model proposed making", () => {
 describe("newFolderBlockReason — the create that would make a folder nobody agreed to", () => {
   const gate = "~/code/invoice-parser";
 
-  it("refuses while the question is unanswered, naming the folder and the tick", () => {
-    // The row is several screens up by the time Create is pressed (this card
+  it("refuses while the folder isn't made, naming the folder and the button", () => {
+    // The row is several screens up by the time Start is pressed (this card
     // scrolls), so "confirm the folder first" would be an instruction about a
-    // control the reader cannot see.
+    // control the reader cannot see. Round 5: the one way to make it is the
+    // "Create this folder" button.
     const reason = newFolderBlockReason({ gate, confirmed: false });
-    expect(reason).toContain("~/code/invoice-parser");
-    expect(reason).toContain("Yes, create ~/code/invoice-parser");
+    expect(reason).toContain("No folder at ~/code/invoice-parser");
+    expect(reason).toContain("“Create this folder”");
   });
 
   it("points at the tick where page 2 draws it, not at the sentence page", () => {
@@ -627,7 +629,7 @@ describe("the confirm gate across a reopen — the two reducers together", () =>
     // And the tick does NOT come back with it — the reopen clears it — so
     // Create still refuses, by name.
     expect(newFolderBlockReason({ gate, confirmed: false })).toContain(
-      "Yes, create ~/code/invoice-parser"
+      "No folder at ~/code/invoice-parser"
     );
   });
 
@@ -843,10 +845,14 @@ describe("immediateStartBlockReason — the one thing the fast path does not ski
     expect(immediateStartBlockReason({ ...missing, folderExists: true })).toBe("");
   });
 
-  it("names the button by the label it actually wears", () => {
-    // The fast path's button reads "Create session" (startLabel); a sentence
-    // telling you to press a "Start session" nobody can find is a dead end.
-    expect(immediateStartBlockReason(missing)).toContain("press " + startLabel(1) + " again");
+  it("names the buttons by the labels they actually wear", () => {
+    // Round 5: page 1's button reads "Start" (START_LABEL), and the folder is
+    // made by "Create this folder" — a sentence naming a button nobody can
+    // find is a dead end.
+    const why = immediateStartBlockReason(missing);
+    expect(why).toContain("“Create this folder”");
+    expect(why).toContain("then " + START_LABEL + " again");
+    expect(startLabel(2)).toBe("Start 2 sessions");
   });
 
   it("names something rather than nothing when the plan sent no label", () => {

@@ -47,6 +47,9 @@ export interface FolderCheck {
   asked: string;
   /** A real folder with no git repo in it. */
   plain: boolean;
+  /** Nothing at that path yet: Start stays off until it exists (never made
+   * implicitly — "Create this folder" is the one way). */
+  missing?: boolean;
   isGit?: boolean;
   /** The server's resolved path (symlinks, ~). */
   resolved?: string;
@@ -110,6 +113,7 @@ export function useFolderLookups({
           setFolderCheck({
             asked,
             plain: !!r.exists && !!r.is_dir && !r.is_git,
+            missing: r.exists === false,
             isGit: !!r.is_git,
             resolved: r.path || "",
             branchPrefix: r.branch_prefix || "",
@@ -380,6 +384,14 @@ export function FolderField({
   pickMatch(path: string): void;
 }) {
   const ids = folderIds(scope);
+  // The END of a long path is the part that names the repo, so while the
+  // field isn't being edited it shows its tail ("…/r5-new/sbx/repo"), not
+  // "/home/me/MindFlo…". The full path is the tooltip.
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (el && document.activeElement !== el) el.scrollLeft = el.scrollWidth;
+  }, [repoPath]);
   return (
     <label
       className="nf-folder"
@@ -389,10 +401,17 @@ export function FolderField({
       <span className="repo-path-row">
         <input
           id={ids.input}
-          ref={repoRef}
+          ref={(el) => {
+            inputRef.current = el;
+            if (repoRef) repoRef.current = el;
+          }}
           autoComplete="off"
           placeholder={placeholder}
           value={repoPath}
+          title={repoPath || undefined}
+          onBlur={(e) => {
+            e.currentTarget.scrollLeft = e.currentTarget.scrollWidth;
+          }}
           // Announced as a combobox because it is one now: without these
           // a screen reader hears an ordinary text box, the arrow keys
           // move a highlight nothing reports, and Enter fills the field
@@ -515,8 +534,12 @@ export function FolderAids({
   folderDo,
   browserOpen,
   device,
+  gitAsked = false,
 }: {
   scope?: string;
+  /** The form asks "Make it a git repo first / Just run in the folder" in
+   * Works in, so the one-line git nudge here would ask it twice. */
+  gitAsked?: boolean;
   searchHits: FolderSearch;
   selIndex: number;
   searchListRef: MutableRefObject<HTMLDivElement | null>;
@@ -639,7 +662,7 @@ export function FolderAids({
 
       {newFolderRow}
 
-      {plainFolder && (
+      {plainFolder && !gitAsked && (
         <p className="nf-git-nudge">
           {initRepo ? (
             <>A git repo will be created here — diff, commit and PR will work.</>
@@ -673,5 +696,40 @@ export function FolderAids({
         />
       )}
     </>
+  );
+}
+
+/** "No folder at …" — the Folder field names a path that does not exist.
+ * Start stays off: MindFlock never makes a folder by itself. The one way to
+ * get it is the button, which creates exactly that folder (POST /api/mkdir)
+ * and then the field reads as an ordinary empty folder. */
+export function MissingFolderRow({
+  label,
+  onCreate,
+  busy,
+  error,
+}: {
+  /** The path as the user should read it (~-relative when known). */
+  label: string;
+  onCreate(): void;
+  busy: boolean;
+  /** Why the last Create this folder failed ("" = it didn't). */
+  error: string;
+}) {
+  return (
+    <p className="nf-folder-missing" id="new-folder-missing" role="alert">
+      <span className="nf-folder-missing-msg">No folder at {label}.</span>{" "}
+      <button
+        type="button"
+        id="new-create-folder"
+        className="nf-fallback"
+        disabled={busy}
+        title="Make this folder now, then start in it"
+        onClick={onCreate}
+      >
+        {busy ? "Creating…" : "Create this folder"}
+      </button>
+      {error && <span className="nf-folder-missing-err"> {error}</span>}
+    </p>
   );
 }

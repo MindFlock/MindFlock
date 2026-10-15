@@ -264,6 +264,81 @@ export interface WorksInProps {
   sharers: string[];
   /** Sessions already working in this repo, any way. */
   others: string[];
+  /** The folder is real but has no git repo: the question becomes "make it
+   * a repo first, or just run in the folder?" (see PlainWorksIn). */
+  plainFolder?: boolean;
+  initRepo?: boolean;
+  setInitRepo?: Set<boolean>;
+}
+
+/** "Works in" for a folder with no git repo: the one question that folder
+ * raises, as two radios on the form — never a pointer to a checkbox folded
+ * away elsewhere, and "recommended" only on the answer that can happen. */
+export function PlainWorksIn({
+  initRepo,
+  setInitRepo,
+  setInPlace,
+  laneNeedsWorktree,
+  draft,
+}: {
+  initRepo: boolean;
+  setInitRepo: Set<boolean>;
+  setInPlace: Set<boolean>;
+  laneNeedsWorktree: boolean;
+  draft: RunDraft;
+}) {
+  return (
+    <div id="new-works-in" className="rt-row rt-row-top nf-works-in" data-caps="git">
+      <span className="rt-label" id="new-mode-label">
+        Works in
+      </span>
+      <div className="rt-ctl nf-mode" role="radiogroup" aria-labelledby="new-mode-label">
+        <label className="check nf-opt">
+          <input
+            type="radio"
+            name="new-workspace-mode"
+            id="new-git-first"
+            checked={initRepo}
+            onChange={() => {
+              setInitRepo(true);
+              setInPlace(false);
+            }}
+          />
+          <ModeText
+            title={
+              <>
+                Make it a git repo first <span className="nf-rec">recommended</span>
+              </>
+            }
+            desc="Turns on diff, commit and PR — git init and a first commit here"
+          />
+        </label>
+        <label className="check nf-opt">
+          <input
+            type="radio"
+            name="new-workspace-mode"
+            id="new-in-place"
+            checked={!initRepo}
+            onChange={() => {
+              setInitRepo(false);
+              setInPlace(true);
+              // Fast-track commits, and a folder with no repo has nothing to
+              // commit to.
+              if (laneNeedsWorktree) draft.setLane("leave");
+            }}
+          />
+          <ModeText
+            title="Just run in the folder"
+            desc={
+              laneNeedsWorktree
+                ? "Turns Fast-track off — there is no repo to commit to"
+                : "The agent edits the files as they are; no diff, commit or PR"
+            }
+          />
+        </label>
+      </div>
+    </div>
+  );
 }
 
 /** "Works in": the one workspace question every session answers, as two
@@ -287,7 +362,20 @@ export function WorksIn({
   continueBranch,
   sharers,
   others,
+  plainFolder,
+  initRepo,
+  setInitRepo,
 }: WorksInProps) {
+  if (plainFolder && setInitRepo)
+    return (
+      <PlainWorksIn
+        initRepo={!!initRepo}
+        setInitRepo={setInitRepo}
+        setInPlace={setInPlace}
+        laneNeedsWorktree={laneNeedsWorktree}
+        draft={draft}
+      />
+    );
   const worktree = !inPlace || laneNeedsWorktree || provisionOn;
   const warn = sharedCheckoutWarning(sharers);
   // In place, the shared-checkout warning below says it louder.
@@ -445,6 +533,8 @@ export interface GitOptionsProps {
   setInitRepo: Set<boolean>;
   /** The folder is already a git repo: "Create a git repo" is not offered. */
   isGit: boolean;
+  /** Works in already asks "Make it a git repo first?" for this folder. */
+  plainFolder?: boolean;
 }
 
 /** More options → the git extras. */
@@ -468,6 +558,7 @@ export function GitOptions({
   initRepo,
   setInitRepo,
   isGit,
+  plainFolder = false,
 }: GitOptionsProps) {
   return (
     <div className="nf-git-opts" data-caps="git">
@@ -491,7 +582,7 @@ export function GitOptions({
           <button
             type="button"
             className="linklike"
-            title="Ticks “Create a git repo in this folder” below"
+            title="Picks “Make it a git repo first”"
             onClick={armInitRepo}
           >
             Create one here
@@ -597,7 +688,7 @@ export function GitOptions({
       {/* Not offered for a folder that already IS a repo — there is nothing
           to create. It combines with either "works in" answer: git init here
           and then work here is the ordinary reading of both. */}
-      {(!isGit || initRepo) && (
+      {!plainFolder && (!isGit || initRepo) && (
         <InitRepoCheck id="new-init-repo" checked={initRepo} onChange={setInitRepo} />
       )}
     </div>

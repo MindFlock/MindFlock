@@ -1036,7 +1036,7 @@ export function Pane({
             ↓{inst.behind} behind
           </span>
         )}
-        <div className="tabs">{items.tabs.map((id) => tabEls[id])}</div>
+        <div className="tabs" data-tour="pane-tabs">{items.tabs.map((id) => tabEls[id])}</div>
         {/* Free room sits here, so the buttons and ⋯ hold the right edge. */}
         <span className="head-spacer" aria-hidden="true" />
         <div className="actions">
@@ -1114,6 +1114,8 @@ export function Pane({
             {icons ? "▶" : "▶ Resume"}
           </button>
         )}
+        {/* The New tour's last step points here (and at the tabs). */}
+        <span className="pane-menu-hook" data-tour="pane-menu">
         <PaneMoreMenu btnRef={ft && !ftShown ? setFtEl : undefined}>
           {(close) => (
             <>
@@ -1132,6 +1134,7 @@ export function Pane({
             </>
           )}
         </PaneMoreMenu>
+        </span>
         </div>
       </div>
       <AgentBlockedBanner block={noAgent} title={title} />
