@@ -462,7 +462,7 @@ beside the state:
   the job has come back from long quiets before, the server's reason: *quiet
   22m — it has resumed after 41m before*). The agent resumes when the job
   finishes.
-- **job running · 2h 10m of ~6h**: the same muted chip for a waiting job
+- **waiting on job · 2h 10m of ~6h**: the same muted chip for a waiting job
   that has an expected duration and is inside it; the tooltip gives the ETA
   as a clock time (*done about 15:50*) and who set it.
 - **job past ~6h**: muted with an amber dot — past its expected duration,

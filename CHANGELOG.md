@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   should take from the job chip's **Expected to take…** (30 min / 1 h / 6 h /
   24 h / custom), from the agent (`expect_background_job`), or by prefixing
   the command with `MINDFLOCK_EXPECT=6h`. Inside that window the chip reads
-  "job running · 2h 10m of ~6h"; passing it raises one bell row; "stuck" only
+  "waiting on job · 2h 10m of ~6h"; passing it raises one bell row; "stuck" only
   after 1.5× the expectation (or when the job provably waits on itself).
 - **Joint tasks: two people, two repos, one feature.** On a People connection,
   **Start a joint task** writes one brief; the other person accepts with their

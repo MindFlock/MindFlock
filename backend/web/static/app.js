@@ -24885,7 +24885,7 @@ function jobChipText(job, now) {
 	};
 	if (expect && progress) return {
 		kind: "waiting",
-		label: "job running · " + progress,
+		label: "waiting on job · " + progress,
 		cls: "bgchip bg-waiting",
 		title: "Expected to take " + expectWords(expect, job.expected_by) + (eta ? " — done about " + etaClock(eta, now) : "") + "; quiet " + formatSpan(quiet) + ": " + cmd
 	};

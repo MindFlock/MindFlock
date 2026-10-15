@@ -3,8 +3,8 @@
  * backend/providers/claude_background.py). Claude Code calls a session busy
  * while ANY such job lives, so without this an idle session with a dead
  * polling loop read "Working" forever. The row's chip says which kind it is:
- * waiting (the job's completion will wake the agent — "job running · 2h 10m
- * of ~6h" when it has an expected duration, "job past ~6h" once it is over
+ * waiting (the job's completion will wake the agent — "waiting on job · 2h
+ * 10m of ~6h" when it has an expected duration, "job past ~6h" once it is over
  * it) or stuck (it never will). Its words come from lib/jobExpectation; a
  * click opens the chip's menu: stop it (stuck, via lib/stopBackgroundJob) and
  * say how long it should take. Pure: no I/O. */

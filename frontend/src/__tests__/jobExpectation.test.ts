@@ -93,9 +93,10 @@ describe("parseDuration", () => {
 });
 
 describe("jobChipText", () => {
-  it("waiting inside its expectation reads as running, with the ETA as a clock time", () => {
+  it("waiting inside its expectation reads as waiting, never running, with the ETA as a clock time", () => {
     const t = jobChipText(sixH("waiting"), NOW);
-    expect(t.label).toBe("job running · 2h 10m of ~6h");
+    expect(t.label).toBe("waiting on job · 2h 10m of ~6h");
+    expect(t.label).not.toMatch(/running/);
     expect(t.cls).toBe("bgchip bg-waiting");
     expect(t.title).toContain("Expected to take ~6h, set by you");
     expect(t.title).toContain("done about 15:50");
