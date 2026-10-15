@@ -1,30 +1,37 @@
 /** The Workflow Optimizer dashboard: one renderer for the dialog and the pane.
  *
- * GET /api/workflow/summary?range= → the headline (median time to PR), where
- * that time goes (phases, grouped by who is the bottleneck), what to change,
- * the weekly trend and every work item; a work item expands into its own
- * timeline (GET /api/workflow/item?id=). Refreshes every minute while mounted
+ * GET /api/workflow/summary?range= → the headline (median time to commit —
+ * a commit finishes a unit of work), where that time goes (phases, grouped by
+ * who is the bottleneck), what to change, the handoffs after the commit, the
+ * weekly trend and every unit; a unit expands into its own timeline
+ * (GET /api/workflow/item?id=). Refreshes every minute while mounted
  * and soon after a stage change or a merge. Range and the phase-table view
  * are remembered per browser in api.storage.
  *
  * "Include my time" (off by default) is the extension's one server-side
  * setting (GET/POST /api/workflow/settings). Off, the server cuts the
  * person's own phases — waiting on your answer, your turn, idle while away —
- * out of every number, so only agent, tooling, handoff, limit and review
- * time counts. Flipping it saves the setting and reloads at once with an
+ * out of every number, so only agent, tooling and limit time counts toward
+ * the commit. Flipping it saves the setting and reloads at once with an
  * explicit include_me= override, keeping the old numbers on screen until
- * the new ones land (no blank flash, no layout jump). */
+ * the new ones land (no blank flash, no layout jump).
+ *
+ * The legend's chips are switches too: click a phase to hide it (the
+ * `hidden` setting, same endpoint). A hidden phase is cut out of every
+ * number the way your own time is — the medians are then the time of what
+ * is left showing — and its chip stays, struck through, to bring it back. */
 
 const REFRESH_MS = 60000;
 const RANGES = ["7d", "30d", "90d"];
-const HINT_OFF = "Off: assumes you respond instantly — only agent, tooling, handoff and review time count.";
+const HINT_OFF = "Off: assumes you respond instantly — only agent, tooling and limit time count.";
 const HINT_ON = "On: your answers, your turns and time away count too.";
+// The handoffs after a commit (analysis._HANDOFF_RANK): their chips live
+// with the "After the commit" table, not under the time-to-commit bar.
+const AFTER_PHASES = new Set(["to_push", "to_pr", "review"]);
 const STATUS_WORDS = {
-  merged: "merged",
-  pr_open: "PR open",
+  committed: "committed",
   in_progress: "in progress",
   abandoned: "abandoned",
-  closed: "closed",
 };
 
 function el(tag, attrs, ...children) {
@@ -104,11 +111,29 @@ export function timelineStrip(timeline, labels) {
   return strip;
 }
 
-function legend(phases, present) {
+/** The phases in `present` plus the hidden ones, each a switch: click to
+ * hide or show it (`onToggle(id)`). */
+function legend(phases, present, hidden, onToggle) {
+  const shown = phases.filter((p) => present.has(p.id) || hidden.has(p.id));
+  if (!shown.length) return null;
   return el(
     "div",
     { class: "wf-legend" },
-    phases.filter((p) => present.has(p.id)).map((p) => el("span", { class: "wf-key", title: p.hint }, el("i", { class: "wf-swatch ph-" + p.id }), p.label))
+    shown.map((p) => {
+      const off = hidden.has(p.id);
+      return el(
+        "button",
+        {
+          class: "wf-key wf-key-btn" + (off ? " off" : ""),
+          type: "button",
+          "aria-pressed": off ? "false" : "true",
+          title: (off ? "Hidden — click to show it again: " : "Click to hide it and leave its time out: ") + p.hint,
+          onClick: () => onToggle(p.id),
+        },
+        el("i", { class: "wf-swatch ph-" + p.id }),
+        p.label
+      );
+    })
   );
 }
 
@@ -119,11 +144,10 @@ function kpis(data, rangeLabel) {
   return el(
     "div",
     { class: "wf-kpis" },
-    tile(fmtDur(k.median_to_pr), mine ? "median time to PR, including your time" : "median time to PR, excluding your time", k.p90_to_pr !== null && k.p90_to_pr !== undefined ? "p90 " + fmtDur(k.p90_to_pr) : "no PR opened in the last " + rangeLabel),
-    tile(fmtDur(k.median_active_to_pr), "median active time to PR", mine ? "without idle-while-away and untracked time" : "without untracked time"),
-    tile(fmtDur(k.median_to_merge), "median time to merge", (k.merged || 0) + " merged"),
-    tile(String(k.prs_opened || 0), "PRs opened", (k.items || 0) + " work items"),
-    tile(String(k.in_progress || 0), "in progress", "not at a PR yet")
+    tile(fmtDur(k.median_to_commit), mine ? "median time to commit, including your time" : "median time to commit, excluding your time", k.p90_to_commit !== null && k.p90_to_commit !== undefined ? "p90 " + fmtDur(k.p90_to_commit) : "nothing committed in the last " + rangeLabel),
+    tile(fmtDur(k.median_active_to_commit), "median active time to commit", mine ? "without idle-while-away and untracked time" : "without untracked time"),
+    tile(String(k.committed || 0), "units committed", (k.estimated ? k.estimated + " estimated · " : "") + (k.items || 0) + " units"),
+    tile(String(k.in_progress || 0), "in progress", "not committed yet")
   );
 }
 
@@ -180,25 +204,25 @@ function phaseTable(rows) {
 }
 
 function trendChart(trend) {
-  const vals = (trend || []).map((w) => w.median_to_pr);
+  const vals = (trend || []).map((w) => w.median_to_commit);
   if (trend.length < 2 || !vals.some((v) => v !== null && v !== undefined)) return null;
   const max = Math.max(...vals.filter((v) => v !== null && v !== undefined), 1);
   return el(
     "div",
     { class: "wf-card" },
-    el("h4", { text: "Median time to PR, by week" }),
+    el("h4", { text: "Median time to commit, by week" }),
     el(
       "div",
       { class: "wf-trend" },
       trend.map((w) => {
-        const h = w.median_to_pr ? Math.max(4, (100 * w.median_to_pr) / max) : 0;
-        const bar = el("span", { class: "wf-trend-bar" + (w.median_to_pr ? "" : " empty") });
+        const h = w.median_to_commit ? Math.max(4, (100 * w.median_to_commit) / max) : 0;
+        const bar = el("span", { class: "wf-trend-bar" + (w.median_to_commit ? "" : " empty") });
         bar.style.height = h.toFixed(1) + "%";
         return el(
           "div",
-          { class: "wf-trend-col", title: "Week ending " + fmtWhen(w.end) + ": " + (w.median_to_pr ? fmtDur(w.median_to_pr) + " median over " + w.items + " PR" + (w.items === 1 ? "" : "s") : "no PRs") },
+          { class: "wf-trend-col", title: "Week ending " + fmtWhen(w.end) + ": " + (w.median_to_commit ? fmtDur(w.median_to_commit) + " median over " + w.items + " unit" + (w.items === 1 ? "" : "s") : "no commits") },
           el("div", { class: "wf-trend-plot" }, bar),
-          el("div", { class: "muted wf-trend-label", text: w.median_to_pr ? fmtDur(w.median_to_pr) : "–" })
+          el("div", { class: "muted wf-trend-label", text: w.median_to_commit ? fmtDur(w.median_to_commit) : "–" })
         );
       })
     )
@@ -219,9 +243,11 @@ export function renderBoard(api, host, opts) {
   if (opts && opts.compact) root.classList.add("wf-compact");
   let range = api.storage.get("range", "7d");
   if (!RANGES.includes(range)) range = "7d";
-  let view = api.storage.get("view", "to_pr");
+  let view = api.storage.get("view", "to_commit");
+  if (view !== "to_commit" && view !== "after_commit") view = "to_commit";
   // null until the server says (the saved setting); then what this view shows.
   let includeMe = null;
+  let hidden = null;
   let data = null;
   let timer = null;
   let disposed = false;
@@ -236,7 +262,7 @@ export function renderBoard(api, host, opts) {
   const meBox = el("input", { type: "checkbox", class: "wf-switch-input", disabled: true, onChange: () => setIncludeMe(meBox.checked) });
   const meHint = el("div", { class: "muted wf-me-hint", text: HINT_OFF });
   const meSwitch = el("label", { class: "wf-switch", title: HINT_OFF }, meBox, el("span", { class: "wf-switch-track", "aria-hidden": "true" }), el("span", { text: "Include my time" }));
-  const top = el("div", { class: "wf-top" }, el("div", { class: "wf-head" }, el("div", { class: "wf-head-title", text: "Where the time goes, ticket → PR" }), el("div", { class: "muted", text: "Every work item (one branch's trip to a merged PR), split by what was holding it." })), el("div", { class: "wf-controls" }, meSwitch, ...rangeBtns, refreshBtn, windowBtn, status), meHint);
+  const top = el("div", { class: "wf-top" }, el("div", { class: "wf-head" }, el("div", { class: "wf-head-title", text: "Where the time goes, work → commit" }), el("div", { class: "muted", text: "Every unit of work (from the first real work to the commit that finishes it), split by what was holding it." })), el("div", { class: "wf-controls" }, meSwitch, ...rangeBtns, refreshBtn, windowBtn, status), meHint);
   const body = el("div", { class: "wf-body" }, el("p", { class: "muted", text: "Loading the workflow timeline…" }));
   root.appendChild(el("div", { class: "wf-wrap" }, top, body));
 
@@ -268,8 +294,22 @@ export function renderBoard(api, host, opts) {
     }
   }
 
+  async function toggleHidden(id) {
+    hidden = new Set(hidden || []);
+    if (hidden.has(id)) hidden.delete(id);
+    else hidden.add(id);
+    details.clear();
+    void load(true);
+    try {
+      await api.request("/api/workflow/settings", { json: { hidden: [...hidden] } });
+    } catch (err) {
+      api.log.error("settings", err);
+      status.textContent = "could not save the setting";
+    }
+  }
+
   function meParam() {
-    return includeMe === null ? "" : "&include_me=" + (includeMe ? "1" : "0");
+    return (includeMe === null ? "" : "&include_me=" + (includeMe ? "1" : "0")) + (hidden === null ? "" : "&hide=" + encodeURIComponent([...hidden].join(",")));
   }
 
   function rangeLabel() {
@@ -291,9 +331,9 @@ export function renderBoard(api, host, opts) {
       el("span", { class: "wf-item-name", text: itemTitle(it) }),
       el("span", { class: "wf-chip s-" + it.status, text: STATUS_WORDS[it.status] || it.status }),
       el("span", { class: "muted wf-item-branch", text: (it.repo ? it.repo + " · " : "") + it.branch }),
-      el("span", { class: "wf-item-lead", text: it.lead_to_pr !== null && it.lead_to_pr !== undefined ? fmtDur(it.lead_to_pr) + " to PR" : fmtDur(it.elapsed) + " so far" })
+      el("span", { class: "wf-item-lead", text: it.lead_to_commit !== null && it.lead_to_commit !== undefined ? fmtDur(it.lead_to_commit) + " to commit" + (it.estimated ? " (est.)" : "") : fmtDur(it.elapsed) + " so far" })
     );
-    const totals = Object.assign({}, it.to_pr || {});
+    const totals = Object.assign({}, it.to_commit || {});
     const kids = [head, phaseBar(totals, lab, "wf-item-bar")];
     if (isOpen) kids.push(itemDetail(it));
     return el("div", { class: "wf-item" + (isOpen ? " open" : "") }, ...kids);
@@ -304,15 +344,15 @@ export function renderBoard(api, host, opts) {
     const d = details.get(it.id);
     const facts = [
       "started " + fmtWhen(it.start),
-      it.pr_at ? "PR " + fmtWhen(it.pr_at) : null,
-      it.merged_at ? "merged " + fmtWhen(it.merged_at) : null,
-      it.commits ? it.commits + " commit" + (it.commits === 1 ? "" : "s") + (it.hook_failures ? ", " + it.hook_failures + " failed hooks" : "") : null,
+      it.commit_at ? (it.estimated ? "committed ~" : "committed ") + fmtWhen(it.commit_at) : null,
+      it.estimated ? "commit time estimated (recorded before commits were tracked)" : null,
+      it.hook_runs ? it.hook_runs + " hook run" + (it.hook_runs === 1 ? "" : "s") + (it.hook_failures ? ", " + it.hook_failures + " failed" : "") : null,
       it.sessions && it.sessions.length ? "window" + (it.sessions.length === 1 ? "" : "s") + ": " + it.sessions.join(", ") : null,
       it.your_time_s ? fmtDur(it.your_time_s) + " of your time left out" : null,
     ].filter(Boolean);
     const compressed = !!(d && d.timeline.length && d.timeline[0].at !== undefined);
-    const after = Object.keys(it.after_pr || {}).length
-      ? el("div", { class: "wf-after" }, el("span", { class: "muted", text: "After the PR opened: " }), Object.entries(it.after_pr).map(([ph, s]) => el("span", { class: "wf-key" }, el("i", { class: "wf-swatch ph-" + ph }), (lab[ph] || ph) + " " + fmtDur(s))))
+    const after = Object.keys(it.after_commit || {}).length
+      ? el("div", { class: "wf-after" }, el("span", { class: "muted", text: "After the commit: " }), Object.entries(it.after_commit).map(([ph, s]) => el("span", { class: "wf-key" }, el("i", { class: "wf-swatch ph-" + ph }), (lab[ph] || ph) + " " + fmtDur(s))))
       : null;
     return el(
       "div",
@@ -320,7 +360,7 @@ export function renderBoard(api, host, opts) {
       el("div", { class: "muted", text: facts.join(" · ") }),
       d ? timelineStrip(d.timeline, lab) : el("div", { class: "muted", text: "Loading timeline…" }),
       d ? el("div", { class: "wf-axis muted" }, el("span", { text: fmtWhen(d.timeline.length ? d.timeline[0].start : it.start) }), compressed ? el("span", { text: "your time cut out" }) : null, el("span", { text: fmtWhen(compressed || !d.timeline.length ? it.end : d.timeline[d.timeline.length - 1].end) })) : null,
-      el("div", { class: "wf-item-phases" }, Object.entries(it.to_pr || {}).sort((a, b) => b[1] - a[1]).map(([ph, s]) => el("span", { class: "wf-key" }, el("i", { class: "wf-swatch ph-" + ph }), (lab[ph] || ph) + " " + fmtDur(s)))),
+      el("div", { class: "wf-item-phases" }, Object.entries(it.to_commit || {}).sort((a, b) => b[1] - a[1]).map(([ph, s]) => el("span", { class: "wf-key" }, el("i", { class: "wf-swatch ph-" + ph }), (lab[ph] || ph) + " " + fmtDur(s)))),
       after,
       it.pr ? el("a", { class: "wf-link", href: it.pr, target: "_blank", rel: "noopener", text: "Open the PR ↗" }) : null
     );
@@ -355,26 +395,36 @@ export function renderBoard(api, host, opts) {
           el("h4", { text: "Nothing recorded yet" }),
           el(
             "p",
-            { class: "muted", text: "The optimizer records every session's phase from the moment it is installed" + (data.tracking_since ? " (recording since " + fmtWhen(data.tracking_since) + ")" : "") + ". Work a ticket through to a PR and the breakdown appears here: agent time, pre-commit hooks, handoffs and review" + (data.include_me === false ? "." : ", and your turns.") }
+            { class: "muted", text: "The optimizer records every session's phase from the moment it is installed" + (data.tracking_since ? " (recording since " + fmtWhen(data.tracking_since) + ")" : "") + ". Work something through to a commit and the breakdown appears here: agent time, pre-commit hooks and limits" + (data.include_me === false ? "." : ", and your turns.") }
           )
         )
       );
       return;
     }
-    const stats = view === "after_pr" ? data.after_pr : data.to_pr;
+    const stats = view === "after_commit" ? data.after_commit : data.to_commit;
     const totals = {};
-    for (const r of data.to_pr || []) totals[r.phase] = r.total_s;
-    const present = new Set([...(data.to_pr || []), ...(data.after_pr || [])].map((r) => r.phase));
-    const basisNote = data.basis === "shipped" ? "Over the " + (data.kpi.prs_opened || 0) + " PR" + (data.kpi.prs_opened === 1 ? "" : "s") + " opened in the last " + rangeLabel() + ", from first work to the PR." : "No PR opened in the last " + rangeLabel() + " — so far, across every item in progress.";
-    // Review (the PR open, nothing working) is reviewers and CI, not your
-    // turn in the terminal: it counts either way, and the copy says so.
+    for (const r of data.to_commit || []) totals[r.phase] = r.total_s;
+    const present = new Set((data.to_commit || []).map((r) => r.phase));
+    const off = hidden || new Set();
+    const beforeOff = new Set([...off].filter((p) => !AFTER_PHASES.has(p)));
+    const afterOff = new Set([...off].filter((p) => AFTER_PHASES.has(p)));
+    const afterPresent = new Set((data.after_commit || []).map((r) => r.phase));
+    const n = data.kpi.committed || 0;
+    const basisNote =
+      data.basis === "committed"
+        ? "Over the " + n + " unit" + (n === 1 ? "" : "s") + " committed in the last " + rangeLabel() + ", from first work to the commit." + (data.kpi.estimated ? " " + data.kpi.estimated + " of the commit times are estimated (recorded before commits were tracked)." : "")
+        : "Nothing committed in the last " + rangeLabel() + " — so far, across every unit in progress.";
+    // Pushing, the PR and review come after the commit: never in this total.
     const meNote =
       data.include_me === false
-        ? "Your own time is left out" + (data.excluded && data.excluded.total_s ? " (" + fmtDur(data.excluded.total_s) + " of answers, turns and time away)" : "") + ", as if you answered instantly. Review — the PR open, waiting on reviewers — still counts."
-        : "Includes your own time: answering questions, your turns and time away.";
+        ? "Your own time is left out" + (data.excluded && data.excluded.total_s ? " (" + fmtDur(data.excluded.total_s) + " of answers, turns and time away)" : "") + ", as if you answered instantly. Pushing, the PR and review come after the commit — see “After the commit”."
+        : "Includes your own time: answering questions, your turns and time away. Pushing, the PR and review come after the commit — see “After the commit”.";
+    const hiddenNote = beforeOff.size
+      ? " Hidden (click a struck-out phase to bring it back): " + [...beforeOff].map((p) => lab[p] || p).join(", ") + (data.hidden && data.hidden.total_s ? " — " + fmtDur(data.hidden.total_s) + " left out." : ".")
+      : " Click a phase below to hide it.";
     const viewBtns = [
-      ["to_pr", "Until the PR"],
-      ["after_pr", "After the PR"],
+      ["to_commit", "Until the commit"],
+      ["after_commit", "After the commit"],
     ].map(([v, t]) =>
       el("button", {
         class: "wf-btn" + (view === v ? " on" : ""),
@@ -389,11 +439,11 @@ export function renderBoard(api, host, opts) {
     );
     const parts = [
       kpis(data, rangeLabel()),
-      el("div", { class: "wf-card" }, el("h4", { text: "Where time to PR goes" }), el("p", { class: "muted", text: basisNote + " " + meNote }), phaseBar(totals, lab, "wf-big-bar"), groupLine(data.to_pr_groups), legend(data.phases || [], present)),
+      el("div", { class: "wf-card" }, el("h4", { text: "Where time to commit goes" }), el("p", { class: "muted", text: basisNote + " " + meNote + hiddenNote }), phaseBar(totals, lab, "wf-big-bar"), groupLine(data.to_commit_groups), legend(data.phases || [], present, beforeOff, toggleHidden)),
       data.advice && data.advice.length ? el("div", { class: "wf-card" }, el("h4", { text: "Bottlenecks — what to change" }), adviceList(data.advice)) : null,
-      el("div", { class: "wf-card" }, el("div", { class: "wf-card-head" }, el("h4", { text: "Phases" }), el("div", { class: "wf-seg-btns" }, ...viewBtns)), phaseTable(stats)),
+      el("div", { class: "wf-card" }, el("div", { class: "wf-card-head" }, el("h4", { text: "Phases" }), el("div", { class: "wf-seg-btns" }, ...viewBtns)), phaseTable(stats), view === "after_commit" ? legend(data.phases || [], afterPresent, afterOff, toggleHidden) : null),
       trendChart(data.trend || []),
-      el("div", { class: "wf-card" }, el("h4", { text: "Work items (" + items.length + ")" }), el("div", { class: "wf-items" }, items.map(itemRow))),
+      el("div", { class: "wf-card" }, el("h4", { text: "Units of work (" + items.length + ")" }), el("div", { class: "wf-items" }, items.map(itemRow))),
     ];
     // replaceChildren would print a skipped (null) card as the text "null".
     body.replaceChildren(...parts.filter(Boolean));
@@ -403,17 +453,19 @@ export function renderBoard(api, host, opts) {
     if (disposed) return;
     status.textContent = manual ? "refreshing…" : "";
     try {
-      const asked = includeMe;
-      const r = await api.request("/api/workflow/summary?range=" + encodeURIComponent(range) + meParam());
+      const asked = meParam();
+      const r = await api.request("/api/workflow/summary?range=" + encodeURIComponent(range) + asked);
       if (disposed) return;
       if (r && r.error) throw new Error(r.error);
-      // A flip while this was in flight: its own load is coming.
-      if (asked !== includeMe) return;
+      // A flip (your time, a phase) while this was in flight: its own load
+      // is coming.
+      if (asked !== meParam()) return;
       data = r;
       if (typeof r.include_me === "boolean" && includeMe === null) {
         includeMe = r.include_me;
         showIncludeMe();
       }
+      if (Array.isArray(r.hide) && hidden === null) hidden = new Set(r.hide);
       details.clear();
       draw();
       // Re-fetch the timelines of the items left open (a snapshot of the

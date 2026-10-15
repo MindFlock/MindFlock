@@ -57,19 +57,19 @@
      "id": "to_push",
      "label": "Committed, not pushed",
      "group": "handoff",
-     "hint": "commits waiting to be pushed"
+     "hint": "after the commit: waiting to be pushed"
     },
     {
      "id": "to_pr",
      "label": "Pushed, no PR yet",
      "group": "handoff",
-     "hint": "the branch is on the remote without a PR"
+     "hint": "after the commit: on the remote without a PR"
     },
     {
      "id": "review",
      "label": "PR open \u2014 waiting",
      "group": "review",
-     "hint": "the PR is open and nothing is working on it"
+     "hint": "after the commit: the PR is open and nothing is working on it"
     },
     {
      "id": "rework",
@@ -131,27 +131,26 @@
     }
    ],
    "kpi": {
-    "items": 2,
-    "prs_opened": 1,
-    "merged": 1,
-    "median_to_pr": 3000.0,
-    "p90_to_pr": 3000.0,
-    "median_active_to_pr": 3000.0,
-    "median_to_merge": 9000.0,
+    "items": 3,
+    "committed": 2,
+    "estimated": 2,
+    "median_to_commit": 1680.0,
+    "p90_to_commit": 2760.0,
+    "median_active_to_commit": 1680.0,
     "in_progress": 1
    },
-   "basis": "shipped",
-   "to_pr": [
+   "basis": "committed",
+   "to_commit": [
     {
      "phase": "agent",
      "label": "Agent working",
      "group": "agent",
      "hint": "the agent is mid-turn",
-     "total_s": 1920.0,
-     "share": 0.64,
-     "median_s": 1920.0,
+     "total_s": 2520.0,
+     "share": 0.75,
+     "median_s": 1260.0,
      "p90_s": 1920.0,
-     "items": 1
+     "items": 2
     },
     {
      "phase": "your_turn",
@@ -159,7 +158,7 @@
      "group": "you",
      "hint": "the agent finished a turn and you were at the keyboard",
      "total_s": 600.0,
-     "share": 0.2,
+     "share": 0.1786,
      "median_s": 600.0,
      "p90_s": 600.0,
      "items": 1
@@ -170,29 +169,7 @@
      "group": "tooling",
      "hint": "the commit's pre-commit hooks are running",
      "total_s": 120.0,
-     "share": 0.04,
-     "median_s": 120.0,
-     "p90_s": 120.0,
-     "items": 1
-    },
-    {
-     "phase": "to_push",
-     "label": "Committed, not pushed",
-     "group": "handoff",
-     "hint": "commits waiting to be pushed",
-     "total_s": 120.0,
-     "share": 0.04,
-     "median_s": 120.0,
-     "p90_s": 120.0,
-     "items": 1
-    },
-    {
-     "phase": "to_pr",
-     "label": "Pushed, no PR yet",
-     "group": "handoff",
-     "hint": "the branch is on the remote without a PR",
-     "total_s": 120.0,
-     "share": 0.04,
+     "share": 0.0357,
      "median_s": 120.0,
      "p90_s": 120.0,
      "items": 1
@@ -203,7 +180,7 @@
      "group": "tooling",
      "hint": "workspace provisioning and setup commands",
      "total_s": 60.0,
-     "share": 0.02,
+     "share": 0.0179,
      "median_s": 60.0,
      "p90_s": 60.0,
      "items": 1
@@ -214,59 +191,64 @@
      "group": "tooling",
      "hint": "a commit's hooks failed; fixing and retrying",
      "total_s": 60.0,
-     "share": 0.02,
+     "share": 0.0179,
      "median_s": 60.0,
      "p90_s": 60.0,
      "items": 1
     }
    ],
-   "to_pr_groups": [
+   "to_commit_groups": [
     {
      "group": "agent",
      "label": "Agent",
-     "total_s": 1920.0,
-     "share": 0.64
+     "total_s": 2520.0,
+     "share": 0.75
     },
     {
      "group": "you",
      "label": "You",
      "total_s": 600.0,
-     "share": 0.2
+     "share": 0.1786
     },
     {
      "group": "tooling",
      "label": "Tooling",
      "total_s": 240.0,
-     "share": 0.08
-    },
-    {
-     "group": "handoff",
-     "label": "Handoffs",
-     "total_s": 240.0,
-     "share": 0.08
+     "share": 0.0714
     }
    ],
-   "after_pr": [
+   "after_commit": [
     {
      "phase": "review",
      "label": "PR open \u2014 waiting",
      "group": "review",
-     "hint": "the PR is open and nothing is working on it",
-     "total_s": 5400.0,
-     "share": 0.9,
-     "median_s": 5400.0,
-     "p90_s": 5400.0,
+     "hint": "after the commit: the PR is open and nothing is working on it",
+     "total_s": 3400.0,
+     "share": 0.9341,
+     "median_s": 3400.0,
+     "p90_s": 3400.0,
      "items": 1
     },
     {
-     "phase": "rework",
-     "label": "Agent reworking the PR",
-     "group": "agent",
-     "hint": "the agent is working after the PR opened",
-     "total_s": 600.0,
-     "share": 0.1,
-     "median_s": 600.0,
-     "p90_s": 600.0,
+     "phase": "to_push",
+     "label": "Committed, not pushed",
+     "group": "handoff",
+     "hint": "after the commit: waiting to be pushed",
+     "total_s": 120.0,
+     "share": 0.033,
+     "median_s": 120.0,
+     "p90_s": 120.0,
+     "items": 1
+    },
+    {
+     "phase": "to_pr",
+     "label": "Pushed, no PR yet",
+     "group": "handoff",
+     "hint": "after the commit: on the remote without a PR",
+     "total_s": 120.0,
+     "share": 0.033,
+     "median_s": 120.0,
+     "p90_s": 120.0,
      "items": 1
     }
    ],
@@ -274,45 +256,86 @@
     {
      "phase": "your_turn",
      "level": "warn",
-     "title": "Finished work waits on you",
-     "detail": "After the agent's turn ends, items sit 10m (median per item) before anything moves \u2014 20% of time to PR. Arm autopilot to the PR (\u23e9, or a template's \u201cwhen a run's turn ends\u201d) so finished work ships without waiting for you, and review in the PR instead of the terminal.",
+     "title": "Work waits on your next prompt",
+     "detail": "Between the agent's turns, units sit 10m (median per unit) before anything moves \u2014 18% of time to commit. Queue the next prompt while the agent works, or put the whole task (acceptance criteria, files to touch, \u201ccommit when done\u201d) in the first prompt so it runs to the commit in one go.",
      "at_stake_s": 600.0,
-     "share": 0.2
+     "share": 0.1786
     },
     {
      "phase": "precommit",
      "level": "warn",
      "title": "Pre-commit hooks are slow",
-     "detail": "Hooks take 1m per commit across 2 commits (4% of time to PR). Move slow checks (the test suite, type checks over the whole tree) to pre-push or CI, and run only changed-file hooks at commit.",
+     "detail": "Hooks take 1m per commit across 2 commits (4% of time to commit). Move slow checks (the test suite, type checks over the whole tree) to pre-push or CI, and run only changed-file hooks at commit.",
      "at_stake_s": 120.0,
-     "share": 0.04
+     "share": 0.0357
     },
     {
      "phase": "hook_fix",
      "level": "warn",
      "title": "Commits keep failing their hooks",
-     "detail": "1 of 2 commits failed pre-commit (50%), costing 1m per item to recover. Put the formatter/linter commands in the agent's instructions (CLAUDE.md/AGENTS.md) so it runs them before committing.",
+     "detail": "1 of 2 commits failed pre-commit (50%), costing 1m per unit to recover. Put the formatter/linter commands in the agent's instructions (CLAUDE.md/AGENTS.md) so it runs them before committing.",
      "at_stake_s": 60.0,
-     "share": 0.02
+     "share": 0.0179
     },
     {
      "phase": "agent",
      "level": "info",
      "title": "Agent time dominates",
-     "detail": "The agent itself is 64% of time to PR (32m per item). Split tickets smaller and run them in parallel, or use a faster model for routine items.",
-     "at_stake_s": 1920.0,
-     "share": 0.64
+     "detail": "The agent itself is 75% of time to commit (21m per unit). Split tickets smaller and run them in parallel, or use a faster model for routine items.",
+     "at_stake_s": 2520.0,
+     "share": 0.75
     }
    ],
    "trend": [
     {
      "start": 1799421200.0,
      "end": 1800026000.0,
-     "items": 1,
-     "median_to_pr": 3000.0
+     "items": 2,
+     "median_to_commit": 1680.0
     }
    ],
    "items": [
+    {
+     "id": "app@feature/sc-12/x#2",
+     "key": "app@feature/sc-12/x",
+     "cycle": 2,
+     "repo": "app",
+     "branch": "feature/sc-12/x",
+     "ticket": "sc-12",
+     "name": "Fix login",
+     "pr": "https://x/pull/1",
+     "sessions": [
+      "s1",
+      "s1-copy"
+     ],
+     "status": "in_progress",
+     "start": 1800020000.0,
+     "commit_at": null,
+     "estimated": false,
+     "end": 1800026000.0,
+     "lead_to_commit": null,
+     "active_to_commit": null,
+     "elapsed": 6000.0,
+     "to_commit": {
+      "agent": 2000.0,
+      "your_turn": 4000.0
+     },
+     "after_commit": {},
+     "hook_runs": 0,
+     "hook_failures": 0,
+     "timeline": [
+      {
+       "ph": "agent",
+       "start": 1800020000.0,
+       "end": 1800022000.0
+      },
+      {
+       "ph": "your_turn",
+       "start": 1800022000.0,
+       "end": 1800026000.0
+      }
+     ]
+    },
     {
      "id": "app@feature/sc-12/x#1",
      "key": "app@feature/sc-12/x",
@@ -326,32 +349,27 @@
       "s1",
       "s1-copy"
      ],
-     "status": "in_progress",
-     "start": 1800020000.0,
-     "pr_at": null,
-     "merged_at": null,
-     "end": 1800026000.0,
-     "lead_to_pr": null,
-     "active_to_pr": null,
-     "lead_to_merge": null,
-     "elapsed": 6000.0,
-     "to_pr": {
-      "agent": 2000.0,
-      "your_turn": 4000.0
+     "status": "committed",
+     "start": 1800005000.0,
+     "commit_at": 1800005600.0,
+     "estimated": true,
+     "end": 1800005600.0,
+     "lead_to_commit": 600.0,
+     "active_to_commit": 600.0,
+     "elapsed": 600.0,
+     "to_commit": {
+      "agent": 600.0
      },
-     "after_pr": {},
-     "commits": 0,
+     "after_commit": {
+      "review": 3400.0
+     },
+     "hook_runs": 0,
      "hook_failures": 0,
      "timeline": [
       {
        "ph": "agent",
-       "start": 1800020000.0,
-       "end": 1800022000.0
-      },
-      {
-       "ph": "your_turn",
-       "start": 1800022000.0,
-       "end": 1800026000.0
+       "start": 1800005000.0,
+       "end": 1800005600.0
       }
      ]
     },
@@ -368,29 +386,26 @@
       "s1",
       "s1-copy"
      ],
-     "status": "merged",
+     "status": "committed",
      "start": 1800000000.0,
-     "pr_at": 1800003000.0,
-     "merged_at": 1800009000.0,
-     "end": 1800009000.0,
-     "lead_to_pr": 3000.0,
-     "active_to_pr": 3000.0,
-     "lead_to_merge": 9000.0,
-     "elapsed": 9000.0,
-     "to_pr": {
+     "commit_at": 1800002760.0,
+     "estimated": true,
+     "end": 1800002760.0,
+     "lead_to_commit": 2760.0,
+     "active_to_commit": 2760.0,
+     "elapsed": 2760.0,
+     "to_commit": {
       "setup": 60.0,
       "agent": 1920.0,
       "your_turn": 600.0,
       "precommit": 120.0,
-      "hook_fix": 60.0,
+      "hook_fix": 60.0
+     },
+     "after_commit": {
       "to_push": 120.0,
       "to_pr": 120.0
      },
-     "after_pr": {
-      "review": 5400.0,
-      "rework": 600.0
-     },
-     "commits": 2,
+     "hook_runs": 2,
      "hook_failures": 1,
      "timeline": [
       {
@@ -432,31 +447,6 @@
        "ph": "precommit",
        "start": 1800002700.0,
        "end": 1800002760.0
-      },
-      {
-       "ph": "to_push",
-       "start": 1800002760.0,
-       "end": 1800002880.0
-      },
-      {
-       "ph": "to_pr",
-       "start": 1800002880.0,
-       "end": 1800003000.0
-      },
-      {
-       "ph": "review",
-       "start": 1800003000.0,
-       "end": 1800005000.0
-      },
-      {
-       "ph": "rework",
-       "start": 1800005000.0,
-       "end": 1800005600.0
-      },
-      {
-       "ph": "review",
-       "start": 1800005600.0,
-       "end": 1800009000.0
       }
      ]
     }
@@ -519,19 +509,19 @@
      "id": "to_push",
      "label": "Committed, not pushed",
      "group": "handoff",
-     "hint": "commits waiting to be pushed"
+     "hint": "after the commit: waiting to be pushed"
     },
     {
      "id": "to_pr",
      "label": "Pushed, no PR yet",
      "group": "handoff",
-     "hint": "the branch is on the remote without a PR"
+     "hint": "after the commit: on the remote without a PR"
     },
     {
      "id": "review",
      "label": "PR open \u2014 waiting",
      "group": "review",
-     "hint": "the PR is open and nothing is working on it"
+     "hint": "after the commit: the PR is open and nothing is working on it"
     },
     {
      "id": "rework",
@@ -594,23 +584,22 @@
    ],
    "kpi": {
     "items": 4,
-    "prs_opened": 3,
-    "merged": 1,
-    "median_to_pr": 4000.0,
-    "p90_to_pr": 4840.0,
-    "median_active_to_pr": 2940.0,
-    "median_to_merge": 8000.0,
+    "committed": 3,
+    "estimated": 3,
+    "median_to_commit": 4000.0,
+    "p90_to_commit": 4660.0,
+    "median_active_to_commit": 2760.0,
     "in_progress": 1
    },
-   "basis": "shipped",
-   "to_pr": [
+   "basis": "committed",
+   "to_commit": [
     {
      "phase": "your_turn",
      "label": "Your turn",
      "group": "you",
      "hint": "the agent finished a turn and you were at the keyboard",
      "total_s": 4400.0,
-     "share": 0.4472,
+     "share": 0.4555,
      "median_s": 600.0,
      "p90_s": 3400.0,
      "items": 3
@@ -621,7 +610,7 @@
      "group": "agent",
      "hint": "the agent is mid-turn",
      "total_s": 2340.0,
-     "share": 0.2378,
+     "share": 0.2422,
      "median_s": 1170.0,
      "p90_s": 1740.0,
      "items": 2
@@ -632,7 +621,7 @@
      "group": "idle",
      "hint": "the agent finished a turn and nobody was around",
      "total_s": 1900.0,
-     "share": 0.1931,
+     "share": 0.1967,
      "median_s": 1900.0,
      "p90_s": 1900.0,
      "items": 1
@@ -643,21 +632,10 @@
      "group": "you",
      "hint": "the agent asked a question or a permission",
      "total_s": 900.0,
-     "share": 0.0915,
+     "share": 0.0932,
      "median_s": 450.0,
      "p90_s": 600.0,
      "items": 2
-    },
-    {
-     "phase": "to_pr",
-     "label": "Pushed, no PR yet",
-     "group": "handoff",
-     "hint": "the branch is on the remote without a PR",
-     "total_s": 120.0,
-     "share": 0.0122,
-     "median_s": 120.0,
-     "p90_s": 120.0,
-     "items": 1
     },
     {
      "phase": "setup",
@@ -665,7 +643,7 @@
      "group": "tooling",
      "hint": "workspace provisioning and setup commands",
      "total_s": 60.0,
-     "share": 0.0061,
+     "share": 0.0062,
      "median_s": 60.0,
      "p90_s": 60.0,
      "items": 1
@@ -676,103 +654,97 @@
      "group": "tooling",
      "hint": "the commit's pre-commit hooks are running",
      "total_s": 60.0,
-     "share": 0.0061,
+     "share": 0.0062,
      "median_s": 60.0,
      "p90_s": 60.0,
+     "items": 1
+    }
+   ],
+   "to_commit_groups": [
+    {
+     "group": "agent",
+     "label": "Agent",
+     "total_s": 2340.0,
+     "share": 0.2422
+    },
+    {
+     "group": "you",
+     "label": "You",
+     "total_s": 5300.0,
+     "share": 0.5487
+    },
+    {
+     "group": "tooling",
+     "label": "Tooling",
+     "total_s": 120.0,
+     "share": 0.0124
+    },
+    {
+     "group": "idle",
+     "label": "Idle (away)",
+     "total_s": 1900.0,
+     "share": 0.1967
+    }
+   ],
+   "after_commit": [
+    {
+     "phase": "review",
+     "label": "PR open \u2014 waiting",
+     "group": "review",
+     "hint": "after the commit: the PR is open and nothing is working on it",
+     "total_s": 11000.0,
+     "share": 0.9839,
+     "median_s": 3280.0,
+     "p90_s": 5280.0,
+     "items": 3
+    },
+    {
+     "phase": "to_pr",
+     "label": "Pushed, no PR yet",
+     "group": "handoff",
+     "hint": "after the commit: on the remote without a PR",
+     "total_s": 120.0,
+     "share": 0.0107,
+     "median_s": 120.0,
+     "p90_s": 120.0,
      "items": 1
     },
     {
      "phase": "to_push",
      "label": "Committed, not pushed",
      "group": "handoff",
-     "hint": "commits waiting to be pushed",
+     "hint": "after the commit: waiting to be pushed",
      "total_s": 60.0,
-     "share": 0.0061,
+     "share": 0.0054,
      "median_s": 60.0,
      "p90_s": 60.0,
      "items": 1
-    }
-   ],
-   "to_pr_groups": [
-    {
-     "group": "agent",
-     "label": "Agent",
-     "total_s": 2340.0,
-     "share": 0.2378
-    },
-    {
-     "group": "you",
-     "label": "You",
-     "total_s": 5300.0,
-     "share": 0.5386
-    },
-    {
-     "group": "tooling",
-     "label": "Tooling",
-     "total_s": 120.0,
-     "share": 0.0122
-    },
-    {
-     "group": "handoff",
-     "label": "Handoffs",
-     "total_s": 180.0,
-     "share": 0.0183
-    },
-    {
-     "group": "idle",
-     "label": "Idle (away)",
-     "total_s": 1900.0,
-     "share": 0.1931
-    }
-   ],
-   "after_pr": [
-    {
-     "phase": "review",
-     "label": "PR open \u2014 waiting",
-     "group": "review",
-     "hint": "the PR is open and nothing is working on it",
-     "total_s": 11000.0,
-     "share": 0.8359,
-     "median_s": 3280.0,
-     "p90_s": 5280.0,
-     "items": 3
-    },
-    {
-     "phase": "untracked",
-     "label": "Untracked",
-     "group": "other",
-     "hint": "MindFlock wasn't running, so nothing was recorded",
-     "total_s": 2160.0,
-     "share": 0.1641,
-     "median_s": 720.0,
-     "p90_s": 720.0,
-     "items": 3
     }
    ],
    "advice": [
     {
      "phase": "your_turn",
      "level": "warn",
-     "title": "Finished work waits on you",
-     "detail": "After the agent's turn ends, items sit 10m (median per item) before anything moves \u2014 45% of time to PR. Arm autopilot to the PR (\u23e9, or a template's \u201cwhen a run's turn ends\u201d) so finished work ships without waiting for you, and review in the PR instead of the terminal.",
+     "title": "Work waits on your next prompt",
+     "detail": "Between the agent's turns, units sit 10m (median per unit) before anything moves \u2014 46% of time to commit. Queue the next prompt while the agent works, or put the whole task (acceptance criteria, files to touch, \u201ccommit when done\u201d) in the first prompt so it runs to the commit in one go.",
      "at_stake_s": 4400.0,
-     "share": 0.4472
+     "share": 0.4555
     },
     {
      "phase": "question",
      "level": "warn",
      "title": "Agents are blocked on your answers",
-     "detail": "Questions and permission prompts hold items 8m per item (9% of time to PR). Front-load the prompt (acceptance criteria, files to touch) and allow-list the tools it keeps asking about.",
+     "detail": "Questions and permission prompts hold units 8m per unit (9% of time to commit). Front-load the prompt (acceptance criteria, files to touch) and allow-list the tools it keeps asking about.",
      "at_stake_s": 900.0,
-     "share": 0.0915
+     "share": 0.0932
     },
     {
      "phase": "away",
      "level": "info",
      "title": "Agents finish and sit idle while you're away",
-     "detail": "32m of finished-but-idle time (19% of time to PR) happened with nobody at the keyboard. Give sessions an autopilot depth, or queue the next prompt / a template run so they keep going.",
+     "detail": "32m of finished-but-idle time (20% of time to commit) happened with nobody at the keyboard. Give sessions an autopilot depth, or queue the next prompt / a template run so they keep going.",
      "at_stake_s": 1900.0,
-     "share": 0.1931
+     "share": 0.1967
     }
    ],
    "trend": [
@@ -780,128 +752,10 @@
      "start": 1799404200.0,
      "end": 1800009000.0,
      "items": 3,
-     "median_to_pr": 4000.0
+     "median_to_commit": 4000.0
     }
    ],
    "items": [
-    {
-     "id": "app@feature/b#0",
-     "key": "app@feature/b",
-     "cycle": 0,
-     "repo": "app",
-     "branch": "feature/b",
-     "ticket": "",
-     "name": "",
-     "pr": "",
-     "sessions": [
-      "b"
-     ],
-     "status": "pr_open",
-     "start": 1800001000.0,
-     "pr_at": 1800005000.0,
-     "merged_at": null,
-     "end": 1800009000.0,
-     "lead_to_pr": 4000.0,
-     "active_to_pr": 4000.0,
-     "lead_to_merge": null,
-     "elapsed": 8000.0,
-     "to_pr": {
-      "agent": 600.0,
-      "your_turn": 3400.0
-     },
-     "after_pr": {
-      "review": 3280.0,
-      "untracked": 720.0
-     },
-     "commits": 0,
-     "hook_failures": 0,
-     "timeline": [
-      {
-       "ph": "agent",
-       "start": 1800001000.0,
-       "end": 1800001600.0
-      },
-      {
-       "ph": "your_turn",
-       "start": 1800001600.0,
-       "end": 1800005000.0
-      },
-      {
-       "ph": "review",
-       "start": 1800005000.0,
-       "end": 1800005880.0
-      },
-      {
-       "ph": "untracked",
-       "start": 1800005880.0,
-       "end": 1800006600.0
-      },
-      {
-       "ph": "review",
-       "start": 1800006600.0,
-       "end": 1800009000.0
-      }
-     ]
-    },
-    {
-     "id": "app@feature/c#0",
-     "key": "app@feature/c",
-     "cycle": 0,
-     "repo": "app",
-     "branch": "feature/c",
-     "ticket": "",
-     "name": "",
-     "pr": "",
-     "sessions": [
-      "c"
-     ],
-     "status": "pr_open",
-     "start": 1800002000.0,
-     "pr_at": 1800003000.0,
-     "merged_at": null,
-     "end": 1800009000.0,
-     "lead_to_pr": 1000.0,
-     "active_to_pr": 1000.0,
-     "lead_to_merge": null,
-     "elapsed": 7000.0,
-     "to_pr": {
-      "question": 600.0,
-      "your_turn": 400.0
-     },
-     "after_pr": {
-      "review": 5280.0,
-      "untracked": 720.0
-     },
-     "commits": 0,
-     "hook_failures": 0,
-     "timeline": [
-      {
-       "ph": "question",
-       "start": 1800002000.0,
-       "end": 1800002600.0
-      },
-      {
-       "ph": "your_turn",
-       "start": 1800002600.0,
-       "end": 1800003000.0
-      },
-      {
-       "ph": "review",
-       "start": 1800003000.0,
-       "end": 1800005880.0
-      },
-      {
-       "ph": "untracked",
-       "start": 1800005880.0,
-       "end": 1800006600.0
-      },
-      {
-       "ph": "review",
-       "start": 1800006600.0,
-       "end": 1800009000.0
-      }
-     ]
-    },
     {
      "id": "app@feature/d#0",
      "key": "app@feature/d",
@@ -916,20 +770,19 @@
      ],
      "status": "in_progress",
      "start": 1800003000.0,
-     "pr_at": null,
-     "merged_at": null,
+     "commit_at": null,
+     "estimated": false,
      "end": 1800009000.0,
-     "lead_to_pr": null,
-     "active_to_pr": null,
-     "lead_to_merge": null,
+     "lead_to_commit": null,
+     "active_to_commit": null,
      "elapsed": 6000.0,
-     "to_pr": {
+     "to_commit": {
       "agent": 500.0,
       "away": 4780.0,
       "untracked": 720.0
      },
-     "after_pr": {},
-     "commits": 0,
+     "after_commit": {},
+     "hook_runs": 0,
      "hook_failures": 0,
      "timeline": [
       {
@@ -955,6 +808,48 @@
      ]
     },
     {
+     "id": "app@feature/b#0",
+     "key": "app@feature/b",
+     "cycle": 0,
+     "repo": "app",
+     "branch": "feature/b",
+     "ticket": "",
+     "name": "",
+     "pr": "",
+     "sessions": [
+      "b"
+     ],
+     "status": "committed",
+     "start": 1800001000.0,
+     "commit_at": 1800005000.0,
+     "estimated": true,
+     "end": 1800005000.0,
+     "lead_to_commit": 4000.0,
+     "active_to_commit": 4000.0,
+     "elapsed": 4000.0,
+     "to_commit": {
+      "agent": 600.0,
+      "your_turn": 3400.0
+     },
+     "after_commit": {
+      "review": 3280.0
+     },
+     "hook_runs": 0,
+     "hook_failures": 0,
+     "timeline": [
+      {
+       "ph": "agent",
+       "start": 1800001000.0,
+       "end": 1800001600.0
+      },
+      {
+       "ph": "your_turn",
+       "start": 1800001600.0,
+       "end": 1800005000.0
+      }
+     ]
+    },
+    {
      "id": "app@feature/a#0",
      "key": "app@feature/a",
      "cycle": 0,
@@ -966,30 +861,28 @@
      "sessions": [
       "a"
      ],
-     "status": "merged",
+     "status": "committed",
      "start": 1800000000.0,
-     "pr_at": 1800004840.0,
-     "merged_at": 1800008000.0,
-     "end": 1800008000.0,
-     "lead_to_pr": 4840.0,
-     "active_to_pr": 2940.0,
-     "lead_to_merge": 8000.0,
-     "elapsed": 8000.0,
-     "to_pr": {
+     "commit_at": 1800004660.0,
+     "estimated": true,
+     "end": 1800004660.0,
+     "lead_to_commit": 4660.0,
+     "active_to_commit": 2760.0,
+     "elapsed": 4660.0,
+     "to_commit": {
       "setup": 60.0,
       "agent": 1740.0,
       "question": 300.0,
       "your_turn": 600.0,
       "away": 1900.0,
-      "precommit": 60.0,
+      "precommit": 60.0
+     },
+     "after_commit": {
       "to_push": 60.0,
-      "to_pr": 120.0
+      "to_pr": 120.0,
+      "review": 2440.0
      },
-     "after_pr": {
-      "review": 2440.0,
-      "untracked": 720.0
-     },
-     "commits": 1,
+     "hook_runs": 1,
      "hook_failures": 0,
      "timeline": [
       {
@@ -1031,31 +924,48 @@
        "ph": "precommit",
        "start": 1800004600.0,
        "end": 1800004660.0
+      }
+     ]
+    },
+    {
+     "id": "app@feature/c#0",
+     "key": "app@feature/c",
+     "cycle": 0,
+     "repo": "app",
+     "branch": "feature/c",
+     "ticket": "",
+     "name": "",
+     "pr": "",
+     "sessions": [
+      "c"
+     ],
+     "status": "committed",
+     "start": 1800002000.0,
+     "commit_at": 1800003000.0,
+     "estimated": true,
+     "end": 1800003000.0,
+     "lead_to_commit": 1000.0,
+     "active_to_commit": 1000.0,
+     "elapsed": 1000.0,
+     "to_commit": {
+      "question": 600.0,
+      "your_turn": 400.0
+     },
+     "after_commit": {
+      "review": 5280.0
+     },
+     "hook_runs": 0,
+     "hook_failures": 0,
+     "timeline": [
+      {
+       "ph": "question",
+       "start": 1800002000.0,
+       "end": 1800002600.0
       },
       {
-       "ph": "to_push",
-       "start": 1800004660.0,
-       "end": 1800004720.0
-      },
-      {
-       "ph": "to_pr",
-       "start": 1800004720.0,
-       "end": 1800004840.0
-      },
-      {
-       "ph": "review",
-       "start": 1800004840.0,
-       "end": 1800005880.0
-      },
-      {
-       "ph": "untracked",
-       "start": 1800005880.0,
-       "end": 1800006600.0
-      },
-      {
-       "ph": "review",
-       "start": 1800006600.0,
-       "end": 1800008000.0
+       "ph": "your_turn",
+       "start": 1800002600.0,
+       "end": 1800003000.0
       }
      ]
     }
@@ -1064,6 +974,47 @@
  },
  "items": {
   "scenario": [
+   {
+    "id": "app@feature/sc-12/x#2",
+    "key": "app@feature/sc-12/x",
+    "cycle": 2,
+    "repo": "app",
+    "branch": "feature/sc-12/x",
+    "ticket": "sc-12",
+    "name": "Fix login",
+    "pr": "https://x/pull/1",
+    "sessions": [
+     "s1",
+     "s1-copy"
+    ],
+    "status": "in_progress",
+    "start": 1800020000.0,
+    "commit_at": null,
+    "estimated": false,
+    "end": 1800026000.0,
+    "lead_to_commit": null,
+    "active_to_commit": null,
+    "elapsed": 6000.0,
+    "to_commit": {
+     "agent": 2000.0,
+     "your_turn": 4000.0
+    },
+    "after_commit": {},
+    "hook_runs": 0,
+    "hook_failures": 0,
+    "timeline": [
+     {
+      "ph": "agent",
+      "start": 1800020000.0,
+      "end": 1800022000.0
+     },
+     {
+      "ph": "your_turn",
+      "start": 1800022000.0,
+      "end": 1800026000.0
+     }
+    ]
+   },
    {
     "id": "app@feature/sc-12/x#1",
     "key": "app@feature/sc-12/x",
@@ -1077,32 +1028,27 @@
      "s1",
      "s1-copy"
     ],
-    "status": "in_progress",
-    "start": 1800020000.0,
-    "pr_at": null,
-    "merged_at": null,
-    "end": 1800026000.0,
-    "lead_to_pr": null,
-    "active_to_pr": null,
-    "lead_to_merge": null,
-    "elapsed": 6000.0,
-    "to_pr": {
-     "agent": 2000.0,
-     "your_turn": 4000.0
+    "status": "committed",
+    "start": 1800005000.0,
+    "commit_at": 1800005600.0,
+    "estimated": true,
+    "end": 1800005600.0,
+    "lead_to_commit": 600.0,
+    "active_to_commit": 600.0,
+    "elapsed": 600.0,
+    "to_commit": {
+     "agent": 600.0
     },
-    "after_pr": {},
-    "commits": 0,
+    "after_commit": {
+     "review": 3400.0
+    },
+    "hook_runs": 0,
     "hook_failures": 0,
     "timeline": [
      {
       "ph": "agent",
-      "start": 1800020000.0,
-      "end": 1800022000.0
-     },
-     {
-      "ph": "your_turn",
-      "start": 1800022000.0,
-      "end": 1800026000.0
+      "start": 1800005000.0,
+      "end": 1800005600.0
      }
     ]
    },
@@ -1119,29 +1065,26 @@
      "s1",
      "s1-copy"
     ],
-    "status": "merged",
+    "status": "committed",
     "start": 1800000000.0,
-    "pr_at": 1800003000.0,
-    "merged_at": 1800009000.0,
-    "end": 1800009000.0,
-    "lead_to_pr": 3000.0,
-    "active_to_pr": 3000.0,
-    "lead_to_merge": 9000.0,
-    "elapsed": 9000.0,
-    "to_pr": {
+    "commit_at": 1800002760.0,
+    "estimated": true,
+    "end": 1800002760.0,
+    "lead_to_commit": 2760.0,
+    "active_to_commit": 2760.0,
+    "elapsed": 2760.0,
+    "to_commit": {
      "setup": 60.0,
      "agent": 1920.0,
      "your_turn": 600.0,
      "precommit": 120.0,
-     "hook_fix": 60.0,
+     "hook_fix": 60.0
+    },
+    "after_commit": {
      "to_push": 120.0,
      "to_pr": 120.0
     },
-    "after_pr": {
-     "review": 5400.0,
-     "rework": 600.0
-    },
-    "commits": 2,
+    "hook_runs": 2,
     "hook_failures": 1,
     "timeline": [
      {
@@ -1183,154 +1126,11 @@
       "ph": "precommit",
       "start": 1800002700.0,
       "end": 1800002760.0
-     },
-     {
-      "ph": "to_push",
-      "start": 1800002760.0,
-      "end": 1800002880.0
-     },
-     {
-      "ph": "to_pr",
-      "start": 1800002880.0,
-      "end": 1800003000.0
-     },
-     {
-      "ph": "review",
-      "start": 1800003000.0,
-      "end": 1800005000.0
-     },
-     {
-      "ph": "rework",
-      "start": 1800005000.0,
-      "end": 1800005600.0
-     },
-     {
-      "ph": "review",
-      "start": 1800005600.0,
-      "end": 1800009000.0
      }
     ]
    }
   ],
   "person_scenario": [
-   {
-    "id": "app@feature/b#0",
-    "key": "app@feature/b",
-    "cycle": 0,
-    "repo": "app",
-    "branch": "feature/b",
-    "ticket": "",
-    "name": "",
-    "pr": "",
-    "sessions": [
-     "b"
-    ],
-    "status": "pr_open",
-    "start": 1800001000.0,
-    "pr_at": 1800005000.0,
-    "merged_at": null,
-    "end": 1800009000.0,
-    "lead_to_pr": 4000.0,
-    "active_to_pr": 4000.0,
-    "lead_to_merge": null,
-    "elapsed": 8000.0,
-    "to_pr": {
-     "agent": 600.0,
-     "your_turn": 3400.0
-    },
-    "after_pr": {
-     "review": 3280.0,
-     "untracked": 720.0
-    },
-    "commits": 0,
-    "hook_failures": 0,
-    "timeline": [
-     {
-      "ph": "agent",
-      "start": 1800001000.0,
-      "end": 1800001600.0
-     },
-     {
-      "ph": "your_turn",
-      "start": 1800001600.0,
-      "end": 1800005000.0
-     },
-     {
-      "ph": "review",
-      "start": 1800005000.0,
-      "end": 1800005880.0
-     },
-     {
-      "ph": "untracked",
-      "start": 1800005880.0,
-      "end": 1800006600.0
-     },
-     {
-      "ph": "review",
-      "start": 1800006600.0,
-      "end": 1800009000.0
-     }
-    ]
-   },
-   {
-    "id": "app@feature/c#0",
-    "key": "app@feature/c",
-    "cycle": 0,
-    "repo": "app",
-    "branch": "feature/c",
-    "ticket": "",
-    "name": "",
-    "pr": "",
-    "sessions": [
-     "c"
-    ],
-    "status": "pr_open",
-    "start": 1800002000.0,
-    "pr_at": 1800003000.0,
-    "merged_at": null,
-    "end": 1800009000.0,
-    "lead_to_pr": 1000.0,
-    "active_to_pr": 1000.0,
-    "lead_to_merge": null,
-    "elapsed": 7000.0,
-    "to_pr": {
-     "question": 600.0,
-     "your_turn": 400.0
-    },
-    "after_pr": {
-     "review": 5280.0,
-     "untracked": 720.0
-    },
-    "commits": 0,
-    "hook_failures": 0,
-    "timeline": [
-     {
-      "ph": "question",
-      "start": 1800002000.0,
-      "end": 1800002600.0
-     },
-     {
-      "ph": "your_turn",
-      "start": 1800002600.0,
-      "end": 1800003000.0
-     },
-     {
-      "ph": "review",
-      "start": 1800003000.0,
-      "end": 1800005880.0
-     },
-     {
-      "ph": "untracked",
-      "start": 1800005880.0,
-      "end": 1800006600.0
-     },
-     {
-      "ph": "review",
-      "start": 1800006600.0,
-      "end": 1800009000.0
-     }
-    ]
-   },
    {
     "id": "app@feature/d#0",
     "key": "app@feature/d",
@@ -1345,20 +1145,19 @@
     ],
     "status": "in_progress",
     "start": 1800003000.0,
-    "pr_at": null,
-    "merged_at": null,
+    "commit_at": null,
+    "estimated": false,
     "end": 1800009000.0,
-    "lead_to_pr": null,
-    "active_to_pr": null,
-    "lead_to_merge": null,
+    "lead_to_commit": null,
+    "active_to_commit": null,
     "elapsed": 6000.0,
-    "to_pr": {
+    "to_commit": {
      "agent": 500.0,
      "away": 4780.0,
      "untracked": 720.0
     },
-    "after_pr": {},
-    "commits": 0,
+    "after_commit": {},
+    "hook_runs": 0,
     "hook_failures": 0,
     "timeline": [
      {
@@ -1384,6 +1183,48 @@
     ]
    },
    {
+    "id": "app@feature/b#0",
+    "key": "app@feature/b",
+    "cycle": 0,
+    "repo": "app",
+    "branch": "feature/b",
+    "ticket": "",
+    "name": "",
+    "pr": "",
+    "sessions": [
+     "b"
+    ],
+    "status": "committed",
+    "start": 1800001000.0,
+    "commit_at": 1800005000.0,
+    "estimated": true,
+    "end": 1800005000.0,
+    "lead_to_commit": 4000.0,
+    "active_to_commit": 4000.0,
+    "elapsed": 4000.0,
+    "to_commit": {
+     "agent": 600.0,
+     "your_turn": 3400.0
+    },
+    "after_commit": {
+     "review": 3280.0
+    },
+    "hook_runs": 0,
+    "hook_failures": 0,
+    "timeline": [
+     {
+      "ph": "agent",
+      "start": 1800001000.0,
+      "end": 1800001600.0
+     },
+     {
+      "ph": "your_turn",
+      "start": 1800001600.0,
+      "end": 1800005000.0
+     }
+    ]
+   },
+   {
     "id": "app@feature/a#0",
     "key": "app@feature/a",
     "cycle": 0,
@@ -1395,30 +1236,28 @@
     "sessions": [
      "a"
     ],
-    "status": "merged",
+    "status": "committed",
     "start": 1800000000.0,
-    "pr_at": 1800004840.0,
-    "merged_at": 1800008000.0,
-    "end": 1800008000.0,
-    "lead_to_pr": 4840.0,
-    "active_to_pr": 2940.0,
-    "lead_to_merge": 8000.0,
-    "elapsed": 8000.0,
-    "to_pr": {
+    "commit_at": 1800004660.0,
+    "estimated": true,
+    "end": 1800004660.0,
+    "lead_to_commit": 4660.0,
+    "active_to_commit": 2760.0,
+    "elapsed": 4660.0,
+    "to_commit": {
      "setup": 60.0,
      "agent": 1740.0,
      "question": 300.0,
      "your_turn": 600.0,
      "away": 1900.0,
-     "precommit": 60.0,
+     "precommit": 60.0
+    },
+    "after_commit": {
      "to_push": 60.0,
-     "to_pr": 120.0
+     "to_pr": 120.0,
+     "review": 2440.0
     },
-    "after_pr": {
-     "review": 2440.0,
-     "untracked": 720.0
-    },
-    "commits": 1,
+    "hook_runs": 1,
     "hook_failures": 0,
     "timeline": [
      {
@@ -1460,31 +1299,48 @@
       "ph": "precommit",
       "start": 1800004600.0,
       "end": 1800004660.0
+     }
+    ]
+   },
+   {
+    "id": "app@feature/c#0",
+    "key": "app@feature/c",
+    "cycle": 0,
+    "repo": "app",
+    "branch": "feature/c",
+    "ticket": "",
+    "name": "",
+    "pr": "",
+    "sessions": [
+     "c"
+    ],
+    "status": "committed",
+    "start": 1800002000.0,
+    "commit_at": 1800003000.0,
+    "estimated": true,
+    "end": 1800003000.0,
+    "lead_to_commit": 1000.0,
+    "active_to_commit": 1000.0,
+    "elapsed": 1000.0,
+    "to_commit": {
+     "question": 600.0,
+     "your_turn": 400.0
+    },
+    "after_commit": {
+     "review": 5280.0
+    },
+    "hook_runs": 0,
+    "hook_failures": 0,
+    "timeline": [
+     {
+      "ph": "question",
+      "start": 1800002000.0,
+      "end": 1800002600.0
      },
      {
-      "ph": "to_push",
-      "start": 1800004660.0,
-      "end": 1800004720.0
-     },
-     {
-      "ph": "to_pr",
-      "start": 1800004720.0,
-      "end": 1800004840.0
-     },
-     {
-      "ph": "review",
-      "start": 1800004840.0,
-      "end": 1800005880.0
-     },
-     {
-      "ph": "untracked",
-      "start": 1800005880.0,
-      "end": 1800006600.0
-     },
-     {
-      "ph": "review",
-      "start": 1800006600.0,
-      "end": 1800008000.0
+      "ph": "your_turn",
+      "start": 1800002600.0,
+      "end": 1800003000.0
      }
     ]
    }

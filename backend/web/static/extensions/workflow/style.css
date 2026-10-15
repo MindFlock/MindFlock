@@ -284,6 +284,35 @@
   margin-top: 4px;
 }
 
+.mfx-workflow .wf-key-btn {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin: 0 -5px;
+  cursor: pointer;
+}
+
+.mfx-workflow .wf-key-btn:hover {
+  border-color: var(--border);
+}
+
+.mfx-workflow .wf-key-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mfx-workflow .wf-key-btn.off {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.mfx-workflow .wf-key-btn.off .wf-swatch {
+  opacity: 0.3;
+}
+
 .mfx-workflow .wf-group b {
   font-variant-numeric: tabular-nums;
 }
@@ -462,10 +491,9 @@
   white-space: nowrap;
 }
 
-.mfx-workflow .wf-chip.s-merged { border-color: var(--green); color: var(--green); }
-.mfx-workflow .wf-chip.s-pr_open { border-color: var(--accent); color: var(--accent); }
-.mfx-workflow .wf-chip.s-abandoned,
-.mfx-workflow .wf-chip.s-closed { color: var(--muted); }
+.mfx-workflow .wf-chip.s-committed { border-color: var(--green); color: var(--green); }
+.mfx-workflow .wf-chip.s-in_progress { border-color: var(--accent); color: var(--accent); }
+.mfx-workflow .wf-chip.s-abandoned { color: var(--muted); }
 
 .mfx-workflow .wf-item-detail {
   display: flex;

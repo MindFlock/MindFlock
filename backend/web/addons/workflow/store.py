@@ -20,8 +20,9 @@ threshold. Reads parse the whole file behind a short mtime-checked cache.
 ``$MINDFLOCK_WORKFLOW_FILE`` redirects the file (tests point it at a tmp path;
 the home guard refuses the real one under pytest).
 
-The extension's one setting — ``include_me``, whether the person's own time
-counts toward bottlenecks (default off) — lives beside the store in
+The extension's settings — ``include_me``, whether the person's own time
+counts toward bottlenecks (default off), and ``hidden``, the phase ids the
+person chose not to look at (default none) — live beside the store in
 ``workflow_optimizer.settings.json`` (mode 0600, written atomically): an
 extension's state is its own file, never a group in settings.json, so it is
 this device's, like the timeline it reads.
@@ -54,7 +55,7 @@ __all__ = [
 _FILE = "workflow_optimizer.jsonl"
 _SETTINGS_FILE = "workflow_optimizer.settings.json"
 #: Every setting at its default; a missing / unreadable file means these.
-DEFAULT_SETTINGS = {"include_me": False}
+DEFAULT_SETTINGS = {"include_me": False, "hidden": []}
 #: Rows older than this are dropped at compaction: a 90-day view plus the
 #: work items that straddle its edge.
 RETENTION_S = 100 * 86400.0
@@ -179,10 +180,26 @@ def settings_path() -> str:
     )
 
 
+def _ids(v) -> Optional[list]:
+    """A list of phase-id strings (deduplicated, in order), or None when
+    ``v`` isn't a list. The analysis drops ids it doesn't know."""
+    if not isinstance(v, list):
+        return None
+    out: list = []
+    for x in v:
+        if isinstance(x, str) and x and len(x) <= 40 and x not in out:
+            out.append(x)
+    return out[:40]
+
+
 def _clean(raw) -> dict:
-    out = dict(DEFAULT_SETTINGS)
+    out = {
+        k: (list(v) if isinstance(v, list) else v) for k, v in DEFAULT_SETTINGS.items()
+    }
     if isinstance(raw, dict) and isinstance(raw.get("include_me"), bool):
         out["include_me"] = raw["include_me"]
+    if isinstance(raw, dict) and _ids(raw.get("hidden")) is not None:
+        out["hidden"] = _ids(raw.get("hidden"))
     return out
 
 
@@ -192,19 +209,20 @@ def load_settings() -> dict:
         with open(settings_path(), "r", encoding="utf-8") as f:
             return _clean(json.load(f))
     except (OSError, ValueError):
-        return dict(DEFAULT_SETTINGS)
+        return _clean(None)
 
 
 def save_settings(patch: dict) -> dict:
     """Merge the known keys of ``patch`` into the settings, write them
-    atomically (0600) and return the result. Unknown keys and non-bool
-    values are ignored."""
+    atomically (0600) and return the result. Unknown keys and values of the
+    wrong type are ignored."""
     with _LOCK:
         cur = load_settings()
-        for k, default in DEFAULT_SETTINGS.items():
-            v = patch.get(k) if isinstance(patch, dict) else None
-            if isinstance(v, type(default)):
-                cur[k] = v
+        patch = patch if isinstance(patch, dict) else {}
+        if isinstance(patch.get("include_me"), bool):
+            cur["include_me"] = patch["include_me"]
+        if _ids(patch.get("hidden")) is not None:
+            cur["hidden"] = _ids(patch.get("hidden"))
         p = settings_path()
         os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
         atomic_write_text(
