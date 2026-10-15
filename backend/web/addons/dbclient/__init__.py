@@ -111,6 +111,11 @@ class DbClientAddon(Addon):
         )
 
     # --- lifecycle -------------------------------------------------------- #
+    async def on_startup(self, ctx: AppContext) -> None:
+        # An engine update rebuilt the venv without the drivers installed
+        # here: put the recorded ones back (background thread, once per boot).
+        installer.start_self_heal()
+
     async def on_shutdown(self, ctx: AppContext) -> None:
         await asyncio.to_thread(self.service.close_all)
 

@@ -27,6 +27,7 @@ one confirmation, and the web UI runs it in a terminal (one sudo prompt).
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass
@@ -1384,6 +1385,28 @@ def check_cache_seeds() -> Check:
     return Check("cache-seeds", "warm cache seeds", "ok", ", ".join(healthy))
 
 
+def check_db_drivers() -> Optional[Check]:
+    """Informational: the Database explorer drivers this machine keeps across
+    engine updates (``~/.mindflock/dbclient/drivers.json``). ``None`` — no
+    row — until one was installed."""
+    from backend.web.core import self_update
+
+    record = self_update.read_driver_record()
+    if not record:
+        return None
+    names = ", ".join(
+        "%s (%s)" % (re.split(r"[\[<>=!~;]", entry["package"], maxsplit=1)[0], engine)
+        for engine, entry in sorted(record.items())
+    )
+    return Check(
+        "db-drivers",
+        "Database drivers",
+        "info",
+        names + " — reinstalled automatically after updates",
+        group=GROUP_OPTIONAL,
+    )
+
+
 #: A probe may answer ``None`` — "doesn't apply on this host" (the Assistant
 #: CLI check when the Assistant uses the default provider) — and is then left
 #: out of the report entirely; or a list (one row per synced agent CLI).
@@ -1407,6 +1430,7 @@ CHECKS_BY_ID: dict[str, Callable[[], "Optional[Check] | List[Check]"]] = {
     "cloudflared": check_cloudflared,
     "state-schema": check_state_schema,
     "cache-seeds": check_cache_seeds,
+    "db-drivers": check_db_drivers,
 }
 
 _ALL_CHECKS: List[Callable[[], "Optional[Check] | List[Check]"]] = list(

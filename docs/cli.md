@@ -122,6 +122,10 @@ N missing tools`, the agent's sign-in, `mindflock init` for the folder, or
 warning, not a failure). `GET /api/doctor` carries each check's heading as
 `group` (`run` | `ship` | `optional`).
 
+Once the Database explorer has installed a driver, an informational
+**Database drivers** row under Optional lists them — `psycopg (postgres),
+pymysql (mysql)` — the ones updates carry along.
+
 `--fix` installs every missing `run` tool in one go (one confirmation, one sudo
 prompt), then offers each remaining fix one at a time: a `run` row with
 Enter = yes, a `ship` row (`gh auth login`) with Enter = no. Optional fixes are
@@ -148,6 +152,14 @@ question), then:
   --group web`, `mindflock restart`) and changes nothing, exit 0. A checkout is
   recognised from the running package even when a stale install.json says
   otherwise, so a release install is never written over your working tree.
+
+Database explorer drivers installed from the app (recorded in
+`~/.mindflock/dbclient/drivers.json`) ride along: one `--with <package>` each
+on the uv line (`--with 'psycopg[binary]' --with pymysql`), and `pipx inject
+mindflock <packages…>` after a pipx install (a failed inject only warns — the
+server reinstalls a missing recorded driver when it starts). The rollback
+carries them the same way. See
+[extensions.md](extensions.md#worked-example-the-database-client).
 
 The install runs in the foreground with its output on your terminal. After a
 good install the command refreshes install.json (`ref`, `sha`, `at`) and, if a

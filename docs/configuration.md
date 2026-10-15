@@ -616,6 +616,14 @@ server merges on save so multiple processes can share it.
   naming the server that drives it, so two servers never drive one run.
   Finished runs move to `runs/archive/` after 30 days. Override with
   `$MINDFLOCK_RUNS_DIR`. See [team-runs.md](team-runs.md).
+- `dbclient/drivers.json` — the Database explorer drivers this machine
+  installed from the app, so they survive engine updates:
+  `{"version": 1, "drivers": {"<engine>": {"package": "psycopg[binary]",
+  "installed_at": "<ISO 8601 UTC>", "python": "3.12"}}}`. Written on a
+  successful **Install driver**; read by the updater (`--with` / `pipx inject`),
+  by the explorer's self-heal at startup, and by `mindflock doctor`. Follows
+  `$MINDFLOCK_HOME` (like `install.json`). See
+  [extensions.md](extensions.md#worked-example-the-database-client).
 - `accounts/<id>/` — an `account`-kind auth profile's isolated CLI config dir
   (mode 0700), created on save and pointed at by `CLAUDE_CONFIG_DIR` /
   `CODEX_HOME` when a session runs under that profile. **Holds real
