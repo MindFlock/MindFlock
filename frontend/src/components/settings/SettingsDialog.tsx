@@ -71,6 +71,8 @@ import { SystemLogs } from "./screens/SystemLogs";
 import { Advanced } from "./screens/Advanced";
 import { Extensions } from "./screens/Extensions";
 import { Traffic } from "./screens/Traffic";
+import { TourButton } from "../onboarding/TourButton";
+import { useAutoTour } from "../onboarding/useAutoTour";
 
 export interface ScreenProps {
   active: boolean;
@@ -133,6 +135,7 @@ export type SettingsScreen = (typeof SCREENS)[number]["key"];
 
 export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () => void }) {
   const open = useUi((s) => s.openDialog === "settings");
+  useAutoTour("settings", open);
   const target = useUi((s) => s.dialogTarget);
   const closeDialog = useUi((s) => s.closeDialog);
   const model = useSettingsModel(open);
@@ -196,6 +199,7 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
         <div id="settings-panel">
           <div className="ws-head">
             <h2>Settings</h2>
+            <TourButton tour="settings" />
             <button type="button" id="settings-close" onClick={closeDialog}>
               Close
             </button>

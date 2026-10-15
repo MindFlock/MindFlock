@@ -253,7 +253,7 @@ export function ShortcutsSheet() {
           <button
             className="shortcuts-tour linklike"
             type="button"
-            title="A five-slide tour of MindFlock"
+            title="Replay the welcome tour"
             onClick={() => {
               closeDialog();
               useUi.getState().openTour();

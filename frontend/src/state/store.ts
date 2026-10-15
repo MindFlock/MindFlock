@@ -17,6 +17,7 @@ import { defaultHiddenBars } from "../components/sidebar/barDefs";
 import { notePrefWrite } from "../lib/prefs";
 import { asPaneHeaderPref, type PaneHeaderPref } from "../lib/paneHeader";
 import { toast } from "../lib/toast";
+import type { TourId } from "../lib/tours";
 
 export type ViewMode = "auto" | "2" | "4" | "9";
 
@@ -48,6 +49,12 @@ function load<T>(key: string, fallback: T, parse = true): T {
   } catch {
     return fallback;
   }
+}
+
+/** The synced `tours_seen` list as this browser has it (strings only). */
+function loadToursSeen(): string[] {
+  const v = load<unknown>("mf_tours_seen", []);
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
 /** True when the key has never been written — a genuinely fresh user, as
@@ -278,6 +285,20 @@ interface UiState {
   mapTourSeen: boolean;
   /** Remember the Map tour as seen (Done / Skip / Esc). */
   markMapTourSeen(): void;
+  /** The coach-mark tour on screen (components/onboarding/CoachTour.tsx), and
+   * its step; null = none. Transient: a reload never resumes one. */
+  coachTour: { id: TourId; step: number } | null;
+  /** Tours seen or dismissed, on any device (synced pref `tours_seen`): a
+   * tour opens by itself (useAutoTour) only while its id is not in here. */
+  toursSeen: string[];
+  /** Show tour `id` from its first step (a "?" button, a Replay, or
+   * useAutoTour's one automatic opening). */
+  openCoachTour(id: TourId): void;
+  /** Move the open coach tour to `step`. */
+  setCoachStep(step: number): void;
+  /** Close the coach tour, however it ends (Done, Skip, Esc, its dialog
+   * closing) — and remember it as seen, on every device. */
+  closeCoachTour(): void;
   /** Per-session last active tab (agent | terminal | diff | queue). */
   lastTab: Record<string, string>;
   /** The open modal, if any (one at a time, like the vanilla app). */
@@ -446,6 +467,8 @@ export const useUi = create<UiState>((set, get) => ({
   tourOpen: false,
   mapTourSeen: load<boolean>("mf_map_tour", false) === true,
   welcomeTourSeen: load<boolean>("mf_welcome_tour", false) === true,
+  coachTour: null,
+  toursSeen: loadToursSeen(),
   // index.html's pre-paint script has already decided (saved choice, else the
   // OS colour scheme), so the class is the answer.
   themeLight: typeof document !== "undefined" && document.documentElement.classList.contains("light"),
@@ -713,6 +736,22 @@ export const useUi = create<UiState>((set, get) => ({
     if (get().welcomeTourSeen) return;
     save("mf_welcome_tour", true);
     set({ welcomeTourSeen: true });
+  },
+  openCoachTour: (id) => set({ coachTour: { id, step: 0 } }),
+  setCoachStep: (step) => {
+    const t = get().coachTour;
+    if (t && t.step !== step) set({ coachTour: { ...t, step } });
+  },
+  closeCoachTour: () => {
+    const t = get().coachTour;
+    if (!t) return;
+    const seen = get().toursSeen;
+    if (seen.includes(t.id)) set({ coachTour: null });
+    else {
+      const next = [...seen, t.id];
+      save("mf_tours_seen", next);
+      set({ coachTour: null, toursSeen: next });
+    }
   },
   openTour: () => set({ tourOpen: true }),
   finishTour: () => set({ tourOpen: false }),

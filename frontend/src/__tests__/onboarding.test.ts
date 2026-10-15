@@ -230,8 +230,8 @@ describe("first-run state has exactly one authority", () => {
   });
 
   it("the welcome tour opens by itself once, from one place, on a synced flag", () => {
-    // openTour() is a user action: the palette's Tour, the ? sheet, Settings →
-    // General's Replay. The ONE automatic opening is WelcomeTour's
+    // openTour() is a user action: the palette's Replay welcome tour, the ?
+    // sheet, Settings → General → Tours. The ONE automatic opening is WelcomeTour's
     // useFirstLaunchTour: a first launch (lib/calm firstLaunchTour), marked
     // seen in the synced `welcome_tour` pref the moment it opens — never a
     // per-browser flag, never from App.
@@ -254,11 +254,53 @@ describe("first-run state has exactly one authority", () => {
       .filter((f) => /(\.openTour\(\)|\bopenTour\(\);)/.test(f.text))
       .map((f) => f.path)
       .sort();
+    // Round 5: the palette's "Replay welcome tour" and Settings → General →
+    // Tours go through onboarding/replayTour (which opens the welcome card);
+    // the ? sheet's "Tour" link still opens it directly.
     expect(callers).toEqual([
-      "components/palette/CommandPalette.tsx",
+      "components/onboarding/replayTour.ts",
       "components/palette/ShortcutsSheet.tsx",
-      "components/settings/screens/General.tsx",
     ]);
+  });
+
+  it("each dialog's tour opens by itself from ONE hook, in the calm first hour, on a synced flag", () => {
+    // The files that may open a coach tour at all: the store (the action),
+    // the "?" button, Replay (palette / Settings → General → Tours), the
+    // welcome card's "Let's go" — and useAutoTour, the ONE automatic opener.
+    const openers = sources
+      .filter((f) => /\bopenCoachTour\(/.test(f.text))
+      .map((f) => f.path)
+      .sort();
+    expect(openers).toEqual([
+      "components/onboarding/TourButton.tsx",
+      "components/onboarding/WelcomeTour.tsx",
+      "components/onboarding/replayTour.ts",
+      "components/onboarding/useAutoTour.ts",
+      "state/store.ts",
+    ]);
+    const auto = sources.find((f) => f.path === "components/onboarding/useAutoTour.ts")!;
+    expect(auto.text).toContain("calmDecision(");
+    expect(auto.text).toContain("firstPrefsPull");
+    expect(auto.text).toMatch(/seen\.includes\(o\.id\)/);
+    // Exactly the five top-bar dialogs call it, each for its own tour.
+    const users = sources
+      .filter((f) => /\buseAutoTour\("/.test(f.text))
+      .map((f) => [f.path, (f.text.match(/useAutoTour\("([a-z]+)"/) || [])[1]])
+      .sort();
+    expect(users).toEqual([
+      ["components/dialogs/NewSessionDialog.tsx", "new"],
+      ["components/dialogs/TemplatesDialog.tsx", "schedule"],
+      ["components/dialogs/VerifyDialog.tsx", "verify"],
+      ["components/intake/IntakeDialog.tsx", "intake"],
+      ["components/settings/SettingsDialog.tsx", "settings"],
+    ]);
+    // ...and each puts its "?" beside Close.
+    for (const [path, id] of users) {
+      expect(sources.find((f) => f.path === path)!.text, path).toContain(`<TourButton tour="${id}" />`);
+    }
+    // Seen is the synced pref, never a per-browser first-run flag.
+    const store = sources.find((f) => f.path === "state/store.ts")!;
+    expect(store.text).toContain('save("mf_tours_seen"');
   });
 
   it("the Setup modal opens only on request (chip, doctor chip, palette, ?setup=)", () => {

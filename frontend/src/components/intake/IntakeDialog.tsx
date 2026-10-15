@@ -35,6 +35,8 @@ import { QueueTab } from "./QueueTab";
 import { collectQueued, isQueued } from "./queue";
 import { kindsText, useIntakeSwitches } from "./switches";
 import type { RepoUse } from "./repoUses";
+import { TourButton } from "../onboarding/TourButton";
+import { useAutoTour } from "../onboarding/useAutoTour";
 
 export type IntakeTabKey = "tickets" | "prs" | "issues" | "autostart";
 
@@ -247,6 +249,7 @@ function AutoStartOn() {
 
 export function IntakeDialog() {
   const open = useUi((s) => s.openDialog === "intake");
+  useAutoTour("intake", open);
   const target = useUi((s) => s.dialogTarget);
   const closeDialog = useUi((s) => s.closeDialog);
   const [tab, setTab] = useState<IntakeTabKey>("tickets");
@@ -348,6 +351,7 @@ export function IntakeDialog() {
             >
               + Add source
             </button>
+            <TourButton tour="intake" />
             <button type="button" id="intake-close" onClick={closeDialog}>
               Close
             </button>

@@ -30,6 +30,8 @@ import { browserReserved } from "./palette/ShortcutsSheet";
 import { VERIFY_BLURB } from "../lib/vocab";
 import { useScheduleStatus } from "../lib/useScheduleStatus";
 import { failingSchedules } from "../lib/templates";
+import { useCalm } from "../lib/useCalm";
+import { topBarShows } from "../lib/calm";
 
 /* The wordmark carries the RUNNING ENGINE's version (GET /api/doctor), not the
  * desktop shell's: this frontend ships inside the engine wheel, so that string
@@ -68,6 +70,14 @@ export function TopBar() {
   // feature working and gets no mark.
   const sched = useScheduleStatus();
   const schedFailing = failingSchedules(sched.templates, sched.status).length;
+  // The calm first hour (lib/calm.ts topBarShows): Verify waits for its first
+  // checklist and Schedule for its first template. Their shortcuts, the
+  // palette and the #verify / #schedule links keep working meanwhile.
+  const shows = topBarShows({
+    calm: useCalm(),
+    checklists: testPlans?.plans?.length ?? 0,
+    templates: sched.templates.length,
+  });
   // Evaluated once: the shell can't grow or lose its title bar mid-run.
   const [mac] = useState(hasNativeWindowControls);
   // macOS hides the traffic lights in fullscreen — stop reserving their room.
@@ -204,6 +214,7 @@ export function TopBar() {
               the "Not checked yet" group are one predicate) — deliberately not
               "things waiting on you personally", since one of them may be an
               agent mid-run. */}
+          {shows.verify && (
           <button
             id="verify-btn"
             className="tb-item"
@@ -223,9 +234,11 @@ export function TopBar() {
                 out. */}
             {due > 0 && <span className={"tb-count" + (failing > 0 ? " is-failing" : "")}>{due}</span>}
           </button>
+          )}
           {/* Schedule: what starts by itself (and the saved setups it starts
               from). Before it had a slot here, the only ways in were the
               palette and New's strip — the owner couldn't find it. */}
+          {shows.schedule && (
           <button
             id="schedule-btn"
             className="tb-item"
@@ -247,6 +260,7 @@ export function TopBar() {
                 rule Verify's count keeps. */}
             {schedFailing > 0 && <span className="tb-count is-failing">{schedFailing}</span>}
           </button>
+          )}
           <button
             id="settings-btn"
             className="tb-item"

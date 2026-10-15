@@ -10,7 +10,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import TOPBAR from "../components/TopBar.tsx?raw";
 import PALETTE from "../components/palette/CommandPalette.tsx?raw";
-import TOUR from "../components/onboarding/WelcomeTour.tsx?raw";
+import TOUR from "../lib/tours/schedule.ts?raw";
 import INDEX_CSS from "../styles/index.css?raw";
 
 vi.mock("../api/client", () => ({ api: vi.fn() }));
@@ -106,8 +106,8 @@ describe("the old name still lands", () => {
     expect(PALETTE).not.toContain('openDialogFor("templates"');
   });
 
-  it("the tour names it, and its stylesheet is wired", () => {
-    expect(TOUR).toContain("<b>Schedule</b>");
+  it("has its own tour, and its stylesheet is wired", () => {
+    expect(TOUR).toContain('title: "Schedule"');
     expect(INDEX_CSS).toContain('@import "../components/dialogs/ScheduleDialog.css" layer(components);');
   });
 });

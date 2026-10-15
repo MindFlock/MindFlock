@@ -41,11 +41,14 @@ in. The **MindFlock** wordmark (carrying the *running engine's* version, plus a
 red `-DEV` badge under a dev shell) sits centered, and the empty strip beside it
 is the drag region that moves the desktop shell's window.
 
-**Verify** is always on the bar. Its badge counts the checklists under **Needs
+**Verify** is always on the bar once the [calm first hour](#layout) is over
+(or its first checklist exists — before that it waits, and so does
+**Schedule** until its first template; Alt+V / Alt+S and the palette work
+throughout). Its badge counts the checklists under **Needs
 you** and **Failed** (the dialog's first two groups) and says nothing at zero;
 it turns **red** when any of them failed, and the tooltip's second line says
 what it counts (*3 checklists need you or failed — 1 failed*). Everywhere Verify is described in passing
-(this tooltip, the palette, the tour, the shortcut sheet) it is one sentence,
+(this tooltip, the palette, the shortcut sheet) it is one sentence,
 `lib/vocab.ts`'s *check that pushed changes work*.
 
 **Schedule** is always on the bar too (`#schedule-btn`, tooltip *Schedule —
@@ -158,13 +161,24 @@ full screen back by itself. A choice the person made always wins: bars set in
 Customize (here or synced from another device) are never touched, and a View
 preset other than Auto keeps the picker shown.
 
+The top bar is calm too (`topBarShows` in `lib/calm.ts`): **Verify** appears
+with the first checklist and **Schedule** with the first template — until
+then each has only an empty state to offer, and both compete with *③ Start
+your first session*. Hidden is not removed: **Alt+V** / **Alt+S**, the
+palette and the `#verify` / `#schedule` links open them all along, and once
+the first hour ends both are always on the bar. An item simply appears; there
+is no fanfare. The first time a top-bar dialog opens in the calm first hour,
+its [tour](#tours) runs once by itself.
+
 The decision is made **before first paint**: `/api/setup` carries the doctor
 and can take seconds, so until it (and the session list) answer, the screen
 uses this browser's last calm decision (`mf_calm_hint` in localStorage — a
 render hint only, never a first-run flag) and the server's answer replaces it
 the moment it lands. No dense layout flashes and then collapses on reload.
-With no hint (a new browser) the old rule holds: calm only on a genuinely
-fresh install (`onboarded: false`), so a veteran's screen never flashes empty.
+With no hint either (a new browser) the first paint is **calm** until the
+server answers — never dense-then-calm: a veteran on a new browser sees a few
+bars arrive a moment later, which reads as loading, where the full chrome
+flashing for seconds and then vanishing read as something going wrong.
 
 The footer's **Setup** chip is amber only while a *required* step is left;
 once the three are done it turns neutral (*Setup 3 of 3 · 2 optional* is an
@@ -259,7 +273,8 @@ entry per screen plus a few controls, matched on the words people use —
 "github", "notification", "worktree", "parallel", "phone", "token", "theme"
 — each opening Settings on that screen, scrolled to the control; listed right
 after the commands whose names contain the text),
-**Tour** (*what MindFlock is, in five slides*), Toggle sidebar, Keyboard
+**Replay <X> tour** (one per [tour](#tours): welcome, New, Intake, Verify,
+Schedule, Settings — found by *tour*, *help* or *how*), Toggle sidebar, Keyboard
 shortcuts — then the focused session's verbs (Commit / Push / **Open PR** /
 **Merge PR** once there is a PR / Open / focus IDE, Rename…, Queue prompt… *runs when idle*, Split…
 only where a split can actually start, **Pause session** (*stops the agent;
@@ -275,9 +290,9 @@ terminal has keyboard focus — the same VSCode trade-off as its quick-open/pale
 keys.
 
 The palette opens on a **short menu**, not the whole index: New session, the
-sessions you last looked at, Intake, Verify, Schedule, Setup, Settings, Tour,
+sessions you last looked at, Intake, Verify, Schedule, Setup, Settings, Replay welcome tour,
 Keyboard shortcuts (the first nine), and **All commands…** (`palette/paletteRank.ts`). Typing matches
-labels and a few plain synonyms (*help* finds the shortcuts and the tour,
+labels and a few plain synonyms (*help* finds the shortcuts and the tours,
 *install* finds Setup and the Doctor). An **outward verb** — Commit, Push,
 Open PR, Merge, Pause, Close, Delete — is never the `Enter` default: typing a
 session's name highlights **Focus: <name>**. **Join with code …** is offered
@@ -2487,10 +2502,10 @@ a same-named different one is saved as *<name> (saved prompt)*.
 ## First-run onboarding
 
 One checklist, shown in one place at a time. On a genuinely first launch the
-welcome tour opens once over the grid's first-run card (below); nothing else
-opens by itself. It counts as seen (the synced `welcome_tour` pref) when it is
-closed — **Get started**, **Skip** or `Esc` — not when it first shows, so a
-reload halfway through brings it back. UI store state
+welcome card opens once over the grid's first-run card (below); its **Let's
+go** starts the Welcome [tour](#tours) over the checklist. It counts as seen
+(the synced `welcome_tour` pref) by **every** exit — **Let's go**, **Skip**,
+`Esc` or the backdrop — so it never comes back by itself. UI store state
 (`state/store.ts`: `hintsEnabled`, `dismissedHints`, persisted in
 `localStorage`) covers the hints; the checklist's state is the server's.
 
@@ -2564,29 +2579,22 @@ reload halfway through brings it back. UI store state
   by itself — not on a failing doctor probe, not on a first load. The
   doctor chip stays down while the grid card or this chip is showing,
   because both open the checklist that already lists the same checks.
-- **Tour** (`onboarding/WelcomeTour.tsx`) — a five-slide tour: **Welcome to
-  MindFlock** (agents side by side on this machine, no account and no cloud;
-  each session is its own branch and folder), **Sessions & the grid** (New,
-  a pane and a row per session; more tools — the Assistant, usage, how many
-  panes show — appear once you have a few sessions, ⚙ Customize brings them
-  in sooner), **Shipping** (the
-  pane's next-step button, ⏩ Fast-track, and the bell for anything waiting
-  on you), **Where work comes from** (Intake, Verify for checking what you
-  shipped, and ⚙ Customize for more bars, like Prompts) and **You're all
-  set** (Setup for GitHub and your tracker, hints, Replay tour) — or, while
-  the doctor still reports a required tool missing, **One thing left**. Both
-  end on **Open Setup** (the checklist, not the whole of Settings) and
-  **Get started**.
-  The fourth slide carries **Set up now →**, which opens **Intake** on its
-  Tickets tab (`LEGACY_SCREEN_TABS` decides that from the slide's `screen`
-  key). The tour pauses behind Settings, Intake or Setup rather than ending,
-  so closing one lands you back on the same slide. It **opens by itself
+- **Welcome card** (`onboarding/WelcomeTour.tsx`) — ONE card: **Welcome to
+  MindFlock**, *MindFlock runs coding agents side by side on this computer,
+  each session on its own branch. Three steps and your first agent is
+  running.* and one button, **Let's go**, which closes it and starts the
+  Welcome tour over the Get set up checklist (on the empty grid; a replay
+  with sessions open brings up the Setup modal first). **Skip**, `Esc` and
+  the backdrop just close it. It replaced a five-slide tour whose slides
+  described a grid, shipping and Intake that weren't on screen yet, covered
+  the checklist, re-armed itself after two of its exits (*Set up now →*,
+  *Open Setup*) and said *You're all set* at 2 of 3. It **opens by itself
   once**, on a first launch — no session ever started (the setup record's
   `repo` step) and never seen on any of your devices (the synced
-  `prefs.welcome_tour`, marked the moment it opens; the page waits for its
-  first prefs pull before deciding). After that it is the palette's
-  **Tour**, the **Tour** link on the **?** shortcuts sheet, and **Replay
-  tour** in Settings → General.
+  `prefs.welcome_tour`; the page waits for its first prefs pull before
+  deciding). After that it is the palette's **Replay welcome tour**, the
+  **Tour** link on the **?** shortcuts sheet, and **Welcome tour → Replay** in
+  Settings → General → Tours.
 - **Connect GitHub** (`dialogs/ConnectGitHub.tsx`, `/api/github/*`) — one
   sign-in for opening PRs and pushing, stored as `github.token` (which
   settings sync shares with your other devices). It offers the best way this
@@ -2653,9 +2661,44 @@ reload halfway through brings it back. UI store state
   Settings → General) hides all of them at once; turning hints **back on
   re-arms** every previously dismissed hint (clears `dismissedHints`).
 
-The tour and hints are reset/replayed from the **Getting started** block at the
-top of **Settings → General**. There is no sidebar welcome hint any more; the
-one first-run hint left in the sidebar points at Customize.
+The tours and hints are replayed from the **Tours** block at the top of
+**Settings → General**. There is no sidebar welcome hint any more; the one
+first-run hint left in the sidebar points at Customize.
+
+### Tours
+
+A **tour** is a short coach-mark walkthrough of one surface: a ring around a
+live control and a small card beside it (`onboarding/CoachTour.tsx`) — one
+plain sentence, **Back** / **Next** / **Done**, *2 of 4*, **Skip tour**. It
+is non-modal (`role="dialog" aria-modal="false"`): what it points at stays
+clickable, the card sits beside, below or above its target (re-measured on
+resize and as the dialog fills in), and a step whose target isn't on screen
+centres the card and still shows. `Esc` ends it; the arrow keys page.
+
+There are six (`lib/tours/`, one file per tour, `TOURS` in `index.ts`):
+**Welcome** (over the Get set up checklist: the *next:* line, ① Install
+Claude Code, ② Sign in to your agent, ③ Start your first session, then the
+first sidebar row), **New**, **Intake**, **Verify**, **Schedule** and
+**Settings**. A step's target is a CSS selector, usually a stable id or a
+`data-tour="<surface>-<thing>"` hook (with today's id as a fallback in the
+same selector list).
+
+- **Replay** lives in three places: the **?** beside Close in each top-bar
+  dialog's header (`onboarding/TourButton.tsx` — *Show me around*, titled
+  *Replay the Intake tour*), **Settings → General → Tours** (one **Replay**
+  per tour), and the palette (**Replay Intake tour** …).
+- **By itself, once** (`onboarding/useAutoTour.ts`): a dialog's tour opens
+  the first time that dialog opens in the [calm first hour](#layout) — decided
+  from the server's setup record, never the render hint — and only while it
+  isn't in the synced `prefs.tours_seen` list (localStorage `mf_tours_seen`;
+  the page waits for its first prefs pull, so a tour seen on another device
+  never opens here). Never outside the first hour, never with hints off,
+  never over the welcome card or another tour.
+- **Seen by every exit**: **Done**, **Skip tour**, `Esc`, or closing the
+  dialog under it (`closeCoachTour` in the store) adds it to `tours_seen`.
+
+The Map tab's own tour ([The Map tour](#the-map-tour)) is the same coach mark,
+contained in the Map's pane.
 
 ## Make-PR dialog
 
@@ -4155,7 +4198,9 @@ cards' **Configure** buttons land where they always did.
 
 A few screens got quieter:
 
-- **General** opens with **Getting started** (hints, **Replay tour**). The
+- **General** opens with **Tours** (a **Replay** per tour and the **Show
+  hints** switch); the per-session budget, resume when usage comes back,
+  revive after a restart and idle sleep wait in its Advanced fold. The
   MindFlock MCP rows (the on/off switch, the scope and the spawn limits) are
   their own screen, **Agents → Agent orchestration** (see
   [Agent teams](#agent-teams-mindflock-mcp)).
@@ -4446,9 +4491,13 @@ labels above the inputs.
 
   Under `prefers-reduced-motion` both surfaces show a settled flock rather than a
   moving one.
-- **General → Getting started** (top of the screen) — the master
-  **getting-started hints** switch and a **Replay tour** button (see
-  [First-run onboarding](#first-run-onboarding)).
+- **General → Tours** (top of the screen) — one **Replay** per tour
+  (Welcome · New · Intake · Verify · Schedule · Settings) and the master
+  **Show hints** switch, which also stops tours opening by themselves (see
+  [Tours](#tours)). The per-session budget, **Resume sessions when usage comes
+  back**, **Revive sessions after a restart** and **Put idle agents to sleep
+  after** sit in General's Advanced fold (advanced mode) with the plan window
+  budget and scroll speed; their keys are unchanged.
 - **Agent CLI → scheduled window refresh** — a keepalive that periodically
   pokes each provider's CLI so usage windows stay warm
   (`GET/POST /api/window-refresh`). Its **Default provider** picker reads

@@ -29,7 +29,13 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
   {
     key: "general",
     label: "General",
-    terms: ["general", "budget", "cost", "spend", "usage resets", "resume", "revive", "restart sessions", "hints", "tips", "tour"],
+    terms: ["general", "hints", "tips", "tour", "tours", "replay", "help"],
+  },
+  {
+    key: "general",
+    label: "General → Budgets, resume and sleep",
+    terms: ["budget", "cost", "spend", "usage resets", "resume", "revive", "restart sessions", "sleep", "idle", "memory", "scroll speed"],
+    anchor: "#general-advanced",
   },
   {
     key: "connections",

@@ -122,6 +122,8 @@ import { GitOptions, WorksIn, useBaseBranches } from "./newSession/WorkspaceFold
 import { PlanFirstRow, TaskField } from "./newSession/PromptFold";
 import { LaunchFold } from "./newSession/LaunchFold";
 import { FooterActions } from "./newSession/FooterActions";
+import { TourButton } from "../onboarding/TourButton";
+import { useAutoTour } from "../onboarding/useAutoTour";
 
 // The pure half (reducers, gates, the fast path's Enter rule) lives in
 // newSession.ts; re-exported so every name this module ever exported still is.
@@ -129,6 +131,7 @@ export * from "./newSession";
 
 export function NewSessionDialog() {
   const open = useUi((s) => s.openDialog === "new-session");
+  useAutoTour("new", open);
   const closeDialog = useUi((s) => s.closeDialog);
 
   // Which of the two things this dialog is making. Not persisted across opens:
@@ -1820,6 +1823,7 @@ function NewHead({
         ))}
       </nav>
       )}
+      <TourButton tour="new" />
       <button type="button" id="new-close" title="Close (Esc)" onClick={onClose}>
         Close
       </button>
