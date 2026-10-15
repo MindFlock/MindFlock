@@ -19,6 +19,10 @@ export interface PeerLink {
   sas: string;
   perms: { messages: boolean; diff: boolean; read_file: boolean };
   shared: boolean;
+  /** Its shared session exists right now. False with `shared`: the session
+   * was closed (peer links turned off, or Close) and its folder is kept —
+   * Reopen starts a new one there. Optional: an older server doesn't send it. */
+  share_open?: boolean;
   share_id?: string | null;
   session_title?: string | null;
   connected: boolean;
@@ -157,7 +161,9 @@ export interface PeerStatus {
   display_name: string;
   fingerprint: string | null;
   sandbox: { available: boolean; reason: string };
-  listen: { host: string; port: number; listening: boolean };
+  /** `bound`: where the listener really is now ("host:port"), null when it
+   * isn't (an older server doesn't send it). */
+  listen: { host: string; port: number; listening: boolean; bound?: string | null };
   relay?: PeerRelay;
   links: PeerLink[];
   invites: PeerInviteRow[];
@@ -308,14 +314,25 @@ export function peerEventNote(
       const text = head + tail;
       return { text, cls: "n-done", toast: d.role === "dialer" ? "" : text };
     }
-    case "peer.link_removed":
+    case "peer.link_removed": {
+      // Your own Remove is not news; theirs is, and says your work is safe.
       if (d.by !== "peer") return null;
-      return { text: name + " unlinked", cls: "n-info", toast: name + " unlinked" };
+      const kept = String(d.kept_folder || "").trim();
+      const text = kept ? name + " unlinked — your shared folder is kept at " + kept : name + " unlinked";
+      return { text, cls: "n-info", toast: text };
+    }
+    case "peer.state": {
+      // Connect / drop is the card's dot, not news; a NEW safety number after
+      // a re-pair is — nothing crosses until you both confirm it again.
+      if (!d.sas_changed) return null;
+      const text = "New safety number after reconnecting — confirm it with " + name + " again";
+      return { text, cls: "n-warn", toast: text };
+    }
     case "peer.message": {
       // Every message is a bell row, by person — whether it waited for you
       // (stored) or went straight to your shared session's agent too.
-      const text = d.stored ? name + " sent you a message" : name + " sent a message (your shared agent has it too)";
-      const preview = String(d.text || "").trim();
+      const text = d.stored === false ? name + " sent a message (your shared agent has it too)" : name + " sent you a message";
+      const preview = clip(String(d.text_head || d.text || "").replace(/\s+/g, " ").trim(), 200);
       return { text: preview ? text + ": " + preview : text, cls: "n-info", toast: name + " sent you a message" };
     }
     case "peer.relay_changed": {
@@ -403,10 +420,12 @@ export const PEER_LIVE_EVENTS = [
   "peer.mirror_failed",
 ] as const;
 
-/** The peer.* events that can be news (a bell row / a toast). */
+/** The peer.* events that can be news (a bell row / a toast). peer.state is
+ * news only when it carries a new safety number. */
 export const PEER_NEWS_EVENTS = [
   "peer.link_added",
   "peer.link_removed",
+  "peer.state",
   "peer.message",
   "peer.relay_changed",
   "peer.joint_proposed",
@@ -533,22 +552,33 @@ export function isCutOffInvite(text: string): boolean {
   return /mfp[12]:/i.test(text || "") && !isPeerCode(text);
 }
 
-/** Export ("Bring work home") succeeded: which branch, where, and — when the
- * server says — how much came across. */
-export function exportDoneText(r: { branch?: string; target?: string; sha?: string; commits?: number } | null, repo: string): string {
+/** What Export answers: the branch, the repo it landed in, and how many
+ * commits it brought (0 = nothing new). */
+export interface PeerExportResult {
+  branch?: string;
+  repo_path?: string;
+  target?: string;
+  sha?: string;
+  commits?: number;
+}
+
+/** Export ("Bring work home") succeeded: "Brought home as <branch> in <repo>
+ * (<n> commits)", or that nothing new came yet. */
+export function exportDoneText(r: PeerExportResult | null, repo: string): string {
+  if (r?.commits === 0) return "Nothing new to bring home yet";
   const branch = r?.branch || "the branch";
-  const where = baseName(r?.target || repo);
-  if (typeof r?.commits === "number") {
-    if (r.commits === 0) return "Nothing new to bring home — " + branch + " in " + where + " is already up to date.";
-    return "Brought " + r.commits + (r.commits === 1 ? " commit" : " commits") + " home → " + branch + " in " + where + ".";
-  }
-  return "Brought home → " + branch + " in " + where + (r?.sha ? " (" + r.sha.slice(0, 7) + ")" : "") + ".";
+  const where = baseName(r?.repo_path || r?.target || repo);
+  const n = r?.commits;
+  const count = typeof n === "number" ? " (" + n + (n === 1 ? " commit)" : " commits)") : "";
+  return "Brought home as " + branch + " in " + where + count;
 }
 
 /** Export failed: one sentence, never "export failed: export failed: …", never
- * an API field name. */
+ * an API field name. The server's own sentence ("Confirm the safety number
+ * with Bea first", "That repo doesn't have the history…") is shown as it is. */
 export function exportErrorText(raw: string): string {
-  let m = String(raw || "").trim();
+  const orig = String(raw || "").trim();
+  let m = orig;
   while (/^export failed:\s*/i.test(m)) m = m.replace(/^export failed:\s*/i, "");
   const lower = m.toLowerCase();
   let why = m;
@@ -560,8 +590,49 @@ export function exportErrorText(raw: string): string {
     why = "that folder is the shared copy itself — pick your own repo";
   else if (lower.includes("checked out in the target"))
     why = m.replace(/in the target/, "in that repo") + " — switch branches there first";
+  else if (m === orig && /^[A-Z]/.test(m)) return /[.!?]$/.test(m) ? m : m + ".";
   why = why.replace(/[.\s]+$/, "");
   return "Couldn't bring work home: " + (why || "something went wrong") + ".";
+}
+
+/** The off switch's question: who you disconnect from, and how many open
+ * shared sessions pause (their folders are kept). */
+export function disableConfirmText(links: Array<Pick<PeerLink, "peer_name" | "share_open" | "shared">>): string {
+  const names = links.map((l) => l.peer_name || "your peer");
+  const who =
+    names.length <= 1 ? names[0] || "everyone" : names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+  const open = links.filter((l) => l.share_open ?? l.shared).length;
+  const pause = open ? " and pause " + open + (open === 1 ? " shared session" : " shared sessions") : "";
+  return "Disconnect from " + who + pause + "?";
+}
+
+/** A link whose folder is still shared but whose session is closed (peer
+ * links were off, or it was closed): the card offers Reopen. */
+export function shareClosed(link: Pick<PeerLink, "shared" | "share_open">): boolean {
+  return !!link.shared && link.share_open === false;
+}
+
+/** The Advanced status line's half about direct connections. */
+export function listenText(listen: PeerStatus["listen"] | null | undefined): string {
+  if (!listen) return "direct connections closed";
+  if (listen.bound) return "direct connections open at " + listen.bound;
+  if (listen.bound === null) return "direct connections closed";
+  return "direct connections " + (listen.listening ? "open" : "closed") + " (" + listen.host + ":" + listen.port + ")";
+}
+
+/** The one line where their screen, files and changes would be, until the
+ * safety number is confirmed (their side refuses them before that). */
+export function viewerGateText(peerName: string): string {
+  return "Confirm the safety number with " + peerName + " in People first — then their screen, files and changes show here.";
+}
+
+/** A closed shared-folder session in Recently closed. Its generic Reopen is
+ * refused by the server (a shared folder reopens from its People card). The
+ * row carries `peer_share` when the server says so; otherwise its title has
+ * the shape the server gives every one: peer-<name>-<6 hex>[-n]. */
+export function isPeerShareRow(row: { title?: string | null; peer_share?: unknown }): boolean {
+  if (row.peer_share) return true;
+  return /^peer-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{6}(?:-\d+)?$/.test(String(row.title || ""));
 }
 
 // --------------------------------------------------------------------------
@@ -572,32 +643,58 @@ export function exportErrorText(raw: string): string {
 
 const SAS_SEEN_KEY = "mf_peer_sas_seen";
 
-function readSasSeen(): Record<string, string> {
+/** The numbers the server announced as new (`peer.state` with
+ * `sas_changed`), per connection — so the callout shows even in a browser
+ * that never saw the old number confirmed. */
+const SAS_NEW_KEY = "mf_peer_sas_new";
+
+function readMap(key: string): Record<string, string> {
   try {
-    const v = JSON.parse(localStorage.getItem(SAS_SEEN_KEY) || "{}");
+    const v = JSON.parse(localStorage.getItem(key) || "{}");
     return v && typeof v === "object" ? (v as Record<string, string>) : {};
   } catch {
     return {};
   }
 }
 
-/** Remember a confirmed number (call when `sas_verified`). */
-export function rememberSas(linkId: string, sas: string): void {
+function writeMap(key: string, map: Record<string, string>): void {
   try {
-    const seen = readSasSeen();
-    if (seen[linkId] === sas) return;
-    seen[linkId] = sas;
-    localStorage.setItem(SAS_SEEN_KEY, JSON.stringify(seen));
+    localStorage.setItem(key, JSON.stringify(map));
   } catch {
     /* storage off: no callout, the number still asks to be compared */
   }
 }
 
-/** Unconfirmed, and different from the one confirmed before on this
- * connection: a reconnect brought a new number. */
+/** Remember a confirmed number (call when `sas_verified`). */
+export function rememberSas(linkId: string, sas: string): void {
+  const seen = readMap(SAS_SEEN_KEY);
+  const fresh = readMap(SAS_NEW_KEY);
+  if (linkId in fresh) {
+    delete fresh[linkId];
+    writeMap(SAS_NEW_KEY, fresh);
+  }
+  if (seen[linkId] === sas) return;
+  seen[linkId] = sas;
+  writeMap(SAS_SEEN_KEY, seen);
+}
+
+/** The server said a re-pair brought a new number (`peer.state` with
+ * `sas_changed`). */
+export function noteSasChanged(linkId: string, sas: string): void {
+  if (!linkId) return;
+  const fresh = readMap(SAS_NEW_KEY);
+  fresh[linkId] = sas || "?";
+  writeMap(SAS_NEW_KEY, fresh);
+}
+
+/** Unconfirmed (`sas_verified === false`) and known to be new: the server
+ * announced it (sas_changed), or it differs from the one confirmed before on
+ * this connection. */
 export function sasChanged(link: Pick<PeerLink, "link_id" | "sas" | "sas_verified">): boolean {
-  if (link.sas_verified) return false;
-  const before = readSasSeen()[link.link_id];
+  if (link.sas_verified !== false) return false;
+  const announced = readMap(SAS_NEW_KEY)[link.link_id];
+  if (announced && (announced === "?" || announced === link.sas)) return true;
+  const before = readMap(SAS_SEEN_KEY)[link.link_id];
   return !!before && before !== link.sas;
 }
 

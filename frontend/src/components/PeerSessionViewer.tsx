@@ -10,7 +10,10 @@
  * - Files — their shared folder (…/their-files), click a file to read it
  *   (…/their-file).
  * - Changes — their diff since the share started (…/diff).
- * Their link permissions decide what each tab may show; a refusal says why.
+ * Their link permissions decide what each tab may show; a refusal is the
+ * server's sentence, naming the switch they turned off. Until the safety
+ * number is confirmed the tabs are off (their side refuses them anyway) and
+ * one line says what to do; messages work, so you can compare it over them.
  * Watching is read-only: what you type goes to them as a message, and the
  * conversation sits right above the send box (People's MessageThread), so a
  * reply shows where you are looking. */
@@ -23,6 +26,8 @@ import { usePeerLinks } from "../state/queries";
 import { ansiLines, runCss } from "../lib/ansiSpans";
 import { errMsg } from "../lib/format";
 import { toast } from "../lib/toast";
+import { openSettings } from "../lib/openSettings";
+import { PEER_SCREEN, viewerGateText } from "../lib/peer";
 import { MessageThread } from "./settings/screens/peer/MessageThread";
 
 type Tab = "session" | "files" | "changes";
@@ -53,6 +58,9 @@ function Viewer({ linkId, onClose }: { linkId: string; onClose(): void }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(0);
+  // An older server doesn't send the flag: the tabs stay on, and a refusal
+  // still says why.
+  const gated = link?.sas_verified === false;
 
   const send = async () => {
     const text = draft.trim();
@@ -83,8 +91,10 @@ function Viewer({ linkId, onClose }: { linkId: string; onClose(): void }) {
                 key={t}
                 type="button"
                 role="tab"
-                aria-selected={tab === t}
-                className={"psv-tab" + (tab === t ? " active" : "")}
+                aria-selected={!gated && tab === t}
+                disabled={gated}
+                title={gated ? viewerGateText(name) : undefined}
+                className={"psv-tab" + (!gated && tab === t ? " active" : "")}
                 onClick={() => setTab(t)}
               >
                 {t === "session" ? "Session" : t === "files" ? "Files" : "Changes"}
@@ -96,9 +106,20 @@ function Viewer({ linkId, onClose }: { linkId: string; onClose(): void }) {
           </button>
         </div>
         <div className="psv-body">
-          {tab === "session" && <SessionTab base={base} name={name} />}
-          {tab === "files" && <FilesTab base={base} />}
-          {tab === "changes" && <ChangesTab base={base} />}
+          {gated ? (
+            <p className="psv-msg psv-gate">
+              {viewerGateText(name)}{" "}
+              <button type="button" className="linklike" onClick={() => openSettings(PEER_SCREEN)}>
+                Open People
+              </button>
+            </p>
+          ) : (
+            <>
+              {tab === "session" && <SessionTab base={base} name={name} />}
+              {tab === "files" && <FilesTab base={base} />}
+              {tab === "changes" && <ChangesTab base={base} />}
+            </>
+          )}
         </div>
         <div className="psv-thread" aria-label={"Messages with " + name}>
           <MessageThread linkId={linkId} peerName={name} connected={!!link?.connected} refresh={sent} />

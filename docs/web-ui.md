@@ -2835,7 +2835,7 @@ box; Agents' default-agent picker; Workspace's *Where your worktrees live*;
 block. Hooks `settings-status`, `settings-github`, `settings-default-agent`,
 `settings-worktrees`, `settings-advanced`, `settings-tours`. Its first step's
 screen is Connections, so the **?** always restarts it there) and **People**
-(five steps on Settings → People: **Invite someone**, **Join a peer**, the
+(five steps on Settings → People: **Invite someone**, **Join someone**, the
 safety number, the share-a-folder row, the joint task — hooks
 `people-invite`, `people-join`, `people-safety`, `people-share`,
 `people-joint`; the link-card steps centre until someone is linked. Its **?**
@@ -2949,7 +2949,10 @@ missing"`): its row reads *Workspace missing — removed at startup.* and then
 *Branch <name> is still in the repo — check it out to recover the work.*, *Its
 branch is still in the repo.* or *Its branch is gone too.* (`branch_exists`).
 
-Per row: **Reopen** (a closed session whose directory is still there), **Delete**
+Per row: **Reopen** (a closed session whose directory is still there; a
+closed shared-folder session — `peer-<name>-<id>` — shows **Reopen from
+People** instead, which opens its card there, since the generic reopen is
+refused for it), **Delete**
 (the directory — absent for an in-place session, whose folder is your own repo,
 and for a directory a running session shares) and **Forget** (drop the closed
 session from the list; the directory stays, and comes back as an on-disk row).
@@ -4884,7 +4887,9 @@ labels above the inputs.
   bell's own **Approve** on the request's row, and from the phone's approve
   card on `/m` (an ntfy tap opens `/m#approve=<id>`). The desktop app also
   raises an OS notification for a join request, someone arriving on a peer
-  link and an update while its window isn't focused; clicking one brings the
+  link, a joint task proposed to you, a mirror that failed, someone unlinking
+  you (*your shared folder is kept at …*) and an update while its window isn't
+  focused; clicking one brings the
   window forward on the right screen.
 
   **Paste a code** is ONE box for every code: one of your devices' codes
@@ -4946,11 +4951,17 @@ labels above the inputs.
   **shared-session viewer** (`PeerSessionViewer`, dialog `peer-session`):
   **Session** (their terminal, re-asked every 1.5 s, colours only —
   `lib/ansiSpans` renders spans, never HTML), **Files** (their folder; click to
-  read), **Changes** (their diff), and a line that messages them.
+  read), **Changes** (their diff), and a line that messages them. Until the
+  safety number is confirmed (`sas_verified`) the three tabs are off and one
+  line says why (*Confirm the safety number with <name> in People first — then
+  their screen, files and changes show here*, with **Open People**); a refusal
+  by their side is the server's own sentence (*<name> hasn't confirmed the
+  safety number yet…*, or the switch they turned off: *<name> turned off “see
+  my changes” on this link…*).
 - **People** (screen key `peer`; was People; the Peer links screen, `/api/peer*`,
   `backend/peer`) — pair-coding with another MindFlock user. It leads with
   **Invite someone** (**Copy invite** copies a ready-to-send message with the
-  `mfp1:`/`mfp2:` code) and **Join a peer** (takes that whole message or just
+  `mfp1:`/`mfp2:` code) and **Join someone** (takes that whole message or just
   the code; Your devices' **Paste a code** box routes a peer code here too); doing
   either turns peer links on, no toggle first. The screen opens with one line
   (*one of you invites, the other joins*) and **Create invite** as the primary
@@ -4962,19 +4973,36 @@ labels above the inputs.
   nobody is in between*) with **It matches** and **It doesn't match** (removes
   the connection and says to make a new invite and send it another way); a
   new number after a reconnect is called out (*New safety number after
-  reconnecting — confirm it again*, from the number this browser last saw
-  confirmed); *In the folder you share, they may* (✓ Saved on each change);
+  reconnecting — confirm it with <name> again*: an unconfirmed number the
+  server announced with `peer.state` `sas_changed`, or one different from the
+  number this browser last saw confirmed); *In the folder you share, they may* (✓ Saved on each change);
   and **Remove connection…** in red. **Share** holds the labelled share form
   (Folder · Branch · Agent; *Confirm the safety number before you share* and
   Share stays off until then), **Bring work home** (Your repo · As branch ·
-  Export, its result on the spot: *Brought home → peer/Bea in api (abc1234)*,
-  or one sentence why not — never *export failed: export failed:*), the joint
-  task and the Mirror row. **Talk** is the conversation by person (*Bea*,
+  Export, its result next to the button: *Brought home as peer/Bea in api (3
+  commits)*, *Nothing new to bring home yet*, or the server's one sentence why
+  not — never *export failed: export failed:*), the joint task and the Mirror
+  row. Share, Export, Mirror's **Enable** and **Reopen** stay off until **It
+  matches**, saying *Confirm the safety number with <name> first* (the
+  server's 409 says the same). A shared folder whose session was closed —
+  peer links turned off, or Close — keeps its folder (`shared` and not
+  `share_open`): the card says *Your shared session is closed — its folder is
+  kept* with **Reopen** (`POST …/share/reopen`, the agent picker beside it; a
+  refusal shows next to it). **Talk** is the conversation by person (*Bea*,
   *you*, *your agent* — never a session id) with its send box, **Watch their
   session** and **Their changes**; the shared-session viewer shows the same
   thread above its send box, and every message from them is a bell row (filed
-  under **People**). Turning **Connections to people** off in Advanced asks
-  first when anyone would be disconnected. In detail: **Share a folder** (any folder — typed or picked
+  under **People**, its first line from `text_head`). The bell also says when
+  they unlink you (*<name> unlinked — your shared folder is kept at <path>*,
+  or just *<name> unlinked*) and when a re-pair brings a new number (*New
+  safety number after reconnecting — confirm it with <name> again*). **Remove
+  connection…** says *Their shared session is closed, not deleted; yours too
+  unless you tick delete*. Turning **Connections to people** off in Advanced
+  asks first when anyone would be disconnected (*Disconnect from Bea and Cy
+  and pause 1 shared session?*, counting open shared sessions), then calls
+  `POST /api/peer/disable`; the cards stay listed, greyed and inert, under
+  *Connections to people are off* with **Turn on**. Advanced's status line
+  says where the listener really is (`listen.bound`). In detail: **Share a folder** (any folder — typed or picked
   with **Browse…**, the New dialog's folder browser; a plain folder is shared
   as a snapshot — optional branch, the agent CLI — any sandbox-capable one;
   not aider) which starts the shared

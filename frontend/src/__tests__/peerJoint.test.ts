@@ -499,6 +499,9 @@ describe("bell rows and toasts for the joint and mirror events", () => {
       expect(PEER_LIVE_EVENTS as readonly string[]).toContain(e);
     }
     expect(PEER_LIVE_EVENTS as readonly string[]).toContain("peer.joint_state");
-    expect(PEER_NEWS_EVENTS as readonly string[]).not.toContain("peer.state");
+    // peer.state is news only when a re-pair brought a new safety number;
+    // a plain connect / drop is the card's dot.
+    expect(PEER_NEWS_EVENTS as readonly string[]).toContain("peer.state");
+    expect(peerEventNote("peer.state", { peer_name: "Bea", connected: true })).toBeNull();
   });
 });

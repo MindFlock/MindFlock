@@ -265,10 +265,12 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
       const approve = approvableRequest(env.event, d);
       return n ? { text: n.text, cls: n.cls, device: true, ...(approve ? { approve } : {}) } : null;
     }
-    // Another person (peer links): they joined, unlinked, left a message for
-    // you, or your relay moved under the people you invited.
+    // Another person (peer links): they joined, unlinked (your shared folder
+    // kept), left a message, re-paired with a new safety number, or your
+    // relay moved under the people you invited.
     case "peer.link_added":
     case "peer.link_removed":
+    case "peer.state":
     case "peer.message":
     case "peer.relay_changed":
     // A joint task: proposed to you, answered or ended by them, an agent's

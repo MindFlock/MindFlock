@@ -179,6 +179,24 @@ export function PeerLinks(_: ScreenProps) {
   // the screen (and Advanced's toggle) agrees.
   const afterPair = () => void s.reload();
 
+  // The off switch (Advanced): off disconnects everyone and closes the open
+  // shared sessions (kept) — the server does it all in one call and keeps
+  // listing the links; on starts listening again and reopens nothing.
+  const [toggling, setToggling] = useState(false);
+  const [toggleErr, setToggleErr] = useState("");
+  const toggle = async (enable: boolean) => {
+    setToggling(true);
+    setToggleErr("");
+    try {
+      await api(enable ? "/api/peer/enable" : "/api/peer/disable", { json: {} });
+    } catch (e) {
+      setToggleErr(errText(e));
+    }
+    await s.reload();
+    setToggling(false);
+    load();
+  };
+
   const createInvite = async (reach: PeerReach) => {
     const op = newOpId();
     inviteOp.current = op;
@@ -510,22 +528,32 @@ export function PeerLinks(_: ScreenProps) {
       {st && st.links.length > 0 && (
         <>
           <h4 className="set-subtitle">People you work with</h4>
-          {st.links.map((l) => (
-            <PeerLinkCard
-              key={l.link_id}
-              link={l}
-              agents={st.agents || []}
-              sandbox={st.sandbox.available}
-              tick={tick}
-              reload={load}
-              onVerified={() => markVerified(l.link_id)}
-              fresh={fresh === l.link_id}
-            />
-          ))}
+          {!st.enabled && (
+            <div className="peer-row peer-off-note" id="peer-off-note">
+              <span className="set-hint">Connections to people are off — nobody connects until you turn them on.</span>
+              <button type="button" className="test-btn" disabled={toggling} onClick={() => void toggle(true)}>
+                {toggling ? "Turning on…" : "Turn on"}
+              </button>
+            </div>
+          )}
+          <div className={"peer-cards" + (st.enabled ? "" : " peer-cards-off")} inert={!st.enabled}>
+            {st.links.map((l) => (
+              <PeerLinkCard
+                key={l.link_id}
+                link={l}
+                agents={st.agents || []}
+                sandbox={st.sandbox.available}
+                tick={tick}
+                reload={load}
+                onVerified={() => markVerified(l.link_id)}
+                fresh={fresh === l.link_id}
+              />
+            ))}
+          </div>
         </>
       )}
 
-      <PeerAdvanced on={on} onToggle={(v) => s.saveField("peer", "enabled", v)} st={st} />
+      <PeerAdvanced on={on} onToggle={(v) => void toggle(v)} st={st} busy={toggling} error={toggleErr} />
     </>
   );
 }

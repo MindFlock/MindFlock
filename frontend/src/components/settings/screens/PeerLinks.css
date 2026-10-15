@@ -90,9 +90,25 @@
   font-size: 12.5px;
 }
 .peer-export-done,
-.peer-export-error {
+.peer-export-error,
+.peer-reopen-error,
+.peer-gate {
   margin: 0;
+  flex: 1 1 200px;
+  min-width: 0;
   overflow-wrap: anywhere;
+}
+/* Peer links off (Advanced): the cards stay listed, greyed and inert, under
+   one line that says so with its Turn on. */
+.peer-cards-off {
+  opacity: 0.55;
+  filter: grayscale(0.6);
+}
+.peer-off-note {
+  margin-bottom: 8px;
+}
+.peer-reopen {
+  margin-bottom: 8px;
 }
 /* The card you just joined lights up once. */
 .peer-card-fresh {

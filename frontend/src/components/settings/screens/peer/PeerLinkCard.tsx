@@ -4,10 +4,12 @@
  *    connection, with what to do next), a NEW number after a reconnect called
  *    out, what they may do in the folder you share (✓ Saved on change), and
  *    Remove connection… in red.
- *  - Share — your folder (labelled Folder / Branch / Agent; Share is off until
- *    the safety number is confirmed), Bring work home with its result named
- *    (branch + repo, or one sentence why not), the joint task (JointTask) and
- *    the Mirror row.
+ *  - Share — your folder (labelled Folder / Branch / Agent), or Reopen when
+ *    it is still shared but its session was closed (peer links off, Close),
+ *    Bring work home with its result next to the button (branch, repo and
+ *    commit count, or the server's one sentence), the joint task (JointTask)
+ *    and the Mirror row. Share, Reopen, Export and Mirror are off until the
+ *    safety number is confirmed — the server refuses them too.
  *  - Talk — the conversation (MessageThread) with its send box, Watch their
  *    session, Their changes.
  *
@@ -22,6 +24,7 @@ import { useUi } from "../../../../state/store";
 import { InlineConfirm } from "../../useSettings";
 import { PathField } from "../../../PathField";
 import { flashSaved } from "../../savedCue";
+import { toast } from "../../../../lib/toast";
 import {
   carrierText,
   exportDoneText,
@@ -32,6 +35,8 @@ import {
   rememberSas,
   roleText,
   sasChanged,
+  shareClosed,
+  type PeerExportResult,
   type PeerLink,
 } from "../../../../lib/peer";
 import { AgentSelect } from "./AgentSelect";
@@ -72,6 +77,8 @@ export function PeerLinkCard(props: {
   );
   const [exported, setExported] = useState<{ ok: boolean; text: string } | null>(null);
   const [busyExport, setBusyExport] = useState(false);
+  const [reopenErr, setReopenErr] = useState("");
+  const [busyReopen, setBusyReopen] = useState(false);
   const [confirm, setConfirm] = useState<Confirm>("");
   const [deleteFiles, setDeleteFiles] = useState(false);
   const [reconnect, setReconnect] = useState("");
@@ -114,7 +121,7 @@ export function PeerLinkCard(props: {
     setExported(null);
     setBusyExport(true);
     try {
-      const r = await api<{ branch?: string; target?: string; sha?: string; commits?: number }>(base + "/export", {
+      const r = await api<PeerExportResult>(base + "/export", {
         json: { target_repo: target.trim(), branch_name: exportBranch },
       });
       setExported({ ok: true, text: exportDoneText(r, target.trim()) });
@@ -122,6 +129,21 @@ export function PeerLinkCard(props: {
       setExported({ ok: false, text: exportErrorText(errText(e)) });
     }
     setBusyExport(false);
+    reload();
+  };
+  // A shared folder whose session was closed (peer links off, or Close):
+  // start a new session in the kept folder. A refusal is the server's
+  // sentence, shown next to the button.
+  const reopen = async () => {
+    setReopenErr("");
+    setBusyReopen(true);
+    try {
+      await api(base + "/share/reopen", { json: chosen ? { program: chosen } : {} });
+      toast("Reopened — the shared session is starting");
+    } catch (e) {
+      setReopenErr(errText(e));
+    }
+    setBusyReopen(false);
     reload();
   };
   const openSession = () => {
@@ -133,6 +155,7 @@ export function PeerLinkCard(props: {
   const how = carrierText(link.carrier);
   const verified = !!link.sas_verified;
   const changed = sasChanged(link);
+  const gate = `Confirm the safety number with ${link.peer_name} first.`;
 
   const trust = (
     <section className="peer-group peer-group-trust" aria-label="Trust" key="trust">
@@ -143,7 +166,11 @@ export function PeerLinkCard(props: {
         </p>
       ) : (
         <div className="peer-safety" data-tour="people-safety">
-          {changed && <p className="peer-warn peer-sas-changed">New safety number after reconnecting — confirm it again.</p>}
+          {changed && (
+            <p className="peer-warn peer-sas-changed">
+              New safety number after reconnecting — confirm it with {link.peer_name} again.
+            </p>
+          )}
           <p className="set-hint">
             Safety number <code className="peer-sas">{link.sas}</code> — read it to each other. The same number on both
             screens means nobody is in between.
@@ -192,14 +219,41 @@ export function PeerLinkCard(props: {
       <h5 className="peer-group-title">Share</h5>
       {link.shared ? (
         <>
-          <div className="peer-row" data-tour="people-share">
-            <span className="set-hint">
-              Your folder is shared in session <strong>{link.session_title || "?"}</strong>.
-            </span>
-            {link.session_title && (
-              <button type="button" className="test-btn" onClick={openSession}>
-                Open session
-              </button>
+          <div data-tour="people-share">
+            {shareClosed(link) ? (
+              <div className="peer-field peer-reopen">
+                <span className="set-hint">Your shared session is closed — its folder is kept.</span>
+                <div className="peer-row">
+                  {sandbox && (
+                    <label className="peer-labelled">
+                      <span className="set-hint">Agent</span>
+                      <AgentSelect agents={agents} value={chosen} onChange={setProgram} />
+                    </label>
+                  )}
+                  <button
+                    type="button"
+                    className="test-btn peer-reopen-btn"
+                    disabled={busyReopen || !!busy || !verified}
+                    title={verified ? "Start a new session in the kept folder" : gate}
+                    onClick={() => void reopen()}
+                  >
+                    {busyReopen ? "Reopening…" : "Reopen"}
+                  </button>
+                  {!verified && <span className="set-hint peer-gate">{gate}</span>}
+                  {reopenErr && <span className="error peer-reopen-error">{reopenErr}</span>}
+                </div>
+              </div>
+            ) : (
+              <div className="peer-row">
+                <span className="set-hint">
+                  Your folder is shared in session <strong>{link.session_title || "?"}</strong>.
+                </span>
+                {link.session_title && (
+                  <button type="button" className="test-btn" onClick={openSession}>
+                    Open session
+                  </button>
+                )}
+              </div>
             )}
           </div>
           <div className="peer-field">
@@ -216,15 +270,19 @@ export function PeerLinkCard(props: {
               <button
                 type="button"
                 className="test-btn peer-export"
-                disabled={busyExport || !!busy || !target.trim() || !exportBranch.startsWith("peer/")}
+                disabled={busyExport || !!busy || !verified || !target.trim() || !exportBranch.startsWith("peer/")}
+                title={verified ? undefined : gate}
                 onClick={() => void doExport()}
               >
                 {busyExport ? "Bringing home…" : "Export"}
               </button>
+              {!verified && !exported && <span className="set-hint peer-gate">{gate}</span>}
+              {exported && (
+                <span role="status" className={exported.ok ? "set-hint peer-export-done" : "error peer-export-error"}>
+                  {exported.text}
+                </span>
+              )}
             </div>
-            {exported && (
-              <p className={exported.ok ? "set-hint peer-export-done" : "error peer-export-error"}>{exported.text}</p>
-            )}
           </div>
           <div className="peer-row">
             <button type="button" className="test-btn" disabled={!!busy} onClick={() => setConfirm("unshare")}>
@@ -347,8 +405,8 @@ export function PeerLinkCard(props: {
           <>
             <span>
               {confirm === "unlink"
-                ? `${link.peer_name} can no longer reach you, and your shared session stops. Your own folder is untouched.`
-                : "Your shared session stops. Your own folder is untouched."}
+                ? `${link.peer_name} can no longer reach you. Their shared session is closed, not deleted; yours too unless you tick delete.`
+                : "Your shared session is closed, not deleted, unless you tick delete. Your own folder is untouched."}
             </span>{" "}
             <label className="check">
               <input type="checkbox" checked={deleteFiles} onChange={(e) => setDeleteFiles(e.target.checked)} />
@@ -367,7 +425,7 @@ export function PeerLinkCard(props: {
           void act(
             unlinking ? "unlink" : "unshare",
             () => api(path, { method: "DELETE" }),
-            unlinking ? "Connection removed" : "Stopped sharing"
+            unlinking ? "Connection removed" : deleteFiles ? "Stopped sharing — the shared folder is deleted" : "Stopped sharing — the shared folder is kept"
           );
         }}
       />

@@ -95,7 +95,7 @@ describe("Trust", () => {
     expect(card()).not.toContain("New safety number");
     rememberSas("lk1", "111-111-111-1");
     expect(sasChanged(link())).toBe(true);
-    expect(card()).toContain("New safety number after reconnecting — confirm it again.");
+    expect(card()).toContain("New safety number after reconnecting — confirm it with Bea again.");
     // same number, or confirmed: no callout
     rememberSas("lk1", "482-019-337-5");
     expect(sasChanged(link())).toBe(false);
@@ -145,14 +145,15 @@ describe("Share", () => {
 describe("Bring work home says what happened", () => {
   it("success names the branch and the repo, and how much when told", () => {
     expect(exportDoneText({ branch: "peer/Bea", target: "/home/al/api", sha: "abc1234def" }, "")).toBe( // pragma: allowlist secret
-      "Brought home → peer/Bea in api (abc1234)."
+      "Brought home as peer/Bea in api"
     );
-    expect(exportDoneText({ branch: "peer/Bea", target: "/home/al/api", commits: 3 }, "")).toBe(
-      "Brought 3 commits home → peer/Bea in api."
+    expect(exportDoneText({ branch: "peer/Bea", repo_path: "/home/al/api", target: "/home/al/api/", commits: 3 }, "")).toBe(
+      "Brought home as peer/Bea in api (3 commits)"
     );
-    expect(exportDoneText({ branch: "peer/Bea", commits: 0 }, "/x/api")).toBe(
-      "Nothing new to bring home — peer/Bea in api is already up to date."
+    expect(exportDoneText({ branch: "peer/Bea", repo_path: "/home/al/api", commits: 1 }, "")).toBe(
+      "Brought home as peer/Bea in api (1 commit)"
     );
+    expect(exportDoneText({ branch: "peer/Bea", commits: 0 }, "/x/api")).toBe("Nothing new to bring home yet");
   });
 
   it("failure is one sentence: never doubled, never a field name", () => {
@@ -231,7 +232,7 @@ describe("the screen", () => {
   it("turning connections off asks first when anyone would be dropped", () => {
     expect(ADV_SRC).toContain('<span className="set-label">Connections to people</span>');
     expect(ADV_SRC).toContain("if (!e.target.checked && people > 0) setAsking(true);");
-    expect(ADV_SRC).toContain('title="Turn off connections to people?"');
+    expect(ADV_SRC).toContain("title={disableConfirmText(st.links)}");
   });
 
   it("the palette finds People by the words a colleague uses", () => {

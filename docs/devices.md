@@ -10,7 +10,7 @@ Remote devices, Peer links, Auth), the invite/join flow in
 |---|---|---|
 | **Your devices** (`devices`) | Tailscale on this device · **Make reachable** (the one Tailscale-mode switch; **Restart server to apply** when needed) · the roster · **Add a device** (pair by code) / **Ask to join** → **Approve** · Paste a code · **Run here** (`github.automation_device`) · **Settings sync** · **One link for all devices** (the shared phone link + its setup checklist) · **Advanced**: Trusted Tailscale accounts, Allow remote control, Pair by pasted token | the access token |
 | **Your phone** (`mobile`) | the three steps in order (Tailscale on this computer — with the doctor's diagnosis when it's missing; Tailscale on the phone; scan) · **one** QR · the `/m` links · a pointer to Your devices → Make reachable when the server is local-only | the token, the Tailscale-mode switch, the shared-link setup |
-| **People** (`peer`) | **Invite someone** / **Join a peer**, links, the shared folder, messages; Advanced: the peer-links switch, relay, listen address | anything about your own devices |
+| **People** (`peer`) | **Invite someone** / **Join someone**, links, the shared folder, messages; Advanced: the peer-links switch, relay, listen address | anything about your own devices |
 | **Security** (`security`) | **Require access token** (auto / on / off) · this device's token (Show / Copy / **Regenerate**) · "Trusting your own devices lives in Your devices" | trusted accounts, remote control, token pairing, settings sync |
 
 ## The two ways
