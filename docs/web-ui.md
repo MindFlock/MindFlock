@@ -2240,8 +2240,8 @@ lays them out (`TemplateEditor.tsx`; `scope="tpl"` ids): **Name**; then the
 New form's Folder row — **Folder** (placeholder *The repo it works in*; a
 NEW template starts on the most recent repo, so it can run as soon as it's
 saved; the field also takes a folder name to look up, as in New) with
-**Browse…** (the same inline folder browser; Escape puts the old folder back
-before it closes the editor) beside **Agent** (New's picker — this device's
+**📁 Browse…** (the same floating folder picker; Escape closes the picker and
+puts the old folder back before it closes the editor) beside **Agent** (New's picker — this device's
 agents with *Your default agent* first, one this device lacks tagged *(not
 installed)* as in New, and its **Manage** link), the two on one baseline and
 one height; under them one line of one-click folders — *Use: 📦 repo* (repos
@@ -2319,6 +2319,31 @@ schedule · next run or *paused*, with **Run now**, and **Open Schedule ›**), 
 starts on its own?" question as the ticket, PR and issue queues there. From a
 shell, `mindflock run <template>` is Run now and `mindflock templates` lists
 schedules and last runs.
+
+### The folder picker window (📁 Browse…)
+
+Every editable path field — New's **Folder** and its *Runs in* line, a
+template's **Folder**, **Settings → Workspace → Workspace folder** — has a
+**📁 Browse…** button that opens ONE floating, draggable window, **Pick a
+folder** (`FolderPickerWindow.tsx`, store in `lib/folderPicker.ts`; the field
+itself is `PathField.tsx` outside New). It is non-modal — the form under it
+stays usable — and sits above every dialog and under the toast. Drag it by its
+title bar (it stays wholly on screen, and at ~420 px it is as wide as the
+screen less a margin); its corner resizes it; it reopens where it was left and
+at the size it was left, per browser (`localStorage` `mf_folder_picker_rect`,
+never a synced pref). Inside is the folder browser New always had (📦 repos /
+📁 folders, *Click selects · double-click or → opens · ← up*, **+ Folder**),
+the folder you are in on the top line and the chosen one in the footer beside
+**Use this folder** (Enter; Enter on a row takes that row; ↑/↓ walk the rows).
+**✕** or Escape closes it without a pick — Escape goes to the picker before the
+dialog under it, except inside the + Folder name box. It opens on the field's
+value, or the nearest folder above it that exists, or home. One window at a
+time: another field's Browse… re-targets it (the first field's browse is
+cancelled). A pick fills the field through its normal change path, so saving
+works as before (the Workspace folder saves on pick, as it does on blur). In
+New and the template editor a click in the picker already fills the Folder
+field (the git nudge follows it) and Escape / ✕ put the old folder back.
+Read-only path rows (Workspace's **Copy** lines) have no button.
 
 **Browse… → + Folder** creates a folder on disk, inside whatever directory the
 browser is currently showing — the path line directly above the name box — and
@@ -2437,8 +2462,8 @@ strips rather than looking like a second form stacked on the first. Under it,
 ONE line says where **Start** runs it: *Runs in [📦 repo ▾] · own branch
 `me/add-readme-section…` · change*. The folder is a real picker (`#new-describe-folder`,
 the New tour's `new-folder` hook): **Recent folders** (only ones a session was
-started in), the other suggestions, then **Browse…**, which opens the inline
-folder browser under the box. A folder with no repo reads *· in the folder
+started in), the other suggestions, then **Browse…**, which opens the folder
+picker window. A folder with no repo reads *· in the folder
 itself (no git, so no diff or PR)*; a path that doesn't exist reads *No folder
 at …* with **Create this folder**, and Start stays off. **change** opens the
 form. Then *Starting from a ticket, pull request or issue? **Open Intake***. A
@@ -4531,7 +4556,8 @@ A few screens got quieter:
   your worktrees live**, `GET /api/settings/workspace-paths`): the absolute
   folder for **Sessions you start** (`<config dir>/worktrees`) and for
   **Ticket and PR sessions** (the **Workspace folder** field — a relative one
-  anchored where the ticket pipeline runs, `~` expanded and stored expanded),
+  anchored where the ticket pipeline runs, `~` expanded and stored expanded;
+  **📁 Browse…** beside it opens the folder picker window and saves the pick),
   each with **Copy**. The folder is checked as you type: a missing one *will
   be created*, an unwritable one or a file is flagged in red under the field,
   and `MINDFLOCK_WORKSPACE_DIR` is named when it overrides the field. **How

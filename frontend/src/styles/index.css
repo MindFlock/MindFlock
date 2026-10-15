@@ -96,6 +96,9 @@
    extension host chrome extends */
 @import "../components/InfoTip.css" layer(components); /* 320 — after
    smallDialogs.css, whose `.ws-head button` pill the icon must not wear */
+@import "../components/FolderPickerWindow.css" layer(components); /* 330 — after
+   NewSessionDialog.css, whose #repo-browser the window stretches to its height */
+@import "../components/PathField.css" layer(components); /* 340 */
 
 @import "./regions.css" layer(theme);
 @import "./theme-light.css" layer(theme); /* 190 */

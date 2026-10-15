@@ -27,7 +27,7 @@ import {
   type FolderAction,
   type RepoSuggestion,
 } from "../newSession";
-import { FolderBrowser } from "./FolderBrowser";
+import { useFolderPickerWhile } from "../../../lib/folderPicker";
 
 type Set<T> = Dispatch<SetStateAction<T>>;
 
@@ -497,9 +497,10 @@ export function FolderField({
           className="repo-browse"
           title={
             browserOpen
-              ? "Close the browser and keep this folder (Esc puts the old one back)"
-              : "Browse local folders"
+              ? "Close the picker and keep this folder (Esc puts the old one back)"
+              : "Pick a folder in a window you can move"
           }
+          aria-expanded={browserOpen}
           onClick={() =>
             // Toggling the panel shut keeps whatever the field now holds:
             // it is on screen, the user has been looking at it, and only
@@ -509,6 +510,7 @@ export function FolderField({
             )
           }
         >
+          <span aria-hidden="true">📁 </span>
           Browse…
         </button>
       </span>
@@ -556,6 +558,21 @@ export function FolderAids({
   browserOpen: boolean;
   device: string;
 }) {
+  // Browse… opens the floating picker window (FolderPickerWindow) for as long
+  // as the form says the browse is open. Same reducer actions as the inline
+  // browser had: a click writes the field (browse-select), "Use this folder"
+  // commits, and ✕ / Escape / another field taking the window cancel — which
+  // hands the field back the way the browse found it.
+  useFolderPickerWhile(browserOpen, () => ({
+    title: scope === "tpl" ? "Pick the template's folder" : "Pick a folder",
+    device,
+    start: folderPath || homePath || "",
+    selected: folderPath,
+    anchor: document.getElementById(folderIds(scope).browse),
+    onSelect: (p) => folderDo({ t: "browse-select", path: p }),
+    onPick: (p) => folderDo({ t: "browse-commit", path: p }),
+    onCancel: () => folderDo({ t: "browse-cancel" }),
+  }));
   // A row whose only suggestion is the folder already in the field repeats
   // the field above it: nothing to choose, so nothing drawn.
   const onlyCurrent =
@@ -686,15 +703,6 @@ export function FolderAids({
         <SuggestRow scope={scope} suggestions={suggestions} folderPath={folderPath} folderDo={folderDo} />
       )}
 
-      {browserOpen && (
-        <FolderBrowser
-          device={device}
-          initialPath={folderPath || homePath || ""}
-          selected={folderPath}
-          onSelect={(p) => folderDo({ t: "browse-select", path: p })}
-          onPick={(p) => folderDo({ t: "browse-commit", path: p })}
-        />
-      )}
     </>
   );
 }

@@ -66,7 +66,7 @@ describe("the template editor draws the New form's parts", () => {
     const html = editor();
     expect(html).toContain('id="tpl-repo-path"');
     expect(html).toContain('role="combobox"');
-    expect(html).toMatch(/<span class="repo-path-row"><input[^>]*id="tpl-repo-path"[^>]*>.*?id="tpl-browse" class="repo-browse"[^>]*>Browse…<\/button>/);
+    expect(html).toMatch(/<span class="repo-path-row"><input[^>]*id="tpl-repo-path"[^>]*>.*?id="tpl-browse" class="repo-browse"[^>]*><span aria-hidden="true">📁 <\/span>Browse…<\/button>/);
     // One line of one-click folders, said as an action ("Use: 📦 app"), not
     // a status ("Started in", "Recent") — r5-schedule finding 13. Only repos
     // and recent folders: a stray notes folder isn't offered.

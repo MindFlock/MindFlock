@@ -911,13 +911,6 @@ export function NewSessionDialog() {
   useEffect(() => {
     if (!open) setRunBrowse(false);
   }, [open]);
-  // The browser opens under the choices, below the fold of the dialog's
-  // body: bring it on screen, once, as it opens.
-  const runBrowseRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const el = runBrowseRef.current;
-    if (runBrowse && el && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
-  }, [runBrowse]);
   const laneAtPress = useRef<{ lane: Lane; askFirst: boolean }>({ lane: "leave", askFirst: false });
   laneAtPress.current = { lane: draft.lane, askFirst: draft.askFirst };
   // Fast-track COMMITS for this session: it never drives a checkout other
@@ -1499,7 +1492,6 @@ export function NewSessionDialog() {
     newFolderRow: missingRow,
     runBrowse,
     setRunBrowse,
-    runBrowseRef,
     repoPath,
     folderDo,
     suggestions,
