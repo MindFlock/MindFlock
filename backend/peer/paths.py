@@ -6,6 +6,8 @@ overrides; tests point it at ``tmp_path``)::
     peer/                       0700
       identity/                 0700  ed25519.key (0600), cert.pem (0644)
       links.json                0600  persisted links (store.py)
+      messages/<link_id>.json   0600  the link's message log (inbox.py)
+      joint/<link_id>.json      0600  the link's joint task (joint.py)
       shares/<share_id>/        0700  ONE shared folder's whole blast radius
         work/                   the folder both agents work in (rw in sandbox)
         work/.git               gitfile -> ../repo.git (read-only in sandbox)

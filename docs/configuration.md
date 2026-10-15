@@ -616,6 +616,14 @@ server merges on save so multiple processes can share it.
   naming the server that drives it, so two servers never drive one run.
   Finished runs move to `runs/archive/` after 30 days. Override with
   `$MINDFLOCK_RUNS_DIR`. See [team-runs.md](team-runs.md).
+- `dbclient/drivers.json` — the Database explorer drivers this machine
+  installed from the app, so they survive engine updates:
+  `{"version": 1, "drivers": {"<engine>": {"package": "psycopg[binary]",
+  "installed_at": "<ISO 8601 UTC>", "python": "3.12"}}}`. Written on a
+  successful **Install driver**; read by the updater (`--with` / `pipx inject`),
+  by the explorer's self-heal at startup, and by `mindflock doctor`. Follows
+  `$MINDFLOCK_HOME` (like `install.json`). See
+  [extensions.md](extensions.md#worked-example-the-database-client).
 - `accounts/<id>/` — an `account`-kind auth profile's isolated CLI config dir
   (mode 0700), created on save and pointed at by `CLAUDE_CONFIG_DIR` /
   `CODEX_HOME` when a session runs under that profile. **Holds real
@@ -766,7 +774,7 @@ control) can't change this group: `POST /api/settings` answers 403 for it.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `enabled` | `false` | Whether peer links are on. Off: no listener, no dialing, no shared sessions start. Not a gate you have to open first: **Invite someone** and **Join a peer** (and `mindflock peer invite` / `join`) turn it on by themselves (since 0.7.1); turning it off again is the deliberate step, under Settings → People → *Advanced*. |
+| `enabled` | `false` | Whether peer links are on. Off: no listener, no dialing, no shared sessions start. Not a gate you have to open first: **Invite someone** and **Join someone** (and `mindflock peer invite` / `join`) turn it on by themselves (since 0.7.1); turning it off again is the deliberate step, under Settings → People → *Advanced* (or `POST /api/peer/disable`). Off closes each shared session (its folder kept) but keeps every link and share — they stay listed and reopen from the link card when it's back on. |
 | `listen_host` | `0.0.0.0` | Where the inviter's TLS listener binds. It runs only while an invite or a link you accepted exists. |
 | `listen_port` | `8799` | The listener's port — must be reachable by the joiner (Tailscale recommended). |
 | `advertise_host` | `""` | The address written into invite codes. Blank = this machine's Tailscale IPv4, else its LAN address. |
@@ -778,7 +786,8 @@ control) can't change this group: `POST /api/settings` answers 403 for it.
 
 State lives under `~/.mindflock/peer/` (`MINDFLOCK_PEER_HOME` overrides):
 `identity/` (this instance's Ed25519 key), `links.json` (0600),
-`shares/<id>/` (one shared folder each) and `relay/` (the relay's ingress
+`shares/<id>/` (one shared folder each), `mirror/<link_id>.json` (a link's
+standing mirror, see [The mirror](peer-link.md#the-mirror--contract-mirrorpy)) and `relay/` (the relay's ingress
 token and cloudflared's private home/config). `cloudflared` is found on
 `PATH`, or at the absolute path in the `MINDFLOCK_CLOUDFLARED` environment
 variable (deliberately not a setting); MindFlock never downloads it.

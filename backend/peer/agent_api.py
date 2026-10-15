@@ -59,6 +59,9 @@ POLL_S = 0.5
 MAX_WAIT_S = 1500
 PEER_TIMEOUT_S = 60.0
 MAX_TEXT = 20000
+MAX_PROPOSAL = 10000  # wire.MAX_JOINT_PROPOSAL
+MAX_CHECK_STEPS = 25  # wire.MAX_CHECK_STEPS
+MAX_CHECK_ANSWER = 60000  # a checklist written as text (a fenced JSON list)
 MAX_ERR = 300
 _MSG_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
 # Every control char (newlines included): errors and names are one line.
@@ -122,8 +125,50 @@ _SPEC: Dict[str, Dict[str, tuple]] = {
     "checkpoint": {
         "message": (False, "peer checkpoint", lambda v: _str(v, "message", 0, 2000)),
     },
+    # Joint tasks (backend.peer.joint): read the contract or propose a change
+    # (a person decides it), and re-read the brief.
+    "contract": {
+        "action": (True, None, lambda v: _choice(v, "action", ("read", "propose"))),
+        "text": (False, None, lambda v: _str(v, "text", 1, MAX_PROPOSAL)),
+    },
+    "joint": {},
+    # The joint check (backend.peer.joint_check): read the checklist, record
+    # one of MY agent steps, or write the checklist my user asked me for.
+    "check": {
+        "action": (
+            True,
+            None,
+            lambda v: _choice(v, "action", ("read", "record", "write")),
+        ),
+        "step_id": (False, None, lambda v: _str(v, "step_id", 1, 16)),
+        "result": (
+            False,
+            None,
+            lambda v: _choice(v, "result", ("pass", "fail", "blocked")),
+        ),
+        "note": (False, "", lambda v: _str(v, "note", 0, 2000)),
+        "steps": (False, None, lambda v: _check_steps(v)),
+    },
 }
 OPS = tuple(_SPEC)
+
+
+def _check_steps(v: Any):
+    """A checklist: a list of step objects (or strings), or text holding a
+    JSON list."""
+    if isinstance(v, str):
+        return _str(v, "steps", 1, MAX_CHECK_ANSWER)
+    if not isinstance(v, list) or not 1 <= len(v) <= MAX_CHECK_STEPS:
+        raise ArgError("steps must be a list of 1..%d steps" % MAX_CHECK_STEPS)
+    if not all(isinstance(x, (dict, str)) for x in v):
+        raise ArgError("each step must be an object {text, expect, actor, side}")
+    return v
+
+
+def _choice(v: Any, name: str, allowed: tuple) -> str:
+    if not isinstance(v, str) or v not in allowed:
+        raise ArgError("%s must be one of %s" % (name, ", ".join(allowed)))
+    return v
 
 
 def _msg_id(v: Any, name: str) -> Optional[str]:
@@ -459,6 +504,53 @@ class AgentApi:
 
     async def _op_peer_list_files(self, args: dict, reader) -> dict:
         return await self._peer("list_files", {})
+
+    async def _joint(self, fn, *args):
+        """A joint-task call on the service; its refusal text, else generic."""
+        try:
+            out = fn(*args)
+            if asyncio.iscoroutine(out):
+                out = await out
+            return out
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            msg = getattr(e, "message", None)
+            if isinstance(msg, str) and msg:
+                raise _PeerError(_clean_err(Exception(msg))) from None
+            _log.warning("agent api: joint call failed: %s", type(e).__name__)
+            raise _PeerError("internal error") from None
+
+    async def _op_contract(self, args: dict, reader) -> dict:
+        joint = self.service.joint
+        if args["action"] == "read":
+            return await self._joint(joint.agent_contract, self.link_id)
+        if args["text"] is None:
+            raise _PeerError("propose needs text: the whole new contract")
+        res = await self._joint(joint.propose_edit, self.link_id, args["text"], "agent")
+        return {"proposal_id": res["proposal_id"]}
+
+    async def _op_joint(self, args: dict, reader) -> dict:
+        return await self._joint(self.service.joint.agent_joint, self.link_id)
+
+    async def _op_check(self, args: dict, reader) -> dict:
+        checks = self.service.joint.check
+        action = args["action"]
+        if action == "read":
+            return await self._joint(checks.agent_read, self.link_id)
+        if action == "record":
+            if args["step_id"] is None or args["result"] is None:
+                raise _PeerError("record needs step_id and result")
+            return await self._joint(
+                checks.agent_record,
+                self.link_id,
+                args["step_id"],
+                args["result"],
+                args["note"],
+            )
+        if args["steps"] is None:
+            raise _PeerError("write needs steps: the JSON list of the checklist")
+        return await self._joint(checks.agent_write, self.link_id, args["steps"])
 
     async def _op_checkpoint(self, args: dict, reader) -> dict:
         sha = await asyncio.to_thread(self._checkpoint, self.share, args["message"])

@@ -101,6 +101,14 @@ async def peer_enable(request: Request) -> JSONResponse:
     return await _peer_call(request, _service().enable)
 
 
+@router.post("/api/peer/disable")
+async def peer_disable(request: Request) -> JSONResponse:
+    """Turn peer links off → ``{enabled: false, closed, links}``: the listener
+    and connections stop and each shared session is closed (folder kept);
+    every link and share stays listed for when they're turned on again."""
+    return await _peer_call(request, _service().disable)
+
+
 @router.post("/api/peer/invites")
 async def peer_create_invite(request: Request) -> JSONResponse:
     """``{ttl_s?, advertise_host?, reach?, op_id?}`` → ``{invite_id, code,
@@ -145,8 +153,9 @@ async def peer_join(request: Request) -> JSONResponse:
 
 @router.delete("/api/peer/links/{link_id}")
 async def peer_unlink(link_id: str, request: Request) -> JSONResponse:
-    """Unlink: stop the shared session, forget the pinned key, close the
-    connection. ``?delete_files=1`` also deletes the shared folder."""
+    """Unlink: close the shared session (its folder kept), forget the pinned
+    key, close the connection. Only ``?delete_files=1`` deletes the folder
+    (and the session); the peer's side closes theirs, never deletes it."""
     delete = request.query_params.get("delete_files", "") in ("1", "true", "yes")
     return await _peer_call(request, _service().unlink, link_id, delete_files=delete)
 
@@ -259,9 +268,25 @@ async def peer_share(link_id: str, request: Request) -> JSONResponse:
     )
 
 
+@router.post("/api/peer/links/{link_id}/share/reopen")
+async def peer_reopen_share(link_id: str, request: Request) -> JSONResponse:
+    """``{program?}`` → ``{link, session}``: start a new sandboxed session in
+    the link's kept shared folder (its session was closed — peer links were
+    off, or Close). 409 when nothing is shared, it's open, or it's gone."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _service().reopen_share,
+        link_id,
+        str(body.get("program") or ""),
+        status=201,
+    )
+
+
 @router.delete("/api/peer/links/{link_id}/share")
 async def peer_unshare(link_id: str, request: Request) -> JSONResponse:
-    """Stop the shared session; ``?delete_files=1`` also deletes the folder."""
+    """Stop sharing: close the shared session (folder kept, ``{folder}``);
+    ``?delete_files=1`` deletes the session and the folder instead."""
     delete = request.query_params.get("delete_files", "") in ("1", "true", "yes")
     return await _peer_call(request, _service().unshare, link_id, delete_files=delete)
 
@@ -269,7 +294,9 @@ async def peer_unshare(link_id: str, request: Request) -> JSONResponse:
 @router.post("/api/peer/links/{link_id}/export")
 async def peer_export(link_id: str, request: Request) -> JSONResponse:
     """``{target_repo, branch_name}`` — checkpoint the share, then fetch it into
-    your own repo as ``branch_name`` (must start with ``peer/``)."""
+    your own repo as ``branch_name`` (must start with ``peer/``) →
+    ``{branch, repo_path, commits, sha, target}``. 409 (one sentence) until
+    the safety number is confirmed, or when the repo won't take it."""
     body = await _peer_body(request)
     return await _peer_call(
         request,
@@ -278,3 +305,153 @@ async def peer_export(link_id: str, request: Request) -> JSONResponse:
         str(body.get("target_repo") or ""),
         str(body.get("branch_name") or ""),
     )
+
+
+@router.post("/api/peer/links/{link_id}/mirror")
+async def peer_mirror_enable(link_id: str, request: Request) -> JSONResponse:
+    """``{repo_path, branch?}`` — mirror THEIR shared work into your repo as
+    ``branch`` (default ``peer/<their name>``), now and on every checkpoint."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _service().enable_mirror,
+        link_id,
+        str(body.get("repo_path") or ""),
+        str(body.get("branch") or "") or None,
+    )
+
+
+@router.delete("/api/peer/links/{link_id}/mirror")
+async def peer_mirror_disable(link_id: str, request: Request) -> JSONResponse:
+    """Stop mirroring (the ``peer/`` branch stays in your repo)."""
+    return await _peer_call(request, _service().disable_mirror, link_id)
+
+
+# -- joint tasks (backend.peer.joint; docs/peer-link.md "Joint tasks") -------
+
+
+def _joint():
+    return _service().joint
+
+
+@router.get("/api/peer/links/{link_id}/joint")
+async def peer_joint(link_id: str, request: Request) -> JSONResponse:
+    """The link's joint task → ``{joint: {…} | null}`` (this side's copy)."""
+    return await _peer_call(request, lambda: _joint().get(link_id))
+
+
+@router.post("/api/peer/links/{link_id}/joint")
+async def peer_joint_propose(link_id: str, request: Request) -> JSONResponse:
+    """``{brief, repo_path?, branch?, program?, contract_text?}`` — propose a
+    joint task to the peer (my half's share starts when they accept). 409
+    while one is open, before the safety number matches, or for an older
+    peer."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _joint().propose,
+        link_id,
+        body.get("brief"),
+        str(body.get("repo_path") or ""),
+        body.get("branch") or None,
+        str(body.get("program") or ""),
+        body.get("contract_text"),
+        status=201,
+    )
+
+
+@router.post("/api/peer/links/{link_id}/joint/accept")
+async def peer_joint_accept(link_id: str, request: Request) -> JSONResponse:
+    """``{repo_path?, branch?, program?}`` — accept their proposal; starts my
+    half's shared session → ``{joint, session?}``."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _joint().accept,
+        link_id,
+        str(body.get("repo_path") or ""),
+        body.get("branch") or None,
+        str(body.get("program") or ""),
+    )
+
+
+@router.post("/api/peer/links/{link_id}/joint/cancel")
+async def peer_joint_cancel(link_id: str, request: Request) -> JSONResponse:
+    """``{reason?}`` — decline, cancel, or (``reason: "done"``) finish it.
+    Shared folders keep running → ``{joint, synced}``."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request, _joint().cancel, link_id, str(body.get("reason") or "")
+    )
+
+
+@router.put("/api/peer/links/{link_id}/joint/contract")
+async def peer_joint_contract(link_id: str, request: Request) -> JSONResponse:
+    """``{text}`` — a new revision of the contract (rev + 1, synced)."""
+    body = await _peer_body(request)
+    return await _peer_call(request, _joint().set_contract, link_id, body.get("text"))
+
+
+@router.post("/api/peer/links/{link_id}/joint/proposals")
+async def peer_joint_propose_edit(link_id: str, request: Request) -> JSONResponse:
+    """``{text}`` — propose a contract change (the whole new text) →
+    ``{proposal_id, synced, joint}``."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request, _joint().propose_edit, link_id, body.get("text"), status=201
+    )
+
+
+@router.post("/api/peer/links/{link_id}/joint/proposals/{proposal_id}/accept")
+async def peer_joint_accept_edit(
+    link_id: str, proposal_id: str, request: Request
+) -> JSONResponse:
+    """Accept a proposal: its text becomes the contract (rev + 1)."""
+    return await _peer_call(request, _joint().decide, link_id, proposal_id, True)
+
+
+@router.post("/api/peer/links/{link_id}/joint/proposals/{proposal_id}/reject")
+async def peer_joint_reject_edit(
+    link_id: str, proposal_id: str, request: Request
+) -> JSONResponse:
+    return await _peer_call(request, _joint().decide, link_id, proposal_id, False)
+
+
+# -- the joint check (backend.peer.joint_check; docs/peer-link.md) -----------
+
+
+@router.post("/api/peer/links/{link_id}/joint/check")
+async def peer_joint_check_write(link_id: str, request: Request) -> JSONResponse:
+    """``{steps: [{text, expect?, actor?, side?}]}`` — write the joint
+    checklist (a new revision clears every result) → ``{check, synced}``."""
+    body = await _peer_body(request)
+    return await _peer_call(request, _joint().check.write, link_id, body.get("steps"))
+
+
+@router.post("/api/peer/links/{link_id}/joint/check/ask")
+async def peer_joint_check_ask(link_id: str, request: Request) -> JSONResponse:
+    """My shared agent writes the checklist (it answers with ``peer_check``
+    within 3 minutes) → ``{check}`` with ``check.ask.state == "asking"``."""
+    return await _peer_call(request, _joint().check.ask, link_id)
+
+
+@router.post("/api/peer/links/{link_id}/joint/check/answer")
+async def peer_joint_check_answer(link_id: str, request: Request) -> JSONResponse:
+    """``{step_id, result: "pass"|"fail"|"blocked"|"", note?}`` — answer one
+    of the human steps on MY side → ``{check, synced}``."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _joint().check.answer,
+        link_id,
+        body.get("step_id"),
+        body.get("result"),
+        body.get("note") or "",
+    )
+
+
+@router.post("/api/peer/links/{link_id}/joint/check/run")
+async def peer_joint_check_run(link_id: str, request: Request) -> JSONResponse:
+    """My shared agent runs my agent steps and records them with
+    ``peer_check`` → ``{check, steps, synced}``."""
+    return await _peer_call(request, _joint().check.run, link_id)

@@ -6,7 +6,7 @@
  * side that can't run the sandbox (a Linux box without bubblewrap, say) still
  * takes part: messages, an inbox, and a read-only view of their changes.
  *
- * Two actions up front — Invite someone, Join a peer — and nothing to set
+ * Two actions up front — Invite someone, Join someone — and nothing to set
  * first: inviting or joining turns peer links on. When this computer can only
  * make same-network invites (no cloudflared), the first invite asks where the
  * other person is. Every knob lives under Advanced.
@@ -17,59 +17,38 @@
  * screen — "safety number", "You invited them", never SAS / listener / dialer.
  *
  * Everything goes through /api/peer*. The invite code is shown only in the
- * response that created it (the server never lists it again). */
+ * response that created it (the server never lists it again).
+ *
+ * This file is the screen and the invite / join half. Each link is a
+ * peer/PeerLinkCard (with its joint task, peer/JointTask, and the Mirror
+ * row); Advanced is peer/PeerAdvanced. The "?" in the header replays the
+ * People tour (lib/tours/people.ts). */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../api/client";
 import { copyText } from "../../../lib/clipboard";
 import { toast } from "../../../lib/toast";
 import { useNow } from "../../../lib/useNow";
-import { selectSession } from "../../../lib/sessionActions";
-import { useUi } from "../../../state/store";
 import { reprobeDoctor, type EventEnvelope } from "../../../state/queries";
-import { SettingField, useSettings, InlineConfirm } from "../useSettings";
-import { PathField } from "../../PathField";
+import { useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 import { InstallMissing, type InstallStep } from "../../dialogs/InstallTerminal";
+import { TourButton } from "../../onboarding/TourButton";
 import {
-  carrierText,
   inviteExpiryText,
+  isCutOffInvite,
   joinPeerCode,
   newOpId,
-  reconnectKind,
-  roleText,
+  PEER_LIVE_EVENTS,
   type PeerInvite,
-  type PeerLink,
-  type PeerMessage,
   type PeerReach,
   type PeerStatus,
 } from "../../../lib/peer";
 import { PEER_JOIN_EVENT, takePendingPeerJoin } from "../../../lib/peerActions";
-
-const RELAY_OPTIONS = [
-  { value: "auto", label: "Automatic — through Cloudflare when cloudflared is installed" },
-  { value: "off", label: "Off — they connect to this computer directly (same network or tailnet)" },
-  { value: "cloudflare", label: "Always through Cloudflare (needs cloudflared)" },
-  { value: "url", label: "My own HTTPS relay (relay URL below)" },
-];
-
-const PERM_LABELS: Array<[keyof PeerLink["perms"], string]> = [
-  ["messages", "message me"],
-  ["diff", "see my changes"],
-  ["read_file", "read my files"],
-];
-
-const PEER_EVENTS = [
-  "peer.link_added",
-  "peer.link_removed",
-  "peer.state",
-  "peer.message",
-  "peer.relay_changed",
-];
-
-function peerErrText(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
+import { PeerAdvanced } from "./peer/PeerAdvanced";
+import { PeerLinkCard } from "./peer/PeerLinkCard";
+import { errText } from "./peer/useAct";
+import "./PeerLinks.css";
 
 function nowSec(): number {
   return Date.now() / 1000;
@@ -103,6 +82,8 @@ export function PeerLinks(_: ScreenProps) {
   const [joinNote, setJoinNote] = useState("");
   const joinOp = useRef("");
   const joinInput = useRef<HTMLInputElement | null>(null);
+  // The connection just joined: its card scrolls into view and lights up once.
+  const [fresh, setFresh] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -111,7 +92,7 @@ export function PeerLinks(_: ScreenProps) {
       setTick((t) => t + 1);
       setError("");
     } catch (e) {
-      setError(peerErrText(e));
+      setError(errText(e));
     }
   }, []);
 
@@ -126,7 +107,7 @@ export function PeerLinks(_: ScreenProps) {
   useEffect(() => {
     const ev = window.mindflock?.events;
     if (!ev) return;
-    const offs = PEER_EVENTS.map((name) =>
+    const offs = PEER_LIVE_EVENTS.map((name) =>
       ev.subscribe(name, (env: EventEnvelope) => {
         if (name === "peer.link_added") {
           const d = (env.data || {}) as Record<string, unknown>;
@@ -198,6 +179,24 @@ export function PeerLinks(_: ScreenProps) {
   // the screen (and Advanced's toggle) agrees.
   const afterPair = () => void s.reload();
 
+  // The off switch (Advanced): off disconnects everyone and closes the open
+  // shared sessions (kept) — the server does it all in one call and keeps
+  // listing the links; on starts listening again and reopens nothing.
+  const [toggling, setToggling] = useState(false);
+  const [toggleErr, setToggleErr] = useState("");
+  const toggle = async (enable: boolean) => {
+    setToggling(true);
+    setToggleErr("");
+    try {
+      await api(enable ? "/api/peer/enable" : "/api/peer/disable", { json: {} });
+    } catch (e) {
+      setToggleErr(errText(e));
+    }
+    await s.reload();
+    setToggling(false);
+    load();
+  };
+
   const createInvite = async (reach: PeerReach) => {
     const op = newOpId();
     inviteOp.current = op;
@@ -210,7 +209,7 @@ export function PeerLinks(_: ScreenProps) {
       setInvite({ ...inv, at: nowSec() });
       afterPair();
     } catch (e) {
-      setInviteErr(peerErrText(e));
+      setInviteErr(errText(e));
     }
     inviteOp.current = "";
     setInviteStage("");
@@ -228,7 +227,7 @@ export function PeerLinks(_: ScreenProps) {
       afterPair();
       setDoctorTick((t) => t + 1);
     } catch (e) {
-      setInviteErr(peerErrText(e));
+      setInviteErr(errText(e));
     }
   };
 
@@ -237,12 +236,16 @@ export function PeerLinks(_: ScreenProps) {
       await api("/api/peer/invites/" + encodeURIComponent(id), { method: "DELETE" });
       if (invite?.invite_id === id) setInvite(null);
     } catch (e) {
-      toast(peerErrText(e));
+      toast(errText(e));
     }
     load();
   };
 
   const join = async () => {
+    if (isCutOffInvite(code)) {
+      setJoinErr("This invite is cut off — copy the whole message again.");
+      return;
+    }
     const op = newOpId();
     joinOp.current = op;
     setJoinBusy(true);
@@ -255,11 +258,14 @@ export function PeerLinks(_: ScreenProps) {
       afterPair();
       setJoinNote(
         link.reconnected
-          ? `Reconnected to ${link.peer_name} — same link, your shared folder is kept.`
-          : `Connected to ${link.peer_name}. Read each other your safety number ${link.sas} — if it differs, unlink.`
+          ? `Reconnected to ${link.peer_name}` +
+              (link.shared ? " — your shared folder is kept" : "") +
+              (link.sas_verified ? "." : `. Compare the safety number ${link.sas} again — it's new.`)
+          : `Connected to ${link.peer_name}. Compare the safety number ${link.sas} on their card below.`
       );
+      setFresh(link.link_id);
     } catch (e) {
-      setJoinErr(peerErrText(e));
+      setJoinErr(errText(e));
     }
     joinOp.current = "";
     setJoinStage("");
@@ -273,34 +279,34 @@ export function PeerLinks(_: ScreenProps) {
       setJoined(null);
       setInvite(null);
     } catch (e) {
-      toast(peerErrText(e));
+      toast(errText(e));
     }
     load();
   };
 
   const inviteLeft = invite ? invite.expires_in - (now - invite.at) : 0;
   const otherInvites = (st?.invites || []).filter((i) => i.invite_id !== invite?.invite_id);
-  const relayAddr = st?.relay?.address || "";
 
   return (
     <>
-      <h3 className="set-section-title">People</h3>
-      <p className="set-hint set-block-hint">
-        Work together with someone else's MindFlock. Send them an invite, they paste it, and
-        you're connected. Then either of you can share <strong>one folder</strong>: an agent
-        works in it inside a sandbox and talks to the other person's agent. You can also message
-        them and look at their changes. Nothing else on your machine is exposed.
+      <div className="peer-head">
+        <h3 className="set-section-title">People</h3>
+        <TourButton tour="people" />
+      </div>
+      <p className="set-hint set-block-hint" id="peer-intro">
+        Work with another person's MindFlock: one of you invites, the other joins — then talk, share a folder, or build
+        one feature together.
       </p>
 
       <div className="peer-actions" id="peer-actions">
-        <div className="peer-action">
+        <div className="peer-action" data-tour="people-invite">
           <h4 className="set-subtitle">Invite someone</h4>
           {joined ? (
-            <div id="peer-joined" className="peer-invite">
+            <div id="peer-joined" className="peer-invite" data-tour="people-safety">
               <p>
                 <strong>{joined.name}</strong> {joined.repaired ? "reconnected" : "joined"} — read them your
-                safety number <code className="peer-sas">{joined.sas}</code>. If theirs is different, unlink
-                now.
+                safety number <code className="peer-sas">{joined.sas}</code>. If theirs is different, press It
+                doesn't match on their card below.
               </p>
               <div className="set-row">
                 <button type="button" className="test-btn" id="peer-joined-match" onClick={() => markVerified(joined.link_id)}>
@@ -361,7 +367,7 @@ export function PeerLinks(_: ScreenProps) {
                 {inviteLeft > 0 &&
                   (invite.relay && !invite.direct
                     ? "They can be anywhere — it connects through a relay that can't read your traffic."
-                    : `They connect to ${invite.host}:${invite.port}, so they need to be on your network or tailnet.`)}
+                    : `They connect to ${invite.host}:${invite.port}, so they need to be on your network or Tailscale.`)}
               </span>
               <span className="set-hint">Waiting for them to join — this updates by itself.</span>
             </div>
@@ -375,7 +381,7 @@ export function PeerLinks(_: ScreenProps) {
                 disabled={inviteBusy}
                 onClick={() => createInvite("direct")}
               >
-                They're on my network or tailnet
+                They're on my network or Tailscale
               </button>
               <button
                 type="button"
@@ -409,22 +415,25 @@ export function PeerLinks(_: ScreenProps) {
             <>
               <button
                 type="button"
-                className="test-btn"
+                className="btn-primary"
                 id="peer-invite"
                 disabled={inviteBusy}
                 onClick={() => createInvite("auto")}
               >
                 {inviteBusy ? "Creating…" : "Create invite"}
               </button>
-              <button
-                type="button"
-                className="linklike"
-                id="peer-invite-direct"
-                disabled={inviteBusy}
-                onClick={() => createInvite("direct")}
-              >
-                Same network or tailnet? Make a direct invite
-              </button>
+              {/* With the relay off every invite is already direct. */}
+              {st?.relay?.setting !== "off" && (
+                <button
+                  type="button"
+                  className="linklike"
+                  id="peer-invite-direct"
+                  disabled={inviteBusy}
+                  onClick={() => createInvite("direct")}
+                >
+                  Same network or Tailscale? Make a direct invite
+                </button>
+              )}
             </>
           )}
           {inviteBusy && inviteStage && (
@@ -455,8 +464,8 @@ export function PeerLinks(_: ScreenProps) {
             </ul>
           )}
         </div>
-        <div className="peer-action">
-          <h4 className="set-subtitle">Join a peer</h4>
+        <div className="peer-action" data-tour="people-join">
+          <h4 className="set-subtitle">Join someone</h4>
           <div className="set-row">
             <input
               id="peer-join-code"
@@ -479,7 +488,7 @@ export function PeerLinks(_: ScreenProps) {
           ) : (
             <span className="set-hint">
               Paste the whole message or just the code — either works. A fresh invite from someone you're
-              already linked with reconnects that link.
+              already connected to reconnects you.
             </span>
           )}
           {joinErr && (
@@ -509,7 +518,7 @@ export function PeerLinks(_: ScreenProps) {
       {st && cloudflaredMissing && !remoteChosen && (st.links.length > 0 || st.invites.length > 0) && (
         <div className="peer-needs">
           <p className="set-hint">
-            Your invites only reach people on your own network or tailnet until <strong>cloudflared</strong> is
+            Your invites only reach people on your own network or Tailscale until <strong>cloudflared</strong> is
             installed. Links that already connect directly keep working after you install it.
           </p>
           <InstallMissing steps={install} onDone={() => load()} />
@@ -519,463 +528,32 @@ export function PeerLinks(_: ScreenProps) {
       {st && st.links.length > 0 && (
         <>
           <h4 className="set-subtitle">People you work with</h4>
-          {st.links.map((l) => (
-            <PeerLinkCard
-              key={l.link_id}
-              link={l}
-              agents={st.agents || []}
-              sandbox={st.sandbox.available}
-              tick={tick}
-              reload={load}
-              onVerified={() => markVerified(l.link_id)}
-            />
-          ))}
-        </>
-      )}
-
-      <details className="peer-advanced" id="peer-advanced">
-        <summary>Advanced</summary>
-        <div className="set-row set-switch-row">
-          <span className="set-label">Peer links</span>
-          <label className="ca-switch">
-            <input
-              type="checkbox"
-              id="peer-enabled"
-              checked={on}
-              onChange={(e) => s.saveField("peer", "enabled", e.target.checked)}
-            />
-            <span className="ca-slider" />
-          </label>
-          <span className="set-hint">
-            Turned on by your first invite or join. Off: nobody can connect, and this computer connects to
-            nobody.
-          </span>
-        </div>
-        <label className="set-row">
-          <span className="set-label">Your name</span>
-          <SettingField group="peer" field="display_name" placeholder="this computer's name" />
-          <span className="set-hint">What the other person sees.</span>
-        </label>
-        <label className="set-row">
-          <span className="set-label">How they reach you</span>
-          <SettingField group="peer" field="relay" options={RELAY_OPTIONS} />
-          <span className="set-hint">
-            How people on other networks reach your invites. Through a relay the connection stays
-            end-to-end encrypted: the relay can block it but never read or change it. The other person
-            needs nothing extra.
-          </span>
-        </label>
-        {relayAddr && (
-          <div className="set-row" id="peer-relay-address">
-            <span className="set-label">Relay address</span>
-            <code className="peer-addr">{relayAddr}</code>
-            <button
-              type="button"
-              className="test-btn"
-              onClick={() => copyText(relayAddr).then((ok) => toast(ok ? "Relay address copied" : "Copy failed"))}
-            >
-              Copy
-            </button>
-            <span className="set-hint">
-              Someone who joined you through an older address can paste this into Reconnect on their side.
-            </span>
-          </div>
-        )}
-        <label className="set-row">
-          <span className="set-label">Port</span>
-          <SettingField group="peer" field="listen_port" placeholder="8799" />
-          <span className="set-hint">
-            Same-network invites only: the other person connects to this port, so it must be reachable
-            from their machine (Tailscale recommended).
-          </span>
-        </label>
-        <label className="set-row">
-          <span className="set-label">Address in invites</span>
-          <SettingField group="peer" field="advertise_host" placeholder="auto: Tailscale IP, else LAN IP" />
-          <span className="set-hint">Same-network invites only: the address written into the code.</span>
-        </label>
-        <label className="set-row">
-          <span className="set-label">Relay URL</span>
-          <SettingField group="peer" field="relay_url" placeholder="wss://peer.example.com/mindflock" />
-          <span className="set-hint">"My own HTTPS relay" only: forwards (path unchanged) to the relay port.</span>
-        </label>
-        <label className="set-row">
-          <span className="set-label">Relay port</span>
-          <SettingField group="peer" field="relay_port" placeholder="auto" />
-          <span className="set-hint">Port on this computer your relay forwards to (blank = any free port).</span>
-        </label>
-        <label className="set-row">
-          <span className="set-label">Extra hosts the shared agent may reach</span>
-          <SettingField group="peer" field="egress_allow" placeholder="e.g. pypi.org, .github.com" />
-          <span className="set-hint">
-            Websites the sandboxed agent may reach (HTTPS), besides its own AI service. A leading dot
-            allows subdomains.
-          </span>
-        </label>
-        {st && (
-          <p className="set-hint" id="peer-status">
-            Sandbox:{" "}
-            {st.sandbox.available ? <strong>ready</strong> : <span className="error">not available here</span>}
-            {st.fingerprint && (
-              <>
-                {" · "}this computer's key <code>{st.fingerprint}</code>
-              </>
-            )}
-            {" · "}direct connections {st.listen.listening ? "open" : "closed"} ({st.listen.host}:{st.listen.port})
-            {st.relay && st.relay.mode !== "off" && (
-              <>
-                {" · "}relay <span id="peer-relay-state">{st.relay.running ? "up" : "down"}</span>
-                {st.relay.public_host && (
-                  <>
-                    {" "}at <code>{st.relay.public_host}</code>
-                  </>
-                )}
-                {st.relay.error && <span className="error"> — {st.relay.error}</span>}
-              </>
-            )}
-          </p>
-        )}
-      </details>
-    </>
-  );
-}
-
-/** One person you're linked with: who, how, the safety number, what they may
- * do, the shared folder (or the share form), messages, their changes, and —
- * on a link you joined that dropped — Reconnect. Each action has its own busy
- * flag and its own inline error. */
-function PeerLinkCard(props: {
-  link: PeerLink;
-  agents: string[];
-  sandbox: boolean;
-  tick: number;
-  reload(): void;
-  onVerified(): void;
-}) {
-  const { link, agents, sandbox, tick, reload, onVerified } = props;
-  const base = "/api/peer/links/" + encodeURIComponent(link.link_id);
-  const [busy, setBusy] = useState("");
-  const [err, setErr] = useState("");
-  const [repo, setRepo] = useState("");
-  const [branch, setBranch] = useState("");
-  const [program, setProgram] = useState("");
-  // The first offered agent is the default CLI (the server orders it so).
-  const chosen = program || agents[0] || "";
-  const [target, setTarget] = useState("");
-  const [exportBranch, setExportBranch] = useState(
-    "peer/" + (link.peer_name || "work").replace(/[^A-Za-z0-9._-]+/g, "-")
-  );
-  const [confirm, setConfirm] = useState<"" | "unlink" | "unshare">("");
-  const [deleteFiles, setDeleteFiles] = useState(false);
-  const [reconnect, setReconnect] = useState("");
-  const [msgsOpen, setMsgsOpen] = useState(false);
-  const [msgs, setMsgs] = useState<PeerMessage[]>([]);
-  const [draft, setDraft] = useState("");
-  const [diff, setDiff] = useState<{ stat: unknown[]; diff: string; truncated: boolean } | null>(null);
-
-  const act = async (what: string, fn: () => Promise<unknown>, ok?: string) => {
-    setBusy(what);
-    setErr("");
-    try {
-      await fn();
-      if (ok) toast(ok);
-    } catch (e) {
-      setErr(peerErrText(e));
-    }
-    setBusy("");
-    reload();
-  };
-
-  // The message log: fetched when opened and again whenever the screen
-  // reloads (a peer.message event reloads it); opening it marks them read.
-  useEffect(() => {
-    if (!msgsOpen) return;
-    let live = true;
-    api<{ messages: PeerMessage[]; unread: number }>(base + "/messages")
-      .then((r) => {
-        if (!live) return;
-        setMsgs(r.messages || []);
-        if (r.unread) void api(base + "/messages/read", { json: {} }).catch(() => undefined);
-      })
-      .catch((e) => live && setErr(peerErrText(e)));
-    return () => {
-      live = false;
-    };
-  }, [msgsOpen, tick, base]);
-
-  const send = () =>
-    act("send", async () => {
-      const r = await api<{ delivered: boolean }>(base + "/message", { json: { text: draft.trim() } });
-      setDraft("");
-      if (!r.delivered) toast(`${link.peer_name} isn't taking messages right now — it's in your log`);
-    });
-
-  const showDiff = () =>
-    act("diff", async () => {
-      setDiff(await api<{ stat: unknown[]; diff: string; truncated: boolean }>(base + "/diff"));
-    });
-
-  const doReconnect = () => {
-    const kind = reconnectKind(reconnect);
-    if (!kind) {
-      setErr("Paste a fresh invite from them, or their relay address (wss://…) or host:port.");
-      return;
-    }
-    void act(
-      "reconnect",
-      async () => {
-        if (kind === "invite") await joinPeerCode(reconnect, newOpId());
-        else await api(base + "/address", { json: { address: reconnect.trim() } });
-        setReconnect("");
-      },
-      "Reconnecting to " + link.peer_name + "…"
-    );
-  };
-
-  const openSession = () => {
-    if (!link.session_title) return;
-    selectSession(link.session_title);
-    useUi.getState().closeDialog();
-  };
-
-  const how = carrierText(link.carrier);
-  const unread = link.unread || 0;
-
-  return (
-    <div className="peer-link-card" data-link-id={link.link_id}>
-      <p>
-        <strong>{link.peer_name}</strong> · {roleText(link.role)} ·{" "}
-        <span className={link.connected ? "peer-on" : "peer-off"}>{link.connected ? "connected" : "offline"}</span>
-        {how && link.connected ? " " + how : ""}
-        {link.peer_app ? <span className="muted"> · MindFlock {link.peer_app}</span> : null}
-      </p>
-      {link.sas_verified ? (
-        <p className="set-hint">
-          Safety number <code className="peer-sas">{link.sas}</code> ✓ checked with them.
-        </p>
-      ) : (
-        <div className="set-row">
-          <span className="set-hint">
-            Safety number <code className="peer-sas">{link.sas}</code> — read it to each other. If it differs,
-            unlink now.
-          </span>
-          <button type="button" className="test-btn" onClick={onVerified}>
-            It matches
-          </button>
-        </div>
-      )}
-      <div className="set-row">
-        <span className="set-label">They may</span>
-        {PERM_LABELS.map(([key, label]) => (
-          <label className="check" key={key}>
-            <input
-              type="checkbox"
-              checked={!!link.perms[key]}
-              disabled={!!busy}
-              onChange={(e) => act("perms", () => api(base + "/perms", { json: { [key]: e.target.checked } }))}
-            />
-            {label}
-          </label>
-        ))}
-      </div>
-
-      {link.role === "dialer" && !link.connected && (
-        <div className="set-row peer-reconnect">
-          <input
-            placeholder="paste a fresh invite from them (or their relay address)"
-            value={reconnect}
-            onChange={(e) => setReconnect(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && reconnect.trim() && !busy) doReconnect();
-            }}
-          />
-          <button type="button" className="test-btn" disabled={!!busy || !reconnect.trim()} onClick={doReconnect}>
-            {busy === "reconnect" ? "Reconnecting…" : "Reconnect"}
-          </button>
-        </div>
-      )}
-
-      {link.shared ? (
-        <>
-          <div className="set-row">
-            <span className="set-hint">
-              Shared folder in session <strong>{link.session_title || "?"}</strong>.
-            </span>
-            {link.session_title && (
-              <button type="button" className="test-btn" onClick={openSession}>
-                Open session
+          {!st.enabled && (
+            <div className="peer-row peer-off-note" id="peer-off-note">
+              <span className="set-hint">Connections to people are off — nobody connects until you turn them on.</span>
+              <button type="button" className="test-btn" disabled={toggling} onClick={() => void toggle(true)}>
+                {toggling ? "Turning on…" : "Turn on"}
               </button>
-            )}
-          </div>
-          <div className="set-row">
-            <span className="set-label">Bring work home</span>
-            <PathField placeholder="your repo to bring it into" value={target} onChange={setTarget} pickerTitle="Pick the repo to bring it into" />
-            <input placeholder="peer/branch" value={exportBranch} onChange={(e) => setExportBranch(e.target.value)} />
-            <button
-              type="button"
-              className="test-btn"
-              disabled={!!busy || !target.trim() || !exportBranch.startsWith("peer/")}
-              onClick={() =>
-                act(
-                  "export",
-                  () => api(base + "/export", { json: { target_repo: target.trim(), branch_name: exportBranch } }),
-                  "Brought home as " + exportBranch
-                )
-              }
-            >
-              Export
-            </button>
-          </div>
-          <button type="button" className="test-btn" disabled={!!busy} onClick={() => setConfirm("unshare")}>
-            Stop sharing…
-          </button>
-        </>
-      ) : sandbox ? (
-        <>
-          <div className="set-row">
-            <PathField placeholder="folder to share" value={repo} onChange={setRepo} pickerTitle="Pick the folder to share" />
-            <input placeholder="branch (optional)" value={branch} onChange={(e) => setBranch(e.target.value)} />
-            <select value={chosen} onChange={(e) => setProgram(e.target.value)} disabled={!agents.length}>
-              {agents.length ? (
-                agents.map((a) => (
-                  <option value={a} key={a}>
-                    {a}
-                  </option>
-                ))
-              ) : (
-                <option value="">no agent CLI can run here</option>
-              )}
-            </select>
-            <button
-              type="button"
-              className="test-btn"
-              disabled={!!busy || !repo.trim() || !chosen}
-              onClick={() =>
-                act(
-                  "share",
-                  () =>
-                    api(base + "/share", {
-                      json: { repo_path: repo.trim(), branch: branch.trim() || undefined, program: chosen },
-                    }),
-                  "Shared — the sandboxed session is starting"
-                )
-              }
-            >
-              {busy === "share" ? "Sharing…" : "Share a folder"}
-            </button>
-          </div>
-        </>
-      ) : (
-        <p className="set-hint">
-          Here you can message {link.peer_name} and look at their changes; sharing a folder needs Linux or macOS.
-        </p>
-      )}
-
-      <div className="set-row">
-        <button
-          type="button"
-          className="test-btn peer-msgs-toggle"
-          aria-expanded={msgsOpen}
-          onClick={() => setMsgsOpen((o) => !o)}
-        >
-          Messages{unread > 0 && <span className="queue-tab-badge">{unread > 99 ? "99+" : unread}</span>}
-        </button>
-        <button type="button" className="test-btn" disabled={!!busy || !link.connected} onClick={showDiff}>
-          {busy === "diff" ? "Loading…" : "Their changes"}
-        </button>
-        <button
-          type="button"
-          className="test-btn"
-          disabled={!link.connected}
-          title={link.connected ? "Their screen, files and changes" : "They're offline"}
-          onClick={() => useUi.getState().openDialogFor("peer-session", link.link_id)}
-        >
-          Watch their session
-        </button>
-        <button type="button" className="test-btn" disabled={!!busy} onClick={() => setConfirm("unlink")}>
-          Unlink…
-        </button>
-      </div>
-
-      {msgsOpen && (
-        <div className="peer-msgs">
-          {msgs.length ? (
-            <ul className="peer-msg-log">
-              {msgs.map((m) => (
-                <li key={m.id} className={"peer-msg peer-msg-" + m.dir}>
-                  <span className="muted">
-                    {m.dir === "in" ? link.peer_name : m.by === "agent" ? "your agent" : "you"}
-                    {m.dir === "in" && m.delivered_to ? " → " + m.delivered_to : ""}:
-                  </span>{" "}
-                  {m.text}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="set-hint">No messages yet.</p>
+            </div>
           )}
-          <div className="set-row">
-            <textarea
-              rows={2}
-              placeholder={`message ${link.peer_name}`}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && draft.trim() && !busy) send();
-              }}
-            />
-            <button type="button" className="test-btn" disabled={!!busy || !draft.trim() || !link.connected} onClick={send}>
-              {busy === "send" ? "Sending…" : "Send"}
-            </button>
+          <div className={"peer-cards" + (st.enabled ? "" : " peer-cards-off")} inert={!st.enabled}>
+            {st.links.map((l) => (
+              <PeerLinkCard
+                key={l.link_id}
+                link={l}
+                agents={st.agents || []}
+                sandbox={st.sandbox.available}
+                tick={tick}
+                reload={load}
+                onVerified={() => markVerified(l.link_id)}
+                fresh={fresh === l.link_id}
+              />
+            ))}
           </div>
-          {!link.connected && <span className="set-hint">{link.peer_name} is offline — send once they're back.</span>}
-        </div>
+        </>
       )}
 
-      {diff && (
-        <div className="peer-diff">
-          <div className="set-row">
-            <span className="set-hint">
-              {link.peer_name}'s changes (read only){diff.truncated ? " — cut short" : ""}
-            </span>
-            <button type="button" className="test-btn" onClick={() => setDiff(null)}>
-              Close
-            </button>
-          </div>
-          {diff.stat?.length ? (
-            <pre className="peer-diff-stat">
-              {diff.stat
-                .map((x) => (typeof x === "string" ? x : Object.values(x as Record<string, unknown>).join(" ")))
-                .join("\n")}
-            </pre>
-          ) : null}
-          <pre className="peer-diff-body">{diff.diff || "No changes."}</pre>
-        </div>
-      )}
-
-      {err && <p className="error">{err}</p>}
-
-      {confirm && (
-        <InlineConfirm
-          title={confirm === "unlink" ? `Unlink ${link.peer_name}?` : "Stop sharing this folder?"}
-          body={
-            <label className="check">
-              <input type="checkbox" checked={deleteFiles} onChange={(e) => setDeleteFiles(e.target.checked)} />
-              also delete the shared folder
-            </label>
-          }
-          confirmLabel={confirm === "unlink" ? "Unlink" : "Stop sharing"}
-          busy={!!busy}
-          onCancel={() => setConfirm("")}
-          onConfirm={() => {
-            const q = deleteFiles ? "?delete_files=1" : "";
-            const path = confirm === "unlink" ? base + q : base + "/share" + q;
-            const unlinking = confirm === "unlink";
-            setConfirm("");
-            void act(unlinking ? "unlink" : "unshare", () => api(path, { method: "DELETE" }), unlinking ? "Unlinked" : "Stopped sharing");
-          }}
-        />
-      )}
-    </div>
+      <PeerAdvanced on={on} onToggle={(v) => void toggle(v)} st={st} busy={toggling} error={toggleErr} />
+    </>
   );
 }

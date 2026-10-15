@@ -18,13 +18,15 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    network or tailnet* (a direct invite now) or *somewhere else* (install
    cloudflared from right there, then invite). Press **Copy invite** and send
    the message over any channel you trust — it carries the code (`mfp1:…` or
-   `mfp2:…`) and says what to do with it. A code is single use and expires
+   `mfp2:…`) and says what to do with it (open Settings → People — or
+   Ctrl+P, "people" — press **Join someone** and paste it; a direct invite
+   adds that it only works on the same network or Tailscale). A code is single use and expires
    after 10 minutes; the screen counts it down, lists unused invites with
    **Cancel**, and turns into "*B* joined — read them your safety number" the
    moment they join. The listener only runs while an invite or a link that you
    accepted exists.
 2. **Join.** The other person pastes the message — all of it, or just the
-   code — into People → **Join a peer**, the palette's *Paste a
+   code — into People → **Join someone**, the palette's *Paste a
    code…*, or `mindflock peer join <code>`. Joining turns peer links on too,
    and needs nothing installed. A relay join can take up to a minute (a new
    tunnel's name has to appear in DNS); the screen shows each stage, and a
@@ -60,7 +62,11 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
 5. **Verify the safety number.** Both sides show one like `482-019-337-5`
    (People, `mindflock peer links`). Read it to each other by
    voice or chat and press **It matches**. If it differs, someone is in the
-   middle: **unlink now**.
+   middle: **unlink now**. Until *you* press it, nothing in your shared
+   folder goes to them — its diff, files, screen and mirror answer "safety
+   number not confirmed" — and you can't share, mirror or export on that link
+   ("Confirm the safety number with *B* first"); messages work, so you can
+   compare the number over them.
 6. **Share a folder.** On the link: the folder (type it, or **Browse…** —
    any folder: a git repository is cloned, anything else is shared as a
    snapshot of its files, see [The shared folder](#the-shared-folder--contract-sharepy)),
@@ -90,18 +96,91 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    diff*, *read my files* (`POST /api/peer/links/<id>/perms`).
 9. **Bring the work home.** *Export* (or `mindflock peer export <link>
    <your repo> peer/<branch>`) checkpoints the shared folder and fetches it into
-   your own repo as a `peer/…` branch. Review it there like any branch — don't
+   your own repo as a `peer/…` branch, and says how many commits came (0:
+   nothing new yet). Pick the repo you shared from (or a clone of it): a git
+   share is a shallow copy, so a repo without its history is refused, in
+   those words. Review it there like any branch — don't
    run the shared folder's code outside the sandbox.
-10. **Stop.** *Unshare* stops the session (keeps the folder unless you tick
-   *delete*); *Unlink* also forgets the peer's key and closes the connection.
-   Either side can unlink at any time.
+
+   **Mirror their work.** Export brings home *your* shared folder; to keep
+   *their* half in one of your repos, set **Mirror into…** on their link
+   (`POST /api/peer/links/<id>/mirror {repo_path, branch?}`): pick the repo
+   and a `peer/…` branch (default `peer/<their name>`). MindFlock fetches what
+   they have now, then again every time they checkpoint — it notices within
+   one status poll (about 10 s) — and says so in the bell ("*B*'s work
+   updated peer/… in *repo*"); a failure is said once, with what to do. Only
+   the branch moves: your working tree, index and checked-out branch are
+   never touched, and a mirror branch you have checked out is refused. Their
+   *read my files* permission decides whether you may mirror. Both of you
+   need this MindFlock version or newer — an older peer never reports a
+   head, so its mirror simply never updates. **Stop mirroring** keeps the
+   branch.
+10. **Stop.** *Unshare* closes the shared session — its agent stops, its
+   folder stays, like Close — unless you tick *delete*; *Unlink* does the
+   same and also forgets the peer's key and closes the connection. Either
+   side can unlink at any time, and **an unlink never destroys the other
+   side's work**: when *they* unlink, your shared session is closed (never
+   deleted) and the bell says "*B* unlinked — your shared folder is kept at
+   *path*". Only your own *delete* tick deletes a folder.
+
+    **Turning peer links off** (People → Advanced) stops the listener, the
+    relay and every connection and closes each shared session (kept); every
+    link and its shared folder stay listed. Turning them on again reopens
+    nothing by itself — **Reopen** on the card starts a new session in the
+    kept folder (`POST /api/peer/links/<id>/share/reopen`).
 11. **Reconnect.** If a link you joined stays offline (the inviter restarted
     and their quick tunnel got a new address — they get a bell item saying
     so), paste a fresh invite from them into the link's **Reconnect** box (or
     **Join**, or `peer join`). Pairing again with someone you're already
     linked to keeps the link — its id, permissions and shared folder — and
-    gives you both a new safety number to compare. The box also takes a bare
+    gives you both a **new safety number**: it is un-confirmed on both sides
+    (the bell says "New safety number after reconnecting — confirm it with
+    *B* again"), and the shared folder's content stops crossing until you
+    both press *It matches* again. The box also takes a bare
     `wss://…` or `host:port` address.
+
+**Joint tasks** — two people, two repos, one feature. Once the safety number
+matches, either of you can **Start a joint task** on the link: a brief, your
+folder (optional — leave it empty to use the folder the link already shares),
+branch, agent, and a starter contract (`## What we're building / ## Interfaces
+between the halves / ## Who owns what / ## Done means`). The other person sees
+the proposal and **Accepts with…** their own folder, or **Declines**. On
+accept, each side that chose a folder gets its shared session, started with
+the brief and a hand-off: the agreed contract is `CONTRACT.md` at the root of
+the shared folder, read it first, follow it, and propose changes with
+`peer_contract` instead of editing it. Either person can edit the contract
+(every revision lands in both folders' `CONTRACT.md`); either agent can
+*propose* a change, which the other agent sees as untrusted peer input and a
+person **Accepts** or **Rejects** in People — agents never accept. Every
+accepted or edited revision, and every rejection, is typed into both shared
+sessions as a short note once the agent is idle ("CONTRACT.md changed to rev
+3 (by Ana) — re-read it before continuing"), so an agent waiting on the
+people carries on by itself. **Done** or
+**Cancel** ends it on both sides; the shared sessions keep running until you
+unshare. A link holds one joint task at a time, and both of you need this
+MindFlock version or newer (an older one gets "<name>'s MindFlock is older —
+ask them to update").
+
+**The joint checklist** answers "do the two halves agree?". On an active
+joint card, **Write the checklist** (one step per line; `[theirs]` marks a
+step checked on the other person's side, `[human]` one a person checks, and
+`->` starts what should happen) or **Ask my agent** (your shared agent reads
+the brief, the contract and both halves' diffs and writes it within 3
+minutes). Each side checks only its own steps: **Run my steps** has your
+shared agent run your agent steps and record each result; your person's
+steps get **Pass / Fail / Can't check** on the card. The shared folder is
+sandboxed — no network, no package installs — so an agent often can't run a
+step that needs a server or a dependency and records it as Can't check; that
+step then gets **Pass / Fail** on your card too ("The agent couldn't check
+this — you can"), for when you ran it yourself. Results travel to the
+other side, so both cards — and a chip on both people's shared-session rows
+— read the same verdict: "Verified — every step passed on both sides",
+"Failed — step 2 on Bob's side", "Needs you — 1 step your agent couldn't
+check", "Needs you — 1 step" or "In progress" (a new checklist is in
+progress until the agents have run their steps).
+Rewriting the checklist clears every result. It never blocks anything. With
+an older MindFlock on the other end your results stay on your card ("<name>'s
+MindFlock is older — their side can't report").
 
 > Status: **shipped.** Pair codes, the pinned-key handshake, the sandboxed
 > shared folder and the peer MCP tools landed in 0.7.0; invites and joins
@@ -148,7 +227,8 @@ session, credential (beyond the sandboxed agent's own model-API credential, see
 | Agent planting git config to run code on the host | The folder's `.git` is a gitfile pointing to `repo.git/`, which is **read-only inside the sandbox**. Both the gitfile and `repo.git` are bind-mounted read-only, so they can't be replaced. Host git on the share runs with `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, hooks off, fsmonitor off, and submodules ignored. `repo.git/info/attributes` unsets filter/diff/merge drivers for every path, so a planted `.gitattributes` can't name one. The engine's own git calls on a share folder (status polling, diff stats) add `--ignore-submodules=all` and the same `-c` hardening, and refuse `add`. The trusted index never holds a gitlink: stripped at creation and at every checkpoint. |
 | Host features executing folder content | Shared sessions refuse: ship/push/PR/Fast-track, worktree setup scripts, IDE launch, spawning, team runs, and an unsandboxed shell pane. No other session may be created on a path under the peer root. |
 | An untrusted relay in the path (`peer.relay`) | The same pinned-key TLS 1.3 runs end to end *inside* the relay's WebSocket; the relay's own TLS is not trusted. A 128-bit ingress token in the relay path keeps scanners off the handshake, and everything else gets one constant `404`. See [Connecting across networks](#connecting-across-networks). |
-| Stale or leaked links | Either side can unlink. The unlinking side sends an authenticated `bye "unlinked"`; the receiving side then removes the link and its pinned key too, stops dialing, and stops that link's shared session (the folder is kept). Links have an idle expiry (30 days). |
+| Stale or leaked links | Either side can unlink. The unlinking side sends an authenticated `bye "unlinked"`; the receiving side then removes the link and its pinned key too, stops dialing, and closes that link's shared session (agent stopped, folder kept — never deleted). Links have an idle expiry (30 days). |
+| A safety number nobody compared | The pinned key already stops a MITM after the first connection, but only the people comparing the number prove the *first* one was them. So the shared folder's content (`diff`, `read_file`, `list_files`, `screen`, `mirror_pull`) is refused — `err: "not permitted: safety number not confirmed"` — to a peer whose link is not `sas_verified` on the serving side, whatever the perms say; share, mirror and export answer 409 until it is. Pairing again resets it on both sides. `msg` and `status` stay open: the number is compared over them. |
 
 ## Components
 
@@ -167,6 +247,11 @@ session, credential (beyond the sandboxed agent's own model-API credential, see
  │ └────────────────────────────────┘ │            │ └────────────────────────────────┘ │
  └────────────────────────────────────┘            └────────────────────────────────────┘
 ```
+
+Per link, beside the transport: the message log (`inbox.py`) and the joint
+task (`joint.py`: its file, the `joint_*` ops, the agent's `peer_contract` /
+`peer_joint`) with its checklist (`joint_check.py`: the `joint_check` op, the
+agent's `peer_check`).
 
 Which side listens: the **inviter** listens on `peer.listen_host:peer.listen_port`
 (default `0.0.0.0:8799`). The listener only runs while at least one invite or
@@ -302,14 +387,36 @@ unknown keys):
 | `diff` | `{"max_chars": int 1000..200000}` | `{"stat": [...], "diff": str, "truncated": bool}` |
 | `read_file` | `{"path": str 1..1024}` | `{"path","size","encoding":"utf-8"\|"base64","content","truncated"}` |
 | `list_files` | `{}` | `{"files": [str], "truncated": bool}` |
-| `status` | `{}` | `{"shared": bool, "agent": "running"\|"stopped"\|"none", "name": str}` |
+| `status` | `{}` | `{"shared": bool, "agent": "running"\|"stopped"\|"none", "name": str, "head"?: sha}` — `head` (40 or 64 hex) is the shared folder's HEAD, sent only while one is bound; an older peer never sends it |
 | `screen` | `{}` | `{"text": str ≤200000, "cols": int 0..1000, "rows": int 0..1000, "agent": "running"\|"stopped"\|"none"}` — the shared session's visible screen (`tmux capture-pane -p -e`), escapes included |
+| `mirror_pull` | `{"have": sha \| "", "offset": int 0..67108864}` | `{"head": sha, "tip": sha, "size": int 0..67108864, "sha256": hex64 \| "", "offset": int, "data": base64 ≤ 960000 chars}` — one chunk of the mirror bundle (see [The mirror](#the-mirror--contract-mirrorpy)); `size` 0 = `have` is the tip already |
 
 Each side enforces its **own** permissions on inbound ops (`link.perms`:
 `messages`, `diff`, `read_file`; `list_files` follows `read_file`, `screen`
-follows `diff`; `status` is always allowed). A refused op returns
-`ok:false, err:"not permitted"`. With no share bound,
-`diff`/`read_file`/`list_files`/`screen` return `err:"no shared folder"`.
+follows `diff`, `mirror_pull` follows `read_file`; `status` is always allowed). A refused op returns
+| `joint_propose` | `{"id": "jt_<12 hex>", "brief": text 1..4000, "contract_text": text ≤50000, "mine": half}` | `{"ok": bool}` |
+| `joint_accept` | `{"id", "mine": half}` | `{"ok": bool}` |
+| `joint_cancel` | `{"id", "reason": line ≤200}` (`"done"` = finished) | `{"ok": bool}` |
+| `joint_contract` | `{"id", "rev": int 1..2^31, "text": text ≤50000, "by": "me"\|"peer"}` | `{"ok": bool, "rev": int}` — the receiver's rev after the offer |
+| `joint_proposal` | `{"id", "proposal": {"id": "cp_<8 hex>", "by", "text": text 1..10000, "at": iso, "state": "open"\|"accepted"\|"rejected"}}` | `{"ok": bool}` |
+| `joint_state` | `{"id"}` | `{"joint": null \| view}` — see [Joint tasks](#joint-tasks--contract-jointpy) |
+| `joint_check` | `{"id", "rev": int 1..2^31, "side_results": side, "steps"?: [step ≤25], "by"?: "me"\|"peer"}` (`steps` and `by` together) | `{"ok": bool, "rev": int}` — the receiver's checklist rev afterwards; see [Joint check](#joint-check--contract-joint_checkpy) |
+
+`half` is `{"repo_name": line ≤128, "branch": line ≤200, "program": line ≤64}`
+— a folder's NAME and the CLI's name, never a path or a command line. `by` is
+relative to the sender (the receiver flips it).
+
+Each side enforces its **own** permissions on inbound ops (`link.perms`:
+`messages`, `diff`, `read_file`; `list_files` follows `read_file`, `screen`
+follows `diff`, every `joint_*` op follows `messages`; `status` is always
+allowed). A refused op returns
+`ok:false, err:"not permitted"`. On top of the perms, the content ops —
+`diff`, `read_file`, `list_files`, `screen`, `mirror_pull`
+(`transport._SAS_OPS`, mirrored in `service._SAS_OPS`) — are refused with
+`err:"not permitted: safety number not confirmed"` while the serving side's
+link is not `sas_verified` (an older requester reads it as "not
+permitted"). With no share bound,
+`diff`/`read_file`/`list_files`/`screen`/`mirror_pull` return `err:"no shared folder"`.
 `screen` captures only the link's own shared session (named from the link
 record, never from the request), and the VIEWER's side strips everything but
 SGR colour codes before a browser sees it (`backend.peer.screen.sanitize`: no
@@ -358,6 +465,8 @@ empty and is backed up to `links.json.corrupt-<ts>`.
   (updated on every pair/auth) or how a dialer link dials. `""` — a link from
   before this field — counts as both until it connects.
 - `sas_verified` (bool): the user pressed *It matches*; a re-pair resets it.
+  While false, the content ops are refused to the peer and share / mirror /
+  export are refused here (see Threat model).
 
 A field this version doesn't know (written by a newer MindFlock) is dropped
 on load rather than condemning the file, so a downgrade keeps every link.
@@ -366,6 +475,240 @@ on load rather than condemning the file, so a downgrade keeps every link.
 Methods: `list()`, `get(link_id)`, `add(link)`, `update(link_id, **fields)`,
 `remove(link_id)`. `peer_name` is sanitized to `[A-Za-z0-9 ._-]{1,32}`, and an
 empty result becomes `peer`.
+
+Per-link state that grows with new features lives in its OWN file next to the
+links, never in `Link` (an older release's `validate()` that rejects a value
+moves the whole links file aside): the message log
+(`messages/<link_id>.json`, `inbox.py`) and the joint task
+(`joint/<link_id>.json`, `joint.py`). Both are dropped when the link goes.
+
+## Joint tasks — CONTRACT (`joint.py`)
+
+A link holds at most ONE joint task: one feature, built by both agents, each
+in its own shared folder. `JointStore(root=<peer root>/joint)` keeps it in
+`<link_id>.json` (0600, atomic tmp + `os.replace`, a thread lock; a corrupt
+file reads as no joint):
+
+```json
+{"version": 1,
+ "joint": {
+   "id": "jt_<12 hex>", "brief": "…", "proposed_by": "me|peer", "created": "<iso>",
+   "state": "proposed|active|done|cancelled", "reason": "",
+   "mine":   {"repo_path": "", "repo_name": "", "branch": "", "program": "",
+              "share_id": "", "session_title": "", "error": ""},
+   "theirs": {"repo_name": "", "branch": "", "program": "", "shared": false},
+   "contract": {"text": "…", "rev": 3, "updated": "<iso>", "by": "me|peer"},
+   "proposals": [{"id": "cp_<8 hex>", "by": "me|peer", "text": "…", "at": "<iso>",
+                  "state": "open|accepted|rejected"}]}}
+```
+
+`me`/`peer` are relative to the file's owner. Keys this version doesn't know
+(a later `check`) are kept untouched. `mine.error` is why my half's shared
+session didn't start (shown on the card); `reason` is the cancel reason.
+Limits: brief 4,000, contract 50,000, a proposal 10,000 characters; at most
+10 proposals (every open one, then the newest decided), so a whole
+`joint_state` answer stays under one frame.
+
+**State machine.** Every op is refused unless the link's `perms.messages`
+allows it, and the SENDER's routes require `sas_verified` (propose, accept,
+contract edits, accepting a proposal):
+
+- `propose` (route `POST …/joint`): stores `proposed` (`proposed_by: me`),
+  then sends `joint_propose`; a refusal rolls it back. 409 while a proposed or
+  active joint exists (a done/cancelled one is replaced). The receiver stores
+  `proposed_by: peer` (a retry with the same id is a no-op; a different open
+  one → `err:"joint task exists"`) and emits `peer.joint_proposed`.
+- `accept` (route `…/joint/accept`): only a `proposed` joint from the peer;
+  sends `joint_accept`, then goes `active` and starts my share. The proposer
+  goes `active` on receipt and starts its share in the background.
+- `cancel` (route `…/joint/cancel`, `reason: "done"` → `done`): local at once,
+  `joint_cancel` best effort. Shares are left running (the person unshares).
+- **Contract rev rule** (`joint_contract`, `apply_contract`): the higher
+  `rev` wins; a tie with different text goes to the proposer's copy. A side
+  that keeps its own copy over an offer sends its copy back, so both
+  converge. A person's edit (`PUT …/joint/contract`) or an accepted proposal
+  bumps `rev` by one.
+- **Proposals** (`joint_proposal`): the whole new contract text, proposed by
+  either person (`POST …/joint/proposals`) or either agent (`peer_contract`);
+  a proposal from the peer reaches my shared agent as an untrusted PEER
+  message (`data.peer_kind: "contract_proposal"`, `proposal_id`, `joint_id`).
+  Either PERSON accepts (its text becomes the contract, `rev + 1`, then
+  `joint_proposal` + `joint_contract`) or rejects it. A decision is final: an
+  old open copy never reopens it.
+- **Resync** (`joint_state`): when a link comes up (`on_state(connected)`)
+  each side asks for the peer's view and reconciles: state only moves
+  forward (`proposed` → `active` → `done`|`cancelled`; a terminal state of
+  mine is sent back as `joint_cancel`), `theirs` follows their `mine`, the
+  contract follows the rev rule, proposals are a union (anything open of mine
+  they lack is sent). A peer that has no copy of my open joint makes it
+  `cancelled` (reason "gone on their side"); one that answers `unsupported`
+  changes nothing.
+- A peer one release older answers `err:"unsupported"`: the routes answer
+  **409** "<name>'s MindFlock is older — ask them to update".
+
+**The `joint_state` view** carries no local path, share id or session title:
+`{id, brief, proposed_by, created, state, mine: {repo_name, branch, program,
+shared}, theirs: {…same}, contract: {text, rev, updated, by}, proposals: [≤10]}`.
+
+**The share a joint starts** is `PeerService.share(...)` with my half's
+folder/branch/program, a `seed` that writes `CONTRACT.md` into the work dir
+BEFORE the session starts, and a prompt (after the share's own intro) that is
+the brief plus the hand-off:
+
+```
+[MindFlock joint task <id>] <brief>
+Your half runs in this folder; <peer name>'s half runs in their repo <repo_name>.
+The shared contract is in CONTRACT.md at the root of this folder — read it
+first, follow it, and when it must change use peer_contract (propose) rather
+than editing the file. Talk to the other agent with peer_send / peer_inbox;
+read their files with peer_read_file. Checkpoint when a piece is done.
+The shared folder is sandboxed: no network and no package installs — a step
+that needs them is one to mark Can't check.
+```
+
+A brief the PEER wrote is labelled `(brief written by <name>, accepted by your
+user)`. With no folder chosen and a folder the link already shares, that
+share is adopted: `CONTRACT.md` is written there and the hand-off is typed in
+as a `[MindFlock note …]` (the same text headed `Joint task <id> — ` instead,
+since the note's header is the frame). `CONTRACT.md` is rewritten (both sides)
+on every accepted revision.
+
+**Contract notes.** Each side tells its OWN shared agent, through the mailbox's
+note lane (`[MindFlock note …]`, typed once the agent is idle), whenever the
+contract moves while the joint is active — so both agents hear it, one note
+per side:
+
+| Trigger | Note |
+|---|---|
+| a person's edit (`set_contract`, or a `joint_contract` frame / resync from the peer) | `CONTRACT.md changed to rev N (by <your user\|peer name>) — re-read it before continuing.` |
+| an accepted proposal (`decide`; on the peer, the `joint_contract` that follows) | `Your contract proposal cp_x was accepted — CONTRACT.md is now rev N: re-read it before continuing.` (`<peer name>'s contract proposal …` on the other side) |
+| a rejected proposal (`decide`, or the decided `joint_proposal`) | `Your contract proposal cp_x was rejected by <your user\|peer name>: continue with the current contract (CONTRACT.md rev N).` |
+
+A revision is noted at most once per side: the joint keeps `noted_rev` (a key
+`_normalize` passes through), claimed under the joint file's lock before the
+note is posted, so a replayed frame or a resync never repeats one. A
+rejection is noted when that side's copy of the proposal turns from open to
+rejected, which happens once. Nothing is noted for a joint that isn't active
+(the hand-off covers the rev it starts on). The sandboxed agent can write the work dir, so the file is
+written through an `O_NOFOLLOW` dir fd as a fresh temp file renamed over
+whatever is there — a planted symlink is replaced, never written through. It
+is an ordinary file: checkpoints commit it and export carries it.
+
+## Joint check — CONTRACT (`joint_check.py`)
+
+One checklist per joint task, id `joint:<joint id>`, in the joint file under
+`check` (the joint keeps keys it doesn't know, so an older release leaves it
+alone):
+
+```json
+"check": {"id": "joint:jt_…", "rev": 2, "by": "me|peer", "written": "<iso>",
+  "steps": [{"id": "s1", "text": "…", "expect": "…", "actor": "agent|human", "side": "mine|theirs"}],
+  "mine":   {"results": {"s1": {"result": "pass|fail|blocked|", "note": "", "at": "<iso>", "by": "agent|human"}},
+             "tested_sha": "<my shared folder's HEAD when last recorded>", "at": "<iso>"},
+  "theirs": {…the same, as their side last reported…},
+  "verdict": "verified|failed|needs_you|in_progress|empty",
+  "ask": {"state": "|asking|failed", "at": "<iso>", "until": <epoch>, "error": ""},
+  "theirs_unsupported": false}
+```
+
+`me`/`peer`/`mine`/`theirs` are relative to the file's owner and flipped on
+receipt; `ask` and `theirs_unsupported` never leave this side. Limits: 25
+steps, 500 characters of text and of expect, a 300-character note — so a
+`joint_state` answer with a full contract, ten proposals and a full checklist
+still fits one frame.
+
+- **Steps.** Written by a person (`POST …/joint/check`) or by MY shared agent
+  after **Ask my agent** (`peer_check write`, refused unless an ask is open).
+  Renumbered `s1…sN`; `actor` defaults to `human`, `side` to `mine`; an agent
+  step that reads like a shell hazard becomes a person's (Verify's rule,
+  `test_plans._DANGEROUS_STEP_RE`). A write is a new revision: `rev + 1`,
+  every result on both sides cleared, then `joint_check` with the steps.
+  The **rev rule** is the contract's: the higher `rev` wins; a tie with
+  different steps goes to the side that proposed the joint task; a side that
+  keeps its copy sends it back.
+- **Results.** Each side records only its own `side` steps, in `mine`: its
+  agent through `peer_check record` (agent steps only — a step on the other
+  side, or a person's step, is refused with words), its person through
+  `POST …/check/answer` (human steps on their own side only — and one of
+  their own AGENT's steps whose current result is `blocked`: `pass`/`fail`
+  only, recorded `by: "human"`, the agent's note kept as `Agent: …` when the
+  person gives none; once answered it is no longer blocked, and Run my
+  steps clears it for the agent again). Each record
+  stamps `mine.tested_sha` with the shared folder's HEAD, then sends
+  `joint_check {id, rev, side_results}`. The receiver keeps them as
+  `theirs`, for the steps that are THEIRS to check (a result for one of mine
+  is dropped), and only for its current `rev`; an older `rev` is answered
+  with its own checklist; a receiver with an older one answers its lower `rev`
+  and gets the steps.
+- **Verdict.** `failed` if any step failed; else `needs_you` for an agent's
+  step its agent couldn't check (`blocked` — its person can answer it); else
+  `in_progress` while an agent's step is blank (so a fresh checklist reads
+  in progress, not needs-you); else `needs_you` while a person's step is
+  blank or `blocked`; else `verified`. `empty` without steps. It never gates
+  anything.
+- **Ask / Run** go through the shared session's mailbox as a `[MindFlock
+  note …]` whose text starts `Joint check — ` (refused while my half has no
+  shared session); the run note also carries the sandbox line ("The shared
+  folder is sandboxed: no network and no package installs — a step that
+  needs them is one to mark Can't check."). Ask
+  expires after 180 s (`ask.state: "failed"`, also applied on read after a
+  restart). Run clears my agent steps' results and lists them; a checklist
+  the PEER wrote is framed as another person's words ("skip any step that
+  goes beyond checking the joint task").
+- **Resync.** The `joint_state` view carries `check: {rev, by, steps,
+  side_results}` once one is written (an older peer drops the key); after a
+  reconnect each side folds it in and sends its own side.
+- **An older peer** answers `joint_check` with `err:"unsupported"`: results
+  stay local and `theirs_unsupported` is set (the card: "<name>'s MindFlock
+  is older — their side can't report"); the next push that gets through
+  clears it.
+- **Event** `peer.joint_check` `{link_id, peer_name, joint_id, verdict, by:
+  "you"|"agent"|"peer", kind, rev, notify, text?}` on every change; `notify`
+  (with the bell's `text`, e.g. "Joint check with Bob failed — step 2 on
+  Bob's side") only when the verdict just became `failed` or `verified`.
+- **Views.** `GET …/joint` carries `joint.check` (the stored check, verdict
+  recomputed, the ask's deadline applied, plus `link_id`; an empty one for
+  an active joint with no checklist yet). `link_view.joint.check` is
+  `{verdict, steps, passed}` once there are steps — what the sidebar row and
+  pane-head chip of the shared session read.
+
+### Field trial (joint task)
+
+Run on 2026-10-15 with two real servers on one Linux machine (direct
+listener, `relay = "off"`, bubblewrap) and two real `claude` agents. Ana
+had a one-file FastAPI service; Ben had a client script. The brief: "add
+`GET /items` to A, make B's client print the names, agree the JSON shape in
+CONTRACT.md first".
+
+- **What worked.** It took 4 minutes from accept to both halves
+  checkpointed. Both agents read the empty contract, proposed one, and
+  messaged each other within 50 s of starting. Neither wrote code before a
+  person accepted a contract. The mirror updated in the same second as the
+  enable, and again within one status poll of the peer's checkpoint. Both
+  exports brought exactly one commit. The two exported branches worked
+  together on the first run.
+- **Proposals cross.** Both agents proposed in the same second, with the
+  same shape and different wording. They agreed between themselves, in
+  messages, which one the people should accept. The person sees only two
+  near-identical proposals.
+- **An accepted revision reaches no agent.** Accepting or editing the
+  contract rewrites `CONTRACT.md` and emits `peer.joint_contract`, but types
+  nothing into either shared session. One agent ended its turn waiting for
+  the accept. It moved only when the other agent's "done" message was typed
+  in. The other agent noticed rev 2 only because its CLI moved a long
+  `peer_inbox` wait into the background and it then re-read the contract.
+- **The sandbox can't run a project with dependencies** (no packages, and
+  egress refuses the package index). Both agents tested with stubs or a
+  static check, and recorded their joint-check steps as `blocked`. A blocked
+  agent step keeps the verdict at `needs_you`. The person can't answer an
+  agent step, and re-running it blocks again, so the only way to reach
+  `verified` was to rewrite those steps as human steps, which clears every
+  result.
+- **Fixed after the trial.** Contract changes are now typed into both
+  shared sessions (Contract notes, above). A person can answer their agent's
+  `blocked` step. A fresh checklist reads `in_progress` until the agents
+  have run. The hand-off and the run note say what the sandbox can't do.
+  The joint-check notes are typed with ASCII brackets.
 
 ## The shared folder — CONTRACT (`share.py`)
 
@@ -434,14 +777,95 @@ The other functions:
     `MindFlock peer <peer@mindflock.invalid>`;
   - returns the new HEAD.
 - `export(share, target_repo, branch_name) -> dict`:
-  - checkpoint first;
-  - then, in the TRUSTED target repo,
-    `git fetch --no-tags <gitdir> +HEAD:refs/heads/<branch_name>`, with
-    `branch_name` validated by `git check-ref-format --branch` and required to
-    start with `peer/`;
-  - refuses to overwrite a checked-out branch.
+  - `check_target(target_repo, branch_name, share)` first: `branch_name`
+    validated by `git check-ref-format --branch` and required to start with
+    `peer/`; the target an existing git repository outside the peer folder;
+    the branch checked out in none of its worktrees (refused) → the canonical
+    path;
+  - checkpoint;
+  - then `fetch_into(target, <gitdir>, "HEAD", branch_name, sha)` — the fetch
+    step export and the mirror share: in the TRUSTED target repo,
+    `git fetch --no-tags --no-recurse-submodules --no-write-fetch-head
+    <source> +<src_ref>:refs/heads/<branch_name>` (hooks and fsmonitor off),
+    then the branch must read `sha`. `untrusted=True` (the mirror's
+    peer-built bundle) adds `-c fetch.fsckObjects=true`.
+- `head_sha(share)`: the share's HEAD (what `status` answers as `head`).
+- `mirror_bundle(share, have, out_path) -> {head, tip, size}`: see
+  [The mirror](#the-mirror--contract-mirrorpy).
 - `remove_share(share_id)`: `rm -rf` the root, only after checking that the
   path is inside `paths.shares_dir()` and that no session is running on it.
+
+## The mirror — CONTRACT (`mirror.py`)
+
+A standing export of THEIR shared folder into one of YOUR repos. Their git
+dir lives on their machine, so the objects cross the link as a git bundle.
+
+**The file.** `~/.mindflock/peer/mirror/<link_id>.json`, 0600, written
+atomically, never inside `links.json` (an older `LinkStore.validate()` must
+not see it):
+
+```json
+{"version": 1, "mirror": {"repo_path": "/abs/path", "branch": "peer/<name>", "enabled": true,
+  "last_head": "<sha>", "last_at": "<iso, UTC>", "last_error": ""}}
+```
+
+`last_head` is THEIR share's HEAD as last mirrored (their `status.head`, not
+the branch's tip — see below). A missing or unreadable file is "no mirror".
+Unlinking deletes it; a re-pair that mints a new link id moves it; the
+`peer/` branch it made is never deleted.
+
+**Enable** (`mirror.enable(link_id, repo_path, branch, peer_name)`, the
+`POST …/mirror` route): `share.check_target` — export's checks — on
+`repo_path` and `branch` (default `peer/<slug of their name>`); a refusal is
+a 400 that says what to fix ("that folder is not a git repository", "…
+is checked out in that repository — switch it to another branch…", "the
+branch must be a valid name starting with \"peer/\""). Re-enabling the same
+repo and branch keeps `last_head`; anything else starts over.
+
+**The trigger** (`mirror.wants_update(m, head, failed, now)`): their
+`status` reply's `head` (polled by `_refresh_their_status`; while any mirror
+is enabled a background loop re-asks every 10 s even with no browser open)
+starts an update when the mirror is enabled and `head` is a sha other than
+`last_head` — not within `RETRY_S` (60 s) of a failed update for that same
+head. Enabling a mirror also starts one at once (when connected). No `head`
+— an older peer, or nothing shared — never triggers. One update per link at
+a time.
+
+**The update** (`mirror.update`, receiving side):
+
+1. `check_target` again (the repo may have changed); `have` = the mirror
+   branch's current tip in the repo, or `""`.
+2. `mirror_pull {have, offset}` from offset 0, one chunk (≤ 720 000 raw
+   bytes) per request, 0.5 s apart (a 64 MB first mirror stays under the
+   link's 120 requests/min), into a 0600 temp file under `mirror/`. Every
+   chunk must carry the first one's `head`/`tip`/`size`/`sha256` (else it
+   restarts once), its own `offset`, and data that fits `size`; the file must
+   hash to `sha256`.
+3. `share.fetch_into(repo, <bundle>, "refs/mindflock/mirror", branch, tip,
+   untrusted=True)`: the only write to the repo is that branch's ref (and
+   the objects behind it, fsck'd). The temp file is removed either way.
+4. Success: `last_head`, `last_at` set, `last_error` cleared, event
+   `peer.mirror_updated {link_id, peer_name, repo_path, branch, sha, head}`
+   (`size` 0 — the branch is at `tip` already — updates the state with no
+   event). Failure: `last_error` set; `peer.mirror_failed {link_id,
+   peer_name, repo_path, branch, error}` only when the error differs from the
+   stored one. Their "no shared folder" is not a failure.
+
+**The bundle** (sharing side: `mirror.serve_pull` → `share.mirror_bundle`).
+A share is a shallow clone: its base commit names parents that exist only in
+the sharer's repo, so a bundle of the real commits fails to fetch anywhere
+else ("did not send all necessary objects"). `mirror_bundle` writes, under
+the share lock, a parent-rewritten copy of HEAD's first-parent chain (at
+most 1000 commits): each commit byte-for-byte except its `parent` lines (the
+oldest gets none, each other the previous copy) and dropped `gpgsig` /
+`gpgsig-sha256` / `mergetag` headers — same trees, authors, dates and
+messages. The copy is deterministic, so the receiver's `have` names a
+commit of it and the next bundle is incremental (`git bundle create <out>
+refs/mindflock/mirror ^<have>`); a `have` outside the chain gets the whole
+chain, `have == tip` gets `size` 0. `refs/mindflock/mirror` points at the
+copy's tip. The bundle is cut at offset 0 into `<share root>/mirror-out.bundle`
+(outside every sandbox mount) and removed after its last chunk is served;
+over `MIRROR_MAX_BYTES` (64 MB) it is refused with `err:"too big to mirror"`.
 
 ## The sandbox — CONTRACT (`sandbox.py`, `egress.py`, `bridge.py`, `sandbox_exec.py`)
 
@@ -645,6 +1069,8 @@ Ops:
 | `peer_read_file` | `{path}` | proxied `read_file` |
 | `peer_list_files` | `{}` | proxied `list_files` |
 | `checkpoint` | `{message}` | `share.checkpoint` on OUR share → `{sha}` |
+| `contract` | `{action: "read"\|"propose", text? 1..10000}` | read → `{rev, text, open_proposals: [{id, by, text, at}]}`; propose (the whole new text) → `{proposal_id}` — a person decides it; agents never accept |
+| `joint` | `{}` | this link's joint task → `{id, brief, state, mine, theirs}` (halves by name) |
 
 **Peer-mode MCP.** When `MINDFLOCK_MCP_MODE=peer`, `backend/mcp` serves ONLY
 the peer toolset. It talks to `MINDFLOCK_PEER_SOCKET` with
@@ -657,6 +1083,11 @@ the peer toolset. It talks to `MINDFLOCK_PEER_SOCKET` with
 - `peer_read_file`
 - `peer_list_files`
 - `checkpoint`
+- `peer_contract` (`action: read | propose`, `text`) — the joint task's
+  contract; see [Joint tasks](#joint-tasks--contract-jointpy)
+- `peer_joint` — re-read the joint task's brief and halves
+- `peer_check` (`action: read | record | write`, `step_id`, `result`, `note`,
+  `steps`) — the joint checklist; see [Joint check](#joint-check--contract-joint_checkpy)
 
 All of them are auto-approved: the sandbox is the boundary. A peer-mode server
 whose socket env is missing refuses every call.
@@ -711,13 +1142,17 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   | `POST` | `/api/peer/invites` | `{ttl_s?}` → `{invite_id, code, expires_in}`; the only response that contains the code |
   | `DELETE` | `/api/peer/invites/{id}` | |
   | `POST` | `/api/peer/join` | `{code}` → link with SAS |
-  | `DELETE` | `/api/peer/links/{id}` | |
+  | `DELETE` | `/api/peer/links/{id}` | closes my shared session (folder kept); `?delete_files=1` deletes it and the folder |
   | `POST` | `/api/peer/links/{id}/perms` | |
-  | `POST` | `/api/peer/links/{id}/share` | `{repo_path, branch?, program?}` → creates the share and the sandboxed session |
-  | `DELETE` | `/api/peer/links/{id}/share` | `?delete_files=1` |
-  | `POST` | `/api/peer/links/{id}/export` | `{target_repo, branch_name}` |
+  | `POST` | `/api/peer/links/{id}/share` | `{repo_path, branch?, program?}` → creates the share and the sandboxed session; 409 "Confirm the safety number with <name> first" before *It matches* |
+  | `POST` | `/api/peer/links/{id}/share/reopen` | `{program?}` → 201 `{link, session}`: a new sandboxed session in the link's KEPT folder (closed by turning links off, or Close); 409 before *It matches*, with nothing shared, already open, or the folder gone |
+  | `DELETE` | `/api/peer/links/{id}/share` | closes the shared session → `{link, deleted: false, folder}`; `?delete_files=1` deletes the session and the folder |
+  | `POST` | `/api/peer/links/{id}/export` | `{target_repo, branch_name}` → `{branch, repo_path, commits, sha, target}` (`commits`: how many the branch brought, 0 = nothing new); every refusal one sentence; 409 before *It matches* |
+  | `POST` | `/api/peer/links/{id}/mirror` | `{repo_path, branch?}` → `{link}`: mirror THEIR share into `repo_path` as `branch` (default `peer/<their name>`); fetches at once when connected. 400 with the reason when the repo or branch won't do |
+  | `DELETE` | `/api/peer/links/{id}/mirror` | → `{link}`; stop mirroring (the branch stays) |
   | `POST` | `/api/peer/links/{id}/address` | `{address}`: re-point a link we joined (`host:port` or `wss://…`) |
   | `POST` | `/api/peer/enable` | turn peer links on without an invite (the "somewhere else" step, so the doctor offers cloudflared) |
+  | `POST` | `/api/peer/disable` | → `{enabled: false, closed: [titles], links: n}`: listener, relay and connections stop, every shared session is closed (kept); links and shares stay (and stay listed in `GET /api/peer`, `connected: false`) |
   | `POST` | `/api/peer/links/{id}/verified` | `{verified: bool}` — *It matches* |
   | `GET` | `/api/peer/links/{id}/messages` | the link's message log `{messages: [{id, dir, by, text, ts, delivered_to, read}], unread}` |
   | `POST` | `/api/peer/links/{id}/messages/read` | mark them read |
@@ -726,19 +1161,49 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   | `GET` | `/api/peer/links/{id}/their-screen` | their shared session's screen now → `{text, cols, rows, agent}` (`text` keeps colours only) |
   | `GET` | `/api/peer/links/{id}/their-files` | their shared folder's files → `{files, truncated}` |
   | `GET` | `/api/peer/links/{id}/their-file?path=` | one of those files → `{path, size, encoding, content, truncated}` |
+  | `GET` | `/api/peer/links/{id}/joint` | `{joint: <the joint file's joint> \| null}` (`theirs.shared` refreshed from their `status` while active) |
+  | `POST` | `/api/peer/links/{id}/joint` | `{brief, repo_path?, branch?, program?, contract_text?}` → 201 `{joint}`; 409 while one is open, before *It matches*, without a sandbox for a chosen folder, or for an older peer |
+  | `POST` | `/api/peer/links/{id}/joint/accept` | `{repo_path?, branch?, program?}` → `{joint, session?}` (my share starts; a failure lands in `joint.mine.error`, still 200) |
+  | `POST` | `/api/peer/links/{id}/joint/cancel` | `{reason?}` (`"done"` finishes it) → `{joint, synced}` |
+  | `PUT` | `/api/peer/links/{id}/joint/contract` | `{text}` → `{joint, synced}` (rev + 1) |
+  | `POST` | `/api/peer/links/{id}/joint/proposals` | `{text}` → 201 `{proposal_id, synced, joint}` |
+  | `POST` | `/api/peer/links/{id}/joint/proposals/{pid}/accept` · `…/reject` | → `{joint, synced}`; 404 unknown, 409 already decided |
+
+  Each link in `GET /api/peer` also carries `joint`: `{id, state,
+  brief_head, contract_rev, open_proposals, mine_shared, theirs_shared}` or
+  `null` (a `done`/`cancelled` one stays listed until a new one replaces it).
+  `synced: false` means the peer was offline: the reconnect resync catches up.
 
   Each link in `GET /api/peer` also carries `their_share`: `{shared, agent}`
   as the peer last answered `status` (re-asked in the background every 10 s
-  while connected), or `null` (offline, or not asked yet). An error any peer
+  while connected), plus `head` when they sent one, or `null` (offline, or
+  not asked yet), and `mirror`: `{repo_path, branch, enabled, last_head,
+  last_at, last_error, updating}` (`updating`: an update is running now) or
+  `null`. An error any peer
   route didn't anticipate answers **500** `{error: "<Type>: <message>"}` —
   never a bare status.
 
   `POST /api/peer/invites` also takes `reach` (`auto` | `tunnel` | `direct`)
   and `op_id`; `POST /api/peer/join` takes `op_id` and answers
   `reconnected`. With an `op_id`, slow steps emit `peer.progress`. Events:
-  `peer.link_added`, `peer.link_removed`, `peer.state`, `peer.progress`,
-  `peer.message`, `peer.relay_changed` (docs/extensions.md); none carries a
-  key, code or relay token.
+  `peer.link_added`, `peer.link_removed` (`by`: `you`|`peer`, `kept_folder`:
+  the closed share's folder or `null`), `peer.state` (`connected`; on a
+  re-pair also `sas_changed: true` + the new `sas`), `peer.progress`,
+  `peer.message` (every incoming one: `text_head` — 200 chars, one line —
+  `stored`, `delivered_to`), `peer.relay_changed`, `peer.mirror_updated`,
+  `peer.mirror_failed` (docs/extensions.md); none carries a key, code or
+  relay token. Each link in `GET /api/peer` also carries `share_open` (its
+  shared session exists now), and `listen.bound` is where the listener
+  really is (a changed `listen_port` re-binds it).
+  `peer.message`, `peer.relay_changed` (docs/extensions.md), and for joint
+  tasks (each with `link_id`, `peer_name`, `joint_id`):
+  `peer.joint_proposed` (+ `brief`, 200 chars — bell: "<name> proposes a
+  joint task — accept in People"), `peer.joint_state` (+ `state`, `by`:
+  `you`|`peer`, optional `reason`, `mine_shared`, `error`) and
+  `peer.joint_contract` (+ `kind`: `revision`|`proposal`, `rev`, `by`:
+  `you`|`peer`|`agent`, `open`, and for a proposal `proposal_id`, `state` —
+  bell only when `open` and `by: "peer"`: "<name>'s agent proposes a
+  contract change"); none carries a key, code or relay token.
 - Settings (`peer` group):
   - `enabled` (false)
   - `listen_host` (`0.0.0.0`)
@@ -774,6 +1239,12 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   the listener closes when no invites or listener links remain. Through a
   relay, the stranger first needs the ingress token from a code; the relay
   operator itself can always deny service.
+- **A joint task's words.** The brief and the starting contract of a joint
+  task the peer proposed become your agent's starting prompt and its
+  `CONTRACT.md` once you accept — labelled as the peer's, but followed. Read
+  both before *Accept with…*. Later contract changes only take effect when a
+  person accepts them; the peer's agent's proposals reach your agent framed
+  as untrusted input.
 - **The relay** (only with `peer.relay` on): see
   [Relay residual risks](#relay-residual-risks).
 - **Platform.** The sandbox is bubblewrap + seccomp on Linux and a Seatbelt

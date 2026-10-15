@@ -598,6 +598,8 @@ def recent_rows(sizes: bool = False, days: float = STALE_WORKTREE_DAYS) -> dict:
                 "worktree": bool(gitdir),
                 "in_place": bool(e.get("in_place")),
                 "provisioned": bool(e.get("provisioned")),
+                # A closed peer-share session reopens from People, never here.
+                "peer_share": bool((e.get("data") or {}).get("peer_share")),
                 "exists": exists,
                 "closed_at": e.get("closed_at"),
                 # Set when the session left without the user closing it (the

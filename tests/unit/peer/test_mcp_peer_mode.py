@@ -220,6 +220,9 @@ def test_peer_tool_names_constant():
         "peer_read_file",
         "peer_list_files",
         "checkpoint",
+        "peer_contract",
+        "peer_joint",
+        "peer_check",
     )
 
 
@@ -293,7 +296,12 @@ def test_missing_env_every_tool_errors(env, no_network, monkeypatch):
     monkeypatch.setattr(pt.socket, "socket", spy)
     h = peer_harness(env)
     h.init()
-    args = {"peer_send": {"text": "x"}, "peer_read_file": {"path": "a"}}
+    args = {
+        "peer_send": {"text": "x"},
+        "peer_read_file": {"path": "a"},
+        "peer_contract": {"action": "read"},
+        "peer_check": {"action": "read"},
+    }
     for name in pt.PEER_TOOL_NAMES:
         resp = h.call(name, args.get(name, {}))
         assert resp["result"]["isError"] is True, name

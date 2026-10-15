@@ -53,6 +53,7 @@ import { agentBlocked } from "../../lib/sessionState";
 import { AgentBlockedBanner } from "../setup/AgentBlocked";
 import { useSetup } from "../setup/useSetup";
 import { VerdictChip } from "../dialogs/VerdictChip";
+import { JointVerdictChip } from "../settings/screens/peer/JointCheck";
 import { familyOf, newestReportTs, threadBadge, threadTabShown } from "../../lib/thread";
 import { effectiveActivity } from "../../lib/stage";
 import {
@@ -1078,6 +1079,10 @@ export function Pane({
           )}
           {/* Verify's verdict, next to Open PR; opens its checklist. */}
           <VerdictChip inst={inst} where="pane" />
+          {/* A shared session: the joint check's verdict, when its link has one. */}
+          {inst.peer_share && (
+            <JointVerdictChip linkId={inst.peer_with?.link_id} peerName={inst.peer_with?.name} where="pane" />
+          )}
           <span
             className={"stagechip " + chip.cls}
             title={inst.pr_url ? "Open PR" : chip.title}

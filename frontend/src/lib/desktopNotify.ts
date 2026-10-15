@@ -1,7 +1,8 @@
 /** OS notifications in the desktop app, for the few things that need you
  * while MindFlock is minimized or behind another window: a computer asking
  * to join your devices (it waits ten minutes, then expires), someone
- * arriving on a peer link (compare the safety number), and an update.
+ * arriving on a peer link (compare the safety number), a joint task proposed
+ * to you, a mirror that failed, someone unlinking you, and an update.
  *
  * The desktop shell exposes `window.mfnotify` (electron/preload.js): show()
  * raises a native Notification in the main process; clicking it focuses the
@@ -10,7 +11,7 @@
  * the in-window toast and the bell already cover a tab that is open. Only
  * shown while the window isn't focused: a focused one has the toast. */
 
-import { PEER_SCREEN } from "./peer";
+import { baseName, PEER_SCREEN } from "./peer";
 import { openSettings } from "./openSettings";
 
 interface MfNotify {
@@ -46,6 +47,35 @@ export function desktopNoteFor(
       return {
         title: name + (d.repaired ? " reconnected" : " joined your invite"),
         body: d.sas ? "Compare the safety number " + String(d.sas) + " with them" : "People",
+        target: "peer",
+      };
+    }
+    case "peer.joint_proposed": {
+      const name = String(d.peer_name || "Someone");
+      const brief = String(d.brief || "").trim();
+      return {
+        title: name + " proposes a joint task",
+        body: brief ? (brief.length > 120 ? brief.slice(0, 119).trimEnd() + "…" : brief) : "Accept or decline it in People",
+        target: "peer",
+      };
+    }
+    case "peer.mirror_failed": {
+      const name = String(d.peer_name || "your peer");
+      const repo = String(d.repo_name || "").trim() || baseName(String(d.repo_path || "")) || "your repo";
+      return {
+        title: "Couldn't mirror " + name + "'s work into " + repo,
+        body: String(d.error || "").trim() || "See the Mirror row in People",
+        target: "peer",
+      };
+    }
+    case "peer.link_removed": {
+      // Only their unlink: your own Remove happened in front of you.
+      if (d.by !== "peer") return null;
+      const name = String(d.peer_name || "Your peer");
+      const kept = String(d.kept_folder || "").trim();
+      return {
+        title: name + " unlinked",
+        body: kept ? "Your shared folder is kept at " + kept : "You're no longer connected",
         target: "peer",
       };
     }

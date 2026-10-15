@@ -72,7 +72,8 @@ describe("plain words", () => {
   it("never shows listener / dialer", () => {
     expect(roleText("listener")).toBe("You invited them");
     expect(roleText("dialer")).toBe("You joined them");
-    expect(carrierText("tcp")).toContain("same network or tailnet");
+    // "Tailscale", not "tailnet": the word people who don't run it can look up
+    expect(carrierText("tcp")).toContain("same network or Tailscale");
     expect(carrierText("relay")).toBe("through the relay");
     expect(carrierText("")).toBe("");
   });
@@ -120,9 +121,11 @@ describe("peerEventNote", () => {
     expect(peerEventNote("peer.link_added", { peer_name: "Bea", sas: "1", repaired: true, role: "listener" })?.text).toMatch(
       /^Bea reconnected/
     );
+    // the joiner pressed Join: their row says they're connected, not "Al joined"
     const joiner = peerEventNote("peer.link_added", { peer_name: "Al", sas: "482-019-337-5", role: "dialer" });
-    expect(joiner?.text).toContain("Al joined");
+    expect(joiner?.text).toBe("Connected to Al — compare safety number 482-019-337-5");
     expect(joiner?.toast).toBe("");
+    expect(peerEventNote("peer.link_added", { peer_name: "Al", repaired: true, role: "dialer" })?.text).toBe("Reconnected to Al");
   });
 
   it("reports an unlink only when THEY did it", () => {
@@ -130,11 +133,13 @@ describe("peerEventNote", () => {
     expect(peerEventNote("peer.link_removed", { peer_name: "Bea", by: "you" })).toBeNull();
   });
 
-  it("surfaces a message only when it was stored for the human", () => {
+  it("surfaces every message as a bell row, by person — stored or handed to the shared agent", () => {
     const n = peerEventNote("peer.message", { peer_name: "Bea", text: "pushed the fix", stored: true });
     expect(n?.toast).toBe("Bea sent you a message");
     expect(n?.text).toBe("Bea sent you a message: pushed the fix");
-    expect(peerEventNote("peer.message", { peer_name: "Bea", text: "x", stored: false })).toBeNull();
+    const toAgent = peerEventNote("peer.message", { peer_name: "Bea", text: "x", stored: false });
+    expect(toAgent?.text).toBe("Bea sent a message (your shared agent has it too): x");
+    expect(toAgent?.toast).toBe("Bea sent you a message");
   });
 
   it("names who needs a fresh invite when the relay moved", () => {
@@ -150,7 +155,7 @@ describe("peerEventNote", () => {
   });
 });
 
-describe("the bell files peer events under Collaborate", () => {
+describe("the bell files peer events under People", () => {
   const env = (e: Partial<EventEnvelope>): EventEnvelope => ({
     event: "",
     session: "",

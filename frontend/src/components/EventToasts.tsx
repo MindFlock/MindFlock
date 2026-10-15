@@ -24,7 +24,7 @@ import { runNote } from "../lib/runs";
 import { openThread } from "../lib/flockActions";
 import { ruleOn, runLookups } from "../state/runs";
 import { showGroup } from "../lib/showGroup";
-import { PEER_SCREEN, peerEventNote } from "../lib/peer";
+import { PEER_NEWS_EVENTS, PEER_SCREEN, isPeerSender, noteSasChanged, peerEventNote } from "../lib/peer";
 import { deviceEventNote, updateNote, updateToastWanted } from "../lib/fleet";
 import { desktopNotify, installDesktopNotifyClicks } from "../lib/desktopNotify";
 import { pushFailedNote } from "../lib/onboarding";
@@ -315,6 +315,9 @@ export function EventToasts() {
         if (isReplay(env) || !env.session) return;
         const d = (env.data || {}) as MessageEventData;
         const from = String(d.from || "");
+        // A person's message into your shared session: its peer.message twin
+        // (below) already toasts it by person, not as "peer:Ben → peer-ben-…".
+        if (isPeerSender(from)) return;
         const isResult = d.kind === "result";
         notifyOnce(
           isResult ? env.session : from || "*external",
@@ -387,11 +390,17 @@ export function EventToasts() {
       );
     }
     // Another person (peer links): someone you invited arrived (compare the
-    // safety number), unlinked you, left a message where no shared session
-    // takes it, or your relay moved. The click opens People.
-    for (const name of ["peer.link_added", "peer.link_removed", "peer.message", "peer.relay_changed"]) {
+    // safety number), unlinked you (your folder kept), re-paired with a new
+    // safety number, left a message, or your relay moved; a joint task was proposed, answered or
+    // ended, an agent proposes a contract change, the mirror moved or failed.
+    // The click opens People.
+    for (const name of PEER_NEWS_EVENTS) {
       unsubs.push(
         ev.subscribe(name, (env) => {
+          // A new safety number is remembered even from a replay: the card's
+          // "New safety number" callout reads it.
+          if (name === "peer.state" && env.data?.sas_changed)
+            noteSasChanged(String(env.data?.link_id || ""), String(env.data?.sas || ""));
           if (isReplay(env)) return;
           desktopNotify(env.event, env.data);
           const n = peerEventNote(env.event, env.data);

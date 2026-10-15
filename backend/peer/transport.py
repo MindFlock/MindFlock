@@ -120,7 +120,17 @@ _OP_PERM = {
     "status": None,
     # Watching the shared session's screen shows what its diff and files do.
     "screen": "diff",
+    # The standing mirror pulls the share's history as a bundle: it reads the
+    # same files "read my files" grants.
+    "mirror_pull": "read_file",
+    # Joint tasks talk, like messages (backend.peer.joint).
+    **{op: "messages" for op in wire.OPS if op.startswith("joint_")},
 }
+# Ops that hand over the shared folder's content: refused until the safety
+# number is confirmed on THIS side (``link.sas_verified``), whatever the
+# perms say; ``msg`` stays open so the people can compare the number over it.
+_SAS_OPS = frozenset({"diff", "read_file", "list_files", "screen", "mirror_pull"})
+NOT_VERIFIED_ERR = "not permitted: safety number not confirmed"
 
 
 class PeerError(Exception):
@@ -440,9 +450,13 @@ class _Conn:
         if link is None:
             self.teardown("link removed")
             return
-        perm = _OP_PERM[op]
+        # An op the wire accepts but this table does not know is a bug, not a
+        # grant: refuse it rather than KeyError into a request timeout.
+        perm = _OP_PERM.get(op, "__unmapped__")
         if perm is not None and not link.perms.get(perm, False):
             resp = {"t": "res", "id": rid, "ok": False, "err": "not permitted"}
+        elif op in _SAS_OPS and getattr(link, "sas_verified", False) is not True:
+            resp = {"t": "res", "id": rid, "ok": False, "err": NOT_VERIFIED_ERR}
         else:
             try:
                 async with asyncio.timeout(owner.request_timeout):

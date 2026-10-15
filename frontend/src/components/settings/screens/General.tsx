@@ -18,6 +18,7 @@ import { AdvancedFold } from "../settingsMode";
 import { flashSaved } from "../savedCue";
 import { TOURS, TOUR_IDS, type TourId } from "../../../lib/tours";
 import { replayTour } from "../../onboarding/replayTour";
+import { replayPeopleTour } from "./peer/replayPeopleTour";
 import "./General.css";
 
 export function General(_: ScreenProps) {
@@ -170,7 +171,7 @@ function Tours() {
             <span className="set-label">{id === "welcome" ? "Welcome tour" : TOURS[id].title}</span>
             <span className="set-hint">{TOUR_HINT[id]}</span>
           </div>
-          <button type="button" className="test-btn" title={`Replay the ${TOURS[id].title} tour`} onClick={() => replayTour(id)}>
+          <button type="button" className="test-btn" title={`Replay the ${TOURS[id].title} tour`} onClick={() => (id === "people" ? replayPeopleTour() : replayTour(id))}>
             Replay
           </button>
         </div>
@@ -208,6 +209,7 @@ const TOUR_HINT: Record<TourId, string> = {
   verify: "Checking that a change actually works.",
   schedule: "Templates, and sessions that start by themselves.",
   settings: "Where your connections and every setting live.",
+  people: "Working with another person: invite, share a folder, a joint task.",
 };
 
 /** Slider position = thirds of a line (1–9 → 0.33…3); tmux gets the whole-line

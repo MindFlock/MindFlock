@@ -275,11 +275,18 @@ export function runBody(o: {
   split: boolean;
   /** N, sent with a split only. */
   maxPieces?: number;
+  /** New's "Make it a git repo first": the server runs git init + a first
+   * commit in the folder before the split (a split only). */
+  initRepo?: boolean;
 }): Record<string, unknown> {
   const together = o.split || o.grouping === "together";
   const lane = together ? oneForAllLane(o.lane) : o.lane;
   const split = o.split
-    ? { split_optional: true, max_pieces: clampSplit(o.maxPieces ?? SPLIT_DEFAULT) }
+    ? {
+        split_optional: true,
+        max_pieces: clampSplit(o.maxPieces ?? SPLIT_DEFAULT),
+        ...(o.initRepo ? { init_repo: true } : {}),
+      }
     : {};
   return {
     name: o.name.trim(),

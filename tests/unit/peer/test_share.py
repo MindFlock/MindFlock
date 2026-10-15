@@ -445,6 +445,31 @@ def test_export_into_trusted_repo(share, repo):
     assert run_git(repo, "show", "peer/collab:peer.txt").stdout == "v2\n"
 
 
+def test_export_counts_the_commits_it_brought(share, repo):
+    out = sh.export(share, str(repo), "peer/count")
+    assert out["commits"] == 0  # nothing done in the folder yet
+    open(os.path.join(share.work, "one.txt"), "w").write("1\n")
+    sh.checkpoint(share, "one")
+    open(os.path.join(share.work, "two.txt"), "w").write("2\n")
+    out = sh.export(share, str(repo), "peer/count")  # + its own checkpoint
+    assert out["commits"] == 2
+    assert sh.export(share, str(repo), "peer/count")["commits"] == 0
+
+
+def test_export_into_a_repo_without_the_shared_history_says_so(share, tmp_path):
+    """A git share is a shallow clone: git would refuse the ref silently
+    ("export failed: branch not updated") in any repo lacking its base."""
+    other = tmp_path / "other"
+    other.mkdir()
+    run_git(other, "init", "-q", "-b", "main")
+    (other / "x").write_text("x\n")
+    commit_all(other, "unrelated")
+    with pytest.raises(sh.ShareError) as exc:
+        sh.export(share, str(other), "peer/x")
+    assert str(exc.value) == sh.NO_SHARED_HISTORY
+    assert run_git(other, "branch", "--list", "peer/x").stdout == ""
+
+
 def test_export_refuses_checked_out_branch(share, repo):
     run_git(repo, "checkout", "-q", "-b", "peer/live")
     with pytest.raises(sh.ShareError, match="checked out"):

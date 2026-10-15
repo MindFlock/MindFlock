@@ -768,3 +768,34 @@ class TestPerSessionFence:
         rz.sync_guard(os.path.realpath(repo), lroot=repo)
         guard = json.load(open(rz.guard_path(os.path.realpath(repo))))
         assert "sessions" not in guard
+
+
+def test_a_split_honours_make_it_a_git_repo_first(env, tmp_path):
+    """New's "Make it a git repo first" + Auto-split: the run used to refuse
+    a plain folder ("repo_path must be a git repository") even with the box
+    ticked, because only the plain create path ran git init. The run path
+    now prepares the folder the same way first."""
+    plain = tmp_path / "notgit"
+    plain.mkdir()
+    (plain / "notes.txt").write_text("hi\n")
+    payload = {
+        "name": "Split in a new repo",
+        "items": [{"kind": "task", "text": "Write a chord chart"}],
+        "policy": {"lane": "commit", "release": "ask"},
+        "split": True,
+        "repo_path": str(plain),
+        "init_repo": True,
+    }
+    run, _w = asyncio.run(drv.create_run(payload))
+    assert run["id"]
+    assert (plain / ".git").is_dir()
+    assert _git(plain, "rev-parse", "HEAD").stdout.strip()
+
+    # Without the tick a plain folder is still refused, and the error says
+    # what to do about it.
+    other = tmp_path / "plain2"
+    other.mkdir()
+    with pytest.raises(drv.RunError, match="Make it a git repo first"):
+        asyncio.run(
+            drv.create_run({**payload, "repo_path": str(other), "init_repo": False})
+        )

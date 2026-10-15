@@ -1266,21 +1266,44 @@ export function renderExplorer(shared, host) {
     return drv && drv.available === false ? drv : null;
   }
 
+  let driverRefetchTimer = null;
+  // While the server reinstalls a remembered driver after an update, re-read
+  // the driver list once a few seconds later so the note clears by itself.
+  function scheduleDriverRefetch() {
+    if (driverRefetchTimer) return;
+    driverRefetchTimer = setTimeout(async () => {
+      driverRefetchTimer = null;
+      await listDrivers(api, true).catch(() => {});
+      refreshAll();
+    }, 4000);
+  }
+
   function driverNote(drv) {
     const st = installState(drv.engine);
     const body = el("div", { class: "dbc-driver-body" });
+    // After an engine update the server reinstalls a driver it remembers
+    // (reinstall: "running" | "failed"): say so instead of "not installed".
+    const reinstalling = drv.reinstall === "running";
+    if (reinstalling) scheduleDriverRefetch();
     body.appendChild(
       el("div", {
         text: st.running
           ? "Installing " + (drv.driver || "the driver") + " into the server's environment…"
-          : "The " +
-            engineLabel(drv.engine) +
-            " driver" +
-            (drv.driver ? " (" + drv.driver + ")" : "") +
-            " is not installed in the server's environment.",
+          : reinstalling
+            ? drv.reinstall_note || "Reinstalling " + (drv.driver || "the driver") + " after the update…"
+            : "The " +
+              engineLabel(drv.engine) +
+              " driver" +
+              (drv.driver ? " (" + drv.driver + ")" : "") +
+              " is not installed in the server's environment.",
       })
     );
-    if (drv.can_install) {
+    if (drv.reinstall === "failed" && drv.reinstall_note) {
+      body.appendChild(el("div", { class: "dbc-hint", text: drv.reinstall_note }));
+    }
+    if (reinstalling) {
+      // Nothing to press while the server works; the refetch above clears it.
+    } else if (drv.can_install) {
       body.appendChild(
         el(
           "div",

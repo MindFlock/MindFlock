@@ -272,23 +272,57 @@ EVENT_NAMES = (
     # "repaired": bool}).
     "peer.link_added",
     # A link is gone (data: {"link_id", "peer_name", "by": "peer" — they
-    # unlinked | "you" — unlinked here}).
+    # unlinked | "you" — unlinked here, "kept_folder": the folder of this
+    # side's shared session, CLOSED and never deleted — or null}).
     "peer.link_removed",
     # A link's connection came up or dropped (data: {"link_id", "peer_name",
-    # "connected": bool}). For UI refetch only; no rule notifies on it.
+    # "connected": bool}). For UI refetch only; no rule notifies on it —
+    # except a re-pair: + "sas_changed": true, "sas" — a new safety number,
+    # un-confirmed on both sides ("confirm it with <name> again").
     "peer.state",
     # A slow invite or join moved on a stage (data: {"op_id" — the id the
     # request carried, "op": "invite"|"join", "stage", "text" — the line to
     # show}). For the screen that asked; no rule notifies on it.
     "peer.progress",
-    # A message from the peer arrived (data: {"link_id", "peer_name",
-    # "text" — first 200 chars, one line, "stored": bool — true when no
-    # shared session took it, so it waits in the link's messages for you}).
+    # A message from the peer arrived — every one (data: {"link_id",
+    # "peer_name", "text_head" — first 200 chars, one line ("text": the same,
+    # for older listeners), "stored": bool — true when no shared session took
+    # it, so it waits in the link's messages for you, "delivered_to": the
+    # shared session that took it, or null}).
     "peer.message",
     # This computer's relay got a new public address while people who joined
     # through the old one still exist — they need a fresh invite to
     # reconnect (data: {"host", "peers": [names]}; never the ingress token).
     "peer.relay_changed",
+    # The standing mirror fetched their newest checkpoint into your repo
+    # (backend.peer.mirror; data: {"link_id", "peer_name", "repo_path",
+    # "branch" — "peer/…", "sha" — the branch's new tip, "head" — their
+    # share's HEAD}).
+    "peer.mirror_updated",
+    # A mirror update failed (data: {"link_id", "peer_name", "repo_path",
+    # "branch", "error" — what to do}). Once per distinct error.
+    "peer.mirror_failed",
+    # Joint tasks (backend.peer.joint; data always carries "link_id",
+    # "peer_name", "joint_id"). The peer proposes one — accept or decline it
+    # in People (data: + "brief" — first 200 chars, one line).
+    "peer.joint_proposed",
+    # A joint task moved, or my half's shared session started or failed
+    # (data: + "state": "proposed"|"active"|"done"|"cancelled", "by": "you" |
+    # "peer", optional "reason", "mine_shared", "error"). For UI refetch.
+    "peer.joint_state",
+    # The contract changed or a change was proposed or decided (data: +
+    # "kind": "revision"|"proposal", "rev", "by": "you"|"peer"|"agent",
+    # "open": bool — true for a proposal waiting on a person, and for a
+    # proposal "proposal_id" + "state"). Notify only on an open proposal by
+    # the peer ("<name>'s agent proposes a contract change").
+    "peer.joint_contract",
+    # The joint check moved: steps written, a result recorded on either side,
+    # an ask of my agent started or ran out (backend.peer.joint_check; data: +
+    # "verdict": "verified"|"failed"|"needs_you"|"in_progress"|"empty", "by":
+    # "you"|"agent"|"peer", "kind": "steps"|"result"|"run"|"ask"|"ask_failed"|
+    # "results", "rev", "notify": bool — true when the verdict just became
+    # failed or verified, then also "text" for the bell).
+    "peer.joint_check",
     # A newer MindFlock release is out and this device, or another of "Your
     # devices", runs an older one (core.update_watch; ``session`` is ""). Once
     # per release and set of devices behind it (data: {"latest", "tag",

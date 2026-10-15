@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Joint tasks: two people, two repos, one feature.** On a People connection,
+  **Start a joint task** writes one brief; the other person accepts with their
+  own folder, and both shared agents start with the brief and a shared
+  **contract** (`CONTRACT.md` in each shared folder: what we're building,
+  the interfaces between the halves, who owns what, done means). Either agent
+  can read it and propose a change (`peer_contract`); a person accepts or
+  rejects the proposal in People. **Mirror** keeps the other person's
+  checkpoints flowing into a repo you choose as a `peer/…` branch (their
+  history crosses the link as an incremental bundle; nothing is written to
+  your working tree). The **joint check** is one checklist with steps tagged
+  per side: each side's agent runs its own (`peer_check`), people answer the
+  human steps, results sync over the link, and one verdict shows on both
+  shared-session rows. A People tour (the "?" in its header, Help → Tours).
+- **People, safer and plainer.** Unlinking never deletes the other side's
+  work (the shared session is closed, its folder kept). A re-pair un-confirms
+  the safety number and says so. Nothing from a shared folder crosses the
+  link until both sides press *It matches*; Share, Mirror and Export wait
+  for it too. Turning peer links off asks first and keeps every connection
+  and share (Reopen brings a share back). The connection card is three
+  groups — Trust, Share, Talk — with labels, a message thread where you are
+  (and in the bell), an *It doesn't match* button, and export results in
+  words ("Brought home as peer/ana in widgets (3 commits)"). The invite
+  message says where to paste it. Settings search finds People under pair,
+  join and link.
 - **Sign in with GitHub, out of the box.** MindFlock ships the client id of
   its registered GitHub OAuth App, so Connect GitHub leads with one **Sign in
   with GitHub** button (a code typed at github.com/login/device) on every
@@ -130,6 +154,16 @@ given a short, replayable tour second.
 
 ### Fixed
 
+- Auto-split refused a folder that wasn't a git repo even with "Make it a
+  git repo first" ticked; the split path now runs the same `git init` + first
+  commit as a plain start.
+- **Database explorer drivers survive updates.** A driver installed with
+  **Install driver** (psycopg, pymysql) vanished after every engine update or
+  reinstall. It is now recorded in `~/.mindflock/dbclient/drivers.json`;
+  updates carry it (`uv tool install --with …`, `pipx inject`), and one an
+  update still dropped (install.sh, a hand-run reinstall) is put back in the
+  background when the server starts ("Reinstalling psycopg after the
+  update…"). `mindflock doctor` lists them.
 - Verify's **Fix…** on a failed checklist returned a 500 (`create_instance()`
   missing `request`), as did Run; errors are plain sentences and never print
   an API path.

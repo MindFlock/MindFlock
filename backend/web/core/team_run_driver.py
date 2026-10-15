@@ -2669,8 +2669,22 @@ async def create_run(payload: dict) -> Tuple[dict, List[str]]:
     repo_root = str(payload.get("repo_path") or "").strip()
     if repo_root:
         repo_root = os.path.abspath(os.path.expanduser(repo_root))
+        if payload.get("init_repo") is True and os.path.isdir(repo_root):
+            # New's "Make it a git repo first": the same git init + first
+            # commit the plain create path does, so an auto-split can start
+            # in a folder that isn't a repo yet (it used to refuse it even
+            # with the box ticked).
+            from backend.web.core import plain_repo as _plain_repo
+
+            try:
+                repo_root, _ = _plain_repo._prepare_plain_repo(repo_root, True)
+            except ValueError as err:
+                raise RunError(str(err)) from None
         if not os.path.isdir(repo_root) or not srv._is_git_repo(repo_root):
-            raise RunError("repo_path must be a git repository: %s" % repo_root)
+            raise RunError(
+                'repo_path must be a git repository: %s (tick "Make it a git '
+                'repo first" in New, or pick a repo)' % repo_root
+            )
     created_by = str(payload.get("created_by") or "user")
     if created_by != "user":
         who = created_by[len("agent:") :] if created_by.startswith("agent:") else ""

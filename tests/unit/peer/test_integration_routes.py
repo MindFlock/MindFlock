@@ -104,6 +104,9 @@ def link(lid="ab" * 16, role="listener", **kw):
         perms={"messages": True, "diff": True, "read_file": True},
         share_id=None,
         session_title=None,
+        # Both pressed It matches: the folder's content may cross (an
+        # unconfirmed link is refused it — test_service_safety.py).
+        sas_verified=True,
     )
     base.update(kw)
     return SimpleNamespace(**base)
@@ -160,6 +163,8 @@ ROUTES = [
         "/api/peer/links/" + "ab" * 16 + "/export",
         {"target_repo": "/tmp", "branch_name": "peer/x"},
     ),
+    ("post", "/api/peer/links/" + "ab" * 16 + "/mirror", {"repo_path": "/tmp"}),
+    ("delete", "/api/peer/links/" + "ab" * 16 + "/mirror", None),
     ("post", "/api/peer/enable", {}),
     ("post", "/api/peer/links/" + "ab" * 16 + "/verified", {"verified": True}),
     ("get", "/api/peer/links/" + "ab" * 16 + "/messages", None),
@@ -277,7 +282,8 @@ def test_join_without_a_code_says_so(svc, client):
 
 def test_invite_response_carries_a_ready_to_send_message(svc, client):
     body = client.post("/api/peer/invites", json={"ttl_s": 600}).json()
-    assert body["message"] == svc_mod.invite_message(CODE, 600)
+    assert body["message"] == svc_mod.invite_message(CODE, 600, direct=True)
+    assert "same network" in body["message"]  # relay off: a direct invite
     assert "10 min" in body["message"]
 
 

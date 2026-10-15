@@ -289,7 +289,7 @@ notifications to your phone (ntfy)* vs *Your phone — Use MindFlock itself
 from your phone*; a title match ranks above a subtitle match; listed right
 after the commands whose names contain the text),
 **Replay <X> tour** (one per [tour](#tours): welcome, New, Intake, Verify,
-Schedule, Settings — found by *tour*, *help* or *how*), Toggle sidebar, Keyboard
+Schedule, Settings, People — found by *tour*, *help* or *how*), Toggle sidebar, Keyboard
 shortcuts — then the focused session's verbs (Commit / Push / **Open PR** /
 **Merge PR** once there is a PR / Open / focus IDE, Rename…, Queue prompt… *runs when idle*, Split…
 only where a split can actually start, **Pause session** (*stops the agent;
@@ -2817,7 +2817,7 @@ that renders late is looked for again for a few seconds. A step can also name
 a `screen` of its surface to switch to first (`TourStep.screen`); Settings is
 the one surface that reads it.
 
-There are six (`lib/tours/`, one file per tour, `TOURS` in `index.ts`):
+There are seven (`lib/tours/`, one file per tour, `TOURS` in `index.ts`):
 **Welcome** (over the Get set up checklist: the *next:* line, ① Install
 Claude Code, ② Sign in to your agent, ③ Start your first session, then the
 first sidebar row), **New** (the task box, the *Runs in* folder picker,
@@ -2834,7 +2834,14 @@ box; Agents' default-agent picker; Workspace's *Where your worktrees live*;
 **Show advanced settings · N more screens** at the nav's foot; General's Help
 block. Hooks `settings-status`, `settings-github`, `settings-default-agent`,
 `settings-worktrees`, `settings-advanced`, `settings-tours`. Its first step's
-screen is Connections, so the **?** always restarts it there). A step's target is a CSS selector, usually a stable id or a
+screen is Connections, so the **?** always restarts it there) and **People**
+(five steps on Settings → People: **Invite someone**, **Join someone**, the
+safety number, the share-a-folder row, the joint task — hooks
+`people-invite`, `people-join`, `people-safety`, `people-share`,
+`people-joint`; the link-card steps centre until someone is linked. Its **?**
+sits in the People screen's header; replaying it from General or the palette
+opens Settings on People first, `settings/screens/peer/replayPeopleTour.ts`.
+It never opens by itself). A step's target is a CSS selector, usually a stable id or a
 `data-tour="<surface>-<thing>"` hook (with today's id as a fallback in the
 same selector list — a list matches in *document* order, so a fallback must
 be the hooked element or inside it, never earlier in the page).
@@ -2942,7 +2949,10 @@ missing"`): its row reads *Workspace missing — removed at startup.* and then
 *Branch <name> is still in the repo — check it out to recover the work.*, *Its
 branch is still in the repo.* or *Its branch is gone too.* (`branch_exists`).
 
-Per row: **Reopen** (a closed session whose directory is still there), **Delete**
+Per row: **Reopen** (a closed session whose directory is still there; a
+closed shared-folder session — `peer-<name>-<id>` — shows **Reopen from
+People** instead, which opens its card there, since the generic reopen is
+refused for it), **Delete**
 (the directory — absent for an in-place session, whose folder is your own repo,
 and for a directory a running session shares) and **Forget** (drop the closed
 session from the list; the directory stays, and comes back as an on-disk row).
@@ -4877,7 +4887,9 @@ labels above the inputs.
   bell's own **Approve** on the request's row, and from the phone's approve
   card on `/m` (an ntfy tap opens `/m#approve=<id>`). The desktop app also
   raises an OS notification for a join request, someone arriving on a peer
-  link and an update while its window isn't focused; clicking one brings the
+  link, a joint task proposed to you, a mirror that failed, someone unlinking
+  you (*your shared folder is kept at …*) and an update while its window isn't
+  focused; clicking one brings the
   window forward on the right screen.
 
   **Paste a code** is ONE box for every code: one of your devices' codes
@@ -4939,23 +4951,97 @@ labels above the inputs.
   **shared-session viewer** (`PeerSessionViewer`, dialog `peer-session`):
   **Session** (their terminal, re-asked every 1.5 s, colours only —
   `lib/ansiSpans` renders spans, never HTML), **Files** (their folder; click to
-  read), **Changes** (their diff), and a line that messages them.
+  read), **Changes** (their diff), and a line that messages them. Until the
+  safety number is confirmed (`sas_verified`) the three tabs are off and one
+  line says why (*Confirm the safety number with <name> in People first — then
+  their screen, files and changes show here*, with **Open People**); a refusal
+  by their side is the server's own sentence (*<name> hasn't confirmed the
+  safety number yet…*, or the switch they turned off: *<name> turned off “see
+  my changes” on this link…*).
 - **People** (screen key `peer`; was People; the Peer links screen, `/api/peer*`,
   `backend/peer`) — pair-coding with another MindFlock user. It leads with
   **Invite someone** (**Copy invite** copies a ready-to-send message with the
-  `mfp1:`/`mfp2:` code) and **Join a peer** (takes that whole message or just
+  `mfp1:`/`mfp2:` code) and **Join someone** (takes that whole message or just
   the code; Your devices' **Paste a code** box routes a peer code here too); doing
-  either turns peer links on, no toggle first. Each link shows its **safety
-  number** to read to each other and confirm (**It matches**), the
-  permissions you granted, **Share a folder** (any folder — typed or picked
+  either turns peer links on, no toggle first. The screen opens with one line
+  (*one of you invites, the other joins*) and **Create invite** as the primary
+  button; **Join someone** takes the paste (a cut-off code is caught before it
+  is sent; a just-joined card scrolls into view and lights up). Each
+  connection's card is three groups, the next step first — **Trust** leads
+  until the safety number is confirmed, then **Share · Talk · Trust**:
+  **Trust** is the **safety number** (*the same number on both screens means
+  nobody is in between*) with **It matches** and **It doesn't match** (removes
+  the connection and says to make a new invite and send it another way); a
+  new number after a reconnect is called out (*New safety number after
+  reconnecting — confirm it with <name> again*: an unconfirmed number the
+  server announced with `peer.state` `sas_changed`, or one different from the
+  number this browser last saw confirmed); *In the folder you share, they may* (✓ Saved on each change);
+  and **Remove connection…** in red. **Share** holds the labelled share form
+  (Folder · Branch · Agent; *Confirm the safety number before you share* and
+  Share stays off until then), **Bring work home** (Your repo · As branch ·
+  Export, its result next to the button: *Brought home as peer/Bea in api (3
+  commits)*, *Nothing new to bring home yet*, or the server's one sentence why
+  not — never *export failed: export failed:*), the joint task and the Mirror
+  row. Share, Export, Mirror's **Enable** and **Reopen** stay off until **It
+  matches**, saying *Confirm the safety number with <name> first* (the
+  server's 409 says the same). A shared folder whose session was closed —
+  peer links turned off, or Close — keeps its folder (`shared` and not
+  `share_open`): the card says *Your shared session is closed — its folder is
+  kept* with **Reopen** (`POST …/share/reopen`, the agent picker beside it; a
+  refusal shows next to it). **Talk** is the conversation by person (*Bea*,
+  *you*, *your agent* — never a session id) with its send box, **Watch their
+  session** and **Their changes**; the shared-session viewer shows the same
+  thread above its send box, and every message from them is a bell row (filed
+  under **People**, its first line from `text_head`). The bell also says when
+  they unlink you (*<name> unlinked — your shared folder is kept at <path>*,
+  or just *<name> unlinked*) and when a re-pair brings a new number (*New
+  safety number after reconnecting — confirm it with <name> again*). **Remove
+  connection…** says *Their shared session is closed, not deleted; yours too
+  unless you tick delete*. Turning **Connections to people** off in Advanced
+  asks first when anyone would be disconnected (*Disconnect from Bea and Cy
+  and pause 1 shared session?*, counting open shared sessions), then calls
+  `POST /api/peer/disable`; the cards stay listed, greyed and inert, under
+  *Connections to people are off* with **Turn on**. Advanced's status line
+  says where the listener really is (`listen.bound`). In detail: **Share a folder** (any folder — typed or picked
   with **Browse…**, the New dialog's folder browser; a plain folder is shared
   as a snapshot — optional branch, the agent CLI — any sandbox-capable one;
   not aider) which starts the shared
   session `peer-<name>-<id>` in a sandboxed shallow clone under
   `~/.mindflock/peer/shares/`, **Export** (brings the shared work into your
   own repo as a `peer/…` branch; **Browse…** picks the repo), **Watch their
-  session** (the shared-session viewer above), **Reconnect** (paste a fresh invite when
-  their address changed) and **Unlink**. *Advanced* holds every setting
+  session** (the shared-session viewer above), **Reconnect** (offline joiner
+  only: *it usually comes back by itself; if not, paste a fresh invite*) and
+  **Remove connection**.
+
+  **Joint task** (one per connection; a done or cancelled one stays listed
+  until the next proposal replaces it; `settings/screens/peer/JointTask.tsx`,
+  `/api/peer/links/{id}/joint*`): two people, two repos, one feature. Once the
+  safety number is checked and they're online, **Start a joint task** opens a
+  form — what you're building together, your half (folder via **Browse…**,
+  optional branch, agent) and a **starter contract** prefilled with four
+  headings (*What we're building / Interfaces between the halves / Who owns
+  what / Done means*) — and **Propose to <name>**. Your card then reads
+  *Proposed to <name> — waiting for them to accept* (**Withdraw**); theirs
+  shows the brief and the contract with **Accept with…** (their folder,
+  branch, agent — their half starts at once) or **Decline**. When the other
+  side is offline, a change says it *will sync when they reconnect*; if your
+  half's session fails to start, its place says why. An active task
+  shows the brief, both halves (**Open session** for yours, **Watch their
+  session** for theirs), the **Contract** panel (rendered Markdown — React
+  elements, never HTML — with its rev and who changed it; **Edit** saves a new
+  rev to both sides and both folders' `CONTRACT.md`; each open proposal from
+  an agent shows as the lines it adds and removes, the whole text folded, with
+  **Accept** / **Reject** — agents never accept), the **Mirror** row
+  (*Mirror their work into [repo] as peer/<name>* → **Enable**; on, it says
+  when it last updated and **Disable**; a failed fetch shows *Last mirror
+  failed: …*), the joint checklist when there is one (its verdict and each
+  side's steps), **Done** and **Cancel…**. A done or cancelled task says so
+  and offers **Start another joint task**. The Mirror row also shows on a link
+  without an active task once they share or a mirror exists. The bell and a
+  toast report a proposal (*<name> proposes a joint task — accept in People*),
+  their accept / cancel, their agent's open contract proposal (your own
+  agent's is a toast only: *review it in People*), and each mirror update or
+  failure; a click opens People. *Advanced* holds every setting
   (`peer.*` in [configuration.md](configuration.md#peer-links-peer-settings-store-only):
   relay `auto` / `off` / `cloudflare` / `url`, listen and advertise
   addresses, display name, egress allow-list) and the off switch. The

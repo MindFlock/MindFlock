@@ -1832,6 +1832,88 @@ git_email}`, and so does the `POST /api/fleet/adopt` body; the joiner adopts the
 id. The settings-sync export (`GET /api/settings/sync/export`) carries
 `"person": {"id": …}` for the tie-break.
 
+### Peer links — the safety number, unlinking, the off switch, export
+
+The routes are specified in
+[peer-link.md](peer-link.md#engine-integration--contract-servicepy--existing-modules);
+the rules a client must expect from them:
+
+- **Before *It matches*** (`sas_verified` on the link), `POST
+  /api/peer/links/{id}/share`, `…/share/reopen`, `…/mirror` and `…/export`
+  answer **409** `{"error": "Confirm the safety number with <name> first"}`.
+  Their side refuses `…/diff`, `…/their-screen`, `…/their-files` and
+  `…/their-file` until *they* confirmed it: **403** `"<name> hasn't confirmed
+  the safety number yet — compare it with them, then you both press It
+  matches"`. Messages work either way. A re-pair (a fresh invite from someone
+  already linked) un-confirms it on both sides and emits `peer.state` with
+  `sas_changed: true`.
+- A refusal by their permissions names the switch: **403** `"<name> turned
+  off “see my changes” on this link — ask them to turn it on in People"`
+  (`read my files` for the files routes).
+- `DELETE /api/peer/links/{id}` and `DELETE /api/peer/links/{id}/share`
+  **close** the shared session (agent stopped, folder kept — `unshare`
+  answers `{link, deleted: false, folder}`); only `?delete_files=1` deletes
+  the session and its folder. When the *peer* unlinks, this side's shared
+  session is closed the same way, never deleted; `peer.link_removed` carries
+  `by` and `kept_folder`.
+- `POST /api/peer/disable` → `{enabled: false, closed: [titles], links: n}`:
+  peer links off — listener, relay and connections stop, every shared session
+  is closed (kept); every link and share record stays and `GET /api/peer`
+  still lists them (`connected: false`). Turning the `peer.enabled` setting
+  off and calling any `/api/peer` route does the same. On again, nothing
+  reopens by itself: a link whose share is kept shows `shared: true,
+  share_open: false`, and `POST /api/peer/links/{id}/share/reopen
+  {program?}` → **201** `{link, session}` starts a new sandboxed session in
+  that folder (409 when nothing is shared, it's open, or the folder is gone).
+- `POST /api/peer/links/{id}/export` → `{branch, repo_path, commits, sha,
+  target}`; `commits` is how many commits the branch brought that the repo
+  didn't have (0 = nothing new). Every refusal is one sentence, e.g. "That
+  repo doesn't have the history the shared folder started from — pick the
+  repo you shared from, or a clone of it."
+- `GET /api/peer` → `listen.bound`: where the listener really is now
+  (`"host:port"`, or `null`); a changed `peer.listen_port` re-binds it.
+
+### Peer links — joint tasks
+
+Peer-link routes live under `/api/peer` and are specified in
+[peer-link.md](peer-link.md#engine-integration--contract-servicepy--existing-modules)
+(403 for a request relayed by another device; writes need `may_configure`).
+A link's joint task — one feature, both agents, one contract
+([peer-link.md → Joint tasks](peer-link.md#joint-tasks--contract-jointpy)):
+
+| Method | Path | Behavior |
+|---|---|---|
+| GET | `/api/peer/links/{id}/joint` | `{joint: null \| {id, brief, proposed_by: "me"\|"peer", created, state: "proposed"\|"active"\|"done"\|"cancelled", reason, mine: {repo_path, repo_name, branch, program, share_id, session_title, error}, theirs: {repo_name, branch, program, shared}, contract: {text, rev, updated, by}, proposals: [{id, by, text, at, state: "open"\|"accepted"\|"rejected"}]}}` |
+| POST | `/api/peer/links/{id}/joint` → **201** | `{brief, repo_path?, branch?, program?, contract_text?}` — propose (an empty `contract_text` gets the starter headings; an empty `repo_path` = use the folder the link already shares, or none). → `{joint}`. **409** while one is proposed/active, before the safety number matches, a folder without a working sandbox, a folder while the link already shares one, or `"<name>'s MindFlock is older — ask them to update"`; **400** missing brief / bad folder or branch; **502** peer offline |
+| POST | `/api/peer/links/{id}/joint/accept` | `{repo_path?, branch?, program?}` → `{joint, session?}` — goes active on both sides and starts my half's shared session (a failure is `joint.mine.error`, still 200). **409** no proposal from them |
+| POST | `/api/peer/links/{id}/joint/cancel` | `{reason?}` — decline / cancel; `reason: "done"` finishes it → `{joint, synced}` |
+| PUT | `/api/peer/links/{id}/joint/contract` | `{text}` → `{joint, synced}` — a new revision (rev + 1), written to both shared folders' `CONTRACT.md` |
+| POST | `/api/peer/links/{id}/joint/proposals` → **201** | `{text}` (the whole new contract) → `{proposal_id, synced, joint}` |
+| POST | `/api/peer/links/{id}/joint/proposals/{pid}/accept` · `…/reject` | → `{joint, synced}`; accept makes it the contract (rev + 1). **404** unknown, **409** already decided |
+
+`synced: false` = the peer was offline; the reconnect resync catches up. Each
+link in `GET /api/peer` carries `joint: {id, state, brief_head, contract_rev,
+open_proposals, mine_shared, theirs_shared, check?: {verdict, steps, passed}} | null`
+(`check` once the joint checklist has steps). Events:
+`peer.joint_proposed`, `peer.joint_state`, `peer.joint_contract`, `peer.joint_check`.
+
+The joint checklist ([peer-link.md → Joint check](peer-link.md#joint-check--contract-joint_checkpy));
+every route needs an **active** joint (**409** otherwise, **404** without one)
+and answers `check` = `{id: "joint:<jid>", rev, by, written, steps: [{id, text,
+expect, actor: "agent"|"human", side: "mine"|"theirs"}], mine: {results: {<step
+id>: {result: "pass"|"fail"|"blocked"|"", note, at, by: "agent"|"human"}},
+tested_sha, at}, theirs: {…}, verdict: "verified"|"failed"|"needs_you"|"in_progress"|"empty"
+(`in_progress` until every agent step has a result, unless one is `blocked`),
+ask: {state: ""|"asking"|"failed", at, until, error}, theirs_unsupported, link_id}`
+(also `joint.check` on `GET …/joint`):
+
+| Method | Path | Body → result |
+|---|---|---|
+| POST | `/api/peer/links/{id}/joint/check` | `{steps: [{text, expect?, actor?, side?}]}` → `{check, synced}` — a new revision (every result cleared); **400** no usable step; **409** before the safety number matches |
+| POST | `/api/peer/links/{id}/joint/check/ask` | → `{check}` with `ask.state: "asking"` — my shared agent writes it (`peer_check write`) within 3 minutes; **409** my half has no shared session |
+| POST | `/api/peer/links/{id}/joint/check/answer` | `{step_id, result: "pass"\|"fail"\|"blocked"\|"", note?}` → `{check, synced}` — one of the person's steps on MY side (`""` clears it), or one of MY agent's steps whose current result is `blocked` (its agent couldn't check it: `pass`/`fail` only, recorded `by: "human"`, the agent's note kept as `Agent: …` when none is given); **409** a step on their side, or an agent's step that isn't `blocked`, **404** unknown step, **400** bad result (or `blocked`/`""` on an agent's step) |
+| POST | `/api/peer/links/{id}/joint/check/run` | → `{check, steps, synced}` — my shared agent runs my agent steps (their results cleared) and records them with `peer_check`; **409** none of mine, or no shared session |
+
 ## Config, providers, usage, settings
 
 | Method | Path | Returns / accepts |
@@ -2484,7 +2566,9 @@ websockets alike — via one ASGI middleware (`web/core/auth.py`).
   of the batch is saved, and the answer names them in `refused`), `POST /api/notify/ntfy`,
   `POST /api/notify/rules/{id}`, the repo-scope `/api/red-zones` writes
   (add, delete, companions, plan-first), `POST /api/cursor/autoadopt`, the
-  `/api/peer` writes (invites, join, unlink, address, perms, share, export)
+  `/api/peer` writes (invites, join, unlink, address, perms, share, export,
+  mirror)
+  joint tasks)
   and `POST /api/settings/sync{,/now,/resume,/pin}`, plus `POST
   /api/settings/auth-token/rotate`, `POST /api/providers/{name}/login-close`,
   the stored-secret Test routes and a session's repo-scope red-zone writes —

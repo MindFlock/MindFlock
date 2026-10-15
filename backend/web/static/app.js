@@ -25301,7 +25301,7 @@ function workerLine(row, opts) {
 		state
 	};
 }
-var plural$6 = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+var plural$7 = (n, word) => n + " " + word + (n === 1 ? "" : "s");
 function rollup(children, nameOf, actOf = rawActivity, now = Date.now() / 1e3) {
 	const n = children.length;
 	if (!n) return null;
@@ -25327,7 +25327,7 @@ function rollup(children, nameOf, actOf = rawActivity, now = Date.now() / 1e3) {
 		cls: "bad"
 	});
 	if (ask) parts.push({
-		text: plural$6(n, "worker"),
+		text: plural$7(n, "worker"),
 		cls: ""
 	});
 	else if (reported === n) parts.push({
@@ -25351,7 +25351,7 @@ function rollup(children, nameOf, actOf = rawActivity, now = Date.now() / 1e3) {
 		cls: ""
 	});
 	else parts.push({
-		text: plural$6(n, "worker") + " · no reports",
+		text: plural$7(n, "worker") + " · no reports",
 		cls: ""
 	});
 	return {
@@ -29793,7 +29793,7 @@ function stepResult(plan, stepId) {
 	if (!run) return null;
 	return run.results?.[stepId] ?? null;
 }
-function verdictOf(plan) {
+function verdictOf$1(plan) {
 	const run = latestRun(plan);
 	if (!run) return "none";
 	const results = run.results || {};
@@ -29856,7 +29856,7 @@ function isEmptyByChoice(plan) {
 function isFailing(plan) {
 	if (plan.state === "running" || plan.state === "generating") return false;
 	if (!(plan.steps || []).length) return false;
-	return verdictOf(plan) === "fail";
+	return verdictOf$1(plan) === "fail";
 }
 function isUnwritten(plan) {
 	if (plan.state === "running") return false;
@@ -29996,7 +29996,7 @@ function planGroup(plan) {
 	if (isWaitingOnYou(plan)) return "due";
 	if (isUnwritten(plan)) return "failed";
 	if (plan.state === "running" || plan.state === "generating") return "generated";
-	if (verdictOf(plan) === "pass") return "done";
+	if (verdictOf$1(plan) === "pass") return "done";
 	if (latestRun(plan)) return "partial";
 	return "generated";
 }
@@ -30151,7 +30151,7 @@ function planStatusOf(plan, liveBranch = "") {
 	const failed = failCount(plan);
 	if (failed) {
 		const first = steps.findIndex((s) => run.results?.[s.id]?.result === "fail");
-		const text = first >= 0 ? clip$3(steps[first].text, 80) : "";
+		const text = first >= 0 ? clip$4(steps[first].text, 80) : "";
 		return at("bad", (first >= 0 ? "Failed: step " + (first + 1) + (text ? " — " + text : "") : "Failed") + (failed > 1 ? " (+" + (failed - 1) + " more)" : "") + "." + (open.length ? " " + open.length + (open.length === 1 ? " step still needs" : " steps still need") + " you." : ""), "answer", "See what failed");
 	}
 	if (open.length) return at("you", open.length === 1 ? "1 step needs your eyes — an agent can't judge it." : open.length + " steps need your eyes — an agent can't judge them.", "answer", "Answer " + open.length + (open.length === 1 ? " step" : " steps"));
@@ -30170,7 +30170,7 @@ function planStatusOf(plan, liveBranch = "") {
 	if (unshipped) return at("ok", "Every step passed on the branch — it comes back to be checked again after merge.", "answer", "See the answers");
 	return at("ok", "Every step passed.", "answer", "See the answers");
 }
-function clip$3(text, max) {
+function clip$4(text, max) {
 	const t = String(text || "").trim().replace(/\s+/g, " ");
 	if (t.length <= max) return t.replace(/[.]$/, "");
 	const cut = t.slice(0, max);
@@ -30202,7 +30202,7 @@ function planVerdict(plan) {
 	if (plan.state === "running") return v("checking", "Agent checking", "busy", "…", "Checking…");
 	if (isEmptyByChoice(plan)) return v("empty", "Empty — add a step", "you", "+", "Empty");
 	if (!steps.length || isGenerationStalled(plan)) return v("unwritten", "Not written yet", "wait", "○", "Not written");
-	const verdict = verdictOf(plan);
+	const verdict = verdictOf$1(plan);
 	if (verdict === "fail") return v("failed", "Failed", "bad", "✗");
 	if (verdict === "pass") {
 		const by = passedBy(plan);
@@ -32962,7 +32962,7 @@ function extError(extId, msg, err) {
 	if (err !== void 0) console.error("[extension " + extId + "] " + msg, err);
 	else console.error("[extension " + extId + "] " + msg);
 }
-function errText$2(err) {
+function errText$3(err) {
 	return String(err?.message || err);
 }
 function getRecord(ext) {
@@ -33025,7 +33025,7 @@ function activateExtension(ext) {
 			bump();
 		} catch (err) {
 			rec.status = "error";
-			rec.error = errText$2(err);
+			rec.error = errText$3(err);
 			extError(ext.id, "activation failed", err);
 			toast("Extension " + (ext.label || ext.id) + " failed: " + rec.error);
 			drainRegistrations(rec);
@@ -33303,7 +33303,7 @@ async function startRuntime(rec, key, runtime) {
 	try {
 		runtime.cleanup = renderer(makeSurfaceHost(liveRec, key, runtime));
 	} catch (err) {
-		runtime.error = errText$2(err);
+		runtime.error = errText$3(err);
 		extError(rec.ext.id, "surface " + runtime.surfaceId + " failed to render", err);
 	}
 	bump();
@@ -34150,7 +34150,7 @@ function pieceStatus(t, leadName, mode) {
 		};
 	}
 }
-function plural$5(n, one, many = one + "s") {
+function plural$6(n, one, many = one + "s") {
 	return n + " " + (n === 1 ? one : many);
 }
 function leadSubline(run, leadName) {
@@ -34162,16 +34162,16 @@ function leadSubline(run, leadName) {
 	if (run.state === "plan_ready") return [
 		{ text: leadName + " proposed " },
 		{
-			text: plural$5(n, "piece") + " with separate paths",
+			text: plural$6(n, "piece") + " with separate paths",
 			b: true
 		},
 		{ text: " — approve them and MindFlock starts the workers." }
 	];
 	const parts = split ? [{ text: "Split into " }, {
-		text: plural$5(n, "piece") + " with separate paths",
+		text: plural$6(n, "piece") + " with separate paths",
 		b: true
 	}] : [{
-		text: plural$5(n, "line") + ", one PR",
+		text: plural$6(n, "line") + ", one PR",
 		b: true
 	}];
 	const merged = tasks.filter((t) => t.state === "integrated").length;
@@ -34223,7 +34223,7 @@ function leadSubline(run, leadName) {
 	}
 	const conflicts = tasks.filter((t) => t.state === "integrating" && (t.reason === "conflict" || t.conflict)).length;
 	if (conflicts) parts.push({
-		text: " · " + plural$5(conflicts, "conflict") + " with " + leadName,
+		text: " · " + plural$6(conflicts, "conflict") + " with " + leadName,
 		cls: "needs"
 	});
 	const c = run.check;
@@ -34270,7 +34270,7 @@ function planRows(pieces) {
 	}));
 }
 function startWorkersLabel(n) {
-	return "Start " + plural$5(n, "worker");
+	return "Start " + plural$6(n, "worker");
 }
 function parsePaths(text) {
 	return String(text || "").split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
@@ -34296,14 +34296,14 @@ function releaseCard(run) {
 	const base = r.base || "the base branch";
 	const branch = r.branch || run.lead?.branch || "";
 	const files = Number(r.files) || 0;
-	const stat = files ? plural$5(files, "file") + " +" + (Number(r.add) || 0) + " −" + (Number(r.del) || 0) : "";
+	const stat = files ? plural$6(files, "file") + " +" + (Number(r.add) || 0) + " −" + (Number(r.del) || 0) : "";
 	const fixes = Number(r.conflict_fixes) || 0;
 	const split = !!run.split;
 	return {
 		title: r.title || run.name,
 		into: base + " ← " + (branch || "its branch"),
 		stat,
-		commits: (isSameFolder(run) ? "one per piece, committed by MindFlock with only its paths" : split ? "one per piece, kept as written" : "one per line, kept as written") + (fixes ? " + " + plural$5(fixes, "conflict fix", "conflict fixes") + " by the lead" : ""),
+		commits: (isSameFolder(run) ? "one per piece, committed by MindFlock with only its paths" : split ? "one per piece, kept as written" : "one per line, kept as written") + (fixes ? " + " + plural$6(fixes, "conflict fix", "conflict fixes") + " by the lead" : ""),
 		body: split ? "a section per piece: what changed, the tests it ran" : "a section per line: what changed, the tests it ran"
 	};
 }
@@ -35098,7 +35098,7 @@ function roleText(role) {
 }
 function carrierText(carrier) {
 	if (carrier === "relay") return "through the relay";
-	if (carrier === "tcp") return "directly (same network or tailnet)";
+	if (carrier === "tcp") return "directly (same network or Tailscale)";
 	return "";
 }
 var PEER_SCREEN = "peer";
@@ -35122,28 +35122,39 @@ function peerEventNote(event, data) {
 		case "peer.link_added": {
 			const sas = String(d.sas || "");
 			const tail = sas ? " — compare safety number " + sas : "";
-			const text = (d.repaired ? name + " reconnected" : name + " joined") + tail;
+			const text = (d.role === "dialer" ? (d.repaired ? "Reconnected to " : "Connected to ") + name : d.repaired ? name + " reconnected" : name + " joined") + tail;
 			return {
 				text,
 				cls: "n-done",
 				toast: d.role === "dialer" ? "" : text
 			};
 		}
-		case "peer.link_removed":
+		case "peer.link_removed": {
 			if (d.by !== "peer") return null;
+			const kept = String(d.kept_folder || "").trim();
+			const text = kept ? name + " unlinked — your shared folder is kept at " + kept : name + " unlinked";
 			return {
-				text: name + " unlinked",
+				text,
 				cls: "n-info",
-				toast: name + " unlinked"
+				toast: text
 			};
+		}
+		case "peer.state": {
+			if (!d.sas_changed) return null;
+			const text = "New safety number after reconnecting — confirm it with " + name + " again";
+			return {
+				text,
+				cls: "n-warn",
+				toast: text
+			};
+		}
 		case "peer.message": {
-			if (!d.stored) return null;
-			const text = name + " sent you a message";
-			const preview = String(d.text || "").trim();
+			const text = d.stored === false ? name + " sent a message (your shared agent has it too)" : name + " sent you a message";
+			const preview = clip$3(String(d.text_head || d.text || "").replace(/\s+/g, " ").trim(), 200);
 			return {
 				text: preview ? text + ": " + preview : text,
 				cls: "n-info",
-				toast: text
+				toast: name + " sent you a message"
 			};
 		}
 		case "peer.relay_changed": {
@@ -35155,8 +35166,268 @@ function peerEventNote(event, data) {
 				toast: text
 			};
 		}
+		case "peer.joint_proposed": {
+			const text = name + " proposes a joint task — accept in People";
+			const brief = String(d.brief || "").trim();
+			return {
+				text: brief ? text + ": " + clip$3(brief, 80) : text,
+				cls: "n-info",
+				toast: text
+			};
+		}
+		case "peer.joint_contract":
+			if (d.kind !== "proposal" || !d.open) return null;
+			if (d.by === "peer") {
+				const text = name + "'s agent proposes a contract change";
+				return {
+					text,
+					cls: "n-info",
+					toast: text
+				};
+			}
+			if (d.by === "agent") return {
+				text: "",
+				cls: "n-info",
+				toast: "Your agent proposes a contract change — review it in People"
+			};
+			return null;
+		case "peer.joint_state": {
+			if (d.by !== "peer") return null;
+			const state = String(d.state || "");
+			const text = state === "active" ? name + " accepted the joint task" : state === "done" ? name + " marked the joint task done" : state === "cancelled" ? name + " cancelled the joint task" : "";
+			if (!text) return null;
+			return {
+				text,
+				cls: state === "cancelled" ? "n-warn" : "n-done",
+				toast: text
+			};
+		}
+		case "peer.joint_check": {
+			if (!d.notify) return null;
+			const text = String(d.text || "").trim() || name + "'s joint check: " + String(d.verdict || "");
+			return {
+				text,
+				cls: d.verdict === "failed" ? "n-warn" : "n-done",
+				toast: text
+			};
+		}
+		case "peer.mirror_updated": {
+			const text = name + "'s work updated " + mirrorBranchText(d.branch) + " in " + repoText(d);
+			return {
+				text,
+				cls: "n-done",
+				toast: text
+			};
+		}
+		case "peer.mirror_failed": {
+			const err = String(d.error || "").trim();
+			return {
+				text: "Couldn't mirror " + name + "'s work into " + repoText(d) + (err ? ": " + err : ""),
+				cls: "n-warn",
+				toast: "Couldn't mirror " + name + "'s work into " + repoText(d)
+			};
+		}
 		default: return null;
 	}
+}
+function clip$3(s, n) {
+	return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s;
+}
+function baseName(path) {
+	const parts = String(path || "").replace(/[\\/]+$/, "").split(/[\\/]/);
+	return parts[parts.length - 1] || String(path || "");
+}
+function repoText(d) {
+	return String(d.repo_name || "").trim() || baseName(String(d.repo_path || "")) || "your repo";
+}
+function mirrorBranchText(branch) {
+	return String(branch || "").trim() || "its peer/ branch";
+}
+var PEER_LIVE_EVENTS = [
+	"peer.link_added",
+	"peer.link_removed",
+	"peer.state",
+	"peer.message",
+	"peer.relay_changed",
+	"peer.joint_proposed",
+	"peer.joint_state",
+	"peer.joint_contract",
+	"peer.mirror_updated",
+	"peer.mirror_failed"
+];
+var PEER_NEWS_EVENTS = [
+	"peer.link_added",
+	"peer.link_removed",
+	"peer.state",
+	"peer.message",
+	"peer.relay_changed",
+	"peer.joint_proposed",
+	"peer.joint_state",
+	"peer.joint_contract",
+	"peer.mirror_updated",
+	"peer.mirror_failed",
+	"peer.joint_check"
+];
+function jointPhase(joint) {
+	if (!joint) return "none";
+	if (joint.state === "active") return "active";
+	if (joint.state === "proposed") return joint.proposed_by === "peer" ? "proposed-by-peer" : "proposed-by-me";
+	return "ended";
+}
+var CONTRACT_TEMPLATE = [
+	"## What we're building",
+	"",
+	"",
+	"## Interfaces between the halves",
+	"",
+	"",
+	"## Who owns what",
+	"",
+	"",
+	"## Done means",
+	""
+].join("\n");
+function openProposals(joint) {
+	return (joint?.proposals || []).filter((p) => p.state === "open");
+}
+function jointPath(linkId, tail = "") {
+	return "/api/peer/links/" + encodeURIComponent(linkId) + "/joint" + tail;
+}
+function defaultMirrorBranch(peerName) {
+	return "peer/" + ((peerName || "work").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "work");
+}
+function isoSeconds(iso) {
+	return iso ? Date.parse(iso) / 1e3 : NaN;
+}
+function mirrorStatusText(m, peerName, now = Date.now() / 1e3) {
+	const where = m.branch + " in " + baseName(m.repo_path);
+	if (!m.enabled) return "Mirror is off.";
+	if (m.updating) return "Mirroring " + peerName + "'s work into " + where + " — updating now…";
+	const t = isoSeconds(m.last_at);
+	if (!m.last_head || !Number.isFinite(t)) return "Mirroring " + peerName + "'s work into " + where + " — waiting for their first change.";
+	const ago = relTime(t, { now });
+	return "Mirroring " + peerName + "'s work into " + where + " — last updated " + ago + " (" + m.last_head.slice(0, 7) + ").";
+}
+function contractLineDiff(before, after) {
+	const a = String(before || "").replace(/\r\n?/g, "\n").split("\n");
+	const b = String(after || "").replace(/\r\n?/g, "\n").split("\n");
+	const n = a.length;
+	const m = b.length;
+	const lcs = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+	for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+	const out = [];
+	let i = 0;
+	let j = 0;
+	while (i < n || j < m) if (i < n && j < m && a[i] === b[j]) {
+		i++;
+		j++;
+	} else if (j < m && (i >= n || lcs[i][j + 1] > lcs[i + 1][j])) {
+		if (b[j].trim()) out.push({
+			op: "+",
+			text: b[j]
+		});
+		j++;
+	} else {
+		if (a[i].trim()) out.push({
+			op: "-",
+			text: a[i]
+		});
+		i++;
+	}
+	return out;
+}
+function isPeerSender(from) {
+	return String(from || "").startsWith("peer:");
+}
+function isCutOffInvite(text) {
+	return /mfp[12]:/i.test(text || "") && !isPeerCode(text);
+}
+function exportDoneText(r, repo) {
+	if (r?.commits === 0) return "Nothing new to bring home yet";
+	const branch = r?.branch || "the branch";
+	const where = baseName(r?.repo_path || r?.target || repo);
+	const n = r?.commits;
+	const count = typeof n === "number" ? " (" + n + (n === 1 ? " commit)" : " commits)") : "";
+	return "Brought home as " + branch + " in " + where + count;
+}
+function exportErrorText(raw) {
+	const orig = String(raw || "").trim();
+	let m = orig;
+	while (/^export failed:\s*/i.test(m)) m = m.replace(/^export failed:\s*/i, "");
+	const lower = m.toLowerCase();
+	let why = m;
+	if (/target_repo|not a git repository|is not a directory|bad target repo/.test(lower)) why = "that folder isn't a git repository — pick your repo";
+	else if (lower.includes("branch not updated")) why = "the branch didn't move — pick the repo you shared from (it must share history with the shared folder)";
+	else if (lower.includes("inside the peer")) why = "that folder is the shared copy itself — pick your own repo";
+	else if (lower.includes("checked out in the target")) why = m.replace(/in the target/, "in that repo") + " — switch branches there first";
+	else if (m === orig && /^[A-Z]/.test(m)) return /[.!?]$/.test(m) ? m : m + ".";
+	why = why.replace(/[.\s]+$/, "");
+	return "Couldn't bring work home: " + (why || "something went wrong") + ".";
+}
+function disableConfirmText(links) {
+	const names = links.map((l) => l.peer_name || "your peer");
+	const who = names.length <= 1 ? names[0] || "everyone" : names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+	const open = links.filter((l) => l.share_open ?? l.shared).length;
+	const pause = open ? " and pause " + open + (open === 1 ? " shared session" : " shared sessions") : "";
+	return "Disconnect from " + who + pause + "?";
+}
+function shareClosed(link) {
+	return !!link.shared && link.share_open === false;
+}
+function listenText(listen) {
+	if (!listen) return "direct connections closed";
+	if (listen.bound) return "direct connections open at " + listen.bound;
+	if (listen.bound === null) return "direct connections closed";
+	return "direct connections " + (listen.listening ? "open" : "closed") + " (" + listen.host + ":" + listen.port + ")";
+}
+function viewerGateText(peerName) {
+	return "Confirm the safety number with " + peerName + " in People first — then their screen, files and changes show here.";
+}
+function isPeerShareRow(row) {
+	if (row.peer_share) return true;
+	return /^peer-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{6}(?:-\d+)?$/.test(String(row.title || ""));
+}
+var SAS_SEEN_KEY = "mf_peer_sas_seen";
+var SAS_NEW_KEY = "mf_peer_sas_new";
+function readMap(key) {
+	try {
+		const v = JSON.parse(localStorage.getItem(key) || "{}");
+		return v && typeof v === "object" ? v : {};
+	} catch {
+		return {};
+	}
+}
+function writeMap(key, map) {
+	try {
+		localStorage.setItem(key, JSON.stringify(map));
+	} catch {}
+}
+function rememberSas(linkId, sas) {
+	const seen = readMap(SAS_SEEN_KEY);
+	const fresh = readMap(SAS_NEW_KEY);
+	if (linkId in fresh) {
+		delete fresh[linkId];
+		writeMap(SAS_NEW_KEY, fresh);
+	}
+	if (seen[linkId] === sas) return;
+	seen[linkId] = sas;
+	writeMap(SAS_SEEN_KEY, seen);
+}
+function noteSasChanged(linkId, sas) {
+	if (!linkId) return;
+	const fresh = readMap(SAS_NEW_KEY);
+	fresh[linkId] = sas || "?";
+	writeMap(SAS_NEW_KEY, fresh);
+}
+function sasChanged(link) {
+	if (link.sas_verified !== false) return false;
+	const announced = readMap(SAS_NEW_KEY)[link.link_id];
+	if (announced && (announced === "?" || announced === link.sas)) return true;
+	const before = readMap(SAS_SEEN_KEY)[link.link_id];
+	return !!before && before !== link.sas;
+}
+function syncedText(ok, r, peerName) {
+	return r && r.synced === false ? ok + " — will sync when " + peerName + " reconnects" : ok;
 }
 //#endregion
 //#region src/lib/fleet.ts
@@ -35944,10 +36215,16 @@ function notifFromEvent(env) {
 		}
 		case "peer.link_added":
 		case "peer.link_removed":
+		case "peer.state":
 		case "peer.message":
-		case "peer.relay_changed": {
+		case "peer.relay_changed":
+		case "peer.joint_proposed":
+		case "peer.joint_state":
+		case "peer.joint_contract":
+		case "peer.mirror_updated":
+		case "peer.mirror_failed": {
 			const n = peerEventNote(env.event, d);
-			return n ? {
+			return n?.text ? {
 				text: n.text,
 				cls: n.cls,
 				peer: true
@@ -36256,7 +36533,7 @@ function NotificationsBell() {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-sess",
-							children: n.device && !n.session ? "Devices" : n.peer && !n.session ? "Collaborate" : n.settings && !n.session ? "Updates" : n.template && !n.session ? "Schedule" : n.run && !n.session ? runLookups.name(n.run) || "Team run" : n.verify ? "Verify · " + (n.name || windowName(n.session)) : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (n.session ? windowName(n.session) : "—")
+							children: n.device && !n.session ? "Devices" : n.peer && !n.session ? "People" : n.settings && !n.session ? "Updates" : n.template && !n.session ? "Schedule" : n.run && !n.session ? runLookups.name(n.run) || "Team run" : n.verify ? "Verify · " + (n.name || windowName(n.session)) : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (n.session ? windowName(n.session) : "—")
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-text",
@@ -36315,6 +36592,34 @@ function desktopNoteFor(event, data) {
 			body: d.sas ? "Compare the safety number " + String(d.sas) + " with them" : "People",
 			target: "peer"
 		};
+		case "peer.joint_proposed": {
+			const name = String(d.peer_name || "Someone");
+			const brief = String(d.brief || "").trim();
+			return {
+				title: name + " proposes a joint task",
+				body: brief ? brief.length > 120 ? brief.slice(0, 119).trimEnd() + "…" : brief : "Accept or decline it in People",
+				target: "peer"
+			};
+		}
+		case "peer.mirror_failed": {
+			const name = String(d.peer_name || "your peer");
+			const repo = String(d.repo_name || "").trim() || baseName(String(d.repo_path || "")) || "your repo";
+			return {
+				title: "Couldn't mirror " + name + "'s work into " + repo,
+				body: String(d.error || "").trim() || "See the Mirror row in People",
+				target: "peer"
+			};
+		}
+		case "peer.link_removed": {
+			if (d.by !== "peer") return null;
+			const name = String(d.peer_name || "Your peer");
+			const kept = String(d.kept_folder || "").trim();
+			return {
+				title: name + " unlinked",
+				body: kept ? "Your shared folder is kept at " + kept : "You're no longer connected",
+				target: "peer"
+			};
+		}
 		case "update.available": {
 			const v = String(d.latest || d.version || "").replace(/^v/i, "");
 			const behind = Array.isArray(d.behind) ? d.behind.length : 0;
@@ -36795,6 +37100,7 @@ function EventToasts() {
 			if (isReplay(env) || !env.session) return;
 			const d = env.data || {};
 			const from = String(d.from || "");
+			if (isPeerSender(from)) return;
 			const isResult = d.kind === "result";
 			notifyOnce(isResult ? env.session : from || "*external", isResult ? "result:" + from : "message", messageToastText(env.session, d, displayName), {
 				onClick: () => {
@@ -36831,12 +37137,8 @@ function EventToasts() {
 				duration: 6e3
 			});
 		}));
-		for (const name of [
-			"peer.link_added",
-			"peer.link_removed",
-			"peer.message",
-			"peer.relay_changed"
-		]) unsubs.push(ev.subscribe(name, (env) => {
+		for (const name of PEER_NEWS_EVENTS) unsubs.push(ev.subscribe(name, (env) => {
+			if (name === "peer.state" && env.data?.sas_changed) noteSasChanged(String(env.data?.link_id || ""), String(env.data?.sas || ""));
 			if (isReplay(env)) return;
 			desktopNotify(env.event, env.data);
 			const n = peerEventNote(env.event, env.data);
@@ -40100,6 +40402,424 @@ function VerdictChip({ inst, where }) {
 	});
 }
 //#endregion
+//#region src/lib/peerCheck.ts
+function cellOf(check, step) {
+	return (step.side === "mine" ? check.mine : check.theirs)?.results?.[step.id];
+}
+function verdictOf(check) {
+	const steps = check?.steps || [];
+	if (!check || !steps.length) return "empty";
+	const seen = steps.map((s) => [s, cellOf(check, s)?.result || ""]);
+	if (seen.some(([, r]) => r === "fail")) return "failed";
+	if (seen.some(([s, r]) => r === "blocked" && s.actor === "agent")) return "needs_you";
+	if (seen.some(([s, r]) => r === "" && s.actor === "agent")) return "in_progress";
+	if (seen.some(([, r]) => r === "" || r === "blocked")) return "needs_you";
+	return "verified";
+}
+var plural$5 = (n) => n + (n === 1 ? " step" : " steps");
+function verdictLine(check, peerName) {
+	const name = (peerName || "").trim() || "your peer";
+	const steps = check?.steps || [];
+	const v = verdictOf(check);
+	if (!check || v === "empty") return "No checklist yet";
+	if (v === "verified") return "Verified — every step passed on both sides";
+	if (v === "in_progress") return "In progress";
+	if (v === "failed") {
+		const i = steps.findIndex((s) => cellOf(check, s)?.result === "fail");
+		const where = steps[i].side === "mine" ? "your side" : name + "'s side";
+		return "Failed — step " + (i + 1) + " on " + where;
+	}
+	const count = (side, actor, result) => steps.filter((s) => s.side === side && s.actor === actor && (cellOf(check, s)?.result || "") === result).length;
+	const who = (side) => side === "mine" ? "Needs you — " : "Needs " + name + " — ";
+	for (const side of ["mine", "theirs"]) {
+		const n = count(side, "agent", "blocked");
+		if (n) return who(side) + plural$5(n) + (side === "mine" ? " your" : " their") + " agent couldn't check";
+	}
+	for (const side of ["mine", "theirs"]) {
+		const n = count(side, "human", "");
+		if (n) return who(side) + plural$5(n);
+	}
+	for (const side of ["mine", "theirs"]) {
+		const n = count(side, "human", "blocked");
+		if (n) return who(side) + plural$5(n) + " couldn't be checked";
+	}
+	return "Needs you";
+}
+function verdictTone(v) {
+	switch (v) {
+		case "verified": return {
+			tone: "ok",
+			glyph: "✓",
+			short: "Joint verified"
+		};
+		case "failed": return {
+			tone: "bad",
+			glyph: "✗",
+			short: "Joint failed"
+		};
+		case "needs_you": return {
+			tone: "you",
+			glyph: "●",
+			short: "Joint: needs a person"
+		};
+		case "in_progress": return {
+			tone: "busy",
+			glyph: "…",
+			short: "Joint checking"
+		};
+		default: return {
+			tone: "wait",
+			glyph: "○",
+			short: "Joint check"
+		};
+	}
+}
+function jointCheckChip(summary, peerName) {
+	if (!summary || !summary.steps) return null;
+	const look = verdictTone(summary.verdict);
+	const name = (peerName || "").trim() || "your peer";
+	const words = {
+		verified: "every step passed on both sides",
+		failed: "a step failed",
+		needs_you: "a person's step is waiting",
+		in_progress: summary.passed + " of " + summary.steps + " passed so far",
+		empty: "no steps yet"
+	};
+	return {
+		verdict: summary.verdict,
+		...look,
+		title: "Joint check with " + name + ": " + words[summary.verdict] + ". Open it in People."
+	};
+}
+var TAG_RE = /\[(theirs|mine|human|person|agent)\]/gi;
+var EXPECT_SEP = /\s+(?:->|→)\s+/;
+function parseStepLines(text) {
+	const out = [];
+	for (const raw of (text || "").split(/\r?\n/)) {
+		let side = "mine";
+		let actor = "agent";
+		const body = raw.replace(TAG_RE, (_m, tag) => {
+			const t = tag.toLowerCase();
+			if (t === "theirs" || t === "mine") side = t;
+			else actor = t === "agent" ? "agent" : "human";
+			return " ";
+		}).replace(/^\s*(?:[-*•]|\d+[.)])\s+/, "").trim();
+		if (!body) continue;
+		const [what, ...rest] = body.split(EXPECT_SEP);
+		out.push({
+			text: what.trim(),
+			expect: rest.join(" -> ").trim(),
+			actor,
+			side
+		});
+	}
+	return out;
+}
+function stepsToLines(steps) {
+	return (steps || []).map((s) => {
+		return (s.side === "theirs" ? "[theirs] " : "") + (s.actor === "human" ? "[human] " : "") + s.text + (s.expect ? " -> " + s.expect : "");
+	}).join("\n");
+}
+var base = (linkId) => "/api/peer/links/" + encodeURIComponent(linkId) + "/joint/check";
+function writeCheck(linkId, steps) {
+	return api(base(linkId), {
+		method: "POST",
+		json: { steps }
+	});
+}
+function askCheck(linkId) {
+	return api(base(linkId) + "/ask", { method: "POST" });
+}
+function runCheck(linkId) {
+	return api(base(linkId) + "/run", { method: "POST" });
+}
+function answerStep(linkId, stepId, result, note = "") {
+	return api(base(linkId) + "/answer", {
+		method: "POST",
+		json: {
+			step_id: stepId,
+			result,
+			note
+		}
+	});
+}
+async function fetchCheck(linkId) {
+	return (await api("/api/peer/links/" + encodeURIComponent(linkId) + "/joint"))?.joint?.check || null;
+}
+//#endregion
+//#region src/components/settings/screens/peer/JointCheck.tsx
+var RESULT_TEXT = {
+	pass: "Pass",
+	fail: "Fail",
+	blocked: "Can't check",
+	"": "Not yet"
+};
+var ANSWERS = [
+	["pass", "Pass"],
+	["fail", "Fail"],
+	["blocked", "Can't check"]
+];
+function JointCheck({ check: given, peerName, linkId: linkIdProp }) {
+	const [check, setCheck] = (0, import_react.useState)(given || null);
+	const [editing, setEditing] = (0, import_react.useState)(false);
+	const [draft, setDraft] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [error, setError] = (0, import_react.useState)("");
+	(0, import_react.useEffect)(() => setCheck(given || null), [given]);
+	const linkId = linkIdProp || check?.link_id || "";
+	(0, import_react.useEffect)(() => {
+		const ev = window.mindflock?.events;
+		if (!ev || !linkId) return;
+		return ev.subscribe("peer.joint_check", (env) => {
+			const d = env.data || {};
+			if (String(d.link_id || "") !== linkId) return;
+			fetchCheck(linkId).then((c) => c && setCheck(c)).catch(() => {});
+		});
+	}, [linkId]);
+	if (!check) return null;
+	const name = (peerName || "").trim() || "your peer";
+	const steps = check.steps || [];
+	const verdict = verdictOf(check);
+	const look = verdictTone(verdict);
+	const asking = check.ask?.state === "asking";
+	const myAgentSteps = steps.filter((s) => s.side === "mine" && s.actor === "agent").length;
+	const act = async (label, fn) => {
+		setBusy(label);
+		setError("");
+		try {
+			const r = await fn();
+			if (r?.check) setCheck(r.check);
+			return true;
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+			return false;
+		} finally {
+			setBusy("");
+		}
+	};
+	const save = async () => {
+		const parsed = parseStepLines(draft);
+		if (!parsed.length) {
+			setError("Write at least one step.");
+			return;
+		}
+		if (await act("write", () => writeCheck(linkId, parsed))) setEditing(false);
+	};
+	const group = (side) => steps.filter((s) => s.side === side);
+	const renderStep = (s) => {
+		const n = steps.indexOf(s) + 1;
+		const r = cellOf(check, s);
+		const result = r?.result || "";
+		const mineHuman = !!linkId && s.side === "mine" && s.actor === "human";
+		const takeOver = !!linkId && s.side === "mine" && s.actor === "agent" && result === "blocked" && r?.by !== "human";
+		const answers = takeOver ? ANSWERS.filter(([v]) => v !== "blocked") : ANSWERS;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+			className: "peer-joint-step peer-joint-step-" + (result || "blank"),
+			"data-step": s.id,
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "peer-joint-step-n",
+					children: n
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "peer-joint-step-body",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "peer-joint-step-text",
+							children: s.text
+						}),
+						s.expect ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "peer-joint-step-expect",
+							children: ["Expect: ", s.expect]
+						}) : null,
+						r?.note ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "peer-joint-step-note",
+							children: r.note
+						}) : null,
+						takeOver ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "peer-joint-step-note peer-joint-step-takeover",
+							children: "The agent couldn't check this — you can"
+						}) : null
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "peer-joint-actor peer-joint-actor-" + s.actor,
+					children: s.actor === "human" ? "person" : "agent"
+				}),
+				mineHuman || takeOver ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "peer-joint-answer",
+					role: "group",
+					"aria-label": "Answer step " + n,
+					children: answers.map(([value, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn peer-joint-answer-btn" + (result === value ? " on" : ""),
+						"aria-pressed": result === value,
+						disabled: !!busy,
+						onClick: () => act("answer", () => answerStep(linkId, s.id, result === value ? "" : value)),
+						children: label
+					}, value))
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "peer-joint-step-result",
+					children: RESULT_TEXT[result] ?? "Not yet"
+				})
+			]
+		}, s.id);
+	};
+	const sideBlock = (side, title) => {
+		const list = group(side);
+		if (!list.length) return null;
+		const sha = (side === "mine" ? check.mine : check.theirs)?.tested_sha || "";
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "peer-joint-side peer-joint-side-" + side,
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-joint-side-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: title }), sha ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("code", {
+					className: "peer-joint-sha",
+					children: ["checked at ", sha.slice(0, 7)]
+				}) : null]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+				className: "peer-joint-steps",
+				children: list.map(renderStep)
+			})]
+		});
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "peer-joint-check",
+		"data-verdict": verdict,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-joint-check-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Joint checklist"
+				}), steps.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "vchip peer-joint-verdict",
+					"data-verdict": verdict,
+					"data-tone": look.tone,
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "vchip-glyph",
+						"aria-hidden": "true",
+						children: look.glyph
+					}), verdictLine(check, name)]
+				}) : null]
+			}),
+			check.theirs_unsupported ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint peer-joint-older",
+				children: [name, "'s MindFlock is older — their side can't report"]
+			}) : null,
+			asking ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint peer-joint-asking",
+				children: "Your agent is writing the checklist…"
+			}) : null,
+			check.ask?.state === "failed" && check.ask.error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint peer-joint-ask-failed",
+				children: check.ask.error
+			}) : null,
+			editing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-joint-editor",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+						className: "peer-joint-editor-text",
+						rows: Math.min(12, Math.max(4, draft.split("\n").length + 1)),
+						value: draft,
+						"aria-label": "Joint checklist steps, one per line",
+						placeholder: "Call GET /items -> a list of items\n[theirs] Run the client -> it prints them\n[theirs] [human] The printed list looks right",
+						onChange: (e) => setDraft(e.target.value)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "set-hint",
+						children: [
+							"One step per line. Add [theirs] for a step on ",
+							name,
+							"'s side and [human] for one a person checks; \"->\" starts what should happen. Saving clears every result."
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "peer-joint-actions",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "btn-primary",
+							disabled: !!busy,
+							onClick: save,
+							children: busy === "write" ? "Saving…" : "Save checklist"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							disabled: !!busy,
+							onClick: () => setEditing(false),
+							children: "Cancel"
+						})]
+					})
+				]
+			}) : steps.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [sideBlock("mine", "Your side"), sideBlock("theirs", name + "'s side")] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				children: "No steps yet. Write what shows the two halves agree, or ask your agent to."
+			}),
+			!editing && linkId ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-joint-actions",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: !!busy,
+						onClick: () => {
+							setDraft(stepsToLines(steps));
+							setError("");
+							setEditing(true);
+						},
+						children: "Write the checklist"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: !!busy || asking,
+						onClick: () => act("ask", () => askCheck(linkId)),
+						children: busy === "ask" ? "Asking…" : "Ask my agent"
+					}),
+					myAgentSteps ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: !!busy,
+						onClick: () => act("run", () => runCheck(linkId)),
+						children: busy === "run" ? "Starting…" : "Run my steps"
+					}) : null
+				]
+			}) : null,
+			error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint peer-joint-error",
+				role: "alert",
+				children: error
+			}) : null
+		]
+	});
+}
+function JointVerdictChip({ linkId, peerName, where }) {
+	const links = usePeerLinks().data?.links || [];
+	if (!linkId) return null;
+	const link = links.find((l) => l.link_id === linkId);
+	const chip = jointCheckChip(link?.joint?.check, peerName || link?.peer_name || "");
+	if (!chip) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		type: "button",
+		className: "vchip vchip-" + where + " peer-joint-chip",
+		"data-verdict": chip.verdict,
+		"data-tone": chip.tone,
+		title: chip.title,
+		"aria-label": chip.title,
+		onClick: (e) => {
+			e.stopPropagation();
+			openSettings(PEER_SCREEN);
+		},
+		onDoubleClick: (e) => e.stopPropagation(),
+		onMouseDown: (e) => e.stopPropagation(),
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "vchip-glyph",
+			"aria-hidden": "true",
+			children: chip.glyph
+		}), where === "pane" ? chip.short : null]
+	});
+}
+//#endregion
 //#region src/components/sidebar/SidebarRow.tsx
 var DBLCLICK_MS = 300;
 function displayTitle(inst) {
@@ -40641,6 +41361,11 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 						className: "peerchip-dot",
 						"aria-hidden": "true"
 					}), peer.label]
+				}),
+				peer && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(JointVerdictChip, {
+					linkId: inst.peer_with?.link_id,
+					peerName: inst.peer_with?.name,
+					where: "row"
 				}),
 				rz && !pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
@@ -62110,6 +62835,37 @@ var TOURS = {
 				body: "Every tour lives here under Help, next to the switch for hints."
 			}
 		]
+	},
+	people: {
+		id: "people",
+		title: "People",
+		steps: [
+			{
+				target: "[data-tour=\"people-invite\"]",
+				title: "Invite someone",
+				body: "Create invite makes a one-time code — send it to the person you want to work with."
+			},
+			{
+				target: "[data-tour=\"people-join\"]",
+				title: "Or join them",
+				body: "Got an invite instead? Paste the whole message here and press Join."
+			},
+			{
+				target: "[data-tour=\"people-safety\"]",
+				title: "Check the safety number",
+				body: "Read it to each other: if it matches press It matches, if it differs unlink."
+			},
+			{
+				target: "[data-tour=\"people-share\"]",
+				title: "Share a folder",
+				body: "An agent works in one shared folder inside a sandbox and talks to their agent."
+			},
+			{
+				target: "[data-tour=\"people-joint\"]",
+				title: "Build one feature together",
+				body: "Start a joint task to agree a contract, then watch their session and mirror their work into your repo."
+			}
+		]
 	}
 };
 var TOUR_IDS = [
@@ -62118,7 +62874,8 @@ var TOUR_IDS = [
 	"intake",
 	"verify",
 	"schedule",
-	"settings"
+	"settings",
+	"people"
 ];
 //#endregion
 //#region src/components/onboarding/CoachTour.tsx
@@ -65266,6 +66023,11 @@ function Pane({ inst, drag, dragging }) {
 								inst,
 								where: "pane"
 							}),
+							inst.peer_share && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(JointVerdictChip, {
+								linkId: inst.peer_with?.link_id,
+								peerName: inst.peer_with?.name,
+								where: "pane"
+							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "stagechip " + chip.cls,
 								title: inst.pr_url ? "Open PR" : chip.title,
@@ -66611,7 +67373,13 @@ var SETTINGS_SEARCH = [
 			"share",
 			"invite",
 			"collaborate",
-			"teammate"
+			"teammate",
+			"pair",
+			"pairing",
+			"join",
+			"link",
+			"safety number",
+			"joint task"
 		]
 	},
 	{
@@ -66733,8 +67501,17 @@ function replayTour(id) {
 		return;
 	}
 	if (id === "settings") openSettings("connections");
+	else if (id === "people") openSettings("peer");
 	else ui.openDialogFor(SURFACE[id]);
 	useUi.getState().openCoachTour(id);
+}
+//#endregion
+//#region src/components/settings/screens/peer/replayPeopleTour.ts
+function replayPeopleTour() {
+	const ui = useUi.getState();
+	if (ui.coachTour) ui.closeCoachTour();
+	openSettings(PEER_SCREEN);
+	useUi.getState().openCoachTour("people");
 }
 //#endregion
 //#region src/components/palette/CommandPalette.tsx
@@ -66926,8 +67703,9 @@ function CommandPalette({ host }) {
 		});
 		acts.push({
 			label: "People…",
-			hint: "peer links: invite someone, or join a peer with their code",
-			run: () => openSettings("peer")
+			hint: "work with someone: invite them, or join their invite",
+			run: () => openSettings("peer"),
+			keywords: "join pair pairing invite colleague teammate collaborate person someone peer share"
 		});
 		acts.push({
 			label: "Paste a code…",
@@ -66946,7 +67724,7 @@ function CommandPalette({ host }) {
 				hint: id === "welcome" ? "the three steps to your first session" : `how ${t.title} works`,
 				keywords: "tour help how guide tutorial walkthrough show me around " + t.title.toLowerCase(),
 				top: id === "welcome" ? TOP.tour : void 0,
-				run: () => replayTour(id)
+				run: () => id === "people" ? replayPeopleTour() : replayTour(id)
 			});
 		}
 		acts.push({
@@ -70731,7 +71509,8 @@ function runBody(o) {
 	const lane = together ? oneForAllLane(o.lane) : o.lane;
 	const split = o.split ? {
 		split_optional: true,
-		max_pieces: clampSplit(o.maxPieces ?? SPLIT_DEFAULT)
+		max_pieces: clampSplit(o.maxPieces ?? SPLIT_DEFAULT),
+		...o.initRepo ? { init_repo: true } : {}
 	} : {};
 	return {
 		name: o.name.trim(),
@@ -71038,7 +71817,7 @@ function useRunDraft(o) {
 	const batch = !o.single && (listMode || o.split);
 	const chosen = laneChoice ?? defaultLaneFor(batch, o.fasttrackDefault);
 	const lane = oneForAll ? oneForAllLane(chosen) : chosen;
-	const start = async ({ split, maxPieces, name: splitName }) => {
+	const start = async ({ split, maxPieces, name: splitName, initRepo }) => {
 		if (starting) return {
 			ok: false,
 			error: ""
@@ -71063,7 +71842,8 @@ function useRunDraft(o) {
 					program,
 					repoPath,
 					split: true,
-					maxPieces
+					maxPieces,
+					initRepo
 				});
 				try {
 					return {
@@ -71525,7 +72305,8 @@ function newSessionSubmit(ctx) {
 		const r = await draft.start({
 			split: splitOn,
 			maxPieces: clampSplit(maxPieces, splitLimit),
-			name: title.trim()
+			name: title.trim(),
+			initRepo
 		});
 		if (!r.ok) {
 			if (r.error) fail(r.error);
@@ -80203,7 +80984,7 @@ function Tours() {
 					type: "button",
 					className: "test-btn",
 					title: `Replay the ${TOURS[id].title} tour`,
-					onClick: () => replayTour(id),
+					onClick: () => id === "people" ? replayPeopleTour() : replayTour(id),
 					children: "Replay"
 				})]
 			}, id)),
@@ -80240,7 +81021,8 @@ var TOUR_HINT = {
 	intake: "Turning tickets, pull requests and issues into sessions.",
 	verify: "Checking that a change actually works.",
 	schedule: "Templates, and sessions that start by themselves.",
-	settings: "Where your connections and every setting live."
+	settings: "Where your connections and every setting live.",
+	people: "Working with another person: invite, share a folder, a joint task."
 };
 function ScrollSpeedRow() {
 	const [pos, setPos] = (0, import_react.useState)(3);
@@ -80802,6 +81584,267 @@ function UrlList({ urls }) {
 	});
 }
 //#endregion
+//#region src/components/settings/screens/peer/PeerAdvanced.tsx
+var RELAY_OPTIONS = [
+	{
+		value: "auto",
+		label: "Automatic — through Cloudflare when cloudflared is installed"
+	},
+	{
+		value: "off",
+		label: "Direct only — they connect to this computer (same network or Tailscale)"
+	},
+	{
+		value: "cloudflare",
+		label: "Always through Cloudflare (needs cloudflared)"
+	},
+	{
+		value: "url",
+		label: "My own HTTPS relay (relay URL below)"
+	}
+];
+function PeerAdvanced({ on, onToggle, st, busy, error }) {
+	const relayAddr = st?.relay?.address || "";
+	const [asking, setAsking] = (0, import_react.useState)(false);
+	const people = st?.links.length || 0;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		className: "peer-advanced",
+		id: "peer-advanced",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Advanced" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row set-switch-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Connections to people"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "ca-switch",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							id: "peer-enabled",
+							checked: on,
+							disabled: busy,
+							onChange: (e) => {
+								if (!e.target.checked && people > 0) setAsking(true);
+								else onToggle(e.target.checked);
+							}
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Turned on by your first invite or join. Off: nobody can connect, and this computer connects to nobody."
+					})
+				]
+			}),
+			error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error peer-toggle-error",
+				children: error
+			}),
+			asking && st && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				title: disableConfirmText(st.links),
+				body: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Shared folders and connections are kept. To pick up again, turn this on and press Reopen on a card." }),
+				confirmLabel: "Turn off",
+				onCancel: () => setAsking(false),
+				onConfirm: () => {
+					setAsking(false);
+					onToggle(false);
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "set-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Your name"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+						group: "peer",
+						field: "display_name",
+						placeholder: "this computer's name"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "What the other person sees."
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "set-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "How they reach you"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+						group: "peer",
+						field: "relay",
+						options: RELAY_OPTIONS
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "How people on other networks reach your invites. Through a relay the connection stays end-to-end encrypted: the relay can block it but never read or change it. The other person needs nothing extra."
+					})
+				]
+			}),
+			relayAddr && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row",
+				id: "peer-relay-address",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Relay address"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+						className: "peer-addr",
+						children: relayAddr
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						onClick: () => copyText(relayAddr).then((ok) => toast(ok ? "Relay address copied" : "Copy failed")),
+						children: "Copy"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Someone who joined you through an older address can paste this into Reconnect on their side."
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "set-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Port"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+						group: "peer",
+						field: "listen_port",
+						placeholder: "8799"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Same-network invites only: the other person connects to this port, so it must be reachable from their machine (Tailscale recommended)."
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "set-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Address in invites"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+						group: "peer",
+						field: "advertise_host",
+						placeholder: "auto: Tailscale IP, else LAN IP"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Same-network invites only: the address written into the code."
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "set-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Relay URL"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+						group: "peer",
+						field: "relay_url",
+						placeholder: "wss://peer.example.com/mindflock"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "\"My own HTTPS relay\" only: forwards (path unchanged) to the relay port."
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "set-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Relay port"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+						group: "peer",
+						field: "relay_port",
+						placeholder: "auto"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Port on this computer your relay forwards to (blank = any free port)."
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "set-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Extra hosts the shared agent may reach"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+						group: "peer",
+						field: "egress_allow",
+						placeholder: "e.g. pypi.org, .github.com"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Websites the sandboxed agent may reach (HTTPS), besides its own AI service. A leading dot allows subdomains."
+					})
+				]
+			}),
+			st && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				id: "peer-status",
+				children: [
+					"Sandbox:",
+					" ",
+					st.sandbox.available ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "ready" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "error",
+						children: "not available here"
+					}),
+					st.fingerprint && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						" · ",
+						"this computer's key ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: st.fingerprint })
+					] }),
+					" · ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						id: "peer-listen-state",
+						children: listenText(st.listen)
+					}),
+					st.relay && st.relay.mode !== "off" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						" · ",
+						"relay ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							id: "peer-relay-state",
+							children: st.relay.running ? "up" : "down"
+						}),
+						st.relay.public_host && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+							" ",
+							"at ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: st.relay.public_host })
+						] }),
+						st.relay.error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "error",
+							children: [" — ", st.relay.error]
+						})
+					] })
+				]
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/PathField.tsx
 function pathFieldRequest(opts) {
 	const start = opts.value.trim();
@@ -80865,40 +81908,1596 @@ function PathField({ value, onChange, onPicked, device = "", pickerTitle, browse
 	});
 }
 //#endregion
-//#region src/components/settings/screens/PeerLinks.tsx
-var RELAY_OPTIONS = [
-	{
-		value: "auto",
-		label: "Automatic — through Cloudflare when cloudflared is installed"
-	},
-	{
-		value: "off",
-		label: "Off — they connect to this computer directly (same network or tailnet)"
-	},
-	{
-		value: "cloudflare",
-		label: "Always through Cloudflare (needs cloudflared)"
-	},
-	{
-		value: "url",
-		label: "My own HTTPS relay (relay URL below)"
+//#region src/components/settings/screens/peer/AgentSelect.tsx
+function AgentSelect(props) {
+	const { agents, value, onChange, className } = props;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+		className,
+		value: value || agents[0] || "",
+		onChange: (e) => onChange(e.target.value),
+		disabled: !agents.length,
+		"aria-label": "Agent",
+		children: agents.length ? agents.map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+			value: a,
+			children: a
+		}, a)) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+			value: "",
+			children: "no agent can run here"
+		})
+	});
+}
+//#endregion
+//#region src/components/settings/screens/peer/ContractMarkdown.tsx
+function contractBlocks(md) {
+	const lines = String(md || "").replace(/\r\n?/g, "\n").split("\n");
+	const out = [];
+	let para = [];
+	const flush = () => {
+		if (para.length) out.push({
+			kind: "p",
+			text: para.join(" ")
+		});
+		para = [];
+	};
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		if (/^\s*```/.test(line)) {
+			flush();
+			const body = [];
+			for (i++; i < lines.length && !/^\s*```/.test(lines[i]); i++) body.push(lines[i]);
+			out.push({
+				kind: "code",
+				text: body.join("\n")
+			});
+			continue;
+		}
+		const h = /^(#{1,6})\s+(.*)$/.exec(line);
+		if (h) {
+			flush();
+			out.push({
+				kind: "h",
+				level: h[1].length,
+				text: h[2].trim()
+			});
+			continue;
+		}
+		const li = /^\s*([-*+]|\d+[.)])\s+(.*)$/.exec(line);
+		if (li) {
+			flush();
+			const kind = /\d/.test(li[1]) ? "ol" : "ul";
+			const last = out[out.length - 1];
+			if (last && last.kind === kind) last.items.push(li[2]);
+			else out.push({
+				kind,
+				items: [li[2]]
+			});
+			continue;
+		}
+		if (!line.trim()) {
+			flush();
+			continue;
+		}
+		para.push(line.trim());
 	}
-];
+	flush();
+	return out;
+}
+function inline(text) {
+	const out = [];
+	const re = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*\s][^*]*\*)/g;
+	let at = 0;
+	let m;
+	let k = 0;
+	while (m = re.exec(text)) {
+		if (m.index > at) out.push(text.slice(at, m.index));
+		const t = m[0];
+		if (t.startsWith("`")) out.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: t.slice(1, -1) }, k++));
+		else if (t.startsWith("**")) out.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: t.slice(2, -2) }, k++));
+		else out.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: t.slice(1, -1) }, k++));
+		at = m.index + t.length;
+	}
+	if (at < text.length) out.push(text.slice(at));
+	return out;
+}
+function ContractMarkdown({ text, id, empty = "No contract yet." }) {
+	const blocks = contractBlocks(text);
+	if (!blocks.length) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "set-hint peer-md-empty",
+		children: empty
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "peer-md",
+		id,
+		children: blocks.map((b, i) => {
+			switch (b.kind) {
+				case "h": {
+					const Tag = b.level <= 2 ? "h5" : "h6";
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tag, { children: inline(b.text) }, i);
+				}
+				case "ul":
+				case "ol": {
+					const Tag = b.kind;
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tag, { children: b.items.map((it, j) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: inline(it) }, j)) }, i);
+				}
+				case "code": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: b.text }, i);
+				default: return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: inline(b.text) }, i);
+			}
+		})
+	});
+}
+//#endregion
+//#region src/components/settings/screens/peer/useAct.ts
+function errText$2(e) {
+	return e instanceof Error ? e.message : String(e);
+}
+function useAct(reload) {
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [err, setErr] = (0, import_react.useState)("");
+	const act = async (what, fn, ok) => {
+		setBusy(what);
+		setErr("");
+		let done = false;
+		try {
+			const r = await fn();
+			done = true;
+			const text = typeof ok === "function" ? ok(r) : ok;
+			if (text) toast(text);
+		} catch (e) {
+			setErr(errText$2(e));
+		}
+		setBusy("");
+		reload();
+		return done;
+	};
+	return {
+		busy,
+		err,
+		setErr,
+		act
+	};
+}
+//#endregion
+//#region src/components/settings/screens/peer/JointContract.tsx
+function whoText(by, peerName, agent = false) {
+	if (by === "peer") return agent ? peerName + "'s agent" : peerName;
+	return agent ? "Your agent" : "you";
+}
+function ProposalChanges({ before, after }) {
+	const diff = contractLineDiff(before, after);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [diff.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+		className: "peer-diff-lines",
+		"aria-label": "What it changes",
+		children: diff.map((d, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: d.op === "+" ? "peer-diff-add" : "peer-diff-del",
+			children: (d.op === "+" ? "+ " : "− ") + d.text
+		}, i))
+	}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "set-hint",
+		children: "It changes nothing but blank lines."
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "The whole proposed contract" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ContractMarkdown, {
+		text: after,
+		empty: "(an empty contract)"
+	})] })] });
+}
+function ContractPanel(props) {
+	const { linkId, peerName, joint, reload, now } = props;
+	const { busy, err, act } = useAct(reload);
+	const [editing, setEditing] = (0, import_react.useState)(false);
+	const [draft, setDraft] = (0, import_react.useState)("");
+	const c = joint.contract || {
+		text: "",
+		rev: 0,
+		updated: "",
+		by: "me"
+	};
+	const open = openProposals(joint);
+	const t = isoSeconds(c.updated);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "peer-contract",
+		"data-rev": c.rev,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-contract-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Contract"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "set-hint peer-contract-rev",
+						children: [
+							"rev ",
+							c.rev,
+							Number.isFinite(t) ? " · changed by " + whoText(c.by, peerName) + " " + relTime(t, { now }) : ""
+						]
+					}),
+					!editing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn peer-contract-edit",
+						disabled: !!busy,
+						onClick: () => {
+							setDraft(c.text);
+							setEditing(true);
+						},
+						children: "Edit"
+					})
+				]
+			}),
+			editing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-contract-editor",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+						rows: 10,
+						value: draft,
+						onChange: (e) => setDraft(e.target.value),
+						"aria-label": "Contract"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "peer-row",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn peer-contract-save",
+							disabled: !!busy || draft === c.text,
+							onClick: async () => {
+								if (await act("save", () => api(jointPath(linkId, "/contract"), {
+									method: "PUT",
+									json: { text: draft }
+								}), (r) => syncedText("Contract saved — both agents get the new version", r, peerName))) setEditing(false);
+							},
+							children: busy === "save" ? "Saving…" : "Save"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							disabled: !!busy,
+							onClick: () => setEditing(false),
+							children: "Cancel"
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "set-hint",
+						children: [
+							"Saving sends it to ",
+							peerName,
+							" and rewrites CONTRACT.md in both folders."
+						]
+					})
+				]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ContractMarkdown, {
+				text: c.text,
+				empty: "The contract is empty — Edit to write one."
+			}),
+			open.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "peer-proposals",
+				children: open.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					className: "peer-proposal",
+					"data-proposal-id": p.id,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "peer-proposal-who",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: whoText(p.by, peerName, true) }),
+								" proposes a change",
+								Number.isFinite(isoSeconds(p.at)) ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "muted",
+									children: [" · ", relTime(isoSeconds(p.at), { now })]
+								}) : null
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProposalChanges, {
+							before: c.text,
+							after: p.text
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "peer-row",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn peer-proposal-accept",
+								disabled: !!busy,
+								onClick: () => act("accept:" + p.id, () => api(jointPath(linkId, "/proposals/" + encodeURIComponent(p.id) + "/accept"), { json: {} }), (r) => syncedText("Change accepted — the contract is updated", r, peerName)),
+								children: busy === "accept:" + p.id ? "Accepting…" : "Accept"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn peer-proposal-reject",
+								disabled: !!busy,
+								onClick: () => act("reject:" + p.id, () => api(jointPath(linkId, "/proposals/" + encodeURIComponent(p.id) + "/reject"), { json: {} }), (r) => syncedText("Change rejected", r, peerName)),
+								children: busy === "reject:" + p.id ? "Rejecting…" : "Reject"
+							})]
+						})
+					]
+				}, p.id))
+			}),
+			err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error",
+				children: err
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/settings/screens/peer/MirrorRow.tsx
+function MirrorRow(props) {
+	const { link, reload, now } = props;
+	const m = link.mirror || null;
+	const base = "/api/peer/links/" + encodeURIComponent(link.link_id) + "/mirror";
+	const { busy, err, act } = useAct(reload);
+	const [repo, setRepo] = (0, import_react.useState)(m?.repo_path || "");
+	const [branch, setBranch] = (0, import_react.useState)(m?.branch || defaultMirrorBranch(link.peer_name));
+	const on = !!m?.enabled;
+	const branchOk = branch.startsWith("peer/") && branch.length > 5;
+	const verified = link.sas_verified !== false;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "peer-mirror",
+		"data-mirror": on ? "on" : "off",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Mirror"
+			}),
+			on && m ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-mirror-on",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint peer-mirror-status",
+					children: mirrorStatusText(m, link.peer_name, now)
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn peer-mirror-disable",
+					disabled: !!busy,
+					onClick: () => act("mirror", () => api(base, { method: "DELETE" }), "Mirror off — the branch stays in your repo"),
+					children: busy === "mirror" ? "Turning off…" : "Disable"
+				})]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-mirror-form",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Mirror their work into"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
+						placeholder: "your repo",
+						value: repo,
+						onChange: setRepo,
+						pickerTitle: "Pick the repo to mirror their work into",
+						className: "peer-mirror-repo"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "as"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						className: "peer-mirror-branch",
+						"aria-label": "Branch",
+						value: branch,
+						onChange: (e) => setBranch(e.target.value)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn peer-mirror-enable",
+						disabled: !!busy || !verified || !repo.trim() || !branchOk,
+						title: verified ? void 0 : `Confirm the safety number with ${link.peer_name} first.`,
+						onClick: () => act("mirror", () => api(base, { json: {
+							repo_path: repo.trim(),
+							branch
+						} }), "Mirroring " + link.peer_name + "'s work into " + branch),
+						children: busy === "mirror" ? "Turning on…" : "Enable"
+					})
+				]
+			}),
+			!on && !verified && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint peer-gate",
+				children: [
+					"Confirm the safety number with ",
+					link.peer_name,
+					" first."
+				]
+			}),
+			!on && !branchOk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: "The branch name starts with peer/."
+			}),
+			m?.last_error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "error peer-mirror-error",
+				children: ["Last mirror failed: ", m.last_error]
+			}),
+			err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error",
+				children: err
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/settings/screens/peer/JointTask.tsx
+function JointSection(props) {
+	const { link, tick } = props;
+	const [joint, setJoint] = (0, import_react.useState)(null);
+	const [loadErr, setLoadErr] = (0, import_react.useState)("");
+	const sum = link.joint;
+	const key = sum === null ? "none" : sum ? [
+		sum.id,
+		sum.state,
+		sum.contract_rev,
+		sum.open_proposals,
+		sum.mine_shared,
+		sum.theirs_shared
+	].join(":") : "ask";
+	(0, import_react.useEffect)(() => {
+		if (key === "none") {
+			setJoint(null);
+			return;
+		}
+		let live = true;
+		api(jointPath(link.link_id)).then((r) => {
+			if (!live) return;
+			setJoint(r.joint || null);
+			setLoadErr("");
+		}).catch((e) => live && setLoadErr(errText$2(e)));
+		return () => {
+			live = false;
+		};
+	}, [
+		key,
+		tick,
+		link.link_id
+	]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(JointView, {
+		...props,
+		joint: key === "none" ? null : joint,
+		loadErr
+	});
+}
+function JointView(props) {
+	const { link, joint, loadErr } = props;
+	const phase = jointPhase(joint);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "peer-joint",
+		"data-tour": "people-joint",
+		"data-joint-phase": phase,
+		children: [
+			phase === "none" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(JointStart, { ...props }),
+			phase === "proposed-by-me" && joint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(JointWaiting, {
+				...props,
+				joint
+			}),
+			phase === "proposed-by-peer" && joint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(JointProposed, {
+				...props,
+				joint
+			}),
+			phase === "active" && joint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(JointActive, {
+				...props,
+				joint
+			}),
+			phase === "ended" && joint && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint peer-joint-ended",
+				children: [
+					joint.state === "done" ? "The joint task is done" : "The joint task was cancelled",
+					": ",
+					joint.brief
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(JointStart, {
+				...props,
+				again: true
+			})] }),
+			loadErr && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "error",
+				children: [
+					"Couldn't load the joint task with ",
+					link.peer_name,
+					": ",
+					loadErr
+				]
+			})
+		]
+	});
+}
+function jointStartBlocker(link) {
+	if (!link.sas_verified) return "Check the safety number with " + link.peer_name + " first — then you can start a joint task.";
+	if (!link.connected) return link.peer_name + " is offline — start a joint task once they're back.";
+	return "";
+}
+function JointStart(props) {
+	const { link, agents, sandbox, reload, again } = props;
+	const { busy, err, act } = useAct(reload);
+	const [open, setOpen] = (0, import_react.useState)(!!props.formOpen);
+	const [brief, setBrief] = (0, import_react.useState)("");
+	const [repo, setRepo] = (0, import_react.useState)("");
+	const [branch, setBranch] = (0, import_react.useState)("");
+	const [program, setProgram] = (0, import_react.useState)("");
+	const [contract, setContract] = (0, import_react.useState)(CONTRACT_TEMPLATE);
+	const blocker = jointStartBlocker(link);
+	const chosen = program || agents[0] || "";
+	if (!open) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "peer-joint-cta",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "test-btn peer-joint-start",
+			disabled: !!blocker,
+			onClick: () => setOpen(true),
+			children: again ? "Start another joint task" : "Start a joint task"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "set-hint",
+			children: blocker || "Build one feature together: your half here, theirs in their repo, one shared contract."
+		})]
+	});
+	const ready = !!brief.trim() && (!sandbox || !!repo.trim() && !!chosen);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+		className: "peer-joint-form",
+		onSubmit: (e) => {
+			e.preventDefault();
+			if (!ready || busy) return;
+			act("propose", () => api(jointPath(link.link_id), { json: {
+				brief: brief.trim(),
+				repo_path: repo.trim(),
+				branch: branch.trim() || void 0,
+				program: chosen || void 0,
+				contract_text: contract
+			} }), "Proposed to " + link.peer_name).then((ok) => ok && setOpen(false));
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", {
+				className: "set-subtitle",
+				children: ["Start a joint task with ", link.peer_name]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "peer-field",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "What you're building together"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+					className: "peer-joint-brief",
+					rows: 3,
+					value: brief,
+					placeholder: "e.g. Add GET /items to the API, and make the client fetch and print it",
+					onChange: (e) => setBrief(e.target.value)
+				})]
+			}),
+			sandbox ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-field",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Your half"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "peer-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
+								placeholder: "your folder",
+								value: repo,
+								onChange: setRepo,
+								pickerTitle: "Pick the folder for your half",
+								className: "peer-joint-repo"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								placeholder: "branch (optional)",
+								value: branch,
+								onChange: (e) => setBranch(e.target.value),
+								"aria-label": "Branch"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSelect, {
+								agents,
+								value: chosen,
+								onChange: setProgram
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Shared once they accept: an agent works in it inside a sandbox."
+					})
+				]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				children: "Your half needs Linux or macOS — here you can still message them and watch their half."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "peer-field",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Starter contract"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+						className: "peer-joint-contract",
+						rows: 9,
+						value: contract,
+						onChange: (e) => setContract(e.target.value)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Both agents read it first; either side can change it later."
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "submit",
+					className: "test-btn peer-joint-propose",
+					disabled: !!busy || !ready,
+					children: busy === "propose" ? "Proposing…" : "Propose to " + link.peer_name
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: !!busy,
+					onClick: () => setOpen(false),
+					children: "Cancel"
+				})]
+			}),
+			err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error",
+				children: err
+			})
+		]
+	});
+}
+function JointWaiting(props) {
+	const { link, joint, reload } = props;
+	const { busy, err, act } = useAct(reload);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "peer-joint-waiting",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: ["Proposed to ", link.peer_name] }), " — waiting for them to accept."] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "peer-joint-brief-text",
+				children: joint.brief
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn peer-joint-withdraw",
+					disabled: !!busy,
+					onClick: () => act("cancel", () => api(jointPath(link.link_id, "/cancel"), { json: { reason: "withdrawn" } }), (r) => syncedText("Proposal withdrawn", r, link.peer_name)),
+					children: busy === "cancel" ? "Withdrawing…" : "Withdraw"
+				}), !link.connected && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "set-hint",
+					children: [link.peer_name, " is offline — they'll see it when they're back."]
+				})]
+			}),
+			err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error",
+				children: err
+			})
+		]
+	});
+}
+function JointProposed(props) {
+	const { link, joint, agents, sandbox, reload } = props;
+	const { busy, err, act } = useAct(reload);
+	const [accepting, setAccepting] = (0, import_react.useState)(!!props.formOpen);
+	const [repo, setRepo] = (0, import_react.useState)("");
+	const [branch, setBranch] = (0, import_react.useState)("");
+	const [program, setProgram] = (0, import_react.useState)("");
+	const chosen = program || agents[0] || "";
+	const theirs = joint.theirs || {
+		repo_name: "",
+		branch: "",
+		program: "",
+		shared: false
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "peer-joint-proposal",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [link.peer_name, " proposes a joint task"] }), theirs.repo_name ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "muted",
+				children: [" · their half in ", theirs.repo_name]
+			}) : null] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "peer-joint-brief-text",
+				children: joint.brief
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+				className: "peer-joint-preview",
+				open: true,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Their starter contract" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ContractMarkdown, { text: joint.contract?.text || "" })]
+			}),
+			accepting ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-joint-accept-form",
+				children: [sandbox ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "peer-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
+							placeholder: "your folder",
+							value: repo,
+							onChange: setRepo,
+							pickerTitle: "Pick the folder for your half",
+							className: "peer-joint-repo"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							placeholder: "branch (optional)",
+							value: branch,
+							onChange: (e) => setBranch(e.target.value),
+							"aria-label": "Branch"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSelect, {
+							agents,
+							value: chosen,
+							onChange: setProgram
+						})
+					]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "Your half starts in this folder as soon as you accept."
+				})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "Your half needs Linux or macOS — accept to message them and watch their half."
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "peer-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn peer-joint-accept",
+						disabled: !!busy || sandbox && (!repo.trim() || !chosen) || !link.connected,
+						onClick: () => act("accept", () => api(jointPath(link.link_id, "/accept"), { json: {
+							repo_path: repo.trim(),
+							branch: branch.trim() || void 0,
+							program: chosen || void 0
+						} }), sandbox ? "Accepted — your half's session is starting" : "Accepted"),
+						children: busy === "accept" ? "Accepting…" : "Accept"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: !!busy,
+						onClick: () => setAccepting(false),
+						children: "Back"
+					})]
+				})]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn peer-joint-accept-with",
+						disabled: !!busy || !link.connected,
+						onClick: () => setAccepting(true),
+						children: "Accept with…"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn peer-joint-decline",
+						disabled: !!busy,
+						onClick: () => act("decline", () => api(jointPath(link.link_id, "/cancel"), { json: { reason: "declined" } }), (r) => syncedText("Declined", r, link.peer_name)),
+						children: busy === "decline" ? "Declining…" : "Decline"
+					}),
+					!link.connected && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "set-hint",
+						children: [link.peer_name, " is offline — answer once they're back."]
+					})
+				]
+			}),
+			err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error",
+				children: err
+			})
+		]
+	});
+}
+function JointActive(props) {
+	const { link, joint, reload, now } = props;
+	const { busy, err, act } = useAct(reload);
+	const [confirm, setConfirm] = (0, import_react.useState)(false);
+	const mine = joint.mine || {
+		repo_path: "",
+		branch: "",
+		program: "",
+		share_id: "",
+		session_title: ""
+	};
+	const theirs = joint.theirs || {
+		repo_name: "",
+		branch: "",
+		program: "",
+		shared: false
+	};
+	const watchable = link.connected && (theirs.shared || !!link.their_share?.shared);
+	const openSession = () => {
+		if (!mine.session_title) return;
+		selectSession(mine.session_title);
+		useUi.getState().closeDialog();
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "peer-joint-active",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "peer-joint-title",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: ["Joint task with ", link.peer_name] })
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "peer-joint-brief-text",
+				children: joint.brief
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-halves",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "peer-half peer-half-mine",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Your half"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "set-hint",
+							children: [mine.repo_path ? baseName(mine.repo_path) + (mine.branch ? " · " + mine.branch : "") : "No folder from your side", mine.program ? " · " + mine.program : ""]
+						}),
+						mine.error ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "error peer-half-error",
+							children: ["Your half didn't start: ", mine.error]
+						}) : mine.session_title ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn peer-half-open",
+							onClick: openSession,
+							children: "Open session"
+						}) : mine.repo_path ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Its session is starting…"
+						}) : null
+					]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "peer-half peer-half-theirs",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "set-label",
+							children: [link.peer_name, "'s half"]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "set-hint",
+							children: [
+								theirs.repo_name || "their repo",
+								theirs.branch ? " · " + theirs.branch : "",
+								theirs.program ? " · " + theirs.program : ""
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn peer-half-watch",
+							disabled: !watchable,
+							title: !link.connected ? "They're offline" : watchable ? "Their screen, files and changes" : "Their half hasn't started yet",
+							onClick: () => useUi.getState().openDialogFor("peer-session", link.link_id),
+							children: "Watch their session"
+						})
+					]
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ContractPanel, {
+				linkId: link.link_id,
+				peerName: link.peer_name,
+				joint,
+				reload,
+				now
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MirrorRow, {
+				link,
+				reload,
+				now
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(JointCheck, {
+				check: joint.check,
+				peerName: link.peer_name
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-row peer-joint-end",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn peer-joint-done",
+					disabled: !!busy,
+					onClick: () => act("done", () => api(jointPath(link.link_id, "/cancel"), { json: { reason: "done" } }), (r) => syncedText("Joint task marked done", r, link.peer_name)),
+					children: busy === "done" ? "Finishing…" : "Done"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn peer-joint-cancel",
+					disabled: !!busy,
+					onClick: () => setConfirm(true),
+					children: "Cancel…"
+				})]
+			}),
+			confirm && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				title: "Cancel the joint task?",
+				body: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Both sessions keep running — stop sharing separately." }),
+				confirmLabel: "Cancel the task",
+				busy: !!busy,
+				onCancel: () => setConfirm(false),
+				onConfirm: () => {
+					setConfirm(false);
+					act("cancel", () => api(jointPath(link.link_id, "/cancel"), { json: {} }), (r) => syncedText("Joint task cancelled", r, link.peer_name));
+				}
+			}),
+			err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error",
+				children: err
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/settings/screens/peer/MessageThread.tsx
+function senderText(m, peerName) {
+	if (m.dir === "in") return peerName;
+	return m.by === "agent" ? "your agent" : "you";
+}
+function MessageLog({ msgs, peerName, now }) {
+	const end = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		end.current?.scrollIntoView?.({ block: "nearest" });
+	}, [msgs.length]);
+	if (!msgs.length) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "set-hint peer-msg-empty",
+		children: "No messages yet — say hello."
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+		className: "peer-msg-log",
+		children: msgs.map((m, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+			className: "peer-msg peer-msg-" + m.dir,
+			ref: i === msgs.length - 1 ? end : void 0,
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "peer-msg-who",
+					children: senderText(m, peerName)
+				}),
+				m.ts ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "muted peer-msg-at",
+					children: [" · ", relTime(m.ts, { now })]
+				}) : null,
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "peer-msg-text",
+					children: m.text
+				})
+			]
+		}, m.id))
+	});
+}
+function MessageThread(props) {
+	const { linkId, peerName, connected, withSend, refresh } = props;
+	const base = "/api/peer/links/" + encodeURIComponent(linkId);
+	const [msgs, setMsgs] = (0, import_react.useState)([]);
+	const [err, setErr] = (0, import_react.useState)("");
+	const [draft, setDraft] = (0, import_react.useState)("");
+	const [sending, setSending] = (0, import_react.useState)(false);
+	const [bump, setBump] = (0, import_react.useState)(0);
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		api(base + "/messages").then((r) => {
+			if (!live) return;
+			setMsgs(r.messages || []);
+			setErr("");
+			if (r.unread) api(base + "/messages/read", { json: {} }).catch(() => void 0);
+		}).catch((e) => live && setErr(errText$2(e)));
+		return () => {
+			live = false;
+		};
+	}, [
+		base,
+		refresh,
+		bump
+	]);
+	(0, import_react.useEffect)(() => {
+		const ev = window.mindflock?.events;
+		if (!ev) return;
+		return ev.subscribe("peer.message", (env) => {
+			if (String((env.data || {}).link_id || "") === linkId) setBump((b) => b + 1);
+		});
+	}, [linkId]);
+	const send = async () => {
+		const text = draft.trim();
+		if (!text || sending) return;
+		setSending(true);
+		try {
+			const r = await api(base + "/message", { json: { text } });
+			setDraft("");
+			if (!r.delivered) toast(`${peerName} isn't taking messages right now — it's in your log`);
+			setBump((b) => b + 1);
+		} catch (e) {
+			setErr("Couldn't send: " + errText$2(e));
+		}
+		setSending(false);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "peer-msgs",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MessageLog, {
+				msgs,
+				peerName
+			}),
+			withSend && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-row peer-msg-send",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+					rows: 2,
+					placeholder: `Message ${peerName} — their agent sees it too`,
+					value: draft,
+					onChange: (e) => setDraft(e.target.value),
+					onKeyDown: (e) => {
+						if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && draft.trim()) send();
+					}
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: sending || !draft.trim() || !connected,
+					onClick: () => void send(),
+					children: sending ? "Sending…" : "Send"
+				})]
+			}),
+			withSend && !connected && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint",
+				children: [peerName, " is offline — send once they're back."]
+			}),
+			err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error",
+				children: err
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/settings/screens/peer/PeerLinkCard.tsx
 var PERM_LABELS = [
 	["messages", "message me"],
 	["diff", "see my changes"],
 	["read_file", "read my files"]
 ];
-var PEER_EVENTS = [
-	"peer.link_added",
-	"peer.link_removed",
-	"peer.state",
-	"peer.message",
-	"peer.relay_changed"
-];
-function peerErrText(e) {
-	return e instanceof Error ? e.message : String(e);
+function PeerLinkCard(props) {
+	const { link, agents, sandbox, tick, reload, onVerified, fresh } = props;
+	const base = "/api/peer/links/" + encodeURIComponent(link.link_id);
+	const { busy, err, setErr, act } = useAct(reload);
+	const [repo, setRepo] = (0, import_react.useState)("");
+	const [branch, setBranch] = (0, import_react.useState)("");
+	const [program, setProgram] = (0, import_react.useState)("");
+	const chosen = program || agents[0] || "";
+	const [target, setTarget] = (0, import_react.useState)("");
+	const [exportBranch, setExportBranch] = (0, import_react.useState)("peer/" + (link.peer_name || "work").replace(/[^A-Za-z0-9._-]+/g, "-"));
+	const [exported, setExported] = (0, import_react.useState)(null);
+	const [busyExport, setBusyExport] = (0, import_react.useState)(false);
+	const [reopenErr, setReopenErr] = (0, import_react.useState)("");
+	const [busyReopen, setBusyReopen] = (0, import_react.useState)(false);
+	const [confirm, setConfirm] = (0, import_react.useState)("");
+	const [deleteFiles, setDeleteFiles] = (0, import_react.useState)(false);
+	const [reconnect, setReconnect] = (0, import_react.useState)("");
+	const [diff, setDiff] = (0, import_react.useState)(null);
+	const root = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		if (link.sas_verified && link.sas) rememberSas(link.link_id, link.sas);
+	}, [
+		link.sas_verified,
+		link.sas,
+		link.link_id
+	]);
+	(0, import_react.useEffect)(() => {
+		if (fresh) root.current?.scrollIntoView?.({
+			block: "center",
+			behavior: "smooth"
+		});
+	}, [fresh]);
+	const showDiff = () => act("diff", async () => {
+		setDiff(await api(base + "/diff"));
+	});
+	const doReconnect = () => {
+		const kind = reconnectKind(reconnect);
+		if (!kind) {
+			setErr(`Paste a fresh invite from ${link.peer_name} (or their relay address).`);
+			return;
+		}
+		act("reconnect", async () => {
+			if (kind === "invite") await joinPeerCode(reconnect, newOpId());
+			else await api(base + "/address", { json: { address: reconnect.trim() } });
+			setReconnect("");
+		}, "Reconnecting to " + link.peer_name + "…");
+	};
+	const doExport = async () => {
+		setExported(null);
+		setBusyExport(true);
+		try {
+			const r = await api(base + "/export", { json: {
+				target_repo: target.trim(),
+				branch_name: exportBranch
+			} });
+			setExported({
+				ok: true,
+				text: exportDoneText(r, target.trim())
+			});
+		} catch (e) {
+			setExported({
+				ok: false,
+				text: exportErrorText(errText$2(e))
+			});
+		}
+		setBusyExport(false);
+		reload();
+	};
+	const reopen = async () => {
+		setReopenErr("");
+		setBusyReopen(true);
+		try {
+			await api(base + "/share/reopen", { json: chosen ? { program: chosen } : {} });
+			toast("Reopened — the shared session is starting");
+		} catch (e) {
+			setReopenErr(errText$2(e));
+		}
+		setBusyReopen(false);
+		reload();
+	};
+	const openSession = () => {
+		if (!link.session_title) return;
+		selectSession(link.session_title);
+		useUi.getState().closeDialog();
+	};
+	const how = carrierText(link.carrier);
+	const verified = !!link.sas_verified;
+	const changed = sasChanged(link);
+	const gate = `Confirm the safety number with ${link.peer_name} first.`;
+	const trust = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "peer-group peer-group-trust",
+		"aria-label": "Trust",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h5", {
+				className: "peer-group-title",
+				children: "Trust"
+			}),
+			verified ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				"data-tour": "people-safety",
+				children: [
+					"Safety number ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+						className: "peer-sas",
+						children: link.sas
+					}),
+					" ✓ checked with them."
+				]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-safety",
+				"data-tour": "people-safety",
+				children: [
+					changed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "peer-warn peer-sas-changed",
+						children: [
+							"New safety number after reconnecting — confirm it with ",
+							link.peer_name,
+							" again."
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "set-hint",
+						children: [
+							"Safety number ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+								className: "peer-sas",
+								children: link.sas
+							}),
+							" — read it to each other. The same number on both screens means nobody is in between."
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "peer-row",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn peer-sas-match",
+							onClick: onVerified,
+							children: "It matches"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn peer-sas-mismatch",
+							disabled: !!busy,
+							onClick: () => setConfirm("mismatch"),
+							children: "It doesn't match"
+						})]
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row peer-perms",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "In the folder you share, they may"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "peer-row",
+					children: PERM_LABELS.map(([key, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "check",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							checked: !!link.perms[key],
+							disabled: !!busy,
+							onChange: (e) => {
+								const el = e.currentTarget;
+								act("perms", () => api(base + "/perms", { json: { [key]: e.target.checked } })).then((ok) => ok && flashSaved(el));
+							}
+						}), label]
+					}, key))
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "peer-row",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn peer-danger",
+					disabled: !!busy,
+					onClick: () => setConfirm("unlink"),
+					children: "Remove connection…"
+				})
+			})
+		]
+	}, "trust");
+	const share = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "peer-group peer-group-share",
+		"aria-label": "Share",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h5", {
+				className: "peer-group-title",
+				children: "Share"
+			}),
+			link.shared ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					"data-tour": "people-share",
+					children: shareClosed(link) ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "peer-field peer-reopen",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Your shared session is closed — its folder is kept."
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "peer-row",
+							children: [
+								sandbox && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+									className: "peer-labelled",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "set-hint",
+										children: "Agent"
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSelect, {
+										agents,
+										value: chosen,
+										onChange: setProgram
+									})]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn peer-reopen-btn",
+									disabled: busyReopen || !!busy || !verified,
+									title: verified ? "Start a new session in the kept folder" : gate,
+									onClick: () => void reopen(),
+									children: busyReopen ? "Reopening…" : "Reopen"
+								}),
+								!verified && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "set-hint peer-gate",
+									children: gate
+								}),
+								reopenErr && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "error peer-reopen-error",
+									children: reopenErr
+								})
+							]
+						})]
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "peer-row",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "set-hint",
+							children: [
+								"Your folder is shared in session ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: link.session_title || "?" }),
+								"."
+							]
+						}), link.session_title && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							onClick: openSession,
+							children: "Open session"
+						})]
+					})
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "peer-field",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Bring work home"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "peer-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								className: "peer-labelled peer-grow",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "set-hint",
+									children: "Your repo"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
+									placeholder: "the repo to bring it into",
+									value: target,
+									onChange: setTarget,
+									pickerTitle: "Pick the repo to bring it into"
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								className: "peer-labelled",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "set-hint",
+									children: "As branch"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									placeholder: "peer/branch",
+									value: exportBranch,
+									onChange: (e) => setExportBranch(e.target.value)
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn peer-export",
+								disabled: busyExport || !!busy || !verified || !target.trim() || !exportBranch.startsWith("peer/"),
+								title: verified ? void 0 : gate,
+								onClick: () => void doExport(),
+								children: busyExport ? "Bringing home…" : "Export"
+							}),
+							!verified && !exported && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint peer-gate",
+								children: gate
+							}),
+							exported && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								role: "status",
+								className: exported.ok ? "set-hint peer-export-done" : "error peer-export-error",
+								children: exported.text
+							})
+						]
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "peer-row",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: !!busy,
+						onClick: () => setConfirm("unshare"),
+						children: "Stop sharing…"
+					})
+				})
+			] }) : sandbox ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-field",
+				"data-tour": "people-share",
+				children: [
+					!verified && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "set-hint peer-share-gate",
+						children: "Confirm the safety number before you share."
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "peer-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								className: "peer-labelled peer-grow",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "set-hint",
+									children: "Folder"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
+									placeholder: "the folder to share",
+									value: repo,
+									onChange: setRepo,
+									pickerTitle: "Pick the folder to share"
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								className: "peer-labelled",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "set-hint",
+									children: "Branch"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									placeholder: "optional",
+									value: branch,
+									onChange: (e) => setBranch(e.target.value)
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								className: "peer-labelled",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "set-hint",
+									children: "Agent"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSelect, {
+									agents,
+									value: chosen,
+									onChange: setProgram
+								})]
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "peer-row",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn peer-share-btn",
+							disabled: !!busy || !verified || !repo.trim() || !chosen,
+							onClick: () => act("share", () => api(base + "/share", { json: {
+								repo_path: repo.trim(),
+								branch: branch.trim() || void 0,
+								program: chosen
+							} }), "Shared — the sandboxed session is starting"),
+							children: busy === "share" ? "Sharing…" : "Share a folder"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "An agent works on a sandboxed copy; nothing else on your machine is visible."
+						})]
+					})
+				]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				"data-tour": "people-share",
+				children: [
+					"Here you can message ",
+					link.peer_name,
+					" and look at their changes; sharing a folder needs Linux or macOS."
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(JointSection, {
+				link,
+				agents,
+				sandbox,
+				tick,
+				reload
+			}),
+			link.joint?.state !== "active" && (link.mirror || link.their_share?.shared) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MirrorRow, {
+				link,
+				reload
+			})
+		]
+	}, "share");
+	const talk = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "peer-group peer-group-talk",
+		"aria-label": "Talk",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h5", {
+				className: "peer-group-title",
+				children: "Talk"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MessageThread, {
+				linkId: link.link_id,
+				peerName: link.peer_name,
+				connected: link.connected,
+				withSend: true,
+				refresh: tick
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: !link.connected,
+					title: link.connected ? "Their screen, files and changes" : "They're offline",
+					onClick: () => useUi.getState().openDialogFor("peer-session", link.link_id),
+					children: "Watch their session"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: !!busy || !link.connected,
+					onClick: showDiff,
+					children: busy === "diff" ? "Loading…" : "Their changes"
+				})]
+			}),
+			diff && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-diff",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "peer-row",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "set-hint",
+							children: [
+								link.peer_name,
+								"'s changes (read only)",
+								diff.truncated ? " — cut short" : ""
+							]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							onClick: () => setDiff(null),
+							children: "Close"
+						})]
+					}),
+					diff.stat?.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+						className: "peer-diff-stat",
+						children: diff.stat.map((x) => typeof x === "string" ? x : Object.values(x).join(" ")).join("\n")
+					}) : null,
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+						className: "peer-diff-body",
+						children: diff.diff || "No changes."
+					})
+				]
+			})
+		]
+	}, "talk");
+	const confirmView = confirm === "mismatch" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+		title: `It doesn't match — remove the connection to ${link.peer_name}?`,
+		body: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Someone may be between you. Remove it, then make a new invite and send it a different way (a call, another chat), and compare again." }),
+		confirmLabel: "Remove connection",
+		busy: !!busy,
+		onCancel: () => setConfirm(""),
+		onConfirm: () => {
+			setConfirm("");
+			act("unlink", () => api(base, { method: "DELETE" }), "Connection removed — make a new invite to try again");
+		}
+	}) : confirm ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+		title: confirm === "unlink" ? `Remove the connection to ${link.peer_name}?` : "Stop sharing this folder?",
+		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: confirm === "unlink" ? `${link.peer_name} can no longer reach you. Their shared session is closed, not deleted; yours too unless you tick delete.` : "Your shared session is closed, not deleted, unless you tick delete. Your own folder is untouched." }),
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "check",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					checked: deleteFiles,
+					onChange: (e) => setDeleteFiles(e.target.checked)
+				}), "also delete the sandbox copy of the shared folder"]
+			})
+		] }),
+		confirmLabel: confirm === "unlink" ? "Remove connection" : "Stop sharing",
+		busy: !!busy,
+		onCancel: () => setConfirm(""),
+		onConfirm: () => {
+			const q = deleteFiles ? "?delete_files=1" : "";
+			const path = confirm === "unlink" ? base + q : base + "/share" + q;
+			const unlinking = confirm === "unlink";
+			setConfirm("");
+			act(unlinking ? "unlink" : "unshare", () => api(path, { method: "DELETE" }), unlinking ? "Connection removed" : deleteFiles ? "Stopped sharing — the shared folder is deleted" : "Stopped sharing — the shared folder is kept");
+		}
+	}) : null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "peer-link-card" + (fresh ? " peer-card-fresh" : ""),
+		"data-link-id": link.link_id,
+		ref: root,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "peer-card-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: link.peer_name }),
+					" · ",
+					roleText(link.role),
+					" ·",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: link.connected ? "peer-on" : "peer-off",
+						children: link.connected ? "connected" : "offline"
+					}),
+					how && link.connected ? " " + how : "",
+					link.peer_app ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "muted",
+						children: [" · MindFlock ", link.peer_app]
+					}) : null
+				]
+			}),
+			!link.connected && (link.role === "dialer" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-field peer-reconnect",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "set-hint",
+					children: [
+						link.peer_name,
+						" is offline. It usually comes back by itself; if not, ask ",
+						link.peer_name,
+						" for a fresh invite and paste it here."
+					]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "peer-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						placeholder: `a fresh invite from ${link.peer_name}`,
+						value: reconnect,
+						onChange: (e) => setReconnect(e.target.value),
+						onKeyDown: (e) => {
+							if (e.key === "Enter" && reconnect.trim() && !busy) doReconnect();
+						}
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: !!busy || !reconnect.trim(),
+						onClick: doReconnect,
+						children: busy === "reconnect" ? "Reconnecting…" : "Reconnect"
+					})]
+				})]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [link.peer_name, " is offline — it reconnects by itself when they're back."]
+			})),
+			verified ? [
+				share,
+				talk,
+				trust
+			] : [
+				trust,
+				share,
+				talk
+			],
+			err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error",
+				children: err
+			}),
+			confirmView
+		]
+	});
 }
+//#endregion
+//#region src/components/settings/screens/PeerLinks.tsx
 function nowSec() {
 	return Date.now() / 1e3;
 }
@@ -80926,6 +83525,7 @@ function PeerLinks(_) {
 	const [joinNote, setJoinNote] = (0, import_react.useState)("");
 	const joinOp = (0, import_react.useRef)("");
 	const joinInput = (0, import_react.useRef)(null);
+	const [fresh, setFresh] = (0, import_react.useState)("");
 	const load = (0, import_react.useCallback)(async () => {
 		try {
 			setSt(await api("/api/peer"));
@@ -80933,7 +83533,7 @@ function PeerLinks(_) {
 			setTick((t) => t + 1);
 			setError("");
 		} catch (e) {
-			setError(peerErrText(e));
+			setError(errText$2(e));
 		}
 	}, []);
 	(0, import_react.useEffect)(() => {
@@ -80944,7 +83544,7 @@ function PeerLinks(_) {
 	(0, import_react.useEffect)(() => {
 		const ev = window.mindflock?.events;
 		if (!ev) return;
-		const offs = PEER_EVENTS.map((name) => ev.subscribe(name, (env) => {
+		const offs = PEER_LIVE_EVENTS.map((name) => ev.subscribe(name, (env) => {
 			if (name === "peer.link_added") {
 				const d = env.data || {};
 				if (d.role === "listener" && inviteRef.current) setJoined({
@@ -80998,6 +83598,20 @@ function PeerLinks(_) {
 		doctorTick
 	]);
 	const afterPair = () => void s.reload();
+	const [toggling, setToggling] = (0, import_react.useState)(false);
+	const [toggleErr, setToggleErr] = (0, import_react.useState)("");
+	const toggle = async (enable) => {
+		setToggling(true);
+		setToggleErr("");
+		try {
+			await api(enable ? "/api/peer/enable" : "/api/peer/disable", { json: {} });
+		} catch (e) {
+			setToggleErr(errText$2(e));
+		}
+		await s.reload();
+		setToggling(false);
+		load();
+	};
 	const createInvite = async (reach) => {
 		const op = newOpId();
 		inviteOp.current = op;
@@ -81016,7 +83630,7 @@ function PeerLinks(_) {
 			});
 			afterPair();
 		} catch (e) {
-			setInviteErr(peerErrText(e));
+			setInviteErr(errText$2(e));
 		}
 		inviteOp.current = "";
 		setInviteStage("");
@@ -81031,7 +83645,7 @@ function PeerLinks(_) {
 			afterPair();
 			setDoctorTick((t) => t + 1);
 		} catch (e) {
-			setInviteErr(peerErrText(e));
+			setInviteErr(errText$2(e));
 		}
 	};
 	const cancelInvite = async (id) => {
@@ -81039,11 +83653,15 @@ function PeerLinks(_) {
 			await api("/api/peer/invites/" + encodeURIComponent(id), { method: "DELETE" });
 			if (invite?.invite_id === id) setInvite(null);
 		} catch (e) {
-			toast(peerErrText(e));
+			toast(errText$2(e));
 		}
 		load();
 	};
 	const join = async () => {
+		if (isCutOffInvite(code)) {
+			setJoinErr("This invite is cut off — copy the whole message again.");
+			return;
+		}
 		const op = newOpId();
 		joinOp.current = op;
 		setJoinBusy(true);
@@ -81054,9 +83672,10 @@ function PeerLinks(_) {
 			const link = await joinPeerCode(code, op);
 			setCode("");
 			afterPair();
-			setJoinNote(link.reconnected ? `Reconnected to ${link.peer_name} — same link, your shared folder is kept.` : `Connected to ${link.peer_name}. Read each other your safety number ${link.sas} — if it differs, unlink.`);
+			setJoinNote(link.reconnected ? `Reconnected to ${link.peer_name}` + (link.shared ? " — your shared folder is kept" : "") + (link.sas_verified ? "." : `. Compare the safety number ${link.sas} again — it's new.`) : `Connected to ${link.peer_name}. Compare the safety number ${link.sas} on their card below.`);
+			setFresh(link.link_id);
 		} catch (e) {
-			setJoinErr(peerErrText(e));
+			setJoinErr(errText$2(e));
 		}
 		joinOp.current = "";
 		setJoinStage("");
@@ -81069,31 +83688,31 @@ function PeerLinks(_) {
 			setJoined(null);
 			setInvite(null);
 		} catch (e) {
-			toast(peerErrText(e));
+			toast(errText$2(e));
 		}
 		load();
 	};
 	const inviteLeft = invite ? invite.expires_in - (now - invite.at) : 0;
 	const otherInvites = (st?.invites || []).filter((i) => i.invite_id !== invite?.invite_id);
-	const relayAddr = st?.relay?.address || "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-			className: "set-section-title",
-			children: "People"
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "peer-head",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+				className: "set-section-title",
+				children: "People"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "people" })]
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint set-block-hint",
-			children: [
-				"Work together with someone else's MindFlock. Send them an invite, they paste it, and you're connected. Then either of you can share ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "one folder" }),
-				": an agent works in it inside a sandbox and talks to the other person's agent. You can also message them and look at their changes. Nothing else on your machine is exposed."
-			]
+			id: "peer-intro",
+			children: "Work with another person's MindFlock: one of you invites, the other joins — then talk, share a folder, or build one feature together."
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "peer-actions",
 			id: "peer-actions",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "peer-action",
+				"data-tour": "people-invite",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
 						className: "set-subtitle",
@@ -81102,6 +83721,7 @@ function PeerLinks(_) {
 					joined ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						id: "peer-joined",
 						className: "peer-invite",
+						"data-tour": "people-safety",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: joined.name }),
 							" ",
@@ -81111,7 +83731,7 @@ function PeerLinks(_) {
 								className: "peer-sas",
 								children: joined.sas
 							}),
-							". If theirs is different, unlink now."
+							". If theirs is different, press It doesn't match on their card below."
 						] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "set-row",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -81172,7 +83792,7 @@ function PeerLinks(_) {
 								children: [
 									inviteExpiryText(inviteLeft),
 									inviteLeft > 0 && " · works once. ",
-									inviteLeft > 0 && (invite.relay && !invite.direct ? "They can be anywhere — it connects through a relay that can't read your traffic." : `They connect to ${invite.host}:${invite.port}, so they need to be on your network or tailnet.`)
+									inviteLeft > 0 && (invite.relay && !invite.direct ? "They can be anywhere — it connects through a relay that can't read your traffic." : `They connect to ${invite.host}:${invite.port}, so they need to be on your network or Tailscale.`)
 								]
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -81194,7 +83814,7 @@ function PeerLinks(_) {
 								id: "peer-reach-direct",
 								disabled: inviteBusy,
 								onClick: () => createInvite("direct"),
-								children: "They're on my network or tailnet"
+								children: "They're on my network or Tailscale"
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
@@ -81229,18 +83849,18 @@ function PeerLinks(_) {
 						]
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						className: "test-btn",
+						className: "btn-primary",
 						id: "peer-invite",
 						disabled: inviteBusy,
 						onClick: () => createInvite("auto"),
 						children: inviteBusy ? "Creating…" : "Create invite"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					}), st?.relay?.setting !== "off" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "linklike",
 						id: "peer-invite-direct",
 						disabled: inviteBusy,
 						onClick: () => createInvite("direct"),
-						children: "Same network or tailnet? Make a direct invite"
+						children: "Same network or Tailscale? Make a direct invite"
 					})] }),
 					inviteBusy && inviteStage && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-hint peer-stage",
@@ -81279,10 +83899,11 @@ function PeerLinks(_) {
 				]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "peer-action",
+				"data-tour": "people-join",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
 						className: "set-subtitle",
-						children: "Join a peer"
+						children: "Join someone"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "set-row",
@@ -81310,7 +83931,7 @@ function PeerLinks(_) {
 						children: joinStage || "Connecting…"
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-hint",
-						children: "Paste the whole message or just the code — either works. A fresh invite from someone you're already linked with reconnects that link."
+						children: "Paste the whole message or just the code — either works. A fresh invite from someone you're already connected to reconnects you."
 					}),
 					joinErr && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "error",
@@ -81356,7 +83977,7 @@ function PeerLinks(_) {
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "set-hint",
 				children: [
-					"Your invites only reach people on your own network or tailnet until ",
+					"Your invites only reach people on your own network or Tailscale until ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "cloudflared" }),
 					" is installed. Links that already connect directly keep working after you install it."
 				]
@@ -81365,635 +83986,47 @@ function PeerLinks(_) {
 				onDone: () => load()
 			})]
 		}),
-		st && st.links.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
-			className: "set-subtitle",
-			children: "People you work with"
-		}), st.links.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerLinkCard, {
-			link: l,
-			agents: st.agents || [],
-			sandbox: st.sandbox.available,
-			tick,
-			reload: load,
-			onVerified: () => markVerified(l.link_id)
-		}, l.link_id))] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-			className: "peer-advanced",
-			id: "peer-advanced",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Advanced" }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "set-row set-switch-row",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-label",
-							children: "Peer links"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-							className: "ca-switch",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-								type: "checkbox",
-								id: "peer-enabled",
-								checked: on,
-								onChange: (e) => s.saveField("peer", "enabled", e.target.checked)
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							children: "Turned on by your first invite or join. Off: nobody can connect, and this computer connects to nobody."
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "set-row",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-label",
-							children: "Your name"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-							group: "peer",
-							field: "display_name",
-							placeholder: "this computer's name"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							children: "What the other person sees."
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "set-row",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-label",
-							children: "How they reach you"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-							group: "peer",
-							field: "relay",
-							options: RELAY_OPTIONS
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							children: "How people on other networks reach your invites. Through a relay the connection stays end-to-end encrypted: the relay can block it but never read or change it. The other person needs nothing extra."
-						})
-					]
-				}),
-				relayAddr && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "set-row",
-					id: "peer-relay-address",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-label",
-							children: "Relay address"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
-							className: "peer-addr",
-							children: relayAddr
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							onClick: () => copyText(relayAddr).then((ok) => toast(ok ? "Relay address copied" : "Copy failed")),
-							children: "Copy"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							children: "Someone who joined you through an older address can paste this into Reconnect on their side."
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "set-row",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-label",
-							children: "Port"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-							group: "peer",
-							field: "listen_port",
-							placeholder: "8799"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							children: "Same-network invites only: the other person connects to this port, so it must be reachable from their machine (Tailscale recommended)."
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "set-row",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-label",
-							children: "Address in invites"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-							group: "peer",
-							field: "advertise_host",
-							placeholder: "auto: Tailscale IP, else LAN IP"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							children: "Same-network invites only: the address written into the code."
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "set-row",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-label",
-							children: "Relay URL"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-							group: "peer",
-							field: "relay_url",
-							placeholder: "wss://peer.example.com/mindflock"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							children: "\"My own HTTPS relay\" only: forwards (path unchanged) to the relay port."
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "set-row",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-label",
-							children: "Relay port"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-							group: "peer",
-							field: "relay_port",
-							placeholder: "auto"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							children: "Port on this computer your relay forwards to (blank = any free port)."
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "set-row",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-label",
-							children: "Extra hosts the shared agent may reach"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-							group: "peer",
-							field: "egress_allow",
-							placeholder: "e.g. pypi.org, .github.com"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							children: "Websites the sandboxed agent may reach (HTTPS), besides its own AI service. A leading dot allows subdomains."
-						})
-					]
-				}),
-				st && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		st && st.links.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+				className: "set-subtitle",
+				children: "People you work with"
+			}),
+			!st.enabled && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-row peer-off-note",
+				id: "peer-off-note",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint",
-					id: "peer-status",
-					children: [
-						"Sandbox:",
-						" ",
-						st.sandbox.available ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "ready" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "error",
-							children: "not available here"
-						}),
-						st.fingerprint && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-							" · ",
-							"this computer's key ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: st.fingerprint })
-						] }),
-						" · ",
-						"direct connections ",
-						st.listen.listening ? "open" : "closed",
-						" (",
-						st.listen.host,
-						":",
-						st.listen.port,
-						")",
-						st.relay && st.relay.mode !== "off" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-							" · ",
-							"relay ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								id: "peer-relay-state",
-								children: st.relay.running ? "up" : "down"
-							}),
-							st.relay.public_host && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-								" ",
-								"at ",
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: st.relay.public_host })
-							] }),
-							st.relay.error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-								className: "error",
-								children: [" — ", st.relay.error]
-							})
-						] })
-					]
-				})
-			]
+					children: "Connections to people are off — nobody connects until you turn them on."
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: toggling,
+					onClick: () => void toggle(true),
+					children: toggling ? "Turning on…" : "Turn on"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "peer-cards" + (st.enabled ? "" : " peer-cards-off"),
+				inert: !st.enabled,
+				children: st.links.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerLinkCard, {
+					link: l,
+					agents: st.agents || [],
+					sandbox: st.sandbox.available,
+					tick,
+					reload: load,
+					onVerified: () => markVerified(l.link_id),
+					fresh: fresh === l.link_id
+				}, l.link_id))
+			})
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerAdvanced, {
+			on,
+			onToggle: (v) => void toggle(v),
+			st,
+			busy: toggling,
+			error: toggleErr
 		})
 	] });
-}
-function PeerLinkCard(props) {
-	const { link, agents, sandbox, tick, reload, onVerified } = props;
-	const base = "/api/peer/links/" + encodeURIComponent(link.link_id);
-	const [busy, setBusy] = (0, import_react.useState)("");
-	const [err, setErr] = (0, import_react.useState)("");
-	const [repo, setRepo] = (0, import_react.useState)("");
-	const [branch, setBranch] = (0, import_react.useState)("");
-	const [program, setProgram] = (0, import_react.useState)("");
-	const chosen = program || agents[0] || "";
-	const [target, setTarget] = (0, import_react.useState)("");
-	const [exportBranch, setExportBranch] = (0, import_react.useState)("peer/" + (link.peer_name || "work").replace(/[^A-Za-z0-9._-]+/g, "-"));
-	const [confirm, setConfirm] = (0, import_react.useState)("");
-	const [deleteFiles, setDeleteFiles] = (0, import_react.useState)(false);
-	const [reconnect, setReconnect] = (0, import_react.useState)("");
-	const [msgsOpen, setMsgsOpen] = (0, import_react.useState)(false);
-	const [msgs, setMsgs] = (0, import_react.useState)([]);
-	const [draft, setDraft] = (0, import_react.useState)("");
-	const [diff, setDiff] = (0, import_react.useState)(null);
-	const act = async (what, fn, ok) => {
-		setBusy(what);
-		setErr("");
-		try {
-			await fn();
-			if (ok) toast(ok);
-		} catch (e) {
-			setErr(peerErrText(e));
-		}
-		setBusy("");
-		reload();
-	};
-	(0, import_react.useEffect)(() => {
-		if (!msgsOpen) return;
-		let live = true;
-		api(base + "/messages").then((r) => {
-			if (!live) return;
-			setMsgs(r.messages || []);
-			if (r.unread) api(base + "/messages/read", { json: {} }).catch(() => void 0);
-		}).catch((e) => live && setErr(peerErrText(e)));
-		return () => {
-			live = false;
-		};
-	}, [
-		msgsOpen,
-		tick,
-		base
-	]);
-	const send = () => act("send", async () => {
-		const r = await api(base + "/message", { json: { text: draft.trim() } });
-		setDraft("");
-		if (!r.delivered) toast(`${link.peer_name} isn't taking messages right now — it's in your log`);
-	});
-	const showDiff = () => act("diff", async () => {
-		setDiff(await api(base + "/diff"));
-	});
-	const doReconnect = () => {
-		const kind = reconnectKind(reconnect);
-		if (!kind) {
-			setErr("Paste a fresh invite from them, or their relay address (wss://…) or host:port.");
-			return;
-		}
-		act("reconnect", async () => {
-			if (kind === "invite") await joinPeerCode(reconnect, newOpId());
-			else await api(base + "/address", { json: { address: reconnect.trim() } });
-			setReconnect("");
-		}, "Reconnecting to " + link.peer_name + "…");
-	};
-	const openSession = () => {
-		if (!link.session_title) return;
-		selectSession(link.session_title);
-		useUi.getState().closeDialog();
-	};
-	const how = carrierText(link.carrier);
-	const unread = link.unread || 0;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "peer-link-card",
-		"data-link-id": link.link_id,
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: link.peer_name }),
-				" · ",
-				roleText(link.role),
-				" ·",
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: link.connected ? "peer-on" : "peer-off",
-					children: link.connected ? "connected" : "offline"
-				}),
-				how && link.connected ? " " + how : "",
-				link.peer_app ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "muted",
-					children: [" · MindFlock ", link.peer_app]
-				}) : null
-			] }),
-			link.sas_verified ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "set-hint",
-				children: [
-					"Safety number ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
-						className: "peer-sas",
-						children: link.sas
-					}),
-					" ✓ checked with them."
-				]
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "set-row",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "set-hint",
-					children: [
-						"Safety number ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
-							className: "peer-sas",
-							children: link.sas
-						}),
-						" — read it to each other. If it differs, unlink now."
-					]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					onClick: onVerified,
-					children: "It matches"
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "set-row",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "They may"
-				}), PERM_LABELS.map(([key, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "check",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "checkbox",
-						checked: !!link.perms[key],
-						disabled: !!busy,
-						onChange: (e) => act("perms", () => api(base + "/perms", { json: { [key]: e.target.checked } }))
-					}), label]
-				}, key))]
-			}),
-			link.role === "dialer" && !link.connected && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "set-row peer-reconnect",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					placeholder: "paste a fresh invite from them (or their relay address)",
-					value: reconnect,
-					onChange: (e) => setReconnect(e.target.value),
-					onKeyDown: (e) => {
-						if (e.key === "Enter" && reconnect.trim() && !busy) doReconnect();
-					}
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					disabled: !!busy || !reconnect.trim(),
-					onClick: doReconnect,
-					children: busy === "reconnect" ? "Reconnecting…" : "Reconnect"
-				})]
-			}),
-			link.shared ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "set-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "set-hint",
-						children: [
-							"Shared folder in session ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: link.session_title || "?" }),
-							"."
-						]
-					}), link.session_title && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						onClick: openSession,
-						children: "Open session"
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "set-row",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-label",
-							children: "Bring work home"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
-							placeholder: "your repo to bring it into",
-							value: target,
-							onChange: setTarget,
-							pickerTitle: "Pick the repo to bring it into"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							placeholder: "peer/branch",
-							value: exportBranch,
-							onChange: (e) => setExportBranch(e.target.value)
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							disabled: !!busy || !target.trim() || !exportBranch.startsWith("peer/"),
-							onClick: () => act("export", () => api(base + "/export", { json: {
-								target_repo: target.trim(),
-								branch_name: exportBranch
-							} }), "Brought home as " + exportBranch),
-							children: "Export"
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					disabled: !!busy,
-					onClick: () => setConfirm("unshare"),
-					children: "Stop sharing…"
-				})
-			] }) : sandbox ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "set-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
-						placeholder: "folder to share",
-						value: repo,
-						onChange: setRepo,
-						pickerTitle: "Pick the folder to share"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						placeholder: "branch (optional)",
-						value: branch,
-						onChange: (e) => setBranch(e.target.value)
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
-						value: chosen,
-						onChange: (e) => setProgram(e.target.value),
-						disabled: !agents.length,
-						children: agents.length ? agents.map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: a,
-							children: a
-						}, a)) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: "",
-							children: "no agent CLI can run here"
-						})
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						disabled: !!busy || !repo.trim() || !chosen,
-						onClick: () => act("share", () => api(base + "/share", { json: {
-							repo_path: repo.trim(),
-							branch: branch.trim() || void 0,
-							program: chosen
-						} }), "Shared — the sandboxed session is starting"),
-						children: busy === "share" ? "Sharing…" : "Share a folder"
-					})
-				]
-			}) }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "set-hint",
-				children: [
-					"Here you can message ",
-					link.peer_name,
-					" and look at their changes; sharing a folder needs Linux or macOS."
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "set-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-						type: "button",
-						className: "test-btn peer-msgs-toggle",
-						"aria-expanded": msgsOpen,
-						onClick: () => setMsgsOpen((o) => !o),
-						children: ["Messages", unread > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "queue-tab-badge",
-							children: unread > 99 ? "99+" : unread
-						})]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						disabled: !!busy || !link.connected,
-						onClick: showDiff,
-						children: busy === "diff" ? "Loading…" : "Their changes"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						disabled: !link.connected,
-						title: link.connected ? "Their screen, files and changes" : "They're offline",
-						onClick: () => useUi.getState().openDialogFor("peer-session", link.link_id),
-						children: "Watch their session"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						disabled: !!busy,
-						onClick: () => setConfirm("unlink"),
-						children: "Unlink…"
-					})
-				]
-			}),
-			msgsOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "peer-msgs",
-				children: [
-					msgs.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-						className: "peer-msg-log",
-						children: msgs.map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-							className: "peer-msg peer-msg-" + m.dir,
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-									className: "muted",
-									children: [
-										m.dir === "in" ? link.peer_name : m.by === "agent" ? "your agent" : "you",
-										m.dir === "in" && m.delivered_to ? " → " + m.delivered_to : "",
-										":"
-									]
-								}),
-								" ",
-								m.text
-							]
-						}, m.id))
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						className: "set-hint",
-						children: "No messages yet."
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "set-row",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-							rows: 2,
-							placeholder: `message ${link.peer_name}`,
-							value: draft,
-							onChange: (e) => setDraft(e.target.value),
-							onKeyDown: (e) => {
-								if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && draft.trim() && !busy) send();
-							}
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							disabled: !!busy || !draft.trim() || !link.connected,
-							onClick: send,
-							children: busy === "send" ? "Sending…" : "Send"
-						})]
-					}),
-					!link.connected && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "set-hint",
-						children: [link.peer_name, " is offline — send once they're back."]
-					})
-				]
-			}),
-			diff && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "peer-diff",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "set-row",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "set-hint",
-							children: [
-								link.peer_name,
-								"'s changes (read only)",
-								diff.truncated ? " — cut short" : ""
-							]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							onClick: () => setDiff(null),
-							children: "Close"
-						})]
-					}),
-					diff.stat?.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
-						className: "peer-diff-stat",
-						children: diff.stat.map((x) => typeof x === "string" ? x : Object.values(x).join(" ")).join("\n")
-					}) : null,
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
-						className: "peer-diff-body",
-						children: diff.diff || "No changes."
-					})
-				]
-			}),
-			err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "error",
-				children: err
-			}),
-			confirm && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
-				title: confirm === "unlink" ? `Unlink ${link.peer_name}?` : "Stop sharing this folder?",
-				body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "check",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "checkbox",
-						checked: deleteFiles,
-						onChange: (e) => setDeleteFiles(e.target.checked)
-					}), "also delete the shared folder"]
-				}),
-				confirmLabel: confirm === "unlink" ? "Unlink" : "Stop sharing",
-				busy: !!busy,
-				onCancel: () => setConfirm(""),
-				onConfirm: () => {
-					const q = deleteFiles ? "?delete_files=1" : "";
-					const path = confirm === "unlink" ? base + q : base + "/share" + q;
-					const unlinking = confirm === "unlink";
-					setConfirm("");
-					act(unlinking ? "unlink" : "unshare", () => api(path, { method: "DELETE" }), unlinking ? "Unlinked" : "Stopped sharing");
-				}
-			})
-		]
-	});
 }
 //#endregion
 //#region src/components/settings/screens/notifyCopy.ts
@@ -92851,6 +94884,8 @@ function Viewer({ linkId, onClose }) {
 	const [tab, setTab] = (0, import_react.useState)("session");
 	const [draft, setDraft] = (0, import_react.useState)("");
 	const [sending, setSending] = (0, import_react.useState)(false);
+	const [sent, setSent] = (0, import_react.useState)(0);
+	const gated = link?.sas_verified === false;
 	const send = async () => {
 		const text = draft.trim();
 		if (!text || sending) return;
@@ -92858,7 +94893,8 @@ function Viewer({ linkId, onClose }) {
 		try {
 			const r = await api(base + "/message", { json: { text } });
 			setDraft("");
-			toast(r.delivered ? "Sent to " + name : name + " isn't taking messages right now — it's in your log");
+			setSent((n) => n + 1);
+			if (!r.delivered) toast(name + " isn't taking messages right now — it's in your log");
 		} catch (e) {
 			toast("Couldn't send — " + errMsg(e));
 		}
@@ -92893,8 +94929,10 @@ function Viewer({ linkId, onClose }) {
 							].map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								role: "tab",
-								"aria-selected": tab === t,
-								className: "psv-tab" + (tab === t ? " active" : ""),
+								"aria-selected": !gated && tab === t,
+								disabled: gated,
+								title: gated ? viewerGateText(name) : void 0,
+								className: "psv-tab" + (!gated && tab === t ? " active" : ""),
 								onClick: () => setTab(t),
 								children: t === "session" ? "Session" : t === "files" ? "Files" : "Changes"
 							}, t))
@@ -92908,16 +94946,38 @@ function Viewer({ linkId, onClose }) {
 						})
 					]
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "psv-body",
-					children: [
+					children: gated ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "psv-msg psv-gate",
+						children: [
+							viewerGateText(name),
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "linklike",
+								onClick: () => openSettings(PEER_SCREEN),
+								children: "Open People"
+							})
+						]
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 						tab === "session" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionTab, {
 							base,
 							name
 						}),
 						tab === "files" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FilesTab, { base }),
 						tab === "changes" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChangesTab, { base })
-					]
+					] })
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "psv-thread",
+					"aria-label": "Messages with " + name,
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MessageThread, {
+						linkId,
+						peerName: name,
+						connected: !!link?.connected,
+						refresh: sent
+					})
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 					className: "psv-say",
@@ -94048,7 +96108,13 @@ function RecentDialog() {
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 									className: "recent-actions",
 									children: [
-										e.source === "closed" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										e.source === "closed" && isPeerShareRow(e) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											className: "recent-reopen recent-reopen-peer",
+											title: "A shared folder reopens from its card in People",
+											onClick: () => openSettings(PEER_SCREEN),
+											children: "Reopen from People"
+										}),
+										e.source === "closed" && !isPeerShareRow(e) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 											className: "recent-reopen",
 											disabled: gone || busy,
 											onClick: async () => {

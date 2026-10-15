@@ -73,7 +73,7 @@ interface Notif {
   rule?: string;
   /** A device.* row ("Your devices"): named "Devices", opens Settings → Your devices. */
   device?: boolean;
-  /** A peer.* row (another person): named "Collaborate", opens People. */
+  /** A peer.* row (another person): named "People", opens People. */
   peer?: boolean;
   /** A join request: the row's own Approve button answers it from here. */
   approve?: { id: string; via: string; code: string; host: string } | null;
@@ -265,14 +265,24 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
       const approve = approvableRequest(env.event, d);
       return n ? { text: n.text, cls: n.cls, device: true, ...(approve ? { approve } : {}) } : null;
     }
-    // Another person (peer links): they joined, unlinked, left a message for
-    // you, or your relay moved under the people you invited.
+    // Another person (peer links): they joined, unlinked (your shared folder
+    // kept), left a message, re-paired with a new safety number, or your
+    // relay moved under the people you invited.
     case "peer.link_added":
     case "peer.link_removed":
+    case "peer.state":
     case "peer.message":
-    case "peer.relay_changed": {
+    case "peer.relay_changed":
+    // A joint task: proposed to you, answered or ended by them, an agent's
+    // contract change waiting on a person; the mirror moved or failed.
+    case "peer.joint_proposed":
+    case "peer.joint_state":
+    case "peer.joint_contract":
+    case "peer.mirror_updated":
+    case "peer.mirror_failed": {
       const n = peerEventNote(env.event, d);
-      return n ? { text: n.text, cls: n.cls, peer: true } : null;
+      // A toast-only note (your own agent's contract proposal) has no row.
+      return n?.text ? { text: n.text, cls: n.cls, peer: true } : null;
     }
     // A newer release, and which of your devices are behind it: the click
     // opens where the Update button is (Devices when others are behind).
@@ -631,7 +641,7 @@ export function NotificationsBell() {
                       {n.device && !n.session
                         ? "Devices"
                         : n.peer && !n.session
-                        ? "Collaborate"
+                        ? "People"
                         : n.settings && !n.session
                         ? "Updates"
                         : n.template && !n.session

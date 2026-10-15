@@ -91,6 +91,9 @@ export interface RunDraft {
     maxPieces?: number;
     /** The group's name (a split only; empty lets the server name it). */
     name?: string;
+    /** New's "Make it a git repo first" (a split only): git init + a first
+     * commit in the folder before the split. */
+    initRepo?: boolean;
   }): Promise<
     { ok: true; body: Record<string, unknown>; run: unknown } | { ok: false; error: string }
   >;
@@ -208,7 +211,7 @@ export function useRunDraft(o: {
   const chosen = laneChoice ?? defaultLaneFor(batch, o.fasttrackDefault);
   const lane = oneForAll ? oneForAllLane(chosen) : chosen;
 
-  const start: RunDraft["start"] = async ({ split, maxPieces, name: splitName }) => {
+  const start: RunDraft["start"] = async ({ split, maxPieces, name: splitName, initRepo }) => {
     if (starting) return { ok: false, error: "" };
     setStarting(true);
     try {
@@ -227,6 +230,7 @@ export function useRunDraft(o: {
           repoPath,
           split: true,
           maxPieces,
+          initRepo,
         });
         try {
           const r = await api<{ run?: unknown }>("/api/runs", { json: body });

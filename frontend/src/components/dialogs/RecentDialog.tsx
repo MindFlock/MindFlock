@@ -30,6 +30,8 @@ import { matchesTokens, searchTokens } from "../../lib/rowSearch";
 import { previewList } from "../../lib/rowSelection";
 import { sortRows } from "../../lib/rowSort";
 import { toast } from "../../lib/toast";
+import { openSettings } from "../../lib/openSettings";
+import { isPeerShareRow, PEER_SCREEN } from "../../lib/peer";
 import { DialogFilter } from "./DialogFilter";
 import { Modal } from "../Modal";
 import { BulkRowBar, RowCheck, SelectAllCheck, useRowSelection } from "./rowSelect";
@@ -655,7 +657,18 @@ export function RecentDialog() {
                     )}
                   </div>
                   <div className="recent-actions">
-                    {e.source === "closed" && (
+                    {/* A shared folder (People) reopens from its card — the
+                        generic Reopen is refused for it. */}
+                    {e.source === "closed" && isPeerShareRow(e) && (
+                      <button
+                        className="recent-reopen recent-reopen-peer"
+                        title="A shared folder reopens from its card in People"
+                        onClick={() => openSettings(PEER_SCREEN)}
+                      >
+                        Reopen from People
+                      </button>
+                    )}
+                    {e.source === "closed" && !isPeerShareRow(e) && (
                       <button
                         className="recent-reopen"
                         disabled={gone || busy}

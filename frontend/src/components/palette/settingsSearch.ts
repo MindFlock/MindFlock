@@ -175,7 +175,7 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
     key: "peer",
     label: "People",
     sub: "Invite someone and share one folder with their agent",
-    terms: ["people", "peer", "share", "invite", "collaborate", "teammate"],
+    terms: ["people", "peer", "share", "invite", "collaborate", "teammate", "pair", "pairing", "join", "link", "safety number", "joint task"],
   },
   {
     key: "extensions",

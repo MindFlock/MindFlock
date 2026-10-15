@@ -60,6 +60,13 @@
   color: var(--accent);
 }
 
+/* Off until the safety number is confirmed (the body says why). */
+#peer-session-dialog .psv-tab:disabled {
+  cursor: default;
+  opacity: 0.5;
+  border-style: dashed;
+}
+
 #peer-session-dialog .psv-close {
   font-size: 15px;
   line-height: 1;
@@ -238,4 +245,17 @@
   margin-left: auto;
   font-size: 10.5px;
   color: var(--muted);
+}
+
+/* The conversation, right above the send box: a reply shows where you look. */
+#peer-session-dialog .psv-thread {
+  padding: 6px 14px 0;
+  border-top: 1px solid var(--border);
+}
+#peer-session-dialog .psv-thread .peer-msg-log {
+  max-height: 120px;
+  margin: 0;
+}
+#peer-session-dialog .psv-thread .peer-msg-empty {
+  margin: 0;
 }
