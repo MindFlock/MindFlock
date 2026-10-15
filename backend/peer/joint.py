@@ -79,6 +79,12 @@ STATES = wire.JOINT_STATES
 OPEN_STATES = ("proposed", "active")
 _RANK = {"proposed": 0, "active": 1, "done": 2, "cancelled": 2}
 CONTRACT_FILE = "CONTRACT.md"
+#: What the shared folder's sandbox can't do — said in the hand-off and in
+#: the check-run note, so an agent marks such a step Can't check.
+SANDBOX_LINE = (
+    "The shared folder is sandboxed: no network and no package installs — a "
+    "step that needs them is one to mark Can't check."
+)
 #: Seconds one joint request to the peer may take.
 JOINT_TIMEOUT_S = 30.0
 
@@ -414,23 +420,27 @@ def summary(
     }
 
 
-def handoff_prompt(j: dict, peer_name: str) -> str:
+def handoff_prompt(j: dict, peer_name: str, framed: bool = True) -> str:
     """What the joint's shared session is started with (after the share's
-    own intro). The brief is the people's; when the PEER wrote it, it says so."""
+    own intro). The brief is the people's; when the PEER wrote it, it says so.
+    ``framed=False`` is the same text for a mailbox note, whose own
+    ``[MindFlock note …]`` header is the frame (a second ``[MindFlock`` would
+    be typed with a fullwidth bracket)."""
     name = _line(peer_name, 32) or "the peer"
     brief = j["brief"].strip()
     if j["proposed_by"] == "peer":
         brief = "(brief written by %s, accepted by your user) %s" % (name, brief)
     repo = _line(j["theirs"].get("repo_name"), 128)
     where = "their repo %s" % repo if repo else "their own repo"
+    head = ("[MindFlock joint task %s] " if framed else "Joint task %s — ") % j["id"]
     return (
-        "[MindFlock joint task %s] %s\n"
+        "%s%s\n"
         "Your half runs in this folder; %s's half runs in %s.\n"
         "The shared contract is in %s at the root of this folder — read it "
         "first, follow it, and when it must change use peer_contract (propose) "
         "rather than editing the file. Talk to the other agent with peer_send / "
         "peer_inbox; read their files with peer_read_file. Checkpoint when a "
-        "piece is done." % (j["id"], brief, name, where, CONTRACT_FILE)
+        "piece is done.\n%s" % (head, brief, name, where, CONTRACT_FILE, SANDBOX_LINE)
     )
 
 
@@ -658,6 +668,7 @@ class JointTasks:
         if j is None:
             return None
         out = copy.deepcopy(j)
+        out.pop("noted_rev", None)  # this side's own bookkeeping
         lid = _get(link, "link_id")
         seen = None
         with contextlib.suppress(Exception):
@@ -722,6 +733,76 @@ class JointTasks:
         except Exception as err:  # noqa: BLE001
             _log.warning("peer: joint note not delivered: %s", err)
 
+    def _note_contract(self, link, j: dict) -> None:
+        """Tell my shared agent CONTRACT.md moved to a new rev (a person's
+        edit, an accepted proposal, the peer's revision) — once per rev, and
+        only for an active joint (the hand-off covers the rev it starts on).
+        Rides the note lane, so it is typed when the agent is idle."""
+        if j["state"] != "active":
+            return
+        rev = int(j["contract"]["rev"])
+        claimed: List[bool] = []
+
+        def claim(cur):
+            if cur is None or cur["id"] != j["id"]:
+                return None
+            seen = cur.get("noted_rev")
+            if type(seen) is int and seen >= rev:
+                return None
+            cur["noted_rev"] = rev
+            claimed.append(True)
+            return cur
+
+        self.store.update(str(_get(link, "link_id") or ""), claim)
+        if not claimed:
+            return
+        name = _line(self._name(link), 32) or "the peer"
+        text = j["contract"]["text"]
+        took = [
+            p for p in j["proposals"] if p["state"] == "accepted" and p["text"] == text
+        ]
+        if took:
+            note = (
+                "%s was accepted — %s is now rev %d: re-read it before continuing."
+                % (
+                    self._whose_proposal(took[-1], name),
+                    CONTRACT_FILE,
+                    rev,
+                )
+            )
+        else:
+            who = "your user" if j["contract"]["by"] == "me" else name
+            note = "%s changed to rev %d (by %s) — re-read it before continuing." % (
+                CONTRACT_FILE,
+                rev,
+                who,
+            )
+        self._post_note(link, note)
+
+    def _note_rejected(self, link, j: dict, prop: dict, by: str) -> None:
+        """Tell my shared agent a contract proposal was rejected (``by`` =
+        "me" for my person, else the peer's). Once: a proposal is decided
+        only once on each side."""
+        if j["state"] != "active":
+            return
+        name = _line(self._name(link), 32) or "the peer"
+        self._post_note(
+            link,
+            "%s was rejected by %s: continue with the current contract (%s rev %d)."
+            % (
+                self._whose_proposal(prop, name),
+                "your user" if by == "me" else name,
+                CONTRACT_FILE,
+                int(j["contract"]["rev"]),
+            ),
+        )
+
+    @staticmethod
+    def _whose_proposal(prop: dict, name: str) -> str:
+        if prop["by"] == "me":
+            return "Your contract proposal %s" % prop["id"]
+        return "%s's contract proposal %s" % (name, prop["id"])
+
     def _deliver_proposal(self, link, j: dict, prop: dict) -> None:
         """A contract proposal from the peer's agent, into MY shared agent as
         an untrusted PEER message (it can't accept it; the person decides)."""
@@ -784,7 +865,7 @@ class JointTasks:
             j2 = self.store.update(link_id, adopt)
             if j2:
                 self._write_contract(link, j2)
-                self._post_note(link, handoff_prompt(j2, name))
+                self._post_note(link, handoff_prompt(j2, name, framed=False))
                 self._emit(
                     "peer.joint_state",
                     link,
@@ -969,6 +1050,7 @@ class JointTasks:
 
         j = self.store.update(link_id, edit)
         self._write_contract(link, j)
+        self._note_contract(link, j)
         self._emit(
             "peer.joint_contract",
             link,
@@ -1063,6 +1145,9 @@ class JointTasks:
         j = self.store.update(link_id, apply)
         if accept:
             self._write_contract(link, j)
+            self._note_contract(link, j)
+        else:
+            self._note_rejected(link, j, decided, "me")
         self._emit(
             "peer.joint_contract",
             link,
@@ -1185,6 +1270,7 @@ class JointTasks:
         j = self.store.update(lid, offer)
         if j is not None:
             self._write_contract(link, j)
+            self._note_contract(link, j)
             self._emit(
                 "peer.joint_contract",
                 link,
@@ -1219,6 +1305,8 @@ class JointTasks:
     def _announce_proposal(self, link, j: dict, prop: dict, outcome: str) -> None:
         if outcome == "new_open" and prop["by"] == "peer":
             self._deliver_proposal(link, j, prop)
+        elif outcome == "decided" and prop["state"] == "rejected":
+            self._note_rejected(link, j, prop, "peer")
         self._emit(
             "peer.joint_contract",
             link,
@@ -1387,6 +1475,7 @@ class JointTasks:
                 self.svc._schedule(self.start_share(link_id))
         if notes["contract"]:
             self._write_contract(link, cur)
+            self._note_contract(link, cur)
             self._emit(
                 "peer.joint_contract",
                 link,

@@ -151,7 +151,11 @@ the shared folder, read it first, follow it, and propose changes with
 `peer_contract` instead of editing it. Either person can edit the contract
 (every revision lands in both folders' `CONTRACT.md`); either agent can
 *propose* a change, which the other agent sees as untrusted peer input and a
-person **Accepts** or **Rejects** in People — agents never accept. **Done** or
+person **Accepts** or **Rejects** in People — agents never accept. Every
+accepted or edited revision, and every rejection, is typed into both shared
+sessions as a short note once the agent is idle ("CONTRACT.md changed to rev
+3 (by Ana) — re-read it before continuing"), so an agent waiting on the
+people carries on by itself. **Done** or
 **Cancel** ends it on both sides; the shared sessions keep running until you
 unshare. A link holds one joint task at a time, and both of you need this
 MindFlock version or newer (an older one gets "<name>'s MindFlock is older —
@@ -164,10 +168,16 @@ step checked on the other person's side, `[human]` one a person checks, and
 the brief, the contract and both halves' diffs and writes it within 3
 minutes). Each side checks only its own steps: **Run my steps** has your
 shared agent run your agent steps and record each result; your person's
-steps get **Pass / Fail / Can't check** on the card. Results travel to the
+steps get **Pass / Fail / Can't check** on the card. The shared folder is
+sandboxed — no network, no package installs — so an agent often can't run a
+step that needs a server or a dependency and records it as Can't check; that
+step then gets **Pass / Fail** on your card too ("The agent couldn't check
+this — you can"), for when you ran it yourself. Results travel to the
 other side, so both cards — and a chip on both people's shared-session rows
 — read the same verdict: "Verified — every step passed on both sides",
-"Failed — step 2 on Bob's side", "Needs you — 1 step" or "In progress".
+"Failed — step 2 on Bob's side", "Needs you — 1 step your agent couldn't
+check", "Needs you — 1 step" or "In progress" (a new checklist is in
+progress until the agents have run their steps).
 Rewriting the checklist clears every result. It never blocks anything. With
 an older MindFlock on the other end your results stay on your card ("<name>'s
 MindFlock is older — their side can't report").
@@ -552,13 +562,34 @@ The shared contract is in CONTRACT.md at the root of this folder — read it
 first, follow it, and when it must change use peer_contract (propose) rather
 than editing the file. Talk to the other agent with peer_send / peer_inbox;
 read their files with peer_read_file. Checkpoint when a piece is done.
+The shared folder is sandboxed: no network and no package installs — a step
+that needs them is one to mark Can't check.
 ```
 
 A brief the PEER wrote is labelled `(brief written by <name>, accepted by your
 user)`. With no folder chosen and a folder the link already shares, that
 share is adopted: `CONTRACT.md` is written there and the hand-off is typed in
-as a `[MindFlock note …]`. `CONTRACT.md` is rewritten (both sides) on every
-accepted revision. The sandboxed agent can write the work dir, so the file is
+as a `[MindFlock note …]` (the same text headed `Joint task <id> — ` instead,
+since the note's header is the frame). `CONTRACT.md` is rewritten (both sides)
+on every accepted revision.
+
+**Contract notes.** Each side tells its OWN shared agent, through the mailbox's
+note lane (`[MindFlock note …]`, typed once the agent is idle), whenever the
+contract moves while the joint is active — so both agents hear it, one note
+per side:
+
+| Trigger | Note |
+|---|---|
+| a person's edit (`set_contract`, or a `joint_contract` frame / resync from the peer) | `CONTRACT.md changed to rev N (by <your user\|peer name>) — re-read it before continuing.` |
+| an accepted proposal (`decide`; on the peer, the `joint_contract` that follows) | `Your contract proposal cp_x was accepted — CONTRACT.md is now rev N: re-read it before continuing.` (`<peer name>'s contract proposal …` on the other side) |
+| a rejected proposal (`decide`, or the decided `joint_proposal`) | `Your contract proposal cp_x was rejected by <your user\|peer name>: continue with the current contract (CONTRACT.md rev N).` |
+
+A revision is noted at most once per side: the joint keeps `noted_rev` (a key
+`_normalize` passes through), claimed under the joint file's lock before the
+note is posted, so a replayed frame or a resync never repeats one. A
+rejection is noted when that side's copy of the proposal turns from open to
+rejected, which happens once. Nothing is noted for a joint that isn't active
+(the hand-off covers the rev it starts on). The sandboxed agent can write the work dir, so the file is
 written through an `O_NOFOLLOW` dir fd as a fresh temp file renamed over
 whatever is there — a planted symlink is replaced, never written through. It
 is an ordinary file: checkpoints commit it and export carries it.
@@ -598,19 +629,28 @@ still fits one frame.
 - **Results.** Each side records only its own `side` steps, in `mine`: its
   agent through `peer_check record` (agent steps only — a step on the other
   side, or a person's step, is refused with words), its person through
-  `POST …/check/answer` (human steps on their own side only). Each record
+  `POST …/check/answer` (human steps on their own side only — and one of
+  their own AGENT's steps whose current result is `blocked`: `pass`/`fail`
+  only, recorded `by: "human"`, the agent's note kept as `Agent: …` when the
+  person gives none; once answered it is no longer blocked, and Run my
+  steps clears it for the agent again). Each record
   stamps `mine.tested_sha` with the shared folder's HEAD, then sends
   `joint_check {id, rev, side_results}`. The receiver keeps them as
   `theirs`, for the steps that are THEIRS to check (a result for one of mine
   is dropped), and only for its current `rev`; an older `rev` is answered
   with its own checklist; a receiver with an older one answers its lower `rev`
   and gets the steps.
-- **Verdict.** `failed` if any step failed; else `needs_you` while a
-  person's step is blank; else `in_progress` while an agent's step is blank;
-  else `needs_you` for a step someone couldn't check (`blocked`); else
-  `verified`. `empty` without steps. It never gates anything.
+- **Verdict.** `failed` if any step failed; else `needs_you` for an agent's
+  step its agent couldn't check (`blocked` — its person can answer it); else
+  `in_progress` while an agent's step is blank (so a fresh checklist reads
+  in progress, not needs-you); else `needs_you` while a person's step is
+  blank or `blocked`; else `verified`. `empty` without steps. It never gates
+  anything.
 - **Ask / Run** go through the shared session's mailbox as a `[MindFlock
-  joint check]` note (refused while my half has no shared session). Ask
+  note …]` whose text starts `Joint check — ` (refused while my half has no
+  shared session); the run note also carries the sandbox line ("The shared
+  folder is sandboxed: no network and no package installs — a step that
+  needs them is one to mark Can't check."). Ask
   expires after 180 s (`ask.state: "failed"`, also applied on read after a
   restart). Run clears my agent steps' results and lists them; a checklist
   the PEER wrote is framed as another person's words ("skip any step that
@@ -664,6 +704,11 @@ CONTRACT.md first".
   agent step, and re-running it blocks again, so the only way to reach
   `verified` was to rewrite those steps as human steps, which clears every
   result.
+- **Fixed after the trial.** Contract changes are now typed into both
+  shared sessions (Contract notes, above). A person can answer their agent's
+  `blocked` step. A fresh checklist reads `in_progress` until the agents
+  have run. The hand-off and the run note say what the sandbox can't do.
+  The joint-check notes are typed with ASCII brackets.
 
 ## The shared folder — CONTRACT (`share.py`)
 

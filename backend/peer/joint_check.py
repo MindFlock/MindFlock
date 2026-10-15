@@ -29,10 +29,12 @@ follow the contract's rule: a rewrite bumps ``rev`` and clears every result;
 the higher ``rev`` wins, a tie with different steps goes to the side that
 proposed the joint task, and a side that keeps its copy sends it back.
 
-Verdict: ``failed`` if any step failed; ``needs_you`` while a person's step
-is unanswered; ``in_progress`` while an agent's step is; ``needs_you`` again
-for a step someone couldn't check; ``verified`` when every step passed on
-both sides; ``empty`` with no steps. It never gates anything.
+Verdict: ``failed`` if any step failed; ``needs_you`` for an agent's step
+its agent couldn't check (a person on that side can answer it);
+``in_progress`` while an agent's step is unanswered; ``needs_you`` while a
+person's step is, or for a person's step marked couldn't check; ``verified``
+when every step passed on both sides; ``empty`` with no steps. It never gates
+anything.
 
 Steps the PEER wrote are another person's words: they reach my agent framed
 as such, and a step that reads like a shell hazard is a person's job (the
@@ -279,11 +281,13 @@ def verdict(check: Optional[dict]) -> str:
     seen = [(s, _cell(check, s)) for s in steps]
     if any(r == "fail" for _, r in seen):
         return "failed"
-    if any(r == "" and s["actor"] == "human" for s, r in seen):
+    # A person is waited on only once the agents are: an agent's step it
+    # couldn't check is theirs to answer now; a blank one is still running.
+    if any(r == "blocked" and s["actor"] == "agent" for s, r in seen):
         return "needs_you"
-    if any(r == "" for _, r in seen):
+    if any(r == "" and s["actor"] == "agent" for s, r in seen):
         return "in_progress"
-    if any(r == "blocked" for _, r in seen):
+    if any(r in ("", "blocked") for _, r in seen):
         return "needs_you"
     return "verified"
 
@@ -680,7 +684,7 @@ class JointChecks:
         where = "their repo %s" % repo if repo else "their own repo"
         mins = max(1, int(round(ASK_TIMEOUT_S / 60)))
         return (
-            "[MindFlock joint check] Your user asks you to write the joint "
+            "Joint check — your user asks you to write the joint "
             "checklist for joint task %s: the few checks that show your half "
             "(this folder) and %s's half (%s) agree.\n"
             "Read the brief with peer_joint and the contract in %s; look at "
@@ -702,7 +706,9 @@ class JointChecks:
     async def answer(self, link_id: str, step_id, result, note="") -> dict:
         """``POST …/joint/check/answer`` ``{step_id, result, note}``: the
         person answers one of the human steps on THEIR side (``result`` ""
-        clears it)."""
+        clears it), or one of their agent's steps the agent recorded as
+        ``blocked`` (couldn't check it) — recorded ``by: "human"``, keeping
+        the agent's note when the person gives none."""
         link, j = self._active(link_id)
         result = str(result if result is not None else "").strip().lower()
         if result not in RESULTS:
@@ -717,11 +723,22 @@ class JointChecks:
                 raise self._err(
                     "that step is on %s's side — they answer it on theirs" % name
                 )
+            said = note
             if step["actor"] != "human":
-                raise self._err(
-                    "that step is your agent's — press Run my steps to check it"
-                )
-            self._record(chk, step["id"], result, note, "human", head)
+                prev = chk["mine"]["results"].get(step["id"]) or {}
+                if prev.get("result") != "blocked" or prev.get("by") == "human":
+                    raise self._err(
+                        "that step is your agent's — press Run my steps to check "
+                        "it (you can answer it once your agent couldn't)"
+                    )
+                if result not in ("pass", "fail"):
+                    raise self._err(
+                        "your agent couldn't check that step — answer pass or fail",
+                        400,
+                    )
+                if not said and prev.get("note"):
+                    said = _clip("Agent: " + prev["note"], MAX_NOTE)
+            self._record(chk, step["id"], result, said, "human", head)
             return chk
 
         chk, before, _ = self._mutate(link_id, j["id"], fn)
@@ -797,12 +814,13 @@ class JointChecks:
     def _run_prompt(self, link, j: dict, chk: dict, steps: List[dict]) -> str:
         name = jm._line(self._name(link), 32) or "the peer"
         lines = [
-            "[MindFlock joint check] Run YOUR side's steps of the joint checklist "
+            "Joint check — run YOUR side's steps of the joint checklist "
             "for joint task %s, here in this folder, and record each one with "
             'peer_check action="record", step_id, result "pass" | "fail" | '
             '"blocked" (couldn\'t check it) and note = one line of what you saw. '
             'peer_check action="read" lists them again. Report what you find — '
-            "don't change code to make a step pass." % j["id"]
+            "don't change code to make a step pass." % j["id"],
+            jm.SANDBOX_LINE,
         ]
         if chk["by"] == "peer":
             lines.append(

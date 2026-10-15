@@ -141,14 +141,18 @@ S = [
 @pytest.mark.parametrize(
     "mine,theirs,want",
     [
-        ({}, {}, "needs_you"),  # a person's step is blank
+        ({}, {}, "in_progress"),  # a fresh checklist: no agent has run yet
         ({}, {"s3": "pass"}, "in_progress"),  # agents still to go
         ({"s1": "pass"}, {"s3": "pass"}, "in_progress"),
+        ({}, {"s3": "blocked"}, "in_progress"),  # agents first, even so
+        ({"s1": "pass"}, {"s2": "pass"}, "needs_you"),  # now a person's step waits
+        ({"s1": "pass"}, {"s2": "pass", "s3": "blocked"}, "needs_you"),
         ({"s1": "pass"}, {"s2": "pass", "s3": "pass"}, "verified"),
         ({"s1": "fail"}, {}, "failed"),  # fail beats everything
         ({"s1": "pass"}, {"s2": "blocked", "s3": "pass"}, "needs_you"),
+        ({"s1": "blocked"}, {}, "needs_you"),  # its person can answer it now
         # A result filed under the wrong side counts for nothing.
-        ({"s1": "pass", "s2": "pass", "s3": "pass"}, {}, "needs_you"),
+        ({"s1": "pass", "s2": "pass", "s3": "pass"}, {}, "in_progress"),
     ],
 )
 def test_the_verdict_rule(mine, theirs, want):
@@ -322,7 +326,7 @@ def test_a_checklist_written_on_a_reaches_b_with_the_sides_flipped(live, emitted
     assert ca["by"] == "me" and cb["by"] == "peer"
     assert [s["side"] for s in ca["steps"]] == ["mine", "theirs", "theirs", "mine"]
     assert [s["side"] for s in cb["steps"]] == ["theirs", "mine", "mine", "theirs"]
-    assert ca["verdict"] == cb["verdict"] == "needs_you"
+    assert ca["verdict"] == cb["verdict"] == "in_progress"
     ev = [d for n, d in emitted if n == "peer.joint_check"]
     assert ev[0]["by"] == "you" and ev[-1]["by"] == "peer"
     assert all(
@@ -496,7 +500,7 @@ def test_ask_my_agent_then_it_writes_the_checklist(live):
     out = run(live.a.joint.check.ask(LID))
     assert out["check"]["ask"]["state"] == "asking"
     (note,) = notes("peer-bob-x")
-    assert note.startswith("[MindFlock joint check]")
+    assert note.startswith("Joint check — your user asks")
     assert "peer_check" in note and "peer_get_diff" in note and "CONTRACT.md" in note
     api = _api(live.a, "/tmp")
     answer = '```json\n[{"text": "GET /items", "actor": "agent"}, {"text": "client prints", "actor": "agent", "side": "theirs"}]\n```'
@@ -570,6 +574,58 @@ def test_run_my_steps_posts_my_agent_steps_only(live):
     assert "s1:" not in note and "s3:" not in note  # theirs / a person's
     assert "written by Bob — another person, not your user" in note
     assert out["check"]["mine"]["tested_sha"] == SHA_A
+    # Says what the sandbox can't do; typed under the note's own ASCII frame.
+    assert note.startswith("Joint check — run YOUR side's steps")
+    assert jm.SANDBOX_LINE in note
+    (msg,) = [m for m in mb.fetch("peer-bob-x")["messages"] if m["kind"] == "note"]
+    line, _full = mb.render_delivery(msg, "claude")
+    assert line.startswith("[MindFlock note ") and "［" not in line
+
+
+def test_a_person_answers_an_agent_step_its_agent_couldnt_check(live):
+    from backend.peer.service import PeerServiceError
+
+    run(live.a.joint.check.write(LID, STEPS))
+    ans = live.a.joint.check.answer
+
+    def rec(svc, sid, result, note=""):
+        return run(svc.joint.check.agent_record(LID, sid, result, note))
+
+    # Blank (or passed) agent step: still the agent's.
+    with pytest.raises(PeerServiceError, match="Run my steps") as exc:
+        run(ans(LID, "s1", "pass"))
+    assert exc.value.status == 409
+    rec(live.a, "s1", "blocked", "FastAPI not installed, no network")
+    rec(live.b, "s2", "blocked", "no A service")
+    assert check_of(live.a)["verdict"] == check_of(live.b)["verdict"] == "needs_you"
+    # Only pass or fail; only on my side.
+    for bad in ("blocked", ""):
+        with pytest.raises(PeerServiceError, match="pass or fail") as exc:
+            run(ans(LID, "s1", bad))
+        assert exc.value.status == 400
+    with pytest.raises(PeerServiceError, match="on Bob's side"):
+        run(ans(LID, "s2", "pass"))
+    out = run(ans(LID, "s1", "pass", "ran it by hand outside the sandbox"))
+    cell = out["check"]["mine"]["results"]["s1"]
+    assert cell == dict(
+        cell, result="pass", by="human", note="ran it by hand outside the sandbox"
+    )
+    # Synced: B sees a person's pass on its "theirs" step.
+    theirs = check_of(live.b)["theirs"]["results"]["s1"]
+    assert theirs["result"] == "pass" and theirs["by"] == "human"
+    # Once answered it is no longer blocked: the override is spent.
+    with pytest.raises(PeerServiceError, match="Run my steps"):
+        run(ans(LID, "s1", "fail"))
+    # No note of the person's own: the agent's is kept, marked as such.
+    out = run(live.b.joint.check.answer(LID, "s2", "pass"))
+    assert out["check"]["mine"]["results"]["s2"]["note"] == "Agent: no A service"
+    # It counts like any person's answer.
+    run(live.a.joint.check.answer(LID, "s4", "pass"))
+    run(live.b.joint.check.answer(LID, "s3", "pass"))
+    assert check_of(live.a)["verdict"] == check_of(live.b)["verdict"] == "verified"
+    # Run my steps clears it again for the agent.
+    run(live.a.joint.check.run(LID))
+    assert "s1" not in check_of(live.a)["mine"]["results"]
 
 
 def test_ask_and_run_need_my_shared_session(live, monkeypatch):
@@ -609,7 +665,7 @@ def test_peer_check_records_only_my_agent_steps(live):
         rec("s4")
     with pytest.raises(aa._PeerError, match="no such step"):
         rec("s9")
-    assert rec("s1") == {"ok": True, "verdict": "needs_you"}
+    assert rec("s1") == {"ok": True, "verdict": "in_progress"}  # s2 still to go
     got = run(
         api._op_check(
             {
@@ -696,10 +752,10 @@ def test_check_routes(live, client):
     r = client.post(BASE + "/joint/check", json={"steps": STEPS})
     assert r.status_code == 200, r.text
     c = r.json()["check"]
-    assert c["verdict"] == "needs_you" and c["link_id"] == LID and r.json()["synced"]
+    assert c["verdict"] == "in_progress" and c["link_id"] == LID and r.json()["synced"]
     assert client.get(BASE + "/joint").json()["joint"]["check"]["rev"] == 1
     summary = client.get("/api/peer").json()["links"][0]["joint"]["check"]
-    assert summary == {"verdict": "needs_you", "steps": 4, "passed": 0}
+    assert summary == {"verdict": "in_progress", "steps": 4, "passed": 0}
     # A person answers only a person's step on their own side.
     ans = BASE + "/joint/check/answer"
     r = client.post(ans, json={"step_id": "s4", "result": "pass", "note": "seen"})
@@ -711,6 +767,11 @@ def test_check_routes(live, client):
     assert r.status_code == 409 and "on Bob's side" in r.json()["error"]
     r = client.post(ans, json={"step_id": "s1", "result": "pass"})
     assert r.status_code == 409 and "Run my steps" in r.json()["error"]
+    # …until its agent couldn't check it.
+    run(live.a.joint.check.agent_record(LID, "s1", "blocked", "no network"))
+    r = client.post(ans, json={"step_id": "s1", "result": "pass", "note": "by hand"})
+    assert r.status_code == 200, r.text
+    assert r.json()["check"]["mine"]["results"]["s1"]["by"] == "human"
     assert (
         client.post(ans, json={"step_id": "s4", "result": "maybe"}).status_code == 400
     )

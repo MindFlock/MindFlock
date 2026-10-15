@@ -306,6 +306,11 @@ def test_handoff_prompt_names_the_contract_and_who_wrote_the_brief():
     assert "peer_send / peer_inbox" in text and "Checkpoint" in text
     mine = jm.handoff_prompt(jm.new_joint(JID, "Do it", "me", "c"), "Bob")
     assert "written by" not in mine and "their own repo" in mine
+    # It says what the sandbox can't do.
+    assert text.endswith(jm.SANDBOX_LINE) and "no package installs" in text
+    # As a mailbox note the note's own header is the frame: no second one.
+    note = jm.handoff_prompt(j, "Alice", framed=False)
+    assert note.startswith("Joint task %s — " % JID) and "[MindFlock" not in note
 
 
 def test_contract_file_never_writes_through_a_planted_symlink(tmp_path):
@@ -633,6 +638,78 @@ def test_contract_revisions_sync_both_ways(pair, emitted):
     ]
 
 
+# --------------------------------------------------------------------------- #
+# The shared agents hear about contract changes (a note, once per rev)
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def shared(pair, monkeypatch):
+    """``pair`` with a shared session on each side (A's agent works in
+    "peer-bob-x", B's in "peer-alice-x")."""
+    for svc, title in ((pair.a, "peer-bob-x"), (pair.b, "peer-alice-x")):
+        monkeypatch.setattr(svc, "_share_session", lambda link, t=title: t)
+    return pair
+
+
+def _notes(title):
+    return [m["text"] for m in mb.fetch(title)["messages"] if m["kind"] == "note"]
+
+
+def test_a_contract_edit_tells_both_agents_once(shared):
+    run(propose_and_accept(shared))
+    run(shared.a.joint.set_contract(LID, "## v2"))
+    assert _notes("peer-bob-x") == [
+        "CONTRACT.md changed to rev 2 (by your user) — re-read it before continuing."
+    ]
+    assert _notes("peer-alice-x") == [
+        "CONTRACT.md changed to rev 2 (by Alice) — re-read it before continuing."
+    ]
+    # Never twice for one rev: a resync, a replayed frame, a second call.
+    run(shared.a.joint.resync(LID))
+    run(shared.b.joint.resync(LID))
+    run(shared.a.joint._push_contract(shared.a.store.get(LID), joint_of(shared.a)))
+    shared.b.joint._note_contract(shared.b.store.get(LID), joint_of(shared.b))
+    assert len(_notes("peer-bob-x")) == len(_notes("peer-alice-x")) == 1
+    run(shared.b.joint.set_contract(LID, "## v3"))
+    assert "noted_rev" not in shared.a.joint.get(LID)["joint"]  # bookkeeping only
+    assert _notes("peer-bob-x")[-1].startswith("CONTRACT.md changed to rev 3 (by Bob)")
+    assert _notes("peer-alice-x")[-1].startswith(
+        "CONTRACT.md changed to rev 3 (by your user)"
+    )
+
+
+def test_an_accepted_proposal_tells_both_agents(shared):
+    run(propose_and_accept(shared))
+    pid = run(shared.b.joint.propose_edit(LID, "## v2", by="agent"))["proposal_id"]
+    assert _notes("peer-bob-x") == _notes("peer-alice-x") == []
+    run(shared.a.joint.decide(LID, pid, True))
+    tail = " was accepted — CONTRACT.md is now rev 2: re-read it before continuing."
+    assert _notes("peer-alice-x") == ["Your contract proposal %s%s" % (pid, tail)]
+    assert _notes("peer-bob-x") == ["Bob's contract proposal %s%s" % (pid, tail)]
+    run(shared.b.joint.resync(LID))
+    assert len(_notes("peer-bob-x")) == len(_notes("peer-alice-x")) == 1
+
+
+def test_a_rejected_proposal_tells_both_agents(shared):
+    run(propose_and_accept(shared, contract="v1"))
+    pid = run(shared.a.joint.propose_edit(LID, "v2"))["proposal_id"]
+    run(shared.b.joint.decide(LID, pid, False))
+    tail = ": continue with the current contract (CONTRACT.md rev 1)."
+    assert _notes("peer-bob-x") == [
+        "Your contract proposal %s was rejected by Bob%s" % (pid, tail)
+    ]
+    assert _notes("peer-alice-x") == [
+        "Alice's contract proposal %s was rejected by your user%s" % (pid, tail)
+    ]
+    run(shared.a.joint.resync(LID))
+    assert len(_notes("peer-bob-x")) == len(_notes("peer-alice-x")) == 1
+
+
+def test_no_contract_note_before_the_joint_is_active(shared):
+    run(shared.a.joint.propose(LID, "brief", contract_text="v1"))
+    run(shared.a.joint.set_contract(LID, "v2"))
+    assert _notes("peer-bob-x") == _notes("peer-alice-x") == []
+
+
 def test_concurrent_edits_converge_on_the_proposers_copy(pair):
     run(propose_and_accept(pair))
     pair.wa.up = pair.wb.up = False
@@ -792,7 +869,9 @@ def test_a_proposal_reaches_the_shared_agent_as_untrusted_peer_input(
     ]
     msgs = mb.fetch("peer-bob-abab")["messages"]
     note = [m for m in msgs if m["kind"] == "note"]
-    assert note and "[MindFlock joint task" in note[0]["text"]
+    assert note and note[0]["text"].startswith("Joint task ")
+    line, _full = mb.render_delivery(note[0], "claude")
+    assert line.startswith("[MindFlock note ") and "［" not in line
     (prop,) = [m for m in msgs if m["from"].startswith("peer:")]
     assert prop["from"] == "peer:Bob"
     assert prop["data"]["peer_kind"] == "contract_proposal"

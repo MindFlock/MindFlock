@@ -43,10 +43,24 @@ describe("verdictLine", () => {
     expect(verdictLine(check(ALL.mine, { s2: "pass" }), "Bob")).toBe("Needs Bob — 1 step");
     expect(verdictLine(check({ s4: "pass" }, { s3: "pass" }), "Bob")).toBe("In progress");
     expect(verdictLine(check(ALL.mine, { s2: "blocked", s3: "pass" }), "Bob")).toBe(
+      "Needs Bob — 1 step their agent couldn't check"
+    );
+    expect(verdictLine(check({ s1: "blocked" }), "Bob")).toBe("Needs you — 1 step your agent couldn't check");
+    expect(verdictLine(check({ ...ALL.mine, s4: "blocked" }, ALL.theirs), "Bob")).toBe(
       "Needs you — 1 step couldn't be checked"
     );
     expect(verdictLine(null, "Bob")).toBe("No checklist yet");
     expect(verdictOf({ steps: [] })).toBe("empty");
+  });
+});
+
+describe("verdictOf", () => {
+  it("is in progress until the agents have run, then waits on a person", () => {
+    expect(verdictOf(check())).toBe("in_progress"); // a fresh checklist
+    expect(verdictOf(check({ s4: "pass" }, { s3: "blocked" }))).toBe("in_progress");
+    expect(verdictOf(check({ s1: "pass" }, { s2: "pass" }))).toBe("needs_you");
+    expect(verdictOf(check({ s1: "blocked" }))).toBe("needs_you");
+    expect(verdictOf(check({ s1: "blocked", s4: "fail" }))).toBe("failed");
   });
 });
 
@@ -79,7 +93,7 @@ describe("JointCheck", () => {
   });
 
   it("groups the steps by side with who checks them, answers only on my person's steps", () => {
-    const html = render(check({ s1: "pass" }));
+    const html = render(check({ s1: "pass" }, { s2: "pass" })); // agents done: a person waits
     expect(html).toContain("Your side");
     expect(html).toContain("Bob&#x27;s side");
     expect(html.indexOf("GET /items answers")).toBeLessThan(html.indexOf("Bob&#x27;s side"));
@@ -92,6 +106,32 @@ describe("JointCheck", () => {
     expect(html).toContain("Write the checklist");
     expect(html).toContain("Ask my agent");
     expect(html).toContain("Run my steps");
+  });
+
+  it("lets my person answer my agent's step it couldn't check — Pass / Fail only", () => {
+    const blocked = (by: "agent" | "human", result: "blocked" | "pass") => {
+      const c = check({ s4: "pass" }, { s2: "pass", s3: "pass" });
+      c.mine!.results.s1 = { result, by, note: "FastAPI not installed" };
+      return render(c);
+    };
+    const html = blocked("agent", "blocked");
+    expect(html).toContain("The agent couldn&#x27;t check this — you can");
+    expect(html).toContain("Needs you — 1 step your agent couldn&#x27;t check");
+    const group = html.slice(html.indexOf('aria-label="Answer step 1"'));
+    const s1 = group.slice(0, group.indexOf("</span>"));
+    expect(s1.match(/peer-joint-answer-btn/g)?.length).toBe(2);
+    expect(s1).toContain(">Pass<");
+    expect(s1).toContain(">Fail<");
+    expect(s1).not.toContain("Can&#x27;t check");
+    // Once a person answered it (or on their side, or read-only): no buttons.
+    expect(blocked("human", "pass")).not.toContain('aria-label="Answer step 1"');
+    expect(blocked("human", "pass")).not.toContain("you can");
+    const theirs = check({ s1: "pass" }, { s3: "pass" });
+    theirs.theirs!.results.s2 = { result: "blocked", by: "agent" };
+    expect(render(theirs)).not.toContain('aria-label="Answer step 2"');
+    const ro = check({}, {}, { link_id: "" });
+    ro.mine!.results.s1 = { result: "blocked", by: "agent" };
+    expect(render(ro)).not.toContain("you can");
   });
 
   it("says verified and failed in the chip's look", () => {
@@ -117,7 +157,7 @@ describe("JointCheck", () => {
   });
 
   it("without a link id it is read-only", () => {
-    const html = render(check({ s1: "pass" }, {}, { link_id: "" }));
+    const html = render(check({ s1: "pass" }, { s2: "pass" }, { link_id: "" }));
     expect(html).toContain("Needs you — 1 step");
     expect(html).not.toContain('aria-label="Answer step');
     expect(html).not.toContain("Write the checklist");

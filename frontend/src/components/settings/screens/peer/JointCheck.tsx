@@ -2,8 +2,10 @@
  *
  * The steps grouped by side (yours, then theirs), each with who checks it
  * (agent / person) and its result; Pass / Fail / Can't check on YOUR person's
- * steps; the verdict line; and Write the checklist (an inline editor, one
- * step per line with [theirs] / [human] tags), Ask my agent, Run my steps.
+ * steps, and Pass / Fail on one of YOUR agent's steps it couldn't check (the
+ * server records that answer as a person's); the verdict line; and Write the
+ * checklist (an inline editor, one step per line with [theirs] / [human]
+ * tags), Ask my agent, Run my steps.
  * It never gates anything (docs/peer-link.md "Joint check — CONTRACT").
  *
  * The server's view carries its `link_id`, so the card that hosts this slot
@@ -110,6 +112,9 @@ export function JointCheck({
     const r = cellOf(check, s);
     const result = r?.result || "";
     const mineHuman = !!linkId && s.side === "mine" && s.actor === "human";
+    // My agent couldn't check it (sandbox: no network, no installs): my person can.
+    const takeOver = !!linkId && s.side === "mine" && s.actor === "agent" && result === "blocked" && r?.by !== "human";
+    const answers = takeOver ? ANSWERS.filter(([v]) => v !== "blocked") : ANSWERS;
     return (
       <li key={s.id} className={"peer-joint-step peer-joint-step-" + (result || "blank")} data-step={s.id}>
         <span className="peer-joint-step-n">{n}</span>
@@ -117,11 +122,16 @@ export function JointCheck({
           <span className="peer-joint-step-text">{s.text}</span>
           {s.expect ? <span className="peer-joint-step-expect">Expect: {s.expect}</span> : null}
           {r?.note ? <span className="peer-joint-step-note">{r.note}</span> : null}
+          {takeOver ? (
+            <span className="peer-joint-step-note peer-joint-step-takeover">
+              The agent couldn't check this — you can
+            </span>
+          ) : null}
         </span>
         <span className={"peer-joint-actor peer-joint-actor-" + s.actor}>{s.actor === "human" ? "person" : "agent"}</span>
-        {mineHuman ? (
+        {mineHuman || takeOver ? (
           <span className="peer-joint-answer" role="group" aria-label={"Answer step " + n}>
-            {ANSWERS.map(([value, label]) => (
+            {answers.map(([value, label]) => (
               <button
                 key={value}
                 type="button"

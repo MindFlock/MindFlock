@@ -69,16 +69,19 @@ export function verdictOf(check: JointCheckView | null | undefined): CheckVerdic
   if (!check || !steps.length) return "empty";
   const seen = steps.map((s) => [s, cellOf(check, s)?.result || ""] as const);
   if (seen.some(([, r]) => r === "fail")) return "failed";
-  if (seen.some(([s, r]) => r === "" && s.actor === "human")) return "needs_you";
-  if (seen.some(([, r]) => r === "")) return "in_progress";
-  if (seen.some(([, r]) => r === "blocked")) return "needs_you";
+  // A person is waited on only once the agents are: an agent's step it
+  // couldn't check is theirs to answer now; a blank one is still running.
+  if (seen.some(([s, r]) => r === "blocked" && s.actor === "agent")) return "needs_you";
+  if (seen.some(([s, r]) => r === "" && s.actor === "agent")) return "in_progress";
+  if (seen.some(([, r]) => r === "" || r === "blocked")) return "needs_you";
   return "verified";
 }
 
 const plural = (n: number) => n + (n === 1 ? " step" : " steps");
 
 /** The card's verdict line: "Verified — every step passed on both sides",
- * "Failed — step 2 on Bob's side", "Needs you — 1 step", "In progress". */
+ * "Failed — step 2 on Bob's side", "Needs you — 1 step", "Needs you — 1 step
+ * your agent couldn't check", "In progress". */
 export function verdictLine(check: JointCheckView | null | undefined, peerName: string): string {
   const name = (peerName || "").trim() || "your peer";
   const steps = check?.steps || [];
@@ -91,12 +94,22 @@ export function verdictLine(check: JointCheckView | null | undefined, peerName: 
     const where = steps[i].side === "mine" ? "your side" : name + "'s side";
     return "Failed — step " + (i + 1) + " on " + where;
   }
-  const blankHuman = (side: CheckSide) =>
-    steps.filter((s) => s.side === side && s.actor === "human" && !cellOf(check, s)?.result).length;
-  if (blankHuman("mine")) return "Needs you — " + plural(blankHuman("mine"));
-  if (blankHuman("theirs")) return "Needs " + name + " — " + plural(blankHuman("theirs"));
-  const blocked = steps.filter((s) => cellOf(check, s)?.result === "blocked").length;
-  return "Needs you — " + plural(blocked) + " couldn't be checked";
+  const count = (side: CheckSide, actor: CheckStep["actor"], result: CheckResult) =>
+    steps.filter((s) => s.side === side && s.actor === actor && (cellOf(check, s)?.result || "") === result).length;
+  const who = (side: CheckSide) => (side === "mine" ? "Needs you — " : "Needs " + name + " — ");
+  for (const side of ["mine", "theirs"] as const) {
+    const n = count(side, "agent", "blocked");
+    if (n) return who(side) + plural(n) + (side === "mine" ? " your" : " their") + " agent couldn't check";
+  }
+  for (const side of ["mine", "theirs"] as const) {
+    const n = count(side, "human", "");
+    if (n) return who(side) + plural(n);
+  }
+  for (const side of ["mine", "theirs"] as const) {
+    const n = count(side, "human", "blocked");
+    if (n) return who(side) + plural(n) + " couldn't be checked";
+  }
+  return "Needs you";
 }
 
 /** The Verify chip's look for a verdict (`.vchip` data-tone + glyph). */
