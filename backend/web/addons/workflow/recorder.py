@@ -10,6 +10,13 @@ So this records its own timeline (:mod:`.store`):
   at the keyboard" bit or the session's identity (:func:`meta_of`) changed,
   plus one heartbeat per :data:`HEARTBEAT_S` so server downtime shows up as
   a gap instead of as the last phase stretched over it.
+* Each sample also reads every session's ``HEAD`` straight from its
+  ``.git`` files (no git process): the first sight of a branch writes a
+  ``head`` row, and when HEAD moves one ``git log`` counts the commits that
+  were authored since the old HEAD was seen (``commit`` row, ``n`` of them,
+  ``merge`` when the new HEAD has two parents). A pull, a rebase, a
+  cherry-pick or an amend keeps the old author time, so it brings ``n`` 0:
+  only a commit written just now finishes a unit of work.
 * :meth:`Recorder.on_event` takes the bus's own word for the moments a
   sample would blur or miss: ``stage_changed`` / ``activity_changed`` (the
   exact second pre-commit hooks start), ``pr_state_changed`` → MERGED (no row
@@ -23,10 +30,12 @@ records its own sessions.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+import subprocess
 import threading
 import time
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from . import store
 
@@ -39,6 +48,13 @@ TICK_S = 5.0
 HEARTBEAT_S = 300.0
 #: A keystroke into any MindFlock window within this counts as "you're here".
 ATTENDED_S = 600.0
+#: Phases where the "someone is at the keyboard" bit is recorded: the agent
+#: is idle, so whose move it is depends on whether a person is around.
+_IDLE_PHASES = frozenset({"your_turn", "to_push", "to_pr", "review"})
+#: A commit authored this long before its old HEAD was first seen still
+#: counts as new (the sample is up to TICK_S late; clocks drift a little).
+_AUTHOR_SLACK_S = 120.0
+_SHA_RE = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
 
 # Ticket ids in titles / branches: Shortcut "sc-123", Jira/Linear "ENG-42",
 # GitHub issues "issue-17" / "gh-17".
@@ -140,6 +156,88 @@ def _local(title: str) -> bool:
     return bool(title) and "::" not in title
 
 
+def _read(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def read_head(wt: str) -> str:
+    """The commit ``HEAD`` points at in worktree ``wt``, read from the
+    ``.git`` files (a linked worktree's ``gitdir:`` file, its ``commondir``,
+    loose refs, then ``packed-refs``); ``""`` when unreadable. Cheap enough
+    for every sample — never runs git."""
+    if not wt:
+        return ""
+    dotgit = os.path.join(wt, ".git")
+    if os.path.isdir(dotgit):
+        gitdir = dotgit
+    else:
+        line = _read(dotgit)
+        if not line.startswith("gitdir:"):
+            return ""
+        gitdir = os.path.normpath(os.path.join(wt, line[len("gitdir:") :].strip()))
+    head = _read(os.path.join(gitdir, "HEAD"))
+    if not head.startswith("ref:"):
+        return head if _SHA_RE.match(head) else ""
+    ref = head[len("ref:") :].strip()
+    common = _read(os.path.join(gitdir, "commondir"))
+    common = os.path.normpath(os.path.join(gitdir, common)) if common else gitdir
+    for base in (gitdir, common):
+        sha = _read(os.path.join(base, ref))
+        if _SHA_RE.match(sha):
+            return sha
+    for line in _read(os.path.join(common, "packed-refs")).splitlines():
+        parts = line.split(" ", 1)
+        if len(parts) == 2 and parts[1].strip() == ref and _SHA_RE.match(parts[0]):
+            return parts[0]
+    return ""
+
+
+def new_commits(wt: str, old: str, new: str, since: float) -> Tuple[int, bool]:
+    """``(n, merge)`` for HEAD moving ``old`` → ``new`` in ``wt``: how many of
+    the commits reachable from ``new`` but not ``old`` are single-parent and
+    were authored at or after ``since``, and whether ``new`` itself is a
+    merge commit. A failure answers ``(0, False)`` — no unit is closed on a
+    guess."""
+    log = ["git", "-C", wt, "log", "--format=%H %P|%at"]
+    # The old HEAD may be gone (gc'd after a rewrite): then the new tip alone.
+    attempts = [log + ["-n", "200", new] + (["^" + old] if old else [])]
+    if old:
+        attempts.append(log + ["-n", "1", new])
+    out = ""
+    for attempt in attempts:
+        try:
+            cp = subprocess.run(
+                attempt,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return 0, False
+        if cp.returncode == 0:
+            out = cp.stdout.decode("utf-8", "replace")
+            break
+    n = 0
+    merge = False
+    for i, line in enumerate(out.splitlines()):
+        shas, _, at = line.partition("|")
+        parents = len(shas.split()) - 1
+        if i == 0 and shas.split()[:1] == [new]:
+            merge = parents >= 2
+        try:
+            authored = float(at)
+        except ValueError:
+            continue
+        if parents <= 1 and authored >= since:
+            n += 1
+    return n, merge
+
+
 class Recorder:
     """The in-memory "last written" state, so only changes are appended.
     Thread-safe: the loop and bus callbacks (any thread) share it."""
@@ -151,6 +249,9 @@ class Recorder:
         self._meta: Dict[str, dict] = {}  # title -> last meta written
         self._rows: Dict[str, dict] = {}  # title -> last row seen
         self._tickets: Dict[str, str] = {}  # title -> ticket id from session.created
+        # title -> {"branch", "sha", "seen"}: the HEAD last written, and when
+        # that sha was first seen (the author-time floor for its successors).
+        self._head: Dict[str, dict] = {}
         self._hb_at = 0.0
 
     # ---- sampling -------------------------------------------------------- #
@@ -166,6 +267,14 @@ class Recorder:
         att = attended(now) if att is None else att
         out: List[dict] = []
         seen = set()
+        # HEAD reads are file reads, outside the lock; the git log for a moved
+        # HEAD runs after it (the bus callbacks share the lock).
+        heads = {
+            str(r.get("title") or ""): read_head(str(r.get("path") or ""))
+            for r in rows or []
+            if isinstance(r, dict) and _local(str(r.get("title") or ""))
+        }
+        moved: List[tuple] = []
         with self._lock:
             for row in rows or []:
                 if not isinstance(row, dict):
@@ -176,6 +285,7 @@ class Recorder:
                 seen.add(title)
                 self._rows[title] = row
                 out += self._diff_locked(title, row, now, att)
+                out += self._head_locked(title, row, heads.get(title, ""), now, moved)
             # A session that vanished from a non-empty list without a delete
             # event (removed elsewhere, tombstone convergence) has ended.
             if seen:
@@ -187,8 +297,38 @@ class Recorder:
                 if now - self._hb_at >= HEARTBEAT_S:
                     out.append({"t": now, "k": "hb"})
                 self._hb_at = now
+        for title, wt, old, new, since in moved:
+            n, merge = new_commits(wt, old, new, since)
+            out.append(
+                {
+                    "t": now,
+                    "k": "commit",
+                    "s": title,
+                    "sha": new,
+                    "n": n,
+                    "merge": merge,
+                }
+            )
         self._write(out)
         return out
+
+    def _head_locked(
+        self, title: str, row: dict, sha: str, now: float, moved: List[tuple]
+    ) -> List[dict]:
+        """A ``head`` row the first time a branch's HEAD is seen; a moved HEAD
+        on the same branch is queued in ``moved`` for :func:`new_commits`."""
+        if not sha:
+            return []
+        branch = str(row.get("branch") or "")
+        old = self._head.get(title)
+        if old is not None and old["sha"] == sha and old["branch"] == branch:
+            return []
+        self._head[title] = {"branch": branch, "sha": sha, "seen": now}
+        if old is None or old["branch"] != branch:
+            return [{"t": now, "k": "head", "s": title, "sha": sha}]
+        since = old["seen"] - _AUTHOR_SLACK_S
+        moved.append((title, str(row.get("path") or ""), old["sha"], sha, since))
+        return []
 
     def _diff_locked(self, title: str, row: dict, now: float, att: bool) -> List[dict]:
         out: List[dict] = []
@@ -201,15 +341,15 @@ class Recorder:
             out.append({"t": now, "k": "meta", "s": title, **meta})
             self._meta[title] = meta
         ph = phase_of(row)
-        # The keyboard bit only matters while it's the person's move.
-        key = (ph, bool(att) if ph == "your_turn" else False)
+        # The keyboard bit only matters while the agent is idle.
+        key = (ph, bool(att) if ph in _IDLE_PHASES else False)
         if self._phase.get(title) != key:
             out.append({"t": now, "k": "ph", "s": title, "ph": ph, "a": key[1]})
             self._phase[title] = key
         return out
 
     def _forget_locked(self, title: str) -> None:
-        for d in (self._phase, self._meta, self._rows, self._tickets):
+        for d in (self._phase, self._meta, self._rows, self._tickets, self._head):
             d.pop(title, None)
 
     # ---- the bus --------------------------------------------------------- #
@@ -259,7 +399,7 @@ class Recorder:
                 self._rows[title] = row
                 prev = self._phase.get(title)
                 att = prev[1] if prev else False
-                if phase_of(row) == "your_turn":
+                if phase_of(row) in _IDLE_PHASES:
                     att = attended(now)
                 out += self._diff_locked(title, row, now, att)
         self._write(out)

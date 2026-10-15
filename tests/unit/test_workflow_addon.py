@@ -1,8 +1,11 @@
 """Workflow Optimizer (addons/workflow): phase classification, the recorder's
 change-only writes, the bus moments it takes (merge, delete, stage, ticket),
-work items (one branch's trip to a merged PR, shared windows combined, split
-at merges, downtime untracked), the bottleneck stats + advice, and the
-routes/manifest. Time is injected (``now=``); nothing reads the real engine.
+its HEAD watching (head / commit rows, against a real scratch git repo),
+units of work (first real work → the commit that finishes it, shared windows
+combined, estimated commits for older rows, idle stages inside a unit are the
+person's, the handoffs after it, downtime untracked), the bottleneck stats +
+advice, and the routes/manifest. Time is injected (``now=``); nothing reads
+the real engine.
 """
 
 from __future__ import annotations
@@ -10,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 
 import pytest
 from fastapi.testclient import TestClient
@@ -113,6 +117,117 @@ def test_observe_writes_only_changes_and_a_heartbeat():
         {"t": T + 25 + R.HEARTBEAT_S, "k": "hb"}
     ]
     assert w[-1]["k"] == "hb"
+
+
+def test_the_keyboard_bit_is_kept_for_every_idle_stage():
+    """Inside a unit an idle agent on a committed branch is the person's
+    move: the recorder keeps whether they were around for it too."""
+    r, _ = rec()
+    r.observe([row(stage="committed")], now=T, att=True)
+    out = r.observe([row(stage="committed")], now=T + 5, att=False)
+    assert out == [{"t": T + 5, "k": "ph", "s": "s1", "ph": "to_push", "a": False}]
+    assert r.observe(
+        [row(stage="committed", activity="working")], now=T + 10, att=True
+    )[0] == {"t": T + 10, "k": "ph", "s": "s1", "ph": "agent", "a": False}
+
+
+def git(wt, *args, when=None):
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+    if when is not None:
+        env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = "@%d +0000" % when
+    out = subprocess.run(
+        ["git", "-C", str(wt), *args],
+        env=env,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return out.stdout.decode().strip()
+
+
+def commit(wt, name, when):
+    (wt / name).write_text(name)
+    git(wt, "add", name)
+    git(wt, "commit", "-q", "--no-verify", "-m", name, when=when)
+    return git(wt, "rev-parse", "HEAD")
+
+
+@pytest.fixture
+def repo(tmp_path):
+    wt = tmp_path / "repo"
+    wt.mkdir()
+    git(wt, "init", "-q", "-b", "feat")
+    commit(wt, "base", T - 86400)
+    return wt
+
+
+def test_read_head_follows_loose_packed_and_linked_worktree_refs(repo, tmp_path):
+    head = git(repo, "rev-parse", "HEAD")
+    assert R.read_head(str(repo)) == head
+    git(repo, "pack-refs", "--all")
+    assert not (repo / ".git" / "refs" / "heads" / "feat").exists()
+    assert R.read_head(str(repo)) == head
+    linked = tmp_path / "linked"
+    git(repo, "worktree", "add", "-q", "-b", "other", str(linked))
+    assert R.read_head(str(linked)) == head
+    nxt = commit(linked, "x", T)
+    assert R.read_head(str(linked)) == nxt and R.read_head(str(repo)) == head
+    git(repo, "checkout", "-q", "--detach")
+    assert R.read_head(str(repo)) == head
+    assert R.read_head(str(tmp_path / "nope")) == "" and R.read_head("") == ""
+
+
+def test_new_commits_counts_only_work_written_just_now(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    one = commit(repo, "a", T + 10)
+    two = commit(repo, "b", T + 20)
+    assert R.new_commits(str(repo), base, two, T) == (2, False)
+    assert R.new_commits(str(repo), one, two, T + 15) == (1, False)
+    # an amend keeps the author time: no new work
+    git(repo, "commit", "-q", "--amend", "--no-verify", "-m", "b2", when=T + 30)
+    amended = git(repo, "rev-parse", "HEAD")
+    assert R.new_commits(str(repo), two, amended, T + 25) == (0, False)
+    # pulled work (authored before the old HEAD was seen) is no new work
+    git(repo, "checkout", "-q", "-b", "side", base)
+    old_side = commit(repo, "side", T - 3600)
+    git(repo, "checkout", "-q", "feat")
+    git(repo, "merge", "-q", "--no-ff", "--no-edit", "side", when=T + 40)
+    merged = git(repo, "rev-parse", "HEAD")
+    assert R.new_commits(str(repo), amended, merged, T + 35) == (0, True)
+    assert old_side
+    # an unknown old HEAD (gc'd after a rewrite): the new tip alone
+    assert R.new_commits(str(repo), "f" * 40, amended, T) == (1, False)
+    assert R.new_commits(str(repo / "nope"), base, amended, T) == (0, False)
+
+
+def test_observe_writes_head_then_commit_rows(repo, monkeypatch):
+    r, w = rec()
+    rw = lambda **kw: row(path=str(repo), branch="feat", **kw)  # noqa: E731
+    out = r.observe([rw()], now=T, att=False)
+    base = git(repo, "rev-parse", "HEAD")
+    assert {"t": T, "k": "head", "s": "s1", "sha": base} in out
+    assert not [x for x in r.observe([rw()], now=T + 5, att=False) if x["k"] != "hb"]
+    sha = commit(repo, "a", T + 7)
+    out = r.observe([rw()], now=T + 10, att=False)
+    assert out == [
+        {"t": T + 10, "k": "commit", "s": "s1", "sha": sha, "n": 1, "merge": False}
+    ]
+    # a branch switch is a new baseline, not a commit
+    git(repo, "checkout", "-q", "-b", "feat2")
+    sha2 = commit(repo, "b", T + 12)
+    out = r.observe([row(path=str(repo), branch="feat2")], now=T + 15, att=False)
+    assert [x["k"] for x in out] == ["meta", "head"] and out[1]["sha"] == sha2
+    # no path (or no repo) → no HEAD rows at all
+    out = r.observe(
+        [row(path=str(repo), branch="feat2"), row("other")], now=T + 20, att=False
+    )
+    assert [x["k"] for x in out] == ["meta", "ph"]
 
 
 def test_observe_ends_a_vanished_session_and_skips_remote_rows():
@@ -310,36 +425,47 @@ def person_scenario():
     return rows
 
 
-def test_work_items_split_at_the_merge_and_add_up():
+def test_units_end_at_commits_and_add_up():
     items = A.build_items(scenario(), T + 26000, ["s1", "s1-copy"], include_me=True)
     assert [it["id"] for it in items] == [
+        "app@feature/sc-12/x#2",
         "app@feature/sc-12/x#1",
         "app@feature/sc-12/x#0",
     ]
-    done = items[1]
+    first = items[2]
     assert (
-        done["status"] == "merged"
-        and done["ticket"] == "sc-12"
-        and done["pr"] == "https://x/pull/1"
+        first["status"] == "committed"
+        and first["ticket"] == "sc-12"
+        and first["pr"] == "https://x/pull/1"
     )
-    assert done["lead_to_pr"] == 3000 and done["lead_to_merge"] == 9000
-    assert done["to_pr"] == {
+    # Recorded before HEAD was watched: the commit is where the second hook
+    # run passed (+2760), and says it's an estimate.
+    assert first["commit_at"] == T + 2760 and first["estimated"] is True
+    assert first["lead_to_commit"] == 2760
+    assert first["to_commit"] == {
         "setup": 60.0,
         "agent": 1920.0,
         "your_turn": 600.0,
         "precommit": 120.0,
         "hook_fix": 60.0,
-        "to_push": 120.0,
-        "to_pr": 120.0,
     }
-    assert sum(done["to_pr"].values()) == done["lead_to_pr"]
-    assert done["after_pr"] == {"review": 5400.0, "rework": 600.0}
-    assert (done["commits"], done["hook_failures"]) == (2, 1)
-    # The next item starts at real work (+20000): the post-merge idle and the
-    # downtime belong to no item; the copy window's work beats the idle one.
+    assert sum(first["to_commit"].values()) == first["lead_to_commit"]
+    # After it: pushed, then a PR — each wait ended in the next handoff. The
+    # PR then sat until the rework turn, which starts the next unit.
+    assert first["after_commit"] == {"to_push": 120.0, "to_pr": 120.0}
+    assert (first["hook_runs"], first["hook_failures"]) == (2, 1)
+    # The rework is a unit of its own; its commit is estimated at the end of
+    # the work before the merge, and the review it waited in counts.
+    rework = items[1]
+    assert (rework["start"], rework["commit_at"]) == (T + 5000, T + 5600)
+    assert rework["to_commit"] == {"agent": 600.0}
+    assert rework["after_commit"] == {"review": 3400.0}
+    # The next unit starts at real work (+20000): the post-merge idle and the
+    # downtime belong to no unit; the copy window's work beats the idle one.
     nxt = items[0]
     assert nxt["status"] == "in_progress" and nxt["start"] == T + 20000
-    assert nxt["to_pr"] == {"agent": 2000.0, "your_turn": 4000.0}
+    assert nxt["commit_at"] is None and nxt["lead_to_commit"] is None
+    assert nxt["to_commit"] == {"agent": 2000.0, "your_turn": 4000.0}
     assert nxt["sessions"] == ["s1", "s1-copy"]
 
 
@@ -354,18 +480,26 @@ def test_downtime_is_untracked_and_away_is_split_from_your_turn():
     it = A.build_items(rows, T + 5200, ["s"], include_me=True)[0]
     # alive until +100+ALIVE_S, dark until the +5000 heartbeat, then idle
     # again for the 100 s before the agent restarts
-    assert it["to_pr"]["away"] == A.ALIVE_S + 100
-    assert it["to_pr"]["untracked"] == 5000 - 100 - A.ALIVE_S
-    assert it["to_pr"]["agent"] == 200
+    assert it["to_commit"]["away"] == A.ALIVE_S + 100
+    assert it["to_commit"]["untracked"] == 5000 - 100 - A.ALIVE_S
+    assert it["to_commit"]["agent"] == 200
     assert A._fmt(5400) == "1h 30m" and A._fmt(90061) == "1d 1h" and A._fmt(42) == "42s"
 
 
-def test_base_branches_are_not_work_items():
+def test_base_branches_list_only_committed_units():
     rows = [
         {"t": T, "k": "meta", "s": "s", "repo": "r", "branch": "main"},
-        {"t": T, "k": "ph", "s": "s", "ph": "to_pr"},
+        {"t": T, "k": "ph", "s": "s", "ph": "agent"},
     ]
+    # a conversation on main is no unit in progress …
     assert A.build_items(rows, T + 100, ["s"]) == []
+    # … but work committed there is a unit like any other
+    rows += [
+        {"t": T + 50, "k": "head", "s": "s", "sha": "a" * 40},
+        {"t": T + 90, "k": "commit", "s": "s", "sha": "b" * 40, "n": 1},
+    ]
+    (it,) = A.build_items(rows, T + 100, ["s"])
+    assert it["status"] == "committed" and it["lead_to_commit"] == 90
 
 
 def test_combine_scales_to_a_long_lived_session():
@@ -385,46 +519,156 @@ def test_combine_scales_to_a_long_lived_session():
     t0 = _time.monotonic()
     it = A.build_items(rows, T + 20000 * 300, ["s"], include_me=True)[0]
     assert _time.monotonic() - t0 < 5
-    assert it["to_pr"]["agent"] == it["to_pr"]["your_turn"] == 10000 * 300
+    # the first 300 s (your turn) is before the first real work
+    assert it["to_commit"]["agent"] == 10000 * 300
+    assert it["to_commit"]["your_turn"] == 9999 * 300
 
 
-def test_abandoned_and_closed_items():
+def test_abandoned_units_and_a_finished_branchs_leftovers():
     rows = [
         {"t": T, "k": "meta", "s": "gone", "repo": "r", "branch": "b"},
         {"t": T, "k": "ph", "s": "gone", "ph": "agent"},
         {"t": T + 60, "k": "end", "s": "gone"},
     ]
     assert A.build_items(rows, T + 100, ["other"])[0]["status"] == "abandoned"
+    # After a commit, the closed window's last words are no abandoned unit.
+    rows = [
+        {"t": T, "k": "meta", "s": "w", "repo": "r", "branch": "b"},
+        {"t": T, "k": "head", "s": "w", "sha": "a" * 40},
+        {"t": T, "k": "ph", "s": "w", "ph": "agent"},
+        {"t": T + 50, "k": "commit", "s": "w", "sha": "b" * 40, "n": 1},
+        {"t": T + 60, "k": "ph", "s": "w", "ph": "to_push"},
+        {"t": T + 70, "k": "ph", "s": "w", "ph": "agent"},
+        {"t": T + 80, "k": "end", "s": "w"},
+    ]
+    assert [it["status"] for it in A.build_items(rows, T + 100, ["other"])] == [
+        "committed"
+    ]
+    assert len(A.build_items(rows, T + 100, ["w"])) == 2
+
+
+def test_a_closed_windows_last_stage_is_not_still_waiting():
+    """A worker that committed and was closed (its branch merged locally,
+    never pushed) left "committed, not pushed" as its last stage: that is
+    no handoff still under way."""
+    rows = [
+        {"t": T, "k": "meta", "s": "w", "repo": "r", "branch": "b"},
+        {"t": T, "k": "head", "s": "w", "sha": "a" * 40},
+        {"t": T, "k": "ph", "s": "w", "ph": "agent"},
+        {"t": T + 50, "k": "commit", "s": "w", "sha": "b" * 40, "n": 1},
+        {"t": T + 60, "k": "ph", "s": "w", "ph": "to_push"},
+        {"t": T + 400, "k": "end", "s": "w"},
+    ] + [{"t": T + x, "k": "hb"} for x in range(0, 501, 300)]
+    (gone,) = A.build_items(rows, T + 500, ["other"])
+    assert gone["after_commit"] == {}
+    (open_,) = A.build_items(rows, T + 500, ["w"])
+    assert open_["after_commit"] == {"to_push": 340.0}
 
 
 def test_report_kpis_stats_and_advice():
     rep = A.report(scenario(), T + 26000, 7 * 86400, ["s1", "s1-copy"], include_me=True)
     k = rep["kpi"]
-    assert (k["items"], k["prs_opened"], k["merged"], k["in_progress"]) == (2, 1, 1, 1)
-    assert k["median_to_pr"] == 3000 and k["median_to_merge"] == 9000
-    assert k["median_active_to_pr"] == 3000  # nothing away/untracked before the PR
-    assert rep["basis"] == "shipped"
-    shares = {r["phase"]: r["share"] for r in rep["to_pr"]}
-    assert rep["to_pr"][0]["phase"] == "agent" and round(sum(shares.values()), 3) == 1.0
-    assert {g["group"] for g in rep["to_pr_groups"]} >= {
-        "agent",
-        "you",
-        "tooling",
-        "handoff",
-    }
+    assert (k["items"], k["committed"], k["estimated"], k["in_progress"]) == (
+        3,
+        2,
+        2,
+        1,
+    )
+    # leads 2760 and 600
+    assert k["median_to_commit"] == 1680 and k["p90_to_commit"] == 2760
+    assert k["median_active_to_commit"] == 1680  # nothing away/untracked
+    assert rep["basis"] == "committed"
+    shares = {r["phase"]: r["share"] for r in rep["to_commit"]}
+    assert (
+        rep["to_commit"][0]["phase"] == "agent"
+        and round(sum(shares.values()), 3) == 1.0
+    )
+    # Handoffs and review come after the commit: never in time to commit.
+    assert {g["group"] for g in rep["to_commit_groups"]} == {"agent", "you", "tooling"}
+    assert {r["phase"] for r in rep["after_commit"]} == {"to_push", "to_pr", "review"}
     phases = [a["phase"] for a in rep["advice"]]
     assert "your_turn" in phases and "hook_fix" in phases
     # fixes first, context (info) last
     levels = [a["level"] for a in rep["advice"]]
     assert levels == sorted(levels, key=lambda lv: lv == "info")
-    assert rep["trend"][-1]["items"] == 1
+    assert rep["trend"][-1]["items"] == 2
+    assert rep["trend"][-1]["median_to_commit"] == 1680
     assert [p["id"] for p in rep["phases"]] == A.PHASE_IDS
 
 
 def test_empty_report():
     rep = A.report([], T, 7 * 86400, [])
-    assert rep["kpi"]["items"] == 0 and rep["kpi"]["median_to_pr"] is None
+    assert rep["kpi"]["items"] == 0 and rep["kpi"]["median_to_commit"] is None
     assert rep["advice"] == [] and rep["items"] == []
+
+
+def test_idle_gaps_between_turns_after_an_early_commit_are_yours():
+    """The orchestrator pattern: a commit lands early (a worker merged in),
+    then the agent idles between turns on a branch that reads "committed,
+    not pushed". Those gaps are the person's move — not a handoff — and the
+    unit's own clock only counts the work."""
+    rows = [
+        {"t": T, "k": "meta", "s": "o", "repo": "app", "branch": "feat/r6"},
+        {"t": T, "k": "head", "s": "o", "sha": "a" * 40},
+        {"t": T, "k": "ph", "s": "o", "ph": "agent", "a": False},
+        {"t": T + 600, "k": "commit", "s": "o", "sha": "b" * 40, "n": 1},
+        {"t": T + 610, "k": "ph", "s": "o", "ph": "to_push", "a": True},
+        {"t": T + 1900, "k": "ph", "s": "o", "ph": "agent", "a": False},
+        {"t": T + 2200, "k": "ph", "s": "o", "ph": "to_push", "a": False},
+        {"t": T + 2500, "k": "ph", "s": "o", "ph": "agent", "a": False},
+        {"t": T + 2800, "k": "commit", "s": "o", "sha": "c" * 40, "n": 2},
+        {"t": T + 2810, "k": "ph", "s": "o", "ph": "to_push", "a": True},
+        {"t": T + 3000, "k": "ph", "s": "o", "ph": "to_pr", "a": True},
+    ] + [{"t": T + x, "k": "hb"} for x in range(0, 3301, 300)]
+    rows.sort(key=lambda r: r["t"])
+    second, first = A.build_items(rows, T + 3300, ["o"])
+    assert (first["start"], first["commit_at"], first["estimated"]) == (
+        T,
+        T + 600,
+        False,
+    )
+    # the agent's summing-up after the commit (+600..+610) is no unit
+    assert first["to_commit"] == {"agent": 600.0}
+    # sat "committed, not pushed" until the next turn: not a handoff
+    assert first["after_commit"] == {}
+    assert second["start"] == T + 1900 and second["commit_at"] == T + 2800
+    assert second["to_commit"] == {"agent": 600.0}
+    assert second["your_time_s"] == 300  # the idle gap mid-unit, cut out
+    full = A.build_items(rows, T + 3300, ["o"], include_me=True)[0]
+    assert full["to_commit"] == {"agent": 600.0, "away": 300.0}
+    # this time the push happened: that wait counts, and the open PR is
+    # still waiting now
+    assert second["after_commit"] == {"to_push": 190.0, "to_pr": 300.0}
+
+
+def test_recorded_commits_beat_estimates_and_skip_non_work():
+    rows = [
+        {"t": T, "k": "meta", "s": "a", "repo": "r", "branch": "b"},
+        {"t": T, "k": "meta", "s": "a-copy", "repo": "r", "branch": "b"},
+        {"t": T, "k": "ph", "s": "a", "ph": "agent"},
+        # before HEAD was watched: hooks that passed are an estimated commit
+        {"t": T + 100, "k": "ph", "s": "a", "ph": "precommit"},
+        {"t": T + 160, "k": "ph", "s": "a", "ph": "to_push"},
+        {"t": T + 200, "k": "head", "s": "a", "sha": "0" * 40},
+        {"t": T + 300, "k": "ph", "s": "a", "ph": "agent"},
+        # watched from here: hooks alone close nothing …
+        {"t": T + 400, "k": "ph", "s": "a", "ph": "precommit"},
+        {"t": T + 460, "k": "ph", "s": "a", "ph": "agent"},
+        # … a merge commit, a pull (n 0) close nothing …
+        {"t": T + 500, "k": "commit", "s": "a", "sha": "1" * 40, "n": 3, "merge": True},
+        {"t": T + 520, "k": "commit", "s": "a", "sha": "2" * 40, "n": 0},
+        # … a real commit does, once, though both windows saw it
+        {"t": T + 600, "k": "commit", "s": "a", "sha": "3" * 40, "n": 1},
+        {"t": T + 605, "k": "commit", "s": "a-copy", "sha": "3" * 40, "n": 1},
+        {"t": T + 610, "k": "ph", "s": "a", "ph": "to_push"},
+    ] + [{"t": T + x, "k": "hb"} for x in range(0, 701, 300)]
+    rows.sort(key=lambda r: r["t"])
+    items = A.build_items(rows, T + 700, ["a", "a-copy"])
+    assert [(it["commit_at"], it["estimated"]) for it in items] == [
+        (T + 600, False),
+        (T + 160, True),
+    ]
+    assert items[0]["hook_runs"] == 1 and items[0]["lead_to_commit"] == 300
 
 
 # --------------------------------------------------------------------------- #
@@ -437,8 +681,9 @@ PERSON_LIVE = ["a", "b", "c", "d"]
 
 
 def test_include_me_is_the_full_clock_byte_for_byte():
-    """The golden file was written by the analysis as it was before the
-    person's time could be left out: counting it must change nothing."""
+    """The full clock, pinned: the golden file holds the analysis's answer for
+    both scenarios with the person's time counted. Regenerate it on purpose
+    (and say why in the commit) when the analysis is meant to change."""
     got = {
         "report": {
             "scenario": A.report(
@@ -467,7 +712,7 @@ def test_person_phases_are_the_you_and_idle_groups():
     assert "review" not in A.PERSON_PHASES and "untracked" not in A.PERSON_PHASES
 
 
-def test_leaving_me_out_compresses_each_items_clock():
+def test_leaving_me_out_compresses_each_units_clock():
     mine = {
         it["id"]: it
         for it in A.build_items(
@@ -477,70 +722,56 @@ def test_leaving_me_out_compresses_each_items_clock():
     items = {
         it["id"]: it for it in A.build_items(person_scenario(), T + 9000, PERSON_LIVE)
     }
-    # Same items either way: ids, status and the real epochs don't move.
+    # Same units either way: ids, status and the real epochs don't move.
     assert set(items) == set(mine)
     for k, it in items.items():
         for f in (
             "status",
             "start",
-            "pr_at",
-            "merged_at",
+            "commit_at",
+            "estimated",
             "end",
-            "commits",
+            "hook_runs",
             "sessions",
+            "after_commit",
         ):
             assert it[f] == mine[k][f], (k, f)
-        assert not set(it["to_pr"]) & A.PERSON_PHASES
-        assert not set(it["after_pr"]) & A.PERSON_PHASES
+        assert not set(it["to_commit"]) & A.PERSON_PHASES
+        assert not set(it["after_commit"]) & A.PERSON_PHASES
         assert not {sg["ph"] for sg in it["timeline"]} & A.PERSON_PHASES
     a = items["app@feature/a#0"]
-    # 4840 s wall to the PR, 300 + 600 + 1900 of it waiting on the person.
+    # 4660 s wall to the commit (hooks passed), 300 + 600 + 1900 of it
+    # waiting on the person.
+    assert a["commit_at"] == T + 4660 and a["estimated"] is True
     assert a["your_time_s"] == 2800
-    assert a["lead_to_pr"] == 4840 - 2800 == sum(a["to_pr"].values())
-    assert a["to_pr"] == {
-        "setup": 60.0,
-        "agent": 1740.0,
-        "precommit": 60.0,
-        "to_push": 60.0,
-        "to_pr": 120.0,
-    }
-    assert a["active_to_pr"] == 2040
-    assert a["lead_to_merge"] == a["elapsed"] == 8000 - 2800
-    assert (
-        a["after_pr"]
-        == mine["app@feature/a#0"]["after_pr"]
-        == {"review": 2440.0, "untracked": 720.0}
-    )
+    assert a["lead_to_commit"] == 4660 - 2800 == sum(a["to_commit"].values())
+    assert a["to_commit"] == {"setup": 60.0, "agent": 1740.0, "precommit": 60.0}
+    assert a["active_to_commit"] == 1860
+    # pushed, a PR, then review until the merge (less the downtime)
+    assert a["after_commit"] == {"to_push": 60.0, "to_pr": 120.0, "review": 2440.0}
     # The strip closes the holes: the two agent stints around the question
-    # and the turn the person sat on are one stretch, the PR opens at +2040.
+    # and the turn the person sat on are one stretch.
     tl = a["timeline"]
-    assert [sg["ph"] for sg in tl] == [
-        "setup",
-        "agent",
-        "precommit",
-        "to_push",
-        "to_pr",
-        "review",
-        "untracked",
-        "review",
-    ]
+    assert [sg["ph"] for sg in tl] == ["setup", "agent", "precommit"]
     assert all(x["end"] == y["start"] for x, y in zip(tl, tl[1:]))
     assert tl[1] == {"ph": "agent", "start": T + 60, "end": T + 1800, "at": T + 60}
-    assert (
-        tl[5]["start"] - tl[0]["start"] == a["lead_to_pr"] and tl[5]["at"] == T + 4840
-    )
-    assert tl[-1]["end"] - tl[0]["start"] == a["lead_to_merge"]
-    assert items["app@feature/b#0"]["lead_to_pr"] == 600
-    # Nothing but the person before its PR: zero to PR, not a crash.
+    assert tl[-1]["end"] - tl[0]["start"] == a["lead_to_commit"]
+    assert tl[-1]["at"] == T + 4600
+    # b: the PR was opened from an idle branch — that's its commit
+    b = items["app@feature/b#0"]
+    assert (b["commit_at"], b["lead_to_commit"]) == (T + 5000, 600)
+    assert b["after_commit"] == {"review": 4000.0 - 720}  # still open now
+    # Nothing but the person before its commit: zero, not a crash.
     c = items["app@feature/c#0"]
-    assert (c["lead_to_pr"], c["active_to_pr"], c["to_pr"], c["your_time_s"]) == (
-        0.0,
-        0,
-        {},
-        1000,
-    )
+    assert (
+        c["lead_to_commit"],
+        c["active_to_commit"],
+        c["to_commit"],
+        c["your_time_s"],
+    ) == (0.0, 0, {}, 1000)
     d = items["app@feature/d#0"]
-    assert d["elapsed"] == 6000 - 4780 and d["to_pr"] == {
+    assert d["status"] == "in_progress" and d["lead_to_commit"] is None
+    assert d["elapsed"] == 6000 - 4780 and d["to_commit"] == {
         "agent": 500.0,
         "untracked": 720.0,
     }
@@ -553,24 +784,24 @@ def test_leaving_me_out_ranks_only_the_process():
     rep = A.report(person_scenario(), T + 9000, 7 * 86400, PERSON_LIVE)
     assert {a["phase"] for a in full["advice"]} >= {"your_turn", "question", "away"}
     k = rep["kpi"]
-    assert (k["items"], k["prs_opened"], k["merged"], k["in_progress"]) == (4, 3, 1, 1)
-    # leads 2040 / 600 / 0 (was 4840 / 4000 / 1000)
-    assert (k["median_to_pr"], k["p90_to_pr"]) == (600, 2040)
-    assert k["median_active_to_pr"] == 600 and k["median_to_merge"] == 5200
-    stats = {r["phase"]: r for r in rep["to_pr"]}
-    assert set(stats) == {"agent", "setup", "precommit", "to_push", "to_pr"}
-    assert round(sum(r["share"] for r in rep["to_pr"]), 3) == 1.0
+    assert (k["items"], k["committed"], k["in_progress"]) == (4, 3, 1)
+    # leads 1860 / 600 / 0 (was 4660 / 4000 / 1000)
+    assert (k["median_to_commit"], k["p90_to_commit"]) == (600, 1860)
+    assert k["median_active_to_commit"] == 600
+    stats = {r["phase"]: r for r in rep["to_commit"]}
+    assert set(stats) == {"agent", "setup", "precommit"}
+    assert round(sum(r["share"] for r in rep["to_commit"]), 3) == 1.0
     assert stats["agent"]["total_s"] == 2340 and stats["agent"]["share"] == round(
-        2340 / 2640, 4
+        2340 / 2460, 4
     )
     assert (
         stats["agent"]["median_s"],
         stats["agent"]["p90_s"],
         stats["agent"]["items"],
     ) == (1170, 1740, 2)
-    assert {g["group"] for g in rep["to_pr_groups"]} == {"agent", "tooling", "handoff"}
-    assert round(sum(g["share"] for g in rep["to_pr_groups"]), 3) == 1.0
-    assert not {r["phase"] for r in rep["after_pr"]} & A.PERSON_PHASES
+    assert {g["group"] for g in rep["to_commit_groups"]} == {"agent", "tooling"}
+    assert round(sum(g["share"] for g in rep["to_commit_groups"]), 3) == 1.0
+    assert not {r["phase"] for r in rep["after_commit"]} & A.PERSON_PHASES
     assert not {a["phase"] for a in rep["advice"]} & A.PERSON_PHASES
     assert not {p["id"] for p in rep["phases"]} & A.PERSON_PHASES
     assert {g["id"] for g in rep["groups"]} == {g for g, _ in A.GROUPS} - {
@@ -581,11 +812,12 @@ def test_leaving_me_out_ranks_only_the_process():
         "phases": ["question", "your_turn", "away"],
         "total_s": 2800 + 3400 + 1000,
     }
-    assert rep["trend"][-1]["items"] == 3 and rep["trend"][-1]["median_to_pr"] == 600
+    assert rep["trend"][-1]["items"] == 3
+    assert rep["trend"][-1]["median_to_commit"] == 600
     assert "excluded" not in full
 
 
-def test_an_item_that_was_all_me():
+def test_a_unit_that_was_all_me():
     rows = [
         {"t": T, "k": "meta", "s": "s", "repo": "r", "branch": "b"},
         {"t": T, "k": "ph", "s": "s", "ph": "your_turn", "a": True},
@@ -593,17 +825,21 @@ def test_an_item_that_was_all_me():
         {"t": T + 400, "k": "ph", "s": "s", "ph": "review", "a": False},
     ] + [{"t": T + x, "k": "hb"} for x in range(0, 1001, 300)]
     rep = A.report(rows, T + 1000, 7 * 86400, ["s"])
-    assert rep["kpi"]["median_to_pr"] == 0 and rep["kpi"]["p90_to_pr"] == 0
-    assert rep["to_pr"] == [] and rep["to_pr_groups"] == [] and rep["advice"] == []
-    assert rep["excluded"]["total_s"] == 400
+    assert rep["kpi"]["median_to_commit"] == 0 and rep["kpi"]["p90_to_commit"] == 0
+    assert rep["to_commit"] == [] and rep["to_commit_groups"] == []
+    assert rep["advice"] == []
+    assert rep["excluded"]["total_s"] == 100
     it = rep["items"][0]
-    assert it["lead_to_pr"] == 0 and it["elapsed"] == 600
-    assert [sg["ph"] for sg in it["timeline"]] == ["review"]
-    # still waiting on you, no PR: nothing counted yet, and no division by zero
-    rows = rows[:2] + rows[4:]
+    # the question is the first real work; the PR opening is its commit
+    assert (it["start"], it["commit_at"]) == (T + 300, T + 400)
+    assert it["lead_to_commit"] == 0 and it["timeline"] == []
+    assert it["after_commit"] == {"review": 600.0}
+    # still waiting on you, nothing committed: nothing counted yet, and no
+    # division by zero
+    rows = rows[:3] + rows[4:]
     rep = A.report(rows, T + 1000, 7 * 86400, ["s"])
     assert rep["basis"] == "all" and rep["items"][0]["elapsed"] == 0
-    assert rep["items"][0]["timeline"] == [] and rep["to_pr"] == []
+    assert rep["items"][0]["timeline"] == [] and rep["to_commit"] == []
 
 
 # --------------------------------------------------------------------------- #
@@ -620,11 +856,11 @@ def test_summary_and_item_routes(tmp_path, monkeypatch):
         "".join(json.dumps({**r, "t": r["t"] + shift}) + "\n" for r in scenario())
     )
     body = client.get("/api/workflow/summary?range=30d").json()
-    assert body["range"] == "30d" and body["kpi"]["merged"] == 1
+    assert body["range"] == "30d" and body["kpi"]["committed"] == 2
     assert all("timeline" not in it for it in body["items"])
-    item_id = body["items"][1]["id"]
+    item_id = body["items"][2]["id"]
     it = client.get("/api/workflow/item", params={"id": item_id}).json()
-    assert it["status"] == "merged" and it["timeline"][0]["ph"] == "setup"
+    assert it["status"] == "committed" and it["timeline"][0]["ph"] == "setup"
     assert client.get("/api/workflow/item", params={"id": "nope"}).status_code == 404
     assert client.get("/api/workflow/summary?range=bogus").json()["range"] == "7d"
 
@@ -704,13 +940,15 @@ def test_summary_and_item_follow_the_setting_and_the_override(tmp_path, monkeypa
     _store_person_scenario(tmp_path, monkeypatch)
 
     def phases(body):
-        return {r["phase"] for r in body["to_pr"]} | {
-            r["phase"] for r in body["after_pr"]
+        return {r["phase"] for r in body["to_commit"]} | {
+            r["phase"] for r in body["after_commit"]
         }
 
     body = client.get("/api/workflow/summary?range=7d").json()
     assert body["include_me"] is False and not phases(body) & A.PERSON_PHASES
-    assert body["excluded"]["total_s"] == 7200 and body["kpi"]["median_to_pr"] == 600
+    assert (
+        body["excluded"]["total_s"] == 7200 and body["kpi"]["median_to_commit"] == 600
+    )
     a = next(it for it in body["items"] if it["branch"] == "feature/a")
     tl = client.get("/api/workflow/item", params={"id": a["id"]}).json()["timeline"]
     assert not {sg["ph"] for sg in tl} & A.PERSON_PHASES and "at" in tl[0]

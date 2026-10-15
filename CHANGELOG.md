@@ -49,6 +49,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   folded under *Or paste a token*; `MINDFLOCK_GITHUB_CLIENT_ID` or
   `github.oauth_client_id` still override the shipped app.
 
+### Changed
+
+- **Workflow Optimizer: time to commit, not time to PR.** A commit finishes a
+  unit of work, so the headline is now the median time from the first real
+  work to the commit, and pushing, the PR and review move to their own
+  *After the commit* table. The recorder now notes each branch's commits
+  (reading HEAD from the worktree's `.git` files; only commits authored just
+  now count, so pulls, rebases, amends and merge commits don't), and
+  history recorded before that gets estimated commit times, marked "est.".
+  Idle time between turns on a branch that already had a commit no longer
+  reads as a "Committed, not pushed" handoff — it's your time, left out by
+  default like any other turn of yours.
+
 Round 5 of the fresh-eyes UX lab: seven judges who could only use the UI walked
 0.8.7 as first-time users, and every surface was then simplified first and
 given a short, replayable tour second.

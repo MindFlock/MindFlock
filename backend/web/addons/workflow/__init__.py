@@ -1,11 +1,12 @@
 """Workflow Optimizer — an Addon API v3 extension (id ``workflow``).
 
-Where does the time go between "start this ticket" and "the PR is up"? The
-extension records every session's phase — setup, agent working, waiting on
-your answer, your turn, pre-commit hooks, recovering from failed hooks,
-committed-not-pushed, pushed-no-PR, PR open, usage limit — and turns that
-into a per-work-item breakdown (one branch's trip to a merged PR), the
-median time to PR, which phase is the bottleneck and what to change about it.
+Where does the time go between starting a piece of work and the commit that
+finishes it? The extension records every session's phase — setup, agent
+working, waiting on your answer, your turn, pre-commit hooks, recovering from
+failed hooks, usage limit, and after the commit: committed-not-pushed,
+pushed-no-PR, PR open — plus each branch's commits, and turns that into a
+per-unit breakdown (first real work → the commit), the median time to
+commit, which phase is the bottleneck and what to change about it.
 By default the person's own time (questions, your turn, idle while away) is
 left out of the clock — "Include my time" in the dashboard puts it back
 (:data:`analysis.PERSON_PHASES`; the setting is :func:`store.load_settings`).
@@ -132,7 +133,7 @@ class WorkflowAddon(Addon):
                 ExtensionButton(
                     command="workflow.open",
                     label="Bottlenecks",
-                    title="Where each ticket's time goes, start to PR",
+                    title="Where each unit of work's time goes, start to commit",
                 ),
             ],
             commands=[

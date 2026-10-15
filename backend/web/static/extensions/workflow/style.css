@@ -462,10 +462,9 @@
   white-space: nowrap;
 }
 
-.mfx-workflow .wf-chip.s-merged { border-color: var(--green); color: var(--green); }
-.mfx-workflow .wf-chip.s-pr_open { border-color: var(--accent); color: var(--accent); }
-.mfx-workflow .wf-chip.s-abandoned,
-.mfx-workflow .wf-chip.s-closed { color: var(--muted); }
+.mfx-workflow .wf-chip.s-committed { border-color: var(--green); color: var(--green); }
+.mfx-workflow .wf-chip.s-in_progress { border-color: var(--accent); color: var(--accent); }
+.mfx-workflow .wf-chip.s-abandoned { color: var(--muted); }
 
 .mfx-workflow .wf-item-detail {
   display: flex;

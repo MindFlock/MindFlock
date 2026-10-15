@@ -1139,8 +1139,10 @@ rate, advice — all functions of `(samples, now)`, pinned by
 ### Worked example 3: the Workflow Optimizer
 
 `workflow` (label "Workflow Optimizer", bar **Workflow**, button
-**Bottlenecks**) answers "where does a ticket's time go between starting it
-and the PR?". Same shape as the Usage Optimizer — a `main` dialog and a
+**Bottlenecks**) answers "where does the time go between starting a piece of
+work and the commit that finishes it?" — a commit is the end of a unit of
+work, so the headline is **time to commit**, and pushing, the PR and review
+are reported apart, after it. Same shape as the Usage Optimizer — a `main` dialog and a
 `board` pane on one renderer, a background loop, its own JSONL store, a pure
 analysis — plus the one thing that example doesn't show: an extension that
 **subscribes to the bus** (`ctx.subscribe("*", …)` in `on_startup`, undone
@@ -1158,6 +1160,19 @@ stage just falls back), `session.created` (the ticket id) and
 `session.deleted`. Remote devices' `<device>::<title>` rows are skipped;
 each device records its own.
 
+**Commits.** Each sample also reads every session's `HEAD` from its `.git`
+files (`recorder.read_head`: a linked worktree's `gitdir:` file, its
+`commondir`, loose refs, then `packed-refs` — no git process). The first
+sight of a branch writes `{"k": "head", "sha"}`; when HEAD moves on the same
+branch one `git log old..new` (`recorder.new_commits`, outside the
+recorder's lock) writes `{"k": "commit", "sha", "n", "merge"}`: `n` counts
+the single-parent commits authored since the old HEAD was first seen (less
+a 2-minute slack), `merge` says the new tip has two parents. A pull, a
+rebase, a cherry-pick or an amend keeps the old author time, so it brings
+`n` 0; only a commit written just now finishes a unit. The rows are
+additive: older rows keep parsing, and a timeline recorded before them gets
+**estimated** commits instead (below).
+
 **Phases** (`recorder.phase_of`, "what is holding the work right now", in
 precedence order): `paused`; `setup` (provisioning, loading, setup commands
 running); `precommit` (stage — the commit's hooks are running); `question`
@@ -1165,29 +1180,26 @@ running); `precommit` (stage — the commit's hooks are running); `question`
 and is being fixed); `agent` / `rework` (working; `rework` once a PR is
 open); `offline`; `review` (PR open, nothing working); `to_pr` (pushed, no
 PR); `to_push` (committed, not pushed); `your_turn` (the agent's turn ended,
-nothing shipped). `your_turn` carries the attended bit (a keystroke into
-MindFlock in the last 10 minutes) and the analysis splits it into
-`your_turn` (you were there: a review/steer bottleneck) and `away` (idle
-capacity).
+nothing committed). The idle phases (`your_turn`, `to_push`, `to_pr`,
+`review`) carry the attended bit (a keystroke into MindFlock in the last 10
+minutes); the analysis splits idle time into `your_turn` (you were there: a
+steer bottleneck) and `away` (idle capacity).
 
 **Your own time is left out by default.** `analysis.PERSON_PHASES` —
 `question`, `your_turn`, `away` — is the person's time, and unless the
 **Include my time** switch is on the analysis assumes the person moves at
-max speed: that time is cut out of the clock, not just hidden. Each item's
-time to PR, time to merge and elapsed time are the wall span less the person
-phases inside it; its `to_pr` / `after_pr` drop them; its timeline is
-compressed (later pieces move earlier by the cut, each keeping its real
-start as `at`) and it carries `your_time_s`. So every median, p90, share
-(they sum to 100 % of the counted time), group, advice item and the weekly
-trend ranks only agent, tooling, handoff, limit and review time; the report
-leaves the person phases and the You / Idle groups out of `phases` and
-`groups` and adds `excluded: {phases, total_s}`. An item that was nothing
-but the person before its PR reads 0 s to PR. Item ids, boundaries, status
-and epochs are the same either way. `review` (PR open, nothing working)
-keeps counting — it waits on reviewers and CI, not on your turn in the
-terminal — and so does `untracked`. With the switch on, the report is the
-full wall clock, byte-for-byte what it was before the switch existed
-(pinned by a golden file).
+max speed: that time is cut out of the clock, not just hidden. Each unit's
+time to commit and elapsed time are the wall span less the person phases
+inside it; its `to_commit` drops them; its timeline is compressed (later
+pieces move earlier by the cut, each keeping its real start as `at`) and it
+carries `your_time_s`. So every median, p90, share (they sum to 100 % of the
+counted time), group, advice item and the weekly trend ranks only agent,
+tooling, limit and untracked time; the report leaves the person phases and
+the You / Idle groups out of `phases` and `groups` and adds `excluded:
+{phases, total_s}`. A unit that was nothing but the person before its commit
+reads 0 s to commit. Unit ids, boundaries, status and epochs are the same
+either way. With the switch on, the report is the full wall clock (pinned by
+a golden file).
 
 The switch is the extension's one setting, `include_me` (default `false`),
 in its own file beside the timeline,
@@ -1197,22 +1209,40 @@ settings.json, so it is per device, like the timeline it reads. Flipping it
 saves the setting and reloads with an explicit `include_me=` override, so
 the numbers change at once without a blank flash.
 
-**Work items** (`analysis.build_items`). One item is one branch's trip to a
-merged PR: everything recorded for the same `repo@branch` — two windows on
-one branch are one item, and at each moment the busiest window speaks for it
-— up to a merge. A long-lived session that ships PR after PR yields one item
-per PR; after a merge the next item starts at the next real work, never at
-the idle in between. Work on `main` / `master` / `develop` / `trunk` is no
-item (it never becomes a PR). Per item: time to PR (first work → stage `pr`), active
-time to PR (without `away` and `untracked`), time to merge, seconds per phase
-before and after the PR, commits and failed-hook commits, and the phase
-timeline. The report adds the medians / p90, the phase and group shares
-(Agent · You · Tooling · Handoffs · Review · Limits · Idle), a weekly trend,
-and **advice** for the phases worth ≥ 5 % of time to PR (your turn → arm
-autopilot to the PR; questions → front-load the prompt; slow hooks → move
-slow checks to pre-push/CI; failing hooks → put the formatter in the agent's
-instructions; handoffs → autopilot depth "pr"; setup; limits; idle while
-away; agent-dominated → split tickets).
+**Units of work** (`analysis.build_items`). A unit runs from the first real
+work (agent, setup, hooks, a question) to the **commit** that finishes it.
+Everything recorded for the same `repo@branch` shares one timeline — two
+windows on one branch are one unit, and at each moment the busiest window
+speaks for it. A commit closes the unit; the next one starts at the next
+stretch of real work that begins after it (the rest of the committing turn —
+the agent summing up — is no unit of its own). Recorded commits are the
+`commit` rows with `n` > 0 that aren't merge commits (one sha seen by two
+windows counts once). Before a branch's first `head` / `commit` row, commits
+are **estimated** from the phases: hooks that finished without failing, a
+branch with nothing committed first showing a commit, push or PR (a branch
+is assumed to start with nothing committed), and the end of the last real
+work before a merge; such units carry `estimated: true`. Inside a unit an
+idle agent is the person's move whatever the stage — a branch with an
+earlier commit reads "committed, not pushed" between turns — so `to_push` /
+`to_pr` / `review` become `your_turn` / `away` there, and `rework` becomes
+`agent`. After the commit, `after_commit` holds the handoffs up to the next
+unit or the merge — but only waits that ended in a further handoff (a push,
+a PR, the merge) or are still waiting now: a stage the work sat in until the
+next agent turn was the person's time. The open unit at the end of a branch
+is `in_progress` (or `abandoned` once its windows are gone); it isn't listed
+on `main` / `master` / `develop` / `trunk` (often just a conversation) or
+after an earlier commit once its windows are gone (a finished branch's
+leftovers). Per unit: time to commit, active time to commit (without `away`
+and `untracked`), seconds per phase before and after the commit, hook runs
+and failed hook runs, and the phase timeline. The report adds the medians /
+p90, the phase and group shares (Agent · You · Tooling · Limits · Idle), the
+after-commit table, a weekly trend, and **advice** for the phases worth ≥ 5 %
+of time to commit (your turn → put the whole task in the first prompt;
+questions → front-load the prompt; slow hooks → move slow checks to
+pre-push/CI; failing hooks → put the formatter in the agent's instructions;
+setup; limits; idle while away; agent-dominated → split tickets), plus one
+context line when committed work waited ≥ 15 minutes to be pushed or get a
+PR (autopilot depth "push" / "pr" ships it on its own).
 
 **Files.** `backend/web/addons/workflow/{__init__,recorder,store,analysis}.py`
 (store: `~/.mindflock/workflow_optimizer.jsonl`, mode 0600, append-only,
@@ -1226,8 +1256,8 @@ away; agent-dominated → split tickets).
 
 | Route | Purpose |
 |---|---|
-| `GET /summary?range=7d\|30d\|90d[&include_me=0\|1]` | `{now, range, include_me, period_s, tracking_since, phases, groups, kpi: {items, prs_opened, merged, median_to_pr, p90_to_pr, median_active_to_pr, median_to_merge, in_progress}, basis, to_pr: [{phase, label, group, total_s, share, median_s, p90_s, items}], to_pr_groups, after_pr, advice: [{phase, level, title, detail, at_stake_s, share}], trend: [{start, end, items, median_to_pr}], items, excluded?: {phases, total_s}}` — items without their timelines. `basis` is `"shipped"` (the PRs opened in the range) or `"all"` when none was. `include_me` is the saved setting unless the query overrides it; `excluded` is there only when your time is left out. Never 500s. |
-| `GET /item?id=<repo@branch#n>[&include_me=0\|1]` | One work item with its `timeline: [{ph, start, end}]` (`at` too when compressed; 404 when unknown). |
+| `GET /summary?range=7d\|30d\|90d[&include_me=0\|1]` | `{now, range, include_me, period_s, tracking_since, phases, groups, kpi: {items, committed, estimated, median_to_commit, p90_to_commit, median_active_to_commit, in_progress}, basis, to_commit: [{phase, label, group, total_s, share, median_s, p90_s, items}], to_commit_groups, after_commit, advice: [{phase, level, title, detail, at_stake_s, share}], trend: [{start, end, items, median_to_commit}], items, excluded?: {phases, total_s}}` — units without their timelines. `basis` is `"committed"` (the units committed in the range) or `"all"` when none was. `include_me` is the saved setting unless the query overrides it; `excluded` is there only when your time is left out. Never 500s. |
+| `GET /item?id=<repo@branch#n>[&include_me=0\|1]` | One unit with its `timeline: [{ph, start, end}]` (`at` too when compressed; 404 when unknown). |
 | `GET /settings` · `POST /settings {include_me}` | The extension's setting (`{include_me: false}` by default); a POST merges the known keys of the right type and returns the result. |
 
 ### A minimal third-party extension
