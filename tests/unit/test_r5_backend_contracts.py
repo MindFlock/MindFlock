@@ -275,3 +275,38 @@ def test_create_folder_true_makes_it(tmp_path, monkeypatch):
         },
     )
     assert r.status_code == 400 and asked == [{"create_folder": True}]
+
+
+def test_tracker_step_ticks_only_from_a_passing_recorded_test(monkeypatch):
+    """Round 5 (r5-intake blocker): a wizard abandoned after a failing Test —
+    or a source saved with "Continue anyway" — must never read as "⑤ Connect
+    your tracker ✓ done". The recorded verdict marks the step only when it
+    passed; the PUT marks it only for a stored source whose last test passed."""
+    from types import SimpleNamespace
+
+    from backend.web.addons import settings as addon
+
+    marked = []
+    monkeypatch.setattr(addon._setup_steps, "mark", lambda step: marked.append(step))
+    monkeypatch.setattr(
+        addon.settings_store, "set_ticketing_sources", lambda rows: None
+    )
+    monkeypatch.setattr(addon, "_stamp_for_sync", lambda *a, **k: None)
+    src = SimpleNamespace(
+        to_dict=lambda: {"id": "jira-1", "provider": "jira", "api_token": "x"}
+    )
+    monkeypatch.setattr(
+        addon.settings_store,
+        "load_settings",
+        lambda: SimpleNamespace(ticketing=SimpleNamespace(sources=[src])),
+    )
+    assert (
+        addon._record_ticketing_test("jira-1", {"ok": False, "message": "HTTP 404"})
+        is not None
+    )
+    assert marked == []
+    assert (
+        addon._record_ticketing_test("jira-1", {"ok": True, "message": "fine"})
+        is not None
+    )
+    assert marked == ["tracker"]

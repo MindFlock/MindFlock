@@ -111,11 +111,16 @@ export function AutomationBar() {
         Tickets
       </button>
       <span className="dc-actions">
-        <label className="dc-switch" title="Auto-start tickets — the same switch as Intake → Tickets">
+        <span className="dc-sw-label">Auto-start</span>
+        <label
+          className="dc-switch"
+          title="Auto-start tickets — checks for new tickets on its own. Same switch as Intake → Auto-start."
+        >
           <input
             type="checkbox"
             id="mindflock-toggle"
             checked={desired}
+            aria-label="Auto-start tickets"
             disabled={busy}
             onChange={(e) => toggle(e.target.checked)}
           />

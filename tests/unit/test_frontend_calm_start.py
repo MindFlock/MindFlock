@@ -60,7 +60,7 @@ class TestNewDialog:
         # dialog, which New's Manage… opens and which hands back to New.
         assert 'id="new-save-tpl-name"' in code
         assert 'id="new-save-tpl-save"' in code
-        assert "Insert a prompt…" in code
+        assert "Insert saved text…" in code
         assert 'openDialogFor("prompts", "new")' in code
 
     def test_the_tab_strip_waits_for_a_tracker(self):
@@ -79,7 +79,10 @@ class TestNewDialog:
         # "Your coding CLI reads this…" explains the box; with the Options fold
         # between them, "this" read as the fold.
         code = _code(_new())
-        assert code.index('className="nf-describe-help"') < code.index("<RunOptions")
+        # Round 5: the help is the "Runs in <folder> · own branch …" line
+        # (StartsInLine), drawn right under the box, before the options.
+        assert 'id="new-describe-help"' in code
+        assert code.index("<StartsInLine") < code.index("<RunOptions")
 
     def test_page_one_is_only_the_prompt(self):
         # The owner: "too much on that new first page — I should be able to
@@ -179,9 +182,11 @@ class TestFirstRun:
         # Both surfaces render the same component.
         assert "<SetupChecklist />" in _read("components/grid/TerminalGrid.tsx")
         assert "<SetupChecklist />" in _read("components/dialogs/SetupDialog.tsx")
-        # The phone extra: Install Tailscale (or start it, when it's installed
-        # but not answering) OR the QR.
-        assert '"install-tailscale"' in src and '"fix-tailscale"' in src
+        # Round 5: the phone extra is ONE line pointing at Settings → Your
+        # phone — no Tailscale install/fix (sudo) commands and no QR in the
+        # first-hour checklist (r5-firsthour #5–#7).
+        assert '"install-tailscale"' not in src and '"fix-tailscale"' not in src
+        assert "Set up in Settings → Your phone" in src
         assert 'data-phone="qr"' in src
 
     def test_grid_card_says_get_set_up(self):

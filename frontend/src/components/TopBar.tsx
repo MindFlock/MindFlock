@@ -197,7 +197,7 @@ export function TopBar() {
             id="intake-btn"
             className="tb-item"
             type="button"
-            title={"Intake — tickets, pull requests and issues waiting to become sessions" + keys("intake")}
+            title={"Intake — tickets, pull requests and issues; starts sessions when work arrives" + keys("intake")}
             /* No aria-label: the visible "Intake" IS the name. The old one still
                said "Open work", the surface's name two renames ago, so a screen
                reader announced a button nobody could see. */
@@ -244,7 +244,7 @@ export function TopBar() {
             className="tb-item"
             type="button"
             title={
-              "Schedule — templates that start sessions on their own" +
+              "Schedule — templates; starts sessions on a timer" +
               keys("schedule") +
               (schedFailing > 0
                 ? "\n" +

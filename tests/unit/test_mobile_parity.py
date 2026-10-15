@@ -237,7 +237,7 @@ def test_action_words_are_the_rails():
     assert '"Close", "stops the agent and moves it to Recently closed"' in js
     assert '"Closed — reopen from Recently closed"' in js
     assert '"Delete…"' in js
-    assert '"Removes the worktree and branch"' in js
+    assert '"Deletes the folder and branch, including uncommitted changes.' in js
     # No Pause row; Resume only on a paused session.
     assert '"Pause", "stops the agent' not in js
     assert '"Resume session"' in js
@@ -304,11 +304,13 @@ def test_new_sheet_buttons_are_the_desktops():
         / "FooterActions.tsx"
     ).read_text()
     run_start = (ROOT / "frontend" / "src" / "lib" / "runStart.ts").read_text()
-    assert "Review details first" in dialog
-    assert "Set it up myself instead" in dialog
+    # Round 5: Start is the one primary; the agent-assisted path and the
+    # full form are secondary (r5-new #2).
+    assert "Let the agent set it up…" in dialog
+    assert "More options" in dialog
     assert 'return "Create session";' in run_start
-    assert '<button type="button" id="new-go">Review details first</button>' in html
-    assert '<button type="button" id="new-start">Create session</button>' in html
-    assert ">Set it up myself instead</button>" in html
-    assert 'var NEW_GO_LABEL = "Review details first";' in js
+    assert '<button type="button" id="new-go">Let the agent set it up…</button>' in html
+    assert '<button type="button" id="new-start">Start</button>' in html
+    assert ">More options</button>" in html
+    assert 'var NEW_GO_LABEL = "Let the agent set it up…";' in js
     assert '"Continue"' not in js and '"Start session"' not in js

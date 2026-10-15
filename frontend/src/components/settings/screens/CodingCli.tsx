@@ -7,6 +7,7 @@
  * agent's card, next to the picker that greys those agents out) and — under
  * Advanced — the window-refresh keepalive. */
 
+import { SKIP_PERMS_LABEL, SKIP_PERMS_TITLE } from "../../../lib/vocab";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../api/client";
 import { toast } from "../../../lib/toast";
@@ -41,8 +42,9 @@ export const SKIP_PERMISSION_FLAGS = [
  * (Settings → Agents' flag chips and the New dialog's): the label says it is a
  * risk, the tooltip says what it does. dialogs/FlagChips.tsx owns the chips;
  * it should read these. */
-export const SKIP_PERMISSIONS_LABEL = "⚠ Skip permission prompts";
-export const SKIP_PERMISSIONS_TIP = "The agent runs commands and edits files without asking you";
+// One source for the warning: lib/vocab (the New dialog's chips use it too).
+export const SKIP_PERMISSIONS_LABEL = SKIP_PERMS_LABEL;
+export const SKIP_PERMISSIONS_TIP = SKIP_PERMS_TITLE;
 
 export function skipsPermissions(flags: string): boolean {
   const tokens = (flags || "").split(/\s+/);

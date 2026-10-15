@@ -273,10 +273,18 @@ describe("orchestrator leftovers", () => {
     expect(skipsPermissions("")).toBe(false);
     const coding = src("components/settings/screens/CodingCli.tsx");
     expect(coding).not.toContain("Bypass approvals");
-    // One wording for the risk, shared with the chip (SKIP_PERMISSIONS_*).
-    expect(coding).toContain('SKIP_PERMISSIONS_LABEL = "⚠ Skip permission prompts"');
-    expect(coding).toContain('SKIP_PERMISSIONS_TIP = "The agent runs commands and edits files without asking you"');
+    // One wording for the risk, shared with every chip: the literal lives in
+    // lib/vocab (round 5), CodingCli re-exports it under its own names.
+    const vocab = src("lib/vocab.ts");
+    expect(vocab).toContain('SKIP_PERMS_LABEL = "⚠ Skip permission prompts"');
+    expect(vocab).toContain('SKIP_PERMS_TITLE = "The agent runs commands and edits files without asking you"');
+    expect(coding).toContain("SKIP_PERMISSIONS_LABEL = SKIP_PERMS_LABEL");
+    expect(coding).toContain("SKIP_PERMISSIONS_TIP = SKIP_PERMS_TITLE");
     expect(coding).toContain("{SKIP_PERMISSIONS_LABEL}");
+    // And the chips themselves wear it (New's launch flags and Settings → Agents).
+    const chips = src("components/dialogs/FlagChips.tsx");
+    expect(chips).not.toContain('"Skip permissions"');
+    expect(chips).toContain("title={p.title}");
   });
 });
 

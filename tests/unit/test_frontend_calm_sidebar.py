@@ -100,7 +100,8 @@ def test_delete_asks_inline_in_two_steps():
     assert "if (it.confirm && !deleteArmed) {" in menu
     assert 'label: sessionAction("delete").short!,' in model
     assert 'short: "Delete…",' in table
-    assert 'confirm: "Removes the worktree and branch",' in model
+    # Round 5: the confirm names the branch and says uncommitted work is lost.
+    assert "confirm: deleteConfirmText(inst)," in model
     assert re.search(r">\s*Cancel\s*</button>", menu)
     # Focus lands on Cancel, never on Delete: a second Enter can't delete.
     armed = menu[
@@ -360,7 +361,9 @@ def test_closed_sessions_are_sent_to_recently_closed_by_its_one_name():
             continue
         assert "Recent…" not in rel.read_text(encoding="utf-8"), rel
     actions = _code("lib/sessionActions.ts")
-    assert '"Session closed — reopen it from Recently closed (Ctrl+Shift+T)"' in actions
+    # Round 5: the toast is itself the Undo.
+    assert "closedToastText(displayName(title), kept)" in actions
+    assert "click to Undo (Ctrl+Shift+T)" in actions
     server = (_SRC.parents[1] / "backend" / "web" / "server.py").read_text(
         encoding="utf-8"
     )

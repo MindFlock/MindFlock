@@ -159,14 +159,17 @@ def test_github_tabs_have_no_repository_cards_under_the_work():
     for name in ("PullRequestsTab.tsx", "IssuesTab.tsx"):
         code = re.sub(r"\s+", " ", _code(_INTAKE / name))
         assert "RepoSourceList" not in code, name
-        assert "const showAdd = !!adding || (!n && !dismissed);" in code, name
+        # Round 5: the wizard never opens by itself on an empty tab — one
+        # setup card (Connect GitHub → pick a repo → turn on) leads instead.
+        assert "const showAdd = !!adding;" in code, name
         assert '<WorkListPanel key="work"' in code, name
         # Order: the add flow, the switch, the GitHub line, the work, Advanced.
         order = [
             "{addFlow}",
-            "<AutomationSwitch",
+            "<GithubSetupCard",
+            "<AutoStartLink",
             "<GithubStatusLine",
-            "{workList}",
+            "? workList : null",
             "<summary>Advanced options</summary>",
         ]
         idx = [code.index(o) for o in order]

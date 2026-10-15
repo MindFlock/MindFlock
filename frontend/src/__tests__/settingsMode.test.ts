@@ -82,7 +82,8 @@ describe("basic mode (the default)", () => {
     const { items, headings, nav, active } = renderNav();
     expect(items).toEqual(BASIC);
     expect(headings).toEqual([]);
-    expect(active).toBe("general");
+    // Round 5: Settings opens on Connections, the status page (r5-settings #4).
+    expect(active).toBe("connections");
     expect(nav).toContain('data-mode="basic"');
     expect(nav).toMatch(/id="settings-advanced-toggle"[^>]*aria-pressed="false"[^>]*>Show advanced settings</);
     expect(nav).toContain(ADVANCED.length + " more screens");
