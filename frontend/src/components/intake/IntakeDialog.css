@@ -1932,3 +1932,192 @@
 .vf-repo-heads {
   gap: 8px;
 }
+
+/* Round 5 ------------------------------------------------------------------ */
+
+/* The Auto-start tab's three switches + Pause all: one home for auto-start. */
+.ik-autostart-switches {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: none;
+}
+.ik-autostart-switches-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.ik-autostart-switches-head > .set-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.ik-autostart-switches .ik-switch {
+  padding: 8px 14px;
+}
+.ik-autostart-setup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 12px;
+}
+
+/* Where a tab's switch used to be: one line and the way to the switches. */
+.ik-autostart-link {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 8px 14px;
+}
+.ik-autostart-link strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.ik-autostart-next {
+  color: var(--muted);
+}
+
+/* The empty GitHub PRs / issues tab: Connect → Pick a repo → Turn on. */
+.ik-setup-card {
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: var(--panel);
+  flex: none;
+}
+.ik-setup-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ik-setup-step {
+  display: grid;
+  grid-template-columns: 18px 130px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.ik-setup-label {
+  font-weight: 600;
+  color: var(--text);
+}
+.ik-setup-step.done .ik-step-num {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}
+.ik-setup-done {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.ik-setup-body .set-hint {
+  margin: 0;
+}
+
+/* The source editor's three parts — the add flow's steps, as tabs. */
+.ik-edit-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+.ik-edit-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 3px 10px 3px 4px;
+  cursor: pointer;
+}
+.ik-edit-step:hover {
+  color: var(--text);
+}
+.ik-edit-step.cur {
+  color: var(--text);
+  font-weight: 600;
+  border-color: var(--border);
+  background: var(--panel-2);
+}
+.ik-edit-step.cur .ik-step-num {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.ik-edit-step .ik-source-pill {
+  font-weight: 400;
+}
+
+/* "Create a token ↗" under a tracker's API token. */
+.ik-token-link {
+  font-size: 12px;
+  align-self: flex-start;
+}
+
+/* What the closed Advanced fold holds, on its summary line. */
+.tk-advanced-sum {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* Step 3's carried-over Test verdict. */
+.ik-add-note {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.ik-add-note.ok {
+  color: var(--green);
+}
+
+/* 420 px: the stepper drops under the title instead of running into Cancel,
+   and the tab strip's hidden scrollbar gets a fade so a clipped tab reads as
+   "more this way". */
+@media (max-width: 600px) {
+  .ik-add-head {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .ik-add-head > .ik-steps {
+    order: 3;
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .ik-step + .ik-step::before {
+    width: 12px;
+    margin: 0 6px;
+  }
+  #intake-tabs {
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    padding-right: 24px;
+  }
+  .ik-setup-step {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+  .ik-setup-body {
+    grid-column: 2;
+  }
+}

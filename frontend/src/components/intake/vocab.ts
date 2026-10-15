@@ -41,6 +41,45 @@ export function friendlySourceError(name: string, raw: string, onCard = false): 
   return name + " can't be listed" + (clean ? " — " + clean : "") + ".";
 }
 
+/** Where each tracker hands out the token its source asks for — the
+ * "Create a token ↗" link under the API token field (GitHub has its own in
+ * the Connect GitHub dialog). */
+export const TOKEN_URLS: Record<string, string> = {
+  jira: "https://id.atlassian.com/manage-profile/security/api-tokens",
+  shortcut: "https://app.shortcut.com/settings/account/api-tokens",
+  linear: "https://linear.app/settings/account/security",
+  asana: "https://app.asana.com/0/my-apps",
+};
+
+/** The host a source's Site URL names ("acme.atlassian.net"), or "" when it
+ * names none. */
+export function siteHost(url: string | undefined): string {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  try {
+    return new URL(/^[a-z]+:\/\//i.test(raw) ? raw : "https://" + raw).host;
+  } catch {
+    return "";
+  }
+}
+
+/** What a failed Test means, in a sentence that names the field to fix.
+ * Jira's own answers ("Jira API returned HTTP 404") say nothing about which of
+ * its three fields is wrong; everything else keeps the tracker's words, which
+ * already say it (Shortcut: "rejected the token (HTTP 401)"). */
+export function friendlyTestError(provider: string, raw: string, baseUrl?: string): string {
+  const text = String(raw || "").trim();
+  if (provider !== "jira") return text;
+  const host = siteHost(baseUrl) || "that address";
+  const status = text.match(/\bHTTP\s*(\d{3})\b/i)?.[1] || text.match(/\breturned (\d{3})\b/i)?.[1] || "";
+  if (status === "404") return "No Jira site at " + host + " — check the Site URL";
+  if (status === "401" || status === "403" || /rejected the credentials/i.test(text))
+    return "Jira rejected the email + token pair";
+  if (/network error|reaching jira|timed? ?out|resolve|connect/i.test(text))
+    return "Can't reach " + host + " from this machine";
+  return text;
+}
+
 /** One sentence for a ticket that failed to START because its tracker
  * refused — never the provider's raw JSON body. Anything that isn't a tracker
  * refusal (a git error, a full disk) keeps its own words, minus a JSON tail. */

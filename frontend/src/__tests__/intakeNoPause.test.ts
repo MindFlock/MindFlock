@@ -111,8 +111,20 @@ describe("the Intake dialog has no Pause/Resume", () => {
     expect(html).toContain("Auto-start is on for tickets and PR comments.");
     expect(html).not.toContain("ik-pause");
     expect(html).not.toMatch(PAUSE_WORDS);
-    // The tab's own switch is still there, on.
-    expect(html).toMatch(/id="tk-ingestion-enabled"[^>]*checked=""|checked=""[^>]*id="tk-ingestion-enabled"/);
+    // Round 5: the switch lives on the Auto-start tab; the Tickets tab says
+    // where it stands and links there.
+    expect(html).toMatch(/id="ik-autostart-link-tickets"[^>]*data-on="1"/);
+    expect(html).toContain("checks every 20 s");
+    expect(html).not.toContain('id="tk-ingestion-enabled"');
+  });
+
+  it("the Auto-start tab holds the three switches, and Pause all records nothing", () => {
+    const auto = code("components/intake/AutoStartSwitches.tsx");
+    for (const id of ["tk-ingestion-enabled", "gh-pr-enabled", "gh-issues-enabled", "ik-pause-all"])
+      expect(auto).toContain(id);
+    expect(auto).toContain("Pause all auto-start");
+    // Pause all only flips switches off — no record, no Resume.
+    expect(auto).not.toMatch(/intake_paused|Resume|Pause intake/);
   });
 
   it("legacy paused: the switches just read off, and Turn on… leads to them", () => {
@@ -133,6 +145,7 @@ describe("nothing reads or writes the old pause record", () => {
     "components/intake/PullRequestsTab.tsx",
     "components/intake/IssuesTab.tsx",
     "components/intake/QueueTab.tsx",
+    "components/intake/AutoStartSwitches.tsx",
     "components/intake/kit.tsx",
     "components/dialogs/NewTicketPane.tsx",
     "components/sidebar/AutomationBar.tsx",
@@ -160,11 +173,11 @@ describe("the switches still do the job, one at a time", () => {
     expect(src("components/sidebar/AutomationBar.tsx")).toContain(
       'api(`/api/mindflock/${start ? "start" : "stop"}`, { method: "POST" })'
     );
-    expect(code("components/intake/TicketsTab.tsx")).toContain(
-      'api(`/api/mindflock/${start ? "start" : "stop"}`, { method: "POST" })'
-    );
-    expect(code("components/intake/PullRequestsTab.tsx")).toContain("{ enabled: next }");
-    expect(code("components/intake/IssuesTab.tsx")).toContain("{ issues_enabled: next }");
+    // Intake's three switches sit together on the Auto-start tab (round 5).
+    const auto = code("components/intake/AutoStartSwitches.tsx");
+    expect(auto).toContain('api(`/api/mindflock/${on ? "start" : "stop"}`, { method: "POST" })');
+    expect(auto).toContain("{ enabled: next }");
+    expect(auto).toContain("{ issues_enabled: next }");
   });
 
   it("the header line reads the three switches together", () => {

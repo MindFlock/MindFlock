@@ -27,7 +27,7 @@ import {
 import { SettingField, useSettings } from "../settings/useSettings";
 import { AgentPicker, useAgentChoices } from "../settings/screens/AgentPicker";
 import {
-  AutomationSwitch,
+  GithubSetupCard,
   GithubStatusLine,
   HeadAction,
   repoGroupOrder,
@@ -47,6 +47,7 @@ import { AddRepoFlow, RepoEditor, type RepoOverrides } from "./RepoSources";
 import { prsOn } from "./switches";
 import { prMatches } from "./search";
 import type { TabProps } from "./IntakeDialog";
+import { AutoStartLink } from "./AutoStartSwitches";
 
 interface OpenPr {
   repo?: string;
@@ -58,6 +59,8 @@ interface OpenPr {
   base_ref?: string;
   created_at?: string;
   has_session?: boolean;
+  /** The session title this item starts (or started) as. */
+  session?: string;
   eligible?: boolean;
   reasons?: string[];
   /** Present when an earlier review of this PR still has its clone here. */
@@ -68,7 +71,7 @@ interface OpenPr {
  * fresh install writes nothing and every group starts open). */
 const PR_GROUPS_KEY = "mf_intake_pr_groups";
 
-export function PullRequestsTab({ focus, adding, startAdd, endAdd }: TabProps) {
+export function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProps) {
   const s = useSettings();
   const agentChoices = useAgentChoices();
   const catalog = useTicketingCatalog(true).data || [];
@@ -95,8 +98,6 @@ export function PullRequestsTab({ focus, adding, startAdd, endAdd }: TabProps) {
     ? gh.skip_authors.join(", ")
     : gh.skip_authors || "";
   const edit = useEditing(focus);
-  // With nothing watched the add flow leads — until you cancel it.
-  const [dismissed, setDismissed] = useState(false);
 
   const [skipDraft, setSkipDraft] = useState(String(skipAuthors));
   useEffect(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
@@ -146,10 +147,11 @@ export function PullRequestsTab({ focus, adding, startAdd, endAdd }: TabProps) {
   const watched = new Set(repos.map((r) => r.toLowerCase()));
   const anyMatch = shownPrs.length > 0;
 
-  const showAdd = !!adding || (!n && !dismissed);
+  // The wizard opens only when asked for ("+ Add source", or the setup card's
+  // "Pick a repo…"): an empty tab shows the setup card instead.
+  const showAdd = !!adding;
   const closeAdd = () => {
     endAdd();
-    setDismissed(true);
   };
   const addFlow = showAdd ? (
     <AddRepoFlow
@@ -229,6 +231,7 @@ export function PullRequestsTab({ focus, adding, startAdd, endAdd }: TabProps) {
                 }
                 meta={`by ${p.author || "?"} · ${ageText(p.created_at)} · into ${p.base_ref || "?"}`}
                 hasSession={p.has_session}
+                session={p.session}
                 eligible={p.eligible}
                 eligibleLabel={enabled ? "will auto-start" : "auto-start off"}
                 eligibleOn={enabled}
@@ -265,7 +268,7 @@ export function PullRequestsTab({ focus, adding, startAdd, endAdd }: TabProps) {
                   // instead of leaving the sidebar blank through the PR clone.
                   refreshInstances();
                   setTimeout(relistPrs, 5000);
-                  return { message: "Session " + (r?.title || ""), title: r?.title };
+                  return { message: r?.title ? "Session " + r.title : "Session for #" + p.number, title: r?.title };
                 }}
               />
             ))
@@ -322,26 +325,23 @@ export function PullRequestsTab({ focus, adding, startAdd, endAdd }: TabProps) {
         session that addresses the comments. It doesn't review other people's PRs.
       </p>
 
-      <AutomationSwitch
-        label="Auto-address review comments"
-        title="Start a session on its own when one of your PRs gets review comments — your repositories are kept either way"
-        rowId="gh-pr-toggle-row"
-        inputId="gh-pr-enabled"
-        statusId="gh-pr-status"
-        checked={enabled}
-        disabled={!n}
-        onChange={(next) =>
-          saveGithub(
-            { enabled: next },
-            next ? "Auto-address review comments on" : "Auto-address review comments off"
-          )
-        }
-        note={!n ? "Add a repository first — + Add source" : undefined}
-      />
-      <GithubStatusLine buttonId="gh-connect-btn" needFor="your PRs can't be listed or started" />
+      {!n && !showAdd ? (
+        <GithubSetupCard
+          what="PR review comments"
+          onPickRepo={() => startAdd({ kind: "repo", uses: ["pr"] })}
+          onTurnOn={() => gotoTab("autostart")}
+        />
+      ) : (
+        <>
+          {/* The switch itself is on the Auto-start tab, beside the other two. */}
+          <AutoStartLink kind="prs" gotoTab={gotoTab} />
+          <GithubStatusLine buttonId="gh-connect-btn" needFor="your PRs can't be listed or started" />
+        </>
+      )}
 
-      {workList}
+      {n || groupOrder.length ? workList : null}
 
+      {n ? (
       <details className="pr-advanced">
         <summary>Advanced options</summary>
         <div className="pr-advanced-body">
@@ -398,6 +398,7 @@ export function PullRequestsTab({ focus, adding, startAdd, endAdd }: TabProps) {
           </label>
         </div>
       </details>
+      ) : null}
     </>
   );
 }

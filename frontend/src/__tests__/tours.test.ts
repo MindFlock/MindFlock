@@ -78,11 +78,21 @@ describe("the tours registry", () => {
     expect(TOURS.welcome.steps.length).toBeLessThanOrEqual(5);
   });
 
+  it("walks Intake in setup order by its data-tour hooks", () => {
+    expect(TOURS.intake.steps.map((s) => s.target.match(/data-tour="([^"]+)"/)?.[1])).toEqual([
+      "intake-tiles",
+      "intake-token",
+      "intake-repo",
+      "intake-start",
+      "intake-autostart",
+    ]);
+  });
+
   it("uses the dialogs' stable ids where they exist", () => {
     const all = (id: keyof typeof TOURS) => TOURS[id].steps.map((s) => s.target).join(" ");
     expect(all("new")).toContain("#new-describe-text");
-    expect(all("intake")).toContain("#intake-tabs");
     expect(all("intake")).toContain("#intake-add-source");
+    expect(all("intake")).toContain("#intake-tab-autostart");
     expect(all("verify")).toContain("#verify-title");
     expect(all("schedule")).toContain("#templates-new");
     expect(all("settings")).toContain("#settings-search");

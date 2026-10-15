@@ -208,8 +208,8 @@ one feature has one name: **Tickets**, **Pull requests**, **Issues**. Each bar's
 label is its door — a button (`.dc-open`) that opens that Intake tab — so a bar
 is a status light, a switch and a door rather than the only way in; Intake is in
 the top bar whether or not its bar is showing. Each switch's tooltip names the
-Intake switch it mirrors (**Auto-start tickets**, **Auto-address review
-comments**, **Auto-start new issues**), and a switch that fails says why in a bottom-right
+Intake switch it mirrors (**Tickets**, **PR review comments**, **New issues** on
+Intake's Auto-start tab), and a switch that fails says why in a bottom-right
 card rather than a browser `alert()` (which the desktop app does not
 implement). The **Verify** bar's label opens Verify the same way. Turning a
 feature's bar on is still how you get an at-a-glance dot for PR review and
@@ -2831,16 +2831,33 @@ shared top edge ([dialog placement](#new-session-dialog)) rather than being
 centred, so switching to a taller tab grows it downward instead of moving the
 tab strip under the cursor.
 
-**What auto-starts, in one line.** A line above the tabs says what auto-starts
-right now across the three switches (*Auto-start is on for tickets and PR
-comments.*, *Auto-start is off everywhere.*, or *Nothing auto-starts yet — set
-up a tab below first.*); with everything off it offers **Turn on…**, which goes
-to the tab whose switch does it (`intake/switches.ts` reads the three together).
-It is read-only: there is no **Pause intake** any more — it was removed as
-redundant, since each tab's switch already turns its own automation off. An
-older build's pause record (`general.intake_paused`) is no longer read: the
-switches it turned off simply show as off, and turning one back on is the
-ordinary switch. **New → Ticket** reads the same ticket switch, so it never says
+**One home for auto-start** (round 5). The three switches — **Tickets**,
+**PR review comments**, **New issues** — sit together at the top of the
+**Auto-start** tab (`intake/AutoStartSwitches.tsx`, the same ids as before:
+`#tk-ingestion-enabled`, `#gh-pr-enabled`, `#gh-issues-enabled`), each saying how
+often it checks (*checks every 20 s* / *every minute*, from the source's
+`poll_interval_seconds` or `github.poll_interval_seconds` /
+`issue_poll_interval_seconds`, else the pipeline's defaults) or why it can't be
+on yet (*Add a repository first — on the GitHub PRs tab*; *Jira can't connect —
+press Fix on the Tickets tab*). Beside them, **Pause all auto-start**
+(`#ik-pause-all`) turns every switch that is on, off, in one press. It is not
+the old pause — there is no **Pause intake** any more: Pause all records nothing
+and has no Resume, and turning one back on is that switch (an older build's
+`general.intake_paused` is still never read). The toasts keep the switches'
+long names (*Auto-start tickets on*, *Auto-address review comments off*,
+*Auto-start new issues on*).
+The Tickets / GitHub PRs / GitHub issues tabs show one line where their switch
+used to be — *Auto-start: on — checks every 20 s* · **Change ›** (or *off* ·
+**Turn on ›**) — which goes to the switches.
+
+**What auto-starts, in one line.** A line above the tabs says what starts on its
+own right now across the three switches (*Auto-start is on for tickets and PR
+comments.*, *Auto-start is off everywhere.*) and the next scheduled template
+(*Next to start on its own: nightly tests, Fri 07:30 — tomorrow's run
+skipped.*); its link (**Turn on ›** / **Auto-start switches ›**) goes to the
+switches (`intake/switches.ts` reads the three together, for this line, the
+row chips and New → Ticket alike). It is hidden until something is set up, so a
+first open shows only the add flow. **New → Ticket** reads the same ticket switch, so it never says
 auto-start is on while Intake says off.
 
 **Chips follow the switches.** A row that passes every filter says
@@ -2913,11 +2930,13 @@ their own toggles *inside* it. An earlier cut let that leak into the labels, so
 tickets read "ingestion paused" beside a PR reading "switched off", which invites
 you to think two different things are wrong. The difference is real, and it
 belongs in exactly one place: the sentence under the heading, which names the
-switch to flip — *"These are ready, but auto-start is off — they will not begin
-until **Automated ingestion** is switched on, on the Tickets tab (this runs inside
-it). You can still start any of them here, with **Start**."* — naming the switch as
-its tab names it: **Auto-start tickets**, **Auto-address review comments**,
-**Auto-start new issues**. The PR and issue sections follow their own switches
+switch to flip — *"They won't start on their own: Tickets is off (above). You can
+still start any of them here, with **Start**."* — naming the switch as the
+switches above name it. The sentence comes from the same state as the chip
+(`stalledText` in `QueueTab.tsx`), so a *not set up* chip is never followed by
+"auto-start is off" and a section that can't connect says so once, by source
+name. Ticket rows are grouped under the source's name (*Jira — payments*), never
+its id. The PR and issue sections follow their own switches
 only; they used to be read as stalled whenever the ticket switch was off, which
 was wrong — the pipeline runs whichever halves are on. A ticket section whose
 sources are all saved but can't be reached says *can't connect* and names the
@@ -2939,13 +2958,15 @@ use, with the same per-launch agent, depth and effort pickers and a **Start**
 button, so waiting for the sweep is the default rather than the only option — and
 when auto-start is off, starting from here is the entire point of the tab.
 
-**One anatomy, three tabs** (`components/intake/kit.tsx`): an intro line → a
-master switch → (on the GitHub tabs) the **GitHub line** → a **work list grouped
-by source**, each row carrying why auto-pickup did or didn't take it →
-**Advanced options** (the tab-wide defaults, on the GitHub tabs). Each of the
-three is a titled section, and the switch is a banded row; its one subtitle is
-the state a switch cannot show: nothing connected yet (*Add a ticket source first
-— + Add source*).
+**One anatomy, three tabs** (`components/intake/kit.tsx`): an intro line → the
+**auto-start line** (where the switch stands, and the way to it) → (on the GitHub
+tabs) the **GitHub line** → a **work list grouped by source**, each row carrying
+why auto-pickup did or didn't take it → **Advanced options** (the tab-wide
+defaults, on the GitHub tabs, once a repository is watched). An empty GitHub PRs
+/ GitHub issues tab is one card instead (`GithubSetupCard`): **1 Connect GitHub**
+(✓ *connected as @you* once it is) → **2 Pick a repo…** (opens the add flow's
+repository step) → **3 Turn on** (a link to the Auto-start tab). The add flow no
+longer opens there by itself; **+ Add source** still opens it.
 
 **Add once, edit where it shows.** There are no source cards. A configured
 source — a tracker, a watched repository — is its **heading in the work list**,
@@ -2974,7 +2995,26 @@ and that heading is where it is edited:
 The editor has the same sections for every kind: **Connection** (the
 credentials, and the Test that proves them — a ticket source's pill sits beside
 the section title) → **What it takes** (whose tickets, which states) → **Where it
-goes, and who works it** (repo, agent, fast-track) → **Advanced options**. Its
+goes, and who works it** (repo, agent, fast-track) → **Advanced options**. A
+ticket source's editor shows them one at a time, as the add flow's steps
+(**1 Connect** · **2 What it takes** · **3 Where it goes**, `.ik-edit-steps`):
+it opens on Connect when the source can't connect, else on What it takes. The
+closed **Advanced options** fold says what it holds on its summary line (*—
+Name: Jira – EU · Effort: high*, or *— nothing changed*). A Test-filled field
+is labelled *Member ID (filled in by Test)*.
+
+**Rows.** A startable row's line says where it goes first: *→ quickpay/quickpay ·
+claude · Fast-track: Off* (`owner/repo` for a GitHub remote), with **Options**
+holding a **Repo** picker when the source has several. A row with a session —
+on any tab, just started or listed with `has_session` — has one control,
+**Open session ›**: it closes Intake and brings that session forward
+(`openSessionFromIntake`); Intake remembers its tab, so `Alt+I` returns to the
+same place. Tab badges say what they count in their tooltip (*2 ready to start —
+the ones auto-start would take (7 listed)*). A ticket source that can't connect
+shows the server's `source_status[id].connect_error` in place of its list —
+*Can't connect — No Jira site at acme.atlassian.net — check the Site URL — press
+Fix.* — never "No tickets are assigned to you"; the footer names the heading's
+real button (**Fix** or **Edit**). Its
 footer is the save line and **Remove**, which **arms** rather than fires: the
 first press turns it into a red *Confirm — remove Jira — payments* (it disarms
 on blur or after five seconds), the second removes it — inline, because these
@@ -3005,15 +3045,24 @@ source** / **+ Add a repository**). The tracker and repository halves:
   tile picked; past step 1 another tile switches the draft straight over)
   starts a draft (`needs_filter: "on"`: it
   auto-starts nothing until a state or label is picked). **Connect** is the
-  credentials; **Test & continue** saves the draft first (Test records its
-  verdict, member id and state list on a *saved* source) and then tests; a
-  failed Test stays on the step and offers *Continue anyway* (a state can still
-  be typed before a Test passes). **What it does** is whose tickets, the states
+  credentials, each tracker's **API token** with a **Create a token ↗** link to
+  the tracker's own token page; **Test & continue** tests the typed values
+  WITHOUT saving anything (`POST /api/settings/test/ticketing` with no
+  `record`) — the draft stays local, and the verdict, member id and state list
+  land on it so step 3's pickers fill in. A failed Test stays on the step with a
+  sentence that names the field (Jira: *No Jira site at acme.atlassian.net —
+  check the Site URL*, *Jira rejected the email + token pair*, *Can't reach
+  acme.atlassian.net from this machine*) and offers *Continue anyway*; the
+  *Fill in the marked fields first.* line clears as soon as they are. **What it does** is whose tickets, the states
   and labels, the repo(s), agent and fast-track, and the Advanced fold.
   **Finish** refuses *Anyone's* without a state or label (the server refuses
   that save too) and a source with no repo, and **never switches Auto-start
   tickets on** — adding a source is not consent to start sessions from it.
-  Cancel removes the draft, saved or not. Picking **GitHub Issues** offers *Add it
+  **Finish is the one save**: it PUTs the source, then tests it again with
+  `record: true` so the stored verdict is honest (a source that still can't
+  connect is added with *can't connect yet: …* in the toast; the server, not the
+  page, decides whether *Connect your tracker* is done). Cancel or ‹ Back to the
+  tiles leaves nothing behind — nothing was stored. Picking **GitHub Issues** offers *Add it
   as a Repository instead* for "every new issue in a repo".
 - **A repository** — the slug once (`owner/name`; the hint names repositories
   already known — on any list, or a ticket source's GitHub repo), **Test
@@ -3037,7 +3086,7 @@ the view is per browser, what auto-starts is on each source's heading.
 What legitimately differs stays in the tabs: only tickets have workflow-state
 buckets inside a source, and only the two GitHub tabs share one credential.
 
-- **Tickets** — the **Auto-start tickets** switch (the same
+- **Tickets** — its switch is **Tickets** on the Auto-start tab (the same
   `/api/mindflock/status` + `start`/`stop` contract, query key and 4 s interval as
   the sidebar's **Tickets** bar, so the two never disagree). Turning it on while a
   saved source can't connect (its last Test failed, or the listing couldn't reach

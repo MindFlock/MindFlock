@@ -286,7 +286,10 @@ describe("splitForSave (one half-filled new card never blocks the others)", () =
   });
 
   it("is what TicketsTab's save sends — never the whole local list", () => {
-    expect(TICKETS_TAB).toMatch(/splitForSave\(list, catalog, storedIds\.current\)/);
+    // The add flow's unsaved draft is left out of every save but Finish's.
+    expect(TICKETS_TAB).toMatch(
+      /splitForSave\(\s*pending \? list\.filter\(\(s\) => s\.id !== pending\) : list,\s*catalog,\s*storedIds\.current\s*\)/
+    );
     expect(TICKETS_TAB).toContain("putBody(send, opts.nulls)");
     expect(TICKETS_TAB).not.toContain("putBody(list");
   });
@@ -347,15 +350,17 @@ describe("Basic vs Advanced (the source form's fold)", () => {
       expect(TICKETS_TAB.indexOf(order[i]), order[i]).toBeGreaterThan(TICKETS_TAB.indexOf(order[i - 1]));
     // The source's name is an advanced extra now.
     expect(TICKETS_TAB.indexOf('className="tk-label"')).toBeGreaterThan(
-      TICKETS_TAB.indexOf("<summary>Advanced options</summary>")
+      TICKETS_TAB.search(/<summary>\s*Advanced options/)
     );
     expect(TICKETS_TAB).toContain("advancedFields(meta).map(renderField)");
     expect(TICKETS_TAB).toMatch(/<details\s+className="tk-advanced"/);
-    expect(TICKETS_TAB).toContain("<summary>Advanced options</summary>");
+    expect(TICKETS_TAB).toMatch(/<summary>\s*Advanced options/);
+    // A closed fold still says what it holds (round 5).
+    expect(TICKETS_TAB).toContain('{" — " + (advancedSummary || "nothing changed")}');
     expect(TICKETS_TAB).toContain("advancedHasValues(meta, source, errs)");
     // Thinking effort lives in the fold; Fast-track sits with the agent, up
     // front — where a repository's editor puts it too.
-    const fold = TICKETS_TAB.indexOf("<summary>Advanced options</summary>");
+    const fold = TICKETS_TAB.search(/<summary>\s*Advanced options/);
     expect(TICKETS_TAB.indexOf('className="tk-effort"')).toBeGreaterThan(fold);
     expect(TICKETS_TAB.indexOf('className="tk-depth"')).toBeLessThan(fold);
     expect(TICKETS_TAB.indexOf('className="tk-agent"')).toBeLessThan(fold);
