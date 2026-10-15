@@ -6,6 +6,7 @@ import { api } from "../../../api/client";
 import { copyText } from "../../../lib/clipboard";
 import { toast } from "../../../lib/toast";
 import type { ScreenProps } from "../SettingsDialog";
+import { useSetup } from "../../setup/useSetup";
 
 /** Reveal-in-file-manager bridge — present only inside the desktop shell. */
 function shellShowItem(): ((p: string) => Promise<{ ok?: boolean }>) | undefined {
@@ -170,6 +171,22 @@ export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
       <pre id="logs-view" className="logs-view" ref={viewRef}>
         {text}
       </pre>
+      <FirstStartReport />
     </>
+  );
+}
+
+/** What `mindflock serve` printed at its first start (GET /api/setup
+ * `report`): a CLI transcript, so it lives here with the logs — not in the
+ * first-hour Setup checklist, where it told a GUI user to open the GUI. */
+function FirstStartReport() {
+  const { data } = useSetup();
+  const report = data?.report || "";
+  if (!report) return null;
+  return (
+    <details className="set-adv-fold logs-first-start" id="logs-first-start">
+      <summary>First-start report</summary>
+      <pre className="logs-view">{report}</pre>
+    </details>
   );
 }

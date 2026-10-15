@@ -30,10 +30,17 @@
  * the screens pane notes the last control changed or left, and
  * useSettings' saveField marks it.
  *
+ * The Settings tour walks several screens: each of its steps names one
+ * (lib/tours/settings.ts `screen`), and while that tour is open the dialog
+ * switches to the current step's screen whenever the step changes — Next,
+ * Back, or the "?" restarting it on Connections. Clicking another screen
+ * mid-step is left alone until the next step.
+ *
  * Labels follow the shared glossary ("Agents", "Custom agents"); the keys
  * ("coding", "providers") never change — palette/settingsSearch.ts, deep
  * links and the server's Connections rows use them. */
 
+import { DEFAULT_SETTINGS_SCREEN } from "../../lib/openSettings";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useUi } from "../../state/store";
 import { Modal } from "../Modal";
@@ -71,6 +78,9 @@ import { SystemLogs } from "./screens/SystemLogs";
 import { Advanced } from "./screens/Advanced";
 import { Extensions } from "./screens/Extensions";
 import { Traffic } from "./screens/Traffic";
+import { TourButton } from "../onboarding/TourButton";
+import { useAutoTour } from "../onboarding/useAutoTour";
+import { TOURS } from "../../lib/tours";
 
 export interface ScreenProps {
   active: boolean;
@@ -133,6 +143,7 @@ export type SettingsScreen = (typeof SCREENS)[number]["key"];
 
 export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () => void }) {
   const open = useUi((s) => s.openDialog === "settings");
+  useAutoTour("settings", open);
   const target = useUi((s) => s.dialogTarget);
   const closeDialog = useUi((s) => s.closeDialog);
   const model = useSettingsModel(open);
@@ -150,7 +161,7 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
   const keys = useMemo(() => screens.map((s) => s.key), [screens]);
   // Seeded from the deep link too (not only the effect below), so the first
   // paint is already the linked screen rather than a flash of General.
-  const [screen, setScreen] = useState(() => resolveScreenKey(target, keys) || "general");
+  const [screen, setScreen] = useState(() => resolveScreenKey(target, keys) || DEFAULT_SETTINGS_SCREEN);
   const [advanced, setAdvanced] = useState(readAdvancedMode);
   const changeMode = (on: boolean) => {
     setAdvanced(on);
@@ -159,7 +170,7 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
   const gotoScreen = (name: string) => {
     const tab = LEGACY_SCREEN_TABS[name];
     if (tab) openDialogFor("intake", tab);
-    else setScreen(resolveScreenKey(name, keys) || "general");
+    else setScreen(resolveScreenKey(name, keys) || DEFAULT_SETTINGS_SCREEN);
   };
 
   useEffect(() => {
@@ -170,10 +181,19 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
       openDialogFor("intake", tab);
       return;
     }
-    setScreen(resolveScreenKey(target, keys) || "general");
+    setScreen(resolveScreenKey(target, keys) || DEFAULT_SETTINGS_SCREEN);
     // Re-read on every open: a sync may have brought another device's choice.
     setAdvanced(readAdvancedMode());
   }, [open, target, openDialogFor, keys]);
+
+  // The Settings tour's step names the screen it shows (see the header).
+  const tourStep = useUi((s) => (s.coachTour?.id === "settings" ? s.coachTour.step : -1));
+  useEffect(() => {
+    if (!open || tourStep < 0) return;
+    const want = TOURS.settings.steps[tourStep]?.screen;
+    const key = want ? resolveScreenKey(want, keys) : null;
+    if (key) setScreen(key);
+  }, [open, tourStep, keys]);
 
   if (!open) return null;
 
@@ -196,6 +216,7 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
         <div id="settings-panel">
           <div className="ws-head">
             <h2>Settings</h2>
+            <TourButton tour="settings" />
             <button type="button" id="settings-close" onClick={closeDialog}>
               Close
             </button>

@@ -5,6 +5,7 @@ import type { Instance } from "../api/types";
 import { queryClient } from "../state/queries";
 import type { Config } from "../api/types";
 import { copyText } from "./clipboard";
+import { confirmPop } from "./errorPop";
 import { toast } from "./toast";
 import {
   PR_FALLBACK_HINT,
@@ -27,6 +28,9 @@ import {
 import { autopilotChipTitle, mergeBlockerLabel } from "./autopilot";
 import { useUi } from "../state/store";
 import { deriveSessionState, SLEEPING_LABEL, type SessionState } from "./sessionState";
+import type { TestPlan, TestPlansResponse } from "../api/types";
+import type { SessionMenuModel } from "./sessionMenu";
+import { planForSession, planVerdict } from "../components/dialogs/verify";
 
 const STAGE_META: Record<string, { label: string }> = {
   provisioning: { label: "provisioning" },
@@ -656,4 +660,87 @@ export function nextStep(inst: Partial<Instance>): NextStep | null {
     default:
       return null; // precommit (running), provisioning
   }
+}
+
+
+// --- Verify's verdict where you merge (round 5, M6) --------------------------
+// The SHIP menu offered Open PR with no word about the branch's checklist, so a
+// FAILED branch was one click from a PR with nothing in the way. The verdict
+// rides on the Open PR item as its note, a failed checklist asks first, and the
+// menu's Verify item says the feature's name.
+
+/** "Checklist ✗ Failed" — the verdict as a menu note, or "" with no checklist. */
+export function verdictNote(plan: TestPlan | null | undefined): string {
+  if (!plan) return "";
+  const v = planVerdict(plan);
+  return "Checklist " + v.glyph + " " + v.short;
+}
+
+/** The question Open PR asks first on a failed checklist, or "". */
+export function prVerdictConfirm(plan: TestPlan | null | undefined): string {
+  if (!plan || planVerdict(plan).key !== "failed") return "";
+  return "Checklist failed — open the PR anyway?";
+}
+
+/** The checklist covering a session, from the list the top bar keeps warm —
+ * never a request of its own (the menu is built on open, outside render). */
+export function cachedPlanFor(inst: Partial<Instance>): TestPlan | null {
+  const data = queryClient.getQueryData<TestPlansResponse>(["test-plans"]);
+  if (!inst.title) return null;
+  return planForSession(data?.plans || [], {
+    title: inst.title,
+    branch: inst.branch,
+    repo: inst.repo,
+  });
+}
+
+/** The session menu with the verdict beside Open PR (and Merge PR), a confirm
+ * on a failed checklist, and "Verify checklist…" as the Verify item's name. */
+export function withVerifyVerdict(
+  menu: SessionMenuModel,
+  inst: Partial<Instance>,
+  plan: TestPlan | null | undefined = cachedPlanFor(inst),
+): SessionMenuModel {
+  const note = verdictNote(plan);
+  const confirm = prVerdictConfirm(plan);
+  return {
+    ...menu,
+    groups: menu.groups.map((g) =>
+      g.id !== "ship"
+        ? g
+        : {
+            ...g,
+            items: g.items.map((item) => {
+              if (item.key === "checklist") return { ...item, label: "Verify checklist…" };
+              if ((item.key === "pr" || item.key === "merge") && !item.disabled && note)
+                return {
+                  ...item,
+                  note: item.note ? item.note + " · " + note : note,
+                  // A question card, not the menu's own `confirm` strip: that
+                  // strip is Delete's, and the menu arms one at a time.
+                  run: confirm
+                    ? () =>
+                        confirmPop(
+                          confirm,
+                          "A step on this branch's checklist failed — see which, or go ahead.",
+                          [
+                            {
+                              label: "Show the checklist",
+                              run: () =>
+                                useUi.getState().openDialogFor("verify", plan?.branch || inst.branch || ""),
+                            },
+                            {
+                              label: item.label.replace(/…$/, "") + " anyway",
+                              primary: true,
+                              run: () => void item.run(),
+                            },
+                          ],
+                        )
+                    : item.run,
+                };
+              return item;
+            }),
+          },
+    ),
+  };
 }

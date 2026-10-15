@@ -224,3 +224,8 @@
 .light .infotip code {
   background: var(--app-panel-2, var(--panel-2));
 }
+
+/* The folder picker window's shadow is tuned for the dark page. */
+.light .fpw {
+  box-shadow: 0 12px 36px rgba(20, 24, 40, 0.18);
+}

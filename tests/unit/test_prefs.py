@@ -342,3 +342,16 @@ def test_pane_header_chosen_on_one_device_shows_on_the_others(tmp_path, monkeypa
     devices.sync("rig")
     with devices.on("rig"):
         assert devices.get("prefs", "pane_header") == choice
+
+
+def test_tours_seen_is_a_synced_string_list():
+    """Round 5: the per-menu coach tours are marked seen on EVERY device
+    (the first-run flags ban), so the list rides prefs sync like bar_order."""
+    from backend.config.settings import PrefsSettings
+    from backend.web.core import settings_sync
+
+    assert "tours_seen" in settings_sync.SYNCED["prefs"]
+    assert PrefsSettings.from_dict({}).to_dict().get("tours_seen") is None
+    assert PrefsSettings.from_dict({"tours_seen": ["new", "intake"]}).to_dict() == {
+        "tours_seen": ["new", "intake"]
+    }

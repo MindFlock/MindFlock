@@ -1,14 +1,18 @@
-/** The welcome walkthrough — a short slideshow that says what MindFlock is and
- * where its few everyday surfaces live: New, the grid, the ship step and the
- * bell, Intake. Opens by itself ONCE, on a first launch (`useFirstLaunchTour`
- * below: the synced `welcome_tour` pref, never a per-browser flag), and is
- * replayable from the palette, the ? sheet and Settings → General.
+/** The welcome card — ONE card on a first launch: what MindFlock is, in two
+ * sentences, and one button. "Let's go" hands over to the Welcome tour
+ * (lib/tours/welcome.ts): coach marks over the Get set up checklist, the
+ * three steps to a first session. Skip, Esc and the backdrop just close it.
  *
- * It used to be twelve slides that walked every setup screen in turn, which put
- * a page of configuration between a new user and their first session. Setup now
- * waits until it is needed; the one slide that names a setup surface (Intake)
- * carries a `screen` key, and its "Set up now" button pauses the tour and jumps
- * there. Everything else is Back/Next. */
+ * Every exit marks it seen (the synced `welcome_tour` pref, on every device),
+ * so it never comes back by itself — there is no button here that leaves it
+ * half-finished and re-armed. It used to be five slides describing a grid,
+ * shipping and Intake that weren't on screen yet, over the checklist that
+ * was the actual path; those surfaces now have their own tours, from the
+ * "?" in each dialog's header.
+ *
+ * Opens by itself ONCE, on a first launch (`useFirstLaunchTour` below: the
+ * synced pref, never a per-browser flag), and is replayable from the palette
+ * ("Replay welcome tour"), the ? sheet and Settings → General → Tours. */
 
 import { useEffect, useState } from "react";
 import { useUi } from "../../state/store";
@@ -17,105 +21,23 @@ import { useSetup } from "../setup/useSetup";
 import { firstLaunchTour } from "../../lib/calm";
 import { firstPrefsPull } from "../../lib/prefsSync";
 import { Modal } from "../Modal";
-import { LEGACY_SCREEN_TABS } from "../intake/IntakeDialog";
-import { useDoctorWarn } from "../dialogs/SetupDialog";
-import { VERIFY_BLURB } from "../../lib/vocab";
+import { findTarget } from "./CoachTour";
 import "./WelcomeTour.css";
 
-interface Slide {
-  /** Emoji icon, or omit and set `logo` to show the MindFlock mark. */
-  icon?: string;
-  logo?: boolean;
-  title: string;
-  body: React.ReactNode;
-  /** Where this slide's "Set up now" button jumps to — a Settings screen key,
-   * or an Intake tab key when the setup step lives there. */
-  screen?: string;
-}
-
-const SLIDES: Slide[] = [
-  {
-    logo: true,
-    title: "Welcome to MindFlock",
-    body: (
-      <>
-        MindFlock runs coding agents side by side on this machine — there is no
-        account and no cloud. Each session is its own branch and folder with an
-        agent working in it; you review the diff and ship it.
-      </>
-    ),
-  },
-  {
-    icon: "▦",
-    title: "Sessions & the grid",
-    body: (
-      <>
-        Press <b>New</b> (Alt+N) and say what to work on. Each session gets a
-        pane in the grid and a row in the sidebar. More tools — the Assistant,
-        usage, how many panes show — appear once you have a few sessions;{" "}
-        <b>⚙ Customize</b> brings any of them in sooner.
-      </>
-    ),
-  },
-  {
-    icon: "⏩",
-    title: "Shipping",
-    body: (
-      <>
-        When an agent stops, its pane's button offers the next step —{" "}
-        <b>Commit…</b>, <b>Push</b>, <b>Open PR</b>. <b>⏩ Fast-track</b> takes
-        those steps for you, as far as you choose, and can ask first. Anything
-        that needs you — a question or an approval — shows under the{" "}
-        <b>bell</b>.
-      </>
-    ),
-  },
-  {
-    icon: "🎫",
-    title: "Where work comes from",
-    body: (
-      <>
-        <b>Intake</b> turns tickets, PRs and issues into sessions (Jira, Linear,
-        GitHub Issues, Shortcut, Asana). <b>Verify</b>: {VERIFY_BLURB}.{" "}
-        <b>Schedule</b> starts a saved setup by itself — nightly, weekdays or
-        on any cron.{" "}
-        <b>⚙ Customize</b> at the bottom of the sidebar adds more bars — like{" "}
-        <b>Prompts</b>, your saved text one click from any session.
-      </>
-    ),
-    screen: "ticketing",
-  },
-  {
-    logo: true,
-    title: "You're all set",
-    body: (
-      <>
-        <b>Setup</b> connects GitHub and your tracker whenever you're ready. Watch
-        for <b>💡 hints</b> as you go — replay this tour or turn hints off under{" "}
-        <b>Settings → General</b>.
-      </>
-    ),
-  },
+/** The card's words (pinned by the tests). */
+export const WELCOME_TITLE = "Welcome to MindFlock";
+export const WELCOME_LINES = [
+  "MindFlock runs coding agents side by side on this computer, each session on its own branch.",
+  "Three steps and your first agent is running.",
 ];
 
-/** The last slide when the doctor still reports a required tool missing: "You're
- * all set" would be untrue, so it names the one thing left and opens Setup,
- * whose Dependencies step installs it in one click. */
-const NOT_YET_SET: Slide = {
-  logo: true,
-  title: "One thing left",
-  body: (
-    <>
-      A tool MindFlock needs is still missing on this computer — usually tmux or
-      your coding agent. <b>Setup</b> installs everything missing in one go, then
-      signs your agent in.
-    </>
-  ),
-};
-
-/** Which last slide to show: the doctor's verdict decides. */
-export function lastSlide(failing: boolean): Slide {
-  return failing ? NOT_YET_SET : SLIDES[SLIDES.length - 1];
+/** "Let's go": the Welcome tour over the checklist. On the empty grid the
+ * checklist is already there; anywhere else (a replay with sessions open) the
+ * Setup dialog brings it up first. */
+export function startWelcomeTour(): void {
+  const ui = useUi.getState();
+  if (typeof document !== "undefined" && !findTarget(document, ".setup-checklist")) ui.openDialogFor("setup");
+  ui.openCoachTour("welcome");
 }
 
 /** The brand mark, painted with the current accent via CSS mask. */
@@ -123,9 +45,9 @@ function Logo() {
   return <div className="wt-logo" role="img" aria-label="MindFlock" />;
 }
 
-/** Open the tour by itself once, on a first launch (lib/calm firstLaunchTour),
+/** Open the card by itself once, on a first launch (lib/calm firstLaunchTour),
  * after this page's first prefs pull — so "seen on another device" is known
- * before anything opens — and remember it as seen the moment it opens. */
+ * before anything opens — and remember it as seen once it closes. */
 function useFirstLaunchTour() {
   const seen = useUi((s) => s.welcomeTourSeen);
   const { data: instances } = useInstances();
@@ -148,8 +70,7 @@ function useFirstLaunchTour() {
     const ui = useUi.getState();
     if (!ui.tourOpen) useUi.setState({ tourOpen: true });
   }, [due]);
-  // Seen once it is CLOSED (Get started, Skip, Esc), not the moment it shows:
-  // a reload halfway through brings it back instead of losing it for good.
+  // Seen once it is CLOSED, by any exit (Let's go, Skip, Esc, the backdrop).
   const open = useUi((s) => s.tourOpen);
   const [wasOpen, setWasOpen] = useState(false);
   useEffect(() => {
@@ -164,117 +85,42 @@ function useFirstLaunchTour() {
 export function WelcomeTour() {
   useFirstLaunchTour();
   const open = useUi((s) => s.tourOpen);
-  // While a setup dialog is open we PAUSE the tour: hide it but stay mounted so
-  // the slide index survives. Closing that dialog brings the tour back where it
-  // was. All three dialogs count — .modal carries no z-index, and the tour
-  // renders last in App.tsx, so an unpaused tour would paint on top of whichever
-  // dialog its own "Set up now" / "Open Settings" just opened, or of the Setup
-  // checklist a failing doctor probe popped.
-  const settingsOpen = useUi(
-    (s) => s.openDialog === "settings" || s.openDialog === "intake" || s.openDialog === "setup"
-  );
+  // Hidden (not closed) while a setup dialog is up over it: .modal carries no
+  // z-index and this renders last in App.tsx, so it would paint on top of
+  // Settings, Intake or the Setup checklist opened from elsewhere.
+  const covered = useUi((s) => s.openDialog === "settings" || s.openDialog === "intake" || s.openDialog === "setup");
   const finishTour = useUi((s) => s.finishTour);
-  const failing = useDoctorWarn().failing;
-  const openDialogFor = useUi((s) => s.openDialogFor);
-  const [i, setI] = useState(0);
+  if (!open || covered) return null;
 
-  // Reset to the first slide whenever the tour (re)opens — but not when it's
-  // merely paused behind Settings.
-  useEffect(() => {
-    if (open) setI(0);
-  }, [open]);
-
-  const paused = open && settingsOpen;
-
-  // Arrows page the slides (Escape is the Modal shell's: it finishes the tour).
-  useEffect(() => {
-    if (!open || paused) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "ArrowRight") setI((n) => Math.min(n + 1, SLIDES.length - 1));
-      else if (e.key === "ArrowLeft") setI((n) => Math.max(n - 1, 0));
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, paused]);
-
-  // Return null (not unmount) while closed or paused: hooks above keep running
-  // and `i` is retained for when the tour reappears.
-  if (!open || paused) return null;
-
-  const last = i === SLIDES.length - 1;
-  const slide = last ? lastSlide(failing) : SLIDES[i];
-
-  // Open the setup surface ON TOP of the (now paused) tour instead of ending it,
-  // so the user lands back on this exact slide when they close it. A legacy
-  // Settings key that moved to Intake routes there; anything else is Settings.
-  const jumpTo = (screen: string) => {
-    const tab = LEGACY_SCREEN_TABS[screen];
-    openDialogFor(tab ? "intake" : "settings", tab || screen);
+  const letsGo = () => {
+    finishTour();
+    startWelcomeTour();
   };
 
   return (
-    <Modal id="welcome-tour" onClose={finishTour}>
+    <Modal id="welcome-tour" role="dialog" aria-modal="true" aria-labelledby="wt-title" onClose={finishTour}>
       <div className="wt-card">
         <button type="button" className="wt-skip" onClick={finishTour}>
           Skip
         </button>
         <div className="wt-content">
           <div className="wt-head">
-            {slide.logo ? <Logo /> : <span className="wt-icon" aria-hidden="true">{slide.icon}</span>}
-            <h2 className="wt-title">{slide.title}</h2>
+            <Logo />
+            <h2 className="wt-title" id="wt-title">
+              {WELCOME_TITLE}
+            </h2>
           </div>
-          <p className="wt-body">{slide.body}</p>
-          {slide.screen && (
-            <button type="button" className="wt-setup" onClick={() => jumpTo(slide.screen!)}>
-              Set up now →
-            </button>
-          )}
+          {WELCOME_LINES.map((line) => (
+            <p key={line} className="wt-body">
+              {line}
+            </p>
+          ))}
         </div>
-
         <div className="wt-foot">
-          <div className="wt-dots" role="tablist" aria-label="Tour progress">
-            {SLIDES.map((_, n) => (
-              <button
-                key={n}
-                type="button"
-                className={"wt-dot" + (n === i ? " active" : "")}
-                aria-label={`Go to step ${n + 1}`}
-                aria-selected={n === i}
-                onClick={() => setI(n)}
-              />
-            ))}
-          </div>
-
-          <div className="wt-nav">
-          <button
-            type="button"
-            className="wt-btn ghost"
-            disabled={i === 0}
-            onClick={() => setI((n) => Math.max(n - 1, 0))}
-          >
-            Back
+          {/* autoFocus: Enter is "Let's go", the one thing to do here. */}
+          <button type="button" className="wt-btn primary wt-go" autoFocus onClick={letsGo}>
+            Let's go
           </button>
-          {last ? (
-            <div className="wt-nav-end">
-              {/* The Setup checklist (Get started · Connect your work), over the
-                  paused tour like "Set up now" — not the whole of Settings. */}
-              <button type="button" className="wt-btn ghost" onClick={() => openDialogFor("setup")}>
-                Open Setup
-              </button>
-              <button type="button" className="wt-btn primary" onClick={finishTour}>
-                Get started
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              className="wt-btn primary"
-              onClick={() => setI((n) => Math.min(n + 1, SLIDES.length - 1))}
-            >
-              Next
-            </button>
-          )}
-          </div>
         </div>
       </div>
     </Modal>

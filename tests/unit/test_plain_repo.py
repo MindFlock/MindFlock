@@ -38,7 +38,9 @@ def test_blank_path_rejected(stub_git):
 def test_init_repo_without_git_rejected(stub_git, monkeypatch, tmp_path):
     monkeypatch.setattr(server, "git_available", lambda: False)
     with pytest.raises(ValueError, match="git is not installed"):
-        plain_repo._prepare_plain_repo(str(tmp_path / "new"), init_repo=True)
+        plain_repo._prepare_plain_repo(
+            str(tmp_path / "new"), init_repo=True, create_folder=True
+        )
 
 
 def test_open_existing_plain_folder_git_disabled(stub_git, tmp_path):
@@ -49,11 +51,24 @@ def test_open_existing_plain_folder_git_disabled(stub_git, tmp_path):
     assert git_enabled is False
 
 
-def test_missing_path_created_as_plain_folder(stub_git, tmp_path):
+def test_missing_path_created_as_plain_folder_only_when_asked(stub_git, tmp_path):
     d = tmp_path / "does-not-exist-yet"
-    abs_path, git_enabled = plain_repo._prepare_plain_repo(str(d), init_repo=False)
-    assert os.path.isdir(abs_path)  # created on the fly
+    abs_path, git_enabled = plain_repo._prepare_plain_repo(
+        str(d), init_repo=False, create_folder=True
+    )
+    assert os.path.isdir(abs_path)  # created because the request asked for it
     assert git_enabled is False
+
+
+def test_missing_path_is_refused_without_create_folder(stub_git, tmp_path):
+    """Round 5: a mistyped folder must not become a new folder (and repo)."""
+    d = tmp_path / "notgit-typo"
+    for init in (False, True):
+        with pytest.raises(plain_repo.NoFolderError) as exc:
+            plain_repo._prepare_plain_repo(str(d), init_repo=init)
+        assert str(exc.value) == "No folder at %s" % os.path.realpath(str(d))
+        assert exc.value.path == os.path.realpath(str(d))
+    assert not d.exists()
 
 
 def test_existing_git_repo_enables_git_and_runs_preflight(
@@ -91,7 +106,9 @@ def test_init_repo_makes_initial_commit_when_empty(stub_git, monkeypatch, tmp_pa
         "_make_initial_commit",
         lambda p: calls.__setitem__("commit", calls["commit"] + 1),
     )
-    abs_path, git_enabled = plain_repo._prepare_plain_repo(str(d), init_repo=True)
+    abs_path, git_enabled = plain_repo._prepare_plain_repo(
+        str(d), init_repo=True, create_folder=True
+    )
     assert git_enabled is True
     assert os.path.isdir(abs_path)
     assert calls["init"] == 1 and calls["commit"] == 1

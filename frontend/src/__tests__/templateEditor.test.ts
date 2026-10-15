@@ -66,22 +66,28 @@ describe("the template editor draws the New form's parts", () => {
     const html = editor();
     expect(html).toContain('id="tpl-repo-path"');
     expect(html).toContain('role="combobox"');
-    expect(html).toMatch(/<span class="repo-path-row"><input[^>]*id="tpl-repo-path"[^>]*>.*?id="tpl-browse" class="repo-browse"[^>]*>Browse…<\/button>/);
-    // The suggestion strip, as New draws it: labelled runs and an N more… chip.
+    expect(html).toMatch(/<span class="repo-path-row"><input[^>]*id="tpl-repo-path"[^>]*>.*?id="tpl-browse" class="repo-browse"[^>]*><span aria-hidden="true">📁 <\/span>Browse…<\/button>/);
+    // One line of one-click folders, said as an action ("Use: 📦 app"), not
+    // a status ("Started in", "Recent") — r5-schedule finding 13. Only repos
+    // and recent folders: a stray notes folder isn't offered.
     expect(html).toContain('id="tpl-suggest"');
-    expect(html).toContain('class="nf-suggest nf-folders"');
-    expect(html).toContain('data-path="/home/me/projects/app"');
-    expect(html).toContain('id="tpl-suggest-more"');
+    expect(html).toContain('class="nf-suggest nf-folders tpl-use"');
+    expect(html).toMatch(/<span class="nf-suggest-label">Use:<\/span><button[^>]*data-path="\/home\/me\/projects\/app"[^>]*>📦 app<\/button>/);
+    expect(html).not.toContain('data-path="/home/me/notes"');
+    expect(html).not.toMatch(/>(Started in|Recent)</);
     // The old bare text box is gone.
     expect(html).not.toContain('id="tpl-repo"');
   });
 
   it("the folder's hint is the input's placeholder, never a line that pushes it down", () => {
     const html = editor();
-    expect(html).toContain('placeholder="Needed to Run now or schedule"');
+    expect(html).toContain('placeholder="The repo it works in"');
     expect(html).not.toContain("— needed to Run now or schedule");
-    // Folder and Agent share New's row, each a label with one line of head.
-    expect(html).toMatch(/<div class="nf-quick"><label class="nf-folder"[^>]*>Folder<span class="repo-path-row">/);
+    // Folder and Agent share New's row, each a label with one line of head
+    // (Folder in a wrap "Add one" rings and the tour points at).
+    expect(html).toMatch(
+      /<div class="nf-quick"><div class="tpl-folder-wrap" data-tour="schedule-folder"><label class="nf-folder"[^>]*>Folder<span class="repo-path-row">/
+    );
     // One height for the input, Browse… and the select: one baseline.
     const row = CSS.slice(CSS.indexOf(".tpl-editor .nf-quick input,"));
     expect(row.slice(0, row.indexOf("}"))).toContain(".tpl-editor .nf-quick select,");
@@ -115,13 +121,20 @@ describe("the template editor draws the New form's parts", () => {
     expect(html).toContain('<span class="nf-opt-title">Provision the worktree</span>');
   });
 
-  it("Schedule and When a run's turn ends sit in the same label column", () => {
+  it("Schedule and Fast-track sit in the same label column", () => {
     const html = editor({ form: { ...formFromTemplate(NIGHTLY) }, ui: { ...TEMPLATES_UI_INIT, editing: "nightly-deps" } });
     expect(html).toContain('id="tpl-schedule-row"');
     expect(html).toMatch(/<span class="rt-label" id="tpl-schedule-label">Schedule<\/span>/);
-    expect(html).toMatch(/<span class="rt-label" id="tpl-autopilot-label">When a run(&#x27;|')s turn ends<\/span>/);
+    // GLOSSARY round 5: Fast-track, with its five levels, not "When a run's
+    // turn ends" / "Leave it for me" / "Commit + push" / "Open a PR".
+    expect(html).toMatch(/<span class="rt-label" id="tpl-autopilot-label">Fast-track<\/span>/);
+    expect(html).toContain("When the agent stops. Applies to Run now and to scheduled runs.");
     expect(html).toContain('id="tpl-at"');
-    expect(html).toContain('<option value="pr" selected="">Open a PR</option>');
+    expect(html).toContain('<option value="pr" selected="">Open PR</option>');
+    expect(html).toContain('<option value="">Off</option>');
+    // never Merge when green: a template's runs are unattended
+    expect(html).not.toContain('value="merge"');
+    expect(html).not.toMatch(/When a run|Leave it for me|Commit \+ push|each Run now/);
     expect(cssRule(CSS, ".tpl-editor .rt-row")).toContain("grid-template-columns: 150px minmax(0, 1fr);");
   });
 

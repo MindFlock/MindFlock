@@ -35,6 +35,9 @@ import { QueueTab } from "./QueueTab";
 import { collectQueued, isQueued } from "./queue";
 import { kindsText, useIntakeSwitches } from "./switches";
 import type { RepoUse } from "./repoUses";
+import { nextScheduledText, useScheduledTemplates } from "./ScheduledTemplates";
+import { TourButton } from "../onboarding/TourButton";
+import { useAutoTour } from "../onboarding/useAutoTour";
 
 export type IntakeTabKey = "tickets" | "prs" | "issues" | "autostart";
 
@@ -182,17 +185,31 @@ function TabCount({ tab }: { tab: Exclude<IntakeTabKey, "autostart"> }) {
   // "nothing to do", which is the one thing this surface must not say when it
   // doesn't know yet. An unconfigured panel 502s and stays silent too.
   if (!n) return null;
+  // The badge counts what auto-start would take, not every row listed — the
+  // tooltip says which, so "2" over a list of 7 reads as meant (round 5).
+  const listed =
+    tab === "tickets"
+      ? countInBuckets(
+          q.data.tickets || [],
+          visibleBuckets(q.data.buckets || [], q.data.done_buckets || [], loadShownBuckets()),
+          loadMineOnly()
+        )
+      : (q.data.prs || q.data.issues || []).length;
   return (
-    <span className="ik-tab-count" title={n + " ready to start"}>
+    <span
+      className="ik-tab-count"
+      title={n + " ready to start — the ones auto-start would take" + (listed > n ? " (" + listed + " listed)" : "")}
+    >
       {n}
     </span>
   );
 }
 
-/** One line above the tabs saying what auto-starts right now, across all
- * three switches (tickets, GitHub PRs, GitHub issues). With everything off,
- * "Turn on…" goes to the tab whose switch does it. Read-only: each switch is
- * flipped on its own tab (there is no "pause everything" — see ./switches.ts). */
+/** One line above the tabs saying what starts on its own right now: the
+ * three switches (read the same way the Auto-start tab's switches and every
+ * row chip read them — ./switches.ts) plus the next scheduled template. Its
+ * link goes to the switches, on the Auto-start tab. Hidden until there is
+ * something to say: on a first open the add flow is the one thing on screen. */
 function AutoStartLine({
   ticketSources,
   gotoTab,
@@ -201,40 +218,42 @@ function AutoStartLine({
   gotoTab(key: IntakeTabKey): void;
 }) {
   const p = useIntakeSwitches(ticketSources);
+  const sched = useScheduledTemplates();
+  const next = nextScheduledText(sched.templates, sched.status);
+  if (!p.anyConfigured && !next) return null;
   const line = p.onKinds.length
     ? "Auto-start is on for " + kindsText(p.onKinds) + "."
     : p.anyConfigured
       ? "Auto-start is off everywhere."
-      : "Nothing auto-starts yet — set up a tab below first.";
-  // Where "Turn on…" goes: the first tab with something set up but off.
-  const offTab: IntakeTabKey | null = p.onKinds.length
-    ? null
-    : p.sw.configured.tickets
-      ? "tickets"
-      : p.sw.configured.prs
-        ? "prs"
-        : p.sw.configured.issues
-          ? "issues"
-          : null;
+      : "";
   return (
     <div className="ik-autostart-line" id="ik-autostart-row">
       <span className="ik-autostart-text" id="ik-autostart-status" role="status" aria-live="polite">
         {line}
+        {next ? (
+          <span className="ik-autostart-next">
+            {line ? " " : ""}Next to start on its own: {next}.
+          </span>
+        ) : null}
       </span>
-      {offTab && (
+      {p.anyConfigured ? (
         <button
           type="button"
           id="ik-turn-on-btn"
           className="linklike"
-          title="Go to the switch that turns auto-start on"
-          onClick={() => gotoTab(offTab)}
+          title="The switches for tickets, PR comments and new issues"
+          onClick={() => gotoTab("autostart")}
         >
-          Turn on…
+          {p.onKinds.length ? "Auto-start switches ›" : "Turn on ›"}
         </button>
-      )}
+      ) : null}
     </div>
   );
 }
+
+/** Where Intake was when it last closed, so Alt+I (no target) returns there —
+ * "Open session ›" closes the dialog, and coming back should not lose the tab. */
+const lastPlace: { tab: IntakeTabKey } = { tab: "tickets" };
 
 const panelId = (t: (typeof TABS)[number]) => t.legacyId || "intake-tabpanel-" + t.key;
 
@@ -247,6 +266,7 @@ function AutoStartOn() {
 
 export function IntakeDialog() {
   const open = useUi((s) => s.openDialog === "intake");
+  useAutoTour("intake", open);
   const target = useUi((s) => s.dialogTarget);
   const closeDialog = useUi((s) => s.closeDialog);
   const [tab, setTab] = useState<IntakeTabKey>("tickets");
@@ -264,10 +284,13 @@ export function IntakeDialog() {
       setFocus("");
       return;
     }
-    const t = parseIntakeTarget(target);
+    const t = target ? parseIntakeTarget(target) : { tab: lastPlace.tab, focus: "" };
     setTab(t.tab);
     setFocus(t.focus);
   }, [open, target]);
+  useEffect(() => {
+    lastPlace.tab = tab;
+  }, [tab]);
 
   // The panels are normally already warm before this dialog exists (App's
   // useIntakeWarm), which is what makes an open land on a list rather than a
@@ -348,6 +371,7 @@ export function IntakeDialog() {
             >
               + Add source
             </button>
+            <TourButton tour="intake" />
             <button type="button" id="intake-close" onClick={closeDialog}>
               Close
             </button>

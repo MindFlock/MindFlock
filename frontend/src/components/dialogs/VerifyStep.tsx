@@ -459,6 +459,7 @@ export function StepRow({
           you can run your eye down, you can. */}
       <span
         className={"vf-step-who" + (mine ? " vf-who-you" : "")}
+        data-tour="verify-badges"
         title={
           handed
             ? "The agent couldn't check this one — it's yours now"
@@ -497,7 +498,10 @@ export function StepRow({
           {/* Three answers, not two. "Blocked" is not a hedge — it is the
               honest one when you couldn't get to the thing (staging is down,
               you have no account on it), and without it a step you cannot check
-              gets marked pass to make the row go away. */}
+              gets marked pass to make the row go away. One span, so the tour
+              can ring the three together and a narrow row can stack the
+              receipt under them. */}
+          <span className="vf-answers" data-tour="verify-answer">
           {(["pass", "fail", "blocked"] as const).map((choice) => {
             // Shown as the recorded value, but only "pressed" when it is YOURS:
             // an agent's blocked is it declining to answer, and painting that as
@@ -568,6 +572,7 @@ export function StepRow({
               </button>
             );
           })}
+          </span>
           <span className="vf-step-tail">
             {/* Who said so, and when. This is the fact the whole surface exists
                 to preserve, and it used to live in a title attribute. */}
@@ -611,12 +616,12 @@ export function StepRow({
             {shown === "fail" && onFix ? (
               <button
                 type="button"
-                className="test-btn vf-fix-step"
+                className="vf-fix-step"
                 disabled={fixing}
-                title="Start a session to fix this step"
+                title="Starts a new session with this failure attached"
                 onClick={() => onFix(step)}
               >
-                {fixing ? "Starting…" : "Fix this…"}
+                {fixing ? "Starting…" : "Fix in a new session"}
               </button>
             ) : null}
           </span>

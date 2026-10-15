@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { deviceApi } from "../../../lib/devices";
 import { focusRowIndex, leafName } from "../newSession";
+import { seedChain } from "../../../lib/folderPicker";
 
 /** Folder browser popover (port of loadBrowse, section 16), on Finder's rules:
  * a single click SELECTS a row and a double click opens it. It used to be the
@@ -20,6 +21,8 @@ export function FolderBrowser({
   selected,
   onSelect,
   onPick,
+  fallback = false,
+  onListing,
 }: {
   /** Whose disk is being browsed: "" here, else the tailnet device the
    * session will be started on. */
@@ -32,6 +35,12 @@ export function FolderBrowser({
   onSelect(path: string): void;
   /** Fill the field and close — the explicit "I'm done" gesture. */
   onPick(path: string): void;
+  /** Open on the nearest folder that exists when `initialPath` does not (its
+   * parents, then home) — the picker window, seeded from a field the user may
+   * have typed a not-yet-made folder into. */
+  fallback?: boolean;
+  /** Every listing that lands: the folder now shown and its rows. */
+  onListing?(path: string, entries: string[]): void;
 }) {
   interface BrowsePayload {
     path: string;
@@ -52,24 +61,47 @@ export function FolderBrowser({
   // pointer drove it (or nothing is pending) — read by the effect below.
   const leaving = useRef<string | null>(null);
 
-  const load = useCallback(async (path: string) => {
+  const load = useCallback(async (path: string, quiet = false): Promise<boolean> => {
     setError("");
     try {
       const q = path ? "?path=" + encodeURIComponent(path) : "";
       setData(await deviceApi(device)<BrowsePayload>("/api/browse" + q));
+      return true;
     } catch (err) {
+      if (quiet) return false;
       // A listing that never arrived leaves the old rows (and the row that has
       // focus) on screen, so it must also drop any pending handoff rather than
       // leave it to fire on somebody else's navigation.
       leaving.current = null;
       setError((err as Error).message);
+      return false;
     }
   }, [device]);
 
   useEffect(() => {
-    load(initialPath);
+    if (!fallback) {
+      load(initialPath);
+      return;
+    }
+    let live = true;
+    (async () => {
+      const chain = seedChain(initialPath);
+      for (let i = 0; i < chain.length && live; i++) {
+        // Only the last try (home) reports its failure: the earlier ones are
+        // expected to miss for a folder that does not exist yet.
+        if (await load(chain[i], i < chain.length - 1)) return;
+      }
+    })();
+    return () => {
+      live = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (data) onListing?.(data.path, (data.entries || []).map((e) => e.path));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
 
   // Navigating swaps every row in the list, which unmounts the button holding
   // focus — and focus falls to document.body, so → and ← worked exactly once and
@@ -151,7 +183,9 @@ export function FolderBrowser({
           ←
         </button>
         <span id="rb-cwd" className="rb-cwd" title={data?.path || ""}>
-          {data?.path || ""}
+          {/* LTR run in the RTL (head-clipping) line, or the leading "/" of
+              the path is drawn at its far end. */}
+          <span dir="ltr">{data?.path || ""}</span>
         </span>
         <button
           type="button"
@@ -245,6 +279,7 @@ export function FolderBrowser({
             }
             aria-pressed={selected === e.path}
             title={e.path}
+            data-path={e.path}
             onClick={() => onSelect(e.path)}
             onDoubleClick={() => {
               onSelect(e.path);

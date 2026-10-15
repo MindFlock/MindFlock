@@ -18,6 +18,9 @@ import { extractPeerCode } from "../../lib/peer";
 
 export interface PaletteAction {
   label: string;
+  /** One small line under the label saying what is behind it (the
+   * Settings rows carry one). Not searched here; the row's source ranks it. */
+  sub?: string;
   hint?: string;
   run(): void;
   /** Extra words that should find it (beyond its label). */
@@ -135,4 +138,12 @@ export function paletteCode(query: string): ReturnType<typeof routeCode> {
   if (extractPeerCode(t)) return routeCode(t);
   if (!/(^|\s)[A-Za-z0-9]{4}-[A-Za-z0-9]{4}(\s|$)/.test(t)) return none;
   return routeCode(t);
+}
+
+/** Whether a row's hint is a key ("Ctrl+B", "?", "Alt+N") — drawn as a
+ * keycap — rather than words ("fresh session, prompt sent"), which are drawn
+ * as plain muted text so they never read as a shortcut. A hint is words as
+ * soon as it holds an all-lowercase word of three letters or more. */
+export function isKeyHint(hint: string): boolean {
+  return !/\b[a-z]{3,}\b/.test(hint);
 }

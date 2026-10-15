@@ -1,7 +1,20 @@
 /** The New form's Launch flags fold: extra CLI flags for this session. */
 
 import { useRef, type Dispatch, type SetStateAction } from "react";
-import { FlagChips } from "../FlagChips";
+import { FlagChips, tokenize } from "../FlagChips";
+import { SKIP_PERMS_LABEL, SKIP_PERMS_TITLE } from "../../../lib/vocab";
+
+/** The flags that turn the agent's permission prompts off, per CLI. */
+const SKIP_PERMS_FLAGS = [
+  "--dangerously-skip-permissions",
+  "--dangerously-bypass-approvals-and-sandbox",
+  "--yes-always",
+  "--auto",
+];
+
+export function skipsPermissions(args: string): boolean {
+  return tokenize(args).some((t) => SKIP_PERMS_FLAGS.includes(t));
+}
 
 export function LaunchFold({
   launchOpen,
@@ -43,7 +56,7 @@ export function LaunchFold({
           <span>
             Flags{" "}
             <span className="muted">
-              — e.g. --dangerously-skip-permissions; appended after the agent's saved defaults
+              — appended after the agent's saved defaults
             </span>
           </span>
           <input
@@ -56,6 +69,11 @@ export function LaunchFold({
           />
         </label>
         <FlagChips provider={program} value={launchArgs} onChange={setLaunchArgs} />
+        {skipsPermissions(launchArgs) && (
+          <p className="nf-git-nudge nf-skip-perms" id="new-skip-perms-warn" role="status">
+            {SKIP_PERMS_LABEL} — {SKIP_PERMS_TITLE.charAt(0).toLowerCase() + SKIP_PERMS_TITLE.slice(1)}.
+          </p>
+        )}
       </div>
     </details>
   );

@@ -8,17 +8,23 @@ HTTP API (`backend/client.py`). Session commands never spawn an engine of
 their own: the terminal and the web UI drive the same server, so a session
 created from either shows up in both.
 
+`mindflock --help` lists the commands in four groups — **Get started** (`init`,
+`serve`, `doctor`), **Sessions**, **This computer** (`update`, `restart`,
+`devices`, `join`, `token`, `uninstall`) and **Advanced** — and ends with
+"New here? Run mindflock init". `git-credential` (git's credential helper, not
+a human command) works but is never listed.
+
 ## Host commands
 
 ```bash
-mindflock serve             # start the web UI (localhost only, port 8765)
+mindflock serve             # start MindFlock (localhost only, port 8765); prints the three steps + the address to open
 mindflock serve tailscale   # also bind this node's Tailscale IPs for phone/tailnet access (URL + QR + token)
 mindflock serve --port 9000 # custom port
 mindflock serve --setup     # run the guided first-run setup (= `mindflock init`) before binding the port
-mindflock doctor            # dependency preflight; exit 1 if a required dep is missing (git is optional: info only)
-mindflock doctor --fix      # install everything missing in one go (asks once), then offer logins
-mindflock init              # guided first run: fixes dependencies, signs your agent in, picks your repo,
-                            # and prints the SAME first-run checklist the app shows, in the same state
+mindflock doctor            # grouped checks + ONE next step; exit 1 if a check fails
+mindflock doctor --all      # …listing the optional checks too (Tailscale, peer links, caches…)
+mindflock doctor --fix      # install everything missing in one go (asks once), then offer the sign-ins
+mindflock init              # the three steps: install the tools, sign in to your agent, pick a project folder
 mindflock uninstall         # undo MindFlock's writes to your repos (see below)
 mindflock mcp               # the MindFlock MCP server on stdio (for an agent CLI to start)
 mindflock mcp --print-config  # how to register it with your own Claude Code / Codex
@@ -42,48 +48,84 @@ unauthenticated clients get 401, and the token + QR code are printed in the
 startup banner. `mindflock token` prints the same token later (it reads the
 settings store directly, so it works with no server running). The default `serve` (local) binds 127.0.0.1 only.
 
+### The three steps (every terminal door)
+
+`install.sh`, `mindflock init` and the top of `mindflock serve` print the same
+block, rendered by one function (`backend/init_wizard.py` `steps_block`), and
+every door — `mindflock doctor` included — ends on exactly ONE next-action line:
+
+```
+MindFlock is installed. Three steps to your first agent:
+  ✓ 1. Install the tools      git, tmux, Claude Code
+  ✗ 2. Sign in to your agent  run claude, sign in, then type /exit   ← you are here
+  ✓ 3. Pick a project folder  /home/me/code/webapp
+  Optional, later: GitHub, ticket sources, phone. Already use MindFlock elsewhere? mindflock join
+
+Next: sign in to Claude Code — run claude, sign in, then type /exit. Then run mindflock init again.
+```
+
+The first line becomes **You're set.** only when all three are ✓ — the agent's
+sign-in counts as required, the same reading as the web checklist's
+"Needs attention" (`setup_steps.doctor_progress`), so a signed-out agent never
+reads as ready. Steps 1 and 2 come from a doctor run; step 3 is the folder
+`mindflock init` picked (`general.last_repo_path`). A folder with no git gets
+"has no git yet — run git init there, or pick a repo".
+
+- **install.sh** runs `mindflock init --steps` (read-only, hidden from
+  `--help`) and ends on `Next: run mindflock init`. It no longer runs the
+  doctor itself (init owns the tools, the sign-in and the folder); the desktop
+  app's run (`MINDFLOCK_NONINTERACTIVE=1`) ends on one line instead — tmux and
+  the agent come next, in the app.
+- **`mindflock serve`** prints the steps with step 3 boxed — *Open
+  http://127.0.0.1:PORT in your browser — it walks you through the rest* — or,
+  once all three are done, just the boxed address. In local mode one line,
+  `Phone: mindflock serve tailscale`, says how to reach it from a phone. The
+  text is also kept for `GET /api/setup` (`report`) on a first run.
+
 ### `mindflock init [--yes]`
 
-The guided first run — what a stranger needs between a fresh install and a
-first agent session, in order. It prints the doctor's checks, offers to run the
-fix for each one that carries a command (install tmux, install the agent CLI,
-log it in — the same loop as `mindflock doctor --fix`), asks Setup's "first
-computer, or join one you already have?" question (joining brings the default
-agent, the GitHub token and ticket sources along), picks the folder to work in
-(remembered as `general.last_repo_path`), and ends on the commands that start
-the first session.
+The guided first run — the three steps, in order. It offers to install
+whatever step 1 is missing in one go and to run your agent's sign-in (the same
+loop as `mindflock doctor --fix`, limited to what a first agent needs: nothing
+optional — Tailscale, GitHub, the MTU — is offered here, and only those rows
+answer Enter = yes). An agent closed before you signed in gets
+"Claude Code closed before you signed in. [R]etry / [s]kip". Then it picks the
+project folder (remembered as `general.last_repo_path`) and ends on the block
+above.
 
-Between the fix loop and the folder it prints **the first-run checklist** —
-the same steps the web UI shows on the empty grid, in the Setup dialog and as
-the "Setup 3/5" chip, read from the same stored state (`general.setup`; one
-definition in `backend/web/core/setup_steps.py`):
+Setup's "first computer, or join one you already have?" question (joining
+brings the default agent, the GitHub token and ticket sources along) is asked
+before the sign-in — but only when another MindFlock answers on this tailnet;
+otherwise the block's last line points at `mindflock join`.
 
-```
-Your setup, in order:
-  ✓ 1. Install the tools       done
-  • 2. Sign in to your agent
-  • 3. Start your first agent
-  • 4. Connect GitHub          optional
-  • 5. Connect your tracker    optional
-  – 6. Use it from your phone  skipped
-```
-
-1–3 are required (the app's *Get started*), 4–5 optional (*Connect your
-work*), and 6 is an *Optional, later* extra the app keeps folded and leaves
-out of its count. Nothing in the wizard ticks a step by hand: the doctor run
-it performs marks 1 and 2 when they pass, the first session (`mindflock new`,
-or **+ New** in the app) marks 3, a GitHub credential (a token, or a
-signed-in gh) marks 4, saving the first ticket source marks 5, and a phone
-reaching `/m` (or the owner fetching the QR) marks 6. The optional steps can
-be skipped from the app (`POST /api/setup/<step>/skip`).
+Nothing in the wizard ticks a web checklist step by hand: the doctor run it
+performs marks *Install the tools* and *Sign in to your agent* when they pass,
+and the first session that actually works marks *Start your first agent*.
 
 `--yes` takes every default without asking and never runs an installer
-unwatched (the fix lines are printed instead). A piped stdin prints the
-non-interactive report — the same text a first `mindflock serve` prints at
-boot and `GET /api/setup` returns as `report` — and names `mindflock init`
-as the door. Exit code 1 when a required dependency is still missing, like
+unwatched (the block says what's missing). A piped stdin says so FIRST — "No
+terminal attached, so this is a read-only summary" — then prints the block and
+its next action. Exit code 1 when a required check still fails, like
 `mindflock doctor`. `mindflock serve --setup` runs the same wizard before
-binding the port.
+binding the port and leaves the block to the serve banner.
+
+### `mindflock doctor [--all] [--fix]`
+
+The checks under three headings, with a legend (✓ good · ! needs attention ·
+✗ missing · - not set up): **Needed to run an agent** (git, tmux, your agent,
+its sign-in), **Needed to ship** (git identity, GitHub) and **Optional**,
+folded into one line — "N optional checks — mindflock doctor --all" — unless
+`--all` (a failing optional row, such as an opted-in local model that is down,
+is still shown). It ends on one next step: `mindflock doctor --fix installs the
+N missing tools`, the agent's sign-in, `mindflock init` for the folder, or
+`mindflock serve`. Exit 1 when a check fails (a sign-in that is still to do is a
+warning, not a failure). `GET /api/doctor` carries each check's heading as
+`group` (`run` | `ship` | `optional`).
+
+`--fix` installs every missing `run` tool in one go (one confirmation, one sudo
+prompt), then offers each remaining fix one at a time: a `run` row with
+Enter = yes, a `ship` row (`gh auth login`) with Enter = no. Optional fixes are
+offered only with `--fix --all`, and always with Enter = no.
 
 ### `mindflock update [--check] [--ref REF] [--yes] [--all-devices]`
 

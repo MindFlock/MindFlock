@@ -10,11 +10,17 @@
  * a Folder field on different baselines (the folder's hint wrapped onto a line
  * of its own), and its own ragged copy of Works in.
  *
- * Top to bottom: Name; Folder beside Agent; the folder chips; Task; then the
- * label column the New form uses for Works in — Works in, Schedule, When a
- * run's turn ends — and Cancel / Save. */
+ * Top to bottom: Name; Folder beside Agent; the "Use: 📦 repo" chip; Task;
+ * then the label column the New form uses for Works in — Works in, Schedule,
+ * Fast-track — and a footer (Cancel / Save) that stays in view while the form
+ * scrolls.
+ *
+ * A card's Schedule… / Change schedule open ScheduleEditor instead: the same
+ * schedule fields (ScheduleWhen — days, a 24-hour time, the next-runs line)
+ * and Save, nothing else. */
 
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -25,15 +31,28 @@ import {
 import { deviceApi } from "../../lib/devices";
 import {
   AUTOPILOT_CHOICES,
+  atOfCron,
+  cronOf,
+  fastTrackNeedsGitHub,
   hasSchedule,
-  whenLabel,
+  normalizeAt,
+  schedulePreviewLine,
+  zoneSuffix,
   type CronPreview,
   type Template,
   type TemplateAutopilot,
   type TemplateRunsStatus,
 } from "../../lib/templates";
+import { openConnectGitHub } from "../../lib/githubConnect";
+import { openSettings } from "../../lib/openSettings";
 import { useUi } from "../../state/store";
-import { folderReducer, type FolderAction, type FolderState, type RepoSuggestion } from "./newSession";
+import {
+  folderReducer,
+  type FolderAction,
+  type FolderState,
+  type InstalledMap,
+  type RepoSuggestion,
+} from "./newSession";
 import { AgentFields } from "./newSession/AgentAccount";
 import { FolderAids, FolderField, matchPicker, useFolderLookups, type FolderCheck, type FolderSearch } from "./newSession/FolderPicker";
 import { TaskField } from "./newSession/PromptFold";
@@ -80,6 +99,21 @@ function cadenceKey(s: { at?: string; days?: string; cron?: string } | null | un
   return s.cron ? "cron:" + s.cron.trim().replace(/\s+/g, " ") : s.at ? s.at + "/" + (s.days || "daily") : "";
 }
 
+/** The folder a NEW template starts on: the most recent repo the folder
+ * chips offer (a template with a folder can run; one without can't), else "". */
+export function defaultFolder(suggestions: RepoSuggestion[] | null | undefined): string {
+  const list = suggestions || [];
+  const pick = list.find((s) => s.source === "recent" && s.is_git) || list.find((s) => s.is_git);
+  return pick?.path || "";
+}
+
+/** The agent a form names, when it is KNOWN not to be installed here ("" =
+ * installed, unknown, or the default agent — the server checks that one). */
+export function missingAgent(program: string, installed: InstalledMap | null | undefined): string {
+  const name = (program || "").trim();
+  return name && installed && installed[name] === false ? name : "";
+}
+
 export function formFromTemplate(t: Template | null): TemplateForm {
   return {
     name: t?.name || "",
@@ -100,8 +134,13 @@ export function formFromTemplate(t: Template | null): TemplateForm {
   };
 }
 
-/** The POST body for a form, or the reason it cannot be saved. */
-export function templateBody(f: TemplateForm): { body: Template } | { error: string } {
+/** The POST body for a form, or the reason it cannot be saved. `installed`
+ * (this device's agents) refuses a schedule whose agent is missing — it
+ * would fail every night with nobody watching. */
+export function templateBody(
+  f: TemplateForm,
+  installed: InstalledMap | null = null
+): { body: Template } | { error: string } {
   const name = f.name.trim();
   if (!name) return { error: "A template needs a name." };
   if (name.length > 100) return { error: "Names are at most 100 characters." };
@@ -114,6 +153,8 @@ export function templateBody(f: TemplateForm): { body: Template } | { error: str
     if (!f.repo_path.trim() && f.mode !== "provisioned")
       return { error: "A scheduled template needs a folder to start its session in." };
     if (!f.prompt.trim()) return { error: "A scheduled template needs a task — it's what the session is told to do." };
+    const missing = missingAgent(f.program, installed);
+    if (missing) return { error: missing + " isn't installed — Install or pick another agent" };
   }
   return {
     body: {
@@ -145,11 +186,23 @@ function scheduleOf(f: TemplateForm, at: string, cron: string): NonNullable<Temp
 
 /** The line under a cron field: its words and next runs, or why it can't be
  * saved ("" while nothing is known yet). */
-export function cronPreviewLine(pv: CronPreview | null | undefined, now: Date = new Date()): string {
-  if (!pv) return "";
-  if (!pv.ok) return pv.error || "Not a cron expression";
-  const next = (pv.next || []).map((t) => whenLabel(t, now)).join(", ");
-  return (pv.label || "") + (next ? " — next " + next : "");
+export function cronPreviewLine(pv: CronPreview | null | undefined, now: Date = new Date(), zone = ""): string {
+  return schedulePreviewLine(pv, now, zone);
+}
+
+/** The form after its days select changes. Custom (cron) starts from the
+ * days + time on screen ("30 7 * * *" for Every day 07:30) — it used to drop
+ * them for a stock "0 21 * * 1-5" — and leaving it keeps a simple cron's
+ * time. */
+export function daysPatch(f: Pick<TemplateForm, "days" | "at" | "cron">, raw: string): Partial<TemplateForm> {
+  const days: TemplateForm["days"] = raw === "weekdays" ? "weekdays" : raw === "cron" ? "cron" : "daily";
+  if (days === f.days) return {};
+  if (days === "cron") return { days, cron: cronOf(f.at, f.days) || f.cron };
+  if (f.days === "cron") {
+    const back = atOfCron(f.cron);
+    return back ? { days, at: back.at } : { days };
+  }
+  return { days };
 }
 
 /** The Folder field's browse state over a path the FORM owns. The New form
@@ -208,7 +261,170 @@ export interface TemplateEditorProps {
   homePath?: string;
   /** The dialog's Escape asks this first: true = it closed the browser. */
   escapeRef?: MutableRefObject<(() => boolean) | null>;
+  /** This device's agents (GET /api/providers/status): a missing one is
+   * tagged "(not installed)" as in New. null = unknown. */
+  installed?: InstalledMap | null;
+  /** Whether GitHub is connected (null/undefined = unknown): Open PR / Merge
+   * when green without it says "Needs GitHub — Connect GitHub". */
+  githubConnected?: boolean | null;
+  /** Why the server refused the last Save ("agent_missing" /
+   * "github_required" / ""), so the line can offer the fix. */
+  errorReason?: string;
+  /** "Add one" opened it: Folder takes the caret and a highlight. */
+  focusFolder?: boolean;
 }
+
+/** Days ▾ + a 24-hour time (or a cron expression), and the line under them
+ * that says what that means — "Every day at 07:30 EDT — next tomorrow 07:30,
+ * Fri 07:30, Sat 07:30" — in every mode, from the server's own reading. */
+export function ScheduleWhen({
+  form,
+  onForm,
+  tz,
+  cronPreview,
+  runs,
+  focusTime,
+}: {
+  form: TemplateForm;
+  onForm: (patch: Partial<TemplateForm>) => void;
+  tz?: string;
+  cronPreview?: CronPreview | null;
+  runs?: Pick<TemplateRunsStatus, "runs_here" | "runs_on">;
+  focusTime?: boolean;
+}) {
+  const status = runs || { runs_here: true, runs_on: "" };
+  const zone = zoneSuffix(tz || "", status);
+  const elsewhere = !status.runs_here && status.runs_on;
+  const line = cronPreviewLine(cronPreview, new Date(), zone);
+  return (
+    <>
+      <div className="tpl-schedule-when">
+        <select
+          id="tpl-days"
+          aria-label="Which days"
+          value={form.days}
+          onChange={(e) => onForm(daysPatch(form, e.target.value))}
+        >
+          <option value="daily">Every day</option>
+          <option value="weekdays">Weekdays</option>
+          <option value="cron">Custom (cron)</option>
+        </select>
+        {form.days === "cron" ? (
+          <input
+            id="tpl-cron"
+            aria-label="Cron expression"
+            autoComplete="off"
+            spellCheck={false}
+            value={form.cron}
+            onChange={(e) => onForm({ cron: e.target.value })}
+            placeholder="*/30 * * * *"
+          />
+        ) : (
+          <>
+            <span className="tpl-at">at</span>
+            {/* A 24-hour text field, not <input type=time>: that one draws
+                "09:00 PM" in a 12-hour locale while every summary says
+                "21:00" — one format everywhere. */}
+            <input
+              id="tpl-at"
+              type="text"
+              inputMode="numeric"
+              aria-label="Time (24-hour)"
+              autoComplete="off"
+              maxLength={5}
+              placeholder="21:00"
+              autoFocus={focusTime === true}
+              value={form.at}
+              onChange={(e) => onForm({ at: e.target.value })}
+              onBlur={(e) => {
+                const at = normalizeAt(e.target.value);
+                if (at !== form.at) onForm({ at });
+              }}
+            />
+          </>
+        )}
+      </div>
+      <p
+        className={"tpl-cron-preview" + (cronPreview && !cronPreview.ok ? " error" : " muted")}
+        id="tpl-cron-preview"
+        aria-live="polite"
+      >
+        {line || (form.days === "cron" ? "minute hour day-of-month month weekday —" + (zone || " local time") : " ")}
+      </p>
+      <p className="tpl-cron-preview tpl-sched-note muted">
+        {elsewhere ? "Starts on " + status.runs_on + " — the computer that runs schedules. " : ""}
+        Skipped while the last run is still working or waiting on you.
+      </p>
+    </>
+  );
+}
+
+/** A card's Schedule… / Change schedule: the schedule alone, inside the
+ * card — days, time, the next-runs line, Save. Edit keeps the whole form.
+ * "Stop schedule" (a scheduled one) is what unticking the box was. */
+export function ScheduleEditor(p: {
+  form: TemplateForm;
+  onForm: (patch: Partial<TemplateForm>) => void;
+  error: string;
+  busy: boolean;
+  onSave: () => void;
+  onCancel: () => void;
+  /** Saves the template with no schedule (shown for a scheduled one). */
+  onStop?: () => void;
+  tz?: string;
+  cronPreview?: CronPreview | null;
+  runs?: Pick<TemplateRunsStatus, "runs_here" | "runs_on">;
+  /** The whole form, for an error only it can fix (no folder, no task). */
+  onEdit?: () => void;
+}) {
+  return (
+    <form
+      className="tpl-editor tpl-sched-editor"
+      onSubmit={(e) => {
+        e.preventDefault();
+        p.onSave();
+      }}
+    >
+      <div className="tpl-schedule tpl-sched-only" data-tour="schedule-when">
+        <ScheduleWhen
+          form={p.form}
+          onForm={p.onForm}
+          tz={p.tz}
+          cronPreview={p.cronPreview}
+          runs={p.runs}
+          focusTime
+        />
+      </div>
+      <div className="tpl-row-actions">
+        {p.error && (
+          <p className="error" aria-live="polite">
+            {p.error}
+            {p.onEdit && /folder|task/.test(p.error) && (
+              <>
+                {" "}
+                <button type="button" className="linklike" onClick={p.onEdit}>
+                  Edit
+                </button>
+              </>
+            )}
+          </p>
+        )}
+        {p.onStop && (
+          <button type="button" className="tpl-stop" disabled={p.busy} onClick={p.onStop}>
+            Stop schedule
+          </button>
+        )}
+        <button type="button" className="tpl-cancel" onClick={p.onCancel}>
+          Cancel
+        </button>
+        <button type="submit" className="tpl-save" disabled={p.busy}>
+          {p.busy ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 
 export function TemplateEditor(p: TemplateEditorProps) {
   const { form, onForm } = p;
@@ -253,7 +469,19 @@ export function TemplateEditor(p: TemplateEditorProps) {
 
   const setPrompt: Dispatch<SetStateAction<string>> = (v) =>
     onForm({ prompt: typeof v === "function" ? v(form.prompt) : v });
-  const elsewhere = p.runs && !p.runs.runs_here && p.runs.runs_on;
+  const missing = missingAgent(form.program, p.installed);
+  const needsGitHub = fastTrackNeedsGitHub(form.autopilot) && p.githubConnected === false;
+  // "Use: 📦 repo": the folders worth one click, recent first — the chips
+  // that used to say "Started in" / "Recent" (a status, not an action).
+  const useChips = (p.folderSuggestions || []).filter((x) => x.is_git || x.source === "recent").slice(0, 3);
+  const folderEmpty = !folderPath && form.mode !== "provisioned";
+  // "Add one" on a card: straight to the field that makes it runnable.
+  useEffect(() => {
+    if (!p.focusFolder) return;
+    const el = document.getElementById("tpl-repo-path");
+    el?.scrollIntoView?.({ block: "center" });
+    el?.focus();
+  }, [p.focusFolder]);
 
   return (
     <form
@@ -263,7 +491,7 @@ export function TemplateEditor(p: TemplateEditorProps) {
         p.onSave();
       }}
     >
-      <label className="tpl-name-field">
+      <label className="tpl-name-field" data-tour="schedule-name">
         Name
         <input
           id="tpl-name"
@@ -276,26 +504,32 @@ export function TemplateEditor(p: TemplateEditorProps) {
 
       {/* Folder (wide) beside Agent (narrow): the New form's row. */}
       <div className="nf-quick">
-        <FolderField
-          scope="tpl"
-          placeholder="Needed to Run now or schedule"
-          repoPath={path}
-          folderPath={folderPath}
-          folderDo={folderDo}
-          search={search}
-          searchHits={searchHits}
-          searchSel={searchSel}
-          setSearchSel={setSearchSel}
-          setSearchOpen={setSearchOpen}
-          selIndex={selIndex}
-          browserOpen={browsing}
-          pickMatch={pickMatch}
-        />
+        <div
+          className={"tpl-folder-wrap" + (p.focusFolder && folderEmpty ? " tpl-flash" : "")}
+          data-tour="schedule-folder"
+        >
+          <FolderField
+            scope="tpl"
+            placeholder="The repo it works in"
+            repoPath={path}
+            folderPath={folderPath}
+            folderDo={folderDo}
+            search={search}
+            searchHits={searchHits}
+            searchSel={searchSel}
+            setSearchSel={setSearchSel}
+            setSearchOpen={setSearchOpen}
+            selIndex={selIndex}
+            browserOpen={browsing}
+            pickMatch={pickMatch}
+          />
+        </div>
         <AgentFields
           scope="tpl"
           defaultLabel="Your default agent"
           program={form.program}
           providers={(p.agents || []).map((name) => ({ name }))}
+          installed={p.installed ?? null}
           setAgent={(program) => onForm({ program })}
           device=""
           closeDialog={() => useUi.getState().closeDialog()}
@@ -313,20 +547,59 @@ export function TemplateEditor(p: TemplateEditorProps) {
         plainFolder={plainFolder}
         initRepo={form.init_repo}
         armInitRepo={() => onForm({ init_repo: true })}
-        suggestions={p.folderSuggestions || []}
+        suggestions={[]}
         folderPath={folderPath}
         folderDo={folderDo}
         browserOpen={browsing}
         device=""
       />
+      {useChips.length > 0 && !browsing && (
+        <div id="tpl-suggest" className="nf-suggest nf-folders tpl-use" role="group" aria-label="Folders you might mean">
+          <span className="nf-suggest-label">Use:</span>
+          {useChips.map((x) => {
+            const active = folderPath === x.path;
+            return (
+              <button
+                key={x.path}
+                type="button"
+                className={"nt-chip" + (x.is_git ? " is-git" : "") + (active ? " active" : "")}
+                data-path={x.path}
+                aria-pressed={active}
+                title={x.path}
+                onClick={() => folderDo({ t: "user-set", path: x.path })}
+              >
+                {(x.is_git ? "📦 " : "📁 ") + x.name}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {missing && (
+        <p className={"tpl-agent-missing" + (form.scheduled ? " error" : " muted")} role="note" aria-live="polite">
+          {missing} isn't installed —{" "}
+          <button
+            type="button"
+            className="linklike"
+            onClick={() => {
+              useUi.getState().closeDialog();
+              openSettings("coding");
+            }}
+          >
+            Install
+          </button>{" "}
+          or pick another agent
+        </p>
+      )}
 
-      <TaskField
-        scope="tpl"
-        hint="what each session from it starts on"
-        placeholder="e.g. update dependencies, run the tests and fix what breaks"
-        prompt={form.prompt}
-        setPrompt={setPrompt}
-      />
+      <div data-tour="schedule-task">
+        <TaskField
+          scope="tpl"
+          hint="what each session from it starts on"
+          placeholder="e.g. update dependencies, run the tests and fix what breaks"
+          prompt={form.prompt}
+          setPrompt={setPrompt}
+        />
+      </div>
 
       <div className="tpl-rows">
         {/* Where it works: the New form's own row. Provisioning is a box on
@@ -340,7 +613,7 @@ export function TemplateEditor(p: TemplateEditorProps) {
           onInPlace={() => onForm({ mode: "in_place", autopilot: "" })}
           inPlaceDesc={
             form.autopilot
-              ? "Turns the autopilot off — it needs its own worktree"
+              ? "Can't commit or open a PR for you — needs its own worktree"
               : IN_PLACE_HINT
           }
           underWorktree={
@@ -375,7 +648,7 @@ export function TemplateEditor(p: TemplateEditorProps) {
           }
         />
 
-        <div className="rt-row rt-row-top" id="tpl-schedule-row">
+        <div className="rt-row rt-row-top" id="tpl-schedule-row" data-tour="schedule-when">
           <span className="rt-label" id="tpl-schedule-label">
             Schedule
           </span>
@@ -390,77 +663,33 @@ export function TemplateEditor(p: TemplateEditorProps) {
               <ModeText title="Run on a schedule" desc="Starts a new session from it, by itself" />
             </label>
             {form.scheduled && (
-              <div className="tpl-schedule-when">
-                <select
-                  id="tpl-days"
-                  aria-label="Which days"
-                  value={form.days}
-                  onChange={(e) =>
-                    onForm({
-                      days: e.target.value === "weekdays" ? "weekdays" : e.target.value === "cron" ? "cron" : "daily",
-                    })
-                  }
-                >
-                  <option value="daily">Every day</option>
-                  <option value="weekdays">Weekdays</option>
-                  <option value="cron">Custom (cron)</option>
-                </select>
-                {form.days === "cron" ? (
-                  <input
-                    id="tpl-cron"
-                    aria-label="Cron expression"
-                    autoComplete="off"
-                    spellCheck={false}
-                    value={form.cron}
-                    onChange={(e) => onForm({ cron: e.target.value })}
-                    placeholder="*/30 * * * *"
-                  />
-                ) : (
-                  <>
-                    <span className="tpl-at">at</span>
-                    <input
-                      id="tpl-at"
-                      type="time"
-                      aria-label="Time"
-                      autoFocus={p.scheduleFocus === true}
-                      value={form.at}
-                      onChange={(e) => onForm({ at: e.target.value })}
-                    />
-                    {p.tz && <span className="muted tpl-tz">{p.tz} — this device's time</span>}
-                  </>
-                )}
-              </div>
-            )}
-            {form.scheduled && form.days === "cron" && (
-              <p
-                className={"tpl-cron-preview" + (p.cronPreview && !p.cronPreview.ok ? " error" : " muted")}
-                id="tpl-cron-preview"
-                aria-live="polite"
-              >
-                {cronPreviewLine(p.cronPreview) || "minute hour day-of-month month weekday — local time"}
-              </p>
-            )}
-            {form.scheduled && (
-              <p className="tpl-cron-preview muted">
-                {elsewhere ? "Starts on " + p.runs?.runs_on + " — the device that runs automation. " : ""}
-                Skipped while the last run is still working or waiting on you.
-              </p>
+              <ScheduleWhen
+                form={form}
+                onForm={onForm}
+                tz={p.tz}
+                cronPreview={p.cronPreview}
+                runs={p.runs}
+                focusTime={p.scheduleFocus}
+              />
             )}
           </div>
         </div>
 
-        <div className="rt-row" id="tpl-autopilot-row">
+        <div className="rt-row rt-row-top" id="tpl-autopilot-row">
           <span className="rt-label" id="tpl-autopilot-label">
-            When a run's turn ends
+            Fast-track
           </span>
-          <div className="rt-ctl">
+          <div className="rt-ctl tpl-fast-track">
+            <span className="muted tpl-autopilot-hint">
+              When the agent stops. Applies to Run now and to scheduled runs.
+            </span>
             <select
               id="tpl-autopilot"
               aria-labelledby="tpl-autopilot-label"
               value={form.autopilot}
               onChange={(e) => {
                 const autopilot = e.target.value as TemplateForm["autopilot"];
-                // Autopilot commits for this session, so it needs its own worktree.
+                // Fast-track commits for this session, so it needs its own worktree.
                 onForm(autopilot && form.mode === "in_place" ? { autopilot, mode: "worktree" } : { autopilot });
               }}
             >
@@ -470,15 +699,32 @@ export function TemplateEditor(p: TemplateEditorProps) {
                 </option>
               ))}
             </select>
-            <span className="muted tpl-autopilot-hint">each Run now and scheduled run</span>
+            {needsGitHub && (
+              <p className="tpl-gh-needed error" role="note">
+                Needs GitHub —{" "}
+                <button type="button" className="linklike" onClick={() => openConnectGitHub()}>
+                  Connect GitHub
+                </button>
+              </p>
+            )}
           </div>
         </div>
       </div>
 
-      <div className="tpl-row-actions">
-        {p.error && (
+      <div className="tpl-row-actions tpl-sticky">
+        {/* A missing agent is already said, with its Install link, under
+            Agent: the footer doesn't repeat it. */}
+        {p.error && !(missing && p.errorReason === "agent_missing") && (
           <p className="error" aria-live="polite">
             {p.error}
+            {p.errorReason === "github_required" && (
+              <>
+                {" "}
+                <button type="button" className="linklike" onClick={() => openConnectGitHub()}>
+                  Connect GitHub
+                </button>
+              </>
+            )}
           </p>
         )}
         <button type="button" className="tpl-cancel" onClick={p.onCancel}>

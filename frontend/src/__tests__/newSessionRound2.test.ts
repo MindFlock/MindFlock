@@ -45,7 +45,10 @@ describe("a session is named from its task", () => {
     expect(DIALOG).toContain("— optional; empty names it from the task");
     // The name Create will really use (numbered past a taken one), or — with
     // no task yet — that it will come from the task, never "untitled".
-    expect(DIALOG).toContain('(planned.from === "none" ? "named from the task" : planned.title) + " — Enter creates it"');
+    // Round 5 (r5-new finding 18): the placeholder is the name alone; "Enter
+    // starts it" is the ↵ on the Start button.
+    expect(DIALOG).toContain('placeholder={planned.from === "none" ? "named from the task" : planned.title}');
+    expect(DIALOG).not.toContain("Enter creates it");
   });
 });
 
@@ -138,7 +141,8 @@ describe("Save as template… saves the whole form", () => {
     const sched = { at: "21:00", days: "weekdays" };
     expect(templateFromForm(form, [{ name: "NIGHTLY", schedule: sched }]).schedule).toEqual(sched);
   });
-  it("is one button in the footer, with an inline name row (no prompt())", () => {
+  it("is one button under More options, with an inline name row (no prompt())", () => {
+    expect(DIALOG).toContain("<SaveTemplateRow");
     expect(FOOTER).toContain("Save as template…");
     expect(FOOTER).toContain('id="new-save-tpl-name"');
     expect(FOOTER).not.toContain("window.prompt(");
@@ -151,9 +155,15 @@ describe("describe-first: a clock, a cap and a way out", () => {
   it("caps the read at 30 s and offers the form with the text in it", () => {
     expect(DESCRIBE_CAP_MS).toBe(30000);
     expect(DESCRIBE).toContain("}, DESCRIBE_CAP_MS);");
-    expect(DESCRIBE).toContain("Fill the form with what I typed");
-    // The fallback and "Set it up myself instead" are one path that carries
-    // the text into Task (setUpMyself).
+    // Round 5: ONE recovery — start it anyway, in the folder the line shows
+    // ("Start it in repo instead"); with no folder, the form picks one.
+    expect(DESCRIBE).toContain('"Start it in " + leafName(repoPath.trim()) + " instead"');
+    expect(DESCRIBE).toContain("onClick={repoPath.trim() ? startInstead : fillFormInstead}");
+    expect(DESCRIBE).not.toContain("Fill the form with what I typed");
+    // Who is asked and for how long at most, while it waits.
+    expect(DESCRIBE).toContain("Asking {agentLabel} to fill in the details…");
+    expect(DESCRIBE).toContain("(up to {Math.round(DESCRIBE_CAP_MS / 1000)} s)");
+    // The way to the form still carries the text into Task (setUpMyself).
     expect(DESCRIBE).toContain("fillFormInstead: setUpMyself");
     expect(DESCRIBE).toContain("setPrompt(text);");
   });

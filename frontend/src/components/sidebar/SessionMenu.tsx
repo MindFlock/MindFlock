@@ -4,7 +4,7 @@
  * folded "More", and Delete's inline confirm strip (the desktop app has no
  * native confirm dialog). */
 
-import { useState, type MouseEvent } from "react";
+import { useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import type { MenuItem, SessionMenuModel } from "../../lib/sessionMenu";
 
 export function SessionMenu({
@@ -20,6 +20,24 @@ export function SessionMenu({
 }) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [deleteArmed, setDeleteArmed] = useState(false);
+  const moreRef = useRef<HTMLDivElement | null>(null);
+
+  // More ▸ unfolded in a menu too tall for the window (it scrolls, Close and
+  // Delete pinned at its foot): scroll the fold into sight above that foot,
+  // never so far that More itself leaves the top.
+  useLayoutEffect(() => {
+    const fold = moreRef.current;
+    if (!moreOpen || !fold) return;
+    let box = fold.parentElement;
+    while (box && !(box.scrollHeight > box.clientHeight && /auto|scroll/.test(getComputedStyle(box).overflowY)))
+      box = box.parentElement;
+    if (!box) return;
+    const view = box.getBoundingClientRect();
+    const foot = fold.parentElement?.querySelector(".sm-danger")?.getBoundingClientRect();
+    const r = fold.getBoundingClientRect();
+    const by = Math.min(r.bottom - (foot ? foot.top : view.bottom), r.top - view.top);
+    if (by > 0) box.scrollTop += by;
+  }, [moreOpen]);
 
   const fire = (it: MenuItem) => (e: MouseEvent) => {
     e.stopPropagation();
@@ -97,7 +115,7 @@ export function SessionMenu({
       {body.map((g, i) => group(g, i === 0))}
       {/* The rare ones, folded, between the work and the two ends. */}
       {model.more.length > 0 && (
-        <div className="sm-group sm-more-group">
+        <div className="sm-group sm-more-group" ref={moreRef}>
           {body.length > 0 && <div className="menu-sep" />}
           <button
             type="button"

@@ -26,21 +26,40 @@ def _server():
     return server
 
 
-def _prepare_plain_repo(repo_path: str, init_repo: bool) -> tuple[str, bool]:
-    """Resolve (and if needed create) the base folder for a plain session.
+class NoFolderError(ValueError):
+    """The folder a session was asked to run in does not exist, and the request
+    did not say to create it (``create_folder``). ``path`` is the resolved one.
+
+    Round 5: a mistyped folder used to be created (and ``git init``-ed) on the
+    spot, the agent started in an empty repo, and the typo became the first
+    Recent folder. A folder is now only ever created when asked for."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__("No folder at %s" % path)
+        self.path = path
+
+
+def _prepare_plain_repo(
+    repo_path: str, init_repo: bool, create_folder: bool = False
+) -> tuple[str, bool]:
+    """Resolve (and, when asked, create) the base folder for a plain session.
 
     Returns ``(abs_path, git_enabled)``. ``git_enabled`` is True when the folder
     is a git repo with at least one commit — so the worktree model and the
     diff/commit/PR features work; False for a plain, non-git folder, where the
     session simply runs in-place with git features turned off. **A git repo is
-    NOT required to start a session.** Raises ``ValueError`` only when the folder
-    is genuinely unusable (blank path, or it can't be created/initialised).
+    NOT required to start a session.** A folder that does not exist is created
+    only with ``create_folder`` — otherwise :class:`NoFolderError`. Raises
+    ``ValueError`` when the folder is unusable (blank path, missing and not to
+    be created, or it can't be created/initialised).
     """
     srv = _server()
     if not repo_path or not repo_path.strip():
         raise ValueError("a folder is required (pick one, or type a path to create)")
     abs_path = os.path.realpath(os.path.expanduser(repo_path.strip()))
     exists = os.path.isdir(abs_path)
+    if not exists and not create_folder:
+        raise NoFolderError(abs_path)
 
     if init_repo:
         # Create-from-scratch (or adopt a plain dir): mkdir + git init + commit.
@@ -67,8 +86,8 @@ def _prepare_plain_repo(repo_path: str, init_repo: bool) -> tuple[str, bool]:
 
     # Open (or create) a plain folder. No git is required.
     if not exists:
-        # The user pointed at a path that doesn't exist yet — create it as a
-        # plain scratch folder (git features stay off until they init a repo).
+        # Asked for (``create_folder``): create it as a plain scratch folder
+        # (git features stay off until they init a repo).
         try:
             os.makedirs(abs_path, exist_ok=True)
         except OSError as err:

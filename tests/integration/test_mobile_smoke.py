@@ -387,7 +387,10 @@ def test_mobile_session_actions_sheet(server, chrome):
         "Recently closed",
     ]
     # Delete asks on its own inline strip, focus on Cancel; no native dialog.
-    assert flow["strip"] == "Removes the worktree and branch"
+    # Round 5: the Delete strip says what is lost, like the desktop's.
+    assert flow["strip"].startswith(
+        "Deletes the folder and branch, including uncommitted changes."
+    )
     assert flow["focusIsCancel"] is True
     assert flow["dialogs"] == 0
     assert not result["exceptions"], "uncaught JS exceptions: %r" % (

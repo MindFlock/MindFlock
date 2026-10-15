@@ -195,7 +195,9 @@ describe("hidden items stay reachable from ⋯", () => {
     expect(buttons).toBeLessThan(tail);
     expect(tail).toBeLessThan(more);
     // Nothing is drawn after ⋯ inside the tail.
-    expect(head.slice(head.indexOf("</PaneMoreMenu>"))).toMatch(/^<\/PaneMoreMenu>\s*<\/div>\s*<\/div>\s*$/);
+    // (Its wrapper is the New tour's ring target, data-tour="pane-menu".)
+    expect(head.slice(head.indexOf("</PaneMoreMenu>"))).toMatch(/^<\/PaneMoreMenu>\s*<\/span>\s*<\/div>\s*<\/div>\s*$/);
+    expect(head).toContain('<span className="pane-menu-hook" data-tour="pane-menu">');
   });
 });
 

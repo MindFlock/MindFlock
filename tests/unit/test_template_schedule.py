@@ -35,6 +35,12 @@ def ny_tz(monkeypatch):
 def stores(monkeypatch, tmp_path):
     monkeypatch.setenv("MINDFLOCK_TEMPLATES_FILE", str(tmp_path / "tpl.json"))
     monkeypatch.setenv("MINDFLOCK_TEMPLATE_RUNS_FILE", str(tmp_path / "runs.json"))
+    # The launch preconditions read this machine (is the agent on PATH, is
+    # GitHub connected); pinned so these answer the same on a bare CI box.
+    from backend.web.addons import templates as _tpl_addon
+
+    monkeypatch.setattr(_tpl_addon, "_agent_installed", lambda program: True)
+    monkeypatch.setattr(_tpl_addon, "_github_connected", lambda: True)
     return tmp_path
 
 
@@ -277,7 +283,14 @@ def test_run_now_route(stores, fake_create):
     assert client.post("/api/templates/nope/run").status_code == 404
     client.post("/api/templates", json={"name": "loose", "prompt": "p"})
     r = client.post("/api/templates/loose/run")
-    assert r.status_code == 400 and "folder" in r.json()["error"]
+    # Round 5: a launch precondition is a 409 with a sentence and a reason,
+    # said before any session is made (and recorded as a failed run).
+    assert r.status_code == 409 and "folder" in r.json()["error"]
+    assert r.json()["reason"] == "no_folder"
+    assert (
+        r.json()["detail"]
+        == "Couldn't start loose: it has no folder — edit it and pick one"
+    )
     assert len(fake_create) == 1
 
 
@@ -576,7 +589,9 @@ def test_a_scheduled_failure_is_announced(stores, fake_create, monkeypatch):
     monkeypatch.setattr(
         ts, "_emit", lambda ev, tpl, trig, **d: events.append((ev, trig, d))
     )
-    asyncio.run(ts.fire({"name": "loose", "prompt": "p"}, "schedule"))
+    status, body = asyncio.run(ts.fire({"name": "loose", "prompt": "p"}, "schedule"))
+    # Refused up front, the same 409 Run now answers — never a 202
+    assert (status, body["reason"]) == (409, "no_folder")
     assert len(events) == 1
     ev, trig, data = events[0]
     assert (ev, trig, data["error"]) == (
@@ -584,8 +599,13 @@ def test_a_scheduled_failure_is_announced(stores, fake_create, monkeypatch):
         "schedule",
         ts.run_problem({}),
     )
-    assert data["detail"].startswith("Scheduled run of “loose” couldn't start")
-    assert ts.load_runs()["loose"]["history"][0]["error"]
+    assert (
+        data["detail"]
+        == "Couldn't start loose: it has no folder — edit it and pick one"
+    )
+    entry = ts.load_runs()["loose"]["history"][0]
+    assert entry["error"] and entry["status"] == "failed"
+    assert entry["trigger"] == "schedule"
 
     async def refuse(payload):
         return 400, {"error": "nope"}
@@ -705,3 +725,32 @@ def test_pause_round_trips_through_the_route(stores, fake_create):
     assert r.json()["template"]["schedule"] == {**DAILY_21, "paused": True}
     got = client.get("/api/templates").json()["runs"]["nightly"]
     assert got["paused"] is True and got["next_at"] is None
+
+
+def test_a_scheduled_fire_with_a_missing_agent_records_a_failed_run(
+    stores, fake_create, monkeypatch
+):
+    """A nightly run of a template whose agent isn't installed never makes a
+    session and never reads as a success: 409 agent_missing, a failed run in
+    the history (the card's "Last run failed" + the top-bar badge) and a bell
+    event — every night, not once."""
+    from backend.web.addons import templates as _tpl_addon
+
+    monkeypatch.setattr(_tpl_addon, "_agent_installed", lambda program: False)
+    events = []
+    monkeypatch.setattr(
+        ts, "_emit", lambda ev, tpl, trig, **d: events.append((ev, trig, d))
+    )
+    status, body = asyncio.run(ts.fire(tpl("pr-bot", program="codex"), "schedule"))
+    assert status == 409
+    assert body["reason"] == "agent_missing" and body["agent"] == "codex"
+    assert fake_create == []
+    row = ts.load_runs()["pr-bot"]
+    assert row["last_error"] == "codex isn't installed"
+    assert row["last_reason"] == "agent_missing"
+    assert row["history"][0]["status"] == "failed"
+    assert row["history"][0]["trigger"] == "schedule"
+    assert [(e[0], e[2]["reason"]) for e in events] == [
+        ("template.run_failed", "agent_missing")
+    ]
+    assert events[0][2]["detail"] == "Couldn't start pr-bot: codex isn't installed"

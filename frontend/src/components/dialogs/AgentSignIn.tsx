@@ -20,6 +20,7 @@ import { api } from "../../api/client";
 import { useWsTerm } from "../../lib/wsTerm";
 import { notifyConnectionsChanged } from "../settings/screens/Connections";
 import { agentName } from "../../lib/agentNames";
+import "./ConnectGitHub.css";
 
 /** The doctor row shape this needs (a subset of DoctorCheckItem). */
 export interface SignInCheck {
@@ -150,7 +151,7 @@ export function SignInWindow({
             ))}
           </ol>
         )}
-        <div className="prov-login-term" ref={hostRef} />
+        <div className="prov-login-term login-term-dark" ref={hostRef} />
       </div>
     </Modal>
   );
@@ -166,12 +167,15 @@ export function AgentSignIn({
   label,
   onDone,
   className,
+  dataTour,
 }: {
   provider: string;
   profile?: string;
   label?: string;
   onDone(): void;
   className?: string;
+  /** A tour hook (`data-tour`), e.g. "setup-next" on the checklist's step ②. */
+  dataTour?: string;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -179,6 +183,7 @@ export function AgentSignIn({
       <button
         type="button"
         className={"test-btn agent-signin-btn" + (className ? " " + className : "")}
+        data-tour={dataTour}
         onClick={(e) => {
           e.stopPropagation();
           setOpen(true);

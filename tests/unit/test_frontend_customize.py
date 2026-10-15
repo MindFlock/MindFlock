@@ -349,6 +349,6 @@ def test_new_page_two_templates_strip_says_what_a_template_is():
     # Round 4: the head says what each part of a chip does (▶ runs, ⏰
     # schedules, the name fills the form), and the door to the dialog reads
     # "All templates…" rather than an edit-only "Manage…".
-    assert '<span title="Saved session setups — one list on every device">' in src
+    assert '<span title="Your templates — one list on every device">' in src
     assert "— ▶ runs one now · ⏰ schedules it · its name fills the form" in src
     assert "All templates…" in src

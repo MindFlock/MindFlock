@@ -1,0 +1,17 @@
+/* Help (the tours and the hints switch) sits LAST on General, after the
+   Advanced fold: its divider goes above it rather than below (the shared
+   .onboarding-block rule in SettingsDialog.css draws one underneath, from
+   when it led the screen). */
+.onboarding-block.general-help {
+  padding-top: var(--set-rhythm, 24px);
+  padding-bottom: 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+}
+
+/* Basic mode renders no fold, so Help is all General shows: no rule over
+   nothing. */
+.set-screen > .onboarding-block.general-help:first-child {
+  padding-top: 0;
+  border-top: 0;
+}

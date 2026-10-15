@@ -295,6 +295,11 @@ def describe(expr: str) -> str:
             )
         if c.dow_star and len(c.months) == 12 and len(c.doms) == 1:
             return "Monthly on day %d at %s" % (next(iter(c.doms)), at)
+        if c.dow_star and len(c.months) == 1 and len(c.doms) == 1:
+            # A date once a year ("Every Feb 29 at 00:00") — the shape whose
+            # next runs are years apart, so the preview names the year.
+            month = _MONTHS[next(iter(c.months)) - 1].capitalize()
+            return "Every %s %d at %s" % (month, next(iter(c.doms)), at)
     if all_days and len(c.hours) == 24:
         if len(c.minutes) == 1:
             return "Every hour at :%02d" % c.minutes[0]

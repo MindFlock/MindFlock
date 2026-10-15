@@ -4040,6 +4040,96 @@ def _range_diff(cwd: str, plan: dict) -> tuple:
     return "", ""
 
 
+def _writer_error(message: str) -> str:
+    """The writer's failure in the user's words: a timeout names the agent and
+    the minutes, never the binary and the seconds ("claude did not answer
+    within 180s" is how the CLI runner phrases it)."""
+    if re.search(r"did not answer within \d+s", message or ""):
+        mins = max(1, int(round(TIMEOUT_GENERATE / 60)))
+        return "the agent didn't answer in %d minute%s. Rewrite to try again" % (
+            mins,
+            "" if mins == 1 else "s",
+        )
+    return message
+
+
+#: What the ask routes answer for a branch with nothing on it yet — the same
+#: sentence the row's headline carries, so the refusal and the card agree.
+NO_COMMITS_DETAIL = "Nothing to check yet — this branch has no commits"
+
+
+def is_no_commits_error(error: str) -> bool:
+    """Whether a stored generation error is "this branch had no commits" — the
+    current sentence, or the one an older build stored."""
+    text = str(error or "").lower()
+    return "this branch has no commits" in text or "this branch changed nothing" in text
+
+
+def claim_no_commits_retry(plan_id: str, sha: str) -> Optional[dict]:
+    """Re-open a checklist that couldn't be written because its branch had no
+    commits, now that it has one at ``sha``: the plan goes back to
+    ``generating`` and is returned, which is the caller's signal to start the
+    writer. ``None`` when there is nothing to retry — the plan has steps, failed
+    for another reason, or ``sha`` is the commit it already failed on.
+
+    BOTH anchors move. The ``sha`` it was stamped with is the live branch's own
+    commit (the branch had nothing else), which the liveness pass would read as
+    "already shipped" the moment the checklist existed."""
+    sha = str(sha or "").strip()
+    if not sha:
+        return None
+    outcome: dict = {"claim": False}
+
+    def apply(plan: dict) -> None:
+        if plan["state"] != "failed" or plan["steps"]:
+            return
+        if not is_no_commits_error(plan.get("error") or ""):
+            return
+        if sha in (plan.get("tip_sha") or "", plan.get("sha") or ""):
+            return
+        plan["sha"] = sha
+        plan["tip_sha"] = sha
+        plan["state"] = "generating"
+        plan["gen_started"] = time.time()
+        plan["gen_attempts"] = 0
+        plan["error"] = ""
+        outcome["claim"] = True
+
+    plan = _mutate(plan_id, apply)
+    return plan if outcome["claim"] else None
+
+
+def branch_has_no_commits(cwd: str, live_branch: str, tip: str = "HEAD") -> bool:
+    """Whether ``tip`` adds nothing over the live branch AND the tree is clean.
+
+    The ask routes' pre-check, so "Ask the agent" on a session that has not
+    committed anything is refused up front instead of failing two seconds later
+    as "Couldn't be written". Generation also reads the UNCOMMITTED delta
+    (:func:`_generate_steps`), so a dirty tree is never "no commits" here — it
+    has something to describe.
+
+    Answers False whenever it cannot tell (no live branch resolvable, git did
+    not answer): a pre-check that refuses on a guess blocks real work, and the
+    generator still says so if there was in fact nothing.
+    """
+    live = str(live_branch or "").strip()
+    if not cwd or not live or not os.path.isdir(cwd) or not _rev_ok(cwd, tip):
+        return False
+    for base in ("origin/%s" % live, live):
+        if not _rev_ok(cwd, base):
+            continue
+        ahead = _commit_message._git_out(
+            cwd, "rev-list", "--count", "%s..%s" % (base, tip)
+        )
+        if not ahead.strip().isdigit() or int(ahead.strip()) > 0:
+            return False
+        if tip != "HEAD":
+            return True
+        dirty = _commit_message._git_out(cwd, "status", "--porcelain")
+        return not dirty.strip()
+    return False
+
+
 #: The headings :meth:`ClaudeCodeRunner._build_prompt` writes into a seed
 #: prompt. Named here because this module has to find the ticket inside a blob
 #: that was addressed to a different agent entirely, and a drift guard in the
@@ -4390,7 +4480,7 @@ def _generate_steps(plan: dict, program: str, worktree: str) -> tuple:
         # has something real to describe.
         stat, patch = _commit_message.collect_diff(cwd)
     if not stat and not patch:
-        raise TestPlanError("nothing to verify — this branch changed nothing")
+        raise TestPlanError(NO_COMMITS_DETAIL[0].lower() + NO_COMMITS_DETAIL[1:])
     # `worktree`, deliberately NOT `cwd`. The diff can be read from the main
     # checkout when the session is gone (that is what makes Rewrite work), but a
     # conversation cannot: `repo_root` is the user's main clone, whose project
@@ -4433,7 +4523,7 @@ def _generate_steps(plan: dict, program: str, worktree: str) -> tuple:
         argv = _commit_message.pick_argv(prompt, program, _default_program())
         out = _commit_message._run(argv, cwd, TIMEOUT_GENERATE)
     except _commit_message.CommitMessageError as err:
-        raise TestPlanError(str(err))
+        raise TestPlanError(_writer_error(str(err)))
     summary, steps = parse_answer(out)
     steps = _vet_generated(steps)
     # THE ECHO. A wrapper that repeats its instructions before answering, or a

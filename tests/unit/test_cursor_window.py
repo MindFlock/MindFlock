@@ -1207,10 +1207,13 @@ def test_mobile_banner_local_mode_suppresses_tailnet_block(monkeypatch):
         server, "_tailscale_info", lambda: pytest.fail("tailscale probed in local mode")
     )
     banner = server._mobile_banner()
-    assert "127.0.0.1" in banner
     assert "Tailscale:" not in banner  # no unusable tailnet URLs
     assert "Scan from a phone" not in banner  # no QR block
-    assert "tailscale" in banner  # ...but points at the fix
+    # F3 (round 5): no boxed /m address either — opened on a desktop it lands
+    # on the phone UI with no setup. One line points at the fix instead.
+    assert "/m" not in banner and "┌" not in banner
+    assert banner == "  Phone: mindflock serve tailscale"
+    assert server._mobile_banner(for_log=True) == banner
 
 
 def test_mobile_banner_tailscale_mode_unchanged(monkeypatch):

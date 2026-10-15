@@ -20,7 +20,7 @@ import {
 import { orderedInstances } from "../sidebar/ordering";
 import { sessionLabel } from "../../lib/sessionLabel";
 import { openDevicesFor, routePastedCode } from "../../lib/deviceActions";
-import { fuzzyScore, paletteCode, rankActions, type PaletteAction } from "./paletteRank";
+import { fuzzyScore, isKeyHint, paletteCode, rankActions, type PaletteAction } from "./paletteRank";
 
 export { fuzzyScore };
 import { openSettings } from "../../lib/openSettings";
@@ -28,6 +28,8 @@ import { TEMPLATES_CHANGED, ensureTemplates, runProblem, templatesNow } from "..
 import { runTemplateNow } from "../../lib/templateRun";
 import { settingsActions } from "./settingsSearch";
 import { VERIFY_BLURB } from "../../lib/vocab";
+import { TOURS, TOUR_IDS } from "../../lib/tours";
+import { replayTour } from "../onboarding/replayTour";
 
 /** The focused session's entries, in palette order (the table holds what
  * each one says and when it applies). Pause and Resume never both apply;
@@ -153,20 +155,22 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     acts.push({ label: "Prompts…", hint: "manage saved prompts", run: () => ui.openDialogFor("prompts") });
     // Schedule is the top bar's; "Templates…" is the name it had, kept as a
     // row so the word people learned still finds it.
-    acts.push({ label: "Templates…", hint: "saved setups — in Schedule", run: () => ui.openDialogFor("schedule") });
+    acts.push({ label: "Templates…", hint: "your templates — in Schedule", run: () => ui.openDialogFor("schedule") });
+    // A NEW template's form with its schedule on — it says template, because
+    // that is what it makes ("Schedule a session…" still finds it).
     acts.push({
-      label: "Schedule a session…",
-      hint: "daily or weekdays",
-      keywords: "recurring cron every day nightly weekly",
+      label: "New scheduled template…",
+      hint: "daily, weekdays or cron",
+      keywords: "schedule a session recurring cron every day nightly weekly",
       run: () => ui.openDialogFor("schedule", "schedule"),
     });
-    // Run now: a fresh session from a template, its prompt already sent —
+    // Run now: a fresh session from a template, its task already sent —
     // one row per template that can start one on its own (it has a folder).
     for (const tpl of templatesNow()) {
       if (runProblem(tpl)) continue;
       acts.push({
         label: "Run template: " + tpl.name,
-        hint: "fresh session, prompt sent",
+        hint: "fresh session, task sent",
         run: () => void runTemplateNow(tpl.name),
       });
     }
@@ -205,7 +209,18 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       run: () => openDevicesFor({ focusPaste: true }),
     });
     acts.push({ label: "Open Setup checklist", top: TOP.setup, run: () => ui.openDialogFor("setup") });
-    acts.push({ label: "Tour", hint: "what MindFlock is, in five slides", top: TOP.tour, run: () => ui.openTour() });
+    // One "Replay <X> tour" per tour (lib/tours); the Welcome one is on the
+    // short menu. Found by "tour", "help", "how" or the surface's name.
+    for (const id of TOUR_IDS) {
+      const t = TOURS[id];
+      acts.push({
+        label: `Replay ${id === "welcome" ? "welcome" : t.title} tour`,
+        hint: id === "welcome" ? "the three steps to your first session" : `how ${t.title} works`,
+        keywords: "tour help how guide tutorial walkthrough show me around " + t.title.toLowerCase(),
+        top: id === "welcome" ? TOP.tour : undefined,
+        run: () => replayTour(id),
+      });
+    }
     acts.push({ label: "Toggle sidebar", hint: "Ctrl+B", run: () => ui.toggleSidebar() });
     acts.push({ label: "Keyboard shortcuts", hint: "?", top: TOP.shortcuts, run: () => host.toggleShortcuts() });
 
@@ -359,8 +374,15 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
               onMouseMove={() => setSel(i)}
               onClick={() => run(a)}
             >
-              <span className="palette-label">{a.label}</span>
-              {a.hint && <span className="palette-hint">{a.hint}</span>}
+              {a.sub ? (
+                <span className="palette-text">
+                  <span className="palette-label">{a.label}</span>
+                  <span className="palette-sub">{a.sub}</span>
+                </span>
+              ) : (
+                <span className="palette-label">{a.label}</span>
+              )}
+              {a.hint && <span className={"palette-hint" + (isKeyHint(a.hint) ? "" : " is-desc")}>{a.hint}</span>}
             </li>
           ))}
           {!filtered.length && <li className="palette-empty muted">No matching commands</li>}

@@ -54,7 +54,21 @@ describe("runTemplateNow", () => {
     expect(selectSession).toHaveBeenCalledWith("rivian-update-oct13");
   });
 
-  it("a refusal is said, and nothing is focused", async () => {
+  it("a refusal is the server's own sentence, never \"Started…\", and nothing is focused", async () => {
+    // r5-schedule finding 1: the 409's detail is the toast
+    api.mockRejectedValueOnce(
+      Object.assign(new Error("codex isn't installed"), {
+        body: { error: "codex isn't installed", detail: "Couldn't start pr-bot: codex isn't installed", reason: "agent_missing" },
+      })
+    );
+    api.mockResolvedValue({ templates: [] });
+    expect(await runTemplateNow("pr-bot")).toBe("");
+    expect(selectSession).not.toHaveBeenCalled();
+    expect(toast.mock.calls.map((c) => String(c[0]))).toEqual(["Couldn't start pr-bot: codex isn't installed"]);
+    // the card re-reads its runs: the refusal is a recorded failed run
+    expect(api.mock.calls.some((c) => c[0] === "/api/templates")).toBe(true);
+    toast.mockReset();
+    api.mockReset();
     api.mockRejectedValue(new Error("this template has no folder"));
     expect(await runTemplateNow("loose")).toBe("");
     expect(selectSession).not.toHaveBeenCalled();
@@ -121,11 +135,15 @@ describe("Templates cards", () => {
     expect(loose).not.toContain("sch-strip");
   });
   it("Schedule… opens the editor with the schedule on", () => {
+    // a card's Schedule… is the compact schedule-only row, not the whole form
     expect(templatesReducer(TEMPLATES_UI_INIT, { t: "schedule", name: "x" })).toEqual({
       editing: "x",
       confirming: null,
       error: "",
+      scheduleOnly: true,
     });
+    // a NEW template's (the palette's) is the whole form: it has no name yet
+    expect(templatesReducer(TEMPLATES_UI_INIT, { t: "schedule", name: "" }).scheduleOnly).toBeUndefined();
   });
   it("names the time zone, and whether the last run was by hand or scheduled", () => {
     const now = new Date(2026, 9, 13, 12, 0);
@@ -134,7 +152,8 @@ describe("Templates cards", () => {
     const st = { runs_here: true, runs_on: "" };
     const info = { next_at: next, last_at: last, last_trigger: "schedule", tz: "EDT" } as never;
     expect(cadenceLine(T[0], info)).toBe("Weekdays at 21:00 EDT");
-    expect(nextLine(T[0], info, st, now)).toBe("Next today 21:00 · in 9h");
+    // the schedule line says when; the chip beside it says how far
+    expect(nextLine(T[0], info, st, now)).toBe("in 9h");
     expect(lastLine(info, now)).toBe("Last run yesterday 21:00 · scheduled");
     expect(lastLine({ last_at: last, last_trigger: "manual" }, now)).toBe("Last run yesterday 21:00 · by hand");
   });
@@ -152,7 +171,7 @@ describe("Templates cards", () => {
     const last = new Date(2026, 9, 12, 21, 0).getTime() / 1000;
     const st = { runs_here: true, runs_on: "" };
     expect(cadenceLine(T[0], {})).toBe("Weekdays at 21:00");
-    expect(nextLine(T[0], { next_at: next }, st, now)).toBe("Next today 21:00 · in 9h");
+    expect(nextLine(T[0], { next_at: next }, st, now)).toBe("in 9h");
     expect(lastLine({ last_at: last, last_session: "nightly-oct12" }, now)).toBe(
       "Last run yesterday 21:00 → nightly-oct12"
     );
@@ -265,10 +284,10 @@ describe("cron schedules, autopilot and history", () => {
     // a cron schedule has no single "at", so no zone tacked on
     expect(cadenceLine(CRON, { schedule_label: "Every 30 minutes", tz: "EDT" } as never)).toBe("Every 30 minutes");
     expect(nextLine(CRON, { next_at: now.getTime() / 1000 + 25 * 60 }, { runs_here: true, runs_on: "" }, now)).toBe(
-      "Next today 10:25 · in 25 min"
+      "in 25 min"
     );
     expect(scheduleLabel({ cron: "0 9 * * 1" })).toBe("Cron 0 9 * * 1");
-    expect(templateMeta(CRON)).toContain("then: open a PR");
+    expect(templateMeta(CRON)).toContain("Fast-track: Open PR");
   });
   it("a skip and the recent runs are on the card", () => {
     const at = new Date(2026, 9, 14, 9, 30).getTime() / 1000;
@@ -292,7 +311,7 @@ describe("cron schedules, autopilot and history", () => {
     });
     expect(html).toContain("Skipped ");
     expect(html).toContain("Recent runs (3)");
-    expect(html).toContain("→ watch-oct14-0900 (autopilot: pr)");
+    expect(html).toContain("→ watch-oct14-0900 (Fast-track: Open PR)");
     expect(html).toContain("by hand — failed: repo moved");
   });
   it("historyLine", () => {

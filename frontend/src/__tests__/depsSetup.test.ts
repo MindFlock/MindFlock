@@ -3,7 +3,7 @@ import { describe, it, expect } from "vitest";
 import { agentDisplayName, signInTarget } from "../components/dialogs/AgentSignIn";
 import { asksForPassword, installButtonLabel } from "../components/dialogs/InstallTerminal";
 import { consumeSetupIntent } from "../components/dialogs/SetupDialog";
-import { lastSlide } from "../components/onboarding/WelcomeTour";
+import { WELCOME_LINES, WELCOME_TITLE } from "../components/onboarding/WelcomeTour";
 
 describe("signInTarget (Sign in to <agent>)", () => {
   const row = { id: "agent-auth", status: "warn", cmd: "claude", provider: "claude" };
@@ -40,7 +40,7 @@ describe("installButtonLabel / asksForPassword", () => {
   };
 
   it("names what one click installs", () => {
-    expect(installButtonLabel([pkgs, agent])).toBe("Install tmux + claude");
+    expect(installButtonLabel([pkgs, agent])).toBe("Install tmux + Claude Code");
     expect(
       installButtonLabel([{ id: "homebrew", label: "Homebrew (the macOS package manager)", cmd: "x" }, pkgs])
     ).toBe("Install Homebrew + tmux");
@@ -81,9 +81,15 @@ describe("consumeSetupIntent (the desktop's first-run hand-off)", () => {
   });
 });
 
-describe("the tour's last slide", () => {
-  it("doesn't say 'all set' while the doctor reports something missing", () => {
-    expect(lastSlide(false).title).toBe("You're all set");
-    expect(lastSlide(true).title).toBe("One thing left");
+describe("the welcome card", () => {
+  // Round 5: the five slides (whose last one said "You're all set" at 2 of 3
+  // done) became one card that never claims setup is finished — the Get set
+  // up checklist and its Welcome tour say what is left.
+  it("says what MindFlock is and that three steps start the first agent, nothing more", () => {
+    expect(WELCOME_TITLE).toBe("Welcome to MindFlock");
+    expect(WELCOME_LINES).toHaveLength(2);
+    expect(WELCOME_LINES.join(" ")).toContain("each session on its own branch");
+    expect(WELCOME_LINES[1]).toBe("Three steps and your first agent is running.");
+    expect(WELCOME_LINES.join(" ")).not.toMatch(/all set/i);
   });
 });

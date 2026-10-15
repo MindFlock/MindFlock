@@ -88,7 +88,7 @@ export function AdvancedToggle({
   onChange(on: boolean): void;
 }) {
   return (
-    <div className="set-mode-foot">
+    <div className="set-mode-foot" data-tour="settings-advanced">
       <button
         type="button"
         id="settings-advanced-toggle"
@@ -117,17 +117,23 @@ export function AdvancedFold({
   id,
   summary = "Advanced",
   basic = false,
+  defaultOpen,
   children,
 }: {
   id: string;
   summary?: string;
   /** Show it (folded) in basic mode too. */
   basic?: boolean;
+  /** Whether it starts open; default: open in advanced mode. `false` keeps a
+   * long, rarely-needed section (Connections' "More connections") folded
+   * until asked for, whatever the mode. */
+  defaultOpen?: boolean;
   children: ReactNode;
 }) {
   const advanced = useAdvancedSettings();
-  const [open, setOpen] = useState(advanced);
-  useEffect(() => setOpen(advanced), [advanced]);
+  const initial = defaultOpen ?? advanced;
+  const [open, setOpen] = useState(initial);
+  useEffect(() => setOpen(initial), [initial]);
   if (!advanced && !basic) return null;
   return (
     <details

@@ -21,7 +21,7 @@ vi.mock("../components/settings/useServerRestart", () => ({
   useServerRestart: () => ({ restarting: false, restart: vi.fn() }),
 }));
 
-const { PhoneSteps, UrlList } = await import("../components/settings/screens/Mobile");
+const { PhoneAppRow, UrlList, computerRow, reachableRow } = await import("../components/settings/screens/Mobile");
 const { SetupChecklist } = await import("../components/settings/screens/SharedLink");
 type Shared = import("../components/settings/screens/SharedLink").SharedLinkState;
 type Step = import("../components/settings/screens/SharedLink").SharedLinkStep;
@@ -172,25 +172,72 @@ describe("UrlList", () => {
   });
 });
 
-describe("PhoneSteps", () => {
-  it("puts Tailscale on the phone first, signed in as this account, with its QR", () => {
+describe("PhoneAppRow", () => {
+  it("is row 2: Tailscale on the phone, signed in as this account, with the app's QR named as such", () => {
     const html = renderToStaticMarkup(
-      createElement(PhoneSteps, {
+      createElement(PhoneAppRow, {
         app: { url: "https://tailscale.com/download", qr_svg: "<svg id='app'></svg>", login: "me@example.com" },
       })
     );
-    const first = html.indexOf('data-phone-step="tailscale"');
-    const second = html.indexOf('data-phone-step="mindflock"');
-    expect(first).toBeGreaterThan(-1);
-    expect(second).toBeGreaterThan(first);
+    expect(html).toContain('data-phone-step="tailscale"');
     expect(html).toContain("<strong>me@example.com</strong>");
     expect(html).toContain("<svg id='app'></svg>");
     expect(html).toContain('href="https://tailscale.com/download"');
+    expect(html).toContain("This QR gets the app");
   });
 
   it("says 'the same account' when the login isn't known", () => {
-    const html = renderToStaticMarkup(createElement(PhoneSteps, { app: undefined }));
+    const html = renderToStaticMarkup(createElement(PhoneAppRow, { app: undefined }));
     expect(html).toContain("same account as this computer");
     expect(html).toContain("tailscale.com/download");
+  });
+});
+
+describe("Your phone rows: live ✓/✗", () => {
+  const base = { installed: true, issues: [] } as never;
+  it("row 1 is ✓ only when Tailscale is running", () => {
+    expect(computerRow({ ...(base as object), backend_state: "Running", user: "me@x.com" } as never, { caps: true })).toMatchObject({
+      state: "ok",
+      line: "Tailscale is running on this computer — signed in as me@x.com.",
+    });
+  });
+
+  it("installed but not running: says so, and the ONE fix is a command for a Copy box (no backticks in the line)", () => {
+    const r = computerRow(
+      {
+        installed: true,
+        backend_state: "",
+        issues: [
+          {
+            id: "daemon",
+            level: "fail",
+            message: "Tailscale is installed but isn't answering — start it with `sudo systemctl enable --now tailscaled`.",
+            fix: "sudo systemctl enable --now tailscaled",
+          },
+        ],
+      } as never,
+      { caps: true }
+    );
+    expect(r.state).toBe("fail");
+    expect(r.line).toBe("Tailscale is installed but not running. Start it:");
+    expect(r.line).not.toContain("`");
+    expect(r.fix).toBe("sudo systemctl enable --now tailscaled");
+  });
+
+  it("not installed / signed out: ✗ with the full card (install guidance, Sign in)", () => {
+    expect(computerRow({ installed: false, issues: [] } as never, { caps: true })).toMatchObject({ state: "fail", card: true });
+    expect(computerRow({ installed: true, backend_state: "NeedsLogin", issues: [] } as never, { caps: true })).toMatchObject({
+      state: "fail",
+      line: "Tailscale isn't signed in on this computer.",
+      card: true,
+    });
+    expect(computerRow(null, { caps: false })).toMatchObject({ state: "fail" });
+    expect(computerRow(null, { caps: true })).toMatchObject({ state: "wait" });
+  });
+
+  it("row 3 is ✗ while MindFlock only listens on this computer", () => {
+    expect(reachableRow({ local_only: true }, { caps: true })).toBe("fail");
+    expect(reachableRow({ local_only: false }, { caps: true })).toBe("ok");
+    expect(reachableRow(null, { caps: true })).toBe("wait");
   });
 });

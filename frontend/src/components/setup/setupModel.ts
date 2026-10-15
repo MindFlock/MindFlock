@@ -26,7 +26,9 @@ export const STEP_ORDER: SetupStepId[] = ["tools", "agent_login", "repo", "githu
 /** The server's names, kept here only as the fallback for a payload that has
  * not arrived yet (the card still draws its rows). */
 export const STEP_TITLES: Record<SetupStepId, string> = {
-  tools: "Install the tools",
+  // The server names the default agent ("Install Claude Code"); this is the
+  // fallback before its payload lands, for the default default.
+  tools: "Install Claude Code",
   agent_login: "Sign in to your agent",
   repo: "Start your first agent",
   github: "Connect GitHub",
@@ -159,14 +161,41 @@ export const EXTRA_CHECKS = new Set([
   "gh",
 ]);
 
+/** A doctor row as served: `required` (whether it can block getting
+ * started — backend/web/core/setup_steps.tag_required) and `install` (the
+ * one-click install covers it) ride along with the shared type's fields. */
+export type SetupCheck = DoctorCheckItem & { required?: boolean; install?: boolean };
+
+/** Whether a doctor row can block steps ①–③: the server's `required` when it
+ * says, else "not an optional extra" (an older server). The setup checklist's
+ * "All checks" lists only these; phone, Tailscale, MTU and the like belong to
+ * Settings → Your phone and Settings → Doctor. */
+export function isRequiredCheck(c: SetupCheck): boolean {
+  if (typeof c.required === "boolean") return c.required;
+  return !EXTRA_CHECKS.has(String(c.id || ""));
+}
+
+/** The rows the checklist's "All checks (N)" fold lists. */
+export function requiredChecks<T extends SetupCheck>(checks: readonly T[] | undefined): T[] {
+  return (checks || []).filter(isRequiredCheck);
+}
+
 /** Whether the setup checklist's "Install the tools" step shows a doctor
  * row: only a problem (fail / warn) with something getting started needs.
  * Agent sign-in rows belong to the next step, extras to Settings → Doctor. */
-export function isEssentialCheck(c: DoctorCheckItem): boolean {
+export function isEssentialCheck(c: SetupCheck): boolean {
   const id = String(c.id || "");
-  if (EXTRA_CHECKS.has(id)) return false;
+  if (!isRequiredCheck(c)) return false;
   if (id.startsWith("agent-auth")) return false;
   return c.status === "fail" || c.status === "warn";
+}
+
+/** The problems step ① shows OUTSIDE "All checks": essential ones the
+ * install button does not already fix. A row the button installs (`install`)
+ * would only repeat the button ("Install Claude Code" next to "✗ agent CLI
+ * (claude) not found"), so it shows inside All checks only. */
+export function stepProblems<T extends SetupCheck>(checks: readonly T[] | undefined): T[] {
+  return (checks || []).filter((c) => isEssentialCheck(c) && !c.install);
 }
 
 /** Whether the phone extra should offer to install Tailscale rather than the QR: the

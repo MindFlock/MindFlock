@@ -897,6 +897,8 @@ def _record_ticketing_test(src_id: str, result: dict) -> Optional[dict]:
     except Exception:  # noqa: BLE001 — unreadable file: the test still answers
         return None
     _stamp_for_sync("ticketing.sources")
+    if verdict.get("ok"):
+        _setup_steps.mark("tracker")  # first-run checklist: a tracker really connected
     out = dict(target)
     out["api_token"] = _MASK if out.get("api_token") else ""
     return out
@@ -1729,10 +1731,12 @@ class SettingsAddon(Addon):
             except Exception as err:  # noqa: BLE001
                 return JSONResponse({"error": str(err)}, status_code=400)
             _stamp_for_sync("ticketing.sources")
-            if clean:
-                _setup_steps.mark(
-                    "tracker"
-                )  # first-run checklist: a tracker is connected
+            # The first-run checklist's "Connect your tracker" ticks from a
+            # saved source whose test PASSED (see _record_ticketing_test),
+            # never from the save alone: a wizard abandoned after a failing
+            # Test must not read as "done".
+            if any((r.get("last_test") or {}).get("ok") for r in clean):
+                _setup_steps.mark("tracker")
             # A local edit reaches the running pipeline the way a synced one
             # does: restart it (debounced) when any field of any source moved.
             _settings_hooks.after_settings_change(

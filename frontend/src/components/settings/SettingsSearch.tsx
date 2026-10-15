@@ -4,12 +4,14 @@
  * "parallel", "max sessions" → Sessions running at once), but nothing inside
  * Settings pointed at it. This box uses the palette's own index
  * (palette/settingsSearch.ts — read-only here, one list of words for both),
- * lists the matches under the box while you type, and on a pick opens
+ * lists the matches under the box while you type (each with a small line
+ * saying what is behind it), and on a pick opens
  * the screen, scrolls to the control (opening a fold around it) and
  * highlights it for a moment. */
 
 import { useState } from "react";
 import { revealInSettings, searchSettings, type SettingsSearchEntry } from "../palette/settingsSearch";
+import "./SettingsSearch.css";
 
 const HIT_MS = 2000;
 
@@ -93,7 +95,8 @@ export function SettingsSearch({ onPick }: { onPick(key: string): void }) {
                 onMouseEnter={() => setCursor(i)}
                 onClick={() => pick(h)}
               >
-                {h.label}
+                <span className="set-search-title">{h.label}</span>
+                <span className="set-search-sub">{h.sub}</span>
               </button>
             ))
           ) : (

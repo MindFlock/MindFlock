@@ -28,7 +28,7 @@ import { selectSession } from "../../../lib/sessionActions";
 import { useUi } from "../../../state/store";
 import { reprobeDoctor, type EventEnvelope } from "../../../state/queries";
 import { SettingField, useSettings, InlineConfirm } from "../useSettings";
-import { FolderBrowser } from "../../dialogs/newSession/FolderBrowser";
+import { PathField } from "../../PathField";
 import type { ScreenProps } from "../SettingsDialog";
 import { InstallMissing, type InstallStep } from "../../dialogs/InstallTerminal";
 import {
@@ -666,10 +666,6 @@ function PeerLinkCard(props: {
     "peer/" + (link.peer_name || "work").replace(/[^A-Za-z0-9._-]+/g, "-")
   );
   const [confirm, setConfirm] = useState<"" | "unlink" | "unshare">("");
-  // Which path field the folder browser is filling: the folder to share, the
-  // repo to bring their work home into, or none (closed). Typing a path still
-  // works; browsing is just what nobody had to be told to do.
-  const [browsing, setBrowsing] = useState<"" | "share" | "export">("");
   const [deleteFiles, setDeleteFiles] = useState(false);
   const [reconnect, setReconnect] = useState("");
   const [msgsOpen, setMsgsOpen] = useState(false);
@@ -813,15 +809,7 @@ function PeerLinkCard(props: {
           </div>
           <div className="set-row">
             <span className="set-label">Bring work home</span>
-            <input placeholder="your repo to bring it into" value={target} onChange={(e) => setTarget(e.target.value)} />
-            <button
-              type="button"
-              className="test-btn"
-              aria-expanded={browsing === "export"}
-              onClick={() => setBrowsing(browsing === "export" ? "" : "export")}
-            >
-              Browse…
-            </button>
+            <PathField placeholder="your repo to bring it into" value={target} onChange={setTarget} pickerTitle="Pick the repo to bring it into" />
             <input placeholder="peer/branch" value={exportBranch} onChange={(e) => setExportBranch(e.target.value)} />
             <button
               type="button"
@@ -838,17 +826,6 @@ function PeerLinkCard(props: {
               Export
             </button>
           </div>
-          {browsing === "export" && (
-            <FolderBrowser
-              initialPath={target.trim()}
-              selected={target.trim()}
-              onSelect={setTarget}
-              onPick={(p) => {
-                setTarget(p);
-                setBrowsing("");
-              }}
-            />
-          )}
           <button type="button" className="test-btn" disabled={!!busy} onClick={() => setConfirm("unshare")}>
             Stop sharing…
           </button>
@@ -856,15 +833,7 @@ function PeerLinkCard(props: {
       ) : sandbox ? (
         <>
           <div className="set-row">
-            <input placeholder="folder to share" value={repo} onChange={(e) => setRepo(e.target.value)} />
-            <button
-              type="button"
-              className="test-btn"
-              aria-expanded={browsing === "share"}
-              onClick={() => setBrowsing(browsing === "share" ? "" : "share")}
-            >
-              Browse…
-            </button>
+            <PathField placeholder="folder to share" value={repo} onChange={setRepo} pickerTitle="Pick the folder to share" />
             <input placeholder="branch (optional)" value={branch} onChange={(e) => setBranch(e.target.value)} />
             <select value={chosen} onChange={(e) => setProgram(e.target.value)} disabled={!agents.length}>
               {agents.length ? (
@@ -895,17 +864,6 @@ function PeerLinkCard(props: {
               {busy === "share" ? "Sharing…" : "Share a folder"}
             </button>
           </div>
-          {browsing === "share" && (
-            <FolderBrowser
-              initialPath={repo.trim()}
-              selected={repo.trim()}
-              onSelect={setRepo}
-              onPick={(p) => {
-                setRepo(p);
-                setBrowsing("");
-              }}
-            />
-          )}
         </>
       ) : (
         <p className="set-hint">

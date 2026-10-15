@@ -155,7 +155,7 @@ def _claim_label_field(noun: str) -> dict:
         "advanced": True,
         "placeholder": "mindflock",
         "hint": (
-            f"Starting a {noun} assigns it to you and labels it <this>:working "
+            f"Starting {'an' if noun[:1] in 'aeiou' else 'a'} {noun} assigns it to you and labels it <this>:working "
             "(mindflock:working when blank), so teammates' MindFlock skips it. "
             "On an Anyone's source it is only labelled, never reassigned. The "
             "label comes off when the session ends; the assignment stays."

@@ -13,7 +13,8 @@
  * has nothing else, since our own – □ ✕ aren't drawn there. Same elements, same
  * behaviour, mirrored placement. */
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { useUi } from "../state/store";
 import { useDoctor, useTestPlans } from "../state/queries";
 import { dueCount, failingCount, verifyCountLine } from "./dialogs/verify";
@@ -30,6 +31,8 @@ import { browserReserved } from "./palette/ShortcutsSheet";
 import { VERIFY_BLURB } from "../lib/vocab";
 import { useScheduleStatus } from "../lib/useScheduleStatus";
 import { failingSchedules } from "../lib/templates";
+import { useCalm } from "../lib/useCalm";
+import { topBarShows } from "../lib/calm";
 
 /* The wordmark carries the RUNNING ENGINE's version (GET /api/doctor), not the
  * desktop shell's: this frontend ships inside the engine wheel, so that string
@@ -44,6 +47,38 @@ import { failingSchedules } from "../lib/templates";
 function engineVersion(raw: string | undefined): string {
   const v = (raw || "").trim();
   return !v || !/^\d/.test(v) || v.startsWith("0+") ? "" : v;
+}
+
+/** What a narrow bar gives up, in order: the wordmark first (it is a label,
+ * not a control), then the foldable items from the RIGHT end (Settings, then
+ * Schedule, then Verify — Verify's count is the reason it earns a slot, so it
+ * goes last) into one ⋯ that sits where they were. New, Intake and the palette
+ * never fold. Every argument is a measured width in px, gaps included:
+ * `room` the bar's content box, `fixed` everything that always shows,
+ * `brand` the wordmark, `items` the foldable items left to right, `more` the ⋯.
+ * Pure, so the rule is pinned by a test rather than by a screenshot. */
+export interface BarWidths {
+  room: number;
+  fixed: number;
+  brand: number;
+  items: number[];
+  more: number;
+}
+export interface BarFit {
+  brand: boolean;
+  /** How many of `items`, from the left, stay on the bar; the rest are in ⋯. */
+  shown: number;
+}
+export function fitTopBar({ room, fixed, brand, items, more }: BarWidths): BarFit {
+  // Half a px of slack: rects are fractional and a sum of them can land a
+  // hair over a room it visibly fits.
+  const fits = (w: number) => w <= room + 0.5;
+  const upTo = (n: number) => items.slice(0, n).reduce((a, b) => a + b, fixed);
+  if (fits(upTo(items.length) + brand)) return { brand: true, shown: items.length };
+  if (fits(upTo(items.length))) return { brand: false, shown: items.length };
+  let shown = items.length - 1;
+  while (shown > 0 && !fits(upTo(shown) + more)) shown--;
+  return { brand: false, shown };
 }
 
 export function TopBar() {
@@ -68,6 +103,14 @@ export function TopBar() {
   // feature working and gets no mark.
   const sched = useScheduleStatus();
   const schedFailing = failingSchedules(sched.templates, sched.status).length;
+  // The calm first hour (lib/calm.ts topBarShows): Verify waits for its first
+  // checklist and Schedule for its first template. Their shortcuts, the
+  // palette and the #verify / #schedule links keep working meanwhile.
+  const shows = topBarShows({
+    calm: useCalm(),
+    checklists: testPlans?.plans?.length ?? 0,
+    templates: sched.templates.length,
+  });
   // Evaluated once: the shell can't grow or lose its title bar mid-run.
   const [mac] = useState(hasNativeWindowControls);
   // macOS hides the traffic lights in fullscreen — stop reserving their room.
@@ -113,6 +156,155 @@ export function TopBar() {
     return k.length ? " (" + k.join(" / ") + ")" : "";
   };
 
+  // One tooltip per item, worn by the bar button and by its row in ⋯ alike.
+  const verifyTitle = "Verify — " + VERIFY_BLURB + keys("verify") + "\n" + verifyCountLine(due, failing);
+  const scheduleTitle =
+    "Schedule — templates; starts sessions on a timer" +
+    keys("schedule") +
+    (schedFailing > 0
+      ? "\n" +
+        (schedFailing === 1
+          ? "1 scheduled template's last run failed"
+          : schedFailing + " scheduled templates' last runs failed")
+      : "");
+
+  // --- Fitting a narrow window (fitTopBar above) ---------------------------
+  // The bar is fixed and never wraps, so whatever doesn't fit isn't squeezed,
+  // it is simply under the window's edge — the palette icon first, since it
+  // is last. So the bar MEASURES itself and folds, rather than guessing from
+  // breakpoints: the words' widths change with the font, the theme set, a
+  // badge, a rebound shortcut's absence, the mac lights' gap.
+  //
+  // The foldable items, in bar order; Verify / Schedule only once the calm
+  // rule above lets them on the bar at all (this never overrides it).
+  const foldable = [
+    shows.verify && {
+      key: "verify",
+      label: "Verify",
+      title: verifyTitle,
+      count: due,
+      failing: failing > 0,
+      open: () => ui.openDialogFor("verify"),
+    },
+    shows.schedule && {
+      key: "schedule",
+      label: "Schedule",
+      title: scheduleTitle,
+      count: schedFailing,
+      failing: true,
+      open: () => ui.openDialogFor("schedule"),
+    },
+    { key: "settings", label: "Settings", title: "Settings", count: 0, failing: false, open: () => openSettings() },
+  ].filter((f) => !!f);
+  const [fit, setFit] = useState<BarFit>({ brand: true, shown: Infinity });
+  const folded = foldable.slice(fit.shown);
+  const isFolded = (key: string) => folded.some((f) => f.key === key);
+  const barRef = useRef<HTMLDivElement>(null);
+  const startRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLElement>(null);
+  const brandRef = useRef<HTMLSpanElement>(null);
+  // A folded item (display:none, so the tours' target lookup skips it) has no
+  // width to read: the last one it had stands in. Every item is on the bar at
+  // first paint, so each is measured before it can ever be folded.
+  const widths = useRef<Record<string, number>>({});
+  const measure = useRef<() => void>(() => {});
+  measure.current = () => {
+    const bar = barRef.current;
+    const start = startRef.current;
+    const menu = menuRef.current;
+    if (!bar || !start || !menu) return;
+    const w = (el: Element | null) => (el ? el.getBoundingClientRect().width : 0);
+    const gap = (el: Element) => parseFloat(getComputedStyle(el).columnGap) || 0;
+    const seen = widths.current;
+    const menuGap = gap(menu);
+    let fixed = 0;
+    for (const el of Array.from(menu.children) as HTMLElement[]) {
+      const key = el.dataset.fold || (el.classList.contains("tb-more") ? "more" : "");
+      const width = w(el);
+      if (!key) fixed += width + menuGap;
+      else if (width > 0) seen[key] = width;
+    }
+    const brandW = w(brandRef.current);
+    if (brandW > 0) seen.brand = brandW;
+    const cs = getComputedStyle(bar);
+    const barGap = gap(bar);
+    const end = bar.querySelector(".tb-end");
+    // The desktop shell's – □ ✕ float over the drag tail (electron/main.js).
+    const winctl = document.getElementById("mf-winctl");
+    const room =
+      bar.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0) - w(winctl);
+    const next = fitTopBar({
+      room,
+      // the left cluster + the start zone's gap + the kept menu items, then
+      // the gap to the drag tail and, on a Mac, the mirrored cluster.
+      fixed: w(start.firstElementChild) + gap(start) + fixed - menuGap + barGap + (end ? barGap + w(end) : 0),
+      brand: (seen.brand || 0) + barGap,
+      items: foldable.map((f) => (seen[f.key] || 0) + menuGap),
+      // Never measured yet: the palette icon's box, which ⋯ shares.
+      more: (seen.more || w(document.getElementById("palette-btn"))) + menuGap,
+    });
+    setFit((prev) => {
+      if (prev.brand === next.brand && prev.shown === next.shown) return prev;
+      return next;
+    });
+  };
+  // Before paint, on every render: a count that appears, Verify arriving with
+  // its first checklist, the version landing beside the wordmark — each is
+  // folded in the same frame it is drawn, so the bar never shows itself
+  // clipped (and never jumps on load).
+  useLayoutEffect(() => measure.current());
+  useEffect(() => {
+    const bar = barRef.current;
+    if (!bar || typeof ResizeObserver === "undefined") return;
+    // The window resizing, and a web font swapping in under the words.
+    const ro = new ResizeObserver(() => flushSync(() => measure.current()));
+    ro.observe(bar);
+    if (menuRef.current) ro.observe(menuRef.current);
+    if (startRef.current?.firstElementChild) ro.observe(startRef.current.firstElementChild);
+    return () => ro.disconnect();
+  }, []);
+
+  // The ⋯ menu itself.
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement>(null);
+  const moreBtn = useRef<HTMLButtonElement>(null);
+  const hasFolded = folded.length > 0;
+  useEffect(() => {
+    if (!hasFolded) setMoreOpen(false);
+  }, [hasFolded]);
+  useEffect(() => {
+    if (!moreOpen) return;
+    moreRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    const onDown = (e: MouseEvent) => {
+      if (!moreRef.current?.contains(e.target as Node)) setMoreOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        // Capture phase: this Escape is the menu's, not a dialog's below it.
+        e.stopPropagation();
+        e.preventDefault();
+        setMoreOpen(false);
+        moreBtn.current?.focus();
+        return;
+      }
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      const rows = Array.from(moreRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') || []);
+      if (!rows.length) return;
+      e.preventDefault();
+      const at = rows.indexOf(document.activeElement as HTMLElement);
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      rows[(at + step + rows.length) % rows.length].focus();
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [moreOpen]);
+  const foldedCount = folded.reduce((n, f) => n + f.count, 0);
+  const foldedFailing = folded.some((f) => f.count > 0 && f.failing);
+
   // The cluster that swaps sides on macOS. Defined once and rendered in exactly
   // one place, so the two layouts can't drift apart.
   const logo = <span id="brand-logo" aria-hidden="true" />;
@@ -145,8 +337,13 @@ export function TopBar() {
   );
 
   return (
-    <div id="topbar" data-mac={mac ? "" : undefined} data-mac-lights={mac && !fullScreen ? "" : undefined}>
-      <div className="tb-start">
+    <div
+      id="topbar"
+      ref={barRef}
+      data-mac={mac ? "" : undefined}
+      data-mac-lights={mac && !fullScreen ? "" : undefined}
+    >
+      <div className="tb-start" ref={startRef}>
         <div className="tb-left">
           {!mac && logo}
           <button
@@ -172,7 +369,7 @@ export function TopBar() {
           {!mac && themeToggle}
           {!mac && <NotificationsBell />}
         </div>
-        <nav className="tb-menu" aria-label="Main actions">
+        <nav className="tb-menu" ref={menuRef} aria-label="Main actions">
           <button
             id="new-btn"
             className="tb-new"
@@ -187,7 +384,7 @@ export function TopBar() {
             id="intake-btn"
             className="tb-item"
             type="button"
-            title={"Intake — tickets, pull requests and issues waiting to become sessions" + keys("intake")}
+            title={"Intake — tickets, pull requests and issues; starts sessions when work arrives" + keys("intake")}
             /* No aria-label: the visible "Intake" IS the name. The old one still
                said "Open work", the surface's name two renames ago, so a screen
                reader announced a button nobody could see. */
@@ -204,13 +401,13 @@ export function TopBar() {
               the "Not checked yet" group are one predicate) — deliberately not
               "things waiting on you personally", since one of them may be an
               agent mid-run. */}
+          {shows.verify && (
           <button
             id="verify-btn"
-            className="tb-item"
+            className={"tb-item" + (isFolded("verify") ? " tb-folded" : "")}
+            data-fold="verify"
             type="button"
-            title={
-              "Verify — " + VERIFY_BLURB + keys("verify") + "\n" + verifyCountLine(due, failing)
-            }
+            title={verifyTitle}
             /* No aria-label, for the same reason as Intake above: the visible
                "Verify" IS the name, and a second wording would be the one a
                screen reader announced. */
@@ -223,23 +420,17 @@ export function TopBar() {
                 out. */}
             {due > 0 && <span className={"tb-count" + (failing > 0 ? " is-failing" : "")}>{due}</span>}
           </button>
+          )}
           {/* Schedule: what starts by itself (and the saved setups it starts
               from). Before it had a slot here, the only ways in were the
               palette and New's strip — the owner couldn't find it. */}
+          {shows.schedule && (
           <button
             id="schedule-btn"
-            className="tb-item"
+            className={"tb-item" + (isFolded("schedule") ? " tb-folded" : "")}
+            data-fold="schedule"
             type="button"
-            title={
-              "Schedule — templates that start sessions on their own" +
-              keys("schedule") +
-              (schedFailing > 0
-                ? "\n" +
-                  (schedFailing === 1
-                    ? "1 scheduled template's last run failed"
-                    : schedFailing + " scheduled templates' last runs failed")
-                : "")
-            }
+            title={scheduleTitle}
             onClick={() => ui.openDialogFor("schedule")}
           >
             Schedule
@@ -247,9 +438,11 @@ export function TopBar() {
                 rule Verify's count keeps. */}
             {schedFailing > 0 && <span className="tb-count is-failing">{schedFailing}</span>}
           </button>
+          )}
           <button
             id="settings-btn"
-            className="tb-item"
+            className={"tb-item" + (isFolded("settings") ? " tb-folded" : "")}
+            data-fold="settings"
             type="button"
             title="Settings"
             aria-label="Open settings"
@@ -257,6 +450,56 @@ export function TopBar() {
           >
             Settings
           </button>
+          {/* What a narrow window folded (fitTopBar): one ⋯ where the folded
+              items stood, carrying their counts, so a red badge is never lost
+              with its word. The ids above stay on the (hidden) bar buttons. */}
+          {hasFolded && (
+            <div className="tb-more" ref={moreRef}>
+              <button
+                id="more-btn"
+                ref={moreBtn}
+                className="tb-item"
+                type="button"
+                title={"More — " + folded.map((f) => f.label).join(", ")}
+                aria-label="More actions"
+                aria-haspopup="menu"
+                aria-expanded={moreOpen}
+                onClick={() => setMoreOpen((v) => !v)}
+              >
+                <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="currentColor">
+                  <circle cx="5" cy="12" r="1.9" />
+                  <circle cx="12" cy="12" r="1.9" />
+                  <circle cx="19" cy="12" r="1.9" />
+                </svg>
+                {foldedCount > 0 && (
+                  <span className={"tb-count" + (foldedFailing ? " is-failing" : "")}>{foldedCount}</span>
+                )}
+              </button>
+              {moreOpen && (
+                <div className="tb-more-menu" role="menu" aria-label="More actions">
+                  {folded.map((f) => (
+                    <button
+                      key={f.key}
+                      type="button"
+                      role="menuitem"
+                      className="tb-more-item"
+                      data-fold-item={f.key}
+                      title={f.title}
+                      onClick={() => {
+                        setMoreOpen(false);
+                        f.open();
+                      }}
+                    >
+                      <span>{f.label}</span>
+                      {f.count > 0 && (
+                        <span className={"tb-count" + (f.failing ? " is-failing" : "")}>{f.count}</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {/* The palette last, as an icon: it reaches everything above (and the
               rest), so it is the keyboard user's door, not one more word in the
               row. Monochrome currentColor like #theme-btn — never an emoji. */}
@@ -287,7 +530,7 @@ export function TopBar() {
       {/* No title= on the wordmark: .tb-brand is pointer-events:none so the
           window-drag works across it, which also means a tooltip can never
           fire. The version is visible, so nothing is lost. */}
-      <span className="tb-brand">
+      <span className={"tb-brand" + (fit.brand ? "" : " tb-folded")} ref={brandRef}>
         MindFlock
         {(window as unknown as { mfshell?: { dev?: boolean } }).mfshell?.dev && (
           <span style={{ color: "var(--red)", fontWeight: 700 }}>-DEV</span>

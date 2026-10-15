@@ -6,7 +6,7 @@
  *
  *   Work     Message…, Queue prompt…
  *   Ship     Commit… (only once there is something to commit), Push, Open PR,
- *            Merge PR, View PR, Fast-track…, Checklist…, Run checks now
+ *            Merge PR, View PR, Fast-track…, Verify checklist…, Run checks now
  *   Session  Rename…, Resume (only on a paused session: there is no Pause
  *            here — the palette, `mindflock pause` and the API still pause)
  *   More ▸   the rare ones, folded: Terminal, Diff, Code map, Thread, Browse
@@ -27,7 +27,9 @@ import type { Instance } from "../api/types";
 import { instApi } from "../api/client";
 import { refreshInstances } from "../state/queries";
 import { displayName, useUi } from "../state/store";
-import { PR_FALLBACK_HINT, cleanupMissing, deleteSession, selectSession } from "./sessionActions";
+import { PR_FALLBACK_HINT, cleanupMissing, deleteConfirmText, deleteSession, selectSession } from "./sessionActions";
+import { api } from "../api/client";
+import { CONNECT_GITHUB_FOR_PRS, NOTHING_TO_PUSH } from "./vocab";
 import { actionLabel, actionNote, sessionAction, type ActionCtx, type SessionActionId } from "./sessionActionTable";
 import { LANE_SHORT, detachableGroup, laneChoice, moveOutOfGroup, splitBlockReason, splitSession } from "./laneActions";
 import { fastTrackStep } from "./stage";
@@ -94,6 +96,33 @@ export interface SessionMenuOpts {
 export function hasUncommitted(inst: Partial<Instance> | undefined): boolean {
   const u = inst?.diff_stat?.uncommitted;
   return (u?.files || 0) + (u?.additions || 0) + (u?.deletions || 0) > 0;
+}
+
+/** Nothing to ship: the server's diff-stat is in and reads zero, committed
+ * or not. Unknown (no stat yet, an older server) is NOT empty — a greyed Push
+ * on a session that does have work would be the worse mistake. */
+export function nothingToShip(inst: Partial<Instance> | undefined): boolean {
+  const d = inst?.diff_stat;
+  if (!d) return false;
+  return !hasUncommitted(inst) && (d.files || 0) + (d.additions || 0) + (d.deletions || 0) === 0;
+}
+
+/** Whether the configured editor ("Open in Cursor") is installed here:
+ * true / false once GET /api/ides has answered, null before (or when it
+ * can't say — a custom command), which shows the item as it always was. */
+let ideKnown: boolean | null = null;
+let ideAsked = false;
+function ideInstalled(): boolean | null {
+  if (!ideAsked) {
+    ideAsked = true;
+    void api<{ ides?: Array<{ command: string; installed?: boolean }>; current?: string }>("/api/ides")
+      .then((d) => {
+        const cur = (d?.ides || []).find((i) => i.command === d?.current);
+        ideKnown = cur && typeof cur.installed === "boolean" ? cur.installed : null;
+      })
+      .catch(() => {});
+  }
+  return ideKnown;
 }
 
 /** Show a tab of the session's pane from outside it (lastTab is what the pane
@@ -167,12 +196,19 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
   ]);
 
   const ft = fastTrackStep(inst);
+  // Shipping with nothing to ship, or a PR with no GitHub to open it on: the
+  // item stays where it is, greyed, saying why (the Ctrl+K chords and the
+  // pane's guided button still answer — nothing is taken away).
+  const empty = nothingToShip(inst);
+  const greyed = (item: MenuItem | null, why: string): MenuItem | null =>
+    item && why && !item.disabled ? { ...item, disabled: true, external: false, title: why, note: why, run: () => {} } : item;
+  const noGithub = ctx.prSupport === false ? CONNECT_GITHUB_FOR_PRS : "";
   const ship = keep([
     // Nothing to commit = no Commit… (the Ctrl+K C chord still answers).
     hasUncommitted(inst) && fromTable("commit"),
-    fromTable("push"),
-    fromTable("pr"),
-    fromTable("merge"),
+    greyed(fromTable("push"), empty ? NOTHING_TO_PUSH : ""),
+    greyed(fromTable("pr"), empty ? NOTHING_TO_PUSH : noGithub),
+    greyed(fromTable("merge"), noGithub),
     fromTable("viewPr"),
     ft &&
       !peer && {
@@ -186,7 +222,7 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
     !!inst.branch &&
       !peer && {
         key: "checklist",
-        label: "Checklist…",
+        label: "Verify checklist…",
         title: "Verify's checklist for " + inst.branch + " — what to check before or after it merges",
         run: () => openChecklist(inst.branch),
       },
@@ -273,7 +309,9 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
     },
     fromTable("duplicate"),
     fromTable("branch", { note: actionNote("branch", ctx) }),
-    fromTable("ide", { note: actionNote("ide", ctx) }),
+    // Only when the editor is there (or nobody can tell): an "Open in
+    // Cursor" for an editor this machine doesn't have is a dead end.
+    (remote || ideInstalled() !== false) && fromTable("ide", { note: actionNote("ide", ctx) }),
     !!inst.ports?.base && {
       key: "preview",
       label: "Open preview",
@@ -326,8 +364,8 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
       key: "delete",
       label: sessionAction("delete").short!,
       danger: true,
-      confirm: "Removes the worktree and branch",
-      title: "Removes the worktree and branch (asks first)",
+      confirm: deleteConfirmText(inst),
+      title: "Deletes its folder and branch, uncommitted changes included (asks first)",
       // Already asked (the strip): the answer may name the sessions holding
       // its folder, which the menu shows under the row.
       run: () => deleteSession(title, true),

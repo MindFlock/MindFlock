@@ -124,6 +124,29 @@
   text-overflow: ellipsis;
 }
 
+/* A row with a subtitle (the Settings rows): label on top, one small muted
+   line under it saying what is behind it. */
+.palette-item .palette-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.palette-item .palette-sub {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette-item.selected .palette-sub {
+  color: rgba(255, 255, 255, 0.85);
+}
+
 .palette-item .palette-hint {
   flex: none;
   font-size: 10px;
@@ -137,6 +160,23 @@
 .palette-item.selected .palette-hint {
   color: #fff;
   border-color: rgba(255, 255, 255, 0.5);
+}
+
+/* A hint in words, not a key: plain muted text, no keycap — a description
+   in a keycap read as a keyboard shortcut. */
+.palette-item .palette-hint.is-desc {
+  border: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: 11px;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-item.selected .palette-hint.is-desc {
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .palette-empty {

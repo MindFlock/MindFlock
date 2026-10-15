@@ -48,6 +48,9 @@ __all__ = [
     "referenced_agents",
     "check_node",
     "install_plan",
+    "group_of",
+    "GROUPS",
+    "GROUP_TITLES",
 ]
 
 #: Cap on every subprocess probe so /api/doctor stays snappy.
@@ -89,9 +92,44 @@ class Check:
     #: UI can offer that provider's own sign-in terminal ("" for everything
     #: else).
     provider: str = ""
+    #: Which heading the row sits under (:data:`GROUPS`): ``run`` (needed to
+    #: run an agent), ``ship`` (needed to commit/push/PR) or ``optional``.
+    #: Derived from ``id`` when left empty.
+    group: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.group:
+            self.group = group_of(self.id)
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+#: The doctor's three headings, in the order every surface prints them.
+GROUP_RUN = "run"
+GROUP_SHIP = "ship"
+GROUP_OPTIONAL = "optional"
+GROUPS = (GROUP_RUN, GROUP_SHIP, GROUP_OPTIONAL)
+GROUP_TITLES = {
+    GROUP_RUN: "Needed to run an agent",
+    GROUP_SHIP: "Needed to ship",
+    GROUP_OPTIONAL: "Optional",
+}
+#: Rows a first agent session cannot do without (the agent's sign-in included:
+#: an agent at a login screen is not a running agent).
+_RUN_IDS = frozenset({"git", "tmux", "agent-cli", "node", "agent-auth"})
+#: Rows only commit / push / PR need.
+_SHIP_IDS = frozenset({"git-identity", "gh"})
+
+
+def group_of(cid: str) -> str:
+    """The heading a check id sits under; anything unlisted is optional, so a
+    new probe never lands in a first-run fix loop by accident."""
+    if cid in _RUN_IDS:
+        return GROUP_RUN
+    if cid in _SHIP_IDS:
+        return GROUP_SHIP
+    return GROUP_OPTIONAL
 
 
 # --------------------------------------------------------------------------- #
@@ -513,9 +551,9 @@ def check_git_identity() -> Optional[Check]:
         "git identity",
         "warn",
         f"{unset} not set — commits will fail on this computer",
-        "Setup → Connect GitHub fills it in from your account, or: "
         'git config --global user.name "Your Name" && '
-        "git config --global user.email you@example.com",
+        "git config --global user.email you@example.com "
+        "(or Connect GitHub in the browser fills it in from your account)",
     )
 
 
@@ -691,7 +729,7 @@ def _agent_auth_check(cid: str, name: str, label: str) -> Check:
             cid,
             label,
             "warn",
-            "agent CLI not installed — cannot probe auth",
+            "install the agent first — then sign in",
             provider=name,
         )
     fix, cmd = _login_fix(provider, base)
@@ -1376,11 +1414,17 @@ _ALL_CHECKS: List[Callable[[], "Optional[Check] | List[Check]"]] = list(
 )
 
 
-def run_checks() -> List[Check]:
+def run_checks(group: str = "") -> List[Check]:
     """Run every check; an individual probe blowing up becomes a ``warn`` result
-    (the doctor itself must never 500)."""
+    (the doctor itself must never 500). ``group`` runs only that heading's
+    probes (``"run"``: the few a boot banner needs, without the slow extras)."""
     out: List[Check] = []
-    for fn in _ALL_CHECKS:
+    fns = (
+        [fn for cid, fn in CHECKS_BY_ID.items() if group_of(cid) == group]
+        if group
+        else _ALL_CHECKS
+    )
+    for fn in fns:
         try:
             check = fn()
         except Exception as err:  # noqa: BLE001 — degrade, never raise

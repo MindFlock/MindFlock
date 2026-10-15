@@ -280,7 +280,9 @@ def test_init_repo_rejected_without_git(monkeypatch, tmp_path):
     monkeypatch.setattr(git_ops, "git_available", lambda: False)
     monkeypatch.setattr(server, "git_available", lambda: False)
     try:
-        server._prepare_plain_repo(str(tmp_path / "newrepo"), init_repo=True)
+        server._prepare_plain_repo(
+            str(tmp_path / "newrepo"), init_repo=True, create_folder=True
+        )
     except ValueError as err:
         assert "git is not installed" in str(err)
     else:

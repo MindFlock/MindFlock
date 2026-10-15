@@ -111,7 +111,8 @@ describe("the row's actions button (⋮)", () => {
     const html = render(row({ title: "aria" }));
     const btn = /<button[^>]*class="row-kebab"[^>]*>([\s\S]*?)<\/button>/.exec(html);
     expect(btn, html).toBeTruthy();
-    expect(btn![0]).toContain('aria-label="Actions for this session"');
+    // Round 5 (finding 20): its own accessible name, not the pane ⋯'s.
+    expect(btn![0]).toContain('aria-label="Session menu for aria"');
     expect(btn![0]).toContain('aria-haspopup="menu"');
     expect(btn![0]).toContain('aria-expanded="false"');
     expect(btn![0]).toContain('type="button"');

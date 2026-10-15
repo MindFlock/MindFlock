@@ -270,7 +270,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     # Every bind includes loopback.
     url = f"http://127.0.0.1:{port}"
     cwd = Path(os.getcwd())
-    print(f"MindFlock server  ->  {url}   (mode: {mode}, bind: {bind})")
+    print(f"MindFlock is running  ->  {url}   (mode: {mode}, bind: {bind})")
     if why == _tailnet_bind.WHY_NO_TAILNET:
         print(
             "  Tailscale isn't running, so this binds every interface (0.0.0.0) "
@@ -308,45 +308,37 @@ def main(argv: Optional[List[str]] = None) -> None:
                 "Settings -> Security -> Always on\n  (or run with MINDFLOCK_AUTH=1).\n",
                 file=sys.stderr,
             )
-    print(f"Managing git repo    :  {cwd}")
     if _is_mindflock_source_repo(cwd):
         print(
-            "note: managing the MindFlock repo itself — cd into your project "
-            "first if this isn't what you want."
+            "note: started inside the MindFlock source itself — folder "
+            "suggestions start here; cd into your project first if that isn't "
+            "what you want."
         )
     print("Press Ctrl-C to stop.")
 
-    # First run = no session has ever been created. Such a boot earns the
-    # wizard's *report* (what this machine is actually missing with the one-line
-    # fix for each, the folders it can see, the commands that come next) instead
-    # of leaving a stranger staring at a bare address. Deliberately the report
-    # and not the wizard: the desktop app auto-starts this server, and a serve
-    # that waited on stdin before binding its port would look like a hung app.
-    # `mindflock init` — named in the report — is the interactive door, and
-    # `mindflock serve --setup` opens it above, which is why that case is
-    # excluded here.
-    first_run = not _is_onboarded() and not setup
+    # The three steps to a first agent (init_wizard.report — the same block
+    # `mindflock init` and install.sh end on) with step 3 the boxed browser
+    # address; once all three are done, just the address. Deliberately a
+    # report and never the wizard: the desktop app auto-starts this server,
+    # and a serve that waited on stdin before binding its port would look like
+    # a hung app. `mindflock serve --setup` runs the wizard above instead.
+    first_run = not _is_onboarded()
 
-    # Everything below runs on a background thread so binding isn't delayed: the
-    # report walks the full doctor (ten checks, each capped at a 5s subprocess)
-    # and scans for repo suggestions (a git probe per candidate, capped at 30s),
-    # and even the short check list shells out three times. On a cold box or a
-    # stalled network mount that is tens of seconds in which the desktop app is
-    # polling a port nobody has opened yet and retrying onto offline.html.
+    # On a background thread so binding isn't delayed: even the `run` checks
+    # shell out (git, tmux, the agent and its sign-in), and on a cold box or a
+    # stalled mount that is seconds in which the desktop app is polling a port
+    # nobody has opened yet and retrying onto offline.html.
     def _preflight() -> None:
         try:
-            if first_run:
-                from backend import init_wizard
+            from backend import init_wizard
 
-                # Rendered into a buffer and written once: the "Press Ctrl-C"
-                # line above is racing this thread, and a report printed line by
-                # line would let that line land in the middle of the block. The
-                # report's own doctor pass already covers git, tmux and the agent
-                # CLI with their fix lines, so it stands in for the short list
-                # below rather than running those probes a second time.
-                buf = io.StringIO()
-                init_wizard.report(buf, serving=True)
-                text = buf.getvalue()
+            # Rendered into a buffer and written once: the "Press Ctrl-C" line
+            # above is racing this thread, and a block printed line by line
+            # would let that line land in the middle of it.
+            buf = io.StringIO()
+            init_wizard.report(buf, serving=True, url=url)
+            text = buf.getvalue()
+            if first_run:
                 # Keep it for GET /api/setup: when the desktop app starts this
                 # server the text lands in ~/.mindflock/desktop-server.log,
                 # which nobody reads — the checklist shows it instead.
@@ -356,24 +348,12 @@ def main(argv: Optional[List[str]] = None) -> None:
                     setup_steps.set_first_run_report(text)
                 except Exception:  # noqa: BLE001 — the report is advice
                     pass
-                sys.stdout.write("\n" + text)
-                return
-            # Every other boot gets just the checks a session can't start
-            # without. A failure prints what's wrong, why the tool needs it, and
-            # the one command that fixes it — instead of a cryptic
-            # FileNotFoundError at first session-create.
-            from backend import doctor
-
-            for fn in (doctor.check_git, doctor.check_tmux, doctor.check_agent_cli):
-                c = fn()
-                if c.status == "fail":
-                    print(f"! {c.label}: {c.detail}", file=sys.stderr)
-                    if c.fix:
-                        print(f"  fix: {c.fix}", file=sys.stderr)
+            sys.stdout.write("\n" + text)
+            sys.stdout.flush()
         except Exception:  # noqa: BLE001 — preflight must never break serving
             # Silence, not a substitute message: init_wizard.report is the one
-            # layer that owns degrading the first-run text, and a second copy of
-            # its wording here would only rot out of sync with it. This catch is
+            # layer that owns degrading this text, and a second copy of its
+            # wording here would only rot out of sync with it. This catch is
             # what keeps an unwritable stdout or a failed import from throwing a
             # thread traceback across the banner.
             pass

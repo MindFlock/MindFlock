@@ -12,6 +12,7 @@ import { RunItems, RunOptions, type RunDraft } from "../NewList";
 import {
   DESCRIBE_CAP_MS,
   DESCRIBE_MAX_CHARS,
+  SUGGEST_SOURCES,
   DESCRIBE_SLOW_MS,
   SUBMIT_ARM_MS,
   cancelPlanRun,
@@ -26,7 +27,8 @@ import {
   type PlanRun,
   type RepoSuggestion,
 } from "../newSession";
-import { FolderBrowser } from "./FolderBrowser";
+import { useFolderPickerWhile } from "../../../lib/folderPicker";
+import { Elapsed } from "./FooterActions";
 import { useUi } from "../../../state/store";
 
 type Set<T> = Dispatch<SetStateAction<T>>;
@@ -510,7 +512,6 @@ export interface DescribeSectionProps {
   newFolderRow: ReactNode;
   runBrowse: boolean;
   setRunBrowse: Set<boolean>;
-  runBrowseRef: MutableRefObject<HTMLDivElement | null>;
   repoPath: string;
   folderDo: Dispatch<FolderAction>;
   suggestions: RepoSuggestion[];
@@ -520,6 +521,17 @@ export interface DescribeSectionProps {
   onClear?: () => void;
   /** A note about the agent (not signed in), shown above the buttons. */
   agentNote?: ReactNode;
+  /** What the "Runs in" line says after the folder (the branch, or that it
+   * runs in the folder itself). */
+  startsIn: ReactNode;
+  /** The agent's name for "Asking Claude Code to fill in the details…". */
+  agentLabel: string;
+  /** When the read in flight started (epoch ms). */
+  describeSince: number;
+  /** The timeout's one recovery: start now from the words as typed. */
+  startInstead(): void;
+  /** Enter in the box: Start. */
+  onEnterStart(): void;
 }
 
 /** Page 1's body: the sentence box, what it is for, and — for an Intake
@@ -542,7 +554,6 @@ export function DescribeSection({
   newFolderRow,
   runBrowse,
   setRunBrowse,
-  runBrowseRef,
   repoPath,
   folderDo,
   suggestions,
@@ -550,7 +561,29 @@ export function DescribeSection({
   homePath,
   onClear,
   agentNote,
+  startsIn,
+  agentLabel,
+  describeSince,
+  startInstead,
+  onEnterStart,
 }: DescribeSectionProps) {
+  // "Runs in" → Browse… (one session) or the list's "tasks start in" →
+  // Browse…: the same floating picker window every path field opens (never a
+  // browser dialog: Electron has none). A click fills the picker; "Use this
+  // folder", ✕ and Escape all leave the folder last clicked, as Done did.
+  useFolderPickerWhile(runBrowse, () => ({
+    title: runMode ? "Pick the folder the tasks start in" : "Pick the folder it runs in",
+    device,
+    start: repoPath || homePath || "",
+    selected: repoPath,
+    anchor: document.querySelector<HTMLElement>("#new-run-repo, #new-describe-folder"),
+    onSelect: (p) => folderDo({ t: "user-set", path: p }),
+    onPick: (p) => {
+      folderDo({ t: "user-set", path: p });
+      setRunBrowse(false);
+    },
+    onCancel: () => setRunBrowse(false),
+  }));
   /* The one-sentence door, the whole of page 1 because it is the widest of
      the three ways to fill this form in (a sentence, a template chip, or by
      hand) and comes first as the least specific. It wears .new-templates so
@@ -583,6 +616,7 @@ export function DescribeSection({
           // Enter was pressed and the sentence would stop being
           // selectable while the user waits to see what it produced.
           readOnly={describing}
+          data-tour="new-task"
           placeholder="e.g. fix the login bug in acme-api"
           onChange={(e) => {
             setDescribe(e.target.value);
@@ -598,15 +632,14 @@ export function DescribeSection({
               e.stopPropagation();
               return;
             }
-            // Enter here means "read this", never "create a session". This
-            // input sits inside <form id="new-form" onSubmit={submit}>, so
-            // without the preventDefault a sentence nobody has resolved
-            // yet becomes a create in whatever folder the suggestion
-            // pre-fill happened to leave behind. stopPropagation keeps the
-            // modal root's Ctrl+Enter handler out of it.
+            // Enter here is Start — the sentence as the task, in the folder
+            // the "Runs in" line shows. Never the form's submit: this input
+            // sits inside <form id="new-form" onSubmit={submit}>, whose
+            // fields are not on screen. stopPropagation keeps the modal
+            // root's Ctrl+Enter handler out of it.
             e.preventDefault();
             e.stopPropagation();
-            void runDescribe("fill");
+            onEnterStart();
           }}
         />
         {describing && (
@@ -633,39 +666,20 @@ export function DescribeSection({
           </button>
         )}
       </div>
-      {/* Each button said on its face, for somebody who has never opened
-          this dialog: Create session starts NOW, from the words as typed, in
-          the folder named here — no waiting on the agent; Review details
-          first is the one that has the agent read the sentence. */}
+      {/* Where Start runs, as ONE line under the box: the folder is a real
+          picker (recent folders + Browse…), the branch is shown, and
+          "change" opens the full form. Nothing about the quick path is
+          hidden in a paragraph any more. */}
       {!runMode && (
       <>
-      <p className="nf-describe-help" id="new-describe-help">
-        <b>Create session</b>{" "}
-        {repoPath.trim() ? (
-          <>
-            starts it now in{" "}
-            <code className="nf-starts-in" title={repoPath.trim()}>
-              {leafName(repoPath.trim())}
-            </code>
-            , with what you typed as its task.
-          </>
-        ) : (
-          <>needs a folder — it opens the form with what you typed as the task.</>
-        )}{" "}
-        <b>Review details first</b> has your agent pick the folder, name and options, and shows
-        them to you before anything starts.
-      </p>
-      {/* Two examples rather than none: the placeholder can only show
-          one shape and the box accepts three — an existing project, a
-          brand-new one, and a request for somewhere separate to work. A
-          user who cannot tell which of those is allowed types the safest
-          thing they can think of and never finds the other two. */}
-      <p className="nf-describe-eg">
-        Examples:{" "}
-        <code>start a new project called invoice-parser</code>
-        {" · "}
-        <code>add metrics to billing, in a worktree</code>
-      </p>
+      <StartsInLine
+        repoPath={repoPath}
+        suggestions={suggestions}
+        folderDo={folderDo}
+        onBrowse={() => setRunBrowse(true)}
+        startsIn={startsIn}
+        onChange={fillFormInstead}
+      />
       {!batch && (
         /* Work that starts from somewhere else — a ticket, a PR, an issue —
            lives in Intake; the draft here waits for you. */
@@ -745,32 +759,15 @@ export function DescribeSection({
         splitBox={null}
       />
       )}
-      {runMode && runBrowse && (
-        // The list's "tasks start in" → Browse…: the same inline
-        // folder browser the Folder field uses (inline: Electron has
-        // no browser dialogs). Picking a folder fills the picker.
-        <div className="rt-browse" data-run-browse="" ref={runBrowseRef}>
-          <div className="rt-browse-head">
-            <span>Pick the folder the tasks start in</span>
-            <button type="button" className="rt-browse-done" onClick={() => setRunBrowse(false)}>
-              Done
-            </button>
-          </div>
-          <FolderBrowser
-            device={device}
-            initialPath={repoPath || homePath || ""}
-            selected={repoPath}
-            onSelect={(p) => folderDo({ t: "user-set", path: p })}
-            onPick={(p) => {
-              folderDo({ t: "user-set", path: p });
-              setRunBrowse(false);
-            }}
-          />
-        </div>
-      )}
       {planNoteShown && (
         <p className="nf-describe-note" aria-live="polite">
           {planNoteShown}
+        </p>
+      )}
+      {describing && !runMode && (
+        <p className="nf-describe-wait" id="new-describe-wait" role="status">
+          Asking {agentLabel} to fill in the details… <Elapsed since={describeSince} />{" "}
+          <span className="muted">(up to {Math.round(DESCRIBE_CAP_MS / 1000)} s)</span>
         </p>
       )}
       {planError && (
@@ -779,13 +776,15 @@ export function DescribeSection({
           {describeFailed && !runMode && (
             <>
               {" "}
+              {/* ONE way on: start it anyway, where the line above says. With
+                  no folder to start in, the form is where one gets picked. */}
               <button
                 type="button"
                 id="new-describe-fallback"
                 className="nf-fallback"
-                onClick={fillFormInstead}
+                onClick={repoPath.trim() ? startInstead : fillFormInstead}
               >
-                Fill the form with what I typed
+                {repoPath.trim() ? "Start it in " + leafName(repoPath.trim()) + " instead" : "Pick a folder…"}
               </button>
             </>
           )}
@@ -794,5 +793,70 @@ export function DescribeSection({
       {newFolderRow}
       {agentNote}
     </div>
+  );
+}
+
+/** Page 1's "Runs in [folder ▾] · own branch `me/…` · change" — the whole of
+ * where Start goes, on one line. The folder is a real picker: the server's
+ * recent folders (only ones a session was started in) and the rest of its
+ * suggestions, then Browse…, which opens the inline folder browser. */
+function StartsInLine({
+  repoPath,
+  suggestions,
+  folderDo,
+  onBrowse,
+  startsIn,
+  onChange,
+}: {
+  repoPath: string;
+  suggestions: RepoSuggestion[];
+  folderDo: Dispatch<FolderAction>;
+  onBrowse(): void;
+  startsIn: ReactNode;
+  onChange(): void;
+}) {
+  const path = repoPath.trim();
+  const groups = SUGGEST_SOURCES.map((g) => ({
+    label: g.key === "recent" ? "Recent folders" : g.label,
+    items: suggestions.filter((s) => s.source === g.key),
+  })).filter((g) => g.items.length > 0);
+  const known = suggestions.some((s) => s.path === path);
+  return (
+    <p className="nf-starts-line" id="new-describe-help">
+      Runs in{" "}
+      <select
+        id="new-describe-folder"
+        className="nf-folder-chip"
+        data-tour="new-folder"
+        aria-label="Folder it runs in"
+        title={path || "Pick the folder it runs in"}
+        value={path}
+        onChange={(e) => {
+          if (e.target.value === BROWSE_VALUE) {
+            onBrowse();
+            return;
+          }
+          folderDo({ t: "user-set", path: e.target.value });
+        }}
+      >
+        {!path && <option value="">Pick a folder…</option>}
+        {path && !known && <option value={path}>{"📁 " + leafName(path)}</option>}
+        {groups.map((g) => (
+          <optgroup key={g.label} label={g.label}>
+            {g.items.map((s) => (
+              <option key={s.path} value={s.path} title={s.path}>
+                {(s.is_git ? "📦 " : "📁 ") + (s.name || leafName(s.path))}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+        <option value={BROWSE_VALUE}>Browse…</option>
+      </select>
+      {startsIn}
+      {" · "}
+      <button type="button" className="linklike" id="new-describe-change" onClick={onChange}>
+        change
+      </button>
+    </p>
   );
 }

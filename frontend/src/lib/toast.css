@@ -1,0 +1,39 @@
+/* The toast's action button (lib/toast.ts `action`): the one thing to press,
+   instead of the whole toast being the click target. The toast itself is
+   styled in NewSessionDialog.css (#cs-toast) and ConnBanner.css (.clickable). */
+#cs-toast.has-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px 6px 14px;
+  pointer-events: auto;
+  /* `left: 50%` would otherwise shrink-wrap a long name into half the window. */
+  width: max-content;
+  max-width: calc(100vw - 32px);
+}
+
+#cs-toast .cs-toast-act {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid rgba(var(--accent-rgb), 0.55);
+  border-radius: 6px;
+  background: rgba(var(--accent-rgb), 0.14);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#cs-toast .cs-toast-act:hover {
+  background: rgba(var(--accent-rgb), 0.26);
+}
+
+#cs-toast .cs-toast-act:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Faded out = gone: no tab stop on an invisible button. */
+#cs-toast:not(.show) .cs-toast-act {
+  visibility: hidden;
+}

@@ -1,3 +1,121 @@
+/* Connect GitHub (ConnectGitHub.tsx) and the login terminals it shares a look
+   with: the GitHub CLI sign-in, an agent's sign-in (AgentSignIn.tsx) and the
+   installer (InstallTerminal.tsx) — all import this sheet. */
+
+/* A CLI's login screen is drawn for a dark terminal: Claude Code's
+   highlighted option ("✔ Dark mode") is light cyan, invisible on the light
+   theme's white. These windows show a CLI's own prompts, so they are always
+   dark, whatever the app's theme. xterm's DOM renderer paints the default
+   colours from a generated sheet, hence !important. */
+.login-term-dark,
+.login-term-dark .xterm,
+.login-term-dark .xterm-viewport,
+.login-term-dark .xterm-scrollable-element,
+.login-term-dark .xterm-screen {
+  background-color: #0f1117 !important;
+}
+
+.login-term-dark .xterm-rows {
+  color: #d7dae3 !important;
+}
+
+/* The window's title stays on one line ("Sign in to GitHub" wrapped). */
+#gh-signin-dialog .ws-head h2,
+#signin-dialog .ws-head h2 {
+  white-space: nowrap;
+}
+
+/* What the gh terminal will ask, in order, under the window's head. */
+.gh-cli-steps {
+  margin: 6px 0 8px;
+  padding-left: 20px;
+  font-size: 13px;
+}
+
+.gh-cli-steps li + li {
+  margin-top: 2px;
+}
+
+/* "✓ Connected as @x" + Done. */
+.gh-connected-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.gh-connected-row .gh-connected {
+  margin: 0;
+}
+
+/* "Other ways to connect ▸" — the gh CLI route, folded under the token
+   path when the device flow isn't configured. */
+.gh-other-ways {
+  margin-top: 8px;
+}
+
+.gh-other-ways > summary {
+  cursor: pointer;
+  font-size: 13px;
+}
+
+/* "Check I can push": the repo it checks, said before the click, and on a
+   failure the one command that fixes it in a Copy box. */
+.gh-push-target {
+  font-size: 12px;
+}
+
+.gh-push-fix {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+  flex-basis: 100%;
+  grid-column: 1 / -1;
+}
+
+.gh-push-fix code {
+  padding: 3px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  background: var(--panel-2, rgba(127, 127, 127, 0.14));
+}
+
+.gh-push-fix .test-btn {
+  flex: none;
+  width: auto;
+}
+
+/* The commit-identity block's heading reads like the steps' headings. */
+.gh-identity .gh-step-title {
+  display: block;
+  margin-bottom: 4px;
+}
+
+/* The install window's next step after a success. */
+.install-next {
+  margin: 6px 0 8px;
+}
+
+/* The one next action in these windows (outside the checklist, whose own
+   sheet styles .setup-primary): Sign in after an install, Done after a
+   GitHub sign-in. */
+.install-next .setup-primary,
+.gh-connected-row .setup-primary {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.install-next .setup-primary:hover,
+.gh-connected-row .setup-primary:hover {
+  filter: brightness(1.1);
+}
 /* Basic vs advanced Settings (settingsMode.tsx).
 
    The switch sits at the foot of the nav, pushed to the bottom of the column
@@ -634,6 +752,69 @@
 .setup-checklist .agent-card .conn-row {
   background: var(--panel);
 }
+
+/* The Setup modal's Close sits top-right, like every other dialog's (it
+   followed the title because the head has no status line to push it). */
+#setup-panel-dlg .ws-head #setup-close {
+  margin-left: auto;
+}
+
+/* Step ①'s first paint before anything is known: the install row's shape,
+   not an empty card that says "Checking…". */
+.setup-skel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.setup-skel-btn,
+.setup-skel-line {
+  display: inline-block;
+  height: 30px;
+  width: 168px;
+  border-radius: 6px;
+  background: var(--panel-2, rgba(127, 127, 127, 0.14));
+  animation: setup-skel-pulse 1.4s ease-in-out infinite;
+}
+
+.setup-skel-line {
+  height: 12px;
+  width: 120px;
+}
+
+.setup-skel-note {
+  flex-basis: 100%;
+  font-size: 12px;
+}
+
+@keyframes setup-skel-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .setup-skel-btn,
+  .setup-skel-line {
+    animation: none;
+  }
+}
+
+/* "Optional, later": one line pointing at Settings → Your phone. */
+.setup-later-row {
+  margin: 6px 0 0;
+  font-size: 13px;
+}
+
+.setup-later-title {
+  font-weight: 600;
+}
+
+/* "Show my session →" then the quiet "or start another". */
+.setup-new-another {
+  font-size: 13px;
+}
 /* Getting-started hint callout. Uses the accent tint so it reads as a friendly
    nudge, not a warning. Inline in the layout flow — see Hint.tsx. */
 
@@ -718,6 +899,192 @@
 .hint.hint-footer {
   margin: 0 0 8px;
 }
+/* The page-level coach tour (onboarding/CoachTour.tsx): a ring on a live
+   control and a card beside it. Fixed to the viewport and portalled to <body>:
+   above every open .modal (they carry no z-index; the top bar is 60, the old
+   welcome card 200) and below the bell's dropdown, the shortcuts sheet, toasts
+   and the connection banner (3000+). The layer and ring never take a click —
+   what the ring points at stays usable; only the card does. The Map's
+   contained tour keeps its own .mt-* rules (grid/CodeMapTab.css). */
+
+.coach-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2500;
+  pointer-events: none;
+}
+
+.coach-ring {
+  position: fixed;
+  border: 2px solid var(--accent);
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--accent) 24%, transparent),
+    0 0 0 9999px rgba(0, 0, 0, 0.22);
+  transition:
+    left 200ms ease,
+    top 200ms ease,
+    width 200ms ease,
+    height 200ms ease;
+}
+
+.coach-card {
+  position: fixed;
+  width: min(320px, calc(100vw - 16px));
+  box-sizing: border-box;
+  pointer-events: auto;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 12px 14px 10px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
+  outline: none;
+  animation: coach-in 160ms ease-out;
+}
+
+.coach-card:focus-visible {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent),
+    0 14px 40px rgba(0, 0, 0, 0.45);
+}
+
+@keyframes coach-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.coach-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.coach-step {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.coach-skip {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.coach-skip:hover {
+  color: var(--text);
+}
+
+.coach-card h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.coach-body {
+  margin: 0 0 10px;
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+}
+
+.coach-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.coach-dots {
+  display: inline-flex;
+  gap: 4px;
+  margin-right: auto;
+}
+
+.coach-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.coach-dots i.on {
+  background: var(--accent);
+}
+
+.coach-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 12px;
+  border-radius: 6px;
+  line-height: 1.4;
+}
+
+.coach-btn:hover:enabled {
+  border-color: var(--accent);
+}
+
+.coach-btn.on {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.coach-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* The "?" in a dialog header (onboarding/TourButton.tsx): replays that
+   dialog's tour. Quiet until hovered, sized to sit beside Close. */
+.tour-btn {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font: 600 12px/1 inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tour-btn:hover,
+.tour-btn:focus-visible {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .coach-card {
+    animation: none;
+  }
+
+  .coach-ring {
+    transition: none;
+  }
+}
 /* A ticketing source's repo list (RepoListField.tsx): one row per repo — the
    URL, then (with two or more) its optional hint and a Remove. */
 .tk-repo-row {
@@ -749,6 +1116,41 @@
 
 .tk-repo-row {
   row-gap: 4px;
+}
+/* "Search settings…" results: the label, and under it one small line saying
+   what is behind it (settingsSearch.ts `sub`). The box and row chrome live
+   with the rest of the nav in screens/screens.css. */
+.set-search-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.set-search-title {
+  color: var(--text);
+}
+
+.set-search-sub {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--muted);
+}
+/* Help (the tours and the hints switch) sits LAST on General, after the
+   Advanced fold: its divider goes above it rather than below (the shared
+   .onboarding-block rule in SettingsDialog.css draws one underneath, from
+   when it led the screen). */
+.onboarding-block.general-help {
+  padding-top: var(--set-rhythm, 24px);
+  padding-bottom: 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+}
+
+/* Basic mode renders no fold, so Help is all General shows: no rule over
+   nothing. */
+.set-screen > .onboarding-block.general-help:first-child {
+  padding-top: 0;
+  border-top: 0;
 }
 /* "Tailscale on this device" (TailscaleCard.tsx). Reuses .sl-snippet,
    .sl-admin-link and .qr-card from mobileLogs.css. */
@@ -905,6 +1307,63 @@
 .ts-app-qr svg {
   width: 120px;
   height: 120px;
+}
+
+/* Settings → Your phone: four rows, each with its own live ✓/✗ (Mobile.tsx). */
+.mobile-steps {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mobile-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.mobile-row.st-fail {
+  border-color: var(--warn, #d08a1e);
+}
+
+.mobile-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.mobile-row-n {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.mobile-row-glyph.st-ok {
+  color: var(--ok, #2f9e5b);
+}
+
+.mobile-row-glyph.st-fail {
+  color: var(--warn, #d08a1e);
+}
+
+.mobile-row-body {
+  margin: 6px 0 0 18px;
+}
+
+.mobile-row-body p {
+  margin: 0 0 6px;
+}
+
+.mobile-fix {
+  margin: 4px 0 6px;
+}
+
+.mobile-ts-details > summary {
+  cursor: pointer;
+  font-size: 12px;
 }
 /* Settings → Your devices ("Your devices"). Rows are a dot + name/status stack +
    buttons pinned right, the same shape as the sidebar's device rows, so a
@@ -1445,7 +1904,8 @@
 .gh-token-fold > .gh-steps {
   margin-top: 10px;
 }
-/* The welcome walkthrough card. Rides the shared .modal overlay. */
+/* The welcome card (one card, then the coach-mark Welcome tour). Rides the
+   shared .modal overlay. */
 
 #welcome-tour {
   z-index: 200;
@@ -1453,15 +1913,8 @@
 
 .wt-card {
   position: relative;
-  width: min(520px, calc(100vw - 40px));
-  /* Constant size across every slide — the body flexes to absorb length
-     differences so the card never resizes as you page through. Sized off the
-     tallest slide ("3. PR review", the only one with both a long body and a
-     Set up now button) with ~20px to spare: at 440px it needed 394px of a
-     320px content box and scrolled. Widening the body to 48ch did most of the
-     work — it took that slide from 394px to 350px — so if a future slide
-     overflows, re-measure before reaching for more height. */
-  height: 490px;
+  width: min(460px, calc(100vw - 32px));
+  box-sizing: border-box;
   max-height: calc(100vh - 40px);
   display: flex;
   flex-direction: column;
@@ -1500,9 +1953,8 @@
   color: var(--text);
 }
 
-/* Centered content region — holds the head, body and (optional) setup button as
-   one group and vertically centers them, so the card looks balanced at its fixed
-   height regardless of how much text a slide has. Scrolls if a slide overflows. */
+/* The logo, title and two lines as one centred group; scrolls on a very
+   short window rather than pushing the button off the card. */
 .wt-content {
   flex: 1;
   min-height: 0;
@@ -1543,11 +1995,15 @@
 }
 
 .wt-body {
-  margin: 0;
+  margin: 0 auto;
   max-width: 48ch;
   font-size: 13.5px;
   line-height: 1.6;
   color: var(--muted);
+}
+
+.wt-body + .wt-body {
+  margin-top: 8px;
 }
 
 .wt-body b {
@@ -1564,68 +2020,12 @@
   color: var(--text);
 }
 
-/* Secondary CTA on setup slides — jumps straight to the relevant Settings
-   screen. Sits between the body and the progress dots. */
-.wt-setup {
-  align-self: center;
-  margin-top: 16px;
-  padding: 6px 14px;
-  background: color-mix(in srgb, var(--accent) 15%, var(--panel));
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
-  border-radius: 8px;
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.wt-setup:hover {
-  background: color-mix(in srgb, var(--accent) 25%, var(--panel));
-}
-
-/* Footer group — dots + nav, pinned at the bottom of the fixed-height card. */
+/* The one button, centred under the two lines. */
 .wt-foot {
   flex: none;
-  padding-top: 16px;
-}
-
-.wt-dots {
+  padding-top: 22px;
   display: flex;
   justify-content: center;
-  gap: 7px;
-  margin-bottom: 16px;
-}
-
-.wt-dot {
-  width: 7px;
-  height: 7px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: var(--border);
-  cursor: pointer;
-  transition: background 120ms, transform 120ms;
-}
-
-.wt-dot:hover {
-  background: var(--muted);
-}
-
-.wt-dot.active {
-  background: var(--accent);
-  transform: scale(1.25);
-}
-
-.wt-nav {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.wt-nav-end {
-  display: flex;
-  gap: 8px;
 }
 
 .wt-btn {
@@ -1646,19 +2046,9 @@
   filter: brightness(1.08);
 }
 
-.wt-btn.ghost {
-  background: transparent;
-  border-color: var(--border);
-  color: var(--text);
-}
-
-.wt-btn.ghost:hover:not(:disabled) {
-  background: var(--panel-2);
-}
-
-.wt-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
+.wt-btn.wt-go {
+  min-width: 140px;
+  padding: 9px 22px;
 }
 
 @layer tokens, base, components, theme;
@@ -2296,13 +2686,14 @@ body #mf-winctl {
   justify-content: flex-start;
 }
 
-/* The menu carries New, Intake, Verify (once it has something to check),
-   Settings and the palette's icon. The type and the spacing stay tighter than
+/* The menu carries New, Intake, Verify and Schedule (once the calm first hour
+   lets them on), Settings, a ⋯ when a narrow window folds some of those (see
+   .tb-folded at the end), and the palette's icon. The type and the spacing stay tighter than
    the rest of the app — here, on #topbar button, on .tb-item and on #new-btn,
    which must all move together or the row goes ragged.
-   The bar must stay ONE line at the narrowest window anyone actually uses: it is
-   fixed and full-width, so an item that wraps does not push anything down, it
-   disappears under the edge of the window. 11px is the floor — these are the
+   The bar stays ONE line at any width: it is fixed and full-width, so an item
+   that wraps does not push anything down, it disappears under the edge of the
+   window — which is why a narrow bar folds instead. 11px is the floor — these are the
    app's primary navigation and the next notch down stops reading as a label. */
 #topbar .tb-menu {
   display: flex;
@@ -2484,26 +2875,73 @@ body #mf-winctl {
   position: relative;
 }
 
-
-/* A phone-narrow window: the wordmark has no room left beside the menu and
-   got clipped to "Mi". The menu is the bar's job; the name steps aside. */
-@media (max-width: 560px) {
-  #topbar .tb-brand {
-    display: none;
-  }
+/* A narrow window: the bar measures itself and folds (fitTopBar in TopBar.tsx)
+   — the wordmark steps aside first, then Settings, Schedule and Verify move,
+   right to left, into one ⋯ before the palette icon. Measured rather than a
+   list of breakpoints: the words' widths move with the font, a badge, the mac
+   lights' gap. display:none (not visibility) so a folded button has no box —
+   the tours' target lookup skips it, and nothing can be tabbed to under ⋯. */
+#topbar .tb-menu .tb-folded,
+#topbar .tb-brand.tb-folded {
+  display: none;
 }
 
-/* Narrower still (a browser tab squeezed to a side): the worded items close
-   up rather than pushing the palette icon past the edge — the bar is fixed
-   and never wraps, so whatever doesn't fit is simply gone. */
-@media (max-width: 520px) {
-  #topbar #new-btn.tb-new,
-  #topbar #intake-btn,
-  #topbar #verify-btn,
-  #topbar #schedule-btn,
-  #topbar #settings-btn {
-    padding: 0 5px;
-  }
+/* ⋯ is the palette icon's twin (.tb-item, a 15px monochrome glyph); the count
+   it carries for the items folded into it rides after the glyph the way
+   Verify's rides after its word. */
+#topbar .tb-more {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+#topbar #more-btn[aria-expanded="true"] {
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+
+/* The folded items as rows. App furniture, not bar chrome: the --app-* tokens
+   opt out of the bar's region hue (styles/tokens.css), the way the bell's
+   panel does, and no-drag so a click in it is a click in the Electron shell. */
+#topbar .tb-more-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 70;
+  min-width: 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px;
+  background: var(--app-panel, var(--panel));
+  border: 1px solid var(--app-border, var(--border));
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38);
+  -webkit-app-region: no-drag;
+}
+
+#topbar .tb-more-menu .tb-more-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 9px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--app-text, var(--text));
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+#topbar .tb-more-menu .tb-more-item:hover,
+#topbar .tb-more-menu .tb-more-item:focus-visible {
+  background: var(--app-panel-2, var(--panel-2));
+  outline: none;
 }
 }
 
@@ -2638,6 +3076,15 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
    the right (status-bar-style help affordance). */
 #sidebar-footer .foot-row.foot-tools {
   justify-content: space-between;
+}
+
+/* The footer keeps its own height: on a short window (a 420-px drawer under
+   the usage, Assistant and Database bars) the column squeezed it to ~70 px
+   and its rows overflowed onto each other — the Customize hint painted over
+   the Setup chip, the one way back to the checklist. The session list above
+   is the part that gives way. */
+#sidebar-footer {
+  flex: none;
 }
 
 /* Setup: the doctor's warning + the "Setup 3/5" chip. Either can be absent;
@@ -4848,6 +5295,15 @@ p.set-hint {
 #addon-bars .addon-toggle:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+
+/* Round 5: the Tickets bar's switch wears its name (r5-intake #2) — an
+   unlabelled toggle beside "Tickets" read as "turn tickets off". */
+#mindflock-bar .dc-sw-label {
+  font-size: 11px;
+  color: var(--muted, #888);
+  align-self: center;
 }
 }
 
@@ -9474,6 +9930,13 @@ button.stagechip.bgchip.bg-stuck:hover {
   font: inherit;
   cursor: pointer;
 }
+
+/* The New tour's ring target around ⋯ — a box of its own (not display:
+   contents, which has no rect to ring), shaped like the button it holds. */
+.pane-menu-hook {
+  display: inline-flex;
+  align-items: center;
+}
 }
 
 /* 140 */
@@ -13918,11 +14381,25 @@ button.ct-chip:hover {
   border-color: var(--red);
 }
 
-/* In the pane popover: tall menus scroll instead of running off the screen. */
+/* In the pane popover: the popover's max-height (PaneMoreMenu, placed by
+   lib/menuPlace) caps it at the window, and the items scroll under the
+   summary line instead of running off the screen. */
 .pane-more-menu .session-menu {
-  max-height: calc(100vh - 120px);
+  min-height: 0;
   overflow-y: auto;
   min-width: 220px;
+}
+
+/* A window too short for the whole menu (More ▸ unfolded on a laptop
+   screen): Close and Delete… stay pinned at its foot while the rest scrolls,
+   so the two ends are never below the fold. Opaque, so what scrolls under
+   them doesn't show through, and its shadow fills the row popover's bottom
+   padding, which would otherwise show a sliver of what scrolls under it. */
+.session-menu .sm-danger {
+  position: sticky;
+  bottom: 0;
+  background: var(--panel);
+  box-shadow: 0 4px 0 var(--panel);
 }
 }
 
@@ -16299,35 +16776,36 @@ button.ct-chip:hover {
   color: #fff;
 }
 
-/* Page 1's headline action wears what Create wears on page 2, because it IS
-   Create — the same POST, reached without the form. It cannot pick the rule
-   above up by itself: it is type="button" on purpose, since a submit here
-   would create a session from whatever the form happened to be holding rather
-   than from the plan. */
-/* Page 1's PRIMARY is "Review details first": it is what Enter does, so the
-   accent and the ↵ sit on one control. "Create session" (the same POST as
-   page 2's Create, reached without the form) is the secondary. */
-#new-describe-go {
+/* Page 1's ONE primary is Start: it is what Enter does, so the accent and the
+   ↵ sit on one control, and it wears what the form's Start wears because it
+   is the same POST reached without the form. "Let the agent set it up…" (a
+   model turn) is the secondary beside it. */
+#new-describe-start {
+  border-radius: 7px;
+  padding: 7px 14px;
+  font-size: 12px;
+  white-space: nowrap;
   background: var(--accent);
-  border-color: var(--accent);
+  border: 1px solid var(--accent);
   color: #fff;
 }
 
-#new-describe-go:hover:not(:disabled) {
+#new-describe-start:hover:not(:disabled) {
   filter: brightness(1.08);
 }
 
-#new-describe-start {
-  border-radius: 7px;
-  padding: 7px 12px;
-  font-size: 12px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
-  white-space: nowrap;
+#new-describe-start .nf-key,
+#new-create .nf-key {
+  border-color: rgba(255, 255, 255, 0.55);
 }
 
-#new-describe-start:hover:not(:disabled) {
+#new-describe-go {
+  background: var(--panel-2);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+#new-describe-go:hover:not(:disabled) {
   border-color: var(--accent);
 }
 
@@ -16761,31 +17239,6 @@ button.ct-chip:hover {
   font-size: 12.5px;
   line-height: 1.5;
   color: var(--text);
-}
-
-/* List mode → "tasks start in" → Browse…: the Folder field's own browser,
-   inline under the choices. */
-#new-form .rt-browse {
-  margin: 8px 0 4px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 10px;
-}
-
-#new-form .rt-browse-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 6px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-#new-form .rt-browse-done {
-  font: inherit;
-  font-size: 12px;
-  padding: 2px 10px;
 }
 
 /* Page 2's Prompt fold: "Manage…" is a link to Customize → Prompts, not a
@@ -17576,6 +18029,105 @@ button.ct-chip:hover {
 /* The folder Create session starts in, named in the help line. */
 .nf-describe-help .nf-starts-in {
   font-weight: 600;
+}
+
+/* Page 1's "Runs in [folder ▾] · own branch me/… · change": where Start goes,
+   on one line under the box. The folder is a real picker, sized like a chip
+   so it reads as part of the sentence. */
+.nf-starts-line {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 4px;
+}
+
+#new-form .nf-starts-line .nf-folder-chip {
+  width: auto;
+  height: 24px;
+  min-height: 0;
+  max-width: 220px;
+  padding: 0 6px;
+  line-height: 22px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+#new-form .nf-starts-line .nf-folder-chip:hover,
+#new-form .nf-starts-line .nf-folder-chip:focus-visible {
+  border-color: var(--accent);
+}
+
+.nf-starts-sub code {
+  font-size: 11.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+/* "No folder at …" — red, with its one way out. Start is off meanwhile. */
+.nf-folder-missing {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--red);
+}
+
+.nf-folder-missing .nf-fallback {
+  margin-left: 4px;
+}
+
+.nf-folder-missing-err {
+  color: var(--red);
+}
+
+/* Who is doing what while "Let the agent set it up…" waits, and for how long
+   at most. */
+.nf-describe-wait {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.nf-tpl-hint {
+  margin: -4px 0 6px;
+  font-size: 11.5px;
+}
+
+/* More options → Advanced: a fold inside the fold, set in a little. */
+.nf-deep {
+  margin-top: 6px;
+}
+
+.nf-save-tpl-wrap {
+  margin: 2px 0;
+}
+
+#new-form #new-save-tpl {
+  font-size: 12px;
+  align-self: flex-start;
+}
+
+/* Start can't go (the folder isn't there): it says so, greyed. */
+#new-form #new-create:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.nf-skip-perms {
+  margin-top: 4px;
 }
 }
 
@@ -18953,6 +19505,113 @@ button.ct-chip:hover {
 .sch-empty .tpl-run:hover {
   background: var(--accent-deep);
 }
+
+/* --- The template editor, round 5 ---------------------------------------- */
+
+/* Save never sits below the fold: the footer sticks to the bottom of the
+   scrolling list while the form is taller than it. The negative margins
+   cover the card's own bottom padding so nothing peeks under it. */
+.tpl-card-editing .tpl-row-actions.tpl-sticky {
+  position: sticky;
+  bottom: -14px;
+  z-index: 1;
+  margin: 0 -18px -14px;
+  padding: 12px 18px 14px;
+  background: var(--panel-2);
+  border-radius: 0 0 10px 10px;
+}
+
+/* Folder wraps FolderField so "Add one" can ring it (and the tour can find
+   it); it takes the field's place in the Folder + Agent row. */
+.tpl-editor .nf-quick .tpl-folder-wrap {
+  display: flex;
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.tpl-editor .nf-quick .tpl-folder-wrap > * {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tpl-folder-wrap.tpl-flash {
+  border-radius: 9px;
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  animation: tpl-flash 1.6s ease-out 1;
+}
+
+@keyframes tpl-flash {
+  0% { outline-color: transparent; }
+  25% { outline-color: var(--accent); }
+}
+
+/* "Use: 📦 repo" — one line of one-click folders under Folder. */
+.tpl-editor .tpl-use {
+  margin-top: -6px;
+}
+
+.tpl-agent-missing,
+.tpl-gh-needed {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tpl-agent-missing {
+  margin-top: -6px;
+}
+
+/* Fast-track: the select, its one-line helper above it, and the GitHub note. */
+.tpl-editor .rt-ctl.tpl-fast-track {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* The 24-hour time field: five characters wide, not a full input. */
+.tpl-schedule-when #tpl-at {
+  box-sizing: content-box;
+  width: 5.5ch;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Schedule… / Change schedule: the compact row inside the card. */
+.tpl-sched-row {
+  padding: 10px 12px 8px;
+  border-radius: 9px;
+  border: 1px solid var(--accent);
+  background: var(--panel);
+}
+
+.tpl-sched-editor {
+  gap: 8px;
+}
+
+.tpl-sched-editor .tpl-schedule-when,
+.tpl-sched-editor .tpl-cron-preview {
+  padding-left: 0;
+}
+
+.tpl-sched-editor .tpl-row-actions {
+  padding-top: 8px;
+}
+
+.tpl-row-actions button.tpl-stop {
+  margin-right: auto;
+}
+
+/* A run's session: a link while it exists, "(closed)" after. */
+.tpl-session-link {
+  font: inherit;
+}
+
+/* New's template chip says its time on its face: "⏰ 07:30". */
+.new-templates .nt-act.nt-sched .nt-sched-at {
+  font-variant-numeric: tabular-nums;
+}
 }
 
 /* 186 — after
@@ -19184,6 +19843,51 @@ body.conn-lost #cs-errors {
 }
 
 /* 200 */
+
+@layer components{
+/* The toast's action button (lib/toast.ts `action`): the one thing to press,
+   instead of the whole toast being the click target. The toast itself is
+   styled in NewSessionDialog.css (#cs-toast) and ConnBanner.css (.clickable). */
+#cs-toast.has-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px 6px 14px;
+  pointer-events: auto;
+  /* `left: 50%` would otherwise shrink-wrap a long name into half the window. */
+  width: max-content;
+  max-width: calc(100vw - 32px);
+}
+
+#cs-toast .cs-toast-act {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid rgba(var(--accent-rgb), 0.55);
+  border-radius: 6px;
+  background: rgba(var(--accent-rgb), 0.14);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#cs-toast .cs-toast-act:hover {
+  background: rgba(var(--accent-rgb), 0.26);
+}
+
+#cs-toast .cs-toast-act:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Faded out = gone: no tab stop on an invisible button. */
+#cs-toast:not(.show) .cs-toast-act {
+  visibility: hidden;
+}
+}
+
+/* after ConnBanner.css, whose
+   #cs-toast.clickable the action toast sits next to */
 
 @layer components{
 /* --------------------------------------------------------------------------- *
@@ -20100,6 +20804,29 @@ button.linklike {
   text-overflow: ellipsis;
 }
 
+/* A row with a subtitle (the Settings rows): label on top, one small muted
+   line under it saying what is behind it. */
+.palette-item .palette-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.palette-item .palette-sub {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette-item.selected .palette-sub {
+  color: rgba(255, 255, 255, 0.85);
+}
+
 .palette-item .palette-hint {
   flex: none;
   font-size: 10px;
@@ -20113,6 +20840,23 @@ button.linklike {
 .palette-item.selected .palette-hint {
   color: #fff;
   border-color: rgba(255, 255, 255, 0.5);
+}
+
+/* A hint in words, not a key: plain muted text, no keycap — a description
+   in a keycap read as a keyboard shortcut. */
+.palette-item .palette-hint.is-desc {
+  border: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: 11px;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-item.selected .palette-hint.is-desc {
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .palette-empty {
@@ -22480,6 +23224,195 @@ button.linklike {
 .vf-repo-heads {
   gap: 8px;
 }
+
+/* Round 5 ------------------------------------------------------------------ */
+
+/* The Auto-start tab's three switches + Pause all: one home for auto-start. */
+.ik-autostart-switches {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: none;
+}
+.ik-autostart-switches-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.ik-autostart-switches-head > .set-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.ik-autostart-switches .ik-switch {
+  padding: 8px 14px;
+}
+.ik-autostart-setup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 12px;
+}
+
+/* Where a tab's switch used to be: one line and the way to the switches. */
+.ik-autostart-link {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 8px 14px;
+}
+.ik-autostart-link strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.ik-autostart-next {
+  color: var(--muted);
+}
+
+/* The empty GitHub PRs / issues tab: Connect → Pick a repo → Turn on. */
+.ik-setup-card {
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: var(--panel);
+  flex: none;
+}
+.ik-setup-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ik-setup-step {
+  display: grid;
+  grid-template-columns: 18px 130px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.ik-setup-label {
+  font-weight: 600;
+  color: var(--text);
+}
+.ik-setup-step.done .ik-step-num {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}
+.ik-setup-done {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.ik-setup-body .set-hint {
+  margin: 0;
+}
+
+/* The source editor's three parts — the add flow's steps, as tabs. */
+.ik-edit-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+.ik-edit-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 3px 10px 3px 4px;
+  cursor: pointer;
+}
+.ik-edit-step:hover {
+  color: var(--text);
+}
+.ik-edit-step.cur {
+  color: var(--text);
+  font-weight: 600;
+  border-color: var(--border);
+  background: var(--panel-2);
+}
+.ik-edit-step.cur .ik-step-num {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.ik-edit-step .ik-source-pill {
+  font-weight: 400;
+}
+
+/* "Create a token ↗" under a tracker's API token. */
+.ik-token-link {
+  font-size: 12px;
+  align-self: flex-start;
+}
+
+/* What the closed Advanced fold holds, on its summary line. */
+.tk-advanced-sum {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* Step 3's carried-over Test verdict. */
+.ik-add-note {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.ik-add-note.ok {
+  color: var(--green);
+}
+
+/* 420 px: the stepper drops under the title instead of running into Cancel,
+   and the tab strip's hidden scrollbar gets a fade so a clipped tab reads as
+   "more this way". */
+@media (max-width: 600px) {
+  .ik-add-head {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .ik-add-head > .ik-steps {
+    order: 3;
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .ik-step + .ik-step::before {
+    width: 12px;
+    margin: 0 6px;
+  }
+  #intake-tabs {
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    padding-right: 24px;
+  }
+  .ik-setup-step {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+  .ik-setup-body {
+    grid-column: 2;
+  }
+}
 }
 
 /* 255 — after
@@ -22910,11 +23843,29 @@ button.linklike {
   white-space: nowrap;
 }
 
-/* Fix… on a failed row: the danger colour, as an outline — it starts a
-   session, it is not the row's main call to action. */
-.vf-acts > .vf-fix {
+/* "Fix in a new session" on a failed row: a normal-weight button (round 5,
+   m3 — the pale red outline read as disabled), red text so it belongs to the
+   failure it answers. */
+.vf-acts > .vf-fix,
+.vf-fix-step {
   color: var(--red);
-  border-color: color-mix(in srgb, var(--red) 50%, var(--border));
+  background: var(--panel-2);
+  border: 1px solid color-mix(in srgb, var(--red) 70%, var(--border));
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.vf-acts > .vf-fix:hover:not(:disabled),
+.vf-fix-step:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 12%, var(--panel-2));
+}
+
+/* Check now beside the row's main button (M3): a plain secondary. */
+.vf-acts > .vf-checknow {
+  font-size: 12px;
+  padding: 5px 12px;
+  white-space: nowrap;
 }
 
 /* A primary button that cannot act must not look like one. `.btn-primary` has
@@ -23270,10 +24221,17 @@ button.linklike {
    which put the commonest act a third of the way across the row. */
 .vf-step-actions {
   display: grid;
-  grid-template-columns: auto auto auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 5px;
   margin-top: 3px;
+}
+
+/* The three answers, one track — still at the same x on every step. */
+.vf-answers {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 /* Pass / Fail / Blocked. Neutral at rest on purpose: three coloured buttons on
@@ -24118,10 +25076,11 @@ button.linklike {
   font-family: var(--mono, monospace);
 }
 
-/* "Fix this…" beside a failed step — the next move, where the failure is. */
+/* "Fix in a new session" beside a failed step — the next move, where the
+   failure is. */
 .vf-fix-step {
   font-size: 11px;
-  padding: 1px 8px;
+  padding: 2px 8px;
 }
 
 /* New checklist: two rows, ask the agent / write steps yourself. */
@@ -24178,6 +25137,23 @@ button.linklike {
 
   .vf-plan-tally {
     margin-left: 0;
+  }
+
+  /* The receipt, Undo, note and Fix stack UNDER the answers (m12): beside
+     them at 420px they clipped to "fail · agent ·" and Fix wrapped under the
+     step's ⋯. */
+  .vf-step-actions > .vf-step-tail {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .vf-step-actions > .vf-menu {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .vf-acts {
+    flex-wrap: wrap;
   }
 }
 
@@ -24287,6 +25263,44 @@ button.vchip:focus-visible {
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: 10px;
   text-align: center;
+}
+
+/* The tour's handle on a sidebar row's verdict (data-tour="verify-chip"):
+   a box the size of the chip, and nothing at all when there is no chip. */
+.vchip-hook {
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.vchip-hook:empty {
+  display: none;
+}
+
+/* "Not written yet" is grey: nothing about the change is known (M4). */
+.vchip[data-tone="wait"] {
+  color: var(--muted);
+}
+
+/* The ⓘ's last line, and a fix session's name on a failed card. */
+.vf-replay-tour {
+  display: block;
+  margin-top: 6px;
+}
+
+.vf-fixing {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.vf-empty .vf-empty-new {
+  margin-top: 6px;
+}
+
+/* "+ Add repository" inside its fold: a button, not a full-width bar. */
+.vf-watch-fold #vf-repo-add-btn {
+  align-self: flex-start;
+  width: auto;
 }
 }
 
@@ -26979,6 +27993,204 @@ button.infotip-btn:focus-visible {
 /* 320 — after
    smallDialogs.css, whose `.ws-head button` pill the icon must not wear */
 
+@layer components{
+/* The floating folder picker (FolderPickerWindow.tsx).
+
+   Above every dialog (a .modal has no z-index of its own; the tallest thing a
+   dialog draws is ~70) and under the toast (#cs-toast, 1000), so a "Folder
+   created" toast still reads over it. Position and size come inline from the
+   component; `resize: both` gives it a corner handle. */
+.fpw {
+  position: fixed;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  resize: both;
+}
+
+.fpw:focus {
+  outline: none;
+}
+
+.fpw:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The title bar is the drag handle. touch-action: none, or a finger drag on a
+   phone scrolls the page instead of moving the window. */
+.fpw-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 6px 6px 6px 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+.fpw-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fpw-close {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.fpw-close:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.fpw-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+}
+
+/* The New form's inline browser is capped at 262px; in a window the list takes
+   whatever height the window has. */
+.fpw #repo-browser {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+
+.fpw #rb-list {
+  flex: 1;
+  min-height: 0;
+}
+
+.fpw .rb-hint {
+  flex: none;
+}
+
+.fpw #rb-error:empty {
+  display: none;
+}
+
+.fpw-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* The folder "Use this folder" takes — its END, which is the part that names
+   it, so a long path loses its head, not its leaf. */
+.fpw-chosen {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.fpw-use {
+  flex: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.fpw-use:hover:not(:disabled) {
+  background: var(--accent-deep);
+}
+
+.fpw-use:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.fpw-use:focus-visible,
+.fpw-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+}
+
+/* 330 — after
+   NewSessionDialog.css, whose #repo-browser the window stretches to its height */
+
+@layer components{
+/* A typed path with its "📁 Browse…" button (PathField.tsx): the box takes the
+   row, the button keeps its natural width beside it, both the same height. */
+.path-field {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.path-field > input {
+  flex: 1;
+  min-width: 0;
+}
+
+.path-field-browse {
+  flex: none;
+  border-radius: 7px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.path-field-browse:hover {
+  border-color: var(--accent);
+}
+
+.path-field-browse:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+}
+
+/* 340 */
+
 @layer theme{
 /* ---------------------------------------------------------------------------
  * Region hues — the one file that knows how a multi-color theme set reaches
@@ -27259,6 +28471,11 @@ button.infotip-btn:focus-visible {
 
 .light .infotip code {
   background: var(--app-panel-2, var(--panel-2));
+}
+
+/* The folder picker window's shadow is tuned for the dark page. */
+.light .fpw {
+  box-shadow: 0 12px 36px rgba(20, 24, 40, 0.18);
 }
 }
 

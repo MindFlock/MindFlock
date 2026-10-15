@@ -566,3 +566,11 @@
   cursor: default;
 }
 
+
+/* Round 5: the Tickets bar's switch wears its name (r5-intake #2) — an
+   unlabelled toggle beside "Tickets" read as "turn tickets off". */
+#mindflock-bar .dc-sw-label {
+  font-size: 11px;
+  color: var(--muted, #888);
+  align-self: center;
+}

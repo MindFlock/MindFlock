@@ -369,3 +369,66 @@
 .setup-checklist .agent-card .conn-row {
   background: var(--panel);
 }
+
+/* The Setup modal's Close sits top-right, like every other dialog's (it
+   followed the title because the head has no status line to push it). */
+#setup-panel-dlg .ws-head #setup-close {
+  margin-left: auto;
+}
+
+/* Step ①'s first paint before anything is known: the install row's shape,
+   not an empty card that says "Checking…". */
+.setup-skel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.setup-skel-btn,
+.setup-skel-line {
+  display: inline-block;
+  height: 30px;
+  width: 168px;
+  border-radius: 6px;
+  background: var(--panel-2, rgba(127, 127, 127, 0.14));
+  animation: setup-skel-pulse 1.4s ease-in-out infinite;
+}
+
+.setup-skel-line {
+  height: 12px;
+  width: 120px;
+}
+
+.setup-skel-note {
+  flex-basis: 100%;
+  font-size: 12px;
+}
+
+@keyframes setup-skel-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .setup-skel-btn,
+  .setup-skel-line {
+    animation: none;
+  }
+}
+
+/* "Optional, later": one line pointing at Settings → Your phone. */
+.setup-later-row {
+  margin: 6px 0 0;
+  font-size: 13px;
+}
+
+.setup-later-title {
+  font-weight: 600;
+}
+
+/* "Show my session →" then the quiet "or start another". */
+.setup-new-another {
+  font-size: 13px;
+}

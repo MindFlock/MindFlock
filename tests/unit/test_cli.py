@@ -55,7 +55,13 @@ class TestDoctorCommand:
                 ),
             ],
         )
+        # uv is an optional row: folded into one line by default, listed (with
+        # its fix) under --all.
         assert cli.main(["doctor"]) == 0
+        out = capsys.readouterr().out
+        assert "Optional: 1 check (1 needs attention) — mindflock doctor --all" in out
+        assert "astral.sh" not in out
+        assert cli.main(["doctor", "--all"]) == 0
         out = capsys.readouterr().out
         assert "✓" in out and "!" in out
         assert "fix: curl https://astral.sh/uv | sh" in out
@@ -84,19 +90,21 @@ class TestDoctorCommand:
         monkeypatch.setattr(doctor, "run_checks", lambda: [doctor.CHECKS_BY_ID["gh"]()])
         assert cli.main(["doctor"]) == 0
         out = capsys.readouterr().out
-        assert "✗" not in out
+        rows = out.split("\n", 1)[1]  # past the title line's glyph legend
+        assert "✗" not in rows
         assert "- GitHub CLI (gh)" in out
         assert "pushing uses plain git" in out
-        assert "All required dependencies look good." in out
+        assert "look good" not in out
+        assert out.rstrip().splitlines()[-1].startswith("Next: ")
 
     def test_help_does_not_list_gh_as_required(self):
         # The subcommand help is the first place anyone learns what MindFlock
         # needs; gh belongs in the optional parenthetical, not the required list.
         # Collapse whitespace: argparse wraps the subcommand help column.
         help_text = " ".join(cli._build_parser().format_help().split())
-        assert "check git/tmux/agent-CLI (plus optional gh, uv, tailscale)" in help_text
-        assert "optional gh" in help_text
-        assert "git/tmux/gh" not in help_text
+        doctor_line = help_text.split("doctor ", 1)[1].split("Sessions:", 1)[0]
+        assert "git, tmux, your agent and its sign-in" in doctor_line
+        assert "gh" not in doctor_line
 
 
 class TestDoctorFix:
@@ -136,7 +144,8 @@ class TestDoctorFix:
         assert ran == [("sudo apt install tmux", True)]
         out = capsys.readouterr().out
         assert "tmux 3.4" in out
-        assert "All required dependencies look good." in out
+        assert "look good" not in out
+        assert out.rstrip().splitlines()[-1].startswith("Next: ")
 
     def test_declined_fix_runs_nothing_and_keeps_exit_one(
         self, monkeypatch, capsys, tty_stdin
@@ -165,8 +174,9 @@ class TestDoctorFix:
     def test_everything_missing_installs_after_one_question(
         self, monkeypatch, capsys, tty_stdin
     ):
-        # Three missing tools, ONE prompt, ONE script run — the old loop asked
-        # (and ran sudo apt) once per tool.
+        # Two missing tools, ONE prompt, ONE script run — the old loop asked
+        # (and ran sudo apt) once per tool. The optional sandbox (bwrap) stays
+        # out of it: no optional extra rides along on Enter = yes (F4).
         missing = [
             Check("tmux", "tmux", "fail", cmd="x", pkg="tmux", install=True),
             Check("bwrap", "sandbox", "warn", cmd="x", pkg="bubblewrap", install=True),
@@ -200,11 +210,12 @@ class TestDoctorFix:
         assert cli.main(["doctor", "--fix"]) == 0
         assert len(prompts) == 1 and "Install all 2?" in prompts[0]
         assert len(ran) == 1
-        assert "sudo apt-get install -y tmux bubblewrap" in ran[0]
+        assert "sudo apt-get install -y tmux" in ran[0]
+        assert "bubblewrap" not in ran[0]
         assert "npm install -g @openai/codex" in ran[0]
         out = capsys.readouterr().out
         assert "/usr/bin/codex" in out
-        assert "All required dependencies look good." in out
+        assert "look good" not in out
 
     def test_declining_the_install_runs_nothing(self, monkeypatch, capsys, tty_stdin):
         missing = [Check("tmux", "tmux", "fail", cmd="x", pkg="tmux", install=True)]
@@ -280,7 +291,8 @@ class TestDoctorFix:
             lambda cmd, shell: type("P", (), {"returncode": 0})(),
         )
         monkeypatch.setattr("builtins.input", lambda prompt="": "y")
-        cli.main(["doctor", "--fix"])
+        # Another CLI's sign-in is an optional row: offered under --all only.
+        cli.main(["doctor", "--fix", "--all"])
         out = capsys.readouterr().out
         assert "to come back here" in out
         assert probed == [("agent-auth-codex", "codex", row.label)]
@@ -351,7 +363,8 @@ class TestDoctorFix:
         )
         monkeypatch.setattr(doctor, "CHECKS_BY_ID", {})  # id absent → no re-probe
         monkeypatch.setattr("builtins.input", lambda prompt="": "y")
-        assert cli.main(["doctor", "--fix"]) == 1  # original fail unchanged
+        # An unknown id is an optional row: only `--fix --all` offers it.
+        assert cli.main(["doctor", "--fix", "--all"]) == 1  # original fail unchanged
         assert ran == ["do-thing"]  # the fix still ran
         assert "still not healthy" not in capsys.readouterr().out
 
@@ -371,6 +384,279 @@ class TestDoctorFix:
         # A broken re-probe must not kill the loop or the command.
         assert cli.main(["doctor", "--fix"]) == 1
         assert "still not healthy" not in capsys.readouterr().out
+
+
+class TestDoctorGroupsAndSummary:
+    """F2 + F6: headings, a legend, optional rows folded, and ONE next-action
+    line that counts the agent's sign-in as required."""
+
+    _ROWS = [
+        Check("git", "git", "ok", "git version 2.43.0"),
+        Check("tmux", "tmux", "ok", "tmux 3.4"),
+        Check(
+            "agent-cli",
+            "agent CLI (claude)",
+            "ok",
+            "/usr/bin/claude",
+            provider="claude",
+        ),
+        Check(
+            "agent-auth",
+            "agent auth (claude)",
+            "warn",
+            "CLI is installed but no sign of a login was found",
+            "run `claude` once to log in",
+            cmd="claude",
+            provider="claude",
+        ),
+        Check(
+            "git-identity", "git identity", "warn", "user.name not set", "git config …"
+        ),
+        Check("tailscale", "tailscale", "warn", "on Windows only", "curl … | sh"),
+        Check("tailnet-mtu", "tailnet MTU", "warn", "too small", "sudo ip link …"),
+        Check("bwrap", "peer sandbox (bubblewrap)", "ok", "/usr/bin/bwrap"),
+        Check("cache-seeds", "warm cache seeds", "info", "none configured"),
+    ]
+
+    def test_grouped_with_a_legend_and_optional_folded(self, monkeypatch, capsys):
+        monkeypatch.setattr(doctor, "run_checks", lambda *a: list(self._ROWS))
+        assert cli.main(["doctor"]) == 0
+        out = capsys.readouterr().out
+        first = out.splitlines()[0]
+        assert first.startswith("MindFlock doctor")
+        for glyph in ("✓", "!", "✗", "-"):
+            assert glyph in first
+        run_at = out.index("Needed to run an agent")
+        ship_at = out.index("Needed to ship")
+        assert run_at < out.index("  ✓ tmux") < ship_at < out.index("git identity")
+        assert "Optional: 4 checks (2 need attention) — mindflock doctor --all" in out
+        # Folded means folded: no MTU sermon, no sudo line on a first look.
+        assert "tailnet MTU" not in out and "sudo ip link" not in out
+        assert "agent sign-in (claude)" in out
+        assert "fix: run claude, sign in, then type /exit" in out
+
+    def test_never_says_all_good_while_the_agent_is_signed_out(
+        self, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(doctor, "run_checks", lambda *a: list(self._ROWS))
+        cli.main(["doctor"])
+        lines = capsys.readouterr().out.rstrip().splitlines()
+        assert "look good" not in "\n".join(lines)
+        assert lines[-1] == (
+            "Next: sign in to Claude Code — run claude, sign in, then type /exit"
+        )
+        assert sum(1 for line in lines if line.startswith("Next:")) == 1
+
+    def test_missing_tools_name_doctor_fix_with_the_count(self, monkeypatch, capsys):
+        rows = [
+            Check("git", "git", "ok"),
+            Check("tmux", "tmux", "fail", "not found", pkg="tmux", install=True),
+            Check(
+                "agent-cli",
+                "agent CLI (claude)",
+                "fail",
+                "not found",
+                cmd="curl … | bash",
+                install=True,
+                provider="claude",
+            ),
+            Check("agent-auth", "agent auth (claude)", "warn", provider="claude"),
+        ]
+        monkeypatch.setattr(doctor, "run_checks", lambda *a: list(rows))
+        assert cli.main(["doctor"]) == 1
+        last = capsys.readouterr().out.rstrip().splitlines()[-1]
+        assert last == (
+            "Next: mindflock doctor --fix installs the 2 missing tools (tmux, Claude Code)"
+        )
+
+    def test_all_lists_the_optional_rows_under_their_heading(self, monkeypatch, capsys):
+        monkeypatch.setattr(doctor, "run_checks", lambda *a: list(self._ROWS))
+        cli.main(["doctor", "--all"])
+        out = capsys.readouterr().out
+        assert "\nOptional\n" in out
+        assert "tailnet MTU" in out and "fix: sudo ip link …" in out
+        assert "doctor --all" not in out
+
+    def test_a_failing_optional_row_is_never_folded_away(self, monkeypatch, capsys):
+        rows = self._ROWS + [
+            Check(
+                "local-model",
+                "local model (ollama)",
+                "fail",
+                "not running",
+                "ollama serve",
+            )
+        ]
+        monkeypatch.setattr(doctor, "run_checks", lambda *a: rows)
+        cli.main(["doctor"])
+        out = capsys.readouterr().out
+        assert "✗ local model (ollama)" in out
+        assert "Optional: 4 more checks" in out
+
+
+class TestFixLoopGroups:
+    """F4: optional extras never ride along on Enter = yes."""
+
+    @pytest.fixture()
+    def tty_stdin(self, monkeypatch):
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+
+    _TS = Check(
+        "tailscale",
+        "tailscale",
+        "warn",
+        "on Windows only",
+        cmd="curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up",
+    )
+    _GH = Check("gh", "GitHub CLI (gh)", "warn", "not signed in", cmd="gh auth login")
+
+    def test_plain_fix_never_offers_an_optional_extra(
+        self, monkeypatch, capsys, tty_stdin
+    ):
+        monkeypatch.setattr(doctor, "run_checks", lambda *a: [self._TS])
+        monkeypatch.setattr(
+            "builtins.input", lambda prompt="": pytest.fail("must not offer tailscale")
+        )
+        cli.main(["doctor", "--fix"])
+
+    def test_fix_all_offers_it_with_enter_meaning_no(
+        self, monkeypatch, capsys, tty_stdin
+    ):
+        monkeypatch.setattr(doctor, "run_checks", lambda *a: [self._TS])
+        prompts = []
+        monkeypatch.setattr(
+            "builtins.input", lambda prompt="": prompts.append(prompt) or ""
+        )
+        monkeypatch.setattr(
+            cli.subprocess, "run", lambda *a, **k: pytest.fail("Enter must not install")
+        )
+        cli.main(["doctor", "--fix", "--all"])
+        assert len(prompts) == 1 and prompts[0].rstrip().endswith("[y/N]")
+        assert "skipped" in capsys.readouterr().out
+
+    def test_a_ship_row_asks_with_enter_meaning_no(
+        self, monkeypatch, capsys, tty_stdin
+    ):
+        monkeypatch.setattr(doctor, "run_checks", lambda *a: [self._GH])
+        prompts = []
+        monkeypatch.setattr(
+            "builtins.input", lambda prompt="": prompts.append(prompt) or ""
+        )
+        cli.main(["doctor", "--fix"])
+        assert prompts and prompts[0].rstrip().endswith("[y/N]")
+
+    def test_the_init_loop_is_the_run_group_only(self, monkeypatch, capsys, tty_stdin):
+        prompts = []
+        monkeypatch.setattr(
+            "builtins.input", lambda prompt="": prompts.append(prompt) or "n"
+        )
+        cli._fix_checks([self._TS, self._GH], groups=("run",))
+        assert prompts == []
+
+
+class TestAbandonedSignIn:
+    """F11: an agent closed before signing in gets [R]etry / [s]kip, not a PATH
+    diagnosis."""
+
+    _AUTH = Check(
+        "agent-auth",
+        "agent auth (claude)",
+        "warn",
+        "no sign of a login",
+        "run `claude` once to log in",
+        cmd="claude",
+        provider="claude",
+    )
+
+    @pytest.fixture()
+    def wired(self, monkeypatch):
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(doctor, "run_checks", lambda *a: [self._AUTH])
+        ran = []
+        monkeypatch.setattr(
+            cli.subprocess,
+            "run",
+            lambda cmd, shell: (ran.append(cmd), type("P", (), {"returncode": 143})())[
+                1
+            ],
+        )
+        return ran
+
+    def test_skip_says_how_to_sign_in_later(self, monkeypatch, capsys, wired):
+        probes = iter([self._AUTH])
+        monkeypatch.setattr(
+            doctor, "CHECKS_BY_ID", {"agent-auth": lambda: next(probes)}
+        )
+        answers = iter(["", "s"])  # Enter = run claude; then skip
+        prompts = []
+        monkeypatch.setattr(
+            "builtins.input", lambda prompt="": prompts.append(prompt) or next(answers)
+        )
+        cli.main(["doctor", "--fix"])
+        out = capsys.readouterr().out
+        assert wired == ["claude"]
+        assert (
+            "Claude Code closed before you signed in. [R]etry / [s]kip:" in prompts[1]
+        )
+        assert "still not healthy" not in out and "new shell" not in out
+        assert "command exited" not in out
+        assert "skipped — sign in later: run claude, sign in, then type /exit" in out
+
+    def test_retry_runs_it_again_and_a_sign_in_ticks(self, monkeypatch, capsys, wired):
+        ok = Check(
+            "agent-auth", "agent auth (claude)", "ok", "signed in", provider="claude"
+        )
+        probes = iter([self._AUTH, ok])
+        monkeypatch.setattr(
+            doctor, "CHECKS_BY_ID", {"agent-auth": lambda: next(probes)}
+        )
+        answers = iter(["", "r"])
+        monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+        cli.main(["doctor", "--fix"])
+        out = capsys.readouterr().out
+        assert wired == ["claude", "claude"]
+        assert "✓ signed in to Claude Code" in out
+
+
+class TestHelpLayout:
+    """F10: grouped commands, no ==SUPPRESS== row, a start-here epilog."""
+
+    def test_groups_in_order_and_the_epilog(self):
+        text = cli._build_parser().format_help()
+        heads = ["Get started:", "Sessions:", "This computer:", "Advanced:"]
+        idx = [text.index(h) for h in heads]
+        assert idx == sorted(idx)
+        assert text.rstrip().endswith("New here? Run mindflock init")
+        started = text.split("Get started:", 1)[1].split("Sessions:", 1)[0]
+        assert [
+            ln.split()[0] for ln in started.strip().splitlines() if ln[:3].strip()
+        ] == [
+            "init",
+            "serve",
+            "doctor",
+        ]
+
+    def test_git_credential_is_hidden_everywhere(self):
+        text = cli._build_parser().format_help()
+        assert "SUPPRESS" not in text
+        assert "git-credential" not in text
+        assert "{" not in text.split("\n", 1)[0]  # no brace list in the usage
+
+    def test_every_visible_command_is_listed_once(self):
+        parser = cli._build_parser()
+        text = parser.format_help()
+        sub = parser._subparsers._group_actions[0]
+        for name in sub.choices:
+            if name == "git-credential":
+                continue
+            rows = [ln for ln in text.splitlines() if ln.startswith("  %s " % name)]
+            assert len(rows) == 1, name
+
+    def test_git_credential_still_works(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(cli, "_cmd_git_credential", lambda op: seen.append(op) or 0)
+        assert cli.main(["git-credential", "get"]) == 0
+        assert seen == ["get"]
 
 
 class TestWebDepsGuard:

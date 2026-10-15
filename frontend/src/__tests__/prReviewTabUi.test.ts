@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import { SRC, dropComments, norm } from "./sourceText";
 import DIALOG_RAW from "../components/intake/IntakeDialog.tsx?raw";
 import PRS_RAW from "../components/intake/PullRequestsTab.tsx?raw";
+import AUTO_RAW from "../components/intake/AutoStartSwitches.tsx?raw";
 import REPO_SOURCES_RAW from "../components/intake/RepoSources.tsx?raw";
 import REPO_USES_RAW from "../components/intake/repoUses.ts?raw";
 import KIT_RAW from "../components/intake/kit.tsx?raw";
@@ -34,6 +35,8 @@ const code = (raw: string) => norm(dropComments(raw));
 const ALL = Object.values(SRC).map(code).join("\n");
 
 const PRS = code(PRS_RAW);
+/** The switch moved to the Auto-start tab with the other two (round 5). */
+const AUTO = code(AUTO_RAW);
 const REPOS = code(REPO_SOURCES_RAW);
 const USES = code(REPO_USES_RAW);
 const TICKETS = code(TICKETS_RAW);
@@ -55,15 +58,16 @@ describe("the Pull requests tab", () => {
     expect(code(DIALOG_RAW)).toContain('label: "GitHub PRs"');
     // Named for what it does: it addresses review comments on YOUR PRs; it
     // never reviews anyone's (round-2: "Automated review" read as the opposite).
-    expect(PRS).toContain('label="Auto-address review comments"');
+    expect(AUTO).toContain('label="PR review comments"');
     expect(PRS).not.toMatch(/Automated review|Begin review|auto review/);
     // Legacy id, kept on the work panel for addon CSS that targeted the screen.
     expect(code(DIALOG_RAW)).toContain('legacyId: "pr-review-block"');
     expect(code(DIALOG_RAW)).toContain("id={panelId(t)}");
     expect(code(DIALOG_RAW)).toContain("t.legacyId || \"intake-tabpanel-\" + t.key");
     // Explicit on/off (pause without deleting repos) + a status line.
-    expect(PRS).toContain('inputId="gh-pr-enabled"');
-    expect(PRS).toContain('statusId="gh-pr-status"');
+    expect(AUTO).toContain('inputId="gh-pr-enabled"');
+    expect(AUTO).toContain('statusId="gh-pr-status"');
+    expect(PRS).toContain('<AutoStartLink kind="prs" gotoTab={gotoTab} />');
     expect(PRS).toContain('id="gh-skip-authors"');
     expect(PRS).toContain('field="min_age_minutes"');
     expect(PRS).toContain('field="poll_interval_seconds"');
@@ -94,7 +98,7 @@ describe("the Pull requests tab", () => {
   });
 
   it("wires the watched repos and the toggle", () => {
-    expect(PRS).toContain("gh-pr-enabled");
+    expect(AUTO).toContain("gh-pr-enabled");
     expect(PRS).toContain("gh-skip-authors");
     expect(PRS).toContain("skip_authors");
     // The owner/name guard lives once, in the add flow.
@@ -107,8 +111,11 @@ describe("the Pull requests tab", () => {
     // No "● Active / ‖ Paused" status line under the switch any more; the
     // switch's only subtitle is the one state a switch can't show.
     expect(ALL).not.toContain("Paused —");
-    expect(PRS).toContain('"Auto-address review comments off"');
-    expect(PRS).toContain('"Add a repository first — + Add source"');
+    expect(AUTO).toContain('"Auto-address review comments off"');
+    expect(AUTO).toContain('"Add a repository first — on the GitHub PRs tab"');
+    // An empty tab is one setup card, not the wizard plus a second Connect.
+    expect(PRS).toContain("<GithubSetupCard");
+    expect(PRS).toContain("const showAdd = !!adding;");
   });
 
   it("styles the feature and the repo cards", () => {

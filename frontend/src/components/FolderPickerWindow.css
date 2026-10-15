@@ -1,0 +1,152 @@
+/* The floating folder picker (FolderPickerWindow.tsx).
+
+   Above every dialog (a .modal has no z-index of its own; the tallest thing a
+   dialog draws is ~70) and under the toast (#cs-toast, 1000), so a "Folder
+   created" toast still reads over it. Position and size come inline from the
+   component; `resize: both` gives it a corner handle. */
+.fpw {
+  position: fixed;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  resize: both;
+}
+
+.fpw:focus {
+  outline: none;
+}
+
+.fpw:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The title bar is the drag handle. touch-action: none, or a finger drag on a
+   phone scrolls the page instead of moving the window. */
+.fpw-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 6px 6px 6px 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+.fpw-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fpw-close {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.fpw-close:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.fpw-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+}
+
+/* The New form's inline browser is capped at 262px; in a window the list takes
+   whatever height the window has. */
+.fpw #repo-browser {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+
+.fpw #rb-list {
+  flex: 1;
+  min-height: 0;
+}
+
+.fpw .rb-hint {
+  flex: none;
+}
+
+.fpw #rb-error:empty {
+  display: none;
+}
+
+.fpw-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* The folder "Use this folder" takes — its END, which is the part that names
+   it, so a long path loses its head, not its leaf. */
+.fpw-chosen {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.fpw-use {
+  flex: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.fpw-use:hover:not(:disabled) {
+  background: var(--accent-deep);
+}
+
+.fpw-use:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.fpw-use:focus-visible,
+.fpw-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

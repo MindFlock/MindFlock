@@ -1250,9 +1250,9 @@
   // is a real model turn (~10-25s), which is long enough that a button which
   // never changes reads as a page that has hung.
   var NEW_SLOW_MS = 8000;
-  // The desktop New dialog's own words (NewSessionDialog.tsx): "Review details
-  // first" reads the sentence and shows the review, "Create session" creates.
-  var NEW_GO_LABEL = "Review details first";
+  // The desktop New dialog's own words (NewSessionDialog.tsx, round 5): "Start"
+  // starts it now; "Let the agent set it up…" reads the sentence and shows the review.
+  var NEW_GO_LABEL = "Let the agent set it up…";
   // How long a 202 has to turn into a row in the session list before we stop
   // claiming it is starting. A create answers 202 immediately and does the
   // worktree/provisioning/tmux work in a background task, so the row is usually
@@ -1456,7 +1456,7 @@
   function resetStartBtn() {
     startBusy = false;
     newStartBtn.disabled = false;
-    newStartBtn.textContent = "Create session";
+    newStartBtn.textContent = "Start";
   }
 
   // The ~-relative spelling, for DISPLAY only — mirrors session_plan._tilde and
@@ -2089,7 +2089,7 @@
     var strip = document.createElement("div");
     strip.className = "delete-strip";
     var msg = document.createElement("div");
-    msg.textContent = "Removes the worktree and branch";
+    msg.textContent = "Deletes the folder and branch, including uncommitted changes. This can't be undone — use Close to keep it.";
     var btns = document.createElement("div");
     btns.className = "delete-strip-btns";
     var cancel = document.createElement("button");

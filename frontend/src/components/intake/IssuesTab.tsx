@@ -17,7 +17,7 @@ import {
 import { SettingField, useSettings } from "../settings/useSettings";
 import { AgentPicker, useAgentChoices } from "../settings/screens/AgentPicker";
 import {
-  AutomationSwitch,
+  GithubSetupCard,
   GithubStatusLine,
   HeadAction,
   repoGroupOrder,
@@ -36,6 +36,7 @@ import {
 import { AddRepoFlow, RepoEditor, type RepoOverrides } from "./RepoSources";
 import { issueMatches } from "./search";
 import type { TabProps } from "./IntakeDialog";
+import { AutoStartLink } from "./AutoStartSwitches";
 
 interface OpenIssue {
   repo?: string;
@@ -45,6 +46,8 @@ interface OpenIssue {
   author?: string;
   created_at?: string;
   has_session?: boolean;
+  /** The session title this item starts (or started) as. */
+  session?: string;
   eligible?: boolean;
   reasons?: string[];
   /** Present when an earlier run of this issue still has its workspace here. */
@@ -54,7 +57,7 @@ interface OpenIssue {
 /** Per-device: which repo groups are collapsed (membership = collapsed). */
 const ISSUE_GROUPS_KEY = "mf_intake_issue_groups";
 
-export function IssuesTab({ focus, adding, startAdd, endAdd }: TabProps) {
+export function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProps) {
   const s = useSettings();
   const agentChoices = useAgentChoices();
   const catalog = useTicketingCatalog(true).data || [];
@@ -79,7 +82,6 @@ export function IssuesTab({ focus, adding, startAdd, endAdd }: TabProps) {
     ? gh.issue_skip_authors.join(", ")
     : gh.issue_skip_authors || "";
   const edit = useEditing(focus);
-  const [dismissed, setDismissed] = useState(false);
 
   const [skipDraft, setSkipDraft] = useState(String(skipAuthors));
   useEffect(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
@@ -123,10 +125,11 @@ export function IssuesTab({ focus, adding, startAdd, endAdd }: TabProps) {
   ).map((k) => repos.find((r) => r.toLowerCase() === k) || extraNames.get(k) || k);
   const watched = new Set(repos.map((r) => r.toLowerCase()));
 
-  const showAdd = !!adding || (!n && !dismissed);
+  // The wizard opens only when asked for ("+ Add source", or the setup card's
+  // "Pick a repo…"): an empty tab shows the setup card instead.
+  const showAdd = !!adding;
   const closeAdd = () => {
     endAdd();
-    setDismissed(true);
   };
   const addFlow = showAdd ? (
     <AddRepoFlow
@@ -196,6 +199,7 @@ export function IssuesTab({ focus, adding, startAdd, endAdd }: TabProps) {
                 }
                 meta={`by ${i.author || "?"} · ${ageText(i.created_at)}`}
                 hasSession={i.has_session}
+                session={i.session}
                 eligible={i.eligible}
                 eligibleLabel={enabled ? "will auto-start" : "auto-start off"}
                 eligibleOn={enabled}
@@ -232,7 +236,7 @@ export function IssuesTab({ focus, adding, startAdd, endAdd }: TabProps) {
                   // instead of leaving the sidebar blank until the next poll.
                   refreshInstances();
                   setTimeout(relistIssues, 5000);
-                  return { message: "Session " + (r?.title || ""), title: r?.title };
+                  return { message: r?.title ? "Session " + r.title : "Session for #" + i.number, title: r?.title };
                 }}
               />
             ))
@@ -287,26 +291,23 @@ export function IssuesTab({ focus, adding, startAdd, endAdd }: TabProps) {
         session for it, with its comments, on a fresh branch.
       </p>
 
-      <AutomationSwitch
-        label="Auto-start new issues"
-        title="Start a session on its own for each newly opened issue — your repositories are kept either way"
-        rowId="gh-issues-toggle-row"
-        inputId="gh-issues-enabled"
-        statusId="gh-issues-status"
-        checked={enabled}
-        disabled={!n}
-        onChange={(next) =>
-          saveGithub(
-            { issues_enabled: next },
-            next ? "Auto-start new issues on" : "Auto-start new issues off"
-          )
-        }
-        note={!n ? "Add a repository first — + Add source" : undefined}
-      />
-      <GithubStatusLine buttonId="gh-issue-connect-btn" needFor="issues can't be listed or started" />
+      {!n && !showAdd ? (
+        <GithubSetupCard
+          what="New issues"
+          onPickRepo={() => startAdd({ kind: "repo", uses: ["issue"] })}
+          onTurnOn={() => gotoTab("autostart")}
+        />
+      ) : (
+        <>
+          {/* The switch itself is on the Auto-start tab, beside the other two. */}
+          <AutoStartLink kind="issues" gotoTab={gotoTab} />
+          <GithubStatusLine buttonId="gh-issue-connect-btn" needFor="issues can't be listed or started" />
+        </>
+      )}
 
-      {workList}
+      {n || groupOrder.length ? workList : null}
 
+      {n ? (
       <details className="pr-advanced">
         <summary>Advanced options</summary>
         <div className="pr-advanced-body">
@@ -353,6 +354,7 @@ export function IssuesTab({ focus, adding, startAdd, endAdd }: TabProps) {
           </label>
         </div>
       </details>
+      ) : null}
     </>
   );
 }

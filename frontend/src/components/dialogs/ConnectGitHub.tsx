@@ -51,6 +51,7 @@ import { useWsTerm } from "../../lib/wsTerm";
 import { notifyConnectionsChanged } from "../settings/screens/Connections";
 import { Modal } from "../Modal";
 import "../settings/connectGitHub.css";
+import "./ConnectGitHub.css";
 
 interface PushCheck {
   ok: boolean | null;
@@ -58,11 +59,69 @@ interface PushCheck {
   message?: string;
   fix?: string;
   remote?: string;
+  repo?: string;
+}
+
+/** What "Check I can push" will ask, from GET /api/github/status
+ * (`push_target`): the remembered repo, its folder name, its origin URL. */
+interface PushTarget {
+  repo: string;
+  name: string;
+  remote: string;
+}
+
+type StatusWithTarget = GithubStatus & { push_target?: PushTarget };
+
+/** The line beside "Check I can push" before it is pressed: WHICH repo and
+ * remote it asks, so a failure is never about a repo you didn't know it meant. */
+export function pushTargetLine(t: PushTarget | null | undefined): string {
+  if (!t?.name) return "Checks your project's repo once a session has opened one — no token needed.";
+  return "Checks " + t.name + (t.remote ? " → " + t.remote : " (it has no remote called origin yet)");
+}
+
+/** A fix that is a command goes in a Copy box; prose stays prose. */
+export function isCommand(fix: string | undefined): boolean {
+  return /^(git|gh|ssh-keygen|ssh-add)\s/.test((fix || "").trim());
+}
+
+/** The dialog's one primary path, and what is folded under it:
+ *  - the device flow configured → ONE "Sign in with GitHub" button; the token
+ *    steps fold under "Or paste a token"; no gh route (the button is easier);
+ *  - not configured → the numbered token steps ARE the path; the gh CLI route
+ *    (only where gh is installed) folds under "Other ways to connect". */
+export function connectLayout(st: GithubStatus | null | undefined): {
+  primary: "device" | "token";
+  /** The token steps sit in a fold ("Or paste a token"). */
+  tokenFolded: boolean;
+  /** The gh CLI route, folded under "Other ways to connect". */
+  ghFolded: boolean;
+} {
+  const device = primaryGithubMethod(st) === "device";
+  const gh = (st?.methods || []).includes("gh") || !!st?.gh?.installed;
+  return { primary: device ? "device" : "token", tokenFolded: device, ghFolded: !device && gh };
+}
+
+/** The folder name of a repo path (the API's `repo` is absolute). */
+function repoName(path: string | undefined): string {
+  const p = (path || "").replace(/[\\/]+$/, "");
+  return p.split(/[\\/]/).pop() || p;
 }
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
+
+/** What the gh terminal asks, in the order it asks it. The server runs
+ * `gh auth login --hostname github.com --git-protocol https --web` (then
+ * `gh auth setup-git`), which still asks one question before the code. */
+export const GH_CLI_STEPS = [
+  "It asks “Authenticate Git with your GitHub credentials?” — press Enter (yes).",
+  "It shows a one-time code — copy it, then press Enter to open GitHub.",
+  "Paste the code on GitHub and approve. This window says when you're connected.",
+];
+
+/** How often the gh window re-asks whether GitHub is connected yet. */
+export const GH_SIGNIN_POLL_MS = 3000;
 
 /** `gh auth login --web` (then `gh auth setup-git`) in a real terminal. */
 function GhSignInWindow({ onClose }: { onClose(): void }) {
@@ -70,6 +129,27 @@ function GhSignInWindow({ onClose }: { onClose(): void }) {
   const state = useWsTerm(hostRef, "/api/github/gh-login-terminal", true);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  // Watch for the sign-in landing, so the window can say so (and offer Done)
+  // instead of leaving the person to guess when to close it.
+  const [login, setLogin] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    const t = window.setInterval(async () => {
+      try {
+        const st = await api<GithubStatus>("/api/github/status");
+        if (live && st.connected) {
+          setLogin(st.login || "");
+          window.clearInterval(t);
+        }
+      } catch {
+        /* the conn banner owns an unreachable server */
+      }
+    }, GH_SIGNIN_POLL_MS);
+    return () => {
+      live = false;
+      window.clearInterval(t);
+    };
+  }, []);
   const close = async () => {
     try {
       await api("/api/github/gh-login-close", { method: "POST" });
@@ -92,23 +172,45 @@ function GhSignInWindow({ onClose }: { onClose(): void }) {
       <div className="prov-login-panel">
         <div className="ws-head">
           <h2>Sign in to GitHub</h2>
-          <span className="muted">
-            {state === "streaming"
-              ? "copy the code it shows, press Enter, sign in in the browser — then close this window"
-              : state}
+          <span className={login !== null ? "signin-ok" : "muted"} id="gh-signin-status" role="status">
+            {login !== null
+              ? "✓ Connected" + (login ? " as @" + login : "") + ". You can close this window."
+              : state === "streaming"
+                ? ""
+                : state}
           </span>
-          <button type="button" id="gh-signin-close" onClick={() => void close()}>
-            Close
+          <button
+            type="button"
+            id="gh-signin-close"
+            className={login !== null ? "signin-done" : ""}
+            onClick={() => void close()}
+          >
+            {login !== null ? "Done" : "Close"}
           </button>
         </div>
-        <div className="prov-login-term" ref={hostRef} />
+        {login === null && (
+          <ol className="gh-cli-steps muted" id="gh-cli-steps">
+            {GH_CLI_STEPS.map((t) => (
+              <li key={t}>{t}</li>
+            ))}
+          </ol>
+        )}
+        <div className="prov-login-term login-term-dark" ref={hostRef} />
       </div>
     </Modal>
   );
 }
 
-export function ConnectGitHub({ onChange }: { onChange?(): void }) {
-  const [st, setSt] = useState<GithubStatus | null>(null);
+export function ConnectGitHub({
+  onChange,
+  onDone,
+}: {
+  onChange?(): void;
+  /** Shown as "Done" beside "✓ Connected as @…": the dialog's own close, so
+   * the person lands back on Setup with ④ ticked. */
+  onDone?(): void;
+}) {
+  const [st, setSt] = useState<StatusWithTarget | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
   const [flow, setFlow] = useState<GithubFlow | null>(null);
@@ -125,7 +227,7 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
 
   const load = useCallback(async () => {
     try {
-      const s = await api<GithubStatus>("/api/github/status");
+      const s = await api<StatusWithTarget>("/api/github/status");
       notifyConnectionsChanged();
       setSt(s);
       setErr("");
@@ -180,10 +282,9 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
   if (err) return <p className="error">GitHub status failed: {err}</p>;
   if (!st) return <p className="muted">Checking GitHub…</p>;
 
-  const method = primaryGithubMethod(st);
+  const layout = connectLayout(st);
+  const method = layout.primary;
   const hasDevice = method === "device";
-  /** gh can sign in here (installed, or offered by the server). */
-  const hasGh = (st.methods || []).includes("gh") || !!st.gh?.installed;
   /** Save the pasted token (GitHub checks it first), then run the Test, all
    * answered inline under step 3 — never a toast at the far edge. */
   const saveToken = () =>
@@ -295,11 +396,26 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
     <div className="connect-github" id="connect-github">
       {st.connected ? (
         <>
-          <p className="gh-connected" id="gh-connected" role="status">
-            ✓ Connected{st.login ? " as @" + st.login : ""}
-            <span className="muted"> · {st.source === "gh-cli" ? "via gh" : st.source}</span>
-            {st.user_error && <span className="error"> — {st.user_error}</span>}
-          </p>
+          <div className="gh-connected-row">
+            <p className="gh-connected" id="gh-connected" role="status">
+              ✓ Connected{st.login ? " as @" + st.login : ""}
+              <span className="muted"> · {st.source === "gh-cli" ? "via gh" : st.source}</span>
+              {st.user_error && <span className="error"> — {st.user_error}</span>}
+            </p>
+            {onDone && (
+              <button
+                type="button"
+                className="setup-primary"
+                id="gh-done"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDone();
+                }}
+              >
+                Done
+              </button>
+            )}
+          </div>
           <details className="gh-token-fold" onClick={(e) => e.stopPropagation()}>
             <summary>Use a different token</summary>
             {tokenSteps}
@@ -353,38 +469,43 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
               {tokenSteps}
             </div>
           )}
-          {!hasDevice && hasGh && (
-            <div className="setup-actions gh-cli-alt">
-              <button
-                type="button"
-                id="gh-cli-signin"
-                className="test-btn"
-                disabled={!!busy}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setGhOpen(true);
-                }}
-              >
-                Or sign in with the GitHub CLI
-              </button>
-              <span className="set-hint">opens GitHub in your browser</span>
-            </div>
+          {/* Without the device flow the token path above is THE path; the
+              gh CLI route is folded, so step 1 is the only thing in view. */}
+          {layout.ghFolded && (
+            <details className="gh-other-ways" id="gh-other-ways" onClick={(e) => e.stopPropagation()}>
+              <summary>Other ways to connect</summary>
+              <div className="setup-actions gh-cli-alt">
+                <button
+                  type="button"
+                  id="gh-cli-signin"
+                  className="test-btn"
+                  disabled={!!busy}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setGhOpen(true);
+                  }}
+                >
+                  Sign in with the GitHub CLI
+                </button>
+                <span className="set-hint">a terminal asks one question, then opens GitHub in your browser</span>
+              </div>
+            </details>
           )}
-          {hasDevice && (
+          {layout.tokenFolded && (
             <details className="gh-token-fold" onClick={(e) => e.stopPropagation()}>
               <summary>Or paste a token</summary>
               {tokenSteps}
             </details>
           )}
           <p className="muted setup-hint">
-            Lets agents open and review pull requests. Pushing works without it.
+            Needed to open and merge pull requests. Pushing works without it.
           </p>
         </>
       )}
 
       {needsIdentity(st) && (
         <div className="gh-identity" id="gh-identity">
-          <span className="set-label">Your name and email for commits</span>
+          <span className="gh-step-title">Your name and email for commits</span>
           <div className="setup-acct-row">
             <input
               className="gh-ident-name"
@@ -470,12 +591,39 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
           {busy === "push" ? "Checking…" : "Check I can push"}
         </button>
         {push ? (
-          <span className={"test-result " + (push.ok ? "ok" : push.ok === false ? "bad" : "")}>
-            {(push.ok ? "✓ " : push.ok === false ? "✗ " : "") + (push.message || "")}
-            {push.ok === false && push.fix ? " — " + push.fix : ""}
+          <span
+            className={"test-result " + (push.ok ? "ok" : push.ok === false ? "bad" : "")}
+            id="gh-push-result"
+            role="status"
+          >
+            {(push.ok ? "✓ " : push.ok === false ? "✗ " : "") +
+              (push.ok === false && push.repo && push.id !== "no_origin" ? repoName(push.repo) + ": " : "") +
+              (push.message || "")}
+            {push.ok === false && push.remote ? <span className="muted"> ({push.remote})</span> : null}
+            {push.fix && !isCommand(push.fix) ? " — " + push.fix : ""}
           </span>
         ) : (
-          <span className="set-hint">Asks your repository's remote, with git — no token needed.</span>
+          <span className="set-hint gh-push-target" id="gh-push-target">
+            {pushTargetLine(st.push_target)}
+          </span>
+        )}
+        {push?.fix && isCommand(push.fix) && (
+          <span className="gh-push-fix" id="gh-push-fix">
+            <span className="set-hint">
+              {push.id === "no_origin" ? "Add one — your GitHub repository's address goes at the end:" : "Fix:"}
+            </span>
+            <code>{push.fix}</code>
+            <button
+              type="button"
+              className="test-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                void copyText(push.fix || "").then((ok) => toast(ok ? "Copied — paste it into a terminal" : "Copy failed"));
+              }}
+            >
+              Copy
+            </button>
+          </span>
         )}
         {push?.ok === false && push.id === "https_auth" && st.connected && (
           <button
@@ -550,12 +698,12 @@ export function ConnectGitHubDialog() {
       <div className="connect-github-panel">
         <div className="ws-head">
           <h2>Connect GitHub</h2>
-          <span className="muted">so agents can open and review pull requests</span>
+          <span className="muted">so agents can open and merge pull requests</span>
           <button type="button" id="connect-github-close" onClick={() => setOpen(false)}>
             Close
           </button>
         </div>
-        <ConnectGitHub />
+        <ConnectGitHub onDone={() => setOpen(false)} />
       </div>
     </Modal>
   );

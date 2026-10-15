@@ -377,14 +377,19 @@ describe("list mode: tasks start in ANY folder", () => {
     expect(runRepoOptions("/home/u/elsewhere/proj", sug)[0]).toEqual({ value: "/home/u/elsewhere/proj", label: "proj" });
   });
 
-  it("Browse… opens the inline folder browser, never a prompt", () => {
+  it("Browse… opens the floating folder picker, never a prompt", () => {
     const src = dialogSrc;
     expect(src).toContain("BROWSE_VALUE");
-    const at = src.indexOf("{runMode && runBrowse && (");
+    // Round 5: one session's "Runs in" → Browse… opens the same picker every
+    // path field opens — the floating window (lib/folderPicker), no longer an
+    // inline browser under the line.
+    const at = src.indexOf("useFolderPickerWhile(runBrowse,");
     expect(at).toBeGreaterThan(0);
-    const block = src.slice(at, src.indexOf("{planNoteShown && (", at));
-    expect(block).toContain("<FolderBrowser");
-    expect(block).not.toMatch(/window\.prompt|\bprompt\(|confirm\(/);
+    const block = src.slice(at, src.indexOf("}));", at));
+    expect(block).toContain('folderDo({ t: "user-set", path: p })');
+    expect(block).toContain("setRunBrowse(false)");
+    expect(src).not.toContain("<FolderBrowser");
+    expect(src).not.toMatch(/window\.prompt|\bprompt\(|confirm\(/);
   });
 });
 

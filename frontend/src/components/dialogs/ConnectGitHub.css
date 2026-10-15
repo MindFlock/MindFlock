@@ -1,0 +1,118 @@
+/* Connect GitHub (ConnectGitHub.tsx) and the login terminals it shares a look
+   with: the GitHub CLI sign-in, an agent's sign-in (AgentSignIn.tsx) and the
+   installer (InstallTerminal.tsx) — all import this sheet. */
+
+/* A CLI's login screen is drawn for a dark terminal: Claude Code's
+   highlighted option ("✔ Dark mode") is light cyan, invisible on the light
+   theme's white. These windows show a CLI's own prompts, so they are always
+   dark, whatever the app's theme. xterm's DOM renderer paints the default
+   colours from a generated sheet, hence !important. */
+.login-term-dark,
+.login-term-dark .xterm,
+.login-term-dark .xterm-viewport,
+.login-term-dark .xterm-scrollable-element,
+.login-term-dark .xterm-screen {
+  background-color: #0f1117 !important;
+}
+
+.login-term-dark .xterm-rows {
+  color: #d7dae3 !important;
+}
+
+/* The window's title stays on one line ("Sign in to GitHub" wrapped). */
+#gh-signin-dialog .ws-head h2,
+#signin-dialog .ws-head h2 {
+  white-space: nowrap;
+}
+
+/* What the gh terminal will ask, in order, under the window's head. */
+.gh-cli-steps {
+  margin: 6px 0 8px;
+  padding-left: 20px;
+  font-size: 13px;
+}
+
+.gh-cli-steps li + li {
+  margin-top: 2px;
+}
+
+/* "✓ Connected as @x" + Done. */
+.gh-connected-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.gh-connected-row .gh-connected {
+  margin: 0;
+}
+
+/* "Other ways to connect ▸" — the gh CLI route, folded under the token
+   path when the device flow isn't configured. */
+.gh-other-ways {
+  margin-top: 8px;
+}
+
+.gh-other-ways > summary {
+  cursor: pointer;
+  font-size: 13px;
+}
+
+/* "Check I can push": the repo it checks, said before the click, and on a
+   failure the one command that fixes it in a Copy box. */
+.gh-push-target {
+  font-size: 12px;
+}
+
+.gh-push-fix {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+  flex-basis: 100%;
+  grid-column: 1 / -1;
+}
+
+.gh-push-fix code {
+  padding: 3px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  background: var(--panel-2, rgba(127, 127, 127, 0.14));
+}
+
+.gh-push-fix .test-btn {
+  flex: none;
+  width: auto;
+}
+
+/* The commit-identity block's heading reads like the steps' headings. */
+.gh-identity .gh-step-title {
+  display: block;
+  margin-bottom: 4px;
+}
+
+/* The install window's next step after a success. */
+.install-next {
+  margin: 6px 0 8px;
+}
+
+/* The one next action in these windows (outside the checklist, whose own
+   sheet styles .setup-primary): Sign in after an install, Done after a
+   GitHub sign-in. */
+.install-next .setup-primary,
+.gh-connected-row .setup-primary {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.install-next .setup-primary:hover,
+.gh-connected-row .setup-primary:hover {
+  filter: brightness(1.1);
+}

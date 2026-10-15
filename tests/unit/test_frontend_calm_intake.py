@@ -159,14 +159,17 @@ def test_github_tabs_have_no_repository_cards_under_the_work():
     for name in ("PullRequestsTab.tsx", "IssuesTab.tsx"):
         code = re.sub(r"\s+", " ", _code(_INTAKE / name))
         assert "RepoSourceList" not in code, name
-        assert "const showAdd = !!adding || (!n && !dismissed);" in code, name
+        # Round 5: the wizard never opens by itself on an empty tab — one
+        # setup card (Connect GitHub → pick a repo → turn on) leads instead.
+        assert "const showAdd = !!adding;" in code, name
         assert '<WorkListPanel key="work"' in code, name
         # Order: the add flow, the switch, the GitHub line, the work, Advanced.
         order = [
             "{addFlow}",
-            "<AutomationSwitch",
+            "<GithubSetupCard",
+            "<AutoStartLink",
             "<GithubStatusLine",
-            "{workList}",
+            "? workList : null",
             "<summary>Advanced options</summary>",
         ]
         idx = [code.index(o) for o in order]
@@ -178,12 +181,15 @@ def test_verify_puts_its_repositories_on_one_line_above_the_work():
         r"\s+", " ", _code(_SRC / "components" / "dialogs" / "VerifyDialog.tsx")
     )
     assert "workFirst" not in code
+    # Round 5 (B2): the add flow lives in the bottom fold, "Watch a GitHub
+    # repository for every push", after New checklist — never above the work.
     order = [
-        "{addFlow}",
         "<VerifySwitch",
         "{sources}",
         "{checklists}",
         "<VerifyNewChecklist",
+        "Watch a GitHub repository for every push",
+        "{showAdd ? ( addFlow )",
     ]
     idx = [code.index(o) for o in order]
     assert idx == sorted(idx), idx
@@ -319,7 +325,8 @@ def test_general_leads_with_getting_started_and_the_mcp_has_its_own_screen():
     src = _read(_SETTINGS / "screens" / "General.tsx")
     body = src[src.index("export function General(") :]
     body = body[: body.index("\n}\n")]
-    assert body.index("<GettingStarted />") < body.index('"set-section-title">General<')
+    # Round 5 follow-up: Tours live at the BOTTOM of General, under "Help".
+    assert body.index("<Tours />") > body.index('<AdvancedFold id="general-advanced"')
     # The MCP rows moved out of General's fold to Agents → Agent orchestration.
     assert "Agent orchestration (MindFlock MCP)" not in src
     assert "AgentMcpRows" not in src

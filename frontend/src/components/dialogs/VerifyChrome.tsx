@@ -26,6 +26,8 @@ import {
   planName,
 } from "./verify";
 import { PlanRow } from "./VerifyPlan";
+import { startEmptyChecklist } from "./verify/emptyChecklist";
+import { useUi } from "../../state/store";
 
 /** Per-device UI state, same reasoning as Intake's group toggles (kit.tsx):
  * "I collapsed Checked on this laptop" is not a property of the flock.
@@ -238,6 +240,7 @@ export function VerifyNewChecklist({
   const [busy, setBusy] = useState(false);
   const [picked, setPicked] = useState("");
   const [pickedPlan, setPickedPlan] = useState("");
+  const [starting, setStarting] = useState(false);
   const pickable = targets.filter((t) => !t.reason);
   // With no session to pick, Another branch… is the only way in.
   const other = picked === ANOTHER_BRANCH || !pickable.length;
@@ -268,7 +271,33 @@ export function VerifyNewChecklist({
   const target = pickable.some((t) => t.title === picked)
     ? picked
     : pickable[0]?.title || "";
-  const planTarget = plans.some((p) => p.id === pickedPlan) ? pickedPlan : plans[0]?.id || "";
+  // "Write steps yourself" offers BOTH: a branch with no checklist yet (Start
+  // an empty checklist — no agent, works on a branch with no commits too) and
+  // a checklist that exists (Add a step). It used to list only the second, so
+  // with no checklist anywhere it was disabled — "ask the agent for one first".
+  const fresh = targets.filter((t) => !t.planId && (!t.reason || t.noCommits));
+  const writeValues = [
+    ...fresh.map((t) => "new:" + t.title),
+    ...plans.map((p) => "plan:" + p.id),
+  ];
+  const writeTarget = writeValues.includes(pickedPlan) ? pickedPlan : writeValues[0] || "";
+  const writeNew = writeTarget.startsWith("new:");
+  const writeId = writeTarget.slice(writeTarget.indexOf(":") + 1);
+
+  async function write() {
+    if (!writeTarget) return;
+    if (!writeNew) {
+      onReveal(writeId, true);
+      return;
+    }
+    setStarting(true);
+    try {
+      const id = await startEmptyChecklist(writeId);
+      if (id) onReveal(id, true);
+    } finally {
+      setStarting(false);
+    }
+  }
 
   async function ask() {
     if (other ? !repo || !branch.trim() : !target) return;
@@ -302,7 +331,7 @@ export function VerifyNewChecklist({
                 {t.branch}
                 {t.title !== t.branch ? " — " + t.title : ""}
                 {t.closed ? " (closed)" : ""}
-                {t.reason ? " · " + t.reason : ""}
+                {t.reason ? " — " + t.reason : ""}
               </option>
             ))}
             <option value={ANOTHER_BRANCH}>Another branch…</option>
@@ -370,30 +399,47 @@ export function VerifyNewChecklist({
           <label htmlFor="vf-write-pick">Write steps yourself</label>
           <select
             id="vf-write-pick"
-            value={planTarget}
-            disabled={!plans.length}
+            value={writeTarget}
+            disabled={!writeValues.length || starting}
             onChange={(e) => setPickedPlan(e.target.value)}
           >
-            {plans.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.branch ? p.branch + " — " : ""}
-                {planName(p)}
-              </option>
-            ))}
+            {fresh.length ? (
+              <optgroup label="Start an empty checklist">
+                {fresh.map((t) => (
+                  <option key={"new:" + t.title} value={"new:" + t.title}>
+                    {t.branch}
+                    {t.title !== t.branch ? " — " + t.title : ""}
+                    {t.closed ? " (closed)" : ""}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
+            {plans.length ? (
+              <optgroup label="Add a step to">
+                {plans.map((p) => (
+                  <option key={"plan:" + p.id} value={"plan:" + p.id}>
+                    {p.branch ? p.branch + " — " : ""}
+                    {planName(p)}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
           </select>
           <button
             type="button"
             id="vf-write-go"
             className="test-btn"
-            disabled={!planTarget}
-            onClick={() => onReveal(planTarget, true)}
+            disabled={!writeTarget || starting}
+            onClick={() => void write()}
           >
-            Add a step
+            {starting ? "Starting…" : writeNew ? "Start an empty checklist" : "Add a step"}
           </button>
           <span className="set-hint">
-            {plans.length
-              ? "Opens the checklist with its Add a step form."
-              : "Steps are added to a checklist — ask the agent for one first."}
+            {!writeValues.length
+              ? reason || "Start a session first — a checklist belongs to a branch."
+              : writeNew
+                ? "No agent involved — you write the steps."
+                : "Opens the checklist with its Add a step form."}
           </span>
         </div>
       </div>
@@ -441,11 +487,14 @@ export function VerifySources({ liveBranch }: { liveBranch: string }) {
     <div className="vf-sources" id="vf-repos-list">
       <div className="ik-watching">
         <span className="ik-watching-label">Watching</span>
-        <span className="ik-watching-list" title={repos.map((r) => r + " ships " + liveOf(r)).join("\n")}>
+        <span
+          className="ik-watching-list"
+          title={repos.map((r) => r + " — live branch: " + liveOf(r)).join("\n")}
+        >
           {repos.map((r, i) => (
             <span key={r} className="ik-watching-item">
               {i ? <span className="ik-watching-sep"> · </span> : null}
-              <b>{r}</b> <span className="ik-watching-live">ships {liveOf(r)}</span>
+              <b>{r}</b> <span className="ik-watching-live">Live branch: {liveOf(r)}</span>
             </span>
           ))}
         </span>
@@ -459,7 +508,7 @@ export function VerifySources({ liveBranch }: { liveBranch: string }) {
             setEditing(null);
           }}
         >
-          {open ? "Done" : "Edit repositories"}
+          {open ? "Close editor" : "Edit repositories"}
         </button>
       </div>
       {gh.data === false ? (
@@ -479,7 +528,7 @@ export function VerifySources({ liveBranch }: { liveBranch: string }) {
               groupKey={r}
               heading
               name={r}
-              detail={"ships " + liveOf(r) + (overrides[r]?.target ? " · " + overrides[r]!.target : "")}
+              detail={"Live branch: " + liveOf(r) + (overrides[r]?.target ? " · " + overrides[r]!.target : "")}
               onDetail={() => setEditing(r)}
               detailTitle={"Change how " + r + " is checked"}
               open={editing === r}
@@ -507,7 +556,7 @@ export function VerifySources({ liveBranch }: { liveBranch: string }) {
  * appearing?", so it costs its own band at the top. Everything else that is
  * configuration is :func:`VerifySources` below it and :func:`VerifyByHand`
  * under the work, which is where Intake keeps the same two things. */
-export function VerifySwitch({ hasPlans }: { hasPlans: boolean }) {
+export function VerifySwitch() {
   const s = useSettings();
   const repo = (s.settings.repository || {}) as {
     verify_repos?: string[];
@@ -517,14 +566,14 @@ export function VerifySwitch({ hasPlans }: { hasPlans: boolean }) {
   // Absent => on, matching the backend default: the real gate is membership, so
   // an older settings file with no key behaves exactly as it did.
   const on = repo.verify_enabled !== false;
-  // NOTHING TO SWITCH YET. A fresh install showed this ON above an empty list,
-  // and nobody could tell what it governed. Until there is a repository or a
-  // checklist it governs nothing, and the empty state already says what to do.
-  if (!n && !hasPlans) return null;
+  // NOTHING TO SWITCH YET. It governs one thing — a checklist written on every
+  // push to a WATCHED repository — so until a repository is watched it is
+  // hidden (m4); checklists asked for by hand don't depend on it.
+  if (!n) return null;
 
   return (
     <AutomationSwitch
-      label="Check what ships, automatically"
+      label="Write a checklist on every push"
       title="Pause or resume new checklists on push — nothing is deleted"
       rowId="vf-toggle-row"
       inputId="vf-enabled"
@@ -544,18 +593,35 @@ export function VerifySwitch({ hasPlans }: { hasPlans: boolean }) {
   );
 }
 
-/** The empty list: what to do to get a checklist. The two moments (before /
- * after merge) are in the intro right above it, so they are not repeated. */
-export function VerifyEmpty() {
+/** The empty list, honestly (round 5, B2): what Verify does, why there is
+ * nothing yet, and the one thing that changes that — a session that commits.
+ * Watching a GitHub repository is the secondary route, folded under the list.
+ * Once a repository is watched the sentence says so (m5). */
+export function VerifyEmpty({ watching = 0 }: { watching?: number }) {
   return (
     <div className="repo-empty vf-empty">
       <p>
-        <strong>No checklists yet.</strong>
+        Verify writes a checklist for each branch your sessions change, then checks it.
       </p>
-      <p>
-        Watch a repository with <strong>+ Add repository</strong> above, or ask for one under{" "}
-        <strong>New checklist</strong> below.
-      </p>
+      {watching ? (
+        <p>
+          <strong>
+            Watching {watching} {watching === 1 ? "repository" : "repositories"}
+          </strong>{" "}
+          — {watching === 1 ? "its" : "their"} next pushed branch appears here.
+        </p>
+      ) : (
+        <p>
+          <strong>Nothing to check yet</strong> — it fills in once a session commits.
+        </p>
+      )}
+      <button
+        type="button"
+        className="btn-primary vf-empty-new"
+        onClick={() => useUi.getState().openDialogFor("new-session")}
+      >
+        New session
+      </button>
     </div>
   );
 }

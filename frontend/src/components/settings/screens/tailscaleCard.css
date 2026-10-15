@@ -154,3 +154,60 @@
   width: 120px;
   height: 120px;
 }
+
+/* Settings → Your phone: four rows, each with its own live ✓/✗ (Mobile.tsx). */
+.mobile-steps {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mobile-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.mobile-row.st-fail {
+  border-color: var(--warn, #d08a1e);
+}
+
+.mobile-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.mobile-row-n {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.mobile-row-glyph.st-ok {
+  color: var(--ok, #2f9e5b);
+}
+
+.mobile-row-glyph.st-fail {
+  color: var(--warn, #d08a1e);
+}
+
+.mobile-row-body {
+  margin: 6px 0 0 18px;
+}
+
+.mobile-row-body p {
+  margin: 0 0 6px;
+}
+
+.mobile-fix {
+  margin: 4px 0 6px;
+}
+
+.mobile-ts-details > summary {
+  cursor: pointer;
+  font-size: 12px;
+}

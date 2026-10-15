@@ -26,15 +26,14 @@
 #      this machine so it serves the new version (step 5). What was installed
 #      (method, ref, commit, Python, time) is recorded in
 #      ~/.mindflock/install.json so `mindflock update` follows the same path.
-#   4. Runs `mindflock doctor` so you immediately see which runtime
-#      dependencies (git, tmux, your agent CLI — plus the optional gh) still need
-#      installing — with the exact install command for your platform. gh is
-#      listed as optional on purpose: pushing is plain `git push` over the
-#      remote you already have (SSH or HTTPS), and only PR create/merge prefer
-#      gh. When a terminal is attached
-#      it runs `doctor --fix`, which installs everything missing in one go
-#      (one confirmation, one sudo prompt) so a fresh machine ends the install
-#      ready to go.
+#   4. Ends on the same three steps `mindflock init` and `mindflock serve`
+#      print (`mindflock init --steps`: install the tools, sign in to your
+#      agent, pick a project folder — ✓/✗ each) and ONE next action: run
+#      `mindflock init`, which installs whatever is missing (one confirmation,
+#      one sudo prompt), signs your agent in and picks the folder. It installs
+#      nothing itself past MindFlock, so nobody is walked through the tools
+#      twice. The desktop app's run (MINDFLOCK_NONINTERACTIVE=1) gets one line
+#      instead: the app's own Setup installs tmux and your agent next.
 #
 # Overrides (env vars):
 #   MINDFLOCK_INSTALL_REPO   git URL to install from
@@ -50,11 +49,12 @@
 #                            (default 8765)
 #   MINDFLOCK_INSTALL_NO_RESTART  set to 1 to leave a running server alone (the
 #                            desktop app sets it: it restarts the server itself)
-#   MINDFLOCK_NONINTERACTIVE set to 1 to force the read-only `mindflock doctor`
-#                            report instead of the guided `--fix` prompts. The
+#   MINDFLOCK_NONINTERACTIVE set to 1 when nobody can answer a prompt. The
 #                            desktop app sets this when it runs this script
 #                            from its offline page: there is no terminal behind
-#                            a GUI process, so --fix would block on y/n forever.
+#                            a GUI process, and the app's own Setup installs
+#                            tmux and the agent next, so the script ends on one
+#                            line saying so instead of the three steps.
 set -eu
 
 # The uv installer we run if uv is absent: version-pinned + checksum-verified.
@@ -129,7 +129,10 @@ fi
 command -v curl >/dev/null 2>&1 || fail "curl is required to install — install it with your package manager (e.g. apt/dnf/pacman/zypper) and re-run."
 
 # --- 2. uv ------------------------------------------------------------------
-# ~/.local/bin is where both uv and the mindflock entry point land.
+# ~/.local/bin is where both uv and the mindflock entry point land. The PATH
+# this shell came with is kept: the closing lines say whether a NEW terminal
+# is needed before `mindflock` is found.
+ORIG_PATH="$PATH"
 PATH="$HOME/.local/bin:$PATH"
 
 # sha256 of a file, portable across Linux (sha256sum) and macOS (shasum).
@@ -262,7 +265,7 @@ else
 fi
 
 command -v mindflock >/dev/null 2>&1 || fail "install finished but \`mindflock\` is not on PATH.
-Add ~/.local/bin to PATH (uv prints the exact line), then re-run: mindflock doctor"
+Add ~/.local/bin to PATH (uv prints the exact line), then run: mindflock init"
 MF="$(command -v mindflock)"
 say "installed: $MF ($("$MF" --version 2>/dev/null || echo mindflock))"
 
@@ -286,19 +289,6 @@ fi
 # ~/.local/bin PATH line to the shell rc if (and only if) it's missing.
 # Best-effort — a failure here never fails the install.
 uv tool update-shell >/dev/null 2>&1 || true
-
-# --- 4. doctor ---------------------------------------------------------------
-say "checking runtime dependencies (git, tmux, agent CLI; gh optional)…"
-# Doctor exits 1 when something required is missing — that's information for
-# the user, not an installer failure, so don't abort on it. Under `curl | sh`
-# stdin is the script pipe, so the guided --fix mode reads its y/n prompts
-# from the controlling terminal; with no terminal (CI, or the desktop app's
-# in-window install) fall back to the plain read-only report.
-if has_tty; then
-  mindflock doctor --fix </dev/tty || true
-else
-  mindflock doctor || true
-fi
 
 # --- 5. a server already running here -----------------------------------------
 # Re-running this script is how people update, and `uv tool install --force`
@@ -342,18 +332,17 @@ if [ -n "$JOIN" ]; then
   fi
 fi
 
+# --- 7. the three steps --------------------------------------------------------
+# The desktop app (no terminal) goes on to its own Setup, which installs tmux
+# and the agent with one button. Everyone else gets the same three steps
+# `mindflock init` and `mindflock serve` print — read-only, the tools are not
+# probed for install a second time here — ending on exactly one next action.
 say ""
-# The next steps are terminal instructions; the desktop app (no terminal) goes
-# on to its own dependency step instead, so it only gets "Done". The absolute
-# path: in THIS shell ~/.local/bin may not be on PATH yet (a new one has it).
-if has_tty; then
-  say "Done. Next steps:"
-  say "  1. fix anything ✗ above (re-run: $MF doctor --fix — installs it all in one go)"
-  say "  2. run: $MF init    →  guided first run: dependencies, your agent's sign-in,"
-  say "     GitHub, your first repo (in a new terminal, plain \`mindflock init\` works too)"
-  say "  3. run: $MF serve   →  open http://127.0.0.1:$PORT_"
-  say "     Prefer an app? The desktop app does all of this for you:"
-  say "     https://github.com/MindFlock/MindFlock/releases/latest"
+if [ "${MINDFLOCK_NONINTERACTIVE:-}" = "1" ]; then
+  say "Done. tmux and your agent come next, in the app."
 else
-  say "Done."
+  if ! PATH="$ORIG_PATH" command -v mindflock >/dev/null 2>&1; then
+    say "Open a new terminal first — this one doesn't find mindflock yet."
+  fi
+  "$MF" init --steps || say "Next: run mindflock init"
 fi

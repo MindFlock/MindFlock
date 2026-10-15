@@ -242,7 +242,7 @@ export async function fixPlanFailures(plan: TestPlan, only?: string[]): Promise<
         (r?.reclaimed ? " (cleared the last one's empty workspace)" : ""),
     );
   } catch (err) {
-    errorPop("Couldn't open a session to fix it", errMsg(err));
+    errorPop("Fix didn't start", errMsg(err));
   }
 }
 

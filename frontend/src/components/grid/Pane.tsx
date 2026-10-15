@@ -13,7 +13,7 @@ import { instApi } from "../../api/client";
 import { refreshInstances, useConfig, useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { fmtUsd, displayBranch, firstLine } from "../../lib/format";
-import { chipState, fastTrackStep, liveStep, nextStep, resetStep } from "../../lib/stage";
+import { chipState, fastTrackStep, liveStep, nextStep, resetStep, withVerifyVerdict } from "../../lib/stage";
 import { cleanupMissing, selectSession } from "../../lib/sessionActions";
 import { sessionLabel } from "../../lib/sessionLabel";
 import {
@@ -727,13 +727,18 @@ export function Pane({
   // has no lead button (the agent's state chip says what it is doing).
   const shownStep = ns && ns.label === "Commit…" && !hasUncommitted(inst) ? null : ns;
   const openHistory = () => setHistPane({ kind: tab === "shell" ? "shell" : "agent", dragSel: null });
+  // SHIP carries Verify's verdict beside Open PR, and asks first on a
+  // failed checklist (lib/stage.ts withVerifyVerdict).
   const menu = () =>
-    sessionMenu(inst, menuCtx, {
-      visibleTabs,
-      onHistory: shows("history") ? undefined : openHistory,
-      onCopyHistory: termTab ? copyHistory : undefined,
-      onNextStep: shows("next") ? undefined : shownStep ?? undefined,
-    });
+    withVerifyVerdict(
+      sessionMenu(inst, menuCtx, {
+        visibleTabs,
+        onHistory: shows("history") ? undefined : openHistory,
+        onCopyHistory: termTab ? copyHistory : undefined,
+        onNextStep: shows("next") ? undefined : shownStep ?? undefined,
+      }),
+      inst,
+    );
   // The read-outs the header leaves out (the cost chip, the diff-stat), at
   // the top of ⋯ so they are still one click away.
   const menuSummary = [
@@ -1036,7 +1041,7 @@ export function Pane({
             ↓{inst.behind} behind
           </span>
         )}
-        <div className="tabs">{items.tabs.map((id) => tabEls[id])}</div>
+        <div className="tabs" data-tour="pane-tabs">{items.tabs.map((id) => tabEls[id])}</div>
         {/* Free room sits here, so the buttons and ⋯ hold the right edge. */}
         <span className="head-spacer" aria-hidden="true" />
         <div className="actions">
@@ -1114,6 +1119,8 @@ export function Pane({
             {icons ? "▶" : "▶ Resume"}
           </button>
         )}
+        {/* The New tour's last step points here (and at the tabs). */}
+        <span className="pane-menu-hook" data-tour="pane-menu">
         <PaneMoreMenu btnRef={ft && !ftShown ? setFtEl : undefined}>
           {(close) => (
             <>
@@ -1132,6 +1139,7 @@ export function Pane({
             </>
           )}
         </PaneMoreMenu>
+        </span>
         </div>
       </div>
       <AgentBlockedBanner block={noAgent} title={title} />

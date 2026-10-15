@@ -2,34 +2,42 @@
  * chip adds/removes its flag token sequence in the bound field; presets vary
  * per provider. Shared by the New-session dialog and Settings → Coding CLI. */
 
+import { SKIP_PERMS_LABEL, SKIP_PERMS_TITLE } from "../../lib/vocab";
+
 interface FlagPreset {
   label: string;
   flag: string;
   group?: string;
+  /** Hover text; the unsupervised-run flags say what they give up. */
+  title?: string;
 }
+
+// Round 5: every "run without asking" flag wears the same warning label and
+// tooltip (r5-new #7, r5-settings #17) — the chip used to be a bare word.
+const SKIP: Pick<FlagPreset, "label" | "title"> = { label: SKIP_PERMS_LABEL, title: SKIP_PERMS_TITLE };
 
 // Flags verified against installed CLIs (codex 0.142.x, aider 0.86.x, agy
 // 1.0.x, claude code) — keep in step with providers/config.py's
 // skip_perms_flag. A provider absent here simply shows no chips.
 const LAUNCH_FLAG_PRESETS: Record<string, FlagPreset[]> = {
   claude: [
-    { label: "Skip permissions", flag: "--dangerously-skip-permissions" },
+    { ...SKIP, flag: "--dangerously-skip-permissions" },
     { label: "Plan mode", flag: "--permission-mode plan" },
     { label: "Verbose", flag: "--verbose" },
   ],
   codex: [
-    { label: "Bypass approvals", flag: "--dangerously-bypass-approvals-and-sandbox" },
+    { ...SKIP, flag: "--dangerously-bypass-approvals-and-sandbox" },
     { label: "Web search", flag: "--search" },
   ],
   antigravity: [
-    { label: "Skip permissions", flag: "--dangerously-skip-permissions" },
+    { ...SKIP, flag: "--dangerously-skip-permissions" },
     { label: "Sandbox", flag: "--sandbox" },
   ],
   aider: [
-    { label: "Yes to all", flag: "--yes-always" },
+    { ...SKIP, flag: "--yes-always" },
     { label: "No auto-commit", flag: "--no-auto-commits" },
   ],
-  opencode: [{ label: "Auto-approve", flag: "--auto" }],
+  opencode: [{ ...SKIP, flag: "--auto" }],
 };
 
 export function tokenize(s: string): string[] {
@@ -107,6 +115,7 @@ export function FlagChips({
             type="button"
             className={"flag-chip" + (on ? " active" : "")}
             data-flag={p.flag}
+            title={p.title}
             aria-pressed={on}
             onClick={(e) => {
               e.preventDefault();

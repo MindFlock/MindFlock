@@ -2,7 +2,14 @@
  * TemplatesDialog), and the fill that writes a template into the form. */
 
 import type { Dispatch, SetStateAction } from "react";
-import { runProblem, scheduleLabel, templatesTarget, type Template } from "../../../lib/templates";
+import {
+  hasSchedule,
+  runInfoFor,
+  runProblem,
+  templateScheduleLine,
+  templatesTarget,
+  type Template,
+} from "../../../lib/templates";
 import { useUi } from "../../../state/store";
 import type { FolderAction } from "../newSession";
 import type { Lane } from "../../../lib/laneActions";
@@ -77,6 +84,15 @@ export function templateFiller(ctx: TemplateFillCtx) {
   return fillFromTemplate;
 }
 
+/** What a scheduled chip's ⏰ says on its face: the time it starts ("07:30"),
+ * "paused", or "on" for a cron with no single time. "" = not scheduled. */
+export function chipScheduleText(t: Template, line = templateScheduleLine(t)): string {
+  if (!hasSchedule(t)) return "";
+  if (t.schedule?.paused || runInfoFor(t.name).paused) return "paused";
+  const hm = /\b\d\d:\d\d\b/.exec(line || "") || /\b\d\d:\d\d\b/.exec(t.schedule?.at || "");
+  return hm ? hm[0] : "on";
+}
+
 export function TemplatesStrip({
   templates,
   activeTemplate,
@@ -104,7 +120,7 @@ export function TemplatesStrip({
   return (
     <div id="new-templates" className={"new-templates" + (landing ? " nt-landing" : "")}>
       <div className="nt-head">
-        <span title="Saved session setups — one list on every device">
+        <span title="Your templates — one list on every device">
           Templates{" "}
           <span className="muted">
             {acts
@@ -125,6 +141,9 @@ export function TemplatesStrip({
       <div id="new-templates-list" className="nt-list">
         {templates.map((t) => {
           const problem = runProblem(t);
+          // THE schedule line (Schedule's card says the same) and its time.
+          const line = templateScheduleLine(t);
+          const sched = chipScheduleText(t, line);
           return (
             <span key={t.name} className={"nt-tpl" + (acts ? " nt-tpl-acts" : "")}>
               <button
@@ -152,16 +171,16 @@ export function TemplatesStrip({
               {onSchedule && (
                 <button
                   type="button"
-                  className={"nt-act nt-sched" + (t.schedule?.at ? " on" : "")}
-                  aria-label={"Schedule “" + t.name + "”"}
+                  className={"nt-act nt-sched" + (sched ? " on" : "")}
+                  aria-label={sched ? "Change the schedule of “" + t.name + "”: " + line : "Schedule “" + t.name + "”"}
                   title={
-                    t.schedule?.at
-                      ? scheduleLabel(t.schedule) + " — change or stop it"
-                      : "Schedule… — start it by itself every day or weekday"
+                    sched
+                      ? line + " — change or stop it"
+                      : "Schedule… — start it by itself every day, weekdays or on a cron"
                   }
                   onClick={() => onSchedule(t)}
                 >
-                  ⏰
+                  ⏰{sched && <span className="nt-sched-at"> {sched}</span>}
                 </button>
               )}
             </span>

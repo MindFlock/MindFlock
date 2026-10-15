@@ -41,11 +41,25 @@ in. The **MindFlock** wordmark (carrying the *running engine's* version, plus a
 red `-DEV` badge under a dev shell) sits centered, and the empty strip beside it
 is the drag region that moves the desktop shell's window.
 
-**Verify** is always on the bar. Its badge counts the checklists under **Needs
+The bar never wraps and never clips (any width from 360 px up): it measures
+itself, before paint and on every resize, and gives things up in a fixed order
+(`fitTopBar` in `TopBar.tsx`). The wordmark goes first, then Settings, Schedule
+and Verify move, from the right, into one **⋯** (`#more-btn`) that sits where
+they stood, just before the magnifier. **New**, **Intake** and the magnifier
+never fold. The ⋯ carries the folded items' counts (Verify's red count rides on
+it while Verify is folded), and its menu lists the folded items with their own
+counts and tooltips (↑/↓ move, Esc closes). A folded item keeps its id
+(`#verify-btn` &c., hidden), its shortcut and its palette entry; the calm rule
+below still decides which items are on the bar at all.
+
+**Verify** is always on the bar once the [calm first hour](#layout) is over
+(or its first checklist exists — before that it waits, and so does
+**Schedule** until its first template; Alt+V / Alt+S and the palette work
+throughout). Its badge counts the checklists under **Needs
 you** and **Failed** (the dialog's first two groups) and says nothing at zero;
 it turns **red** when any of them failed, and the tooltip's second line says
 what it counts (*3 checklists need you or failed — 1 failed*). Everywhere Verify is described in passing
-(this tooltip, the palette, the tour, the shortcut sheet) it is one sentence,
+(this tooltip, the palette, the shortcut sheet) it is one sentence,
 `lib/vocab.ts`'s *check that pushed changes work*.
 
 **Schedule** is always on the bar too (`#schedule-btn`, tooltip *Schedule —
@@ -158,13 +172,24 @@ full screen back by itself. A choice the person made always wins: bars set in
 Customize (here or synced from another device) are never touched, and a View
 preset other than Auto keeps the picker shown.
 
+The top bar is calm too (`topBarShows` in `lib/calm.ts`): **Verify** appears
+with the first checklist and **Schedule** with the first template — until
+then each has only an empty state to offer, and both compete with *③ Start
+your first session*. Hidden is not removed: **Alt+V** / **Alt+S**, the
+palette and the `#verify` / `#schedule` links open them all along, and once
+the first hour ends both are always on the bar. An item simply appears; there
+is no fanfare. The first time a top-bar dialog opens in the calm first hour,
+its [tour](#tours) runs once by itself.
+
 The decision is made **before first paint**: `/api/setup` carries the doctor
 and can take seconds, so until it (and the session list) answer, the screen
 uses this browser's last calm decision (`mf_calm_hint` in localStorage — a
 render hint only, never a first-run flag) and the server's answer replaces it
 the moment it lands. No dense layout flashes and then collapses on reload.
-With no hint (a new browser) the old rule holds: calm only on a genuinely
-fresh install (`onboarded: false`), so a veteran's screen never flashes empty.
+With no hint either (a new browser) the first paint is **calm** until the
+server answers — never dense-then-calm: a veteran on a new browser sees a few
+bars arrive a moment later, which reads as loading, where the full chrome
+flashing for seconds and then vanishing read as something going wrong.
 
 The footer's **Setup** chip is amber only while a *required* step is left;
 once the three are done it turns neutral (*Setup 3 of 3 · 2 optional* is an
@@ -194,8 +219,8 @@ one feature has one name: **Tickets**, **Pull requests**, **Issues**. Each bar's
 label is its door — a button (`.dc-open`) that opens that Intake tab — so a bar
 is a status light, a switch and a door rather than the only way in; Intake is in
 the top bar whether or not its bar is showing. Each switch's tooltip names the
-Intake switch it mirrors (**Auto-start tickets**, **Auto-address review
-comments**, **Auto-start new issues**), and a switch that fails says why in a bottom-right
+Intake switch it mirrors (**Tickets**, **PR review comments**, **New issues** on
+Intake's Auto-start tab), and a switch that fails says why in a bottom-right
 card rather than a browser `alert()` (which the desktop app does not
 implement). The **Verify** bar's label opens Verify the same way. Turning a
 feature's bar on is still how you get an at-a-glance dot for PR review and
@@ -248,18 +273,23 @@ first and the jump rows last: **New session…**, then the dialog openers — Op
 Intake (plus **Intake: Tickets** / **Intake: GitHub PRs** / **Intake:
 GitHub issues** — the tabs' own names — so typing "issues" lands on that queue instead of on a dialog you then
 have to navigate), **Verify — check that pushed changes work**, **Customize…**, **Prompts…** (*manage saved prompts*),
-**Schedule…** (`Alt+S`; also on the short menu), **Templates…** (*saved setups — in
-Schedule*, the name it had, kept so the word still finds it), **Schedule a session…**
-(opens Schedule on a new template with **Run on a schedule** ticked), one **Run template:
-<name>** (*fresh session, prompt sent*) per template that has a folder,
+**Schedule…** (`Alt+S`; also on the short menu), **Templates…** (*your templates — in
+Schedule*, the name it had, kept so the word still finds it), **New scheduled template…**
+(*daily, weekdays or cron* — opens Schedule on a new template with **Run on a schedule**
+ticked; *schedule a session* still finds it), one **Run template:
+<name>** (*fresh session, task sent*) per template that has a folder,
 **Assistant instructions (agent file)…**,
 **Recently closed…**, Open Settings / Doctor / **Open Setup checklist**,
 **Settings → …** rows for what you typed (`palette/settingsSearch.ts`: one
 entry per screen plus a few controls, matched on the words people use —
 "github", "notification", "worktree", "parallel", "phone", "token", "theme"
-— each opening Settings on that screen, scrolled to the control; listed right
+— each opening Settings on that screen, scrolled to the control, with one
+small line under it saying what is behind it: *Phone alerts — Push
+notifications to your phone (ntfy)* vs *Your phone — Use MindFlock itself
+from your phone*; a title match ranks above a subtitle match; listed right
 after the commands whose names contain the text),
-**Tour** (*what MindFlock is, in five slides*), Toggle sidebar, Keyboard
+**Replay <X> tour** (one per [tour](#tours): welcome, New, Intake, Verify,
+Schedule, Settings — found by *tour*, *help* or *how*), Toggle sidebar, Keyboard
 shortcuts — then the focused session's verbs (Commit / Push / **Open PR** /
 **Merge PR** once there is a PR / Open / focus IDE, Rename…, Queue prompt… *runs when idle*, Split…
 only where a split can actually start, **Pause session** (*stops the agent;
@@ -275,9 +305,9 @@ terminal has keyboard focus — the same VSCode trade-off as its quick-open/pale
 keys.
 
 The palette opens on a **short menu**, not the whole index: New session, the
-sessions you last looked at, Intake, Verify, Schedule, Setup, Settings, Tour,
+sessions you last looked at, Intake, Verify, Schedule, Setup, Settings, Replay welcome tour,
 Keyboard shortcuts (the first nine), and **All commands…** (`palette/paletteRank.ts`). Typing matches
-labels and a few plain synonyms (*help* finds the shortcuts and the tour,
+labels and a few plain synonyms (*help* finds the shortcuts and the tours,
 *install* finds Setup and the Doctor). An **outward verb** — Commit, Push,
 Open PR, Merge, Pause, Close, Delete — is never the `Enter` default: typing a
 session's name highlights **Focus: <name>**. **Join with code …** is offered
@@ -586,8 +616,12 @@ newest thing you actually asked.
   files, untracked included); until then the header has no lead button and
   the state chip says what the agent is doing. On hover: *Commit this
   session's changes — you check the message first. Next: Push, then Open PR.*
-- **⋯ → Checklist…** (any header, when the session has a branch) opens Verify
-  on that branch's checklist — also on the row's ⋮ menu. When a checklist
+- **⋯ → Verify checklist…** (any header, when the session has a branch) opens
+  Verify on that branch's checklist — also on the row's ⋮ menu (still
+  *Checklist…* there). In the pane's ⋯ the checklist's verdict rides under
+  **Open PR** / **Merge PR** (*Checklist ✗ Failed*), and on a failed checklist
+  they ask first: *Checklist failed — open the PR anyway?* with **Show the
+  checklist** and **Open PR anyway** (`withVerifyVerdict`, lib/stage.ts). When a checklist
   exists, its verdict chip (*✓ Verified*, *✗ Failed*, *3/5 checked*) sits beside
   the PR chip and opens it in one click.
 - **An agent that isn't installed, or isn't signed in.** When the session's
@@ -737,17 +771,25 @@ A session has **one menu**, opened from its sidebar row or the pane header's
   through the items; **Esc** closes it and returns focus to the ⋮.
 
 Both hosts draw it as a popover over the whole window (`sidebar/RowMenu.tsx`
-for the row, portalled to `<body>`), placed by `lib/menuPlace.ts` so all of
-it is on screen: under the ⋮ with right edges aligned, or at the pointer;
-flipped above when there is no room below (and to the pointer's left when
-there is none to its right), nudged — never flipped — when **More ▸** or an
-armed **Delete…** grows it, and scrolling only when the window is shorter than
-the menu. A click outside, scrolling the list or resizing the window closes
-it. The items, in groups:
+for the row, `grid/PaneMoreMenu.tsx` for the pane, both portalled to
+`<body>`), measured hidden for one layout pass and then placed by
+`lib/menuPlace.ts` so all of it is on screen: under the ⋮ / ⋯ with right
+edges aligned, or at the pointer; flipped above when there is no room below
+(and to the pointer's left when there is none to its right), nudged — never
+flipped — when **More ▸** or an armed **Delete…** grows it, and scrolling
+only when the window is shorter than the menu. While it scrolls, **✕ Close**
+and **Delete…** stay pinned at its foot, and unfolding **More ▸** scrolls its
+items into sight above them (a 1280×720 window shows every item of the
+unfolded fold at once). A click outside, scrolling the list or resizing the
+window closes it. The items, in groups:
 
 - **Work** — **Message…** (`Ctrl+K S`) · **Queue prompt…** *runs when idle*
 - **Ship** — **Commit…** (only once there is something to commit) · **Push** ·
-  **Open PR** · **Merge PR** once there is a PR · **View PR ↗** ·
+  **Open PR** · **Merge PR** once there is a PR · **View PR ↗** (while the
+  session's diff-stat reads zero, **Push** and **Open PR** stay in place
+  greyed, noted *Nothing to push yet*; without GitHub connected **Open PR**
+  and **Merge PR** are greyed *Connect GitHub to open PRs* — the pane's guided
+  button and the `Ctrl+K` chords still answer) ·
   **Fast-track…** (opens the pane's [⏩ picker](#fast-track-), with the current
   choice under it) · **Checklist…** (when the session has a branch: Verify on
   that branch's checklist, `openDialogFor("verify", branch)`) · **Run checks
@@ -761,7 +803,8 @@ it. The items, in groups:
   run}** for a team run member · **Duplicate session** (`Ctrl+K D`; a second
   in-place session on the same worktree) · **Branch session** (`Ctrl+K B`;
   see [Branch session](#branch-session)) · **Open in <IDE>** *your code editor*
-  (`Ctrl+K O`; row double-click does the same) · **Open preview ↗** `:port`
+  (`Ctrl+K O`; row double-click does the same; left out once `GET /api/ides`
+  says the configured editor isn't installed here) · **Open preview ↗** `:port`
   when the session serves one · **Select** (`Ctrl+click`) · **Hide/Show
   window** (`Ctrl+K H`; the session keeps running) · **Re-run worktree setup**
   after a failed one · **Copy folder path**
@@ -826,10 +869,22 @@ the verb (*stops the agent and moves it to Recently closed*). The row's ✕ is
 labelled *Close session*, and on a session with uncommitted changes it asks
 first, on a strip under the row: *Close session? Its N uncommitted changes
 stay in its folder — reopen it from Recently closed.* **Close session** /
-**Cancel** (focus on Cancel). **Delete…** removes the worktree and its branch; the
-first click turns the item into an inline strip — *Removes the worktree and
-branch* with **Delete** and **Cancel** (focus lands on Cancel, so a second
-Enter never deletes). Both land in [Recently closed](#recently-closed); only a
+**Cancel** (focus on Cancel). The Close toast carries an **Undo** button:
+*Closed “<name>”* **Undo** (its tooltip names the shortcut, Ctrl+Shift+T) —
+pressing it reopens exactly that session, and **Recently closed (n)** refreshes
+on the close and on the undo. Only the button reopens; a click on the rest of
+the toast does nothing, and the toast stays up while the pointer is on it or
+the button has focus. (The toast helper takes an optional
+`action: { label, onClick }` for a button like this; `lib/toast.ts`.)
+After a ✕ the next row slides up under the pointer, so the row's ✕ ignores a
+second click within 400 ms. **Delete…** removes the worktree and its branch; the
+first click turns the item into an inline strip — *Deletes the folder and
+branch “<branch>”, including uncommitted changes. This can't be undone — use
+Close to keep it.* (an in-place session: *Removes this session. Its folder and
+branch stay as they are…*) with **Delete** and **Cancel** (focus lands on
+Cancel, so a second Enter never deletes). The pane's ⋯ is named *Actions for
+this session* and the row's ⋮ *Session menu for <name>*, so a screen reader
+can tell them apart. Both land in [Recently closed](#recently-closed); only a
 closed one can be reopened. The words *End* and *Delete + wipe* are gone from
 the app: a session is closed or deleted, nothing else.
 
@@ -1623,8 +1678,11 @@ a number. Clicking an entry focuses that session. Verify adds three rows,
 named **Verify · <checklist>** and opening that checklist in Verify: *ready to
 check* (`session.test_plan_due`), *couldn't write the checklist*
 (`session.test_plan_failed`) and *checklist failed — N steps*
-(`session.test_plan_checked` with `new: "failed"`), each gated by its own rule
-(`verify_plan_due`, `verify_plan_failed`, `verify_run_failed`). A session that ended reads
+(`session.test_plan_checked` with `new: "failed"`) — or *checklist failed — step
+1 GET /health* when a **person's** Fail turned it red
+(`session.test_plan_step_failed`) — each gated by its own rule
+(`verify_plan_due`, `verify_plan_failed`, `verify_run_failed` for both failed
+rows). A session that ended reads
 **closed** when it was closed (✕, `Ctrl+W`, the palette — the worktree kept)
 and **deleted** only when it was deleted (worktree and branch removed), never
 the other way round. The rows read as sentences: a stage change says
@@ -1966,17 +2024,17 @@ because it is the hot path. Ticket is described further down.
 The Session tab is two pages, as in v0.7: a compact **Describe** card it opens
 on (*What do you want to work on?* — see
 [describe it in a sentence](#new-session-dialog-describe-it-in-a-sentence)),
-and the full form behind it (**Set it up myself instead**, which carries what
-you typed into the Task, or **Review details first** to have the model fill it
-in). The form has **← Back** to the sentence. The caret starts in the sentence
+and the full form behind it (**More options** or the line's **change**, which
+carry what you typed into the Task, or **Let the agent set it up…** to have the
+model fill it in). The dialog is a `role="dialog"` with `aria-modal`. The form has **← Back** to the sentence. The caret starts in the sentence
 box; after a refused create the dialog reopens on the form with the caret in
 **Name**, since the form is what needs fixing.
 
 **What you type is never thrown away.** Closing New — or a trip to Intake,
 Settings or anywhere else — keeps the sentence, the form and the page you were
-on; the next opening shows them as you left them. Only a **Create** (or
+on; the next opening shows them as you left them. Only a **Start** (or
 Intake's **Start together…**, which opens New on its own list) starts fresh,
-and **Clear** — beside the box on page 1 and beside **← Back** on the form,
+and **Clear** — beside the box on page 1 (the form's **← Back** leads there),
 shown while something typed is in it — empties it on purpose. A Task the
 opening's own last-used template wrote doesn't count as typed.
 
@@ -1998,9 +2056,10 @@ a 723 px window without a scroll; at 420 px the fields stack and Fast-track's
 choices wrap.
 
 **The form, in order:** the **Templates** strip (only once a template exists),
-**Folder** and **Agent**, **Task**, **Works in**, then **More options** (shut).
-The footer has **Save as template…**, **Clear** (while there is a draft),
-**← Back** and **Create**.
+with one muted line under it — *Templates save this whole form (folder, agent,
+task, fast-track) to run again or schedule.* — then **Folder** and **Agent**,
+**Task**, **Works in**, then **More options** (shut). The footer has
+**← Back** and **Start ↵** (the button names what Enter does).
 
 - **Folder** — with one quiet line of suggestion chips under it: recent
   folders first, each run headed by a muted **Recent** / **Started in** (the
@@ -2009,19 +2068,28 @@ The footer has **Save as template…**, **Clear** (while there is a draft),
   how many (*8 more…*); it unfolds the line into all of them, one run per
   line (**Fewer** folds it back; picking a chip folds it too). The line is
   left out when its only suggestion is the folder already in the field.
-- **Agent** — the agents this device has; one that isn't installed reads
+  "Recent" is the server's list: only folders a session was actually started
+  in. While the field isn't being edited it shows the END of the path (the
+  repo's name), the whole path in its tooltip. **A folder is never made by
+  itself:** a path that doesn't exist reads *No folder at <path>.* in red with
+  **Create this folder**, and both Starts stay off until it exists — the
+  button makes exactly that folder (`POST /api/mkdir`, the parent must exist)
+  and the form then reads it as an empty folder with no repo. A plan from
+  **Let the agent set it up…** that proposes a new folder asks the same way.
+- **Agent** — the agents this device has; the ones that aren't installed fold
+  behind a last row, *More agents… (6 not installed)*, which lists them as
   *codex (not installed)* (`GET /api/providers/status`, this device only — an
-  unknown answer never blocks). The default never starts on a missing agent
+  unknown answer never blocks; the chosen agent always shows). The default never starts on a missing agent
   when another is installed. Picking a missing one shows *<agent> isn't
   installed on this device. Install it in Settings → Agents, or pick another
-  agent.* under the field, and **Create** (and page 1's **Create session**)
+  agent.* under the field, and **Start** (on either page)
   refuses — a session would otherwise sit "Idle" on *command not found*. An
   installed agent `GET /api/setup` knows is NOT signed in gets *<agent> isn't
   signed in yet — a session would stop at its sign-in screen.* **Sign in…**
   (Settings → Agents) — under the field and on page 1. A note, not a block.
 - **Task** — what the agent starts on (blank starts it idle), always on the
   form — two rows to start, growing with its text up to 220 px, then
-  scrolling — with **Insert a prompt…** (built-ins first, then yours) and
+  scrolling — with **Insert saved text…** (built-ins first, then yours) and
   **Manage…**, which opens the Prompts dialog and comes back to this form as
   it was — there, clicking a prompt puts it in this Task box (no *Paste
   into*: you are making a new session, not talking to a running one).
@@ -2049,18 +2117,33 @@ The footer has **Save as template…**, **Clear** (while there is a draft),
   already edits that folder directly warns *“<session>” is already editing
   this folder directly. Pick “Separate worktree” so they don't overwrite each
   other.*
-- **More options** — its summary names anything in it that isn't the default
-  (*named x · fast-track on · from main · flags*), else *name, fast-track,
-  base branch, flags*. Inside: **Name** (*optional; empty names it from the
-  task* — see below), **Fast-track to** (*Ask me before it ships* reads
-  *(needs fast-track)* while it is Off), **Auto-split** (*Lets the agent break
-  a big task into up to 3 parallel sessions — you approve the split first.*),
-  **Provision the worktree** (*also run the repo's setup and warm test caches*
-  — a box on top of the separate worktree, with the workspace strategy),
-  **Base branch** (drawn at once, *Loading branches…* until the list lands),
-  **Create a git repo in this folder** (only for a folder that isn't a repo
-  yet), **Plan first** (*— the agent lists the files it will change and waits
-  for your OK (Map tab)*) and the **Launch flags** fold.
+  For a real folder with **no git repo**, Works in asks that one question
+  instead: **Make it a git repo first** `recommended` / *Turns on diff, commit
+  and PR — git init and a first commit here* or **Just run in the folder** /
+  *The agent edits the files as they are; no diff, commit or PR* (the default —
+  nothing is git-inited unasked). Fast-track's rungs past Off are greyed until
+  it is a repo.
+- **More options** — only what a first session may want: **Name** (*optional;
+  empty names it from the task* — the placeholder is the name it will get),
+  **Fast-track** (*Off / Commit / Push / Open PR / Merge when green*; without
+  GitHub connected **Open PR** and **Merge when green** are greyed with the
+  session menu's own sentence, *MindFlock can’t open or merge the PR for you
+  yet — …*) and **Save as template…**. Its summary names anything in it that
+  isn't the default (*named x · Fast-track: Commit · from main · flags*), else
+  *name, Fast-track, save as template*. Inside it, one more fold,
+  **Advanced**, holds what a first-hour session can't use yet, its summary
+  naming only what is in it: **Ask me before it ships** (*(needs Fast-track)*
+  while it is Off), **Auto-split** (*Lets the agent break a big task into up to
+  3 parallel sessions — you approve the split first.*), **Provision the
+  worktree** (*also run the repo's setup and warm test caches* — with the
+  workspace strategy), **Base branch** (only while there is a branch to pick;
+  *Loading branches…* until the list lands), **Plan first** (*— the agent
+  lists the files it will change and waits for your OK (Map tab)*) and the
+  **Launch flags** fold. A flag that turns the agent's permission prompts off
+  (`--dangerously-skip-permissions` and its kin) adds a line under the chips:
+  *⚠ Skip permission prompts — the agent runs commands and edits files without
+  asking you.* (the label and tooltip are `SKIP_PERMS_LABEL` /
+  `SKIP_PERMS_TITLE` in `lib/vocab.ts`, for the chip itself too).
 
 **Names come from the task.** With the Name empty, a session is named from
 its Task: the first line's first few words, filler dropped, lowercased and
@@ -2085,7 +2168,7 @@ after the Folder settles; the first 200). Leaving it on the first row keeps
 the server's own choice; any other row is sent as `base_ref` + `base_branch`
 on create. **Ctrl/Cmd+Enter** submits the dialog from anywhere in it.
 
-**Save as template…** opens an inline name row above the footer (Enter saves,
+**Save as template…** (under More options) opens an inline name row in place (Enter saves,
 Esc cancels without closing the dialog; never a `prompt()`) and saves the
 **whole form**: folder, agent, where it works, provisioning, git init, Task and
 fast-track — stored as the template's autopilot (*Commit*, *Commit + push* or
@@ -2106,7 +2189,10 @@ also moves to the form; a template with no task takes the sentence); the Name
 is left empty so the session is named from its task. **▶** starts a new
 session from it now (`POST /api/templates/{name}/run`, greyed with the reason
 when it has no folder) and New steps aside, keeping your draft; **⏰** opens
-[Schedule](#schedule) on that template's editor with its schedule on.
+[Schedule](#schedule) on that template's editor with its schedule on. A
+scheduled template's ⏰ says its time on its face (*⏰ 07:30*, *⏰ paused*) and
+its tooltip is the same one schedule line the Schedule card shows (*Weekdays
+at 07:30 EDT · next tomorrow 07:30 — change or stop it*).
 **All templates…** opens **Schedule** (also the top bar's **Schedule**, `Alt+S`,
 and the palette's **Schedule…** / **Templates…**). ▶ and ⏰ are this device's: they are not drawn when the
 session would run on another device.
@@ -2122,39 +2208,48 @@ and *To send text to a session that's already running, use Prompts.*, with
 
 - **Next** — one band: *NEXT nightly-deps in 2h — today 21:00*, the soonest
   run of any schedule that isn't paused (or *Schedules start on mac-mini —
-  the device that runs automation.* when another device fires them).
+  the computer that runs schedules.* when another device fires them).
 - **Scheduled (n)** — the scheduled templates, soonest next run first, then
-  any with no next run, paused ones last. Each card's **strip** holds its
-  cadence in this device's zone (*Every day at 21:00 EDT*, *Every 4 hours*),
-  when it runs next (*Next today 21:00 · in 2h*, *Paused*, *Starts on
-  mac-mini*) and its three switches: **Change schedule** (the editor, schedule
-  on), **Skip next** (*Let today 21:00 pass without a session — the one after
-  runs as usual*; the card then says *Skipping today 21:00 — you asked to
-  skip it* and offers **Undo skip**) and **Pause** / **Resume** (keeps the
-  cadence, starts nothing; the cadence is struck through and the strip says
-  *Paused*). Under it: the last run (*Last run yesterday 21:00 · scheduled →
-  nightly-deps-oct13*), or *Last run failed: …* (the card's border turns red,
-  and the top bar counts it), or *Skipped …: the previous run is still
-  working*, and the **Recent runs (n)** fold. With nothing scheduled the
-  section says *Nothing runs by itself yet — Schedule… on a setup below
-  starts it every day, weekday or on any cron.*
-- **Saved setups (n)** *run now or add a schedule* — the templates without a
+  any with no next run, paused ones last. Each card's **strip** holds THE
+  one schedule line — `templateScheduleLine()` in `lib/templates.ts`, the
+  same words New's ⏰ chip and Intake's Auto-start show: *Every day at 07:30
+  EDT · next Fri 07:30 (tomorrow skipped)*, *(mac-mini's time)* after the
+  zone when another device fires schedules — then how far off that is (*in
+  2h*), and its three switches: **Change schedule** (the compact schedule
+  row, below), **Skip next** (*Let today 21:00 pass without a session — the
+  one after runs as usual*; the line then says *(today skipped)* and the
+  strip offers **Undo skip**) and **Pause** / **Resume** (keeps the cadence,
+  starts nothing; the strip says *Paused*). Under it: the last run (*Last run
+  yesterday 21:00 · scheduled → nightly-deps-oct13*, the session name a link
+  that closes Schedule and shows that session, or *nightly-deps-oct13
+  (closed)* once it's gone — the same in **Recent runs**), or *Last run
+  failed: …* in red (the card's border turns red, and the top bar counts a
+  scheduled one), or *Skipped …: the previous run is still working*, and the
+  **Recent runs (n)** fold. With nothing scheduled the section says *Nothing
+  runs by itself yet — Schedule… on a template below starts it every day,
+  weekday or on any cron.*
+- **Not scheduled (n)** *run now or add a schedule* — the templates without a
   schedule, each with **▶ Run now**, **Schedule…**, **Edit** and **Delete**.
 
 Every card has **▶ Run now**, **Edit** and **Delete** at its top right.
-With no templates at all the surface is one dashed panel: *Save a session
-setup once, then start it with one click — or every night by itself.* and a
+With no templates at all the surface is one dashed panel: *Save a session as
+a template once, then start it with one click — or every night by itself.* and a
 **Create a template** button (the new-template editor). **Edit** opens the
 editor inline in the card — the New form's own parts, laid out the way New
 lays them out (`TemplateEditor.tsx`; `scope="tpl"` ids): **Name**; then the
-New form's Folder row — **Folder** (placeholder *Needed to Run now or
-schedule*; the field also takes a folder name to look up, as in New) with
-**Browse…** (the same inline folder browser; Escape puts the old folder back
-before it closes the editor) beside **Agent** (New's picker — this device's
-agents with *Your default agent* first, and its **Manage** link), the two on
-one baseline and one height; under them New's one line of **Recent** / **Home**
-folder chips with its *N more…* chip, and New's *No git repo in this folder…
-Create one* line for a plain folder; **Task** (*— what each session from it
+New form's Folder row — **Folder** (placeholder *The repo it works in*; a
+NEW template starts on the most recent repo, so it can run as soon as it's
+saved; the field also takes a folder name to look up, as in New) with
+**📁 Browse…** (the same floating folder picker; Escape closes the picker and
+puts the old folder back before it closes the editor) beside **Agent** (New's picker — this device's
+agents with *Your default agent* first, one this device lacks tagged *(not
+installed)* as in New, and its **Manage** link), the two on one baseline and
+one height; under them one line of one-click folders — *Use: 📦 repo* (repos
+and recent folders, up to three) — and New's *No git repo in this folder…
+Create one* line for a plain folder; a missing agent says *codex isn't
+installed — **Install** or pick another agent* under them (red, and Save
+refuses, once the template is scheduled: it would fail every night with
+nobody watching); **Task** (*— what each session from it
 starts on*), New's box that starts at two rows and grows. Below a rule, New's
 label column: **Works in** — New's own row: **Separate worktree**
 `recommended` with **Provision the worktree** (*Also runs the repo's setup and
@@ -2162,13 +2257,20 @@ warms test caches*, and its workspace strategy once ticked) hung under it,
 **This folder directly**, and **Create a git repo in this folder** (*git init +
 first commit — turns on diff, commit and PR*; not offered for a folder that is
 already a repo); **Schedule** — **Run on a schedule** (*Starts a new session
-from it, by itself*); and **When a run's turn ends** (*Leave it for me* /
-*Commit* / *Commit + push* / *Open a PR*), the template's autopilot — picking
-one moves *This folder directly* to the worktree and the other way round, as
-in New. **Cancel** / **Save** close the card, with a refused save's reason on
-the left of that row. **Delete** asks on an inline row — *Delete
-“<name>”? It goes from every device.* **Delete** / **Keep** — and checks the
-delete happened (*“<name>” was already gone*). **+ New template** adds one.
+from it, by itself*); and **Fast-track** (*When the agent stops. Applies to
+Run now and to scheduled runs.* — *Off* / *Commit* / *Push* / *Open PR*, the
+ladder's own words; never *Merge when green*: a template's runs are
+unattended), the template's autopilot — picking one moves *This folder
+directly* (whose line then reads *Can't commit or open a PR for you — needs
+its own worktree*) to the worktree and the other way round, as in New. *Open
+PR* with GitHub not connected says *Needs GitHub — **Connect GitHub*** under
+it (the server refuses that save with `github_required`). **Cancel** /
+**Save** sit in a footer that sticks to the bottom of the list while the form
+scrolls, with a refused save's reason (the server's own sentence) on the
+left of that row. **Delete** asks on an inline row — *Delete “<name>”?* plus
+*This also removes it from your other linked devices.* only when there are
+other linked devices — **Delete** / **Keep** — and checks the delete
+happened (*“<name>” was already gone*). **+ New template** adds one.
 Templates live on the server (`/api/templates`, synced between devices).
 
 **Run now and schedules.** **▶ Run now** (*Run now — starts a new session from
@@ -2176,19 +2278,31 @@ this template*) starts a fresh session — the template's agent, folder and
 workspace — with its Task already sent, titled after the template and the date
 (`rivian-update-oct13`, `-2` for a second run that day, so a nightly
 template's sessions sort together), and focuses it (Schedule steps aside). The
-palette offers the same as **Run template: <name>**. A template with no folder
-can't start a session on its own: Run now is visibly disabled and the card
-says *Run now and schedules need a folder.* **Add one** (opens Edit); the
-palette leaves it out. **Schedule…** (or a scheduled card's **Change schedule**) opens the editor with **Run on
-a schedule** already ticked: **Every day** / **Weekdays** **at** a time, in
-this device's zone (*EDT — this device's time*), or **Custom (cron)**: a
-5-field cron expression (`*/30 * * * *`, `0 21 * * 1-5`, `@weekly`) with the
-server's reading under it as you type (*Every 30 minutes — next today 10:30,
-today 11:00, today 11:30*, or why it can't be saved — nothing more often than
-every 15 minutes). A scheduled template needs a folder and a Task. **When a
-run's turn ends** (*Leave it for me* / *Commit* / *Commit + push* / *Open a
-PR*) arms each Run now and scheduled run with that autopilot depth, so a
-nightly chore can end in a PR. The card then reads *Weekdays at 21:00 EDT ·
+palette offers the same as **Run template: <name>**. When the server refuses
+(its agent isn't installed, no folder — a 409 recorded as a failed run) the
+toast is its own sentence — *Couldn't start pr-bot: codex isn't installed* —
+never *Started…*, nothing is focused, and the card turns red with *Last run
+failed: codex isn't installed*. A template with no folder can't start a
+session on its own: saving one says *Saved — add a folder to run it*, Run now
+is visibly disabled and the card says *Run now and schedules need a folder.*
+**Add one** (opens Edit with the caret in Folder and the field ringed); the
+palette leaves it out. **Schedule…** (or a scheduled card's **Change
+schedule**) opens a compact row inside the card — just the schedule, **Save**
+and **Cancel** (and **Stop schedule** on a scheduled one, which saves it
+unscheduled); **Edit** keeps the whole form. Either way the schedule is
+**Every day** / **Weekdays** **at** a 24-hour time (a text field, *07:30* —
+one format everywhere; *7:30* and *730* are read as 07:30), or **Custom
+(cron)**: a 5-field cron expression (`*/30 * * * *`, `0 21 * * 1-5`,
+`@weekly`) that starts from the days and time on screen (*Every day 07:30* →
+`30 7 * * *`, *Weekdays* → `30 7 * * 1-5`; switching back keeps a simple
+cron's time). Every mode shows the server's reading under it as you type,
+with the zone of the computer that runs schedules: *Every day at 07:30 EDT —
+next tomorrow 07:30, Fri 07:30, Sat 07:30*, *Every 30 minutes — next today
+10:30, today 11:00, today 11:30*, *Every Feb 29 at 00:00 EDT — next Feb 29
+2028, 2032, 2036* (dates in another year name it), or why it can't be saved
+— nothing more often than every 15 minutes. A scheduled template needs a
+folder and a Task. **Fast-track** arms each Run now and scheduled run with
+that autopilot depth, so a nightly chore can end in a PR. The card then reads *Weekdays at 21:00 EDT ·
 next today 21:00 · last yesterday 21:00 (scheduled) → rivian-update-oct12*
 (*by hand* for a Run now; *starts on <device>* when another device in the
 group runs automation and fires schedules), *Last run failed: …* when the
@@ -2205,6 +2319,31 @@ schedule · next run or *paused*, with **Run now**, and **Open Schedule ›**), 
 starts on its own?" question as the ticket, PR and issue queues there. From a
 shell, `mindflock run <template>` is Run now and `mindflock templates` lists
 schedules and last runs.
+
+### The folder picker window (📁 Browse…)
+
+Every editable path field — New's **Folder** and its *Runs in* line, a
+template's **Folder**, **Settings → Workspace → Workspace folder** — has a
+**📁 Browse…** button that opens ONE floating, draggable window, **Pick a
+folder** (`FolderPickerWindow.tsx`, store in `lib/folderPicker.ts`; the field
+itself is `PathField.tsx` outside New). It is non-modal — the form under it
+stays usable — and sits above every dialog and under the toast. Drag it by its
+title bar (it stays wholly on screen, and at ~420 px it is as wide as the
+screen less a margin); its corner resizes it; it reopens where it was left and
+at the size it was left, per browser (`localStorage` `mf_folder_picker_rect`,
+never a synced pref). Inside is the folder browser New always had (📦 repos /
+📁 folders, *Click selects · double-click or → opens · ← up*, **+ Folder**),
+the folder you are in on the top line and the chosen one in the footer beside
+**Use this folder** (Enter; Enter on a row takes that row; ↑/↓ walk the rows).
+**✕** or Escape closes it without a pick — Escape goes to the picker before the
+dialog under it, except inside the + Folder name box. It opens on the field's
+value, or the nearest folder above it that exists, or home. One window at a
+time: another field's Browse… re-targets it (the first field's browse is
+cancelled). A pick fills the field through its normal change path, so saving
+works as before (the Workspace folder saves on pick, as it does on blur). In
+New and the template editor a click in the picker already fills the Folder
+field (the git nudge follows it) and Escape / ✕ put the old folder back.
+Read-only path rows (Workspace's **Copy** lines) have no button.
 
 **Browse… → + Folder** creates a folder on disk, inside whatever directory the
 browser is currently showing — the path line directly above the name box — and
@@ -2320,54 +2459,50 @@ text box — and the full form is page 2. The box is the widest of the three way
 to fill the form in (a sentence, a template chip, or by hand), and **nothing in
 it is submitted**: it wears the same card as the Templates and folder-suggestion
 strips rather than looking like a second form stacked on the first. Under it,
-*__Create session__ starts it now in **<folder>**, with what you typed as its
-task. __Review details first__ has your agent pick the folder, name and
-options, and shows them to you before anything starts.* — the folder named is
-the one the form holds (the last-used or best suggestion; with none, *needs a
-folder — it opens the form with what you typed as the task*) — then two
-examples (*Examples: start a new project called invoice-parser · add metrics
-to billing, in a worktree*) and *Starting from a ticket, pull request or
-issue? **Open Intake***.
+ONE line says where **Start** runs it: *Runs in [📦 repo ▾] · own branch
+`me/add-readme-section…` · change*. The folder is a real picker (`#new-describe-folder`,
+the New tour's `new-folder` hook): **Recent folders** (only ones a session was
+started in), the other suggestions, then **Browse…**, which opens the folder
+picker window. A folder with no repo reads *· in the folder
+itself (no git, so no diff or PR)*; a path that doesn't exist reads *No folder
+at …* with **Create this folder**, and Start stays off. **change** opens the
+form. Then *Starting from a ticket, pull request or issue? **Open Intake***. A
+path typed into the sentence is not read as the folder — the line is the
+folder.
 
-Three actions sit under it, in increasing order of commitment, each named for
-its outcome rather than for the app's own vocabulary:
+Three actions sit under it — ONE primary:
 
-- **Set it up myself instead** — straight to page 2, with what you typed as the
-  Task (a Task you edited since an earlier trip is kept). Nothing is read and
-  no model runs. It cannot be dropped: it is the only route to the form for
-  someone with no coding CLI installed.
-- **Review details first ↵** — the primary (accent) button, because it is
-  what Enter in the box does (hidden for an
-  Intake batch, which has no single form to fill in). Sends the sentence to
-  [`POST /api/session-plan`](web-api.md#post-apisession-plan--200), which walks
-  the filesystem, asks one headless model turn, and fills in page 2 for you to
-  change before anything is created — Folder, Name (when the plan has one),
-  Task, and the Works in choice (*this folder directly*, *Create a git repo*),
-  opening those folds — then moves the caret to Folder. It leaves the agent,
-  account, launch flags and Plan first alone. Enter here has always meant "read
-  this", and `preventDefault` keeps it that way — the box lives inside the form,
-  so without it a sentence nobody has resolved yet would become a create in
-  whatever folder the pre-fill left behind. The button is **`type="button"`**
-  for the same reason. Shift+Enter starts another line.
-- **Create session** — the secondary button: starts the session **now**, in
-  the folder the help line names, with the sentence as typed as its Task, the
-  form's other choices as they stand, and the name made from the task — no
-  model turn, nothing to wait for (pressed during a Review read, it drops the
-  read). A refusal (no folder, a missing agent, a folder to confirm) opens the
-  form with the sentence already in Task. After **Review details first** and
-  **← Back**, it acts on that plan instead of reading again.
+- **More options** — quiet, far left: straight to page 2, with what you typed
+  as the Task (a Task you edited since an earlier trip is kept). Nothing is
+  read and no model runs; it is the only route to the form for someone with no
+  coding CLI installed.
+- **Let the agent set it up…** — secondary (hidden for an Intake batch). Sends
+  the sentence to [`POST /api/session-plan`](web-api.md#post-apisession-plan--200),
+  which walks the filesystem, asks one headless model turn, and fills in page 2
+  for you to change before anything starts — Folder, Name (when the plan has
+  one), Task, and the Works in choice — then moves the caret to Folder. It
+  leaves the agent, account, launch flags and Plan first alone. The button is
+  **`type="button"`**: the box lives inside the form.
+- **Start ↵** — the primary (accent), and what **Enter** in the box (and
+  **Ctrl/Cmd+Enter** on page 1) does: starts the session **now**, in the
+  folder the line names, with the sentence as typed as its Task, the form's
+  other choices as they stand, and the name made from the task — no model
+  turn (pressed during a read, it drops the read). A refusal (no folder, a
+  missing agent) opens the form with the sentence already in Task. After
+  **Let the agent set it up…** and **← Back**, it acts on that plan instead of
+  reading again. Shift+Enter starts another line.
 
-While a turn is in flight **the button that was pressed** shows a ring, a word
-and a clock — **Reading… 0:04**, then **Still reading… 0:09** after 8 s. The
-read gives up at **30 s** (the server's own budget, `session_plan.TIMEOUT_PLAN`,
-is the same): *The agent didn't answer within 30 seconds.* with **Fill the form
-with what I typed**, which opens the form with the sentence as its Task. Any
-other failure says why and offers the same button — a CLI known not to be
-signed in says *claude isn't signed in yet — sign in under Settings → Agents*
-rather than *claude exited 1*.
-A **Cancel** link appears beside the box, which goes read-only rather than
-disabled so the caret and the selection survive the wait. Create on the form is
-held while a turn is reading.
+While a turn is in flight the button shows a ring and **Asking…** (**Still
+asking…** after 8 s), and a line under the box says who and for how long at
+most: *Asking Claude Code to fill in the details… 0:04 (up to 30 s)*. The read
+gives up at **30 s** (the server's own budget, `session_plan.TIMEOUT_PLAN`, is
+the same): *The agent didn't answer within 30 seconds.* with ONE recovery,
+**Start it in <folder> instead** (with no folder: **Pick a folder…**, the
+form). Any other failure says why and offers the same button — a CLI known not
+to be signed in says *claude isn't signed in yet — sign in under Settings →
+Agents* rather than *claude exited 1*. A **Cancel** link appears beside the
+box, which goes read-only rather than disabled so the caret and the selection
+survive the wait. Start on the form is held while a turn is reading.
 
 **One prompt, however many lines; batches come from Intake.** The box is a
 textarea and stays ONE prompt however many lines it holds — **Fast-track to**
@@ -2466,7 +2601,7 @@ server and follow you between devices. They have three doors, one job each:
   more are running ("running" = status `running` or started, but not paused;
   verify sessions are left out; *All* sends once per session). Both surfaces
   use one paste path, `lib/promptPaste.ts`.
-- **New's Task box** can start from one: **Insert a prompt…** sits
+- **New's Task box** can start from one: **Insert saved text…** sits
   beside the **Task** label. Built-ins ship for the common loops — *Fix
   failing tests*, *Address PR review comments*, *Write tests for recent
   changes*, *Refactor for clarity — no behavior change*. Picking one fills the
@@ -2487,10 +2622,10 @@ a same-named different one is saved as *<name> (saved prompt)*.
 ## First-run onboarding
 
 One checklist, shown in one place at a time. On a genuinely first launch the
-welcome tour opens once over the grid's first-run card (below); nothing else
-opens by itself. It counts as seen (the synced `welcome_tour` pref) when it is
-closed — **Get started**, **Skip** or `Esc` — not when it first shows, so a
-reload halfway through brings it back. UI store state
+welcome card opens once over the grid's first-run card (below); its **Let's
+go** starts the Welcome [tour](#tours) over the checklist. It counts as seen
+(the synced `welcome_tour` pref) by **every** exit — **Let's go**, **Skip**,
+`Esc` or the backdrop — so it never comes back by itself. UI store state
 (`state/store.ts`: `hintsEnabled`, `dismissedHints`, persisted in
 `localStorage`) covers the hints; the checklist's state is the server's.
 
@@ -2502,11 +2637,17 @@ reload halfway through brings it back. UI store state
   (`GET /api/setup`, `backend/web/core/setup_steps.py` — the same list
   `mindflock init` prints, in the same state), drawn as three groups so the
   few things that matter come first:
-  - **Get started** (required): ① **Install the tools** (the
-    **Install …** button, then *only* what getting started is missing —
-    optional extras such as Tailscale, peer links, a local model or the gh CLI
-    never show here; every check is folded under *All checks (N)*, and
-    Settings → Doctor lists them all; **Re-check**), ② **Sign in to your
+  - **Get started** (required): ① **Install Claude Code** — the server
+    names the default agent by its product name (`tools_title`); it reads
+    *Install the tools* only when the agent is already here and something
+    else is missing. The **Install …** button names the agent too (*Install
+    Claude Code*); beside it only problems the button does NOT fix (a row the
+    install plan covers shows inside *All checks* only). *All checks (N)*
+    lists only checks that can block ①–③ (each doctor row's `required`);
+    phone, Tailscale, MTU and sudo fixes never show in Setup — they belong to
+    Settings → Your phone and Settings → Doctor. Before any payload arrives
+    the step shows a skeleton of the install row, then the setup payload's own
+    doctor result, never an empty card. **Re-check**. ② **Sign in to your
     agent** (the default agent's **agent card** — the same card Settings →
     Connections, Agents and Custom agents show, with its one next action:
     **Install** → **Sign in** → **Test**; *Using Claude Code · change*; *Using
@@ -2518,23 +2659,37 @@ reload halfway through brings it back. UI store state
     on its task (the activity classifier's first corroborated *working*
     reading), not when a session row appears; until then a session that exists
     says *Your first session is open. This ticks once its agent starts on your
-    task.* (or, while ② is not done, that it can't start until you sign in).
-  - **Connect your work** (optional): ④ **Connect GitHub** (the Connect
-    GitHub dialog below) and ⑤ **Connect your tracker** (**Add a ticket
-    source** opens Intake → Tickets). Each has a **Skip** (and **Show
+    task.* (or, while ② is not done, that it can't start until you sign in),
+    and the step's primary is **Show my session →** (closes Setup and selects
+    that session's pane — the focused one, else the first) with a quiet *or
+    start another* link instead of a second **+ New session**.
+  - **Connect your work** (optional): ④ **Connect GitHub** (*Optional —
+    pushing works without it; needed to open and merge pull requests.* — the
+    Connect GitHub dialog below) and ⑤ **Connect your tracker** (**Add a
+    ticket source** opens Intake → Tickets). Each has a **Skip** (and **Show
     again**).
-  - **Optional, later** — folded, unnumbered, not counted: **Use it from
-    your phone** (**Install Tailscale** with the doctor's hint until
-    Tailscale is there, then **Show QR**; **Settings → Your phone**), plus one
-    line pointing at Settings for other computers, people, extensions and IDEs.
+  - **Optional, later** — folded, unnumbered, not counted: one line, *Use it
+    from your phone — Set up in Settings → Your phone*. Tailscale, its fixes
+    and the QR live on that screen, not in Setup.
+  Tour hooks (stable; pinned by `setupChecklist.test.ts`):
+  `data-tour="setup-step-<id>"` on each counted step's root (`tools`,
+  `agent_login`, `repo`, `github`, `tracker`) and `data-tour="setup-next"` on
+  the next step's primary button only (the install button, the agent card's
+  **Sign in**, **Show my session →** / **+ New session**, **Connect GitHub**,
+  **Add a ticket source**).
   One obvious next action: the server's `summary.next` step is outlined and
   its button is the only accent-coloured one; a done step shrinks to its
   title. The progress line uses the chip's one count (`setupCount`): the three
   required steps (*1 of 3 done · next: Sign in to your agent*), then what
   optional is left (*3 of 3 done · 2 optional left · next: Connect GitHub*).
-  **Install …** never leaves you watching a cursor: the window shows what it
-  installs and a running clock (from the run's own start, `started_at` on
-  `GET /api/doctor/install-state`), and after 90 s, or when the run fails,
+  **Install …** never leaves you watching a cursor: the window's line says
+  what it fetches and a running clock (*Downloading Claude Code… 0:12 — can
+  take a few minutes*, from the run's own start, `started_at` on
+  `GET /api/doctor/install-state`); on success the window STAYS, with *✓
+  Claude Code installed — Next: Sign in* and a **Sign in to Claude Code**
+  button that hands over to the agent's sign-in window (the checklist keeps
+  step ①'s body mounted while either window is up, so ticking ① no longer
+  takes the window with it); after 90 s, or when the run fails,
   shows the commands to run in your own terminal with **Copy** — the same
   commands are always under *Or run it yourself* by the button. A run still
   going after a reload (or in another tab) shows as *Installing… 1:23*
@@ -2550,9 +2705,9 @@ reload halfway through brings it back. UI store state
   step once done stays done. The state is `general.setup`;
   `general.onboarded` is derived from ③ (an older store is migrated on load;
   one that settled the old combined "Connect a tracker and GitHub" step reads
-  ④ as skipped). The text a first `mindflock serve` prints at boot is folded
-  at the bottom as *What the server found at first start* — the desktop
-  app's server writes it to a log nobody reads.
+  ④ as skipped). The text a first `mindflock serve` prints at boot (a CLI
+  transcript — `report` on `GET /api/setup`) is NOT in Setup; it is the
+  folded *First-start report* under Settings → System logs.
 - **Setup chip** — once the three required steps are done (or a session
   exists) the card gives way to a compact chip in the sidebar footer reading
   **Setup 1 of 3** (then **Setup 3 of 3 · 2 optional**), until every
@@ -2560,54 +2715,33 @@ reload halfway through brings it back. UI store state
   *Optional, later*, never keeps it up). The chip, the doctor chip's **open Setup**, the
   palette's **Open Setup checklist** and the desktop app's `?setup=1` (its
   older spelling `?setup=install`; once, the parameter is stripped) open the
-  **Setup** modal, which renders the same checklist. The modal never opens
-  by itself — not on a failing doctor probe, not on a first load. The
+  **Setup** modal, which renders the same checklist (its **Close** sits
+  top-right, like every dialog's). The modal never opens
+  by itself — not on a failing doctor probe, not on a first load. In a
+  phone-narrow window the sidebar is a drawer over the page; any dialog that
+  opens (the chip's Setup, Shortcuts, …) closes the drawer first
+  (`Modal`'s `mf:modal-open` event → `closeDrawerForModal`), so it is never
+  drawn under it. The
   doctor chip stays down while the grid card or this chip is showing,
   because both open the checklist that already lists the same checks.
-- **Tour** (`onboarding/WelcomeTour.tsx`) — a five-slide tour: **Welcome to
-  MindFlock** (agents side by side on this machine, no account and no cloud;
-  each session is its own branch and folder), **Sessions & the grid** (New,
-  a pane and a row per session; more tools — the Assistant, usage, how many
-  panes show — appear once you have a few sessions, ⚙ Customize brings them
-  in sooner), **Shipping** (the
-  pane's next-step button, ⏩ Fast-track, and the bell for anything waiting
-  on you), **Where work comes from** (Intake, Verify for checking what you
-  shipped, and ⚙ Customize for more bars, like Prompts) and **You're all
-  set** (Setup for GitHub and your tracker, hints, Replay tour) — or, while
-  the doctor still reports a required tool missing, **One thing left**. Both
-  end on **Open Setup** (the checklist, not the whole of Settings) and
-  **Get started**.
-  The fourth slide carries **Set up now →**, which opens **Intake** on its
-  Tickets tab (`LEGACY_SCREEN_TABS` decides that from the slide's `screen`
-  key). The tour pauses behind Settings, Intake or Setup rather than ending,
-  so closing one lands you back on the same slide. It **opens by itself
+- **Welcome card** (`onboarding/WelcomeTour.tsx`) — ONE card: **Welcome to
+  MindFlock**, *MindFlock runs coding agents side by side on this computer,
+  each session on its own branch. Three steps and your first agent is
+  running.* and one button, **Let's go**, which closes it and starts the
+  Welcome tour over the Get set up checklist (on the empty grid; a replay
+  with sessions open brings up the Setup modal first). **Skip**, `Esc` and
+  the backdrop just close it. It replaced a five-slide tour whose slides
+  described a grid, shipping and Intake that weren't on screen yet, covered
+  the checklist, re-armed itself after two of its exits (*Set up now →*,
+  *Open Setup*) and said *You're all set* at 2 of 3. It **opens by itself
   once**, on a first launch — no session ever started (the setup record's
   `repo` step) and never seen on any of your devices (the synced
-  `prefs.welcome_tour`, marked the moment it opens; the page waits for its
-  first prefs pull before deciding). After that it is the palette's
-  **Tour**, the **Tour** link on the **?** shortcuts sheet, and **Replay
-  tour** in Settings → General.
-- **Connect GitHub** (`dialogs/ConnectGitHub.tsx`, `/api/github/*`) — one
-  sign-in for opening PRs and pushing, stored as `github.token` (which
-  settings sync shares with your other devices). It offers the best way this
-  computer has: **Sign in with GitHub** (GitHub's device flow — a code to type
-  at github.com/login/device — when an OAuth App client id is configured,
-  `github.oauth_client_id` or `$MINDFLOCK_GITHUB_CLIENT_ID`), else **Sign in
-  to GitHub** (`gh auth login --web` then `gh auth setup-git`, in a terminal
-  window, when gh is installed — its token is copied in when the window
-  closes), else **Make a token on GitHub** (a pre-filled classic-token page:
-  `repo`, `read:org`) and a paste box, which is also always offered folded as
-  *Or paste a token*. A pasted token is checked with GitHub before it is saved.
-  Below it: *Your name and email for commits* when git has none (pre-filled
-  from the account, with its private `@users.noreply.github.com` address;
-  **Use these** writes the global git config — nothing writes it on its own),
-  and **Check I can push**, which asks the remembered repo's origin for real
-  (a `push --dry-run` with prompts off). When that fails for want of an HTTPS
-  credential, **Let git push with this sign-in** runs `gh auth setup-git`, or
-  — only when git has no credential helper for GitHub — registers
-  `mindflock git-credential` for https://github.com. Every one of these
-  routes is for the person at this computer (`privileged()`), never a relayed
-  or anonymous caller.
+  `prefs.welcome_tour`; the page waits for its first prefs pull before
+  deciding). After that it is the palette's **Replay welcome tour**, the
+  **Tour** link on the **?** shortcuts sheet, and **Welcome tour → Replay** in
+  Settings → General → Help.
+- **Connect GitHub** — the dialog; see [Connect GitHub](#connect-github)
+  below.
 - **Push failed** — the Push button types `GIT_TERMINAL_PROMPT=0 git push …`
   into the session's shell, so a missing credential fails at once instead of
   waiting on a Username prompt. When the push's output (kept in the
@@ -2617,9 +2751,10 @@ reload halfway through brings it back. UI store state
   opens Setup (`session.push_failed`).
 - **Install …** — above the dependency checklist (the card, the Setup modal and
   Settings → Doctor) whenever something this machine needs is missing. The
-  button names what it installs when that's short (*Install tmux + claude*,
-  else *Install everything missing*), with the full list beside it and *asks
-  for your password once* when a package-manager or Homebrew step is in it.
+  button names what it installs, an agent by its product name, when that's
+  short (*Install tmux + Claude Code*, else *Install everything missing*,
+  with the full list beside it), and says *asks for your password once* when
+  a package-manager or Homebrew step is in it.
   One click opens a terminal running a single script: Homebrew first on a Mac
   that lacks it, one package-manager run for every system package (one sudo
   prompt), then each tool's own installer — including whichever agent CLI you
@@ -2635,6 +2770,10 @@ reload halfway through brings it back. UI store state
   Claude Code: *Pick a text style … Choose how to log in … Open the link it
   shows* — and watches the login probe, so it says *✓ Signed in. You can close
   this window.* the moment the login lands. Closing it re-runs the check.
+  The login, gh and install terminals are always dark (`.login-term-dark`
+  in `dialogs/ConnectGitHub.css`), whatever the app's theme: a CLI's login
+  screen is drawn for a dark terminal, and Claude Code's highlighted option
+  is light cyan.
   Neither the login nor the install terminal draws tmux's status line.
 - **The agent card** (`components/setup/AgentCard.tsx`) — one card per agent,
   the same on Connections (*What you use*), Settings → Agents, Settings →
@@ -2643,19 +2782,118 @@ reload halfway through brings it back. UI store state
   **Install** (not on this computer: the Setup checklist's own one-click
   install, or the copyable command for an agent that isn't in its plan) →
   **Sign in** (installed, no login found) → **Test** (everything else; it
-  answers in words: *Signed in as …*, *Installed, not signed in yet*). The
+  answers in words: *Found at /usr/bin/claude · signed in as … · answered in
+  0.4 s*, or *… · installed, not signed in yet*). The
   default agent's card on Connections adds a quiet **Change agent** link to
   Settings → Agents; nothing points at another screen for the same thing. A
-  finished install says *✓ Installed — next: sign in to Claude Code*.
+  finished install says *✓ Claude Code installed — Next: Sign in*.
 - **Hints** (`onboarding/Hint.tsx`) — small dismissible 💡 inline callouts that
   nudge toward a feature. Each needs a **stable `id`**; dismissing one remembers
   that id (`dismissHint` → `dismissedHints`). A master switch (`hintsEnabled`,
   Settings → General) hides all of them at once; turning hints **back on
   re-arms** every previously dismissed hint (clears `dismissedHints`).
 
-The tour and hints are reset/replayed from the **Getting started** block at the
-top of **Settings → General**. There is no sidebar welcome hint any more; the
-one first-run hint left in the sidebar points at Customize.
+The tours and hints are replayed from the **Help** block at the bottom of
+**Settings → General**. There is no sidebar welcome hint any more; the one
+first-run hint left in the sidebar points at Customize.
+
+### Tours
+
+A **tour** is a short coach-mark walkthrough of one surface: a ring around a
+live control and a small card beside it (`onboarding/CoachTour.tsx`) — one
+plain sentence, **Back** / **Next** / **Done**, *2 of 4*, **Skip tour**. It
+is non-modal (`role="dialog" aria-modal="false"`): what it points at stays
+clickable, the card sits beside, below or above its target (re-measured on
+resize, on any scroll, and as the dialog fills in), and a step whose target
+isn't on screen centres the card and still shows. `Esc` ends it; the arrow
+keys page.
+
+Every step is **brought into view by the tour** (`revealTarget` in
+`CoachTour.tsx`): a target inside a closed `<details>` has its fold opened,
+and one not wholly inside its scrolling pane (a Settings screen, a dialog
+body) or the window is scrolled to the pane's centre (`behavior: "smooth"`,
+or instant under reduce motion) — nobody scrolls to find a ring. A target
+that renders late is looked for again for a few seconds. A step can also name
+a `screen` of its surface to switch to first (`TourStep.screen`); Settings is
+the one surface that reads it.
+
+There are six (`lib/tours/`, one file per tour, `TOURS` in `index.ts`):
+**Welcome** (over the Get set up checklist: the *next:* line, ① Install
+Claude Code, ② Sign in to your agent, ③ Start your first session, then the
+first sidebar row), **New** (the task box, the *Runs in* folder picker,
+**Start**, then a session pane's Agent / Diff tabs and its ⋯ — hooks
+`new-task`, `new-folder`, `new-start`, `pane-tabs`, `pane-menu`; the last
+step centres when no session is open), **Intake**, **Verify**, **Schedule** (six
+steps: the top-bar **Schedule** — or **Create a template** while that item is
+still hidden — then Create a template, Name + Folder, Task, Run on a schedule
+and its next-runs line, **▶ Run now**; hooks `schedule-new`, `schedule-name`,
+`schedule-folder`, `schedule-task`, `schedule-when`, `schedule-run`) and
+**Settings** (seven steps across four screens: Connections' status header,
+GitHub's **Connect** — the whole GitHub card once connected — and the search
+box; Agents' default-agent picker; Workspace's *Where your worktrees live*;
+**Show advanced settings · N more screens** at the nav's foot; General's Help
+block. Hooks `settings-status`, `settings-github`, `settings-default-agent`,
+`settings-worktrees`, `settings-advanced`, `settings-tours`. Its first step's
+screen is Connections, so the **?** always restarts it there). A step's target is a CSS selector, usually a stable id or a
+`data-tour="<surface>-<thing>"` hook (with today's id as a fallback in the
+same selector list — a list matches in *document* order, so a fallback must
+be the hooked element or inside it, never earlier in the page).
+
+- **Replay** lives in three places: the **?** beside Close in each top-bar
+  dialog's header (`onboarding/TourButton.tsx` — *Show me around*, titled
+  *Replay the Intake tour*), **Settings → General → Help** (one **Replay**
+  per tour), and the palette (**Replay Intake tour** …).
+- **By itself, once** (`onboarding/useAutoTour.ts`): a dialog's tour opens
+  the first time that dialog opens in the [calm first hour](#layout) — decided
+  from the server's setup record, never the render hint — and only while it
+  isn't in the synced `prefs.tours_seen` list (localStorage `mf_tours_seen`;
+  the page waits for its first prefs pull, so a tour seen on another device
+  never opens here). Never outside the first hour, never with hints off,
+  never over the welcome card or another tour.
+- **Seen by every exit**: **Done**, **Skip tour**, `Esc`, or closing the
+  dialog under it (`closeCoachTour` in the store) adds it to `tours_seen`.
+
+The Map tab's own tour ([The Map tour](#the-map-tour)) is the same coach mark,
+contained in the Map's pane.
+
+### Connect GitHub
+
+`dialogs/ConnectGitHub.tsx`, `/api/github/*`. One sign-in for opening and
+merging PRs, stored as `github.token` (which settings sync shares with your
+other devices). Pushing does not need it — it is plain git over your own
+remote. The dialog has ONE primary path (`connectLayout`):
+
+- **Device flow configured** (an OAuth App client id: the build's constant,
+  `github.oauth_client_id` or `$MINDFLOCK_GITHUB_CLIENT_ID`): one **Sign in
+  with GitHub** button (a code to type at github.com/login/device); the token
+  steps are folded under *Or paste a token*.
+- **Not configured**: the three numbered token steps ARE the path — **Make a
+  token on GitHub** (a pre-filled classic-token page: `repo`, `read:org`) →
+  paste it → **Save & test** (GitHub checks it before it is saved). When gh
+  is installed, *Other ways to connect ▸* folds **Sign in with the GitHub
+  CLI**: a terminal running `gh auth login --hostname github.com
+  --git-protocol https --web` then `gh auth setup-git`, whose window lists
+  what the terminal asks, in order (*Authenticate Git with your GitHub
+  credentials?* → Enter; the one-time code → Enter opens GitHub; approve), and
+  says *✓ Connected as @…* + **Done** once GitHub reports the sign-in (gh's
+  token is copied in when the window closes).
+
+After *✓ Connected as @…* a **Done** button closes the dialog, back to the
+Setup checklist with ④ ticked. *Your name and email for commits* (in the
+dialog's step-heading style) shows when git has none — pre-filled from the
+account with its private `@users.noreply.github.com` address; **Use these**
+writes the global git config, nothing writes it on its own. **Check I can
+push** says what it will ask before the click (*Checks repo → <origin URL>*,
+from `push_target` on `GET /api/github/status`), asks that origin for real (a
+`push --dry-run` with prompts off), and on a failure names the repo and the
+remote with one fix — a command in a **Copy** box (*repo has no remote called
+origin yet, so there's nowhere to push* → `git remote add origin <url>`), or a
+sentence for anything else. When it fails for want of an HTTPS credential,
+**Let git push with this sign-in** runs `gh auth setup-git`, or — only when
+git has no credential helper for GitHub — registers `mindflock
+git-credential` for https://github.com. Every one of these routes is for the
+person at this computer (`privileged()`), never a relayed or anonymous caller.
+Settings → Connections' GitHub card links its **Docs** here.
 
 ## Make-PR dialog
 
@@ -2788,16 +3026,33 @@ shared top edge ([dialog placement](#new-session-dialog)) rather than being
 centred, so switching to a taller tab grows it downward instead of moving the
 tab strip under the cursor.
 
-**What auto-starts, in one line.** A line above the tabs says what auto-starts
-right now across the three switches (*Auto-start is on for tickets and PR
-comments.*, *Auto-start is off everywhere.*, or *Nothing auto-starts yet — set
-up a tab below first.*); with everything off it offers **Turn on…**, which goes
-to the tab whose switch does it (`intake/switches.ts` reads the three together).
-It is read-only: there is no **Pause intake** any more — it was removed as
-redundant, since each tab's switch already turns its own automation off. An
-older build's pause record (`general.intake_paused`) is no longer read: the
-switches it turned off simply show as off, and turning one back on is the
-ordinary switch. **New → Ticket** reads the same ticket switch, so it never says
+**One home for auto-start** (round 5). The three switches — **Tickets**,
+**PR review comments**, **New issues** — sit together at the top of the
+**Auto-start** tab (`intake/AutoStartSwitches.tsx`, the same ids as before:
+`#tk-ingestion-enabled`, `#gh-pr-enabled`, `#gh-issues-enabled`), each saying how
+often it checks (*checks every 20 s* / *every minute*, from the source's
+`poll_interval_seconds` or `github.poll_interval_seconds` /
+`issue_poll_interval_seconds`, else the pipeline's defaults) or why it can't be
+on yet (*Add a repository first — on the GitHub PRs tab*; *Jira can't connect —
+press Fix on the Tickets tab*). Beside them, **Pause all auto-start**
+(`#ik-pause-all`) turns every switch that is on, off, in one press. It is not
+the old pause — there is no **Pause intake** any more: Pause all records nothing
+and has no Resume, and turning one back on is that switch (an older build's
+`general.intake_paused` is still never read). The toasts keep the switches'
+long names (*Auto-start tickets on*, *Auto-address review comments off*,
+*Auto-start new issues on*).
+The Tickets / GitHub PRs / GitHub issues tabs show one line where their switch
+used to be — *Auto-start: on — checks every 20 s* · **Change ›** (or *off* ·
+**Turn on ›**) — which goes to the switches.
+
+**What auto-starts, in one line.** A line above the tabs says what starts on its
+own right now across the three switches (*Auto-start is on for tickets and PR
+comments.*, *Auto-start is off everywhere.*) and the next scheduled template
+(*Next to start on its own: nightly tests, Fri 07:30 — tomorrow's run
+skipped.*); its link (**Turn on ›** / **Auto-start switches ›**) goes to the
+switches (`intake/switches.ts` reads the three together, for this line, the
+row chips and New → Ticket alike). It is hidden until something is set up, so a
+first open shows only the add flow. **New → Ticket** reads the same ticket switch, so it never says
 auto-start is on while Intake says off.
 
 **Chips follow the switches.** A row that passes every filter says
@@ -2870,11 +3125,13 @@ their own toggles *inside* it. An earlier cut let that leak into the labels, so
 tickets read "ingestion paused" beside a PR reading "switched off", which invites
 you to think two different things are wrong. The difference is real, and it
 belongs in exactly one place: the sentence under the heading, which names the
-switch to flip — *"These are ready, but auto-start is off — they will not begin
-until **Automated ingestion** is switched on, on the Tickets tab (this runs inside
-it). You can still start any of them here, with **Start**."* — naming the switch as
-its tab names it: **Auto-start tickets**, **Auto-address review comments**,
-**Auto-start new issues**. The PR and issue sections follow their own switches
+switch to flip — *"They won't start on their own: Tickets is off (above). You can
+still start any of them here, with **Start**."* — naming the switch as the
+switches above name it. The sentence comes from the same state as the chip
+(`stalledText` in `QueueTab.tsx`), so a *not set up* chip is never followed by
+"auto-start is off" and a section that can't connect says so once, by source
+name. Ticket rows are grouped under the source's name (*Jira — payments*), never
+its id. The PR and issue sections follow their own switches
 only; they used to be read as stalled whenever the ticket switch was off, which
 was wrong — the pipeline runs whichever halves are on. A ticket section whose
 sources are all saved but can't be reached says *can't connect* and names the
@@ -2896,13 +3153,15 @@ use, with the same per-launch agent, depth and effort pickers and a **Start**
 button, so waiting for the sweep is the default rather than the only option — and
 when auto-start is off, starting from here is the entire point of the tab.
 
-**One anatomy, three tabs** (`components/intake/kit.tsx`): an intro line → a
-master switch → (on the GitHub tabs) the **GitHub line** → a **work list grouped
-by source**, each row carrying why auto-pickup did or didn't take it →
-**Advanced options** (the tab-wide defaults, on the GitHub tabs). Each of the
-three is a titled section, and the switch is a banded row; its one subtitle is
-the state a switch cannot show: nothing connected yet (*Add a ticket source first
-— + Add source*).
+**One anatomy, three tabs** (`components/intake/kit.tsx`): an intro line → the
+**auto-start line** (where the switch stands, and the way to it) → (on the GitHub
+tabs) the **GitHub line** → a **work list grouped by source**, each row carrying
+why auto-pickup did or didn't take it → **Advanced options** (the tab-wide
+defaults, on the GitHub tabs, once a repository is watched). An empty GitHub PRs
+/ GitHub issues tab is one card instead (`GithubSetupCard`): **1 Connect GitHub**
+(✓ *connected as @you* once it is) → **2 Pick a repo…** (opens the add flow's
+repository step) → **3 Turn on** (a link to the Auto-start tab). The add flow no
+longer opens there by itself; **+ Add source** still opens it.
 
 **Add once, edit where it shows.** There are no source cards. A configured
 source — a tracker, a watched repository — is its **heading in the work list**,
@@ -2931,7 +3190,26 @@ and that heading is where it is edited:
 The editor has the same sections for every kind: **Connection** (the
 credentials, and the Test that proves them — a ticket source's pill sits beside
 the section title) → **What it takes** (whose tickets, which states) → **Where it
-goes, and who works it** (repo, agent, fast-track) → **Advanced options**. Its
+goes, and who works it** (repo, agent, fast-track) → **Advanced options**. A
+ticket source's editor shows them one at a time, as the add flow's steps
+(**1 Connect** · **2 What it takes** · **3 Where it goes**, `.ik-edit-steps`):
+it opens on Connect when the source can't connect, else on What it takes. The
+closed **Advanced options** fold says what it holds on its summary line (*—
+Name: Jira – EU · Effort: high*, or *— nothing changed*). A Test-filled field
+is labelled *Member ID (filled in by Test)*.
+
+**Rows.** A startable row's line says where it goes first: *→ quickpay/quickpay ·
+claude · Fast-track: Off* (`owner/repo` for a GitHub remote), with **Options**
+holding a **Repo** picker when the source has several. A row with a session —
+on any tab, just started or listed with `has_session` — has one control,
+**Open session ›**: it closes Intake and brings that session forward
+(`openSessionFromIntake`); Intake remembers its tab, so `Alt+I` returns to the
+same place. Tab badges say what they count in their tooltip (*2 ready to start —
+the ones auto-start would take (7 listed)*). A ticket source that can't connect
+shows the server's `source_status[id].connect_error` in place of its list —
+*Can't connect — No Jira site at acme.atlassian.net — check the Site URL — press
+Fix.* — never "No tickets are assigned to you"; the footer names the heading's
+real button (**Fix** or **Edit**). Its
 footer is the save line and **Remove**, which **arms** rather than fires: the
 first press turns it into a red *Confirm — remove Jira — payments* (it disarms
 on blur or after five seconds), the second removes it — inline, because these
@@ -2962,15 +3240,24 @@ source** / **+ Add a repository**). The tracker and repository halves:
   tile picked; past step 1 another tile switches the draft straight over)
   starts a draft (`needs_filter: "on"`: it
   auto-starts nothing until a state or label is picked). **Connect** is the
-  credentials; **Test & continue** saves the draft first (Test records its
-  verdict, member id and state list on a *saved* source) and then tests; a
-  failed Test stays on the step and offers *Continue anyway* (a state can still
-  be typed before a Test passes). **What it does** is whose tickets, the states
+  credentials, each tracker's **API token** with a **Create a token ↗** link to
+  the tracker's own token page; **Test & continue** tests the typed values
+  WITHOUT saving anything (`POST /api/settings/test/ticketing` with no
+  `record`) — the draft stays local, and the verdict, member id and state list
+  land on it so step 3's pickers fill in. A failed Test stays on the step with a
+  sentence that names the field (Jira: *No Jira site at acme.atlassian.net —
+  check the Site URL*, *Jira rejected the email + token pair*, *Can't reach
+  acme.atlassian.net from this machine*) and offers *Continue anyway*; the
+  *Fill in the marked fields first.* line clears as soon as they are. **What it does** is whose tickets, the states
   and labels, the repo(s), agent and fast-track, and the Advanced fold.
   **Finish** refuses *Anyone's* without a state or label (the server refuses
   that save too) and a source with no repo, and **never switches Auto-start
   tickets on** — adding a source is not consent to start sessions from it.
-  Cancel removes the draft, saved or not. Picking **GitHub Issues** offers *Add it
+  **Finish is the one save**: it PUTs the source, then tests it again with
+  `record: true` so the stored verdict is honest (a source that still can't
+  connect is added with *can't connect yet: …* in the toast; the server, not the
+  page, decides whether *Connect your tracker* is done). Cancel or ‹ Back to the
+  tiles leaves nothing behind — nothing was stored. Picking **GitHub Issues** offers *Add it
   as a Repository instead* for "every new issue in a repo".
 - **A repository** — the slug once (`owner/name`; the hint names repositories
   already known — on any list, or a ticket source's GitHub repo), **Test
@@ -2994,7 +3281,7 @@ the view is per browser, what auto-starts is on each source's heading.
 What legitimately differs stays in the tabs: only tickets have workflow-state
 buckets inside a source, and only the two GitHub tabs share one credential.
 
-- **Tickets** — the **Auto-start tickets** switch (the same
+- **Tickets** — its switch is **Tickets** on the Auto-start tab (the same
   `/api/mindflock/status` + `start`/`stop` contract, query key and 4 s interval as
   the sidebar's **Tickets** bar, so the two never disagree). Turning it on while a
   saved source can't connect (its last Test failed, or the listing couldn't reach
@@ -3743,21 +4030,26 @@ classes, because it is the fourth surface of that kind.
 **Repositories: one line, edited from their own headings.** Checklists group by
 verdict, not by repository, so there is no repository heading in the work to
 hang an Edit on (as Intake's tabs do). The repositories get one quiet line
-instead — *Watching acme/api ships main · acme/web ships staging* (one line,
+instead — *Watching acme/api Live branch: main · acme/web Live branch: staging* (one line,
 truncated with an ellipsis, the full list on hover) — and **Edit repositories**
-opens one heading per repository (*ships staging · https://staging…*), each with
+opens one heading per repository (*Live branch: staging · https://staging…*), each with
 the same editor Intake uses on the Verify use: **Use it for** ticks (putting the
 same repository on Intake's PR / issue lists in one save), **Branch that ships**,
 **Wait after merge (minutes)**, **Where it runs**, **Notes for the checklist
 writer**, **Test access** and an arm-then-confirm **Remove** (which keeps the
 repository's verify block — your own words — for a re-add). A line under it says
-when the repositories need GitHub connected. **+ Add repository** in the dialog
-head (`#vf-repo-add-btn`) opens the add flow with only the Verify use: the slug,
-Test access, the GitHub line and the no-remote snippet, then the Verify fields.
-Before any repository or checklist exists the add flow leads the dialog on its
-own (until cancelled), and the master switch is not shown at all (it would
-govern nothing). The master switch
-(`repository.verify_enabled`) pauses the **automatic** half only: no checklist
+when the repositories need GitHub connected; the editor's toggle reads **Close
+editor**. **+ Add repository** (`#vf-repo-add-btn`) sits in a fold at the bottom,
+**Watch a GitHub repository for every push**, and opens the add flow with only the
+Verify use: the slug, Test access, the GitHub line and the no-remote snippet, then
+the Verify fields. It **never opens on its own** (round 5): a fresh Verify shows
+the empty state — *Verify writes a checklist for each branch your sessions
+change, then checks it. Nothing to check yet — it fills in once a session
+commits.* with a **New session** button — and once a repository is watched the
+second line reads *Watching 1 repository — its next pushed branch appears here.*
+The master switch, **Write a checklist on every push**
+(`repository.verify_enabled`), shows only once a repository is watched, and
+pauses the **automatic** half only: no checklist
 written on a push, and nothing new moved into the list. Repositories, checklists
 and every recorded answer are kept, and asking for one, running one and
 answering a step all keep working — exactly as a forced PR review still runs with
@@ -3770,8 +4062,10 @@ a branch no session has been on):
   and the agent reads the branch's changes and writes the steps, about three
   minutes, with nothing configured. **Every** session with a branch is listed,
   open or closed: one that can't be picked stays in the list, greyed, saying why
-  — *has a checklist*, or *on main — nothing to compare* for a session sitting on
-  the branch its repo ships from — and the default is always one that can be.
+  — *has a checklist*, *on main — nothing to compare* for a session sitting on
+  the branch its repo ships from, or *no commits yet* for a branch with nothing on
+  it (its `diff_stat` counts no files; the server refuses it too, 409
+  `reason: "no_commits"`) — and the default is always one that can be.
   Pressing it for a session that turns out to be covered does not error — the
   toast names the checklist that covers it. The picker's last entry,
   **Another branch…** (the default when there is no session to pick), swaps in
@@ -3784,9 +4078,11 @@ a branch no session has been on):
   reads **Empty — add a step** under **Needs you** with **Add a step** as its
   button, never *Couldn't be written* (a rewrite asked of it that fails reads as
   the failure again).
-- **Write steps yourself** — pick a checklist and **Add a step** opens it with its
-  **Add a step** form open and the caret in it. Steps live on a checklist, so with
-  none yet the row says to ask the agent for one first.
+- **Write steps yourself** — pick a branch with no checklist yet and **Start an
+  empty checklist** makes one (`{"empty": true}` on the session's write route —
+  no agent, and it works on a branch with no commits), or pick an existing
+  checklist and **Add a step**; either opens it with its **Add a step** form open
+  and the caret in it.
 
 **Closed sessions are listed too**, labelled `(closed)`, alongside
 the open ones. A checklist outlives its session everywhere else in this feature —
@@ -3807,27 +4103,42 @@ owner"* — and it sits under the session's title. A checklist coming due three
 weeks later used to be `sc-1234-fix-filters` over a list of imperatives, leaving
 the reader to reconstruct the change from the steps.
 
-**Five groups, one axis, loudest first** (round 4). **Failed** (a step failed,
-or the checklist couldn't be written), **Needs you** (shipped and unchecked, or
-steps of yours still open), **In progress** (an agent is writing or checking it,
-or the branch hasn't merged and nobody has checked it), **Not verified** (a run
-finished with gaps nobody owes — steps never reached, or answered *Can't check*)
-and **Verified**. The badge counts the first two, by construction. Merged-or-not
+**Six groups, one axis, loudest first** (round 4; round 5 split the writer's
+failures out). **Failed** (a step failed — the change doesn't work), **Needs
+you** (shipped and unchecked, steps of yours still open, or a wait only a
+setting can end — *Origin has no branch called production…* with **Edit
+repositories** as a link), **In progress** (an agent is writing or checking it,
+or the branch hasn't merged and nobody has checked it), **Not written yet**
+(grey: the writer failed, timed out, came back empty or stalled — the reason is
+the row's sentence, *Not written yet — the agent didn't answer in 3 minutes.*
+with **Rewrite the checklist**; a branch with no commits reads *Comes back
+automatically when the session commits* with no button, and the due loop
+re-writes it once the session has a new commit), **Not verified** (a run
+finished with gaps nobody owes — steps never reached, or answered *Can't
+check*) and **Verified**. The badge counts the first two, by construction —
+never *Not written yet*. Merged-or-not
 is never a heading; it is on the row.
 
 **Every row says its verdict first** — a pill before the sentence: **Verified on
-branch**, **Verified live**, **Failed**, **Couldn't be written**, **Empty — add a
-step** (made empty on purpose), **Agent
+branch · by you** / **by the agent** (who recorded the passes), **Verified
+live · by …**, **Failed**, **Not written yet** (grey; *Not written* on a pane
+chip), **Empty — add a step** (made empty on purpose), **Agent
 checking**, **Being written**, **Waiting to ship** (merged, waiting out the
 deploy) or **n of m checked** (`planVerdict` in `verify.ts`). Then one
 plain-English sentence saying whose turn it is — a failure names its step:
 *"Failed: step 2 — POST /webhooks returns 200 (+1 more)."* — and at most one
 filled button: only a row asking something of **you** gets the accent button;
-every other row's button is a plain one. A failed row also has **Fix…** beside
-it. The landing chip reads **not merged** or **merged → main · 4m ago** (never
-"local" — the branch was pushed). Everything rare is in the row's ⋯ menu, which
-starts with **Open session**, **View diff** and **Open PR ↗** while the session
-is open.
+every other row's button is a plain one. A failed row also has **Fix in a new
+session** beside it (normal weight; a failed step has its own), and while that
+session (`fix-<checklist>`) is open the sentence ends *Being fixed in
+fix-<checklist>.* with its name as a link. Any row with an agent step nobody
+has answered shows **Check now** as a visible secondary button. A partly
+checked row carries one counter (the tally), not a pill as well. The landing
+chip reads **not merged** or **merged → main · 4m ago** (never "local" — the
+branch was pushed). Everything rare is in the row's ⋯ menu, which starts with
+**Open the work session**, **View diff** and **Open PR ↗** while the session is
+open; the verify run is **Open the checking run** / **Show the checking run
+here**. A finished row says *Every step passed.* (never "it works").
 
 **"Check now" means one thing** — start the agent's steps — on the row, in the ⋯
 and in the intro. A checklist with no agent step says **Show steps** instead
@@ -3835,9 +4146,15 @@ and in the intro. A checklist with no agent step says **Show steps** instead
 some were *Can't check* reads *"Couldn't check 2 steps — not verified."* with
 **Show steps**, never "Answer 2 steps".
 
-**The legend is said once**, under the list: `you` = a person checks it ·
-`agent` = the agent does · Pass, Fail and Can't check are all answers, only Pass
-says it works · keys 1 2 3, u undo, n note.
+**The legend lives in the ⓘ** next to *Does the change work?*, with the two
+moments (before / after merge): `you` = a person checks it · `agent` = the agent
+does · Pass, Fail and Can't check are all answers, only Pass says it works ·
+keys 1 2 3, u undo, n note. Its last line is **Replay the Verify tour**. The
+tour (`lib/tours/verify.ts`, five steps) rings the row chip
+(`data-tour="verify-chip"`), a step's YOU/AGENT badge (`verify-badges`), its
+Pass · Fail · Can't check (`verify-answer`), Check now or Fix (`verify-check`)
+and the merge pill (`verify-merge`), scrolling each into view inside the list.
+At 420 px a step's receipt, Undo and Fix stack under its answers.
 
 **The verdict outside Verify.** A session's sidebar row and pane head carry the
 same verdict as a small chip (`VerdictChip`, class `.vchip` — not `.stagechip`,
@@ -4096,7 +4413,10 @@ is running it**.
 ## Settings (⚙)
 
 **Set-and-forget configuration and diagnostics**, from the top bar's
-**Settings**.
+**Settings**. With no screen named (the top bar, the palette's **Open
+Settings**) it opens on **Connections** — the status of everything MindFlock
+talks to, and the first-hour screen (`DEFAULT_SETTINGS_SCREEN` in
+`lib/openSettings.ts`).
 
 **Basic first, advanced on request.** Out of the box the nav lists only the
 six screens a new user needs to point MindFlock at a repo and a tracker and
@@ -4110,12 +4430,13 @@ follows the person to all their devices, like the theme. There is ONE
 advanced mechanism: the power-user controls that live on a basic screen sit
 in an **Advanced** section (`AdvancedFold`) that basic mode does not render
 at all, and advanced mode shows as an open fold — General's plan window
-budget and terminal scroll speed, Agents' keep-usage-windows-warm schedule
-and **Check another agent**, Workspace's live branch, fast-track depth and
-retryable pre-commit hooks, and Connections' other agents and its rows beyond
-what you use (devices and people, orchestration, databases, phone push,
-extensions, system — so basic mode never calls a merely enabled extension
-"Connected"). Only Notifications' two optional folds — **Phone alerts
+budget and terminal scroll speed, Agents' keep-usage-windows-warm schedule,
+Workspace's live branch, fast-track depth and
+retryable pre-commit hooks, and Connections' rows beyond
+what you use under **More connections** (devices and people, orchestration,
+databases, phone push, extensions, system — so basic mode never calls a merely
+enabled extension "Connected"; folded even in advanced mode,
+`defaultOpen={false}`). Only Notifications' two optional folds — **Phone alerts
 (ntfy)** and **More alerts** — opt back into basic mode (`basic`), as closed
 folds. A control's long explanation sits behind a small circled-i at the end
 of its one-line hint (`InfoTip`, components/InfoTip.tsx): hovering or
@@ -4155,7 +4476,9 @@ cards' **Configure** buttons land where they always did.
 
 A few screens got quieter:
 
-- **General** opens with **Getting started** (hints, **Replay tour**). The
+- **General** opens with **Tours** (a **Replay** per tour and the **Show
+  hints** switch); the per-session budget, resume when usage comes back,
+  revive after a restart and idle sleep wait in its Advanced fold. The
   MindFlock MCP rows (the on/off switch, the scope and the spawn limits) are
   their own screen, **Agents → Agent orchestration** (see
   [Agent teams](#agent-teams-mindflock-mcp)).
@@ -4173,7 +4496,10 @@ A few screens got quieter:
   or leave it blank for no limit.* — instead of saving `-2` as "no limit".
 - **Search settings…** heads the nav (`#settings-search`, on the command
   palette's own index, `palette/settingsSearch.ts`, synonyms included): the
-  matches list under the box as you type; ↑/↓ and Enter (or a click) open the
+  matches list under the box as you type, each with the same one-line
+  subtitle as the palette's rows ("tour" → **General → Tours** *Replay the
+  welcome tour and the menu tours*, "dark" → **Appearance → Mode** *Light or
+  dark*); ↑/↓ and Enter (or a click) open the
   screen, scroll to the control (opening a fold around it) and outline it for
   a moment; Escape clears the box before it closes Settings.
 - **Notifications** opens on **Where alerts go**: In MindFlock (the bell,
@@ -4191,7 +4517,14 @@ A few screens got quieter:
   motion**, **Take a break** and **Idle flock** moved to **Appearance →
   Comfort**.
 - **Agents** shows the default agent's own Connections row (status, Test,
-  Sign in) so the two screens give one answer; its flags field suggests a
+  Sign in) so the two screens give one answer. The picker greys out every
+  agent that isn't installed, and right under it **Not installed — how to
+  install ▸** (*Set up another agent* once everything is installed) unfolds
+  the chosen agent's card with its install command — no longer inside the
+  Advanced fold. Turning on a skip-permissions flag shows *⚠ Skip permission
+  prompts: the agent runs commands and edits files without asking you*
+  (`SKIP_PERMISSIONS_LABEL` / `SKIP_PERMISSIONS_TIP`, exported for the flag
+  chips). Its flags field suggests a
   harmless per-agent example (never a permission-skipping flag), and
   **Sessions running at once** says it plainly: no limit on sessions you
   start, **Ticket sessions at once** (`engine.max_sessions`, the same field
@@ -4223,7 +4556,8 @@ A few screens got quieter:
   your worktrees live**, `GET /api/settings/workspace-paths`): the absolute
   folder for **Sessions you start** (`<config dir>/worktrees`) and for
   **Ticket and PR sessions** (the **Workspace folder** field — a relative one
-  anchored where the ticket pipeline runs, `~` expanded and stored expanded),
+  anchored where the ticket pipeline runs, `~` expanded and stored expanded;
+  **📁 Browse…** beside it opens the folder picker window and saves the pick),
   each with **Copy**. The folder is checked as you type: a missing one *will
   be created*, an unwritable one or a file is flagged in red under the field,
   and `MINDFLOCK_WORKSPACE_DIR` is named when it overrides the field. **How
@@ -4446,9 +4780,14 @@ labels above the inputs.
 
   Under `prefers-reduced-motion` both surfaces show a settled flock rather than a
   moving one.
-- **General → Getting started** (top of the screen) — the master
-  **getting-started hints** switch and a **Replay tour** button (see
-  [First-run onboarding](#first-run-onboarding)).
+- **General → Help** (the bottom of the screen, after the Advanced fold;
+  still `#general-tours`) — under *Tours*, one **Replay** per tour
+  (Welcome · New · Intake · Verify · Schedule · Settings) and the master
+  **Show hints** switch, which also stops tours opening by themselves (see
+  [Tours](#tours)). The per-session budget, **Resume sessions when usage comes
+  back**, **Revive sessions after a restart** and **Put idle agents to sleep
+  after** sit in General's Advanced fold (advanced mode) with the plan window
+  budget and scroll speed; their keys are unchanged.
 - **Agent CLI → scheduled window refresh** — a keepalive that periodically
   pokes each provider's CLI so usage windows stay warm
   (`GET/POST /api/window-refresh`). Its **Default provider** picker reads
@@ -4477,10 +4816,11 @@ labels above the inputs.
   (`coding_cli.default_launch_args`) that pre-fill the New-session dialog are
   also edited here.
 - **Your devices** (screen key `devices`; was Devices) is the one place for
-  your own machines. It opens with *You — the same on every device you pair.*
-  and the **You** card (name, git author name and email for MindFlock's own
-  commits, the person id with Copy — `GET/POST /api/person`, see
-  [people.md](people.md)), then **Tailscale on this device** (`GET
+  your own machines. The **You** card (*You — the same on every device you
+  pair.*: name, git author name and email for MindFlock's own commits, the
+  person id with Copy — `GET/POST /api/person`, see [people.md](people.md))
+  comes LAST, after **Add a device** and Settings sync — you come here to add a
+  device, not to fill in a form. It opens with **Tailscale on this device** (`GET
   /api/tailscale/health`; the same list the doctor's tailscale row reads):
   signed in as whom (a tagged device shows its tag), the tailnet, this
   device's name and IP, then each problem with its fix, worst first. Signed
@@ -4623,16 +4963,19 @@ labels above the inputs.
   `sandbox-exec` on macOS) and can install `cloudflared`. Shared folders run
   on Linux and macOS. Design and protocol in [peer-link.md](peer-link.md).
 - **Your phone** (screen key `mobile`; was Mobile) — getting this MindFlock
-  onto your phone, as three steps in order: Tailscale on this computer,
-  **Install Tailscale on your phone and sign in** (*as <login>* when known,
-  with a QR to the app download), then *Open MindFlock on the phone: scan the
-  QR below, or use one of the URLs* — the QR and the `/m` URLs
-  (`GET /api/mobile`). Nothing here is a knob. The screen never hides: without
-  Tailscale on this computer the first step is **Install Tailscale on this
-  computer** with the Tailscale card (the doctor's diagnosis) inline, and the
-  QR step says it shows once Tailscale is set up. When the server only listens
-  on itself it says so (*This computer only listens on itself — your phone
-  can't reach it yet…*) with **Open Your devices**, where **Make reachable**
+  onto your phone, as four rows, each with its own live ✓/✗: **1 Tailscale on
+  this computer** (`GET /api/tailscale/health`: ✓ when running; installed but
+  stopped says *Tailscale is installed but not running. Start it:* with the
+  one command in a Copy box; not installed or signed out shows the Tailscale
+  card with its install guidance and **Sign in**), **2 Tailscale on your
+  phone** (*as <login>* when known, with *This QR gets the app*), **3 Make
+  MindFlock reachable from your phone** (✗ while it only listens on this
+  computer, with **Turn on Make reachable…**), and **4 Scan to open
+  MindFlock** — the QR and the `/m` URLs (`GET /api/mobile`), drawn ONLY once
+  1 and 3 are ✓, so there is never a QR that opens a URL that hangs. No
+  backticked shell in the prose: Tailscale issue lines drop the clause that
+  quotes their own fix (`plainIssueMessage`). Nothing here is a knob. **Turn
+  on Make reachable…** opens Your devices, where **Make reachable**
   is the one Tailscale-mode switch (it takes the restart the bind needs
   itself — `POST /api/settings` answers `{"restarting": true}`, the screen
   waits for the server to come back — and gives up after three attempts,
@@ -4792,6 +5135,9 @@ labels above the inputs.
   Saved prompts are the templates that hold only a prompt — one list. To
   paste text into a session that is already running, use the
   [Prompts bar](#saved-prompts).
+- **System logs** — under the log, the folded **First-start report**: what
+  the first `mindflock serve` printed (`report` on `GET /api/setup`; moved
+  here from the Setup checklist).
 - **System logs** — a grid pane tailing the server log (`GET /api/logs`,
   3 s poll).
 - **Terminal scroll speed** — 1–20 lines per wheel notch, applied live.

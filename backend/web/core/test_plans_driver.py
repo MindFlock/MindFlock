@@ -519,6 +519,41 @@ def _recover_stalled_test_plans(plans: list) -> None:
             pass
 
 
+def _retry_no_commit_test_plans(plans: list) -> None:
+    """Write the checklists that couldn't be written for want of a commit, once
+    their session has committed.
+
+    The card says "Comes back automatically when the session commits", and
+    this is what keeps that true: a ``failed`` plan is otherwise never retried
+    (``ensure_plan_for`` treats it as settled). Only a plan whose session is
+    still open is looked at — its worktree is where the new commit is — and
+    only a NEW commit claims it (:func:`test_plans.claim_no_commits_retry`), so
+    a branch that is still empty costs one ``rev-list`` a minute and no model
+    call. Quiet while Verify is paused, like the stall recovery above."""
+    if not _verify_enabled():
+        return
+    for plan in plans:
+        try:
+            if plan.get("state") != "failed" or plan.get("steps"):
+                continue
+            if not _test_plans.is_no_commits_error(plan.get("error") or ""):
+                continue
+            pid = plan["id"]
+            program, worktree = _test_plan_session_ctx(pid)
+            if not worktree or not os.path.isdir(worktree):
+                continue
+            live = plan.get("live_branch") or _test_plans.resolve_live_branch(
+                plan.get("repo_root") or worktree
+            )
+            if _test_plans.branch_has_no_commits(worktree, live):
+                continue
+            head = _server()._git_head_sha(worktree)
+            if head and _test_plans.claim_no_commits_retry(pid, head) is not None:
+                _start_test_plan_generation(pid, program, worktree)
+        except Exception:  # noqa: BLE001 — one bad plan can't stop the pass
+            pass
+
+
 def _start_test_plan_generation(
     plan_id: str, program: str, worktree: str, refresh: bool = False
 ) -> None:
@@ -667,9 +702,8 @@ def _test_plan_is_live(plan: dict) -> bool:
     if verdict == "missing":
         _test_plans.set_live_problem(
             plan["id"],
-            "origin has no branch called %s, so this can never come due. Set the "
-            "live branch on this repo's card in Verify \u2192 Sources."
-            % (plan["live_branch"] or "?"),
+            "Origin has no branch called %s, so this can never come due — set "
+            "the live branch under Edit repositories." % (plan["live_branch"] or "?"),
         )
     else:
         # "waiting" and "unreachable" are both ordinary; clear any stale
@@ -1759,6 +1793,7 @@ def _test_plans_due_pass(full: bool = True) -> bool:
     # picked back up.
     if full:
         _recover_stalled_test_plans(plans)
+        _retry_no_commit_test_plans(plans)
     _poll_running_test_plans(plans)
     if full:
         _check_test_plans_for_liveness(plans)

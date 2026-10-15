@@ -22,6 +22,10 @@
  *  - Focus: on open, if the dialog didn't focus something inside itself, the
  *    shell takes focus (so keys stop going to the terminal behind it); on
  *    close, focus goes back to where it was unless something else took it.
+ *  - Announces itself (`MODAL_OPEN_EVENT`) on open: in a phone-narrow window
+ *    the sidebar is a drawer drawn OVER the page (z-index 60), and a dialog
+ *    opened from it (the Setup chip, Shortcuts, a row's Rename) opened under
+ *    it, unclickable. The sidebar closes its drawer on this event.
  *
  * Electron has no window.prompt/alert/confirm — dialogs are DOM, always. */
 
@@ -47,6 +51,10 @@ export interface ModalProps extends Omit<HTMLAttributes<HTMLDivElement>, "onMous
 
 /** Open modals, oldest first — only the last one answers Escape. */
 const stack: object[] = [];
+
+/** Fired on window when any modal opens (see the header: the narrow
+ * sidebar drawer closes on it, so a dialog is never drawn under it). */
+export const MODAL_OPEN_EVENT = "mf:modal-open";
 
 /** The backdrop's press handler: only a mousedown whose target IS the
  * backdrop counts (a press bubbling up from the card never does). */
@@ -101,6 +109,7 @@ export function Modal({
   useEffect(() => {
     const token = {};
     const pop = pushModal(token);
+    window.dispatchEvent(new CustomEvent(MODAL_OPEN_EVENT));
     const onKey = (e: KeyboardEvent) => {
       modalEscape(token, e, props.current);
     };

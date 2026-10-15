@@ -8,11 +8,12 @@ import { api } from "../api/client";
 import { refreshInstances } from "../state/queries";
 import { selectSession } from "./sessionActions";
 import { toast } from "./toast";
-import { errMsg } from "./format";
-import { ensureTemplates } from "./templates";
+import { ensureTemplates, templateRefusal } from "./templates";
 
 /** Starts the template's session and focuses it. Resolves to the new
- * session's title, or "" when the server refused (the reason is toasted). */
+ * session's title, or "" when the server refused — its own sentence is the
+ * toast ("Couldn't start pr-bot: codex isn't installed"), never "Started…",
+ * and the card re-reads its runs (a refusal is recorded as a failed run). */
 export async function runTemplateNow(name: string): Promise<string> {
   try {
     const made = await api<{ title?: string }>("/api/templates/" + encodeURIComponent(name) + "/run", {
@@ -26,7 +27,8 @@ export async function runTemplateNow(name: string): Promise<string> {
     void ensureTemplates(true).catch(() => {});
     return title;
   } catch (err) {
-    toast(`Couldn't run “${name}”: ${errMsg(err)}`);
+    toast(templateRefusal(err, `Couldn't start ${name}`).text);
+    void ensureTemplates(true).catch(() => {});
     return "";
   }
 }

@@ -549,7 +549,7 @@ def test_mobile_start_button_state_never_survives_a_dismiss():
         assert "resetStartBtn();" in body, fn
     reset = js.split("  function resetStartBtn() {")[1].split("\n  }\n")[0]
     assert "startBusy = false;" in reset
-    assert 'newStartBtn.textContent = "Create session";' in reset
+    assert 'newStartBtn.textContent = "Start";' in reset  # round 5: one verb, Start
 
 
 # --------------------------------------------------------------------------- #

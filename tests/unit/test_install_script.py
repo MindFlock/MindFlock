@@ -137,3 +137,20 @@ def test_a_failed_restart_never_claims_the_new_version_runs(tmp_path):
     assert "runs the new version" not in cp.stdout
     assert "still runs the previous version" in cp.stdout
     assert cp.returncode == 1
+
+
+def test_the_script_ends_on_the_three_steps_and_one_next_action():
+    # F16: no third dependency pass, no "Prefer an app?" once a door is chosen —
+    # the shared block (`mindflock init --steps`) ends on "Next: run mindflock init".
+    tail = _SCRIPT.split("# --- 7. the three steps", 1)[1]
+    assert '"$MF" init --steps' in tail
+    assert "Prefer an app" not in _SCRIPT
+    assert "doctor --fix" not in _SCRIPT
+    assert not re.search(r"^\s*(mindflock|\"\$MF\") doctor", _SCRIPT, re.M)
+
+
+def test_the_desktop_app_gets_one_line_not_a_doctor_table():
+    # F15: the app's own Setup installs tmux and the agent next.
+    tail = _SCRIPT.split("# --- 7. the three steps", 1)[1]
+    assert 'MINDFLOCK_NONINTERACTIVE:-}" = "1"' in tail
+    assert "tmux and your agent come next, in the app." in tail

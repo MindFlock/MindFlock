@@ -134,7 +134,7 @@ describe("TemplatesDialogView — the markup", () => {
     expect(view({ templates: [], loaded: false })).toContain("Loading templates…");
     const empty = view({ templates: [] });
     expect(empty).toContain('id="schedule-empty"');
-    expect(empty).toContain("Save a session setup once, then start it with one click");
+    expect(empty).toContain("Save a session as a template once, then start it with one click");
     expect(empty).toContain('id="schedule-empty-create"');
     expect(empty).toContain(">Create a template<");
     // One way in, not two: no head "+ New template", no intro paragraph.

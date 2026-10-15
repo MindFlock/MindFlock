@@ -667,6 +667,7 @@ export function RecentDialog() {
                             );
                             closeDialog();
                             await refreshInstances();
+                            refreshRecentlyClosed(); // the "(n)" link follows at once (r5-new #11)
                             if (inst?.title) selectSession(inst.title);
                           } catch (err) {
                             errorPop("Reopen failed", (err as Error).message);

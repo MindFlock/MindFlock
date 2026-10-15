@@ -15,12 +15,29 @@
 [Where your code goes](#where-your-code-goes) •
 [Does it actually work?](#what-it-looks-like-in-use) •
 [How is this different?](#how-is-this-different) •
-[Quick Start](#quick-start) •
+[Get started](#get-started-5-min) •
 [Download](#download) •
 [How It Works](#how-it-works) •
 [Documentation](#documentation)
 
 </div>
+
+## Get started (≈5 min)
+
+1. **Download the app** for your OS: [Windows](https://github.com/MindFlock/MindFlock/releases/latest/download/MindFlock-Setup.exe) · [macOS](https://github.com/MindFlock/MindFlock/releases/latest/download/MindFlock.dmg) · [Linux](https://github.com/MindFlock/MindFlock/releases/latest/download/MindFlock.AppImage) ([what each needs](#download)).
+2. Open it and click **Set up MindFlock** — it installs MindFlock and the tools your agent needs.
+3. **Sign in to your agent**, pick a project folder, and click **+ New session**.
+
+<details>
+<summary>No desktop? <code>curl … | sh</code>, then <code>mindflock init</code>, then open http://127.0.0.1:8765</summary>
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/main/install.sh | sh
+mindflock init     # the same three steps: tools, sign in to your agent, project folder
+mindflock serve    # then open http://127.0.0.1:8765 in your browser
+```
+
+</details>
 
 <div align="center">
 
@@ -420,9 +437,39 @@ a feature race; those two change what your day looks like:
 
 ## Quick Start
 
-[Install first](#download) — one command — then pick the half you came for.
+Install first — [the app](#download) or [one command](#1-server--cli) — then
+start sessions yourself, and when you're ready, let your tracker start them.
 
-### Let your tracker start the sessions
+### Start sessions yourself — no tracker required
+
+The **desktop app** is the default client: its first launch sets up MindFlock
+and walks you through the three steps, and it starts MindFlock by itself after
+that. From a terminal instead, `mindflock init` is the same three steps
+(install the tools, sign in to your agent, pick a project folder) and ends on
+one next command. From zero to a supervised agent session (the serve → new →
+ls part is verified in CI on every push by
+[`scripts/quickstart-verify.sh`](scripts/quickstart-verify.sh)):
+
+```bash
+cd ~/code/your-repo                    # 1. the project folder you want the agents to work in
+mindflock init                         # 2. tools, sign in to your agent, this folder (`mindflock doctor` re-checks any time)
+mindflock serve                        # 3. then open http://127.0.0.1:8765 and click + New session
+mindflock new . -p "fix the failing tests"   # …or start one from a second terminal
+mindflock ls                           # watch it: TITLE REPO STATUS ACTIVITY STAGE DIFF COST
+```
+
+Open **http://127.0.0.1:8765** (or the MindFlock desktop app) — each session
+is a live terminal in its own git worktree, with Diff view and guided
+commit → push → PR → merge buttons. `mindflock attach <title>` drops your
+terminal into the same tmux session.
+
+`mindflock serve` binds localhost only; run `mindflock serve tailscale` to opt
+into phone/tailnet access — an auth token + QR code are printed, and scanning
+the QR opens the phone UI at `/m`. To skip the token on your own devices, tick
+your Tailscale account under Settings → Your devices → Advanced → **Trusted
+Tailscale accounts** (untagged devices only; rotating the token does not revoke them).
+
+### Next: let your tracker start sessions
 
 On a fresh install you connect a tracker in the desktop app's top bar under
 **Intake → Tickets** (Alt+I) — **+ Add ticketing source** takes a token, plus the
@@ -444,34 +491,6 @@ least 15 minutes old — a branch you just pushed doesn't get jumped on.
 Prefer a file to a dialog? [`config.toml.example`](config.toml.example) is the
 headless equivalent, and `python -m backend.ticket_ingestion` runs the pipeline
 standalone — see [docs/ingestion-pipeline.md](docs/ingestion-pipeline.md).
-
-### Or start them yourself — no tracker required
-
-The **desktop app** is the default client: its first launch installs the
-engine and walks you through Setup, and it auto-starts the server after that.
-From a terminal instead, `mindflock init` is the same guided first run
-(dependencies, agent sign-in, GitHub, your first repo). From zero to a
-supervised agent session (this CLI flow is verified in CI on every push by
-[`scripts/quickstart-verify.sh`](scripts/quickstart-verify.sh)):
-
-```bash
-mindflock doctor                       # 1. everything installed + authenticated? (`mindflock init` sets it up)
-cd ~/code/your-repo                    # 2. the repo you want the agents to work on
-mindflock serve                        # 3. start the server (the app can also do this for you)
-mindflock new . -p "fix the failing tests"   # 4. (new terminal) spawn a session
-mindflock ls                           # 5. watch it: TITLE REPO STATUS ACTIVITY STAGE DIFF COST
-```
-
-Open the **MindFlock desktop app** — the session is a live terminal; each one
-is an isolated git worktree, with Diff view and guided
-commit → push → PR → merge buttons. `mindflock attach <title>` drops your
-terminal into the same tmux session.
-
-`mindflock serve` binds localhost only; run `mindflock serve tailscale` to opt
-into phone/tailnet access — an auth token + QR code are printed, and scanning
-the QR opens the phone UI at `/m`. To skip the token on your own devices, tick
-your Tailscale account under Settings → Your devices → Advanced → **Trusted
-Tailscale accounts** (untagged devices only; rotating the token does not revoke them).
 
 ## Download
 
@@ -585,9 +604,10 @@ curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/main/install.sh
 No repo clone, no Python setup needed — the installer brings
 [uv](https://docs.astral.sh/uv/) (no root), installs the newest **release**
 of the `mindflock` command (`MINDFLOCK_INSTALL_REF=main` installs unreleased
-code instead), and finishes with `mindflock doctor` so anything still missing
-(git, tmux, `claude`) is listed with the exact install command for your
-platform.
+code instead), and finishes with the three steps to your first agent — install
+the tools, sign in to your agent, pick a project folder, each ✓ or ✗ — and one
+next command: `mindflock init`, which installs anything still missing (git,
+tmux, `claude`) in one go, signs your agent in and picks the folder.
 
 **A second computer?** On the first one, Settings → Your devices → **Add a
 device** → *New computer with nothing installed yet?* (or `mindflock devices
@@ -601,9 +621,11 @@ curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/v<version>/inst
 ```
 
 Then open the app's **Setup** (or run `mindflock init`): one ordered list —
-dependencies, "first computer or join one?", your agent's sign-in, Tailscale
-when you have more than one computer, **Connect GitHub** (a browser sign-in,
-no token to copy when gh is installed), and your first repo.
+the tools, "first computer or join one?" (`mindflock init` asks it only when
+another MindFlock answers on your tailnet; `mindflock join` works any time),
+your agent's sign-in, Tailscale when you have more than one computer,
+**Connect GitHub** (a browser sign-in, no token to copy when gh is installed),
+and your project folder.
 
 > **Note on `curl | sh`:** it isn't a blind one — the uv installer it fetches
 > is version-pinned and sha256-verified before it runs, and the requested
@@ -711,10 +733,14 @@ mindflock serve tailscale    # bind 0.0.0.0: tailnet mobile URL + QR + auth toke
 mindflock serve --port 9000  # custom port (default 8765)
 ```
 
-Run `mindflock serve` from inside the git repository you want to manage — the
-startup banner prints which repo that is (and warns if it's the MindFlock
-checkout itself). `mindflock doctor` (also served at `GET /api/doctor`) checks
-every dependency and prints a platform-appropriate fix for anything missing.
+`mindflock serve` starts with the three steps to your first agent and, boxed,
+the address to open in your browser (it walks you through the rest); in local
+mode one line says how to reach it from your phone (`mindflock serve
+tailscale`). Folder suggestions start from the directory you run it in (it
+warns if that's the MindFlock checkout itself). `mindflock doctor` (also
+served at `GET /api/doctor`) groups its checks — needed to run an agent,
+needed to ship, optional (`--all`) — prints a platform-appropriate fix for
+anything missing, and ends on one next step.
 
 In the app, **+ New** creates a session (worktree + tmux + agent); click a
 session to type into its live terminal. Next to it in the top bar, **Intake**
@@ -903,7 +929,7 @@ On macOS the desktop app additionally leaves `/Applications/MindFlock.app`,
 git clone https://github.com/MindFlock/MindFlock
 cd MindFlock
 uv sync --group web --group dev   # web = FastAPI server deps, dev = pytest
-uv run mindflock doctor           # checks git/tmux/agent CLI (+ gh, optional)
+uv run mindflock doctor           # checks git, tmux, your agent and its sign-in (+ gh)
 uv run mindflock serve            # localhost:8765, from a repo you want to manage
 ```
 

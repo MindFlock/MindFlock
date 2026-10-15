@@ -165,7 +165,15 @@ def ensure_session() -> Tuple[str, Optional[str]]:
         except Exception as err:  # noqa: BLE001 — surfaced in the terminal
             return SESSION, "could not start the install terminal: %s" % err
         return SESSION, None
-    wrapped += "; exec ${SHELL:-/bin/sh}"
+    # tmux keeps the pane while something runs in it. After a FAILED run that
+    # is a shell (the manual commands can be pasted right there); after a
+    # successful one the window stays on its "✓ installed — Sign in" result,
+    # and an interactive prompt there (a fresh account's zsh setup wizard,
+    # even) only invites typing into the wrong place — so the pane idles.
+    wrapped += (
+        '; [ "$(cat %s)" = 0 ] && exec tail -f /dev/null; exec ${SHELL:-/bin/sh}'
+        % status
+    )
     try:
         created = subprocess.run(
             [

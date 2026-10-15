@@ -60,7 +60,7 @@ class TestNewDialog:
         # dialog, which New's Manage… opens and which hands back to New.
         assert 'id="new-save-tpl-name"' in code
         assert 'id="new-save-tpl-save"' in code
-        assert "Insert a prompt…" in code
+        assert "Insert saved text…" in code
         assert 'openDialogFor("prompts", "new")' in code
 
     def test_the_tab_strip_waits_for_a_tracker(self):
@@ -79,7 +79,10 @@ class TestNewDialog:
         # "Your coding CLI reads this…" explains the box; with the Options fold
         # between them, "this" read as the fold.
         code = _code(_new())
-        assert code.index('className="nf-describe-help"') < code.index("<RunOptions")
+        # Round 5: the help is the "Runs in <folder> · own branch …" line
+        # (StartsInLine), drawn right under the box, before the options.
+        assert 'id="new-describe-help"' in code
+        assert code.index("<StartsInLine") < code.index("<RunOptions")
 
     def test_page_one_is_only_the_prompt(self):
         # The owner: "too much on that new first page — I should be able to
@@ -116,18 +119,18 @@ class TestNewDialog:
 
 
 class TestFirstRun:
-    def test_the_tour_is_five_slides_and_pauses_for_setup(self):
+    def test_the_welcome_is_one_card_that_hands_over_to_the_coach_tour(self):
+        """Round 5: the five-slide tour is one welcome card — a title, two
+        plain lines and "Let's go", which starts the Welcome coach tour over
+        the checklist. No slide ever sends a 0-session user into Intake's
+        tracker wizard again ("Set up now"), and no exit stacks a second
+        checklist modal ("Open Setup")."""
         src = _read("components/onboarding/WelcomeTour.tsx")
-        slides = src[
-            src.index("const SLIDES: Slide[] = [") : src.index("/** The brand mark")
-        ]
-        assert len(re.findall(r"^\s{4}title: ", slides, flags=re.M)) == 5
-        # Verify always shows in the top bar, and there is no Outbox to name.
-        assert "Outbox" not in slides
-        assert "joins the top bar" not in slides
-        assert "adds more bars" in slides and "<b>Prompts</b>" in slides
+        assert "WELCOME_TITLE" in src and "WELCOME_LINES" in src
+        assert "Let's go" in src
+        assert "Set up now" not in src and "Open Setup" not in src
+        assert "const SLIDES" not in src and "LEGACY_SCREEN_TABS" not in src
         assert 's.openDialog === "setup"' in src
-        assert "LEGACY_SCREEN_TABS" in src
 
     def test_setup_never_opens_itself(self):
         """The Setup modal opens from the chip, the doctor chip, the palette and
@@ -154,7 +157,7 @@ class TestFirstRun:
         store = _code(_read("state/store.ts"))
         assert "tourDone" not in store and "mf_tour_done" not in store
         palette = _read("components/palette/CommandPalette.tsx")
-        assert 'label: "Tour"' in palette
+        assert "replayTour(id)" in palette
         assert "shortcuts-tour" in _read("components/palette/ShortcutsSheet.tsx")
 
     def test_setup_has_no_account_test_forms(self):
@@ -179,10 +182,12 @@ class TestFirstRun:
         # Both surfaces render the same component.
         assert "<SetupChecklist />" in _read("components/grid/TerminalGrid.tsx")
         assert "<SetupChecklist />" in _read("components/dialogs/SetupDialog.tsx")
-        # The phone extra: Install Tailscale (or start it, when it's installed
-        # but not answering) OR the QR.
-        assert '"install-tailscale"' in src and '"fix-tailscale"' in src
-        assert 'data-phone="qr"' in src
+        # Round 5: the phone extra is ONE line pointing at Settings → Your
+        # phone — no Tailscale install/fix (sudo) commands and no QR in the
+        # first-hour checklist (r5-firsthour #5–#7).
+        assert '"install-tailscale"' not in src and '"fix-tailscale"' not in src
+        assert "Set up in Settings → Your phone" in src
+        assert 'data-phone="qr"' not in src  # the QR lives in Settings → Your phone now
 
     def test_grid_card_says_get_set_up(self):
         src = _read("components/grid/TerminalGrid.tsx")

@@ -566,7 +566,7 @@ class TestAgentAuth:
         monkeypatch.setattr(doctor.shutil, "which", _which({}))
         c = doctor.check_agent_auth()
         assert c.status == "warn"
-        assert "cannot probe auth" in c.detail
+        assert "install the agent first" in c.detail
 
     def test_unregistered_provider_cannot_be_probed(self, monkeypatch):
         # A provider name left in settings after its TOML was deleted: there is
@@ -900,6 +900,10 @@ class TestDoctorApi:
             "pkg",
             "install",
             "provider",
+            "group",
+            # Added by the doctor addon (setup_steps.tag_required): whether the
+            # row can block getting started — the Setup checklist's "All checks".
+            "required",
         }
 
         # Without ?refresh the cached payload is served (run_checks not re-run).
@@ -1366,3 +1370,70 @@ class TestPathRefresh:
         c.get("/api/doctor/install-state")
         c.get("/api/doctor/install-state")  # polled again: no second refresh
         assert _no_path_probe == [1]
+
+
+class TestGroups:
+    """Every check carries ``group`` (run | ship | optional) — the doctor's
+    headings, and what /api/doctor consumers fold by. Every other field stays."""
+
+    def test_the_first_agent_rows_are_run(self):
+        for cid in ("git", "tmux", "agent-cli", "node", "agent-auth"):
+            assert Check(cid, cid, "ok").group == "run"
+
+    def test_commit_and_pr_rows_are_ship(self):
+        for cid in ("git-identity", "gh"):
+            assert Check(cid, cid, "ok").group == "ship"
+
+    def test_everything_else_is_optional(self):
+        for cid in (
+            "tailscale",
+            "tailnet-mtu",
+            "bwrap",
+            "cloudflared",
+            "cache-seeds",
+            "local-model",
+            "clipboard",
+            "uv",
+            "state-schema",
+            "agent-auth-codex",
+            "synced-codex-cli",
+            "some-new-probe",
+        ):
+            assert Check(cid, cid, "ok").group == "optional"
+
+    def test_the_wire_payload_keeps_every_field_and_adds_group(self):
+        d = Check("tmux", "tmux", "fail", "x", "y", cmd="z").to_dict()
+        assert d["group"] == "run"
+        assert set(d) >= {
+            "id",
+            "label",
+            "status",
+            "detail",
+            "fix",
+            "docs",
+            "cmd",
+            "pkg",
+            "install",
+            "provider",
+            "group",
+        }
+
+    def test_every_registered_probe_has_a_known_group(self):
+        assert set(doctor.GROUPS) == {"run", "ship", "optional"}
+        assert {doctor.group_of(cid) for cid in doctor.CHECKS_BY_ID} <= set(
+            doctor.GROUPS
+        )
+
+    def test_run_checks_can_run_one_group(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            doctor,
+            "CHECKS_BY_ID",
+            {
+                "git": lambda: calls.append("git") or Check("git", "git", "ok"),
+                "tailscale": lambda: calls.append("ts")
+                or Check("tailscale", "t", "ok"),
+            },
+        )
+        out = doctor.run_checks("run")
+        assert calls == ["git"] and [c.id for c in out] == ["git"]

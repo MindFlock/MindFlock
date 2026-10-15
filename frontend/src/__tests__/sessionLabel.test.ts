@@ -55,4 +55,15 @@ describe("sessionLabel", () => {
   it("handles an empty title", () => {
     expect(sessionLabel("", "").text).toBe("");
   });
+  it("never reads a template's session as a PR or issue (r5 finding 17)", () => {
+    // A template named "pr-bot" starts "pr-bot-oct14"; it is no PR.
+    for (const t of ["pr-bot-oct14", "pr-bot-oct14-2", "pr-watch-oct13-2130", "issue-triage-jan3", "pr-bot"]) {
+      const l = sessionLabel(t, "emandel2630/" + t);
+      expect(l.kind).toBe("");
+      expect(l.text).toBe(t);
+    }
+    // The pipelines' own shapes still are
+    expect(sessionLabel("pr-42-c-9001", "").kind).toBe("pr");
+    expect(sessionLabel("issue-owner-repo-42", "").kind).toBe("iss");
+  });
 });

@@ -50,7 +50,7 @@ describe("Terminal and Map hang off the person's choice, never `compact`", () =>
     expect(pane).not.toMatch(/\bcompact\b/);
     expect(pane).not.toContain("paneNarrow");
     expect(pane).toContain("const items = headerItems(paneHeader, {");
-    expect(pane).toContain('<div className="tabs">{items.tabs.map((id) => tabEls[id])}</div>');
+    expect(pane).toContain('<div className="tabs" data-tour="pane-tabs">{items.tabs.map((id) => tabEls[id])}</div>');
     // The pane hands its drawn tabs to its ⋯ as visible, so the menu doesn't repeat them.
     expect(pane).toContain("const visibleTabs: string[] = items.tabs;");
   });

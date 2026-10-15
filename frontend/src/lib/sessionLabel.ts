@@ -49,11 +49,23 @@ function branchTail(branch: string): string {
   return parts.length ? parts[parts.length - 1] : "";
 }
 
-/** Split a session title into its kind tag and identifying slug. */
+/** A session a template started: `<template slug>-<mon><day>`, then an
+ * optional `-HHMM` (a schedule that fires more than once a day) and an
+ * optional `-N` (a name already taken) — "pr-bot-oct14", "deploy-oct13-2130-2". */
+const TEMPLATE_RUN_RE = /-(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\d{1,2}(?:-\d{4})?(?:-\d+)?$/;
+
+/** The slug of a PR / issue session: `<repo>-<number>`, or a PR comment
+ * session's `<number>-c-<comment id>`. */
+const PIPELINE_SLUG_RE = /^(?:.+-\d+|\d+-c-\d+)$/;
+
+/** Split a session title into its kind tag and identifying slug. Only the
+ * shapes the PR / issue pipelines make count — a template named "pr-bot"
+ * starts "pr-bot-oct14", which is no PR. */
 function splitKind(title: string): { kind: string; slug: string } | null {
-  if (title.startsWith("pr-")) return { kind: "pr", slug: title.slice(3) };
-  if (title.startsWith("issue-")) return { kind: "iss", slug: title.slice(6) };
-  return null;
+  if (TEMPLATE_RUN_RE.test(title)) return null;
+  const m = /^(pr|issue)-(.+)$/.exec(title);
+  if (!m || !PIPELINE_SLUG_RE.test(m[2])) return null;
+  return { kind: m[1] === "pr" ? "pr" : "iss", slug: m[2] };
 }
 
 /**
