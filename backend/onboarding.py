@@ -38,12 +38,12 @@ __all__ = ["ORDER", "build_plan", "collect", "plan"]
 ORDER = ("deps", "devices", "agent", "tailscale", "github", "repo")
 
 TITLES = {
-    "deps": "Dependencies",
+    "deps": "Install the tools",
     "devices": "First computer, or join one you already have?",
     "agent": "Sign in to your agent",
     "tailscale": "Tailscale",
     "github": "Connect GitHub",
-    "repo": "Your first repo",
+    "repo": "Pick a project folder",
 }
 
 
