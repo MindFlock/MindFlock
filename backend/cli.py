@@ -6,9 +6,10 @@ Installed via ``[project.scripts]``::
     mindflock serve tailscale     # serve on the tailnet (phone access)
     mindflock serve --port 9000   # custom port
     mindflock serve --setup       # …run the guided setup first, then serve
-    mindflock init                # guided first run: deps, agent login, repo
+    mindflock init                # the three steps: tools, agent sign-in, project folder
     mindflock init --yes          # …taking every default, for scripts
     mindflock doctor              # dependency preflight (exit 1 on failures)
+    mindflock doctor --all        # …listing the optional checks too
     mindflock doctor --fix        # …and offer to run each fix command
 
     mindflock new [REPO_PATH] -p "…"   # create a session on a running server
@@ -106,19 +107,22 @@ _NEW_POLL_S = 1.0
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mindflock",
-        description=(
-            "MindFlock — a private flock of AI coding agents, started by your "
-            "ticket queue, merged by you."
-        ),
+        usage="mindflock [-h] [--version] COMMAND ...",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="New here? Run mindflock init",
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
     )
-    sub = parser.add_subparsers(dest="command")
+    # help=SUPPRESS: argparse's own flat, brace-listed table is replaced by the
+    # grouped one _command_groups() writes into the description below.
+    sub = parser.add_subparsers(
+        dest="command", metavar="COMMAND", help=argparse.SUPPRESS
+    )
 
     serve = sub.add_parser(
         "serve",
-        help="start the MindFlock server (default command); run it from the git repo you want to manage",
+        help="start MindFlock (the default command), then open the address it prints in your browser",
     )
     serve.add_argument(
         "mode",
@@ -142,7 +146,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     init_p = sub.add_parser(
         "init",
-        help="guided first-run setup: check dependencies, log in your agent CLI, pick your repo",
+        help="guided first-run setup: install the tools, sign in to your agent, pick a project folder",
     )
     init_p.add_argument(
         "--yes",
@@ -150,15 +154,23 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="take every default without prompting (for scripts)",
     )
+    # What install.sh ends on: the three steps + the next action, read-only.
+    init_p.add_argument("--steps", action="store_true", help=argparse.SUPPRESS)
 
     doctor_p = sub.add_parser(
         "doctor",
-        help="check git/tmux/agent-CLI (plus optional gh, uv, tailscale) and print fixes",
+        help="check what this computer has (git, tmux, your agent and its sign-in) and print fixes",
     )
     doctor_p.add_argument(
         "--fix",
         action="store_true",
-        help="install everything missing in one go (one confirmation), then offer the logins",
+        help="install everything missing in one go (one confirmation), then offer the sign-ins",
+    )
+    doctor_p.add_argument(
+        "--all",
+        action="store_true",
+        dest="show_all",
+        help="also list the optional checks (Tailscale, peer links, caches…); with --fix, offer their fixes too",
     )
 
     # Shared --host/--port for every command that talks to a running server.
@@ -193,7 +205,7 @@ def _build_parser() -> argparse.ArgumentParser:
     new = sub.add_parser(
         "new",
         parents=[server_opts],
-        help="create a session on the running server (repo defaults to CWD)",
+        help="start a session on the running MindFlock (project folder defaults to here)",
     )
     new.add_argument(
         "repo_path",
@@ -230,9 +242,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "'default' = the CLI's own login; unset = the app-wide default)",
     )
 
-    ls = sub.add_parser(
-        "ls", parents=[server_opts], help="list sessions on the running server"
-    )
+    ls = sub.add_parser("ls", parents=[server_opts], help="list sessions")
     ls.add_argument(
         "--json", action="store_true", dest="as_json", help="raw JSON for scripting"
     )
@@ -722,7 +732,7 @@ def _build_parser() -> argparse.ArgumentParser:
     upd = sub.add_parser(
         "update",
         parents=[server_opts],
-        help="update this MindFlock to the newest release and restart the server",
+        help="update MindFlock to the newest release and restart it",
         description=(
             "Install the newest MindFlock release (or --ref) over this one the "
             "way it was installed — install.json says whether that is uv tool "
@@ -755,7 +765,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "restart",
         parents=[server_opts],
-        help="restart the running server (onto whatever is installed now)",
+        help="restart the running MindFlock (onto whatever is installed now)",
     )
 
     mcp = sub.add_parser(
@@ -859,7 +869,70 @@ def _build_parser() -> argparse.ArgumentParser:
         help="skip the confirmation prompt (for scripts)",
     )
 
+    parser.description = (
+        "MindFlock — a private flock of AI coding agents, started by your\n"
+        "ticket queue, merged by you.\n\n" + _command_groups(sub)
+    )
     return parser
+
+
+#: How ``mindflock --help`` groups the commands. A command missing here lands
+#: under Advanced, so a new one is never left out of the help.
+_HELP_GROUPS = (
+    ("Get started", ("init", "serve", "doctor")),
+    (
+        "Sessions",
+        (
+            "new",
+            "ls",
+            "attach",
+            "msg",
+            "inbox",
+            "run",
+            "templates",
+            "pause",
+            "resume",
+            "sleep",
+            "wake",
+            "close",
+            "delete",
+            "rm",
+            "open",
+        ),
+    ),
+    ("This computer", ("update", "restart", "devices", "join", "token", "uninstall")),
+    ("Advanced", ("accounts", "peer", "events", "mcp", "slot")),
+)
+
+
+def _command_groups(sub: "argparse._SubParsersAction") -> str:
+    """The command table, grouped, from each subparser's own ``help`` (a
+    command whose help is SUPPRESS — git-credential — is left out)."""
+    helps = {
+        a.dest: a.help
+        for a in sub._choices_actions  # noqa: SLF001 — argparse keeps help here
+        if a.help and a.help != argparse.SUPPRESS
+    }
+    listed = {name for _title, names in _HELP_GROUPS for name in names}
+    extra = tuple(n for n in helps if n not in listed)
+    width = max(len(n) for n in helps) + 2
+    import textwrap
+
+    out: List[str] = []
+    for title, names in _HELP_GROUPS:
+        names = names + extra if title == "Advanced" else names
+        rows = [n for n in names if n in helps]
+        if not rows:
+            continue
+        out.append(title + ":")
+        for n in rows:
+            text = textwrap.wrap(helps[n], 78 - width - 2, break_on_hyphens=False) or [
+                ""
+            ]
+            out.append("  " + n.ljust(width) + text[0])
+            out.extend("  " + " " * width + t for t in text[1:])
+        out.append("")
+    return "\n".join(out).rstrip()
 
 
 def _cmd_serve(mode: Optional[str], port: Optional[int], setup: bool = False) -> int:
@@ -878,29 +951,96 @@ def _cmd_serve(mode: Optional[str], port: Optional[int], setup: bool = False) ->
     return 0
 
 
-def print_checks(checks: list[Check], stream: Optional[TextIO] = None) -> None:
-    """Render doctor results the one way MindFlock renders them: a glyph column,
-    label-aligned details, and the fix line under anything that needs attention.
+#: What the doctor's glyphs mean — printed once, next to its title.
+_LEGEND = "✓ good   ! needs attention   ✗ missing   - not set up"
 
-    Shared by ``mindflock doctor`` and the first-run wizard
-    (:mod:`backend.init_wizard`) so the two can never drift into two dialects of
-    the same table. An empty list prints nothing — the wizard's report passes
-    only the checks that need attention, and on a healthy machine that is none.
+
+def _row_label(c: Check) -> str:
+    """A row's name in the terminal: the agent rows say "agent" and
+    "sign-in", not "agent CLI" / "agent auth" (the wire label is unchanged)."""
+    if c.id == "agent-cli" and c.provider:
+        return f"agent ({c.provider})"
+    if c.id == "agent-auth" and c.provider:
+        return f"agent sign-in ({c.provider})"
+    return c.label
+
+
+def _row_fix(c: Check) -> str:
+    if c.id == "agent-auth" and c.status == "warn" and (c.cmd or c.fix):
+        from backend import init_wizard
+
+        return init_wizard.sign_in_hint(c)
+    return (c.fix or "").replace("`", "")
+
+
+def print_checks(
+    checks: list[Check],
+    stream: Optional[TextIO] = None,
+    *,
+    show_all: bool = False,
+    grouped: bool = True,
+) -> None:
+    """Render doctor results the one way MindFlock renders them: a heading per
+    group (Needed to run an agent / Needed to ship / Optional), a glyph
+    column, label-aligned details, and the fix line under anything that needs
+    attention.
+
+    Optional rows fold into one "N optional checks — mindflock doctor --all"
+    line (a failing one is still shown: an opted-in local model that is down
+    is a real problem) unless ``show_all``. ``grouped=False`` prints a bare
+    list (the re-probe after an install). An empty list prints nothing.
     """
+    from backend import doctor
+
     out = stream if stream is not None else sys.stdout
     if not checks:
         return
-    width = max(len(c.label) for c in checks)
-    for c in checks:
+    sections = []
+    for group in doctor.GROUPS if grouped else ():
+        rows = [c for c in checks if getattr(c, "group", "") == group]
+        shown, folded = rows, []
+        if group == doctor.GROUP_OPTIONAL and not show_all:
+            shown = [c for c in rows if c.status == "fail"]
+            folded = [c for c in rows if c.status != "fail"]
+        if rows:
+            sections.append((group, shown, folded))
+    visible = [c for _g, shown, _f in sections for c in shown] if grouped else checks
+    width = max((len(_row_label(c)) for c in visible), default=0)
+
+    def _row(c: Check) -> None:
         glyph = _GLYPHS.get(c.status, "?")
-        print(f"  {glyph} {c.label.ljust(width)}  {c.detail}", file=out)
-        if c.fix and c.status in ("warn", "fail"):
-            print(f"    {' ' * width}  fix: {c.fix}", file=out)
+        detail = (c.detail or "").replace("`", "")
+        print(f"  {glyph} {_row_label(c).ljust(width)}  {detail}".rstrip(), file=out)
+        fix = _row_fix(c)
+        if fix and c.status in ("warn", "fail"):
+            print(f"    {' ' * width}  fix: {fix}", file=out)
+
+    if not grouped:
+        for c in checks:
+            _row(c)
+        return
+    for group, shown, folded in sections:
+        print("", file=out)
+        if shown:
+            print(doctor.GROUP_TITLES[group], file=out)
+            for c in shown:
+                _row(c)
+        if folded:
+            warn = sum(1 for c in folded if c.status == "warn")
+            note = f" ({warn} need{'s' if warn == 1 else ''} attention)" if warn else ""
+            more = " more" if shown else ""
+            print(
+                f"Optional: {len(folded)}{more} check{'' if len(folded) == 1 else 's'}"
+                f"{note} — mindflock doctor --all",
+                file=out,
+            )
 
 
-def _cmd_init(assume_yes: bool = False) -> int:
+def _cmd_init(assume_yes: bool = False, steps: bool = False) -> int:
     from backend import init_wizard
 
+    if steps:
+        return init_wizard.print_steps("install")
     return init_wizard.run(assume_yes=assume_yes)
 
 
@@ -932,41 +1072,49 @@ def _cmd_token(out: Optional[TextIO] = None) -> int:
     return 0
 
 
-def _cmd_doctor(fix: bool = False) -> int:
-    from backend import doctor
+def _cmd_doctor(fix: bool = False, show_all: bool = False) -> int:
+    """``mindflock doctor``: grouped checks, then ONE next-action line (the
+    same one ``mindflock init`` ends on — the agent's sign-in counts as
+    required there, as in the browser's checklist). Exit 1 when a check
+    fails, as before."""
+    from backend import doctor, init_wizard
 
     checks = doctor.run_checks()
-    print("MindFlock doctor")
-    print()
-    print_checks(checks)
+    print("MindFlock doctor     " + _LEGEND)
+    print_checks(checks, show_all=show_all)
     if fix:
-        checks = _fix_checks(checks)
-    failed = [c for c in checks if c.status == "fail"]
+        groups = doctor.GROUPS if show_all else (doctor.GROUP_RUN, doctor.GROUP_SHIP)
+        checks = _fix_checks(checks, groups=groups)
+    st = init_wizard.readiness(checks, init_wizard._known_folder())
     print()
-    if failed:
-        print(
-            f"{len(failed)} required dependenc{'y' if len(failed) == 1 else 'ies'} missing."
-        )
-        return 1
-    print("All required dependencies look good.")
-    return 0
+    print(init_wizard.next_action(st, "doctor"))
+    return 1 if any(c.status == "fail" for c in checks) else 0
 
 
-def _install_all(checks: list[Check]) -> list[Check]:
+def _install_all(checks: list[Check], groups: Tuple[str, ...]) -> list[Check]:
     """The one-shot half of `doctor --fix`: show everything missing that this
-    machine needs, ask ONCE, then run it as a single script (one package-manager
-    run, so one sudo prompt) and re-probe every check. Returns the checks list,
-    re-probed when the script ran."""
+    machine needs (in ``groups``, never an optional extra), ask ONCE, then run
+    it as a single script (one package-manager run, so one sudo prompt) and
+    re-probe every check. Returns the checks list, re-probed when the script
+    ran."""
     from backend import doctor
 
-    plan = doctor.install_plan(checks)
+    plan = doctor.install_plan(
+        [c for c in checks if c.group in groups and c.group != doctor.GROUP_OPTIONAL]
+    )
     steps = plan["steps"]
     if not steps:
         return checks
     print()
     print("Missing — I can install all of it in one go:")
+    by_id = {c.id: c for c in checks}
     for st in steps:
-        print(f"  • {st['label']}")
+        label = st["label"]
+        if st["id"] == "agent-cli" and getattr(by_id.get("agent-cli"), "provider", ""):
+            from backend import init_wizard
+
+            label = "your agent: " + init_wizard.agent_name(by_id["agent-cli"].provider)
+        print(f"  • {label}")
         print(f"      {st['cmd']}")
     try:
         answer = input(f"\nInstall all {len(steps)}? [Y/n] ").strip().lower()
@@ -995,69 +1143,148 @@ def _install_all(checks: list[Check]) -> list[Check]:
     changed = [c for c in fresh if c.id in done or c.pkg in plan["packages"]]
     if changed:
         print()
-        print_checks(changed)
+        print_checks(changed, grouped=False)
     return fresh
 
 
-def _fix_checks(checks: list[Check]) -> list[Check]:
-    """Interactive `doctor --fix`.
+#: How many times an abandoned sign-in may be retried before the loop moves on.
+_SIGN_IN_TRIES = 3
+
+
+def _sign_in(
+    c: Check, recheck: Optional[Callable[[], Optional[Check]]]
+) -> Optional[Check]:
+    """Run the agent's sign-in, re-probe, and when it still isn't signed in
+    say so plainly — "<agent> closed before you signed in" — with
+    [R]etry / [s]kip, instead of a PATH diagnosis that has nothing to do with
+    it. Returns the last re-probe (``None`` when there is no probe)."""
+    from backend import init_wizard
+
+    agent = init_wizard.agent_name(c.provider)
+    fresh: Optional[Check] = None
+    for _ in range(_SIGN_IN_TRIES):
+        if "login" not in c.cmd:
+            # A bare program (`claude`) signs in from inside its own UI, which
+            # then just sits there: say how to get back. It runs in THIS
+            # directory, which is why it may first ask to trust it.
+            quit_ = (
+                "/exit in Claude Code" if c.cmd == "claude" else "its own quit command"
+            )
+            print(
+                f"  {c.cmd} opens — sign in when it asks (a browser window may "
+                f"open), then quit it ({quit_}) to come back here."
+            )
+        # shell=True: a login command we authored or the provider declared.
+        subprocess.run(c.cmd, shell=True)
+        if recheck is None:
+            return None
+        try:
+            fresh = recheck()
+        except Exception:  # noqa: BLE001 — a broken re-probe ends the retry loop
+            return None
+        if fresh is None or fresh.status not in ("warn", "fail"):
+            print(f"  ✓ signed in to {agent}")
+            return fresh
+        try:
+            answer = (
+                input(f"\n  {agent} closed before you signed in. [R]etry / [s]kip: ")
+                .strip()
+                .lower()
+            )
+        except EOFError:
+            answer = "s"
+        if answer not in ("", "r", "retry"):
+            break
+    print(
+        f"  skipped — sign in later: {init_wizard.sign_in_hint(fresh or c)}, "
+        "or click Sign in on the browser page"
+    )
+    return fresh
+
+
+def _fix_checks(
+    checks: list[Check], groups: Tuple[str, ...] = ("run", "ship")
+) -> list[Check]:
+    """Interactive `doctor --fix`, limited to ``groups``.
 
     First everything installable at once (:func:`_install_all`), then — one at
     a time, because each is interactive in its own way — the remaining fix
-    commands (logins like `codex login` / `gh auth login`): ask, run with
-    inherited stdio, re-probe just that check. Returns the checks list with
-    re-probed results swapped in."""
+    commands (the agent's sign-in, `gh auth login`): ask, run with inherited
+    stdio, re-probe just that check. Only a ``run`` row (needed to run an
+    agent) says Enter = yes; anything else asks [y/N], and optional extras
+    (Tailscale, the MTU, bubblewrap…) are offered only when ``groups`` names
+    them (`doctor --fix --all`) — never in `mindflock init`. Returns the checks
+    list with re-probed results swapped in."""
     from backend import doctor
+
+    def _cmd(c: Check) -> str:
+        if c.cmd:
+            return c.cmd
+        if c.group == doctor.GROUP_OPTIONAL and c.install and c.pkg:
+            return doctor._pkg_install_line([c.pkg])
+        return ""
 
     def _rest(cs: list[Check]) -> list[Check]:
         return [
-            c for c in cs if c.status in ("warn", "fail") and c.cmd and not c.install
+            c
+            for c in cs
+            if c.group in groups
+            and c.status in ("warn", "fail")
+            and _cmd(c)
+            and not (c.install and c.group != doctor.GROUP_OPTIONAL)
         ]
 
-    if not doctor.install_plan(checks)["steps"] and not _rest(checks):
+    planned = [
+        c for c in checks if c.group in groups and c.group != doctor.GROUP_OPTIONAL
+    ]
+    if not doctor.install_plan(planned)["steps"] and not _rest(checks):
         return checks
     if not sys.stdin.isatty():
         print()
         print(
             "--fix needs an interactive terminal to confirm; "
-            "run `mindflock doctor --fix` yourself, or paste the fix lines above."
+            "run mindflock doctor --fix yourself, or paste the fix lines above."
         )
         return checks
-    checks = _install_all(list(checks))
+    checks = _install_all(list(checks), groups)
     fixable = _rest(checks)
     if not fixable:
         return checks
-    print()
-    print(
-        f"{len(fixable)} more fixable — I can run each command for you (Enter = yes)."
-    )
     for c in fixable:
+        cmd = _cmd(c)
+        required = c.group == doctor.GROUP_RUN
+        choices = "[Y/n]" if required else "[y/N]"
+        if c.id == "agent-auth":
+            from backend import init_wizard
+
+            question = (
+                f"Sign in to {init_wizard.agent_name(c.provider)}: run {cmd} now?"
+            )
+        else:
+            question = f"{_row_label(c)}: run {cmd}?"
         try:
-            answer = input(f"\n  {c.label}: run `{c.cmd}`? [Y/n] ").strip().lower()
+            answer = input(f"\n  {question} {choices} ").strip().lower()
         except EOFError:
             break
-        if answer not in ("", "y", "yes"):
+        if answer not in (("", "y", "yes") if required else ("y", "yes")):
             print("  skipped")
             continue
-        # "agent-auth" is the default's row; "agent-auth-<name>" the other
-        # CLIs a ticket source, PR review or the Assistant would launch.
-        if c.id.startswith("agent-auth") and "login" not in c.cmd:
-            # A bare program (`claude`) signs in from inside its own UI, which
-            # then just sits there: say how to get back. It runs in THIS
-            # directory, which is why it may first ask to trust it.
-            print(
-                f"  `{c.cmd}` opens — sign in when it asks (a browser window may "
-                "open), then quit it (/exit in Claude Code) to come back here."
-            )
-        # shell=True: fix commands are trusted strings we authored (pipes like
-        # the uv installer need a shell); stdio is inherited for interactivity.
-        proc = subprocess.run(c.cmd, shell=True)
         recheck = doctor.CHECKS_BY_ID.get(c.id)
         if recheck is None and c.id.startswith("agent-auth-"):
             # A per-provider row has no probe of its own in CHECKS_BY_ID (its
             # family's returns every such row): re-probe just this CLI.
             name = c.id[len("agent-auth-") :]
             recheck = functools.partial(doctor._agent_auth_check, c.id, name, c.label)
+        # "agent-auth" is the default's row; "agent-auth-<name>" the other
+        # CLIs a ticket source, PR review or the Assistant would launch.
+        if c.id.startswith("agent-auth"):
+            fresh = _sign_in(c, recheck)
+            if fresh is not None and not isinstance(fresh, list):
+                checks[checks.index(c)] = fresh
+            continue
+        # shell=True: fix commands are trusted strings we authored (pipes like
+        # the uv installer need a shell); stdio is inherited for interactivity.
+        proc = subprocess.run(cmd, shell=True)
         if proc.returncode != 0:
             print(f"  command exited {proc.returncode}")
         if recheck is None:
@@ -1066,11 +1293,11 @@ def _fix_checks(checks: list[Check]) -> list[Check]:
             fresh = recheck()
         except Exception:  # noqa: BLE001 — a broken re-probe shouldn't kill the loop
             continue
-        if fresh is None:
+        if fresh is None or isinstance(fresh, list):
             continue
         checks[checks.index(c)] = fresh
         glyph = _GLYPHS.get(fresh.status, "?")
-        print(f"  {glyph} {fresh.label}  {fresh.detail}")
+        print(f"  {glyph} {_row_label(fresh)}  {fresh.detail}")
         if fresh.status in ("warn", "fail"):
             print(
                 "  still not healthy — you may need to open a new shell (PATH) "
@@ -3227,12 +3454,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         return slot.main(argv[1:])
     args = _build_parser().parse_args(argv)
     if args.command == "doctor":
-        return _cmd_doctor(fix=args.fix)
+        return _cmd_doctor(fix=args.fix, show_all=args.show_all)
     if args.command == "init":
         # Like doctor and uninstall, not a session command: init is what you run
         # *before* there is a server, so it must never go through the
         # ServerNotFound handler below.
-        return _cmd_init(assume_yes=args.yes)
+        return _cmd_init(assume_yes=args.yes, steps=args.steps)
     if args.command == "uninstall":
         # Not a session command: it works offline against state.json (and
         # refuses to run while a server is up), so it must never be wrapped in
