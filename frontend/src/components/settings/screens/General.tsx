@@ -25,10 +25,14 @@ export function General(_: ScreenProps) {
   return (
     <>
       {/* Budgets, resuming, reviving and sleeping only mean something once
-          sessions run, so they wait in the fold — advanced mode only, like
-          every power-user row on a basic screen (settingsMode.tsx); their
-          keys are unchanged, and "Show advanced settings" brings them back. */}
-      <AdvancedFold id="general-advanced">
+          sessions run, so they wait in a NAMED fold, closed until opened —
+          the screen used to open on a bare "▼ Advanced" heading (the owner
+          disliked that) — advanced mode only, like every power-user row on a
+          basic screen (settingsMode.tsx); their keys are unchanged. */}
+      {/* The one everyday knob leads: the terminal's wheel speed (basic mode
+          shows it too). */}
+      <ScrollSpeedRow />
+      <AdvancedFold id="general-advanced" summary="Budgets, resume and sleep" defaultOpen={false}>
         <label className="set-row">
           <span className="set-label">Per-session budget (USD, 0 = off)</span>
           <SettingField group="general" field="session_budget_usd" type="number" placeholder="0" />
@@ -44,7 +48,6 @@ export function General(_: ScreenProps) {
             Powers the "% left" in the sidebar's Usage bar. An estimate, not billed dollars.
           </span>
         </label>
-        <ScrollSpeedRow />
       </AdvancedFold>
       {/* Last, under Help: where to replay a tour is a help question, not the
           first thing General is for (the owner found it odd up top). Basic

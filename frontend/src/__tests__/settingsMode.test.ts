@@ -210,7 +210,7 @@ describe("advanced controls on basic screens are folded", () => {
     ["screens/Notifications.tsx", "notif-advanced", /<AdvancedFold id="notif-advanced" summary="Phone alerts \(ntfy\)" basic>\s*<Ntfy /],
     ["screens/Notifications.tsx", "notif-more-events", /<AdvancedFold\s+id="notif-more-events"\s+basic/],
     ["screens/CodingCli.tsx", "coding-advanced", /<AdvancedFold id="coding-advanced">\s*<WindowRefresh \/>/],
-    ["screens/General.tsx", "general-advanced", /<AdvancedFold id="general-advanced">[\s\S]*window_budget_usd[\s\S]*<ScrollSpeedRow \/>/],
+    ["screens/General.tsx", "general-advanced", /<ScrollSpeedRow \/>[\s\S]*<AdvancedFold id="general-advanced" summary="Budgets, resume and sleep" defaultOpen=\{false\}>[\s\S]*window_budget_usd/],
     ["screens/Workspace.tsx", "workspace-advanced", /<AdvancedFold id="workspace-advanced">[\s\S]*live_branch[\s\S]*fasttrack_depth[\s\S]*precommit_retry_hooks/],
     // Folded by default even in advanced mode (r5 settings #8).
     ["screens/Connections.tsx", "connections-advanced", /<AdvancedFold id="connections-advanced" summary="More connections" defaultOpen=\{false\}>\s*\{more\.map\(renderGroup\)\}/],

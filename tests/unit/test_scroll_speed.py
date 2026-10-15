@@ -98,3 +98,31 @@ def test_apply_binds_copy_mode_wheel(monkeypatch, tmp_path):
         assert "if-shell" in c
         forward = c[c.index("-F") + 2]  # the "then" branch follows the -F condition
         assert forward == " ; ".join(["send-keys -M"] * 3)
+
+
+def test_the_synced_setting_wins_over_the_file(monkeypatch, tmp_path):
+    """The setting ``ui.scroll_speed`` is what sync carries and what Settings
+    writes; the file is the older store. With both present the setting wins,
+    so a restart (which re-applies the speed from ``load_scroll_speed``) keeps
+    the chosen speed even when the file is missing or stale."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(terminal, "SCROLL_SPEED_PATH", tmp_path / "scroll-speed")
+    terminal.save_scroll_speed(2)
+    monkeypatch.setattr(terminal, "_settings_scroll_speed", lambda: 0.6667)
+    assert terminal.load_scroll_speed() == 0.6667
+    monkeypatch.setattr(terminal, "_settings_scroll_speed", lambda: None)
+    assert terminal.load_scroll_speed() == 2  # the file, when the setting is unset
+    (tmp_path / "scroll-speed").unlink()
+    assert terminal.load_scroll_speed() == 1  # neither: the default
+    # The store helper itself reads ui.scroll_speed and clamps it.
+    monkeypatch.undo()
+    monkeypatch.setattr(terminal, "SCROLL_SPEED_PATH", tmp_path / "scroll-speed")
+    from backend.config import settings as _settings
+
+    monkeypatch.setattr(
+        _settings,
+        "load_settings",
+        lambda: SimpleNamespace(ui=SimpleNamespace(scroll_speed=2.4)),
+    )
+    assert terminal.load_scroll_speed() == 2.3333
