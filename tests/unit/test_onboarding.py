@@ -402,7 +402,10 @@ def test_device_flow_expires_without_asking(monkeypatch, flow):
 
 
 def test_no_client_id_no_device_flow(monkeypatch):
+    # The build ships the MindFlock OAuth App's id; a build with the constant
+    # emptied (and nothing in env or settings) has no device flow to start.
     monkeypatch.delenv(github_auth.CLIENT_ID_ENV, raising=False)
+    monkeypatch.setattr(github_auth, "DEFAULT_GITHUB_OAUTH_CLIENT_ID", "")
     out = github_auth.start_device_flow()
     assert not out["ok"] and "OAuth App" in out["error"]
 
