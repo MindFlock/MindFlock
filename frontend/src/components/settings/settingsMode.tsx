@@ -88,7 +88,7 @@ export function AdvancedToggle({
   onChange(on: boolean): void;
 }) {
   return (
-    <div className="set-mode-foot">
+    <div className="set-mode-foot" data-tour="settings-advanced">
       <button
         type="button"
         id="settings-advanced-toggle"

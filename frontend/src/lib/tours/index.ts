@@ -7,6 +7,9 @@
  *    selector LIST is fine: the first match in the page wins, so a step can
  *    name a `[data-tour="…"]` hook and today's id as its fallback). `""`, or
  *    a target that isn't on screen, centres the card and still shows the step.
+ *    A target below the fold of a scrolling pane is scrolled into view (a
+ *    closed <details> around it is opened first) by the coach mark itself.
+ *  - `screen` (optional) names a screen of the surface to switch to first.
  *  - One file per tour (`./<id>.ts`). A surface's owner refines its own file
  *    as the surface changes; hooks it adds are named
  *    `data-tour="<surface>-<thing>"` once and kept (tests pin them).
@@ -32,6 +35,12 @@ export interface TourStep {
   title: string;
   /** One plain sentence. */
   body: string;
+  /** The screen of the tour's surface this step shows, switched to before the
+   * step is measured — so one tour can walk several screens. Settings reads
+   * it (a Settings screen key: "connections", "coding", …) and follows the
+   * store's `coachTour` step; Back returns to the step's screen too. Omit it
+   * and the step stays on whatever is showing. */
+  screen?: string;
 }
 
 export interface TourDef {

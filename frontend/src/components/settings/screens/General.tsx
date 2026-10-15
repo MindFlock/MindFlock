@@ -1,8 +1,8 @@
 /** Settings → General (partial 101 + the scroll-speed wiring from
- * section 20): the tours (replay any of them) and the hints switch first;
- * then, in the Advanced fold, the cost budget, what happens when usage runs
- * out or MindFlock restarts, idle sleep, the plan estimate and terminal
- * scroll speed. One plain line per control; the long why sits in a "Learn
+ * section 20): in the Advanced fold, the cost budget, what happens when usage
+ * runs out or MindFlock restarts, idle sleep, the plan estimate and terminal
+ * scroll speed; then, last, Help — the tours (replay any of them) and the
+ * hints switch. One plain line per control; the long why sits in a "Learn
  * more" fold. The comfort switches (Reduce motion, Take a break, Idle flock)
  * live on Appearance — they are about how the app looks and feels. */
 
@@ -18,13 +18,11 @@ import { AdvancedFold } from "../settingsMode";
 import { flashSaved } from "../savedCue";
 import { TOURS, TOUR_IDS, type TourId } from "../../../lib/tours";
 import { replayTour } from "../../onboarding/replayTour";
+import "./General.css";
 
 export function General(_: ScreenProps) {
   return (
     <>
-      {/* First, because it is the part of General a newcomer came for — and
-          the part an old hand never needs to scroll past to reach budgets. */}
-      <Tours />
       {/* Budgets, resuming, reviving and sleeping only mean something once
           sessions run, so they wait in the fold — advanced mode only, like
           every power-user row on a basic screen (settingsMode.tsx); their
@@ -47,6 +45,10 @@ export function General(_: ScreenProps) {
         </label>
         <ScrollSpeedRow />
       </AdvancedFold>
+      {/* Last, under Help: where to replay a tour is a help question, not the
+          first thing General is for (the owner found it odd up top). Basic
+          mode shows only this; the Settings tour's last step points here. */}
+      <Tours />
     </>
   );
 }
@@ -149,16 +151,19 @@ function SleepIdleRow() {
   );
 }
 
-/** Tours: one Replay per tour (lib/tours) — each opens its surface and walks
+/** Help: one Replay per tour (lib/tours) — each opens its surface and walks
  * it — and the hints switch. Turning hints back on re-arms every hint the
  * user had dismissed; with hints off, no tour opens by itself either
- * (onboarding/useAutoTour), though every Replay still works. */
+ * (onboarding/useAutoTour), though every Replay still works. Keeps the id
+ * `general-tours` (deep links, the search index) and carries the Settings
+ * tour's `settings-tours` hook on the same element. */
 function Tours() {
   const enabled = useUi((s) => s.hintsEnabled);
   const setHintsEnabled = useUi((s) => s.setHintsEnabled);
   return (
-    <div className="onboarding-block" id="general-tours">
-      <h3 className="set-section-title">Tours</h3>
+    <div className="onboarding-block general-help" id="general-tours" data-tour="settings-tours">
+      <h3 className="set-section-title">Help</h3>
+      <h4 className="set-subtitle">Tours</h4>
       {TOUR_IDS.map((id) => (
         <div className="set-row onboarding-action" key={id} data-tour-row={id}>
           <div className="onboarding-action-text">

@@ -30,6 +30,12 @@
  * the screens pane notes the last control changed or left, and
  * useSettings' saveField marks it.
  *
+ * The Settings tour walks several screens: each of its steps names one
+ * (lib/tours/settings.ts `screen`), and while that tour is open the dialog
+ * switches to the current step's screen whenever the step changes — Next,
+ * Back, or the "?" restarting it on Connections. Clicking another screen
+ * mid-step is left alone until the next step.
+ *
  * Labels follow the shared glossary ("Agents", "Custom agents"); the keys
  * ("coding", "providers") never change — palette/settingsSearch.ts, deep
  * links and the server's Connections rows use them. */
@@ -74,6 +80,7 @@ import { Extensions } from "./screens/Extensions";
 import { Traffic } from "./screens/Traffic";
 import { TourButton } from "../onboarding/TourButton";
 import { useAutoTour } from "../onboarding/useAutoTour";
+import { TOURS } from "../../lib/tours";
 
 export interface ScreenProps {
   active: boolean;
@@ -178,6 +185,15 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
     // Re-read on every open: a sync may have brought another device's choice.
     setAdvanced(readAdvancedMode());
   }, [open, target, openDialogFor, keys]);
+
+  // The Settings tour's step names the screen it shows (see the header).
+  const tourStep = useUi((s) => (s.coachTour?.id === "settings" ? s.coachTour.step : -1));
+  useEffect(() => {
+    if (!open || tourStep < 0) return;
+    const want = TOURS.settings.steps[tourStep]?.screen;
+    const key = want ? resolveScreenKey(want, keys) : null;
+    if (key) setScreen(key);
+  }, [open, tourStep, keys]);
 
   if (!open) return null;
 

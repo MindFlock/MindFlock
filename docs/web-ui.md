@@ -2692,7 +2692,7 @@ go** starts the Welcome [tour](#tours) over the checklist. It counts as seen
   `prefs.welcome_tour`; the page waits for its first prefs pull before
   deciding). After that it is the palette's **Replay welcome tour**, the
   **Tour** link on the **?** shortcuts sheet, and **Welcome tour → Replay** in
-  Settings → General → Tours.
+  Settings → General → Help.
 - **Connect GitHub** — the dialog; see [Connect GitHub](#connect-github)
   below.
 - **Push failed** — the Push button types `GIT_TERMINAL_PROMPT=0 git push …`
@@ -2746,7 +2746,7 @@ go** starts the Welcome [tour](#tours) over the checklist. It counts as seen
   Settings → General) hides all of them at once; turning hints **back on
   re-arms** every previously dismissed hint (clears `dismissedHints`).
 
-The tours and hints are replayed from the **Tours** block at the top of
+The tours and hints are replayed from the **Help** block at the bottom of
 **Settings → General**. There is no sidebar welcome hint any more; the one
 first-run hint left in the sidebar points at Customize.
 
@@ -2757,8 +2757,18 @@ live control and a small card beside it (`onboarding/CoachTour.tsx`) — one
 plain sentence, **Back** / **Next** / **Done**, *2 of 4*, **Skip tour**. It
 is non-modal (`role="dialog" aria-modal="false"`): what it points at stays
 clickable, the card sits beside, below or above its target (re-measured on
-resize and as the dialog fills in), and a step whose target isn't on screen
-centres the card and still shows. `Esc` ends it; the arrow keys page.
+resize, on any scroll, and as the dialog fills in), and a step whose target
+isn't on screen centres the card and still shows. `Esc` ends it; the arrow
+keys page.
+
+Every step is **brought into view by the tour** (`revealTarget` in
+`CoachTour.tsx`): a target inside a closed `<details>` has its fold opened,
+and one not wholly inside its scrolling pane (a Settings screen, a dialog
+body) or the window is scrolled to the pane's centre (`behavior: "smooth"`,
+or instant under reduce motion) — nobody scrolls to find a ring. A target
+that renders late is looked for again for a few seconds. A step can also name
+a `screen` of its surface to switch to first (`TourStep.screen`); Settings is
+the one surface that reads it.
 
 There are six (`lib/tours/`, one file per tour, `TOURS` in `index.ts`):
 **Welcome** (over the Get set up checklist: the *next:* line, ① Install
@@ -2771,13 +2781,20 @@ steps: the top-bar **Schedule** — or **Create a template** while that item is
 still hidden — then Create a template, Name + Folder, Task, Run on a schedule
 and its next-runs line, **▶ Run now**; hooks `schedule-new`, `schedule-name`,
 `schedule-folder`, `schedule-task`, `schedule-when`, `schedule-run`) and
-**Settings**. A step's target is a CSS selector, usually a stable id or a
+**Settings** (seven steps across four screens: Connections' status header,
+GitHub's **Connect** — the whole GitHub card once connected — and the search
+box; Agents' default-agent picker; Workspace's *Where your worktrees live*;
+**Show advanced settings · N more screens** at the nav's foot; General's Help
+block. Hooks `settings-status`, `settings-github`, `settings-default-agent`,
+`settings-worktrees`, `settings-advanced`, `settings-tours`. Its first step's
+screen is Connections, so the **?** always restarts it there). A step's target is a CSS selector, usually a stable id or a
 `data-tour="<surface>-<thing>"` hook (with today's id as a fallback in the
-same selector list).
+same selector list — a list matches in *document* order, so a fallback must
+be the hooked element or inside it, never earlier in the page).
 
 - **Replay** lives in three places: the **?** beside Close in each top-bar
   dialog's header (`onboarding/TourButton.tsx` — *Show me around*, titled
-  *Replay the Intake tour*), **Settings → General → Tours** (one **Replay**
+  *Replay the Intake tour*), **Settings → General → Help** (one **Replay**
   per tour), and the palette (**Replay Intake tour** …).
 - **By itself, once** (`onboarding/useAutoTour.ts`): a dialog's tour opens
   the first time that dialog opens in the [calm first hour](#layout) — decided
@@ -4712,7 +4729,8 @@ labels above the inputs.
 
   Under `prefers-reduced-motion` both surfaces show a settled flock rather than a
   moving one.
-- **General → Tours** (top of the screen) — one **Replay** per tour
+- **General → Help** (the bottom of the screen, after the Advanced fold;
+  still `#general-tours`) — under *Tours*, one **Replay** per tour
   (Welcome · New · Intake · Verify · Schedule · Settings) and the master
   **Show hints** switch, which also stops tours opening by themselves (see
   [Tours](#tours)). The per-session budget, **Resume sessions when usage comes
