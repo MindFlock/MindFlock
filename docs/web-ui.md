@@ -457,19 +457,44 @@ those jobs (the row's `background` field, see
 [providers.md](providers.md#background-jobs)), and the row shows a second chip
 beside the state:
 
-- **job waiting** / **N jobs waiting**: muted and informational. The session
-  reads **Idle**, and the tooltip names the command and how long it has been
-  quiet. The agent resumes when the job finishes.
-- **job stuck ✕** / **N jobs stuck ✕**: red, for a job that has been quiet for
-  15 min or provably can't finish. It is a button that calls
-  `POST /api/instances/{title}/background/{pid}/stop` on the *first* stuck job
-  and toasts *Stopped the stuck background job in <name>* (or *Couldn't stop
-  the background job in <name> — <why>*). The tooltip says how many remain.
-  On a remote `device::title` row it is plain text, not a button.
+- **job waiting** / **N jobs waiting**: muted. The session reads **Idle**,
+  and the tooltip names the command and how long it has been quiet (or, when
+  the job has come back from long quiets before, the server's reason: *quiet
+  22m — it has resumed after 41m before*). The agent resumes when the job
+  finishes.
+- **job running · 2h 10m of ~6h**: the same muted chip for a waiting job
+  that has an expected duration and is inside it; the tooltip gives the ETA
+  as a clock time (*done about 15:50*) and who set it.
+- **job past ~6h**: muted with an amber dot — past its expected duration,
+  not yet stuck. The tooltip says how long it has run, how long it has been
+  quiet, and when it would be called stuck.
+- **job stuck ✕** / **N jobs stuck ✕**: red, for a job quiet past its
+  threshold (15 min, or twice its longest earlier quiet, or 1.5× its expected
+  duration — whichever is longest) or provably unable to finish. The tooltip
+  is the server's reason.
+
+On this device's rows the chip is a button that opens the job's menu (a
+popover, like the row's ⋮): **Stop the job** (stuck only —
+`POST /api/instances/{title}/background/{pid}/stop` on the *first* stuck
+job, toasting *Stopped the stuck background job in <name>* or *Couldn't stop
+the background job in <name> — <why>*); **Expected to take…** → 30 min / 1 h
+/ 6 h / 24 h / **Custom…** (one inline field taking `6h`, `90m`, `1h30m`;
+1 minute to 14 days), which calls
+`POST /api/instances/{title}/jobs/{job_id}/expect {duration: seconds}`; and
+**Clear expectation** (`DELETE …/expect`) once one is set. A job can also
+get its expectation from the agent (the MCP tool) or from its command line
+(`MINDFLOCK_EXPECT=6h python train.py`); the menu says who set it. On a
+remote `device::title` row the chip is plain text, with no menu.
 
 A job that is still running gets no chip, because the row already reads
-**Working**. The state chip's tooltip names the job instead (*Turn ended; a
-background job is still running: …*). A pending row draws no job chip.
+**Working**. The state chip's tooltip — on the row and in the pane header —
+names the job instead, with its progress when it has an expectation (*Turn
+ended; a background job is still running (2h 10m of ~6h, done about 15:50):
+…*). A pending row draws no job chip.
+
+When a job first passes its expected duration, `session.job_past_expected`
+toasts *Job on <name> is past its expected ~6h — still quiet* and adds a
+bell row (*job is past its expected ~6h — still quiet*), once per job.
 
 **Restart.** The Offline chip calls `POST /api/instances/{title}/revive`
 ([web-api.md](web-api.md)), the same lazy relaunch a terminal attach or a sent
