@@ -123,6 +123,9 @@ import {
   VerifySwitch,
 } from "./VerifyChrome";
 import { TourButton } from "../onboarding/TourButton";
+import { replayTour } from "../onboarding/replayTour";
+import { findTarget } from "../onboarding/CoachTour";
+import { VERIFY_TOUR } from "../../lib/tours/verify";
 import { useAutoTour } from "../onboarding/useAutoTour";
 
 // The deep link — `openDialogFor("verify", <branch>)` — is resolved by
@@ -194,7 +197,6 @@ export function VerifyDialog() {
   const [preselect, setPreselect] = useState("");
   const [asking, setAsking] = useState(false);
   const [addingRepo, setAddingRepo] = useState(false);
-  const [addDismissed, setAddDismissed] = useState(false);
   const linked = useRef("");
 
   // Half-typed step notes belong to the visit, not to the app: drop them when
@@ -212,7 +214,6 @@ export function VerifyDialog() {
     setNewOpen(false);
     setPreselect("");
     setAddingRepo(false);
-    setAddDismissed(false);
     linked.current = "";
   }, [open, sel]);
 
@@ -251,7 +252,7 @@ export function VerifyDialog() {
       // order, and #verify-close lives up in the header — so every visit would
       // have landed on Close, which is the one control nobody opened this dialog
       // to press.
-      for (const sel of [".vf-primary", "#vf-repo-add-btn", "#verify-close"]) {
+      for (const sel of [".vf-primary", ".vf-empty-new", "#verify-close"]) {
         const el = panel?.querySelector<HTMLElement>(sel);
         if (el) {
           el.focus();
@@ -261,6 +262,18 @@ export function VerifyDialog() {
     }, 0);
     return () => window.clearTimeout(id);
   }, [open]);
+
+  // THE TOUR'S TARGETS LIVE IN A SCROLLING LIST: a step's badge or Check now
+  // can sit below the fold of #verify-body, where the coach mark would ring
+  // it off-screen. Bring each step's target into view inside the dialog (the
+  // coach mark follows the scroll).
+  const coachStep = useUi((s) => (s.coachTour?.id === "verify" ? s.coachTour.step : -1));
+  useEffect(() => {
+    if (!open || coachStep < 0) return;
+    const sel = VERIFY_TOUR.steps[coachStep]?.target;
+    const el = sel ? findTarget(document, sel) : null;
+    if (el && el.closest("#verify-body")) el.scrollIntoView({ block: "center" });
+  }, [open, coachStep]);
 
   if (!open) return null;
 
@@ -346,10 +359,12 @@ export function VerifyDialog() {
     loaded: !!plansQ.data,
   });
 
-  // "+ Add repository" (the dialog head) opens the add flow, Verify ticked;
-  // with nothing tracked and no checklist yet it leads on its own, until
-  // cancelled.
-  const showAdd = addingRepo || ((repoCfg.verify_repos || []).length === 0 && !plans.length && !addDismissed);
+  // "+ Add repository" (the fold at the bottom) opens the add flow, Verify
+  // ticked. It NEVER leads on its own any more (round 5, B2): a fresh install
+  // opened straight into a GitHub repository form a local-git user couldn't
+  // finish, and the honest first screen is the empty state.
+  const watching = (repoCfg.verify_repos || []).length;
+  const showAdd = addingRepo;
   const sources = (
     <VerifySources key="sources" liveBranch={liveBranch} />
   );
@@ -360,14 +375,8 @@ export function VerifyDialog() {
       uses={["verify"]}
       only="verify"
       liveBranch={liveBranch}
-      onCancel={() => {
-        setAddingRepo(false);
-        setAddDismissed(true);
-      }}
-      onDone={() => {
-        setAddingRepo(false);
-        setAddDismissed(true);
-      }}
+      onCancel={() => setAddingRepo(false)}
+      onDone={() => setAddingRepo(false)}
     />
   ) : null;
   const checklists = (
@@ -409,24 +418,14 @@ export function VerifyDialog() {
           </>
         ) : undefined
       }
-      // THE LEGEND, ONCE. It used to repeat as three lines inside every
-      // expanded checklist; it is said here, under the list, and nowhere
-      // else. Dropped when there is nothing to read it against.
-      hint={
-        plans.length ? (
-          <span className="vf-legend-once">
-            <span className="vf-step-who vf-who-you">you</span> = a person checks it ·{" "}
-            <span className="vf-step-who">agent</span> = the agent does · Pass, Fail and
-            Can't check are all answers; only Pass says it works · on a step:{" "}
-            <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd>, <kbd>u</kbd> undo, <kbd>n</kbd> note
-          </span>
-        ) : undefined
-      }
+      // The legend lives in the ⓘ by the title now (m2): it was a line of
+      // furniture on every visit, read once.
+      hint={undefined}
     >
       {error ? (
         <div className="repo-empty">{error}</div>
       ) : !plansQ.data ? null : !plans.length && !missingBranch ? (
-        <VerifyEmpty />
+        <VerifyEmpty watching={watching} />
       ) : (
         <>
           {missingBranch ? (
@@ -558,25 +557,26 @@ export function VerifyDialog() {
             <h2 id="verify-title">Verify</h2>
             <span className="ik-subtitle">
               Does the change work?
-              {/* Once there are checklists to work, the two-moment intro
-                  below steps aside into this tip: what a first visit needs
-                  and what the fiftieth scrolls past. */}
-              {plans.length > 0 && (
-                <InfoTip id="verify-how" label="How Verify works">
-                  <VerifyMoments liveBranch={liveBranch} overridden={overridden} />
-                </InfoTip>
-              )}
+              {/* How it works, the legend and the tour — what a first visit
+                  needs and what the fiftieth scrolls past, behind one ⓘ. */}
+              <InfoTip id="verify-how" label="How Verify works">
+                <VerifyMoments liveBranch={liveBranch} overridden={overridden} />
+                <p className="vf-legend-once">
+                  <span className="vf-step-who vf-who-you">you</span> = a person checks it ·{" "}
+                  <span className="vf-step-who">agent</span> = the agent does. Pass, Fail and
+                  Can't check are all answers; only Pass says it works. On a step:{" "}
+                  <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> answer, <kbd>u</kbd> undo,{" "}
+                  <kbd>n</kbd> note.
+                </p>
+                <button
+                  type="button"
+                  className="linklike vf-replay-tour"
+                  onClick={() => replayTour("verify")}
+                >
+                  Replay the Verify tour
+                </button>
+              </InfoTip>
             </span>
-            <button
-              type="button"
-              id="vf-repo-add-btn"
-              className="btn-primary"
-              disabled={showAdd}
-              title="Watch a GitHub repository: each new branch pushed there gets a checklist"
-              onClick={() => setAddingRepo(true)}
-            >
-              + Add repository
-            </button>
             <TourButton tour="verify" />
             <button type="button" id="verify-close" onClick={closeDialog}>
               Close
@@ -584,25 +584,12 @@ export function VerifyDialog() {
           </div>
 
           <div id="verify-body">
-            {/* INTAKE'S ANATOMY, in Intake's order: what this does, the master
-                switch, the work, the SOURCES it watches, and a fold at the
-                bottom for what you touch once. Work leads once there is any to
-                show (a tracked repo or a checklist); before that Sources and its
-                + Add lead, as on the Tickets, Pull requests and Issues tabs.
-
-                The intro is two lines — before merge, after merge — and moves
-                into the ⓘ by the title once there are checklists to work. */}
-            {plans.length === 0 && (
-              <div className="vf-intro">
-                <p className="set-hint set-block-hint">
-                  Each pushed branch gets a checklist of real-world checks — the agent
-                  does the ones it can, the rest are yours.
-                </p>
-                <VerifyMoments liveBranch={liveBranch} overridden={overridden} />
-              </div>
-            )}
-            {addFlow}
-            <VerifySwitch hasPlans={plans.length > 0} />
+            {/* INTAKE'S ANATOMY, in Intake's order: the master switch (only
+                once a repository is watched), the repositories, the work, and
+                folds at the bottom for what you touch once — a new checklist,
+                and watching a GitHub repository. The intro that used to lead
+                lives in the ⓘ; the empty state says what a first visit needs. */}
+            <VerifySwitch />
             {/* The repositories, as one quiet line above the work — edited from
                 their own headings under "Edit repositories". */}
             {sources}
@@ -619,6 +606,27 @@ export function VerifyDialog() {
                 setReveal({ planId, nonce: Date.now(), addStep });
               }}
             />
+            {/* The secondary route (B2): every push to a GitHub repository gets
+                a checklist, even work done outside MindFlock. Folded — a
+                first-hour user has no use for it, and it needs GitHub. */}
+            <details className="pr-advanced vf-watch-fold" open={showAdd || undefined}>
+              <summary>Watch a GitHub repository for every push</summary>
+              <div className="pr-advanced-body">
+                {showAdd ? (
+                  addFlow
+                ) : (
+                  <button
+                    type="button"
+                    id="vf-repo-add-btn"
+                    className="test-btn"
+                    title="Each new branch pushed to it gets a checklist"
+                    onClick={() => setAddingRepo(true)}
+                  >
+                    + Add repository
+                  </button>
+                )}
+              </div>
+            </details>
           </div>
         </div>
       </Modal>

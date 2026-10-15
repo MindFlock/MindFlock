@@ -33,7 +33,8 @@ describe("the verdict where merges happen", () => {
 describe("a checklist row", () => {
   it("carries the verdict and a way back to the work", () => {
     expect(has(PLAN, "<VerdictBadge plan={plan} />")).toBe(true);
-    for (const label of ['"Open session"', '"View diff"', '"Open PR \\u2197"'])
+    // m9: the ⋯ says which session it means — the work, or the checking run.
+    for (const label of ['"Open the work session"', '"View diff"', '"Open PR \\u2197"', '"Open the checking run"'])
       expect(has(PLAN, label)).toBe(true);
   });
 
@@ -48,8 +49,10 @@ describe("a checklist row", () => {
     );
   });
 
-  it("offers Fix… on a failed row", () => {
-    expect(has(PLAN, 'className="test-btn vf-fix"')).toBe(true);
+  it("offers Fix in a new session on a failed row, at normal button weight (m3)", () => {
+    expect(has(PLAN, 'className="vf-fix"')).toBe(true);
+    expect(has(PLAN, '"Fix in a new session"')).toBe(true);
+    expect(PLAN).not.toContain('"Fix…"');
   });
 
   it("teaches the legend once, under the list — not in every expanded row", () => {

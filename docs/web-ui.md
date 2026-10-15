@@ -602,8 +602,12 @@ newest thing you actually asked.
   files, untracked included); until then the header has no lead button and
   the state chip says what the agent is doing. On hover: *Commit this
   session's changes — you check the message first. Next: Push, then Open PR.*
-- **⋯ → Checklist…** (any header, when the session has a branch) opens Verify
-  on that branch's checklist — also on the row's ⋮ menu. When a checklist
+- **⋯ → Verify checklist…** (any header, when the session has a branch) opens
+  Verify on that branch's checklist — also on the row's ⋮ menu (still
+  *Checklist…* there). In the pane's ⋯ the checklist's verdict rides under
+  **Open PR** / **Merge PR** (*Checklist ✗ Failed*), and on a failed checklist
+  they ask first: *Checklist failed — open the PR anyway?* with **Show the
+  checklist** and **Open PR anyway** (`withVerifyVerdict`, lib/stage.ts). When a checklist
   exists, its verdict chip (*✓ Verified*, *✗ Failed*, *3/5 checked*) sits beside
   the PR chip and opens it in one click.
 - **An agent that isn't installed, or isn't signed in.** When the session's
@@ -1652,8 +1656,11 @@ a number. Clicking an entry focuses that session. Verify adds three rows,
 named **Verify · <checklist>** and opening that checklist in Verify: *ready to
 check* (`session.test_plan_due`), *couldn't write the checklist*
 (`session.test_plan_failed`) and *checklist failed — N steps*
-(`session.test_plan_checked` with `new: "failed"`), each gated by its own rule
-(`verify_plan_due`, `verify_plan_failed`, `verify_run_failed`). A session that ended reads
+(`session.test_plan_checked` with `new: "failed"`) — or *checklist failed — step
+1 GET /health* when a **person's** Fail turned it red
+(`session.test_plan_step_failed`) — each gated by its own rule
+(`verify_plan_due`, `verify_plan_failed`, `verify_run_failed` for both failed
+rows). A session that ended reads
 **closed** when it was closed (✕, `Ctrl+W`, the palette — the worktree kept)
 and **deleted** only when it was deleted (worktree and branch removed), never
 the other way round. The rows read as sentences: a stage change says
@@ -3959,21 +3966,26 @@ classes, because it is the fourth surface of that kind.
 **Repositories: one line, edited from their own headings.** Checklists group by
 verdict, not by repository, so there is no repository heading in the work to
 hang an Edit on (as Intake's tabs do). The repositories get one quiet line
-instead — *Watching acme/api ships main · acme/web ships staging* (one line,
+instead — *Watching acme/api Live branch: main · acme/web Live branch: staging* (one line,
 truncated with an ellipsis, the full list on hover) — and **Edit repositories**
-opens one heading per repository (*ships staging · https://staging…*), each with
+opens one heading per repository (*Live branch: staging · https://staging…*), each with
 the same editor Intake uses on the Verify use: **Use it for** ticks (putting the
 same repository on Intake's PR / issue lists in one save), **Branch that ships**,
 **Wait after merge (minutes)**, **Where it runs**, **Notes for the checklist
 writer**, **Test access** and an arm-then-confirm **Remove** (which keeps the
 repository's verify block — your own words — for a re-add). A line under it says
-when the repositories need GitHub connected. **+ Add repository** in the dialog
-head (`#vf-repo-add-btn`) opens the add flow with only the Verify use: the slug,
-Test access, the GitHub line and the no-remote snippet, then the Verify fields.
-Before any repository or checklist exists the add flow leads the dialog on its
-own (until cancelled), and the master switch is not shown at all (it would
-govern nothing). The master switch
-(`repository.verify_enabled`) pauses the **automatic** half only: no checklist
+when the repositories need GitHub connected; the editor's toggle reads **Close
+editor**. **+ Add repository** (`#vf-repo-add-btn`) sits in a fold at the bottom,
+**Watch a GitHub repository for every push**, and opens the add flow with only the
+Verify use: the slug, Test access, the GitHub line and the no-remote snippet, then
+the Verify fields. It **never opens on its own** (round 5): a fresh Verify shows
+the empty state — *Verify writes a checklist for each branch your sessions
+change, then checks it. Nothing to check yet — it fills in once a session
+commits.* with a **New session** button — and once a repository is watched the
+second line reads *Watching 1 repository — its next pushed branch appears here.*
+The master switch, **Write a checklist on every push**
+(`repository.verify_enabled`), shows only once a repository is watched, and
+pauses the **automatic** half only: no checklist
 written on a push, and nothing new moved into the list. Repositories, checklists
 and every recorded answer are kept, and asking for one, running one and
 answering a step all keep working — exactly as a forced PR review still runs with
@@ -3986,8 +3998,10 @@ a branch no session has been on):
   and the agent reads the branch's changes and writes the steps, about three
   minutes, with nothing configured. **Every** session with a branch is listed,
   open or closed: one that can't be picked stays in the list, greyed, saying why
-  — *has a checklist*, or *on main — nothing to compare* for a session sitting on
-  the branch its repo ships from — and the default is always one that can be.
+  — *has a checklist*, *on main — nothing to compare* for a session sitting on
+  the branch its repo ships from, or *no commits yet* for a branch with nothing on
+  it (its `diff_stat` counts no files; the server refuses it too, 409
+  `reason: "no_commits"`) — and the default is always one that can be.
   Pressing it for a session that turns out to be covered does not error — the
   toast names the checklist that covers it. The picker's last entry,
   **Another branch…** (the default when there is no session to pick), swaps in
@@ -4000,9 +4014,11 @@ a branch no session has been on):
   reads **Empty — add a step** under **Needs you** with **Add a step** as its
   button, never *Couldn't be written* (a rewrite asked of it that fails reads as
   the failure again).
-- **Write steps yourself** — pick a checklist and **Add a step** opens it with its
-  **Add a step** form open and the caret in it. Steps live on a checklist, so with
-  none yet the row says to ask the agent for one first.
+- **Write steps yourself** — pick a branch with no checklist yet and **Start an
+  empty checklist** makes one (`{"empty": true}` on the session's write route —
+  no agent, and it works on a branch with no commits), or pick an existing
+  checklist and **Add a step**; either opens it with its **Add a step** form open
+  and the caret in it.
 
 **Closed sessions are listed too**, labelled `(closed)`, alongside
 the open ones. A checklist outlives its session everywhere else in this feature —
@@ -4023,27 +4039,42 @@ owner"* — and it sits under the session's title. A checklist coming due three
 weeks later used to be `sc-1234-fix-filters` over a list of imperatives, leaving
 the reader to reconstruct the change from the steps.
 
-**Five groups, one axis, loudest first** (round 4). **Failed** (a step failed,
-or the checklist couldn't be written), **Needs you** (shipped and unchecked, or
-steps of yours still open), **In progress** (an agent is writing or checking it,
-or the branch hasn't merged and nobody has checked it), **Not verified** (a run
-finished with gaps nobody owes — steps never reached, or answered *Can't check*)
-and **Verified**. The badge counts the first two, by construction. Merged-or-not
+**Six groups, one axis, loudest first** (round 4; round 5 split the writer's
+failures out). **Failed** (a step failed — the change doesn't work), **Needs
+you** (shipped and unchecked, steps of yours still open, or a wait only a
+setting can end — *Origin has no branch called production…* with **Edit
+repositories** as a link), **In progress** (an agent is writing or checking it,
+or the branch hasn't merged and nobody has checked it), **Not written yet**
+(grey: the writer failed, timed out, came back empty or stalled — the reason is
+the row's sentence, *Not written yet — the agent didn't answer in 3 minutes.*
+with **Rewrite the checklist**; a branch with no commits reads *Comes back
+automatically when the session commits* with no button, and the due loop
+re-writes it once the session has a new commit), **Not verified** (a run
+finished with gaps nobody owes — steps never reached, or answered *Can't
+check*) and **Verified**. The badge counts the first two, by construction —
+never *Not written yet*. Merged-or-not
 is never a heading; it is on the row.
 
 **Every row says its verdict first** — a pill before the sentence: **Verified on
-branch**, **Verified live**, **Failed**, **Couldn't be written**, **Empty — add a
-step** (made empty on purpose), **Agent
+branch · by you** / **by the agent** (who recorded the passes), **Verified
+live · by …**, **Failed**, **Not written yet** (grey; *Not written* on a pane
+chip), **Empty — add a step** (made empty on purpose), **Agent
 checking**, **Being written**, **Waiting to ship** (merged, waiting out the
 deploy) or **n of m checked** (`planVerdict` in `verify.ts`). Then one
 plain-English sentence saying whose turn it is — a failure names its step:
 *"Failed: step 2 — POST /webhooks returns 200 (+1 more)."* — and at most one
 filled button: only a row asking something of **you** gets the accent button;
-every other row's button is a plain one. A failed row also has **Fix…** beside
-it. The landing chip reads **not merged** or **merged → main · 4m ago** (never
-"local" — the branch was pushed). Everything rare is in the row's ⋯ menu, which
-starts with **Open session**, **View diff** and **Open PR ↗** while the session
-is open.
+every other row's button is a plain one. A failed row also has **Fix in a new
+session** beside it (normal weight; a failed step has its own), and while that
+session (`fix-<checklist>`) is open the sentence ends *Being fixed in
+fix-<checklist>.* with its name as a link. Any row with an agent step nobody
+has answered shows **Check now** as a visible secondary button. A partly
+checked row carries one counter (the tally), not a pill as well. The landing
+chip reads **not merged** or **merged → main · 4m ago** (never "local" — the
+branch was pushed). Everything rare is in the row's ⋯ menu, which starts with
+**Open the work session**, **View diff** and **Open PR ↗** while the session is
+open; the verify run is **Open the checking run** / **Show the checking run
+here**. A finished row says *Every step passed.* (never "it works").
 
 **"Check now" means one thing** — start the agent's steps — on the row, in the ⋯
 and in the intro. A checklist with no agent step says **Show steps** instead
@@ -4051,9 +4082,15 @@ and in the intro. A checklist with no agent step says **Show steps** instead
 some were *Can't check* reads *"Couldn't check 2 steps — not verified."* with
 **Show steps**, never "Answer 2 steps".
 
-**The legend is said once**, under the list: `you` = a person checks it ·
-`agent` = the agent does · Pass, Fail and Can't check are all answers, only Pass
-says it works · keys 1 2 3, u undo, n note.
+**The legend lives in the ⓘ** next to *Does the change work?*, with the two
+moments (before / after merge): `you` = a person checks it · `agent` = the agent
+does · Pass, Fail and Can't check are all answers, only Pass says it works ·
+keys 1 2 3, u undo, n note. Its last line is **Replay the Verify tour**. The
+tour (`lib/tours/verify.ts`, five steps) rings the row chip
+(`data-tour="verify-chip"`), a step's YOU/AGENT badge (`verify-badges`), its
+Pass · Fail · Can't check (`verify-answer`), Check now or Fix (`verify-check`)
+and the merge pill (`verify-merge`), scrolling each into view inside the list.
+At 420 px a step's receipt, Undo and Fix stack under its answers.
 
 **The verdict outside Verify.** A session's sidebar row and pane head carry the
 same verdict as a small chip (`VerdictChip`, class `.vchip` — not `.stagechip`,

@@ -1014,7 +1014,7 @@ def test_generate_fails_when_no_cli_has_a_headless_mode(store, work_repo, monkey
         # It took longer than TIMEOUT_GENERATE.
         (
             {"raises": subprocess.TimeoutExpired(["claude"], tp.TIMEOUT_GENERATE)},
-            "did not answer",
+            "didn't answer in 3 minutes",
         ),
         # It ran and failed.
         ({"returncode": 1}, "exited 1"),
@@ -1116,7 +1116,7 @@ def test_generate_refuses_a_branch_that_changed_nothing(store, tmp_path, monkeyp
     _stub_cli(monkeypatch, stdout="<testplan>%s</testplan>" % _ONE_STEP)
     tp.upsert(_plan("sc-1", repo_root=str(d), sha="HEAD", steps=[], live_branch=""))
     plan = tp.generate("sc-1", worktree=str(d))
-    assert plan["state"] == "failed" and "nothing to verify" in plan["error"]
+    assert plan["state"] == "failed" and "nothing to check yet" in plan["error"]
 
 
 def test_generate_on_an_unknown_id_is_a_silent_no_op(store, monkeypatch):
@@ -8442,3 +8442,147 @@ def test_a_branch_checklist_refuses_what_it_cannot_write(
     assert r.status_code == status
     assert words in r.json()["error"]
     assert branch_repo.started == []
+
+
+# --------------------------------------------------------------------------- #
+# Round 5: no-commits refusal, empty checklists, the bell's failed-step event
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def feature_session(pushed_session, monkeypatch):
+    """`pushed_session`, but the session is on a fresh `feature/x` branch cut
+    from main — the ordinary worktree shape, with no commits of its own yet."""
+    repo, calls = pushed_session
+    _git(repo, "checkout", "-q", "-b", "feature/x")
+    return repo, calls
+
+
+def test_ask_refuses_a_branch_with_no_commits(client, feature_session):
+    """M1: "Ask the agent" on a branch that changed nothing used to start a
+    model call that failed two seconds later as "Couldn't be written". It is
+    refused up front, in the sentence the card shows."""
+    _repo, calls = feature_session
+    r = client.post("/api/instances/sc-1/test-plan")
+    assert r.status_code == 409
+    body = r.json()
+    assert body["reason"] == "no_commits"
+    assert body["detail"] == "Nothing to check yet — this branch has no commits."
+    assert tp.list_plans() == [] and calls == []
+
+
+def test_ask_still_writes_from_uncommitted_work(client, feature_session):
+    """The writer reads the uncommitted delta too, so a dirty tree is never
+    "no commits" — it has something to describe."""
+    repo, calls = feature_session
+    (repo / "g.txt").write_text("new\n", encoding="utf-8")
+    assert client.post("/api/instances/sc-1/test-plan").status_code == 202
+    assert len(calls) == 1
+
+
+def test_ask_writes_once_the_branch_has_a_commit(client, feature_session):
+    repo, calls = feature_session
+    (repo / "g.txt").write_text("new\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "more")
+    assert client.post("/api/instances/sc-1/test-plan").status_code == 202
+    assert len(calls) == 1
+
+
+def test_start_an_empty_checklist_for_a_session(client, feature_session):
+    """M2: `{"empty": true}` makes the checklist empty (origin "manual") and
+    asks no model — even on a branch with no commits yet."""
+    _repo, calls = feature_session
+    r = client.post("/api/instances/sc-1/test-plan", json={"empty": True})
+    assert r.status_code == 201
+    assert r.json() == {"ok": True, "plan": "sc-1", "existing": False, "empty": True}
+    plan = tp.get("sc-1")
+    assert plan["origin"] == "manual" and plan["steps"] == []
+    assert calls == []
+
+
+def test_branch_route_refuses_a_branch_with_no_commits(
+    client, feature_session, monkeypatch
+):
+    from backend.web import server
+
+    repo, calls = feature_session
+    _git(repo, "checkout", "-q", "main")
+    monkeypatch.setattr(
+        server, "_known_repo_roots", lambda: [{"root": str(repo), "name": "repo"}]
+    )
+    monkeypatch.setattr(tp, "norm_repo", lambda r: r)
+    r = client.post(
+        "/api/test-plans/branch", json={"repo": "repo", "branch": "feature/x"}
+    )
+    assert r.status_code == 409 and r.json()["reason"] == "no_commits"
+    r = client.post(
+        "/api/test-plans/branch",
+        json={"repo": "repo", "branch": "feature/x", "empty": True},
+    )
+    assert r.status_code == 201 and r.json()["empty"] is True
+    assert calls == []
+
+
+def _capture_events(monkeypatch):
+    from backend.web import server
+
+    seen: list = []
+    monkeypatch.setattr(
+        server._events.BUS, "emit", lambda event, **kw: seen.append((event, kw))
+    )
+    return seen
+
+
+def test_a_persons_fail_announces_the_failed_checklist(client, monkeypatch):
+    """M5: the bell heard only about AGENT runs that failed. A person's Fail
+    that turns the checklist failed now emits `session.test_plan_step_failed`
+    — once per transition, never for a pass or a second Fail."""
+    seen = _capture_events(monkeypatch)
+    tp.upsert(_plan("sc-1", state="due"))
+    client.post("/api/test-plans/sc-1/result", json={"step_id": "s1", "result": "pass"})
+    assert seen == []
+    client.post("/api/test-plans/sc-1/result", json={"step_id": "s2", "result": "fail"})
+    assert [e for e, _ in seen] == ["session.test_plan_step_failed"]
+    kw = seen[0][1]
+    assert kw["new"] == "failed" and kw["session"] == "sc-1"
+    assert kw["data"]["step"] == 2 and kw["data"]["text"] == "Look at it"
+    client.post("/api/test-plans/sc-1/result", json={"step_id": "s1", "result": "fail"})
+    assert len(seen) == 1
+
+
+def test_writer_timeout_names_the_agent_not_the_binary():
+    """m11: "claude did not answer within 180s" is the CLI runner's wording."""
+    assert tp._writer_error("claude did not answer within 180s") == (
+        "the agent didn't answer in 3 minutes. Rewrite to try again"
+    )
+    assert tp._writer_error("boom") == "boom"
+
+
+def test_a_no_commits_checklist_comes_back_when_the_session_commits(feature_session):
+    """The card promises "Comes back automatically when the session commits":
+    the due pass re-writes a no-commits checklist once the branch has a new
+    commit — and not before, and only once."""
+    repo, calls = feature_session
+    tp.upsert(
+        _plan(
+            "sc-1",
+            state="failed",
+            steps=[],
+            branch="feature/x",
+            repo_root=str(repo),
+            error="nothing to check yet — this branch has no commits",
+        )
+    )
+    tp_driver._retry_no_commit_test_plans(tp.list_plans())
+    assert calls == [] and tp.get("sc-1")["state"] == "failed"
+    (repo / "g.txt").write_text("new\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "more")
+    tp_driver._retry_no_commit_test_plans(tp.list_plans())
+    assert len(calls) == 1
+    plan = tp.get("sc-1")
+    assert plan["state"] == "generating" and plan["error"] == ""
+    assert plan["sha"] == plan["tip_sha"] != "a" * 40
+    tp_driver._retry_no_commit_test_plans(tp.list_plans())
+    assert len(calls) == 1

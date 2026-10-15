@@ -421,11 +421,29 @@
   white-space: nowrap;
 }
 
-/* Fix… on a failed row: the danger colour, as an outline — it starts a
-   session, it is not the row's main call to action. */
-.vf-acts > .vf-fix {
+/* "Fix in a new session" on a failed row: a normal-weight button (round 5,
+   m3 — the pale red outline read as disabled), red text so it belongs to the
+   failure it answers. */
+.vf-acts > .vf-fix,
+.vf-fix-step {
   color: var(--red);
-  border-color: color-mix(in srgb, var(--red) 50%, var(--border));
+  background: var(--panel-2);
+  border: 1px solid color-mix(in srgb, var(--red) 70%, var(--border));
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.vf-acts > .vf-fix:hover:not(:disabled),
+.vf-fix-step:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 12%, var(--panel-2));
+}
+
+/* Check now beside the row's main button (M3): a plain secondary. */
+.vf-acts > .vf-checknow {
+  font-size: 12px;
+  padding: 5px 12px;
+  white-space: nowrap;
 }
 
 /* A primary button that cannot act must not look like one. `.btn-primary` has
@@ -781,10 +799,17 @@
    which put the commonest act a third of the way across the row. */
 .vf-step-actions {
   display: grid;
-  grid-template-columns: auto auto auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 5px;
   margin-top: 3px;
+}
+
+/* The three answers, one track — still at the same x on every step. */
+.vf-answers {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 /* Pass / Fail / Blocked. Neutral at rest on purpose: three coloured buttons on
@@ -1629,10 +1654,11 @@
   font-family: var(--mono, monospace);
 }
 
-/* "Fix this…" beside a failed step — the next move, where the failure is. */
+/* "Fix in a new session" beside a failed step — the next move, where the
+   failure is. */
 .vf-fix-step {
   font-size: 11px;
-  padding: 1px 8px;
+  padding: 2px 8px;
 }
 
 /* New checklist: two rows, ask the agent / write steps yourself. */
@@ -1689,6 +1715,23 @@
 
   .vf-plan-tally {
     margin-left: 0;
+  }
+
+  /* The receipt, Undo, note and Fix stack UNDER the answers (m12): beside
+     them at 420px they clipped to "fail · agent ·" and Fix wrapped under the
+     step's ⋯. */
+  .vf-step-actions > .vf-step-tail {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .vf-step-actions > .vf-menu {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .vf-acts {
+    flex-wrap: wrap;
   }
 }
 
@@ -1798,4 +1841,42 @@ button.vchip:focus-visible {
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: 10px;
   text-align: center;
+}
+
+/* The tour's handle on a sidebar row's verdict (data-tour="verify-chip"):
+   a box the size of the chip, and nothing at all when there is no chip. */
+.vchip-hook {
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.vchip-hook:empty {
+  display: none;
+}
+
+/* "Not written yet" is grey: nothing about the change is known (M4). */
+.vchip[data-tone="wait"] {
+  color: var(--muted);
+}
+
+/* The ⓘ's last line, and a fix session's name on a failed card. */
+.vf-replay-tour {
+  display: block;
+  margin-top: 6px;
+}
+
+.vf-fixing {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.vf-empty .vf-empty-new {
+  margin-top: 6px;
+}
+
+/* "+ Add repository" inside its fold: a button, not a full-width bar. */
+.vf-watch-fold #vf-repo-add-btn {
+  align-self: flex-start;
+  width: auto;
 }

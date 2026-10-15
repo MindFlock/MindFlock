@@ -50,6 +50,23 @@ describe("the bell's checklist rows", () => {
     expect(notifFromEvent(env({ event: "session.test_plan_checked", new: "", data: { plan: "p3" } }))).toBeNull();
   });
 
+  it("a person's Fail that turned the checklist red is news too (round 5, M5)", () => {
+    const n = notifFromEvent(
+      env({
+        event: "session.test_plan_step_failed",
+        new: "failed",
+        data: { plan: "p4", title: "add-health", step: 1, text: "GET /health on the dev server" },
+      })
+    )!;
+    expect(n).toMatchObject({
+      rule: "verify_run_failed",
+      verify: "p4",
+      name: "add-health",
+      cls: "n-warn",
+      text: "checklist failed — step 1 GET /health on the dev server",
+    });
+  });
+
   it("falls back to the event's session when the data names no plan", () => {
     expect(notifFromEvent(env({ event: "session.test_plan_failed" }))!.verify).toBe("shop@feature/x");
   });
@@ -89,11 +106,12 @@ describe("a checklist made empty on purpose", () => {
     expect(failingCount([p])).toBe(0);
   });
 
-  it("a generated checklist with no steps still couldn't be written", () => {
+  it("a generated checklist with no steps is Not written yet — grey, not a failure (round 5, M4)", () => {
     const p = plan({});
     expect(isEmptyByChoice(p)).toBe(false);
-    expect(planVerdict(p).key).toBe("unwritten");
-    expect(isFailing(p)).toBe(true);
+    expect(planVerdict(p)).toMatchObject({ key: "unwritten", label: "Not written yet", short: "Not written", tone: "wait" });
+    expect(isFailing(p)).toBe(false);
+    expect(dueCount([p])).toBe(0);
   });
 
   it("a rewrite that failed reads as the failure again", () => {

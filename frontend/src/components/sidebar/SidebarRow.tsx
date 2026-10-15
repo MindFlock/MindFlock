@@ -566,8 +566,10 @@ export const SidebarRow = memo(function SidebarRow({
                   .filter(Boolean)
                   .join("\n")}
               >
-                {/* Middle-truncated: a "-2" suffix is what tells two rows apart. */}
-                <MidName text={shown} />
+                {/* Truncated at the END (round 5, m13: chips squeezed
+                    "fix-typo-readme" to "fi…eadme"); middle-truncated only
+                    when a "-2" / "(3)" suffix is what tells two rows apart. */}
+                {/(-\d+|\(\d+\))$/.test(shown) ? <MidName text={shown} /> : shown}
               </span>
             )}
             {!editing && ship && (
@@ -762,7 +764,11 @@ export const SidebarRow = memo(function SidebarRow({
             </span>
           )}
           {/* Verify's verdict for this branch; opens its checklist. */}
-          {!pending && <VerdictChip inst={inst} where="row" />}
+          {!pending && (
+            <span className="vchip-hook" data-tour="verify-chip">
+              <VerdictChip inst={inst} where="row" />
+            </span>
+          )}
           {bg &&
             (bg.stopPid ? (
               <button

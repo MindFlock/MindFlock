@@ -36,7 +36,17 @@ describe("apiText", () => {
     serve(500, "boom");
     const err = await apiText("/h").catch((e) => e);
     expect(err).toBeInstanceOf(ApiError);
-    expect(err.message).toBe("/h -> 500");
+    // Never the request path: a toast reads this.
+    expect(err.message).toBe("MindFlock hit an error (details in the log).");
+    expect(err.message).not.toContain("/h");
+  });
+
+  it("prefers the route's plain `detail` sentence over the terse `error`", async () => {
+    serve(500, JSON.stringify({ error: "fix session failed", detail: "Couldn't start a fix session — MindFlock hit an error (details in the log)." }));
+    await expect(apiText("/api/test-plans/x/fix")).rejects.toMatchObject({
+      status: 500,
+      message: "Couldn't start a fix session — MindFlock hit an error (details in the log).",
+    });
   });
 
   it("reloads on 401 (the token gate turned on mid-session)", async () => {

@@ -57,7 +57,7 @@ describe("the at-a-glance tally", () => {
   });
 
   it("can bring the log back after the run that produced it ended", () => {
-    expect(PLAN).toContain('label: running ? "Show the run here" : "Show the last run here",');
+    expect(PLAN).toContain('label: running ? "Show the checking run here" : "Show the last checking run here",');
   });
 
   it("finds one among many and acts on several", () => {

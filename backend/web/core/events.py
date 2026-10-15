@@ -130,6 +130,11 @@ EVENT_NAMES = (
     # row that changes) and finishing one was silent, so the answers landed
     # somewhere the user had usually navigated away from.
     "session.test_plan_checked",
+    # A PERSON's Fail turned a checklist from not-failed to failed (data:
+    # {"plan", "title", "branch", "step": 1-based index, "text"}). The agent's
+    # runs say the same through ``test_plan_checked``; this is the hand-answered
+    # half, so the bell hears about every failed checklist. Once per transition.
+    "session.test_plan_step_failed",
     # A run was RELEASED without ever reporting (data: {"plan", "title",
     # "run_session", "hours", "reason"}). Two things end a run this way — an
     # agent window that died, and the two-hour deadline — and both used to be

@@ -181,12 +181,15 @@ def test_verify_puts_its_repositories_on_one_line_above_the_work():
         r"\s+", " ", _code(_SRC / "components" / "dialogs" / "VerifyDialog.tsx")
     )
     assert "workFirst" not in code
+    # Round 5 (B2): the add flow lives in the bottom fold, "Watch a GitHub
+    # repository for every push", after New checklist — never above the work.
     order = [
-        "{addFlow}",
         "<VerifySwitch",
         "{sources}",
         "{checklists}",
         "<VerifyNewChecklist",
+        "Watch a GitHub repository for every push",
+        "{showAdd ? ( addFlow )",
     ]
     idx = [code.index(o) for o in order]
     assert idx == sorted(idx), idx

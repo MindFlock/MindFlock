@@ -13,7 +13,7 @@ import { instApi } from "../../api/client";
 import { refreshInstances, useConfig, useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { fmtUsd, displayBranch, firstLine } from "../../lib/format";
-import { chipState, fastTrackStep, liveStep, nextStep, resetStep } from "../../lib/stage";
+import { chipState, fastTrackStep, liveStep, nextStep, resetStep, withVerifyVerdict } from "../../lib/stage";
 import { cleanupMissing, selectSession } from "../../lib/sessionActions";
 import { sessionLabel } from "../../lib/sessionLabel";
 import {
@@ -727,13 +727,18 @@ export function Pane({
   // has no lead button (the agent's state chip says what it is doing).
   const shownStep = ns && ns.label === "Commit…" && !hasUncommitted(inst) ? null : ns;
   const openHistory = () => setHistPane({ kind: tab === "shell" ? "shell" : "agent", dragSel: null });
+  // SHIP carries Verify's verdict beside Open PR, and asks first on a
+  // failed checklist (lib/stage.ts withVerifyVerdict).
   const menu = () =>
-    sessionMenu(inst, menuCtx, {
-      visibleTabs,
-      onHistory: shows("history") ? undefined : openHistory,
-      onCopyHistory: termTab ? copyHistory : undefined,
-      onNextStep: shows("next") ? undefined : shownStep ?? undefined,
-    });
+    withVerifyVerdict(
+      sessionMenu(inst, menuCtx, {
+        visibleTabs,
+        onHistory: shows("history") ? undefined : openHistory,
+        onCopyHistory: termTab ? copyHistory : undefined,
+        onNextStep: shows("next") ? undefined : shownStep ?? undefined,
+      }),
+      inst,
+    );
   // The read-outs the header leaves out (the cost chip, the diff-stat), at
   // the top of ⋯ so they are still one click away.
   const menuSummary = [
