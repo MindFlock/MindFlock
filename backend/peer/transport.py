@@ -120,6 +120,9 @@ _OP_PERM = {
     "status": None,
     # Watching the shared session's screen shows what its diff and files do.
     "screen": "diff",
+    # The standing mirror pulls the share's history as a bundle: it reads the
+    # same files "read my files" grants.
+    "mirror_pull": "read_file",
 }
 
 
@@ -440,7 +443,9 @@ class _Conn:
         if link is None:
             self.teardown("link removed")
             return
-        perm = _OP_PERM[op]
+        # An op the wire accepts but this table does not know is a bug, not a
+        # grant: refuse it rather than KeyError into a request timeout.
+        perm = _OP_PERM.get(op, "__unmapped__")
         if perm is not None and not link.perms.get(perm, False):
             resp = {"t": "res", "id": rid, "ok": False, "err": "not permitted"}
         else:
