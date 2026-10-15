@@ -156,7 +156,7 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
   return (
     <>
       <h3 className="set-section-title">Agents</h3>
-      <label className="set-row">
+      <label className="set-row" data-tour="settings-default-agent">
         <span className="set-label">Default agent</span>
         <select id="default-provider-select" value={selected} onChange={(e) => pickProvider(e.target.value)}>
           {/* Every known agent, the absent ones disabled with the reason — you

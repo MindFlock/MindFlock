@@ -83,7 +83,12 @@ function WorktreeHome() {
   const warn = paths?.tickets_warning || "";
   const bad = paths?.tickets_state === "not_dir" || paths?.tickets_state === "not_writable";
   return (
-    <section className="ws-home" id="workspace-paths" aria-label="Where your worktrees live">
+    <section
+      className="ws-home"
+      id="workspace-paths"
+      data-tour="settings-worktrees"
+      aria-label="Where your worktrees live"
+    >
       <h4 className="set-subtitle">Where your worktrees live</h4>
       <PathLine
         id="workspace-sessions-dir"

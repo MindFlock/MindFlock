@@ -13,6 +13,11 @@ import WELCOME_SRC from "../components/onboarding/WelcomeTour.tsx?raw";
 import TOPBAR_SRC from "../components/TopBar.tsx?raw";
 import GENERAL_SRC from "../components/settings/screens/General.tsx?raw";
 import PALETTE_SRC from "../components/palette/CommandPalette.tsx?raw";
+import SETTINGS_DIALOG_SRC from "../components/settings/SettingsDialog.tsx?raw";
+import CONNECTIONS_SRC from "../components/settings/screens/Connections.tsx?raw";
+import CODING_SRC from "../components/settings/screens/CodingCli.tsx?raw";
+import WORKSPACE_SRC from "../components/settings/screens/Workspace.tsx?raw";
+import SETTINGS_MODE_SRC from "../components/settings/settingsMode.tsx?raw";
 
 vi.mock("../api/client", () => ({ api: vi.fn(async () => ({})) }));
 vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
@@ -26,7 +31,7 @@ const storage = new Map<string, string>();
 };
 
 const { TOURS, TOUR_IDS, isTourId } = await import("../lib/tours");
-const { CoachTour, placeCard, findTarget } = await import("../components/onboarding/CoachTour");
+const { CoachTour, placeCard, findTarget, revealTarget } = await import("../components/onboarding/CoachTour");
 const { TourButton } = await import("../components/onboarding/TourButton");
 const { autoTourDue } = await import("../components/onboarding/useAutoTour");
 const { topBarShows } = await import("../lib/calm");
@@ -41,12 +46,12 @@ describe("the tours registry", () => {
     expect(isTourId("map")).toBe(false);
   });
 
-  it("keeps every tour short: 3–6 steps of one plain sentence each", () => {
+  it("keeps every tour short: 3–7 steps of one plain sentence each", () => {
     for (const id of TOUR_IDS) {
       const { steps, title } = TOURS[id];
       expect(title, id).toMatch(/^[A-Z]/);
       expect(steps.length, id).toBeGreaterThanOrEqual(3);
-      expect(steps.length, id).toBeLessThanOrEqual(6);
+      expect(steps.length, id).toBeLessThanOrEqual(7);
       for (const s of steps) {
         expect(s.title.trim(), id).not.toBe("");
         expect(s.body.trim(), id).not.toBe("");
@@ -96,6 +101,56 @@ describe("the tours registry", () => {
     expect(all("verify")).toContain("#verify-title");
     expect(all("schedule")).toContain("#templates-new");
     expect(all("settings")).toContain("#settings-search");
+  });
+
+  it("walks Settings across its screens, starting on Connections", () => {
+    const steps = TOURS.settings.steps;
+    expect(steps.length).toBeGreaterThanOrEqual(6);
+    expect(steps.map((s) => s.target.match(/data-tour="([^"]+)"/)?.[1] ?? s.target)).toEqual([
+      "settings-status",
+      "settings-github",
+      "#settings-search",
+      "settings-default-agent",
+      "settings-worktrees",
+      "settings-advanced",
+      "settings-tours",
+    ]);
+    // the screen each step shows: the first is why "?" restarts on Connections
+    expect(steps.map((s) => s.screen ?? null)).toEqual([
+      "connections",
+      "connections",
+      "connections",
+      "coding",
+      "workspace",
+      null,
+      "general",
+    ]);
+    // a fallback must never come before its hook in the page (a selector list
+    // matches in document order): the nav button for Connections would win
+    expect(steps[0].target).not.toContain("set-nav-item");
+    expect(steps[1].target).not.toContain("data-conn");
+  });
+
+  it("only Settings' tour switches screens (the others live on one surface)", () => {
+    for (const id of TOUR_IDS) if (id !== "settings") for (const s of TOURS[id].steps) expect(s.screen, id).toBeUndefined();
+  });
+});
+
+describe("the Settings tour's hooks live on its screens", () => {
+  it("each screen carries the hook its step rings", () => {
+    expect(CONNECTIONS_SRC).toContain('<h3 className="set-section-title" data-tour="settings-status">');
+    // GitHub: Connect when it shows, else the whole card
+    expect(CONNECTIONS_SRC).toContain('githubOnButton ? "settings-github"');
+    expect(CONNECTIONS_SRC).toContain('c.kind === "github" && !githubOnButton ? "settings-github"');
+    expect(CODING_SRC).toContain('<label className="set-row" data-tour="settings-default-agent">');
+    expect(WORKSPACE_SRC).toMatch(/id="workspace-paths"\s+data-tour="settings-worktrees"/);
+    expect(SETTINGS_MODE_SRC).toContain('<div className="set-mode-foot" data-tour="settings-advanced">');
+    expect(GENERAL_SRC).toContain('id="general-tours" data-tour="settings-tours"');
+  });
+
+  it("Settings follows the tour step's screen", () => {
+    expect(SETTINGS_DIALOG_SRC).toContain('s.coachTour?.id === "settings" ? s.coachTour.step : -1');
+    expect(SETTINGS_DIALOG_SRC).toContain("TOURS.settings.steps[tourStep]?.screen");
   });
 });
 
@@ -160,6 +215,63 @@ describe("the coach mark", () => {
     const shown = el(10);
     const root = { querySelectorAll: () => [hidden, shown] } as unknown as ParentNode;
     expect(findTarget(root, ".a, .b")).toBe(shown);
+  });
+
+  it("brings every step into view itself: opens a closed fold, scrolls the pane, follows the scroll", () => {
+    expect(COACH_SRC).toContain("revealTarget(scope, step.target)");
+    expect(COACH_SRC).toMatch(/scrollIntoView\(\{\s*block: [^,]+\? "start" : "center"/);
+    expect(COACH_SRC).toContain('behavior: reducedMotion() ? "auto" : "smooth"');
+    expect(COACH_SRC).toContain('closest("details:not([open])")');
+    // the page and a contained root both re-measure on any scroll
+    expect(COACH_SRC).toContain('window.addEventListener("scroll", onMove, true)');
+    expect(COACH_SRC).toContain('root?.addEventListener("scroll", onScroll, true)');
+  });
+
+  it("revealTarget: leaves a wholly shown target alone, scrolls a cut-off one, opens a fold", () => {
+    const g = globalThis as Record<string, unknown>;
+    const saved = { window: g.window, document: g.document, getComputedStyle: g.getComputedStyle };
+    const body = { parentElement: null };
+    const pane = {
+      parentElement: body,
+      scrollHeight: 2000,
+      clientHeight: 500,
+      closest: () => null,
+      getBoundingClientRect: () => ({ top: 100, bottom: 600, height: 500, width: 600 }),
+    };
+    g.window = { innerHeight: 900, matchMedia: () => ({ matches: true }) };
+    g.document = { body, documentElement: {} };
+    g.getComputedStyle = (el: unknown) => ({ overflowY: el === pane ? "auto" : "visible" });
+    try {
+      const calls: unknown[] = [];
+      const make = (top: number, parent: unknown) => ({
+        parentElement: parent,
+        getBoundingClientRect: () => ({ top, bottom: top + 30, height: 30, width: 200 }),
+        scrollIntoView: (o: unknown) => calls.push(o),
+      });
+      const shown = make(200, pane);
+      const scope = (els: unknown[]) => ({ querySelectorAll: () => els }) as unknown as ParentNode;
+      expect(revealTarget(scope([shown]), "#a")).toEqual({ el: shown, scrolled: false });
+      expect(calls).toEqual([]);
+      const below = make(800, pane); // inside the window, below the pane's fold
+      expect(revealTarget(scope([below]), "#a")?.scrolled).toBe(true);
+      expect(calls).toEqual([{ block: "center", inline: "nearest", behavior: "auto" }]);
+      // hidden in a closed <details>: the fold opens, then it is measured
+      let open = false;
+      const details = { open: false, parentElement: pane, closest: () => null };
+      Object.defineProperty(details, "open", { get: () => open, set: (v) => (open = v) });
+      const folded = {
+        parentElement: { closest: (s: string) => (s === "details:not([open])" && !open ? details : null) },
+        getBoundingClientRect: () => (open ? { top: 300, bottom: 330, height: 30, width: 200 } : { top: 0, bottom: 0, height: 0, width: 0 }),
+        scrollIntoView: () => {},
+      };
+      (folded.parentElement as Record<string, unknown>).parentElement = pane;
+      expect(revealTarget(scope([folded]), "#a")?.el).toBe(folded);
+      expect(open).toBe(true);
+      expect(revealTarget(scope([]), "#a")).toBeNull();
+      expect(revealTarget(scope([shown]), "")).toBeNull();
+    } finally {
+      Object.assign(g, saved);
+    }
   });
 
   it("sits above the open dialog and keeps its target clickable", () => {
@@ -243,8 +355,13 @@ describe("the ? button and the replays", () => {
     expect(html).toContain('title="Replay the Intake tour"');
   });
 
-  it("Settings → General → Tours lists one Replay per tour plus the hints switch", () => {
-    expect(GENERAL_SRC).toContain('<h3 className="set-section-title">Tours</h3>');
+  it("Settings → General → Help lists one Replay per tour plus the hints switch, after the fold", () => {
+    expect(GENERAL_SRC).toContain('<h3 className="set-section-title">Help</h3>');
+    expect(GENERAL_SRC).toContain('<h4 className="set-subtitle">Tours</h4>');
+    // at the bottom of General now, not the top
+    const body = GENERAL_SRC.slice(GENERAL_SRC.indexOf("export function General("));
+    expect(body.indexOf("<Tours />")).toBeGreaterThan(body.indexOf('<AdvancedFold id="general-advanced"'));
+    expect(body.indexOf("<Tours />")).toBeGreaterThan(body.indexOf("</AdvancedFold>"));
     expect(GENERAL_SRC).not.toContain("Getting started");
     expect(GENERAL_SRC).toContain("TOUR_IDS.map(");
     expect(GENERAL_SRC).toContain("replayTour(id)");

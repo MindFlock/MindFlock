@@ -10,10 +10,17 @@
  * `onClose` is where "seen" is remembered, so every exit counts. Arrow keys
  * page while the card has focus.
  *
- * Targets are looked up at each step (and re-measured on resize, and every
- * few hundred ms while open — a dialog's rows land after it opens), so a step
- * whose target is absent (an empty list, a fold that isn't open, a hook a
- * surface hasn't added yet) centres the card and still shows the step.
+ * Targets are looked up at each step (and re-measured on resize, on any
+ * scroll, and every few hundred ms while open — a dialog's rows land after it
+ * opens), so a step whose target is absent (an empty list, a hook a surface
+ * hasn't added yet) centres the card and still shows the step.
+ *
+ * Every step is brought into view by the tour itself (revealTarget): a target
+ * inside a closed <details> has its fold opened, and one that is not wholly
+ * inside its scrolling pane (a Settings screen, a dialog body) or the window
+ * is scrolled to the pane's centre — so no tour asks anyone to scroll to find
+ * its ring. The ring follows the scroll; a target that renders late (a screen
+ * the step switched to, a list still loading) is retried for a few seconds.
  *
  * Two placements:
  *  - `rootRef` given: targets are found INSIDE that element and the card is
@@ -81,6 +88,75 @@ export function findTarget(root: ParentNode, selector: string): HTMLElement | nu
     if (r.width > 0 && r.height > 0) return el;
   }
   return null;
+}
+
+/** The ancestors of `el` that scroll (overflow auto/scroll), innermost first. */
+function scrollPanes(el: HTMLElement): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+    const o = getComputedStyle(p).overflowY;
+    if ((o === "auto" || o === "scroll" || o === "overlay") && p.scrollHeight > p.clientHeight) out.push(p);
+  }
+  return out;
+}
+
+/** Whether all of `el` shows: inside the window and every pane it scrolls in
+ * (a sliver of margin, so a ring at a pane's very edge counts as cut off). */
+function whollyShown(el: HTMLElement): boolean {
+  const r = el.getBoundingClientRect();
+  const M = 4;
+  if (r.top < M || r.bottom > window.innerHeight - M) return false;
+  for (const p of scrollPanes(el)) {
+    const b = p.getBoundingClientRect();
+    if (r.top < b.top + M || r.bottom > b.bottom - M) return false;
+  }
+  return true;
+}
+
+function reducedMotion(): boolean {
+  if (useUi.getState().reduceMotion) return true;
+  try {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch {
+    return false;
+  }
+}
+
+/** Bring a step's target into view: the first visible match, or else the
+ * first match hidden by a closed <details> (whose folds are opened); then, if
+ * it is not wholly showing, scroll it to the centre of its pane (a target
+ * taller than its pane goes to the top instead). Returns the element, or null
+ * when there is nothing to show yet. Never throws. */
+export function revealTarget(scope: ParentNode, selector: string): { el: HTMLElement; scrolled: boolean } | null {
+  if (!selector || typeof window === "undefined") return null;
+  let el = findTarget(scope, selector);
+  if (!el) {
+    let all: HTMLElement[] = [];
+    try {
+      all = Array.from(scope.querySelectorAll<HTMLElement>(selector));
+    } catch {
+      return null;
+    }
+    const folded = all.find((c) => c.parentElement?.closest("details:not([open])"));
+    if (!folded) return null;
+    for (let d = folded.parentElement?.closest("details:not([open])"); d; d = d.parentElement?.closest("details:not([open])"))
+      (d as HTMLDetailsElement).open = true;
+    el = findTarget(scope, selector);
+    if (!el) return null;
+  }
+  if (whollyShown(el)) return { el, scrolled: false };
+  const pane = scrollPanes(el)[0];
+  const room = pane ? pane.clientHeight : window.innerHeight;
+  try {
+    el.scrollIntoView({
+      block: el.getBoundingClientRect().height > room - 16 ? "start" : "center",
+      inline: "nearest",
+      behavior: reducedMotion() ? "auto" : "smooth",
+    });
+  } catch {
+    /* an old engine without the options form: leave it where it is */
+  }
+  return { el, scrolled: true };
 }
 
 export interface CoachTourProps {
@@ -160,11 +236,48 @@ export function CoachTour({
   }, [rootRef, step]);
 
   useLayoutEffect(measure, [measure, i]);
+
+  // Bring each step's target into view (revealTarget). Its screen may still
+  // be switching or its rows loading, so look again every 100 ms for a few
+  // seconds until it exists; once it is scrolled, measure again when the
+  // scroll settles (the scroll listeners below keep the ring on it meanwhile).
+  useEffect(() => {
+    if (!step?.target) return;
+    let stopped = false;
+    const timers: number[] = [];
+    let tries = 0;
+    const attempt = () => {
+      if (stopped) return;
+      const scope: ParentNode | null = rootRef ? rootRef.current : document;
+      const hit = scope ? revealTarget(scope, step.target) : null;
+      if (hit) {
+        measure();
+        if (hit.scrolled) for (const ms of [120, 350, 700]) timers.push(window.setTimeout(measure, ms));
+        return;
+      }
+      if (++tries < 40) timers.push(window.setTimeout(attempt, 100));
+    };
+    const raf = window.requestAnimationFrame(attempt);
+    return () => {
+      stopped = true;
+      window.cancelAnimationFrame(raf);
+      for (const t of timers) window.clearTimeout(t);
+    };
+  }, [i, step, rootRef, measure]);
+
   useEffect(() => {
     const root = rootRef?.current;
     const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => measure()) : null;
     if (root && ro) ro.observe(root);
-    if (contained) return () => ro?.disconnect();
+    if (contained) {
+      // Contained: a scroll inside the root moves its targets too.
+      const onScroll = () => measure();
+      root?.addEventListener("scroll", onScroll, true);
+      return () => {
+        ro?.disconnect();
+        root?.removeEventListener("scroll", onScroll, true);
+      };
+    }
     // The page: follow the window, any scroll, and targets that render late
     // or move as a dialog fills in.
     const onMove = () => measure();

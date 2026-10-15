@@ -416,8 +416,17 @@ export function ConnectionRowView({
   // sign in to; GitHub with no credential has nothing to test yet.
   const showTest =
     !!c.test && !!onTest && !(c.kind === "github" && status === "off") && (stage === null || stage === "test");
+  // The Settings tour's GitHub step (lib/tours/settings.ts) rings Connect;
+  // with no Connect showing (connected, or Connect is the Get set up
+  // checklist's next step) it rings the whole card instead.
+  const githubOnButton = c.kind === "github" && !!handler && !tourNext;
   return (
-    <div className="conn-row" data-conn={c.id} data-status={status}>
+    <div
+      className="conn-row"
+      data-conn={c.id}
+      data-status={status}
+      data-tour={c.kind === "github" && !githubOnButton ? "settings-github" : undefined}
+    >
       <div className="conn-main">
         <div className="conn-head">
           <span className="conn-name">{rowName(c)}</span>
@@ -467,7 +476,7 @@ export function ConnectionRowView({
           <button
             type="button"
             className={stage && a!.kind === "screen" ? "linklike conn-configure conn-link" : "test-btn conn-configure"}
-            data-tour={tourNext ? "setup-next" : undefined}
+            data-tour={tourNext ? "setup-next" : githubOnButton ? "settings-github" : undefined}
             onClick={handler}
           >
             {a!.label}
@@ -559,7 +568,7 @@ export function Connections({ gotoScreen }: ScreenProps) {
 
   return (
     <>
-      <h3 className="set-section-title">
+      <h3 className="set-section-title" data-tour="settings-status">
         Connections{" "}
         <span id="settings-connections-summary" className="muted">
           {counted ? summaryLine(counted) : ""}
