@@ -187,7 +187,7 @@ class TestFirstRun:
         # first-hour checklist (r5-firsthour #5–#7).
         assert '"install-tailscale"' not in src and '"fix-tailscale"' not in src
         assert "Set up in Settings → Your phone" in src
-        assert 'data-phone="qr"' in src
+        assert 'data-phone="qr"' not in src  # the QR lives in Settings → Your phone now
 
     def test_grid_card_says_get_set_up(self):
         src = _read("components/grid/TerminalGrid.tsx")

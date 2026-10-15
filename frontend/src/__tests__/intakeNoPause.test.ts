@@ -92,7 +92,9 @@ describe("the sidebar's Tickets bar has no pause button", () => {
     expect(html).not.toContain("dc-pause");
     expect(html).not.toMatch(PAUSE_WORDS);
     // The switch is on, and drawn as a plain switch.
-    expect(html).toMatch(/<input type="checkbox" id="mindflock-toggle" checked=""/);
+    // (React emits `checked` last; the switch's accessible name sits between.)
+    expect(html).toMatch(/<input type="checkbox" id="mindflock-toggle"[^>]*checked=""/);
+    expect(html).toContain('aria-label="Auto-start tickets"');
   });
 
   it("an older build's pause record reads as plain OFF", () => {

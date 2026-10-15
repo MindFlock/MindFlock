@@ -258,7 +258,7 @@ export function RepoFields({
       <div className="ik-fields" data-use="verify" key={repo}>
         <div className="ik-grid ik-grid-2">
           <BlockInput
-            label="Branch that ships"
+            label="Live branch"
             field="live_branch"
             value={text("live_branch")}
             // The INHERITED answer, not a format hint: an empty box has to read
@@ -272,7 +272,7 @@ export function RepoFields({
             onSave={save}
           />
           <BlockInput
-            label="Wait after merge (minutes)"
+            label="Deploy delay (minutes)"
             field="deploy_delay_minutes"
             type="number"
             value={text("deploy_delay_minutes")}
@@ -455,7 +455,16 @@ function usesText(uses: RepoUse[]): string {
  * failure people actually hit (a typo'd slug, or a private repo the token has
  * no scope for; GitHub 404s both). Issue work has to push, so a read-only
  * token is said there. */
-function TestAccess({ repo, use }: { repo: string; use?: RepoUse }) {
+function TestAccess({
+  repo,
+  use,
+  onResult,
+}: {
+  repo: string;
+  use?: RepoUse;
+  /** The add flow listens: a failed test makes Finish ask before saving (round 5). */
+  onResult?(ok: boolean): void;
+}) {
   return (
     <TestButton
       label="Test access"
@@ -469,7 +478,13 @@ function TestAccess({ repo, use }: { repo: string; use?: RepoUse }) {
           can_push?: boolean;
           default_branch?: string;
         }>("/api/settings/test/github-repo", { json: { repo: repo.trim() } });
-        if (!r?.ok) throw new Error(r?.error || "test failed");
+        onResult?.(!!r?.ok);
+        if (!r?.ok) {
+          // The dialog's own Connect GitHub button sits right under this row:
+          // point at it, not at a Settings path (r5-verify m6).
+          const err = r?.error || "test failed";
+          throw new Error(/no GitHub token/i.test(err) ? "Not connected — use Connect GitHub below" : err);
+        }
         return (
           (r.name || repo) +
           (r.private ? " (private)" : "") +
@@ -509,7 +524,9 @@ export function RepoEditor({
   };
   return (
     <div className="ik-editor-body" data-repo={repo} data-use={use}>
-      <UseTicks repo={repo} fixed={use} value={uses} onChange={setUses} />
+      {/* Verify's editor is about Verify: the PR-comment / issue ticks are
+          Intake's business (r5-verify m7). */}
+      {use !== "verify" && <UseTicks repo={repo} fixed={use} value={uses} onChange={setUses} />}
       <RepoFields use={use} repo={repo} liveBranch={liveBranch} />
       <div className="ik-editor-foot">
         <span className="test-row">
@@ -605,11 +622,20 @@ export function AddRepoFlow({
   const s = useSettings();
   const ticketSources = useTicketingSources(true).data || [];
   const [step, setStep] = useState<2 | 3>(2);
-  const [slug, setSlug] = useState("");
+  const [slug, setSlugRaw] = useState("");
+  const setSlug = (v: string) => {
+    setSlugRaw(v);
+    setAccessFailed(false);
+    setSaveAnyway(false);
+  };
   const [ticks, setTicks] = useState<RepoUse[]>(only ? [only] : initialUses);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [added, setAdded] = useState<{ repo: string; uses: RepoUse[] } | null>(null);
+  // Round 5 (r5-verify B2): a repository whose access test FAILED is never
+  // saved on the first press — the second press is an explicit "Save anyway".
+  const [accessFailed, setAccessFailed] = useState(false);
+  const [saveAnyway, setSaveAnyway] = useState(false);
   const repo = slug.trim();
   const already = REPO_RE.test(repo) ? usesOf(s.settings, repo) : [];
   const ticketRepos = ticketSources.flatMap((src) => sourceRepos(src).map((r) => githubSlugOf(r.url)));
@@ -628,6 +654,11 @@ export function AddRepoFlow({
     const want = [...new Set([...already, ...ticks])];
     if (!ticks.length && !already.length) {
       setError("Tick at least one use.");
+      return;
+    }
+    if (accessFailed && !saveAnyway) {
+      setSaveAnyway(true);
+      setError("The access test failed — fix the name or Connect GitHub, or press Save anyway.");
       return;
     }
     setError("");
@@ -655,7 +686,7 @@ export function AddRepoFlow({
           {error}
         </span>
         <button type="button" className="ik-quiet-btn" disabled={busy} onClick={() => void commit(false)}>
-          Finish with defaults
+          {saveAnyway ? "Save anyway" : "Finish with defaults"}
         </button>
         <button
           type="button"
@@ -724,7 +755,14 @@ export function AddRepoFlow({
                   }
                 }}
               />
-              <TestAccess repo={repo} use={ticks.includes("issue") ? "issue" : undefined} />
+              <TestAccess
+                repo={repo}
+                use={ticks.includes("issue") ? "issue" : undefined}
+                onResult={(ok) => {
+                  setAccessFailed(!ok);
+                  setSaveAnyway(false);
+                }}
+              />
             </div>
             <datalist id="ik-add-repo-known">
               {suggestions.map((r) => (

@@ -6,7 +6,7 @@
  *
  *   Work     Message…, Queue prompt…
  *   Ship     Commit… (only once there is something to commit), Push, Open PR,
- *            Merge PR, View PR, Fast-track…, Checklist…, Run checks now
+ *            Merge PR, View PR, Fast-track…, Verify checklist…, Run checks now
  *   Session  Rename…, Resume (only on a paused session: there is no Pause
  *            here — the palette, `mindflock pause` and the API still pause)
  *   More ▸   the rare ones, folded: Terminal, Diff, Code map, Thread, Browse
@@ -222,7 +222,7 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
     !!inst.branch &&
       !peer && {
         key: "checklist",
-        label: "Checklist…",
+        label: "Verify checklist…",
         title: "Verify's checklist for " + inst.branch + " — what to check before or after it merges",
         run: () => openChecklist(inst.branch),
       },
