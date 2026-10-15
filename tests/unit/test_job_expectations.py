@@ -564,3 +564,26 @@ def test_the_instructions_teach_the_long_job_line():
     assert "expect_background_job" in tools.INSTRUCTIONS
     assert "MINDFLOCK_EXPECT=6h" in tools.INSTRUCTIONS
     assert "MINDFLOCK_EXPECT=6h" in tools._D_EXPECT
+
+
+@linux_only
+def test_a_learned_gap_survives_a_server_restart(job):
+    """The sample table dies with the process; the rhythm it learned must
+    not — otherwise every restart makes a 40-minute-cadence job "stuck" 15
+    minutes later. The gap is written through when it grows and seeded on
+    the first sighting after a restart."""
+    gap = 41 * 60.0
+    job.classify(gap, age=2 * H)
+    job.table[PID]["cpu"] = 110
+    assert job.scan(now=NOW + 10)["longest_gap_s"] == gap + 10
+    assert bg.remembered_gap(JOB_ID) == gap + 10
+    bg._samples.clear()  # a restart
+    restart = NOW + 10 + 20 * 60
+    first = job.scan(now=restart)  # the first sighting: one fresh window
+    assert first["longest_gap_s"] == gap + 10
+    assert first["state"] == "running"
+    j = job.scan(now=restart + 20 * 60)  # 20 quiet minutes later
+    assert j["longest_gap_s"] == gap + 10
+    assert j["state"] == "waiting"
+    assert j["threshold_s"] == 2 * (gap + 10)
+    assert job.scan(now=restart + 2 * (gap + 10) + 1)["state"] == "stuck"

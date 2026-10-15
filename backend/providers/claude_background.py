@@ -388,7 +388,7 @@ def expectations_path() -> Path:
 
 
 def _empty_store() -> dict:
-    return {"version": 1, "jobs": {}, "announced": {}}
+    return {"version": 1, "jobs": {}, "announced": {}, "gaps": {}}
 
 
 def _load_store() -> dict:
@@ -408,7 +408,7 @@ def _load_store() -> dict:
         data = None
     if not isinstance(data, dict):
         data = _empty_store()
-    for key in ("jobs", "announced"):
+    for key in ("jobs", "announced", "gaps"):
         if not isinstance(data.get(key), dict):
             data[key] = {}
     _store_cache.update(sig=sig, data=data)
@@ -430,7 +430,14 @@ def _save_store(data: dict, now: float) -> None:
         for k, v in data["announced"].items()
         if isinstance(v, (int, float)) and v >= now - EXPECT_MAX_S - _EXPECT_PRUNE_S
     }
-    out = {"version": 1, "jobs": jobs, "announced": announced}
+    # A learned rhythm outlives a restart (the whole point of keeping it), but
+    # not the longest expectation: a job gone that long is a different job.
+    gaps = {
+        k: v
+        for k, v in data.get("gaps", {}).items()
+        if isinstance(v, dict) and float(v.get("at") or 0) >= now - EXPECT_MAX_S
+    }
+    out = {"version": 1, "jobs": jobs, "announced": announced, "gaps": gaps}
     path = expectations_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
@@ -502,6 +509,33 @@ def set_expectation(
         data["jobs"][job_id] = entry
         _save_store(data, now)
     return True, entry
+
+
+def remembered_gap(job_id: str) -> float:
+    """The longest quiet gap this job was seen to resume from, across server
+    restarts (``gaps`` in the expectations file); 0 when none."""
+    try:
+        with _store_lock:
+            v = _load_store()["gaps"].get(job_id)
+    except Exception:  # noqa: BLE001 — unreadable store: learn afresh
+        return 0.0
+    try:
+        return max(0.0, float(v.get("gap_s") or 0.0)) if isinstance(v, dict) else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def remember_gap(job_id: str, gap_s: float, now: Optional[float] = None) -> None:
+    """Write a grown gap through to the file, so the rhythm survives a
+    restart. Only called when the gap GREW (rare), so no throttle is needed."""
+    now = time.time() if now is None else now
+    try:
+        with _store_lock:
+            data = json.loads(json.dumps(_load_store()))
+            data["gaps"][job_id] = {"gap_s": round(float(gap_s), 1), "at": now}
+            _save_store(data, now)
+    except Exception:  # noqa: BLE001 — the in-memory sample still carries it
+        pass
 
 
 def clear_expectation(job_id: str, now: Optional[float] = None) -> bool:
@@ -613,14 +647,24 @@ def jobs_under(pane_pid, now: Optional[float] = None) -> Optional[List[dict]]:
             out_mtime = 0.0
         key = (pid, st["start"])
         seen_keys.add(key)
+        job_id = m.group(1)
+        grew = False
         with _lock:
             prev = _samples.get(key)
-            gap = prev.get("gap", 0.0) if prev else 0.0
+            # A restart forgets the sample table: seed the rhythm the file
+            # remembers, so a job that resumes every 40 min is not "stuck"
+            # 15 min after every server restart.
+            gap = prev.get("gap", 0.0) if prev else remembered_gap(job_id)
             if prev is None:
                 # First sighting (a fresh job, or a server restart): judge by
-                # the lifetime average, since there is no previous sample.
+                # the lifetime average, since there is no previous sample — or,
+                # when the file remembers this job's rhythm, give it one full
+                # threshold window from now: a restart must not turn a job
+                # that resumes every 40 min into "stuck" on the spot.
                 age = max(1.0, now - started)
-                active = now if cpu_s / age >= ACTIVE_CPU_FRACTION else started
+                active = (
+                    now if (cpu_s / age >= ACTIVE_CPU_FRACTION or gap > 0) else started
+                )
             else:
                 dt = max(1e-3, now - prev["ts"])
                 busy = (cpu_s - prev["cpu"]) / dt >= ACTIVE_CPU_FRACTION
@@ -631,7 +675,9 @@ def jobs_under(pane_pid, now: Optional[float] = None) -> Optional[List[dict]]:
                 # It came back from a quiet stretch: learn how long one can
                 # be. Only the stretch this process OBSERVED counts — a first
                 # sighting's "active" is a guess from the lifetime average.
-                gap = max(gap, active - max(prev["active"], since))
+                seen_gap = active - max(prev["active"], since)
+                if seen_gap > gap:
+                    gap, grew = seen_gap, True
             _samples[key] = {
                 "ts": now,
                 "cpu": max(cpu_s, prev["cpu"] if prev else 0.0),
@@ -639,10 +685,11 @@ def jobs_under(pane_pid, now: Optional[float] = None) -> Optional[List[dict]]:
                 "gap": gap,
                 "since": since,
             }
+        if grew:
+            remember_gap(job_id, gap, now)
         command = command_of(_cmdline(pid))
         quiet = max(0.0, now - active)
         elapsed = max(0.0, now - started)
-        job_id = m.group(1)
         expect_s, expected_by = _effective_expectation(job_id, command)
         if expected_by in ("you", "agent"):
             remembered.append(job_id)
