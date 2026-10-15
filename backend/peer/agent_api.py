@@ -59,6 +59,7 @@ POLL_S = 0.5
 MAX_WAIT_S = 1500
 PEER_TIMEOUT_S = 60.0
 MAX_TEXT = 20000
+MAX_PROPOSAL = 10000  # wire.MAX_JOINT_PROPOSAL
 MAX_ERR = 300
 _MSG_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
 # Every control char (newlines included): errors and names are one line.
@@ -122,8 +123,21 @@ _SPEC: Dict[str, Dict[str, tuple]] = {
     "checkpoint": {
         "message": (False, "peer checkpoint", lambda v: _str(v, "message", 0, 2000)),
     },
+    # Joint tasks (backend.peer.joint): read the contract or propose a change
+    # (a person decides it), and re-read the brief.
+    "contract": {
+        "action": (True, None, lambda v: _choice(v, "action", ("read", "propose"))),
+        "text": (False, None, lambda v: _str(v, "text", 1, MAX_PROPOSAL)),
+    },
+    "joint": {},
 }
 OPS = tuple(_SPEC)
+
+
+def _choice(v: Any, name: str, allowed: tuple) -> str:
+    if not isinstance(v, str) or v not in allowed:
+        raise ArgError("%s must be one of %s" % (name, ", ".join(allowed)))
+    return v
 
 
 def _msg_id(v: Any, name: str) -> Optional[str]:
@@ -459,6 +473,34 @@ class AgentApi:
 
     async def _op_peer_list_files(self, args: dict, reader) -> dict:
         return await self._peer("list_files", {})
+
+    async def _joint(self, fn, *args):
+        """A joint-task call on the service; its refusal text, else generic."""
+        try:
+            out = fn(*args)
+            if asyncio.iscoroutine(out):
+                out = await out
+            return out
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            msg = getattr(e, "message", None)
+            if isinstance(msg, str) and msg:
+                raise _PeerError(_clean_err(Exception(msg))) from None
+            _log.warning("agent api: joint call failed: %s", type(e).__name__)
+            raise _PeerError("internal error") from None
+
+    async def _op_contract(self, args: dict, reader) -> dict:
+        joint = self.service.joint
+        if args["action"] == "read":
+            return await self._joint(joint.agent_contract, self.link_id)
+        if args["text"] is None:
+            raise _PeerError("propose needs text: the whole new contract")
+        res = await self._joint(joint.propose_edit, self.link_id, args["text"], "agent")
+        return {"proposal_id": res["proposal_id"]}
+
+    async def _op_joint(self, args: dict, reader) -> dict:
+        return await self._joint(self.service.joint.agent_joint, self.link_id)
 
     async def _op_checkpoint(self, args: dict, reader) -> dict:
         sha = await asyncio.to_thread(self._checkpoint, self.share, args["message"])

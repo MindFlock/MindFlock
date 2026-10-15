@@ -123,6 +123,8 @@ _OP_PERM = {
     # The standing mirror pulls the share's history as a bundle: it reads the
     # same files "read my files" grants.
     "mirror_pull": "read_file",
+    # Joint tasks talk, like messages (backend.peer.joint).
+    **{op: "messages" for op in wire.OPS if op.startswith("joint_")},
 }
 
 

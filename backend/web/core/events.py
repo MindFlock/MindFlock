@@ -297,6 +297,20 @@ EVENT_NAMES = (
     # A mirror update failed (data: {"link_id", "peer_name", "repo_path",
     # "branch", "error" — what to do}). Once per distinct error.
     "peer.mirror_failed",
+    # Joint tasks (backend.peer.joint; data always carries "link_id",
+    # "peer_name", "joint_id"). The peer proposes one — accept or decline it
+    # in People (data: + "brief" — first 200 chars, one line).
+    "peer.joint_proposed",
+    # A joint task moved, or my half's shared session started or failed
+    # (data: + "state": "proposed"|"active"|"done"|"cancelled", "by": "you" |
+    # "peer", optional "reason", "mine_shared", "error"). For UI refetch.
+    "peer.joint_state",
+    # The contract changed or a change was proposed or decided (data: +
+    # "kind": "revision"|"proposal", "rev", "by": "you"|"peer"|"agent",
+    # "open": bool — true for a proposal waiting on a person, and for a
+    # proposal "proposal_id" + "state"). Notify only on an open proposal by
+    # the peer ("<name>'s agent proposes a contract change").
+    "peer.joint_contract",
     # A newer MindFlock release is out and this device, or another of "Your
     # devices", runs an older one (core.update_watch; ``session`` is ""). Once
     # per release and set of devices behind it (data: {"latest", "tag",
