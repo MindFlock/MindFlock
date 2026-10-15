@@ -914,7 +914,7 @@ On macOS the desktop app additionally leaves `/Applications/MindFlock.app`,
 | [docs/session-engine.md](docs/session-engine.md) | Session lifecycle, git worktrees, tmux/PTY, provisioned mode |
 | [docs/cli.md](docs/cli.md) | `mindflock` CLI: serve (`--setup`), init, doctor, update, uninstall, token, mcp, accounts, devices, peer, and terminal session control (new/ls/attach/rm/open/events/msg/inbox) |
 | [docs/team-runs.md](docs/team-runs.md) | Team runs and fast-track: several tickets / task lines at once, each fast-tracked (commit, push, PR, merge) by the server; what waits in the bell and what the team run header holds; restart semantics |
-| [docs/mcp.md](docs/mcp.md) | The MindFlock MCP: agent-to-agent messaging and orchestration — auto-attach, the 27 tools (plus 7 peer-only tools), message delivery, lineage and spawn limits, scopes, a worked orchestrator example |
+| [docs/mcp.md](docs/mcp.md) | The MindFlock MCP: agent-to-agent messaging and orchestration — auto-attach, the 28 tools (plus 10 peer-only tools), message delivery, lineage and spawn limits, scopes, a worked orchestrator example |
 | [docs/web-api.md](docs/web-api.md) | Complete HTTP + WebSocket API reference |
 | [docs/web-ui.md](docs/web-ui.md) | Frontend guide: grid, tabs, stages, shortcuts, mobile, addons |
 | [docs/providers.md](docs/providers.md) | Provider framework, adding a CLI via TOML, pricing & usage tracking |

@@ -14,7 +14,7 @@ import {
 } from "react";
 import { rowDndProps } from "./rowDnd";
 import type { NestInfo } from "./ordering";
-import type { Instance } from "../../api/types";
+import type { BackgroundJob, Instance } from "../../api/types";
 import { queryClient, useConfig } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { chipState, checkChip, effectiveActivity } from "../../lib/stage";
@@ -23,8 +23,9 @@ import { AgentBlockedChip } from "../setup/AgentBlocked";
 import { useSetup } from "../setup/useSetup";
 import { reviveSession } from "../../lib/revive";
 import { wakeSession } from "../../lib/wake";
-import { backgroundChip } from "../../lib/backgroundJobs";
-import { stopBackgroundJob } from "../../lib/stopBackgroundJob";
+import { backgroundChip, backgroundJobs } from "../../lib/backgroundJobs";
+import { expectBackgroundJob, stopBackgroundJob } from "../../lib/stopBackgroundJob";
+import { EXPECT_PRESETS, expectOf, formatSpan, parseDuration } from "../../lib/jobExpectation";
 import { sessionLabel } from "../../lib/sessionLabel";
 import { useNow } from "../../lib/useNow";
 import {
@@ -167,6 +168,11 @@ export const SidebarRow = memo(function SidebarRow({
   const expanded = !!menuAt;
   const kebab = useRef<HTMLButtonElement | null>(null);
   const menuId = useId();
+  // The background-job chip's menu (stop it, say how long it should take):
+  // where it hangs, under the chip — null while closed.
+  const [jobMenuAt, setJobMenuAt] = useState<RowMenuOpen | null>(null);
+  const jobChipRef = useRef<HTMLButtonElement | null>(null);
+  const jobMenuId = useId();
   // The row's ✕ on a session with uncommitted changes asks first, on a strip
   // under the row (never confirm(): the desktop app has none).
   const [closeArmed, setCloseArmed] = useState(false);
@@ -325,6 +331,8 @@ export const SidebarRow = memo(function SidebarRow({
   // "working · 6m" counts up by itself: a busy worker's row data can sit
   // unchanged between polls, and memo would freeze the minutes.
   useNow(wline?.state === "working" || ship?.state === "working" ? 30_000 : false);
+  // "job running · 2h 10m of ~6h" counts up by itself too.
+  useNow(backgroundJobs(inst).some((j) => expectOf(j)) ? 60_000 : false);
   // Subscribed (not a render-time snapshot): the row must clear its red dot
   // the moment the agent socket connects, not on the next instances poll.
   const agentWs = useSyncExternalStore(
@@ -771,13 +779,25 @@ export const SidebarRow = memo(function SidebarRow({
             </span>
           )}
           {bg &&
-            (bg.stopPid ? (
+            (bg.job ? (
+              // Opens the job's menu (JobMenu below): Stop for a stuck job,
+              // and "Expected to take…" for any job it is about.
               <button
                 type="button"
+                ref={jobChipRef}
                 className={"stagechip " + bg.cls}
                 title={bg.title}
                 aria-label={bg.title}
-                onClick={(e) => act(() => void stopBackgroundJob(title, bg.stopPid as number), e)}
+                aria-haspopup="menu"
+                aria-expanded={!!jobMenuAt}
+                aria-controls={jobMenuAt ? jobMenuId : undefined}
+                onClick={(e) =>
+                  act(() => {
+                    if (jobMenuAt) return setJobMenuAt(null);
+                    const b = jobChipRef.current?.getBoundingClientRect();
+                    if (b) setJobMenuAt({ x: b.left, y: b.bottom + 4, flipY: b.top - 4, align: "start", keyboard: e.detail === 0 });
+                  }, e)
+                }
                 onDoubleClick={(e) => e.stopPropagation()}
               >
                 {bg.label}
@@ -951,9 +971,158 @@ export const SidebarRow = memo(function SidebarRow({
           />
         </RowMenu>
       )}
+      {jobMenuAt && bg?.job && (
+        <RowMenu
+          id={jobMenuId}
+          at={jobMenuAt}
+          label={"Background job in " + shown}
+          opener={jobChipRef.current}
+          onClose={(refocus) => {
+            setJobMenuAt(null);
+            if (refocus) jobChipRef.current?.focus();
+          }}
+        >
+          <JobMenu title={title} job={bg.job} stopPid={bg.stopPid} onDone={() => setJobMenuAt(null)} />
+        </RowMenu>
+      )}
     </>
   );
 });
+
+/** The background-job chip's menu: Stop (a stuck job), then "Expected to
+ * take…" — 30 min / 1 h / 6 h / 24 h, or Custom… as one inline field (never
+ * prompt(): the desktop app has none) — and Clear expectation once one is set.
+ * Drawn with SessionMenu's look (.session-menu). */
+export function JobMenu({
+  title,
+  job,
+  stopPid,
+  onDone,
+}: {
+  title: string;
+  job: BackgroundJob;
+  stopPid?: number;
+  onDone(): void;
+}) {
+  const expect = expectOf(job);
+  // The presets fold open under "Expected to take…"; Custom… swaps them for the field.
+  const [open, setOpen] = useState(false);
+  const [custom, setCustom] = useState(false);
+  const [text, setText] = useState("");
+  const [bad, setBad] = useState(false);
+  const field = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (custom) field.current?.focus();
+  }, [custom]);
+  const set = (secs: number | null) => {
+    onDone();
+    void expectBackgroundJob(title, job.id, secs);
+  };
+  const submit = () => {
+    const secs = parseDuration(text);
+    if (secs == null) return setBad(true);
+    set(secs);
+  };
+  const cmd = job.command.replace(/\s+/g, " ").trim();
+  return (
+    <div className="session-menu job-menu">
+      <div className="sm-head">Background job</div>
+      <div className="job-menu-cmd" title={cmd}>
+        {cmd}
+      </div>
+      {stopPid != null && (
+        <button
+          type="button"
+          role="menuitem"
+          className="danger"
+          data-menu="stop-job"
+          onClick={() => {
+            onDone();
+            void stopBackgroundJob(title, stopPid);
+          }}
+        >
+          <span className="sm-verb">
+            <span className="sm-label">Stop the job</span>
+          </span>
+        </button>
+      )}
+      <button
+        type="button"
+        role="menuitem"
+        data-menu="expect-job"
+        aria-expanded={open}
+        onClick={() => {
+          setOpen(!open);
+          setCustom(false);
+        }}
+      >
+        <span className="sm-verb">
+          <span className="sm-label">Expected to take…</span>
+          <span className="sm-caret" aria-hidden="true">
+            {open ? "▾" : "▸"}
+          </span>
+        </span>
+        {expect != null && (
+          <span className="end-sub">
+            Now ~{formatSpan(expect)}
+            {job.expected_by === "you" ? ", set by you" : job.expected_by === "agent" ? ", set by the agent" : job.expected_by === "command" ? ", set by its command" : ""}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="sm-more-items job-expect">
+          {EXPECT_PRESETS.map((p) => (
+            <button key={p.secs} type="button" role="menuitem" data-expect={p.secs} onClick={() => set(p.secs)}>
+              <span className="sm-verb">
+                <span className="sm-label">{p.label}</span>
+              </span>
+            </button>
+          ))}
+          {!custom ? (
+            <button type="button" role="menuitem" data-expect="custom" onClick={() => setCustom(true)}>
+              <span className="sm-verb">
+                <span className="sm-label">Custom…</span>
+              </span>
+            </button>
+          ) : (
+            <form
+              className="job-expect-custom"
+              onSubmit={(e) => {
+                e.preventDefault();
+                submit();
+              }}
+            >
+              <input
+                ref={field}
+                type="text"
+                aria-label="Expected to take"
+                placeholder="6h, 90m or 1h30m"
+                value={text}
+                aria-invalid={bad}
+                onChange={(e) => {
+                  setText(e.target.value);
+                  setBad(false);
+                }}
+                onKeyDown={(e) => e.stopPropagation()}
+              />
+              <button type="submit" className="job-expect-set">
+                Set
+              </button>
+              {bad && <div className="job-expect-bad">Try 6h, 90m or 1h30m (1 minute to 14 days)</div>}
+            </form>
+          )}
+        </div>
+      )}
+      {expect != null && (
+        <button type="button" role="menuitem" data-menu="clear-expect" onClick={() => set(null)}>
+          <span className="sm-verb">
+            <span className="sm-label">Clear expectation</span>
+          </span>
+        </button>
+      )}
+    </div>
+  );
+}
 
 /** ⋮ — three dots on the 24-unit grid the app's other line icons use, filled
  * at the weight of their 2-unit strokes. */

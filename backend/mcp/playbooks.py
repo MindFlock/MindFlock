@@ -72,6 +72,7 @@ _MAX_NAMES_CHARS = 120
 #: a template may name these and nothing else.
 TOOL_NAMES = (
     "whoami",
+    "expect_background_job",
     "list_sessions",
     "get_session",
     "read_output",

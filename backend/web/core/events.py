@@ -169,6 +169,15 @@ EVENT_NAMES = (
     # "previous_name"} — how the previous driver hears they lost it.
     "session.presence_changed",
     "session.driver_changed",
+    # A background job the agent left running first passed the duration it
+    # was expected to take (a person's, the agent's, or the command's own
+    # MINDFLOCK_EXPECT=; see providers.claude_background) — at 1×, not the
+    # 1.5× where it may turn stuck. Once per job (deduped per (pid, start),
+    # and by job id across restarts), emitted from the snapshot probe
+    # (server._background_jobs) (data: {"title", "job_id", "command_head",
+    # "expect_s", "elapsed_s", "state", "detail"}). "Stuck" is NOT an event:
+    # the row chip is that signal.
+    "session.job_past_expected",
     # Red zones (core.red_zone_monitor). All three are SEEDED rather than
     # boot-gated: the loop's first sight of a session/worktree records what is
     # already there without emitting, so a restart never re-announces.

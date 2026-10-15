@@ -35,6 +35,7 @@ import { clearAttention, updateTitleBadge, useTitleBadge } from "../lib/titleBad
 // The theme toggle (TopBar) redraws the favicon through here.
 export { redrawFavicon } from "../lib/titleBadge";
 import { openSettings } from "../lib/openSettings";
+import { jobPastExpectedNote } from "../lib/jobExpectation";
 
 function instances(): Instance[] {
   return queryClient.getQueryData<Instance[]>(["instances"]) || [];
@@ -190,6 +191,19 @@ export function EventToasts() {
         notifyOnce(env.session, "pushfail", n.text, {
           onClick: () => (n.setup ? useUi.getState().openDialogFor("setup") : selectSession(env.session)),
           duration: 10000,
+        });
+      })
+    );
+    unsubs.push(
+      // A background job ran past the time it was expected to take (lib/
+      // jobExpectation): said once per job; the click shows its session,
+      // whose rail chip holds Stop and "Expected to take…".
+      ev.subscribe("session.job_past_expected", (env) => {
+        if (isReplay(env)) return;
+        const d = (env.data || {}) as { job_id?: string; expect_s?: number };
+        notifyOnce(env.session, "jobpast:" + String(d.job_id || ""), jobPastExpectedNote(namedSlot(env.session), Number(d.expect_s) || 0), {
+          onClick: () => selectSession(env.session),
+          duration: 8000,
         });
       })
     );

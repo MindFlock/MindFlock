@@ -323,7 +323,7 @@ against every fresh listing.
 
 ## The tools
 
-The 27 tools. Every result is JSON text. Clients that negotiate protocol
+The 28 tools. Every result is JSON text. Clients that negotiate protocol
 `2025-06-18` or later also get `structuredContent`. Arguments are checked
 against each tool's JSON schema, and a violation comes back as a tool error
 with a fix-it message, not a protocol error. The check is lenient about what
@@ -351,6 +351,7 @@ it.
 | `set_parent` | write | **no** |
 | `fence_session` | write, managed only | **no** |
 | `set_order` | write (your own workers); no arguments reads | **no** |
+| `expect_background_job` | write (your own background jobs) | **no** |
 | `list_tickets` | read (the Intake ticket list) | yes |
 | `spawn_ticket_session` | write | **no** |
 | `ship_session` | write, pushes code; destructive at `merge` | **no** |
@@ -365,7 +366,7 @@ it.
 
 "Auto-approved" is the `--allowedTools` list for Claude and the
 `approval_mode = "approve"` table for Codex. The server also sends
-`instructions` (under 1900 characters, because Claude truncates at 2048) that
+`instructions` (under 2000 characters, because Claude truncates at 2048) that
 teach the worker and orchestrator workflows below. In the tables that follow,
 "self" means the session the MCP runs in.
 
@@ -719,6 +720,28 @@ to **your** workers (a title that is a live session must be one you manage;
 a title no session has yet is a planned one). `POST
 /api/instances/{you}/order` → `{ok, order}`; a cycle, an unknown worker, or a
 started one in `after` refuses the whole change with its `problems`.
+
+### `expect_background_job`
+
+`job_id`, `duration`. Tells MindFlock how long one of **your own** background
+jobs should take, so the row never calls it stuck while inside that window.
+`job_id` is the id Claude Code printed when it backgrounded the command
+("Command running in background with ID: …"; the row's `background[].id`).
+`duration` is `"90m"`, `"6h"`, `"1h30m"`, `"2d"` or a number of seconds, 1
+minute to 14 days. A quiet job turns stuck only after `max(15 min, 2 × the
+longest quiet stretch it has resumed from, 1.5 × duration)`. `POST
+/api/instances/{you}/jobs/{job_id}/expect` with `by: "agent"` → `{ok,
+expect_s, expected_by, eta, state, reason}`. A person's expectation for the
+job stands: then `ok` is false and the answer carries theirs. A job id that
+is not one of your current jobs, or a bad duration, is a tool error.
+
+The alternative needs no tool call: prefix the command itself,
+`MINDFLOCK_EXPECT=6h python train.py` (`expected_by: "command"`). Precedence:
+the person's, then the agent's, then the command's. The server instructions
+carry this as one line ("A long job: give expect_background_job its
+duration (or prefix the command with MINDFLOCK_EXPECT=6h) so it never shows
+as stuck early."). When the job first passes its duration the server emits
+`session.job_past_expected` ([extensions.md](extensions.md)).
 
 ### `list_tickets`
 
