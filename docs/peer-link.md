@@ -632,6 +632,39 @@ still fits one frame.
   `{verdict, steps, passed}` once there are steps — what the sidebar row and
   pane-head chip of the shared session read.
 
+### Field trial (joint task)
+
+Run on 2026-10-15 with two real servers on one Linux machine (direct
+listener, `relay = "off"`, bubblewrap) and two real `claude` agents. Ana
+had a one-file FastAPI service; Ben had a client script. The brief: "add
+`GET /items` to A, make B's client print the names, agree the JSON shape in
+CONTRACT.md first".
+
+- **What worked.** It took 4 minutes from accept to both halves
+  checkpointed. Both agents read the empty contract, proposed one, and
+  messaged each other within 50 s of starting. Neither wrote code before a
+  person accepted a contract. The mirror updated in the same second as the
+  enable, and again within one status poll of the peer's checkpoint. Both
+  exports brought exactly one commit. The two exported branches worked
+  together on the first run.
+- **Proposals cross.** Both agents proposed in the same second, with the
+  same shape and different wording. They agreed between themselves, in
+  messages, which one the people should accept. The person sees only two
+  near-identical proposals.
+- **An accepted revision reaches no agent.** Accepting or editing the
+  contract rewrites `CONTRACT.md` and emits `peer.joint_contract`, but types
+  nothing into either shared session. One agent ended its turn waiting for
+  the accept. It moved only when the other agent's "done" message was typed
+  in. The other agent noticed rev 2 only because its CLI moved a long
+  `peer_inbox` wait into the background and it then re-read the contract.
+- **The sandbox can't run a project with dependencies** (no packages, and
+  egress refuses the package index). Both agents tested with stubs or a
+  static check, and recorded their joint-check steps as `blocked`. A blocked
+  agent step keeps the verdict at `needs_you`. The person can't answer an
+  agent step, and re-running it blocks again, so the only way to reach
+  `verified` was to rewrite those steps as human steps, which clears every
+  result.
+
 ## The shared folder — CONTRACT (`share.py`)
 
 `create_share(link_id, repo_path, branch=None) -> Share`:
