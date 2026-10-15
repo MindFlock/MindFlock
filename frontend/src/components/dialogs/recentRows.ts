@@ -24,6 +24,8 @@ export interface RecentRow {
   folder: string;
   /** base · refresher · pr · tmp · worktree · workspace · in-place ("" unknown). */
   kind: string;
+  /** A closed peer-share session (People → Reopen, never the generic Reopen). */
+  peer_share?: boolean;
   /** Whether git generated this directory as a linked worktree — the only kind
    * of row the sweep can ever take. */
   worktree: boolean;

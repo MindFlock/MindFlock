@@ -381,6 +381,177 @@
 .flags-danger {
   color: var(--red);
 }
+/* The joint checklist on an active joint card (JointCheck.tsx). The verdict
+   pill reuses Verify's `.vchip` (dialogs/VerifyDialog.css); everything here
+   is layout only, coloured by meaning through the theme tokens. Every rule is
+   scoped under `.peer-joint-check`, so it out-ranks the older read-only
+   slot's `.peer-joint-step*` rules in PeerLinks.css whatever the load order. */
+.peer-joint-check {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.peer-joint-check .peer-joint-check-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.peer-joint-check .peer-joint-verdict {
+  white-space: normal;
+}
+
+.peer-joint-check .peer-joint-side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.peer-joint-check .peer-joint-side-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.peer-joint-check .peer-joint-sha {
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.peer-joint-check .peer-joint-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.peer-joint-check .peer-joint-step {
+  display: grid;
+  /* number | text | who checks it; the result (or my answer buttons) on
+     the row under the text — the settings panel is narrow at any width. */
+  grid-template-columns: 1.5em minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 4px 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12.5px;
+}
+
+.peer-joint-check .peer-joint-step-n {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.peer-joint-check .peer-joint-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.peer-joint-check .peer-joint-step-expect,
+.peer-joint-check .peer-joint-step-note {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.peer-joint-check .peer-joint-actor {
+  justify-self: start;
+  align-self: start;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.peer-joint-check .peer-joint-actor-human {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.peer-joint-check .peer-joint-answer,
+.peer-joint-check .peer-joint-step-result {
+  grid-column: 2 / -1;
+}
+
+.peer-joint-check .peer-joint-step-result {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.peer-joint-check .peer-joint-step-pass .peer-joint-step-result {
+  color: var(--green);
+}
+
+.peer-joint-check .peer-joint-step-fail {
+  border-color: color-mix(in srgb, var(--red) 55%, transparent);
+}
+
+.peer-joint-check .peer-joint-step-fail .peer-joint-step-result {
+  color: var(--red);
+}
+
+.peer-joint-check .peer-joint-answer {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.peer-joint-check .peer-joint-answer-btn {
+  padding: 1px 7px;
+  font-size: 11px;
+}
+
+.peer-joint-check .peer-joint-answer-btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.peer-joint-check .peer-joint-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.peer-joint-check .peer-joint-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.peer-joint-check .peer-joint-editor-text {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 12.5px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  resize: vertical;
+}
+
+.peer-joint-check .peer-joint-error {
+  color: var(--red);
+}
 /* --------------------------------------------------------------------------- *
  * The first-run checklist (components/setup): three groups (Get started ·
  * Connect your work · Optional, later) as drawn on the empty grid's card and in
@@ -1364,6 +1535,471 @@
 .mobile-ts-details > summary {
   cursor: pointer;
   font-size: 12px;
+}
+/* Settings → People, round 6: the header's tour "?", the joint task on a link
+   card (start form, proposal, active card with its two halves, the Contract
+   panel, the Mirror row and the joint checklist). The older People rules
+   (invite / join boxes, the card itself) stay in screens.css. */
+
+.peer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.peer-head .set-section-title {
+  margin-right: auto;
+}
+
+.peer-link-card + .peer-link-card {
+  margin-top: 12px;
+}
+.peer-action > .btn-primary {
+  align-self: flex-start;
+}
+.peer-card-head {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+/* The card's three groups: Trust, Share, Talk. Each a titled block with a
+   hairline between; the next step's group leads. */
+.peer-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.peer-group-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.peer-group p {
+  margin: 0;
+}
+.peer-safety {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.peer-perms .check {
+  font-size: 13px;
+}
+/* A field with its label above it, in a row of fields. */
+.peer-labelled {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 0 1 170px;
+}
+.peer-labelled.peer-grow {
+  flex: 1 1 240px;
+}
+.peer-labelled select,
+.peer-labelled input {
+  width: 100%;
+  box-sizing: border-box;
+}
+.peer-group .peer-row {
+  align-items: flex-end;
+}
+.peer-group .peer-row > .set-hint {
+  align-self: center;
+}
+/* Remove connection is destructive and looks it. */
+.peer-danger {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 55%, var(--border));
+}
+.peer-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+/* A disabled button stays readable in both themes. */
+.peer-link-card .test-btn:disabled {
+  opacity: 0.6;
+  border-style: dashed;
+}
+.peer-sas-changed {
+  font-size: 12.5px;
+}
+.peer-export-done,
+.peer-export-error,
+.peer-reopen-error,
+.peer-gate {
+  margin: 0;
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* Peer links off (Advanced): the cards stay listed, greyed and inert, under
+   one line that says so with its Turn on. */
+.peer-cards-off {
+  opacity: 0.55;
+  filter: grayscale(0.6);
+}
+.peer-off-note {
+  margin-bottom: 8px;
+}
+.peer-reopen {
+  margin-bottom: 8px;
+}
+/* The card you just joined lights up once. */
+.peer-card-fresh {
+  animation: peer-fresh 1.6s ease-out 1;
+}
+@keyframes peer-fresh {
+  from {
+    box-shadow: 0 0 0 3px var(--accent);
+  }
+  to {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .peer-card-fresh {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+}
+/* The conversation (Talk, and the shared-session viewer). */
+.peer-msg-who {
+  font-weight: 600;
+}
+.peer-msg-text {
+  display: block;
+}
+.peer-msg-send textarea {
+  flex: 1 1 240px;
+  min-width: 0;
+  resize: vertical;
+}
+
+/* The joint task: one bordered block inside the card. */
+.peer-joint {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+.peer-joint[data-joint-phase="none"],
+.peer-joint[data-joint-phase="ended"] {
+  background: transparent;
+  border-style: dashed;
+}
+.peer-joint p {
+  margin: 0;
+  font-size: 13px;
+}
+.peer-joint .peer-joint-title {
+  font-size: 14px;
+}
+.peer-joint-cta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.peer-joint-form,
+.peer-joint-proposal,
+.peer-joint-active,
+.peer-joint-waiting,
+.peer-joint-accept-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.peer-joint-form .set-subtitle {
+  margin: 0;
+}
+.peer-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.peer-joint textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+.peer-joint-contract,
+.peer-contract-editor textarea {
+  font: 12px ui-monospace, Menlo, Consolas, monospace;
+}
+/* A row of controls inside the joint block (Settings' .set-row stacks). */
+.peer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.peer-row > .peer-joint-repo {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+/* Same look as a Settings row's select (SettingsDialog.css .set-row select). */
+.peer-row select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-family: inherit;
+}
+.peer-row > input,
+.peer-row > select {
+  flex: 0 1 170px;
+  min-width: 0;
+}
+.peer-joint-brief-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.peer-joint-ended {
+  overflow-wrap: anywhere;
+}
+
+/* Both halves side by side; stacked on a phone. */
+.peer-halves {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+.peer-half {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  min-width: 0;
+}
+.peer-half .set-hint {
+  overflow-wrap: anywhere;
+}
+
+/* The contract: rendered Markdown in a bounded, scrollable box. */
+.peer-contract {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.peer-contract-head,
+.peer-joint-check-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+.peer-contract-head .peer-contract-edit {
+  margin-left: auto;
+}
+.peer-md {
+  max-height: 260px;
+  overflow: auto;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  font-size: 12.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.peer-md h5,
+.peer-md h6 {
+  margin: 8px 0 2px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.peer-md h6 {
+  color: var(--muted);
+}
+.peer-md > :first-child {
+  margin-top: 0;
+}
+.peer-md p,
+.peer-md ul,
+.peer-md ol {
+  margin: 2px 0 6px;
+}
+.peer-md ul,
+.peer-md ol {
+  padding-left: 18px;
+}
+.peer-md pre {
+  margin: 4px 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  font: 11.5px ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+}
+.peer-md code {
+  font: 11.5px ui-monospace, Menlo, Consolas, monospace;
+}
+.peer-joint-preview > summary {
+  cursor: pointer;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+/* An agent's proposed change, waiting for a person. */
+.peer-proposals {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.peer-proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--gold);
+  border-radius: 0 6px 6px 0;
+  background: var(--panel);
+}
+
+.peer-diff-lines {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  font: 11.5px/1.5 ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.peer-diff-lines > span {
+  display: block;
+}
+.peer-diff-add {
+  color: var(--green);
+}
+.peer-diff-del {
+  color: var(--red);
+  text-decoration: line-through;
+}
+.peer-proposal details > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Mirror: "Mirror their work into [repo] as [peer/…] Enable". */
+.peer-mirror {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.peer-mirror-form,
+.peer-mirror-on {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.peer-mirror-form .peer-mirror-repo {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.peer-mirror-branch {
+  flex: 0 1 160px;
+  min-width: 0;
+}
+.peer-mirror-status {
+  overflow-wrap: anywhere;
+}
+.peer-mirror-error {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The joint checklist (filled in by wave 2). */
+.peer-joint-check {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.peer-verdict {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--tone-neutral);
+  color: var(--tone-neutral-ink);
+}
+.peer-verdict-verified {
+  background: var(--tone-working);
+  color: var(--tone-working-ink);
+}
+.peer-verdict-failed {
+  background: var(--tone-broken);
+  color: var(--tone-broken-ink);
+}
+.peer-verdict-needs_you {
+  background: var(--tone-attention);
+  color: var(--tone-attention-ink);
+}
+.peer-verdict-in_progress {
+  background: var(--tone-waiting);
+  color: var(--tone-waiting-ink);
+}
+.peer-joint-steps {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+}
+.peer-joint-step {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 8px;
+}
+.peer-joint-step-who {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 11px;
+}
+.peer-joint-step-text {
+  overflow-wrap: anywhere;
+}
+.peer-joint-step-pass .peer-joint-step-result {
+  color: var(--green);
+}
+.peer-joint-step-fail .peer-joint-step-result {
+  color: var(--red);
+}
+
+.peer-joint-end {
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 520px) {
+  .peer-link-card {
+    padding: 10px 12px;
+  }
+  .peer-joint {
+    padding: 8px 10px;
+  }
+  .peer-contract-head .peer-contract-edit {
+    margin-left: 0;
+  }
 }
 /* Settings → Your devices ("Your devices"). Rows are a dot + name/status stack +
    buttons pinned right, the same shape as the sidebar's device rows, so a
@@ -20023,6 +20659,13 @@ body.conn-lost #cs-errors {
   color: var(--accent);
 }
 
+/* Off until the safety number is confirmed (the body says why). */
+#peer-session-dialog .psv-tab:disabled {
+  cursor: default;
+  opacity: 0.5;
+  border-style: dashed;
+}
+
 #peer-session-dialog .psv-close {
   font-size: 15px;
   line-height: 1;
@@ -20201,6 +20844,19 @@ body.conn-lost #cs-errors {
   margin-left: auto;
   font-size: 10.5px;
   color: var(--muted);
+}
+
+/* The conversation, right above the send box: a reply shows where you look. */
+#peer-session-dialog .psv-thread {
+  padding: 6px 14px 0;
+  border-top: 1px solid var(--border);
+}
+#peer-session-dialog .psv-thread .peer-msg-log {
+  max-height: 120px;
+  margin: 0;
+}
+#peer-session-dialog .psv-thread .peer-msg-empty {
+  margin: 0;
 }
 }
 

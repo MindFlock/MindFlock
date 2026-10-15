@@ -31,7 +31,7 @@ REST API with a token, then to a browser URL).
 | `frontend/` | The React + TypeScript source (Vite) of the web UI; vitest tests in `src/__tests__/`, run by CI with `npm test` |
 | `electron/` | The desktop app: a thin shell (`main.js`, `preload.js`, `offline.html`) that auto-starts the server and installs the engine on first launch |
 | `backend/ticket_ingestion/` | Ticket/PR ingestion pipeline (Shortcut/Jira/Linear/GitHub Issues/Asana) |
-| `backend/mcp/` | MindFlock MCP stdio server (stdlib only): 27 agent-to-agent tools over the HTTP API (plus 7 peer-only tools in peer mode), identity, scope policy. Auto-attached per launch by `providers/mcp_attach.py`; mailbox + lineage live in `web/core/`. Also `bridge.py`: the shared-MCP bridge that runs a user's opt-in stdio servers once per machine (`providers/mcp_share.py`) |
+| `backend/mcp/` | MindFlock MCP stdio server (stdlib only): 27 agent-to-agent tools over the HTTP API (plus 10 peer-only tools in peer mode), identity, scope policy. Auto-attached per launch by `providers/mcp_attach.py`; mailbox + lineage live in `web/core/`. Also `bridge.py`: the shared-MCP bridge that runs a user's opt-in stdio servers once per machine (`providers/mcp_share.py`) |
 | `backend/peer/` | Peer links: pair-code invites, the pinned-key TLS handshake, the relay/tunnel carriers, the sandboxed shared folder and its agent API |
 | `docs/` | architecture, session-engine, web-api, web-ui, providers, extensions, configuration, cli, mcp, team-runs, peer-link, accounts, development, ingestion-pipeline |
 

@@ -373,6 +373,13 @@ export function peerEventNote(
       if (!text) return null;
       return { text, cls: state === "cancelled" ? "n-warn" : "n-done", toast: text };
     }
+    case "peer.joint_check": {
+      // The joint check's verdict moved (r6w-joint-verify): a row only when
+      // the server flags it worth telling (verified / failed), with its text.
+      if (!d.notify) return null;
+      const text = String(d.text || "").trim() || name + "'s joint check: " + String(d.verdict || "");
+      return { text, cls: d.verdict === "failed" ? "n-warn" : "n-done", toast: text };
+    }
     case "peer.mirror_updated": {
       const text = name + "'s work updated " + mirrorBranchText(d.branch) + " in " + repoText(d);
       return { text, cls: "n-done", toast: text };
@@ -433,6 +440,7 @@ export const PEER_NEWS_EVENTS = [
   "peer.joint_contract",
   "peer.mirror_updated",
   "peer.mirror_failed",
+  "peer.joint_check",
 ] as const;
 
 // --------------------------------------------------------------------------
