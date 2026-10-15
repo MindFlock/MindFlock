@@ -85,6 +85,11 @@ class DoctorAddon(Addon):
 
             pathenv.refresh()
         payload = doctor.to_payload(doctor.run_checks())
+        # ``required`` on every row: whether it can block getting started
+        # (the setup checklist's "All checks" lists only those).
+        from backend.web.core import setup_steps
+
+        payload["checks"] = setup_steps.tag_required(payload.get("checks") or [])
         self._cached_payload = payload
         self._cached_at = now
         return payload

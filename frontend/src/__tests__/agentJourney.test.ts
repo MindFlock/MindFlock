@@ -59,7 +59,8 @@ describe("one agent card: status + ONE next action", () => {
     expect(agentStage(c)).toBe("install");
     const html = render(c);
     expect(html).toContain('id="doctor-install-btn"');
-    expect(html).toContain("Install claude");
+    // The agent by its product name (GLOSSARY: "Install Claude Code").
+    expect(html).toContain("Install Claude Code");
     expect(html).not.toContain(">Test</button>");
   });
 
@@ -108,14 +109,28 @@ describe("one agent card: status + ONE next action", () => {
     expect(html).not.toContain(">Configure</button>");
   });
 
-  it("Test reads the server's plain sentence, never the file the login was found in", () => {
-    const out = describeTestResult({
+  it("Test answers in words — where the agent is, how it is signed in, how long it took — never the login file", () => {
+    const out = describeTestResult(
+      {
+        ok: true,
+        detail: "Signed in as me@example.com",
+        cli: { status: "ok", detail: "/usr/bin/claude — 2.1.0 (Claude Code)" },
+        auth: { status: "ok", detail: "login state found in /home/me/.claude.json" },
+      },
+      420
+    );
+    expect(out).toEqual({
       ok: true,
-      detail: "Signed in as me@example.com",
-      cli: { status: "ok", detail: "/usr/bin/claude" },
-      auth: { status: "ok", detail: "login state found in /home/me/.claude.json" },
+      text: "Found at /usr/bin/claude · signed in as me@example.com · answered in 0.4 s",
     });
-    expect(out).toEqual({ ok: true, text: "Signed in as me@example.com" });
+    expect(out.text).not.toContain(".claude.json");
+    // A failing probe says what failed, with no timing.
+    expect(
+      describeTestResult(
+        { ok: false, detail: "Installed, not signed in yet", cli: { status: "ok", detail: "/usr/bin/claude" }, auth: { status: "warn" } },
+        300
+      )
+    ).toEqual({ ok: false, text: "Found at /usr/bin/claude · installed, not signed in yet" });
   });
 
   it("the card finds the default, or a named agent", () => {
@@ -131,7 +146,7 @@ describe("one agent card: status + ONE next action", () => {
     const coding = src("components/settings/screens/CodingCli.tsx");
     expect(coding).not.toContain("To install or sign in to another, see");
     // The "another agent" picker reads product names, not raw ids.
-    expect(coding).toContain("{agentName(p.name)}");
+    expect(coding).toContain("agentName(p.name)");
     expect(coding).not.toContain('" (default)"');
     // Connections reads the shared product-name map.
     const conns = src("components/settings/screens/Connections.tsx");
@@ -213,7 +228,7 @@ describe("the install window ends with a message", () => {
   it("names the next step when the agent was part of it", async () => {
     const { installedMessage } = await import("../components/dialogs/InstallTerminal");
     expect(installedMessage([{ id: "agent-cli", label: "agent CLI (claude)", cmd: "x" }])).toBe(
-      "✓ Installed — next: sign in to Claude Code"
+      "✓ Claude Code installed — Next: Sign in"
     );
     expect(installedMessage([{ id: "packages", label: "system packages: tmux", cmd: "x" }])).toBe(
       "✓ Everything is installed"
@@ -258,7 +273,10 @@ describe("orchestrator leftovers", () => {
     expect(skipsPermissions("")).toBe(false);
     const coding = src("components/settings/screens/CodingCli.tsx");
     expect(coding).not.toContain("Bypass approvals");
-    expect(coding).toContain("without asking you first.");
+    // One wording for the risk, shared with the chip (SKIP_PERMISSIONS_*).
+    expect(coding).toContain('SKIP_PERMISSIONS_LABEL = "⚠ Skip permission prompts"');
+    expect(coding).toContain('SKIP_PERMISSIONS_TIP = "The agent runs commands and edits files without asking you"');
+    expect(coding).toContain("{SKIP_PERMISSIONS_LABEL}");
   });
 });
 

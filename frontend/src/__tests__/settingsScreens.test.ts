@@ -160,6 +160,6 @@ describe("each trust control is rendered by exactly one screen", () => {
 
   it("Security points at Your devices and Your phone points at Make reachable", () => {
     expect(SRC.security).toMatch(/Trusting your own devices lives in[\s\S]{0,200}gotoScreen\("devices"\)/);
-    expect(SRC.mobile).toMatch(/Make reachable[\s\S]{0,300}gotoScreen\("devices"\)/);
+    expect(SRC.mobile).toMatch(/gotoScreen\("devices"\)\}>\s*Turn on Make reachable…/);
   });
 });

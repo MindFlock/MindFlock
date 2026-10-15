@@ -541,6 +541,9 @@ def _github_connection() -> dict:
     else:
         pr_review = "PR review: no repos set"
     detail = f"{detail} · {pr_review}"
+    # "Docs" is MindFlock's own help for this connection, not the gh CLI's
+    # homepage (a token does gh's job; most people never install gh).
+    fix_fields["docs"] = GITHUB_HELP_URL
 
     return _row(
         "github",
@@ -566,6 +569,11 @@ def _github_connection() -> dict:
         **fix_fields,
     )
 
+
+#: The GitHub row's "Docs": docs/web-ui.md → Connect GitHub, on GitHub.
+GITHUB_HELP_URL = (
+    "https://github.com/MindFlock/MindFlock/blob/main/docs/web-ui.md#connect-github"
+)
 
 _PROVIDER_LABELS = {
     "shortcut": "Shortcut",

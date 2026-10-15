@@ -379,8 +379,10 @@ class TestRoutes:
         assert r.status_code == 200
         d = r.json()
         assert [s["id"] for s in d["steps"]] == list(STEP_IDS)
+        # ① names the default agent (UX r5: "Install Claude Code"); the CLI's
+        # TITLES keep the generic name.
         assert [s["title"] for s in d["steps"]] == [
-            "Install the tools",
+            "Install Claude Code",
             "Sign in to your agent",
             "Start your first agent",
             "Connect GitHub",
@@ -523,3 +525,72 @@ class TestRoutes:
         assert client.get("/api/config").json()["onboarded"] is False
         setup_steps.note_agent_worked()
         assert client.get("/api/config").json()["onboarded"] is True
+
+
+# --------------------------------------------------------------------------- #
+# UX round 5: what step ① shows
+# --------------------------------------------------------------------------- #
+class TestRequiredChecks:
+    def test_every_doctor_row_says_whether_it_blocks_getting_started(self):
+        rows = setup_steps.tag_required(
+            [
+                {"id": "git", "status": "ok"},
+                {"id": "agent-cli", "status": "fail"},
+                {"id": "tailscale", "status": "warn"},
+                {"id": "tailnet-mtu", "status": "warn"},
+                {"id": "gh", "status": "info"},
+                # A newer doctor that sets its own wins.
+                {"id": "uv", "status": "ok", "required": False},
+            ]
+        )
+        assert [r["required"] for r in rows] == [True, True, False, False, False, False]
+
+    def test_required_is_exactly_what_tools_waits_for(self):
+        for cid in setup_steps.EXTRA_CHECKS:
+            assert setup_steps.is_required_check(cid) is False
+        assert setup_steps.is_required_check("tmux") is True
+
+    def test_the_doctor_route_and_the_setup_payload_carry_it(self, client, monkeypatch):
+        monkeypatch.setattr(
+            doctor,
+            "run_checks",
+            lambda: [_check("git", "ok"), _check("tailscale", "warn")],
+        )
+        body = client.get("/api/doctor?refresh=1").json()
+        assert {c["id"]: c["required"] for c in body["checks"]} == {
+            "git": True,
+            "tailscale": False,
+        }
+        st = setup_steps.status(body)
+        assert {c["id"]: c["required"] for c in st["doctor"]["checks"]} == {
+            "git": True,
+            "tailscale": False,
+        }
+
+
+class TestToolsTitle:
+    def test_names_the_default_agent(self):
+        checks = [{"id": "agent-cli", "status": "fail", "provider": "claude"}]
+        assert setup_steps.tools_title(checks, "claude") == "Install Claude Code"
+        assert setup_steps.tools_title([], "codex") == "Install Codex"
+
+    def test_generic_only_when_the_agent_is_here_and_something_else_is_not(self):
+        checks = [
+            {"id": "agent-cli", "status": "ok"},
+            {"id": "tmux", "status": "fail"},
+        ]
+        assert setup_steps.tools_title(checks, "claude") == "Install the tools"
+        # An optional extra failing never makes the title generic.
+        checks = [
+            {"id": "agent-cli", "status": "ok"},
+            {"id": "tailscale", "status": "fail"},
+        ]
+        assert setup_steps.tools_title(checks, "claude") == "Install Claude Code"
+
+    def test_the_payload_uses_it_and_the_cli_list_keeps_its_own(self):
+        st = setup_steps.status(
+            {"checks": [{"id": "agent-cli", "status": "fail", "provider": "claude"}]}
+        )
+        tools = next(r for r in st["steps"] if r["id"] == "tools")
+        assert tools["title"].startswith("Install ")
+        assert setup_steps.TITLES["tools"] == "Install the tools"

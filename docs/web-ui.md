@@ -2502,11 +2502,17 @@ reload halfway through brings it back. UI store state
   (`GET /api/setup`, `backend/web/core/setup_steps.py` — the same list
   `mindflock init` prints, in the same state), drawn as three groups so the
   few things that matter come first:
-  - **Get started** (required): ① **Install the tools** (the
-    **Install …** button, then *only* what getting started is missing —
-    optional extras such as Tailscale, peer links, a local model or the gh CLI
-    never show here; every check is folded under *All checks (N)*, and
-    Settings → Doctor lists them all; **Re-check**), ② **Sign in to your
+  - **Get started** (required): ① **Install Claude Code** — the server
+    names the default agent by its product name (`tools_title`); it reads
+    *Install the tools* only when the agent is already here and something
+    else is missing. The **Install …** button names the agent too (*Install
+    Claude Code*); beside it only problems the button does NOT fix (a row the
+    install plan covers shows inside *All checks* only). *All checks (N)*
+    lists only checks that can block ①–③ (each doctor row's `required`);
+    phone, Tailscale, MTU and sudo fixes never show in Setup — they belong to
+    Settings → Your phone and Settings → Doctor. Before any payload arrives
+    the step shows a skeleton of the install row, then the setup payload's own
+    doctor result, never an empty card. **Re-check**. ② **Sign in to your
     agent** (the default agent's **agent card** — the same card Settings →
     Connections, Agents and Custom agents show, with its one next action:
     **Install** → **Sign in** → **Test**; *Using Claude Code · change*; *Using
@@ -2518,23 +2524,37 @@ reload halfway through brings it back. UI store state
     on its task (the activity classifier's first corroborated *working*
     reading), not when a session row appears; until then a session that exists
     says *Your first session is open. This ticks once its agent starts on your
-    task.* (or, while ② is not done, that it can't start until you sign in).
-  - **Connect your work** (optional): ④ **Connect GitHub** (the Connect
-    GitHub dialog below) and ⑤ **Connect your tracker** (**Add a ticket
-    source** opens Intake → Tickets). Each has a **Skip** (and **Show
+    task.* (or, while ② is not done, that it can't start until you sign in),
+    and the step's primary is **Show my session →** (closes Setup and selects
+    that session's pane — the focused one, else the first) with a quiet *or
+    start another* link instead of a second **+ New session**.
+  - **Connect your work** (optional): ④ **Connect GitHub** (*Optional —
+    pushing works without it; needed to open and merge pull requests.* — the
+    Connect GitHub dialog below) and ⑤ **Connect your tracker** (**Add a
+    ticket source** opens Intake → Tickets). Each has a **Skip** (and **Show
     again**).
-  - **Optional, later** — folded, unnumbered, not counted: **Use it from
-    your phone** (**Install Tailscale** with the doctor's hint until
-    Tailscale is there, then **Show QR**; **Settings → Your phone**), plus one
-    line pointing at Settings for other computers, people, extensions and IDEs.
+  - **Optional, later** — folded, unnumbered, not counted: one line, *Use it
+    from your phone — Set up in Settings → Your phone*. Tailscale, its fixes
+    and the QR live on that screen, not in Setup.
+  Tour hooks (stable; pinned by `setupChecklist.test.ts`):
+  `data-tour="setup-step-<id>"` on each counted step's root (`tools`,
+  `agent_login`, `repo`, `github`, `tracker`) and `data-tour="setup-next"` on
+  the next step's primary button only (the install button, the agent card's
+  **Sign in**, **Show my session →** / **+ New session**, **Connect GitHub**,
+  **Add a ticket source**).
   One obvious next action: the server's `summary.next` step is outlined and
   its button is the only accent-coloured one; a done step shrinks to its
   title. The progress line uses the chip's one count (`setupCount`): the three
   required steps (*1 of 3 done · next: Sign in to your agent*), then what
   optional is left (*3 of 3 done · 2 optional left · next: Connect GitHub*).
-  **Install …** never leaves you watching a cursor: the window shows what it
-  installs and a running clock (from the run's own start, `started_at` on
-  `GET /api/doctor/install-state`), and after 90 s, or when the run fails,
+  **Install …** never leaves you watching a cursor: the window's line says
+  what it fetches and a running clock (*Downloading Claude Code… 0:12 — can
+  take a few minutes*, from the run's own start, `started_at` on
+  `GET /api/doctor/install-state`); on success the window STAYS, with *✓
+  Claude Code installed — Next: Sign in* and a **Sign in to Claude Code**
+  button that hands over to the agent's sign-in window (the checklist keeps
+  step ①'s body mounted while either window is up, so ticking ① no longer
+  takes the window with it); after 90 s, or when the run fails,
   shows the commands to run in your own terminal with **Copy** — the same
   commands are always under *Or run it yourself* by the button. A run still
   going after a reload (or in another tab) shows as *Installing… 1:23*
@@ -2550,9 +2570,9 @@ reload halfway through brings it back. UI store state
   step once done stays done. The state is `general.setup`;
   `general.onboarded` is derived from ③ (an older store is migrated on load;
   one that settled the old combined "Connect a tracker and GitHub" step reads
-  ④ as skipped). The text a first `mindflock serve` prints at boot is folded
-  at the bottom as *What the server found at first start* — the desktop
-  app's server writes it to a log nobody reads.
+  ④ as skipped). The text a first `mindflock serve` prints at boot (a CLI
+  transcript — `report` on `GET /api/setup`) is NOT in Setup; it is the
+  folded *First-start report* under Settings → System logs.
 - **Setup chip** — once the three required steps are done (or a session
   exists) the card gives way to a compact chip in the sidebar footer reading
   **Setup 1 of 3** (then **Setup 3 of 3 · 2 optional**), until every
@@ -2560,8 +2580,13 @@ reload halfway through brings it back. UI store state
   *Optional, later*, never keeps it up). The chip, the doctor chip's **open Setup**, the
   palette's **Open Setup checklist** and the desktop app's `?setup=1` (its
   older spelling `?setup=install`; once, the parameter is stripped) open the
-  **Setup** modal, which renders the same checklist. The modal never opens
-  by itself — not on a failing doctor probe, not on a first load. The
+  **Setup** modal, which renders the same checklist (its **Close** sits
+  top-right, like every dialog's). The modal never opens
+  by itself — not on a failing doctor probe, not on a first load. In a
+  phone-narrow window the sidebar is a drawer over the page; any dialog that
+  opens (the chip's Setup, Shortcuts, …) closes the drawer first
+  (`Modal`'s `mf:modal-open` event → `closeDrawerForModal`), so it is never
+  drawn under it. The
   doctor chip stays down while the grid card or this chip is showing,
   because both open the checklist that already lists the same checks.
 - **Tour** (`onboarding/WelcomeTour.tsx`) — a five-slide tour: **Welcome to
@@ -2587,27 +2612,8 @@ reload halfway through brings it back. UI store state
   first prefs pull before deciding). After that it is the palette's
   **Tour**, the **Tour** link on the **?** shortcuts sheet, and **Replay
   tour** in Settings → General.
-- **Connect GitHub** (`dialogs/ConnectGitHub.tsx`, `/api/github/*`) — one
-  sign-in for opening PRs and pushing, stored as `github.token` (which
-  settings sync shares with your other devices). It offers the best way this
-  computer has: **Sign in with GitHub** (GitHub's device flow — a code to type
-  at github.com/login/device — when an OAuth App client id is configured,
-  `github.oauth_client_id` or `$MINDFLOCK_GITHUB_CLIENT_ID`), else **Sign in
-  to GitHub** (`gh auth login --web` then `gh auth setup-git`, in a terminal
-  window, when gh is installed — its token is copied in when the window
-  closes), else **Make a token on GitHub** (a pre-filled classic-token page:
-  `repo`, `read:org`) and a paste box, which is also always offered folded as
-  *Or paste a token*. A pasted token is checked with GitHub before it is saved.
-  Below it: *Your name and email for commits* when git has none (pre-filled
-  from the account, with its private `@users.noreply.github.com` address;
-  **Use these** writes the global git config — nothing writes it on its own),
-  and **Check I can push**, which asks the remembered repo's origin for real
-  (a `push --dry-run` with prompts off). When that fails for want of an HTTPS
-  credential, **Let git push with this sign-in** runs `gh auth setup-git`, or
-  — only when git has no credential helper for GitHub — registers
-  `mindflock git-credential` for https://github.com. Every one of these
-  routes is for the person at this computer (`privileged()`), never a relayed
-  or anonymous caller.
+- **Connect GitHub** — the dialog; see [Connect GitHub](#connect-github)
+  below.
 - **Push failed** — the Push button types `GIT_TERMINAL_PROMPT=0 git push …`
   into the session's shell, so a missing credential fails at once instead of
   waiting on a Username prompt. When the push's output (kept in the
@@ -2617,9 +2623,10 @@ reload halfway through brings it back. UI store state
   opens Setup (`session.push_failed`).
 - **Install …** — above the dependency checklist (the card, the Setup modal and
   Settings → Doctor) whenever something this machine needs is missing. The
-  button names what it installs when that's short (*Install tmux + claude*,
-  else *Install everything missing*), with the full list beside it and *asks
-  for your password once* when a package-manager or Homebrew step is in it.
+  button names what it installs, an agent by its product name, when that's
+  short (*Install tmux + Claude Code*, else *Install everything missing*,
+  with the full list beside it), and says *asks for your password once* when
+  a package-manager or Homebrew step is in it.
   One click opens a terminal running a single script: Homebrew first on a Mac
   that lacks it, one package-manager run for every system package (one sudo
   prompt), then each tool's own installer — including whichever agent CLI you
@@ -2635,6 +2642,10 @@ reload halfway through brings it back. UI store state
   Claude Code: *Pick a text style … Choose how to log in … Open the link it
   shows* — and watches the login probe, so it says *✓ Signed in. You can close
   this window.* the moment the login lands. Closing it re-runs the check.
+  The login, gh and install terminals are always dark (`.login-term-dark`
+  in `dialogs/ConnectGitHub.css`), whatever the app's theme: a CLI's login
+  screen is drawn for a dark terminal, and Claude Code's highlighted option
+  is light cyan.
   Neither the login nor the install terminal draws tmux's status line.
 - **The agent card** (`components/setup/AgentCard.tsx`) — one card per agent,
   the same on Connections (*What you use*), Settings → Agents, Settings →
@@ -2643,10 +2654,11 @@ reload halfway through brings it back. UI store state
   **Install** (not on this computer: the Setup checklist's own one-click
   install, or the copyable command for an agent that isn't in its plan) →
   **Sign in** (installed, no login found) → **Test** (everything else; it
-  answers in words: *Signed in as …*, *Installed, not signed in yet*). The
+  answers in words: *Found at /usr/bin/claude · signed in as … · answered in
+  0.4 s*, or *… · installed, not signed in yet*). The
   default agent's card on Connections adds a quiet **Change agent** link to
   Settings → Agents; nothing points at another screen for the same thing. A
-  finished install says *✓ Installed — next: sign in to Claude Code*.
+  finished install says *✓ Claude Code installed — Next: Sign in*.
 - **Hints** (`onboarding/Hint.tsx`) — small dismissible 💡 inline callouts that
   nudge toward a feature. Each needs a **stable `id`**; dismissing one remembers
   that id (`dismissHint` → `dismissedHints`). A master switch (`hintsEnabled`,
@@ -2656,6 +2668,45 @@ reload halfway through brings it back. UI store state
 The tour and hints are reset/replayed from the **Getting started** block at the
 top of **Settings → General**. There is no sidebar welcome hint any more; the
 one first-run hint left in the sidebar points at Customize.
+
+### Connect GitHub
+
+`dialogs/ConnectGitHub.tsx`, `/api/github/*`. One sign-in for opening and
+merging PRs, stored as `github.token` (which settings sync shares with your
+other devices). Pushing does not need it — it is plain git over your own
+remote. The dialog has ONE primary path (`connectLayout`):
+
+- **Device flow configured** (an OAuth App client id: the build's constant,
+  `github.oauth_client_id` or `$MINDFLOCK_GITHUB_CLIENT_ID`): one **Sign in
+  with GitHub** button (a code to type at github.com/login/device); the token
+  steps are folded under *Or paste a token*.
+- **Not configured**: the three numbered token steps ARE the path — **Make a
+  token on GitHub** (a pre-filled classic-token page: `repo`, `read:org`) →
+  paste it → **Save & test** (GitHub checks it before it is saved). When gh
+  is installed, *Other ways to connect ▸* folds **Sign in with the GitHub
+  CLI**: a terminal running `gh auth login --hostname github.com
+  --git-protocol https --web` then `gh auth setup-git`, whose window lists
+  what the terminal asks, in order (*Authenticate Git with your GitHub
+  credentials?* → Enter; the one-time code → Enter opens GitHub; approve), and
+  says *✓ Connected as @…* + **Done** once GitHub reports the sign-in (gh's
+  token is copied in when the window closes).
+
+After *✓ Connected as @…* a **Done** button closes the dialog, back to the
+Setup checklist with ④ ticked. *Your name and email for commits* (in the
+dialog's step-heading style) shows when git has none — pre-filled from the
+account with its private `@users.noreply.github.com` address; **Use these**
+writes the global git config, nothing writes it on its own. **Check I can
+push** says what it will ask before the click (*Checks repo → <origin URL>*,
+from `push_target` on `GET /api/github/status`), asks that origin for real (a
+`push --dry-run` with prompts off), and on a failure names the repo and the
+remote with one fix — a command in a **Copy** box (*repo has no remote called
+origin yet, so there's nowhere to push* → `git remote add origin <url>`), or a
+sentence for anything else. When it fails for want of an HTTPS credential,
+**Let git push with this sign-in** runs `gh auth setup-git`, or — only when
+git has no credential helper for GitHub — registers `mindflock
+git-credential` for https://github.com. Every one of these routes is for the
+person at this computer (`privileged()`), never a relayed or anonymous caller.
+Settings → Connections' GitHub card links its **Docs** here.
 
 ## Make-PR dialog
 
@@ -4096,7 +4147,10 @@ is running it**.
 ## Settings (⚙)
 
 **Set-and-forget configuration and diagnostics**, from the top bar's
-**Settings**.
+**Settings**. With no screen named (the top bar, the palette's **Open
+Settings**) it opens on **Connections** — the status of everything MindFlock
+talks to, and the first-hour screen (`DEFAULT_SETTINGS_SCREEN` in
+`lib/openSettings.ts`).
 
 **Basic first, advanced on request.** Out of the box the nav lists only the
 six screens a new user needs to point MindFlock at a repo and a tracker and
@@ -4110,12 +4164,13 @@ follows the person to all their devices, like the theme. There is ONE
 advanced mechanism: the power-user controls that live on a basic screen sit
 in an **Advanced** section (`AdvancedFold`) that basic mode does not render
 at all, and advanced mode shows as an open fold — General's plan window
-budget and terminal scroll speed, Agents' keep-usage-windows-warm schedule
-and **Check another agent**, Workspace's live branch, fast-track depth and
-retryable pre-commit hooks, and Connections' other agents and its rows beyond
-what you use (devices and people, orchestration, databases, phone push,
-extensions, system — so basic mode never calls a merely enabled extension
-"Connected"). Only Notifications' two optional folds — **Phone alerts
+budget and terminal scroll speed, Agents' keep-usage-windows-warm schedule,
+Workspace's live branch, fast-track depth and
+retryable pre-commit hooks, and Connections' rows beyond
+what you use under **More connections** (devices and people, orchestration,
+databases, phone push, extensions, system — so basic mode never calls a merely
+enabled extension "Connected"; folded even in advanced mode,
+`defaultOpen={false}`). Only Notifications' two optional folds — **Phone alerts
 (ntfy)** and **More alerts** — opt back into basic mode (`basic`), as closed
 folds. A control's long explanation sits behind a small circled-i at the end
 of its one-line hint (`InfoTip`, components/InfoTip.tsx): hovering or
@@ -4191,7 +4246,14 @@ A few screens got quieter:
   motion**, **Take a break** and **Idle flock** moved to **Appearance →
   Comfort**.
 - **Agents** shows the default agent's own Connections row (status, Test,
-  Sign in) so the two screens give one answer; its flags field suggests a
+  Sign in) so the two screens give one answer. The picker greys out every
+  agent that isn't installed, and right under it **Not installed — how to
+  install ▸** (*Set up another agent* once everything is installed) unfolds
+  the chosen agent's card with its install command — no longer inside the
+  Advanced fold. Turning on a skip-permissions flag shows *⚠ Skip permission
+  prompts: the agent runs commands and edits files without asking you*
+  (`SKIP_PERMISSIONS_LABEL` / `SKIP_PERMISSIONS_TIP`, exported for the flag
+  chips). Its flags field suggests a
   harmless per-agent example (never a permission-skipping flag), and
   **Sessions running at once** says it plainly: no limit on sessions you
   start, **Ticket sessions at once** (`engine.max_sessions`, the same field
@@ -4477,10 +4539,11 @@ labels above the inputs.
   (`coding_cli.default_launch_args`) that pre-fill the New-session dialog are
   also edited here.
 - **Your devices** (screen key `devices`; was Devices) is the one place for
-  your own machines. It opens with *You — the same on every device you pair.*
-  and the **You** card (name, git author name and email for MindFlock's own
-  commits, the person id with Copy — `GET/POST /api/person`, see
-  [people.md](people.md)), then **Tailscale on this device** (`GET
+  your own machines. The **You** card (*You — the same on every device you
+  pair.*: name, git author name and email for MindFlock's own commits, the
+  person id with Copy — `GET/POST /api/person`, see [people.md](people.md))
+  comes LAST, after **Add a device** and Settings sync — you come here to add a
+  device, not to fill in a form. It opens with **Tailscale on this device** (`GET
   /api/tailscale/health`; the same list the doctor's tailscale row reads):
   signed in as whom (a tagged device shows its tag), the tailnet, this
   device's name and IP, then each problem with its fix, worst first. Signed
@@ -4623,16 +4686,19 @@ labels above the inputs.
   `sandbox-exec` on macOS) and can install `cloudflared`. Shared folders run
   on Linux and macOS. Design and protocol in [peer-link.md](peer-link.md).
 - **Your phone** (screen key `mobile`; was Mobile) — getting this MindFlock
-  onto your phone, as three steps in order: Tailscale on this computer,
-  **Install Tailscale on your phone and sign in** (*as <login>* when known,
-  with a QR to the app download), then *Open MindFlock on the phone: scan the
-  QR below, or use one of the URLs* — the QR and the `/m` URLs
-  (`GET /api/mobile`). Nothing here is a knob. The screen never hides: without
-  Tailscale on this computer the first step is **Install Tailscale on this
-  computer** with the Tailscale card (the doctor's diagnosis) inline, and the
-  QR step says it shows once Tailscale is set up. When the server only listens
-  on itself it says so (*This computer only listens on itself — your phone
-  can't reach it yet…*) with **Open Your devices**, where **Make reachable**
+  onto your phone, as four rows, each with its own live ✓/✗: **1 Tailscale on
+  this computer** (`GET /api/tailscale/health`: ✓ when running; installed but
+  stopped says *Tailscale is installed but not running. Start it:* with the
+  one command in a Copy box; not installed or signed out shows the Tailscale
+  card with its install guidance and **Sign in**), **2 Tailscale on your
+  phone** (*as <login>* when known, with *This QR gets the app*), **3 Make
+  MindFlock reachable from your phone** (✗ while it only listens on this
+  computer, with **Turn on Make reachable…**), and **4 Scan to open
+  MindFlock** — the QR and the `/m` URLs (`GET /api/mobile`), drawn ONLY once
+  1 and 3 are ✓, so there is never a QR that opens a URL that hangs. No
+  backticked shell in the prose: Tailscale issue lines drop the clause that
+  quotes their own fix (`plainIssueMessage`). Nothing here is a knob. **Turn
+  on Make reachable…** opens Your devices, where **Make reachable**
   is the one Tailscale-mode switch (it takes the restart the bind needs
   itself — `POST /api/settings` answers `{"restarting": true}`, the screen
   waits for the server to come back — and gives up after three attempts,
@@ -4792,6 +4858,9 @@ labels above the inputs.
   Saved prompts are the templates that hold only a prompt — one list. To
   paste text into a session that is already running, use the
   [Prompts bar](#saved-prompts).
+- **System logs** — under the log, the folded **First-start report**: what
+  the first `mindflock serve` printed (`report` on `GET /api/setup`; moved
+  here from the Setup checklist).
 - **System logs** — a grid pane tailing the server log (`GET /api/logs`,
   3 s poll).
 - **Terminal scroll speed** — 1–20 lines per wheel notch, applied live.

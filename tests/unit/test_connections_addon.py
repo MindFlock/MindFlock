@@ -427,7 +427,8 @@ def test_github_no_credential_leads_with_the_token_not_a_gh_install(quiet):
     )
     assert c["fix_command"] == ""  # Connect/$GH_TOKEN, not a shell command
     assert "brew install gh" not in c["fix"]
-    assert c["docs"] == "https://cli.github.com"  # still reachable as a secondary
+    # Docs is MindFlock's own Connect GitHub help (UX r5), not gh's homepage.
+    assert c["docs"] == connections.GITHUB_HELP_URL
 
 
 def test_github_no_credential_detail_is_honest_about_pushing(quiet):
@@ -458,7 +459,7 @@ def test_github_gh_unauthenticated_is_off_but_offers_gh_auth_login(quiet):
     assert c["status"] == "off"
     assert c["fix_command"] == "gh auth login"  # extracted from the backtick span
     assert c["fix"] == "run gh auth login"  # hint, backticks stripped
-    assert c["docs"] == "https://x"
+    assert c["docs"] == connections.GITHUB_HELP_URL
 
 
 def test_settings_github_test_route_records_its_verdict(quiet, monkeypatch):
@@ -923,3 +924,17 @@ def test_rows_are_ordered_by_kind_agents_first(quiet):
     ordered = connections.build_connections()
     assert ordered[0]["id"] == "agent"
     assert [c["kind"] for c in ordered][-1] == "system"
+
+
+def test_github_docs_is_mindflocks_own_help_not_the_gh_homepage(quiet):
+    # UX r5 settings #16: "Docs" on the GitHub card went to cli.github.com.
+    quiet.setattr(connections, "_github_token_source", lambda: "")
+    c = connections._github_connection()
+    assert c["docs"] == connections.GITHUB_HELP_URL
+    assert c["docs"].endswith("docs/web-ui.md#connect-github")
+    assert "cli.github.com" not in c["docs"]
+    # The anchor it links to exists.
+    from pathlib import Path
+
+    doc = (Path(__file__).resolve().parents[2] / "docs" / "web-ui.md").read_text()
+    assert "\n### Connect GitHub\n" in doc

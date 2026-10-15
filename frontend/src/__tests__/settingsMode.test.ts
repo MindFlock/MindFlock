@@ -211,7 +211,8 @@ describe("advanced controls on basic screens are folded", () => {
     ["screens/CodingCli.tsx", "coding-advanced", /<AdvancedFold id="coding-advanced">\s*<WindowRefresh \/>/],
     ["screens/General.tsx", "general-advanced", /<AdvancedFold id="general-advanced">[\s\S]*window_budget_usd[\s\S]*<ScrollSpeedRow \/>/],
     ["screens/Workspace.tsx", "workspace-advanced", /<AdvancedFold id="workspace-advanced">[\s\S]*live_branch[\s\S]*fasttrack_depth[\s\S]*precommit_retry_hooks/],
-    ["screens/Connections.tsx", "connections-advanced", /<AdvancedFold id="connections-advanced" summary="More connections">\s*\{more\.map\(renderGroup\)\}/],
+    // Folded by default even in advanced mode (r5 settings #8).
+    ["screens/Connections.tsx", "connections-advanced", /<AdvancedFold id="connections-advanced" summary="More connections" defaultOpen=\{false\}>\s*\{more\.map\(renderGroup\)\}/],
     // "Other agents on this computer" is a plain fold on purpose: visible
     // (closed) in basic mode too — agentJourney.test.ts pins it.
   ];
@@ -232,8 +233,10 @@ describe("advanced controls on basic screens are folded", () => {
 
   it("the fold is absent in basic mode (unless `basic`) and open in advanced mode", () => {
     const mode = src("components/settings/settingsMode.tsx");
-    expect(mode).toContain("const [open, setOpen] = useState(advanced);");
-    expect(mode).toContain("useEffect(() => setOpen(advanced), [advanced]);");
+    // Open in advanced mode unless the fold says `defaultOpen={false}`.
+    expect(mode).toContain("const initial = defaultOpen ?? advanced;");
+    expect(mode).toContain("const [open, setOpen] = useState(initial);");
+    expect(mode).toContain("useEffect(() => setOpen(initial), [initial]);");
     // Round 4: one advanced mechanism — basic mode renders no fold at all.
     expect(mode).toContain("if (!advanced && !basic) return null;");
   });

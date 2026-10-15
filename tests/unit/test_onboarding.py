@@ -912,3 +912,48 @@ def test_the_desktop_paste_goes_through_the_paste_a_code_router():
         "code": "ABCD-EFGH",
         "device": "laptop",
     }
+
+
+def test_push_check_without_origin_names_the_repo_not_its_path_and_gives_the_fix(
+    tmp_path,
+):
+    repo = tmp_path / "myrepo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    out = github_auth.push_check(str(repo))
+    assert out["ok"] is None and out["id"] == "no_origin"
+    assert (
+        out["message"]
+        == "myrepo has no remote called origin yet, so there's nowhere to push"
+    )
+    assert str(tmp_path) not in out["message"]
+    assert out["fix"] == "git remote add origin <url>"
+    assert github_auth.push_check("")["message"] == github_auth.NO_REPO_MESSAGE
+
+
+def test_push_target_is_said_before_the_click(tmp_path, monkeypatch):
+    repo = tmp_path / "proj"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    assert github_auth.push_target(str(repo)) == {
+        "repo": str(repo),
+        "name": "proj",
+        "remote": "",
+    }
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/me/proj.git",
+        ],
+        check=True,
+    )
+    assert (
+        github_auth.push_target(str(repo))["remote"] == "https://github.com/me/proj.git"
+    )
+    assert github_auth.push_target("") == {"repo": "", "name": "", "remote": ""}
+    monkeypatch.setattr(github_auth, "remembered_repo", lambda: str(repo))
+    monkeypatch.setattr(github_auth, "resolve_full_chain", lambda: ("none", ""))
+    assert github_auth.status(check_user=False)["push_target"]["name"] == "proj"

@@ -428,11 +428,6 @@ export function Devices(p: ScreenProps) {
 
   return (
     <>
-      {/* The person behind every device here, first: it is what pairing shares. */}
-      <p className="set-hint" id="devices-you-intro">
-        You — the same on every device you pair.
-      </p>
-      <PersonCard />
       <TailscaleCard active={p.active} />
       {/* 0. This device: where it listens, and the ONE Tailscale-mode switch
           ("Make reachable") — the fix when the others can't reach it. */}
@@ -1245,6 +1240,12 @@ export function Devices(p: ScreenProps) {
       <SharedLinkCard active={p.active} revision={linkRev} />
       {/* 8. The older ways to trust a machine, folded. */}
       <DevicesAdvanced focusDevice={focusDevice} />
+      {/* The person behind every device here — what pairing shares. Last:
+          you come to this screen to add a device, not to fill in a form. */}
+      <p className="set-hint" id="devices-you-intro">
+        You — the same on every device you pair.
+      </p>
+      <PersonCard />
     </>
   );
 }

@@ -128,6 +128,15 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
   justify-content: space-between;
 }
 
+/* The footer keeps its own height: on a short window (a 420-px drawer under
+   the usage, Assistant and Database bars) the column squeezed it to ~70 px
+   and its rows overflowed onto each other — the Customize hint painted over
+   the Setup chip, the one way back to the checklist. The session list above
+   is the part that gives way. */
+#sidebar-footer {
+  flex: none;
+}
+
 /* Setup: the doctor's warning + the "Setup 3/5" chip. Either can be absent;
    with both gone the row takes no space. */
 #sidebar-footer .foot-row.foot-setup {

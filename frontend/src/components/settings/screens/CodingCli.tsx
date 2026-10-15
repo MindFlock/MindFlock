@@ -3,8 +3,9 @@
  * and the Setup checklist show — components/setup/AgentCard — so "is my
  * agent ready?" has one answer and one button wherever you look), per-agent
  * default launch flags (a name -> flags map re-sent whole on every edit), how
- * many sessions run at once, and — folded — any other agent's card plus the
- * window-refresh keepalive. */
+ * many sessions run at once, "Not installed — how to install" (any other
+ * agent's card, next to the picker that greys those agents out) and — under
+ * Advanced — the window-refresh keepalive. */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../api/client";
@@ -35,6 +36,13 @@ export const SKIP_PERMISSION_FLAGS = [
   "--yes-always",
   "--auto",
 ];
+
+/** The "skip permissions" chip's words, for every place that draws one
+ * (Settings → Agents' flag chips and the New dialog's): the label says it is a
+ * risk, the tooltip says what it does. dialogs/FlagChips.tsx owns the chips;
+ * it should read these. */
+export const SKIP_PERMISSIONS_LABEL = "⚠ Skip permission prompts";
+export const SKIP_PERMISSIONS_TIP = "The agent runs commands and edits files without asking you";
 
 export function skipsPermissions(flags: string): boolean {
   const tokens = (flags || "").split(/\s+/);
@@ -137,7 +145,11 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
   );
 
   const others = providers.filter((p) => p.name !== selected);
-  const other = others.find((p) => p.name === otherProvider)?.name || others[0]?.name || "";
+  // The picker greys out every agent that isn't installed; the fold beside it
+  // says how to install one, starting on the first of those.
+  const missing = others.filter((p) => !p.installed);
+  const other =
+    others.find((p) => p.name === otherProvider)?.name || missing[0]?.name || others[0]?.name || "";
 
   return (
     <>
@@ -164,6 +176,29 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
         />
         <span className="set-hint">New sessions start with this agent.</span>
       </label>
+      {/* Next to the picker, not under Advanced: the greyed-out agents above
+          are the question this answers ("where's Codex?"). */}
+      {others.length > 0 && (
+        <details className="pr-advanced set-adv-fold coding-other-fold" id="coding-other-agent-fold">
+          <summary>{missing.length ? "Not installed — how to install" : "Set up another agent"}</summary>
+          <div className="set-row" id="coding-other-agent">
+            <span className="set-label">Set up another agent</span>
+            <select
+              id="agent-test-provider"
+              aria-label="Another agent"
+              value={other}
+              onChange={(e) => setOtherProvider(e.target.value)}
+            >
+              {others.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {agentName(p.name) + (p.installed ? "" : " — not installed")}
+                </option>
+              ))}
+            </select>
+            {other && <AgentCard key={other} provider={other} here="coding" gotoScreen={gotoScreen} />}
+          </div>
+        </details>
+      )}
       <div className="set-row coding-agent-status" id="coding-agent-status">
         <span className="set-label">Status</span>
         <AgentCard key={selected + ":" + defaultSaved} provider={selected} here="coding" gotoScreen={gotoScreen} />
@@ -193,31 +228,13 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
         <span className="set-hint">Added every time the default agent starts.</span>
         {skipsPermissions(flags) && (
           <span className="set-hint flags-danger" id="default-launch-args-warning" role="note">
-            ⚠ The agent will edit files and run commands without asking you first.
+            {SKIP_PERMISSIONS_LABEL}: {SKIP_PERMISSIONS_TIP.charAt(0).toLowerCase() + SKIP_PERMISSIONS_TIP.slice(1)}.
           </span>
         )}
       </label>
       <SessionsAtOnce gotoScreen={gotoScreen} />
       <AdvancedFold id="coding-advanced">
         <WindowRefresh />
-        {others.length > 0 && (
-          <div className="set-row" id="coding-other-agent">
-            <span className="set-label">Set up another agent</span>
-            <select
-              id="agent-test-provider"
-              aria-label="Another agent"
-              value={other}
-              onChange={(e) => setOtherProvider(e.target.value)}
-            >
-              {others.map((p) => (
-                <option key={p.name} value={p.name}>
-                  {agentName(p.name)}
-                </option>
-              ))}
-            </select>
-            {other && <AgentCard key={other} provider={other} here="coding" gotoScreen={gotoScreen} />}
-          </div>
-        )}
       </AdvancedFold>
     </>
   );

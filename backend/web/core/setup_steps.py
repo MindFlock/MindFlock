@@ -84,6 +84,9 @@ __all__ = [
     "provider_logins",
     "set_first_run_report",
     "first_run_report",
+    "is_required_check",
+    "tag_required",
+    "tools_title",
     "status",
 ]
 
@@ -436,6 +439,48 @@ def doctor_progress(checks: Iterable[Any]) -> Dict[str, bool]:
     return {"tools": bool(tools), "agent_login": bool(agent)}
 
 
+def is_required_check(check_id: str) -> bool:
+    """Whether a doctor row can block getting started (steps ①–③): every row
+    but an optional extra (:data:`EXTRA_CHECKS`). The same split
+    :func:`doctor_progress` waits on, so "All checks" in the setup checklist
+    lists exactly what ``tools`` waits for."""
+    return str(check_id or "") not in EXTRA_CHECKS
+
+
+def tag_required(checks: Iterable[Any]) -> List[dict]:
+    """``checks`` (dicts, as served) with ``required`` set on each row that
+    does not already carry one (a newer doctor may set its own). Never
+    raises; a row that isn't a dict passes through untouched."""
+    out: List[dict] = []
+    for c in checks or ():
+        if isinstance(c, dict) and "required" not in c:
+            c = {**c, "required": is_required_check(str(c.get("id") or ""))}
+        out.append(c)
+    return out
+
+
+def tools_title(checks: Iterable[Any], default_provider: str = "") -> str:
+    """Step ①'s name: "Install Claude Code" — the default agent by its product
+    name, since that is what a first-run computer is missing — unless the
+    agent is already here and something else is not (then the generic
+    "Install the tools", so the title never names a thing that is done)."""
+    by = _by_id(checks)
+    cli = by.get("agent-cli")
+    others_missing = any(
+        c.get("status") == "fail" and cid not in EXTRA_CHECKS and cid != "agent-cli"
+        for cid, c in by.items()
+    )
+    if cli is not None and cli.get("status") == "ok" and others_missing:
+        return TITLES["tools"]
+    name = default_provider or str((cli or {}).get("provider") or "") or "claude"
+    try:
+        from backend.web.addons.connections import agent_product_name
+
+        return "Install " + agent_product_name(name)
+    except Exception:  # noqa: BLE001 — a title must never break the payload
+        return TITLES["tools"]
+
+
 def note_doctor(checks: Iterable[Any]) -> None:
     """The doctor's hook: mark ``tools`` / ``agent_login`` from a run's results.
     Never raises."""
@@ -551,6 +596,16 @@ def status(doctor_payload: Optional[dict] = None) -> dict:
     except Exception:  # noqa: BLE001 — a bookkeeping flag
         pass
     rows = checklist()
+    default = ""
+    try:
+        from backend import doctor
+
+        default = doctor._default_provider_name()
+    except Exception:  # noqa: BLE001
+        default = ""
+    for r in rows:
+        if r["id"] == "tools":
+            r["title"] = tools_title(checks, default)
     tailscale = None
     if doctor_payload:
         ts = _by_id(doctor_payload.get("checks") or []).get("tailscale")
@@ -561,20 +616,13 @@ def status(doctor_payload: Optional[dict] = None) -> dict:
                 "fix": ts.get("fix", ""),
                 "docs": ts.get("docs", ""),
             }
-    default = ""
-    try:
-        from backend import doctor
-
-        default = doctor._default_provider_name()
-    except Exception:  # noqa: BLE001
-        default = ""
     return {
         "steps": rows,
         "summary": summary(rows),
         "doctor": (
             {
                 "ok": bool(doctor_payload.get("ok")),
-                "checks": list(doctor_payload.get("checks") or []),
+                "checks": tag_required(doctor_payload.get("checks") or []),
                 "install": doctor_payload.get("install")
                 or {"steps": [], "packages": []},
             }

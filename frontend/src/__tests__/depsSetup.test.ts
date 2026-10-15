@@ -40,7 +40,7 @@ describe("installButtonLabel / asksForPassword", () => {
   };
 
   it("names what one click installs", () => {
-    expect(installButtonLabel([pkgs, agent])).toBe("Install tmux + claude");
+    expect(installButtonLabel([pkgs, agent])).toBe("Install tmux + Claude Code");
     expect(
       installButtonLabel([{ id: "homebrew", label: "Homebrew (the macOS package manager)", cmd: "x" }, pkgs])
     ).toBe("Install Homebrew + tmux");

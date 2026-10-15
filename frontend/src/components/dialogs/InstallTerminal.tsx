@@ -12,15 +12,28 @@
  * own instead of showing stale ✗s. */
 
 import { useEffect, useRef, useState } from "react";
+import { create } from "zustand";
 import { api } from "../../api/client";
 import type { InstallStep } from "../../api/types";
 import { toast } from "../../lib/toast";
 import { copyText } from "../../lib/clipboard";
 import { useWsTerm } from "../../lib/wsTerm";
 import { Modal } from "../Modal";
+import { notifyConnectionsChanged } from "../settings/screens/Connections";
 import { agentName } from "../../lib/agentNames";
+import { SignInWindow } from "./AgentSignIn";
+import "./ConnectGitHub.css";
 
 export type { InstallStep };
+
+/** Whether the install window (or the sign-in window it hands over to) is
+ * up. The Setup checklist keeps step ①'s body mounted while it is: a
+ * successful install ticks the step done, and unmounting the body used to
+ * take the window — and its "✓ installed" moment — with it. */
+export const useInstallWindow = create<{ open: boolean; set(open: boolean): void }>((set) => ({
+  open: false,
+  set: (open) => set({ open }),
+}));
 
 interface InstallState {
   running: boolean;
@@ -79,22 +92,29 @@ function ManualFallback({ cmds, lead }: { cmds: string; lead: string }) {
   );
 }
 
-/** What a finished install says once its window may already be gone (the
- * Setup step it sat in ticks done and folds away): what landed, and the next
- * step when an agent was part of it. */
-export function installedMessage(steps: InstallStep[]): string {
+/** The agent an install plan installs ("agent CLI (claude)" → "claude"),
+ * or "" when it installs none. */
+export function installedAgent(steps: InstallStep[]): string {
   const agent = steps.find((s) => s.id === "agent-cli");
   const m = agent ? /\(([^)]+)\)\s*$/.exec(agent.label) : null;
-  return m ? "✓ Installed — next: sign in to " + agentName(m[1]) : "✓ Everything is installed";
+  return m ? m[1] : "";
 }
 
-/** The summary line under the button: what one click installs. */
+/** What a finished install says: what landed, and the next step when an
+ * agent was part of it. */
+export function installedMessage(steps: InstallStep[]): string {
+  const agent = installedAgent(steps);
+  return agent ? "✓ " + agentName(agent) + " installed — Next: Sign in" : "✓ Everything is installed";
+}
+
+/** The summary of what one click installs, by the names a person knows
+ * ("tmux, Claude Code" — never "agent CLI (claude)"). */
 export function installSummary(steps: InstallStep[]): string {
-  return steps.map((s) => s.label.replace(/^system packages: /, "")).join(", ");
+  return stepNames(steps).join(", ");
 }
 
-/** The short names of what the plan installs: package names, the agent CLI's
- * own name ("agent CLI (claude)" → "claude"), "Homebrew"… */
+/** The short names of what the plan installs: package names, an agent CLI by
+ * its product name ("agent CLI (claude)" → "Claude Code"), "Homebrew"… */
 function stepNames(steps: InstallStep[]): string[] {
   const out: string[] = [];
   for (const s of steps) {
@@ -104,10 +124,21 @@ function stepNames(steps: InstallStep[]): string[] {
       out.push("Homebrew");
     } else {
       const m = /\(([^)]+)\)\s*$/.exec(s.label);
-      out.push(m && /-cli$/.test(s.id) ? m[1] : s.label);
+      out.push(m && /-cli$/.test(s.id) ? agentName(m[1]) : s.label);
     }
   }
   return out.filter(Boolean);
+}
+
+/** The window's line while the run goes: what it is fetching, by name, and
+ * how long it has been at it ("Downloading Claude Code… 0:12"). The script's
+ * own output can be silent for a minute (curl), so this line is the progress. */
+export function installProgress(steps: InstallStep[], secs: number): string {
+  const agent = installedAgent(steps);
+  const others = stepNames(steps).filter((n) => !agent || n !== agentName(agent));
+  const what = agent && !others.length ? "Downloading " + agentName(agent) : "Installing " + stepNames(steps).join(", ");
+  const tail = asksForPassword(steps) ? " — type your password if asked" : " — can take a few minutes";
+  return (steps.length ? what : "Installing") + "… " + fmtElapsed(secs) + tail;
 }
 
 /** The button's text: names what one click installs ("Install tmux + claude")
@@ -130,10 +161,13 @@ function InstallWindow({
   steps,
   onClose,
   onDone,
+  onSignIn,
 }: {
   steps: InstallStep[] | undefined;
   onClose(): void;
   onDone(): void;
+  /** "Sign in" after an agent landed: hands over to its sign-in window. */
+  onSignIn(provider: string): void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const state = useWsTerm(hostRef, "/api/doctor/install-terminal", true);
@@ -167,7 +201,8 @@ function InstallWindow({
         setExit(s.exit_code);
         if (!fired) {
           fired = true;
-          if (s.exit_code === 0) toast(installedMessage(planned));
+          // The window stays open on its result ("✓ Claude Code installed —
+          // Next: Sign in"); the checklist behind it re-probes meanwhile.
           doneRef.current();
         }
       } catch {
@@ -193,15 +228,14 @@ function InstallWindow({
 
   const secs = exit === null ? elapsedSince(run, seenAt.current, now) : 0;
   const slow = exit === null && secs >= INSTALL_SLOW_S;
-  const what = installSummary(steps || []);
+  const agent = installedAgent(planned);
   const status =
     exit === 0
-      ? "✓ everything installed"
+      ? installedMessage(planned)
       : exit !== null
         ? "✗ some steps failed — scroll up to see which"
         : state === "streaming"
-          ? "Installing" + (what ? " " + what : "") + " · " + fmtElapsed(secs) +
-            (asksForPassword(steps || []) ? " — type your password if asked" : " — downloads can take a few minutes")
+          ? installProgress(planned, secs)
           : state;
 
   // Escape is caught in the capture phase: it must close this window before
@@ -218,13 +252,26 @@ function InstallWindow({
       <div className="prov-login-panel">
         <div className="ws-head">
           <h2>Install missing tools</h2>
-          <span className="muted" id="install-status">
+          <span className={exit === 0 ? "signin-ok" : "muted"} id="install-status" role="status">
             {status}
           </span>
           <button type="button" id="install-close" onClick={() => void close()}>
             Close
           </button>
         </div>
+        {exit === 0 && (
+          <div className="install-next" id="install-next">
+            {agent ? (
+              <button type="button" className="setup-primary" id="install-signin" onClick={() => onSignIn(agent)}>
+                Sign in to {agentName(agent)}
+              </button>
+            ) : (
+              <button type="button" className="setup-primary" id="install-done" onClick={() => void close()}>
+                Done
+              </button>
+            )}
+          </div>
+        )}
         {(slow || (exit !== null && exit !== 0)) && (
           <ManualFallback
             cmds={cmds}
@@ -235,7 +282,7 @@ function InstallWindow({
             }
           />
         )}
-        <div className="prov-login-term" ref={hostRef} />
+        <div className="prov-login-term login-term-dark" ref={hostRef} />
       </div>
     </Modal>
   );
@@ -285,17 +332,51 @@ function useRunningInstall(active: boolean, onFinished: () => void) {
 export function InstallMissing({
   steps,
   onDone,
+  tourNext = false,
 }: {
   steps: InstallStep[] | undefined;
   onDone(): void;
+  /** The button is the setup checklist's next action (`data-tour="setup-next"`). */
+  tourNext?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  /** The agent whose sign-in window took over from the install window. */
+  const [signIn, setSignIn] = useState("");
+  const setWindowOpen = useInstallWindow((st) => st.set);
+  useEffect(() => {
+    setWindowOpen(open || !!signIn);
+  }, [open, signIn, setWindowOpen]);
+  useEffect(() => () => setWindowOpen(false), [setWindowOpen]);
   // Not while the window is open: it follows the run itself.
   const runningFor = useRunningInstall(!open && !!steps?.length, onDone);
   // The window outlives the button: a successful install empties `steps` (the
   // re-probe finds nothing missing), and that is exactly the moment the result
   // has to stay on screen.
-  const window_ = open && <InstallWindow steps={steps} onClose={() => setOpen(false)} onDone={onDone} />;
+  const window_ = (open || signIn) && (
+    <>
+      {open && (
+        <InstallWindow
+          steps={steps}
+          onClose={() => setOpen(false)}
+          onDone={onDone}
+          onSignIn={(p) => {
+            setOpen(false);
+            setSignIn(p);
+          }}
+        />
+      )}
+      {signIn && (
+        <SignInWindow
+          provider={signIn}
+          onClose={() => {
+            setSignIn("");
+            notifyConnectionsChanged();
+            onDone();
+          }}
+        />
+      )}
+    </>
+  );
   if (!steps || !steps.length) return window_ || null;
   if (runningFor !== null)
     return (
@@ -312,14 +393,25 @@ export function InstallMissing({
     );
   return (
     <div className="doctor-install" id="doctor-install">
-      <button type="button" className="test-btn" id="doctor-install-btn" onClick={() => setOpen(true)}>
+      <button
+        type="button"
+        className={"test-btn" + (tourNext ? " setup-primary" : "")}
+        id="doctor-install-btn"
+        data-tour={tourNext ? "setup-next" : undefined}
+        onClick={() => setOpen(true)}
+      >
         {installButtonLabel(steps)}
       </button>
-      <span className="set-hint">
-        {" "}
-        {installSummary(steps)}
-        {asksForPassword(steps) ? " — asks for your password once" : ""}
-      </span>
+      {/* The button already names what it installs; the hint adds only what
+          it doesn't say (the full list when the label had to give up, the
+          password). */}
+      {(stepNames(steps).length > 3 || asksForPassword(steps)) && (
+        <span className="set-hint">
+          {" "}
+          {stepNames(steps).length > 3 ? installSummary(steps) : ""}
+          {asksForPassword(steps) ? (stepNames(steps).length > 3 ? " — " : "") + "asks for your password once" : ""}
+        </span>
+      )}
       <details className="install-manual-fold">
         <summary>Or run it yourself</summary>
         <ManualFallback cmds={manualCommands(steps)} lead="Paste this into a terminal on this computer:" />

@@ -635,6 +635,11 @@ def credential_answer(stdin_text: str) -> str:
     return "username=x-access-token\npassword=%s\n" % tok
 
 
+#: What "Check I can push" says before any session has given it a repo.
+NO_REPO_MESSAGE = "No project folder yet — start a session, then this checks its repo"
+#: The one command that gives a repo without a remote somewhere to push.
+NO_ORIGIN_FIX = "git remote add origin <url>"
+
 _PUSH: Dict[str, Tuple[float, dict]] = {}
 _PUSH_RUNNING: set = set()
 
@@ -656,11 +661,19 @@ def push_check(repo: str) -> dict:
         "fix": "",
     }
     if not repo or not os.path.isdir(repo) or not shutil.which("git"):
-        out["message"] = "no repository to check yet"
+        out["message"] = NO_REPO_MESSAGE
         return out
     rc, url, _ = _git("-C", repo, "remote", "get-url", "origin")
     if rc != 0 or not url:
-        out["message"] = "no origin remote in %s" % repo
+        # Named by the folder, never its absolute path; the fix is the one
+        # command that gives it somewhere to push (``<url>`` is the address
+        # of the person's own repository on GitHub — the UI says so).
+        out.update(
+            id="no_origin",
+            message="%s has no remote called origin yet, so there's nowhere to push"
+            % (os.path.basename(repo.rstrip(os.sep)) or repo),
+            fix=NO_ORIGIN_FIX,
+        )
         return out
     out["remote"] = url
     rc, _o, _e = _git("-C", repo, "rev-parse", "--verify", "-q", "HEAD")
@@ -725,6 +738,22 @@ def remembered_repo() -> str:
         return ""
 
 
+def push_target(repo: Optional[str] = None) -> dict:
+    """What "Check I can push" will ask, said BEFORE the click:
+    ``{"repo", "name", "remote"}`` — the remembered repo, its folder name and
+    its ``origin`` URL (``""`` for any that is unknown). Local reads only."""
+    path = remembered_repo() if repo is None else (repo or "")
+    out = {"repo": path, "name": "", "remote": ""}
+    if not path or not os.path.isdir(path):
+        return out
+    out["name"] = os.path.basename(path.rstrip(os.sep)) or path
+    if shutil.which("git"):
+        rc, url, _ = _git("-C", path, "remote", "get-url", "origin")
+        if rc == 0:
+            out["remote"] = url
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # status
 # --------------------------------------------------------------------------- #
@@ -757,6 +786,7 @@ def status(*, check_user: bool = True) -> dict:
         ),
         "credential_helper": credential_helper() if shutil.which("git") else "",
         "flow": flow_view(),
+        "push_target": push_target(),
     }
 
 
