@@ -8,7 +8,7 @@
  *
  * The server's view carries its `link_id`, so the card that hosts this slot
  * only passes `check` and the peer's name; it refetches on `peer.joint_check`
- * for its link. */
+ * for its link. Without a link id it is read-only (no buttons). */
 
 import { useEffect, useState } from "react";
 import {
@@ -72,7 +72,7 @@ export function JointCheck({
     });
   }, [linkId]);
 
-  if (!check || !linkId) return null;
+  if (!check) return null;
   const name = (peerName || "").trim() || "your peer";
   const steps = check.steps || [];
   const verdict = verdictOf(check);
@@ -109,7 +109,7 @@ export function JointCheck({
     const n = steps.indexOf(s) + 1;
     const r = cellOf(check, s);
     const result = r?.result || "";
-    const mineHuman = s.side === "mine" && s.actor === "human";
+    const mineHuman = !!linkId && s.side === "mine" && s.actor === "human";
     return (
       <li key={s.id} className={"peer-joint-step peer-joint-step-" + (result || "blank")} data-step={s.id}>
         <span className="peer-joint-step-n">{n}</span>
@@ -209,7 +209,7 @@ export function JointCheck({
         <p className="set-hint">No steps yet. Write what shows the two halves agree, or ask your agent to.</p>
       )}
 
-      {!editing ? (
+      {!editing && linkId ? (
         <div className="peer-joint-actions">
           <button
             type="button"

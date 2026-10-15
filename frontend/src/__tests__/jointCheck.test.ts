@@ -116,6 +116,13 @@ describe("JointCheck", () => {
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Ask my agent/);
   });
 
+  it("without a link id it is read-only", () => {
+    const html = render(check({ s1: "pass" }, {}, { link_id: "" }));
+    expect(html).toContain("Needs you — 1 step");
+    expect(html).not.toContain('aria-label="Answer step');
+    expect(html).not.toContain("Write the checklist");
+  });
+
   it("shows why an ask failed", () => {
     const html = render(check({}, {}, { ask: { state: "failed", error: "Your agent didn't write the checklist in 3 minutes" } }));
     expect(html).toContain("in 3 minutes");

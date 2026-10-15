@@ -1,6 +1,8 @@
 /* The joint checklist on an active joint card (JointCheck.tsx). The verdict
    pill reuses Verify's `.vchip` (dialogs/VerifyDialog.css); everything here
-   is layout only, coloured by meaning through the theme tokens. */
+   is layout only, coloured by meaning through the theme tokens. Every rule is
+   scoped under `.peer-joint-check`, so it out-ranks the older read-only
+   slot's `.peer-joint-step*` rules in PeerLinks.css whatever the load order. */
 .peer-joint-check {
   display: flex;
   flex-direction: column;
@@ -10,24 +12,24 @@
   border-top: 1px solid var(--border);
 }
 
-.peer-joint-check-head {
+.peer-joint-check .peer-joint-check-head {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.peer-joint-verdict {
+.peer-joint-check .peer-joint-verdict {
   white-space: normal;
 }
 
-.peer-joint-side {
+.peer-joint-check .peer-joint-side {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.peer-joint-side-head {
+.peer-joint-check .peer-joint-side-head {
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -36,12 +38,12 @@
   color: var(--muted);
 }
 
-.peer-joint-sha {
+.peer-joint-check .peer-joint-sha {
   font-size: 11px;
   font-weight: 400;
 }
 
-.peer-joint-steps {
+.peer-joint-check .peer-joint-steps {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -50,23 +52,25 @@
   gap: 4px;
 }
 
-.peer-joint-step {
+.peer-joint-check .peer-joint-step {
   display: grid;
-  grid-template-columns: 1.5em minmax(0, 1fr) auto auto;
+  /* number | text | who checks it; the result (or my answer buttons) on
+     the row under the text — the settings panel is narrow at any width. */
+  grid-template-columns: 1.5em minmax(0, 1fr) auto;
   align-items: start;
-  gap: 6px 8px;
+  gap: 4px 8px;
   padding: 5px 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 12.5px;
 }
 
-.peer-joint-step-n {
+.peer-joint-check .peer-joint-step-n {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 
-.peer-joint-step-body {
+.peer-joint-check .peer-joint-step-body {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -74,13 +78,15 @@
   overflow-wrap: anywhere;
 }
 
-.peer-joint-step-expect,
-.peer-joint-step-note {
+.peer-joint-check .peer-joint-step-expect,
+.peer-joint-check .peer-joint-step-note {
   color: var(--muted);
   font-size: 11.5px;
 }
 
-.peer-joint-actor {
+.peer-joint-check .peer-joint-actor {
+  justify-self: start;
+  align-self: start;
   padding: 0 6px;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -90,59 +96,64 @@
   white-space: nowrap;
 }
 
-.peer-joint-actor-human {
+.peer-joint-check .peer-joint-actor-human {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
-.peer-joint-step-result {
+.peer-joint-check .peer-joint-answer,
+.peer-joint-check .peer-joint-step-result {
+  grid-column: 2 / -1;
+}
+
+.peer-joint-check .peer-joint-step-result {
   font-size: 11.5px;
   color: var(--muted);
   white-space: nowrap;
 }
 
-.peer-joint-step-pass .peer-joint-step-result {
+.peer-joint-check .peer-joint-step-pass .peer-joint-step-result {
   color: var(--green);
 }
 
-.peer-joint-step-fail {
+.peer-joint-check .peer-joint-step-fail {
   border-color: color-mix(in srgb, var(--red) 55%, transparent);
 }
 
-.peer-joint-step-fail .peer-joint-step-result {
+.peer-joint-check .peer-joint-step-fail .peer-joint-step-result {
   color: var(--red);
 }
 
-.peer-joint-answer {
+.peer-joint-check .peer-joint-answer {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 4px;
 }
 
-.peer-joint-answer-btn {
+.peer-joint-check .peer-joint-answer-btn {
   padding: 1px 7px;
   font-size: 11px;
 }
 
-.peer-joint-answer-btn.on {
+.peer-joint-check .peer-joint-answer-btn.on {
   border-color: var(--accent);
   color: var(--accent);
   font-weight: 600;
 }
 
-.peer-joint-actions {
+.peer-joint-check .peer-joint-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.peer-joint-editor {
+.peer-joint-check .peer-joint-editor {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.peer-joint-editor-text {
+.peer-joint-check .peer-joint-editor-text {
   width: 100%;
   box-sizing: border-box;
   font: inherit;
@@ -155,19 +166,6 @@
   resize: vertical;
 }
 
-.peer-joint-error {
+.peer-joint-check .peer-joint-error {
   color: var(--red);
-}
-
-/* Narrow (a phone, or the settings panel squeezed): the answer buttons drop
-   under the step instead of crushing its text. */
-@media (max-width: 520px) {
-  .peer-joint-step {
-    grid-template-columns: 1.5em minmax(0, 1fr) auto;
-  }
-
-  .peer-joint-answer,
-  .peer-joint-step-result {
-    grid-column: 2 / -1;
-  }
 }
