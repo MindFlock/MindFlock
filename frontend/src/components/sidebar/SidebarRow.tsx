@@ -64,6 +64,7 @@ import { PEER_SCREEN, peerChip } from "../../lib/peer";
 import { actionCtx, sessionAction } from "../../lib/sessionActionTable";
 import { openSettings } from "../../lib/openSettings";
 import { VerdictChip } from "../dialogs/VerdictChip";
+import { JointVerdictChip } from "../settings/screens/peer/JointCheck";
 
 /** How long a click on the selected row waits for a second click before it
  * turns into an inline rename. Under the browser's ~500ms dblclick ceiling,
@@ -802,6 +803,8 @@ export const SidebarRow = memo(function SidebarRow({
               {peer.label}
             </button>
           )}
+          {/* The joint check's verdict, when this shared session's link has one. */}
+          {peer && <JointVerdictChip linkId={inst.peer_with?.link_id} peerName={inst.peer_with?.name} where="row" />}
           {rz && !pending && (
             <button
               type="button"

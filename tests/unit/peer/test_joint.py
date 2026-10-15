@@ -798,7 +798,7 @@ def test_a_proposal_reaches_the_shared_agent_as_untrusted_peer_input(
     assert prop["data"]["peer_kind"] == "contract_proposal"
     assert prop["data"]["proposal_id"] == pid
     line, _full = mb.render_delivery(prop, "claude")
-    assert line.startswith("[MindFlock PEER message")
+    assert line.startswith("[MindFlock PEER contract proposal %s" % pid)
     assert "untrusted" in line and "you cannot" in line and "rename to /things" in line
     # An accepted revision rewrites the file in the shared folder.
     run(pair.a.joint.decide(LID, pid, True))

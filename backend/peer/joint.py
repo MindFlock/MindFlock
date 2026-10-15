@@ -18,7 +18,8 @@ would move the whole links file aside over a value it doesn't know::
 
 ``me``/``peer`` are always relative to the file's owner; on the wire they are
 relative to the SENDER and flipped on receipt. Keys this version doesn't know
-(a later ``check``) are kept as they are.
+are kept as they are — the joint check (:mod:`backend.peer.joint_check`) lives
+under ``check`` that way.
 
 :class:`JointStore` is the file; :class:`JointTasks` is the protocol around
 it, owned by the :class:`~backend.peer.service.PeerService`: the people's
@@ -376,7 +377,16 @@ def wire_view(j: dict) -> dict:
         },
         "contract": dict(j["contract"]),
         "proposals": [dict(p) for p in j["proposals"][-MAX_PROPOSALS:]],
+        **_wire_check(j),
     }
+
+
+def _wire_check(j: dict) -> dict:
+    """``{"check": …}`` for a joint with a written checklist, else ``{}``."""
+    from backend.peer import joint_check
+
+    c = joint_check.wire_check(j)
+    return {"check": c} if c is not None else {}
 
 
 def summary(
@@ -490,6 +500,16 @@ class JointTasks:
         self.svc = svc
         self.store = store or JointStore()
         self._locks: Dict[str, asyncio.Lock] = {}
+        self._check = None
+
+    @property
+    def check(self):
+        """The joint checks (:class:`backend.peer.joint_check.JointChecks`)."""
+        if self._check is None:
+            from backend.peer.joint_check import JointChecks
+
+            self._check = JointChecks(self)
+        return self._check
 
     # -- helpers ------------------------------------------------------------ #
     def _lock(self, link_id: str) -> asyncio.Lock:
@@ -644,6 +664,13 @@ class JointTasks:
             seen = self.svc._their_share_view(lid, self.svc.is_connected(lid))
         if isinstance(seen, dict) and j["state"] == "active":
             out["theirs"]["shared"] = bool(seen.get("shared"))
+        from backend.peer import joint_check
+
+        out["check"] = joint_check.view(
+            joint_check.normalize_check(j.get("check"), j["id"]),
+            lid,
+            j["id"] if j["state"] == "active" else "",
+        )
         return out
 
     def summary(self, link) -> Optional[dict]:
@@ -657,7 +684,14 @@ class JointTasks:
             return None
         seen = self.svc._their_status.get(lid) if j["state"] == "active" else None
         their = bool(seen[1].get("shared")) if seen else None
-        return summary(j, their, self._mine_shared(link, j))
+        out = summary(j, their, self._mine_shared(link, j))
+        from backend.peer import joint_check
+
+        with contextlib.suppress(Exception):
+            check = joint_check.summary(j)
+            if check is not None:
+                out["check"] = check
+        return out
 
     @staticmethod
     def _mine_shared(link, j: dict) -> bool:
@@ -1197,6 +1231,9 @@ class JointTasks:
             rev=j["contract"]["rev"],
         )
 
+    async def _in_check(self, link, lid: str, p: dict) -> dict:
+        return await self.check.inbound(link, lid, p)
+
     async def _in_state(self, link, lid: str, p: dict) -> dict:
         j = self.store.get(lid)
         if j is None:
@@ -1372,3 +1409,5 @@ class JointTasks:
                 await self._try_send(
                     link, "joint_proposal", {"id": jid, "proposal": item[1]}
                 )
+        # The joint check: their side's results (and steps), then mine.
+        await self.check.reconcile(link, link_id, theirs.get("check"))

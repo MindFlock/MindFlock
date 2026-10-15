@@ -118,6 +118,44 @@ async def test_joint_task_over_real_transports(tmp_path, engine):
             assert j["contract"]["text"] == "## v3: {items: [{id, name}]}"
             assert j["proposals"][0]["state"] == "accepted"
 
+        # 3b. The joint check: A writes it (one agent step on A's side, one
+        # person's step on B's), A's agent records its step, B's person
+        # answers theirs — each over joint_check — and both read verified.
+        out = await a.joint.check.write(
+            lid,
+            [
+                {"text": "GET /items answers {items: [...]}", "actor": "agent"},
+                {
+                    "text": "B's client prints the items",
+                    "actor": "human",
+                    "side": "theirs",
+                },
+            ],
+        )
+        assert out["synced"] is True
+        cb = b.joint.get(lid)["joint"]["check"]
+        assert [(s["id"], s["side"]) for s in cb["steps"]] == [
+            ("s1", "theirs"),
+            ("s2", "mine"),
+        ]
+        rec = await a.joint.check.agent_record(lid, "s1", "pass", "200, two items")
+        assert rec == {"ok": True, "verdict": "needs_you"}
+        with pytest.raises(svc_mod.PeerServiceError, match="on alice's side"):
+            await b.joint.check.agent_record(lid, "s1", "pass")
+        assert b.joint.get(lid)["joint"]["check"]["theirs"]["results"]["s1"][
+            "note"
+        ] == ("200, two items")
+        await b.joint.check.answer(lid, "s2", "pass", "printed both")
+        await _settle()
+        for side in (a, b):
+            c = side.joint.get(lid)["joint"]["check"]
+            assert c["verdict"] == "verified", c
+            assert side.link_view(side.store.get(lid))["joint"]["check"] == {
+                "verdict": "verified",
+                "steps": 2,
+                "passed": 2,
+            }
+
         # 4. The link drops (and can't come back yet: A stops listening);
         # both edit, and B's agent proposes, while it's down.
         await a.transport.stop_listener()

@@ -143,6 +143,7 @@ def test_event_names_vocabulary_is_complete():
         "peer.joint_proposed",
         "peer.joint_state",
         "peer.joint_contract",
+        "peer.joint_check",
         "update.available",
         "system.memory_changed",
     }

@@ -311,6 +311,13 @@ EVENT_NAMES = (
     # proposal "proposal_id" + "state"). Notify only on an open proposal by
     # the peer ("<name>'s agent proposes a contract change").
     "peer.joint_contract",
+    # The joint check moved: steps written, a result recorded on either side,
+    # an ask of my agent started or ran out (backend.peer.joint_check; data: +
+    # "verdict": "verified"|"failed"|"needs_you"|"in_progress"|"empty", "by":
+    # "you"|"agent"|"peer", "kind": "steps"|"result"|"run"|"ask"|"ask_failed"|
+    # "results", "rev", "notify": bool — true when the verdict just became
+    # failed or verified, then also "text" for the bell).
+    "peer.joint_check",
     # A newer MindFlock release is out and this device, or another of "Your
     # devices", runs an older one (core.update_watch; ``session`` is ""). Once
     # per release and set of devices behind it (data: {"latest", "tag",

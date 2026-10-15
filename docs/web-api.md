@@ -1852,8 +1852,25 @@ A link's joint task — one feature, both agents, one contract
 
 `synced: false` = the peer was offline; the reconnect resync catches up. Each
 link in `GET /api/peer` carries `joint: {id, state, brief_head, contract_rev,
-open_proposals, mine_shared, theirs_shared} | null`. Events:
-`peer.joint_proposed`, `peer.joint_state`, `peer.joint_contract`.
+open_proposals, mine_shared, theirs_shared, check?: {verdict, steps, passed}} | null`
+(`check` once the joint checklist has steps). Events:
+`peer.joint_proposed`, `peer.joint_state`, `peer.joint_contract`, `peer.joint_check`.
+
+The joint checklist ([peer-link.md → Joint check](peer-link.md#joint-check--contract-joint_checkpy));
+every route needs an **active** joint (**409** otherwise, **404** without one)
+and answers `check` = `{id: "joint:<jid>", rev, by, written, steps: [{id, text,
+expect, actor: "agent"|"human", side: "mine"|"theirs"}], mine: {results: {<step
+id>: {result: "pass"|"fail"|"blocked"|"", note, at, by: "agent"|"human"}},
+tested_sha, at}, theirs: {…}, verdict: "verified"|"failed"|"needs_you"|"in_progress"|"empty",
+ask: {state: ""|"asking"|"failed", at, until, error}, theirs_unsupported, link_id}`
+(also `joint.check` on `GET …/joint`):
+
+| Method | Path | Body → result |
+|---|---|---|
+| POST | `/api/peer/links/{id}/joint/check` | `{steps: [{text, expect?, actor?, side?}]}` → `{check, synced}` — a new revision (every result cleared); **400** no usable step; **409** before the safety number matches |
+| POST | `/api/peer/links/{id}/joint/check/ask` | → `{check}` with `ask.state: "asking"` — my shared agent writes it (`peer_check write`) within 3 minutes; **409** my half has no shared session |
+| POST | `/api/peer/links/{id}/joint/check/answer` | `{step_id, result: "pass"\|"fail"\|"blocked"\|"", note?}` → `{check, synced}` — one of the person's steps on MY side (`""` clears it); **409** a step on their side or an agent's step, **404** unknown step, **400** bad result |
+| POST | `/api/peer/links/{id}/joint/check/run` | → `{check, steps, synced}` — my shared agent runs my agent steps (their results cleared) and records them with `peer_check`; **409** none of mine, or no shared session |
 
 ## Config, providers, usage, settings
 

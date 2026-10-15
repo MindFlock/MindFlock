@@ -222,6 +222,7 @@ def test_peer_tool_names_constant():
         "checkpoint",
         "peer_contract",
         "peer_joint",
+        "peer_check",
     )
 
 
@@ -299,6 +300,7 @@ def test_missing_env_every_tool_errors(env, no_network, monkeypatch):
         "peer_send": {"text": "x"},
         "peer_read_file": {"path": "a"},
         "peer_contract": {"action": "read"},
+        "peer_check": {"action": "read"},
     }
     for name in pt.PEER_TOOL_NAMES:
         resp = h.call(name, args.get(name, {}))

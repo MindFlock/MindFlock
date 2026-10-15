@@ -388,3 +388,43 @@ async def peer_joint_reject_edit(
     link_id: str, proposal_id: str, request: Request
 ) -> JSONResponse:
     return await _peer_call(request, _joint().decide, link_id, proposal_id, False)
+
+
+# -- the joint check (backend.peer.joint_check; docs/peer-link.md) -----------
+
+
+@router.post("/api/peer/links/{link_id}/joint/check")
+async def peer_joint_check_write(link_id: str, request: Request) -> JSONResponse:
+    """``{steps: [{text, expect?, actor?, side?}]}`` — write the joint
+    checklist (a new revision clears every result) → ``{check, synced}``."""
+    body = await _peer_body(request)
+    return await _peer_call(request, _joint().check.write, link_id, body.get("steps"))
+
+
+@router.post("/api/peer/links/{link_id}/joint/check/ask")
+async def peer_joint_check_ask(link_id: str, request: Request) -> JSONResponse:
+    """My shared agent writes the checklist (it answers with ``peer_check``
+    within 3 minutes) → ``{check}`` with ``check.ask.state == "asking"``."""
+    return await _peer_call(request, _joint().check.ask, link_id)
+
+
+@router.post("/api/peer/links/{link_id}/joint/check/answer")
+async def peer_joint_check_answer(link_id: str, request: Request) -> JSONResponse:
+    """``{step_id, result: "pass"|"fail"|"blocked"|"", note?}`` — answer one
+    of the human steps on MY side → ``{check, synced}``."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _joint().check.answer,
+        link_id,
+        body.get("step_id"),
+        body.get("result"),
+        body.get("note") or "",
+    )
+
+
+@router.post("/api/peer/links/{link_id}/joint/check/run")
+async def peer_joint_check_run(link_id: str, request: Request) -> JSONResponse:
+    """My shared agent runs my agent steps and records them with
+    ``peer_check`` → ``{check, steps, synced}``."""
+    return await _peer_call(request, _joint().check.run, link_id)
