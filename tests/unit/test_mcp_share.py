@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import subprocess
 import sys
 
@@ -274,7 +275,12 @@ def test_bridge_lifecycle(tmp_path):
             oct(os.stat(os.path.join(state, "bridge.json")).st_mode & 0o777) == "0o600"
         )
         assert mcp_share.bridge_status()["running"]
+        # Stops promptly: the bridge is this process's child, so it must be
+        # reaped while waiting — a zombie still answers kill(pid, 0), which
+        # ran the full timeout and then (on macOS) failed the SIGKILL.
+        t0 = time.monotonic()
         assert mcp_share.stop_bridge()
+        assert time.monotonic() - t0 < 3.0
         assert mcp_share.bridge_pid() is None
         # A restarted bridge answers at the SAME url with the SAME token, so
         # the run files of windows already open stay valid.

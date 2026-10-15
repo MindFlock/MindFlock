@@ -480,10 +480,19 @@ def stop_bridge(timeout: float = 5.0) -> bool:
             return False
         os.kill(pid, signal.SIGTERM)
         deadline = time.time() + timeout
+        # Reap while waiting: a bridge this process started stays a zombie
+        # until reaped, and kill(pid, 0) still succeeds on a zombie — so the
+        # wait would run its full timeout, then SIGKILL a dead process group
+        # (which macOS refuses with EPERM).
+        _reap_spawned()
         while time.time() < deadline and _pid_alive(pid):
             time.sleep(0.1)
+            _reap_spawned()
         if _pid_alive(pid):
-            os.killpg(pid, signal.SIGKILL)
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass  # gone meanwhile (or a zombie macOS won't signal)
         _reap_spawned()
         return True
     except Exception:  # noqa: BLE001
