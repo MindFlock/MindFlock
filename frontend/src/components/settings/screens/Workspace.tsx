@@ -16,6 +16,7 @@ import { SettingField, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 import { InfoTip } from "../../InfoTip";
 import { AdvancedFold } from "../settingsMode";
+import { PathField } from "../../PathField";
 
 /** GET /api/settings/workspace-paths. */
 export interface WorkspacePaths {
@@ -103,19 +104,19 @@ function WorktreeHome() {
       />
       <label className="set-row">
         <span className="set-label">Workspace folder (ticket and PR sessions)</span>
-        <input
-          type="text"
+        <PathField
           data-group="repository"
           data-field="workspace_dir"
           id="workspace-dir-input"
-          autoComplete="off"
-          spellCheck={false}
           placeholder="./workspaces"
           value={typed}
           aria-invalid={bad ? true : undefined}
           aria-describedby="workspace-dir-check"
-          onChange={(e) => setTyped(e.target.value)}
+          pickerTitle="Pick the workspace folder"
+          onChange={setTyped}
           onBlur={() => typed.trim() !== stored && s.saveField("repository", "workspace_dir", typed.trim())}
+          // A pick never blurs the box (focus is in the picker), so it saves here.
+          onPicked={(p) => p.trim() !== stored && s.saveField("repository", "workspace_dir", p.trim())}
           onKeyDown={(e) => {
             if (e.key === "Enter") (e.target as HTMLInputElement).blur();
           }}

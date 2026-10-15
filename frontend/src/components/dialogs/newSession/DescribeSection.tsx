@@ -27,7 +27,7 @@ import {
   type PlanRun,
   type RepoSuggestion,
 } from "../newSession";
-import { FolderBrowser } from "./FolderBrowser";
+import { useFolderPickerWhile } from "../../../lib/folderPicker";
 import { Elapsed } from "./FooterActions";
 import { useUi } from "../../../state/store";
 
@@ -512,7 +512,6 @@ export interface DescribeSectionProps {
   newFolderRow: ReactNode;
   runBrowse: boolean;
   setRunBrowse: Set<boolean>;
-  runBrowseRef: MutableRefObject<HTMLDivElement | null>;
   repoPath: string;
   folderDo: Dispatch<FolderAction>;
   suggestions: RepoSuggestion[];
@@ -555,7 +554,6 @@ export function DescribeSection({
   newFolderRow,
   runBrowse,
   setRunBrowse,
-  runBrowseRef,
   repoPath,
   folderDo,
   suggestions,
@@ -569,6 +567,23 @@ export function DescribeSection({
   startInstead,
   onEnterStart,
 }: DescribeSectionProps) {
+  // "Runs in" → Browse… (one session) or the list's "tasks start in" →
+  // Browse…: the same floating picker window every path field opens (never a
+  // browser dialog: Electron has none). A click fills the picker; "Use this
+  // folder", ✕ and Escape all leave the folder last clicked, as Done did.
+  useFolderPickerWhile(runBrowse, () => ({
+    title: runMode ? "Pick the folder the tasks start in" : "Pick the folder it runs in",
+    device,
+    start: repoPath || homePath || "",
+    selected: repoPath,
+    anchor: document.querySelector<HTMLElement>("#new-run-repo, #new-describe-folder"),
+    onSelect: (p) => folderDo({ t: "user-set", path: p }),
+    onPick: (p) => {
+      folderDo({ t: "user-set", path: p });
+      setRunBrowse(false);
+    },
+    onCancel: () => setRunBrowse(false),
+  }));
   /* The one-sentence door, the whole of page 1 because it is the widest of
      the three ways to fill this form in (a sentence, a template chip, or by
      hand) and comes first as the least specific. It wears .new-templates so
@@ -743,30 +758,6 @@ export function DescribeSection({
         // A batch is already one session per line: nothing to split.
         splitBox={null}
       />
-      )}
-      {runBrowse && (
-        // "Runs in" → Browse… (one session) or the list's "tasks start
-        // in" → Browse…: the same inline folder browser the Folder field
-        // uses (inline: Electron has no browser dialogs). Picking a
-        // folder fills the picker.
-        <div className="rt-browse" data-run-browse="" ref={runBrowseRef}>
-          <div className="rt-browse-head">
-            <span>{runMode ? "Pick the folder the tasks start in" : "Pick the folder it runs in"}</span>
-            <button type="button" className="rt-browse-done" onClick={() => setRunBrowse(false)}>
-              Done
-            </button>
-          </div>
-          <FolderBrowser
-            device={device}
-            initialPath={repoPath || homePath || ""}
-            selected={repoPath}
-            onSelect={(p) => folderDo({ t: "user-set", path: p })}
-            onPick={(p) => {
-              folderDo({ t: "user-set", path: p });
-              setRunBrowse(false);
-            }}
-          />
-        </div>
       )}
       {planNoteShown && (
         <p className="nf-describe-note" aria-live="polite">

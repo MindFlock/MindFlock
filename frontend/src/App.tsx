@@ -43,6 +43,7 @@ import { WelcomeTour } from "./components/onboarding/WelcomeTour";
 import { CoachTourHost } from "./components/onboarding/CoachTour";
 import { Breaks } from "./components/breaks/Breaks";
 import { openSettings } from "./lib/openSettings";
+import { FolderPickerWindow } from "./components/FolderPickerWindow";
 import { installSurfaceHash } from "./lib/surfaceHash";
 
 /** At or under this window width the main screen goes single-column. */
@@ -312,6 +313,9 @@ export default function App() {
       {/* The coach-mark tour on screen, if any (lib/tours): last, so its card
           and ring sit above whichever dialog it walks. */}
       <CoachTourHost />
+      {/* The one floating folder picker every path field's Browse… opens
+          (portalled to body, above the dialogs, under the toast). */}
+      <FolderPickerWindow />
 
       {/* Break reminder + the idle flock (Settings → General; both off-screen
           until their timers fire) */}
