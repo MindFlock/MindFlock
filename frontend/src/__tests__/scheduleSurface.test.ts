@@ -70,8 +70,11 @@ describe("the top-bar item", () => {
     expect(v).toBeGreaterThan(0);
     expect(v < sc && sc < se).toBe(true);
     const btn = TOPBAR.slice(sc, se);
-    expect(btn).toContain('className="tb-item"');
-    expect(btn).toContain('keys("schedule")');
+    // The bar's item look, folded into ⋯ on a narrow window (TopBar's
+    // fitTopBar); its tooltip is the one the ⋯ row wears too.
+    expect(btn).toContain('className={"tb-item" + (isFolded("schedule") ? " tb-folded" : "")}');
+    expect(btn).toContain("title={scheduleTitle}");
+    expect(TOPBAR).toMatch(/const scheduleTitle =\s*"Schedule — templates; starts sessions on a timer" \+\s*keys\("schedule"\)/);
     expect(btn).toContain('ui.openDialogFor("schedule")');
     // A count only for failures, in the failure red, nothing at zero.
     expect(btn).toContain('{schedFailing > 0 && <span className="tb-count is-failing">{schedFailing}</span>}');
