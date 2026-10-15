@@ -282,7 +282,8 @@ def test_join_without_a_code_says_so(svc, client):
 
 def test_invite_response_carries_a_ready_to_send_message(svc, client):
     body = client.post("/api/peer/invites", json={"ttl_s": 600}).json()
-    assert body["message"] == svc_mod.invite_message(CODE, 600)
+    assert body["message"] == svc_mod.invite_message(CODE, 600, direct=True)
+    assert "same network" in body["message"]  # relay off: a direct invite
     assert "10 min" in body["message"]
 
 

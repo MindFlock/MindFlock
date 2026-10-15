@@ -18,13 +18,15 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    network or tailnet* (a direct invite now) or *somewhere else* (install
    cloudflared from right there, then invite). Press **Copy invite** and send
    the message over any channel you trust — it carries the code (`mfp1:…` or
-   `mfp2:…`) and says what to do with it. A code is single use and expires
+   `mfp2:…`) and says what to do with it (open Settings → People — or
+   Ctrl+P, "people" — press **Join someone** and paste it; a direct invite
+   adds that it only works on the same network or Tailscale). A code is single use and expires
    after 10 minutes; the screen counts it down, lists unused invites with
    **Cancel**, and turns into "*B* joined — read them your safety number" the
    moment they join. The listener only runs while an invite or a link that you
    accepted exists.
 2. **Join.** The other person pastes the message — all of it, or just the
-   code — into People → **Join a peer**, the palette's *Paste a
+   code — into People → **Join someone**, the palette's *Paste a
    code…*, or `mindflock peer join <code>`. Joining turns peer links on too,
    and needs nothing installed. A relay join can take up to a minute (a new
    tunnel's name has to appear in DNS); the screen shows each stage, and a

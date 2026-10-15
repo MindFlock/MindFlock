@@ -128,16 +128,24 @@ _RELAY_TOKEN_RE = re.compile(r"^[a-z2-7]{26}\Z")
 _CODE_IN_TEXT_RE = re.compile(r"mfp[12]:[a-z2-7]+-[a-z2-7]{4}", re.I)
 
 
-def invite_message(code: str, expires_in: int) -> str:
+def invite_message(code: str, expires_in: int, direct: bool = False) -> str:
     """The text "Copy invite" puts on the clipboard: the code plus the one
     thing the other person has to do with it, so the code can go over any chat
     with no explaining. :meth:`PeerService.join` accepts this whole message
-    back, so pasting all of it works."""
+    back, so pasting all of it works. A ``direct`` invite names this machine,
+    so it says it only reaches someone on the same network or Tailscale."""
     minutes = max(1, round(int(expires_in or 0) / 60))
+    reach = (
+        " It only works if you're on the same network as me (or the same "
+        "Tailscale network)."
+        if direct
+        else ""
+    )
     return (
-        'Join me on MindFlock: in MindFlock choose "Join a peer" and paste '
-        "this whole message.\n\n%s\n\n(Works once, expires in %d min. From a "
-        "terminal: mindflock peer join <the code above>)" % (code, minutes)
+        "Join me on MindFlock: open Settings → People (or press Ctrl+P and "
+        'type "people"), press Join someone and paste this whole message.%s'
+        "\n\n%s\n\n(Works once, expires in %d min. From a terminal: "
+        "mindflock peer join <the code above>)" % (reach, code, minutes)
     )
 
 
@@ -1845,7 +1853,7 @@ class PeerService:
         out = {
             "invite_id": iid,
             "code": _get(inv, "code"),
-            "message": invite_message(_get(inv, "code"), ttl),
+            "message": invite_message(_get(inv, "code"), ttl, direct=True),
             "expires_in": ttl,
             "host": adv,
             "port": port,
@@ -1952,7 +1960,7 @@ class PeerService:
         if not found:
             if re.search(r"mfp[12]:", code, re.I):
                 raise PeerServiceError(
-                    "This invite code is cut off — copy the whole message again."
+                    "That code is cut off — paste the whole invite message."
                 )
             raise PeerServiceError(
                 "That doesn't contain an invite code — paste the whole message "

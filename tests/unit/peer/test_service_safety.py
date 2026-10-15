@@ -440,12 +440,20 @@ def test_a_cut_off_code_is_called_cut_off(engine):
     svc = make_service()
     with pytest.raises(svc_mod.PeerServiceError) as exc:
         run(svc.join("Join me on MindFlock: mfp1:beytenzogaxdalrrjfxx6nq"))
-    assert exc.value.message == (
-        "This invite code is cut off — copy the whole message again."
-    )
+    assert exc.value.message == "That code is cut off — paste the whole invite message."
     with pytest.raises(svc_mod.PeerServiceError) as exc:
         run(svc.join("hello there"))
     assert exc.value.message.startswith("That doesn't contain an invite code")
+
+
+def test_the_invite_message_says_where_to_paste_and_who_it_reaches():
+    relay = svc_mod.invite_message("mfp2:abc-defg", 600)
+    assert "Settings → People" in relay and 'type "people"' in relay
+    assert "Join someone" in relay and "Join a peer" not in relay
+    assert "same network" not in relay  # a relay invite reaches anywhere
+    direct = svc_mod.invite_message("mfp1:abc-defg", 600, direct=True)
+    assert "same network as me (or the same Tailscale network)" in direct
+    assert "mfp1:abc-defg" in direct and "expires in 10 min" in direct
 
 
 def test_a_new_listen_port_rebinds_the_listener(engine):
