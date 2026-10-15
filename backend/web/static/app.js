@@ -40411,9 +40411,9 @@ function verdictOf(check) {
 	if (!check || !steps.length) return "empty";
 	const seen = steps.map((s) => [s, cellOf(check, s)?.result || ""]);
 	if (seen.some(([, r]) => r === "fail")) return "failed";
-	if (seen.some(([s, r]) => r === "" && s.actor === "human")) return "needs_you";
-	if (seen.some(([, r]) => r === "")) return "in_progress";
-	if (seen.some(([, r]) => r === "blocked")) return "needs_you";
+	if (seen.some(([s, r]) => r === "blocked" && s.actor === "agent")) return "needs_you";
+	if (seen.some(([s, r]) => r === "" && s.actor === "agent")) return "in_progress";
+	if (seen.some(([, r]) => r === "" || r === "blocked")) return "needs_you";
 	return "verified";
 }
 var plural$5 = (n) => n + (n === 1 ? " step" : " steps");
@@ -40429,11 +40429,21 @@ function verdictLine(check, peerName) {
 		const where = steps[i].side === "mine" ? "your side" : name + "'s side";
 		return "Failed — step " + (i + 1) + " on " + where;
 	}
-	const blankHuman = (side) => steps.filter((s) => s.side === side && s.actor === "human" && !cellOf(check, s)?.result).length;
-	if (blankHuman("mine")) return "Needs you — " + plural$5(blankHuman("mine"));
-	if (blankHuman("theirs")) return "Needs " + name + " — " + plural$5(blankHuman("theirs"));
-	const blocked = steps.filter((s) => cellOf(check, s)?.result === "blocked").length;
-	return "Needs you — " + plural$5(blocked) + " couldn't be checked";
+	const count = (side, actor, result) => steps.filter((s) => s.side === side && s.actor === actor && (cellOf(check, s)?.result || "") === result).length;
+	const who = (side) => side === "mine" ? "Needs you — " : "Needs " + name + " — ";
+	for (const side of ["mine", "theirs"]) {
+		const n = count(side, "agent", "blocked");
+		if (n) return who(side) + plural$5(n) + (side === "mine" ? " your" : " their") + " agent couldn't check";
+	}
+	for (const side of ["mine", "theirs"]) {
+		const n = count(side, "human", "");
+		if (n) return who(side) + plural$5(n);
+	}
+	for (const side of ["mine", "theirs"]) {
+		const n = count(side, "human", "blocked");
+		if (n) return who(side) + plural$5(n) + " couldn't be checked";
+	}
+	return "Needs you";
 }
 function verdictTone(v) {
 	switch (v) {
@@ -40601,6 +40611,8 @@ function JointCheck({ check: given, peerName, linkId: linkIdProp }) {
 		const r = cellOf(check, s);
 		const result = r?.result || "";
 		const mineHuman = !!linkId && s.side === "mine" && s.actor === "human";
+		const takeOver = !!linkId && s.side === "mine" && s.actor === "agent" && result === "blocked" && r?.by !== "human";
+		const answers = takeOver ? ANSWERS.filter(([v]) => v !== "blocked") : ANSWERS;
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 			className: "peer-joint-step peer-joint-step-" + (result || "blank"),
 			"data-step": s.id,
@@ -40623,6 +40635,10 @@ function JointCheck({ check: given, peerName, linkId: linkIdProp }) {
 						r?.note ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "peer-joint-step-note",
 							children: r.note
+						}) : null,
+						takeOver ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "peer-joint-step-note peer-joint-step-takeover",
+							children: "The agent couldn't check this — you can"
 						}) : null
 					]
 				}),
@@ -40630,11 +40646,11 @@ function JointCheck({ check: given, peerName, linkId: linkIdProp }) {
 					className: "peer-joint-actor peer-joint-actor-" + s.actor,
 					children: s.actor === "human" ? "person" : "agent"
 				}),
-				mineHuman ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				mineHuman || takeOver ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "peer-joint-answer",
 					role: "group",
 					"aria-label": "Answer step " + n,
-					children: ANSWERS.map(([value, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					children: answers.map(([value, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "test-btn peer-joint-answer-btn" + (result === value ? " on" : ""),
 						"aria-pressed": result === value,
