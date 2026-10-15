@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-10-14
+
 A pass over New, Intake, Verify, Settings and the first hour, judged by
 fresh-eyes testers who could only use the UI (never the code or docs).
 
@@ -71,7 +73,74 @@ fresh-eyes testers who could only use the UI (never the code or docs).
   are the agent, tooling, handoffs, limits and review; the **Include my
   time** switch in the dashboard counts it again.
 
+- **Memory guard.** MindFlock reads memory pressure (available memory plus
+  PSI) and, while it runs low, holds new agents that agents or the ticket
+  queue would start (a person's New and Restart are never refused), starts no
+  new team-run lines, and shows a notice. An agent that died mid-turn comes
+  back with "continue where you left off" queued, and **Restart all** above
+  the rail brings back every offline agent at once.
+- **Sleeping agents.** An agent idle for 45 minutes (5 while memory is low),
+  unwatched and with nothing waiting for it, is put to sleep: its CLI and MCP
+  servers stop and their memory is freed, the row says **Sleeping**, and
+  opening it or sending it anything (including another agent's message)
+  wakes it in the same conversation. Settings → General.
+- **Agents, not MindFlock, are what the OOM killer takes.** Every agent
+  launch raises its own `oom_score_adj`, so under memory pressure the kernel
+  kills a test run or an agent before the server; an agent killed that way
+  comes back by itself once memory recovers (at most 3 times an hour).
+- **`mindflock slot -- <command>`**: a machine-wide gate for heavy commands
+  (test suites in commit hooks) so several sessions take turns instead of
+  running out of memory together. One slot below ~32 GB of RAM, else two
+  (`general.heavy_slots`).
+- **Shared MCP servers** (opt-in, Settings → Agent orchestration): a stdio
+  MCP server you mark as shared runs once per machine and every Claude window
+  connects to that copy, instead of one copy per window.
+- **Schedule** on the top bar (Alt+S): your templates and what starts by
+  itself, in one place — what runs next, scheduled templates with Change
+  schedule, Skip next and Pause, and saved setups. Its template editor uses
+  New's folder explorer, agent picker and Works in.
+- **Task headlines.** The line under each session in the sidebar is a short
+  verb phrase of what it's working on ("Fix pin bar drawing below
+  terminal"), made by fixed rules (no model) — or your own words when the
+  rules aren't sure. Hover it for the prompt it came from.
+- **Branch session (Ctrl+K B).** Like Duplicate, but the copy gets its own
+  worktree on a new branch cut from the session's current commit, with its
+  uncommitted changes copied across (the original is untouched). Git
+  repositories only.
+- **Customize the pane header.** Customize now has two pages, Sidebar and
+  Pane header: choose and order the tabs and buttons along the top of every
+  session (default Agent · Terminal · Diff · Queue · ⏩ · Copy all), with a
+  live preview. Words until they don't fit, then icons; ⋯ is always on the
+  right and holds everything switched off.
+- **ⓘ tips** replace the "Learn more" folds: hover or tab to the icon for the
+  explanation, tap it on a phone.
+
 ### Changed
+
+- **Intake sources: add once, edit where it shows.** No more card lists:
+  each source's heading in the work list has **Edit** (red **Fix** when it's
+  broken) that opens its settings right there; one **+ Add source** adds a
+  tracker or a repository, and a repository is added once with "Use it for"
+  ticks (PR comments, new issues, Verify). The ticket view filters are one
+  **View** menu, and Settings → Connections → Open in Intake lands on that
+  source.
+- **Adding a source starts with nothing picked**, and nothing names a tracker
+  until you choose one; GitHub Issues as a tracker and a GitHub repository's
+  issues are told apart.
+- **The New dialog** sits centred with room above and below, its folder
+  suggestions are one compact line, and Works in reads as clean aligned
+  options. **New, Intake, Verify and Schedule open at the same top edge** and
+  don't move as their content changes.
+- **Pane header:** Terminal and Map are tabs again in every pane (calm mode
+  had hidden them), a **Copy all** button copies the open terminal's whole
+  history, and there is no Pause button (the palette, `mindflock pause` and
+  the API still pause; ▶ Resume shows only on a paused session). The ⋯ menu
+  opens fully on screen.
+- **Sidebar rows:** the actions menu is a ⋮ at the right end of the row (on
+  hover and the selected row), and right-clicking a row opens it.
+- **The server uses far less memory** — about 230 MB instead of growing past
+  1 GB — by capping glibc's per-thread arenas and reading transcript tails
+  instead of whole files.
 
 - **One agent card everywhere** (Connections, Settings → Agents, Custom
   agents, Setup): the agent's status and its one next step — Install, Sign
@@ -84,10 +153,10 @@ fresh-eyes testers who could only use the UI (never the code or docs).
   sessions, New and Setup, nothing else; it no longer flashes the full
   layout on load. The welcome tour opens once (per person, synced), and
   setup shows one count everywhere.
-- **One menu per session** (the row's ⋯ and the pane's ⋯ are the same, in
+- **One menu per session** (the row's ⋮ and the pane's ⋯ are the same, in
   groups), **Commit…** only when there is something to commit, the session's
-  task in the pane header ("Task: …", kept on the server) and a visible
-  Pause. Names are shortened in the middle, so "-2" stays visible.
+  task in the pane header ("Task: …", kept on the server). Names are
+  shortened in the middle, so "-2" stays visible.
 - **New:** a git folder defaults to a separate worktree and shows the branch
   it will create (the real "-2" name when the repo is busy, and who else is
   in it); Folder → Agent → Task → Create, the rest under More options; what
@@ -124,17 +193,20 @@ fresh-eyes testers who could only use the UI (never the code or docs).
 
 ### Fixed
 
+- **Pause sticks.** Opening (or having open) a paused session's pane no
+  longer relaunches its agent; the pane shows "Paused · Resume" instead.
+- An OOM-killed agent is no longer relaunched by its own launcher three
+  seconds later (and, on a second kill, into a fresh conversation); a killed
+  provisioned agent reads Offline, not Idle.
+- Claude Code's "This session is being continued…" compaction message no
+  longer becomes a session's task line.
+
 - Aider (and other API-key agents) no longer read "Connected" without a key.
 - Notification rules no longer show raw `{detail}` placeholders.
 - The command palette no longer offers "Join with code W0RK-TREE" for
   ordinary words, and never makes Push/Merge/Delete the Enter default.
 - Esc closes the Shortcuts sheet; top-bar tooltips show the shortcut that
   actually works (Alt+N in a browser tab).
-- Devices on a WSL2 (or any) machine whose network adapter's MTU leaves no
-  room for Tailscale's headers could see each other but never load each
-  other's sessions — large responses were silently dropped. MindFlock now
-  caps its tailnet TCP segment size there, and `mindflock doctor` explains
-  the machine-wide fix.
 
 
 ## [0.8.6] - 2026-10-13
@@ -3746,7 +3818,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.8.6...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.8.7...HEAD
+[0.8.7]: https://github.com/MindFlock/MindFlock/releases/tag/v0.8.7
 [0.8.6]: https://github.com/MindFlock/MindFlock/releases/tag/v0.8.6
 [0.8.5]: https://github.com/MindFlock/MindFlock/releases/tag/v0.8.5
 [0.8.4]: https://github.com/MindFlock/MindFlock/releases/tag/v0.8.4
