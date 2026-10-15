@@ -272,7 +272,10 @@ ticked; *schedule a session* still finds it), one **Run template:
 **Settings → …** rows for what you typed (`palette/settingsSearch.ts`: one
 entry per screen plus a few controls, matched on the words people use —
 "github", "notification", "worktree", "parallel", "phone", "token", "theme"
-— each opening Settings on that screen, scrolled to the control; listed right
+— each opening Settings on that screen, scrolled to the control, with one
+small line under it saying what is behind it: *Phone alerts — Push
+notifications to your phone (ntfy)* vs *Your phone — Use MindFlock itself
+from your phone*; a title match ranks above a subtitle match; listed right
 after the commands whose names contain the text),
 **Replay <X> tour** (one per [tour](#tours): welcome, New, Intake, Verify,
 Schedule, Settings — found by *tour*, *help* or *how*), Toggle sidebar, Keyboard
@@ -4432,7 +4435,10 @@ A few screens got quieter:
   or leave it blank for no limit.* — instead of saving `-2` as "no limit".
 - **Search settings…** heads the nav (`#settings-search`, on the command
   palette's own index, `palette/settingsSearch.ts`, synonyms included): the
-  matches list under the box as you type; ↑/↓ and Enter (or a click) open the
+  matches list under the box as you type, each with the same one-line
+  subtitle as the palette's rows ("tour" → **General → Tours** *Replay the
+  welcome tour and the menu tours*, "dark" → **Appearance → Mode** *Light or
+  dark*); ↑/↓ and Enter (or a click) open the
   screen, scroll to the control (opening a fold around it) and outline it for
   a moment; Escape clears the box before it closes Settings.
 - **Notifications** opens on **Where alerts go**: In MindFlock (the bell,

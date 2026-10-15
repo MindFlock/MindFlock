@@ -374,7 +374,14 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
               onMouseMove={() => setSel(i)}
               onClick={() => run(a)}
             >
-              <span className="palette-label">{a.label}</span>
+              {a.sub ? (
+                <span className="palette-text">
+                  <span className="palette-label">{a.label}</span>
+                  <span className="palette-sub">{a.sub}</span>
+                </span>
+              ) : (
+                <span className="palette-label">{a.label}</span>
+              )}
               {a.hint && <span className={"palette-hint" + (isKeyHint(a.hint) ? "" : " is-desc")}>{a.hint}</span>}
             </li>
           ))}

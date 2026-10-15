@@ -18,6 +18,9 @@ import { extractPeerCode } from "../../lib/peer";
 
 export interface PaletteAction {
   label: string;
+  /** One small line under the label saying what is behind it (the
+   * Settings rows carry one). Not searched here; the row's source ranks it. */
+  sub?: string;
   hint?: string;
   run(): void;
   /** Extra words that should find it (beyond its label). */

@@ -1,0 +1,18 @@
+/* "Search settings…" results: the label, and under it one small line saying
+   what is behind it (settingsSearch.ts `sub`). The box and row chrome live
+   with the rest of the nav in screens/screens.css. */
+.set-search-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.set-search-title {
+  color: var(--text);
+}
+
+.set-search-sub {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--muted);
+}
