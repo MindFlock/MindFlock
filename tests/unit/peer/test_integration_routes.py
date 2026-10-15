@@ -160,6 +160,8 @@ ROUTES = [
         "/api/peer/links/" + "ab" * 16 + "/export",
         {"target_repo": "/tmp", "branch_name": "peer/x"},
     ),
+    ("post", "/api/peer/links/" + "ab" * 16 + "/mirror", {"repo_path": "/tmp"}),
+    ("delete", "/api/peer/links/" + "ab" * 16 + "/mirror", None),
     ("post", "/api/peer/enable", {}),
     ("post", "/api/peer/links/" + "ab" * 16 + "/verified", {"verified": True}),
     ("get", "/api/peer/links/" + "ab" * 16 + "/messages", None),

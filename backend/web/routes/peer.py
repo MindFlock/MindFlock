@@ -278,3 +278,23 @@ async def peer_export(link_id: str, request: Request) -> JSONResponse:
         str(body.get("target_repo") or ""),
         str(body.get("branch_name") or ""),
     )
+
+
+@router.post("/api/peer/links/{link_id}/mirror")
+async def peer_mirror_enable(link_id: str, request: Request) -> JSONResponse:
+    """``{repo_path, branch?}`` — mirror THEIR shared work into your repo as
+    ``branch`` (default ``peer/<their name>``), now and on every checkpoint."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _service().enable_mirror,
+        link_id,
+        str(body.get("repo_path") or ""),
+        str(body.get("branch") or "") or None,
+    )
+
+
+@router.delete("/api/peer/links/{link_id}/mirror")
+async def peer_mirror_disable(link_id: str, request: Request) -> JSONResponse:
+    """Stop mirroring (the ``peer/`` branch stays in your repo)."""
+    return await _peer_call(request, _service().disable_mirror, link_id)

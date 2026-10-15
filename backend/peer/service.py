@@ -61,6 +61,8 @@ _OP_PERM = {
     # Watching the shared session's screen (backend.peer.screen) shows what
     # its diff and files do; keep in step with transport._OP_PERM.
     "screen": "diff",
+    # The standing mirror (backend.peer.mirror) hands over every file.
+    "mirror_pull": "read_file",
 }
 _SHARE_OPS = ("diff", "read_file", "list_files")
 #: Seconds a peer's reported share status is reused before re-asking.
@@ -240,6 +242,11 @@ class PeerService:
         # status() when older than _THEIR_STATUS_TTL.
         self._their_status: Dict[str, tuple] = {}
         self._their_status_inflight: set = set()
+        # The standing mirror (backend.peer.mirror): links updating now, the
+        # last failed head per link (retry backoff), the background poller.
+        self._mirror_inflight: set = set()
+        self._mirror_failed: Dict[str, tuple] = {}
+        self._mirror_task: Optional[asyncio.Task] = None
         self._jobs_lock = threading.Lock()
         # The relay (peer.relay != off): ingress + optional quick tunnel.
         self._ingress_factory = ingress_factory
@@ -346,6 +353,7 @@ class PeerService:
                         await self._restore_runtime(link)
                     except Exception as err:  # noqa: BLE001
                         _log.warning("peer: share runtime not restored: %s", err)
+            self._mirror_watch()
         except Exception as err:  # noqa: BLE001 — never block the server
             _log.warning("peer: service start failed: %s", err)
 
@@ -365,6 +373,9 @@ class PeerService:
             await self.stop()
 
     async def stop(self) -> None:
+        task, self._mirror_task = self._mirror_task, None
+        if task is not None:
+            task.cancel()
         for share_id in list(self._runtimes):
             await self._stop_runtime(share_id)
         await self._stop_relay()
@@ -782,6 +793,35 @@ class PeerService:
         out["agent"] = agent
         return out
 
+    async def _mirror_pull_op(self, link, p: dict) -> dict:
+        """Their mirror pulling OUR share (backend.peer.mirror.serve_pull)."""
+        share_id = _get(link, "share_id")
+        if not share_id:
+            raise _peer_op_error("no shared folder")
+        from backend.peer import mirror
+        from backend.peer import share as share_mod
+
+        try:
+            return await self._in_thread(
+                link,
+                mirror.serve_pull,
+                self._share_obj(share_id),
+                str(_get(link, "link_id") or ""),
+                p.get("have") or "",
+                int(p.get("offset") or 0),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001
+            if getattr(err, "busy", False):
+                raise
+            if (
+                isinstance(err, share_mod.ShareError)
+                and str(err) == "too big to mirror"
+            ):
+                raise _peer_op_error("too big to mirror") from err
+            raise _peer_op_error("mirror_pull failed") from err
+
     async def handle_request(self, link, op: str, p: dict) -> dict:
         """One inbound request from the peer, already schema-validated by the
         transport. Raises the transport's ``PeerOpError`` to refuse."""
@@ -796,6 +836,8 @@ class PeerService:
             if not _get(link, "share_id"):
                 raise _peer_op_error("no shared folder")
             return await self._in_thread(link, self._screen_op, link)
+        if op == "mirror_pull":
+            return await self._mirror_pull_op(link, p)
         if op in _SHARE_OPS:
             share_id = _get(link, "share_id")
             if not share_id:
@@ -973,11 +1015,18 @@ class PeerService:
         return "running" if live else "stopped"
 
     def _status_op(self, link) -> dict:
-        return {
+        out = {
             "shared": bool(_get(link, "share_id")),
             "agent": self._agent_state(_get(link, "session_title") or ""),
             "name": str(self.settings().get("display_name") or "peer")[:32],
         }
+        share_id = _get(link, "share_id")
+        if share_id:  # what their mirror watches (backend.peer.mirror)
+            from backend.peer import share as share_mod
+
+            with contextlib.suppress(Exception):
+                out["head"] = share_mod.head_sha(self._share_obj(share_id))
+        return out
 
     def _link_event(self, link, repaired: bool) -> dict:
         return {
@@ -1010,9 +1059,10 @@ class PeerService:
             },
         )
         try:
-            from backend.peer import inbox
+            from backend.peer import inbox, mirror
 
             inbox.drop(str(_get(link, "link_id") or ""))
+            mirror.drop(str(_get(link, "link_id") or ""))
         except Exception:  # noqa: BLE001
             pass
         share_id = _get(link, "share_id")
@@ -1222,13 +1272,15 @@ class PeerService:
         self._their_status_inflight.add(link_id)
         try:
             res = await self.request(link_id, "status", {}, timeout=15.0)
-            self._their_status[link_id] = (
-                time.monotonic(),
-                {
-                    "shared": bool(res.get("shared")),
-                    "agent": str(res.get("agent") or "none"),
-                },
-            )
+            view = {
+                "shared": bool(res.get("shared")),
+                "agent": str(res.get("agent") or "none"),
+            }
+            head = res.get("head") or None  # an older peer never sends it
+            if head:
+                view["head"] = head
+            self._their_status[link_id] = (time.monotonic(), view)
+            self._mirror_check(link_id, head)
         except Exception:  # noqa: BLE001 — unknown stays unknown; retried later
             pass
         finally:
@@ -1292,6 +1344,9 @@ class PeerService:
             # THEIR shared session, as they last reported it ({shared, agent}
             # or None): what the rail's "Shared with you" row is built from.
             "their_share": self._their_share_view(lid, self.is_connected(lid)),
+            # The standing mirror of THEIR share into one of our repos
+            # (backend.peer.mirror.view), or None.
+            "mirror": self._mirror_view(lid),
             "carrier": self._carrier_of(link),
             "sas_verified": _get(link, "sas_verified") is True,
             "unread": unread,
@@ -1731,9 +1786,10 @@ class PeerService:
                     rt.agent_api.link_id = lid  # the running agent keeps going
             self.store.update(lid, **fields)
             try:
-                from backend.peer import inbox
+                from backend.peer import inbox, mirror
 
                 inbox.drop(old_id)
+                mirror.move(old_id, lid)
             except Exception:  # noqa: BLE001
                 pass
             if self._transport is not None:
@@ -1804,9 +1860,10 @@ class PeerService:
         if self.store.get(link_id) is not None:
             self.store.remove(link_id)
         try:
-            from backend.peer import inbox
+            from backend.peer import inbox, mirror
 
             inbox.drop(link_id)
+            mirror.drop(link_id)
         except Exception:  # noqa: BLE001
             pass
         self._emit(
@@ -2082,6 +2139,112 @@ class PeerService:
         except Exception as err:  # noqa: BLE001
             raise PeerServiceError("export failed: %s" % err, 409) from err
         return result if isinstance(result, dict) else {"ok": True}
+
+    # ------------------------------------------------------------------ #
+    # The standing mirror (backend.peer.mirror, docs/peer-link.md)
+    # ------------------------------------------------------------------ #
+    async def enable_mirror(self, link_id: str, repo_path, branch=None) -> dict:
+        """Mirror THEIR share into ``repo_path`` as ``branch`` (default
+        ``peer/<their name>``), now and on every checkpoint they make."""
+        from backend.peer import mirror
+
+        link = self._link_or_404(link_id)
+        name = str(_get(link, "peer_name") or "peer")
+        try:
+            await asyncio.to_thread(mirror.enable, link_id, repo_path, branch, name)
+        except mirror.MirrorError as err:
+            raise PeerServiceError(str(err)) from err
+        self._mirror_failed.pop(link_id, None)
+        if self.is_connected(link_id):
+            self._schedule(self._mirror_update(link_id))
+        self._mirror_watch()
+        return {"link": self.link_view(self.store.get(link_id))}
+
+    def disable_mirror(self, link_id: str) -> dict:
+        from backend.peer import mirror
+
+        self._link_or_404(link_id)
+        mirror.drop(link_id)
+        self._mirror_failed.pop(link_id, None)
+        return {"link": self.link_view(self.store.get(link_id))}
+
+    def _mirror_view(self, link_id: str):
+        try:
+            from backend.peer import mirror
+
+            return mirror.view(link_id, link_id in self._mirror_inflight)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _mirror_check(self, link_id: str, head) -> None:
+        """Their ``status`` said ``head``: start an update when it moved."""
+        from backend.peer import mirror
+
+        if link_id in self._mirror_inflight:
+            return
+        if mirror.wants_update(
+            mirror.load(link_id), head, self._mirror_failed.get(link_id)
+        ):
+            self._schedule(self._mirror_update(link_id, head))
+
+    async def _mirror_update(self, link_id: str, head=None) -> None:
+        from backend.peer import mirror
+
+        if link_id in self._mirror_inflight:
+            return
+        link = self.store.get(link_id)
+        if link is None:
+            return
+        if not head:
+            head = (self._their_status.get(link_id) or (0, {}))[1].get("head")
+        self._mirror_inflight.add(link_id)
+        try:
+            outcome = await mirror.update(
+                link_id,
+                pull=lambda p: self.request(link_id, "mirror_pull", p, timeout=60.0),
+                peer_name=str(_get(link, "peer_name") or "peer"),
+                describe=lambda err: str(self._peer_error(link, err)),
+            )
+        except Exception as err:  # noqa: BLE001
+            _log.warning("peer: mirror update failed: %s", err)
+            outcome = None
+        finally:
+            self._mirror_inflight.discard(link_id)
+        m = mirror.load(link_id) or {}
+        if m.get("last_error") and head:
+            self._mirror_failed[link_id] = (head, time.monotonic())
+        else:
+            self._mirror_failed.pop(link_id, None)
+        if outcome is not None:
+            kind, data = outcome
+            if kind == "updated":
+                self._emit("peer.mirror_updated", data)
+            else:
+                self._emit("peer.mirror_failed", data)
+
+    def _mirror_watch(self) -> None:
+        """Poll the peers of enabled mirrors even with no browser open (the
+        UI's link_view would otherwise be the only status poll)."""
+        if self._mirror_task is not None and not self._mirror_task.done():
+            return
+        try:
+            self._mirror_task = asyncio.get_running_loop().create_task(
+                self._mirror_loop()
+            )
+        except RuntimeError:
+            self._mirror_task = None
+
+    async def _mirror_loop(self) -> None:
+        from backend.peer import mirror
+
+        while True:
+            ids = await asyncio.to_thread(mirror.enabled_links)
+            if not ids:
+                return
+            for lid in ids:
+                if self.store.get(lid) is not None:
+                    self._their_share_view(lid, self.is_connected(lid))
+            await asyncio.sleep(_THEIR_STATUS_TTL)
 
 
 _SERVICE: Optional[PeerService] = None

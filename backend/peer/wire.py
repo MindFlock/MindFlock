@@ -60,7 +60,7 @@ HANDSHAKE_MAX_FRAME = 4096
 MAX_DEPTH = 16
 MAX_ID = 2**53
 PROTOCOL_VERSION = 1
-OPS = ("msg", "diff", "read_file", "list_files", "status", "screen")
+OPS = ("msg", "diff", "read_file", "list_files", "status", "screen", "mirror_pull")
 
 MAX_NAME = 128  # on the wire; stores sanitize further to 32
 MAX_MSG_TEXT = 20_000
@@ -73,6 +73,8 @@ MAX_LIST_ITEMS = 20_000
 MAX_STAT_STR = 4096
 MAX_SCREEN_CHARS = 200_000  # backend.peer.screen.MAX_SCREEN_CHARS
 MAX_SCREEN_DIM = 1000
+MAX_MIRROR_BYTES = 64 * 1024 * 1024  # backend.peer.share.MIRROR_MAX_BYTES
+MAX_MIRROR_CHUNK = 960_000  # base64 of backend.peer.mirror.CHUNK raw bytes
 
 
 class ProtocolError(Exception):
@@ -111,6 +113,10 @@ _OP_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
 _CAP_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,31}\Z")
 MAX_APP = 64
 MAX_CAPS = 32
+
+
+# A git object id: SHA-1 (40 hex) or SHA-256 (64 hex).
+_SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
 
 
 def _hex_re(n: int) -> re.Pattern:
@@ -282,6 +288,17 @@ def _req_empty(p, strict) -> dict:
     return _keys(p, (), (), strict)
 
 
+def _req_mirror_pull(p, strict) -> dict:
+    p = _keys(p, ("have", "offset"), (), strict)
+    if not (
+        p["have"] == "" or (isinstance(p["have"], str) and _SHA_RE.match(p["have"]))
+    ):
+        _fail("bad have")
+    if not _int(p["offset"], 0, MAX_MIRROR_BYTES):
+        _fail("bad offset")
+    return p
+
+
 _REQUESTS = {
     "msg": _req_msg,
     "diff": _req_diff,
@@ -289,6 +306,7 @@ _REQUESTS = {
     "list_files": _req_empty,
     "status": _req_empty,
     "screen": _req_empty,
+    "mirror_pull": _req_mirror_pull,
 }
 
 
@@ -387,7 +405,10 @@ def _res_list_files(p, req, strict) -> dict:
 
 
 def _res_status(p, req, strict) -> dict:
-    p = _keys(p, ("shared", "agent", "name"), (), strict)
+    # ``head`` (their share's HEAD sha) is newer: an older peer omits it.
+    p = _keys(p, ("shared", "agent", "name"), ("head",), strict)
+    if "head" in p and not (isinstance(p["head"], str) and _SHA_RE.match(p["head"])):
+        _fail("bad head")
     if not isinstance(p["shared"], bool):
         _fail("bad shared")
     if p["agent"] not in ("running", "stopped", "none"):
@@ -410,6 +431,31 @@ def _res_screen(p, req, strict) -> dict:
     return p
 
 
+def _res_mirror_pull(p, req, strict) -> dict:
+    p = _keys(p, ("head", "tip", "size", "sha256", "offset", "data"), (), strict)
+    for k in ("head", "tip"):
+        if not isinstance(p[k], str) or not _SHA_RE.match(p[k]):
+            _fail("bad " + k)
+    if not _int(p["size"], 0, MAX_MIRROR_BYTES) or not _int(
+        p["offset"], 0, MAX_MIRROR_BYTES
+    ):
+        _fail("bad size")
+    sha = p["sha256"]
+    if not isinstance(sha, str) or not (
+        sha == "" if p["size"] == 0 else _HEX64.match(sha)
+    ):
+        _fail("bad sha256")
+    data = p["data"]
+    if (
+        not isinstance(data, str)
+        or len(data) > MAX_MIRROR_CHUNK
+        or len(data) % 4
+        or not _B64_RE.match(data)
+    ):
+        _fail("bad data")
+    return p
+
+
 _RESPONSES = {
     "msg": _res_msg,
     "diff": _res_diff,
@@ -417,6 +463,7 @@ _RESPONSES = {
     "list_files": _res_list_files,
     "status": _res_status,
     "screen": _res_screen,
+    "mirror_pull": _res_mirror_pull,
 }
 
 

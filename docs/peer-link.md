@@ -92,6 +92,20 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    <your repo> peer/<branch>`) checkpoints the shared folder and fetches it into
    your own repo as a `peer/…` branch. Review it there like any branch — don't
    run the shared folder's code outside the sandbox.
+
+   **Mirror their work.** Export brings home *your* shared folder; to keep
+   *their* half in one of your repos, set **Mirror into…** on their link
+   (`POST /api/peer/links/<id>/mirror {repo_path, branch?}`): pick the repo
+   and a `peer/…` branch (default `peer/<their name>`). MindFlock fetches what
+   they have now, then again every time they checkpoint — it notices within
+   one status poll (about 10 s) — and says so in the bell ("*B*'s work
+   updated peer/… in *repo*"); a failure is said once, with what to do. Only
+   the branch moves: your working tree, index and checked-out branch are
+   never touched, and a mirror branch you have checked out is refused. Their
+   *read my files* permission decides whether you may mirror. Both of you
+   need this MindFlock version or newer — an older peer never reports a
+   head, so its mirror simply never updates. **Stop mirroring** keeps the
+   branch.
 10. **Stop.** *Unshare* stops the session (keeps the folder unless you tick
    *delete*); *Unlink* also forgets the peer's key and closes the connection.
    Either side can unlink at any time.
@@ -302,14 +316,15 @@ unknown keys):
 | `diff` | `{"max_chars": int 1000..200000}` | `{"stat": [...], "diff": str, "truncated": bool}` |
 | `read_file` | `{"path": str 1..1024}` | `{"path","size","encoding":"utf-8"\|"base64","content","truncated"}` |
 | `list_files` | `{}` | `{"files": [str], "truncated": bool}` |
-| `status` | `{}` | `{"shared": bool, "agent": "running"\|"stopped"\|"none", "name": str}` |
+| `status` | `{}` | `{"shared": bool, "agent": "running"\|"stopped"\|"none", "name": str, "head"?: sha}` — `head` (40 or 64 hex) is the shared folder's HEAD, sent only while one is bound; an older peer never sends it |
 | `screen` | `{}` | `{"text": str ≤200000, "cols": int 0..1000, "rows": int 0..1000, "agent": "running"\|"stopped"\|"none"}` — the shared session's visible screen (`tmux capture-pane -p -e`), escapes included |
+| `mirror_pull` | `{"have": sha \| "", "offset": int 0..67108864}` | `{"head": sha, "tip": sha, "size": int 0..67108864, "sha256": hex64 \| "", "offset": int, "data": base64 ≤ 960000 chars}` — one chunk of the mirror bundle (see [The mirror](#the-mirror--contract-mirrorpy)); `size` 0 = `have` is the tip already |
 
 Each side enforces its **own** permissions on inbound ops (`link.perms`:
 `messages`, `diff`, `read_file`; `list_files` follows `read_file`, `screen`
-follows `diff`; `status` is always allowed). A refused op returns
+follows `diff`, `mirror_pull` follows `read_file`; `status` is always allowed). A refused op returns
 `ok:false, err:"not permitted"`. With no share bound,
-`diff`/`read_file`/`list_files`/`screen` return `err:"no shared folder"`.
+`diff`/`read_file`/`list_files`/`screen`/`mirror_pull` return `err:"no shared folder"`.
 `screen` captures only the link's own shared session (named from the link
 record, never from the request), and the VIEWER's side strips everything but
 SGR colour codes before a browser sees it (`backend.peer.screen.sanitize`: no
@@ -434,14 +449,95 @@ The other functions:
     `MindFlock peer <peer@mindflock.invalid>`;
   - returns the new HEAD.
 - `export(share, target_repo, branch_name) -> dict`:
-  - checkpoint first;
-  - then, in the TRUSTED target repo,
-    `git fetch --no-tags <gitdir> +HEAD:refs/heads/<branch_name>`, with
-    `branch_name` validated by `git check-ref-format --branch` and required to
-    start with `peer/`;
-  - refuses to overwrite a checked-out branch.
+  - `check_target(target_repo, branch_name, share)` first: `branch_name`
+    validated by `git check-ref-format --branch` and required to start with
+    `peer/`; the target an existing git repository outside the peer folder;
+    the branch checked out in none of its worktrees (refused) → the canonical
+    path;
+  - checkpoint;
+  - then `fetch_into(target, <gitdir>, "HEAD", branch_name, sha)` — the fetch
+    step export and the mirror share: in the TRUSTED target repo,
+    `git fetch --no-tags --no-recurse-submodules --no-write-fetch-head
+    <source> +<src_ref>:refs/heads/<branch_name>` (hooks and fsmonitor off),
+    then the branch must read `sha`. `untrusted=True` (the mirror's
+    peer-built bundle) adds `-c fetch.fsckObjects=true`.
+- `head_sha(share)`: the share's HEAD (what `status` answers as `head`).
+- `mirror_bundle(share, have, out_path) -> {head, tip, size}`: see
+  [The mirror](#the-mirror--contract-mirrorpy).
 - `remove_share(share_id)`: `rm -rf` the root, only after checking that the
   path is inside `paths.shares_dir()` and that no session is running on it.
+
+## The mirror — CONTRACT (`mirror.py`)
+
+A standing export of THEIR shared folder into one of YOUR repos. Their git
+dir lives on their machine, so the objects cross the link as a git bundle.
+
+**The file.** `~/.mindflock/peer/mirror/<link_id>.json`, 0600, written
+atomically, never inside `links.json` (an older `LinkStore.validate()` must
+not see it):
+
+```json
+{"version": 1, "mirror": {"repo_path": "/abs/path", "branch": "peer/<name>", "enabled": true,
+  "last_head": "<sha>", "last_at": "<iso, UTC>", "last_error": ""}}
+```
+
+`last_head` is THEIR share's HEAD as last mirrored (their `status.head`, not
+the branch's tip — see below). A missing or unreadable file is "no mirror".
+Unlinking deletes it; a re-pair that mints a new link id moves it; the
+`peer/` branch it made is never deleted.
+
+**Enable** (`mirror.enable(link_id, repo_path, branch, peer_name)`, the
+`POST …/mirror` route): `share.check_target` — export's checks — on
+`repo_path` and `branch` (default `peer/<slug of their name>`); a refusal is
+a 400 that says what to fix ("that folder is not a git repository", "…
+is checked out in that repository — switch it to another branch…", "the
+branch must be a valid name starting with \"peer/\""). Re-enabling the same
+repo and branch keeps `last_head`; anything else starts over.
+
+**The trigger** (`mirror.wants_update(m, head, failed, now)`): their
+`status` reply's `head` (polled by `_refresh_their_status`; while any mirror
+is enabled a background loop re-asks every 10 s even with no browser open)
+starts an update when the mirror is enabled and `head` is a sha other than
+`last_head` — not within `RETRY_S` (60 s) of a failed update for that same
+head. Enabling a mirror also starts one at once (when connected). No `head`
+— an older peer, or nothing shared — never triggers. One update per link at
+a time.
+
+**The update** (`mirror.update`, receiving side):
+
+1. `check_target` again (the repo may have changed); `have` = the mirror
+   branch's current tip in the repo, or `""`.
+2. `mirror_pull {have, offset}` from offset 0, one chunk (≤ 720 000 raw
+   bytes) per request, 0.5 s apart (a 64 MB first mirror stays under the
+   link's 120 requests/min), into a 0600 temp file under `mirror/`. Every
+   chunk must carry the first one's `head`/`tip`/`size`/`sha256` (else it
+   restarts once), its own `offset`, and data that fits `size`; the file must
+   hash to `sha256`.
+3. `share.fetch_into(repo, <bundle>, "refs/mindflock/mirror", branch, tip,
+   untrusted=True)`: the only write to the repo is that branch's ref (and
+   the objects behind it, fsck'd). The temp file is removed either way.
+4. Success: `last_head`, `last_at` set, `last_error` cleared, event
+   `peer.mirror_updated {link_id, peer_name, repo_path, branch, sha, head}`
+   (`size` 0 — the branch is at `tip` already — updates the state with no
+   event). Failure: `last_error` set; `peer.mirror_failed {link_id,
+   peer_name, repo_path, branch, error}` only when the error differs from the
+   stored one. Their "no shared folder" is not a failure.
+
+**The bundle** (sharing side: `mirror.serve_pull` → `share.mirror_bundle`).
+A share is a shallow clone: its base commit names parents that exist only in
+the sharer's repo, so a bundle of the real commits fails to fetch anywhere
+else ("did not send all necessary objects"). `mirror_bundle` writes, under
+the share lock, a parent-rewritten copy of HEAD's first-parent chain (at
+most 1000 commits): each commit byte-for-byte except its `parent` lines (the
+oldest gets none, each other the previous copy) and dropped `gpgsig` /
+`gpgsig-sha256` / `mergetag` headers — same trees, authors, dates and
+messages. The copy is deterministic, so the receiver's `have` names a
+commit of it and the next bundle is incremental (`git bundle create <out>
+refs/mindflock/mirror ^<have>`); a `have` outside the chain gets the whole
+chain, `have == tip` gets `size` 0. `refs/mindflock/mirror` points at the
+copy's tip. The bundle is cut at offset 0 into `<share root>/mirror-out.bundle`
+(outside every sandbox mount) and removed after its last chunk is served;
+over `MIRROR_MAX_BYTES` (64 MB) it is refused with `err:"too big to mirror"`.
 
 ## The sandbox — CONTRACT (`sandbox.py`, `egress.py`, `bridge.py`, `sandbox_exec.py`)
 
@@ -716,6 +812,8 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   | `POST` | `/api/peer/links/{id}/share` | `{repo_path, branch?, program?}` → creates the share and the sandboxed session |
   | `DELETE` | `/api/peer/links/{id}/share` | `?delete_files=1` |
   | `POST` | `/api/peer/links/{id}/export` | `{target_repo, branch_name}` |
+  | `POST` | `/api/peer/links/{id}/mirror` | `{repo_path, branch?}` → `{link}`: mirror THEIR share into `repo_path` as `branch` (default `peer/<their name>`); fetches at once when connected. 400 with the reason when the repo or branch won't do |
+  | `DELETE` | `/api/peer/links/{id}/mirror` | → `{link}`; stop mirroring (the branch stays) |
   | `POST` | `/api/peer/links/{id}/address` | `{address}`: re-point a link we joined (`host:port` or `wss://…`) |
   | `POST` | `/api/peer/enable` | turn peer links on without an invite (the "somewhere else" step, so the doctor offers cloudflared) |
   | `POST` | `/api/peer/links/{id}/verified` | `{verified: bool}` — *It matches* |
@@ -729,7 +827,10 @@ The HTTP messages route refuses any client-supplied `from` that starts with
 
   Each link in `GET /api/peer` also carries `their_share`: `{shared, agent}`
   as the peer last answered `status` (re-asked in the background every 10 s
-  while connected), or `null` (offline, or not asked yet). An error any peer
+  while connected), plus `head` when they sent one, or `null` (offline, or
+  not asked yet), and `mirror`: `{repo_path, branch, enabled, last_head,
+  last_at, last_error, updating}` (`updating`: an update is running now) or
+  `null`. An error any peer
   route didn't anticipate answers **500** `{error: "<Type>: <message>"}` —
   never a bare status.
 
@@ -737,8 +838,9 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   and `op_id`; `POST /api/peer/join` takes `op_id` and answers
   `reconnected`. With an `op_id`, slow steps emit `peer.progress`. Events:
   `peer.link_added`, `peer.link_removed`, `peer.state`, `peer.progress`,
-  `peer.message`, `peer.relay_changed` (docs/extensions.md); none carries a
-  key, code or relay token.
+  `peer.message`, `peer.relay_changed`, `peer.mirror_updated`,
+  `peer.mirror_failed` (docs/extensions.md); none carries a key, code or
+  relay token.
 - Settings (`peer` group):
   - `enabled` (false)
   - `listen_host` (`0.0.0.0`)

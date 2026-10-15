@@ -32,6 +32,7 @@ See ``docs/peer-link.md`` ("The shared folder — CONTRACT").
 from __future__ import annotations
 
 import base64
+import contextlib
 import os
 import re
 import secrets
@@ -58,6 +59,12 @@ __all__ = [
     "diff",
     "checkpoint",
     "export",
+    "check_target",
+    "fetch_into",
+    "head_sha",
+    "mirror_bundle",
+    "MIRROR_REF",
+    "MIRROR_MAX_BYTES",
     "remove_share",
     "validate_relpath",
     "sanitize_message",
@@ -1251,11 +1258,15 @@ def _target_git(target: str, *args: str, timeout: float = 120) -> GitResult:
     return _run(argv, env=_trusted_env(), cwd=target, timeout=timeout)
 
 
-def export(share: Share, target_repo: str, branch_name: str) -> dict:
-    """Checkpoint the share, then fetch its HEAD into the user's TRUSTED
-    ``target_repo`` as ``refs/heads/<branch_name>`` (which must start with
-    ``peer/``). Nothing from the share is checked out or executed there.
-    → ``{branch, sha, target}``."""
+def check_target(
+    target_repo: str, branch_name: str, share: Optional[Share] = None
+) -> str:
+    """Validate a trusted target for :func:`fetch_into` → its canonical path.
+
+    ``branch_name`` must start with ``peer/`` and be a valid branch;
+    ``target_repo`` must be an existing git repository outside the peer
+    folder (and outside ``share``), with ``branch_name`` checked out in none
+    of its worktrees. Shared by export and the standing mirror."""
     if not isinstance(branch_name, str) or not branch_name.startswith("peer/"):
         raise ShareError("branch name must start with peer/")
     _check_branch(branch_name)
@@ -1264,9 +1275,10 @@ def export(share: Share, target_repo: str, branch_name: str) -> dict:
     target = os.path.realpath(os.path.expanduser(target_repo))
     if paths.is_inside_peer_root(target):
         raise ShareError("target repo is inside the peer folder")
-    root = os.path.realpath(share.root)
-    if target == root or target.startswith(root + os.sep):
-        raise ShareError("target repo is inside the peer folder")
+    if share is not None:
+        root = os.path.realpath(share.root)
+        if target == root or target.startswith(root + os.sep):
+            raise ShareError("target repo is inside the peer folder")
     if not os.path.isdir(target):
         raise ShareError("target repo is not a directory")
     probe = _target_git(target, "rev-parse", "--git-dir", timeout=30)
@@ -1279,26 +1291,196 @@ def export(share: Share, target_repo: str, branch_name: str) -> dict:
     worktrees = gitutil.parse_worktree_list(wt.stdout.decode("utf-8", "replace"))
     if any(w.get("branch") == ref for w in worktrees):
         raise ShareError("branch %s is checked out in the target" % branch_name)
+    return target
 
+
+def fetch_into(
+    target: str,
+    source: str,
+    src_ref: str,
+    branch_name: str,
+    sha: str,
+    *,
+    what: str = "export",
+    untrusted: bool = False,
+) -> None:
+    """The fetch step of export and the mirror: ``git fetch <source>
+    +<src_ref>:refs/heads/<branch_name>`` in the TRUSTED ``target`` (already
+    passed :func:`check_target`), then check the branch landed on ``sha``.
+    Only a ref moves — the target's working tree and index are never touched.
+    ``source`` is a git dir or a bundle file; ``untrusted`` (a bundle the
+    peer built) also fscks every object received."""
+    ref = "refs/heads/" + branch_name
+    fsck = ("-c", "fetch.fsckObjects=true") if untrusted else ()
+    fetch = _target_git(
+        target,
+        *fsck,
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--no-recurse-submodules",
+        "--no-write-fetch-head",
+        "--end-of-options",
+        source,
+        "+%s:%s" % (src_ref, ref),
+        timeout=600,
+    )
+    if fetch.returncode != 0:
+        raise ShareError("%s failed: %s" % (what, _first_line(fetch.stderr)))
+    got = _target_git(target, "rev-parse", "--verify", "-q", ref + "^{commit}")
+    if got.stdout.decode("ascii", "replace").strip() != sha:
+        raise ShareError("%s failed: branch not updated" % what)
+
+
+def export(share: Share, target_repo: str, branch_name: str) -> dict:
+    """Checkpoint the share, then fetch its HEAD into the user's TRUSTED
+    ``target_repo`` as ``refs/heads/<branch_name>`` (which must start with
+    ``peer/``). Nothing from the share is checked out or executed there.
+    → ``{branch, sha, target}``."""
+    target = check_target(target_repo, branch_name, share)
     with _lock(share):  # HEAD can't move between the commit and the fetch
         sha = _checkpoint_locked(
             share, "peer export to %s" % branch_name, author=_export_author()
         )
-        fetch = _target_git(
-            target,
-            "fetch",
-            "--quiet",
-            "--no-tags",
-            "--no-recurse-submodules",
-            "--no-write-fetch-head",
-            "--end-of-options",
-            share.gitdir,
-            "+HEAD:" + ref,
-            timeout=600,
-        )
-    if fetch.returncode != 0:
-        raise ShareError("export failed: %s" % _first_line(fetch.stderr))
-    got = _target_git(target, "rev-parse", "--verify", "-q", ref + "^{commit}")
-    if got.stdout.decode("ascii", "replace").strip() != sha:
-        raise ShareError("export failed: branch not updated")
+        fetch_into(target, share.gitdir, "HEAD", branch_name, sha)
     return {"branch": branch_name, "sha": sha, "target": target}
+
+
+# --------------------------------------------------------------------------- #
+# The standing mirror, sharing side (docs/peer-link.md, "The mirror")
+# --------------------------------------------------------------------------- #
+#: The share-side ref a mirror bundle is cut from: the parent-rewritten copy
+#: of HEAD's first-parent chain (see :func:`mirror_bundle`).
+MIRROR_REF = "refs/mindflock/mirror"
+#: A mirror bundle bigger than this is refused (it crosses the link in
+#: ``mirror_pull`` chunks, under the link's request rate).
+MIRROR_MAX_BYTES = 64 * 1024 * 1024
+#: The newest commits of the chain a mirror carries; the oldest becomes a root.
+MIRROR_MAX_COMMITS = 1000
+_SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
+_DROP_HEADERS = (b"parent ", b"gpgsig ", b"gpgsig-sha256 ", b"mergetag ")
+
+
+def head_sha(share: Share) -> str:
+    """The share's HEAD sha (what ``status`` answers as ``head``)."""
+    return _head(share)
+
+
+def _rewrite_commit(raw: bytes, parent: Optional[str]) -> bytes:
+    """``raw`` (a commit object's body) with its parents replaced by
+    ``parent`` (or none) and its signatures dropped; all else verbatim."""
+    header, sep, message = raw.partition(b"\n\n")
+    out: List[bytes] = []
+    dropping = False
+    for line in header.split(b"\n"):
+        if dropping and line.startswith(b" "):
+            continue  # a dropped header's continuation line
+        dropping = line.startswith(_DROP_HEADERS)
+        if dropping:
+            continue
+        out.append(line)
+        if parent and line.startswith(b"tree "):
+            out.append(b"parent " + parent.encode("ascii"))
+    return b"\n".join(out) + sep + message
+
+
+def _object_id(kind: bytes, body: bytes, sha256: bool) -> str:
+    import hashlib
+
+    h = hashlib.sha256() if sha256 else hashlib.sha1()  # noqa: S324 — git's id
+    h.update(kind + b" %d\x00" % len(body) + body)
+    return h.hexdigest()
+
+
+def _mirror_chain(share: Share) -> Tuple[str, List[str]]:
+    """Write the mirror copy of HEAD's chain → ``(head, [rewritten shas,
+    oldest first])`` and point :data:`MIRROR_REF` at the last one.
+
+    A share is a SHALLOW clone: its base commit names parents that exist only
+    in the sharer's own repo, so a bundle of the real commits can't be
+    fetched anywhere else ("did not send all necessary objects"). The copy
+    is the same commits — same trees, authors, dates and messages — with the
+    base made a root and every parent pointing at the previous copy. It is
+    deterministic, so the receiver's last mirrored sha names a commit the
+    sharer can cut the next (incremental) bundle from. Caller holds the lock."""
+    head = _head(share)
+    revs = git(
+        share,
+        "rev-list",
+        "--first-parent",
+        "--reverse",
+        "--max-count=%d" % MIRROR_MAX_COMMITS,
+        "HEAD",
+    ).stdout.split()
+    res = git(share, "cat-file", "--batch", input=b"\n".join(revs) + b"\n", timeout=120)
+    if res.truncated:
+        raise ShareError("share history is too big to mirror")
+    batch = res.stdout
+    sha256 = len(head) == 64
+    chain: List[str] = []
+    bodies: Dict[str, bytes] = {}
+    pos = 0
+    for _ in revs:
+        nl = batch.index(b"\n", pos)
+        fields = batch[pos:nl].split()
+        if len(fields) != 3 or fields[1] != b"commit":
+            raise ShareError("share history is unreadable")
+        size = int(fields[2])
+        raw = batch[nl + 1 : nl + 1 + size]
+        pos = nl + 1 + size + 1
+        body = _rewrite_commit(raw, chain[-1] if chain else None)
+        oid = _object_id(b"commit", body, sha256)
+        bodies[oid] = body
+        chain.append(oid)
+    if not chain:
+        raise ShareError("share has no HEAD")
+    have = git(
+        share,
+        "cat-file",
+        "--batch-check=%(objectname) %(objecttype)",
+        input="\n".join(chain).encode("ascii") + b"\n",
+        check=False,
+    ).stdout.decode("ascii", "replace")
+    # A missing object reads "<sha> missing": only "<sha> commit" is there.
+    present = {
+        f[0] for f in (ln.split() for ln in have.splitlines()) if f[1:] == ["commit"]
+    }
+    for oid in chain:
+        if oid in present:
+            continue
+        wrote = git(
+            share, "hash-object", "-t", "commit", "-w", "--stdin", input=bodies[oid]
+        )
+        if wrote.stdout.decode("ascii", "replace").strip() != oid:
+            raise ShareError("share history could not be copied")
+    git(share, "update-ref", MIRROR_REF, chain[-1])
+    return head, chain
+
+
+def mirror_bundle(share: Share, have: str, out_path: str) -> dict:
+    """Cut the mirror bundle for a receiver whose mirror branch is at
+    ``have`` ("" for none) into ``out_path`` → ``{head, tip, size}``.
+
+    ``tip`` is the mirror copy of ``head`` (:func:`_mirror_chain`). When
+    ``have`` is that copy already, nothing is written (``size`` 0); when it
+    is an older copy, the bundle carries only what follows it; otherwise all
+    of it. The receiver fetches ``MIRROR_REF`` from the bundle. Raises
+    ShareError("too big to mirror") past :data:`MIRROR_MAX_BYTES`."""
+    with _lock(share):
+        head, chain = _mirror_chain(share)
+        tip = chain[-1]
+        if have == tip:
+            return {"head": head, "tip": tip, "size": 0}
+        args = ["bundle", "create", "--quiet", out_path, MIRROR_REF]
+        if have and _SHA_RE.match(have) and have in chain:
+            args.append("^" + have)
+        git(share, *args, timeout=600)
+    try:
+        size = os.stat(out_path).st_size
+    except OSError:
+        raise ShareError("mirror bundle failed") from None
+    if size > MIRROR_MAX_BYTES:
+        with contextlib.suppress(OSError):
+            os.unlink(out_path)
+        raise ShareError("too big to mirror")
+    return {"head": head, "tip": tip, "size": size}
