@@ -12,10 +12,25 @@
  * and portalled to <body>. Inside the pane, `container-type` (Pane.css) makes
  * the pane the containing block and stacking context of a fixed child, so in
  * a 2×2 the pane below painted over the menu's lower half and the pinned
- * Task bar over its first item. */
+ * Task bar over its first item.
+ *
+ * Placed by lib/menuPlace, like the row's menu: measured hidden for one
+ * layout pass, then hung under the ⋯ (above it with no room below), and
+ * nudged up as More ▸ unfolds or Delete arms, so all of it stays on screen;
+ * on a window too short for it, its items scroll and Close / Delete stay
+ * pinned at its foot (SessionMenu.css). */
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { placeMenu, refitMenu, type MenuPlacement } from "../../lib/menuPlace";
+
+/** The menu's height with nothing scrolled away: a clamped child (the
+ * session items scroll inside it) counts at its full height. */
+function naturalHeight(el: HTMLElement): number {
+  let h = el.offsetHeight;
+  for (const c of Array.from(el.children)) h += c.scrollHeight - c.clientHeight;
+  return h;
+}
 
 export function PaneMoreMenu({
   children,
@@ -27,14 +42,30 @@ export function PaneMoreMenu({
   btnRef?: (el: HTMLButtonElement | null) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const [place, setPlace] = useState<MenuPlacement | null>(null);
   const btn = useRef<HTMLButtonElement | null>(null);
   const menu = useRef<HTMLDivElement | null>(null);
 
+  // Measure, then place: drawn hidden at 0,0 for one layout pass first.
   useLayoutEffect(() => {
-    if (!open || !btn.current) return;
+    setPlace(null);
+    const el = menu.current;
+    if (!open || !el || !btn.current) return;
     const r = btn.current.getBoundingClientRect();
-    setPos({ top: r.bottom + 4, right: Math.max(4, window.innerWidth - r.right) });
+    let placed: MenuPlacement | null = null;
+    const fit = () => {
+      const w = el.offsetWidth;
+      const h = naturalHeight(el);
+      placed = placed
+        ? refitMenu(placed, w, h, window.innerWidth, window.innerHeight)
+        : placeMenu({ x: r.right, y: r.bottom + 4, flipY: r.top - 4, align: "end" }, w, h, window.innerWidth, window.innerHeight);
+      setPlace(placed);
+    };
+    fit();
+    // More ▸ unfolding or Delete arming grows it: keep it on screen.
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(fit) : null;
+    for (const c of Array.from(el.querySelectorAll(":scope > *, .session-menu > *"))) ro?.observe(c);
+    return () => ro?.disconnect();
   }, [open]);
 
   useEffect(() => {
@@ -82,13 +113,16 @@ export function PaneMoreMenu({
         ⋯
       </button>
       {open &&
-        pos &&
         createPortal(
           <div
             ref={menu}
             className="pane-more-menu"
             role="menu"
-            style={{ top: pos.top, right: pos.right }}
+            style={
+              place
+                ? { left: place.left, top: place.top, maxHeight: place.maxHeight }
+                : { left: 0, top: 0, visibility: "hidden" }
+            }
             onMouseDown={(e) => e.stopPropagation()}
           >
             {children(() => setOpen(false))}
