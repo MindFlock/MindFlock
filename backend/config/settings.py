@@ -1462,6 +1462,7 @@ class PrefsSettings:
     diff_base: str = ""
     hidden_bars: Optional[List[str]] = None  # None = never set; [] = none hidden
     bar_order: List[str] = field(default_factory=list)
+    tours_seen: List[str] = field(default_factory=list)  # tour ids seen on any device
     reduce_motion: Optional[bool] = None
     break_on: Optional[bool] = None
     break_every: Optional[int] = None
@@ -1505,6 +1506,8 @@ class PrefsSettings:
             d["hidden_bars"] = list(self.hidden_bars)
         if self.bar_order:
             d["bar_order"] = list(self.bar_order)
+        if self.tours_seen:
+            d["tours_seen"] = list(self.tours_seen)
         for f in self._BOOLS + self._INTS:
             if getattr(self, f) is not None:
                 d[f] = getattr(self, f)
@@ -1529,6 +1532,7 @@ class PrefsSettings:
                 _str_list(hidden) if isinstance(hidden, (list, tuple)) else None
             ),
             bar_order=_str_list(d.get("bar_order")),
+            tours_seen=_str_list(d.get("tours_seen")),
             reduce_motion=_opt_bool(d.get("reduce_motion")),
             break_on=_opt_bool(d.get("break_on")),
             break_every=_opt_int(d.get("break_every")),

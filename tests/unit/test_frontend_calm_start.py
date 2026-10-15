@@ -116,18 +116,18 @@ class TestNewDialog:
 
 
 class TestFirstRun:
-    def test_the_tour_is_five_slides_and_pauses_for_setup(self):
+    def test_the_welcome_is_one_card_that_hands_over_to_the_coach_tour(self):
+        """Round 5: the five-slide tour is one welcome card — a title, two
+        plain lines and "Let's go", which starts the Welcome coach tour over
+        the checklist. No slide ever sends a 0-session user into Intake's
+        tracker wizard again ("Set up now"), and no exit stacks a second
+        checklist modal ("Open Setup")."""
         src = _read("components/onboarding/WelcomeTour.tsx")
-        slides = src[
-            src.index("const SLIDES: Slide[] = [") : src.index("/** The brand mark")
-        ]
-        assert len(re.findall(r"^\s{4}title: ", slides, flags=re.M)) == 5
-        # Verify always shows in the top bar, and there is no Outbox to name.
-        assert "Outbox" not in slides
-        assert "joins the top bar" not in slides
-        assert "adds more bars" in slides and "<b>Prompts</b>" in slides
+        assert "WELCOME_TITLE" in src and "WELCOME_LINES" in src
+        assert "Let's go" in src
+        assert "Set up now" not in src and "Open Setup" not in src
+        assert "const SLIDES" not in src and "LEGACY_SCREEN_TABS" not in src
         assert 's.openDialog === "setup"' in src
-        assert "LEGACY_SCREEN_TABS" in src
 
     def test_setup_never_opens_itself(self):
         """The Setup modal opens from the chip, the doctor chip, the palette and
@@ -154,7 +154,7 @@ class TestFirstRun:
         store = _code(_read("state/store.ts"))
         assert "tourDone" not in store and "mf_tour_done" not in store
         palette = _read("components/palette/CommandPalette.tsx")
-        assert 'label: "Tour"' in palette
+        assert "replayTour(id)" in palette
         assert "shortcuts-tour" in _read("components/palette/ShortcutsSheet.tsx")
 
     def test_setup_has_no_account_test_forms(self):
