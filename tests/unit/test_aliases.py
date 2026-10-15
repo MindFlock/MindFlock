@@ -288,3 +288,15 @@ def test_phone_renders_the_name_not_the_title():
     js = client.get("/mobile.js").text
     assert "name.textContent = inst.name || title;" in js
     assert "function nameOf(title)" in js
+
+
+def test_a_template_run_named_pr_something_is_not_a_pr_session():
+    """Round 5: a template called "pr-bot" starts "pr-bot-oct14" — plain
+    title, never "(pr) bot-oct14". Only pipeline shapes split."""
+    from backend.web.core import aliases
+
+    assert aliases.session_label("pr-bot-oct14", "") == "pr-bot-oct14"
+    assert aliases.session_label("pr-bot", "") == "pr-bot"
+    assert aliases.session_label("pr-widgets-318", "") == "(pr) widgets-318"
+    assert aliases.session_label("issue-widgets-42", "") == "(iss) widgets-42"
+    assert aliases.session_label("pr-318-c-9001", "") == "(pr) 318-c-9001"

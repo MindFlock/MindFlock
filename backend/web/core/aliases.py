@@ -20,6 +20,8 @@ pattern): one process writes, so an in-memory dict loaded once is safe.
 
 from __future__ import annotations
 
+import re
+
 import os
 import threading
 from typing import Dict, Optional
@@ -131,12 +133,27 @@ def _branch_tail(branch: str) -> str:
     return parts[-1] if parts else ""
 
 
+# A template run's title ends in a date stamp ("nightly-tests-oct14",
+# "-oct14-2", "-oct14-2026"): it is never a pipeline session, whatever the
+# template was called. Mirrors TEMPLATE_RUN_RE in frontend/src/lib/sessionLabel.ts.
+_TEMPLATE_RUN_RE = re.compile(
+    r"-(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\d{1,2}(?:-\d{4})?(?:-\d+)?$"
+)
+# The slug of a PR / issue session: ``<repo>-<number>``, or a PR comment
+# session's ``<number>-c-<comment id>``. Mirrors PIPELINE_SLUG_RE.
+_PIPELINE_SLUG_RE = re.compile(r"^(?:.+-\d+|\d+-c-\d+)$")
+
+
 def _split_kind(title: str):
-    """``(kind, slug)`` for a title a pipeline made, else ``None``."""
-    if title.startswith("pr-"):
-        return ("pr", title[3:])
-    if title.startswith("issue-"):
-        return ("iss", title[6:])
+    """``(kind, slug)`` for a title a pipeline made, else ``None``. Only the
+    shapes the PR / issue pipelines make count: a template named "pr-bot"
+    starts "pr-bot-oct14", which is no PR (round 5, r5-schedule #17)."""
+    if _TEMPLATE_RUN_RE.search(title):
+        return None
+    for prefix, kind in (("pr-", "pr"), ("issue-", "iss")):
+        if title.startswith(prefix):
+            slug = title[len(prefix) :]
+            return (kind, slug) if _PIPELINE_SLUG_RE.match(slug) else None
     return None
 
 
