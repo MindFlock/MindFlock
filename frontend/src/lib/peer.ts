@@ -7,6 +7,7 @@
  * router: an `mfp1:`/`mfp2:` code goes here, a device code to Devices. */
 
 import { api } from "../api/client";
+import { relTime } from "./format";
 import type { SettingsScreen } from "./openSettings";
 
 export interface PeerLink {
@@ -32,7 +33,103 @@ export interface PeerLink {
   peer_app?: string | null;
   /** THEIR shared session as they last reported it (asked over the link
    * every ~10s while connected): null when not connected or not asked yet. */
-  their_share?: { shared: boolean; agent: "running" | "stopped" | "none" | string } | null;
+  their_share?: { shared: boolean; agent: "running" | "stopped" | "none" | string; head?: string } | null;
+  /** The link's joint task in short (null/absent: none, or an older server). */
+  joint?: PeerJointSummary | null;
+  /** The standing mirror of their work into one of my repos (null: off). */
+  mirror?: PeerMirror | null;
+}
+
+/** Whose side something came from, as the side reading it sees it. */
+export type JointWho = "me" | "peer";
+export type JointState = "proposed" | "active" | "done" | "cancelled";
+
+/** `link_view.joint` — enough for the card to know whether to fetch more. */
+export interface PeerJointSummary {
+  id: string;
+  state: JointState;
+  brief_head: string;
+  contract_rev: number;
+  open_proposals: number;
+  mine_shared: boolean;
+  theirs_shared: boolean;
+}
+
+/** A proposed edit to the contract (the whole new text), and its fate. */
+export interface JointProposal {
+  id: string;
+  by: JointWho;
+  text: string;
+  at: string;
+  state: "open" | "accepted" | "rejected";
+}
+
+export interface JointCheckStep {
+  id: string;
+  text: string;
+  expect: string;
+  actor: "agent" | "human";
+  side: "mine" | "theirs";
+}
+
+export interface JointCheckResult {
+  result: "pass" | "fail" | "blocked" | "";
+  note: string;
+  at: string;
+  by: "agent" | "human";
+}
+
+export interface JointCheckSide {
+  results: Record<string, JointCheckResult>;
+  tested_sha: string;
+  at: string;
+}
+
+export type JointVerdict = "verified" | "failed" | "needs_you" | "in_progress" | "empty";
+
+/** The joint checklist (wave 2): steps split by side, each side's results. */
+export interface JointCheckData {
+  steps: JointCheckStep[];
+  mine: JointCheckSide;
+  theirs: JointCheckSide;
+  verdict: JointVerdict;
+}
+
+/** GET /api/peer/links/{id}/joint → `{joint}`: one task, two halves, one
+ * contract both agents follow. */
+export interface PeerJoint {
+  id: string;
+  brief: string;
+  proposed_by: JointWho;
+  created: string;
+  state: JointState;
+  /** `error`: why my half's shared session failed to start ("" when fine). */
+  mine: {
+    repo_path: string;
+    repo_name?: string;
+    branch: string;
+    program: string;
+    share_id: string;
+    session_title: string;
+    error?: string;
+  };
+  theirs: { repo_name: string; branch: string; program: string; shared: boolean };
+  contract: { text: string; rev: number; updated: string; by: JointWho };
+  proposals: JointProposal[];
+  check?: JointCheckData | null;
+}
+
+/** `link_view.mirror`: their shared work fetched into my repo as a branch
+ * whenever their HEAD moves. */
+export interface PeerMirror {
+  repo_path: string;
+  branch: string;
+  enabled: boolean;
+  last_head: string;
+  last_at: string;
+  last_error: string;
+  /** A fetch is running right now. */
+  updating?: boolean;
 }
 
 export interface PeerRelay {
@@ -156,7 +253,7 @@ export function roleText(role: string): string {
 /** Plain words for how a link connects. */
 export function carrierText(carrier: string | undefined): string {
   if (carrier === "relay") return "through the relay";
-  if (carrier === "tcp") return "directly (same network or tailnet)";
+  if (carrier === "tcp") return "directly (same network or Tailscale)";
   return "";
 }
 
@@ -192,8 +289,9 @@ export function peerChip(inst: {
   };
 }
 
-/** The peer.* events as one line each: the bell's row (`text`, `cls`) and the
- * toast (`toast`, "" for none). null for an event that is not news. */
+/** The peer.* events as one line each: the bell's row (`text`, `cls`; "" for
+ * a toast-only event) and the toast (`toast`, "" for none). null for an event
+ * that is not news. */
 export function peerEventNote(
   event: string,
   data: Record<string, unknown> | null | undefined
@@ -204,18 +302,21 @@ export function peerEventNote(
     case "peer.link_added": {
       const sas = String(d.sas || "");
       const tail = sas ? " — compare safety number " + sas : "";
-      const text = (d.repaired ? name + " reconnected" : name + " joined") + tail;
-      // Only the inviter is surprised by it: the joiner just clicked Join.
+      // The inviter hears who arrived; the joiner (role "dialer") just pressed
+      // Join, so their row says they're connected, not that the other joined.
+      const head = d.role === "dialer" ? (d.repaired ? "Reconnected to " : "Connected to ") + name : d.repaired ? name + " reconnected" : name + " joined";
+      const text = head + tail;
       return { text, cls: "n-done", toast: d.role === "dialer" ? "" : text };
     }
     case "peer.link_removed":
       if (d.by !== "peer") return null;
       return { text: name + " unlinked", cls: "n-info", toast: name + " unlinked" };
     case "peer.message": {
-      if (!d.stored) return null; // delivered into a shared session: that session says so
-      const text = name + " sent you a message";
+      // Every message is a bell row, by person — whether it waited for you
+      // (stored) or went straight to your shared session's agent too.
+      const text = d.stored ? name + " sent you a message" : name + " sent a message (your shared agent has it too)";
       const preview = String(d.text || "").trim();
-      return { text: preview ? text + ": " + preview : text, cls: "n-info", toast: text };
+      return { text: preview ? text + ": " + preview : text, cls: "n-info", toast: name + " sent you a message" };
     }
     case "peer.relay_changed": {
       const peers = Array.isArray(d.peers) ? d.peers.map(String).filter(Boolean) : [];
@@ -223,7 +324,285 @@ export function peerEventNote(
       const text = "Your relay address changed — send " + who + " a fresh invite to reconnect";
       return { text, cls: "n-warn", toast: text };
     }
+    case "peer.joint_proposed": {
+      const text = name + " proposes a joint task — accept in People";
+      const brief = String(d.brief || "").trim();
+      return { text: brief ? text + ": " + clip(brief, 80) : text, cls: "n-info", toast: text };
+    }
+    case "peer.joint_contract": {
+      // Only an open proposal waits on a person; a synced revision is not
+      // news. Theirs is a bell row; your own agent's is a toast only (text "").
+      if (d.kind !== "proposal" || !d.open) return null;
+      if (d.by === "peer") {
+        const text = name + "'s agent proposes a contract change";
+        return { text, cls: "n-info", toast: text };
+      }
+      if (d.by === "agent") return { text: "", cls: "n-info", toast: "Your agent proposes a contract change — review it in People" };
+      return null;
+    }
+    case "peer.joint_state": {
+      // Their answer to my proposal, or their side ending it; my own clicks
+      // are not news.
+      if (d.by !== "peer") return null;
+      const state = String(d.state || "");
+      const text =
+        state === "active"
+          ? name + " accepted the joint task"
+          : state === "done"
+          ? name + " marked the joint task done"
+          : state === "cancelled"
+          ? name + " cancelled the joint task"
+          : "";
+      if (!text) return null;
+      return { text, cls: state === "cancelled" ? "n-warn" : "n-done", toast: text };
+    }
+    case "peer.mirror_updated": {
+      const text = name + "'s work updated " + mirrorBranchText(d.branch) + " in " + repoText(d);
+      return { text, cls: "n-done", toast: text };
+    }
+    case "peer.mirror_failed": {
+      const err = String(d.error || "").trim();
+      const text = "Couldn't mirror " + name + "'s work into " + repoText(d) + (err ? ": " + err : "");
+      return { text, cls: "n-warn", toast: "Couldn't mirror " + name + "'s work into " + repoText(d) };
+    }
     default:
       return null;
   }
+}
+
+function clip(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s;
+}
+
+/** The last folder name of a path ("/home/a/api" → "api"). */
+export function baseName(path: string): string {
+  const parts = String(path || "").replace(/[\\/]+$/, "").split(/[\\/]/);
+  return parts[parts.length - 1] || String(path || "");
+}
+
+function repoText(d: Record<string, unknown>): string {
+  return String(d.repo_name || "").trim() || baseName(String(d.repo_path || "")) || "your repo";
+}
+
+function mirrorBranchText(branch: unknown): string {
+  return String(branch || "").trim() || "its peer/ branch";
+}
+
+/** Every peer.* event the People screen refetches on (and the bell / toasts
+ * know about). */
+export const PEER_LIVE_EVENTS = [
+  "peer.link_added",
+  "peer.link_removed",
+  "peer.state",
+  "peer.message",
+  "peer.relay_changed",
+  "peer.joint_proposed",
+  "peer.joint_state",
+  "peer.joint_contract",
+  "peer.mirror_updated",
+  "peer.mirror_failed",
+] as const;
+
+/** The peer.* events that can be news (a bell row / a toast). */
+export const PEER_NEWS_EVENTS = [
+  "peer.link_added",
+  "peer.link_removed",
+  "peer.message",
+  "peer.relay_changed",
+  "peer.joint_proposed",
+  "peer.joint_state",
+  "peer.joint_contract",
+  "peer.mirror_updated",
+  "peer.mirror_failed",
+] as const;
+
+// --------------------------------------------------------------------------
+// Joint tasks (docs/peer-link.md → Joint tasks)
+// --------------------------------------------------------------------------
+
+/** Where a link's joint task stands, from THIS side: what the card shows. */
+export type JointPhase = "none" | "proposed-by-me" | "proposed-by-peer" | "active" | "ended";
+
+export function jointPhase(joint: Pick<PeerJoint, "state" | "proposed_by"> | null | undefined): JointPhase {
+  if (!joint) return "none";
+  if (joint.state === "active") return "active";
+  if (joint.state === "proposed") return joint.proposed_by === "peer" ? "proposed-by-peer" : "proposed-by-me";
+  return "ended";
+}
+
+/** The starter contract a new joint task's form is prefilled with. */
+export const CONTRACT_TEMPLATE = [
+  "## What we're building",
+  "",
+  "",
+  "## Interfaces between the halves",
+  "",
+  "",
+  "## Who owns what",
+  "",
+  "",
+  "## Done means",
+  "",
+].join("\n");
+
+/** The open proposals, oldest first. */
+export function openProposals(joint: Pick<PeerJoint, "proposals"> | null | undefined): JointProposal[] {
+  return (joint?.proposals || []).filter((p) => p.state === "open");
+}
+
+/** "/api/peer/links/<id>/joint" plus a tail ("/accept", "/contract", …). */
+export function jointPath(linkId: string, tail = ""): string {
+  return "/api/peer/links/" + encodeURIComponent(linkId) + "/joint" + tail;
+}
+
+/** The mirror branch a new mirror suggests: peer/<their name>. */
+export function defaultMirrorBranch(peerName: string): string {
+  return "peer/" + ((peerName || "work").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "work");
+}
+
+/** An ISO time (or "") as epoch seconds, NaN when unreadable. */
+export function isoSeconds(iso: string | null | undefined): number {
+  return iso ? Date.parse(iso) / 1000 : NaN;
+}
+
+/** The mirror row's status line: what it is doing, and when it last did it. */
+export function mirrorStatusText(m: PeerMirror, peerName: string, now = Date.now() / 1000): string {
+  const where = m.branch + " in " + baseName(m.repo_path);
+  if (!m.enabled) return "Mirror is off.";
+  if (m.updating) return "Mirroring " + peerName + "'s work into " + where + " — updating now…";
+  const t = isoSeconds(m.last_at);
+  if (!m.last_head || !Number.isFinite(t)) return "Mirroring " + peerName + "'s work into " + where + " — waiting for their first change.";
+  const ago = relTime(t, { now });
+  return "Mirroring " + peerName + "'s work into " + where + " — last updated " + ago + " (" + m.last_head.slice(0, 7) + ").";
+}
+
+/** The joint checklist's verdict as words for its chip. */
+export function jointVerdictText(v: JointVerdict | string | undefined): string {
+  switch (v) {
+    case "verified":
+      return "Both halves agree";
+    case "failed":
+      return "A step failed";
+    case "needs_you":
+      return "Needs you";
+    case "in_progress":
+      return "Checking…";
+    default:
+      return "No steps yet";
+  }
+}
+
+/** What a proposed contract changes, line by line: the lines it adds ("+")
+ * and removes ("-"), in order, blank lines left out — so a person reviews the
+ * change, not the whole contract again. A longest-common-subsequence diff;
+ * contracts are short. */
+export function contractLineDiff(before: string, after: string): Array<{ op: "+" | "-"; text: string }> {
+  const a = String(before || "").replace(/\r\n?/g, "\n").split("\n");
+  const b = String(after || "").replace(/\r\n?/g, "\n").split("\n");
+  const n = a.length;
+  const m = b.length;
+  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--) lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+  const out: Array<{ op: "+" | "-"; text: string }> = [];
+  let i = 0;
+  let j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && a[i] === b[j]) {
+      i++;
+      j++;
+    } else if (j < m && (i >= n || lcs[i][j + 1] > lcs[i + 1][j])) {
+      if (b[j].trim()) out.push({ op: "+", text: b[j] });
+      j++;
+    } else {
+      if (a[i].trim()) out.push({ op: "-", text: a[i] });
+      i++;
+    }
+  }
+  return out;
+}
+
+/** Whether a session.message comes from a person over a peer connection
+ * ("peer:<name>") — its peer.message twin already says so, by person. */
+export function isPeerSender(from: unknown): boolean {
+  return String(from || "").startsWith("peer:");
+}
+
+/** Pasted text that names an invite (mfp1:/mfp2:) but whose code is cut off. */
+export function isCutOffInvite(text: string): boolean {
+  return /mfp[12]:/i.test(text || "") && !isPeerCode(text);
+}
+
+/** Export ("Bring work home") succeeded: which branch, where, and — when the
+ * server says — how much came across. */
+export function exportDoneText(r: { branch?: string; target?: string; sha?: string; commits?: number } | null, repo: string): string {
+  const branch = r?.branch || "the branch";
+  const where = baseName(r?.target || repo);
+  if (typeof r?.commits === "number") {
+    if (r.commits === 0) return "Nothing new to bring home — " + branch + " in " + where + " is already up to date.";
+    return "Brought " + r.commits + (r.commits === 1 ? " commit" : " commits") + " home → " + branch + " in " + where + ".";
+  }
+  return "Brought home → " + branch + " in " + where + (r?.sha ? " (" + r.sha.slice(0, 7) + ")" : "") + ".";
+}
+
+/** Export failed: one sentence, never "export failed: export failed: …", never
+ * an API field name. */
+export function exportErrorText(raw: string): string {
+  let m = String(raw || "").trim();
+  while (/^export failed:\s*/i.test(m)) m = m.replace(/^export failed:\s*/i, "");
+  const lower = m.toLowerCase();
+  let why = m;
+  if (/target_repo|not a git repository|is not a directory|bad target repo/.test(lower))
+    why = "that folder isn't a git repository — pick your repo";
+  else if (lower.includes("branch not updated"))
+    why = "the branch didn't move — pick the repo you shared from (it must share history with the shared folder)";
+  else if (lower.includes("inside the peer"))
+    why = "that folder is the shared copy itself — pick your own repo";
+  else if (lower.includes("checked out in the target"))
+    why = m.replace(/in the target/, "in that repo") + " — switch branches there first";
+  why = why.replace(/[.\s]+$/, "");
+  return "Couldn't bring work home: " + (why || "something went wrong") + ".";
+}
+
+// --------------------------------------------------------------------------
+// The safety number each browser last saw confirmed, per connection — so a
+// NEW number after a reconnect is called out instead of silently replacing
+// the one people read to each other. Per-viewer convenience only.
+// --------------------------------------------------------------------------
+
+const SAS_SEEN_KEY = "mf_peer_sas_seen";
+
+function readSasSeen(): Record<string, string> {
+  try {
+    const v = JSON.parse(localStorage.getItem(SAS_SEEN_KEY) || "{}");
+    return v && typeof v === "object" ? (v as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Remember a confirmed number (call when `sas_verified`). */
+export function rememberSas(linkId: string, sas: string): void {
+  try {
+    const seen = readSasSeen();
+    if (seen[linkId] === sas) return;
+    seen[linkId] = sas;
+    localStorage.setItem(SAS_SEEN_KEY, JSON.stringify(seen));
+  } catch {
+    /* storage off: no callout, the number still asks to be compared */
+  }
+}
+
+/** Unconfirmed, and different from the one confirmed before on this
+ * connection: a reconnect brought a new number. */
+export function sasChanged(link: Pick<PeerLink, "link_id" | "sas" | "sas_verified">): boolean {
+  if (link.sas_verified) return false;
+  const before = readSasSeen()[link.link_id];
+  return !!before && before !== link.sas;
+}
+
+/** The toast after a joint action: `synced: false` means the other side was
+ * offline and gets it when they reconnect. */
+export function syncedText(ok: string, r: { synced?: boolean } | null | undefined, peerName: string): string {
+  return r && r.synced === false ? ok + " — will sync when " + peerName + " reconnects" : ok;
 }

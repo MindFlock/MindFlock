@@ -11,7 +11,9 @@
  *   (…/their-file).
  * - Changes — their diff since the share started (…/diff).
  * Their link permissions decide what each tab may show; a refusal says why.
- * Watching is read-only: what you type goes to them as a message. */
+ * Watching is read-only: what you type goes to them as a message, and the
+ * conversation sits right above the send box (People's MessageThread), so a
+ * reply shows where you are looking. */
 
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
@@ -21,6 +23,7 @@ import { usePeerLinks } from "../state/queries";
 import { ansiLines, runCss } from "../lib/ansiSpans";
 import { errMsg } from "../lib/format";
 import { toast } from "../lib/toast";
+import { MessageThread } from "./settings/screens/peer/MessageThread";
 
 type Tab = "session" | "files" | "changes";
 
@@ -49,6 +52,7 @@ function Viewer({ linkId, onClose }: { linkId: string; onClose(): void }) {
   const [tab, setTab] = useState<Tab>("session");
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(0);
 
   const send = async () => {
     const text = draft.trim();
@@ -57,7 +61,8 @@ function Viewer({ linkId, onClose }: { linkId: string; onClose(): void }) {
     try {
       const r = await api<{ delivered: boolean }>(base + "/message", { json: { text } });
       setDraft("");
-      toast(r.delivered ? "Sent to " + name : name + " isn't taking messages right now — it's in your log");
+      setSent((n) => n + 1);
+      if (!r.delivered) toast(name + " isn't taking messages right now — it's in your log");
     } catch (e) {
       toast("Couldn't send — " + errMsg(e));
     }
@@ -94,6 +99,9 @@ function Viewer({ linkId, onClose }: { linkId: string; onClose(): void }) {
           {tab === "session" && <SessionTab base={base} name={name} />}
           {tab === "files" && <FilesTab base={base} />}
           {tab === "changes" && <ChangesTab base={base} />}
+        </div>
+        <div className="psv-thread" aria-label={"Messages with " + name}>
+          <MessageThread linkId={linkId} peerName={name} connected={!!link?.connected} refresh={sent} />
         </div>
         <form
           className="psv-say"

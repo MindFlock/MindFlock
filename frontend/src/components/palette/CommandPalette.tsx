@@ -30,6 +30,7 @@ import { settingsActions } from "./settingsSearch";
 import { VERIFY_BLURB } from "../../lib/vocab";
 import { TOURS, TOUR_IDS } from "../../lib/tours";
 import { replayTour } from "../onboarding/replayTour";
+import { replayPeopleTour } from "../settings/screens/peer/replayPeopleTour";
 
 /** The focused session's entries, in palette order (the table holds what
  * each one says and when it applies). Pause and Resume never both apply;
@@ -196,8 +197,10 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     });
     acts.push({
       label: "People…",
-      hint: "peer links: invite someone, or join a peer with their code",
+      hint: "work with someone: invite them, or join their invite",
       run: () => openSettings("peer"),
+      // The words a colleague uses ("let's pair", "join me") land here.
+      keywords: "join pair pairing invite colleague teammate collaborate person someone peer share",
     });
     // ONE place for every code (lib/deviceActions.ts): Your devices'
     // paste box, which sends one of your devices' codes to Your devices and
@@ -218,7 +221,8 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         hint: id === "welcome" ? "the three steps to your first session" : `how ${t.title} works`,
         keywords: "tour help how guide tutorial walkthrough show me around " + t.title.toLowerCase(),
         top: id === "welcome" ? TOP.tour : undefined,
-        run: () => replayTour(id),
+        // People is a Settings screen, not a top-bar dialog: its own replay.
+        run: () => (id === "people" ? replayPeopleTour() : replayTour(id)),
       });
     }
     acts.push({ label: "Toggle sidebar", hint: "Ctrl+B", run: () => ui.toggleSidebar() });
