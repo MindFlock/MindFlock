@@ -98,8 +98,10 @@ and classifies each:
 | state | meaning | the session reads |
 |---|---|---|
 | `running` | its process tree used ≥ 3% of a core, or its output file grew, in the last 60 s | `working` |
-| `waiting` | quiet, but for less than 15 min — its completion will wake the agent | `idle` (autopilot and `wait_for_session` hold) |
-| `stuck` | quiet for 15 min, or **proven** unable to finish: a `while pgrep -f P` / `until ! pgrep -f P` loop where nothing outside the job matches `P` | `idle`; the rail offers to stop it |
+| `waiting` | quiet, but for less than its stuck threshold — its completion will wake the agent | `idle` (autopilot and `wait_for_session` hold) |
+| `stuck` | quiet past its threshold, or **proven** unable to finish: a `while pgrep -f P` / `until ! pgrep -f P` loop where nothing outside the job matches `P` | `idle`; the rail offers to stop it |
+
+The threshold is `max(15 min, 2 × the longest quiet gap the job has already resumed from, 1.5 × its expected duration)`. An expected duration comes from the person (the job chip's *Expected to take…*), the agent (`expect_background_job`) or a `MINDFLOCK_EXPECT=6h` prefix on the command; while inside it the chip reads "job running · 2h 10m of ~6h", and passing it (not 1.5×) raises one `session.job_past_expected` bell row. Fields: `expect_s`, `expected_by`, `eta`, `longest_gap_s`, `threshold_s`, `past_expected`.
 
 The thresholds are the module's constants: `ACTIVE_CPU_FRACTION = 0.03`,
 `ACTIVE_GRACE_S = 60`, `STUCK_AFTER_S = 900`. The scan runs only on that

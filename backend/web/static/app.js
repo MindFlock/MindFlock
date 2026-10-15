@@ -24767,52 +24767,188 @@ function refreshTestPlans() {
 	return queryClient.invalidateQueries({ queryKey: ["test-plans"] });
 }
 //#endregion
-//#region src/lib/backgroundJobs.ts
-function minutes(s) {
-	const m = Math.round(s / 60);
-	return m < 1 ? "<1m" : m < 90 ? m + "m" : (m / 60).toFixed(1) + "h";
+//#region src/lib/jobExpectation.ts
+var MIN = 60;
+var HOUR = 3600;
+var DAY = 86400;
+var EXPECT_MIN_S = MIN;
+var EXPECT_MAX_S = 14 * DAY;
+var EXPECT_PRESETS = [
+	{
+		label: "30 min",
+		secs: 1800
+	},
+	{
+		label: "1 h",
+		secs: HOUR
+	},
+	{
+		label: "6 h",
+		secs: 6 * HOUR
+	},
+	{
+		label: "24 h",
+		secs: DAY
+	}
+];
+function formatSpan(secs) {
+	const s = Math.max(0, Number(secs) || 0);
+	const m = Math.round(s / MIN);
+	if (m < 1) return "<1m";
+	if (m < 60) return m + "m";
+	if (s < 2 * DAY) {
+		const h = Math.floor(m / 60);
+		const mm = m % 60;
+		return mm ? h + "h " + mm + "m" : h + "h";
+	}
+	const d = Math.floor(s / DAY);
+	const h = Math.round((s - d * DAY) / HOUR);
+	return h ? d + "d " + h + "h" : d + "d";
+}
+var UNIT = {
+	s: 1,
+	m: MIN,
+	h: HOUR,
+	d: DAY
+};
+function parseDuration(input) {
+	let secs;
+	if (typeof input === "number") secs = input;
+	else {
+		const t = String(input || "").trim().toLowerCase().replace(/\s+/g, "");
+		if (!t) return null;
+		if (/^\d+(\.\d+)?$/.test(t)) secs = parseFloat(t);
+		else {
+			const m = /^(?:(\d+(?:\.\d+)?)d)?(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?$/.exec(t);
+			if (!m || !(m[1] || m[2] || m[3] || m[4])) return null;
+			secs = [
+				"d",
+				"h",
+				"m",
+				"s"
+			].reduce((sum, u, i) => sum + (m[i + 1] ? parseFloat(m[i + 1]) * UNIT[u] : 0), 0);
+		}
+	}
+	if (!Number.isFinite(secs)) return null;
+	secs = Math.round(secs);
+	return secs >= EXPECT_MIN_S && secs <= EXPECT_MAX_S ? secs : null;
+}
+function etaClock(eta, now) {
+	const a = /* @__PURE__ */ new Date(eta * 1e3);
+	const b = /* @__PURE__ */ new Date(now * 1e3);
+	const sameDay = a.toDateString() === b.toDateString();
+	const clock = String(a.getHours()).padStart(2, "0") + ":" + String(a.getMinutes()).padStart(2, "0");
+	return (sameDay ? "" : a.toLocaleDateString(void 0, { weekday: "short" }) + " ") + clock;
+}
+function expectOf(job) {
+	const e = Number(job.expect_s);
+	return e > 0 ? e : null;
+}
+var BY = {
+	you: "you",
+	agent: "the agent",
+	command: "its command"
+};
+function expectWords(expect, by) {
+	return "~" + formatSpan(expect) + (by && BY[by] ? ", set by " + BY[by] : "");
 }
 function oneLine$1(cmd) {
-	const s = cmd.replace(/\s+/g, " ").trim();
+	const s = String(cmd || "").replace(/\s+/g, " ").trim();
 	return s.length > 140 ? s.slice(0, 139) + "…" : s;
 }
+function jobChipText(job, now) {
+	const cmd = oneLine$1(job.command);
+	const started = Number(job.started) || 0;
+	const elapsed = started > 0 ? Math.max(0, now - started) : 0;
+	const expect = expectOf(job);
+	const eta = Number(job.eta) || (expect && started > 0 ? started + expect : 0);
+	const past = !!expect && (job.past_expected ?? (started > 0 && elapsed > expect));
+	const quiet = Number(job.quiet_s) || 0;
+	const progress = expect && started > 0 ? formatSpan(elapsed) + " of ~" + formatSpan(expect) : "";
+	if (job.state === "stuck") return {
+		kind: "stuck",
+		label: "job stuck ✕",
+		cls: "bgchip bg-stuck",
+		title: "Background job stuck (" + (job.reason || "no CPU or output for " + formatSpan(quiet)) + "): " + cmd
+	};
+	if (job.state === "running") return {
+		kind: "running",
+		label: "job running" + (progress && !past ? " · " + progress : ""),
+		cls: "bgchip bg-running",
+		title: "Turn ended; a background job is still running" + (expect ? " (" + (past ? "past its expected " + expectWords(expect, job.expected_by) : progress + (eta ? ", done about " + etaClock(eta, now) : "")) + ")" : "") + ": " + cmd
+	};
+	if (past && expect) return {
+		kind: "past",
+		label: "job past ~" + formatSpan(expect),
+		cls: "bgchip bg-waiting bg-past",
+		title: "Past its expected " + expectWords(expect, job.expected_by) + " — " + formatSpan(elapsed) + " in, quiet " + formatSpan(quiet) + (Number(job.threshold_s) > quiet ? "; called stuck after " + formatSpan(Number(job.threshold_s)) + " quiet" : "") + ": " + cmd
+	};
+	if (expect && progress) return {
+		kind: "waiting",
+		label: "job running · " + progress,
+		cls: "bgchip bg-waiting",
+		title: "Expected to take " + expectWords(expect, job.expected_by) + (eta ? " — done about " + etaClock(eta, now) : "") + "; quiet " + formatSpan(quiet) + ": " + cmd
+	};
+	return {
+		kind: "waiting",
+		label: "job waiting",
+		cls: "bgchip bg-waiting",
+		title: "The turn ended, but a background job is still waiting (" + (Number(job.longest_gap_s) > 0 && job.reason ? job.reason : "quiet " + formatSpan(quiet)) + "): " + cmd + " — the agent resumes when it finishes"
+	};
+}
+function jobPastExpectedNote(name, expectS) {
+	return "Job on " + name + " is past its expected ~" + formatSpan(expectS) + " — still quiet";
+}
+function jobPastExpectedRow(expectS) {
+	return "job is past its expected ~" + formatSpan(expectS) + " — still quiet";
+}
+//#endregion
+//#region src/lib/backgroundJobs.ts
 function backgroundJobs(inst) {
 	return Array.isArray(inst.background) ? inst.background.filter((j) => j && typeof j.pid === "number") : [];
 }
-function backgroundChip(inst) {
+var nowS = () => Date.now() / 1e3;
+function backgroundChip(inst, now = nowS()) {
 	const jobs = backgroundJobs(inst);
+	const local = !inst.device;
 	const stuck = jobs.filter((j) => j.state === "stuck");
-	const waiting = jobs.filter((j) => j.state === "waiting");
 	if (stuck.length) {
 		const j = stuck[0];
-		const base = "A background job the agent left running can't finish (" + j.reason + "): " + oneLine$1(j.command);
-		if (inst.device) return {
+		const t = jobChipText(j, now);
+		if (!local) return {
 			label: stuck.length > 1 ? stuck.length + " jobs stuck" : "job stuck",
-			cls: "bgchip bg-stuck",
-			title: base
+			cls: t.cls,
+			title: t.title
 		};
 		return {
-			label: stuck.length > 1 ? stuck.length + " jobs stuck ✕" : "job stuck ✕",
-			cls: "bgchip bg-stuck",
-			title: base + " — click to stop it" + (stuck.length > 1 ? " (" + (stuck.length - 1) + " more after this one)" : ""),
-			stopPid: j.pid
+			label: stuck.length > 1 ? stuck.length + " jobs stuck ✕" : t.label,
+			cls: t.cls,
+			title: t.title + " — click to stop it or say how long it should take" + (stuck.length > 1 ? " (" + (stuck.length - 1) + " more after this one)" : ""),
+			stopPid: j.pid,
+			job: j
 		};
 	}
+	const waiting = jobs.filter((j) => j.state === "waiting");
 	if (waiting.length) {
-		const j = waiting[0];
+		const texts = waiting.map((j) => ({
+			j,
+			t: jobChipText(j, now)
+		}));
+		const { j, t } = texts.find((x) => x.t.kind === "past") || texts[0];
 		return {
-			label: waiting.length > 1 ? waiting.length + " jobs waiting" : "job waiting",
-			cls: "bgchip bg-waiting",
-			title: "The turn ended, but a background job is still waiting (quiet " + minutes(j.quiet_s) + "): " + oneLine$1(j.command) + " — the agent resumes when it finishes"
+			label: waiting.length > 1 ? waiting.length + " jobs waiting" : t.label,
+			cls: t.cls,
+			title: t.title + (local ? " — click to say how long it should take" : ""),
+			...local ? { job: j } : {}
 		};
 	}
 	return null;
 }
-function backgroundHint(inst) {
+function backgroundHint(inst, now = nowS()) {
 	const running = backgroundJobs(inst).find((j) => j.state === "running");
-	if (running) return "Turn ended; a background job is still running: " + oneLine$1(running.command);
-	const chip = backgroundChip(inst);
-	return chip ? chip.title.replace(/ — click to stop it.*$/, "") : "";
+	if (running) return jobChipText(running, now).title;
+	const chip = backgroundChip(inst, now);
+	return chip ? chip.title.replace(/ — click to .*$/, "") : "";
 }
 //#endregion
 //#region src/lib/agentNames.ts
@@ -36125,6 +36261,14 @@ function notifFromEvent(env) {
 				cls: "n-done"
 			};
 		}
+		case "session.job_past_expected": {
+			const dd = d;
+			return {
+				text: jobPastExpectedRow(Number(dd.expect_s) || 0),
+				cls: "n-warn",
+				dedupe: "job-past:" + String(env.session || "") + ":" + String(dd.job_id || "")
+			};
+		}
 		case "session.stage_changed": return {
 			text: STAGE_WORDS[String(env.new || "")] || String(env.new || ""),
 			cls: "n-info"
@@ -37026,6 +37170,14 @@ function EventToasts() {
 			notifyOnce(env.session, "pushfail", n.text, {
 				onClick: () => n.setup ? useUi.getState().openDialogFor("setup") : selectSession(env.session),
 				duration: 1e4
+			});
+		}));
+		unsubs.push(ev.subscribe("session.job_past_expected", (env) => {
+			if (isReplay(env)) return;
+			const d = env.data || {};
+			notifyOnce(env.session, "jobpast:" + String(d.job_id || ""), jobPastExpectedNote(namedSlot(env.session), Number(d.expect_s) || 0), {
+				onClick: () => selectSession(env.session),
+				duration: 8e3
 			});
 		}));
 		unsubs.push(ev.subscribe("session.autopilot_changed", (env) => {
@@ -39660,6 +39812,22 @@ async function stopBackgroundJob(title, pid) {
 	refreshInstances();
 	return true;
 }
+async function expectBackgroundJob(title, jobId, secs) {
+	const path = "/jobs/" + encodeURIComponent(jobId) + "/expect";
+	try {
+		if (secs == null) await instApi(title, path, { method: "DELETE" });
+		else await instApi(title, path, {
+			method: "POST",
+			json: { duration: secs }
+		});
+	} catch (e) {
+		toast("Couldn't change how long the job in " + displayName(title) + " should take — " + errMsg(e));
+		return false;
+	}
+	toast(secs == null ? "Cleared the job's expected time in " + displayName(title) : "The job in " + displayName(title) + " is expected to take ~" + formatSpan(secs));
+	refreshInstances();
+	return true;
+}
 //#endregion
 //#region src/lib/codemapSeen.ts
 var KEY = "mf_codemap_seen";
@@ -40883,6 +41051,9 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const expanded = !!menuAt;
 	const kebab = (0, import_react.useRef)(null);
 	const menuId = (0, import_react.useId)();
+	const [jobMenuAt, setJobMenuAt] = (0, import_react.useState)(null);
+	const jobChipRef = (0, import_react.useRef)(null);
+	const jobMenuId = (0, import_react.useId)();
 	const [closeArmed, setCloseArmed] = (0, import_react.useState)(false);
 	const [inUse, setInUse] = (0, import_react.useState)(null);
 	const strip = (0, import_react.useRef)(null);
@@ -40975,6 +41146,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !!task;
 	const subline = !editing && (ship || wline || roll || lline || lineage || taskLine || !!noAgent);
 	useNow(wline?.state === "working" || ship?.state === "working" ? 3e4 : false);
+	useNow(backgroundJobs(inst).some((j) => expectOf(j)) ? 6e4 : false);
 	const agentWs = (0, import_react.useSyncExternalStore)(subscribeTermStates, (0, import_react.useCallback)(() => peekTerm(title, "agent")?.state, [title]));
 	const disconnected = inst.status === "running" && onScreen && agentWs === "disconnected";
 	const mapSeen = (0, import_react.useSyncExternalStore)(subscribeCodemapSeen, (0, import_react.useCallback)(() => codemapSeenAt(title), [title]));
@@ -41059,434 +41231,618 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 		toast(`Renamed to “${next}”`);
 	};
 	const rowCls = "inst" + (nested ? " nest-" + nest.depth : "") + (nest.stem ? " has-stem" : "") + (focused === title ? " active" : "") + (hidden ? " is-hidden" : "") + (missing ? " ws-missing" : "") + (pending ? " is-pending" : "") + (picked ? " bulk-picked" : "") + (menuAt ? " menu-open" : "") + (dropCue ? ` drop-${dropCue}` : "");
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-		className: rowCls,
-		"data-title": title,
-		tabIndex: answering ? 0 : void 0,
-		onKeyDown: (e) => {
-			if (!pending && !editing && (e.key === "ContextMenu" || e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) && !isEditingTarget(e.target)) {
-				e.preventDefault();
-				e.stopPropagation();
-				openAtKebab(true);
-				return;
-			}
-			if (!answering || e.ctrlKey || e.metaKey || e.altKey || !/^[1-9]$/.test(e.key)) return;
-			if (isEditingTarget(e.target)) return;
-			if (strip.current?.answerKey(e.key)) {
-				e.preventDefault();
-				e.stopPropagation();
-			}
-		},
-		...rowDndProps(title, {
-			onDragState,
-			onDropCue,
-			onDropRow
-		}, !editing),
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "inst-row",
-			onMouseDown: (e) => {
-				if (e.shiftKey) e.preventDefault();
-			},
-			onClick: (e) => {
-				if (editing || Date.now() - editEndedAt.current < 400) return;
-				if (!pending && (e.ctrlKey || e.metaKey || e.shiftKey || picking)) {
-					clearRenameTimer();
-					useUi.getState().pickRow(title, e.shiftKey);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+			className: rowCls,
+			"data-title": title,
+			tabIndex: answering ? 0 : void 0,
+			onKeyDown: (e) => {
+				if (!pending && !editing && (e.key === "ContextMenu" || e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) && !isEditingTarget(e.target)) {
+					e.preventDefault();
+					e.stopPropagation();
+					openAtKebab(true);
 					return;
 				}
-				if (focused !== title) {
-					selectSession(title);
-					return;
+				if (!answering || e.ctrlKey || e.metaKey || e.altKey || !/^[1-9]$/.test(e.key)) return;
+				if (isEditingTarget(e.target)) return;
+				if (strip.current?.answerKey(e.key)) {
+					e.preventDefault();
+					e.stopPropagation();
 				}
-				if (!pending) armRename();
 			},
-			onDoubleClick: () => {
-				clearRenameTimer();
-				if (picking) return;
-				if (!missing && !pending) ideSession(title, true);
-			},
-			onContextMenu: onRowContextMenu,
-			children: [
-				(nested || nest.stem) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NestLines, {
-					nest,
-					part: "row"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "grip",
-					title: "Drag to reorder",
-					children: "⠿"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "idx",
-					title: num ? `Ctrl+${num} / Alt+${num} to focus` : "",
-					children: picking ? picked ? "✓" : "" : num
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "dot tone-" + ss.tone + " st-" + ss.state + (disconnected ? " disconnected" : "") + (disconnected || nested || nest.stem || lchip || pchip ? "" : " dot-quiet"),
-					title: disconnected ? "Terminal socket lost — reconnecting" : ss.label
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "meta" + (subline ? " has-lineage" : ""),
-					children: [
-						editing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							className: "title title-edit",
-							type: "text",
-							defaultValue: shown,
-							autoFocus: true,
-							autoComplete: "off",
-							spellCheck: false,
-							onFocus: (e) => e.currentTarget.select(),
-							onMouseDown: (e) => e.stopPropagation(),
-							onClick: (e) => e.stopPropagation(),
-							onDoubleClick: (e) => e.stopPropagation(),
-							onBlur: (e) => commitRename(e.currentTarget.value),
-							onKeyDown: (e) => {
-								if (e.key === "Enter") {
-									e.preventDefault();
-									commitRename(e.currentTarget.value);
-								} else if (e.key === "Escape") {
-									e.preventDefault();
-									cancelled.current = true;
-									editEndedAt.current = Date.now();
-									setEditing(false);
-								}
-							}
-						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "title",
-							title: [
-								shown,
-								label.kind && !alias ? `session: ${displayTitle(inst)}` : "",
-								inst.branch ? `branch: ${inst.branch}` : "",
-								wline ? wline.title : lineage ? lineage.title : "",
-								focused === title && !picking ? "Click again to rename" : "",
-								picking ? "" : "Ctrl+click or Shift+click to select several"
-							].filter(Boolean).join("\n"),
-							children: /(-\d+|\(\d+\))$/.test(shown) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MidName, { text: shown }) : shown
-						}),
-						!editing && ship && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "lineage ship-line " + ship.cls + (shipOpensBell ? " opens-bell" : ""),
-							title: [
-								ship.title,
-								wline ? wline.title : lineage ? lineage.title : "",
-								shipOpensBell ? "Click to open it in the bell" : ""
-							].filter(Boolean).join("\n"),
-							...shipOpensBell ? {
-								role: "button",
-								tabIndex: 0,
-								onMouseDown: (e) => e.stopPropagation(),
-								onClick: (e) => act(openBell, e),
-								onDoubleClick: (e) => e.stopPropagation(),
-								onKeyDown: (e) => {
-									if (e.key !== "Enter" && e.key !== " ") return;
-									e.preventDefault();
-									e.stopPropagation();
-									openBell();
-								}
-							} : {},
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "sl-lead",
-								children: ship.lead
-							}), ship.rest && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "sl-rest" + (ship.restCls ? " " + ship.restCls : ""),
-								children: ship.rest
-							})]
-						}),
-						!editing && !ship && lline && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "roll-line",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-								className: "lineage workers lead-line",
-								title: "Its team run: " + (leadRun?.name || "") + "\nClick to open the Thread",
-								role: "button",
-								tabIndex: 0,
-								onClick: (e) => act(() => openThread(title), e),
-								onDoubleClick: (e) => e.stopPropagation(),
-								onKeyDown: (e) => {
-									if (e.key !== "Enter" && e.key !== " ") return;
-									e.preventDefault();
-									e.stopPropagation();
-									openThread(title);
-								},
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: lline.cls || void 0,
-									children: lline.text
-								}), lline.url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
-									className: "lead-link",
-									href: lline.url,
-									target: "_blank",
-									rel: "noreferrer",
-									title: lline.url,
-									onClick: (e) => e.stopPropagation(),
-									children: " ↗"
-								})]
-							}), foldBtn]
-						}),
-						!editing && !ship && !lline && wline && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "lineage " + wline.cls,
-							title: wline.title,
-							children: wline.text
-						}),
-						!editing && noAgent && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "lineage noagent-line",
-							title: ss.hint,
-							children: agentBlockedLine(noAgent)
-						}),
-						!editing && taskLine && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TaskLine, { inst }),
-						!editing && !ship && !lline && !wline && lineage && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "lineage" + (lineage.spawned ? " spawned" : ""),
-							title: lineage.title,
-							children: lineage.text
-						}),
-						!editing && roll && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "roll-line",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "lineage workers",
-								title: roll.title,
-								role: "button",
-								tabIndex: 0,
-								"aria-label": roll.parts.map((p) => p.text).join(" · ") + " — open the Thread",
-								onClick: (e) => act(() => openThread(title), e),
-								onDoubleClick: (e) => e.stopPropagation(),
-								onKeyDown: (e) => {
-									if (e.key !== "Enter" && e.key !== " ") return;
-									e.preventDefault();
-									e.stopPropagation();
-									openThread(title);
-								},
-								children: roll.parts.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [i > 0 && " · ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: p.cls || void 0,
-									children: p.text
-								})] }, i))
-							}), foldBtn]
-						})
-					]
-				}),
-				lchip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "stagechip wrapchip leadchip",
-					title: lchip.title,
-					"aria-label": lchip.title,
-					onClick: (e) => act(() => openThread(title), e),
-					onDoubleClick: (e) => e.stopPropagation(),
-					children: lchip.label
-				}) : pchip?.kind === "wrap" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "stagechip " + pchip.cls,
-					title: pchip.title,
-					"aria-label": pchip.title,
-					onClick: (e) => act(() => void pasteWrapup(title), e),
-					onDoubleClick: (e) => e.stopPropagation(),
-					children: pchip.label
-				}) : pchip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "stagechip " + pchip.cls,
-					title: pchip.title,
-					children: pchip.label
-				}) : noAgent ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentBlockedChip, {
-					block: noAgent,
-					title,
-					className: "stagechip chip-restart " + chip.cls,
-					hint: ss.hint
-				}) : ss.state === "offline" && ss.restartable && !paused ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-					type: "button",
-					className: "stagechip chip-restart " + chip.cls,
-					title: chip.title,
-					"aria-label": "Offline — restart the agent",
-					onClick: (e) => act(() => void reviveSession(title), e),
-					onDoubleClick: (e) => e.stopPropagation(),
-					children: [chip.label, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "chip-act",
-						"aria-hidden": "true",
-						children: "↻ Restart"
-					})]
-				}) : inst.sleeping && !inst.device && !paused ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-					type: "button",
-					className: "stagechip chip-restart chip-wake " + chip.cls,
-					title: chip.title,
-					"aria-label": "Sleeping — wake the agent",
-					onClick: (e) => act(() => void wakeSession(title), e),
-					onDoubleClick: (e) => e.stopPropagation(),
-					children: [chip.label, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "chip-act",
-						"aria-hidden": "true",
-						children: "Wake"
-					})]
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "stagechip " + chip.cls,
-					title: chip.title,
-					children: chip.label
-				}),
-				!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PresenceDots, {
-					inst,
-					me
-				}),
-				inst.shared_branch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "shared-branch-mark",
-					title: "Shared branch " + (inst.branch || "") + " — others push to it too",
-					"aria-label": "shared branch",
-					children: "⑂"
-				}),
-				extra.check && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "stagechip checkchip " + extra.check.cls,
-					title: extra.check.title,
-					children: extra.check.label
-				}),
-				!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "vchip-hook",
-					"data-tour": "verify-chip",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerdictChip, {
-						inst,
-						where: "row"
-					})
-				}),
-				bg && (bg.stopPid ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "stagechip " + bg.cls,
-					title: bg.title,
-					"aria-label": bg.title,
-					onClick: (e) => act(() => void stopBackgroundJob(title, bg.stopPid), e),
-					onDoubleClick: (e) => e.stopPropagation(),
-					children: bg.label
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "stagechip " + bg.cls,
-					title: bg.title,
-					children: bg.label
-				})),
-				peer && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-					type: "button",
-					className: "stagechip peerchip" + (peer.connected === false ? " peer-offline" : ""),
-					title: peer.title,
-					"aria-label": peer.title,
-					onClick: (e) => act(() => openSettings(PEER_SCREEN), e),
-					onDoubleClick: (e) => e.stopPropagation(),
-					children: [peer.connected !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "peerchip-dot",
-						"aria-hidden": "true"
-					}), peer.label]
-				}),
-				peer && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(JointVerdictChip, {
-					linkId: inst.peer_with?.link_id,
-					peerName: inst.peer_with?.name,
-					where: "row"
-				}),
-				rz && !pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "stagechip rzchip " + rz.cls,
-					title: rz.title,
-					"aria-label": rz.title,
-					onClick: (e) => act(() => {
+			...rowDndProps(title, {
+				onDragState,
+				onDropCue,
+				onDropRow
+			}, !editing),
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "inst-row",
+				onMouseDown: (e) => {
+					if (e.shiftKey) e.preventDefault();
+				},
+				onClick: (e) => {
+					if (editing || Date.now() - editEndedAt.current < 400) return;
+					if (!pending && (e.ctrlKey || e.metaKey || e.shiftKey || picking)) {
+						clearRenameTimer();
+						useUi.getState().pickRow(title, e.shiftKey);
+						return;
+					}
+					if (focused !== title) {
 						selectSession(title);
-						useUi.getState().setLastTab(title, "map");
-					}, e),
-					children: rz.label
-				}),
-				!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					ref: kebab,
-					type: "button",
-					className: "row-kebab" + (expanded ? " open" : ""),
-					title: "Actions for this session (or right-click the row)",
-					"aria-label": "Session menu for " + shown,
-					"aria-haspopup": "menu",
-					"aria-expanded": expanded,
-					"aria-controls": expanded ? menuId : void 0,
-					onClick: (e) => act(() => expanded ? closeMenu() : openAtKebab(e.detail === 0), e),
-					onDoubleClick: (e) => e.stopPropagation(),
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KebabIcon, {})
-				}),
-				!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					className: "kill" + (missing ? " cleanup" : ""),
-					"aria-label": missing ? "Delete session" : "Close session",
-					title: missing ? "Delete — its workspace is gone; this removes the session" : "Close session — stops the agent and moves it to Recently closed (Ctrl+W / Del; reopen with Ctrl+Shift+T)",
-					onClick: (e) => act(() => {
-						if (closeGuarded(Date.now())) return;
-						if (missing) return cleanupMissing(title);
-						if (uncommitted > 0 && !closeArmed) return setCloseArmed(true);
-						setCloseArmed(false);
-						sessionAction("close").run(title);
-					}, e),
-					children: missing ? "Delete" : "✕"
-				})
-			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "inst-tail",
-			children: [
-				(nested || nest.stem) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NestLines, {
-					nest,
-					part: "tail"
-				}),
-				closeArmed && !missing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "close-confirm",
-					role: "group",
-					"aria-label": `Close ${shown}?`,
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "del-q",
+						return;
+					}
+					if (!pending) armRename();
+				},
+				onDoubleClick: () => {
+					clearRenameTimer();
+					if (picking) return;
+					if (!missing && !pending) ideSession(title, true);
+				},
+				onContextMenu: onRowContextMenu,
+				children: [
+					(nested || nest.stem) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NestLines, {
+						nest,
+						part: "row"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "grip",
+						title: "Drag to reorder",
+						children: "⠿"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "idx",
+						title: num ? `Ctrl+${num} / Alt+${num} to focus` : "",
+						children: picking ? picked ? "✓" : "" : num
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "dot tone-" + ss.tone + " st-" + ss.state + (disconnected ? " disconnected" : "") + (disconnected || nested || nest.stem || lchip || pchip ? "" : " dot-quiet"),
+						title: disconnected ? "Terminal socket lost — reconnecting" : ss.label
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "meta" + (subline ? " has-lineage" : ""),
 						children: [
-							"Close session? Its ",
-							uncommitted,
-							" uncommitted change",
-							uncommitted === 1 ? "" : "s",
-							" stay in its folder — reopen it from Recently closed."
+							editing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								className: "title title-edit",
+								type: "text",
+								defaultValue: shown,
+								autoFocus: true,
+								autoComplete: "off",
+								spellCheck: false,
+								onFocus: (e) => e.currentTarget.select(),
+								onMouseDown: (e) => e.stopPropagation(),
+								onClick: (e) => e.stopPropagation(),
+								onDoubleClick: (e) => e.stopPropagation(),
+								onBlur: (e) => commitRename(e.currentTarget.value),
+								onKeyDown: (e) => {
+									if (e.key === "Enter") {
+										e.preventDefault();
+										commitRename(e.currentTarget.value);
+									} else if (e.key === "Escape") {
+										e.preventDefault();
+										cancelled.current = true;
+										editEndedAt.current = Date.now();
+										setEditing(false);
+									}
+								}
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "title",
+								title: [
+									shown,
+									label.kind && !alias ? `session: ${displayTitle(inst)}` : "",
+									inst.branch ? `branch: ${inst.branch}` : "",
+									wline ? wline.title : lineage ? lineage.title : "",
+									focused === title && !picking ? "Click again to rename" : "",
+									picking ? "" : "Ctrl+click or Shift+click to select several"
+								].filter(Boolean).join("\n"),
+								children: /(-\d+|\(\d+\))$/.test(shown) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MidName, { text: shown }) : shown
+							}),
+							!editing && ship && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "lineage ship-line " + ship.cls + (shipOpensBell ? " opens-bell" : ""),
+								title: [
+									ship.title,
+									wline ? wline.title : lineage ? lineage.title : "",
+									shipOpensBell ? "Click to open it in the bell" : ""
+								].filter(Boolean).join("\n"),
+								...shipOpensBell ? {
+									role: "button",
+									tabIndex: 0,
+									onMouseDown: (e) => e.stopPropagation(),
+									onClick: (e) => act(openBell, e),
+									onDoubleClick: (e) => e.stopPropagation(),
+									onKeyDown: (e) => {
+										if (e.key !== "Enter" && e.key !== " ") return;
+										e.preventDefault();
+										e.stopPropagation();
+										openBell();
+									}
+								} : {},
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "sl-lead",
+									children: ship.lead
+								}), ship.rest && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "sl-rest" + (ship.restCls ? " " + ship.restCls : ""),
+									children: ship.rest
+								})]
+							}),
+							!editing && !ship && lline && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "roll-line",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "lineage workers lead-line",
+									title: "Its team run: " + (leadRun?.name || "") + "\nClick to open the Thread",
+									role: "button",
+									tabIndex: 0,
+									onClick: (e) => act(() => openThread(title), e),
+									onDoubleClick: (e) => e.stopPropagation(),
+									onKeyDown: (e) => {
+										if (e.key !== "Enter" && e.key !== " ") return;
+										e.preventDefault();
+										e.stopPropagation();
+										openThread(title);
+									},
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: lline.cls || void 0,
+										children: lline.text
+									}), lline.url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+										className: "lead-link",
+										href: lline.url,
+										target: "_blank",
+										rel: "noreferrer",
+										title: lline.url,
+										onClick: (e) => e.stopPropagation(),
+										children: " ↗"
+									})]
+								}), foldBtn]
+							}),
+							!editing && !ship && !lline && wline && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "lineage " + wline.cls,
+								title: wline.title,
+								children: wline.text
+							}),
+							!editing && noAgent && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "lineage noagent-line",
+								title: ss.hint,
+								children: agentBlockedLine(noAgent)
+							}),
+							!editing && taskLine && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TaskLine, { inst }),
+							!editing && !ship && !lline && !wline && lineage && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "lineage" + (lineage.spawned ? " spawned" : ""),
+								title: lineage.title,
+								children: lineage.text
+							}),
+							!editing && roll && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "roll-line",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "lineage workers",
+									title: roll.title,
+									role: "button",
+									tabIndex: 0,
+									"aria-label": roll.parts.map((p) => p.text).join(" · ") + " — open the Thread",
+									onClick: (e) => act(() => openThread(title), e),
+									onDoubleClick: (e) => e.stopPropagation(),
+									onKeyDown: (e) => {
+										if (e.key !== "Enter" && e.key !== " ") return;
+										e.preventDefault();
+										e.stopPropagation();
+										openThread(title);
+									},
+									children: roll.parts.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [i > 0 && " · ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: p.cls || void 0,
+										children: p.text
+									})] }, i))
+								}), foldBtn]
+							})
 						]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "del-acts",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "danger",
-							onClick: (e) => act(() => {
-								setCloseArmed(false);
-								sessionAction("close").run(title);
-							}, e),
-							children: "Close session"
+					}),
+					lchip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "stagechip wrapchip leadchip",
+						title: lchip.title,
+						"aria-label": lchip.title,
+						onClick: (e) => act(() => openThread(title), e),
+						onDoubleClick: (e) => e.stopPropagation(),
+						children: lchip.label
+					}) : pchip?.kind === "wrap" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "stagechip " + pchip.cls,
+						title: pchip.title,
+						"aria-label": pchip.title,
+						onClick: (e) => act(() => void pasteWrapup(title), e),
+						onDoubleClick: (e) => e.stopPropagation(),
+						children: pchip.label
+					}) : pchip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "stagechip " + pchip.cls,
+						title: pchip.title,
+						children: pchip.label
+					}) : noAgent ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentBlockedChip, {
+						block: noAgent,
+						title,
+						className: "stagechip chip-restart " + chip.cls,
+						hint: ss.hint
+					}) : ss.state === "offline" && ss.restartable && !paused ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "stagechip chip-restart " + chip.cls,
+						title: chip.title,
+						"aria-label": "Offline — restart the agent",
+						onClick: (e) => act(() => void reviveSession(title), e),
+						onDoubleClick: (e) => e.stopPropagation(),
+						children: [chip.label, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "chip-act",
+							"aria-hidden": "true",
+							children: "↻ Restart"
+						})]
+					}) : inst.sleeping && !inst.device && !paused ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "stagechip chip-restart chip-wake " + chip.cls,
+						title: chip.title,
+						"aria-label": "Sleeping — wake the agent",
+						onClick: (e) => act(() => void wakeSession(title), e),
+						onDoubleClick: (e) => e.stopPropagation(),
+						children: [chip.label, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "chip-act",
+							"aria-hidden": "true",
+							children: "Wake"
+						})]
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "stagechip " + chip.cls,
+						title: chip.title,
+						children: chip.label
+					}),
+					!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PresenceDots, {
+						inst,
+						me
+					}),
+					inst.shared_branch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "shared-branch-mark",
+						title: "Shared branch " + (inst.branch || "") + " — others push to it too",
+						"aria-label": "shared branch",
+						children: "⑂"
+					}),
+					extra.check && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "stagechip checkchip " + extra.check.cls,
+						title: extra.check.title,
+						children: extra.check.label
+					}),
+					!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "vchip-hook",
+						"data-tour": "verify-chip",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerdictChip, {
+							inst,
+							where: "row"
+						})
+					}),
+					bg && (bg.job ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						ref: jobChipRef,
+						className: "stagechip " + bg.cls,
+						title: bg.title,
+						"aria-label": bg.title,
+						"aria-haspopup": "menu",
+						"aria-expanded": !!jobMenuAt,
+						"aria-controls": jobMenuAt ? jobMenuId : void 0,
+						onClick: (e) => act(() => {
+							if (jobMenuAt) return setJobMenuAt(null);
+							const b = jobChipRef.current?.getBoundingClientRect();
+							if (b) setJobMenuAt({
+								x: b.left,
+								y: b.bottom + 4,
+								flipY: b.top - 4,
+								align: "start",
+								keyboard: e.detail === 0
+							});
+						}, e),
+						onDoubleClick: (e) => e.stopPropagation(),
+						children: bg.label
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "stagechip " + bg.cls,
+						title: bg.title,
+						children: bg.label
+					})),
+					peer && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "stagechip peerchip" + (peer.connected === false ? " peer-offline" : ""),
+						title: peer.title,
+						"aria-label": peer.title,
+						onClick: (e) => act(() => openSettings(PEER_SCREEN), e),
+						onDoubleClick: (e) => e.stopPropagation(),
+						children: [peer.connected !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "peerchip-dot",
+							"aria-hidden": "true"
+						}), peer.label]
+					}),
+					peer && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(JointVerdictChip, {
+						linkId: inst.peer_with?.link_id,
+						peerName: inst.peer_with?.name,
+						where: "row"
+					}),
+					rz && !pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "stagechip rzchip " + rz.cls,
+						title: rz.title,
+						"aria-label": rz.title,
+						onClick: (e) => act(() => {
+							selectSession(title);
+							useUi.getState().setLastTab(title, "map");
+						}, e),
+						children: rz.label
+					}),
+					!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						ref: kebab,
+						type: "button",
+						className: "row-kebab" + (expanded ? " open" : ""),
+						title: "Actions for this session (or right-click the row)",
+						"aria-label": "Session menu for " + shown,
+						"aria-haspopup": "menu",
+						"aria-expanded": expanded,
+						"aria-controls": expanded ? menuId : void 0,
+						onClick: (e) => act(() => expanded ? closeMenu() : openAtKebab(e.detail === 0), e),
+						onDoubleClick: (e) => e.stopPropagation(),
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KebabIcon, {})
+					}),
+					!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						className: "kill" + (missing ? " cleanup" : ""),
+						"aria-label": missing ? "Delete session" : "Close session",
+						title: missing ? "Delete — its workspace is gone; this removes the session" : "Close session — stops the agent and moves it to Recently closed (Ctrl+W / Del; reopen with Ctrl+Shift+T)",
+						onClick: (e) => act(() => {
+							if (closeGuarded(Date.now())) return;
+							if (missing) return cleanupMissing(title);
+							if (uncommitted > 0 && !closeArmed) return setCloseArmed(true);
+							setCloseArmed(false);
+							sessionAction("close").run(title);
+						}, e),
+						children: missing ? "Delete" : "✕"
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "inst-tail",
+				children: [
+					(nested || nest.stem) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NestLines, {
+						nest,
+						part: "tail"
+					}),
+					closeArmed && !missing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "close-confirm",
+						role: "group",
+						"aria-label": `Close ${shown}?`,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "del-q",
+							children: [
+								"Close session? Its ",
+								uncommitted,
+								" uncommitted change",
+								uncommitted === 1 ? "" : "s",
+								" stay in its folder — reopen it from Recently closed."
+							]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "del-acts",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "danger",
+								onClick: (e) => act(() => {
+									setCloseArmed(false);
+									sessionAction("close").run(title);
+								}, e),
+								children: "Close session"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								autoFocus: true,
+								onClick: (e) => act(() => setCloseArmed(false), e),
+								children: "Cancel"
+							})]
+						})]
+					}),
+					answering && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerStrip, {
+						ref: strip,
+						title,
+						activity,
+						variant: "rail",
+						onOpen: () => selectSession(title),
+						onRedirect: () => openThread(isWorker ? inst.parent : title, title)
+					}),
+					inUse && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "folder-in-use",
+						role: "status",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fiu-text",
+							children: folderInUseText(inUse)
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							autoFocus: true,
-							onClick: (e) => act(() => setCloseArmed(false), e),
-							children: "Cancel"
+							className: "fiu-x",
+							"aria-label": "Dismiss",
+							title: "Dismiss",
+							onClick: (e) => act(() => setInUse(null), e),
+							children: "✕"
 						})]
-					})]
+					})
+				]
+			})]
+		}),
+		menuAt && !pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMenu, {
+			id: menuId,
+			at: menuAt,
+			label: "Actions for " + shown,
+			opener: kebab.current,
+			onClose: closeMenu,
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionMenu, {
+				model: sessionMenu(inst, ctx, {
+					onSelect: () => {
+						useUi.getState().pickRow(title, false);
+						closeMenu();
+					},
+					picked
 				}),
-				answering && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerStrip, {
-					ref: strip,
-					title,
-					activity,
-					variant: "rail",
-					onOpen: () => selectSession(title),
-					onRedirect: () => openThread(isWorker ? inst.parent : title, title)
-				}),
-				inUse && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "folder-in-use",
-					role: "status",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "fiu-text",
-						children: folderInUseText(inUse)
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "fiu-x",
-						"aria-label": "Dismiss",
-						title: "Dismiss",
-						onClick: (e) => act(() => setInUse(null), e),
-						children: "✕"
-					})]
-				})
-			]
-		})]
-	}), menuAt && !pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMenu, {
-		id: menuId,
-		at: menuAt,
-		label: "Actions for " + shown,
-		opener: kebab.current,
-		onClose: closeMenu,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionMenu, {
-			model: sessionMenu(inst, ctx, {
-				onSelect: () => {
-					useUi.getState().pickRow(title, false);
-					closeMenu();
-				},
-				picked
-			}),
-			onInUse: setInUse,
-			onDone: () => closeMenu()
+				onInUse: setInUse,
+				onDone: () => closeMenu()
+			})
+		}),
+		jobMenuAt && bg?.job && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMenu, {
+			id: jobMenuId,
+			at: jobMenuAt,
+			label: "Background job in " + shown,
+			opener: jobChipRef.current,
+			onClose: (refocus) => {
+				setJobMenuAt(null);
+				if (refocus) jobChipRef.current?.focus();
+			},
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(JobMenu, {
+				title,
+				job: bg.job,
+				stopPid: bg.stopPid,
+				onDone: () => setJobMenuAt(null)
+			})
 		})
-	})] });
+	] });
 });
+function JobMenu({ title, job, stopPid, onDone }) {
+	const expect = expectOf(job);
+	const [open, setOpen] = (0, import_react.useState)(false);
+	const [custom, setCustom] = (0, import_react.useState)(false);
+	const [text, setText] = (0, import_react.useState)("");
+	const [bad, setBad] = (0, import_react.useState)(false);
+	const field = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		if (custom) field.current?.focus();
+	}, [custom]);
+	const set = (secs) => {
+		onDone();
+		expectBackgroundJob(title, job.id, secs);
+	};
+	const submit = () => {
+		const secs = parseDuration(text);
+		if (secs == null) return setBad(true);
+		set(secs);
+	};
+	const cmd = job.command.replace(/\s+/g, " ").trim();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "session-menu job-menu",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "sm-head",
+				children: "Background job"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "job-menu-cmd",
+				title: cmd,
+				children: cmd
+			}),
+			stopPid != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				role: "menuitem",
+				className: "danger",
+				"data-menu": "stop-job",
+				onClick: () => {
+					onDone();
+					stopBackgroundJob(title, stopPid);
+				},
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sm-verb",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sm-label",
+						children: "Stop the job"
+					})
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				role: "menuitem",
+				"data-menu": "expect-job",
+				"aria-expanded": open,
+				onClick: () => {
+					setOpen(!open);
+					setCustom(false);
+				},
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "sm-verb",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sm-label",
+						children: "Expected to take…"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sm-caret",
+						"aria-hidden": "true",
+						children: open ? "▾" : "▸"
+					})]
+				}), expect != null && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "end-sub",
+					children: [
+						"Now ~",
+						formatSpan(expect),
+						job.expected_by === "you" ? ", set by you" : job.expected_by === "agent" ? ", set by the agent" : job.expected_by === "command" ? ", set by its command" : ""
+					]
+				})]
+			}),
+			open && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sm-more-items job-expect",
+				children: [EXPECT_PRESETS.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					role: "menuitem",
+					"data-expect": p.secs,
+					onClick: () => set(p.secs),
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sm-verb",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sm-label",
+							children: p.label
+						})
+					})
+				}, p.secs)), !custom ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					role: "menuitem",
+					"data-expect": "custom",
+					onClick: () => setCustom(true),
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sm-verb",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sm-label",
+							children: "Custom…"
+						})
+					})
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+					className: "job-expect-custom",
+					onSubmit: (e) => {
+						e.preventDefault();
+						submit();
+					},
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							ref: field,
+							type: "text",
+							"aria-label": "Expected to take",
+							placeholder: "6h, 90m or 1h30m",
+							value: text,
+							"aria-invalid": bad,
+							onChange: (e) => {
+								setText(e.target.value);
+								setBad(false);
+							},
+							onKeyDown: (e) => e.stopPropagation()
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "submit",
+							className: "job-expect-set",
+							children: "Set"
+						}),
+						bad && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "job-expect-bad",
+							children: "Try 6h, 90m or 1h30m (1 minute to 14 days)"
+						})
+					]
+				})]
+			}),
+			expect != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				role: "menuitem",
+				"data-menu": "clear-expect",
+				onClick: () => set(null),
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sm-verb",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sm-label",
+						children: "Clear expectation"
+					})
+				})
+			})
+		]
+	});
+}
 function KebabIcon() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 		width: "14",

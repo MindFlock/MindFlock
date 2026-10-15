@@ -717,7 +717,7 @@ def _agent_action(rec: dict, snap: dict, depth: str) -> Tuple[str, dict]:
     if snap.get("background_waiting"):
         # The turn ended, but a job the agent backgrounded is still waiting and
         # will wake it when it finishes. Bounded: a waiting job turns stuck
-        # (and stops holding) after claude_background.STUCK_AFTER_S.
+        # (and stops holding) after the job's own stuck threshold (claude_background: 15 min, raised by its learned rhythm or a declared expected duration).
         return "wait", {"reason": "a background job the agent started is still waiting"}
     idle_since = rec.get("idle_since")
     now = float(snap.get("now") or 0.0)
