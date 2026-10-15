@@ -24140,15 +24140,20 @@ async function request(path, opts) {
 	const text = await r.text();
 	if (!r.ok) {
 		const body = parse(text);
-		let msg = `${path} -> ${r.status}`;
+		let msg = statusSentence(r.status);
 		if (body && typeof body === "object") {
 			const b = body;
-			if (typeof b.error === "string" && b.error) msg = b.error;
-			else if (typeof b.detail === "string" && b.detail) msg = b.detail;
+			if (typeof b.detail === "string" && b.detail) msg = b.detail;
+			else if (typeof b.error === "string" && b.error) msg = b.error;
 		}
 		throw new ApiError(r.status, msg, body);
 	}
 	return text;
+}
+function statusSentence(status) {
+	if (status === 404) return "MindFlock couldn't find that — it may have just been removed.";
+	if (status >= 500) return "MindFlock hit an error (details in the log).";
+	return "MindFlock couldn't do that (error " + status + ").";
 }
 function parse(text) {
 	try {
@@ -25750,16 +25755,16 @@ function branchTail(branch) {
 	const parts = branch.split("/").filter(Boolean);
 	return parts.length ? parts[parts.length - 1] : "";
 }
+var TEMPLATE_RUN_RE = /-(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\d{1,2}(?:-\d{4})?(?:-\d+)?$/;
+var PIPELINE_SLUG_RE = /^(?:.+-\d+|\d+-c-\d+)$/;
 function splitKind(title) {
-	if (title.startsWith("pr-")) return {
-		kind: "pr",
-		slug: title.slice(3)
+	if (TEMPLATE_RUN_RE.test(title)) return null;
+	const m = /^(pr|issue)-(.+)$/.exec(title);
+	if (!m || !PIPELINE_SLUG_RE.test(m[2])) return null;
+	return {
+		kind: m[1] === "pr" ? "pr" : "iss",
+		slug: m[2]
 	};
-	if (title.startsWith("issue-")) return {
-		kind: "iss",
-		slug: title.slice(6)
-	};
-	return null;
 }
 function sessionLabel(title, branch) {
 	const plain = {
@@ -26033,6 +26038,7 @@ var PREF_DEFAULTS = {
 	map_tour: null,
 	settings_advanced: null,
 	welcome_tour: null,
+	tours_seen: [],
 	pane_header: null
 };
 var PREF_MAP = [
@@ -26118,6 +26124,11 @@ var PREF_MAP = [
 		ls: "mf_welcome_tour",
 		field: "welcome_tour",
 		kind: "json-bool"
+	},
+	{
+		ls: "mf_tours_seen",
+		field: "tours_seen",
+		kind: "json-list"
 	},
 	{
 		ls: "mf_paneheader",
@@ -26262,7 +26273,8 @@ function planBoot(server, local, seeded, dirty = /* @__PURE__ */ new Set()) {
 				if (!same(merged, l)) apply[f] = merged;
 			} else if (!localSet || !same(s, l)) apply[f] = s;
 		} else if (localSet) {
-			if (seeded) apply[f] = PREF_DEFAULTS[f];
+			if (seeded && f in server) apply[f] = PREF_DEFAULTS[f];
+			else if (seeded) continue;
 			else upload[f] = l;
 		}
 	}
@@ -26677,6 +26689,10 @@ function load$1(key, fallback, parse = true) {
 		return fallback;
 	}
 }
+function loadToursSeen() {
+	const v = load$1("mf_tours_seen", []);
+	return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+}
 function firstRun(key) {
 	try {
 		return localStorage.getItem(key) === null;
@@ -26743,6 +26759,8 @@ var useUi = create((set, get) => ({
 	tourOpen: false,
 	mapTourSeen: load$1("mf_map_tour", false) === true,
 	welcomeTourSeen: load$1("mf_welcome_tour", false) === true,
+	coachTour: null,
+	toursSeen: loadToursSeen(),
 	themeLight: typeof document !== "undefined" && document.documentElement.classList.contains("light"),
 	lastTab: load$1("cs_lasttab", {}),
 	openDialog: null,
@@ -27028,6 +27046,31 @@ var useUi = create((set, get) => ({
 		if (get().welcomeTourSeen) return;
 		save("mf_welcome_tour", true);
 		set({ welcomeTourSeen: true });
+	},
+	openCoachTour: (id) => set({ coachTour: {
+		id,
+		step: 0
+	} }),
+	setCoachStep: (step) => {
+		const t = get().coachTour;
+		if (t && t.step !== step) set({ coachTour: {
+			...t,
+			step
+		} });
+	},
+	closeCoachTour: () => {
+		const t = get().coachTour;
+		if (!t) return;
+		const seen = get().toursSeen;
+		if (seen.includes(t.id)) set({ coachTour: null });
+		else {
+			const next = [...seen, t.id];
+			save("mf_tours_seen", next);
+			set({
+				coachTour: null,
+				toursSeen: next
+			});
+		}
 	},
 	openTour: () => set({ tourOpen: true }),
 	finishTour: () => set({ tourOpen: false }),
@@ -27492,7 +27535,7 @@ function agentCopyText(text, session, cols, startCol = 0) {
 var NOT_YET = 4404;
 var NOT_READY = 4409;
 var PAUSED_CLOSE = 4423;
-var RETRY_MS = [
+var RETRY_MS$1 = [
 	700,
 	1500,
 	3e3
@@ -27501,8 +27544,8 @@ var RETRY_MAX_MS = 3e3;
 var RETRY_LIMIT = 100;
 function retryAfter(code, attempts, reconnect) {
 	if (!reconnect || attempts >= RETRY_LIMIT || code === PAUSED_CLOSE) return null;
-	if (code === NOT_YET || code === NOT_READY) return RETRY_MS[attempts] ?? RETRY_MAX_MS;
-	if (code === 1006 || code === 1001 || attempts === 0) return RETRY_MS[attempts] ?? RETRY_MAX_MS;
+	if (code === NOT_YET || code === NOT_READY) return RETRY_MS$1[attempts] ?? RETRY_MAX_MS;
+	if (code === 1006 || code === 1001 || attempts === 0) return RETRY_MS$1[attempts] ?? RETRY_MAX_MS;
 	return null;
 }
 function isStarting(code) {
@@ -29645,6 +29688,655 @@ function openFastTrackMenu(title) {
 	requestAnimationFrame(() => useUi.getState().setFastTrackMenu({ title }));
 }
 //#endregion
+//#region src/lib/rowSearch.ts
+function searchTokens(query) {
+	return query.toLowerCase().split(/\s+/).filter(Boolean);
+}
+function matchesTokens(fields, tokens) {
+	if (!tokens.length) return true;
+	const hay = fields.filter(Boolean).join(" ").toLowerCase();
+	return tokens.every((t) => hay.includes(t));
+}
+//#endregion
+//#region src/components/dialogs/verify.ts
+function planName(plan) {
+	return plan.title || plan.id;
+}
+function isFinal(result) {
+	return result === "pass" || result === "fail";
+}
+function isYourAnswer(result, by = "") {
+	return isFinal(result) || result === "blocked" && by === "human";
+}
+function answeredByYou(entry) {
+	return isYourAnswer(entry?.result, entry?.by);
+}
+function handedBack(entry) {
+	return entry?.result === "blocked" && entry?.by !== "human";
+}
+function stepIsYours(plan, step) {
+	return step.actor === "human" || handedBack(stepResult(plan, step.id));
+}
+function isPhantomRun(run) {
+	if (run.session) return false;
+	const results = run.results || {};
+	return !Object.keys(results).some((id) => !!results[id]?.result);
+}
+function latestRun(plan) {
+	const runs = plan.runs || [];
+	let best = null;
+	const shipped = !!plan.live_at;
+	for (const run of runs) {
+		if (!run || isPhantomRun(run)) continue;
+		if (shipped && isBeforeMerge(run)) continue;
+		if (!best || (run.at || 0) >= (best.at || 0)) best = run;
+	}
+	return best;
+}
+function isBeforeMerge(run) {
+	return !!run?.prelive;
+}
+function beforeMergeRun(plan) {
+	if (!plan.live_at) return null;
+	let best = null;
+	for (const run of plan.runs || []) {
+		if (!run || isPhantomRun(run) || !isBeforeMerge(run)) continue;
+		if (!best || (run.at || 0) >= (best.at || 0)) best = run;
+	}
+	return best;
+}
+function beforeMergeSummary(plan, run) {
+	const results = run.results || {};
+	const ids = (plan.steps || []).map((s) => s.id);
+	const failed = ids.filter((id) => results[id]?.result === "fail").length;
+	if (failed) return failed + (failed === 1 ? " step failed" : " steps failed");
+	const open = ids.filter((id) => !isFinal(results[id]?.result)).length;
+	if (!open) return "every step passed";
+	return ids.length - open + " of " + ids.length + " passed";
+}
+function stepResult(plan, stepId) {
+	const run = latestRun(plan);
+	if (!run) return null;
+	return run.results?.[stepId] ?? null;
+}
+function verdictOf(plan) {
+	const run = latestRun(plan);
+	if (!run) return "none";
+	const results = run.results || {};
+	const ids = answerableIds(plan, run);
+	if (!ids.length) return "partial";
+	let unsettled = false;
+	for (const id of ids) {
+		const result = results[id]?.result;
+		if (result === "fail") return "fail";
+		if (!isFinal(result)) unsettled = true;
+	}
+	return unsettled ? "partial" : "pass";
+}
+function answerableIds(plan, run) {
+	const steps = plan.steps || [];
+	return steps.length ? steps.map((s) => s.id) : Object.keys(run.results || {});
+}
+function openHumanSteps(plan) {
+	const run = latestRun(plan);
+	if (!run) return [];
+	const results = run.results || {};
+	return (plan.steps || []).filter((step) => stepIsYours(plan, step) && !answeredByYou(results[step.id]));
+}
+function needsConfirmation(plan) {
+	return openHumanSteps(plan).length > 0;
+}
+function failCount(plan) {
+	const run = latestRun(plan);
+	if (!run) return 0;
+	const results = run.results || {};
+	return answerableIds(plan, run).filter((id) => results[id]?.result === "fail").length;
+}
+function unansweredCount(plan) {
+	const run = latestRun(plan);
+	if (!run) return 0;
+	const results = run.results || {};
+	return answerableIds(plan, run).filter((id) => !isFinal(results[id]?.result)).length;
+}
+function cantCheckCount(plan) {
+	const run = latestRun(plan);
+	if (!run) return 0;
+	const results = run.results || {};
+	return answerableIds(plan, run).filter((id) => {
+		const entry = results[id];
+		return entry?.result === "blocked" && entry.by === "human";
+	}).length;
+}
+function isWaitingOnYou(plan) {
+	if (plan.state === "running" || plan.state === "generating") return false;
+	if (isEmptyByChoice(plan)) return true;
+	if (isConfigBlocked(plan)) return true;
+	return plan.state === "due" || needsConfirmation(plan);
+}
+function isConfigBlocked(plan) {
+	return !!plan.live_problem && plan.state === "generated" && !plan.live_at && !plan.merged_at && (plan.steps || []).length > 0 && !latestRun(plan);
+}
+function isEmptyByChoice(plan) {
+	return plan.origin === "manual" && !(plan.steps || []).length && plan.state !== "generating" && plan.state !== "failed";
+}
+function isFailing(plan) {
+	if (plan.state === "running" || plan.state === "generating") return false;
+	if (!(plan.steps || []).length) return false;
+	return verdictOf(plan) === "fail";
+}
+function isUnwritten(plan) {
+	if (plan.state === "running") return false;
+	if (plan.state === "generating") return isGenerationStalled(plan);
+	return !(plan.steps || []).length && !isEmptyByChoice(plan);
+}
+function isNoCommits(plan) {
+	const text = String(plan?.error || "").toLowerCase();
+	return text.includes("this branch has no commits") || text.includes("this branch changed nothing");
+}
+function dueCount(plans) {
+	return (plans || []).filter((p) => isFailing(p) || isWaitingOnYou(p)).length;
+}
+function verifyCountLine(due, failing) {
+	if (!due) return "Checklists that need you or failed: none right now";
+	const what = due + " checklist" + (due === 1 ? "" : "s") + " need" + (due === 1 ? "s" : "") + " you or failed";
+	return failing ? what + " — " + failing + " failed" : what;
+}
+function failingCount(plans) {
+	return (plans || []).filter(isFailing).length;
+}
+function liveBranchOverridden(liveBranch, plans, trackedRepos, blocks) {
+	if ((plans || []).some((plan) => plan.effective_live_branch && plan.effective_live_branch !== liveBranch)) return true;
+	const tracked = new Set((trackedRepos || []).map((slug) => String(slug || "").trim().toLowerCase()));
+	return Object.entries(blocks || {}).some(([slug, block]) => {
+		const own = String(block?.live_branch || "").trim();
+		return !!own && own !== liveBranch && tracked.has(String(slug || "").trim().toLowerCase());
+	});
+}
+function planTargets(instances, plans, closed = []) {
+	const havePlans = new Set((plans || []).map((plan) => plan.id));
+	const covered = new Set((plans || []).map((plan) => coverageKey(repoName$1(plan.repo_root), plan.branch)).filter(Boolean));
+	const out = [];
+	const seen = /* @__PURE__ */ new Set();
+	const take = (title, branch, repo) => {
+		if (!title || !branch || havePlans.has(title) || seen.has(title)) return;
+		const key = coverageKey(repo, branch);
+		if (key && covered.has(key)) return;
+		seen.add(title);
+		out.push(title);
+	};
+	for (const inst of instances || []) take(inst.title, inst.branch, inst.repo);
+	for (const entry of closed || []) take(entry.title, entry.branch, "");
+	return out;
+}
+function coverageKey(repo, branch) {
+	const r = (repo || "").trim();
+	const b = (branch || "").trim();
+	return r && b ? r + "\0" + b : "";
+}
+function repoName$1(repoRoot) {
+	const parts = (repoRoot || "").replace(/[/\\]+$/, "").split(/[/\\]/);
+	return parts[parts.length - 1] || "";
+}
+function verifyDeepLinkPlan(plans, target) {
+	const t = (target || "").trim();
+	if (!t) return null;
+	return plans.find((p) => p.branch === t) || plans.find((p) => p.id === t) || null;
+}
+function checklistTargets(instances, plans, closed = [], liveBranch = "") {
+	const byTitle = new Map((plans || []).map((p) => [p.id, p]));
+	const byBranch = /* @__PURE__ */ new Map();
+	for (const plan of plans || []) {
+		const key = coverageKey(repoName$1(plan.repo_root), plan.branch);
+		if (key && !byBranch.has(key)) byBranch.set(key, plan);
+	}
+	const plansByBranchOnly = /* @__PURE__ */ new Map();
+	for (const plan of plans || []) if (plan.branch && !plansByBranchOnly.has(plan.branch)) plansByBranchOnly.set(plan.branch, plan);
+	const shipsFrom = new Set([
+		liveBranch,
+		"main",
+		"master"
+	].map((b) => (b || "").trim()).filter(Boolean));
+	const out = [];
+	const seen = /* @__PURE__ */ new Set();
+	const take = (title, branch, repo, isClosed, empty = false) => {
+		const b = (branch || "").trim();
+		if (!title || !b || seen.has(title)) return;
+		seen.add(title);
+		const covering = byTitle.get(title) || (repo ? byBranch.get(coverageKey(repo, b)) : plansByBranchOnly.get(b));
+		const onLive = shipsFrom.has(b);
+		const noCommits = !covering && !onLive && empty;
+		const reason = covering ? "has a checklist" : onLive ? "on " + b + " — nothing to compare" : noCommits ? "no commits yet" : "";
+		out.push({
+			title,
+			branch: b,
+			closed: isClosed,
+			reason,
+			planId: covering?.id || "",
+			noCommits
+		});
+	};
+	const live = new Set((instances || []).map((i) => i.title));
+	for (const inst of instances || []) take(inst.title, inst.branch, inst.repo, false, !!inst.diff_stat && inst.diff_stat.files === 0);
+	for (const entry of closed || []) take(entry.title, entry.branch, "", !live.has(entry.title));
+	return [...out.filter((t) => !t.reason), ...out.filter((t) => !!t.reason)];
+}
+function noTargetsReason(instances, plans, closed = []) {
+	if (planTargets(instances, plans, closed).length) return "";
+	const list = [...instances || [], ...closed || []];
+	if (!list.length) return "Start a session first — a checklist is written from a branch's diff.";
+	if (!list.some((inst) => inst.branch)) return "No session has a branch yet — a checklist is written from a branch's diff.";
+	return "Every session's branch already has a checklist.";
+}
+var GROUPS = [
+	{
+		key: "fail",
+		label: "Failed"
+	},
+	{
+		key: "due",
+		label: "Needs you"
+	},
+	{
+		key: "generated",
+		label: "In progress"
+	},
+	{
+		key: "failed",
+		label: "Not written yet"
+	},
+	{
+		key: "partial",
+		label: "Not verified"
+	},
+	{
+		key: "done",
+		label: "Verified"
+	}
+];
+var GROUP_KEYS = GROUPS.map((g) => g.key);
+function groupLabel(key) {
+	return GROUPS.find((g) => g.key === key)?.label || key;
+}
+function planGroup(plan) {
+	if (isFailing(plan)) return "fail";
+	if (isWaitingOnYou(plan)) return "due";
+	if (isUnwritten(plan)) return "failed";
+	if (plan.state === "running" || plan.state === "generating") return "generated";
+	if (verdictOf(plan) === "pass") return "done";
+	if (latestRun(plan)) return "partial";
+	return "generated";
+}
+function planMatches(plan, tokens) {
+	if (!tokens.length) return true;
+	const fields = [
+		plan.title,
+		plan.id,
+		plan.summary,
+		plan.branch,
+		plan.sha,
+		plan.repo_root,
+		plan.live_branch,
+		GROUPS.find((g) => g.key === planGroup(plan))?.label
+	];
+	for (const step of plan.steps || []) fields.push(step.text, step.expect, step.actor === "human" ? "you" : "agent");
+	return matchesTokens(fields, tokens);
+}
+function canRunNow(plan) {
+	const action = planStatus(plan).action;
+	return action === "run" || action === "rerun" || action === "early";
+}
+function groupPlans(plans) {
+	const buckets = /* @__PURE__ */ new Map();
+	for (const plan of plans || []) {
+		if (!plan) continue;
+		const key = planGroup(plan);
+		const bucket = buckets.get(key);
+		if (bucket) bucket.push(plan);
+		else buckets.set(key, [plan]);
+	}
+	return GROUPS.filter((g) => (buckets.get(g.key) || []).length > 0).map((g) => {
+		const found = buckets.get(g.key) || [];
+		if (g.key === "due" || g.key === "fail") {
+			const sum = found.reduce((acc, p) => {
+				const t = checkTally(p);
+				return {
+					yours: acc.yours + t.yours,
+					failed: acc.failed + t.failed
+				};
+			}, {
+				yours: 0,
+				failed: 0
+			});
+			const bits = [];
+			if (sum.failed) bits.push(sum.failed + (sum.failed === 1 ? " step failed" : " steps failed"));
+			if (sum.yours) bits.push(sum.yours + (sum.yours === 1 ? " step needs" : " steps need") + " you");
+			return {
+				key: g.key,
+				label: g.label,
+				detail: bits.length ? bits.join(" · ") : void 0,
+				plans: found
+			};
+		}
+		return {
+			key: g.key,
+			label: g.label,
+			plans: found
+		};
+	});
+}
+var GENERATION_STALE_S = 300;
+function isGenerationStalled(plan, now = Date.now() / 1e3) {
+	if (!plan || plan.state !== "generating") return false;
+	return now - (plan.gen_started || 0) >= GENERATION_STALE_S;
+}
+var GENERATION_SLOW_S = 180;
+function isGenerationSlow(plan, now = Date.now() / 1e3) {
+	if (!plan || plan.state !== "generating" || !plan.gen_started) return false;
+	return now - plan.gen_started >= GENERATION_SLOW_S;
+}
+function runElapsed(run, now = Date.now() / 1e3) {
+	const at = Number(run?.at || 0);
+	if (!at) return "";
+	const mins = Math.round((now - at) / 60);
+	if (mins < 1 || mins > 1440) return "";
+	return " (" + agoText(at, now).replace(" ago", "") + " so far)";
+}
+function agoText(epochSeconds, now = Date.now() / 1e3) {
+	const mins = Math.max(0, Math.round((now - (epochSeconds || 0)) / 60));
+	if (mins < 1) return "just now";
+	if (mins < 60) return mins + "m ago";
+	const h = Math.round(mins / 60);
+	return h < 48 ? h + "h ago" : Math.round(h / 24) + "d ago";
+}
+var HEADLINE_MAX = 120;
+function errorHeadline(plan) {
+	const raw = String(plan?.error || "").trim();
+	if (!raw) return "";
+	const stop = raw.search(/[.!?](\s|$)/);
+	let first = stop >= 0 ? raw.slice(0, stop + 1) : raw;
+	if (first.length > HEADLINE_MAX) {
+		const cut = first.slice(0, HEADLINE_MAX);
+		const space = cut.lastIndexOf(" ");
+		first = (space > 40 ? cut.slice(0, space) : cut).replace(/[,;:]$/, "") + "…";
+	}
+	const cased = first.charAt(0).toUpperCase() + first.slice(1);
+	return /[.!?…]$/.test(cased) ? cased : cased + ".";
+}
+function planStatus(plan, liveBranch = "") {
+	const status = planStatusOf(plan, liveBranch);
+	const headline = errorHeadline(plan);
+	if (!headline || plan.state === "failed" || plan.state === "generating" || !(plan.steps || []).length) return status;
+	return {
+		...status,
+		line: status.line + " " + headline
+	};
+}
+function planStatusOf(plan, liveBranch = "") {
+	const group = planGroup(plan);
+	const steps = plan.steps || [];
+	const run = latestRun(plan);
+	const agentCan = steps.filter((s) => s.actor !== "human").length;
+	const again = () => agentCan ? ["rerun", "Check now"] : ["answer", "Show steps"];
+	const at = (tone, line, action, actionLabel = "") => ({
+		group,
+		tone,
+		line,
+		action,
+		actionLabel
+	});
+	if (plan.state === "generating") {
+		if (isGenerationStalled(plan)) return at("wait", "Not written yet — writing stopped part-way, nothing for five minutes.", "rewrite", "Rewrite the checklist");
+		return at("wait", isGenerationSlow(plan) ? "Writing the checklist — taking longer than usual…" : "Writing the checklist from the diff — up to three minutes.", "none");
+	}
+	if (plan.state === "failed" && !steps.length) {
+		if (isNoCommits(plan)) return at("wait", "Not written yet — this branch has no commits. Comes back automatically when the session commits.", "none");
+		const why = errorHeadline(plan);
+		return at("wait", why ? "Not written yet — " + why.charAt(0).toLowerCase() + why.slice(1) : "Not written yet — the agent couldn't write a checklist for this.", "rewrite", "Rewrite the checklist");
+	}
+	if (plan.state === "failed") return at("warn", "Rewriting this didn't work — the steps below are unchanged.", "rewrite", "Try rewriting again");
+	if (isEmptyByChoice(plan)) return at("you", "Empty — add the steps to check.", "answer", "Add a step");
+	if (!steps.length) return at("wait", "Not written yet — it came back with no steps.", "rewrite", "Rewrite the checklist");
+	if (plan.state === "running") {
+		const mine = openHumanSteps(plan).length;
+		if (!plan.run_session) return at("warn", "The agent that was checking this is gone — nothing is running now.", ...again());
+		const been = runElapsed(run);
+		return at("busy", mine ? "An agent is checking the rest" + been + " — " + mine + (mine === 1 ? " step needs" : " steps need") + " your eyes." : "An agent is checking the steps it can" + been + ".", "watch", "Watch");
+	}
+	const unshipped = !plan.live_at && plan.state === "generated";
+	const checkNow = () => agentCan ? ["early", "Check now"] : ["answer", "Show steps"];
+	if (!run) {
+		if (plan.live_at || plan.state === "due") {
+			if (!agentCan) return at("you", steps.length === 1 ? "Shipped — its one step is yours to check." : "Shipped — all " + steps.length + " steps are yours to check.", "answer", "Answer " + steps.length + (steps.length === 1 ? " step" : " steps"));
+			return at("you", "Shipped — nobody has checked it yet. " + (agentCan === steps.length ? "An agent can check all " + steps.length + (steps.length === 1 ? " step." : " steps.") : "An agent can check " + agentCan + " of " + steps.length + "; the rest are yours."), "run", "Check now");
+		}
+		if (plan.merged_at) return at("wait", "Merged " + agoText(plan.merged_at) + " — waiting for it to deploy.", "none");
+		if (plan.live_problem) return at("warn", plan.live_problem, ...checkNow());
+		return at("wait", "Not merged yet — check the branch now, or it comes back here after it reaches " + (plan.live_branch || liveBranch || "the live branch") + ".", ...checkNow());
+	}
+	const open = openHumanSteps(plan);
+	const failed = failCount(plan);
+	if (failed) {
+		const first = steps.findIndex((s) => run.results?.[s.id]?.result === "fail");
+		const text = first >= 0 ? clip$3(steps[first].text, 80) : "";
+		return at("bad", (first >= 0 ? "Failed: step " + (first + 1) + (text ? " — " + text : "") : "Failed") + (failed > 1 ? " (+" + (failed - 1) + " more)" : "") + "." + (open.length ? " " + open.length + (open.length === 1 ? " step still needs" : " steps still need") + " you." : ""), "answer", "See what failed");
+	}
+	if (open.length) return at("you", open.length === 1 ? "1 step needs your eyes — an agent can't judge it." : open.length + " steps need your eyes — an agent can't judge them.", "answer", "Answer " + open.length + (open.length === 1 ? " step" : " steps"));
+	const missing = unansweredCount(plan);
+	const cant = cantCheckCount(plan);
+	if (missing && missing === cant) {
+		const seen = (plan.steps || []).length - cant;
+		return at("warn", (seen ? seen + " passed · " : "") + "Couldn't check " + cant + (cant === 1 ? " step" : " steps") + " — not verified.", "answer", "Show steps");
+	}
+	const ranByAgent = !!(run.session || run.by === "agent");
+	if (missing) {
+		const blank = missing - cant;
+		const gaps = [blank ? blank + (blank === 1 ? " step" : " steps") + " with no answer" : "", cant ? cant + " you couldn't check" : ""].filter(Boolean).join(" · ");
+		return at("warn", (plan.state === "done" ? "Not verified — " : ranByAgent ? "The check stopped early — " : "Part-answered — ") + gaps + ".", ...again());
+	}
+	if (unshipped) return at("ok", "Every step passed on the branch — it comes back to be checked again after merge.", "answer", "See the answers");
+	return at("ok", "Every step passed.", "answer", "See the answers");
+}
+function clip$3(text, max) {
+	const t = String(text || "").trim().replace(/\s+/g, " ");
+	if (t.length <= max) return t.replace(/[.]$/, "");
+	const cut = t.slice(0, max);
+	const space = cut.lastIndexOf(" ");
+	return (space > max / 2 ? cut.slice(0, space) : cut).replace(/[,;:.]$/, "") + "…";
+}
+function passedBy(plan) {
+	const results = latestRun(plan)?.results || {};
+	let you = false;
+	let agent = false;
+	for (const step of plan.steps || []) {
+		const entry = results[step.id];
+		if (entry?.result !== "pass") continue;
+		if (entry.by === "human") you = true;
+		else agent = true;
+	}
+	return you && agent ? "you and the agent" : you ? "you" : agent ? "the agent" : "";
+}
+function planVerdict(plan) {
+	const v = (key, label, tone, glyph, short = label) => ({
+		key,
+		label,
+		short,
+		tone,
+		glyph
+	});
+	const steps = plan.steps || [];
+	if (plan.state === "generating" && !isGenerationStalled(plan)) return v("writing", "Being written", "busy", "…", "Checklist…");
+	if (plan.state === "running") return v("checking", "Agent checking", "busy", "…", "Checking…");
+	if (isEmptyByChoice(plan)) return v("empty", "Empty — add a step", "you", "+", "Empty");
+	if (!steps.length || isGenerationStalled(plan)) return v("unwritten", "Not written yet", "wait", "○", "Not written");
+	const verdict = verdictOf(plan);
+	if (verdict === "fail") return v("failed", "Failed", "bad", "✗");
+	if (verdict === "pass") {
+		const by = passedBy(plan);
+		const who = by ? " · by " + by : "";
+		return plan.live_at ? v("live", "Verified live" + who, "ok", "✓", "Verified live") : v("branch", "Verified on branch" + who, "ok", "✓", "Verified");
+	}
+	if (!latestRun(plan) && plan.merged_at && !plan.live_at) return v("shipping", "Waiting to ship", "wait", "◷");
+	const t = checkTally(plan);
+	return v("partial", t.passed + " of " + t.total + " checked", isWaitingOnYou(plan) ? "you" : latestRun(plan) ? "warn" : "wait", "◐", t.passed + "/" + t.total + " checked");
+}
+function planForSession(plans, inst) {
+	const list = plans || [];
+	const byTitle = list.find((p) => p.id === inst.title);
+	if (byTitle) return byTitle;
+	const branch = (inst.branch || "").trim();
+	const repo = (inst.repo || "").trim();
+	if (!branch || !repo) return null;
+	return list.find((p) => p.branch === branch && repoName$1(p.repo_root) === repo) || null;
+}
+function checkTally(plan) {
+	const steps = plan?.steps || [];
+	const t = {
+		passed: 0,
+		failed: 0,
+		yours: 0,
+		cant: 0,
+		pending: 0,
+		total: steps.length
+	};
+	const key = {
+		pass: "passed",
+		fail: "failed",
+		yours: "yours",
+		cant: "cant",
+		pending: "pending"
+	};
+	for (const step of steps) t[key[stepCheck(plan, step.id)]]++;
+	return t;
+}
+function tallyBits(plan) {
+	const t = checkTally(plan);
+	return [
+		{
+			state: "pass",
+			count: t.passed,
+			label: "passed",
+			short: "passed"
+		},
+		{
+			state: "fail",
+			count: t.failed,
+			label: "failed",
+			short: "failed"
+		},
+		{
+			state: "yours",
+			count: t.yours,
+			label: t.yours === 1 ? "needs you" : "need you",
+			short: "for you"
+		},
+		{
+			state: "cant",
+			count: t.cant,
+			label: "you couldn't check",
+			short: "couldn't check"
+		},
+		{
+			state: "pending",
+			count: t.pending,
+			label: "not checked yet",
+			short: "not checked"
+		}
+	].filter((b) => b.count > 0);
+}
+function tallySentence(plan) {
+	const t = checkTally(plan);
+	if (!t.total) return "";
+	const bits = tallyBits(plan);
+	const head = t.total + (t.total === 1 ? " step" : " steps");
+	if (!bits.length) return head;
+	return head + ": " + bits.map((b) => b.count + " " + b.label).join(", ");
+}
+function planShipped(plan) {
+	return !!plan?.live_at || plan?.state === "due" || plan?.state === "running" || plan?.state === "done";
+}
+function asksHumanSteps(plan) {
+	return planShipped(plan) || !!latestRun(plan);
+}
+function stepCheck(plan, stepId) {
+	const entry = stepResult(plan, stepId);
+	if (entry?.result === "pass") return "pass";
+	if (entry?.result === "fail") return "fail";
+	if (isYourAnswer(entry?.result || "", entry?.by || "")) return "cant";
+	const step = (plan.steps || []).find((s) => s.id === stepId);
+	if (step && stepIsYours(plan, step) && asksHumanSteps(plan)) return "yours";
+	return "pending";
+}
+var CHECK_MARK = {
+	pass: "✓",
+	fail: "✗",
+	cant: "–",
+	yours: "●",
+	pending: "○"
+};
+function stepKeyAction(key) {
+	switch (key) {
+		case "1":
+		case "p":
+		case "P": return "pass";
+		case "2":
+		case "f":
+		case "F": return "fail";
+		case "3":
+		case "b":
+		case "B": return "blocked";
+		case "u":
+		case "U": return "";
+		case "n":
+		case "N": return "note";
+		default: return "";
+	}
+}
+function noteDraftAfter(result, noteOpen, note) {
+	if (result === "") return {
+		open: false,
+		text: ""
+	};
+	if ((result === "fail" || result === "blocked") && !noteOpen) return {
+		open: true,
+		text: ""
+	};
+	if (noteOpen && note.trim()) return {
+		open: false,
+		text: ""
+	};
+	return {
+		open: noteOpen,
+		text: note
+	};
+}
+function stepKeyAllowed(busy, repeat) {
+	return !busy && !repeat;
+}
+function stepKeyIsUndo(key) {
+	return key === "u" || key === "U";
+}
+function runEvidence(run, liveBranch = "", branch = "") {
+	if (!run) return "";
+	if (run.target) return "Checked against " + run.target;
+	const sha = (run.tested_sha || "").slice(0, 7);
+	if (!sha) return "";
+	return "Checked on " + (isBeforeMerge(run) && branch ? branch : liveBranch || "the live branch") + " @ " + sha;
+}
+function runTreeMismatch(run) {
+	const tested = (run?.tested_sha || "").trim();
+	const expected = (run?.expected_sha || "").trim();
+	return !!(tested && expected && tested !== expected);
+}
+function rewriteWarning(plan) {
+	if (!latestRun(plan)) return "";
+	return "Answers on steps that change are lost. Steps you added or edited yourself are kept.";
+}
+function rewriteBlockedReason(plan) {
+	if (plan.state === "running") return "An agent is checking this right now — cancel the run first.";
+	if (plan.state === "generating") return "It is already being written.";
+	return "";
+}
+//#endregion
 //#region src/lib/stage.ts
 var STAGE_META = {
 	provisioning: { label: "provisioning" },
@@ -30030,6 +30722,53 @@ function nextStep(inst) {
 		default: return null;
 	}
 }
+function verdictNote(plan) {
+	if (!plan) return "";
+	const v = planVerdict(plan);
+	return "Checklist " + v.glyph + " " + v.short;
+}
+function prVerdictConfirm(plan) {
+	if (!plan || planVerdict(plan).key !== "failed") return "";
+	return "Checklist failed — open the PR anyway?";
+}
+function cachedPlanFor(inst) {
+	const data = queryClient.getQueryData(["test-plans"]);
+	if (!inst.title) return null;
+	return planForSession(data?.plans || [], {
+		title: inst.title,
+		branch: inst.branch,
+		repo: inst.repo
+	});
+}
+function withVerifyVerdict(menu, inst, plan = cachedPlanFor(inst)) {
+	const note = verdictNote(plan);
+	const confirm = prVerdictConfirm(plan);
+	return {
+		...menu,
+		groups: menu.groups.map((g) => g.id !== "ship" ? g : {
+			...g,
+			items: g.items.map((item) => {
+				if (item.key === "checklist") return {
+					...item,
+					label: "Verify checklist…"
+				};
+				if ((item.key === "pr" || item.key === "merge") && !item.disabled && note) return {
+					...item,
+					note: item.note ? item.note + " · " + note : note,
+					run: confirm ? () => confirmPop(confirm, "A step on this branch's checklist failed — see which, or go ahead.", [{
+						label: "Show the checklist",
+						run: () => useUi.getState().openDialogFor("verify", plan?.branch || inst.branch || "")
+					}, {
+						label: item.label.replace(/…$/, "") + " anyway",
+						primary: true,
+						run: () => void item.run()
+					}]) : item.run
+				};
+				return item;
+			})
+		})
+	};
+}
 //#endregion
 //#region src/lib/sessionActions.ts
 function caps() {
@@ -30142,13 +30881,24 @@ async function closeSession(title) {
 	forgetLocally(title);
 	closeUndo.push(title);
 	const kept = keptRunningText(r);
-	toast("Session closed — reopen it from Recently closed (Ctrl+Shift+T)" + (kept ? " · " + kept : ""), kept ? { duration: 5e3 } : void 0);
+	toast(closedToastText(displayName(title), kept), {
+		onClick: () => void undoLastClose(),
+		duration: 7e3
+	});
+	refreshRecentlyClosed();
 	await refreshInstances();
+}
+function closedToastText(name, kept) {
+	return "Closed “" + name + "” — click to Undo (Ctrl+Shift+T)" + (kept ? " · " + kept : "");
+}
+function deleteConfirmText(inst) {
+	if (inst?.in_place) return "Removes this session. Its folder and branch stay as they are; Close keeps the session to reopen.";
+	return "Deletes the folder and branch" + (inst?.branch ? " “" + inst.branch + "”" : "") + ", including uncommitted changes. This can't be undone — use Close to keep it.";
 }
 async function deleteSession(title, confirmed = false) {
 	if (!title) return null;
 	if (!confirmed) {
-		confirmPop("Delete " + displayName(title) + "?", "Removes the worktree and branch. Close instead keeps the worktree (reopen it from Recently closed).", [{
+		confirmPop("Delete " + displayName(title) + "?", deleteConfirmText(instances$2().find((i) => i.title === title)), [{
 			label: "Delete",
 			primary: true,
 			run: () => void deleteSession(title, true).then((r) => {
@@ -30209,6 +30959,7 @@ async function undoLastClose() {
 		}
 		try {
 			const inst = await api("/api/recently-closed/" + encodeURIComponent(ent.id) + "/reopen", { method: "POST" });
+			refreshRecentlyClosed();
 			await refreshInstances();
 			if (inst?.title) selectSession(inst.title);
 			toast("Reopened " + (ent.title ? displayName(ent.title) : "session"));
@@ -30902,6 +31653,14 @@ function runChordAction(id, title) {
 //#endregion
 //#region src/lib/vocab.ts
 var VERIFY_BLURB = "check that pushed changes work";
+var FAST_TRACK_LEVELS = LANE_CHOICES.map((lane) => ({
+	lane,
+	label: LANE_LABEL[lane]
+}));
+var SKIP_PERMS_LABEL = "⚠ Skip permission prompts";
+var SKIP_PERMS_TITLE = "The agent runs commands and edits files without asking you";
+var NOTHING_TO_PUSH = "Nothing to push yet";
+var CONNECT_GITHUB_FOR_PRS = "Connect GitHub to open PRs";
 //#endregion
 //#region src/lib/keymap.ts
 var _host = null;
@@ -31444,12 +32203,10 @@ function installKeymap(host) {
 }
 //#endregion
 //#region src/lib/templates.ts
-var AUTOPILOT_CHOICES = [
-	["", "Leave it for me"],
-	["commit", "Commit"],
-	["push", "Commit + push"],
-	["pr", "Open a PR"]
-];
+var AUTOPILOT_CHOICES = LANE_CHOICES.filter((lane) => lane !== "merge").map((lane) => [lane === "leave" ? "" : lane, LANE_LABEL[lane]]);
+function fastTrackNeedsGitHub(level) {
+	return level === "pr" || level === "merge";
+}
 var TEMPLATES_CHANGED = "mf-presets-changed";
 var TEMPLATES_MIRROR_KEY = "mindflock.templates_cache";
 var OLD_PRESETS_STORAGE_KEY = "mindflock.prompt_presets";
@@ -31473,6 +32230,9 @@ var runsStatus = {
 };
 function templateRunsNow() {
 	return runsStatus;
+}
+function runInfoFor(name) {
+	return runsStatus.runs[(name || "").trim().toLowerCase()] || {};
 }
 function notify() {
 	if (typeof document !== "undefined") document.dispatchEvent(new Event(TEMPLATES_CHANGED));
@@ -31505,7 +32265,8 @@ function ensureTemplates(force = false) {
 			runsStatus = {
 				runs: d.runs && typeof d.runs === "object" ? d.runs : {},
 				runs_here: d.runs_here !== false,
-				runs_on: String(d.runs_on || "")
+				runs_on: String(d.runs_on || ""),
+				tz: String(d.tz || "")
 			};
 			let list = setTemplates(d.templates || []);
 			if (await migratePresetsOnce(list)) list = setTemplates((await api("/api/templates")).templates || []);
@@ -31563,7 +32324,11 @@ function infoOf(t, status) {
 	return status.runs[(t.name || "").trim().toLowerCase()] || {};
 }
 function failingSchedules(templates, status) {
-	return templates.filter((t) => hasSchedule(t) && !t.schedule?.paused && !!infoOf(t, status).last_error).map((t) => t.name);
+	return templates.filter((t) => hasSchedule(t) && !t.schedule?.paused && lastRunFailed(infoOf(t, status))).map((t) => t.name);
+}
+function lastRunFailed(info) {
+	if (info.last_status) return info.last_status === "failed" && !!info.last_error;
+	return !!info.last_error;
 }
 function nextUp(templates, status) {
 	let best = null;
@@ -31599,6 +32364,25 @@ function withScheduleFlags(t, patch, nowSec = Date.now() / 1e3) {
 		schedule: sched
 	};
 }
+function cronOf(at, days) {
+	const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec((at || "").trim());
+	if (!m) return "";
+	return Number(m[2]) + " " + Number(m[1]) + " * * " + (days === "weekdays" ? "1-5" : "*");
+}
+function atOfCron(cron) {
+	const m = /^(\d{1,2}) (\d{1,2}) \* \* (\*|1-5)$/.exec((cron || "").trim().replace(/\s+/g, " "));
+	if (!m || Number(m[1]) > 59 || Number(m[2]) > 23) return null;
+	return {
+		at: m[2].padStart(2, "0") + ":" + m[1].padStart(2, "0"),
+		days: m[3] === "1-5" ? "weekdays" : "daily"
+	};
+}
+function normalizeAt(raw) {
+	const t = (raw || "").trim();
+	const m = /^(\d{1,2}):?(\d{2})$/.exec(t);
+	if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) return t;
+	return m[1].padStart(2, "0") + ":" + m[2];
+}
 function scheduleLabel(s) {
 	if (!s) return "";
 	if (s.cron) return "Cron " + s.cron;
@@ -31608,20 +32392,82 @@ function scheduleLabel(s) {
 async function cronPreview(expr) {
 	return api("/api/templates/cron-preview?expr=" + encodeURIComponent(expr));
 }
+function hhmm(d) {
+	return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+function dateLabel(d, now) {
+	const md = d.toLocaleDateString("en-US", {
+		month: "short",
+		day: "numeric"
+	});
+	return d.getFullYear() === now.getFullYear() ? md : md + " " + d.getFullYear();
+}
 function whenLabel(epochSec, now = /* @__PURE__ */ new Date()) {
 	if (!epochSec) return "";
 	const d = /* @__PURE__ */ new Date(epochSec * 1e3);
-	const hm = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+	const hm = hhmm(d);
 	const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
 	const diff = Math.round((day(d) - day(now)) / 864e5);
 	if (diff === 0) return "today " + hm;
 	if (diff === 1) return "tomorrow " + hm;
 	if (diff === -1) return "yesterday " + hm;
-	if (Math.abs(diff) < 7) return d.toLocaleDateString(void 0, { weekday: "short" }) + " " + hm;
-	return d.toLocaleDateString(void 0, {
-		month: "short",
-		day: "numeric"
-	}) + " " + hm;
+	if (Math.abs(diff) < 7) return d.toLocaleDateString("en-US", { weekday: "short" }) + " " + hm;
+	return dateLabel(d, now) + " " + hm;
+}
+function nextRunsLabel(epochs, now = /* @__PURE__ */ new Date()) {
+	const ds = (epochs || []).filter(Boolean).map((e) => /* @__PURE__ */ new Date(e * 1e3));
+	if (!ds.length) return "";
+	const sameSlot = (a, b) => a.getMonth() === b.getMonth() && a.getDate() === b.getDate() && hhmm(a) === hhmm(b);
+	if (ds.length > 1 && ds.every((d, i) => i === 0 || sameSlot(d, ds[0]) && d.getFullYear() !== ds[i - 1].getFullYear())) {
+		const first = ds[0];
+		return [first.toLocaleDateString("en-US", {
+			month: "short",
+			day: "numeric"
+		}) + " " + first.getFullYear(), ...ds.slice(1).map((d) => String(d.getFullYear()))].join(", ");
+	}
+	return ds.map((d) => whenLabel(d.getTime() / 1e3, now)).join(", ");
+}
+function schedulePreviewLine(pv, now = /* @__PURE__ */ new Date(), zone = "") {
+	if (!pv) return "";
+	if (!pv.ok) return pv.error || "Not a cron expression";
+	const next = nextRunsLabel(pv.next, now);
+	return (pv.label || "") + (zone && /\d\d:\d\d/.test(pv.label || "") ? zone : "") + (next ? " — next " + next : "");
+}
+function zoneSuffix(tz, status) {
+	const other = !status.runs_here && status.runs_on ? " (" + status.runs_on + "'s time)" : "";
+	return (tz ? " " + tz : "") + other;
+}
+function cadenceText(t, info = runInfoFor(t.name), status = runsStatus) {
+	const words = info.schedule_label || scheduleLabel(t.schedule);
+	if (!words) return "";
+	return words + (/\d\d:\d\d/.test(words) ? zoneSuffix(info.tz || status.tz || "", status) : "");
+}
+function templateScheduleLine(t, status = runsStatus, now = /* @__PURE__ */ new Date()) {
+	if (!hasSchedule(t)) return "";
+	const info = infoOf(t, status);
+	const bits = [cadenceText(t, info, status)];
+	if (t.schedule?.paused || info.paused) bits.push("paused");
+	else if (info.next_at) {
+		const skip = info.skipping_at ? " (" + dayWord(info.skipping_at, now) + " skipped)" : "";
+		bits.push("next " + whenLabel(info.next_at, now) + skip);
+	}
+	if (lastRunFailed(info)) bits.push("last run failed");
+	return bits.filter(Boolean).join(" · ");
+}
+function dayWord(epochSec, now) {
+	return whenLabel(epochSec, now).replace(/ \d\d:\d\d$/, "");
+}
+function templateRefusal(err, fallback = "") {
+	const raw = err?.body;
+	const body = raw && typeof raw === "object" ? raw : {};
+	const str = (v) => typeof v === "string" ? v : "";
+	const detail = str(body.detail);
+	const msg = err?.message || "";
+	return {
+		text: detail || (fallback ? fallback + (msg ? ": " + msg : "") : msg || "error"),
+		reason: str(body.reason),
+		agent: str(body.agent)
+	};
 }
 function isPromptOnly(t) {
 	return typeof t.prompt === "string" && !!t.prompt.trim() && !t.program && !t.repo_path && !t.provisioned && !t.in_place && !t.init_repo && !t.autopilot && !t.schedule;
@@ -31834,6 +32680,9 @@ function applyLive(fields) {
 				break;
 			case "welcome_tour":
 				st.welcomeTourSeen = v === true;
+				break;
+			case "tours_seen":
+				st.toursSeen = Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
 				break;
 			case "keymap":
 				reloadKeymap();
@@ -32593,6 +33442,7 @@ function extActivationError(extId) {
 //#endregion
 //#region src/components/Modal.tsx
 var stack = [];
+var MODAL_OPEN_EVENT = "mf:modal-open";
 function backdropPress(onClose) {
 	return (e) => {
 		if (e.target === e.currentTarget) onClose();
@@ -32632,6 +33482,7 @@ function Modal({ onClose, onEscape, closeOnBackdrop = true, closeOnEscape = true
 	(0, import_react.useEffect)(() => {
 		const token = {};
 		const pop = pushModal(token);
+		window.dispatchEvent(new CustomEvent(MODAL_OPEN_EVENT));
 		const onKey = (e) => {
 			modalEscape(token, e, props.current);
 		};
@@ -32719,612 +33570,6 @@ function ExtensionDialog() {
 			})]
 		})
 	});
-}
-//#endregion
-//#region src/lib/rowSearch.ts
-function searchTokens(query) {
-	return query.toLowerCase().split(/\s+/).filter(Boolean);
-}
-function matchesTokens(fields, tokens) {
-	if (!tokens.length) return true;
-	const hay = fields.filter(Boolean).join(" ").toLowerCase();
-	return tokens.every((t) => hay.includes(t));
-}
-//#endregion
-//#region src/components/dialogs/verify.ts
-function planName(plan) {
-	return plan.title || plan.id;
-}
-function isFinal(result) {
-	return result === "pass" || result === "fail";
-}
-function isYourAnswer(result, by = "") {
-	return isFinal(result) || result === "blocked" && by === "human";
-}
-function answeredByYou(entry) {
-	return isYourAnswer(entry?.result, entry?.by);
-}
-function handedBack(entry) {
-	return entry?.result === "blocked" && entry?.by !== "human";
-}
-function stepIsYours(plan, step) {
-	return step.actor === "human" || handedBack(stepResult(plan, step.id));
-}
-function isPhantomRun(run) {
-	if (run.session) return false;
-	const results = run.results || {};
-	return !Object.keys(results).some((id) => !!results[id]?.result);
-}
-function latestRun(plan) {
-	const runs = plan.runs || [];
-	let best = null;
-	const shipped = !!plan.live_at;
-	for (const run of runs) {
-		if (!run || isPhantomRun(run)) continue;
-		if (shipped && isBeforeMerge(run)) continue;
-		if (!best || (run.at || 0) >= (best.at || 0)) best = run;
-	}
-	return best;
-}
-function isBeforeMerge(run) {
-	return !!run?.prelive;
-}
-function beforeMergeRun(plan) {
-	if (!plan.live_at) return null;
-	let best = null;
-	for (const run of plan.runs || []) {
-		if (!run || isPhantomRun(run) || !isBeforeMerge(run)) continue;
-		if (!best || (run.at || 0) >= (best.at || 0)) best = run;
-	}
-	return best;
-}
-function beforeMergeSummary(plan, run) {
-	const results = run.results || {};
-	const ids = (plan.steps || []).map((s) => s.id);
-	const failed = ids.filter((id) => results[id]?.result === "fail").length;
-	if (failed) return failed + (failed === 1 ? " step failed" : " steps failed");
-	const open = ids.filter((id) => !isFinal(results[id]?.result)).length;
-	if (!open) return "every step passed";
-	return ids.length - open + " of " + ids.length + " passed";
-}
-function stepResult(plan, stepId) {
-	const run = latestRun(plan);
-	if (!run) return null;
-	return run.results?.[stepId] ?? null;
-}
-function verdictOf(plan) {
-	const run = latestRun(plan);
-	if (!run) return "none";
-	const results = run.results || {};
-	const ids = answerableIds(plan, run);
-	if (!ids.length) return "partial";
-	let unsettled = false;
-	for (const id of ids) {
-		const result = results[id]?.result;
-		if (result === "fail") return "fail";
-		if (!isFinal(result)) unsettled = true;
-	}
-	return unsettled ? "partial" : "pass";
-}
-function answerableIds(plan, run) {
-	const steps = plan.steps || [];
-	return steps.length ? steps.map((s) => s.id) : Object.keys(run.results || {});
-}
-function openHumanSteps(plan) {
-	const run = latestRun(plan);
-	if (!run) return [];
-	const results = run.results || {};
-	return (plan.steps || []).filter((step) => stepIsYours(plan, step) && !answeredByYou(results[step.id]));
-}
-function needsConfirmation(plan) {
-	return openHumanSteps(plan).length > 0;
-}
-function failCount(plan) {
-	const run = latestRun(plan);
-	if (!run) return 0;
-	const results = run.results || {};
-	return answerableIds(plan, run).filter((id) => results[id]?.result === "fail").length;
-}
-function unansweredCount(plan) {
-	const run = latestRun(plan);
-	if (!run) return 0;
-	const results = run.results || {};
-	return answerableIds(plan, run).filter((id) => !isFinal(results[id]?.result)).length;
-}
-function cantCheckCount(plan) {
-	const run = latestRun(plan);
-	if (!run) return 0;
-	const results = run.results || {};
-	return answerableIds(plan, run).filter((id) => {
-		const entry = results[id];
-		return entry?.result === "blocked" && entry.by === "human";
-	}).length;
-}
-function isWaitingOnYou(plan) {
-	if (plan.state === "running" || plan.state === "generating") return false;
-	if (isEmptyByChoice(plan)) return true;
-	return plan.state === "due" || needsConfirmation(plan);
-}
-function isEmptyByChoice(plan) {
-	return plan.origin === "manual" && !(plan.steps || []).length && plan.state !== "generating" && plan.state !== "failed";
-}
-function isFailing(plan) {
-	if (plan.state === "running") return false;
-	if (plan.state === "generating") return isGenerationStalled(plan);
-	if (!(plan.steps || []).length) return !isEmptyByChoice(plan);
-	return verdictOf(plan) === "fail";
-}
-function dueCount(plans) {
-	return (plans || []).filter((p) => isFailing(p) || isWaitingOnYou(p)).length;
-}
-function verifyCountLine(due, failing) {
-	if (!due) return "Checklists that need you or failed: none right now";
-	const what = due + " checklist" + (due === 1 ? "" : "s") + " need" + (due === 1 ? "s" : "") + " you or failed";
-	return failing ? what + " — " + failing + " failed" : what;
-}
-function failingCount(plans) {
-	return (plans || []).filter(isFailing).length;
-}
-function liveBranchOverridden(liveBranch, plans, trackedRepos, blocks) {
-	if ((plans || []).some((plan) => plan.effective_live_branch && plan.effective_live_branch !== liveBranch)) return true;
-	const tracked = new Set((trackedRepos || []).map((slug) => String(slug || "").trim().toLowerCase()));
-	return Object.entries(blocks || {}).some(([slug, block]) => {
-		const own = String(block?.live_branch || "").trim();
-		return !!own && own !== liveBranch && tracked.has(String(slug || "").trim().toLowerCase());
-	});
-}
-function planTargets(instances, plans, closed = []) {
-	const havePlans = new Set((plans || []).map((plan) => plan.id));
-	const covered = new Set((plans || []).map((plan) => coverageKey(repoName(plan.repo_root), plan.branch)).filter(Boolean));
-	const out = [];
-	const seen = /* @__PURE__ */ new Set();
-	const take = (title, branch, repo) => {
-		if (!title || !branch || havePlans.has(title) || seen.has(title)) return;
-		const key = coverageKey(repo, branch);
-		if (key && covered.has(key)) return;
-		seen.add(title);
-		out.push(title);
-	};
-	for (const inst of instances || []) take(inst.title, inst.branch, inst.repo);
-	for (const entry of closed || []) take(entry.title, entry.branch, "");
-	return out;
-}
-function coverageKey(repo, branch) {
-	const r = (repo || "").trim();
-	const b = (branch || "").trim();
-	return r && b ? r + "\0" + b : "";
-}
-function repoName(repoRoot) {
-	const parts = (repoRoot || "").replace(/[/\\]+$/, "").split(/[/\\]/);
-	return parts[parts.length - 1] || "";
-}
-function verifyDeepLinkPlan(plans, target) {
-	const t = (target || "").trim();
-	if (!t) return null;
-	return plans.find((p) => p.branch === t) || plans.find((p) => p.id === t) || null;
-}
-function checklistTargets(instances, plans, closed = [], liveBranch = "") {
-	const byTitle = new Map((plans || []).map((p) => [p.id, p]));
-	const byBranch = /* @__PURE__ */ new Map();
-	for (const plan of plans || []) {
-		const key = coverageKey(repoName(plan.repo_root), plan.branch);
-		if (key && !byBranch.has(key)) byBranch.set(key, plan);
-	}
-	const plansByBranchOnly = /* @__PURE__ */ new Map();
-	for (const plan of plans || []) if (plan.branch && !plansByBranchOnly.has(plan.branch)) plansByBranchOnly.set(plan.branch, plan);
-	const shipsFrom = new Set([
-		liveBranch,
-		"main",
-		"master"
-	].map((b) => (b || "").trim()).filter(Boolean));
-	const out = [];
-	const seen = /* @__PURE__ */ new Set();
-	const take = (title, branch, repo, isClosed) => {
-		const b = (branch || "").trim();
-		if (!title || !b || seen.has(title)) return;
-		seen.add(title);
-		const covering = byTitle.get(title) || (repo ? byBranch.get(coverageKey(repo, b)) : plansByBranchOnly.get(b));
-		const reason = covering ? "has a checklist" : shipsFrom.has(b) ? "on " + b + " — nothing to compare" : "";
-		out.push({
-			title,
-			branch: b,
-			closed: isClosed,
-			reason,
-			planId: covering?.id || ""
-		});
-	};
-	const live = new Set((instances || []).map((i) => i.title));
-	for (const inst of instances || []) take(inst.title, inst.branch, inst.repo, false);
-	for (const entry of closed || []) take(entry.title, entry.branch, "", !live.has(entry.title));
-	return [...out.filter((t) => !t.reason), ...out.filter((t) => !!t.reason)];
-}
-function noTargetsReason(instances, plans, closed = []) {
-	if (planTargets(instances, plans, closed).length) return "";
-	const list = [...instances || [], ...closed || []];
-	if (!list.length) return "Start a session first — a checklist is written from a branch's diff.";
-	if (!list.some((inst) => inst.branch)) return "No session has a branch yet — a checklist is written from a branch's diff.";
-	return "Every session's branch already has a checklist.";
-}
-var GROUPS = [
-	{
-		key: "fail",
-		label: "Failed"
-	},
-	{
-		key: "due",
-		label: "Needs you"
-	},
-	{
-		key: "generated",
-		label: "In progress"
-	},
-	{
-		key: "partial",
-		label: "Not verified"
-	},
-	{
-		key: "done",
-		label: "Verified"
-	}
-];
-var GROUP_KEYS = GROUPS.map((g) => g.key);
-function groupLabel(key) {
-	return GROUPS.find((g) => g.key === key)?.label || key;
-}
-function planGroup(plan) {
-	if (isFailing(plan)) return "fail";
-	if (isWaitingOnYou(plan)) return "due";
-	if (plan.state === "running" || plan.state === "generating") return "generated";
-	if (verdictOf(plan) === "pass") return "done";
-	if (latestRun(plan)) return "partial";
-	return "generated";
-}
-function planMatches(plan, tokens) {
-	if (!tokens.length) return true;
-	const fields = [
-		plan.title,
-		plan.id,
-		plan.summary,
-		plan.branch,
-		plan.sha,
-		plan.repo_root,
-		plan.live_branch,
-		GROUPS.find((g) => g.key === planGroup(plan))?.label
-	];
-	for (const step of plan.steps || []) fields.push(step.text, step.expect, step.actor === "human" ? "you" : "agent");
-	return matchesTokens(fields, tokens);
-}
-function canRunNow(plan) {
-	const action = planStatus(plan).action;
-	return action === "run" || action === "rerun" || action === "early";
-}
-function groupPlans(plans) {
-	const buckets = /* @__PURE__ */ new Map();
-	for (const plan of plans || []) {
-		if (!plan) continue;
-		const key = planGroup(plan);
-		const bucket = buckets.get(key);
-		if (bucket) bucket.push(plan);
-		else buckets.set(key, [plan]);
-	}
-	return GROUPS.filter((g) => (buckets.get(g.key) || []).length > 0).map((g) => {
-		const found = buckets.get(g.key) || [];
-		if (g.key === "due" || g.key === "fail") {
-			const sum = found.reduce((acc, p) => {
-				const t = checkTally(p);
-				return {
-					yours: acc.yours + t.yours,
-					failed: acc.failed + t.failed
-				};
-			}, {
-				yours: 0,
-				failed: 0
-			});
-			const unwritten = g.key === "fail" ? found.filter((p) => !failCount(p)).length : 0;
-			const bits = [];
-			if (sum.failed) bits.push(sum.failed + (sum.failed === 1 ? " step failed" : " steps failed"));
-			if (unwritten) bits.push(unwritten + (unwritten === 1 ? " checklist" : " checklists") + " couldn't be written");
-			if (sum.yours) bits.push(sum.yours + (sum.yours === 1 ? " step needs" : " steps need") + " you");
-			return {
-				key: g.key,
-				label: g.label,
-				detail: bits.length ? bits.join(" · ") : void 0,
-				plans: found
-			};
-		}
-		return {
-			key: g.key,
-			label: g.label,
-			plans: found
-		};
-	});
-}
-var GENERATION_STALE_S = 300;
-function isGenerationStalled(plan, now = Date.now() / 1e3) {
-	if (!plan || plan.state !== "generating") return false;
-	return now - (plan.gen_started || 0) >= GENERATION_STALE_S;
-}
-function runElapsed(run, now = Date.now() / 1e3) {
-	const at = Number(run?.at || 0);
-	if (!at) return "";
-	const mins = Math.round((now - at) / 60);
-	if (mins < 1 || mins > 1440) return "";
-	return " (" + agoText(at, now).replace(" ago", "") + " so far)";
-}
-function agoText(epochSeconds, now = Date.now() / 1e3) {
-	const mins = Math.max(0, Math.round((now - (epochSeconds || 0)) / 60));
-	if (mins < 1) return "just now";
-	if (mins < 60) return mins + "m ago";
-	const h = Math.round(mins / 60);
-	return h < 48 ? h + "h ago" : Math.round(h / 24) + "d ago";
-}
-var HEADLINE_MAX = 120;
-function errorHeadline(plan) {
-	const raw = String(plan?.error || "").trim();
-	if (!raw) return "";
-	const stop = raw.search(/[.!?](\s|$)/);
-	let first = stop >= 0 ? raw.slice(0, stop + 1) : raw;
-	if (first.length > HEADLINE_MAX) {
-		const cut = first.slice(0, HEADLINE_MAX);
-		const space = cut.lastIndexOf(" ");
-		first = (space > 40 ? cut.slice(0, space) : cut).replace(/[,;:]$/, "") + "…";
-	}
-	const cased = first.charAt(0).toUpperCase() + first.slice(1);
-	return /[.!?…]$/.test(cased) ? cased : cased + ".";
-}
-function planStatus(plan, liveBranch = "") {
-	const status = planStatusOf(plan, liveBranch);
-	const headline = errorHeadline(plan);
-	if (!headline || plan.state === "failed" || plan.state === "generating" || !(plan.steps || []).length) return status;
-	return {
-		...status,
-		line: status.line + " " + headline
-	};
-}
-function planStatusOf(plan, liveBranch = "") {
-	const group = planGroup(plan);
-	const steps = plan.steps || [];
-	const run = latestRun(plan);
-	const agentCan = steps.filter((s) => s.actor !== "human").length;
-	const again = () => agentCan ? ["rerun", "Check now"] : ["answer", "Show steps"];
-	const at = (tone, line, action, actionLabel = "") => ({
-		group,
-		tone,
-		line,
-		action,
-		actionLabel
-	});
-	if (plan.state === "generating") {
-		if (isGenerationStalled(plan)) return at("broken", "Writing this checklist stopped part-way — nothing has been written for five minutes.", "rewrite", "Rewrite the checklist");
-		return at("wait", "Writing the checklist from the diff — up to three minutes.", "none");
-	}
-	if (plan.state === "failed" && !steps.length) return at("broken", "The agent couldn't write a checklist for this.", "rewrite", "Rewrite the checklist");
-	if (plan.state === "failed") return at("warn", "Rewriting this didn't work — the steps below are unchanged.", "rewrite", "Try rewriting again");
-	if (isEmptyByChoice(plan)) return at("you", "Empty — add the steps to check.", "answer", "Add a step");
-	if (!steps.length) return at("broken", "No steps — the checklist came back empty.", "rewrite", "Rewrite the checklist");
-	if (plan.state === "running") {
-		const mine = openHumanSteps(plan).length;
-		if (!plan.run_session) return at("warn", "The agent that was checking this is gone — nothing is running now.", ...again());
-		const been = runElapsed(run);
-		return at("busy", mine ? "An agent is checking the rest" + been + " — " + mine + (mine === 1 ? " step needs" : " steps need") + " your eyes." : "An agent is checking the steps it can" + been + ".", "watch", "Watch");
-	}
-	const unshipped = !plan.live_at && plan.state === "generated";
-	const checkNow = () => agentCan ? ["early", "Check now"] : ["answer", "Show steps"];
-	if (!run) {
-		if (plan.live_at || plan.state === "due") {
-			if (!agentCan) return at("you", steps.length === 1 ? "Shipped — its one step is yours to check." : "Shipped — all " + steps.length + " steps are yours to check.", "answer", "Answer " + steps.length + (steps.length === 1 ? " step" : " steps"));
-			return at("you", "Shipped — nobody has checked it yet. " + (agentCan === steps.length ? "An agent can check all " + steps.length + (steps.length === 1 ? " step." : " steps.") : "An agent can check " + agentCan + " of " + steps.length + "; the rest are yours."), "run", "Check now");
-		}
-		if (plan.merged_at) return at("wait", "Merged " + agoText(plan.merged_at) + " — waiting for it to deploy.", "none");
-		if (plan.live_problem) return at("warn", plan.live_problem, ...checkNow());
-		return at("wait", "Not merged yet — check the branch now, or it comes back here after it reaches " + (plan.live_branch || liveBranch || "the live branch") + ".", ...checkNow());
-	}
-	const open = openHumanSteps(plan);
-	const failed = failCount(plan);
-	if (failed) {
-		const first = steps.findIndex((s) => run.results?.[s.id]?.result === "fail");
-		const text = first >= 0 ? clip$3(steps[first].text, 80) : "";
-		return at("bad", (first >= 0 ? "Failed: step " + (first + 1) + (text ? " — " + text : "") : "Failed") + (failed > 1 ? " (+" + (failed - 1) + " more)" : "") + "." + (open.length ? " " + open.length + (open.length === 1 ? " step still needs" : " steps still need") + " you." : ""), "answer", "See what failed");
-	}
-	if (open.length) return at("you", open.length === 1 ? "1 step needs your eyes — an agent can't judge it." : open.length + " steps need your eyes — an agent can't judge them.", "answer", "Answer " + open.length + (open.length === 1 ? " step" : " steps"));
-	const missing = unansweredCount(plan);
-	const cant = cantCheckCount(plan);
-	if (missing && missing === cant) {
-		const seen = (plan.steps || []).length - cant;
-		return at("warn", (seen ? seen + " passed · " : "") + "Couldn't check " + cant + (cant === 1 ? " step" : " steps") + " — not verified.", "answer", "Show steps");
-	}
-	const ranByAgent = !!(run.session || run.by === "agent");
-	if (missing) {
-		const blank = missing - cant;
-		const gaps = [blank ? blank + (blank === 1 ? " step" : " steps") + " with no answer" : "", cant ? cant + " you couldn't check" : ""].filter(Boolean).join(" · ");
-		return at("warn", (plan.state === "done" ? "Not verified — " : ranByAgent ? "The check stopped early — " : "Part-answered — ") + gaps + ".", ...again());
-	}
-	if (unshipped) return at("ok", "Works on the branch — it comes back to be checked again after merge.", "answer", "See the answers");
-	return at("ok", "Every step has an answer — it works.", "answer", "See the answers");
-}
-function clip$3(text, max) {
-	const t = String(text || "").trim().replace(/\s+/g, " ");
-	if (t.length <= max) return t.replace(/[.]$/, "");
-	const cut = t.slice(0, max);
-	const space = cut.lastIndexOf(" ");
-	return (space > max / 2 ? cut.slice(0, space) : cut).replace(/[,;:.]$/, "") + "…";
-}
-function planVerdict(plan) {
-	const v = (key, label, tone, glyph, short = label) => ({
-		key,
-		label,
-		short,
-		tone,
-		glyph
-	});
-	const steps = plan.steps || [];
-	if (plan.state === "generating" && !isGenerationStalled(plan)) return v("writing", "Being written", "busy", "…", "Checklist…");
-	if (plan.state === "running") return v("checking", "Agent checking", "busy", "…", "Checking…");
-	if (isEmptyByChoice(plan)) return v("empty", "Empty — add a step", "you", "+", "Empty");
-	if (!steps.length || isGenerationStalled(plan)) return v("unwritten", "Couldn't be written", "bad", "✗", "No checklist");
-	const verdict = verdictOf(plan);
-	if (verdict === "fail") return v("failed", "Failed", "bad", "✗");
-	if (verdict === "pass") return plan.live_at ? v("live", "Verified live", "ok", "✓") : v("branch", "Verified on branch", "ok", "✓", "Verified");
-	if (!latestRun(plan) && plan.merged_at && !plan.live_at) return v("shipping", "Waiting to ship", "wait", "◷");
-	const t = checkTally(plan);
-	return v("partial", t.passed + " of " + t.total + " checked", isWaitingOnYou(plan) ? "you" : latestRun(plan) ? "warn" : "wait", "◐", t.passed + "/" + t.total + " checked");
-}
-function planForSession(plans, inst) {
-	const list = plans || [];
-	const byTitle = list.find((p) => p.id === inst.title);
-	if (byTitle) return byTitle;
-	const branch = (inst.branch || "").trim();
-	const repo = (inst.repo || "").trim();
-	if (!branch || !repo) return null;
-	return list.find((p) => p.branch === branch && repoName(p.repo_root) === repo) || null;
-}
-function checkTally(plan) {
-	const steps = plan?.steps || [];
-	const t = {
-		passed: 0,
-		failed: 0,
-		yours: 0,
-		cant: 0,
-		pending: 0,
-		total: steps.length
-	};
-	const key = {
-		pass: "passed",
-		fail: "failed",
-		yours: "yours",
-		cant: "cant",
-		pending: "pending"
-	};
-	for (const step of steps) t[key[stepCheck(plan, step.id)]]++;
-	return t;
-}
-function tallyBits(plan) {
-	const t = checkTally(plan);
-	return [
-		{
-			state: "pass",
-			count: t.passed,
-			label: "passed",
-			short: "passed"
-		},
-		{
-			state: "fail",
-			count: t.failed,
-			label: "failed",
-			short: "failed"
-		},
-		{
-			state: "yours",
-			count: t.yours,
-			label: t.yours === 1 ? "needs you" : "need you",
-			short: "for you"
-		},
-		{
-			state: "cant",
-			count: t.cant,
-			label: "you couldn't check",
-			short: "couldn't check"
-		},
-		{
-			state: "pending",
-			count: t.pending,
-			label: "not checked yet",
-			short: "not checked"
-		}
-	].filter((b) => b.count > 0);
-}
-function tallySentence(plan) {
-	const t = checkTally(plan);
-	if (!t.total) return "";
-	const bits = tallyBits(plan);
-	const head = t.total + (t.total === 1 ? " step" : " steps");
-	if (!bits.length) return head;
-	return head + ": " + bits.map((b) => b.count + " " + b.label).join(", ");
-}
-function planShipped(plan) {
-	return !!plan?.live_at || plan?.state === "due" || plan?.state === "running" || plan?.state === "done";
-}
-function asksHumanSteps(plan) {
-	return planShipped(plan) || !!latestRun(plan);
-}
-function stepCheck(plan, stepId) {
-	const entry = stepResult(plan, stepId);
-	if (entry?.result === "pass") return "pass";
-	if (entry?.result === "fail") return "fail";
-	if (isYourAnswer(entry?.result || "", entry?.by || "")) return "cant";
-	const step = (plan.steps || []).find((s) => s.id === stepId);
-	if (step && stepIsYours(plan, step) && asksHumanSteps(plan)) return "yours";
-	return "pending";
-}
-var CHECK_MARK = {
-	pass: "✓",
-	fail: "✗",
-	cant: "–",
-	yours: "●",
-	pending: "○"
-};
-function stepKeyAction(key) {
-	switch (key) {
-		case "1":
-		case "p":
-		case "P": return "pass";
-		case "2":
-		case "f":
-		case "F": return "fail";
-		case "3":
-		case "b":
-		case "B": return "blocked";
-		case "u":
-		case "U": return "";
-		case "n":
-		case "N": return "note";
-		default: return "";
-	}
-}
-function noteDraftAfter(result, noteOpen, note) {
-	if (result === "") return {
-		open: false,
-		text: ""
-	};
-	if ((result === "fail" || result === "blocked") && !noteOpen) return {
-		open: true,
-		text: ""
-	};
-	if (noteOpen && note.trim()) return {
-		open: false,
-		text: ""
-	};
-	return {
-		open: noteOpen,
-		text: note
-	};
-}
-function stepKeyAllowed(busy, repeat) {
-	return !busy && !repeat;
-}
-function stepKeyIsUndo(key) {
-	return key === "u" || key === "U";
-}
-function runEvidence(run, liveBranch = "", branch = "") {
-	if (!run) return "";
-	if (run.target) return "Checked against " + run.target;
-	const sha = (run.tested_sha || "").slice(0, 7);
-	if (!sha) return "";
-	return "Checked on " + (isBeforeMerge(run) && branch ? branch : liveBranch || "the live branch") + " @ " + sha;
-}
-function runTreeMismatch(run) {
-	const tested = (run?.tested_sha || "").trim();
-	const expected = (run?.expected_sha || "").trim();
-	return !!(tested && expected && tested !== expected);
-}
-function rewriteWarning(plan) {
-	if (!latestRun(plan)) return "";
-	return "Answers on steps that change are lost. Steps you added or edited yourself are kept.";
-}
-function rewriteBlockedReason(plan) {
-	if (plan.state === "running") return "An agent is checking this right now — cancel the run first.";
-	if (plan.state === "generating") return "It is already being written.";
-	return "";
 }
 //#endregion
 //#region src/lib/flockActions.ts
@@ -35423,8 +35668,9 @@ function approvableRequest(event, data) {
 }
 //#endregion
 //#region src/lib/openSettings.ts
+var DEFAULT_SETTINGS_SCREEN = "connections";
 function openSettings(screen) {
-	useUi.getState().openDialogFor("settings", screen ?? null);
+	useUi.getState().openDialogFor("settings", screen ?? DEFAULT_SETTINGS_SCREEN);
 }
 //#endregion
 //#region src/lib/peerActions.ts
@@ -35627,6 +35873,16 @@ function notifFromEvent(env) {
 			const n = Number(d.failed) || 0;
 			return {
 				text: "checklist failed" + (n ? " — " + n + " step" + (n === 1 ? "" : "s") : ""),
+				cls: "n-warn",
+				rule: "verify_run_failed",
+				...planOf(env, d)
+			};
+		}
+		case "session.test_plan_step_failed": {
+			const step = Number(d.step) || 0;
+			const text = String(d.text || "");
+			return {
+				text: "checklist failed" + (step ? " — step " + step + (text ? " " + (text.length > 60 ? text.slice(0, 59) + "…" : text) : "") : ""),
 				cls: "n-warn",
 				rule: "verify_run_failed",
 				...planOf(env, d)
@@ -36846,7 +37102,7 @@ function ShortcutsSheet() {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							className: "shortcuts-tour linklike",
 							type: "button",
-							title: "A five-slide tour of MindFlock",
+							title: "Replay the welcome tour",
 							onClick: () => {
 								closeDialog();
 								useUi.getState().openTour();
@@ -36983,6 +37239,105 @@ function useScheduleStatus() {
 	};
 }
 //#endregion
+//#region src/components/setup/useSetup.ts
+var SETUP_KEY = ["setup"];
+function useSetup(enabled = true) {
+	return useQuery({
+		queryKey: SETUP_KEY,
+		queryFn: () => api("/api/setup"),
+		staleTime: 3e4,
+		enabled
+	});
+}
+async function refreshSetup(reprobe = false) {
+	if (!reprobe) {
+		await queryClient.invalidateQueries({ queryKey: SETUP_KEY });
+		return;
+	}
+	try {
+		const d = await api("/api/setup?refresh=1");
+		queryClient.setQueryData(SETUP_KEY, d);
+	} catch {
+		await queryClient.invalidateQueries({ queryKey: SETUP_KEY });
+	}
+}
+async function skipSetupStep(step, undo = false) {
+	const r = await api("/api/setup/" + encodeURIComponent(step) + (undo ? "/unskip" : "/skip"), { method: "POST" });
+	queryClient.setQueryData(SETUP_KEY, (old) => old ? {
+		...old,
+		steps: r.steps,
+		summary: r.summary
+	} : old);
+}
+//#endregion
+//#region src/lib/calm.ts
+var NEWCOMER_DAYS = 7;
+var CALM_MAX_SESSIONS = 3;
+function isNewcomer(status, onboarded, now = Date.now()) {
+	if (!status) return onboarded === false ? true : null;
+	const repo = (status.steps || []).find((s) => s.id === "repo");
+	if (!repo) return null;
+	if (!repo.done) return true;
+	const at = repo.at ? Date.parse(repo.at) : NaN;
+	if (!isFinite(at)) return false;
+	return now - at < NEWCOMER_DAYS * 864e5;
+}
+function calmDecision(opts) {
+	if (opts.sessions >= CALM_MAX_SESSIONS) return false;
+	return isNewcomer(opts.status, opts.onboarded, opts.now);
+}
+function undecidedCalm(hint) {
+	return hint ?? true;
+}
+var CALM_HINT_KEY = "mf_calm_hint";
+function readCalmHint() {
+	try {
+		const v = localStorage.getItem(CALM_HINT_KEY);
+		return v === "1" ? true : v === "0" ? false : null;
+	} catch {
+		return null;
+	}
+}
+function writeCalmHint(calm) {
+	try {
+		if (localStorage.getItem(CALM_HINT_KEY) !== (calm ? "1" : "0")) localStorage.setItem(CALM_HINT_KEY, calm ? "1" : "0");
+	} catch {}
+}
+var CALM_HIDDEN_BARS = ["usage", "assistant"];
+function calmHidesBar(key) {
+	return CALM_HIDDEN_BARS.includes(key) || key.startsWith("ext:");
+}
+function topBarShows(o) {
+	return {
+		verify: !o.calm || o.checklists > 0,
+		schedule: !o.calm || o.templates > 0
+	};
+}
+function firstLaunchTour(opts) {
+	if (opts.seen || opts.sessions !== 0) return false;
+	if (!opts.status) return opts.onboarded === false;
+	const repo = (opts.status.steps || []).find((s) => s.id === "repo");
+	return !!repo && !repo.done;
+}
+//#endregion
+//#region src/lib/useCalm.ts
+function useCalm() {
+	const { data: instances } = useInstances();
+	const { data: setup } = useSetup();
+	const { data: config } = useConfig();
+	const sessions = instances ? instances.filter((i) => !i.device && !isVerifySession(i)).length : null;
+	const decided = sessions === null ? null : calmDecision({
+		sessions,
+		status: setup,
+		onboarded: config?.onboarded
+	});
+	(0, import_react.useEffect)(() => {
+		if (decided !== null) writeCalmHint(decided);
+	}, [decided]);
+	if (decided !== null) return decided;
+	return undecidedCalm(readCalmHint());
+}
+//#endregion
 //#region src/components/TopBar.tsx
 function engineVersion(raw) {
 	const v = (raw || "").trim();
@@ -36997,6 +37352,11 @@ function TopBar() {
 	const failing = failingCount(testPlans?.plans || []);
 	const sched = useScheduleStatus();
 	const schedFailing = failingSchedules(sched.templates, sched.status).length;
+	const shows = topBarShows({
+		calm: useCalm(),
+		checklists: testPlans?.plans?.length ?? 0,
+		templates: sched.templates.length
+	});
 	const [mac] = (0, import_react.useState)(hasNativeWindowControls);
 	const [fullScreen, setFullScreen] = (0, import_react.useState)(false);
 	(0, import_react.useEffect)(() => {
@@ -37115,11 +37475,11 @@ function TopBar() {
 							id: "intake-btn",
 							className: "tb-item",
 							type: "button",
-							title: "Intake — tickets, pull requests and issues waiting to become sessions" + keys("intake"),
+							title: "Intake — tickets, pull requests and issues; starts sessions when work arrives" + keys("intake"),
 							onClick: () => ui.openDialogFor("intake"),
 							children: "Intake"
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						shows.verify && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 							id: "verify-btn",
 							className: "tb-item",
 							type: "button",
@@ -37130,11 +37490,11 @@ function TopBar() {
 								children: due
 							})]
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						shows.schedule && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 							id: "schedule-btn",
 							className: "tb-item",
 							type: "button",
-							title: "Schedule — templates that start sessions on their own" + keys("schedule") + (schedFailing > 0 ? "\n" + (schedFailing === 1 ? "1 scheduled template's last run failed" : schedFailing + " scheduled templates' last runs failed") : ""),
+							title: "Schedule — templates; starts sessions on a timer" + keys("schedule") + (schedFailing > 0 ? "\n" + (schedFailing === 1 ? "1 scheduled template's last run failed" : schedFailing + " scheduled templates' last runs failed") : ""),
 							onClick: () => ui.openDialogFor("schedule"),
 							children: ["Schedule", schedFailing > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "tb-count is-failing",
@@ -37663,6 +38023,10 @@ function describeConnectionTest(r) {
 }
 //#endregion
 //#region src/components/dialogs/InstallTerminal.tsx
+var useInstallWindow = create((set) => ({
+	open: false,
+	set: (open) => set({ open })
+}));
 var INSTALL_SLOW_S = 90;
 function fmtElapsed(secs) {
 	const s = Math.max(0, Math.floor(secs));
@@ -37696,13 +38060,17 @@ function ManualFallback({ cmds, lead }) {
 		]
 	});
 }
-function installedMessage(steps) {
+function installedAgent(steps) {
 	const agent = steps.find((s) => s.id === "agent-cli");
 	const m = agent ? /\(([^)]+)\)\s*$/.exec(agent.label) : null;
-	return m ? "✓ Installed — next: sign in to " + agentName(m[1]) : "✓ Everything is installed";
+	return m ? m[1] : "";
+}
+function installedMessage(steps) {
+	const agent = installedAgent(steps);
+	return agent ? "✓ " + agentName(agent) + " installed — Next: Sign in" : "✓ Everything is installed";
 }
 function installSummary(steps) {
-	return steps.map((s) => s.label.replace(/^system packages: /, "")).join(", ");
+	return stepNames(steps).join(", ");
 }
 function stepNames(steps) {
 	const out = [];
@@ -37710,9 +38078,16 @@ function stepNames(steps) {
 	else if (s.id === "homebrew") out.push("Homebrew");
 	else {
 		const m = /\(([^)]+)\)\s*$/.exec(s.label);
-		out.push(m && /-cli$/.test(s.id) ? m[1] : s.label);
+		out.push(m && /-cli$/.test(s.id) ? agentName(m[1]) : s.label);
 	}
 	return out.filter(Boolean);
+}
+function installProgress(steps, secs) {
+	const agent = installedAgent(steps);
+	const others = stepNames(steps).filter((n) => !agent || n !== agentName(agent));
+	const what = agent && !others.length ? "Downloading " + agentName(agent) : "Installing " + stepNames(steps).join(", ");
+	const tail = asksForPassword(steps) ? " — type your password if asked" : " — can take a few minutes";
+	return (steps.length ? what : "Installing") + "… " + fmtElapsed(secs) + tail;
 }
 function installButtonLabel(steps) {
 	const names = stepNames(steps);
@@ -37722,7 +38097,7 @@ function installButtonLabel(steps) {
 function asksForPassword(steps) {
 	return steps.some((s) => s.id === "packages" || s.id === "homebrew" || /(^|[\s;&|(])sudo\s/.test(s.cmd || ""));
 }
-function InstallWindow({ steps, onClose, onDone }) {
+function InstallWindow({ steps, onClose, onDone, onSignIn }) {
 	const hostRef = (0, import_react.useRef)(null);
 	const state = useWsTerm(hostRef, "/api/doctor/install-terminal", true);
 	const [exit, setExit] = (0, import_react.useState)(null);
@@ -37750,7 +38125,6 @@ function InstallWindow({ steps, onClose, onDone }) {
 				setExit(s.exit_code);
 				if (!fired) {
 					fired = true;
-					if (s.exit_code === 0) toast(installedMessage(planned));
 					doneRef.current();
 				}
 			} catch {}
@@ -37769,8 +38143,8 @@ function InstallWindow({ steps, onClose, onDone }) {
 	};
 	const secs = exit === null ? elapsedSince(run, seenAt.current, now) : 0;
 	const slow = exit === null && secs >= INSTALL_SLOW_S;
-	const what = installSummary(steps || []);
-	const status = exit === 0 ? "✓ everything installed" : exit !== null ? "✗ some steps failed — scroll up to see which" : state === "streaming" ? "Installing" + (what ? " " + what : "") + " · " + fmtElapsed(secs) + (asksForPassword(steps || []) ? " — type your password if asked" : " — downloads can take a few minutes") : state;
+	const agent = installedAgent(planned);
+	const status = exit === 0 ? installedMessage(planned) : exit !== null ? "✗ some steps failed — scroll up to see which" : state === "streaming" ? installProgress(planned, secs) : state;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "install-dialog",
 		role: "dialog",
@@ -37786,8 +38160,9 @@ function InstallWindow({ steps, onClose, onDone }) {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Install missing tools" }),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "muted",
+							className: exit === 0 ? "signin-ok" : "muted",
 							id: "install-status",
+							role: "status",
 							children: status
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -37798,12 +38173,29 @@ function InstallWindow({ steps, onClose, onDone }) {
 						})
 					]
 				}),
+				exit === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "install-next",
+					id: "install-next",
+					children: agent ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "setup-primary",
+						id: "install-signin",
+						onClick: () => onSignIn(agent),
+						children: ["Sign in to ", agentName(agent)]
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "setup-primary",
+						id: "install-done",
+						onClick: () => void close(),
+						children: "Done"
+					})
+				}),
 				(slow || exit !== null && exit !== 0) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ManualFallback, {
 					cmds,
 					lead: slow ? "Taking a while — it may be stuck on the network. It keeps trying; or run this in your own terminal:" : "Didn't finish. Run this in your own terminal instead:"
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "prov-login-term",
+					className: "prov-login-term login-term-dark",
 					ref: hostRef
 				})
 			]
@@ -37844,14 +38236,35 @@ function useRunningInstall(active, onFinished) {
 	}, [active]);
 	return run ? elapsedSince(run, seenAt.current, now) : null;
 }
-function InstallMissing({ steps, onDone }) {
+function InstallMissing({ steps, onDone, tourNext = false }) {
 	const [open, setOpen] = (0, import_react.useState)(false);
+	const [signIn, setSignIn] = (0, import_react.useState)("");
+	const setWindowOpen = useInstallWindow((st) => st.set);
+	(0, import_react.useEffect)(() => {
+		setWindowOpen(open || !!signIn);
+	}, [
+		open,
+		signIn,
+		setWindowOpen
+	]);
+	(0, import_react.useEffect)(() => () => setWindowOpen(false), [setWindowOpen]);
 	const runningFor = useRunningInstall(!open && !!steps?.length, onDone);
-	const window_ = open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallWindow, {
+	const window_ = (open || signIn) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallWindow, {
 		steps,
 		onClose: () => setOpen(false),
-		onDone
-	});
+		onDone,
+		onSignIn: (p) => {
+			setOpen(false);
+			setSignIn(p);
+		}
+	}), signIn && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SignInWindow, {
+		provider: signIn,
+		onClose: () => {
+			setSignIn("");
+			notifyConnectionsChanged();
+			onDone();
+		}
+	})] });
 	if (!steps || !steps.length) return window_ || null;
 	if (runningFor !== null) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "doctor-install",
@@ -37882,17 +38295,18 @@ function InstallMissing({ steps, onDone }) {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
-				className: "test-btn",
+				className: "test-btn" + (tourNext ? " setup-primary" : ""),
 				id: "doctor-install-btn",
+				"data-tour": tourNext ? "setup-next" : void 0,
 				onClick: () => setOpen(true),
 				children: installButtonLabel(steps)
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			(stepNames(steps).length > 3 || asksForPassword(steps)) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "set-hint",
 				children: [
 					" ",
-					installSummary(steps),
-					asksForPassword(steps) ? " — asks for your password once" : ""
+					stepNames(steps).length > 3 ? installSummary(steps) : "",
+					asksForPassword(steps) ? (stepNames(steps).length > 3 ? " — " : "") + "asks for your password once" : ""
 				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
@@ -37905,37 +38319,6 @@ function InstallMissing({ steps, onDone }) {
 			window_
 		]
 	});
-}
-//#endregion
-//#region src/components/setup/useSetup.ts
-var SETUP_KEY = ["setup"];
-function useSetup(enabled = true) {
-	return useQuery({
-		queryKey: SETUP_KEY,
-		queryFn: () => api("/api/setup"),
-		staleTime: 3e4,
-		enabled
-	});
-}
-async function refreshSetup(reprobe = false) {
-	if (!reprobe) {
-		await queryClient.invalidateQueries({ queryKey: SETUP_KEY });
-		return;
-	}
-	try {
-		const d = await api("/api/setup?refresh=1");
-		queryClient.setQueryData(SETUP_KEY, d);
-	} catch {
-		await queryClient.invalidateQueries({ queryKey: SETUP_KEY });
-	}
-}
-async function skipSetupStep(step, undo = false) {
-	const r = await api("/api/setup/" + encodeURIComponent(step) + (undo ? "/unskip" : "/skip"), { method: "POST" });
-	queryClient.setQueryData(SETUP_KEY, (old) => old ? {
-		...old,
-		steps: r.steps,
-		summary: r.summary
-	} : old);
 }
 //#endregion
 //#region src/components/settings/settingsMode.tsx
@@ -37978,10 +38361,11 @@ function AdvancedToggle({ advanced, hidden, onChange }) {
 		}) : null]
 	});
 }
-function AdvancedFold({ id, summary = "Advanced", basic = false, children }) {
+function AdvancedFold({ id, summary = "Advanced", basic = false, defaultOpen, children }) {
 	const advanced = useAdvancedSettings();
-	const [open, setOpen] = (0, import_react.useState)(advanced);
-	(0, import_react.useEffect)(() => setOpen(advanced), [advanced]);
+	const initial = defaultOpen ?? advanced;
+	const [open, setOpen] = (0, import_react.useState)(initial);
+	(0, import_react.useEffect)(() => setOpen(initial), [initial]);
 	if (!advanced && !basic) return null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 		className: "pr-advanced set-adv-fold",
@@ -38103,7 +38487,7 @@ function shownStatus(c, result) {
 		tone: status
 	};
 }
-function plainDetail(c) {
+function plainDetail$1(c) {
 	const d = c.detail || "";
 	if (c.kind === "agent" && extras(c).provider) {
 		if (/^signed in/i.test(d)) return extras(c).account ? "Signed in as " + extras(c).account : "Signed in";
@@ -38136,8 +38520,10 @@ function summaryLine(rows) {
 	const need = n.needs_attention === 1 ? "needs" : "need";
 	return `${n.connected} connected · ${n.needs_attention} ${need} attention · ${n.off} off`;
 }
-function describeTestResult(res) {
+function describeTestResult(res, ms) {
 	const r = res && typeof res === "object" ? res : {};
+	const agent = describeAgentTest(r, ms);
+	if (agent) return agent;
 	const str = (v) => typeof v === "string" ? v.trim() : "";
 	const sub = (k) => {
 		const v = r[k];
@@ -38150,12 +38536,37 @@ function describeTestResult(res) {
 		text: str(r.detail) || str(r.message) || str(r.error) || str(r.server) || (ok ? sub("auth") || sub("cli") : cliOk ? sub("auth") || sub("cli") : sub("cli") || sub("auth")) || (ok ? "Works" : "Failed")
 	};
 }
+function answeredIn(ms) {
+	const s = Math.max(0, ms) / 1e3;
+	return "answered in " + (s < 10 ? s.toFixed(1) : String(Math.round(s))) + " s";
+}
+function describeAgentTest(r, ms) {
+	const cli = r.cli && typeof r.cli === "object" ? r.cli : null;
+	if (!cli) return null;
+	const str = (v) => typeof v === "string" ? v.trim() : "";
+	const ok = r.ok === true;
+	const bits = [];
+	if (cli.status === "ok") {
+		const path = str(cli.detail).split(" — ")[0];
+		if (path) bits.push("found at " + path);
+	}
+	const line = str(r.detail);
+	if (line) bits.push(bits.length ? line.charAt(0).toLowerCase() + line.slice(1) : line);
+	if (typeof ms === "number" && ok) bits.push(answeredIn(ms));
+	const text = bits.join(" · ");
+	if (!text) return null;
+	return {
+		ok,
+		text: text.charAt(0).toUpperCase() + text.slice(1)
+	};
+}
 async function runTest(t) {
+	const t0 = Date.now();
 	try {
 		return describeTestResult(await api(t.endpoint, {
 			method: t.method || "POST",
 			json: t.body
-		}));
+		}), Date.now() - t0);
 	} catch (err) {
 		return {
 			ok: false,
@@ -38220,7 +38631,7 @@ function AgentInstall({ provider, fallback }) {
 		})]
 	});
 }
-function ConnectionRowView({ c, deps, result, testing, onTest, onChanged }) {
+function ConnectionRowView({ c, deps, result, testing, onTest, onChanged, tourNext = false }) {
 	const shown = shownStatus(c, result);
 	const status = shown.status;
 	const a = c.action;
@@ -38252,7 +38663,7 @@ function ConnectionRowView({ c, deps, result, testing, onTest, onChanged }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "conn-detail muted",
 						title: c.detail || void 0,
-						children: plainDetail(c)
+						children: plainDetail$1(c)
 					}),
 					install ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentInstall, {
 						provider: install,
@@ -38272,7 +38683,7 @@ function ConnectionRowView({ c, deps, result, testing, onTest, onChanged }) {
 					result && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "conn-test-result " + (result.ok ? "ok" : "bad"),
 						role: "status",
-						children: [result.ok ? "✓ " : "✗ ", result.ok && result.text === plainDetail(c) ? "Checked just now" : result.text]
+						children: [result.ok ? "✓ " : "✗ ", result.ok && result.text === plainDetail$1(c) ? "Checked just now" : result.text]
 					})
 				]
 			}),
@@ -38294,11 +38705,13 @@ function ConnectionRowView({ c, deps, result, testing, onTest, onChanged }) {
 						provider: a.provider,
 						profile: a.profile,
 						label: a.label || "Sign in",
-						onDone: onChanged
+						onDone: onChanged,
+						dataTour: tourNext ? "setup-next" : void 0
 					}) : null,
 					handler && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: stage && a.kind === "screen" ? "linklike conn-configure conn-link" : "test-btn conn-configure",
+						"data-tour": tourNext ? "setup-next" : void 0,
 						onClick: handler,
 						children: a.label
 					}),
@@ -38446,6 +38859,7 @@ function Connections({ gotoScreen }) {
 				more.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdvancedFold, {
 					id: "connections-advanced",
 					summary: "More connections",
+					defaultOpen: false,
 					children: more.map(renderGroup)
 				}) : null
 			] })
@@ -38542,18 +38956,19 @@ function SignInWindow({ provider, profile, onClose }) {
 					children: signInSteps(provider).map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: t }, t))
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "prov-login-term",
+					className: "prov-login-term login-term-dark",
 					ref: hostRef
 				})
 			]
 		})
 	});
 }
-function AgentSignIn({ provider, profile, label, onDone, className }) {
+function AgentSignIn({ provider, profile, label, onDone, className, dataTour }) {
 	const [open, setOpen] = (0, import_react.useState)(false);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 		type: "button",
 		className: "test-btn agent-signin-btn" + (className ? " " + className : ""),
+		"data-tour": dataTour,
 		onClick: (e) => {
 			e.stopPropagation();
 			setOpen(true);
@@ -39079,6 +39494,23 @@ function hasUncommitted(inst) {
 	const u = inst?.diff_stat?.uncommitted;
 	return (u?.files || 0) + (u?.additions || 0) + (u?.deletions || 0) > 0;
 }
+function nothingToShip(inst) {
+	const d = inst?.diff_stat;
+	if (!d) return false;
+	return !hasUncommitted(inst) && (d.files || 0) + (d.additions || 0) + (d.deletions || 0) === 0;
+}
+var ideKnown = null;
+var ideAsked = false;
+function ideInstalled() {
+	if (!ideAsked) {
+		ideAsked = true;
+		api("/api/ides").then((d) => {
+			const cur = (d?.ides || []).find((i) => i.command === d?.current);
+			ideKnown = cur && typeof cur.installed === "boolean" ? cur.installed : null;
+		}).catch(() => {});
+	}
+	return ideKnown;
+}
 function openTab(title, tab) {
 	selectSession(title, { noKeyboard: true });
 	useUi.getState().setLastTab(title, tab);
@@ -39142,11 +39574,21 @@ function sessionMenu(inst, ctx, opts = {}) {
 		note: actionNote("queue", ctx)
 	})]);
 	const ft = fastTrackStep(inst);
+	const empty = nothingToShip(inst);
+	const greyed = (item, why) => item && why && !item.disabled ? {
+		...item,
+		disabled: true,
+		external: false,
+		title: why,
+		note: why,
+		run: () => {}
+	} : item;
+	const noGithub = ctx.prSupport === false ? CONNECT_GITHUB_FOR_PRS : "";
 	const ship = keep([
 		hasUncommitted(inst) && fromTable("commit"),
-		fromTable("push"),
-		fromTable("pr"),
-		fromTable("merge"),
+		greyed(fromTable("push"), empty ? NOTHING_TO_PUSH : ""),
+		greyed(fromTable("pr"), empty ? NOTHING_TO_PUSH : noGithub),
+		greyed(fromTable("merge"), noGithub),
 		fromTable("viewPr"),
 		ft && !peer && {
 			key: "fast-track",
@@ -39158,7 +39600,7 @@ function sessionMenu(inst, ctx, opts = {}) {
 		},
 		!!inst.branch && !peer && {
 			key: "checklist",
-			label: "Checklist…",
+			label: "Verify checklist…",
 			title: "Verify's checklist for " + inst.branch + " — what to check before or after it merges",
 			run: () => openChecklist(inst.branch)
 		},
@@ -39232,7 +39674,7 @@ function sessionMenu(inst, ctx, opts = {}) {
 		},
 		fromTable("duplicate"),
 		fromTable("branch", { note: actionNote("branch", ctx) }),
-		fromTable("ide", { note: actionNote("ide", ctx) }),
+		(remote || ideInstalled() !== false) && fromTable("ide", { note: actionNote("ide", ctx) }),
 		!!inst.ports?.base && {
 			key: "preview",
 			label: "Open preview",
@@ -39274,8 +39716,8 @@ function sessionMenu(inst, ctx, opts = {}) {
 		key: "delete",
 		label: sessionAction("delete").short,
 		danger: true,
-		confirm: "Removes the worktree and branch",
-		title: "Removes the worktree and branch (asks first)",
+		confirm: deleteConfirmText(inst),
+		title: "Deletes its folder and branch, uncommitted changes included (asks first)",
 		run: () => deleteSession(title, true)
 	}]);
 	return {
@@ -39445,6 +39887,13 @@ var FLAT = {
 	stem: false
 };
 var NO_KIDS = [];
+var CLOSE_GUARD_MS = 400;
+var lastCloseClick = 0;
+function closeGuarded(now) {
+	if (now - lastCloseClick < CLOSE_GUARD_MS) return true;
+	lastCloseClick = now;
+	return false;
+}
 var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbered = true, onScreen, dropCue, onDragState, onDropCue, onDropRow, nest = FLAT, kids = NO_KIDS, parentLive = false, runTask = null, leadRun = null }) {
 	const [menuAt, setMenuAt] = (0, import_react.useState)(null);
 	const expanded = !!menuAt;
@@ -39728,7 +40177,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 								focused === title && !picking ? "Click again to rename" : "",
 								picking ? "" : "Ctrl+click or Shift+click to select several"
 							].filter(Boolean).join("\n"),
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MidName, { text: shown })
+							children: /(-\d+|\(\d+\))$/.test(shown) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MidName, { text: shown }) : shown
 						}),
 						!editing && ship && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "lineage ship-line " + ship.cls + (shipOpensBell ? " opens-bell" : ""),
@@ -39896,9 +40345,13 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 					title: extra.check.title,
 					children: extra.check.label
 				}),
-				!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerdictChip, {
-					inst,
-					where: "row"
+				!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "vchip-hook",
+					"data-tour": "verify-chip",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerdictChip, {
+						inst,
+						where: "row"
+					})
 				}),
 				bg && (bg.stopPid ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
@@ -39941,7 +40394,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 					type: "button",
 					className: "row-kebab" + (expanded ? " open" : ""),
 					title: "Actions for this session (or right-click the row)",
-					"aria-label": "Actions for this session",
+					"aria-label": "Session menu for " + shown,
 					"aria-haspopup": "menu",
 					"aria-expanded": expanded,
 					"aria-controls": expanded ? menuId : void 0,
@@ -39954,6 +40407,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 					"aria-label": missing ? "Delete session" : "Close session",
 					title: missing ? "Delete — its workspace is gone; this removes the session" : "Close session — stops the agent and moves it to Recently closed (Ctrl+W / Del; reopen with Ctrl+Shift+T)",
 					onClick: (e) => act(() => {
+						if (closeGuarded(Date.now())) return;
 						if (missing) return cleanupMissing(title);
 						if (uncommitted > 0 && !closeArmed) return setCloseArmed(true);
 						setCloseArmed(false);
@@ -41074,19 +41528,23 @@ function AutomationBar() {
 				onClick: () => openDialogFor("intake", "tickets"),
 				children: "Tickets"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "dc-actions",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "dc-sw-label",
+					children: "Auto-start"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "dc-switch",
-					title: "Auto-start tickets — the same switch as Intake → Tickets",
+					title: "Auto-start tickets — checks for new tickets on its own. Same switch as Intake → Auto-start.",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						type: "checkbox",
 						id: "mindflock-toggle",
 						checked: desired,
+						"aria-label": "Auto-start tickets",
 						disabled: busy,
 						onChange: (e) => toggle(e.target.checked)
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dc-slider" })]
-				})
+				})]
 			})
 		]
 	});
@@ -42085,7 +42543,7 @@ function agentRowFor(rows, provider) {
 	const prov = (c) => c.provider;
 	return want && rows.find((c) => prov(c) === want) || (!want ? rows.find((c) => c.default) : null) || null;
 }
-function AgentCard({ provider, here, gotoScreen, onChanged }) {
+function AgentCard({ provider, here, gotoScreen, onChanged, tourNext = false }) {
 	const [row, setRow] = (0, import_react.useState)(void 0);
 	const [result, setResult] = (0, import_react.useState)();
 	const [testing, setTesting] = (0, import_react.useState)(false);
@@ -42107,9 +42565,17 @@ function AgentCard({ provider, here, gotoScreen, onChanged }) {
 		window.addEventListener(CONNECTIONS_CHANGED_EVENT, on);
 		return () => window.removeEventListener(CONNECTIONS_CHANGED_EVENT, on);
 	}, [load]);
-	if (row === void 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-		className: "set-hint agent-card-loading",
-		children: "Checking…"
+	if (row === void 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "agent-card agent-card-loading",
+		"aria-busy": "true",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "set-hint",
+			children: [
+				"Checking ",
+				agentName(provider || "claude"),
+				"…"
+			]
+		})
 	});
 	if (row === null) return null;
 	const shown = !!here && row.action?.kind === "screen" && row.action.target === here ? {
@@ -42130,6 +42596,7 @@ function AgentCard({ provider, here, gotoScreen, onChanged }) {
 			},
 			result,
 			testing,
+			tourNext,
 			onTest: row.test ? async () => {
 				setTesting(true);
 				const out = await runTest(row.test);
@@ -42170,7 +42637,7 @@ var STEP_ORDER = [
 	"phone"
 ];
 var STEP_TITLES = {
-	tools: "Install the tools",
+	tools: "Install Claude Code",
 	agent_login: "Sign in to your agent",
 	repo: "Start your first agent",
 	github: "Connect GitHub",
@@ -42257,20 +42724,21 @@ var EXTRA_CHECKS = /* @__PURE__ */ new Set([
 	"clipboard",
 	"gh"
 ]);
+function isRequiredCheck(c) {
+	if (typeof c.required === "boolean") return c.required;
+	return !EXTRA_CHECKS.has(String(c.id || ""));
+}
+function requiredChecks(checks) {
+	return (checks || []).filter(isRequiredCheck);
+}
 function isEssentialCheck(c) {
 	const id = String(c.id || "");
-	if (EXTRA_CHECKS.has(id)) return false;
+	if (!isRequiredCheck(c)) return false;
 	if (id.startsWith("agent-auth")) return false;
 	return c.status === "fail" || c.status === "warn";
 }
-function tailscaleMissing(status) {
-	const ts = status?.tailscale;
-	if (!ts) return false;
-	return ts.status !== "ok";
-}
-function tailscaleNotInstalled(status) {
-	const ts = status?.tailscale;
-	return !!ts && ts.status !== "ok" && /^not found/i.test(ts.detail || "");
+function stepProblems(checks) {
+	return (checks || []).filter((c) => isEssentialCheck(c) && !c.install);
 }
 function consumeSetupIntent(loc = window.location, hist = window.history) {
 	const params = new URLSearchParams(loc.search);
@@ -42309,6 +42777,9 @@ function useDoctorAutoShow() {
 		if (data !== void 0) useDoctorWarnStore.getState()._setFailing(!(data && data.ok));
 	}, [data]);
 }
+function plainDetail(text) {
+	return (text || "").replace(/`([^`]*)`/g, "$1");
+}
 function CheckRow({ c, onSignedIn }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		className: "doctor-check st-" + (c.status || "info"),
@@ -42324,10 +42795,14 @@ function CheckRow({ c, onSignedIn }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "doctor-detail",
 				children: [
-					c.detail || "",
+					plainDetail(c.detail),
 					c.fix && c.status !== "ok" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "doctor-fix",
-						children: [" fix: ", c.fix]
+						children: [
+							" ",
+							"fix: ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: plainDetail(c.fix) })
+						]
 					}),
 					signInTarget(c) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
 						provider: signInTarget(c),
@@ -42339,7 +42814,7 @@ function CheckRow({ c, onSignedIn }) {
 		]
 	});
 }
-function DoctorList({ reprobeKey, onChange, essential = false }) {
+function DoctorList({ reprobeKey, onChange, essential = false, fallback, tourNext = false }) {
 	const [installed, setInstalled] = (0, import_react.useState)(0);
 	const reprobe = (reprobeKey || 0) > 0 || installed > 0;
 	const query = useDoctor({ enabled: !reprobe });
@@ -42358,12 +42833,13 @@ function DoctorList({ reprobeKey, onChange, essential = false }) {
 			live = false;
 		};
 	}, [reprobeKey, installed]);
-	const doctor = query.data ?? null;
+	const doctor = query.data ?? (essential ? fallback : null) ?? null;
 	const error = reprobe ? reprobeError : query.error ? query.error.message : "";
 	if (error) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 		className: "error",
 		children: ["doctor failed: ", error]
 	});
+	if (!doctor && essential) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorSkeleton, {});
 	if (!doctor) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 		className: "muted",
 		children: "Checking dependencies…"
@@ -42384,11 +42860,15 @@ function DoctorList({ reprobeKey, onChange, essential = false }) {
 		steps: doctor.install?.steps,
 		onDone: bump
 	}), all] });
-	const problems = doctor.checks.filter(isEssentialCheck);
+	const steps = doctor.install?.steps;
+	const problems = stepProblems(doctor.checks);
+	const required = requiredChecks(doctor.checks);
+	const nothingToDo = !problems.length && !steps?.length;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallMissing, {
-			steps: doctor.install?.steps,
-			onDone: bump
+			steps,
+			onDone: bump,
+			tourNext
 		}),
 		problems.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 			className: "doctor-list doctor-list-essential",
@@ -42396,20 +42876,41 @@ function DoctorList({ reprobeKey, onChange, essential = false }) {
 				c,
 				onSignedIn: bump
 			}, c.id || i))
-		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		}) : nothingToDo ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "setup-hint setup-tools-ok",
 			children: "✓ Everything needed is installed."
-		}),
+		}) : null,
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 			className: "setup-allchecks",
 			onClick: (e) => e.stopPropagation(),
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: [
 				"All checks (",
-				doctor.checks.length,
+				required.length,
 				")"
-			] }), all]
+			] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "doctor-list",
+				children: required.map((c, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CheckRow, {
+					c,
+					onSignedIn: bump
+				}, c.id || i))
+			})]
 		})
 	] });
+}
+function DoctorSkeleton() {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "setup-skel",
+		"aria-busy": "true",
+		"aria-label": "Checking what's installed",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "setup-skel-btn" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "setup-skel-line" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "muted setup-skel-note",
+				children: "Checking what's installed…"
+			})
+		]
+	});
 }
 //#endregion
 //#region src/components/setup/SetupChecklist.tsx
@@ -42463,15 +42964,17 @@ function SkipRow({ step }) {
 		children: step.skipped ? "Show again" : "Skip"
 	});
 }
-function Step({ step, next, children, fold }) {
+function Step({ step, next, children, fold, keepBody = false }) {
 	const isNext = step.id === next;
+	const body = step.status === "todo" || keepBody && step.status === "done";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "setup-step st-" + step.status + (isNext ? " is-next" : ""),
 		"data-step": step.id,
 		"data-status": step.status,
+		"data-tour": "setup-step-" + step.id,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepHead, { step }),
-			step.status === "todo" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			body && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "setup-step-body",
 				children
 			}),
@@ -42479,7 +42982,7 @@ function Step({ step, next, children, fold }) {
 				className: "setup-actions",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkipRow, { step })
 			}),
-			step.status === "done" && fold
+			step.status === "done" && !body && fold
 		]
 	});
 }
@@ -42487,6 +42990,7 @@ function Action({ next, className, onClick, children, title }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 		type: "button",
 		className: className + (next ? " setup-primary" : ""),
+		"data-tour": next ? "setup-next" : void 0,
 		title,
 		onClick: (e) => {
 			e.stopPropagation();
@@ -42495,8 +42999,17 @@ function Action({ next, className, onClick, children, title }) {
 		children
 	});
 }
+function sessionToShow(instances, focused) {
+	const list = instances || [];
+	if (focused && list.some((i) => i.title === focused)) return focused;
+	return list[0]?.title || "";
+}
+var GITHUB_STEP_HINT = "Optional — pushing works without it; needed to open and merge pull requests.";
 function SetupChecklist$1() {
 	const { data: status, error } = useSetup();
+	const { data: instances } = useInstances();
+	const focused = useUi((st) => st.focused);
+	const installOpen = useInstallWindow((st) => st.open);
 	const [reprobeKey, setReprobeKey] = (0, import_react.useState)(0);
 	const steps = orderedSteps(status);
 	const by = new Map(steps.map((s) => [s.id, s]));
@@ -42520,6 +43033,11 @@ function SetupChecklist$1() {
 	const github = step("github");
 	const tracker = step("tracker");
 	const phone = step("phone");
+	const shown = sessionToShow(instances, focused);
+	const showSession = () => {
+		closeSetup();
+		if (shown) selectSession(shown);
+	};
 	const defaultAgent = status?.default_provider || "";
 	const defaultInstalled = !!(status?.logins || []).find((l) => l.name === defaultAgent && l.installed);
 	const repoStarted = !!repo.started;
@@ -42553,6 +43071,7 @@ function SetupChecklist$1() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Step, {
 						step: tools,
 						next,
+						keepBody: installOpen,
 						fold: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 							className: "setup-fold",
 							onClick: (e) => e.stopPropagation(),
@@ -42569,6 +43088,8 @@ function SetupChecklist$1() {
 							className: "setup-doctor",
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorList, {
 								essential: true,
+								fallback: status?.doctor,
+								tourNext: tools.id === next,
 								reprobeKey,
 								onChange: () => void refreshSetup()
 							})
@@ -42594,14 +43115,15 @@ function SetupChecklist$1() {
 						}) : !defaultInstalled ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 							className: "muted setup-hint",
 							children: [
-								"Install the tools first — that installs ",
+								"Install ",
 								agentName(defaultAgent || "claude"),
-								"."
+								" first (①)."
 							]
 						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentCard, {
 							provider: defaultAgent,
 							gotoScreen: (n) => go("settings", n),
-							onChanged: () => void refreshSetup(true)
+							onChanged: () => void refreshSetup(true),
+							tourNext: agent.id === next
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 							className: "muted setup-hint setup-agent-change",
 							children: [
@@ -42637,13 +43159,29 @@ function SetupChecklist$1() {
 							]
 						})]
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Step, {
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Step, {
 						step: repo,
 						next,
-						children: [repoStarted ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						children: repoStarted || shown ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 							className: "muted setup-hint setup-repo-started",
 							children: agent.done ? "Your first session is open. This ticks once its agent starts on your task." : "Your first session is open, but its agent can't start until you sign in (②)."
-						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "setup-actions",
+							children: [shown && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Action, {
+								next: repo.id === next,
+								className: "setup-show-session",
+								onClick: showSession,
+								children: "Show my session →"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "linklike setup-new setup-new-another",
+								onClick: (e) => {
+									e.stopPropagation();
+									go("new-session");
+								},
+								children: shown ? "or start another" : "+ New session"
+							})]
+						})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 							className: "muted setup-hint",
 							children: "Pick a repo folder and say what to do."
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -42654,7 +43192,7 @@ function SetupChecklist$1() {
 								onClick: () => go("new-session"),
 								children: "+ New session"
 							})
-						})]
+						})] })
 					})
 				]
 			}),
@@ -42673,8 +43211,8 @@ function SetupChecklist$1() {
 						step: github,
 						next,
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "muted setup-hint",
-							children: "Lets agents open and merge pull requests."
+							className: "muted setup-hint setup-github-hint",
+							children: GITHUB_STEP_HINT
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "setup-actions",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Action, {
@@ -42708,131 +43246,34 @@ function SetupChecklist$1() {
 				className: "setup-later",
 				"data-group": "later",
 				onClick: (e) => e.stopPropagation(),
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Optional, later" }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-						className: "setup-step st-" + phone.status,
-						"data-step": "phone",
-						"data-status": phone.status,
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepHead, { step: phone }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PhoneStep, {
-								status,
-								done: phone.done
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "setup-actions",
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									className: "linklike setup-open-mobile",
-									onClick: (e) => {
-										e.stopPropagation();
-										go("settings", "mobile");
-									},
-									children: "Settings → Your phone"
-								})
-							})
-						]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-						className: "muted setup-hint setup-later-more",
-						children: [
-							"Other computers, sharing with people, extensions and IDEs are all in",
-							" ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "linklike setup-open-settings",
-								onClick: (e) => {
-									e.stopPropagation();
-									go("settings");
-								},
-								children: "Settings"
-							}),
-							"."
-						]
-					})
-				]
-			}),
-			status?.report && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-				className: "setup-report",
-				onClick: (e) => e.stopPropagation(),
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "What the server found at first start" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: status.report })]
-			})
-		]
-	});
-}
-function PhoneStep({ status, done }) {
-	const [qr, setQr] = (0, import_react.useState)(null);
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const showQr = (0, import_react.useCallback)(async () => {
-		setBusy(true);
-		try {
-			const d = await api("/api/mobile?setup=1");
-			setQr({
-				svg: d.qr_svg || "",
-				urls: d.urls || []
-			});
-			refreshSetup();
-		} catch (e) {
-			toast(e.message);
-		} finally {
-			setBusy(false);
-		}
-	}, []);
-	if (status && tailscaleMissing(status)) {
-		const ts = status.tailscale;
-		const absent = tailscaleNotInstalled(status);
-		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "setup-phone setup-phone-tailscale",
-			"data-phone": absent ? "install-tailscale" : "fix-tailscale",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "muted setup-hint",
-					children: absent ? "Your phone reaches MindFlock over Tailscale, which isn't on this computer yet." : "Your phone reaches MindFlock over Tailscale, which is installed but not ready: " + ts.detail
-				}),
-				ts.fix && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "setup-hint",
-					children: [absent ? "Install Tailscale: " : "Run: ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: ts.fix })]
-				}),
-				ts.docs && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "setup-hint",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
-						href: ts.docs,
-						target: "_blank",
-						rel: "noopener noreferrer",
-						children: ts.docs
-					})
-				})
-			]
-		});
-	}
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "setup-phone",
-		"data-phone": "qr",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "muted setup-hint",
-				children: done ? "Your phone has been here. Scan again any time from Settings → Your phone." : "Install Tailscale on your phone, sign in to the same account, then scan this QR."
-			}),
-			qr?.svg ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "setup-qr",
-				dangerouslySetInnerHTML: { __html: qr.svg }
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "setup-actions",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "setup-show-qr",
-					disabled: busy,
-					onClick: (e) => {
-						e.stopPropagation();
-						showQr();
-					},
-					children: busy ? "Loading…" : "Show QR"
-				})
-			}),
-			qr && !qr.svg && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "muted setup-hint",
-				children: "No QR yet — turn on Make reachable in Settings → Your devices first."
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Optional, later" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "setup-later-row st-" + phone.status,
+					"data-step": "phone",
+					"data-status": phone.status,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "setup-later-title",
+							children: [phone.title, phone.done && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "setup-state st-done",
+								children: [
+									" ",
+									STATUS_GLYPH.done,
+									" done"
+								]
+							})]
+						}),
+						" — ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike setup-open-mobile",
+							onClick: (e) => {
+								e.stopPropagation();
+								go("settings", "mobile");
+							},
+							children: "Set up in Settings → Your phone"
+						})
+					]
+				})]
 			})
 		]
 	});
@@ -42932,67 +43373,6 @@ function SetupChip() {
 	});
 }
 //#endregion
-//#region src/lib/calm.ts
-var NEWCOMER_DAYS = 7;
-var CALM_MAX_SESSIONS = 3;
-function isNewcomer(status, onboarded, now = Date.now()) {
-	if (!status) return onboarded === false ? true : null;
-	const repo = (status.steps || []).find((s) => s.id === "repo");
-	if (!repo) return null;
-	if (!repo.done) return true;
-	const at = repo.at ? Date.parse(repo.at) : NaN;
-	if (!isFinite(at)) return false;
-	return now - at < NEWCOMER_DAYS * 864e5;
-}
-function calmDecision(opts) {
-	if (opts.sessions >= CALM_MAX_SESSIONS) return false;
-	return isNewcomer(opts.status, opts.onboarded, opts.now);
-}
-var CALM_HINT_KEY = "mf_calm_hint";
-function readCalmHint() {
-	try {
-		const v = localStorage.getItem(CALM_HINT_KEY);
-		return v === "1" ? true : v === "0" ? false : null;
-	} catch {
-		return null;
-	}
-}
-function writeCalmHint(calm) {
-	try {
-		if (localStorage.getItem(CALM_HINT_KEY) !== (calm ? "1" : "0")) localStorage.setItem(CALM_HINT_KEY, calm ? "1" : "0");
-	} catch {}
-}
-var CALM_HIDDEN_BARS = ["usage", "assistant"];
-function calmHidesBar(key) {
-	return CALM_HIDDEN_BARS.includes(key) || key.startsWith("ext:");
-}
-function firstLaunchTour(opts) {
-	if (opts.seen || opts.sessions !== 0) return false;
-	if (!opts.status) return opts.onboarded === false;
-	const repo = (opts.status.steps || []).find((s) => s.id === "repo");
-	return !!repo && !repo.done;
-}
-//#endregion
-//#region src/lib/useCalm.ts
-function useCalm() {
-	const { data: instances } = useInstances();
-	const { data: setup } = useSetup();
-	const { data: config } = useConfig();
-	const sessions = instances ? instances.filter((i) => !i.device && !isVerifySession(i)).length : null;
-	const decided = sessions === null ? null : calmDecision({
-		sessions,
-		status: setup,
-		onboarded: config?.onboarded
-	});
-	(0, import_react.useEffect)(() => {
-		if (decided !== null) writeCalmHint(decided);
-	}, [decided]);
-	if (decided !== null) return decided;
-	const hint = readCalmHint();
-	if (hint !== null) return hint;
-	return config?.onboarded === false;
-}
-//#endregion
 //#region src/components/sidebar/Sidebar.tsx
 var NO_FOLDS = /* @__PURE__ */ new Set();
 var VIEW_MODES = [
@@ -43002,7 +43382,18 @@ var VIEW_MODES = [
 	"4",
 	"9"
 ];
+function closeDrawerForModal() {
+	const ui = useUi.getState();
+	if (!ui.narrow || ui.sidebarHidden) return false;
+	ui.toggleSidebar();
+	return true;
+}
 function Sidebar({ onOpenChat, onOpenTodo }) {
+	(0, import_react.useEffect)(() => {
+		const on = () => void closeDrawerForModal();
+		window.addEventListener(MODAL_OPEN_EVENT, on);
+		return () => window.removeEventListener(MODAL_OPEN_EVENT, on);
+	}, []);
 	const { data: instances = [] } = useInstances();
 	const { data: devices } = useDevices();
 	const ui = useUi();
@@ -61240,6 +61631,459 @@ function SessionPanel({ m, a }) {
 	] });
 }
 //#endregion
+//#region src/lib/tours/welcome.ts
+var WELCOME_TOUR = {
+	id: "welcome",
+	title: "Welcome",
+	steps: [
+		{
+			target: "[data-tour=\"setup-next\"], .setup-progress",
+			title: "Three steps to your first agent",
+			body: "This line always says what to do next; each step ticks itself once it is really done."
+		},
+		{
+			target: "[data-tour=\"setup-step-tools\"], .setup-step[data-step=\"tools\"]",
+			title: "① Install Claude Code",
+			body: "MindFlock drives Claude Code for you; one click installs it in about a minute."
+		},
+		{
+			target: "[data-tour=\"setup-step-agent_login\"], .setup-step[data-step=\"agent_login\"]",
+			title: "② Sign in to your agent",
+			body: "Sign in once in the window that opens, with your Claude account."
+		},
+		{
+			target: "[data-tour=\"setup-step-repo\"], .setup-step[data-step=\"repo\"]",
+			title: "③ Start your first session",
+			body: "Pick your repo and say what to do; the agent works on its own branch, so your checkout is untouched."
+		},
+		{
+			target: "[data-tour=\"session-row\"], li.inst",
+			title: "Your sessions live here",
+			body: "Each session is a row: Working means the agent is busy, Idle means it is your turn — click it to watch."
+		}
+	]
+};
+//#endregion
+//#region src/lib/tours/new.ts
+var NEW_TOUR = {
+	id: "new",
+	title: "New",
+	steps: [
+		{
+			target: "[data-tour=\"new-task\"], #new-describe-text",
+			title: "Say what to work on",
+			body: "Describe one task in plain words — the agent starts on exactly this."
+		},
+		{
+			target: "[data-tour=\"new-folder\"], #new-describe-folder",
+			title: "Where it works",
+			body: "This is the repo it works in; each session gets its own branch, so your checkout is never touched."
+		},
+		{
+			target: "[data-tour=\"new-start\"], #new-describe-start, #new-create",
+			title: "Start it",
+			body: "Start begins the session now — watch, steer or stop it from its pane."
+		},
+		{
+			target: "[data-tour=\"pane-tabs\"], [data-tour=\"pane-menu\"]",
+			title: "Then, in its pane",
+			body: "Diff shows what changed; when the agent stops, ⋯ → Push or Open PR ships it, and ✕ closes it (reopen it from Recently closed)."
+		}
+	]
+};
+//#endregion
+//#region src/lib/tours/intake.ts
+var INTAKE_TOUR = {
+	id: "intake",
+	title: "Intake",
+	steps: [
+		{
+			target: "[data-tour=\"intake-tiles\"], #intake-panel:not(:has([data-tour=\"intake-tiles\"])) #intake-add-source",
+			title: "Pick where your work lives",
+			body: "Intake turns tickets, pull requests and issues into sessions — start by picking your tracker, or Repository for a GitHub repo."
+		},
+		{
+			target: "[data-tour=\"intake-token\"]",
+			title: "Paste a token",
+			body: "Create a token ↗ opens the tracker's page for one; Test & continue checks it, and nothing is saved until Finish."
+		},
+		{
+			target: "[data-tour=\"intake-repo\"]",
+			title: "Name the repo",
+			body: "Each ticket starts as a session on its own branch of this repo — the one thing Finish needs."
+		},
+		{
+			target: "[data-tour=\"intake-start\"]",
+			title: "Start one by hand first",
+			body: "Start opens a ticket as a session in the sidebar, and Open session › takes you to it."
+		},
+		{
+			target: "[data-tour=\"intake-autostart\"], #intake-panel:not(:has([data-tour=\"intake-autostart\"])) #intake-tab-autostart",
+			title: "Auto-start, when you trust it",
+			body: "Switches for tickets, PR review comments and new issues live here, with how often each checks and Pause all auto-start."
+		}
+	]
+};
+//#endregion
+//#region src/lib/tours/verify.ts
+var VERIFY_TOUR = {
+	id: "verify",
+	title: "Verify",
+	steps: [
+		{
+			target: "[data-tour=\"verify-chip\"], #verify-title",
+			title: "Does the change work?",
+			body: "This chip is a session's checklist: the steps that prove its change works — click it to open Verify on that branch."
+		},
+		{
+			target: "[data-tour=\"verify-badges\"]",
+			title: "You or the agent",
+			body: "The agent checks the AGENT steps from a shell; the YOU steps need your eyes."
+		},
+		{
+			target: "[data-tour=\"verify-answer\"]",
+			title: "Answer a step",
+			body: "Pass, Fail or Can't check — only Pass counts as working, and pressing it again takes it back."
+		},
+		{
+			target: "[data-tour=\"verify-check\"], .vf-fix",
+			title: "Check now, or fix it",
+			body: "Check now has an agent run the steps on the branch; if one fails, Fix starts a session with the failure attached."
+		},
+		{
+			target: "[data-tour=\"verify-merge\"]",
+			title: "Then merge",
+			body: "The verdict shows beside Open PR, and after merge the checklist comes back to be checked on the live branch."
+		}
+	]
+};
+//#endregion
+//#region src/lib/tours/index.ts
+var TOURS = {
+	welcome: WELCOME_TOUR,
+	new: NEW_TOUR,
+	intake: INTAKE_TOUR,
+	verify: VERIFY_TOUR,
+	schedule: {
+		id: "schedule",
+		title: "Schedule",
+		steps: [
+			{
+				target: "#schedule-btn, [data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
+				title: "Sessions you'll want again",
+				body: "Schedule keeps templates — a folder, an agent and a task — so a session starts with one click, or by itself."
+			},
+			{
+				target: "[data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
+				title: "Create a template",
+				body: "Start with a job you repeat, like a nightly test run or a dependency bump."
+			},
+			{
+				target: "[data-tour=\"schedule-name\"], [data-tour=\"schedule-folder\"]",
+				title: "Name it and pick the repo",
+				body: "The folder is what makes a template runnable — every session from it works there."
+			},
+			{
+				target: "[data-tour=\"schedule-task\"]",
+				title: "Say what to do",
+				body: "Every session from this template is told this task first."
+			},
+			{
+				target: "[data-tour=\"schedule-when\"]",
+				title: "Let it start by itself",
+				body: "Tick Run on a schedule — the line below it shows exactly when it runs next."
+			},
+			{
+				target: "[data-tour=\"schedule-run\"]",
+				title: "Try it once now",
+				body: "▶ Run now starts a new session in the sidebar, and the card logs it under Last run."
+			}
+		]
+	},
+	settings: {
+		id: "settings",
+		title: "Settings",
+		steps: [
+			{
+				target: ".set-nav-item[data-screen=\"connections\"]",
+				title: "Your status page",
+				body: "Connections lists everything MindFlock talks to: what is connected and what needs you."
+			},
+			{
+				target: "[data-tour=\"settings-github\"], [data-conn=\"github\"]",
+				title: "Connect GitHub when you need PRs",
+				body: "Agents need GitHub to open pull requests; pushing already works without it."
+			},
+			{
+				target: "#settings-search",
+				title: "Search finds any setting",
+				body: "Type a word like dark, phone or parallel and jump straight to it."
+			},
+			{
+				target: "#settings-advanced-toggle",
+				title: "The rest waits here",
+				body: "Phones, other computers, local models and troubleshooting live behind Show advanced settings."
+			}
+		]
+	}
+};
+var TOUR_IDS = [
+	"welcome",
+	"new",
+	"intake",
+	"verify",
+	"schedule",
+	"settings"
+];
+//#endregion
+//#region src/components/onboarding/CoachTour.tsx
+var CARD_W = 320;
+var GAP = 12;
+function placeCard(t, W, H, cardH) {
+	const cw = Math.min(CARD_W, W - 16);
+	const clampX = (x) => Math.max(8, Math.min(x, W - cw - 8));
+	const clampY = (y) => Math.max(8, Math.min(y, H - cardH - 8));
+	if (!t) return {
+		left: clampX((W - cw) / 2),
+		top: clampY((H - cardH) / 2)
+	};
+	if (t.x + t.w + GAP + cw <= W - 8 && t.h > H * .4) return {
+		left: t.x + t.w + GAP,
+		top: clampY(t.y)
+	};
+	if (t.y + t.h + GAP + cardH <= H - 8) return {
+		left: clampX(t.x),
+		top: t.y + t.h + GAP
+	};
+	if (t.y - GAP - cardH >= 8) return {
+		left: clampX(t.x),
+		top: t.y - GAP - cardH
+	};
+	if (t.x + t.w + GAP + cw <= W - 8) return {
+		left: t.x + t.w + GAP,
+		top: clampY(t.y)
+	};
+	if (t.x - GAP - cw >= 8) return {
+		left: t.x - GAP - cw,
+		top: clampY(t.y)
+	};
+	return {
+		left: clampX((W - cw) / 2),
+		top: clampY((H - cardH) / 2)
+	};
+}
+function findTarget(root, selector) {
+	if (!selector) return null;
+	let all;
+	try {
+		all = root.querySelectorAll(selector);
+	} catch {
+		return null;
+	}
+	for (const el of Array.from(all)) {
+		const r = el.getBoundingClientRect();
+		if (r.width > 0 && r.height > 0) return el;
+	}
+	return null;
+}
+function CoachTour({ steps, onClose, rootRef, step: controlled, onStep, prefix = "coach", buttonClass = "coach-btn", skipLabel = "Skip tour", labelId = prefix + "-title" }) {
+	const [own, setOwn] = (0, import_react.useState)(0);
+	const i = Math.max(0, Math.min(controlled ?? own, steps.length - 1));
+	const go = (n) => onStep ? onStep(n) : setOwn(n);
+	const [rect, setRect] = (0, import_react.useState)(null);
+	const [box, setBox] = (0, import_react.useState)({
+		W: 0,
+		H: 0
+	});
+	const [cardH, setCardH] = (0, import_react.useState)(180);
+	const cardRef = (0, import_react.useRef)(null);
+	const step = steps[i];
+	const last = i >= steps.length - 1;
+	const contained = !!rootRef;
+	const measure = (0, import_react.useCallback)(() => {
+		if (!step) return;
+		let x0 = 0;
+		let y0 = 0;
+		let W;
+		let H;
+		let scope;
+		if (rootRef) {
+			const root = rootRef.current;
+			if (!root) return;
+			const r0 = root.getBoundingClientRect();
+			x0 = r0.left;
+			y0 = r0.top;
+			W = r0.width;
+			H = r0.height;
+			scope = root;
+		} else {
+			if (typeof window === "undefined") return;
+			W = window.innerWidth;
+			H = window.innerHeight;
+			scope = document;
+		}
+		setBox((b) => b.W === W && b.H === H ? b : {
+			W,
+			H
+		});
+		const el = findTarget(scope, step.target);
+		const r = el ? el.getBoundingClientRect() : null;
+		const next = r ? {
+			x: r.left - x0,
+			y: r.top - y0,
+			w: r.width,
+			h: r.height
+		} : null;
+		setRect((p) => p === next || p && next && p.x === next.x && p.y === next.y && p.w === next.w && p.h === next.h ? p : next);
+		if (cardRef.current) {
+			const h = cardRef.current.offsetHeight || 180;
+			setCardH((p) => p === h ? p : h);
+		}
+	}, [rootRef, step]);
+	(0, import_react.useLayoutEffect)(measure, [measure, i]);
+	(0, import_react.useEffect)(() => {
+		const root = rootRef?.current;
+		const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => measure()) : null;
+		if (root && ro) ro.observe(root);
+		if (contained) return () => ro?.disconnect();
+		const onMove = () => measure();
+		window.addEventListener("resize", onMove);
+		window.addEventListener("scroll", onMove, true);
+		const t = window.setInterval(measure, 400);
+		return () => {
+			ro?.disconnect();
+			window.removeEventListener("resize", onMove);
+			window.removeEventListener("scroll", onMove, true);
+			window.clearInterval(t);
+		};
+	}, [
+		rootRef,
+		contained,
+		measure
+	]);
+	const backTo = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		backTo.current = typeof document !== "undefined" ? document.activeElement : null;
+		return () => {
+			const el = backTo.current;
+			if (el && el.isConnected && typeof el.focus === "function") el.focus();
+		};
+	}, []);
+	(0, import_react.useEffect)(() => {
+		cardRef.current?.focus({ preventScroll: true });
+	}, [i]);
+	if (!step) return null;
+	const onKey = (e) => {
+		if (e.key === "Escape") {
+			e.preventDefault();
+			e.stopPropagation();
+			onClose();
+		} else if (e.key === "ArrowRight" || e.key === "Enter" && e.target === e.currentTarget) {
+			e.preventDefault();
+			e.stopPropagation();
+			if (last) onClose();
+			else go(i + 1);
+		} else if (e.key === "ArrowLeft") {
+			e.preventDefault();
+			e.stopPropagation();
+			if (i > 0) go(i - 1);
+		}
+	};
+	const pos = placeCard(rect, box.W, box.H, cardH);
+	const c = (part) => prefix + "-" + part;
+	const layer = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: c("layer"),
+		"aria-live": "polite",
+		children: [rect && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: c("ring"),
+			"aria-hidden": "true",
+			style: {
+				left: rect.x - 4,
+				top: rect.y - 4,
+				width: rect.w + 8,
+				height: rect.h + 8
+			}
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			ref: cardRef,
+			className: c("card") + (rect ? "" : " is-centred"),
+			role: "dialog",
+			"aria-modal": "false",
+			"aria-labelledby": labelId,
+			tabIndex: -1,
+			style: {
+				left: pos.left,
+				top: pos.top
+			},
+			onKeyDown: onKey,
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: c("head"),
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: c("step"),
+						children: [
+							i + 1,
+							" of ",
+							steps.length
+						]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: c("skip"),
+						onClick: onClose,
+						children: skipLabel
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+					id: labelId,
+					children: step.title
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: c("body"),
+					children: step.body
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: c("foot"),
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: c("dots"),
+							"aria-hidden": "true",
+							children: steps.map((_, k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: k === i ? "on" : "" }, k))
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: buttonClass + " " + c("back"),
+							disabled: i === 0,
+							onClick: () => go(i - 1),
+							children: "Back"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: buttonClass + " on " + c("next"),
+							onClick: () => last ? onClose() : go(i + 1),
+							children: last ? "Done" : "Next"
+						})
+					]
+				})
+			]
+		})]
+	});
+	return contained || typeof document === "undefined" ? layer : (0, import_react_dom.createPortal)(layer, document.body);
+}
+function CoachTourHost() {
+	const tour = useUi((s) => s.coachTour);
+	const setCoachStep = useUi((s) => s.setCoachStep);
+	const closeCoachTour = useUi((s) => s.closeCoachTour);
+	if (!tour) return null;
+	const def = TOURS[tour.id];
+	if (!def) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CoachTour, {
+		steps: def.steps,
+		step: tour.step,
+		onStep: setCoachStep,
+		onClose: closeCoachTour,
+		labelId: "coach-title"
+	}, tour.id);
+}
+//#endregion
 //#region src/components/grid/codemap/MapTour.tsx
 var MAP_TOUR = [
 	{
@@ -61318,162 +62162,14 @@ var MAP_TOUR = [
 		] })
 	}
 ];
-var CARD_W = 320;
-var GAP = 12;
-function placeCard(t, W, H, cardH) {
-	const cw = Math.min(CARD_W, W - 16);
-	const clampX = (x) => Math.max(8, Math.min(x, W - cw - 8));
-	const clampY = (y) => Math.max(8, Math.min(y, H - cardH - 8));
-	if (!t) return {
-		left: clampX((W - cw) / 2),
-		top: clampY((H - cardH) / 2)
-	};
-	if (t.x + t.w + GAP + cw <= W - 8 && t.h > H * .4) return {
-		left: t.x + t.w + GAP,
-		top: clampY(t.y)
-	};
-	if (t.y + t.h + GAP + cardH <= H - 8) return {
-		left: clampX(t.x),
-		top: t.y + t.h + GAP
-	};
-	if (t.y - GAP - cardH >= 8) return {
-		left: clampX(t.x),
-		top: t.y - GAP - cardH
-	};
-	return {
-		left: clampX((W - cw) / 2),
-		top: clampY((H - cardH) / 2)
-	};
-}
 function MapTour({ rootRef, onClose, steps = MAP_TOUR }) {
-	const [i, setI] = (0, import_react.useState)(0);
-	const [rect, setRect] = (0, import_react.useState)(null);
-	const [box, setBox] = (0, import_react.useState)({
-		W: 0,
-		H: 0
-	});
-	const [cardH, setCardH] = (0, import_react.useState)(180);
-	const cardRef = (0, import_react.useRef)(null);
-	const step = steps[Math.min(i, steps.length - 1)];
-	const last = i >= steps.length - 1;
-	const measure = (0, import_react.useCallback)(() => {
-		const root = rootRef.current;
-		if (!root) return;
-		const r0 = root.getBoundingClientRect();
-		setBox({
-			W: r0.width,
-			H: r0.height
-		});
-		const el = step.target ? root.querySelector(step.target) : null;
-		const r = el ? el.getBoundingClientRect() : null;
-		setRect(r && r.width > 0 && r.height > 0 ? {
-			x: r.left - r0.left,
-			y: r.top - r0.top,
-			w: r.width,
-			h: r.height
-		} : null);
-		if (cardRef.current) setCardH(cardRef.current.offsetHeight || 180);
-	}, [rootRef, step.target]);
-	(0, import_react.useLayoutEffect)(measure, [measure, i]);
-	(0, import_react.useEffect)(() => {
-		const root = rootRef.current;
-		if (!root || typeof ResizeObserver === "undefined") return;
-		const ro = new ResizeObserver(() => measure());
-		ro.observe(root);
-		return () => ro.disconnect();
-	}, [rootRef, measure]);
-	(0, import_react.useEffect)(() => {
-		cardRef.current?.focus();
-	}, [i]);
-	const onKey = (e) => {
-		e.stopPropagation();
-		if (e.key === "Escape") {
-			e.preventDefault();
-			onClose();
-		} else if (e.key === "ArrowRight" || e.key === "Enter") {
-			e.preventDefault();
-			if (last) onClose();
-			else setI(i + 1);
-		} else if (e.key === "ArrowLeft") {
-			e.preventDefault();
-			if (i > 0) setI(i - 1);
-		}
-	};
-	const pos = placeCard(rect, box.W, box.H, cardH);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "mt-layer",
-		"aria-live": "polite",
-		children: [rect && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "mt-ring",
-			"aria-hidden": "true",
-			style: {
-				left: rect.x - 4,
-				top: rect.y - 4,
-				width: rect.w + 8,
-				height: rect.h + 8
-			}
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			ref: cardRef,
-			className: "mt-card",
-			role: "dialog",
-			"aria-modal": "false",
-			"aria-labelledby": "mt-title",
-			tabIndex: -1,
-			style: {
-				left: pos.left,
-				top: pos.top
-			},
-			onKeyDown: onKey,
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "mt-head",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "mt-step",
-						children: [
-							i + 1,
-							" of ",
-							steps.length
-						]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "mt-skip",
-						onClick: onClose,
-						children: "Skip tour"
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-					id: "mt-title",
-					children: step.title
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "mt-body",
-					children: step.body
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "mt-foot",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "mt-dots",
-							"aria-hidden": "true",
-							children: steps.map((_, k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: k === i ? "on" : "" }, k))
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "cm-btn mt-back",
-							disabled: i === 0,
-							onClick: () => setI(i - 1),
-							children: "Back"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "cm-btn on mt-next",
-							onClick: () => last ? onClose() : setI(i + 1),
-							children: last ? "Done" : "Next"
-						})
-					]
-				})
-			]
-		})]
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CoachTour, {
+		steps,
+		onClose,
+		rootRef,
+		prefix: "mt",
+		buttonClass: "cm-btn",
+		labelId: "mt-title"
 	});
 }
 //#endregion
@@ -63863,12 +64559,12 @@ function Pane({ inst, drag, dragging }) {
 		kind: tab === "shell" ? "shell" : "agent",
 		dragSel: null
 	});
-	const menu = () => sessionMenu(inst, menuCtx, {
+	const menu = () => withVerifyVerdict(sessionMenu(inst, menuCtx, {
 		visibleTabs,
 		onHistory: shows("history") ? void 0 : openHistory,
 		onCopyHistory: termTab ? copyHistory : void 0,
 		onNextStep: shows("next") ? void 0 : shownStep ?? void 0
-	});
+	}), inst);
 	const menuSummary = [!shows("cost") && usageHeadline(inst), !shows("diffstat") && hasDiffStat && diffStatText(inst)].filter(Boolean);
 	const canResume = sessionAction("resume").enabled(menuCtx);
 	const fitKeyNow = [
@@ -64122,6 +64818,7 @@ function Pane({ inst, drag, dragging }) {
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "tabs",
+						"data-tour": "pane-tabs",
 						children: items.tabs.map((id) => tabEls[id])
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -64195,17 +64892,21 @@ function Pane({ inst, drag, dragging }) {
 								sessionAction("resume").run(title);
 							},
 							children: icons ? "▶" : "▶ Resume"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneMoreMenu, {
-							btnRef: ft && !ftShown ? setFtEl : void 0,
-							children: (close) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [menuSummary.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "pane-more-summary",
-								role: "note",
-								children: menuSummary.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t }, t))
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionMenu, {
-								model: menu(),
-								onDone: close,
-								onInUse: (t) => errorPop("Can't delete " + displayName, folderInUseText(t))
-							})] })
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "pane-menu-hook",
+							"data-tour": "pane-menu",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneMoreMenu, {
+								btnRef: ft && !ftShown ? setFtEl : void 0,
+								children: (close) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [menuSummary.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "pane-more-summary",
+									role: "note",
+									children: menuSummary.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t }, t))
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionMenu, {
+									model: menu(),
+									onDone: close,
+									onInUse: (t) => errorPop("Can't delete " + displayName, folderInUseText(t))
+								})] })
+							})
 						})]
 					})
 				]
@@ -65129,6 +65830,9 @@ function paletteCode(query) {
 	if (!/(^|\s)[A-Za-z0-9]{4}-[A-Za-z0-9]{4}(\s|$)/.test(t)) return none;
 	return routeCode(t);
 }
+function isKeyHint(hint) {
+	return !/\b[a-z]{3,}\b/.test(hint);
+}
 //#endregion
 //#region src/lib/templateRun.ts
 async function runTemplateNow(name) {
@@ -65141,7 +65845,8 @@ async function runTemplateNow(name) {
 		ensureTemplates(true).catch(() => {});
 		return title;
 	} catch (err) {
-		toast(`Couldn't run “${name}”: ${errMsg(err)}`);
+		toast(templateRefusal(err, `Couldn't start ${name}`).text);
+		ensureTemplates(true).catch(() => {});
 		return "";
 	}
 }
@@ -65153,6 +65858,18 @@ var SETTINGS_SEARCH = [
 		label: "General",
 		terms: [
 			"general",
+			"hints",
+			"tips",
+			"tour",
+			"tours",
+			"replay",
+			"help"
+		]
+	},
+	{
+		key: "general",
+		label: "General → Budgets, resume and sleep",
+		terms: [
 			"budget",
 			"cost",
 			"spend",
@@ -65160,10 +65877,12 @@ var SETTINGS_SEARCH = [
 			"resume",
 			"revive",
 			"restart sessions",
-			"hints",
-			"tips",
-			"tour"
-		]
+			"sleep",
+			"idle",
+			"memory",
+			"scroll speed"
+		],
+		anchor: "#general-advanced"
 	},
 	{
 		key: "connections",
@@ -65535,6 +66254,26 @@ function settingsActions(query) {
 	}));
 }
 //#endregion
+//#region src/components/onboarding/replayTour.ts
+var SURFACE = {
+	new: "new-session",
+	intake: "intake",
+	verify: "verify",
+	schedule: "schedule"
+};
+function replayTour(id) {
+	const ui = useUi.getState();
+	if (ui.coachTour) ui.closeCoachTour();
+	if (id === "welcome") {
+		ui.closeDialog();
+		ui.openTour();
+		return;
+	}
+	if (id === "settings") openSettings("connections");
+	else ui.openDialogFor(SURFACE[id]);
+	useUi.getState().openCoachTour(id);
+}
+//#endregion
 //#region src/components/palette/CommandPalette.tsx
 var PALETTE_ACTIONS = [
 	"rename",
@@ -65672,20 +66411,20 @@ function CommandPalette({ host }) {
 		});
 		acts.push({
 			label: "Templates…",
-			hint: "saved setups — in Schedule",
+			hint: "your templates — in Schedule",
 			run: () => ui.openDialogFor("schedule")
 		});
 		acts.push({
-			label: "Schedule a session…",
-			hint: "daily or weekdays",
-			keywords: "recurring cron every day nightly weekly",
+			label: "New scheduled template…",
+			hint: "daily, weekdays or cron",
+			keywords: "schedule a session recurring cron every day nightly weekly",
 			run: () => ui.openDialogFor("schedule", "schedule")
 		});
 		for (const tpl of templatesNow()) {
 			if (runProblem(tpl)) continue;
 			acts.push({
 				label: "Run template: " + tpl.name,
-				hint: "fresh session, prompt sent",
+				hint: "fresh session, task sent",
 				run: () => void runTemplateNow(tpl.name)
 			});
 		}
@@ -65737,12 +66476,16 @@ function CommandPalette({ host }) {
 			top: TOP.setup,
 			run: () => ui.openDialogFor("setup")
 		});
-		acts.push({
-			label: "Tour",
-			hint: "what MindFlock is, in five slides",
-			top: TOP.tour,
-			run: () => ui.openTour()
-		});
+		for (const id of TOUR_IDS) {
+			const t = TOURS[id];
+			acts.push({
+				label: `Replay ${id === "welcome" ? "welcome" : t.title} tour`,
+				hint: id === "welcome" ? "the three steps to your first session" : `how ${t.title} works`,
+				keywords: "tour help how guide tutorial walkthrough show me around " + t.title.toLowerCase(),
+				top: id === "welcome" ? TOP.tour : void 0,
+				run: () => replayTour(id)
+			});
+		}
 		acts.push({
 			label: "Toggle sidebar",
 			hint: "Ctrl+B",
@@ -65890,7 +66633,7 @@ function CommandPalette({ host }) {
 						className: "palette-label",
 						children: a.label
 					}), a.hint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "palette-hint",
+						className: "palette-hint" + (isKeyHint(a.hint) ? "" : " is-desc"),
 						children: a.hint
 					})]
 				}, a.label + i)), !filtered.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
@@ -65934,6 +66677,13 @@ var DESCRIBE_MIN_CHARS = 8;
 var DESCRIBE_MAX_CHARS = 2e3;
 var DESCRIBE_SLOW_MS = 8e3;
 var SUBMIT_ARM_MS = 500;
+var START_LABEL = "Start";
+function prNeedsGithubReason(fallbackHint) {
+	return fallbackHint.split("\n")[0];
+}
+function advancedSummary(parts) {
+	return parts.filter(([, shown]) => shown).map(([name]) => name).join(", ");
+}
 function looksLikePath(text) {
 	const t = text.trim();
 	return t.startsWith("/") || t.startsWith("~");
@@ -66047,12 +66797,12 @@ function provisionBlockReason(where) {
 }
 function immediateStartBlockReason(where) {
 	if (where.folderExists || where.confirmed) return "";
-	return "One thing first: " + where.folderLabel + " does not exist yet. Tick the box, then press Create session again.";
+	return "One thing first: " + where.folderLabel + " does not exist yet. Press “Create this folder”, then Start again.";
 }
 function worktreeClampReason(where) {
 	if (where.inPlace || where.provisionOn) return "";
 	if (!where.plainFolder || where.initRepo) return "";
-	return "There is no git repo in that folder, so this will run in the folder itself — tick “Create a git repo in this folder” below to get a real worktree.";
+	return "There is no git repo in that folder, so this will run in the folder itself — pick “Make it a git repo first” to get a real worktree.";
 }
 function describeBlockReason(where) {
 	if (where.busy) return "";
@@ -66115,7 +66865,7 @@ function newFolderGate(where) {
 }
 function newFolderBlockReason(where) {
 	if (!where.gate || where.confirmed) return "";
-	return "There is no folder at " + where.gate + " yet — tick “Yes, create " + where.gate + "” under Folder to have Create make it, or put a folder that already exists in Folder.";
+	return "No folder at " + where.gate + " — press “Create this folder” under Folder, or pick a folder that already exists.";
 }
 function remoteBranchName(ref) {
 	const m = /^(?:[^/\s]+)\/(.+)$/.exec((ref || "").trim());
@@ -66141,12 +66891,12 @@ function rememberedProfileVerdict(id, profiles) {
 	return profiles.some((p) => p.id === id) ? "apply" : "drop";
 }
 function enterAction(where) {
-	if (where.field === "describe") return where.shift || where.runMode ? "newline" : "describe";
+	if (where.field === "describe") return where.shift || where.runMode ? "newline" : "start";
 	if (where.shift) return "none";
 	return "create";
 }
 function ctrlEnterAction(where) {
-	if (where.page === 1 && !where.runMode) return "describe";
+	if (where.page === 1 && !where.runMode) return "start";
 	return "submit";
 }
 function focusRowIndex(paths, leaving) {
@@ -66271,6 +67021,7 @@ function openingMode(o) {
 }
 //#endregion
 //#region src/components/dialogs/newSession/AgentAccount.tsx
+var MORE_AGENTS = "\0more-agents";
 function accountSetter(ctx) {
 	const { authProfiles, program, profileModels, canonAgent, setAgent, setProfileId, setProfileModel, setProfileModels } = ctx;
 	const setAccount = (id, agentNow) => {
@@ -66296,7 +67047,11 @@ function accountSetter(ctx) {
 	};
 	return setAccount;
 }
-function AgentFields({ scope = "new", defaultLabel, program, providers, installed = null, setAgent, device, authProfiles, profileId, pendingProfile, setAccount, closeDialog }) {
+function AgentFields({ scope = "new", defaultLabel, program, providers, installed = null, setAgent, device, authProfiles, profileId, pendingProfile, setAccount, closeDialog, foldMissing = false }) {
+	const [showAll, setShowAll] = (0, import_react.useState)(false);
+	const hidden = (p) => foldMissing && !showAll && !!installed && installed[p.name] === false && p.name !== program;
+	const shown = providers.filter((p) => !hidden(p));
+	const folded = providers.length - shown.length;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 		className: "nf-agent",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
@@ -66316,7 +67071,13 @@ function AgentFields({ scope = "new", defaultLabel, program, providers, installe
 			id: scope + "-program",
 			title: defaultLabel ? "The agent each session from this template runs" : "The agent this session runs",
 			value: program,
-			onChange: (e) => setAgent(e.target.value),
+			onChange: (e) => {
+				if (e.target.value === MORE_AGENTS) {
+					setShowAll(true);
+					return;
+				}
+				setAgent(e.target.value);
+			},
 			children: [
 				defaultLabel !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 					value: "",
@@ -66326,10 +67087,18 @@ function AgentFields({ scope = "new", defaultLabel, program, providers, installe
 					value: program,
 					children: program
 				}),
-				providers.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
+				shown.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
 					value: p.name,
 					children: [p.name, installed && installed[p.name] === false ? " (not installed)" : ""]
-				}, p.name))
+				}, p.name)),
+				folded > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
+					value: MORE_AGENTS,
+					children: [
+						"More agents… (",
+						folded,
+						" not installed)"
+					]
+				})
 			]
 		})]
 	}), !device && setAccount && (authProfiles?.profiles || []).length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
@@ -66607,6 +67376,7 @@ function useFolderLookups({ open, repoPath, dapi, setFolderCheck, setSearch, set
 				if (live) setFolderCheck({
 					asked,
 					plain: !!r.exists && !!r.is_dir && !r.is_git,
+					missing: r.exists === false,
 					isGit: !!r.is_git,
 					resolved: r.path || "",
 					branchPrefix: r.branch_prefix || ""
@@ -66768,6 +67538,11 @@ function folderIds(scope) {
 }
 function FolderField({ scope = "new", placeholder = "/home/me/projects/foo — or a folder name to look up", repoRef, repoPath, folderPath, folderDo, search, searchHits, searchSel, setSearchSel, setSearchOpen, selIndex, browserOpen, pickMatch }) {
 	const ids = folderIds(scope);
+	const inputRef = (0, import_react.useRef)(null);
+	(0, import_react.useLayoutEffect)(() => {
+		const el = inputRef.current;
+		if (el && document.activeElement !== el) el.scrollLeft = el.scrollWidth;
+	}, [repoPath]);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 		className: "nf-folder",
 		title: "Any folder works — git features (diff / commit / PR) turn on automatically when it's a git repo.",
@@ -66775,10 +67550,17 @@ function FolderField({ scope = "new", placeholder = "/home/me/projects/foo — o
 			className: "repo-path-row",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 				id: ids.input,
-				ref: repoRef,
+				ref: (el) => {
+					inputRef.current = el;
+					if (repoRef) repoRef.current = el;
+				},
 				autoComplete: "off",
 				placeholder,
 				value: repoPath,
+				title: repoPath || void 0,
+				onBlur: (e) => {
+					e.currentTarget.scrollLeft = e.currentTarget.scrollWidth;
+				},
 				role: "combobox",
 				"aria-expanded": !!searchHits,
 				"aria-controls": ids.list,
@@ -66828,7 +67610,7 @@ function FolderField({ scope = "new", placeholder = "/home/me/projects/foo — o
 		})]
 	});
 }
-function FolderAids({ scope = "new", searchHits, selIndex, searchListRef, setSearchSel, pickMatch, homePath, newFolderRow, plainFolder, initRepo, armInitRepo, suggestions, folderPath, folderDo, browserOpen, device }) {
+function FolderAids({ scope = "new", searchHits, selIndex, searchListRef, setSearchSel, pickMatch, homePath, newFolderRow, plainFolder, initRepo, armInitRepo, suggestions, folderPath, folderDo, browserOpen, device, gitAsked = false }) {
 	const onlyCurrent = suggestions.length > 0 && suggestions.every((s) => s.path === folderPath);
 	const ids = folderIds(scope);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -66891,7 +67673,7 @@ function FolderAids({ scope = "new", searchHits, selIndex, searchListRef, setSea
 			]
 		}),
 		newFolderRow,
-		plainFolder && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		plainFolder && !gitAsked && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "nf-git-nudge",
 			children: initRepo ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: "A git repo will be created here — diff, commit and PR will work." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 				"No git repo in this folder, so diff, commit and PR stay off.",
@@ -66926,6 +67708,37 @@ function FolderAids({ scope = "new", searchHits, selIndex, searchListRef, setSea
 		})
 	] });
 }
+function MissingFolderRow({ label, onCreate, busy, error }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "nf-folder-missing",
+		id: "new-folder-missing",
+		role: "alert",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "nf-folder-missing-msg",
+				children: [
+					"No folder at ",
+					label,
+					"."
+				]
+			}),
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				id: "new-create-folder",
+				className: "nf-fallback",
+				disabled: busy,
+				title: "Make this folder now, then start in it",
+				onClick: onCreate,
+				children: busy ? "Creating…" : "Create this folder"
+			}),
+			error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "nf-folder-missing-err",
+				children: [" ", error]
+			})
+		]
+	});
+}
 //#endregion
 //#region src/components/dialogs/newSession/PromptFold.tsx
 var TASK_MAX_PX = 220;
@@ -66953,8 +67766,8 @@ function TaskField({ scope = "new", hint = "what the agent starts on; blank star
 				className: "preset-row",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
 					id: "new-preset",
-					"aria-label": "Insert a prompt",
-					title: "Put one of your prompts in the Task box (you can edit it after)",
+					"aria-label": "Insert saved text",
+					title: "Put one of your saved prompts in the Task box (you can edit it after)",
 					value: presetValue,
 					onChange: (e) => {
 						setPresetValue(e.target.value);
@@ -66964,7 +67777,7 @@ function TaskField({ scope = "new", hint = "what the agent starts on; blank star
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 							value: "",
-							children: "Insert a prompt…"
+							children: "Insert saved text…"
 						}),
 						BUILTIN_PRESETS.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
 							label: "Built-in",
@@ -67181,7 +67994,65 @@ function BranchLine({ parts, muted }) {
 		}) : null]
 	});
 }
-function WorksIn({ inPlace, setInPlace, setProvision, provisionOn, laneNeedsWorktree, draft, splitOn, setSplit, worktreeClamped, isGit, name, prefix, baseLabel, continueBranch, sharers, others }) {
+function PlainWorksIn({ initRepo, setInitRepo, setInPlace, laneNeedsWorktree, draft }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "new-works-in",
+		className: "rt-row rt-row-top nf-works-in",
+		"data-caps": "git",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "rt-label",
+			id: "new-mode-label",
+			children: "Works in"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "rt-ctl nf-mode",
+			role: "radiogroup",
+			"aria-labelledby": "new-mode-label",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "check nf-opt",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "radio",
+					name: "new-workspace-mode",
+					id: "new-git-first",
+					checked: initRepo,
+					onChange: () => {
+						setInitRepo(true);
+						setInPlace(false);
+					}
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModeText, {
+					title: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: ["Make it a git repo first ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "nf-rec",
+						children: "recommended"
+					})] }),
+					desc: "Turns on diff, commit and PR — git init and a first commit here"
+				})]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "check nf-opt",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "radio",
+					name: "new-workspace-mode",
+					id: "new-in-place",
+					checked: !initRepo,
+					onChange: () => {
+						setInitRepo(false);
+						setInPlace(true);
+						if (laneNeedsWorktree) draft.setLane("leave");
+					}
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModeText, {
+					title: "Just run in the folder",
+					desc: laneNeedsWorktree ? "Turns Fast-track off — there is no repo to commit to" : "The agent edits the files as they are; no diff, commit or PR"
+				})]
+			})]
+		})]
+	});
+}
+function WorksIn({ inPlace, setInPlace, setProvision, provisionOn, laneNeedsWorktree, draft, splitOn, setSplit, worktreeClamped, isGit, name, prefix, baseLabel, continueBranch, sharers, others, plainFolder, initRepo, setInitRepo }) {
+	if (plainFolder && setInitRepo) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlainWorksIn, {
+		initRepo: !!initRepo,
+		setInitRepo,
+		setInPlace,
+		laneNeedsWorktree,
+		draft
+	});
 	const worktree = !inPlace || laneNeedsWorktree || provisionOn;
 	const warn = sharedCheckoutWarning(sharers);
 	const othersLine = warn && !worktree ? "" : otherSessionsLine(others, worktree);
@@ -67291,7 +68162,7 @@ function WorksInGroup({ scope, worktree, onWorktree, onInPlace, inPlaceDesc, und
 		})]
 	});
 }
-function GitOptions({ provision, setProvision, setInPlace, provisionOn, offerProvision, provisionBlocked, armInitRepo, strategy, setStrategy, worktreeMode, branches, baseBranch, setBaseBranch, canContinue, continueOn, setContinueOn, initRepo, setInitRepo, isGit }) {
+function GitOptions({ provision, setProvision, setInPlace, provisionOn, offerProvision, provisionBlocked, armInitRepo, strategy, setStrategy, worktreeMode, branches, baseBranch, setBaseBranch, canContinue, continueOn, setContinueOn, initRepo, setInitRepo, isGit, plainFolder = false }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "nf-git-opts",
 		"data-caps": "git",
@@ -67313,7 +68184,7 @@ function GitOptions({ provision, setProvision, setInPlace, provisionOn, offerPro
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "linklike",
-						title: "Ticks “Create a git repo in this folder” below",
+						title: "Picks “Make it a git repo first”",
 						onClick: armInitRepo,
 						children: "Create one here"
 					})
@@ -67434,7 +68305,7 @@ function GitOptions({ provision, setProvision, setInPlace, provisionOn, offerPro
 					]
 				})]
 			})] }),
-			(!isGit || initRepo) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InitRepoCheck, {
+			!plainFolder && (!isGit || initRepo) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InitRepoCheck, {
 				id: "new-init-repo",
 				checked: initRepo,
 				onChange: setInitRepo
@@ -67447,6 +68318,14 @@ function GitOptions({ provision, setProvision, setInPlace, provisionOn, offerPro
 function cadenceKey(s) {
 	if (!s) return "";
 	return s.cron ? "cron:" + s.cron.trim().replace(/\s+/g, " ") : s.at ? s.at + "/" + (s.days || "daily") : "";
+}
+function defaultFolder(suggestions) {
+	const list = suggestions || [];
+	return (list.find((s) => s.source === "recent" && s.is_git) || list.find((s) => s.is_git))?.path || "";
+}
+function missingAgent(program, installed) {
+	const name = (program || "").trim();
+	return name && installed && installed[name] === false ? name : "";
 }
 function formFromTemplate(t) {
 	return {
@@ -67467,7 +68346,7 @@ function formFromTemplate(t) {
 		seeded: t && hasSchedule(t) ? cadenceKey(t.schedule) : ""
 	};
 }
-function templateBody(f) {
+function templateBody(f, installed = null) {
 	const name = f.name.trim();
 	if (!name) return { error: "A template needs a name." };
 	if (name.length > 100) return { error: "Names are at most 100 characters." };
@@ -67479,6 +68358,8 @@ function templateBody(f) {
 		} else if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(at)) return { error: "Pick a time for the schedule, like 21:00." };
 		if (!f.repo_path.trim() && f.mode !== "provisioned") return { error: "A scheduled template needs a folder to start its session in." };
 		if (!f.prompt.trim()) return { error: "A scheduled template needs a task — it's what the session is told to do." };
+		const missing = missingAgent(f.program, installed);
+		if (missing) return { error: missing + " isn't installed — Install or pick another agent" };
 	}
 	return { body: {
 		name,
@@ -67504,11 +68385,24 @@ function scheduleOf(f, at, cron) {
 	if (f.skip_until && sameCadence && f.skip_until > Date.now() / 1e3) out.skip_until = f.skip_until;
 	return out;
 }
-function cronPreviewLine(pv, now = /* @__PURE__ */ new Date()) {
-	if (!pv) return "";
-	if (!pv.ok) return pv.error || "Not a cron expression";
-	const next = (pv.next || []).map((t) => whenLabel(t, now)).join(", ");
-	return (pv.label || "") + (next ? " — next " + next : "");
+function cronPreviewLine(pv, now = /* @__PURE__ */ new Date(), zone = "") {
+	return schedulePreviewLine(pv, now, zone);
+}
+function daysPatch(f, raw) {
+	const days = raw === "weekdays" ? "weekdays" : raw === "cron" ? "cron" : "daily";
+	if (days === f.days) return {};
+	if (days === "cron") return {
+		days,
+		cron: cronOf(f.at, f.days) || f.cron
+	};
+	if (f.days === "cron") {
+		const back = atOfCron(f.cron);
+		return back ? {
+			days,
+			at: back.at
+		} : { days };
+	}
+	return { days };
 }
 var TEMPLATE_BROWSE_INIT = {
 	browsing: false,
@@ -67540,6 +68434,130 @@ function useTemplateFolder(path, setPath) {
 		browsing: browse.browsing,
 		folderDo
 	};
+}
+function ScheduleWhen({ form, onForm, tz, cronPreview, runs, focusTime }) {
+	const status = runs || {
+		runs_here: true,
+		runs_on: ""
+	};
+	const zone = zoneSuffix(tz || "", status);
+	const elsewhere = !status.runs_here && status.runs_on;
+	const line = cronPreviewLine(cronPreview, /* @__PURE__ */ new Date(), zone);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "tpl-schedule-when",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+				id: "tpl-days",
+				"aria-label": "Which days",
+				value: form.days,
+				onChange: (e) => onForm(daysPatch(form, e.target.value)),
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: "daily",
+						children: "Every day"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: "weekdays",
+						children: "Weekdays"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: "cron",
+						children: "Custom (cron)"
+					})
+				]
+			}), form.days === "cron" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				id: "tpl-cron",
+				"aria-label": "Cron expression",
+				autoComplete: "off",
+				spellCheck: false,
+				value: form.cron,
+				onChange: (e) => onForm({ cron: e.target.value }),
+				placeholder: "*/30 * * * *"
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "tpl-at",
+				children: "at"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				id: "tpl-at",
+				type: "text",
+				inputMode: "numeric",
+				"aria-label": "Time (24-hour)",
+				autoComplete: "off",
+				maxLength: 5,
+				placeholder: "21:00",
+				autoFocus: focusTime === true,
+				value: form.at,
+				onChange: (e) => onForm({ at: e.target.value }),
+				onBlur: (e) => {
+					const at = normalizeAt(e.target.value);
+					if (at !== form.at) onForm({ at });
+				}
+			})] })]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "tpl-cron-preview" + (cronPreview && !cronPreview.ok ? " error" : " muted"),
+			id: "tpl-cron-preview",
+			"aria-live": "polite",
+			children: line || (form.days === "cron" ? "minute hour day-of-month month weekday —" + (zone || " local time") : " ")
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "tpl-cron-preview tpl-sched-note muted",
+			children: [elsewhere ? "Starts on " + status.runs_on + " — the computer that runs schedules. " : "", "Skipped while the last run is still working or waiting on you."]
+		})
+	] });
+}
+function ScheduleEditor(p) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+		className: "tpl-editor tpl-sched-editor",
+		onSubmit: (e) => {
+			e.preventDefault();
+			p.onSave();
+		},
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "tpl-schedule tpl-sched-only",
+			"data-tour": "schedule-when",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScheduleWhen, {
+				form: p.form,
+				onForm: p.onForm,
+				tz: p.tz,
+				cronPreview: p.cronPreview,
+				runs: p.runs,
+				focusTime: true
+			})
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "tpl-row-actions",
+			children: [
+				p.error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "error",
+					"aria-live": "polite",
+					children: [p.error, p.onEdit && /folder|task/.test(p.error) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: p.onEdit,
+						children: "Edit"
+					})] })]
+				}),
+				p.onStop && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "tpl-stop",
+					disabled: p.busy,
+					onClick: p.onStop,
+					children: "Stop schedule"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "tpl-cancel",
+					onClick: p.onCancel,
+					children: "Cancel"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "submit",
+					className: "tpl-save",
+					disabled: p.busy,
+					children: p.busy ? "Saving…" : "Save"
+				})
+			]
+		})]
+	});
 }
 function TemplateEditor(p) {
 	const { form, onForm } = p;
@@ -67576,7 +68594,16 @@ function TemplateEditor(p) {
 		return true;
 	};
 	const setPrompt = (v) => onForm({ prompt: typeof v === "function" ? v(form.prompt) : v });
-	const elsewhere = p.runs && !p.runs.runs_here && p.runs.runs_on;
+	const missing = missingAgent(form.program, p.installed);
+	const needsGitHub = fastTrackNeedsGitHub(form.autopilot) && p.githubConnected === false;
+	const useChips = (p.folderSuggestions || []).filter((x) => x.is_git || x.source === "recent").slice(0, 3);
+	const folderEmpty = !folderPath && form.mode !== "provisioned";
+	(0, import_react.useEffect)(() => {
+		if (!p.focusFolder) return;
+		const el = document.getElementById("tpl-repo-path");
+		el?.scrollIntoView?.({ block: "center" });
+		el?.focus();
+	}, [p.focusFolder]);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 		className: "tpl-editor",
 		onSubmit: (e) => {
@@ -67586,6 +68613,7 @@ function TemplateEditor(p) {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 				className: "tpl-name-field",
+				"data-tour": "schedule-name",
 				children: ["Name", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 					id: "tpl-name",
 					autoComplete: "off",
@@ -67596,25 +68624,30 @@ function TemplateEditor(p) {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "nf-quick",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderField, {
-					scope: "tpl",
-					placeholder: "Needed to Run now or schedule",
-					repoPath: path,
-					folderPath,
-					folderDo,
-					search,
-					searchHits,
-					searchSel,
-					setSearchSel,
-					setSearchOpen,
-					selIndex,
-					browserOpen: browsing,
-					pickMatch
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "tpl-folder-wrap" + (p.focusFolder && folderEmpty ? " tpl-flash" : ""),
+					"data-tour": "schedule-folder",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderField, {
+						scope: "tpl",
+						placeholder: "The repo it works in",
+						repoPath: path,
+						folderPath,
+						folderDo,
+						search,
+						searchHits,
+						searchSel,
+						setSearchSel,
+						setSearchOpen,
+						selIndex,
+						browserOpen: browsing,
+						pickMatch
+					})
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentFields, {
 					scope: "tpl",
 					defaultLabel: "Your default agent",
 					program: form.program,
 					providers: (p.agents || []).map((name) => ({ name })),
+					installed: p.installed ?? null,
 					setAgent: (program) => onForm({ program }),
 					device: "",
 					closeDialog: () => useUi.getState().closeDialog()
@@ -67632,18 +68665,66 @@ function TemplateEditor(p) {
 				plainFolder,
 				initRepo: form.init_repo,
 				armInitRepo: () => onForm({ init_repo: true }),
-				suggestions: p.folderSuggestions || [],
+				suggestions: [],
 				folderPath,
 				folderDo,
 				browserOpen: browsing,
 				device: ""
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TaskField, {
-				scope: "tpl",
-				hint: "what each session from it starts on",
-				placeholder: "e.g. update dependencies, run the tests and fix what breaks",
-				prompt: form.prompt,
-				setPrompt
+			useChips.length > 0 && !browsing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				id: "tpl-suggest",
+				className: "nf-suggest nf-folders tpl-use",
+				role: "group",
+				"aria-label": "Folders you might mean",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "nf-suggest-label",
+					children: "Use:"
+				}), useChips.map((x) => {
+					const active = folderPath === x.path;
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "nt-chip" + (x.is_git ? " is-git" : "") + (active ? " active" : ""),
+						"data-path": x.path,
+						"aria-pressed": active,
+						title: x.path,
+						onClick: () => folderDo({
+							t: "user-set",
+							path: x.path
+						}),
+						children: (x.is_git ? "📦 " : "📁 ") + x.name
+					}, x.path);
+				})]
+			}),
+			missing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "tpl-agent-missing" + (form.scheduled ? " error" : " muted"),
+				role: "note",
+				"aria-live": "polite",
+				children: [
+					missing,
+					" isn't installed —",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: () => {
+							useUi.getState().closeDialog();
+							openSettings("coding");
+						},
+						children: "Install"
+					}),
+					" ",
+					"or pick another agent"
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				"data-tour": "schedule-task",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TaskField, {
+					scope: "tpl",
+					hint: "what each session from it starts on",
+					placeholder: "e.g. update dependencies, run the tests and fix what breaks",
+					prompt: form.prompt,
+					setPrompt
+				})
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "tpl-rows",
@@ -67656,7 +68737,7 @@ function TemplateEditor(p) {
 							mode: "in_place",
 							autopilot: ""
 						}),
-						inPlaceDesc: form.autopilot ? "Turns the autopilot off — it needs its own worktree" : IN_PLACE_HINT,
+						inPlaceDesc: form.autopilot ? "Can't commit or open a PR for you — needs its own worktree" : IN_PLACE_HINT,
 						underWorktree: form.mode !== "in_place" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "nf-opt-sub tpl-provision",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProvisionCheck, {
@@ -67680,6 +68761,7 @@ function TemplateEditor(p) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "rt-row rt-row-top",
 						id: "tpl-schedule-row",
+						"data-tour": "schedule-when",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "rt-label",
 							id: "tpl-schedule-label",
@@ -67688,119 +68770,88 @@ function TemplateEditor(p) {
 							className: "rt-ctl tpl-schedule",
 							role: "group",
 							"aria-labelledby": "tpl-schedule-label",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-									className: "check nf-opt nf-opt-check",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-										type: "checkbox",
-										id: "tpl-scheduled",
-										checked: form.scheduled,
-										onChange: (e) => onForm({ scheduled: e.target.checked })
-									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModeText, {
-										title: "Run on a schedule",
-										desc: "Starts a new session from it, by itself"
-									})]
-								}),
-								form.scheduled && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "tpl-schedule-when",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-										id: "tpl-days",
-										"aria-label": "Which days",
-										value: form.days,
-										onChange: (e) => onForm({ days: e.target.value === "weekdays" ? "weekdays" : e.target.value === "cron" ? "cron" : "daily" }),
-										children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-												value: "daily",
-												children: "Every day"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-												value: "weekdays",
-												children: "Weekdays"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-												value: "cron",
-												children: "Custom (cron)"
-											})
-										]
-									}), form.days === "cron" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-										id: "tpl-cron",
-										"aria-label": "Cron expression",
-										autoComplete: "off",
-										spellCheck: false,
-										value: form.cron,
-										onChange: (e) => onForm({ cron: e.target.value }),
-										placeholder: "*/30 * * * *"
-									}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "tpl-at",
-											children: "at"
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-											id: "tpl-at",
-											type: "time",
-											"aria-label": "Time",
-											autoFocus: p.scheduleFocus === true,
-											value: form.at,
-											onChange: (e) => onForm({ at: e.target.value })
-										}),
-										p.tz && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-											className: "muted tpl-tz",
-											children: [p.tz, " — this device's time"]
-										})
-									] })]
-								}),
-								form.scheduled && form.days === "cron" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-									className: "tpl-cron-preview" + (p.cronPreview && !p.cronPreview.ok ? " error" : " muted"),
-									id: "tpl-cron-preview",
-									"aria-live": "polite",
-									children: cronPreviewLine(p.cronPreview) || "minute hour day-of-month month weekday — local time"
-								}),
-								form.scheduled && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-									className: "tpl-cron-preview muted",
-									children: [elsewhere ? "Starts on " + p.runs?.runs_on + " — the device that runs automation. " : "", "Skipped while the last run is still working or waiting on you."]
-								})
-							]
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								className: "check nf-opt nf-opt-check",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "checkbox",
+									id: "tpl-scheduled",
+									checked: form.scheduled,
+									onChange: (e) => onForm({ scheduled: e.target.checked })
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModeText, {
+									title: "Run on a schedule",
+									desc: "Starts a new session from it, by itself"
+								})]
+							}), form.scheduled && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScheduleWhen, {
+								form,
+								onForm,
+								tz: p.tz,
+								cronPreview: p.cronPreview,
+								runs: p.runs,
+								focusTime: p.scheduleFocus
+							})]
 						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "rt-row",
+						className: "rt-row rt-row-top",
 						id: "tpl-autopilot-row",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "rt-label",
 							id: "tpl-autopilot-label",
-							children: "When a run's turn ends"
+							children: "Fast-track"
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "rt-ctl",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
-								id: "tpl-autopilot",
-								"aria-labelledby": "tpl-autopilot-label",
-								value: form.autopilot,
-								onChange: (e) => {
-									const autopilot = e.target.value;
-									onForm(autopilot && form.mode === "in_place" ? {
-										autopilot,
-										mode: "worktree"
-									} : { autopilot });
-								},
-								children: AUTOPILOT_CHOICES.map(([v, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-									value: v,
-									children: label
-								}, v || "leave"))
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "muted tpl-autopilot-hint",
-								children: "each Run now and scheduled run"
-							})]
+							className: "rt-ctl tpl-fast-track",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "muted tpl-autopilot-hint",
+									children: "When the agent stops. Applies to Run now and to scheduled runs."
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+									id: "tpl-autopilot",
+									"aria-labelledby": "tpl-autopilot-label",
+									value: form.autopilot,
+									onChange: (e) => {
+										const autopilot = e.target.value;
+										onForm(autopilot && form.mode === "in_place" ? {
+											autopilot,
+											mode: "worktree"
+										} : { autopilot });
+									},
+									children: AUTOPILOT_CHOICES.map(([v, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: v,
+										children: label
+									}, v || "leave"))
+								}),
+								needsGitHub && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+									className: "tpl-gh-needed error",
+									role: "note",
+									children: [
+										"Needs GitHub —",
+										" ",
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "linklike",
+											onClick: () => openConnectGitHub(),
+											children: "Connect GitHub"
+										})
+									]
+								})
+							]
 						})]
 					})
 				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "tpl-row-actions",
+				className: "tpl-row-actions tpl-sticky",
 				children: [
-					p.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					p.error && !(missing && p.errorReason === "agent_missing") && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 						className: "error",
 						"aria-live": "polite",
-						children: p.error
+						children: [p.error, p.errorReason === "github_required" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike",
+							onClick: () => openConnectGitHub(),
+							children: "Connect GitHub"
+						})] })]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -67820,6 +68871,70 @@ function TemplateEditor(p) {
 	});
 }
 //#endregion
+//#region src/components/onboarding/TourButton.tsx
+function TourButton({ tour }) {
+	const openCoachTour = useUi((s) => s.openCoachTour);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "tour-btn",
+		"aria-label": "Show me around",
+		title: `Replay the ${TOURS[tour].title} tour`,
+		"data-tour-id": tour,
+		onClick: () => openCoachTour(tour),
+		children: "?"
+	});
+}
+//#endregion
+//#region src/components/onboarding/useAutoTour.ts
+var AUTO_TOUR_DELAY_MS = 400;
+var RETRY_MS = 500;
+var RETRIES = 10;
+function autoTourDue(o) {
+	return o.open && o.pulled && o.calm === true && o.hints && !o.busy && !o.seen.includes(o.id);
+}
+var pulled = false;
+firstPrefsPull.then(() => {
+	pulled = true;
+});
+function calmNow() {
+	const instances = queryClient.getQueryData(["instances"]);
+	if (!instances) return null;
+	const sessions = instances.filter((i) => !i.device && !isVerifySession(i)).length;
+	return calmDecision({
+		sessions,
+		status: queryClient.getQueryData(SETUP_KEY),
+		onboarded: queryClient.getQueryData(["config"])?.onboarded
+	});
+}
+function useAutoTour(id, open) {
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		let tries = 0;
+		let t = 0;
+		const look = () => {
+			const ui = useUi.getState();
+			const calm = calmNow();
+			if (autoTourDue({
+				open: true,
+				calm,
+				seen: ui.toursSeen,
+				id,
+				pulled,
+				hints: ui.hintsEnabled,
+				busy: ui.coachTour !== null || ui.tourOpen
+			})) ui.openCoachTour(id);
+			else if ((calm === null || !pulled) && ++tries < RETRIES) t = window.setTimeout(look, RETRY_MS);
+		};
+		t = window.setTimeout(look, AUTO_TOUR_DELAY_MS);
+		return () => window.clearTimeout(t);
+	}, [open, id]);
+	const wasOpen = (0, import_react.useRef)(open);
+	(0, import_react.useEffect)(() => {
+		if (wasOpen.current && !open && useUi.getState().coachTour?.id === id) useUi.getState().closeCoachTour();
+		wasOpen.current = open;
+	}, [open, id]);
+}
+//#endregion
 //#region src/components/dialogs/TemplatesDialog.tsx
 function localZone() {
 	try {
@@ -67835,11 +68950,17 @@ var TEMPLATES_UI_INIT = {
 };
 function templatesReducer(s, a) {
 	switch (a.t) {
-		case "edit":
+		case "edit": return {
+			editing: a.name,
+			confirming: null,
+			error: "",
+			focus: a.focus
+		};
 		case "schedule": return {
 			editing: a.name,
 			confirming: null,
-			error: ""
+			error: "",
+			scheduleOnly: a.name ? true : void 0
 		};
 		case "new": return {
 			editing: "",
@@ -67860,7 +68981,8 @@ function templatesReducer(s, a) {
 		};
 		case "error": return {
 			...s,
-			error: a.message
+			error: a.message,
+			reason: a.reason
 		};
 	}
 }
@@ -67870,9 +68992,9 @@ function renameLeaves(oldName, newName) {
 	return a && a !== b ? oldName : null;
 }
 var AUTOPILOT_THEN = {
-	commit: "commit",
-	push: "commit + push",
-	pr: "open a PR"
+	commit: LANE_LABEL.commit,
+	push: LANE_LABEL.push,
+	pr: LANE_LABEL.pr
 };
 function templateMeta(t) {
 	const bits = [];
@@ -67880,25 +69002,27 @@ function templateMeta(t) {
 	if (t.repo_path) bits.push(leafName(t.repo_path));
 	bits.push(t.provisioned ? "separate worktree, provisioned" + (t.workspace_strategy === "clone" ? " (full clone)" : "") : t.in_place ? "this folder directly" : "separate worktree");
 	if (t.init_repo) bits.push("git init");
-	if (t.autopilot) bits.push("then: " + AUTOPILOT_THEN[t.autopilot]);
+	if (t.autopilot) bits.push("Fast-track: " + (AUTOPILOT_THEN[t.autopilot] || t.autopilot));
 	return bits.join(" · ");
+}
+function failedRow(h) {
+	return h.status ? h.status === "failed" : !!h.error && !h.skipped;
+}
+function levelWord(v) {
+	return AUTOPILOT_THEN[v] || v;
 }
 function historyLine(h, now = /* @__PURE__ */ new Date()) {
 	let line = [whenLabel(h.at, now), h.trigger === "schedule" ? "scheduled" : "by hand"].join(" · ");
 	if (h.skipped) line += " — skipped: " + h.skipped;
-	else if (h.error) line += " — failed: " + h.error;
-	else if (h.session) line += " → " + h.session + (h.autopilot ? " (autopilot: " + h.autopilot + ")" : "");
+	else if (failedRow(h)) line += " — failed: " + (h.error || "it couldn't start");
+	else if (h.session) line += " → " + h.session + (h.autopilot ? " (Fast-track: " + levelWord(h.autopilot) + ")" : "");
 	return line;
-}
-function cadenceLine(t, info) {
-	const tz = info.tz;
-	return (info.schedule_label || scheduleLabel(t.schedule)) + (tz && t.schedule?.at ? " " + tz : "");
 }
 function nextLine(t, info, status, now = /* @__PURE__ */ new Date()) {
 	if (t.schedule?.paused || info.paused) return "Paused";
 	if (!status.runs_here && status.runs_on) return "Starts on " + status.runs_on;
 	if (!info.next_at) return "";
-	return "Next " + whenLabel(info.next_at, now) + " · " + inLabel(info.next_at, now);
+	return inLabel(info.next_at, now);
 }
 function lastLine(info, now = /* @__PURE__ */ new Date()) {
 	if (!info.last_at) return "";
@@ -67940,16 +69064,71 @@ function TemplatesDialogView(p) {
 		runs: p.runs,
 		folderSuggestions: p.folderSuggestions,
 		homePath: p.homePath,
-		escapeRef
+		escapeRef,
+		installed: p.installed,
+		githubConnected: p.githubConnected,
+		errorReason: ui.reason,
+		focusFolder: ui.focus === "folder"
+	});
+	const scheduleEditor = (t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScheduleEditor, {
+		form,
+		onForm: p.onForm,
+		error: ui.error,
+		busy,
+		onSave: p.onSave,
+		onCancel: () => p.dispatch({ t: "cancel" }),
+		onStop: hasSchedule(t) ? p.onStopSchedule : void 0,
+		onEdit: () => p.dispatch({
+			t: "edit",
+			name: t.name
+		}),
+		tz: p.tz,
+		cronPreview: p.cronPreview,
+		runs: p.runs
 	});
 	const now = p.now || /* @__PURE__ */ new Date();
 	const infoFor = (t) => runs.runs[t.name.trim().toLowerCase()] || {};
+	const sessionRef = (title) => {
+		const live = p.liveSessions;
+		if (!live) return title;
+		if (!live.has(title)) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "tpl-session-gone",
+			children: [
+				title,
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "muted",
+					children: "(closed)"
+				})
+			]
+		});
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "linklike tpl-session-link",
+			title: "Show “" + title + "”",
+			onClick: () => p.onOpenSession?.(title),
+			children: title
+		});
+	};
+	const historyRow = (h) => {
+		const line = historyLine(h, now);
+		if (!h.session || h.skipped || failedRow(h)) return line;
+		const at = line.indexOf(" → " + h.session);
+		if (at < 0) return line;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			line.slice(0, at),
+			" → ",
+			sessionRef(h.session),
+			line.slice(at + 3 + h.session.length)
+		] });
+	};
 	const actions = (t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "tpl-actions",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "tpl-btn tpl-run",
+				"data-tour": "schedule-run",
 				disabled: !!runProblem(t) || !!p.running,
 				title: runProblem(t) ? "Run now needs a folder" : "Run now — starts a new session from this template",
 				onClick: () => p.onRun?.(t.name),
@@ -67958,7 +69137,7 @@ function TemplatesDialogView(p) {
 			!hasSchedule(t) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "tpl-btn tpl-sched",
-				title: "Start it by itself — every day, weekdays, or on a cron expression",
+				title: "Start it by itself — every day, weekdays or on a cron",
 				onClick: () => p.dispatch({
 					t: "schedule",
 					name: t.name
@@ -67993,22 +69172,28 @@ function TemplatesDialogView(p) {
 		const flagging = p.flagging === t.name;
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "sch-strip" + (paused ? " is-paused" : ""),
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "sch-when",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				children: paused ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "sch-cadence",
-					children: cadenceLine(t, info)
+					children: cadenceText(t, info, runs)
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sch-next sch-paused-chip",
+					children: "Paused"
+				})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sch-cadence",
+					children: templateScheduleLine(t, runs, now)
 				}), next && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "sch-next" + (paused ? " sch-paused-chip" : ""),
+					className: "sch-next",
 					children: next
-				})]
+				})] })
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "sch-switches",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "sch-sw tpl-sched",
-						title: "Change when it runs, or stop its schedule",
+						title: "Change when it runs, or stop its schedule — just the schedule",
 						onClick: () => p.dispatch({
 							t: "schedule",
 							name: t.name
@@ -68042,56 +69227,46 @@ function TemplatesDialogView(p) {
 		});
 	};
 	const outcome = (t, info) => {
-		const skipping = !(t.schedule?.paused || info.paused) && info.skipping_at ? info.skipping_at : 0;
 		const last = lastLine(info, now);
-		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			skipping > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "sch-skipping muted",
-				children: [
-					"Skipping ",
-					whenLabel(skipping, now),
-					" — you asked to skip it"
-				]
-			}),
-			info.last_error ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "tpl-run-error error",
-				children: ["Last run failed: ", info.last_error]
-			}) : info.last_skip ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "tpl-run-skip muted",
-				children: [
-					"Skipped ",
-					whenLabel(info.last_skip_at, now),
-					": ",
-					info.last_skip
-				]
-			}) : last && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "tpl-runs",
-				children: last
-			}),
-			info.history && info.history.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-				className: "tpl-history",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: [
-					"Recent runs (",
-					info.history.length,
-					")"
-				] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: info.history.map((h, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
-					className: h.error ? "error" : h.skipped ? "muted" : "",
-					children: historyLine(h, now)
-				}, i)) })]
-			})
-		] });
+		const session = info.last_session || "";
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [lastRunFailed(info) ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "tpl-run-error error",
+			children: ["Last run failed: ", info.last_error]
+		}) : info.last_skip ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "tpl-run-skip muted",
+			children: [
+				"Skipped ",
+				whenLabel(info.last_skip_at, now),
+				": ",
+				info.last_skip
+			]
+		}) : last && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "tpl-runs",
+			children: session && last.endsWith(" → " + session) ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [last.slice(0, last.length - session.length), sessionRef(session)] }) : last
+		}), info.history && info.history.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+			className: "tpl-history",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: [
+				"Recent runs (",
+				info.history.length,
+				")"
+			] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: info.history.map((h, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+				className: failedRow(h) ? "error" : h.skipped ? "muted" : "",
+				children: historyRow(h)
+			}, i)) })]
+		})] });
 	};
 	const card = (t) => {
-		if (ui.editing === t.name) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		if (ui.editing === t.name && !ui.scheduleOnly) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "tpl-card tpl-card-editing",
 			"data-name": t.name,
 			children: editor
 		}, t.name);
+		const schedOpen = ui.editing === t.name && !!ui.scheduleOnly;
 		const info = infoFor(t);
 		const scheduled = hasSchedule(t);
 		const paused = scheduled && !!(t.schedule?.paused || info.paused);
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "tpl-card" + (scheduled ? " is-scheduled" : "") + (paused ? " is-paused" : "") + (scheduled && !paused && info.last_error ? " is-failing" : ""),
+			className: "tpl-card" + (scheduled ? " is-scheduled" : "") + (paused ? " is-paused" : "") + (!paused && lastRunFailed(info) ? " is-failing" : ""),
 			"data-name": t.name,
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -68108,7 +69283,10 @@ function TemplatesDialogView(p) {
 						})]
 					}), actions(t)]
 				}),
-				scheduled && strip(t, info),
+				schedOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "tpl-sched-row",
+					children: scheduleEditor(t)
+				}) : scheduled && strip(t, info),
 				outcome(t, info),
 				t.prompt && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "tpl-prompt",
@@ -68124,7 +69302,8 @@ function TemplatesDialogView(p) {
 							className: "linklike",
 							onClick: () => p.dispatch({
 								t: "edit",
-								name: t.name
+								name: t.name,
+								focus: "folder"
 							}),
 							children: "Add one"
 						})
@@ -68138,7 +69317,8 @@ function TemplatesDialogView(p) {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
 							"Delete “",
 							t.name,
-							"”? It goes from every device."
+							"”?",
+							p.otherDevices ? " This also removes it from your other linked devices." : ""
 						] }),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
@@ -68191,18 +69371,23 @@ function TemplatesDialogView(p) {
 						children: "Schedule"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "tpl-head-acts",
-						children: [ui.editing !== "" && !empty && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "templates-new",
-							className: "tpl-new",
-							onClick: () => p.dispatch({ t: "new" }),
-							children: "+ New template"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "templates-close",
-							onClick: p.onClose,
-							children: "Close"
-						})]
+						children: [
+							ui.editing !== "" && !empty && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								id: "templates-new",
+								className: "tpl-new",
+								"data-tour": "schedule-new",
+								onClick: () => p.dispatch({ t: "new" }),
+								children: "+ New template"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "schedule" }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								id: "templates-close",
+								onClick: p.onClose,
+								children: "Close"
+							})
+						]
 					})]
 				}),
 				!empty && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
@@ -68256,11 +69441,12 @@ function TemplatesDialogView(p) {
 										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 9v4l2.5 2.5M9 2.5h6" })]
 									})
 								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Save a session setup once, then start it with one click — or every night by itself." }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Save a session as a template once, then start it with one click — or every night by itself." }),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									type: "button",
 									id: "schedule-empty-create",
 									className: "tpl-btn tpl-run",
+									"data-tour": "schedule-new",
 									onClick: () => p.dispatch({ t: "new" }),
 									children: "Create a template"
 								})
@@ -68273,7 +69459,7 @@ function TemplatesDialogView(p) {
 								children: elsewhere ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 									"Schedules start on ",
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: runs.runs_on }),
-									" — the device that runs automation."
+									" — the computer that runs schedules."
 								] }) : up && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 										className: "sch-next-label",
@@ -68302,7 +69488,7 @@ function TemplatesDialogView(p) {
 									children: [
 										"Nothing runs by itself yet — ",
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Schedule…" }),
-										" on a setup below starts it every day, weekday or on any cron."
+										" on a template below starts it every day, weekday or on any cron."
 									]
 								})]
 							}),
@@ -68313,7 +69499,7 @@ function TemplatesDialogView(p) {
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
 									id: "schedule-saved-h",
 									children: [
-										"Saved setups",
+										"Not scheduled",
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 											className: "sch-count",
 											children: saved.length
@@ -68334,6 +69520,7 @@ function TemplatesDialogView(p) {
 }
 function TemplatesDialog() {
 	const open = useUi((s) => s.openDialog === "schedule");
+	useAutoTour("schedule", open);
 	const target = useUi((s) => s.dialogTarget);
 	const closeDialog = useUi((s) => s.closeDialog);
 	const [templates, setList] = (0, import_react.useState)(() => templatesNow());
@@ -68346,12 +69533,19 @@ function TemplatesDialog() {
 	const [running, setRunning] = (0, import_react.useState)("");
 	const [flagging, setFlagging] = (0, import_react.useState)("");
 	const [agents, setAgents] = (0, import_react.useState)([]);
+	const [installed, setInstalled] = (0, import_react.useState)(null);
+	const [otherDevices, setOtherDevices] = (0, import_react.useState)(false);
+	const fleetAsked = (0, import_react.useRef)(false);
+	const folderSeeded = (0, import_react.useRef)(false);
 	const [scheduleFocus, setScheduleFocus] = (0, import_react.useState)(false);
 	const [preview, setPreview] = (0, import_react.useState)(null);
 	const editingRef = (0, import_react.useRef)(null);
 	const [folderSuggestions, setFolderSuggestions] = (0, import_react.useState)([]);
 	const suggestAsked = (0, import_react.useRef)(false);
 	const { data: config } = useConfig();
+	const { data: instances } = useInstances();
+	const github = useGithubConnected(open && ui.editing !== null && fastTrackNeedsGitHub(form.autopilot));
+	const liveSessions = instances ? new Set(instances.map((i) => i.title)) : void 0;
 	const editorOpen = open && ui.editing !== null;
 	(0, import_react.useEffect)(() => {
 		if (!open) suggestAsked.current = false;
@@ -68359,8 +69553,26 @@ function TemplatesDialog() {
 		suggestAsked.current = true;
 		api("/api/repos/suggest").then((d) => setFolderSuggestions(d.suggestions || [])).catch(() => setFolderSuggestions([]));
 	}, [open, editorOpen]);
-	const wantsPreview = open && ui.editing !== null && form.scheduled && form.days === "cron";
-	const cronText = form.cron.trim();
+	(0, import_react.useEffect)(() => {
+		if (ui.editing !== "") {
+			folderSeeded.current = false;
+			return;
+		}
+		if (folderSeeded.current || !folderSuggestions.length) return;
+		folderSeeded.current = true;
+		const path = defaultFolder(folderSuggestions);
+		if (path) setForm((f) => f.repo_path ? f : {
+			...f,
+			repo_path: path
+		});
+	}, [ui.editing, folderSuggestions]);
+	(0, import_react.useEffect)(() => {
+		if (!open || !ui.confirming || fleetAsked.current) return;
+		fleetAsked.current = true;
+		api("/api/fleet").then((f) => setOtherDevices(!!f?.in_fleet && (f.members || []).some((m) => !m.self))).catch(() => setOtherDevices(false));
+	}, [open, ui.confirming]);
+	const wantsPreview = open && ui.editing !== null && (form.scheduled || !!ui.scheduleOnly);
+	const cronText = (form.days === "cron" ? form.cron : cronOf(form.at, form.days)).trim();
 	(0, import_react.useEffect)(() => {
 		if (!wantsPreview || !cronText) {
 			setPreview(null);
@@ -68401,6 +69613,14 @@ function TemplatesDialog() {
 		api("/api/providers/manage").then((d) => {
 			if (live) setAgents((d.providers || []).map((x) => x.name));
 		}).catch(() => {});
+		api("/api/providers/status").then((d) => {
+			if (!live) return;
+			const have = {};
+			for (const x of d.providers || []) if (typeof x.installed === "boolean") have[x.name] = x.installed;
+			setInstalled(have);
+		}).catch(() => {
+			if (live) setInstalled(null);
+		});
 		ensureTemplates(true).then((list) => {
 			if (!live) return;
 			setList(list);
@@ -68424,7 +69644,11 @@ function TemplatesDialog() {
 		if (ui.editing && !t) return;
 		editingRef.current = ui.editing;
 		const f = formFromTemplate(t);
-		if (scheduleFocus) f.scheduled = true;
+		if (!t && folderSuggestions.length) {
+			f.repo_path = defaultFolder(folderSuggestions);
+			folderSeeded.current = true;
+		}
+		if (scheduleFocus || ui.scheduleOnly) f.scheduled = true;
 		setForm(f);
 	}, [ui.editing, templates]);
 	if (!open) return null;
@@ -68435,12 +69659,13 @@ function TemplatesDialog() {
 			useUi.getState().openDialogFor("new-session");
 		}
 	};
-	const save = async () => {
-		const r = templateBody(form);
+	const save = async (f = form) => {
+		const r = templateBody(f, installed);
 		if ("error" in r) {
 			dispatch({
 				t: "error",
-				message: r.error
+				message: r.error,
+				reason: /isn't installed/.test(r.error) ? "agent_missing" : ""
 			});
 			return;
 		}
@@ -68449,14 +69674,16 @@ function TemplatesDialog() {
 			await saveTemplate(r.body);
 			const gone = ui.editing ? renameLeaves(ui.editing, r.body.name) : null;
 			if (gone) await deleteTemplate(gone);
-			ensureTemplates(true).catch(() => {});
+			ensureTemplates(true).then(() => setRuns(templateRunsNow())).catch(() => {});
 			setList(templatesNow());
 			dispatch({ t: "saved" });
-			toast(`Saved template “${r.body.name}”`);
+			toast(runProblem(r.body) ? "Saved — add a folder to run it" : `Saved template “${r.body.name}”`);
 		} catch (err) {
+			const why = templateRefusal(err);
 			dispatch({
 				t: "error",
-				message: errMsg(err)
+				message: why.text,
+				reason: why.reason
 			});
 		} finally {
 			setBusy(false);
@@ -68528,10 +69755,22 @@ function TemplatesDialog() {
 		folderSuggestions,
 		homePath: config?.home || "",
 		scheduleFocus,
-		tz: Object.values(runs.runs || {}).map((r) => r.tz).find(Boolean) || localZone(),
+		tz: Object.values(runs.runs || {}).map((r) => r.tz).find(Boolean) || runs.tz || localZone(),
 		onSave: () => void save(),
+		onStopSchedule: () => void save({
+			...form,
+			scheduled: false
+		}),
 		onDelete: (name) => void del(name),
-		onClose: close
+		onClose: close,
+		installed,
+		githubConnected: github.data ?? null,
+		liveSessions,
+		onOpenSession: (title) => {
+			closeDialog();
+			selectSession(title);
+		},
+		otherDevices
 	});
 }
 //#endregion
@@ -69701,10 +70940,14 @@ function RunOptions({ draft, n, split, maxPieces, splitBox, repoPicker }) {
 }
 //#endregion
 //#region src/components/dialogs/FlagChips.tsx
+var SKIP = {
+	label: SKIP_PERMS_LABEL,
+	title: SKIP_PERMS_TITLE
+};
 var LAUNCH_FLAG_PRESETS = {
 	claude: [
 		{
-			label: "Skip permissions",
+			...SKIP,
 			flag: "--dangerously-skip-permissions"
 		},
 		{
@@ -69717,28 +70960,28 @@ var LAUNCH_FLAG_PRESETS = {
 		}
 	],
 	codex: [{
-		label: "Bypass approvals",
+		...SKIP,
 		flag: "--dangerously-bypass-approvals-and-sandbox"
 	}, {
 		label: "Web search",
 		flag: "--search"
 	}],
 	antigravity: [{
-		label: "Skip permissions",
+		...SKIP,
 		flag: "--dangerously-skip-permissions"
 	}, {
 		label: "Sandbox",
 		flag: "--sandbox"
 	}],
 	aider: [{
-		label: "Yes to all",
+		...SKIP,
 		flag: "--yes-always"
 	}, {
 		label: "No auto-commit",
 		flag: "--no-auto-commits"
 	}],
 	opencode: [{
-		label: "Auto-approve",
+		...SKIP,
 		flag: "--auto"
 	}]
 };
@@ -69794,6 +71037,7 @@ function FlagChips({ provider, value, onChange }) {
 				type: "button",
 				className: "flag-chip" + (on ? " active" : ""),
 				"data-flag": p.flag,
+				title: p.title,
 				"aria-pressed": on,
 				onClick: (e) => {
 					e.preventDefault();
@@ -69943,6 +71187,157 @@ function newSessionSubmit(ctx) {
 		startRun,
 		submit
 	};
+}
+//#endregion
+//#region src/components/dialogs/newSession/FooterActions.tsx
+function Elapsed({ since }) {
+	const [now, setNow] = (0, import_react.useState)(() => Date.now());
+	(0, import_react.useEffect)(() => {
+		const h = window.setInterval(() => setNow(Date.now()), 1e3);
+		return () => window.clearInterval(h);
+	}, []);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "nf-elapsed",
+		children: elapsedLabel((now - since) / 1e3)
+	});
+}
+function Reading({ slow }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "btn-spin",
+			"aria-hidden": "true"
+		}),
+		" ",
+		slow ? "Still asking…" : "Asking…"
+	] });
+}
+function FooterActions({ error, page, setPage, runMode, describing, describeSlow, describeMode, draft, runDescribe, startRun, startNow, setUpMyself, startBlocked = "" }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "modal-actions nf-actions",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			id: "new-error",
+			className: "error",
+			children: error
+		}), page === 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				id: "new-describe-skip",
+				className: "nf-quiet",
+				"data-tour": "new-more",
+				title: "The full form — folder, agent, task, name and Fast-track — with what you typed as the task",
+				onClick: setUpMyself,
+				children: "More options"
+			}),
+			!runMode && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				id: "new-describe-go",
+				disabled: describing,
+				"aria-busy": describing && describeMode === "fill" || void 0,
+				title: "Your agent picks the folder, name and options from what you typed; you check them before anything starts.",
+				onClick: () => void runDescribe("fill"),
+				children: describing && describeMode === "fill" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Reading, { slow: describeSlow }) : "Let the agent set it up…"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				id: "new-describe-start",
+				"data-tour": "new-start",
+				disabled: draft.starting || runMode && describing || !runMode && !!startBlocked,
+				"aria-busy": describing && describeMode === "start" || draft.starting || void 0,
+				title: runMode ? "Start them now. MindFlock queues the rest and ships each one as chosen above, and the bell shows anything that needs you." : startBlocked || "Start it now in the folder shown, with what you typed as its task (Enter)",
+				onClick: runMode ? () => void startRun() : startNow,
+				children: describing && describeMode === "start" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Reading, { slow: describeSlow }) : draft.starting ? "Starting…" : draft.listMode && draft.count >= 2 ? startLabel(draft.count) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					START_LABEL,
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "nf-key",
+						"aria-hidden": "true",
+						children: "↵"
+					})
+				] })
+			})
+		] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			id: "new-back",
+			className: "nf-quiet",
+			onClick: () => setPage(1),
+			children: "← Back"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "submit",
+			id: "new-create",
+			"data-tour": "new-start",
+			disabled: draft.starting || describing || !!startBlocked,
+			"aria-busy": draft.starting || void 0,
+			title: describing ? "Waiting for the agent to fill in the details" : startBlocked || "Start it now (Enter)",
+			children: draft.starting ? "Starting…" : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				START_LABEL,
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "nf-key",
+					"aria-hidden": "true",
+					children: "↵"
+				})
+			] })
+		})] })]
+	}) });
+}
+function SaveTemplateRow({ saveTpl }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "nf-save-tpl-wrap",
+		children: saveTpl.name === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			id: "new-save-tpl",
+			className: "linklike",
+			"aria-expanded": false,
+			title: "Save this whole setup — folder, agent, where it works, task and Fast-track — to start again in one click or on a schedule",
+			onClick: () => saveTpl.setName(""),
+			children: "Save as template…"
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "nf-save-tpl",
+			id: "new-save-tpl-row",
+			role: "group",
+			"aria-label": "Save as template",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					id: "new-save-tpl-name",
+					type: "text",
+					autoFocus: true,
+					autoComplete: "off",
+					spellCheck: false,
+					placeholder: "Template name, e.g. nightly-deps",
+					"aria-label": "Template name",
+					value: saveTpl.name,
+					onChange: (e) => saveTpl.setName(e.target.value),
+					onKeyDown: (e) => {
+						e.stopPropagation();
+						if (e.key === "Enter") {
+							e.preventDefault();
+							if (!saveTpl.blocked && !saveTpl.busy) saveTpl.save();
+						} else if (e.key === "Escape") {
+							e.preventDefault();
+							saveTpl.setName(null);
+						}
+					}
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					id: "new-save-tpl-save",
+					disabled: !!saveTpl.blocked || saveTpl.busy,
+					onClick: saveTpl.save,
+					children: saveTpl.busy ? "Saving…" : "Save"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					onClick: () => saveTpl.setName(null),
+					children: "Cancel"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "muted nf-save-tpl-hint",
+					children: saveTpl.blocked || "Saves the folder, agent, where it works, task and Fast-track. Run it from Templates, now or on a schedule."
+				})
+			]
+		})
+	});
 }
 //#endregion
 //#region src/components/dialogs/newSession/DescribeSection.tsx
@@ -70113,42 +71508,7 @@ function useDescribeFocus({ open, page, focusFolderNext, focusOpeningNext, opene
 		el.focus();
 	}, [open, page]);
 }
-function NewFolderRow({ ask: newFolderAsk, ok: newFolderOk, onOk: setNewFolderOk }) {
-	if (!newFolderAsk) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "nf-newfolder",
-		role: "group",
-		"aria-labelledby": "new-describe-newfolder-q",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			id: "new-describe-newfolder-q",
-			className: "nf-newfolder-q",
-			"aria-live": "polite",
-			children: [
-				"There is no folder at ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: newFolderAsk }),
-				" yet. Make it?"
-			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "check",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "checkbox",
-					id: "new-describe-newfolder",
-					checked: newFolderOk,
-					onChange: (e) => setNewFolderOk(e.target.checked)
-				}),
-				"Yes, create ",
-				newFolderAsk,
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "muted",
-					children: "— a new directory, made when you press Create. Not the same as “Create a git repo in this folder” under Git & workspace, which runs git init inside it; a new project usually wants both."
-				})
-			]
-		})]
-	});
-}
-function DescribeSection({ batch, describe, setDescribe, describing, describeRef, runMode, runDescribe, cancelDescribe, draft, planNoteShown, planError, setPlanError, describeFailed, fillFormInstead, newFolderRow, runBrowse, setRunBrowse, runBrowseRef, repoPath, folderDo, suggestions, device, homePath, onClear, agentNote }) {
+function DescribeSection({ batch, describe, setDescribe, describing, describeRef, runMode, runDescribe, cancelDescribe, draft, planNoteShown, planError, setPlanError, describeFailed, fillFormInstead, newFolderRow, runBrowse, setRunBrowse, runBrowseRef, repoPath, folderDo, suggestions, device, homePath, onClear, agentNote, startsIn, agentLabel, describeSince, startInstead, onEnterStart }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "new-describe",
 		className: "new-templates nf-describe",
@@ -70169,6 +71529,7 @@ function DescribeSection({ batch, describe, setDescribe, describing, describeRef
 						autoComplete: "off",
 						spellCheck: false,
 						readOnly: describing,
+						"data-tour": "new-task",
 						placeholder: "e.g. fix the login bug in acme-api",
 						onChange: (e) => {
 							setDescribe(e.target.value);
@@ -70186,7 +71547,7 @@ function DescribeSection({ batch, describe, setDescribe, describing, describeRef
 							}
 							e.preventDefault();
 							e.stopPropagation();
-							runDescribe("fill");
+							onEnterStart();
 						}
 					}),
 					describing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -70206,53 +71567,27 @@ function DescribeSection({ batch, describe, setDescribe, describing, describeRef
 					})
 				]
 			}),
-			!runMode && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "nf-describe-help",
-					id: "new-describe-help",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Create session" }),
-						" ",
-						repoPath.trim() ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-							"starts it now in",
-							" ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
-								className: "nf-starts-in",
-								title: repoPath.trim(),
-								children: leafName(repoPath.trim())
-							}),
-							", with what you typed as its task."
-						] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: "needs a folder — it opens the form with what you typed as the task." }),
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Review details first" }),
-						" has your agent pick the folder, name and options, and shows them to you before anything starts."
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "nf-describe-eg",
-					children: [
-						"Examples:",
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "start a new project called invoice-parser" }),
-						" · ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "add metrics to billing, in a worktree" })
-					]
-				}),
-				!batch && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "nf-describe-eg",
-					id: "new-intake-door",
-					children: [
-						"Starting from a ticket, pull request or issue?",
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "linklike",
-							onClick: () => useUi.getState().openDialogFor("intake"),
-							children: "Open Intake"
-						})
-					]
-				})
-			] }),
+			!runMode && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StartsInLine, {
+				repoPath,
+				suggestions,
+				folderDo,
+				onBrowse: () => setRunBrowse(true),
+				startsIn,
+				onChange: fillFormInstead
+			}), !batch && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "nf-describe-eg",
+				id: "new-intake-door",
+				children: [
+					"Starting from a ticket, pull request or issue?",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: () => useUi.getState().openDialogFor("intake"),
+						children: "Open Intake"
+					})
+				]
+			})] }),
 			draft.listMode && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunItems, {
 				rows: draft.rows,
 				onRemove: (row) => {
@@ -70299,13 +71634,13 @@ function DescribeSection({ batch, describe, setDescribe, describing, describeRef
 				}) : null,
 				splitBox: null
 			}),
-			runMode && runBrowse && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			runBrowse && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "rt-browse",
 				"data-run-browse": "",
 				ref: runBrowseRef,
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "rt-browse-head",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Pick the folder the tasks start in" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: runMode ? "Pick the folder the tasks start in" : "Pick the folder it runs in" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "rt-browse-done",
 						onClick: () => setRunBrowse(false),
@@ -70333,6 +71668,26 @@ function DescribeSection({ batch, describe, setDescribe, describing, describeRef
 				"aria-live": "polite",
 				children: planNoteShown
 			}),
+			describing && !runMode && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "nf-describe-wait",
+				id: "new-describe-wait",
+				role: "status",
+				children: [
+					"Asking ",
+					agentLabel,
+					" to fill in the details… ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Elapsed, { since: describeSince }),
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "muted",
+						children: [
+							"(up to ",
+							Math.round(DESCRIBE_CAP_MS / 1e3),
+							" s)"
+						]
+					})
+				]
+			}),
 			planError && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				id: "new-describe-error",
 				className: "error",
@@ -70341,12 +71696,77 @@ function DescribeSection({ batch, describe, setDescribe, describing, describeRef
 					type: "button",
 					id: "new-describe-fallback",
 					className: "nf-fallback",
-					onClick: fillFormInstead,
-					children: "Fill the form with what I typed"
+					onClick: repoPath.trim() ? startInstead : fillFormInstead,
+					children: repoPath.trim() ? "Start it in " + leafName(repoPath.trim()) + " instead" : "Pick a folder…"
 				})] })]
 			}),
 			newFolderRow,
 			agentNote
+		]
+	});
+}
+function StartsInLine({ repoPath, suggestions, folderDo, onBrowse, startsIn, onChange }) {
+	const path = repoPath.trim();
+	const groups = SUGGEST_SOURCES.map((g) => ({
+		label: g.key === "recent" ? "Recent folders" : g.label,
+		items: suggestions.filter((s) => s.source === g.key)
+	})).filter((g) => g.items.length > 0);
+	const known = suggestions.some((s) => s.path === path);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "nf-starts-line",
+		id: "new-describe-help",
+		children: [
+			"Runs in",
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+				id: "new-describe-folder",
+				className: "nf-folder-chip",
+				"data-tour": "new-folder",
+				"aria-label": "Folder it runs in",
+				title: path || "Pick the folder it runs in",
+				value: path,
+				onChange: (e) => {
+					if (e.target.value === BROWSE_VALUE) {
+						onBrowse();
+						return;
+					}
+					folderDo({
+						t: "user-set",
+						path: e.target.value
+					});
+				},
+				children: [
+					!path && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: "",
+						children: "Pick a folder…"
+					}),
+					path && !known && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: path,
+						children: "📁 " + leafName(path)
+					}),
+					groups.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
+						label: g.label,
+						children: g.items.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: s.path,
+							title: s.path,
+							children: (s.is_git ? "📦 " : "📁 ") + (s.name || leafName(s.path))
+						}, s.path))
+					}, g.label)),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: BROWSE_VALUE,
+						children: "Browse…"
+					})
+				]
+			}),
+			startsIn,
+			" · ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "linklike",
+				id: "new-describe-change",
+				onClick: onChange,
+				children: "change"
+			})
 		]
 	});
 }
@@ -70381,6 +71801,12 @@ function templateFiller(ctx) {
 	};
 	return fillFromTemplate;
 }
+function chipScheduleText(t, line = templateScheduleLine(t)) {
+	if (!hasSchedule(t)) return "";
+	if (t.schedule?.paused || runInfoFor(t.name).paused) return "paused";
+	const hm = /\b\d\d:\d\d\b/.exec(line || "") || /\b\d\d:\d\d\b/.exec(t.schedule?.at || "");
+	return hm ? hm[0] : "on";
+}
 function TemplatesStrip({ templates, activeTemplate, onPick, onRun, onSchedule, landing }) {
 	if (!templates.length) return null;
 	const acts = !!(onRun || onSchedule);
@@ -70390,7 +71816,7 @@ function TemplatesStrip({ templates, activeTemplate, onPick, onRun, onSchedule, 
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "nt-head",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				title: "Saved session setups — one list on every device",
+				title: "Your templates — one list on every device",
 				children: [
 					"Templates",
 					" ",
@@ -70415,6 +71841,8 @@ function TemplatesStrip({ templates, activeTemplate, onPick, onRun, onSchedule, 
 			className: "nt-list",
 			children: templates.map((t) => {
 				const problem = runProblem(t);
+				const line = templateScheduleLine(t);
+				const sched = chipScheduleText(t, line);
 				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "nt-tpl" + (acts ? " nt-tpl-acts" : ""),
 					children: [
@@ -70436,13 +71864,16 @@ function TemplatesStrip({ templates, activeTemplate, onPick, onRun, onSchedule, 
 							onClick: () => onRun(t),
 							children: "▶"
 						}),
-						onSchedule && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						onSchedule && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 							type: "button",
-							className: "nt-act nt-sched" + (t.schedule?.at ? " on" : ""),
-							"aria-label": "Schedule “" + t.name + "”",
-							title: t.schedule?.at ? scheduleLabel(t.schedule) + " — change or stop it" : "Schedule… — start it by itself every day or weekday",
+							className: "nt-act nt-sched" + (sched ? " on" : ""),
+							"aria-label": sched ? "Change the schedule of “" + t.name + "”: " + line : "Schedule “" + t.name + "”",
+							title: sched ? line + " — change or stop it" : "Schedule… — start it by itself every day, weekdays or on a cron",
 							onClick: () => onSchedule(t),
-							children: "⏰"
+							children: ["⏰", sched && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "nt-sched-at",
+								children: [" ", sched]
+							})]
 						})
 					]
 				}, t.name);
@@ -70452,6 +71883,15 @@ function TemplatesStrip({ templates, activeTemplate, onPick, onRun, onSchedule, 
 }
 //#endregion
 //#region src/components/dialogs/newSession/LaunchFold.tsx
+var SKIP_PERMS_FLAGS = [
+	"--dangerously-skip-permissions",
+	"--dangerously-bypass-approvals-and-sandbox",
+	"--yes-always",
+	"--auto"
+];
+function skipsPermissions$1(args) {
+	return tokenize(args).some((t) => SKIP_PERMS_FLAGS.includes(t));
+}
 function LaunchFold({ launchOpen, setLaunchOpen, launchArgs, setLaunchArgs, program }) {
 	const launchRef = (0, import_react.useRef)(null);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
@@ -70472,186 +71912,47 @@ function LaunchFold({ launchOpen, setLaunchOpen, launchArgs, setLaunchArgs, prog
 			children: "— extra CLI flags for this session"
 		})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "nf-advanced-body",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-				"Flags",
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "muted",
-					children: "— e.g. --dangerously-skip-permissions; appended after the agent's saved defaults"
-				})
-			] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "text",
-				id: "new-launch-args",
-				autoComplete: "off",
-				placeholder: "e.g. --verbose",
-				value: launchArgs,
-				onChange: (e) => setLaunchArgs(e.target.value)
-			})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlagChips, {
-				provider: program,
-				value: launchArgs,
-				onChange: setLaunchArgs
-			})]
-		})]
-	});
-}
-//#endregion
-//#region src/components/dialogs/newSession/FooterActions.tsx
-function Elapsed({ since }) {
-	const [now, setNow] = (0, import_react.useState)(() => Date.now());
-	(0, import_react.useEffect)(() => {
-		const h = window.setInterval(() => setNow(Date.now()), 1e3);
-		return () => window.clearInterval(h);
-	}, []);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: "nf-elapsed",
-		children: elapsedLabel((now - since) / 1e3)
-	});
-}
-function Reading({ slow, since }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "btn-spin",
-			"aria-hidden": "true"
-		}),
-		" ",
-		slow ? "Still reading…" : "Reading…",
-		" ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Elapsed, { since })
-	] });
-}
-function FooterActions({ error, page, setPage, runMode, describing, describeSlow, describeMode, describeSince, draft, runDescribe, startRun, startNow, setUpMyself, onClear, saveTpl }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [page === 2 && saveTpl.name !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "nf-save-tpl",
-		id: "new-save-tpl-row",
-		role: "group",
-		"aria-label": "Save as template",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				id: "new-save-tpl-name",
-				type: "text",
-				autoFocus: true,
-				autoComplete: "off",
-				spellCheck: false,
-				placeholder: "Template name, e.g. nightly-deps",
-				"aria-label": "Template name",
-				value: saveTpl.name,
-				onChange: (e) => saveTpl.setName(e.target.value),
-				onKeyDown: (e) => {
-					e.stopPropagation();
-					if (e.key === "Enter") {
-						e.preventDefault();
-						if (!saveTpl.blocked && !saveTpl.busy) saveTpl.save();
-					} else if (e.key === "Escape") {
-						e.preventDefault();
-						saveTpl.setName(null);
-					}
-				}
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				id: "new-save-tpl-save",
-				disabled: !!saveTpl.blocked || saveTpl.busy,
-				onClick: saveTpl.save,
-				children: saveTpl.busy ? "Saving…" : "Save"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "linklike",
-				onClick: () => saveTpl.setName(null),
-				children: "Cancel"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "muted nf-save-tpl-hint",
-				children: saveTpl.blocked || "Saves the folder, agent, where it works, task and fast-track. Run it from Templates, now or on a schedule."
-			})
-		]
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "modal-actions nf-actions",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			id: "new-error",
-			className: "error",
-			children: error
-		}), page === 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				id: "new-describe-skip",
-				className: "nf-quiet",
-				title: "Go to the form with what you typed as the task, and choose the folder and options yourself. Nothing is read.",
-				onClick: setUpMyself,
-				children: "Set it up myself instead"
-			}),
-			!runMode && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				id: "new-describe-go",
-				disabled: describing,
-				"aria-busy": describing && describeMode === "fill" || void 0,
-				title: "Your agent fills in the folder, name and task; you check them before anything is created.",
-				onClick: () => void runDescribe("fill"),
-				children: describing && describeMode === "fill" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Reading, {
-					slow: describeSlow,
-					since: describeSince
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-					"Review details first",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+					"Flags",
 					" ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "nf-key",
-						"aria-hidden": "true",
-						children: "↵"
+						className: "muted",
+						children: "— appended after the agent's saved defaults"
 					})
-				] })
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				id: "new-describe-start",
-				disabled: draft.starting || runMode && describing,
-				"aria-busy": describing && describeMode === "start" || draft.starting || void 0,
-				title: runMode ? "Start them now. MindFlock queues the rest and ships each one as chosen above, and the bell shows anything that needs you." : "Start the session now in the folder shown, with what you typed as its task — nothing to review.",
-				onClick: runMode ? () => void startRun() : startNow,
-				children: describing && describeMode === "start" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Reading, {
-					slow: describeSlow,
-					since: describeSince
-				}) : draft.starting ? "Starting…" : startLabel(draft.listMode ? draft.count : 1)
-			})
-		] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				id: "new-save-tpl",
-				className: "nf-quiet",
-				"aria-expanded": saveTpl.name !== null,
-				title: "Save this whole setup — folder, agent, where it works, task and fast-track — to start again in one click or on a schedule",
-				onClick: () => saveTpl.setName((cur) => cur === null ? "" : null),
-				children: "Save as template…"
-			}),
-			onClear && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				id: "new-clear-form",
-				className: "linklike",
-				title: "Empty the form and start over — what you type here otherwise stays until you Create",
-				onClick: onClear,
-				children: "Clear"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				id: "new-back",
-				className: "linklike",
-				onClick: () => setPage(1),
-				children: "← Back"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "submit",
-				id: "new-create",
-				disabled: draft.starting || describing,
-				"aria-busy": draft.starting || void 0,
-				title: describing ? "Waiting for the description to be read" : void 0,
-				children: draft.starting ? "Starting…" : "Create"
-			})
-		] })]
-	})] });
+				] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "text",
+					id: "new-launch-args",
+					autoComplete: "off",
+					placeholder: "e.g. --verbose",
+					value: launchArgs,
+					onChange: (e) => setLaunchArgs(e.target.value)
+				})] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlagChips, {
+					provider: program,
+					value: launchArgs,
+					onChange: setLaunchArgs
+				}),
+				skipsPermissions$1(launchArgs) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "nf-git-nudge nf-skip-perms",
+					id: "new-skip-perms-warn",
+					role: "status",
+					children: [
+						SKIP_PERMS_LABEL,
+						" — ",
+						SKIP_PERMS_TITLE.charAt(0).toLowerCase() + SKIP_PERMS_TITLE.slice(1),
+						"."
+					]
+				})
+			]
+		})]
+	});
 }
 //#endregion
 //#region src/components/dialogs/NewSessionDialog.tsx
 function NewSessionDialog() {
 	const open = useUi((s) => s.openDialog === "new-session");
+	useAutoTour("new", open);
 	const closeDialog = useUi((s) => s.closeDialog);
 	const [tab, setTab] = (0, import_react.useState)("session");
 	const [title, setTitle] = (0, import_react.useState)("");
@@ -70675,6 +71976,9 @@ function NewSessionDialog() {
 	const [error, setError] = (0, import_react.useState)("");
 	const [advancedOpen, setAdvancedOpen] = (0, import_react.useState)(true);
 	const [launchOpen, setLaunchOpen] = (0, import_react.useState)(false);
+	const [deepOpen, setDeepOpen] = (0, import_react.useState)(false);
+	const [mkBusy, setMkBusy] = (0, import_react.useState)(false);
+	const [mkError, setMkError] = (0, import_react.useState)("");
 	const setPromptOpen = () => {};
 	const [templates, setTemplates] = (0, import_react.useState)([]);
 	const [activeTemplate, setActiveTemplate] = (0, import_react.useState)("");
@@ -70855,6 +72159,9 @@ function NewSessionDialog() {
 		setMaxPieces(SPLIT_DEFAULT);
 		setAdvancedOpen(false);
 		setLaunchOpen(false);
+		setDeepOpen(false);
+		setMkBusy(false);
+		setMkError("");
 		folderDo({ t: "reopen" });
 		setSearch(null);
 		setSearchOpen(true);
@@ -71142,20 +72449,38 @@ function NewSessionDialog() {
 		taken: device ? /* @__PURE__ */ new Set() : takenNames(liveRows || [], aliases)
 	});
 	const branchKnown = isGit && folderCheck?.branchPrefix !== void 0;
+	const planned1 = plannedName({
+		prefix: folderCheck?.asked === folderPath && folderCheck?.branchPrefix || "",
+		title: "",
+		prompt: describe,
+		taken: device ? /* @__PURE__ */ new Set() : takenNames(liveRows || [], aliases)
+	});
 	const others = device ? [] : sessionsInRepo(liveRows || [], [folderPath, folderCheck?.asked === folderPath ? folderCheck.resolved || "" : ""]);
 	const baseLabel = baseBranch || branches?.current || "";
 	const agentMissing = device ? "" : agentMissingReason(canonAgent(program), installed);
 	const agentSignedOut = !device && !agentMissing && !!signedOut[canonAgent(program)];
 	const moreBits = [];
 	if (title.trim()) moreBits.push("named " + title.trim());
-	if (draft.lane !== "leave") moreBits.push("fast-track on");
+	if (draft.lane !== "leave") moreBits.push("Fast-track: " + LANE_LABEL[draft.lane]);
 	if (splitOn) moreBits.push("auto-split");
 	if (provisionOn) moreBits.push("provisioned");
 	if (baseBranch) moreBits.push("from " + baseBranch);
-	if (initRepo) moreBits.push("git init");
 	if (planFirst && planOk) moreBits.push("plan first");
 	if (launchArgs.trim()) moreBits.push("flags");
-	const moreSummary = moreBits.length ? moreBits.join(" · ") : "name, fast-track, base branch, flags";
+	const moreSummary = moreBits.length ? moreBits.join(" · ") : "name, Fast-track, save as template";
+	const gitOn = config?.caps?.git !== false;
+	const prOk = !!device || hasPrSupport(config?.caps);
+	const prWhy = prNeedsGithubReason(PR_FALLBACK_HINT);
+	const laneWhy = (lane) => plainFolder && !initRepo && lane !== "leave" ? "No git repo here, so nothing to commit — pick “Make it a git repo first” to use Fast-track" : splitOn && lane === "leave" ? "An auto-split commits each piece into its branch — Commit keeps it all on this machine" : !prOk && (lane === "pr" || lane === "merge") ? prWhy : "";
+	const askWhy = splitOn ? "An auto-split always asks you before anything leaves this machine" : askFirstApplies(draft.lane) ? "" : "Fast-track is off: nothing is committed, pushed or merged for you";
+	const deepSummary = advancedSummary([
+		["ask me first", gitOn],
+		["auto-split", gitOn && mcpOk.reason !== SERVER_NO_SPLIT],
+		["provisioning", gitOn && offerProvision],
+		["base branch", gitOn && worktreeMode && isGit && (branches === null || !!branches.is_git && branches.branches.length > 0)],
+		["plan first", true],
+		["launch flags", true]
+	]);
 	const provisionBlocked = provisionBlockReason({
 		provision: provisionOn,
 		plainFolder,
@@ -71177,17 +72502,53 @@ function NewSessionDialog() {
 		gate: newFolderAsk,
 		confirmed: newFolderOk
 	});
-	const newFolderRow = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewFolderRow, {
-		ask: newFolderAsk,
-		ok: newFolderOk,
-		onOk: setNewFolderOk
-	});
 	const planNoteShown = planNoteFor({
 		note: planNote,
 		planPath: planFolder.path,
 		folderPath
 	});
 	const pickMatch = matchPicker(folderDo, setSearchOpen);
+	const folderMissing = folderCheck?.asked === folderPath && !!folderCheck?.missing;
+	const missingLabel = homeRelative(folderCheck?.asked === folderPath && folderCheck?.resolved || folderPath, homePath);
+	const askFolder = newFolderAsk && !newFolderOk ? newFolderAsk : folderMissing ? missingLabel : "";
+	const startBlocked = askFolder && !runMode ? "No folder at " + askFolder + " — press “Create this folder”, or pick a folder that already exists." : "";
+	const createFolder = async () => {
+		const full = (folderCheck?.asked === folderPath && folderCheck?.resolved || folderPath).replace(/\/+$/, "");
+		const cut = full.lastIndexOf("/");
+		const parent = cut > 0 ? full.slice(0, cut) : "/";
+		const name = full.slice(cut + 1);
+		if (!name || mkBusy) return;
+		setMkBusy(true);
+		setMkError("");
+		try {
+			const r = await dapi("/api/mkdir", { json: {
+				path: parent,
+				name
+			} });
+			setFolderCheck({
+				asked: folderPath,
+				plain: true,
+				isGit: false,
+				missing: false,
+				resolved: r.path || full
+			});
+			if (newFolderAsk) setNewFolderOk(true);
+			setError("");
+			setPlanError("");
+			(page === 2 ? repoRef.current : describeRef.current)?.focus({ preventScroll: true });
+		} catch (err) {
+			const msg = errMsg(err);
+			setMkError(/not a directory/i.test(msg) ? "The folder it would go in doesn't exist either — use Browse… to pick a place." : /already exists/i.test(msg) ? "Something is already there — pick it with Browse…." : "Couldn't create it: " + msg);
+		} finally {
+			setMkBusy(false);
+		}
+	};
+	const missingRow = askFolder ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MissingFolderRow, {
+		label: askFolder,
+		onCreate: () => void createFolder(),
+		busy: mkBusy,
+		error: mkError
+	}) : null;
 	const { buildBody, postCreate: postCreateRaw, startRun, submit: submitRaw } = newSessionSubmit({
 		title,
 		repoPath,
@@ -71229,8 +72590,12 @@ function NewSessionDialog() {
 		}
 	});
 	const submit = () => {
+		if (startBlocked) {
+			setError(startBlocked);
+			return;
+		}
 		if (agentMissing && !runMode) {
-			setError("Can't create yet — pick an agent that's installed.");
+			setError("Can't start yet — pick an agent that's installed.");
 			return;
 		}
 		submitRaw();
@@ -71289,12 +72654,16 @@ function NewSessionDialog() {
 		carried.current = text;
 		if (!folderPath) {
 			setPage(2);
-			setError("Pick a folder for it, then Create.");
+			setError("Pick a folder for it, then " + START_LABEL + ".");
+			return;
+		}
+		if (startBlocked) {
+			setPlanError(startBlocked);
 			return;
 		}
 		if (agentMissing) {
 			setPage(2);
-			setError("Can't create yet — pick an agent that's installed.");
+			setError("Can't start yet — pick an agent that's installed.");
 			return;
 		}
 		submitRaw({ prompt: text }).then((sent) => {
@@ -71365,6 +72734,16 @@ function NewSessionDialog() {
 			})
 		]
 	});
+	const startsIn = !folderPath ? null : plainFolder ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "nf-starts-sub",
+		children: " · in the folder itself (no git, so no diff or PR)"
+	}) : branchKnown ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "nf-starts-sub",
+		children: [" · own branch ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+			title: planned1.branch,
+			children: planned1.from === "none" ? (folderCheck?.branchPrefix || "") + "…" : planned1.branch
+		})]
+	}) : null;
 	const describeProps = {
 		batch,
 		describe,
@@ -71380,7 +72759,7 @@ function NewSessionDialog() {
 		setPlanError,
 		describeFailed,
 		fillFormInstead: setUpMyself,
-		newFolderRow,
+		newFolderRow: missingRow,
 		runBrowse,
 		setRunBrowse,
 		runBrowseRef,
@@ -71390,7 +72769,12 @@ function NewSessionDialog() {
 		device,
 		homePath,
 		onClear: draftTyped ? clearDraft : void 0,
-		agentNote: agentSignedOut ? signedOutNote : null
+		agentNote: agentSignedOut ? signedOutNote : null,
+		startsIn,
+		agentLabel: agentName(canonAgent(program)),
+		describeSince,
+		startInstead: startRaw,
+		onEnterStart: startNow
 	};
 	const runTpl = device ? void 0 : (t) => {
 		closeDialog();
@@ -71428,7 +72812,7 @@ function NewSessionDialog() {
 				if (ctrlEnterAction({
 					page,
 					runMode
-				}) === "describe") runDescribe("fill");
+				}) === "start") startNow();
 				else submit();
 			}
 		},
@@ -71436,6 +72820,9 @@ function NewSessionDialog() {
 			id: "new-ticket-form",
 			className: "ta-drop",
 			ref: dropZoneRef,
+			role: "dialog",
+			"aria-modal": "true",
+			"aria-labelledby": "new-dialog-title",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewHead, {
 				tab: shownTab,
 				tabs: ticketingOk,
@@ -71446,6 +72833,9 @@ function NewSessionDialog() {
 			id: "new-form",
 			ref: dropZoneRef,
 			className: "ta-drop",
+			role: "dialog",
+			"aria-modal": "true",
+			"aria-labelledby": "new-dialog-title",
 			onSubmit: (e) => {
 				e.preventDefault();
 				submit();
@@ -71496,6 +72886,11 @@ function NewSessionDialog() {
 							onRun: runTpl,
 							onSchedule: scheduleTpl
 						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "nf-tpl-hint muted",
+							id: "new-templates-hint",
+							children: "Templates save this whole form (folder, agent, task, fast-track) to run again or schedule."
+						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "nf-quick",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderField, {
@@ -71521,7 +72916,8 @@ function NewSessionDialog() {
 								profileId,
 								pendingProfile,
 								setAccount,
-								closeDialog
+								closeDialog,
+								foldMissing: true
 							})]
 						}),
 						agentMissing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -71547,7 +72943,8 @@ function NewSessionDialog() {
 							setSearchSel,
 							pickMatch,
 							homePath,
-							newFolderRow,
+							newFolderRow: missingRow,
+							gitAsked: config?.caps?.git !== false,
 							plainFolder,
 							initRepo,
 							armInitRepo,
@@ -71580,7 +72977,10 @@ function NewSessionDialog() {
 							baseLabel,
 							continueBranch,
 							sharers,
-							others
+							others,
+							plainFolder,
+							initRepo,
+							setInitRepo
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 							id: "new-advanced",
@@ -71612,106 +73012,166 @@ function NewSessionDialog() {
 										id: "new-title",
 										ref: titleRef,
 										autoComplete: "off",
-										placeholder: (planned.from === "none" ? "named from the task" : planned.title) + " — Enter creates it",
+										placeholder: planned.from === "none" ? "named from the task" : planned.title,
 										value: title,
 										onChange: (e) => setTitle(e.target.value)
 									})] }),
-									config?.caps?.git !== false && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									gitOn && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 										id: "new-ft-row",
 										className: "rt-row rt-row-top",
 										"data-caps": "git",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 											className: "rt-label",
-											children: "Fast-track to"
-										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+											children: "Fast-track"
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 											className: "rt-ctl",
-											children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FastTrackChoice, {
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
 												id: "new-lane-form",
-												label: "Fast-track to",
+												label: "Fast-track",
 												value: draft.lane,
 												onChange: draft.setLane,
-												askFirst: draft.askFirst,
-												onAskFirst: draft.setAskFirst,
-												disabledReason: splitOn ? { leave: "An auto-split commits each piece into its branch — Commit keeps it all on this machine" } : void 0,
-												askReason: splitOn ? "An auto-split always asks you before anything leaves this machine" : void 0
-											})
+												options: FAST_TRACK_LEVELS.map(({ lane, label }) => {
+													const why = laneWhy(lane);
+													return {
+														v: lane,
+														label,
+														title: why || LANE_DESC[lane],
+														disabled: !!why
+													};
+												})
+											}), !prOk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+												className: "nf-opt-help muted",
+												id: "new-ft-github",
+												title: prWhy,
+												children: "Open PR and Merge when green need GitHub — connect it in Settings → Connections."
+											})]
 										})]
 									}),
-									config?.caps?.git !== false && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										id: "new-split-row",
-										"data-caps": "git",
-										children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SplitCheck, {
-												id: "new-split",
-												split,
-												onSplit: toggleSplit,
-												gate: mcpOk,
-												maxPieces: clampSplit(maxPieces, splitLimit),
-												onMaxPieces: (n) => setMaxPieces(clampSplit(n, splitLimit)),
-												limit: splitLimit,
-												text: prompt || describe
-											}),
-											!splitOn && mcpOk.reason !== SERVER_NO_SPLIT && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-												className: "nf-opt-help muted",
-												id: "new-split-help",
-												children: [
-													"Lets the agent break a big task into up to ",
-													clampSplit(maxPieces, splitLimit),
-													" parallel sessions — you approve the split first."
-												]
-											}),
-											splitSum && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-												className: "rt-sum",
-												"aria-live": "polite",
-												children: [
-													splitSum.lead,
-													" ",
-													splitSum.tail && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-														className: "muted",
-														children: splitSum.tail
-													}),
-													" ",
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-														className: "muted",
-														children: "The account, plan-first, launch flags and git options don't apply to a split."
-													})
-												]
-											})
-										]
-									}),
-									config?.caps?.git !== false && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GitOptions, {
-										provision,
-										setProvision,
-										setInPlace,
-										provisionOn,
-										offerProvision,
-										provisionBlocked,
-										armInitRepo,
-										strategy,
-										setStrategy,
-										worktreeMode,
-										branches,
-										baseBranch,
-										setBaseBranch,
-										canContinue,
-										continueOn,
-										setContinueOn,
-										initRepo,
-										setInitRepo,
-										isGit
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlanFirstRow, {
-										prompt,
-										planOk,
-										planFirst,
-										setPlanFirst
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LaunchFold, {
-										launchOpen,
-										setLaunchOpen,
-										launchArgs,
-										setLaunchArgs,
-										program
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SaveTemplateRow, { saveTpl: {
+										name: saveTplName,
+										setName: setSaveTplName,
+										busy: saveTplBusy,
+										save: () => void saveAsTemplate(),
+										blocked: saveTplBlocked
+									} }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+										id: "new-deep",
+										className: "nf-advanced nf-deep",
+										open: deepOpen,
+										onToggle: (e) => {
+											const el = e.target;
+											e.stopPropagation();
+											setDeepOpen(el.open);
+											if (el.open && typeof el.scrollIntoView === "function") el.scrollIntoView({
+												behavior: "smooth",
+												block: "nearest"
+											});
+										},
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: ["Advanced", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+											className: "nf-fold-sum",
+											id: "new-deep-sum",
+											children: ["— ", deepSummary]
+										})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+											className: "nf-advanced-body",
+											children: [
+												gitOn && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+													className: "check rt-ask" + (askWhy ? " disabled" : ""),
+													id: "new-ask-row",
+													title: askWhy || ASK_FIRST_DESC,
+													children: [
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+															type: "checkbox",
+															id: "new-lane-form-ask",
+															checked: !askWhy && draft.askFirst,
+															disabled: !!askWhy,
+															onChange: (e) => draft.setAskFirst(e.target.checked)
+														}),
+														ASK_FIRST_LABEL,
+														askWhy && !splitOn && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+															className: "muted",
+															children: " (needs Fast-track)"
+														})
+													]
+												}),
+												gitOn && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+													id: "new-split-row",
+													"data-caps": "git",
+													children: [
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SplitCheck, {
+															id: "new-split",
+															split,
+															onSplit: toggleSplit,
+															gate: mcpOk,
+															maxPieces: clampSplit(maxPieces, splitLimit),
+															onMaxPieces: (n) => setMaxPieces(clampSplit(n, splitLimit)),
+															limit: splitLimit,
+															text: prompt || describe
+														}),
+														!splitOn && mcpOk.reason !== SERVER_NO_SPLIT && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+															className: "nf-opt-help muted",
+															id: "new-split-help",
+															children: [
+																"Lets the agent break a big task into up to ",
+																clampSplit(maxPieces, splitLimit),
+																" parallel sessions — you approve the split first."
+															]
+														}),
+														splitSum && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+															className: "rt-sum",
+															"aria-live": "polite",
+															children: [
+																splitSum.lead,
+																" ",
+																splitSum.tail && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+																	className: "muted",
+																	children: splitSum.tail
+																}),
+																" ",
+																/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+																	className: "muted",
+																	children: "The account, plan-first, launch flags and git options don't apply to a split."
+																})
+															]
+														})
+													]
+												}),
+												gitOn && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GitOptions, {
+													provision,
+													setProvision,
+													setInPlace,
+													provisionOn,
+													offerProvision,
+													provisionBlocked,
+													armInitRepo,
+													strategy,
+													setStrategy,
+													worktreeMode,
+													branches,
+													baseBranch,
+													setBaseBranch,
+													canContinue,
+													continueOn,
+													setContinueOn,
+													initRepo,
+													setInitRepo,
+													isGit,
+													plainFolder
+												}),
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlanFirstRow, {
+													prompt,
+													planOk,
+													planFirst,
+													setPlanFirst
+												}),
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LaunchFold, {
+													launchOpen,
+													setLaunchOpen,
+													launchArgs,
+													setLaunchArgs,
+													program
+												})
+											]
+										})]
 									})
 								]
 							})]
@@ -71726,20 +73186,12 @@ function NewSessionDialog() {
 					describing,
 					describeSlow,
 					describeMode,
-					describeSince,
 					draft,
 					runDescribe,
 					startRun,
 					startNow,
 					setUpMyself,
-					onClear: draftTyped ? clearDraft : void 0,
-					saveTpl: {
-						name: saveTplName,
-						setName: setSaveTplName,
-						busy: saveTplBusy,
-						save: () => void saveAsTemplate(),
-						blocked: saveTplBlocked
-					}
+					startBlocked
 				})
 			]
 		})
@@ -71749,7 +73201,10 @@ function NewHead({ tab, tabs, onTab, onClose }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "ws-head nf-head",
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "New" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+				id: "new-dialog-title",
+				children: "New"
+			}),
 			tabs && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
 				className: "nf-tabs",
 				"aria-label": "New",
@@ -71762,6 +73217,7 @@ function NewHead({ tab, tabs, onTab, onClose }) {
 					children: t.label
 				}, t.key))
 			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "new" }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				id: "new-close",
@@ -72370,6 +73826,86 @@ function GithubStatusLine({ buttonId, needFor }) {
 		]
 	});
 }
+function GithubSetupCard({ what, onPickRepo, onTurnOn }) {
+	const st = useGithubStatus(true).data;
+	const connected = !!st?.connected;
+	const steps = [
+		{
+			key: "github",
+			label: "Connect GitHub",
+			done: connected,
+			body: connected ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "ik-setup-done",
+				children: ["connected", st?.login ? " as @" + st.login : ""]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "btn-primary",
+				id: "ik-setup-connect",
+				onClick: () => openConnectGitHub(),
+				children: "Connect GitHub"
+			})
+		},
+		{
+			key: "repo",
+			label: "Pick a repo",
+			done: false,
+			body: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: connected ? "btn-primary" : "test-btn",
+				id: "ik-setup-repo",
+				onClick: onPickRepo,
+				children: "Pick a repo…"
+			})
+		},
+		{
+			key: "on",
+			label: "Turn on",
+			done: false,
+			body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint",
+				children: [
+					"Then switch on ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: what }),
+					" on the",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: onTurnOn,
+						children: "Auto-start tab"
+					}),
+					"."
+				]
+			})
+		}
+	];
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
+		className: "ik-setup-card",
+		id: "ik-github-setup",
+		"aria-label": "Set up",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+			className: "ik-setup-steps",
+			children: steps.map((s, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+				className: "ik-setup-step" + (s.done ? " done" : ""),
+				"data-step": s.key,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ik-step-num",
+						children: s.done ? "✓" : i + 1
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ik-setup-label",
+						children: s.label
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ik-setup-body",
+						children: s.body
+					})
+				]
+			}, s.key))
+		})
+	});
+}
 var TRACKER_SUB = {
 	github_issues: "Issues assigned to you, as tickets",
 	shortcut: "Stories assigned to you",
@@ -72436,6 +73972,7 @@ function AddFlowShell({ title = "Add a source", step, kinds, picked, onPick, onC
 				className: "ik-kinds",
 				role: "radiogroup",
 				"aria-label": "What to add",
+				"data-tour": "intake-tiles",
 				children: kinds.map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 					type: "button",
 					role: "radio",
@@ -72543,6 +74080,16 @@ function repoNameOf(url) {
 	const u = (url || "").trim().replace(/\/+$/, "").replace(/\.git$/, "");
 	return u.split(/[/:\\]/).pop() || u;
 }
+function repoSlugOf(url) {
+	const u = (url || "").trim().replace(/\/+$/, "").replace(/\.git$/, "");
+	const m = u.match(/^(?:[a-z+]+:\/\/)?(?:[^@/]+@)?[^/:]+[/:]([^/:]+)\/([^/]+)$/i);
+	if (m && !/^[./~]/.test(u)) return m[1] + "/" + m[2];
+	return repoNameOf(u);
+}
+function openSessionFromIntake(title) {
+	useUi.getState().closeDialog();
+	if (title) selectSession(title);
+}
 function routeText(route) {
 	if (!route) return "";
 	const repos = (route.repos || []).filter(Boolean);
@@ -72577,7 +74124,7 @@ function RepoPick({ route, value, reference, disabled, onChange }) {
 		})]
 	});
 }
-function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, elsewhere, eligible, eligibleLabel, eligibleOn = true, route, reasons, actionLabel, onStart, failPrefix, linkTitle, agents, configuredAgent, configuredDepth, configuredEffort, workspace, onReopen, actionExtra, drawer, onDrawerClose, pick, housekeeping }) {
+function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, session, elsewhere, eligible, eligibleLabel, eligibleOn = true, route, reasons, actionLabel, onStart, failPrefix, linkTitle, agents, configuredAgent, configuredDepth, configuredEffort, workspace, onReopen, actionExtra, drawer, onDrawerClose, pick, housekeeping }) {
 	const [state, setState] = (0, import_react.useState)("idle");
 	const [startedTitle, setStartedTitle] = (0, import_react.useState)("");
 	const [reopening, setReopening] = (0, import_react.useState)("idle");
@@ -72601,10 +74148,15 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, elsewhe
 	const pickedRepo = repo ? repoChoices.find((c) => c.url === repo) : void 0;
 	const where = pickedRepo ? "→ " + pickedRepo.name + " · your pick" : routeText(route);
 	const uses = [
+		where,
 		agent || configuredAgent || (agents && agents.length > 0 ? "app default" : ""),
 		"Fast-track: " + (depth ? laneLabel(depth) : defaultDepth),
-		!effortUsable ? "" : effort ? (EFFORT_LABELS[effort] || effort) + " effort" : effortDefault ? effortDefault + " effort" : "default effort"
+		!effortUsable ? "" : effort ? (EFFORT_LABELS[effort] || effort) + " effort" : effortDefault ? effortDefault + " effort" : ""
 	].filter(Boolean).join(" · ");
+	const routeInMeta = hasSession || !!elsewhere;
+	const routeTitle = route?.method === ONLY_REPO ? "The repo this starts in — this source's only repo. Add more with Edit on its heading." : (route?.method === "pending" || !(route?.repos || []).length ? "Nothing on the ticket names one of this source's repos, so the agent reads the ticket and picks when it starts." : "The repo this starts in, and why.") + (canPickRepo ? " To start it in another repo, pick one under Options." : " To send it elsewhere, give the ticket a label that matches another repo's name or hint (on the source card).");
+	const openLabel = "Open session ›";
+	const openTitle = "Close Intake and go to this session";
 	const willAutoStart = !!eligible && eligibleOn && !hasSession;
 	const housekeepingBlock = housekeeping ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "ik-item-housekeeping",
@@ -72669,10 +74221,10 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, elsewhe
 				className: "pr-open-meta",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: meta }),
-					where ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					where && routeInMeta ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "ik-item-route",
 						"data-route": route?.method || "",
-						title: route?.method === ONLY_REPO ? "The repo this starts in — this source's only repo. Add more with Edit on its heading." : (route?.method === "pending" || !(route?.repos || []).length ? "Nothing on the ticket names one of this source's repos, so the agent reads the ticket and picks when it starts." : "The repo this starts in, and why.") + (canPickRepo ? " To start it in another repo, pick one under Options." : " To send it elsewhere, give the ticket a label that matches another repo's name or hint (on the source card)."),
+						title: routeTitle,
 						children: where
 					}) : null,
 					hasSession ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -72716,9 +74268,10 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, elsewhe
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						className: "btn-primary pr-review-btn",
-						disabled: true,
-						children: "Session open"
+						className: "btn-primary pr-review-btn ik-open-session",
+						title: openTitle,
+						onClick: () => openSessionFromIntake(session || ""),
+						children: openLabel
 					}),
 					actionExtra,
 					housekeepingFold
@@ -72748,6 +74301,8 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, elsewhe
 						className: "ik-item-optline",
 						children: [!showPicks && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "ik-item-uses",
+							title: where ? routeTitle : void 0,
+							"data-route": route?.method || void 0,
 							children: uses
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
@@ -72859,11 +74414,12 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, elsewhe
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: canReopen ? "test-btn ik-start-again" : willAutoStart ? "test-btn pr-review-btn ik-start-quiet" : "btn-primary pr-review-btn",
-						disabled: state === "starting" || state === "started" && !startedTitle,
-						title: state === "started" && startedTitle ? "Go to the new session" : canReopen ? actionLabel + " starts a NEW session, leaving the workspace above alone" : "Start a session for " + reference + " now",
+						disabled: state === "starting",
+						"data-tour": state === "idle" ? "intake-start" : void 0,
+						title: state === "started" ? openTitle : canReopen ? actionLabel + " starts a NEW session, leaving the workspace above alone" : "Start a session for " + reference + " now",
 						onClick: async () => {
 							if (state === "started") {
-								if (startedTitle) selectSession(startedTitle);
+								openSessionFromIntake(startedTitle || session || "");
 								return;
 							}
 							setState("starting");
@@ -72884,7 +74440,7 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, elsewhe
 								setState("idle");
 							}
 						},
-						children: state === "starting" ? "Starting…" : state === "started" ? startedTitle ? "Open session ›" : "Started" : actionLabel
+						children: state === "starting" ? "Starting…" : state === "started" ? openLabel : actionLabel
 					}),
 					actionExtra
 				]
@@ -72962,6 +74518,31 @@ function friendlySourceError(name, raw, onCard = false) {
 	if (/missing|required/i.test(text)) return name + " isn't set up yet — finish it with Fix on its heading.";
 	const clean = text.replace(/[:\s]*[{[].*$/s, "").trim();
 	return name + " can't be listed" + (clean ? " — " + clean : "") + ".";
+}
+var TOKEN_URLS = {
+	jira: "https://id.atlassian.com/manage-profile/security/api-tokens",
+	shortcut: "https://app.shortcut.com/settings/account/api-tokens",
+	linear: "https://linear.app/settings/account/security",
+	asana: "https://app.asana.com/0/my-apps"
+};
+function siteHost(url) {
+	const raw = String(url || "").trim();
+	if (!raw) return "";
+	try {
+		return new URL(/^[a-z]+:\/\//i.test(raw) ? raw : "https://" + raw).host;
+	} catch {
+		return "";
+	}
+}
+function friendlyTestError(provider, raw, baseUrl) {
+	const text = String(raw || "").trim();
+	if (provider !== "jira") return text;
+	const host = siteHost(baseUrl) || "that address";
+	const status = text.match(/\bHTTP\s*(\d{3})\b/i)?.[1] || text.match(/\breturned (\d{3})\b/i)?.[1] || "";
+	if (status === "404") return "No Jira site at " + host + " — check the Site URL";
+	if (status === "401" || status === "403" || /rejected the credentials/i.test(text)) return "Jira rejected the email + token pair";
+	if (/network error|reaching jira|timed? ?out|resolve|connect/i.test(text)) return "Can't reach " + host + " from this machine";
+	return text;
 }
 function friendlyStartError(name, raw) {
 	const text = String(raw || "").trim();
@@ -73802,7 +75383,7 @@ function RepoFields({ use, repo, liveBranch }) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "ik-grid ik-grid-2",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
-						label: "Branch that ships",
+						label: "Live branch",
 						field: "live_branch",
 						value: text("live_branch"),
 						placeholder: live || "main",
@@ -73813,7 +75394,7 @@ function RepoFields({ use, repo, liveBranch }) {
 						] }),
 						onSave: save
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
-						label: "Wait after merge (minutes)",
+						label: "Deploy delay (minutes)",
 						field: "deploy_delay_minutes",
 						type: "number",
 						value: text("deploy_delay_minutes"),
@@ -73999,13 +75580,17 @@ function usesText(uses) {
 	const names = REPO_USES.filter((u) => uses.includes(u)).map((u) => USE_LABEL[u]);
 	return names.length <= 1 ? names.join("") : names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
 }
-function TestAccess({ repo, use }) {
+function TestAccess({ repo, use, onResult }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestButton, {
 		label: "Test access",
 		onTest: async () => {
 			if (!REPO_RE.test(repo.trim())) throw new Error("type owner/name first");
 			const r = await api("/api/settings/test/github-repo", { json: { repo: repo.trim() } });
-			if (!r?.ok) throw new Error(r?.error || "test failed");
+			onResult?.(!!r?.ok);
+			if (!r?.ok) {
+				const err = r?.error || "test failed";
+				throw new Error(/no GitHub token/i.test(err) ? "Not connected — use Connect GitHub below" : err);
+			}
 			return (r.name || repo) + (r.private ? " (private)" : "") + (r.default_branch ? " · default " + r.default_branch : "") + (r.can_push ? " · can push" : "") + (use === "issue" && !r.can_push ? " · read-only token — issue work can't push a branch" : "");
 		}
 	});
@@ -74024,7 +75609,7 @@ function RepoEditor({ use, repo, liveBranch }) {
 		"data-repo": repo,
 		"data-use": use,
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UseTicks, {
+			use !== "verify" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UseTicks, {
 				repo,
 				fixed: use,
 				value: uses,
@@ -74085,11 +75670,18 @@ function AddRepoFlow({ uses: initialUses, trackers = [], onPickTracker, onDone, 
 	const s = useSettings();
 	const ticketSources = useTicketingSources(true).data || [];
 	const [step, setStep] = (0, import_react.useState)(2);
-	const [slug, setSlug] = (0, import_react.useState)("");
+	const [slug, setSlugRaw] = (0, import_react.useState)("");
+	const setSlug = (v) => {
+		setSlugRaw(v);
+		setAccessFailed(false);
+		setSaveAnyway(false);
+	};
 	const [ticks, setTicks] = (0, import_react.useState)(only ? [only] : initialUses);
 	const [error, setError] = (0, import_react.useState)("");
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [added, setAdded] = (0, import_react.useState)(null);
+	const [accessFailed, setAccessFailed] = (0, import_react.useState)(false);
+	const [saveAnyway, setSaveAnyway] = (0, import_react.useState)(false);
 	const repo = slug.trim();
 	const already = REPO_RE.test(repo) ? usesOf(s.settings, repo) : [];
 	const ticketRepos = ticketSources.flatMap((src) => sourceRepos(src).map((r) => githubSlugOf(r.url)));
@@ -74103,6 +75695,11 @@ function AddRepoFlow({ uses: initialUses, trackers = [], onPickTracker, onDone, 
 		const want = [.../* @__PURE__ */ new Set([...already, ...ticks])];
 		if (!ticks.length && !already.length) {
 			setError("Tick at least one use.");
+			return;
+		}
+		if (accessFailed && !saveAnyway) {
+			setSaveAnyway(true);
+			setError("The access test failed — fix the name or Connect GitHub, or press Save anyway.");
 			return;
 		}
 		setError("");
@@ -74146,7 +75743,7 @@ function AddRepoFlow({ uses: initialUses, trackers = [], onPickTracker, onDone, 
 				className: "ik-quiet-btn",
 				disabled: busy,
 				onClick: () => void commit(false),
-				children: "Finish with defaults"
+				children: saveAnyway ? "Save anyway" : "Finish with defaults"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
@@ -74198,7 +75795,11 @@ function AddRepoFlow({ uses: initialUses, trackers = [], onPickTracker, onDone, 
 								}
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestAccess, {
 								repo,
-								use: ticks.includes("issue") ? "issue" : void 0
+								use: ticks.includes("issue") ? "issue" : void 0,
+								onResult: (ok) => {
+									setAccessFailed(!ok);
+									setSaveAnyway(false);
+								}
 							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("datalist", {
@@ -74251,64 +75852,317 @@ function AddRepoFlow({ uses: initialUses, trackers = [], onPickTracker, onDone, 
 	});
 }
 //#endregion
-//#region src/components/intake/TicketsTab.tsx
-function IngestionToggle({ sourceCount, broken }) {
+//#region src/components/intake/switches.ts
+function prsOn(gh) {
+	if (!(Array.isArray(gh?.repos) ? gh.repos.filter(Boolean) : []).length) return false;
+	return gh?.enabled === true || gh?.enabled == null;
+}
+function issuesOn(gh) {
+	return !!(Array.isArray(gh?.issue_repos) ? gh.issue_repos.filter(Boolean) : []).length && gh?.issues_enabled === true;
+}
+function intakeSwitches(opts) {
+	const gh = opts.gh || {};
+	return {
+		on: {
+			tickets: !!opts.ticketsDesired && opts.ticketSources > 0,
+			prs: prsOn(gh),
+			issues: issuesOn(gh)
+		},
+		configured: {
+			tickets: opts.ticketSources > 0,
+			prs: (gh.repos || []).filter(Boolean).length > 0,
+			issues: (gh.issue_repos || []).filter(Boolean).length > 0
+		}
+	};
+}
+var KIND_NAMES = {
+	tickets: "tickets",
+	prs: "PR comments",
+	issues: "issues"
+};
+function kindsText(kinds) {
+	const names = [
+		"tickets",
+		"prs",
+		"issues"
+	].filter((k) => kinds.includes(k)).map((k) => KIND_NAMES[k]);
+	if (names.length <= 1) return names.join("");
+	return names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+}
+function useGithubSettings() {
+	return useQuery({
+		queryKey: ["github-settings"],
+		queryFn: async () => {
+			return (await api("/api/settings"))?.settings?.github || {};
+		},
+		refetchInterval: 3e4,
+		retry: false
+	});
+}
+function useIntakeSwitches(ticketSources) {
+	const status = useMindflockStatus().data;
+	const gh = useGithubSettings();
+	const sw = intakeSwitches({
+		ticketsDesired: !!(status?.desired ?? status?.running),
+		ticketSources,
+		gh: gh.data
+	});
+	return {
+		status,
+		sw,
+		onKinds: [
+			"tickets",
+			"prs",
+			"issues"
+		].filter((k) => sw.on[k]),
+		anyConfigured: sw.configured.tickets || sw.configured.prs || sw.configured.issues
+	};
+}
+//#endregion
+//#region src/components/intake/AutoStartSwitches.tsx
+var DEFAULT_POLL_SECONDS = {
+	tickets: 20,
+	prs: 60,
+	issues: 60
+};
+function everyText(seconds) {
+	const s = Math.max(1, Math.round(seconds));
+	if (s < 60) return "checks every " + s + " s";
+	if (s === 60) return "checks every minute";
+	return "checks every " + Math.round(s / 60) + " min";
+}
+function pollSeconds(opts) {
+	const num = (v) => {
+		const n = Number(v);
+		return Number.isFinite(n) && n > 0 ? n : 0;
+	};
+	const perSource = opts.ticketSources.map((s) => num(s.poll_interval_seconds) || DEFAULT_POLL_SECONDS.tickets);
+	return {
+		tickets: perSource.length ? Math.min(...perSource) : DEFAULT_POLL_SECONDS.tickets,
+		prs: num(opts.github?.poll_interval_seconds) || DEFAULT_POLL_SECONDS.prs,
+		issues: num(opts.github?.issue_poll_interval_seconds) || DEFAULT_POLL_SECONDS.issues
+	};
+}
+function useBrokenTicketSources() {
+	const sources = useTicketingSources(true).data || [];
+	const catalog = useTicketingCatalog(true).data || [];
+	const panel = usePanelQuery("tickets").data;
+	const listed = new Map((panel?.errors || []).map((e) => [e.source, e.error]));
+	return sources.flatMap((s) => {
+		const name = sourceDisplayName(s, catalog);
+		const status = panel?.source_status?.[s.id]?.connect_error || "";
+		const test = lastTestOf(s);
+		const raw = status.replace(/^can't connect\s*[—-]\s*/i, "") || listed.get(s.id) || (test && !test.ok ? test.message || "test failed" : "");
+		if (!raw) return [];
+		const words = friendlyTestError(s.provider, raw, s.base_url);
+		return [{
+			name,
+			why: words !== raw ? name + ": " + words + "." : friendlySourceError(name, raw)
+		}];
+	});
+}
+function useAutoStartModel(github) {
+	const status = useMindflockStatus();
+	const sources = useTicketingSources(true).data || [];
+	const gh = github || {};
+	const repos = (gh.repos || []).filter(Boolean);
+	const issueRepos = (gh.issue_repos || []).filter(Boolean);
+	const st = status.data;
+	return {
+		status: st,
+		refetchStatus: status.refetch,
+		ticketSources: sources.length,
+		repos: repos.length,
+		issueRepos: issueRepos.length,
+		ticketsOn: !!(st?.desired ?? st?.running) && sources.length > 0,
+		prsOn: prsOn(gh),
+		issuesOn: issueRepos.length > 0 && gh.issues_enabled === true,
+		every: pollSeconds({
+			ticketSources: sources,
+			github: gh
+		}),
+		runsOn: st?.automation_here === false ? st?.automation_device || "another of your devices" : ""
+	};
+}
+async function flipTickets(on) {
+	await api(`/api/mindflock/${on ? "start" : "stop"}`, { method: "POST" });
+}
+function AutoStartSwitches({ gotoTab }) {
+	const settings = useSettings();
+	const m = useAutoStartModel(settings.settings.github);
+	const qc = useQueryClient();
+	const broken = useBrokenTicketSources();
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [optimistic, setOptimistic] = (0, import_react.useState)(null);
 	const [asking, setAsking] = (0, import_react.useState)(false);
-	const { data: status, refetch } = useMindflockStatus();
-	if (!status || !status.available) return null;
-	const running = !!status.running;
-	const desired = optimistic ?? status.desired ?? running;
-	const toggle = async (start) => {
+	const pipeline = !!m.status?.available;
+	const ticketsChecked = pipeline && (optimistic ?? !!(m.status?.desired ?? m.status?.running));
+	const refreshGithub = () => void qc.invalidateQueries({ queryKey: ["github-settings"] });
+	const toggleTickets = async (start) => {
 		if (busy) return;
 		setBusy(true);
 		setOptimistic(start);
 		try {
-			await api(`/api/mindflock/${start ? "start" : "stop"}`, { method: "POST" });
+			await flipTickets(start);
 			toast(start ? "Auto-start tickets on" : "Auto-start tickets off");
 		} catch (err) {
 			errorPop(`Auto-start tickets didn't turn ${start ? "on" : "off"}`, err.message || "the server gave no reason");
 		} finally {
 			setBusy(false);
 			setOptimistic(null);
-			refetch();
+			m.refetchStatus();
 		}
+	};
+	const saveGithub = async (patch, okMsg) => {
+		await settings.saveGroup("github", patch, okMsg);
+		refreshGithub();
 	};
 	const names = listNames(broken.map((b) => b.name));
 	const one = broken.length === 1;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutomationSwitch, {
-		label: "Auto-start tickets",
-		title: "Start a session on its own for each ticket in your auto-start states. Stays as you leave it across restarts.",
-		rowId: "tk-ingestion-toggle-row",
-		inputId: "tk-ingestion-enabled",
-		statusId: "tk-ingestion-status",
-		checked: desired,
-		onChange: (next) => {
-			if (busy) return;
-			if (next && broken.length) setAsking(true);
-			else toggle(next);
-		},
-		note: !sourceCount ? "Add a ticket source first — + Add source" : desired && broken.length ? names + " can't connect — nothing starts from " + (one ? "it" : "them") + " until fixed" : void 0
-	}), asking && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
-		id: "tk-ingestion-confirm",
-		title: names + " can't connect.",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			broken.map((b) => b.why).join(" "),
-			" Auto-start does nothing for",
-			" ",
-			one ? "it" : "them",
-			" until then."
-		] }),
-		confirmLabel: "Turn on anyway",
-		cancelLabel: "Not now",
-		onConfirm: () => {
-			setAsking(false);
-			toggle(true);
-		},
-		onCancel: () => setAsking(false)
-	})] });
+	const anyOn = ticketsChecked || m.prsOn || m.issuesOn;
+	const pauseAll = async () => {
+		if (busy) return;
+		setBusy(true);
+		try {
+			const patch = {};
+			if (m.prsOn) patch.enabled = false;
+			if (m.issuesOn) patch.issues_enabled = false;
+			if (Object.keys(patch).length) await settings.saveGroup("github", patch);
+			if (ticketsChecked) await flipTickets(false);
+			toast("All auto-start is off — nothing starts on its own");
+		} catch (err) {
+			errorPop("Couldn't turn every switch off", err.message || "the server gave no reason");
+		} finally {
+			setBusy(false);
+			refreshGithub();
+			m.refetchStatus();
+		}
+	};
+	const elsewhere = m.runsOn ? "runs on " + m.runsOn + ", not here" : "";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "ik-autostart-switches",
+		id: "ik-autostart-switches",
+		"data-tour": "intake-autostart",
+		"aria-label": "Auto-start switches",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-autostart-switches-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Starts sessions on its own"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					id: "ik-pause-all",
+					className: "ik-quiet-btn",
+					disabled: !anyOn || busy,
+					title: anyOn ? "Turn every switch below off at once" : "Nothing is on",
+					onClick: () => void pauseAll(),
+					children: "Pause all auto-start"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutomationSwitch, {
+				label: "Tickets",
+				title: "Start a session on its own for each ticket in your auto-start states. Stays as you leave it across restarts.",
+				rowId: "tk-ingestion-toggle-row",
+				inputId: "tk-ingestion-enabled",
+				statusId: "tk-ingestion-status",
+				checked: ticketsChecked,
+				disabled: !m.ticketSources || !pipeline,
+				onChange: (next) => {
+					if (busy) return;
+					if (next && broken.length) setAsking(true);
+					else toggleTickets(next);
+				},
+				note: !m.ticketSources ? "Add a ticket source first — on the Tickets tab" : !pipeline ? "Give a ticket source its repo first — on the Tickets tab" : broken.length ? names + " can't connect — press Fix on the Tickets tab" + (ticketsChecked ? "; nothing starts from " + (one ? "it" : "them") + " until then" : "") : everyText(m.every.tickets)
+			}),
+			asking && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				id: "tk-ingestion-confirm",
+				title: names + " can't connect.",
+				body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					broken.map((b) => b.why).join(" "),
+					" Auto-start does nothing for",
+					" ",
+					one ? "it" : "them",
+					" until then."
+				] }),
+				confirmLabel: "Turn on anyway",
+				cancelLabel: "Not now",
+				onConfirm: () => {
+					setAsking(false);
+					toggleTickets(true);
+				},
+				onCancel: () => setAsking(false)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutomationSwitch, {
+				label: "PR review comments",
+				title: "Start a session on its own when one of your PRs gets review comments — your repositories are kept either way",
+				rowId: "gh-pr-toggle-row",
+				inputId: "gh-pr-enabled",
+				statusId: "gh-pr-status",
+				checked: m.prsOn,
+				disabled: !m.repos,
+				onChange: (next) => void saveGithub({ enabled: next }, next ? "Auto-address review comments on" : "Auto-address review comments off"),
+				note: !m.repos ? "Add a repository first — on the GitHub PRs tab" : elsewhere || everyText(m.every.prs)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutomationSwitch, {
+				label: "New issues",
+				title: "Start a session on its own for each newly opened issue — your repositories are kept either way",
+				rowId: "gh-issues-toggle-row",
+				inputId: "gh-issues-enabled",
+				statusId: "gh-issues-status",
+				checked: m.issuesOn,
+				disabled: !m.issueRepos,
+				onChange: (next) => void saveGithub({ issues_enabled: next }, next ? "Auto-start new issues on" : "Auto-start new issues off"),
+				note: !m.issueRepos ? "Add a repository first — on the GitHub issues tab" : elsewhere || everyText(m.every.issues)
+			}),
+			!m.ticketSources || !m.repos || !m.issueRepos ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-autostart-setup",
+				children: [
+					!m.ticketSources ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: () => gotoTab("tickets"),
+						children: "Set up tickets ›"
+					}) : null,
+					!m.repos ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: () => gotoTab("prs"),
+						children: "Set up PR comments ›"
+					}) : null,
+					!m.issueRepos ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: () => gotoTab("issues"),
+						children: "Set up new issues ›"
+					}) : null
+				]
+			}) : null
+		]
+	});
 }
+function AutoStartLink({ kind, gotoTab }) {
+	const m = useAutoStartModel(useGithubSettings().data);
+	const broken = useBrokenTicketSources();
+	if (kind === "tickets" && (!m.status || !m.status.available)) return null;
+	if (!(kind === "tickets" ? m.ticketSources > 0 : kind === "prs" ? m.repos > 0 : m.issueRepos > 0)) return null;
+	const on = kind === "tickets" ? m.ticketsOn : kind === "prs" ? m.prsOn : m.issuesOn;
+	const state = kind === "tickets" && on && broken.length ? "on, but " + listNames(broken.map((b) => b.name)) + " can't connect" : kind !== "tickets" && m.runsOn && on ? "runs on " + m.runsOn : on ? "on — " + everyText(m.every[kind]) : "off";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ik-autostart-link",
+		id: "ik-autostart-link-" + kind,
+		"data-on": on ? "1" : "0",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["Auto-start: ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: state })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "linklike",
+			title: "The switches for tickets, PR comments and new issues are on the Auto-start tab",
+			onClick: () => gotoTab("autostart"),
+			children: on ? "Change ›" : "Turn on ›"
+		})]
+	});
+}
+//#endregion
+//#region src/components/intake/TicketsTab.tsx
 var EMPTY_CATALOG = [];
 var EMPTY_AGENTS = {
 	names: [],
@@ -74320,6 +76174,8 @@ function sourceDisplayName(source, catalog) {
 	const namesProvider = [provName, source.provider].some((n) => !!n && detail.toLowerCase().startsWith(n.toLowerCase()) && !/[a-z0-9]/i.test(detail.charAt(n.length)));
 	return !detail ? provName : namesProvider ? detail : provName + " — " + detail;
 }
+var FILL_FIELDS = "Fill in the marked fields first.";
+var FIX_FIELDS = "Fix the marked fields first.";
 function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	const catalog = useTicketingCatalog(true).data || EMPTY_CATALOG;
 	const savedSources = useTicketingSources(true);
@@ -74328,6 +76184,8 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	const seeded = (0, import_react.useRef)(savedSources.data !== void 0);
 	const storedIds = (0, import_react.useRef)(new Set((savedSources.data || []).map((s) => s.id)));
 	const seq = (0, import_react.useRef)(0);
+	const lastRefused = (0, import_react.useRef)({});
+	const pendingDraft = (0, import_react.useRef)("");
 	const [errors, setErrors] = (0, import_react.useState)({});
 	const [tests, setTests] = (0, import_react.useState)({});
 	const [saves, setSaves] = (0, import_react.useState)({});
@@ -74355,6 +76213,7 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	const ticketsPanel = usePanelQuery("tickets");
 	const edit = useEditing(focus);
 	const [draft, setDraft] = (0, import_react.useState)(null);
+	pendingDraft.current = draft && !storedIds.current.has(draft.id) ? draft.id : "";
 	const [choice, setChoice] = (0, import_react.useState)("");
 	const [flowError, setFlowError] = (0, import_react.useState)("");
 	const [busy, setBusy] = (0, import_react.useState)(false);
@@ -74411,7 +76270,8 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 					project: srv.project || s.project || ""
 				}, verdict) : s));
 			}
-			const msg = String(r?.message || r?.error || (r?.ok ? "Connected" : "test failed"));
+			const raw = String(r?.message || r?.error || (r?.ok ? "Connected" : "test failed"));
+			const msg = r?.ok ? raw : friendlyTestError(src.provider, raw, src.base_url);
 			setTests((prev) => ({
 				...prev,
 				[src.id]: {
@@ -74424,7 +76284,7 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 			refreshConfig();
 			return msg;
 		} catch (err) {
-			const msg = err.message || "test failed";
+			const msg = friendlyTestError(src.provider, err.message || "test failed", src.base_url);
 			setTests((prev) => ({
 				...prev,
 				[src.id]: {
@@ -74433,12 +76293,71 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 					msg
 				}
 			}));
-			throw err;
+			throw new Error(msg);
+		}
+	}, []);
+	const testDraftSource = (0, import_react.useCallback)(async (src, meta) => {
+		const payload = {
+			id: src.id,
+			provider: src.provider
+		};
+		for (const f of meta?.fields || []) {
+			const v = src[f.key];
+			if (f.secret && (!v || v === "•••set")) continue;
+			if (v != null && v !== "") payload[f.key] = v;
+		}
+		if (src.repo_url) payload.repo_url = src.repo_url;
+		setTests((prev) => ({
+			...prev,
+			[src.id]: { testing: true }
+		}));
+		try {
+			const r = await api("/api/settings/test/ticketing", { json: payload });
+			const raw = String(r?.message || r?.error || (r?.ok ? "Connected" : "test failed"));
+			const msg = r?.ok ? raw : friendlyTestError(src.provider, raw, src.base_url);
+			const verdict = {
+				ok: !!r?.ok,
+				at: (/* @__PURE__ */ new Date()).toISOString(),
+				message: msg,
+				...r?.member_id ? { member_id: r.member_id } : {},
+				...r?.states?.length ? { states: r.states } : {},
+				...r?.workspaces?.length ? { workspaces: r.workspaces } : {}
+			};
+			const next = (latest.current || []).map((s) => s.id === src.id ? withLastTest({
+				...s,
+				member_id: r?.ok && r?.member_id || s.member_id || "",
+				project: s.project || r?.ok && r?.project || ""
+			}, verdict) : s);
+			latest.current = next;
+			setSources(next);
+			setTests((prev) => ({
+				...prev,
+				[src.id]: {
+					testing: false,
+					ok: !!r?.ok,
+					msg
+				}
+			}));
+			if (!r?.ok) throw new Error(msg);
+			return msg;
+		} catch (err) {
+			const msg = friendlyTestError(src.provider, err.message || "test failed", src.base_url);
+			setTests((prev) => ({
+				...prev,
+				[src.id]: {
+					testing: false,
+					ok: false,
+					msg
+				}
+			}));
+			throw new Error(msg);
 		}
 	}, []);
 	const persist = (0, import_react.useCallback)(async (list, opts = {}) => {
 		const mySeq = ++seq.current;
-		const { send, held } = splitForSave(list, catalog, storedIds.current);
+		lastRefused.current = {};
+		const pending = opts.withDraft ? "" : pendingDraft.current;
+		const { send, held } = splitForSave(pending ? list.filter((s) => s.id !== pending) : list, catalog, storedIds.current);
 		const changed = opts.changed ? [opts.changed] : [];
 		if (!send.length && !storedIds.current.size) {
 			setErrors(held);
@@ -74471,6 +76390,7 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 		} catch (err) {
 			const fieldErrors = err instanceof ApiError && err.status === 400 ? fieldErrorsFrom(err.body) : {};
 			if (Object.keys(fieldErrors).length) {
+				lastRefused.current = fieldErrors;
 				if (mySeq === seq.current) setErrors({
 					...held,
 					...fieldErrors
@@ -74500,7 +76420,42 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 		const base = prefixFor(provider);
 		return id === base || new RegExp(`^${base.replace(/[^\w]/g, "\\$&")}-\\d+$`).test(id);
 	};
+	const updateDraft = (id, patch) => {
+		const strings = {};
+		for (const [k, v] of Object.entries(patch)) strings[k] = v ?? "";
+		const next = (latest.current || []).map((s) => s.id === id ? {
+			...s,
+			...strings
+		} : s);
+		latest.current = next;
+		setSources(next);
+		const merged = next.find((s) => s.id === id);
+		if (!merged) return;
+		const meta = catalog.find((p) => p.id === merged.provider) || null;
+		const { held } = splitForSave([merged], catalog, /* @__PURE__ */ new Set());
+		setErrors((prev) => {
+			if (!prev[id]) return prev;
+			const out = { ...prev };
+			if (held[id]) out[id] = held[id];
+			else delete out[id];
+			return out;
+		});
+		if (!held[id]) setFlowError((f) => f === FILL_FIELDS ? "" : f);
+		if (isTestSensitive(meta, patch)) {
+			setTests((prev) => {
+				if (!prev[id]) return prev;
+				const out = { ...prev };
+				delete out[id];
+				return out;
+			});
+			setFlowError((f) => f.startsWith("Test failed") ? "" : f);
+		}
+	};
 	const update = (id, patch) => {
+		if (draft && id === draft.id && !storedIds.current.has(id)) {
+			updateDraft(id, patch);
+			return;
+		}
 		{
 			const list = latest.current || [];
 			const nulls = {};
@@ -74580,6 +76535,13 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	};
 	const dropDraft = () => {
 		if (draft) {
+			const gone = draft.id;
+			for (const set of [setErrors, setTests]) set((prev) => {
+				if (!(gone in prev)) return prev;
+				const out = { ...prev };
+				delete out[gone];
+				return out;
+			});
 			if (storedIds.current.has(draft.id)) remove(draft.id, true);
 			else {
 				latest.current = (latest.current || []).filter((x) => x.id !== draft.id);
@@ -74598,25 +76560,29 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	beginDraftRef.current = beginDraft;
 	const draftSource = draft ? sources.find((x) => x.id === draft.id) || null : null;
 	const draftMeta = draftSource ? catalog.find((p) => p.id === draftSource.provider) || null : null;
-	const saveDraft = async () => {
+	const settledDraft = async () => {
 		await new Promise((r) => setTimeout(r, 0));
 		if (!draft) return null;
-		await persist(latest.current || [], { changed: draft.id });
-		const src = (latest.current || []).find((x) => x.id === draft.id) || null;
-		if (!src || !storedIds.current.has(draft.id)) {
-			setFlowError("Fill in the marked fields first.");
-			return null;
-		}
-		return src;
+		return (latest.current || []).find((x) => x.id === draft.id) || null;
+	};
+	const draftComplete = (src) => {
+		const { held } = splitForSave([src], catalog, /* @__PURE__ */ new Set());
+		if (!held[src.id]) return true;
+		setErrors((prev) => ({
+			...prev,
+			[src.id]: held[src.id]
+		}));
+		setFlowError(FILL_FIELDS);
+		return false;
 	};
 	const testAndContinue = async (skip = false) => {
 		if (!draft || busy) return;
 		setBusy(true);
 		try {
-			const src = await saveDraft();
-			if (!src) return;
+			const src = await settledDraft();
+			if (!src || !draftComplete(src)) return;
 			if (!skip) try {
-				await runTest(src, draftMeta);
+				await testDraftSource(src, draftMeta);
 			} catch (err) {
 				setFlowError("Test failed — " + (err.message || "no answer") + ". Fix it, or continue anyway.");
 				return;
@@ -74634,21 +76600,44 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 		if (!draft || busy) return;
 		setBusy(true);
 		try {
-			const src = await saveDraft();
-			if (!src) return;
+			const src = await settledDraft();
+			if (!src || !draftComplete(src)) {
+				if (src) setDraft({
+					id: draft.id,
+					step: 2
+				});
+				return;
+			}
 			const anyone = src.assignee_scope === "anyone";
 			const hasFilter = savedFilter(src).length > 0 || savedLabels(src).length > 0;
 			if (anyone && !hasFilter) {
 				setFlowError("Anyone's needs at least one state to take tickets from — pick one, or set Whose tickets back to Assigned to me.");
 				return;
 			}
-			if (Object.keys(errors[draft.id] || {}).length) {
-				setFlowError("Fix the marked fields first.");
-				return;
-			}
 			if (!sourceRepos(src).length) {
 				setFlowError("Add the repository its tickets are worked on (Repo URL).");
 				return;
+			}
+			await persist(latest.current || [], {
+				changed: draft.id,
+				withDraft: true
+			});
+			if (!storedIds.current.has(draft.id)) {
+				const refused = Object.keys(lastRefused.current[draft.id] || {});
+				const credKeys = new Set(basicFields(draftMeta).filter((f) => f.type !== "state").map((f) => f.key));
+				if (refused.some((k) => credKeys.has(k))) setDraft({
+					id: draft.id,
+					step: 2
+				});
+				setFlowError(FIX_FIELDS);
+				return;
+			}
+			const stored = (latest.current || []).find((x) => x.id === draft.id) || src;
+			let connectNote = "";
+			try {
+				await runTest(stored, draftMeta);
+			} catch (err) {
+				connectNote = " — can't connect yet: " + (err.message || "the test failed");
 			}
 			const name = sourceDisplayName(src, catalog);
 			setDraft(null);
@@ -74657,22 +76646,13 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 			endAdd();
 			setDismissed(true);
 			refreshPanel("tickets");
-			toast("Added " + name + (hasFilter ? "" : " — nothing auto-starts until you pick a state"));
+			toast("Added " + name + (connectNote || (hasFilter ? "" : " — nothing auto-starts until you pick a state")));
 		} finally {
 			setBusy(false);
 		}
 	};
 	const stored = sources.filter((s) => storedIds.current.has(s.id) && s.id !== draft?.id);
 	const panelErrors = new Map((ticketsPanel.data?.errors || []).map((e) => [e.source, e.error]));
-	const broken = stored.flatMap((s) => {
-		const name = sourceDisplayName(s, catalog);
-		const test = lastTestOf(s);
-		const raw = panelErrors.get(s.id) || (test && !test.ok ? test.message || "test failed" : "");
-		return raw ? [{
-			name,
-			why: friendlySourceError(name, raw)
-		}] : [];
-	});
 	const headOf = (id, listError) => {
 		const src = sources.find((x) => x.id === id);
 		if (!src) return {
@@ -74702,7 +76682,7 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 		};
 		if (last && !last.ok) return {
 			broken: true,
-			message: "can't connect — " + (last.message || "the last test failed")
+			message: "can't connect — " + (friendlyTestError(src.provider, last.message || "", src.base_url) || "the last test failed")
 		};
 		if (last && missingAutoFields(meta, src).length) return {
 			broken: true,
@@ -74812,10 +76792,14 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 				children: busy ? "Testing…" : "Test & continue ›"
 			})
 		] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			flowError || !tests[draft.id]?.msg ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "ik-add-error",
 				role: "alert",
 				children: flowError
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "ik-add-note" + (tests[draft.id]?.ok ? " ok" : ""),
+				id: "ik-add-test-note",
+				children: tests[draft.id]?.ok ? "✓ " + tests[draft.id]?.msg : "Not connected yet — Finish saves it and tests it again."
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
@@ -74856,7 +76840,7 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 				},
 				saved: storedIds.current.has(draftSource.id),
 				test: tests[draftSource.id],
-				onTest: () => runTest(draftSource, draftMeta),
+				onTest: () => testDraftSource(draftSource, draftMeta),
 				onChange: (patch) => update(draftSource.id, patch),
 				onRemove: dropDraft
 			})
@@ -74872,9 +76856,9 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 				"."
 			]
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(IngestionToggle, {
-			sourceCount: stored.length,
-			broken
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutoStartLink, {
+			kind: "tickets",
+			gotoTab
 		}),
 		stored.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssignedTickets, {
 			sources: stored,
@@ -75190,6 +77174,14 @@ function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent,
 		});
 	};
 	const only = sourceOrder.length === 1 ? filterOf(sourceOrder[0]) : null;
+	const onlyAction = sourceOrder.length === 1 && headOf(sourceOrder[0], sourceErrors.get(sourceOrder[0])).broken ? "Fix" : "Edit";
+	const connectErrorOf = (key) => {
+		const raw = ticketsQuery.data?.source_status?.[key]?.connect_error || "";
+		if (!raw) return "";
+		const src = configured.get(key);
+		const reason = raw.replace(/^can't connect\s*[—-]\s*/i, "");
+		return "Can't connect — " + (src ? friendlyTestError(src.provider, reason, src.base_url) : reason).replace(/\.$/, "") + " — press Fix.";
+	};
 	const ingestSummary = !only ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		"Each source's heading says which tickets it auto-starts — press it to change them;",
 		" ",
@@ -75200,15 +77192,16 @@ function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent,
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "nothing" }),
 		" until you pick a state — press",
 		" ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Edit" }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: onlyAction }),
 		" on its heading. ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start" }),
 		" starts any ticket now."
 	] }) : only.kind === "none" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		"Auto-start takes tickets in ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "every state" }),
-		" — press ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Edit" }),
+		" — press",
+		" ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: onlyAction }),
 		" on its heading to narrow it. ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start" }),
 		" starts any ticket now."
@@ -75360,7 +77353,12 @@ function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent,
 						}, t.source + ":" + t.id))
 					}, key);
 				});
-				const buckets = tickets === null || filter.active && !total ? null : srcError ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				const cantConnect = connectErrorOf(src);
+				const buckets = tickets === null || filter.active && !total ? null : cantConnect && !inner.size ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "repo-empty ik-source-error",
+					"data-connect-error": src,
+					children: cantConnect
+				}) : srcError ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "repo-empty ik-source-error",
 					children: friendlySourceError(label, srcError)
 				}) : !inner.size ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -75454,11 +77452,12 @@ function AssignedTicketRow({ t, all, agents, configuredAgent, configuredDepth, c
 		tooltip: t.slug + " — " + (t.name || "") + "\nfrom " + (t.source_label || t.source),
 		meta: t.mine === false ? ageText(t.created_at) + " · " + (t.assignee || "someone else") : ageText(t.created_at),
 		route: t.route || (t.repo_url ? {
-			repos: [repoNameOf(t.repo_url)],
+			repos: [repoSlugOf(t.repo_url)],
 			repo_url: t.repo_url,
 			method: ONLY_REPO
 		} : void 0),
 		hasSession: t.has_session,
+		session: t.session,
 		elsewhere: t.elsewhere?.label,
 		eligible: t.eligible,
 		eligibleLabel,
@@ -75524,6 +77523,25 @@ function AssignedTicketRow({ t, all, agents, configuredAgent, configuredDepth, c
 			};
 		}
 	});
+}
+var EDIT_PARTS = [
+	["connect", "Connect"],
+	["takes", "What it takes"],
+	["goes", "Where it goes"]
+];
+function advancedSummaryOf(meta, source, states = [], effortUsable = true) {
+	const parts = [];
+	if ((source.label || "").trim()) parts.push("Name: " + source.label.trim());
+	if (effortUsable && (source.effort || "").trim()) parts.push("Effort: " + source.effort);
+	for (const f of advancedFields(meta)) {
+		if (f.auto) continue;
+		const v = (source[f.key] || "").trim();
+		if (!v) continue;
+		const shown = f.type === "state_one" || f.type === "state" ? v.split(",").map((id) => stateName(id.trim(), states) || id.trim()).join(", ") : f.type === "choice" ? (f.options || []).find((o) => o.value === v)?.label || v : v;
+		parts.push(f.label + ": " + shown);
+	}
+	if (parts.length <= 3) return parts.join(" · ");
+	return parts.slice(0, 3).join(" · ") + " · +" + (parts.length - 3) + " more";
 }
 function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, save, dirty, onDirty, gotoTab, onAddRepo, saved, listError, test, onTest, onChange, onRemove }) {
 	const meta = catalog.find((p) => p.id === source.provider) || null;
@@ -75598,6 +77616,7 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 	}, f.key) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CatalogInput, {
 		field: f,
 		source,
+		saved,
 		error: errs[f.key],
 		onChange,
 		onDirty: (on) => onDirty(f.key, on)
@@ -75609,26 +77628,45 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 	const paired = filterFields.length >= 2 && filterFields[0].key === "assignee_scope" && filterFields[1].type === "state";
 	const saveLine = !saved ? unsaved ? "Not saved — fill in the marked fields" : dirty ? "Saving…" : "Not saved yet" : dirty || save?.state === "saving" || save?.state === "pending" ? "Saving…" : save?.state === "failed" ? "Not saved" : save?.state === "saved" ? "Saved ✓" : "";
 	const name = sourceDisplayName(source, catalog);
-	const showConnect = section !== "setup";
-	const showSetup = section !== "connect";
+	const [part, setPart] = (0, import_react.useState)(() => pillState === "connected" && !unsaved ? "takes" : "connect");
 	const heads = section === "edit";
+	const showConnect = section === "connect" || heads && part === "connect";
+	const showTakes = section === "setup" || heads && part === "takes";
+	const showGoes = section === "setup" || heads && part === "goes";
+	const advancedSummary = advancedSummaryOf(meta, source, states, effortUsable);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "ik-editor-body tk-source-editor",
 		"data-source-id": source.id,
 		"data-section": section,
+		"data-part": heads ? part : void 0,
 		children: [
+			heads ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-edit-steps",
+				role: "tablist",
+				"aria-label": "Settings for " + name,
+				children: EDIT_PARTS.map(([key, label], i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					role: "tab",
+					"aria-selected": part === key,
+					className: "ik-edit-step" + (part === key ? " cur" : ""),
+					"data-part": key,
+					onClick: () => setPart(key),
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "ik-step-num",
+							children: i + 1
+						}),
+						label,
+						key === "connect" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SourcePill, {
+							state: pillState,
+							label: pillLabel,
+							message: pillMessage
+						}) : null
+					]
+				}, key))
+			}) : null,
 			showConnect ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-				heads ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "ik-editor-hrow",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
-						className: "ik-editor-h",
-						children: "Connection"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SourcePill, {
-						state: pillState,
-						label: pillLabel,
-						message: pillMessage
-					})]
-				}) : meta?.blurb ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				heads ? null : meta?.blurb ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "set-hint tk-blurb",
 					children: meta.blurb
 				}) : null,
@@ -75657,7 +77695,7 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 					className: "tk-fields",
 					children: credFields.map(renderField)
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				section === "connect" ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "set-row tk-test-row",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "test-row",
@@ -75673,8 +77711,8 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 					})
 				})
 			] }) : null,
-			showSetup ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-				heads || section === "setup" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+			showTakes ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				section === "setup" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
 					className: "ik-editor-h",
 					children: "What it takes"
 				}) : null,
@@ -75685,19 +77723,24 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "tk-fields",
 					children: (paired ? filterFields.slice(2) : filterFields).map(renderField)
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+				})
+			] }) : null,
+			showGoes ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				section === "setup" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
 					className: "ik-editor-h",
 					children: "Where it goes, and who works it"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoListField, {
-					source,
-					onChange: (patch) => {
-						onDirty("repos", false);
-						onChange(patch);
-					},
-					onPending: () => onDirty("repos", true),
-					onSettled: () => onDirty("repos", false)
+				}) : null,
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					"data-tour": "intake-repo",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoListField, {
+						source,
+						onChange: (patch) => {
+							onDirty("repos", false);
+							onChange(patch);
+						},
+						onPending: () => onDirty("repos", true),
+						onSettled: () => onDirty("repos", false)
+					})
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "ik-grid ik-grid-2",
@@ -75758,7 +77801,11 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 					"data-tk-advanced": source.id,
 					open: advancedOpen,
 					onToggle: (e) => setAdvancedOpen(e.currentTarget.open),
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Advanced options" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: ["Advanced options", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "tk-advanced-sum",
+						"data-tk-advanced-sum": true,
+						children: " — " + (advancedSummary || "nothing changed")
+					})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "tk-advanced-body",
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
@@ -75847,7 +77894,7 @@ function FieldLabel({ field }) {
 		children: [field.label, marker ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "ik-field-marker" + (marker === "required" ? " required" : ""),
 			"data-marker": marker,
-			children: marker === "required" ? "*" : marker
+			children: marker === "required" ? "*" : "(filled in by Test)"
 		}) : null]
 	});
 }
@@ -75862,7 +77909,7 @@ function FieldNote({ field, error }) {
 		children: field.hint
 	}) : null;
 }
-function CatalogInput({ field: f, source, error, onChange, onDirty }) {
+function CatalogInput({ field: f, source, saved = true, error, onChange, onDirty }) {
 	const save = useAutosave((v) => {
 		onDirty?.(false);
 		if (f.secret && v === "") return;
@@ -75895,7 +77942,7 @@ function CatalogInput({ field: f, source, error, onChange, onDirty }) {
 			})
 		]
 	});
-	const stored = hasSecret(source, f);
+	const stored = saved && hasSecret(source, f);
 	const input = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 		type: f.secret ? "password" : "text",
 		autoComplete: "off",
@@ -75903,7 +77950,7 @@ function CatalogInput({ field: f, source, error, onChange, onDirty }) {
 		className: error ? "field-missing" : "",
 		"aria-invalid": error ? true : void 0,
 		placeholder: f.secret && stored ? "•••set (saved) — type to replace" : f.placeholder || "",
-		defaultValue: f.secret ? "" : source[f.key] || "",
+		defaultValue: f.secret && saved ? "" : source[f.key] || "",
 		onChange: (e) => save.schedule(e.target.value),
 		onBlur: save.flush,
 		onKeyDown: (e) => {
@@ -75913,8 +77960,10 @@ function CatalogInput({ field: f, source, error, onChange, onDirty }) {
 			}
 		}
 	}, f.secret ? stored ? "set" : "empty" : void 0);
+	const tokenUrl = f.secret ? TOKEN_URLS[source.provider] : "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 		className: "set-row",
+		"data-tour": f.secret ? "intake-token" : void 0,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FieldLabel, { field: f }),
 			f.secret && stored ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
@@ -75934,7 +77983,15 @@ function CatalogInput({ field: f, source, error, onChange, onDirty }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FieldNote, {
 				field: f,
 				error
-			})
+			}),
+			tokenUrl ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+				className: "ik-token-link",
+				href: tokenUrl,
+				target: "_blank",
+				rel: "noopener noreferrer",
+				"data-tk-token-link": source.provider,
+				children: "Create a token ↗"
+			}) : null
 		]
 	});
 }
@@ -75991,76 +78048,9 @@ function AgentPicker({ label, hint, value, choices, fallbackLabel, onChange }) {
 	});
 }
 //#endregion
-//#region src/components/intake/switches.ts
-function prsOn(gh) {
-	if (!(Array.isArray(gh?.repos) ? gh.repos.filter(Boolean) : []).length) return false;
-	return gh?.enabled === true || gh?.enabled == null;
-}
-function issuesOn(gh) {
-	return !!(Array.isArray(gh?.issue_repos) ? gh.issue_repos.filter(Boolean) : []).length && gh?.issues_enabled === true;
-}
-function intakeSwitches(opts) {
-	const gh = opts.gh || {};
-	return {
-		on: {
-			tickets: !!opts.ticketsDesired && opts.ticketSources > 0,
-			prs: prsOn(gh),
-			issues: issuesOn(gh)
-		},
-		configured: {
-			tickets: opts.ticketSources > 0,
-			prs: (gh.repos || []).filter(Boolean).length > 0,
-			issues: (gh.issue_repos || []).filter(Boolean).length > 0
-		}
-	};
-}
-var KIND_NAMES = {
-	tickets: "tickets",
-	prs: "PR comments",
-	issues: "issues"
-};
-function kindsText(kinds) {
-	const names = [
-		"tickets",
-		"prs",
-		"issues"
-	].filter((k) => kinds.includes(k)).map((k) => KIND_NAMES[k]);
-	if (names.length <= 1) return names.join("");
-	return names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
-}
-function useGithubSettings() {
-	return useQuery({
-		queryKey: ["github-settings"],
-		queryFn: async () => {
-			return (await api("/api/settings"))?.settings?.github || {};
-		},
-		refetchInterval: 3e4,
-		retry: false
-	});
-}
-function useIntakeSwitches(ticketSources) {
-	const status = useMindflockStatus().data;
-	const gh = useGithubSettings();
-	const sw = intakeSwitches({
-		ticketsDesired: !!(status?.desired ?? status?.running),
-		ticketSources,
-		gh: gh.data
-	});
-	return {
-		status,
-		sw,
-		onKinds: [
-			"tickets",
-			"prs",
-			"issues"
-		].filter((k) => sw.on[k]),
-		anyConfigured: sw.configured.tickets || sw.configured.prs || sw.configured.issues
-	};
-}
-//#endregion
 //#region src/components/intake/PullRequestsTab.tsx
 var PR_GROUPS_KEY = "mf_intake_pr_groups";
-function PullRequestsTab({ focus, adding, startAdd, endAdd }) {
+function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	const s = useSettings();
 	const agentChoices = useAgentChoices();
 	const catalog = useTicketingCatalog(true).data || [];
@@ -76072,7 +78062,6 @@ function PullRequestsTab({ focus, adding, startAdd, endAdd }) {
 	const overrides = gh.repo_settings || {};
 	const skipAuthors = Array.isArray(gh.skip_authors) ? gh.skip_authors.join(", ") : gh.skip_authors || "";
 	const edit = useEditing(focus);
-	const [dismissed, setDismissed] = (0, import_react.useState)(false);
 	const [skipDraft, setSkipDraft] = (0, import_react.useState)(String(skipAuthors));
 	(0, import_react.useEffect)(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
 	const prsQuery = usePanelQuery("github-prs");
@@ -76098,10 +78087,9 @@ function PullRequestsTab({ focus, adding, startAdd, endAdd }) {
 	const groupOrder = repoGroupOrder(repos.map((r) => r.toLowerCase()), byRepo).map((k) => repos.find((r) => r.toLowerCase() === k) || extraNames.get(k) || k);
 	const watched = new Set(repos.map((r) => r.toLowerCase()));
 	const anyMatch = shownPrs.length > 0;
-	const showAdd = !!adding || !n && !dismissed;
+	const showAdd = !!adding;
 	const closeAdd = () => {
 		endAdd();
-		setDismissed(true);
 	};
 	const addFlow = showAdd ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddRepoFlow, {
 		uses: adding?.uses?.length ? adding.uses : ["pr"],
@@ -76173,6 +78161,7 @@ function PullRequestsTab({ focus, adding, startAdd, endAdd }) {
 					tooltip: (p.repo || "") + "#" + p.number + " — " + (p.title || "") + "\nby " + (p.author || "?") + " · " + (p.head_ref || "?") + " → " + (p.base_ref || "?"),
 					meta: `by ${p.author || "?"} · ${ageText(p.created_at)} · into ${p.base_ref || "?"}`,
 					hasSession: p.has_session,
+					session: p.session,
 					eligible: p.eligible,
 					eligibleLabel: enabled ? "will auto-start" : "auto-start off",
 					eligibleOn: enabled,
@@ -76203,7 +78192,7 @@ function PullRequestsTab({ focus, adding, startAdd, endAdd }) {
 						refreshInstances();
 						setTimeout(relistPrs, 5e3);
 						return {
-							message: "Session " + (r?.title || ""),
+							message: r?.title ? "Session " + r.title : "Session for #" + p.number,
 							title: r?.title
 						};
 					}
@@ -76255,23 +78244,22 @@ function PullRequestsTab({ focus, adding, startAdd, endAdd }) {
 				" open PRs, MindFlock starts a session that addresses the comments. It doesn't review other people's PRs."
 			]
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutomationSwitch, {
-			label: "Auto-address review comments",
-			title: "Start a session on its own when one of your PRs gets review comments — your repositories are kept either way",
-			rowId: "gh-pr-toggle-row",
-			inputId: "gh-pr-enabled",
-			statusId: "gh-pr-status",
-			checked: enabled,
-			disabled: !n,
-			onChange: (next) => saveGithub({ enabled: next }, next ? "Auto-address review comments on" : "Auto-address review comments off"),
-			note: !n ? "Add a repository first — + Add source" : void 0
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GithubStatusLine, {
+		!n && !showAdd ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GithubSetupCard, {
+			what: "PR review comments",
+			onPickRepo: () => startAdd({
+				kind: "repo",
+				uses: ["pr"]
+			}),
+			onTurnOn: () => gotoTab("autostart")
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutoStartLink, {
+			kind: "prs",
+			gotoTab
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GithubStatusLine, {
 			buttonId: "gh-connect-btn",
 			needFor: "your PRs can't be listed or started"
-		}),
-		workList,
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		})] }),
+		n || groupOrder.length ? workList : null,
+		n ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 			className: "pr-advanced",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Advanced options" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "pr-advanced-body",
@@ -76374,13 +78362,13 @@ function PullRequestsTab({ focus, adding, startAdd, endAdd }) {
 					})
 				]
 			})]
-		})
+		}) : null
 	] });
 }
 //#endregion
 //#region src/components/intake/IssuesTab.tsx
 var ISSUE_GROUPS_KEY = "mf_intake_issue_groups";
-function IssuesTab({ focus, adding, startAdd, endAdd }) {
+function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	const s = useSettings();
 	const agentChoices = useAgentChoices();
 	const catalog = useTicketingCatalog(true).data || [];
@@ -76392,7 +78380,6 @@ function IssuesTab({ focus, adding, startAdd, endAdd }) {
 	const overrides = gh.issue_repo_settings || {};
 	const skipAuthors = Array.isArray(gh.issue_skip_authors) ? gh.issue_skip_authors.join(", ") : gh.issue_skip_authors || "";
 	const edit = useEditing(focus);
-	const [dismissed, setDismissed] = (0, import_react.useState)(false);
 	const [skipDraft, setSkipDraft] = (0, import_react.useState)(String(skipAuthors));
 	(0, import_react.useEffect)(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
 	const issuesQuery = usePanelQuery("github-issues");
@@ -76417,10 +78404,9 @@ function IssuesTab({ focus, adding, startAdd, endAdd }) {
 	const extraNames = new Map(shown.map((i) => [(i.repo || "unknown").toLowerCase(), i.repo || "unknown"]));
 	const groupOrder = repoGroupOrder(repos.map((r) => r.toLowerCase()), byRepo).map((k) => repos.find((r) => r.toLowerCase() === k) || extraNames.get(k) || k);
 	const watched = new Set(repos.map((r) => r.toLowerCase()));
-	const showAdd = !!adding || !n && !dismissed;
+	const showAdd = !!adding;
 	const closeAdd = () => {
 		endAdd();
-		setDismissed(true);
 	};
 	const addFlow = showAdd ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddRepoFlow, {
 		uses: adding?.uses?.length ? adding.uses : ["issue"],
@@ -76492,6 +78478,7 @@ function IssuesTab({ focus, adding, startAdd, endAdd }) {
 					tooltip: (i.repo || "") + "#" + i.number + " — " + (i.title || "") + "\nby " + (i.author || "?"),
 					meta: `by ${i.author || "?"} · ${ageText(i.created_at)}`,
 					hasSession: i.has_session,
+					session: i.session,
 					eligible: i.eligible,
 					eligibleLabel: enabled ? "will auto-start" : "auto-start off",
 					eligibleOn: enabled,
@@ -76522,7 +78509,7 @@ function IssuesTab({ focus, adding, startAdd, endAdd }) {
 						refreshInstances();
 						setTimeout(relistIssues, 5e3);
 						return {
-							message: "Session " + (r?.title || ""),
+							message: r?.title ? "Session " + r.title : "Session for #" + i.number,
 							title: r?.title
 						};
 					}
@@ -76571,23 +78558,22 @@ function IssuesTab({ focus, adding, startAdd, endAdd }) {
 			className: "set-hint set-block-hint",
 			children: "When a new GitHub issue opens on one of the repositories below, MindFlock starts a session for it, with its comments, on a fresh branch."
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutomationSwitch, {
-			label: "Auto-start new issues",
-			title: "Start a session on its own for each newly opened issue — your repositories are kept either way",
-			rowId: "gh-issues-toggle-row",
-			inputId: "gh-issues-enabled",
-			statusId: "gh-issues-status",
-			checked: enabled,
-			disabled: !n,
-			onChange: (next) => saveGithub({ issues_enabled: next }, next ? "Auto-start new issues on" : "Auto-start new issues off"),
-			note: !n ? "Add a repository first — + Add source" : void 0
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GithubStatusLine, {
+		!n && !showAdd ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GithubSetupCard, {
+			what: "New issues",
+			onPickRepo: () => startAdd({
+				kind: "repo",
+				uses: ["issue"]
+			}),
+			onTurnOn: () => gotoTab("autostart")
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutoStartLink, {
+			kind: "issues",
+			gotoTab
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GithubStatusLine, {
 			buttonId: "gh-issue-connect-btn",
 			needFor: "issues can't be listed or started"
-		}),
-		workList,
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		})] }),
+		n || groupOrder.length ? workList : null,
+		n ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 			className: "pr-advanced",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Advanced options" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "pr-advanced-body",
@@ -76672,27 +78658,57 @@ function IssuesTab({ focus, adding, startAdd, endAdd }) {
 					})
 				]
 			})]
-		})
+		}) : null
 	] });
 }
 //#endregion
 //#region src/components/intake/ScheduledTemplates.tsx
+function skippedText(epochSec, now = /* @__PURE__ */ new Date()) {
+	const label = whenLabel(epochSec, now);
+	if (!label) return "";
+	return label.split(" ")[0] + "'s run skipped";
+}
+function scheduleLine(row) {
+	return [
+		row.when,
+		row.next,
+		row.skipped
+	].filter(Boolean).join(" · ");
+}
 function scheduledRows(templates, status, now = /* @__PURE__ */ new Date()) {
 	return templates.filter(hasSchedule).map((t) => {
 		const info = status.runs[t.name.trim().toLowerCase()] || {};
 		const next = t.schedule?.paused ? "paused" : !status.runs_here && status.runs_on ? "starts on " + status.runs_on : info.next_at ? "next " + whenLabel(info.next_at, now) : "";
-		return {
+		const tz = info.tz;
+		const skipping = !t.schedule?.paused && !info.paused ? info.skipping_at : 0;
+		const row = {
 			name: t.name,
-			when: info.schedule_label || scheduleLabel(t.schedule),
+			when: (info.schedule_label || scheduleLabel(t.schedule)) + (tz && t.schedule?.at ? " " + tz : ""),
 			next,
 			problem: runProblem(t)
 		};
+		if (skipping) row.skipped = skippedText(skipping, now);
+		return row;
 	});
 }
-function ScheduledTemplates() {
+function nextScheduledText(templates, status, now = /* @__PURE__ */ new Date()) {
+	if (!status.runs_here && status.runs_on) return "";
+	let best = null;
+	for (const t of templates.filter(hasSchedule)) {
+		const info = status.runs[t.name.trim().toLowerCase()] || {};
+		if (t.schedule?.paused || info.paused || !info.next_at) continue;
+		if (!best || info.next_at < best.at) best = {
+			t,
+			at: info.next_at,
+			skip: info.skipping_at || 0
+		};
+	}
+	if (!best) return "";
+	return best.t.name + ", " + whenLabel(best.at, now) + (best.skip ? " — " + skippedText(best.skip, now) : "");
+}
+function useScheduledTemplates() {
 	const [templates, setTemplates] = (0, import_react.useState)(() => templatesNow());
 	const [status, setStatus] = (0, import_react.useState)(() => templateRunsNow());
-	const [running, setRunning] = (0, import_react.useState)("");
 	(0, import_react.useEffect)(() => {
 		const reload = () => {
 			setTemplates(templatesNow());
@@ -76702,6 +78718,14 @@ function ScheduledTemplates() {
 		ensureTemplates().then(reload).catch(() => {});
 		return () => document.removeEventListener(TEMPLATES_CHANGED, reload);
 	}, []);
+	return {
+		templates,
+		status
+	};
+}
+function ScheduledTemplates() {
+	const { templates, status } = useScheduledTemplates();
+	const [running, setRunning] = (0, import_react.useState)("");
 	const rows = scheduledRows(templates, status);
 	if (!rows.length) return null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -76728,7 +78752,7 @@ function ScheduledTemplates() {
 			]
 		}), rows.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "pr-open-item",
-			title: r.name + " — " + r.when,
+			title: r.name + " — " + scheduleLine(r),
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "pr-open-main",
@@ -76741,7 +78765,7 @@ function ScheduledTemplates() {
 					className: "pr-open-meta",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "ik-scheduled-when",
-						children: [r.when, r.next].filter(Boolean).join(" · ")
+						children: scheduleLine(r)
 					})
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -76874,49 +78898,19 @@ function StateChip({ state, device }) {
 		children: "auto-start off"
 	});
 }
+function stalledText(s, many) {
+	const they = many ? "They" : "It";
+	const any = many ? "any of them" : "it";
+	if (s.broken) return s.broken;
+	if (s.state === "elsewhere") return runsOnText(s.runsOn) + " — " + (s.runsOn || "that device") + " starts " + (many ? "these" : "this one") + " on its own; this computer doesn't (to move them here, choose Run here in Settings → Your devices). You can still start " + any + " here, with Start.";
+	if (s.state === "unset") return "Not set up — auto-start isn't available for " + s.label + " here yet. You can still start " + any + " with Start.";
+	return they + " won't start on " + (many ? "their" : "its") + " own: " + s.switchName + " is off (above). You can still start " + any + " here, with Start.";
+}
 function StalledNote({ s }) {
-	const many = s.items.length !== 1;
-	if (s.state === "elsewhere") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "ik-queue-stalled",
-		"data-runs-on": s.runsOn || "",
-		children: [
-			runsOnText(s.runsOn),
-			" — ",
-			s.runsOn || "that device",
-			" starts",
-			" ",
-			many ? "these" : "this one",
-			" on its own; this computer doesn't (to move them here, choose",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Run here" }),
-			" in Settings → Your devices). You can still start ",
-			many ? "any of them" : "it",
-			" here, with ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start" }),
-			"."
-		]
-	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "ik-queue-stalled",
-		children: [
-			many ? "These are" : "This one is",
-			" ready, but auto-start is off —",
-			" ",
-			many ? "they" : "it",
-			" won't start on ",
-			many ? "their" : "its",
-			" own until",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: s.blockedOn }),
-			" is on (the ",
-			s.label,
-			" tab). You can still start",
-			" ",
-			many ? "any of them" : "it",
-			" here, with ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start" }),
-			"."
-		]
+		"data-runs-on": s.state === "elsewhere" ? s.runsOn || "" : void 0,
+		children: stalledText(s, s.items.length !== 1)
 	});
 }
 function SectionBlock({ s, gotoTab, agents, configuredFor, onStart }) {
@@ -76961,8 +78955,8 @@ function SectionBlock({ s, gotoTab, agents, configuredFor, onStart }) {
 			}) : null,
 			s.items.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "ik-queue-empty",
-				children: s.broken ? "" : s.state === "unset" ? "Nothing set up yet — set it up on the " + s.label + " tab." : "Nothing waiting."
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [s.state !== "on" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StalledNote, { s }), groups.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				children: s.broken ? "" : s.state === "unset" ? "Not set up yet — set it up on the " + s.label + " tab." : "Nothing waiting."
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [s.state !== "on" && !s.broken && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StalledNote, { s }), groups.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ik-queue-group",
 				children: [groups.length > 1 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "ik-queue-group-name",
@@ -77050,7 +79044,7 @@ function QueueTab({ gotoTab }) {
 		const panel = item.kind === "tickets" ? ticketsQ : item.kind === "prs" ? prsQ : issuesQ;
 		setTimeout(() => void panel.refetch(), 5e3);
 		return {
-			message: "Session " + title,
+			message: title ? "Session " + title : "Session for " + item.reference,
 			title
 		};
 	};
@@ -77067,14 +79061,13 @@ function QueueTab({ gotoTab }) {
 		loaded: !!q.data
 	});
 	const configuredTickets = (ticketSources || []).length;
-	const ticketErrors = (ticketsQ.data?.errors || []).filter((e) => (ticketSources || []).some((x) => x.id === e.source));
-	const listedTickets = (ticketsQ.data?.sources || []).length;
 	const catalog = useTicketingCatalog(true).data || [];
 	const nameOfSource = (id) => {
 		const src = (ticketSources || []).find((x) => x.id === id);
 		return src ? sourceDisplayName(src, catalog) : id;
 	};
-	const ticketsBroken = configuredTickets && ticketErrors.length && !listedTickets ? ticketErrors.map((e) => friendlySourceError(nameOfSource(e.source), e.error).replace(/ — press Fix on its heading\.$/, ".")).join(" ") + " Fix it on the Tickets tab." : "";
+	const brokenSources = useBrokenTicketSources();
+	const ticketsBroken = configuredTickets && brokenSources.length >= configuredTickets ? "Can't connect — " + brokenSources.map((b) => b.why.replace(/ — press Fix on its heading\.$/, ".")).join(" ") + " Press Fix on the Tickets tab." : "";
 	const sections = [
 		{
 			kind: "tickets",
@@ -77086,9 +79079,12 @@ function QueueTab({ gotoTab }) {
 				engineOn,
 				switchOn: true
 			}),
-			blockedOn: "Auto-start tickets",
+			switchName: "Tickets",
 			broken: ticketsBroken,
-			items: queuedOf("tickets", payloads),
+			items: queuedOf("tickets", payloads).map((i) => i.target.kind === "tickets" ? {
+				...i,
+				group: nameOfSource(i.target.source)
+			} : i),
 			note: noteFor(ticketsQ, "tickets")
 		},
 		{
@@ -77102,7 +79098,7 @@ function QueueTab({ gotoTab }) {
 				switchOn: status?.pr_enabled === true,
 				runsElsewhere: runsElsewhere && gh.enabled !== false
 			}),
-			blockedOn: "Auto-address review comments",
+			switchName: "PR review comments",
 			runsOn,
 			items: queuedOf("prs", payloads),
 			note: noteFor(prsQ, "PRs")
@@ -77118,7 +79114,7 @@ function QueueTab({ gotoTab }) {
 				switchOn: status?.issues_enabled === true,
 				runsElsewhere: runsElsewhere && gh.issues_enabled === true
 			}),
-			blockedOn: "Auto-start new issues",
+			switchName: "New issues",
 			runsOn,
 			items: queuedOf("issues", payloads),
 			note: noteFor(issuesQ, "issues")
@@ -77136,89 +79132,95 @@ function QueueTab({ gotoTab }) {
 		issuesQ.refresh();
 	};
 	const held = status?.held_for_slot;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-		className: "set-row",
-		id: "ik-max-sessions-row",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Max ticket sessions at once"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-				group: "engine",
-				field: "max_sessions",
-				type: "number",
-				placeholder: "no limit"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "set-hint",
-				children: [held ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [
-						"Holding: ",
-						held.live,
-						" of ",
-						held.max,
-						" ticket sessions are running."
-					] }),
-					" ",
-					"The next ticket starts when one of them is closed.",
-					" "
-				] }) : null, "Past this, the rest wait their turn. Blank = no limit."]
-			})
-		]
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "set-row",
-		id: "ik-queue-row",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Starts automatically"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "pr-open-toolbar",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						id: "ik-queue-refresh",
-						onClick: refreshAll,
-						children: "Refresh"
-					}),
-					total ? filter.control : null,
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "pr-open-note",
-						children: total === 0 ? "Nothing waiting to start" : filter.active ? shownTotal + " of " + total + " shown" : autoTotal === total ? total + (total === 1 ? " item will auto-start" : " items will auto-start") : total + " waiting · " + autoTotal + " will auto-start"
-					})
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "ik-queue",
-				id: "ik-queue-list",
-				children: [
-					filter.active && !shownSections.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "ik-queue-empty",
-						children: [
-							"No queued item matches “",
-							filter.query,
-							"”."
-						]
-					}) : null,
-					shownSections.map((sec) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectionBlock, {
-						s: sec,
-						gotoTab,
-						agents: agentChoices.names,
-						configuredFor,
-						onStart: startItem
-					}, sec.kind)),
-					!filter.active && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScheduledTemplates, {})
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-hint",
-				children: "What would start on its own next, oldest first. Each other tab says why anything else is skipped."
-			})
-		]
-	})] });
+	const sched = useScheduledTemplates();
+	const nextSched = nextScheduledText(sched.templates, sched.status);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutoStartSwitches, { gotoTab }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			id: "ik-max-sessions-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Max ticket sessions at once"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+					group: "engine",
+					field: "max_sessions",
+					type: "number",
+					placeholder: "no limit"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "set-hint",
+					children: [held ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [
+							"Holding: ",
+							held.live,
+							" of ",
+							held.max,
+							" ticket sessions are running."
+						] }),
+						" ",
+						"The next ticket starts when one of them is closed.",
+						" "
+					] }) : null, "Past this, the rest wait their turn. Blank = no limit."]
+				})
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row",
+			id: "ik-queue-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Starts automatically"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "pr-open-toolbar",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							id: "ik-queue-refresh",
+							onClick: refreshAll,
+							children: "Refresh"
+						}),
+						total ? filter.control : null,
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "pr-open-note",
+							children: total === 0 ? nextSched ? "Next to start on its own: " + nextSched : "Nothing waiting to start" : filter.active ? shownTotal + " of " + total + " shown" : autoTotal === total ? total + (total === 1 ? " item will auto-start" : " items will auto-start") : total + " waiting · " + autoTotal + " will auto-start"
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "ik-queue",
+					id: "ik-queue-list",
+					children: [
+						filter.active && !shownSections.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "ik-queue-empty",
+							children: [
+								"No queued item matches “",
+								filter.query,
+								"”."
+							]
+						}) : null,
+						shownSections.map((sec) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SectionBlock, {
+							s: sec,
+							gotoTab,
+							agents: agentChoices.names,
+							configuredFor,
+							onStart: startItem
+						}, sec.kind)),
+						!filter.active && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScheduledTemplates, {})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "What would start on its own next, oldest first. Each other tab says why anything else is skipped."
+				})
+			]
+		})
+	] });
 }
 //#endregion
 //#region src/components/intake/IntakeDialog.tsx
@@ -77291,35 +79293,47 @@ function TabCount({ tab }) {
 	if (!q.data) return null;
 	const n = tab === "tickets" ? countInBuckets((q.data.tickets || []).filter(isQueued), visibleBuckets(q.data.buckets || [], q.data.done_buckets || [], loadShownBuckets()), loadMineOnly()) : (q.data.prs || q.data.issues || []).filter(isQueued).length;
 	if (!n) return null;
+	const listed = tab === "tickets" ? countInBuckets(q.data.tickets || [], visibleBuckets(q.data.buckets || [], q.data.done_buckets || [], loadShownBuckets()), loadMineOnly()) : (q.data.prs || q.data.issues || []).length;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "ik-tab-count",
-		title: n + " ready to start",
+		title: n + " ready to start — the ones auto-start would take" + (listed > n ? " (" + listed + " listed)" : ""),
 		children: n
 	});
 }
 function AutoStartLine({ ticketSources, gotoTab }) {
 	const p = useIntakeSwitches(ticketSources);
-	const line = p.onKinds.length ? "Auto-start is on for " + kindsText(p.onKinds) + "." : p.anyConfigured ? "Auto-start is off everywhere." : "Nothing auto-starts yet — set up a tab below first.";
-	const offTab = p.onKinds.length ? null : p.sw.configured.tickets ? "tickets" : p.sw.configured.prs ? "prs" : p.sw.configured.issues ? "issues" : null;
+	const sched = useScheduledTemplates();
+	const next = nextScheduledText(sched.templates, sched.status);
+	if (!p.anyConfigured && !next) return null;
+	const line = p.onKinds.length ? "Auto-start is on for " + kindsText(p.onKinds) + "." : p.anyConfigured ? "Auto-start is off everywhere." : "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "ik-autostart-line",
 		id: "ik-autostart-row",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			className: "ik-autostart-text",
 			id: "ik-autostart-status",
 			role: "status",
 			"aria-live": "polite",
-			children: line
-		}), offTab && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			children: [line, next ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "ik-autostart-next",
+				children: [
+					line ? " " : "",
+					"Next to start on its own: ",
+					next,
+					"."
+				]
+			}) : null]
+		}), p.anyConfigured ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			type: "button",
 			id: "ik-turn-on-btn",
 			className: "linklike",
-			title: "Go to the switch that turns auto-start on",
-			onClick: () => gotoTab(offTab),
-			children: "Turn on…"
-		})]
+			title: "The switches for tickets, PR comments and new issues",
+			onClick: () => gotoTab("autostart"),
+			children: p.onKinds.length ? "Auto-start switches ›" : "Turn on ›"
+		}) : null]
 	});
 }
+var lastPlace = { tab: "tickets" };
 var panelId = (t) => t.legacyId || "intake-tabpanel-" + t.key;
 function AutoStartOn() {
 	const p = useIntakeSwitches((useTicketingSources(true).data || []).length);
@@ -77327,6 +79341,7 @@ function AutoStartOn() {
 }
 function IntakeDialog() {
 	const open = useUi((s) => s.openDialog === "intake");
+	useAutoTour("intake", open);
 	const target = useUi((s) => s.dialogTarget);
 	const closeDialog = useUi((s) => s.closeDialog);
 	const [tab, setTab] = (0, import_react.useState)("tickets");
@@ -77341,10 +79356,16 @@ function IntakeDialog() {
 			setFocus("");
 			return;
 		}
-		const t = parseIntakeTarget(target);
+		const t = target ? parseIntakeTarget(target) : {
+			tab: lastPlace.tab,
+			focus: ""
+		};
 		setTab(t.tab);
 		setFocus(t.focus);
 	}, [open, target]);
+	(0, import_react.useEffect)(() => {
+		lastPlace.tab = tab;
+	}, [tab]);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
 		prefetchIntakePanels();
@@ -77413,6 +79434,7 @@ function IntakeDialog() {
 								},
 								children: "+ Add source"
 							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "intake" }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								id: "intake-close",
@@ -77574,37 +79596,32 @@ function SettingsSearch({ onPick }) {
 //#endregion
 //#region src/components/settings/screens/General.tsx
 function General(_) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GettingStarted, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-			className: "set-section-title",
-			children: "General"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Per-session budget (USD, 0 = off)"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-					group: "general",
-					field: "session_budget_usd",
-					type: "number",
-					placeholder: "0"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint",
-					children: "One alert when a session's estimated cost passes this."
-				})
-			]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResumeOnUsageResetRow, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReviveOnStartRow, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SleepIdleRow, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(AdvancedFold, {
-			id: "general-advanced",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tours, {}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(AdvancedFold, {
+		id: "general-advanced",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "set-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Per-session budget (USD, 0 = off)"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+						group: "general",
+						field: "session_budget_usd",
+						type: "number",
+						placeholder: "0"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "One alert when a session's estimated cost passes this."
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResumeOnUsageResetRow, {}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReviveOnStartRow, {}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SleepIdleRow, {}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 				className: "set-row",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -77622,9 +79639,10 @@ function General(_) {
 						children: "Powers the \"% left\" in the sidebar's Usage bar. An estimate, not billed dollars."
 					})
 				]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollSpeedRow, {})]
-		})
-	] });
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollSpeedRow, {})
+		]
+	})] });
 }
 function ResumeOnUsageResetRow() {
 	const s = useSettings();
@@ -77702,24 +79720,49 @@ function SleepIdleRow() {
 		]
 	});
 }
-function GettingStarted() {
+function Tours() {
 	const enabled = useUi((s) => s.hintsEnabled);
 	const setHintsEnabled = useUi((s) => s.setHintsEnabled);
-	const openTour = useUi((s) => s.openTour);
-	const closeDialog = useUi((s) => s.closeDialog);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "onboarding-block",
+		id: "general-tours",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 				className: "set-section-title",
-				children: "Getting started"
+				children: "Tours"
 			}),
+			TOUR_IDS.map((id) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row onboarding-action",
+				"data-tour-row": id,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "onboarding-action-text",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: id === "welcome" ? "Welcome tour" : TOURS[id].title
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: TOUR_HINT[id]
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					title: `Replay the ${TOURS[id].title} tour`,
+					onClick: () => replayTour(id),
+					children: "Replay"
+				})]
+			}, id)),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "set-row set-switch-row",
 				title: "Small inline 💡 tips that point out features around the app. Turn them back on any time to see the ones you dismissed again.",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Show getting-started hints"
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "notif-rule-text",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Show hints"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint notif-rule-desc",
+						children: "💡 tips around the app, and each tour the first time you open its menu."
+					})]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "ca-switch",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -77731,31 +79774,18 @@ function GettingStarted() {
 						}
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "set-row onboarding-action",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "onboarding-action-text",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: "Welcome walkthrough"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-hint",
-						children: "A short tour of sessions, shipping, and where work comes from."
-					})]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					onClick: () => {
-						closeDialog();
-						openTour();
-					},
-					children: "Replay tour"
-				})]
 			})
 		]
 	});
 }
+var TOUR_HINT = {
+	welcome: "The three steps to your first session.",
+	new: "Starting a session: the task, the repo, Start.",
+	intake: "Turning tickets, pull requests and issues into sessions.",
+	verify: "Checking that a change actually works.",
+	schedule: "Templates, and sessions that start by themselves.",
+	settings: "Where your connections and every setting live."
+};
 function ScrollSpeedRow() {
 	const [pos, setPos] = (0, import_react.useState)(3);
 	const fmt = (v) => String(Math.round(v * 100) / 100);
@@ -77853,12 +79883,21 @@ function CopyRow({ text }) {
 		})]
 	});
 }
+function plainIssueMessage(message, fix) {
+	let m = message || "";
+	if (fix && m.includes("`" + fix + "`")) {
+		const parts = m.split(/\s+—\s+|;\s+/);
+		const kept = parts.filter((p) => !p.includes("`" + fix + "`"));
+		if (kept.length && kept.length < parts.length) m = kept.join(" — ").replace(/[.\s]*$/, "") + ".";
+	}
+	return m.replace(/`([^`]*)`/g, "$1");
+}
 function Issue({ issue }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		className: "ts-issue ts-" + issue.level,
 		"data-issue": issue.id,
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: issue.message }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: plainIssueMessage(issue.message, issue.fix) }),
 			issue.fix && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CopyRow, { text: issue.fix }),
 			issue.id === "wsl_windows_only" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WslOptions, {}),
 			issue.docs && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
@@ -78050,23 +80089,134 @@ function TailscaleCard({ active = true }) {
 }
 //#endregion
 //#region src/components/settings/screens/Mobile.tsx
+function computerRow(h, opts) {
+	if (!h) {
+		if (!opts.caps || opts.error) return {
+			state: "fail",
+			line: "Tailscale isn't on this computer yet.",
+			fix: "",
+			card: true
+		};
+		return {
+			state: "wait",
+			line: "Checking Tailscale on this computer…",
+			fix: "",
+			card: false
+		};
+	}
+	const fix = (h.issues || []).find((i) => i.fix)?.fix || "";
+	if (!h.installed) return {
+		state: "fail",
+		line: "Tailscale isn't on this computer yet.",
+		fix: "",
+		card: true
+	};
+	if (h.running || h.backend_state === "Running") return {
+		state: "ok",
+		line: "Tailscale is running on this computer" + (h.tagged ? "" : h.user ? " — signed in as " + h.user : "") + ".",
+		fix: "",
+		card: false
+	};
+	if (h.backend_state === "NeedsLogin" || h.backend_state === "NoState") return {
+		state: "fail",
+		line: "Tailscale isn't signed in on this computer.",
+		fix: "",
+		card: true
+	};
+	if (h.backend_state === "NeedsMachineAuth") return {
+		state: "fail",
+		line: "Tailscale is waiting for an admin to approve this computer.",
+		fix: "",
+		card: true
+	};
+	return {
+		state: "fail",
+		line: fix ? "Tailscale is installed but not running. Start it:" : "Tailscale is installed but not running.",
+		fix,
+		card: !fix
+	};
+}
+function reachableRow(data, opts) {
+	if (!opts.caps) return "wait";
+	if (!data) return "wait";
+	return data.local_only ? "fail" : "ok";
+}
+var GLYPH = {
+	ok: "✓",
+	fail: "✗",
+	wait: "•"
+};
+function CopyBox({ text }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sl-snippet mobile-fix",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: text }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "test-btn",
+			onClick: () => copyText(text).then((ok) => toast(ok ? "Command copied" : "Copy failed")),
+			children: "Copy"
+		})]
+	});
+}
+function Row({ n, state, title, id, children }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		className: "mobile-row st-" + state,
+		"data-phone-step": id,
+		"data-state": state,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "mobile-row-head",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "mobile-row-n",
+					"aria-hidden": "true",
+					children: n
+				}),
+				state !== "none" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "mobile-row-glyph st-" + state,
+					"aria-label": state === "ok" ? "done" : state === "fail" ? "not yet" : "checking",
+					children: GLYPH[state]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "mobile-row-title",
+					children: title
+				})
+			]
+		}), children ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "mobile-row-body set-hint",
+			children
+		}) : null]
+	});
+}
 function Mobile(p) {
 	const { data: config } = useConfig();
 	const [data, setData] = (0, import_react.useState)(null);
 	const [error, setError] = (0, import_react.useState)("");
-	const tailscale = config?.caps?.tailscale !== false;
+	const [health, setHealth] = (0, import_react.useState)(null);
+	const [healthErr, setHealthErr] = (0, import_react.useState)(false);
+	const caps = config?.caps?.tailscale !== false;
 	const load = (0, import_react.useCallback)(async () => {
-		if (!tailscale) return;
+		try {
+			setHealth(await api("/api/tailscale/health"));
+			setHealthErr(false);
+		} catch {
+			setHealthErr(true);
+		}
+		if (!caps) return;
 		try {
 			setData(await api("/api/mobile"));
 			setError("");
 		} catch {
 			setError("Could not load the phone URLs.");
 		}
-	}, [tailscale]);
+	}, [caps]);
 	(0, import_react.useEffect)(() => {
 		if (p.active) load();
 	}, [p.active, load]);
+	const one = computerRow(health, {
+		caps,
+		error: healthErr
+	});
+	const three = reachableRow(data, { caps });
+	const ready = one.state === "ok" && three === "ok";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
@@ -78074,109 +80224,106 @@ function Mobile(p) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint set-block-hint",
-			children: "Your phone reaches this computer over Tailscale, a private network between your own devices. Three steps, in order:"
+			children: "Your phone reaches this computer over Tailscale, a private network between your own devices."
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
-			className: "mobile-phone-steps set-hint",
-			id: "mobile-computer-steps",
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
-				"data-phone-step": "computer",
-				"data-state": tailscale ? "ok" : "fail",
-				children: tailscale ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: "Tailscale is installed on this computer." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Install Tailscale on this computer" }),
-					" and sign in. What that means here depends on the OS (the Mac app, or Tailscale inside WSL when it's only on Windows) — the card below knows, and says what's wrong if anything is.",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailscaleCard, { active: p.active }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Then reopen this screen — the QR code and phone URLs appear below." })
-				] })
-			})
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PhoneSteps, { app: data?.phone_app }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			id: "mobile-body",
-			className: "mobile-body",
-			children: !tailscale ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "set-hint",
-				id: "mobile-waiting",
-				children: [
-					"The QR code and the ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/m" }),
-					" link show here once Tailscale is set up on this computer."
-				]
-			}) : error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "error",
-				children: error
-			}) : !data ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "set-hint",
-				children: "Loading…"
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-				data.local_only && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "devices-warn",
-					id: "mobile-local-only",
-					role: "alert",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-						"This computer only listens on itself — your phone can't reach it yet. Turn on",
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Make reachable" }),
-						" in Your devices (Tailscale mode with the access gate on; MindFlock restarts once)."
-					] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						id: "mobile-open-devices",
-						onClick: () => p.gotoScreen("devices"),
-						children: "Open Your devices"
-					})]
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ol", {
+			className: "mobile-steps",
+			id: "mobile-steps",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Row, {
+					n: 1,
+					state: one.state,
+					title: "Tailscale on this computer",
+					id: "computer",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							id: "mobile-computer-line",
+							children: one.line
+						}),
+						one.fix && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CopyBox, { text: one.fix }),
+						one.state !== "ok" && (one.card ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailscaleCard, { active: p.active }) : one.state === "fail" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+							className: "mobile-ts-details",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "More about Tailscale on this computer" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailscaleCard, { active: p.active })]
+						}) : null)
+					]
 				}),
-				data.qr_svg && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					id: "mobile-qr",
-					dangerouslySetInnerHTML: { __html: data.qr_svg }
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PhoneAppRow, { app: data?.phone_app }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
+					n: 3,
+					state: three,
+					title: "Make MindFlock reachable from your phone",
+					id: "reachable",
+					children: three === "fail" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						id: "mobile-local-only",
+						role: "alert",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "MindFlock only listens on this computer, so your phone can't reach it yet." }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							id: "mobile-open-devices",
+							onClick: () => p.gotoScreen("devices"),
+							children: "Turn on Make reachable…"
+						})]
+					}) : three === "ok" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Your other devices on Tailscale can reach MindFlock." }) : error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "error",
+						children: error
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: caps ? "Checking…" : "Waits for Tailscale on this computer (1)." })
 				}),
-				data.note && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "set-hint",
-					children: data.note
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UrlList, { urls: data.urls || [] }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "set-hint",
-					id: "mobile-sign-in-hint",
-					children: "Scanning signs the phone in. To open the link by hand it asks for the access token (Settings → Security). One URL for all your computers: Your devices → One link for all devices."
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, {
+					n: 4,
+					state: "none",
+					title: "Scan to open MindFlock",
+					id: "mindflock",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						id: "mobile-body",
+						className: "mobile-body",
+						children: !ready || !data ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							id: "mobile-waiting",
+							children: "The QR to open MindFlock appears here once 1 and 3 are ✓."
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+							data.qr_svg && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								id: "mobile-qr",
+								dangerouslySetInnerHTML: { __html: data.qr_svg }
+							}),
+							data.note && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: data.note }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UrlList, { urls: data.urls || [] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								id: "mobile-sign-in-hint",
+								children: "Scanning signs the phone in. Opening a link by hand asks for the access token (Settings → Security)."
+							})
+						] })
+					})
 				})
-			] })
+			]
 		})
 	] });
 }
-function PhoneSteps({ app }) {
+function PhoneAppRow({ app }) {
 	const url = app?.url || "https://tailscale.com/download";
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ol", {
-		className: "mobile-phone-steps set-hint",
-		id: "mobile-phone-steps",
-		start: 2,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-			"data-phone-step": "tailscale",
-			children: [
-				"Install Tailscale on your phone and sign in",
-				app?.login ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-					" ",
-					"as ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: app.login })
-				] }) : " with the same account as this computer",
-				". Scan to get the app, or open",
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Row, {
+		n: 2,
+		state: "none",
+		title: "Tailscale on your phone",
+		id: "tailscale",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"Install the Tailscale app on your phone and sign in",
+			app?.login ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
-					href: url,
-					target: "_blank",
-					rel: "noopener noreferrer",
-					children: url.replace(/^https:\/\//, "")
-				}),
-				" ",
-				"on the phone.",
-				app?.qr_svg && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "qr-card ts-app-qr",
-					dangerouslySetInnerHTML: { __html: app.qr_svg }
-				})
-			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
-			"data-phone-step": "mindflock",
-			children: "Open MindFlock on the phone: scan the QR below, or use one of the URLs."
+				"as ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: app.login })
+			] }) : " with the same account as this computer",
+			". This QR gets the app, or open",
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+				href: url,
+				target: "_blank",
+				rel: "noopener noreferrer",
+				children: url.replace(/^https:\/\//, "")
+			}),
+			" ",
+			"on the phone."
+		] }), app?.qr_svg && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "qr-card ts-app-qr",
+			dangerouslySetInnerHTML: { __html: app.qr_svg }
 		})]
 	});
 }
@@ -80028,6 +82175,8 @@ var SKIP_PERMISSION_FLAGS = [
 	"--yes-always",
 	"--auto"
 ];
+var SKIP_PERMISSIONS_LABEL = SKIP_PERMS_LABEL;
+var SKIP_PERMISSIONS_TIP = SKIP_PERMS_TITLE;
 function skipsPermissions(flags) {
 	const tokens = (flags || "").split(/\s+/);
 	return SKIP_PERMISSION_FLAGS.some((f) => tokens.includes(f));
@@ -80083,7 +82232,8 @@ function CodingCli({ gotoScreen }) {
 		}
 	}, [selected]);
 	const others = providers.filter((p) => p.name !== selected);
-	const other = others.find((p) => p.name === otherProvider)?.name || others[0]?.name || "";
+	const missing = others.filter((p) => !p.installed);
+	const other = others.find((p) => p.name === otherProvider)?.name || missing[0]?.name || others[0]?.name || "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
@@ -80119,6 +82269,35 @@ function CodingCli({ gotoScreen }) {
 					children: "New sessions start with this agent."
 				})
 			]
+		}),
+		others.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+			className: "pr-advanced set-adv-fold coding-other-fold",
+			id: "coding-other-agent-fold",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: missing.length ? "Not installed — how to install" : "Set up another agent" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row",
+				id: "coding-other-agent",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Set up another agent"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+						id: "agent-test-provider",
+						"aria-label": "Another agent",
+						value: other,
+						onChange: (e) => setOtherProvider(e.target.value),
+						children: others.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: p.name,
+							children: agentName(p.name) + (p.installed ? "" : " — not installed")
+						}, p.name))
+					}),
+					other && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentCard, {
+						provider: other,
+						here: "coding",
+						gotoScreen
+					}, other)
+				]
+			})]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "set-row coding-agent-status",
@@ -80163,42 +82342,23 @@ function CodingCli({ gotoScreen }) {
 					className: "set-hint",
 					children: "Added every time the default agent starts."
 				}),
-				skipsPermissions(flags) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				skipsPermissions(flags) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "set-hint flags-danger",
 					id: "default-launch-args-warning",
 					role: "note",
-					children: "⚠ The agent will edit files and run commands without asking you first."
+					children: [
+						SKIP_PERMISSIONS_LABEL,
+						": ",
+						SKIP_PERMISSIONS_TIP.charAt(0).toLowerCase() + SKIP_PERMISSIONS_TIP.slice(1),
+						"."
+					]
 				})
 			]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionsAtOnce, { gotoScreen }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(AdvancedFold, {
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdvancedFold, {
 			id: "coding-advanced",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WindowRefresh, {}), others.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "set-row",
-				id: "coding-other-agent",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: "Set up another agent"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
-						id: "agent-test-provider",
-						"aria-label": "Another agent",
-						value: other,
-						onChange: (e) => setOtherProvider(e.target.value),
-						children: others.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: p.name,
-							children: agentName(p.name)
-						}, p.name))
-					}),
-					other && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentCard, {
-						provider: other,
-						here: "coding",
-						gotoScreen
-					}, other)
-				]
-			})]
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WindowRefresh, {})
 		})
 	] });
 }
@@ -83661,12 +85821,6 @@ function Devices(p) {
 		onCancel: () => setReachAsk(false)
 	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			id: "devices-you-intro",
-			children: "You — the same on every device you pair."
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PersonCard, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailscaleCard, { active: p.active }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: local ? "devices-warn" : "devices-this",
@@ -84421,7 +86575,13 @@ function Devices(p) {
 			active: p.active,
 			revision: linkRev
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DevicesAdvanced, { focusDevice })
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DevicesAdvanced, { focusDevice }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			id: "devices-you-intro",
+			children: "You — the same on every device you pair."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PersonCard, {})
 	] });
 }
 function SettingsSyncRows(props) {
@@ -84878,8 +87038,22 @@ function SystemLogs({ onOpenSysLogsPane }) {
 			className: "logs-view",
 			ref: viewRef,
 			children: text
-		})
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FirstStartReport, {})
 	] });
+}
+function FirstStartReport() {
+	const { data } = useSetup();
+	const report = data?.report || "";
+	if (!report) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		className: "set-adv-fold logs-first-start",
+		id: "logs-first-start",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "First-start report" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+			className: "logs-view",
+			children: report
+		})]
+	});
 }
 //#endregion
 //#region src/lib/shellUpdate.ts
@@ -86637,13 +88811,14 @@ var SCREENS = [
 ];
 function SettingsDialog({ onOpenSysLogsPane }) {
 	const open = useUi((s) => s.openDialog === "settings");
+	useAutoTour("settings", open);
 	const target = useUi((s) => s.dialogTarget);
 	const closeDialog = useUi((s) => s.closeDialog);
 	const model = useSettingsModel(open);
 	const openDialogFor = useUi((s) => s.openDialogFor);
 	const screens = (0, import_react.useMemo)(() => SCREENS.filter((s) => s.key !== "traffic" || isDevShell()), []);
 	const keys = (0, import_react.useMemo)(() => screens.map((s) => s.key), [screens]);
-	const [screen, setScreen] = (0, import_react.useState)(() => resolveScreenKey(target, keys) || "general");
+	const [screen, setScreen] = (0, import_react.useState)(() => resolveScreenKey(target, keys) || DEFAULT_SETTINGS_SCREEN);
 	const [advanced, setAdvanced] = (0, import_react.useState)(readAdvancedMode);
 	const changeMode = (on) => {
 		setAdvanced(on);
@@ -86652,7 +88827,7 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 	const gotoScreen = (name) => {
 		const tab = LEGACY_SCREEN_TABS[name];
 		if (tab) openDialogFor("intake", tab);
-		else setScreen(resolveScreenKey(name, keys) || "general");
+		else setScreen(resolveScreenKey(name, keys) || DEFAULT_SETTINGS_SCREEN);
 	};
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
@@ -86661,7 +88836,7 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 			openDialogFor("intake", tab);
 			return;
 		}
-		setScreen(resolveScreenKey(target, keys) || "general");
+		setScreen(resolveScreenKey(target, keys) || DEFAULT_SETTINGS_SCREEN);
 		setAdvanced(readAdvancedMode());
 	}, [
 		open,
@@ -86691,12 +88866,16 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 					id: "settings-panel",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "ws-head",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Settings" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "settings-close",
-							onClick: closeDialog,
-							children: "Close"
-						})]
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Settings" }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "settings" }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								id: "settings-close",
+								onClick: closeDialog,
+								children: "Close"
+							})
+						]
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						id: "settings-body",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
@@ -87621,7 +89800,7 @@ async function fixPlanFailures(plan, only) {
 		await refreshInstances();
 		toast("Opened " + (r?.session || "a session") + " to fix what failed" + (r?.reclaimed ? " (cleared the last one's empty workspace)" : ""));
 	} catch (err) {
-		errorPop("Couldn't open a session to fix it", errMsg(err));
+		errorPop("Fix didn't start", errMsg(err));
 	}
 }
 async function markPlanDeployed(plan) {
@@ -88075,6 +90254,7 @@ function StepRow({ step, index, plan, onRecord, onRunStep, running, onRemove, on
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "vf-step-who" + (mine ? " vf-who-you" : ""),
+				"data-tour": "verify-badges",
 				title: handed ? "The agent couldn't check this one — it's yours now" : mine ? "Only a person can check this" : "The agent checks this — you can still answer it yourself",
 				children: mine ? "you" : "agent"
 			}),
@@ -88105,29 +90285,33 @@ function StepRow({ step, index, plan, onRecord, onRunStep, running, onRemove, on
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "vf-step-actions",
 						children: [
-							[
-								"pass",
-								"fail",
-								"blocked"
-							].map((choice) => {
-								const on = shown === choice && (answered || choice !== "blocked");
-								return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									className: "vf-mark vf-mark-" + choice,
-									"data-on": on ? "1" : void 0,
-									"aria-pressed": on,
-									"aria-label": answerLabel(choice) + " — step " + (index + 1),
-									disabled: pending !== null || saving,
-									title: on ? shownBy === "human" ? "Recorded — press again to take it back" : "The agent recorded this — Undo takes it back" : "Record " + answerLabel(choice).toLowerCase(),
-									onClick: () => {
-										if (on && answered) {
-											if (shownBy === "human") record("");
-											return;
-										}
-										record(choice);
-									},
-									children: pending === choice ? "…" : answerLabel(choice)
-								}, choice);
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "vf-answers",
+								"data-tour": "verify-answer",
+								children: [
+									"pass",
+									"fail",
+									"blocked"
+								].map((choice) => {
+									const on = shown === choice && (answered || choice !== "blocked");
+									return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "vf-mark vf-mark-" + choice,
+										"data-on": on ? "1" : void 0,
+										"aria-pressed": on,
+										"aria-label": answerLabel(choice) + " — step " + (index + 1),
+										disabled: pending !== null || saving,
+										title: on ? shownBy === "human" ? "Recorded — press again to take it back" : "The agent recorded this — Undo takes it back" : "Record " + answerLabel(choice).toLowerCase(),
+										onClick: () => {
+											if (on && answered) {
+												if (shownBy === "human") record("");
+												return;
+											}
+											record(choice);
+										},
+										children: pending === choice ? "…" : answerLabel(choice)
+									}, choice);
+								})
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 								className: "vf-step-tail",
@@ -88160,11 +90344,11 @@ function StepRow({ step, index, plan, onRecord, onRunStep, running, onRemove, on
 									}) : null,
 									shown === "fail" && onFix ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 										type: "button",
-										className: "test-btn vf-fix-step",
+										className: "vf-fix-step",
 										disabled: fixing,
-										title: "Start a session to fix this step",
+										title: "Starts a new session with this failure attached",
 										onClick: () => onFix(step),
-										children: fixing ? "Starting…" : "Fix this…"
+										children: fixing ? "Starting…" : "Fix in a new session"
 									}) : null
 								]
 							}),
@@ -88455,6 +90639,7 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand, re
 	const openVerifyPane = useUi((s) => s.openVerifyPane);
 	const { data: instances } = useInstances();
 	const session = (instances || []).find((i) => !isVerifySession(i) && planForSession([plan], i) === plan) || null;
+	const fixSession = (instances || []).find((i) => i.title === "fix-" + plan.id) || null;
 	const [busy, setBusy] = (0, import_react.useState)("");
 	const [stepBusy, setStepBusy] = (0, import_react.useState)("");
 	const [focusStep, setFocusStep] = (0, import_react.useState)("");
@@ -88487,6 +90672,10 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand, re
 	const steps = plan.steps || [];
 	const status = planStatus(plan, liveBranch);
 	const open = openHumanSteps(plan);
+	const verdict = planVerdict(plan);
+	const uncheckedAgent = steps.filter((s) => s.actor !== "human" && stepCheck(plan, s.id) === "pending").length;
+	const statusRuns = status.action === "run" || status.action === "rerun" || status.action === "early";
+	const showCheckNow = !running && plan.state !== "generating" && uncheckedAgent > 0 && !statusRuns;
 	const nowLive = plan.effective_live_branch || liveBranch;
 	const landed = plan.merged_into || (plan.live_at ? nowLive || "" : "");
 	const where = landed ? "merged → " + landed : plan.live_at ? "shipped" : plan.merged_at ? "merged" : "not merged";
@@ -88611,7 +90800,7 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand, re
 		};
 		menu.push({
 			key: "open-session",
-			label: "Open session",
+			label: "Open the work session",
 			title: "Show " + session.title + " in the grid",
 			onSelect: () => go()
 		});
@@ -88630,13 +90819,13 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand, re
 	}
 	if (watchSession && !watchingHere) menu.push({
 		key: "watch-here",
-		label: running ? "Show the run here" : "Show the last run here",
+		label: running ? "Show the checking run here" : "Show the last checking run here",
 		title: "Show " + watchSession + " under this checklist",
 		onSelect: () => setWatchingHere(true)
 	});
 	if (watchSession) menu.push({
 		key: "watch",
-		label: "Open the session in its own window",
+		label: "Open the checking run",
 		title: "Open " + watchSession + " as a pane — closing it doesn't stop the check",
 		onSelect: watch
 	});
@@ -88654,7 +90843,7 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand, re
 		onSelect: () => void markDeployed()
 	});
 	if (!running && steps.length && plan.state !== "generating") {
-		if (steps.some((s) => s.actor !== "human") && status.action !== "run" && status.action !== "rerun" && status.action !== "early") menu.push({
+		if (steps.some((s) => s.actor !== "human") && !statusRuns && !showCheckNow) menu.push({
 			key: "run",
 			label: "Check now",
 			title: "An agent checks the steps it can",
@@ -88727,14 +90916,35 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand, re
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "vf-plan-line",
 					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerdictBadge, { plan }),
+						verdict.key !== "partial" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerdictBadge, { plan }) : null,
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "vf-stopline",
 							"data-tone": status.tone,
-							children: [plan.state === "generating" && status.tone === "wait" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "vf-spin",
-								"aria-hidden": "true"
-							}) : null, status.line]
+							children: [
+								plan.state === "generating" && status.tone === "wait" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "vf-spin",
+									"aria-hidden": "true"
+								}) : null,
+								isConfigBlocked(plan) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConfigLine, { line: status.line }) : status.line,
+								fixSession && failedCount > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "vf-fixing",
+									children: [
+										" ",
+										"Being fixed in",
+										" ",
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "linklike",
+											onClick: () => {
+												closeDialog();
+												selectSession(fixSession.title);
+											},
+											children: fixSession.title
+										}),
+										"."
+									]
+								}) : null
+							]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlanTally, { plan })
 					]
@@ -88746,6 +90956,7 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand, re
 						children: plan.branch
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "vf-plan-landed",
+						"data-tour": "verify-merge",
 						"data-live": landed === nowLive && !!nowLive ? "yes" : "no",
 						title: whereTitle,
 						children: [where, whereAgo ? " · " + whereAgo : ""]
@@ -88753,22 +90964,35 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand, re
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "vf-acts",
-					children: [!running && failedCount > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn vf-fix",
-						disabled: busy !== "",
-						title: "Start a session to fix what failed",
-						onClick: () => void fixFailures(),
-						children: busy === "fix" ? "Opening…" : "Fix…"
-					}) : null, status.action !== "none" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: (status.tone === "you" ? "btn-primary" : "test-btn") + " vf-primary",
-						"data-action": status.action,
-						disabled: busy !== "" || stepBusy !== "" || status.action === "watch" && !plan.run_session,
-						title: status.action === "answer" ? status.tone === "bad" ? "Show the steps that failed" : status.tone === "ok" ? "Show every step and its answer" : status.tone === "warn" ? "Show the steps you couldn't check" : "Show the steps that need you" : status.action === "watch" ? "Show " + (plan.run_session || "the agent") + " at work" : status.action === "rewrite" ? "Ask the agent to write the steps again" : status.action === "early" ? "An agent checks the branch now — it's checked again after merge" : "An agent checks the steps it can — takes a few minutes",
-						onClick: doPrimary,
-						children: busy === "run" ? "Starting…" : busy === "regen" ? "…" : status.actionLabel
-					}) : null]
+					children: [
+						!running && failedCount > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "vf-fix",
+							disabled: busy !== "",
+							title: fixSession ? "Sends the failure to " + fixSession.title + " again" : "Starts a new session with the failure attached",
+							onClick: () => void fixFailures(),
+							children: busy === "fix" ? "Opening…" : "Fix in a new session"
+						}) : null,
+						showCheckNow ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn vf-checknow",
+							"data-tour": "verify-check",
+							disabled: busy !== "" || stepBusy !== "",
+							title: plan.live_at ? "An agent checks the steps it can — takes a few minutes" : "An agent checks the branch now — it's checked again after merge",
+							onClick: () => void startRun(),
+							children: busy === "run" ? "Starting…" : "Check now"
+						}) : null,
+						status.action !== "none" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: (status.tone === "you" ? "btn-primary" : "test-btn") + " vf-primary",
+							"data-action": status.action,
+							"data-tour": statusRuns ? "verify-check" : void 0,
+							disabled: busy !== "" || stepBusy !== "" || status.action === "watch" && !plan.run_session,
+							title: status.action === "answer" ? status.tone === "bad" ? "Show the steps that failed" : status.tone === "ok" ? "Show every step and its answer" : status.tone === "warn" ? "Show the steps you couldn't check" : "Show the steps that need you" : status.action === "watch" ? "Show " + (plan.run_session || "the agent") + " at work" : status.action === "rewrite" ? "Ask the agent to write the steps again" : status.action === "early" ? "An agent checks the branch now — it's checked again after merge" : "An agent checks the steps it can — takes a few minutes",
+							onClick: doPrimary,
+							children: busy === "run" ? "Starting…" : busy === "regen" ? "…" : status.actionLabel
+						}) : null
+					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
 					label: "More actions for " + planName(plan),
@@ -88783,18 +91007,14 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand, re
 				!!plan.error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "vf-error",
 					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: steps.length ? "That didn't work." : "Couldn't write the checklist." }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: steps.length ? "That didn't work." : "Not written yet." }),
 						" ",
 						plan.error || "no reason recorded",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "vf-note",
-							children: steps.length ? "The steps below are unchanged." : "Try Rewrite, or add steps yourself below."
+							children: steps.length ? "The steps below are unchanged." : isNoCommits(plan) ? "Comes back automatically when the session commits — or add steps yourself below." : "Rewrite to try again, or add steps yourself below."
 						})
 					]
-				}),
-				plan.state === "generated" && !plan.live_at && steps.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "vf-note vf-moment",
-					children: "Not merged yet — answers here check the branch. After merge it comes back to be checked again."
 				}),
 				earlier && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "vf-note vf-moment",
@@ -88862,7 +91082,6 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand, re
 					onPopOut: watch,
 					onHide: () => setWatchingHere(false)
 				}),
-				steps.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChecksHead, { plan }),
 				steps.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "vf-steps",
 					children: steps.map((step, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepRow, {
@@ -88892,33 +91111,6 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand, re
 				})
 			]
 		})]
-	});
-}
-function ChecksHead({ plan }) {
-	const t = checkTally(plan);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "vf-checks-head",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "vf-checks-total",
-			children: [
-				t.total,
-				" ",
-				t.total === 1 ? "step" : "steps"
-			]
-		}), tallyBits(plan).map((bit) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "vf-checks-bit",
-			"data-check": bit.state,
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "vf-mark-glyph",
-					"aria-hidden": "true",
-					children: CHECK_MARK[bit.state]
-				}),
-				bit.count,
-				" ",
-				bit.label
-			]
-		}, bit.state))]
 	});
 }
 function PlanTally({ plan }) {
@@ -88983,6 +91175,47 @@ function RunWatch({ session, onPopOut, onHide }) {
 			ref: hostRef
 		})]
 	});
+}
+function ConfigLine({ line }) {
+	const at = line.indexOf("Edit repositories");
+	if (at < 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: line });
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		line.slice(0, at),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "linklike",
+			onClick: () => {
+				const btn = document.getElementById("vf-repos-edit");
+				if (!btn) return;
+				if (btn.getAttribute("aria-expanded") !== "true") btn.click();
+				btn.scrollIntoView({
+					block: "center",
+					behavior: "smooth"
+				});
+			},
+			children: "Edit repositories"
+		}),
+		line.slice(at + 17)
+	] });
+}
+//#endregion
+//#region src/components/dialogs/verify/emptyChecklist.ts
+async function startEmptyChecklist(session) {
+	return post("/api/instances/" + encodeURIComponent(session) + "/test-plan", { empty: true }, session);
+}
+async function post(path, json, name) {
+	try {
+		const r = await api(path, {
+			method: "POST",
+			json
+		});
+		await refreshTestPlans();
+		toast(r.existing ? name + " already has a checklist — add your steps to it" : "Started an empty checklist for " + name + " — add the steps to check");
+		return r.plan || "";
+	} catch (err) {
+		errorPop("Couldn't start the checklist", errMsg(err));
+		return "";
+	}
 }
 //#endregion
 //#region src/components/dialogs/VerifyChrome.tsx
@@ -89090,6 +91323,7 @@ function VerifyNewChecklist({ targets, reason, plans, preselect, open, onToggle,
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [picked, setPicked] = (0, import_react.useState)("");
 	const [pickedPlan, setPickedPlan] = (0, import_react.useState)("");
+	const [starting, setStarting] = (0, import_react.useState)(false);
 	const pickable = targets.filter((t) => !t.reason);
 	const other = picked === ANOTHER_BRANCH || !pickable.length;
 	const [repos, setRepos] = (0, import_react.useState)(null);
@@ -89108,7 +91342,25 @@ function VerifyNewChecklist({ targets, reason, plans, preselect, open, onToggle,
 		if (preselect) setPicked(preselect);
 	}, [preselect]);
 	const target = pickable.some((t) => t.title === picked) ? picked : pickable[0]?.title || "";
-	const planTarget = plans.some((p) => p.id === pickedPlan) ? pickedPlan : plans[0]?.id || "";
+	const fresh = targets.filter((t) => !t.planId && (!t.reason || t.noCommits));
+	const writeValues = [...fresh.map((t) => "new:" + t.title), ...plans.map((p) => "plan:" + p.id)];
+	const writeTarget = writeValues.includes(pickedPlan) ? pickedPlan : writeValues[0] || "";
+	const writeNew = writeTarget.startsWith("new:");
+	const writeId = writeTarget.slice(writeTarget.indexOf(":") + 1);
+	async function write() {
+		if (!writeTarget) return;
+		if (!writeNew) {
+			onReveal(writeId, true);
+			return;
+		}
+		setStarting(true);
+		try {
+			const id = await startEmptyChecklist(writeId);
+			if (id) onReveal(id, true);
+		} finally {
+			setStarting(false);
+		}
+	}
 	async function ask() {
 		if (other ? !repo || !branch.trim() : !target) return;
 		setBusy(true);
@@ -89145,7 +91397,7 @@ function VerifyNewChecklist({ targets, reason, plans, preselect, open, onToggle,
 								t.branch,
 								t.title !== t.branch ? " — " + t.title : "",
 								t.closed ? " (closed)" : "",
-								t.reason ? " · " + t.reason : ""
+								t.reason ? " — " + t.reason : ""
 							]
 						}, t.title)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 							value: ANOTHER_BRANCH,
@@ -89208,27 +91460,40 @@ function VerifyNewChecklist({ targets, reason, plans, preselect, open, onToggle,
 						htmlFor: "vf-write-pick",
 						children: "Write steps yourself"
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
 						id: "vf-write-pick",
-						value: planTarget,
-						disabled: !plans.length,
+						value: writeTarget,
+						disabled: !writeValues.length || starting,
 						onChange: (e) => setPickedPlan(e.target.value),
-						children: plans.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
-							value: p.id,
-							children: [p.branch ? p.branch + " — " : "", planName(p)]
-						}, p.id))
+						children: [fresh.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
+							label: "Start an empty checklist",
+							children: fresh.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
+								value: "new:" + t.title,
+								children: [
+									t.branch,
+									t.title !== t.branch ? " — " + t.title : "",
+									t.closed ? " (closed)" : ""
+								]
+							}, "new:" + t.title))
+						}) : null, plans.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
+							label: "Add a step to",
+							children: plans.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
+								value: "plan:" + p.id,
+								children: [p.branch ? p.branch + " — " : "", planName(p)]
+							}, "plan:" + p.id))
+						}) : null]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						id: "vf-write-go",
 						className: "test-btn",
-						disabled: !planTarget,
-						onClick: () => onReveal(planTarget, true),
-						children: "Add a step"
+						disabled: !writeTarget || starting,
+						onClick: () => void write(),
+						children: starting ? "Starting…" : writeNew ? "Start an empty checklist" : "Add a step"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-hint",
-						children: plans.length ? "Opens the checklist with its Add a step form." : "Steps are added to a checklist — ask the agent for one first."
+						children: !writeValues.length ? reason || "Start a session first — a checklist belongs to a branch." : writeNew ? "No agent involved — you write the steps." : "Opens the checklist with its Add a step form."
 					})
 				]
 			})]
@@ -89257,7 +91522,7 @@ function VerifySources({ liveBranch }) {
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "ik-watching-list",
-						title: repos.map((r) => r + " ships " + liveOf(r)).join("\n"),
+						title: repos.map((r) => r + " — live branch: " + liveOf(r)).join("\n"),
 						children: repos.map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "ik-watching-item",
 							children: [
@@ -89269,7 +91534,7 @@ function VerifySources({ liveBranch }) {
 								" ",
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 									className: "ik-watching-live",
-									children: ["ships ", liveOf(r)]
+									children: ["Live branch: ", liveOf(r)]
 								})
 							]
 						}, r))
@@ -89283,7 +91548,7 @@ function VerifySources({ liveBranch }) {
 							setOpen((v) => !v);
 							setEditing(null);
 						},
-						children: open ? "Done" : "Edit repositories"
+						children: open ? "Close editor" : "Edit repositories"
 					})
 				]
 			}),
@@ -89308,7 +91573,7 @@ function VerifySources({ liveBranch }) {
 					groupKey: r,
 					heading: true,
 					name: r,
-					detail: "ships " + liveOf(r) + (overrides[r]?.target ? " · " + overrides[r].target : ""),
+					detail: "Live branch: " + liveOf(r) + (overrides[r]?.target ? " · " + overrides[r].target : ""),
 					onDetail: () => setEditing(r),
 					detailTitle: "Change how " + r + " is checked",
 					open: editing === r,
@@ -89328,14 +91593,14 @@ function VerifySources({ liveBranch }) {
 		]
 	});
 }
-function VerifySwitch({ hasPlans }) {
+function VerifySwitch() {
 	const s = useSettings();
 	const repo = s.settings.repository || {};
 	const n = Array.isArray(repo.verify_repos) ? repo.verify_repos.length : 0;
 	const on = repo.verify_enabled !== false;
-	if (!n && !hasPlans) return null;
+	if (!n) return null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutomationSwitch, {
-		label: "Check what ships, automatically",
+		label: "Write a checklist on every push",
 		title: "Pause or resume new checklists on push — nothing is deleted",
 		rowId: "vf-toggle-row",
 		inputId: "vf-enabled",
@@ -89344,17 +91609,30 @@ function VerifySwitch({ hasPlans }) {
 		onChange: (next) => s.saveGroup("repository", { verify_enabled: next }, next ? "Automatic checking on" : "Automatic checking paused")
 	});
 }
-function VerifyEmpty() {
+function VerifyEmpty({ watching = 0 }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "repo-empty vf-empty",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "No checklists yet." }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"Watch a repository with ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "+ Add repository" }),
-			" above, or ask for one under",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "New checklist" }),
-			" below."
-		] })]
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Verify writes a checklist for each branch your sessions change, then checks it." }),
+			watching ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [
+					"Watching ",
+					watching,
+					" ",
+					watching === 1 ? "repository" : "repositories"
+				] }),
+				" ",
+				"— ",
+				watching === 1 ? "its" : "their",
+				" next pushed branch appears here."
+			] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Nothing to check yet" }), " — it fills in once a session commits."] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "btn-primary vf-empty-new",
+				onClick: () => useUi.getState().openDialogFor("new-session"),
+				children: "New session"
+			})
+		]
 	});
 }
 function VerifyMoments({ liveBranch, overridden = false }) {
@@ -89381,6 +91659,7 @@ function VerifyMoments({ liveBranch, overridden = false }) {
 //#region src/components/dialogs/VerifyDialog.tsx
 function VerifyDialog() {
 	const open = useUi((s) => s.openDialog === "verify");
+	useAutoTour("verify", open);
 	const target = useUi((s) => s.openDialog === "verify" ? s.dialogTarget : null) || "";
 	const closeDialog = useUi((s) => s.closeDialog);
 	const plansQ = useTestPlans(open);
@@ -89408,7 +91687,6 @@ function VerifyDialog() {
 	const [preselect, setPreselect] = (0, import_react.useState)("");
 	const [asking, setAsking] = (0, import_react.useState)(false);
 	const [addingRepo, setAddingRepo] = (0, import_react.useState)(false);
-	const [addDismissed, setAddDismissed] = (0, import_react.useState)(false);
 	const linked = (0, import_react.useRef)("");
 	(0, import_react.useEffect)(() => {
 		if (open) return;
@@ -89421,7 +91699,6 @@ function VerifyDialog() {
 		setNewOpen(false);
 		setPreselect("");
 		setAddingRepo(false);
-		setAddDismissed(false);
 		linked.current = "";
 	}, [open, sel]);
 	const plansLoaded = !!plansQ.data;
@@ -89456,7 +91733,7 @@ function VerifyDialog() {
 			const panel = document.getElementById("verify-panel");
 			for (const sel of [
 				".vf-primary",
-				"#vf-repo-add-btn",
+				".vf-empty-new",
 				"#verify-close"
 			]) {
 				const el = panel?.querySelector(sel);
@@ -89468,6 +91745,13 @@ function VerifyDialog() {
 		}, 0);
 		return () => window.clearTimeout(id);
 	}, [open]);
+	const coachStep = useUi((s) => s.coachTour?.id === "verify" ? s.coachTour.step : -1);
+	(0, import_react.useEffect)(() => {
+		if (!open || coachStep < 0) return;
+		const sel = VERIFY_TOUR.steps[coachStep]?.target;
+		const el = sel ? findTarget(document, sel) : null;
+		if (el && el.closest("#verify-body")) el.scrollIntoView({ block: "center" });
+	}, [open, coachStep]);
 	if (!open) return null;
 	const plans = allPlans;
 	const byId = new Map(plans.map((p) => [p.id, p]));
@@ -89503,21 +91787,16 @@ function VerifyDialog() {
 		fetching: plansQ.isFetching,
 		loaded: !!plansQ.data
 	});
-	const showAdd = addingRepo || (repoCfg.verify_repos || []).length === 0 && !plans.length && !addDismissed;
+	const watching = (repoCfg.verify_repos || []).length;
+	const showAdd = addingRepo;
 	const sources = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifySources, { liveBranch }, "sources");
 	const addFlow = showAdd ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddRepoFlow, {
 		title: "Add a repository",
 		uses: ["verify"],
 		only: "verify",
 		liveBranch,
-		onCancel: () => {
-			setAddingRepo(false);
-			setAddDismissed(true);
-		},
-		onDone: () => {
-			setAddingRepo(false);
-			setAddDismissed(true);
-		}
+		onCancel: () => setAddingRepo(false),
+		onDone: () => setAddingRepo(false)
 	}, "add") : null;
 	const checklists = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkListPanel, {
 		label: "Checklists",
@@ -89544,37 +91823,11 @@ function VerifyDialog() {
 			placeholder: "Filter by ticket, branch, repo, or what a step says…  ( Ctrl+F )",
 			onEscape: closeDialog
 		})] }) : void 0,
-		hint: plans.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "vf-legend-once",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "vf-step-who vf-who-you",
-					children: "you"
-				}),
-				" = a person checks it ·",
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "vf-step-who",
-					children: "agent"
-				}),
-				" = the agent does · Pass, Fail and Can't check are all answers; only Pass says it works · on a step:",
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "1" }),
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "2" }),
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "3" }),
-				", ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "u" }),
-				" undo, ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "n" }),
-				" note"
-			]
-		}) : void 0,
+		hint: void 0,
 		children: error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "repo-empty",
 			children: error
-		}) : !plansQ.data ? null : !plans.length && !missingBranch ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyEmpty, {}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		}) : !plansQ.data ? null : !plans.length && !missingBranch ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyEmpty, { watching }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			missingBranch ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "vf-missing",
 				role: "status",
@@ -89665,24 +91918,52 @@ function VerifyDialog() {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "ik-subtitle",
-							children: ["Does the change work?", plans.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InfoTip, {
+							children: ["Does the change work?", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(InfoTip, {
 								id: "verify-how",
 								label: "How Verify works",
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyMoments, {
-									liveBranch,
-									overridden
-								})
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyMoments, {
+										liveBranch,
+										overridden
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+										className: "vf-legend-once",
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "vf-step-who vf-who-you",
+												children: "you"
+											}),
+											" = a person checks it ·",
+											" ",
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "vf-step-who",
+												children: "agent"
+											}),
+											" = the agent does. Pass, Fail and Can't check are all answers; only Pass says it works. On a step:",
+											" ",
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "1" }),
+											" ",
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "2" }),
+											" ",
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "3" }),
+											" answer, ",
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "u" }),
+											" undo,",
+											" ",
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "n" }),
+											" note."
+										]
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "linklike vf-replay-tour",
+										onClick: () => replayTour("verify"),
+										children: "Replay the Verify tour"
+									})
+								]
 							})]
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "vf-repo-add-btn",
-							className: "btn-primary",
-							disabled: showAdd,
-							title: "Watch a GitHub repository: each new branch pushed there gets a checklist",
-							onClick: () => setAddingRepo(true),
-							children: "+ Add repository"
-						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "verify" }),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							id: "verify-close",
@@ -89693,18 +91974,7 @@ function VerifyDialog() {
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					id: "verify-body",
 					children: [
-						plans.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "vf-intro",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-								className: "set-hint set-block-hint",
-								children: "Each pushed branch gets a checklist of real-world checks — the agent does the ones it can, the rest are yours."
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyMoments, {
-								liveBranch,
-								overridden
-							})]
-						}),
-						addFlow,
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifySwitch, { hasPlans: plans.length > 0 }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifySwitch, {}),
 						sources,
 						checklists,
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyNewChecklist, {
@@ -89722,6 +91992,21 @@ function VerifyDialog() {
 									addStep
 								});
 							}
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+							className: "pr-advanced vf-watch-fold",
+							open: showAdd || void 0,
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Watch a GitHub repository for every push" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "pr-advanced-body",
+								children: showAdd ? addFlow : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									id: "vf-repo-add-btn",
+									className: "test-btn",
+									title: "Each new branch pushed to it gets a checklist",
+									onClick: () => setAddingRepo(true),
+									children: "+ Add repository"
+								})
+							})]
 						})
 					]
 				})]
@@ -91270,6 +93555,7 @@ function RecentDialog() {
 													const inst = await api(`/api/recently-closed/${encodeURIComponent(e.id)}/reopen`, { method: "POST" });
 													closeDialog();
 													await refreshInstances();
+													refreshRecentlyClosed();
 													if (inst?.title) selectSession(inst.title);
 												} catch (err) {
 													errorPop("Reopen failed", err.message);
@@ -91333,14 +93619,57 @@ function RecentDialog() {
 }
 //#endregion
 //#region src/components/dialogs/ConnectGitHub.tsx
+function pushTargetLine(t) {
+	if (!t?.name) return "Checks your project's repo once a session has opened one — no token needed.";
+	return "Checks " + t.name + (t.remote ? " → " + t.remote : " (it has no remote called origin yet)");
+}
+function isCommand(fix) {
+	return /^(git|gh|ssh-keygen|ssh-add)\s/.test((fix || "").trim());
+}
+function connectLayout(st) {
+	const device = primaryGithubMethod(st) === "device";
+	const gh = (st?.methods || []).includes("gh") || !!st?.gh?.installed;
+	return {
+		primary: device ? "device" : "token",
+		tokenFolded: device,
+		ghFolded: !device && gh
+	};
+}
+function repoName(path) {
+	const p = (path || "").replace(/[\\/]+$/, "");
+	return p.split(/[\\/]/).pop() || p;
+}
 function errText(e) {
 	return e instanceof Error ? e.message : String(e);
 }
+var GH_CLI_STEPS = [
+	"It asks “Authenticate Git with your GitHub credentials?” — press Enter (yes).",
+	"It shows a one-time code — copy it, then press Enter to open GitHub.",
+	"Paste the code on GitHub and approve. This window says when you're connected."
+];
+var GH_SIGNIN_POLL_MS = 3e3;
 function GhSignInWindow({ onClose }) {
 	const hostRef = (0, import_react.useRef)(null);
 	const state = useWsTerm(hostRef, "/api/github/gh-login-terminal", true);
 	const closeRef = (0, import_react.useRef)(onClose);
 	closeRef.current = onClose;
+	const [login, setLogin] = (0, import_react.useState)(null);
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		const t = window.setInterval(async () => {
+			try {
+				const st = await api("/api/github/status");
+				if (live && st.connected) {
+					setLogin(st.login || "");
+					window.clearInterval(t);
+				}
+			} catch {}
+		}, GH_SIGNIN_POLL_MS);
+		return () => {
+			live = false;
+			window.clearInterval(t);
+		};
+	}, []);
 	const close = async () => {
 		try {
 			await api("/api/github/gh-login-close", { method: "POST" });
@@ -91356,29 +93685,40 @@ function GhSignInWindow({ onClose }) {
 		onClose: () => void close(),
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "prov-login-panel",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "ws-head",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Sign in to GitHub" }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "muted",
-						children: state === "streaming" ? "copy the code it shows, press Enter, sign in in the browser — then close this window" : state
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "gh-signin-close",
-						onClick: () => void close(),
-						children: "Close"
-					})
-				]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "prov-login-term",
-				ref: hostRef
-			})]
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "ws-head",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Sign in to GitHub" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: login !== null ? "signin-ok" : "muted",
+							id: "gh-signin-status",
+							role: "status",
+							children: login !== null ? "✓ Connected" + (login ? " as @" + login : "") + ". You can close this window." : state === "streaming" ? "" : state
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "gh-signin-close",
+							className: login !== null ? "signin-done" : "",
+							onClick: () => void close(),
+							children: login !== null ? "Done" : "Close"
+						})
+					]
+				}),
+				login === null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+					className: "gh-cli-steps muted",
+					id: "gh-cli-steps",
+					children: GH_CLI_STEPS.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: t }, t))
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "prov-login-term login-term-dark",
+					ref: hostRef
+				})
+			]
 		})
 	});
 }
-function ConnectGitHub({ onChange }) {
+function ConnectGitHub({ onChange, onDone }) {
 	const [st, setSt] = (0, import_react.useState)(null);
 	const [err, setErr] = (0, import_react.useState)("");
 	const [busy, setBusy] = (0, import_react.useState)("");
@@ -91447,9 +93787,9 @@ function ConnectGitHub({ onChange }) {
 		className: "muted",
 		children: "Checking GitHub…"
 	});
-	const method = primaryGithubMethod(st);
+	const layout = connectLayout(st);
+	const method = layout.primary;
 	const hasDevice = method === "device";
-	const hasGh = (st.methods || []).includes("gh") || !!st.gh?.installed;
 	const saveToken = () => run("token", async () => {
 		setTokenResult(null);
 		setTest(null);
@@ -91585,22 +93925,34 @@ function ConnectGitHub({ onChange }) {
 		className: "connect-github",
 		id: "connect-github",
 		children: [
-			st.connected ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "gh-connected",
-				id: "gh-connected",
-				role: "status",
-				children: [
-					"✓ Connected",
-					st.login ? " as @" + st.login : "",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "muted",
-						children: [" · ", st.source === "gh-cli" ? "via gh" : st.source]
-					}),
-					st.user_error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "error",
-						children: [" — ", st.user_error]
-					})
-				]
+			st.connected ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "gh-connected-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "gh-connected",
+					id: "gh-connected",
+					role: "status",
+					children: [
+						"✓ Connected",
+						st.login ? " as @" + st.login : "",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "muted",
+							children: [" · ", st.source === "gh-cli" ? "via gh" : st.source]
+						}),
+						st.user_error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "error",
+							children: [" — ", st.user_error]
+						})
+					]
+				}), onDone && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "setup-primary",
+					id: "gh-done",
+					onClick: (e) => {
+						e.stopPropagation();
+						onDone();
+					},
+					children: "Done"
+				})]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 				className: "gh-token-fold",
 				onClick: (e) => e.stopPropagation(),
@@ -91659,31 +94011,36 @@ function ConnectGitHub({ onChange }) {
 					id: "gh-token-lead",
 					children: tokenSteps
 				}),
-				!hasDevice && hasGh && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "setup-actions gh-cli-alt",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "gh-cli-signin",
-						className: "test-btn",
-						disabled: !!busy,
-						onClick: (e) => {
-							e.stopPropagation();
-							setGhOpen(true);
-						},
-						children: "Or sign in with the GitHub CLI"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-hint",
-						children: "opens GitHub in your browser"
+				layout.ghFolded && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+					className: "gh-other-ways",
+					id: "gh-other-ways",
+					onClick: (e) => e.stopPropagation(),
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Other ways to connect" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "setup-actions gh-cli-alt",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "gh-cli-signin",
+							className: "test-btn",
+							disabled: !!busy,
+							onClick: (e) => {
+								e.stopPropagation();
+								setGhOpen(true);
+							},
+							children: "Sign in with the GitHub CLI"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "a terminal asks one question, then opens GitHub in your browser"
+						})]
 					})]
 				}),
-				hasDevice && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+				layout.tokenFolded && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 					className: "gh-token-fold",
 					onClick: (e) => e.stopPropagation(),
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Or paste a token" }), tokenSteps]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "muted setup-hint",
-					children: "Lets agents open and review pull requests. Pushing works without it."
+					children: "Needed to open and merge pull requests. Pushing works without it."
 				})
 			] }),
 			needsIdentity(st) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -91691,7 +94048,7 @@ function ConnectGitHub({ onChange }) {
 				id: "gh-identity",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
+						className: "gh-step-title",
 						children: "Your name and email for commits"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -91776,10 +94133,44 @@ function ConnectGitHub({ onChange }) {
 					}),
 					push ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "test-result " + (push.ok ? "ok" : push.ok === false ? "bad" : ""),
-						children: [(push.ok ? "✓ " : push.ok === false ? "✗ " : "") + (push.message || ""), push.ok === false && push.fix ? " — " + push.fix : ""]
+						id: "gh-push-result",
+						role: "status",
+						children: [
+							(push.ok ? "✓ " : push.ok === false ? "✗ " : "") + (push.ok === false && push.repo && push.id !== "no_origin" ? repoName(push.repo) + ": " : "") + (push.message || ""),
+							push.ok === false && push.remote ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "muted",
+								children: [
+									" (",
+									push.remote,
+									")"
+								]
+							}) : null,
+							push.fix && !isCommand(push.fix) ? " — " + push.fix : ""
+						]
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-hint",
-						children: "Asks your repository's remote, with git — no token needed."
+						className: "set-hint gh-push-target",
+						id: "gh-push-target",
+						children: pushTargetLine(st.push_target)
+					}),
+					push?.fix && isCommand(push.fix) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "gh-push-fix",
+						id: "gh-push-fix",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: push.id === "no_origin" ? "Add one — your GitHub repository's address goes at the end:" : "Fix:"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: push.fix }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn",
+								onClick: (e) => {
+									e.stopPropagation();
+									copyText(push.fix || "").then((ok) => toast(ok ? "Copied — paste it into a terminal" : "Copy failed"));
+								},
+								children: "Copy"
+							})
+						]
 					}),
 					push?.ok === false && push.id === "https_auth" && st.connected && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -91837,7 +94228,7 @@ function ConnectGitHubDialog() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Connect GitHub" }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "muted",
-						children: "so agents can open and review pull requests"
+						children: "so agents can open and merge pull requests"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -91846,7 +94237,7 @@ function ConnectGitHubDialog() {
 						children: "Close"
 					})
 				]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectGitHub, {})]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectGitHub, { onDone: () => setOpen(false) })]
 		})
 	});
 }
@@ -92786,90 +95177,12 @@ function Companions({ repoId, label }) {
 }
 //#endregion
 //#region src/components/onboarding/WelcomeTour.tsx
-var SLIDES = [
-	{
-		logo: true,
-		title: "Welcome to MindFlock",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: "MindFlock runs coding agents side by side on this machine — there is no account and no cloud. Each session is its own branch and folder with an agent working in it; you review the diff and ship it." })
-	},
-	{
-		icon: "▦",
-		title: "Sessions & the grid",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"Press ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "New" }),
-			" (Alt+N) and say what to work on. Each session gets a pane in the grid and a row in the sidebar. More tools — the Assistant, usage, how many panes show — appear once you have a few sessions;",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⚙ Customize" }),
-			" brings any of them in sooner."
-		] })
-	},
-	{
-		icon: "⏩",
-		title: "Shipping",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"When an agent stops, its pane's button offers the next step —",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Commit…" }),
-			", ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Push" }),
-			", ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Open PR" }),
-			". ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏩ Fast-track" }),
-			" takes those steps for you, as far as you choose, and can ask first. Anything that needs you — a question or an approval — shows under the",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "bell" }),
-			"."
-		] })
-	},
-	{
-		icon: "🎫",
-		title: "Where work comes from",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Intake" }),
-			" turns tickets, PRs and issues into sessions (Jira, Linear, GitHub Issues, Shortcut, Asana). ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Verify" }),
-			": ",
-			VERIFY_BLURB,
-			".",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Schedule" }),
-			" starts a saved setup by itself — nightly, weekdays or on any cron.",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⚙ Customize" }),
-			" at the bottom of the sidebar adds more bars — like",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Prompts" }),
-			", your saved text one click from any session."
-		] }),
-		screen: "ticketing"
-	},
-	{
-		logo: true,
-		title: "You're all set",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Setup" }),
-			" connects GitHub and your tracker whenever you're ready. Watch for ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "💡 hints" }),
-			" as you go — replay this tour or turn hints off under",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Settings → General" }),
-			"."
-		] })
-	}
-];
-var NOT_YET_SET = {
-	logo: true,
-	title: "One thing left",
-	body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		"A tool MindFlock needs is still missing on this computer — usually tmux or your coding agent. ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Setup" }),
-		" installs everything missing in one go, then signs your agent in."
-	] })
-};
-function lastSlide(failing) {
-	return failing ? NOT_YET_SET : SLIDES[SLIDES.length - 1];
+var WELCOME_TITLE = "Welcome to MindFlock";
+var WELCOME_LINES = ["MindFlock runs coding agents side by side on this computer, each session on its own branch.", "Three steps and your first agent is running."];
+function startWelcomeTour() {
+	const ui = useUi.getState();
+	if (typeof document !== "undefined" && !findTarget(document, ".setup-checklist")) ui.openDialogFor("setup");
+	ui.openCoachTour("welcome");
 }
 function Logo() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -92914,33 +95227,18 @@ function useFirstLaunchTour() {
 function WelcomeTour() {
 	useFirstLaunchTour();
 	const open = useUi((s) => s.tourOpen);
-	const settingsOpen = useUi((s) => s.openDialog === "settings" || s.openDialog === "intake" || s.openDialog === "setup");
+	const covered = useUi((s) => s.openDialog === "settings" || s.openDialog === "intake" || s.openDialog === "setup");
 	const finishTour = useUi((s) => s.finishTour);
-	const failing = useDoctorWarn().failing;
-	const openDialogFor = useUi((s) => s.openDialogFor);
-	const [i, setI] = (0, import_react.useState)(0);
-	(0, import_react.useEffect)(() => {
-		if (open) setI(0);
-	}, [open]);
-	const paused = open && settingsOpen;
-	(0, import_react.useEffect)(() => {
-		if (!open || paused) return;
-		const onKey = (e) => {
-			if (e.key === "ArrowRight") setI((n) => Math.min(n + 1, SLIDES.length - 1));
-			else if (e.key === "ArrowLeft") setI((n) => Math.max(n - 1, 0));
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [open, paused]);
-	if (!open || paused) return null;
-	const last = i === SLIDES.length - 1;
-	const slide = last ? lastSlide(failing) : SLIDES[i];
-	const jumpTo = (screen) => {
-		const tab = LEGACY_SCREEN_TABS[screen];
-		openDialogFor(tab ? "intake" : "settings", tab || screen);
+	if (!open || covered) return null;
+	const letsGo = () => {
+		finishTour();
+		startWelcomeTour();
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "welcome-tour",
+		role: "dialog",
+		"aria-modal": "true",
+		"aria-labelledby": "wt-title",
 		onClose: finishTour,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "wt-card",
@@ -92953,71 +95251,27 @@ function WelcomeTour() {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "wt-content",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "wt-head",
-							children: [slide.logo ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Logo, {}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "wt-icon",
-								"aria-hidden": "true",
-								children: slide.icon
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-								className: "wt-title",
-								children: slide.title
-							})]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "wt-body",
-							children: slide.body
-						}),
-						slide.screen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "wt-setup",
-							onClick: () => jumpTo(slide.screen),
-							children: "Set up now →"
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "wt-foot",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "wt-dots",
-						role: "tablist",
-						"aria-label": "Tour progress",
-						children: SLIDES.map((_, n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "wt-dot" + (n === i ? " active" : ""),
-							"aria-label": `Go to step ${n + 1}`,
-							"aria-selected": n === i,
-							onClick: () => setI(n)
-						}, n))
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "wt-nav",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "wt-btn ghost",
-							disabled: i === 0,
-							onClick: () => setI((n) => Math.max(n - 1, 0)),
-							children: "Back"
-						}), last ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "wt-nav-end",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "wt-btn ghost",
-								onClick: () => openDialogFor("setup"),
-								children: "Open Setup"
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "wt-btn primary",
-								onClick: finishTour,
-								children: "Get started"
-							})]
-						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "wt-btn primary",
-							onClick: () => setI((n) => Math.min(n + 1, SLIDES.length - 1)),
-							children: "Next"
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "wt-head",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Logo, {}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+							className: "wt-title",
+							id: "wt-title",
+							children: WELCOME_TITLE
 						})]
-					})]
+					}), WELCOME_LINES.map((line) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "wt-body",
+						children: line
+					}, line))]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "wt-foot",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "wt-btn primary wt-go",
+						autoFocus: true,
+						onClick: letsGo,
+						children: "Let's go"
+					})
 				})
 			]
 		})
@@ -93541,6 +95795,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommandPalette, { host }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShortcutsSheet, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WelcomeTour, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CoachTourHost, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Breaks, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(EventToasts, {})
 	] });

@@ -7,6 +7,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Round 5 of the fresh-eyes UX lab: seven judges who could only use the UI walked
+0.8.7 as first-time users, and every surface was then simplified first and
+given a short, replayable tour second.
+
+### Added
+
+- **Tours — one per top-bar menu, replayable.** The five-slide welcome is now
+  one welcome card; "Let's go" starts a coach-mark tour over the Get set up
+  checklist. New, Intake, Verify, Schedule and Settings each have a 3–6 step
+  tour drawn on the live screen (a ring on the real control, one sentence
+  each), which opens once by itself during the calm first hour and never
+  again on any of your devices. Replay any of them from the **?** in the
+  dialog's header, **Settings → General → Tours**, or the command palette
+  ("Replay Intake tour").
+- **A terminal first run that tells the truth.** `mindflock init`, `doctor`,
+  `serve` and install.sh print one "Three steps to your first agent" block
+  with ✓/✗ and "← you are here", and end on exactly one `Next:` line.
+  "You're set" shows only when tools, the agent sign-in and a project folder
+  are all done. `doctor` is grouped — Needed to run an agent / Needed to ship /
+  Optional — with a legend; optional items (Tailscale, MTU, gh…) never enter
+  the first-run fix loop and are never installed by pressing Enter. The
+  `serve` banner boxes the browser URL ("it walks you through the rest") and
+  prints no phone-view box in local mode. `--help` is grouped and ends with
+  "New here? Run mindflock init". README opens on a 3-step "Get started".
+- **Verify: empty checklists, honest states.** Start an empty checklist and
+  write the steps yourself; branches with no commits are marked and refused
+  ("Nothing to check yet — this branch has no commits") and the checklist is
+  re-written by itself once the session commits. "Not written yet" is its own
+  grey state, off the Failed badge. **Check now** is visible on every card
+  with unchecked agent steps; the pane's SHIP menu shows the verdict beside
+  Open PR and asks before opening a PR on a failed branch; a failed step
+  reaches the bell. "Verified on branch · by you / by the agent".
+- **Intake → Auto-start is one home**: three labelled switches (Tickets / PR
+  review comments / New issues), each saying how often it checks, plus
+  "Pause all auto-start"; the other tabs show one status line and a Change
+  link. Empty PRs / Issues tabs show one card (Connect GitHub → pick a repo →
+  turn on). Each ticket row says which repo it goes to; "Open session ›"
+  closes Intake and shows the session. "Create a token ↗" for every tracker.
+- **New: a folder you name but that doesn't exist** shows "No folder at …" and
+  a **Create this folder** button — nothing is created, git-inited or
+  remembered on its own. A non-git folder asks one question: make it a git
+  repo first, or just run in it.
+- **Schedule shows the same one-line schedule everywhere** (card, New's
+  template chip, Intake → Auto-start): "Every day at 07:30 EDT · next Fri
+  07:30 (tomorrow skipped)". A compact in-card editor changes just the
+  schedule; Edit keeps the full form. Run-history names are links.
+
+### Changed
+
+- **On rails in the first hour.** Verify is hidden from the top bar until a
+  checklist exists and Schedule until a template exists (Alt+V / Alt+S, the
+  palette and the URL still open them); the first paint is calm until the
+  server answers, so the full chrome never flashes and collapses. Setup shows
+  steps ①–③ only: "All checks" lists just what blocks getting started,
+  Tailscale/MTU/sudo fixes moved to Settings → Your phone, the first-start
+  CLI transcript moved to Settings → System logs, step ① says "Install Claude
+  Code". Once a session exists, Setup's primary is **Show my session →** (not
+  "+ New session"). The welcome card no longer sends a 0-session user into
+  the tracker wizard, and every exit marks it seen.
+- **New: one primary button, Start.** The folder is a real picker under the
+  task box ("Runs in 📦 repo · own branch … · change"); "Let the agent set it
+  up…" is secondary with a bounded wait and one recovery; "More options"
+  holds Name, Fast-track and Save as template, with everything a first-hour
+  user can't use yet under a nested Advanced fold. Uninstalled agents sit
+  behind "More agents…". Push / Open PR are greyed with a reason while
+  there's nothing to push or no GitHub. The Close toast is the Undo; Delete
+  says uncommitted work is lost; a second ✕ within 400 ms is ignored. Fast-track
+  levels read the same everywhere; "⚠ Skip permission prompts" wears its
+  warning on every chip.
+- **Settings opens on Connections** (the status page); budget / resume /
+  revive / sleep moved under General's Advanced fold; "More connections"
+  folded; Agents shows "Not installed — how to install" beside the picker and
+  Test answers in words; Your phone is live ✓/✗ rows with the QR only once it
+  will work; Your devices puts "Add a device" first. Connect GitHub: the token
+  path is the one numbered path (the gh CLI route folds under "Other ways"),
+  a **Done** after "✓ Connected", and "Check I can push" names the repo and
+  remote and gives one fix.
+- **Intake: Test saves nothing.** Testing a new ticket source persists
+  nothing; Finish is the one save and the "Connect your tracker" step ticks
+  only from a saved source whose test passed. Jira errors are sentences
+  ("No Jira site at <host> — check the Site URL"). A source that can't
+  connect says so instead of "No tickets are assigned to you".
+- **Schedule never reports a failed run as a success.** Agents are tagged
+  "(not installed)" and a schedule with one won't save; Run now and scheduled
+  fires with a missing agent record a failed run ("Last run failed: …"), red
+  card, badge. Custom (cron) is seeded from the days and time on screen;
+  every mode previews its next runs; one time format and the zone of the
+  computer that runs schedules. One word: template.
+- The mobile page's New sheet uses the desktop's words (Start / Let the agent
+  set it up… / More options) and the same Delete warning. A template named
+  "pr-…" is no longer shown as a PR session. At 420 px a modal opened from
+  the sidebar drawer closes the drawer first and the Setup chip stays reachable.
+
+### Fixed
+
+- Verify's **Fix…** on a failed checklist returned a 500 (`create_instance()`
+  missing `request`), as did Run; errors are plain sentences and never print
+  an API path.
+- Testing a ticket source saved it (and its token) and ticked the setup step;
+  the Install window closed before showing success; the sign-in terminal's
+  highlighted option was unreadable; Reopen left "Recently closed (n)" stale.
+
 ## [0.8.7] - 2026-10-14
 
 A pass over New, Intake, Verify, Settings and the first hour, judged by
