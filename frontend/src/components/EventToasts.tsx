@@ -24,7 +24,7 @@ import { runNote } from "../lib/runs";
 import { openThread } from "../lib/flockActions";
 import { ruleOn, runLookups } from "../state/runs";
 import { showGroup } from "../lib/showGroup";
-import { PEER_NEWS_EVENTS, PEER_SCREEN, peerEventNote } from "../lib/peer";
+import { PEER_NEWS_EVENTS, PEER_SCREEN, isPeerSender, peerEventNote } from "../lib/peer";
 import { deviceEventNote, updateNote, updateToastWanted } from "../lib/fleet";
 import { desktopNotify, installDesktopNotifyClicks } from "../lib/desktopNotify";
 import { pushFailedNote } from "../lib/onboarding";
@@ -315,6 +315,9 @@ export function EventToasts() {
         if (isReplay(env) || !env.session) return;
         const d = (env.data || {}) as MessageEventData;
         const from = String(d.from || "");
+        // A person's message into your shared session: its peer.message twin
+        // (below) already toasts it by person, not as "peer:Ben → peer-ben-…".
+        if (isPeerSender(from)) return;
         const isResult = d.kind === "result";
         notifyOnce(
           isResult ? env.session : from || "*external",

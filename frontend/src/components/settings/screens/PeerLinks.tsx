@@ -6,7 +6,7 @@
  * side that can't run the sandbox (a Linux box without bubblewrap, say) still
  * takes part: messages, an inbox, and a read-only view of their changes.
  *
- * Two actions up front — Invite someone, Join a peer — and nothing to set
+ * Two actions up front — Invite someone, Join someone — and nothing to set
  * first: inviting or joining turns peer links on. When this computer can only
  * make same-network invites (no cloudflared), the first invite asks where the
  * other person is. Every knob lives under Advanced.
@@ -36,6 +36,7 @@ import { InstallMissing, type InstallStep } from "../../dialogs/InstallTerminal"
 import { TourButton } from "../../onboarding/TourButton";
 import {
   inviteExpiryText,
+  isCutOffInvite,
   joinPeerCode,
   newOpId,
   PEER_LIVE_EVENTS,
@@ -81,6 +82,8 @@ export function PeerLinks(_: ScreenProps) {
   const [joinNote, setJoinNote] = useState("");
   const joinOp = useRef("");
   const joinInput = useRef<HTMLInputElement | null>(null);
+  // The connection just joined: its card scrolls into view and lights up once.
+  const [fresh, setFresh] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -221,6 +224,10 @@ export function PeerLinks(_: ScreenProps) {
   };
 
   const join = async () => {
+    if (isCutOffInvite(code)) {
+      setJoinErr("This invite is cut off — copy the whole message again.");
+      return;
+    }
     const op = newOpId();
     joinOp.current = op;
     setJoinBusy(true);
@@ -233,9 +240,12 @@ export function PeerLinks(_: ScreenProps) {
       afterPair();
       setJoinNote(
         link.reconnected
-          ? `Reconnected to ${link.peer_name} — same link, your shared folder is kept.`
-          : `Connected to ${link.peer_name}. Read each other your safety number ${link.sas} — if it differs, unlink.`
+          ? `Reconnected to ${link.peer_name}` +
+              (link.shared ? " — your shared folder is kept" : "") +
+              (link.sas_verified ? "." : `. Compare the safety number ${link.sas} again — it's new.`)
+          : `Connected to ${link.peer_name}. Compare the safety number ${link.sas} on their card below.`
       );
+      setFresh(link.link_id);
     } catch (e) {
       setJoinErr(errText(e));
     }
@@ -265,11 +275,9 @@ export function PeerLinks(_: ScreenProps) {
         <h3 className="set-section-title">People</h3>
         <TourButton tour="people" />
       </div>
-      <p className="set-hint set-block-hint">
-        Work together with someone else's MindFlock. Send them an invite, they paste it, and
-        you're connected. Then either of you can share <strong>one folder</strong>: an agent
-        works in it inside a sandbox and talks to the other person's agent. You can also message
-        them and look at their changes. Nothing else on your machine is exposed.
+      <p className="set-hint set-block-hint" id="peer-intro">
+        Work with another person's MindFlock: one of you invites, the other joins — then talk, share a folder, or build
+        one feature together.
       </p>
 
       <div className="peer-actions" id="peer-actions">
@@ -279,8 +287,8 @@ export function PeerLinks(_: ScreenProps) {
             <div id="peer-joined" className="peer-invite" data-tour="people-safety">
               <p>
                 <strong>{joined.name}</strong> {joined.repaired ? "reconnected" : "joined"} — read them your
-                safety number <code className="peer-sas">{joined.sas}</code>. If theirs is different, unlink
-                now.
+                safety number <code className="peer-sas">{joined.sas}</code>. If theirs is different, press It
+                doesn't match on their card below.
               </p>
               <div className="set-row">
                 <button type="button" className="test-btn" id="peer-joined-match" onClick={() => markVerified(joined.link_id)}>
@@ -341,7 +349,7 @@ export function PeerLinks(_: ScreenProps) {
                 {inviteLeft > 0 &&
                   (invite.relay && !invite.direct
                     ? "They can be anywhere — it connects through a relay that can't read your traffic."
-                    : `They connect to ${invite.host}:${invite.port}, so they need to be on your network or tailnet.`)}
+                    : `They connect to ${invite.host}:${invite.port}, so they need to be on your network or Tailscale.`)}
               </span>
               <span className="set-hint">Waiting for them to join — this updates by itself.</span>
             </div>
@@ -355,7 +363,7 @@ export function PeerLinks(_: ScreenProps) {
                 disabled={inviteBusy}
                 onClick={() => createInvite("direct")}
               >
-                They're on my network or tailnet
+                They're on my network or Tailscale
               </button>
               <button
                 type="button"
@@ -389,22 +397,25 @@ export function PeerLinks(_: ScreenProps) {
             <>
               <button
                 type="button"
-                className="test-btn"
+                className="btn-primary"
                 id="peer-invite"
                 disabled={inviteBusy}
                 onClick={() => createInvite("auto")}
               >
                 {inviteBusy ? "Creating…" : "Create invite"}
               </button>
-              <button
-                type="button"
-                className="linklike"
-                id="peer-invite-direct"
-                disabled={inviteBusy}
-                onClick={() => createInvite("direct")}
-              >
-                Same network or tailnet? Make a direct invite
-              </button>
+              {/* With the relay off every invite is already direct. */}
+              {st?.relay?.setting !== "off" && (
+                <button
+                  type="button"
+                  className="linklike"
+                  id="peer-invite-direct"
+                  disabled={inviteBusy}
+                  onClick={() => createInvite("direct")}
+                >
+                  Same network or Tailscale? Make a direct invite
+                </button>
+              )}
             </>
           )}
           {inviteBusy && inviteStage && (
@@ -436,7 +447,7 @@ export function PeerLinks(_: ScreenProps) {
           )}
         </div>
         <div className="peer-action" data-tour="people-join">
-          <h4 className="set-subtitle">Join a peer</h4>
+          <h4 className="set-subtitle">Join someone</h4>
           <div className="set-row">
             <input
               id="peer-join-code"
@@ -459,7 +470,7 @@ export function PeerLinks(_: ScreenProps) {
           ) : (
             <span className="set-hint">
               Paste the whole message or just the code — either works. A fresh invite from someone you're
-              already linked with reconnects that link.
+              already connected to reconnects you.
             </span>
           )}
           {joinErr && (
@@ -489,7 +500,7 @@ export function PeerLinks(_: ScreenProps) {
       {st && cloudflaredMissing && !remoteChosen && (st.links.length > 0 || st.invites.length > 0) && (
         <div className="peer-needs">
           <p className="set-hint">
-            Your invites only reach people on your own network or tailnet until <strong>cloudflared</strong> is
+            Your invites only reach people on your own network or Tailscale until <strong>cloudflared</strong> is
             installed. Links that already connect directly keep working after you install it.
           </p>
           <InstallMissing steps={install} onDone={() => load()} />
@@ -508,6 +519,7 @@ export function PeerLinks(_: ScreenProps) {
               tick={tick}
               reload={load}
               onVerified={() => markVerified(l.link_id)}
+              fresh={fresh === l.link_id}
             />
           ))}
         </>

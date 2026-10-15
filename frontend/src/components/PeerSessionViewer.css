@@ -239,3 +239,16 @@
   font-size: 10.5px;
   color: var(--muted);
 }
+
+/* The conversation, right above the send box: a reply shows where you look. */
+#peer-session-dialog .psv-thread {
+  padding: 6px 14px 0;
+  border-top: 1px solid var(--border);
+}
+#peer-session-dialog .psv-thread .peer-msg-log {
+  max-height: 120px;
+  margin: 0;
+}
+#peer-session-dialog .psv-thread .peer-msg-empty {
+  margin: 0;
+}

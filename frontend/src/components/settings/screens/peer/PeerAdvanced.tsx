@@ -2,31 +2,40 @@
  * networks reach you (relay / port / address), what the shared agent may
  * reach, and the status line. Split out of PeerLinks.tsx unchanged. */
 
+import { useState } from "react";
 import { copyText } from "../../../../lib/clipboard";
 import { toast } from "../../../../lib/toast";
-import { SettingField } from "../../useSettings";
+import { InlineConfirm, SettingField } from "../../useSettings";
 import type { PeerStatus } from "../../../../lib/peer";
 
 const RELAY_OPTIONS = [
   { value: "auto", label: "Automatic — through Cloudflare when cloudflared is installed" },
-  { value: "off", label: "Off — they connect to this computer directly (same network or tailnet)" },
+  { value: "off", label: "Direct only — they connect to this computer (same network or Tailscale)" },
   { value: "cloudflare", label: "Always through Cloudflare (needs cloudflared)" },
   { value: "url", label: "My own HTTPS relay (relay URL below)" },
 ];
 
 export function PeerAdvanced({ on, onToggle, st }: { on: boolean; onToggle(on: boolean): void; st: PeerStatus | null }) {
   const relayAddr = st?.relay?.address || "";
+  // Turning it off drops every connection and stops shared sessions: ask
+  // first, naming what stops, whenever there is anything to stop.
+  const [asking, setAsking] = useState(false);
+  const people = st?.links.length || 0;
+  const shares = st?.links.filter((l) => l.shared).length || 0;
   return (
     <details className="peer-advanced" id="peer-advanced">
       <summary>Advanced</summary>
       <div className="set-row set-switch-row">
-        <span className="set-label">Peer links</span>
+        <span className="set-label">Connections to people</span>
         <label className="ca-switch">
           <input
             type="checkbox"
             id="peer-enabled"
             checked={on}
-            onChange={(e) => onToggle(e.target.checked)}
+            onChange={(e) => {
+              if (!e.target.checked && people > 0) setAsking(true);
+              else onToggle(e.target.checked);
+            }}
           />
           <span className="ca-slider" />
         </label>
@@ -35,6 +44,24 @@ export function PeerAdvanced({ on, onToggle, st }: { on: boolean; onToggle(on: b
           nobody.
         </span>
       </div>
+      {asking && (
+        <InlineConfirm
+          title="Turn off connections to people?"
+          body={
+            <span>
+              You disconnect from {people === 1 ? "1 person" : people + " people"}
+              {shares ? ` and ${shares === 1 ? "1 shared session stops" : shares + " shared sessions stop"}` : ""} until you turn
+              it back on.
+            </span>
+          }
+          confirmLabel="Turn off"
+          onCancel={() => setAsking(false)}
+          onConfirm={() => {
+            setAsking(false);
+            onToggle(false);
+          }}
+        />
+      )}
       <label className="set-row">
         <span className="set-label">Your name</span>
         <SettingField group="peer" field="display_name" placeholder="this computer's name" />

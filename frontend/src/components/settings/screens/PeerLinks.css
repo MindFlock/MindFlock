@@ -15,6 +15,115 @@
 .peer-link-card + .peer-link-card {
   margin-top: 12px;
 }
+.peer-action > .btn-primary {
+  align-self: flex-start;
+}
+.peer-card-head {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+/* The card's three groups: Trust, Share, Talk. Each a titled block with a
+   hairline between; the next step's group leads. */
+.peer-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.peer-group-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.peer-group p {
+  margin: 0;
+}
+.peer-safety {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.peer-perms .check {
+  font-size: 13px;
+}
+/* A field with its label above it, in a row of fields. */
+.peer-labelled {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 0 1 170px;
+}
+.peer-labelled.peer-grow {
+  flex: 1 1 240px;
+}
+.peer-labelled select,
+.peer-labelled input {
+  width: 100%;
+  box-sizing: border-box;
+}
+.peer-group .peer-row {
+  align-items: flex-end;
+}
+.peer-group .peer-row > .set-hint {
+  align-self: center;
+}
+/* Remove connection is destructive and looks it. */
+.peer-danger {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 55%, var(--border));
+}
+.peer-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+/* A disabled button stays readable in both themes. */
+.peer-link-card .test-btn:disabled {
+  opacity: 0.6;
+  border-style: dashed;
+}
+.peer-sas-changed {
+  font-size: 12.5px;
+}
+.peer-export-done,
+.peer-export-error {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+/* The card you just joined lights up once. */
+.peer-card-fresh {
+  animation: peer-fresh 1.6s ease-out 1;
+}
+@keyframes peer-fresh {
+  from {
+    box-shadow: 0 0 0 3px var(--accent);
+  }
+  to {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .peer-card-fresh {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+}
+/* The conversation (Talk, and the shared-session viewer). */
+.peer-msg-who {
+  font-weight: 600;
+}
+.peer-msg-text {
+  display: block;
+}
+.peer-msg-send textarea {
+  flex: 1 1 240px;
+  min-width: 0;
+  resize: vertical;
+}
 
 /* The joint task: one bordered block inside the card. */
 .peer-joint {

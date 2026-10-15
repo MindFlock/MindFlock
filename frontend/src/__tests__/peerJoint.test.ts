@@ -26,6 +26,7 @@ const {
   mirrorStatusText,
   openProposals,
   peerEventNote,
+  syncedText,
 } = await import("../lib/peer");
 const { JointView, JointStart, JointProposed, jointStartBlocker } = await import(
   "../components/settings/screens/peer/JointTask"
@@ -233,6 +234,12 @@ describe("active", () => {
     );
   });
 
+  it("my half's start failure is a sentence in its place", () => {
+    const html = view(active({ mine: { ...active().mine, session_title: "", error: "the sandbox couldn't start (bubblewrap is missing)" } }));
+    expect(html).toContain("Your half didn&#x27;t start: the sandbox couldn&#x27;t start (bubblewrap is missing)");
+    expect(html).not.toContain("Its session is starting…");
+  });
+
   it("holds the Contract panel, the Mirror row, Done and Cancel", () => {
     const html = view(active());
     expect(html).toContain('class="peer-contract" data-rev="3"');
@@ -407,6 +414,7 @@ describe("the Mirror row", () => {
       "Mirroring Bea's work into peer/Bea in api — waiting for their first change."
     );
     expect(mirrorStatusText(mirror({ enabled: false }), "Bea", NOW)).toBe("Mirror is off.");
+    expect(mirrorStatusText(mirror({ updating: true }), "Bea", NOW)).toBe("Mirroring Bea's work into peer/Bea in api — updating now…");
   });
 
   it("suggests a peer/ branch from their name", () => {
@@ -439,16 +447,26 @@ describe("bell rows and toasts for the joint and mirror events", () => {
     expect(notifFromEvent(env("peer.joint_proposed", { peer_name: "Bea" }))?.peer).toBe(true);
   });
 
-  it("a contract event is news only for an open proposal", () => {
-    expect(
-      peerEventNote("peer.joint_contract", { peer_name: "Bea", proposal: { id: "cp_1", by: "peer", state: "open" } })?.text
-    ).toBe("Bea's agent proposes a contract change");
-    expect(peerEventNote("peer.joint_contract", { peer_name: "Bea", proposal: { by: "me", state: "open" } })?.text).toBe(
-      "Your agent proposes a contract change"
-    );
-    expect(peerEventNote("peer.joint_contract", { peer_name: "Bea", rev: 4 })).toBeNull();
-    expect(peerEventNote("peer.joint_contract", { peer_name: "Bea", proposal: { by: "peer", state: "accepted" } })).toBeNull();
-    expect(notifFromEvent(env("peer.joint_contract", { peer_name: "Bea", rev: 4 }))).toBeNull();
+  it("a contract event is a bell row only for THEIR agent's open proposal; my agent's is a toast", () => {
+    const base = { link_id: "lk1", peer_name: "Bea", joint_id: "jt_1" };
+    const theirs = peerEventNote("peer.joint_contract", { ...base, kind: "proposal", by: "peer", open: true, proposal_id: "cp_1", state: "open", rev: 3 });
+    expect(theirs?.text).toBe("Bea's agent proposes a contract change");
+    expect(theirs?.toast).toBe(theirs?.text);
+    const mine = peerEventNote("peer.joint_contract", { ...base, kind: "proposal", by: "agent", open: true, proposal_id: "cp_2", state: "open" });
+    expect(mine?.text).toBe("");
+    expect(mine?.toast).toBe("Your agent proposes a contract change — review it in People");
+    expect(notifFromEvent(env("peer.joint_contract", { ...base, kind: "proposal", by: "agent", open: true }))).toBeNull();
+    // a revision, an answered proposal, my own click: not news
+    expect(peerEventNote("peer.joint_contract", { ...base, kind: "revision", by: "peer", open: false, rev: 4 })).toBeNull();
+    expect(peerEventNote("peer.joint_contract", { ...base, kind: "proposal", by: "peer", open: false, state: "accepted" })).toBeNull();
+    expect(peerEventNote("peer.joint_contract", { ...base, kind: "proposal", by: "you", open: true })).toBeNull();
+    expect(notifFromEvent(env("peer.joint_contract", { ...base, kind: "proposal", by: "peer", open: true }))?.peer).toBe(true);
+  });
+
+  it("an action the other side missed (offline) says it will sync", () => {
+    expect(syncedText("Contract saved", { synced: false }, "Bea")).toBe("Contract saved — will sync when Bea reconnects");
+    expect(syncedText("Contract saved", { synced: true }, "Bea")).toBe("Contract saved");
+    expect(syncedText("Declined", null, "Bea")).toBe("Declined");
   });
 
   it("their answer to a joint task is news; my own clicks are not", () => {
@@ -456,7 +474,7 @@ describe("bell rows and toasts for the joint and mirror events", () => {
       "Bea accepted the joint task"
     );
     expect(peerEventNote("peer.joint_state", { peer_name: "Bea", state: "cancelled", by: "peer" })?.cls).toBe("n-warn");
-    expect(peerEventNote("peer.joint_state", { peer_name: "Bea", state: "active", by: "me" })).toBeNull();
+    expect(peerEventNote("peer.joint_state", { peer_name: "Bea", state: "active", by: "you" })).toBeNull();
     expect(peerEventNote("peer.joint_state", { peer_name: "Bea", state: "active" })).toBeNull();
   });
 

@@ -7,7 +7,7 @@
 import { useState } from "react";
 import { api } from "../../../../api/client";
 import { relTime } from "../../../../lib/format";
-import { contractLineDiff, isoSeconds, jointPath, openProposals, type PeerJoint } from "../../../../lib/peer";
+import { contractLineDiff, isoSeconds, jointPath, openProposals, syncedText, type PeerJoint } from "../../../../lib/peer";
 import { ContractMarkdown } from "./ContractMarkdown";
 import { useAct } from "./useAct";
 
@@ -90,7 +90,7 @@ export function ContractPanel(props: {
                 const ok = await act(
                   "save",
                   () => api(jointPath(linkId, "/contract"), { method: "PUT", json: { text: draft } }),
-                  "Contract saved — both agents get the new version"
+                  (r) => syncedText("Contract saved — both agents get the new version", r as { synced?: boolean }, peerName)
                 );
                 if (ok) setEditing(false);
               }}
@@ -125,7 +125,7 @@ export function ContractPanel(props: {
                     act(
                       "accept:" + p.id,
                       () => api(jointPath(linkId, "/proposals/" + encodeURIComponent(p.id) + "/accept"), { json: {} }),
-                      "Change accepted — the contract is updated on both sides"
+                      (r) => syncedText("Change accepted — the contract is updated", r as { synced?: boolean }, peerName)
                     )
                   }
                 >
@@ -139,7 +139,7 @@ export function ContractPanel(props: {
                     act(
                       "reject:" + p.id,
                       () => api(jointPath(linkId, "/proposals/" + encodeURIComponent(p.id) + "/reject"), { json: {} }),
-                      "Change rejected"
+                      (r) => syncedText("Change rejected", r as { synced?: boolean }, peerName)
                     )
                   }
                 >

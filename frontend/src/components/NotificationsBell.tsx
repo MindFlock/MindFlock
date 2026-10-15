@@ -73,7 +73,7 @@ interface Notif {
   rule?: string;
   /** A device.* row ("Your devices"): named "Devices", opens Settings → Your devices. */
   device?: boolean;
-  /** A peer.* row (another person): named "Collaborate", opens People. */
+  /** A peer.* row (another person): named "People", opens People. */
   peer?: boolean;
   /** A join request: the row's own Approve button answers it from here. */
   approve?: { id: string; via: string; code: string; host: string } | null;
@@ -279,7 +279,8 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
     case "peer.mirror_updated":
     case "peer.mirror_failed": {
       const n = peerEventNote(env.event, d);
-      return n ? { text: n.text, cls: n.cls, peer: true } : null;
+      // A toast-only note (your own agent's contract proposal) has no row.
+      return n?.text ? { text: n.text, cls: n.cls, peer: true } : null;
     }
     // A newer release, and which of your devices are behind it: the click
     // opens where the Update button is (Devices when others are behind).
@@ -638,7 +639,7 @@ export function NotificationsBell() {
                       {n.device && !n.session
                         ? "Devices"
                         : n.peer && !n.session
-                        ? "Collaborate"
+                        ? "People"
                         : n.settings && !n.session
                         ? "Updates"
                         : n.template && !n.session

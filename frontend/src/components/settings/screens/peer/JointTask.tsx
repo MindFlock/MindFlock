@@ -25,6 +25,7 @@ import {
   CONTRACT_TEMPLATE,
   jointPath,
   jointPhase,
+  syncedText,
   type PeerJoint,
   type PeerLink,
 } from "../../../../lib/peer";
@@ -34,6 +35,8 @@ import { ContractPanel } from "./JointContract";
 import { JointCheck } from "./JointCheck";
 import { MirrorRow } from "./MirrorRow";
 import { errText, useAct } from "./useAct";
+
+type Synced = { synced?: boolean };
 
 type LinkBits = Pick<
   PeerLink,
@@ -208,7 +211,7 @@ function JointWaiting(props: JointProps & { joint: PeerJoint }) {
           type="button"
           className="test-btn peer-joint-withdraw"
           disabled={!!busy}
-          onClick={() => act("cancel", () => api(jointPath(link.link_id, "/cancel"), { json: { reason: "withdrawn" } }), "Proposal withdrawn")}
+          onClick={() => act("cancel", () => api(jointPath(link.link_id, "/cancel"), { json: { reason: "withdrawn" } }), (r) => syncedText("Proposal withdrawn", r as Synced, link.peer_name))}
         >
           {busy === "cancel" ? "Withdrawing…" : "Withdraw"}
         </button>
@@ -285,7 +288,7 @@ export function JointProposed(props: JointProps & { joint: PeerJoint; formOpen?:
             type="button"
             className="test-btn peer-joint-decline"
             disabled={!!busy}
-            onClick={() => act("decline", () => api(jointPath(link.link_id, "/cancel"), { json: { reason: "declined" } }), "Declined")}
+            onClick={() => act("decline", () => api(jointPath(link.link_id, "/cancel"), { json: { reason: "declined" } }), (r) => syncedText("Declined", r as Synced, link.peer_name))}
           >
             {busy === "decline" ? "Declining…" : "Decline"}
           </button>
@@ -325,7 +328,9 @@ function JointActive(props: JointProps & { joint: PeerJoint; now?: number }) {
             {mine.repo_path ? baseName(mine.repo_path) + (mine.branch ? " · " + mine.branch : "") : "No folder from your side"}
             {mine.program ? " · " + mine.program : ""}
           </span>
-          {mine.session_title ? (
+          {mine.error ? (
+            <p className="error peer-half-error">Your half didn't start: {mine.error}</p>
+          ) : mine.session_title ? (
             <button type="button" className="test-btn peer-half-open" onClick={openSession}>
               Open session
             </button>
@@ -361,7 +366,7 @@ function JointActive(props: JointProps & { joint: PeerJoint; now?: number }) {
           type="button"
           className="test-btn peer-joint-done"
           disabled={!!busy}
-          onClick={() => act("done", () => api(jointPath(link.link_id, "/cancel"), { json: { reason: "done" } }), "Joint task marked done")}
+          onClick={() => act("done", () => api(jointPath(link.link_id, "/cancel"), { json: { reason: "done" } }), (r) => syncedText("Joint task marked done", r as Synced, link.peer_name))}
         >
           {busy === "done" ? "Finishing…" : "Done"}
         </button>
@@ -378,7 +383,7 @@ function JointActive(props: JointProps & { joint: PeerJoint; now?: number }) {
           onCancel={() => setConfirm(false)}
           onConfirm={() => {
             setConfirm(false);
-            void act("cancel", () => api(jointPath(link.link_id, "/cancel"), { json: {} }), "Joint task cancelled");
+            void act("cancel", () => api(jointPath(link.link_id, "/cancel"), { json: {} }), (r) => syncedText("Joint task cancelled", r as Synced, link.peer_name));
           }}
         />
       )}

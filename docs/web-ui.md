@@ -4952,19 +4952,41 @@ labels above the inputs.
   **Invite someone** (**Copy invite** copies a ready-to-send message with the
   `mfp1:`/`mfp2:` code) and **Join a peer** (takes that whole message or just
   the code; Your devices' **Paste a code** box routes a peer code here too); doing
-  either turns peer links on, no toggle first. Each link shows its **safety
-  number** to read to each other and confirm (**It matches**), the
-  permissions you granted, **Share a folder** (any folder — typed or picked
+  either turns peer links on, no toggle first. The screen opens with one line
+  (*one of you invites, the other joins*) and **Create invite** as the primary
+  button; **Join someone** takes the paste (a cut-off code is caught before it
+  is sent; a just-joined card scrolls into view and lights up). Each
+  connection's card is three groups, the next step first — **Trust** leads
+  until the safety number is confirmed, then **Share · Talk · Trust**:
+  **Trust** is the **safety number** (*the same number on both screens means
+  nobody is in between*) with **It matches** and **It doesn't match** (removes
+  the connection and says to make a new invite and send it another way); a
+  new number after a reconnect is called out (*New safety number after
+  reconnecting — confirm it again*, from the number this browser last saw
+  confirmed); *In the folder you share, they may* (✓ Saved on each change);
+  and **Remove connection…** in red. **Share** holds the labelled share form
+  (Folder · Branch · Agent; *Confirm the safety number before you share* and
+  Share stays off until then), **Bring work home** (Your repo · As branch ·
+  Export, its result on the spot: *Brought home → peer/Bea in api (abc1234)*,
+  or one sentence why not — never *export failed: export failed:*), the joint
+  task and the Mirror row. **Talk** is the conversation by person (*Bea*,
+  *you*, *your agent* — never a session id) with its send box, **Watch their
+  session** and **Their changes**; the shared-session viewer shows the same
+  thread above its send box, and every message from them is a bell row (filed
+  under **People**). Turning **Connections to people** off in Advanced asks
+  first when anyone would be disconnected. In detail: **Share a folder** (any folder — typed or picked
   with **Browse…**, the New dialog's folder browser; a plain folder is shared
   as a snapshot — optional branch, the agent CLI — any sandbox-capable one;
   not aider) which starts the shared
   session `peer-<name>-<id>` in a sandboxed shallow clone under
   `~/.mindflock/peer/shares/`, **Export** (brings the shared work into your
   own repo as a `peer/…` branch; **Browse…** picks the repo), **Watch their
-  session** (the shared-session viewer above), **Reconnect** (paste a fresh invite when
-  their address changed) and **Unlink**.
+  session** (the shared-session viewer above), **Reconnect** (offline joiner
+  only: *it usually comes back by itself; if not, paste a fresh invite*) and
+  **Remove connection**.
 
-  **Joint task** (one per link; `settings/screens/peer/JointTask.tsx`,
+  **Joint task** (one per connection; a done or cancelled one stays listed
+  until the next proposal replaces it; `settings/screens/peer/JointTask.tsx`,
   `/api/peer/links/{id}/joint*`): two people, two repos, one feature. Once the
   safety number is checked and they're online, **Start a joint task** opens a
   form — what you're building together, your half (folder via **Browse…**,
@@ -4973,7 +4995,9 @@ labels above the inputs.
   what / Done means*) — and **Propose to <name>**. Your card then reads
   *Proposed to <name> — waiting for them to accept* (**Withdraw**); theirs
   shows the brief and the contract with **Accept with…** (their folder,
-  branch, agent — their half starts at once) or **Decline**. An active task
+  branch, agent — their half starts at once) or **Decline**. When the other
+  side is offline, a change says it *will sync when they reconnect*; if your
+  half's session fails to start, its place says why. An active task
   shows the brief, both halves (**Open session** for yours, **Watch their
   session** for theirs), the **Contract** panel (rendered Markdown — React
   elements, never HTML — with its rev and who changed it; **Edit** saves a new
@@ -4987,8 +5011,9 @@ labels above the inputs.
   and offers **Start another joint task**. The Mirror row also shows on a link
   without an active task once they share or a mirror exists. The bell and a
   toast report a proposal (*<name> proposes a joint task — accept in People*),
-  their accept / cancel, an agent's open contract proposal, and each mirror
-  update or failure; a click opens People. *Advanced* holds every setting
+  their accept / cancel, their agent's open contract proposal (your own
+  agent's is a toast only: *review it in People*), and each mirror update or
+  failure; a click opens People. *Advanced* holds every setting
   (`peer.*` in [configuration.md](configuration.md#peer-links-peer-settings-store-only):
   relay `auto` / `off` / `cloudflare` / `url`, listen and advertise
   addresses, display name, egress allow-list) and the off switch. The

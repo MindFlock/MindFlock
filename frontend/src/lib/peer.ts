@@ -103,7 +103,16 @@ export interface PeerJoint {
   proposed_by: JointWho;
   created: string;
   state: JointState;
-  mine: { repo_path: string; branch: string; program: string; share_id: string; session_title: string };
+  /** `error`: why my half's shared session failed to start ("" when fine). */
+  mine: {
+    repo_path: string;
+    repo_name?: string;
+    branch: string;
+    program: string;
+    share_id: string;
+    session_title: string;
+    error?: string;
+  };
   theirs: { repo_name: string; branch: string; program: string; shared: boolean };
   contract: { text: string; rev: number; updated: string; by: JointWho };
   proposals: JointProposal[];
@@ -119,6 +128,8 @@ export interface PeerMirror {
   last_head: string;
   last_at: string;
   last_error: string;
+  /** A fetch is running right now. */
+  updating?: boolean;
 }
 
 export interface PeerRelay {
@@ -242,7 +253,7 @@ export function roleText(role: string): string {
 /** Plain words for how a link connects. */
 export function carrierText(carrier: string | undefined): string {
   if (carrier === "relay") return "through the relay";
-  if (carrier === "tcp") return "directly (same network or tailnet)";
+  if (carrier === "tcp") return "directly (same network or Tailscale)";
   return "";
 }
 
@@ -278,8 +289,9 @@ export function peerChip(inst: {
   };
 }
 
-/** The peer.* events as one line each: the bell's row (`text`, `cls`) and the
- * toast (`toast`, "" for none). null for an event that is not news. */
+/** The peer.* events as one line each: the bell's row (`text`, `cls`; "" for
+ * a toast-only event) and the toast (`toast`, "" for none). null for an event
+ * that is not news. */
 export function peerEventNote(
   event: string,
   data: Record<string, unknown> | null | undefined
@@ -290,18 +302,21 @@ export function peerEventNote(
     case "peer.link_added": {
       const sas = String(d.sas || "");
       const tail = sas ? " — compare safety number " + sas : "";
-      const text = (d.repaired ? name + " reconnected" : name + " joined") + tail;
-      // Only the inviter is surprised by it: the joiner just clicked Join.
+      // The inviter hears who arrived; the joiner (role "dialer") just pressed
+      // Join, so their row says they're connected, not that the other joined.
+      const head = d.role === "dialer" ? (d.repaired ? "Reconnected to " : "Connected to ") + name : d.repaired ? name + " reconnected" : name + " joined";
+      const text = head + tail;
       return { text, cls: "n-done", toast: d.role === "dialer" ? "" : text };
     }
     case "peer.link_removed":
       if (d.by !== "peer") return null;
       return { text: name + " unlinked", cls: "n-info", toast: name + " unlinked" };
     case "peer.message": {
-      if (!d.stored) return null; // delivered into a shared session: that session says so
-      const text = name + " sent you a message";
+      // Every message is a bell row, by person — whether it waited for you
+      // (stored) or went straight to your shared session's agent too.
+      const text = d.stored ? name + " sent you a message" : name + " sent a message (your shared agent has it too)";
       const preview = String(d.text || "").trim();
-      return { text: preview ? text + ": " + preview : text, cls: "n-info", toast: text };
+      return { text: preview ? text + ": " + preview : text, cls: "n-info", toast: name + " sent you a message" };
     }
     case "peer.relay_changed": {
       const peers = Array.isArray(d.peers) ? d.peers.map(String).filter(Boolean) : [];
@@ -315,11 +330,15 @@ export function peerEventNote(
       return { text: brief ? text + ": " + clip(brief, 80) : text, cls: "n-info", toast: text };
     }
     case "peer.joint_contract": {
-      // Only an open proposal waits on a person; a synced revision is not news.
-      const p = (d.proposal || null) as { by?: string; state?: string } | null;
-      if (!p || p.state !== "open") return null;
-      const text = (p.by === "me" ? "Your agent" : name + "'s agent") + " proposes a contract change";
-      return { text, cls: "n-info", toast: text };
+      // Only an open proposal waits on a person; a synced revision is not
+      // news. Theirs is a bell row; your own agent's is a toast only (text "").
+      if (d.kind !== "proposal" || !d.open) return null;
+      if (d.by === "peer") {
+        const text = name + "'s agent proposes a contract change";
+        return { text, cls: "n-info", toast: text };
+      }
+      if (d.by === "agent") return { text: "", cls: "n-info", toast: "Your agent proposes a contract change — review it in People" };
+      return null;
     }
     case "peer.joint_state": {
       // Their answer to my proposal, or their side ending it; my own clicks
@@ -450,6 +469,7 @@ export function isoSeconds(iso: string | null | undefined): number {
 export function mirrorStatusText(m: PeerMirror, peerName: string, now = Date.now() / 1000): string {
   const where = m.branch + " in " + baseName(m.repo_path);
   if (!m.enabled) return "Mirror is off.";
+  if (m.updating) return "Mirroring " + peerName + "'s work into " + where + " — updating now…";
   const t = isoSeconds(m.last_at);
   if (!m.last_head || !Number.isFinite(t)) return "Mirroring " + peerName + "'s work into " + where + " — waiting for their first change.";
   const ago = relTime(t, { now });
@@ -500,4 +520,89 @@ export function contractLineDiff(before: string, after: string): Array<{ op: "+"
     }
   }
   return out;
+}
+
+/** Whether a session.message comes from a person over a peer connection
+ * ("peer:<name>") — its peer.message twin already says so, by person. */
+export function isPeerSender(from: unknown): boolean {
+  return String(from || "").startsWith("peer:");
+}
+
+/** Pasted text that names an invite (mfp1:/mfp2:) but whose code is cut off. */
+export function isCutOffInvite(text: string): boolean {
+  return /mfp[12]:/i.test(text || "") && !isPeerCode(text);
+}
+
+/** Export ("Bring work home") succeeded: which branch, where, and — when the
+ * server says — how much came across. */
+export function exportDoneText(r: { branch?: string; target?: string; sha?: string; commits?: number } | null, repo: string): string {
+  const branch = r?.branch || "the branch";
+  const where = baseName(r?.target || repo);
+  if (typeof r?.commits === "number") {
+    if (r.commits === 0) return "Nothing new to bring home — " + branch + " in " + where + " is already up to date.";
+    return "Brought " + r.commits + (r.commits === 1 ? " commit" : " commits") + " home → " + branch + " in " + where + ".";
+  }
+  return "Brought home → " + branch + " in " + where + (r?.sha ? " (" + r.sha.slice(0, 7) + ")" : "") + ".";
+}
+
+/** Export failed: one sentence, never "export failed: export failed: …", never
+ * an API field name. */
+export function exportErrorText(raw: string): string {
+  let m = String(raw || "").trim();
+  while (/^export failed:\s*/i.test(m)) m = m.replace(/^export failed:\s*/i, "");
+  const lower = m.toLowerCase();
+  let why = m;
+  if (/target_repo|not a git repository|is not a directory|bad target repo/.test(lower))
+    why = "that folder isn't a git repository — pick your repo";
+  else if (lower.includes("branch not updated"))
+    why = "the branch didn't move — pick the repo you shared from (it must share history with the shared folder)";
+  else if (lower.includes("inside the peer"))
+    why = "that folder is the shared copy itself — pick your own repo";
+  else if (lower.includes("checked out in the target"))
+    why = m.replace(/in the target/, "in that repo") + " — switch branches there first";
+  why = why.replace(/[.\s]+$/, "");
+  return "Couldn't bring work home: " + (why || "something went wrong") + ".";
+}
+
+// --------------------------------------------------------------------------
+// The safety number each browser last saw confirmed, per connection — so a
+// NEW number after a reconnect is called out instead of silently replacing
+// the one people read to each other. Per-viewer convenience only.
+// --------------------------------------------------------------------------
+
+const SAS_SEEN_KEY = "mf_peer_sas_seen";
+
+function readSasSeen(): Record<string, string> {
+  try {
+    const v = JSON.parse(localStorage.getItem(SAS_SEEN_KEY) || "{}");
+    return v && typeof v === "object" ? (v as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Remember a confirmed number (call when `sas_verified`). */
+export function rememberSas(linkId: string, sas: string): void {
+  try {
+    const seen = readSasSeen();
+    if (seen[linkId] === sas) return;
+    seen[linkId] = sas;
+    localStorage.setItem(SAS_SEEN_KEY, JSON.stringify(seen));
+  } catch {
+    /* storage off: no callout, the number still asks to be compared */
+  }
+}
+
+/** Unconfirmed, and different from the one confirmed before on this
+ * connection: a reconnect brought a new number. */
+export function sasChanged(link: Pick<PeerLink, "link_id" | "sas" | "sas_verified">): boolean {
+  if (link.sas_verified) return false;
+  const before = readSasSeen()[link.link_id];
+  return !!before && before !== link.sas;
+}
+
+/** The toast after a joint action: `synced: false` means the other side was
+ * offline and gets it when they reconnect. */
+export function syncedText(ok: string, r: { synced?: boolean } | null | undefined, peerName: string): string {
+  return r && r.synced === false ? ok + " — will sync when " + peerName + " reconnects" : ok;
 }

@@ -197,8 +197,10 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     });
     acts.push({
       label: "People…",
-      hint: "peer links: invite someone, or join a peer with their code",
+      hint: "work with someone: invite them, or join their invite",
       run: () => openSettings("peer"),
+      // The words a colleague uses ("let's pair", "join me") land here.
+      keywords: "join pair pairing invite colleague teammate collaborate person someone peer share",
     });
     // ONE place for every code (lib/deviceActions.ts): Your devices'
     // paste box, which sends one of your devices' codes to Your devices and
