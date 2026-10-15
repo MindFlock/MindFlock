@@ -971,8 +971,8 @@ never stalls the event loop):
 
 | Route | Purpose |
 |---|---|
-| `GET /drivers` | `{drivers: [{engine, available, driver, install_hint, can_install, install_blocked}], installer, install_blocked, target}`. Drivers are import-detected, never required; sqlite always works. `can_install` says whether the server can install the missing driver itself; when it cannot, `install_blocked` says why and the UI shows only the command. |
-| `POST /drivers/install` | `{engine}` → `{ok, engine, driver, target, already?, method?, output?, error?, install_hint?, busy?}`. Installs that engine's driver into the venv serving the app (`uv pip install --python sys.executable`, falling back to `pip`, then `ensurepip` + `pip`) and re-checks importability in-process, so no restart is needed. The body names an *engine*, never a package spec — the spec comes from the adapter, which is the whole security model. A failure is a report carrying the installer's own output, not an exception. Capped at `INSTALL_TIMEOUT_S` (300 s — a wheel is seconds, a source build is not); one install runs at a time, so a second click while one is going gets `busy: true` rather than racing it. The install lands in the **live** process (import caches invalidated, `available()` re-checked), but it lands in that venv only: re-running `uv tool install --force` later replaces the environment and takes the driver with it. Where the server runs on a PEP 668 system interpreter the route refuses rather than breaking the OS's Python, `can_install` is false, and the driver-missing notice shows only the paste-into-a-shell command. |
+| `GET /drivers` | `{drivers: [{engine, available, driver, install_hint, can_install, install_blocked, reinstall, reinstall_note}], installer, install_blocked, target}`. Drivers are import-detected, never required; sqlite always works. `can_install` says whether the server can install the missing driver itself; when it cannot, `install_blocked` says why and the UI shows only the command. `reinstall` is the self-heal's state for a recorded driver the venv lost: `""` (none), `"running"` (`reinstall_note` "Reinstalling psycopg after the update…", and `can_install` is false meanwhile) or `"failed"` (`reinstall_note` "last reinstall failed: <installer output tail>"; the button and the manual command stay). Each call also kicks the self-heal (a no-op once it has run). |
+| `POST /drivers/install` | `{engine}` → `{ok, engine, driver, target, already?, method?, output?, error?, install_hint?, busy?}`. Installs that engine's driver into the venv serving the app (`uv pip install --python sys.executable`, falling back to `pip`, then `ensurepip` + `pip`) and re-checks importability in-process, so no restart is needed. The body names an *engine*, never a package spec — the spec comes from the adapter, which is the whole security model. A failure is a report carrying the installer's own output, not an exception. Capped at `INSTALL_TIMEOUT_S` (300 s — a wheel is seconds, a source build is not); one install runs at a time, so a second click while one is going gets `busy: true` rather than racing it. The install lands in the **live** process (import caches invalidated, `available()` re-checked) and is recorded in `~/.mindflock/dbclient/drivers.json` so it **survives engine updates** (see *Drivers survive updates* below). Where the server runs on a PEP 668 system interpreter the route refuses rather than breaking the OS's Python, `can_install` is false, and the driver-missing notice shows only the paste-into-a-shell command. |
 | `GET /connections` · `POST /connections` · `DELETE /connections/{id}` | Profile CRUD. Reads mask `password` with `SECRET_MASK`; a write carrying the mask (or `""`) keeps the stored one; a *new* id with a masked password on a password engine is a 400 naming the field. |
 | `POST /connections/{id}/test` | `{ok, error?, server?}` |
 | `GET /connections/{id}/tree?database=&schema=` | One lazy level following the engine's hierarchy: `{level: "databases" \| "schemas" \| "tables", items}`. Table items are `{name, kind, approx_rows \| null}` — never a `COUNT(*)`. Database and schema items are `{name, size_bytes?}` — the size only where the engine answers it from cheap statistics (`pg_database_size` / summed `pg_total_relation_size` / `information_schema.tables` lengths), `null`/absent otherwise, and never a scan. |
@@ -1033,6 +1033,31 @@ chokepoint behind the query pad, the table page, the row batch and export:
   (`MINDFLOCK_DBCLIENT_FILE` overrides it), mode 0600, written atomically
   (tempfile + `os.replace`, the `save_settings` pattern) — never in
   settings.json, never through `/api/settings`.
+- **Drivers survive updates.** An engine update (`uv tool install --force`,
+  `pipx install --force`, install.sh, a hand-run `uv tool install --force
+  --editable`) rebuilds the venv from `mindflock[web]` alone, which used to
+  drop every driver installed here. Two layers keep them:
+  1. *Remember and self-heal.* A successful install records the engine and
+     its package in `~/.mindflock/dbclient/drivers.json` (`$MINDFLOCK_HOME`
+     honoured; `{"version": 1, "drivers": {"postgres": {"package":
+     "psycopg[binary]", "installed_at": "…", "python": "3.12"}}}`). At addon
+     startup and on `GET /drivers`, any recorded driver whose adapter is not
+     available is reinstalled in a background thread with the same installer
+     — at most once per engine per boot, serialized by the install lock. The
+     reinstall uses the adapter's own package spec, never one from the file.
+     A failure keeps the record (the next boot tries again) unless the
+     installer said the package no longer exists ("No matching distribution",
+     uv's "not found in the package registry"), which drops it.
+  2. *Carry through updates.* The server's updater and `mindflock update`
+     add `--with <package>` per recorded driver to `uv tool install` (uv keeps
+     them in the tool receipt, so a later plain `uv tool upgrade` does too);
+     after a pipx install they run `pipx inject mindflock <packages…>` (a
+     failed inject only logs — layer 1 covers it). Only plain names with
+     extras reach an argv; a URL, path or flag in the file is ignored.
+  install.sh is shell and does not read the record: layer 1 is what restores
+  a driver after a reinstall through it. `mindflock doctor` lists the record
+  as an informational *Database drivers* row under Optional. Removing a
+  driver (an Uninstall) is not implemented: delete its entry from the file.
 
 It emits `addon.dbclient.query` with `{connection, elapsed_ms, ok}` — timing
 and outcome only, never SQL text.

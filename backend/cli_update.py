@@ -141,6 +141,20 @@ def _run_installer(argv: list) -> int:
         return 1
 
 
+def _carry_drivers(method: str) -> None:
+    """Put the Database explorer's recorded drivers back after a pipx rebuild
+    (uv carries them as ``--with`` in the install line itself). A failure only
+    warns: the explorer reinstalls a missing driver when the server starts."""
+    from backend.web.core import self_update
+
+    for argv in self_update.driver_carry_commands(method):
+        if _run_installer(argv) != 0:
+            _err(
+                "couldn't carry the database drivers over — MindFlock "
+                "reinstalls them when the server starts"
+            )
+
+
 def _rollback(previous: Optional[dict]) -> str:
     """The boot-failure safety net the server-driven updater had: put the
     engine ``install.json`` described BEFORE this update back and restart onto
@@ -160,6 +174,7 @@ def _rollback(previous: Optional[dict]) -> str:
     print("rolling back to %s…" % (previous.get("ref") or target))
     if _run_installer(argv) != 0:
         return ""
+    _carry_drivers(method)
     self_update.write_install_json(
         method=method,
         ref=previous.get("ref"),
@@ -221,6 +236,9 @@ def cmd_update(args: argparse.Namespace) -> int:
       updater runs (the tag resolved to its commit first);
     * ``pipx`` — ``pipx install --force "mindflock[web] @ git+<repo>@<tag>"``;
     * ``editable`` — prints the git commands and changes nothing (exit 0).
+
+    Database explorer drivers recorded in ``~/.mindflock/dbclient/drivers.json``
+    ride along: one ``--with`` each on the uv line, ``pipx inject`` after pipx.
 
     ``--check`` prints the installed and newest versions and exits 0 when
     current, 1 when behind (2 when GitHub couldn't be reached). After a good
@@ -312,6 +330,7 @@ def cmd_update(args: argparse.Namespace) -> int:
     if code != 0:
         _err("the install failed (exit %d) — see the lines above" % code)
         return 1
+    _carry_drivers(kind)
     self_update.write_install_json(
         method=kind, ref=ref, sha=commit or None, at=int(time.time())
     )

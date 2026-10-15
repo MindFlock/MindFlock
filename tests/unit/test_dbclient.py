@@ -16,6 +16,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import threading
 
 import pytest
 from fastapi import FastAPI
@@ -32,6 +33,7 @@ from backend.web.addons.dbclient import (
     store,
 )
 from backend.web.core import events as events_mod
+from backend.web.core import self_update
 
 BASE = "/api/dbclient"
 
@@ -548,6 +550,154 @@ class TestDriverInstall:
 # --------------------------------------------------------------------------- #
 # Test / tree / table info
 # --------------------------------------------------------------------------- #
+
+
+class TestDriverSurvivesUpdates:
+    """An engine update rebuilds the venv and drops every driver installed
+    into it. A good install is recorded; a recorded driver the venv lost is
+    reinstalled in the background, once per boot, and the report says so.
+    Same stubs as TestDriverInstall: nothing here installs a real package."""
+
+    fake_pg = TestDriverInstall.fake_pg
+    _stub_run = TestDriverInstall._stub_run
+
+    @pytest.fixture(autouse=True)
+    def mf_home(self, tmp_path, monkeypatch):
+        home = tmp_path / "mfhome"
+        monkeypatch.setenv("MINDFLOCK_HOME", str(home))
+        monkeypatch.setattr(installer_mod, "_HEAL_TRIED", set())
+        monkeypatch.setattr(installer_mod, "_HEAL_STATE", {})
+        return home
+
+    def _pg_row(self, client):
+        rows = client.get(BASE + "/drivers").json()["drivers"]
+        return {d["engine"]: d for d in rows}["postgres"]
+
+    def test_a_successful_install_is_recorded(
+        self, client, monkeypatch, fake_pg, mf_home
+    ):
+        self._stub_run(monkeypatch, fake_pg)
+        r = client.post(BASE + "/drivers/install", json={"engine": "postgres"}).json()
+        assert r["ok"] is True
+        data = json.loads((mf_home / "dbclient" / "drivers.json").read_text("utf-8"))
+        assert data["version"] == 1
+        entry = data["drivers"]["postgres"]
+        assert entry["package"] == "psycopg[binary]"
+        assert entry["installed_at"] and entry["python"]
+
+    def test_a_failed_install_records_nothing(
+        self, client, monkeypatch, fake_pg, mf_home
+    ):
+        self._stub_run(monkeypatch, fake_pg, code=1, out="boom")
+        r = client.post(BASE + "/drivers/install", json={"engine": "postgres"}).json()
+        assert r["ok"] is False
+        assert self_update.read_driver_record() == {}
+        assert not (mf_home / "dbclient" / "drivers.json").exists()
+
+    def test_a_dropped_driver_is_reinstalled_once_per_boot(
+        self, client, monkeypatch, fake_pg
+    ):
+        self_update.record_driver("postgres", "psycopg[binary]")
+        gate = threading.Event()
+
+        def run(argv):
+            fake_pg["calls"].append(list(argv))
+            assert gate.wait(10)
+            fake_pg["installed"] = True
+            return 0, "ok"
+
+        monkeypatch.setattr(installer_mod, "_run", run)
+        thread = installer_mod.start_self_heal()
+        assert thread is not None
+        try:
+            row = self._pg_row(client)
+            # While it runs: no Install button, a note saying what is going on.
+            assert row["reinstall"] == "running"
+            assert (
+                row["reinstall_note"] == "Reinstalling psycopg after the update\u2026"
+            )
+            assert row["can_install"] is False
+        finally:
+            gate.set()
+            thread.join(10)
+        row = self._pg_row(client)
+        assert row["available"] is True
+        assert (row["reinstall"], row["reinstall_note"]) == ("", "")
+        assert len(fake_pg["calls"]) == 1
+        # Once per boot: losing it again offers the button, not another loop.
+        fake_pg["installed"] = False
+        assert installer_mod.start_self_heal() is None
+        row = self._pg_row(client)
+        assert row["can_install"] is True and row["reinstall"] == ""
+        assert len(fake_pg["calls"]) == 1
+
+    def test_a_failed_reinstall_keeps_the_hint_and_says_why(
+        self, client, monkeypatch, fake_pg
+    ):
+        self_update.record_driver("postgres", "psycopg[binary]")
+        self._stub_run(monkeypatch, fake_pg, code=1, out="resolver exploded")
+        installer_mod.start_self_heal().join(10)
+        row = self._pg_row(client)
+        assert row["reinstall"] == "failed"
+        assert row["reinstall_note"].startswith("last reinstall failed: ")
+        assert "resolver exploded" in row["reinstall_note"]
+        assert row["can_install"] is True and "uv pip install" in row["install_hint"]
+        # A transient failure keeps the record: the next boot tries again.
+        assert "postgres" in self_update.read_driver_record()
+        # A click that runs supersedes the stale note.
+        self._stub_run(monkeypatch, fake_pg)
+        client.post(BASE + "/drivers/install", json={"engine": "postgres"})
+        fake_pg["installed"] = False
+        assert self._pg_row(client)["reinstall_note"] == ""
+
+    def test_a_package_that_no_longer_exists_is_dropped(
+        self, client, monkeypatch, fake_pg
+    ):
+        self_update.record_driver("postgres", "psycopg[binary]")
+        self._stub_run(
+            monkeypatch,
+            fake_pg,
+            code=1,
+            out="ERROR: No matching distribution found for psycopg[binary]",
+        )
+        installer_mod.start_self_heal().join(10)
+        assert self_update.read_driver_record() == {}
+        assert self._pg_row(client)["reinstall"] == "failed"
+
+    def test_nothing_recorded_or_nothing_missing_runs_nothing(
+        self, client, monkeypatch, fake_pg
+    ):
+        self._stub_run(monkeypatch, fake_pg)
+        assert installer_mod.start_self_heal() is None
+        fake_pg["installed"] = True
+        self_update.record_driver("postgres", "psycopg[binary]")
+        assert installer_mod.start_self_heal() is None
+        assert self._pg_row(client)["reinstall"] == ""
+        assert fake_pg["calls"] == []
+
+    def test_the_drivers_report_kicks_the_self_heal(self, client, monkeypatch, fake_pg):
+        """The UI's driver refresh is the second trigger after addon startup."""
+        self_update.record_driver("postgres", "psycopg[binary]")
+        self._stub_run(monkeypatch, fake_pg)
+        started = []
+        real = threading.Thread.start
+
+        def start(t):
+            started.append(t)
+            real(t)
+
+        monkeypatch.setattr(threading.Thread, "start", start)
+        client.get(BASE + "/drivers")
+        heals = [t for t in started if t.name == "dbclient-driver-heal"]
+        assert len(heals) == 1
+        heals[0].join(10)
+        assert self._pg_row(client)["available"] is True
+
+    def test_addon_startup_kicks_the_self_heal(self, addon, ctx, monkeypatch):
+        called = []
+        monkeypatch.setattr(installer_mod, "start_self_heal", lambda: called.append(1))
+        asyncio.run(addon.on_startup(ctx))
+        assert called == [1]
 
 
 class TestIntrospection:

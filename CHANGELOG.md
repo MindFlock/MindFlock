@@ -130,6 +130,13 @@ given a short, replayable tour second.
 
 ### Fixed
 
+- **Database explorer drivers survive updates.** A driver installed with
+  **Install driver** (psycopg, pymysql) vanished after every engine update or
+  reinstall. It is now recorded in `~/.mindflock/dbclient/drivers.json`;
+  updates carry it (`uv tool install --with …`, `pipx inject`), and one an
+  update still dropped (install.sh, a hand-run reinstall) is put back in the
+  background when the server starts ("Reinstalling psycopg after the
+  update…"). `mindflock doctor` lists them.
 - Verify's **Fix…** on a failed checklist returned a 500 (`create_instance()`
   missing `request`), as did Run; errors are plain sentences and never print
   an API path.

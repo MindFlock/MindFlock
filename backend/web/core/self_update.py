@@ -251,6 +251,126 @@ def write_install_json(**fields) -> bool:
     return True
 
 
+# --------------------------------------------------------------------------- #
+# Database drivers the update carries along
+# --------------------------------------------------------------------------- #
+# The Database explorer installs a driver (``psycopg[binary]``, ``pymysql``)
+# into THIS venv (``backend/web/addons/dbclient/installer.py``), and every
+# ``uv tool install --force`` / ``pipx install --force`` rebuilds the venv from
+# ``mindflock[web]`` alone — so the driver was gone after every update. The
+# installer records what it installed; the install command below carries each
+# recorded package through the rebuild. The record lives here, not in the
+# addon, because its readers (this updater, ``mindflock update``, the doctor)
+# must not import the addon package — that imports every addon and FastAPI.
+
+#: ``drivers.json``'s schema version.
+DRIVER_RECORD_VERSION = 1
+
+#: What a recorded package may look like: a distribution name with optional
+#: extras. Nothing else reaches an install argv — not a URL, a path, a version
+#: pin or anything starting with ``-`` that the installer would read as a flag.
+_DRIVER_SPEC = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9._,-]+\])?$")
+
+
+def driver_record_path() -> Optional[Path]:
+    """``~/.mindflock/dbclient/drivers.json`` — under ``MINDFLOCK_HOME`` when
+    set, like :func:`install_json_path`. ``None`` when there is no home to
+    use (the pytest guard refused the real one): nothing is read or written."""
+    home = os.environ.get("MINDFLOCK_HOME", "").strip()
+    if home:
+        return Path(os.path.expanduser(home)) / "dbclient" / "drivers.json"
+    try:
+        return Path(_config.GetConfigDir()) / "dbclient" / "drivers.json"
+    except Exception:  # noqa: BLE001 — the home guard refused the real home
+        return None
+
+
+def read_driver_record() -> Dict[str, dict]:
+    """``{engine: {"package", "installed_at", "python"}}`` — only entries whose
+    package passes :data:`_DRIVER_SPEC`. ``{}`` when there is no record or it
+    is unreadable."""
+    path = driver_record_path()
+    if path is None:
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    raw = data.get("drivers") if isinstance(data, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, dict] = {}
+    for engine, entry in raw.items():
+        if not isinstance(engine, str) or not isinstance(entry, dict):
+            continue
+        package = str(entry.get("package") or "")
+        if _DRIVER_SPEC.match(package):
+            out[engine] = dict(entry, package=package)
+    return out
+
+
+def _write_driver_record(drivers: Dict[str, dict]) -> bool:
+    path = driver_record_path()
+    if path is None:
+        return False
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(
+            path,
+            {"version": DRIVER_RECORD_VERSION, "drivers": drivers},
+            ensure_ascii=True,
+            mode=0o644,
+        )
+    except OSError:
+        return False
+    return True
+
+
+def record_driver(engine: str, package: str) -> bool:
+    """Remember that ``engine``'s driver ``package`` was installed into this
+    venv. Best-effort: a failed write costs a reinstall later, nothing more."""
+    if not engine or not _DRIVER_SPEC.match(package or ""):
+        return False
+    drivers = read_driver_record()
+    drivers[engine] = {
+        "package": package,
+        "installed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "python": "%d.%d" % sys.version_info[:2],
+    }
+    return _write_driver_record(drivers)
+
+
+def forget_driver(engine: str) -> bool:
+    """Drop ``engine`` from the record (its package no longer exists)."""
+    drivers = read_driver_record()
+    if engine not in drivers:
+        return False
+    drivers.pop(engine)
+    return _write_driver_record(drivers)
+
+
+def recorded_driver_packages() -> List[str]:
+    """The recorded packages, de-duplicated, in engine order."""
+    out: List[str] = []
+    for _engine, entry in sorted(read_driver_record().items()):
+        if entry["package"] not in out:
+            out.append(entry["package"])
+    return out
+
+
+def driver_carry_commands(
+    method: str, packages: Optional[List[str]] = None
+) -> List[List[str]]:
+    """What runs AFTER :func:`install_command` to put the recorded drivers
+    back: ``pipx inject`` for pipx (``pipx install --force`` drops injected
+    packages). Nothing for ``uv-tool`` — its install line carries them as
+    ``--with``. ``packages`` defaults to :func:`recorded_driver_packages`."""
+    packages = recorded_driver_packages() if packages is None else packages
+    if method == "pipx" and packages:
+        return [["pipx", "inject", "mindflock", *packages]]
+    return []
+
+
 def _detected_kind() -> str:
     """How this engine is installed, judged from where the running package
     is: ``editable``, ``uv-tool``, ``pipx`` or ``other``."""
@@ -319,7 +439,9 @@ def install_spec(target: str) -> str:
     return "mindflock[web] @ git+{}@{}".format(INSTALL_REPO, target)
 
 
-def install_command(method: str, target: str) -> Optional[List[str]]:
+def install_command(
+    method: str, target: str, packages: Optional[List[str]] = None
+) -> Optional[List[str]]:
     """THE install command for ``method`` — the one ``install.sh``, the
     server's updater and ``mindflock update`` all run — as an argv, or None
     for a method that has none (``editable`` updates come from git, see
@@ -327,8 +449,17 @@ def install_command(method: str, target: str) -> Optional[List[str]]:
 
     ``target`` is what gets installed: the resolved commit for ``uv-tool``
     (a tag moves, a commit doesn't) or a release tag for ``pipx``.
+
+    ``packages`` (default: :func:`recorded_driver_packages`) are the Database
+    explorer's drivers, carried as one ``--with`` each — uv keeps them in the
+    tool receipt, so a later plain ``uv tool upgrade`` keeps them too. pipx
+    has no such flag: :func:`driver_carry_commands` injects them afterwards.
     """
     if method == "uv-tool":
+        packages = recorded_driver_packages() if packages is None else packages
+        withs: List[str] = []
+        for package in packages:
+            withs += ["--with", package]
         return [
             "uv",
             "tool",
@@ -336,6 +467,7 @@ def install_command(method: str, target: str) -> Optional[List[str]]:
             "--force",
             "--python",
             INSTALL_PYTHON,
+            *withs,
             install_spec(target),
         ]
     if method == "pipx":
@@ -710,6 +842,14 @@ def _script(
 
     install_line = " ".join(shlex.quote(a) for a in install_argv)
     rollback_line = " ".join(shlex.quote(a) for a in (prev_argv or []))
+    # pipx's rebuild drops injected packages: put the recorded database drivers
+    # back. Never fatal — the explorer reinstalls a missing driver on start.
+    carry_lines = [
+        '%s >> "$LOG" 2>&1 || printf "=== could not carry the database drivers '
+        'over; MindFlock reinstalls them when it starts ===\\n" >> "$LOG"'
+        % " ".join(shlex.quote(a) for a in argv)
+        for argv in driver_carry_commands(method)
+    ]
     return "\n".join(
         [
             "#!/bin/sh",
@@ -744,6 +884,7 @@ def _script(
             '  printf "=== failed (exit %s) ===\\n" "$code" >> "$LOG"',
             '  exit "$code"',
             "fi",
+            *carry_lines,
             'watch=""',
             'if [ -n "$HEALTH_URL" ] && command -v curl >/dev/null 2>&1 && hello >/dev/null; then watch=1; fi',
             "put done 0",
@@ -796,6 +937,7 @@ def _script(
             '      put failed "$rc" \',"error":"the new version did not start, and putting the previous one back failed"\'',
             '      exit "$rc"',
             "    fi",
+            *("    " + line for line in carry_lines),
             '    if [ -n "$RELAUNCH" ] && ! hello >/dev/null; then',
             '      (eval "$RELAUNCH") >> "$LOG" 2>&1 < /dev/null &',
             "    fi",
