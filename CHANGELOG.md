@@ -154,6 +154,12 @@ given a short, replayable tour second.
 
 ### Fixed
 
+- The terminal scroll speed reset on every restart and every reload: the
+  server re-applied a legacy file instead of the synced setting at boot, and
+  the browser applied the sub-line part only once Settings → General had been
+  opened. The setting is the source of truth now and the app applies it at
+  boot. Settings → General leads with the scroll speed; budgets, resume and
+  sleep sit in a named fold that starts closed, and Help comes last.
 - Auto-split refused a folder that wasn't a git repo even with "Make it a
   git repo first" ticked; the split path now runs the same `git init` + first
   commit as a plain start.

@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useMemo } from "react";
 import { api } from "./api/client";
+import { setWheelDamping } from "./lib/terminals";
 import { useConfig, useExtensions, useInstances, useIntakeWarm } from "./state/queries";
 import { useUi, type SpecialKind } from "./state/store";
 import { followAutopilot, noteActivity, reconcileLoopReset } from "./lib/stage";
@@ -71,6 +72,17 @@ export default function App() {
   // are formatted server-side. Merge-only on the server, so this cannot erase
   // renames another browser synced. Fire-and-forget — an older server without
   // the endpoint just keeps naming pushes by raw title.
+  useEffect(() => {
+    // The terminal's wheel speed below one line is enforced browser-side:
+    // apply the stored speed at boot, not only when Settings → General mounts
+    // (it used to reset to a full line on every reload until then).
+    api<{ speed?: number }>("/api/scroll-speed")
+      .then((s) => {
+        if (s?.speed) setWheelDamping(s.speed);
+      })
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     // The answer is the merged map: adopt it, so a rename made in another
     // browser is this one's name for the session too.

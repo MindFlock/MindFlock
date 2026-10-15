@@ -80828,53 +80828,58 @@ function SettingsSearch({ onPick }) {
 //#endregion
 //#region src/components/settings/screens/General.tsx
 function General(_) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(AdvancedFold, {
-		id: "general-advanced",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "set-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: "Per-session budget (USD, 0 = off)"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-						group: "general",
-						field: "session_budget_usd",
-						type: "number",
-						placeholder: "0"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-hint",
-						children: "One alert when a session's estimated cost passes this."
-					})
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResumeOnUsageResetRow, {}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReviveOnStartRow, {}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SleepIdleRow, {}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "set-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: "Plan window budget (≈USD per window, 0 = off)"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-						group: "general",
-						field: "window_budget_usd",
-						type: "number",
-						placeholder: "0"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-hint",
-						children: "Powers the \"% left\" in the sidebar's Usage bar. An estimate, not billed dollars."
-					})
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollSpeedRow, {})
-		]
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tours, {})] });
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollSpeedRow, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(AdvancedFold, {
+			id: "general-advanced",
+			summary: "Budgets, resume and sleep",
+			defaultOpen: false,
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Per-session budget (USD, 0 = off)"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+							group: "general",
+							field: "session_budget_usd",
+							type: "number",
+							placeholder: "0"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "One alert when a session's estimated cost passes this."
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResumeOnUsageResetRow, {}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReviveOnStartRow, {}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SleepIdleRow, {}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Plan window budget (≈USD per window, 0 = off)"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+							group: "general",
+							field: "window_budget_usd",
+							type: "number",
+							placeholder: "0"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Powers the \"% left\" in the sidebar's Usage bar. An estimate, not billed dollars."
+						})
+					]
+				})
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tours, {})
+	] });
 }
 function ResumeOnUsageResetRow() {
 	const s = useSettings();
@@ -98604,6 +98609,11 @@ function App() {
 	const ui = useUi();
 	useDoctorAutoShow();
 	useIntakeWarm(!!config?.caps?.ticketing);
+	(0, import_react.useEffect)(() => {
+		api("/api/scroll-speed").then((s) => {
+			if (s?.speed) setWheelDamping(s.speed);
+		}).catch(() => {});
+	}, []);
 	(0, import_react.useEffect)(() => {
 		const aliases = useUi.getState().aliases;
 		api("/api/aliases", { json: { aliases } }).then((r) => {

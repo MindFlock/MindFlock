@@ -61,9 +61,28 @@ def _clamp_scroll_speed(n):
     return thirds // 3 if thirds % 3 == 0 else round(thirds / 3, 4)
 
 
+def _settings_scroll_speed():
+    """``ui.scroll_speed`` from the settings store (the value settings sync
+    carries between devices), or ``None`` when unset or unreadable. A lazy
+    import: this module is imported by the server before the store is."""
+    try:
+        from backend.config import settings as _settings
+
+        raw = _settings.load_settings().ui.scroll_speed
+    except Exception:  # noqa: BLE001 — no store (tests, a broken file): fall back
+        return None
+    return None if raw is None else _clamp_scroll_speed(raw)
+
+
 def load_scroll_speed():
     """Persisted wheel scroll speed (lines per notch, fractional below 1);
-    default 1 if unset."""
+    default 1 if unset. The settings value wins — it is what sync carries and
+    what the Settings screen writes; the ``scroll-speed`` file is the older
+    store and the fallback (it used to be the only one, so a restart reset
+    the speed to 1 whenever the file was missing while the setting was not)."""
+    speed = _settings_scroll_speed()
+    if speed is not None:
+        return speed
     try:
         raw = SCROLL_SPEED_PATH.read_text(encoding="utf-8").strip()
     except OSError:
