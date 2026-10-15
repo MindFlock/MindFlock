@@ -69,6 +69,7 @@ describe("PREF_MAP", () => {
       mf_map_tour: "map_tour",
       mf_settings_advanced: "settings_advanced",
       mf_welcome_tour: "welcome_tour",
+      mf_tours_seen: "tours_seen",
       mf_paneheader: "pane_header",
     });
     // Every prefs field is mapped, and nothing else is.
@@ -207,6 +208,18 @@ describe("planBoot", () => {
     const plan = planBoot({ theme: "light" }, { hints: false }, false);
     expect(plan.apply).toEqual({ theme: "light" });
     expect(plan.upload).toEqual({ hints: false });
+  });
+
+  it("a field an older server doesn't list is kept here, never cleared as 'deleted'", () => {
+    // A server from before tours_seen leaves it out of its GET: absence means
+    // "too old to store it", so the tours seen here must not re-arm on reload.
+    const older: Partial<Prefs> = { ...PREF_DEFAULTS };
+    delete older.tours_seen;
+    const plan = planBoot(older, { tours_seen: ["new", "intake"] }, true);
+    expect(plan.apply).toEqual({});
+    expect(plan.upload).toEqual({});
+    // A server that lists it but has it empty still clears (someone did).
+    expect(planBoot(server({}), { tours_seen: ["new"] }, true).apply).toEqual({ tours_seen: [] });
   });
 });
 

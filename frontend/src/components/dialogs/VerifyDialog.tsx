@@ -122,12 +122,15 @@ import {
   VerifySources,
   VerifySwitch,
 } from "./VerifyChrome";
+import { TourButton } from "../onboarding/TourButton";
+import { useAutoTour } from "../onboarding/useAutoTour";
 
 // The deep link — `openDialogFor("verify", <branch>)` — is resolved by
 // `verifyDeepLinkPlan` in verify.ts; its contract is documented there.
 
 export function VerifyDialog() {
   const open = useUi((s) => s.openDialog === "verify");
+  useAutoTour("verify", open);
   const target = useUi((s) => (s.openDialog === "verify" ? s.dialogTarget : null)) || "";
   const closeDialog = useUi((s) => s.closeDialog);
   // Polls only while the dialog is up; the top bar's badge keeps its own copy
@@ -574,6 +577,7 @@ export function VerifyDialog() {
             >
               + Add repository
             </button>
+            <TourButton tour="verify" />
             <button type="button" id="verify-close" onClick={closeDialog}>
               Close
             </button>

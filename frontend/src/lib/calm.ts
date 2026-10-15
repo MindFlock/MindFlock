@@ -25,9 +25,12 @@
  * paint, so the screen doesn't flash the dense layout and then collapse; the
  * server's answer replaces it the moment it lands and is written back as the
  * new hint. It is not a first-run flag — nothing is marked done or seen by
- * it, and a cleared profile just falls back to the old rule: no hint means
- * the server's `onboarded` flag (false only on a genuinely fresh install),
- * else not calm, so a veteran never flashes empty. */
+ * it. With no hint either (a new browser), the first paint is CALM until
+ * the server answers: undecided means fewer than three sessions (three or
+ * more decide at once), and the screen growing a few bars a moment later
+ * reads as the app finishing loading, while the dense chrome flashing for
+ * seconds and then vanishing reads as something going wrong (r5-new: ~5 s
+ * of full chrome on one load in three). */
 
 import type { SetupStatus } from "../api/types";
 
@@ -70,6 +73,12 @@ export function calmDecision(opts: CalmInput): boolean | null {
   return isNewcomer(opts.status, opts.onboarded, opts.now);
 }
 
+/** The first-paint answer while calmDecision() is null: the browser's last
+ * server-made decision, else calm (see the header). */
+export function undecidedCalm(hint: boolean | null): boolean {
+  return hint ?? true;
+}
+
 /** localStorage key of the render hint (see the header): "1" calm, "0" not. */
 export const CALM_HINT_KEY = "mf_calm_hint";
 
@@ -99,6 +108,19 @@ export const CALM_HIDDEN_BARS = ["usage", "assistant"];
 /** Whether a bar key is one the calm default hides. */
 export function calmHidesBar(key: string): boolean {
   return CALM_HIDDEN_BARS.includes(key) || key.startsWith("ext:");
+}
+
+/** The top bar in the calm first hour: Verify appears with its first
+ * checklist and Schedule with its first template — until then each has only
+ * an empty state to offer, and both compete with "③ Start your first
+ * session". Hidden is not removed: Alt+V / Alt+S, the palette and the
+ * #verify / #schedule links still open them, and once calm ends (three
+ * sessions, or a week) both are always shown. */
+export function topBarShows(o: { calm: boolean; checklists: number; templates: number }): {
+  verify: boolean;
+  schedule: boolean;
+} {
+  return { verify: !o.calm || o.checklists > 0, schedule: !o.calm || o.templates > 0 };
 }
 
 /** The welcome tour opens by itself exactly once, on a genuinely first

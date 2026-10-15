@@ -100,6 +100,9 @@ function applyLive(fields: Partial<Prefs>) {
       case "welcome_tour":
         st.welcomeTourSeen = v === true;
         break;
+      case "tours_seen":
+        st.toursSeen = Array.isArray(v) ? (v as unknown[]).filter((x) => typeof x === "string") : [];
+        break;
       case "keymap":
         reloadKeymap();
         break;

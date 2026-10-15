@@ -1,7 +1,8 @@
 /** Settings → General (partial 101 + the scroll-speed wiring from
- * section 20): getting started, the cost budget, what happens when usage
- * runs out or MindFlock restarts, and (advanced mode only) the plan estimate
- * + terminal scroll speed. One plain line per control; the long why sits in a "Learn
+ * section 20): the tours (replay any of them) and the hints switch first;
+ * then, in the Advanced fold, the cost budget, what happens when usage runs
+ * out or MindFlock restarts, idle sleep, the plan estimate and terminal
+ * scroll speed. One plain line per control; the long why sits in a "Learn
  * more" fold. The comfort switches (Reduce motion, Take a break, Idle flock)
  * live on Appearance — they are about how the app looks and feels. */
 
@@ -15,24 +16,28 @@ import type { ScreenProps } from "../SettingsDialog";
 import { InfoTip } from "../../InfoTip";
 import { AdvancedFold } from "../settingsMode";
 import { flashSaved } from "../savedCue";
+import { TOURS, TOUR_IDS, type TourId } from "../../../lib/tours";
+import { replayTour } from "../../onboarding/replayTour";
 
 export function General(_: ScreenProps) {
   return (
     <>
       {/* First, because it is the part of General a newcomer came for — and
           the part an old hand never needs to scroll past to reach budgets. */}
-      <GettingStarted />
-      <h3 className="set-section-title">General</h3>
-      <label className="set-row">
-        <span className="set-label">Per-session budget (USD, 0 = off)</span>
-        <SettingField group="general" field="session_budget_usd" type="number" placeholder="0" />
-        <span className="set-hint">One alert when a session's estimated cost passes this.</span>
-      </label>
-      <ResumeOnUsageResetRow />
-      <ReviveOnStartRow />
-      <SleepIdleRow />
-      {/* An estimate to calibrate and a wheel to fine-tune: advanced mode only. */}
+      <Tours />
+      {/* Budgets, resuming, reviving and sleeping only mean something once
+          sessions run, so they wait in the fold — advanced mode only, like
+          every power-user row on a basic screen (settingsMode.tsx); their
+          keys are unchanged, and "Show advanced settings" brings them back. */}
       <AdvancedFold id="general-advanced">
+        <label className="set-row">
+          <span className="set-label">Per-session budget (USD, 0 = off)</span>
+          <SettingField group="general" field="session_budget_usd" type="number" placeholder="0" />
+          <span className="set-hint">One alert when a session's estimated cost passes this.</span>
+        </label>
+        <ResumeOnUsageResetRow />
+        <ReviveOnStartRow />
+        <SleepIdleRow />
         <label className="set-row">
           <span className="set-label">Plan window budget (≈USD per window, 0 = off)</span>
           <SettingField group="general" field="window_budget_usd" type="number" placeholder="0" />
@@ -144,22 +149,35 @@ function SleepIdleRow() {
   );
 }
 
-/** Onboarding controls, parked at the bottom of General: the master hints
- * switch and a button to replay the welcome walkthrough. Turning hints back on
- * re-arms every hint the user had dismissed. */
-function GettingStarted() {
+/** Tours: one Replay per tour (lib/tours) — each opens its surface and walks
+ * it — and the hints switch. Turning hints back on re-arms every hint the
+ * user had dismissed; with hints off, no tour opens by itself either
+ * (onboarding/useAutoTour), though every Replay still works. */
+function Tours() {
   const enabled = useUi((s) => s.hintsEnabled);
   const setHintsEnabled = useUi((s) => s.setHintsEnabled);
-  const openTour = useUi((s) => s.openTour);
-  const closeDialog = useUi((s) => s.closeDialog);
   return (
-    <div className="onboarding-block">
-      <h3 className="set-section-title">Getting started</h3>
+    <div className="onboarding-block" id="general-tours">
+      <h3 className="set-section-title">Tours</h3>
+      {TOUR_IDS.map((id) => (
+        <div className="set-row onboarding-action" key={id} data-tour-row={id}>
+          <div className="onboarding-action-text">
+            <span className="set-label">{id === "welcome" ? "Welcome tour" : TOURS[id].title}</span>
+            <span className="set-hint">{TOUR_HINT[id]}</span>
+          </div>
+          <button type="button" className="test-btn" title={`Replay the ${TOURS[id].title} tour`} onClick={() => replayTour(id)}>
+            Replay
+          </button>
+        </div>
+      ))}
       <div
         className="set-row set-switch-row"
         title="Small inline 💡 tips that point out features around the app. Turn them back on any time to see the ones you dismissed again."
       >
-        <span className="set-label">Show getting-started hints</span>
+        <span className="notif-rule-text">
+          <span className="set-label">Show hints</span>
+          <span className="set-hint notif-rule-desc">💡 tips around the app, and each tour the first time you open its menu.</span>
+        </span>
         {/* label wraps only the switch, so clicking the row text no longer flips it */}
         <label className="ca-switch">
           <input
@@ -173,25 +191,19 @@ function GettingStarted() {
           <span className="ca-slider" />
         </label>
       </div>
-      <div className="set-row onboarding-action">
-        <div className="onboarding-action-text">
-          <span className="set-label">Welcome walkthrough</span>
-          <span className="set-hint">A short tour of sessions, shipping, and where work comes from.</span>
-        </div>
-        <button
-          type="button"
-          className="test-btn"
-          onClick={() => {
-            closeDialog();
-            openTour();
-          }}
-        >
-          Replay tour
-        </button>
-      </div>
     </div>
   );
 }
+
+/** One line per tour: what it walks you through. */
+const TOUR_HINT: Record<TourId, string> = {
+  welcome: "The three steps to your first session.",
+  new: "Starting a session: the task, the repo, Start.",
+  intake: "Turning tickets, pull requests and issues into sessions.",
+  verify: "Checking that a change actually works.",
+  schedule: "Templates, and sessions that start by themselves.",
+  settings: "Where your connections and every setting live.",
+};
 
 /** Slider position = thirds of a line (1–9 → 0.33…3); tmux gets the whole-line
  * part and the fractional residue applies client-side (setWheelDamping). */

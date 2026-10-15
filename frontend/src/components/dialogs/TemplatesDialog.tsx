@@ -55,6 +55,8 @@ import { api } from "../../api/client";
 import { useConfig } from "../../state/queries";
 import { leafName, newSessionResume, type RepoSuggestion } from "./newSession";
 import { TemplateEditor, formFromTemplate, templateBody, type TemplateForm } from "./TemplateEditor";
+import { TourButton } from "../onboarding/TourButton";
+import { useAutoTour } from "../onboarding/useAutoTour";
 
 // The editor's form and its helpers live with the editor; the dialog's tests
 // (and anything else) keep importing them from here.
@@ -513,6 +515,7 @@ export function TemplatesDialogView(p: ViewProps) {
                 + New template
               </button>
             )}
+            <TourButton tour="schedule" />
             <button type="button" id="templates-close" onClick={p.onClose}>
               Close
             </button>
@@ -603,6 +606,7 @@ export function TemplatesDialogView(p: ViewProps) {
 
 export function TemplatesDialog() {
   const open = useUi((s) => s.openDialog === "schedule");
+  useAutoTour("schedule", open);
   const target = useUi((s) => s.dialogTarget);
   const closeDialog = useUi((s) => s.closeDialog);
   const [templates, setList] = useState<Template[]>(() => templatesNow());

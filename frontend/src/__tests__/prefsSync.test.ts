@@ -114,6 +114,20 @@ describe("pullPrefs", () => {
     expect(kv.data.mf_prefs_dirty).toBeUndefined(); // confirmed → no longer dirty
   });
 
+  it("adopts the tours seen on another device into the cache and the live store", async () => {
+    const kv = memKV({ mf_prefs_seeded: "1" });
+    g.localStorage = kv;
+    routes = {
+      "GET /api/prefs": () => ({ tours_seen: ["new", "intake"] }),
+      "GET /api/settings": () => ({ settings: {} }),
+    };
+    const { pullPrefs } = await import("../lib/prefsSync");
+    const { useUi } = await import("../state/store");
+    await pullPrefs();
+    expect(JSON.parse(kv.data.mf_tours_seen)).toEqual(["new", "intake"]);
+    expect(useUi.setState).toHaveBeenCalledWith(expect.objectContaining({ toursSeen: ["new", "intake"] }));
+  });
+
   it("a failed upload keeps the field dirty and the value in place", async () => {
     const kv = memKV({ mf_prefs_seeded: "1", cs_theme: "light", mf_prefs_dirty: '["theme"]' });
     g.localStorage = kv;

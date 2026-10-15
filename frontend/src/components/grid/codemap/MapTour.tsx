@@ -2,7 +2,8 @@
  * at the part it explains (the tree, the agents column, ⚠ Could break, the
  * rule tools, find). It opens by itself the first time a Map is shown on any
  * of your devices (the synced `map_tour` pref) and is replayable from the
- * toolbar's "? Guide".
+ * toolbar's "? Guide". The coach-mark itself is the shared one
+ * (onboarding/CoachTour.tsx), contained in the Map's root.
  *
  * Non-modal on purpose: the map stays live underneath (the birds keep
  * flying), and a click anywhere outside the card is allowed. Esc or Skip ends
@@ -10,14 +11,12 @@
  * the tab's root at each step, so a step whose target is absent (no changes
  * yet, a narrow pane) just points at the tree instead. */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import type { RefObject } from "react";
+import { CoachTour, placeCard, type CoachStep } from "../../onboarding/CoachTour";
 
-export interface TourStep {
-  /** CSS selector inside the Map's root; "" = the tree as a whole. */
-  target: string;
-  title: string;
-  body: ReactNode;
-}
+/** A Map step: its `target` is a CSS selector inside the Map's root; "" =
+ * the tree as a whole. */
+export type TourStep = CoachStep;
 
 export const MAP_TOUR: TourStep[] = [
   {
@@ -85,32 +84,8 @@ export const MAP_TOUR: TourStep[] = [
   },
 ];
 
-interface Rect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-const CARD_W = 320;
-const GAP = 12;
-
-/** Where the card goes for a target rect inside a W×H root: beside a tall
- * target on the left, else below it, else above it; always clamped inside.
- * (Pure, for the tests.) */
-export function placeCard(t: Rect | null, W: number, H: number, cardH: number): { left: number; top: number } {
-  const cw = Math.min(CARD_W, W - 16);
-  const clampX = (x: number) => Math.max(8, Math.min(x, W - cw - 8));
-  const clampY = (y: number) => Math.max(8, Math.min(y, H - cardH - 8));
-  if (!t) return { left: clampX((W - cw) / 2), top: clampY((H - cardH) / 2) };
-  // a column on the left (the agents list): to its right
-  if (t.x + t.w + GAP + cw <= W - 8 && t.h > H * 0.4) return { left: t.x + t.w + GAP, top: clampY(t.y) };
-  // below
-  if (t.y + t.h + GAP + cardH <= H - 8) return { left: clampX(t.x), top: t.y + t.h + GAP };
-  // above
-  if (t.y - GAP - cardH >= 8) return { left: clampX(t.x), top: t.y - GAP - cardH };
-  return { left: clampX((W - cw) / 2), top: clampY((H - cardH) / 2) };
-}
+/** Where the card goes (the generic rule, re-exported for the Map's tests). */
+export { placeCard };
 
 export function MapTour({
   rootRef,
@@ -121,97 +96,7 @@ export function MapTour({
   onClose: () => void;
   steps?: TourStep[];
 }) {
-  const [i, setI] = useState(0);
-  const [rect, setRect] = useState<Rect | null>(null);
-  const [box, setBox] = useState({ W: 0, H: 0 });
-  const [cardH, setCardH] = useState(180);
-  const cardRef = useRef<HTMLDivElement | null>(null);
-  const step = steps[Math.min(i, steps.length - 1)];
-  const last = i >= steps.length - 1;
-
-  const measure = useCallback(() => {
-    const root = rootRef.current;
-    if (!root) return;
-    const r0 = root.getBoundingClientRect();
-    setBox({ W: r0.width, H: r0.height });
-    const el = step.target ? (root.querySelector(step.target) as HTMLElement | null) : null;
-    const r = el ? el.getBoundingClientRect() : null;
-    setRect(r && r.width > 0 && r.height > 0 ? { x: r.left - r0.left, y: r.top - r0.top, w: r.width, h: r.height } : null);
-    if (cardRef.current) setCardH(cardRef.current.offsetHeight || 180);
-  }, [rootRef, step.target]);
-
-  useLayoutEffect(measure, [measure, i]);
-  useEffect(() => {
-    const root = rootRef.current;
-    if (!root || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => measure());
-    ro.observe(root);
-    return () => ro.disconnect();
-  }, [rootRef, measure]);
-  useEffect(() => {
-    cardRef.current?.focus();
-  }, [i]);
-
-  const onKey = (e: React.KeyboardEvent) => {
-    // the Map's own keys (Esc closes panels, arrows pan) must not fire under the tour
-    e.stopPropagation();
-    if (e.key === "Escape") {
-      e.preventDefault();
-      onClose();
-    } else if (e.key === "ArrowRight" || e.key === "Enter") {
-      e.preventDefault();
-      if (last) onClose();
-      else setI(i + 1);
-    } else if (e.key === "ArrowLeft") {
-      e.preventDefault();
-      if (i > 0) setI(i - 1);
-    }
-  };
-
-  const pos = placeCard(rect, box.W, box.H, cardH);
-  return (
-    <div className="mt-layer" aria-live="polite">
-      {rect && (
-        <div
-          className="mt-ring"
-          aria-hidden="true"
-          style={{ left: rect.x - 4, top: rect.y - 4, width: rect.w + 8, height: rect.h + 8 }}
-        />
-      )}
-      <div
-        ref={cardRef}
-        className="mt-card"
-        role="dialog"
-        aria-modal="false"
-        aria-labelledby="mt-title"
-        tabIndex={-1}
-        style={{ left: pos.left, top: pos.top }}
-        onKeyDown={onKey}
-      >
-        <div className="mt-head">
-          <span className="mt-step">
-            {i + 1} of {steps.length}
-          </span>
-          <button type="button" className="mt-skip" onClick={onClose}>
-            Skip tour
-          </button>
-        </div>
-        <h3 id="mt-title">{step.title}</h3>
-        <p className="mt-body">{step.body}</p>
-        <div className="mt-foot">
-          <span className="mt-dots" aria-hidden="true">
-            {steps.map((_, k) => (
-              <i key={k} className={k === i ? "on" : ""} />
-            ))}
-          </span>
-          <button type="button" className="cm-btn mt-back" disabled={i === 0} onClick={() => setI(i - 1)}>
-            Back
-          </button>
-          <button type="button" className="cm-btn on mt-next" onClick={() => (last ? onClose() : setI(i + 1))}>
-            {last ? "Done" : "Next"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+  // The generic coach tour (onboarding/CoachTour), contained in the Map's
+  // root and dressed in the Map's own .mt-* / .cm-btn styles.
+  return <CoachTour steps={steps} onClose={onClose} rootRef={rootRef} prefix="mt" buttonClass="cm-btn" labelId="mt-title" />;
 }

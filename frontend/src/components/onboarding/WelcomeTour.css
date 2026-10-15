@@ -1,4 +1,5 @@
-/* The welcome walkthrough card. Rides the shared .modal overlay. */
+/* The welcome card (one card, then the coach-mark Welcome tour). Rides the
+   shared .modal overlay. */
 
 #welcome-tour {
   z-index: 200;
@@ -6,15 +7,8 @@
 
 .wt-card {
   position: relative;
-  width: min(520px, calc(100vw - 40px));
-  /* Constant size across every slide — the body flexes to absorb length
-     differences so the card never resizes as you page through. Sized off the
-     tallest slide ("3. PR review", the only one with both a long body and a
-     Set up now button) with ~20px to spare: at 440px it needed 394px of a
-     320px content box and scrolled. Widening the body to 48ch did most of the
-     work — it took that slide from 394px to 350px — so if a future slide
-     overflows, re-measure before reaching for more height. */
-  height: 490px;
+  width: min(460px, calc(100vw - 32px));
+  box-sizing: border-box;
   max-height: calc(100vh - 40px);
   display: flex;
   flex-direction: column;
@@ -53,9 +47,8 @@
   color: var(--text);
 }
 
-/* Centered content region — holds the head, body and (optional) setup button as
-   one group and vertically centers them, so the card looks balanced at its fixed
-   height regardless of how much text a slide has. Scrolls if a slide overflows. */
+/* The logo, title and two lines as one centred group; scrolls on a very
+   short window rather than pushing the button off the card. */
 .wt-content {
   flex: 1;
   min-height: 0;
@@ -96,11 +89,15 @@
 }
 
 .wt-body {
-  margin: 0;
+  margin: 0 auto;
   max-width: 48ch;
   font-size: 13.5px;
   line-height: 1.6;
   color: var(--muted);
+}
+
+.wt-body + .wt-body {
+  margin-top: 8px;
 }
 
 .wt-body b {
@@ -117,68 +114,12 @@
   color: var(--text);
 }
 
-/* Secondary CTA on setup slides — jumps straight to the relevant Settings
-   screen. Sits between the body and the progress dots. */
-.wt-setup {
-  align-self: center;
-  margin-top: 16px;
-  padding: 6px 14px;
-  background: color-mix(in srgb, var(--accent) 15%, var(--panel));
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
-  border-radius: 8px;
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.wt-setup:hover {
-  background: color-mix(in srgb, var(--accent) 25%, var(--panel));
-}
-
-/* Footer group — dots + nav, pinned at the bottom of the fixed-height card. */
+/* The one button, centred under the two lines. */
 .wt-foot {
   flex: none;
-  padding-top: 16px;
-}
-
-.wt-dots {
+  padding-top: 22px;
   display: flex;
   justify-content: center;
-  gap: 7px;
-  margin-bottom: 16px;
-}
-
-.wt-dot {
-  width: 7px;
-  height: 7px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: var(--border);
-  cursor: pointer;
-  transition: background 120ms, transform 120ms;
-}
-
-.wt-dot:hover {
-  background: var(--muted);
-}
-
-.wt-dot.active {
-  background: var(--accent);
-  transform: scale(1.25);
-}
-
-.wt-nav {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.wt-nav-end {
-  display: flex;
-  gap: 8px;
 }
 
 .wt-btn {
@@ -199,17 +140,7 @@
   filter: brightness(1.08);
 }
 
-.wt-btn.ghost {
-  background: transparent;
-  border-color: var(--border);
-  color: var(--text);
-}
-
-.wt-btn.ghost:hover:not(:disabled) {
-  background: var(--panel-2);
-}
-
-.wt-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
+.wt-btn.wt-go {
+  min-width: 140px;
+  padding: 9px 22px;
 }

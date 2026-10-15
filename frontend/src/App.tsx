@@ -40,6 +40,7 @@ import { TodoDialog } from "./components/dialogs/TodoDialog";
 import { AssistantAgentDialog } from "./components/dialogs/AssistantAgentDialog";
 import { RedZonesDialog } from "./components/dialogs/RedZonesDialog";
 import { WelcomeTour } from "./components/onboarding/WelcomeTour";
+import { CoachTourHost } from "./components/onboarding/CoachTour";
 import { Breaks } from "./components/breaks/Breaks";
 import { openSettings } from "./lib/openSettings";
 import { installSurfaceHash } from "./lib/surfaceHash";
@@ -60,9 +61,10 @@ export default function App() {
 
   // First-run: ONE surface. The checklist card on the empty grid (TerminalGrid)
   // while a required step is to do, the "Setup 3/5" chip (below) after, and
-  // the Setup modal when either opens it. The welcome tour no longer opens by
-  // itself — it is a "Tour" entry in the palette and the ? sheet, and
-  // Settings → General's Replay.
+  // the Setup modal when either opens it. App never opens a tour: the welcome
+  // card's one automatic opening is WelcomeTour's, each dialog's tour is
+  // useAutoTour's, and replays are the palette's, the ? sheet's, a dialog's
+  // "?" and Settings → General → Tours.
   // Seed the server's alias mirror once per load: renames made before the
   // mirror existed live only in this browser's localStorage, and ntfy pushes
   // are formatted server-side. Merge-only on the server, so this cannot erase
@@ -307,6 +309,9 @@ export default function App() {
       <CommandPalette host={host} />
       <ShortcutsSheet />
       <WelcomeTour />
+      {/* The coach-mark tour on screen, if any (lib/tours): last, so its card
+          and ring sit above whichever dialog it walks. */}
+      <CoachTourHost />
 
       {/* Break reminder + the idle flock (Settings → General; both off-screen
           until their timers fire) */}

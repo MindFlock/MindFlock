@@ -1,0 +1,186 @@
+/* The page-level coach tour (onboarding/CoachTour.tsx): a ring on a live
+   control and a card beside it. Fixed to the viewport and portalled to <body>:
+   above every open .modal (they carry no z-index; the top bar is 60, the old
+   welcome card 200) and below the bell's dropdown, the shortcuts sheet, toasts
+   and the connection banner (3000+). The layer and ring never take a click —
+   what the ring points at stays usable; only the card does. The Map's
+   contained tour keeps its own .mt-* rules (grid/CodeMapTab.css). */
+
+.coach-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2500;
+  pointer-events: none;
+}
+
+.coach-ring {
+  position: fixed;
+  border: 2px solid var(--accent);
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--accent) 24%, transparent),
+    0 0 0 9999px rgba(0, 0, 0, 0.22);
+  transition:
+    left 200ms ease,
+    top 200ms ease,
+    width 200ms ease,
+    height 200ms ease;
+}
+
+.coach-card {
+  position: fixed;
+  width: min(320px, calc(100vw - 16px));
+  box-sizing: border-box;
+  pointer-events: auto;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 12px 14px 10px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
+  outline: none;
+  animation: coach-in 160ms ease-out;
+}
+
+.coach-card:focus-visible {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent),
+    0 14px 40px rgba(0, 0, 0, 0.45);
+}
+
+@keyframes coach-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.coach-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.coach-step {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.coach-skip {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.coach-skip:hover {
+  color: var(--text);
+}
+
+.coach-card h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.coach-body {
+  margin: 0 0 10px;
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+}
+
+.coach-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.coach-dots {
+  display: inline-flex;
+  gap: 4px;
+  margin-right: auto;
+}
+
+.coach-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.coach-dots i.on {
+  background: var(--accent);
+}
+
+.coach-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 12px;
+  border-radius: 6px;
+  line-height: 1.4;
+}
+
+.coach-btn:hover:enabled {
+  border-color: var(--accent);
+}
+
+.coach-btn.on {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.coach-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* The "?" in a dialog header (onboarding/TourButton.tsx): replays that
+   dialog's tour. Quiet until hovered, sized to sit beside Close. */
+.tour-btn {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font: 600 12px/1 inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tour-btn:hover,
+.tour-btn:focus-visible {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .coach-card {
+    animation: none;
+  }
+
+  .coach-ring {
+    transition: none;
+  }
+}

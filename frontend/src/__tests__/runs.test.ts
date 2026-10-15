@@ -293,6 +293,12 @@ describe("the bell: run rows carry their group and their rule", () => {
 function renderRail(list: Instance[], runs: RunInfo[]) {
   Object.assign(useUi.getInitialState(), useUi.getState());
   queryClient.setQueryData<Instance[]>(["instances"], list);
+  // A veteran's rail (row numbers on): an undecided first hour now paints
+  // calm (lib/calm.ts undecidedCalm), so say it — a first session long done.
+  queryClient.setQueryData(["setup"], {
+    steps: [{ id: "repo", done: true, at: null }],
+    summary: { done: 3, total: 5, required_done: true, complete: true, next: "" },
+  });
   queryClient.setQueryData(["devices"], { devices: [], self: null });
   queryClient.setQueryData(["runs"], runs);
   const html = renderToStaticMarkup(

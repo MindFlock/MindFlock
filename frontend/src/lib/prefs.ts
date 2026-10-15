@@ -47,6 +47,9 @@ export interface Prefs {
   /** The welcome tour has been shown (true) — on any device; it opens by
    * itself once, on a first launch, until then. */
   welcome_tour: boolean | null;
+  /** The coach-mark tours seen or dismissed (lib/tours TourId values) — on
+   * any device; each opens by itself in the first hour only until then. */
+  tours_seen: string[];
   /** What a session pane's header shows and in what order (lib/paneHeader:
    * `{order, hidden}`); null = never customized, the defaults. */
   pane_header: { order: string[]; hidden: string[] } | null;
@@ -72,6 +75,7 @@ export const PREF_DEFAULTS: Prefs = {
   map_tour: null,
   settings_advanced: null,
   welcome_tour: null,
+  tours_seen: [],
   pane_header: null,
 };
 
@@ -107,6 +111,7 @@ export const PREF_MAP: PrefKey[] = [
   { ls: "mf_map_tour", field: "map_tour", kind: "json-bool" },
   { ls: "mf_settings_advanced", field: "settings_advanced", kind: "json-bool" },
   { ls: "mf_welcome_tour", field: "welcome_tour", kind: "json-bool" },
+  { ls: "mf_tours_seen", field: "tours_seen", kind: "json-list" },
   { ls: "mf_paneheader", field: "pane_header", kind: "json-object" },
 ];
 
@@ -328,7 +333,11 @@ export function planBoot(
         if (!same(merged, l)) apply[f] = merged;
       } else if (!localSet || !same(s, l)) apply[f] = s;
     } else if (localSet) {
-      if (seeded) apply[f] = PREF_DEFAULTS[f];
+      // GET /api/prefs lists every field it knows (defaults filled in), so a
+      // field MISSING from the answer is one this server is too old to keep —
+      // not one somebody cleared: the local copy stays.
+      if (seeded && f in server) apply[f] = PREF_DEFAULTS[f];
+      else if (seeded) continue;
       else upload[f] = l;
     }
   }

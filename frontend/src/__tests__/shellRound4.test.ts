@@ -16,7 +16,7 @@ vi.stubGlobal("localStorage", {
 });
 
 const { useUi } = await import("../state/store");
-const { CALM_HINT_KEY, calmDecision, readCalmHint, writeCalmHint } = await import("../lib/calm");
+const { CALM_HINT_KEY, calmDecision, readCalmHint, undecidedCalm, writeCalmHint } = await import("../lib/calm");
 const { splitName } = await import("../lib/midName");
 const { sessionMenu, hasUncommitted } = await import("../lib/sessionMenu");
 const { actionCtx } = await import("../lib/sessionActionTable");
@@ -50,8 +50,12 @@ describe("calm before first paint", () => {
     expect(hook).toContain("if (decided !== null) writeCalmHint(decided);");
     expect(hook).toContain("if (decided !== null) return decided;");
     expect(hook).toContain("const hint = readCalmHint();");
-    // No hint at all: the old rule (fresh install only), never a guess.
-    expect(hook).toContain("return config?.onboarded === false;");
+    // No hint at all: calm until the server answers — never dense-then-calm
+    // (r5-new finding 5: the full chrome flashed ~5 s on one load in three).
+    expect(hook).toContain("return undecidedCalm(hint);");
+    expect(undecidedCalm(null)).toBe(true);
+    expect(undecidedCalm(false)).toBe(false);
+    expect(undecidedCalm(true)).toBe(true);
   });
 });
 
@@ -267,7 +271,7 @@ describe("a quieter main screen", () => {
     expect(code("components/TopBar.tsx")).toContain('"Verify — " + VERIFY_BLURB');
     expect(code("components/palette/CommandPalette.tsx")).toContain('"Verify — " + VERIFY_BLURB');
     expect(code("lib/keymap.ts")).toContain('"Verify — " + VERIFY_BLURB');
-    expect(code("components/onboarding/WelcomeTour.tsx")).toContain("{VERIFY_BLURB}");
+    // The welcome card no longer describes Verify; the Verify tour does.
   });
 
   it('"Agent" is the coding agent only: the assistant\'s file is its Instructions', () => {

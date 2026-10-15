@@ -3,13 +3,14 @@
  * hook so the sidebar, the pane headers and the rows agree on the moment the
  * full screen comes back. While the server hasn't answered yet, the browser's
  * last decision (the calm render hint) picks the first paint, so the layout
- * doesn't flash dense and then collapse. */
+ * doesn't flash dense and then collapse; with no hint either, calm — never
+ * dense-then-calm (lib/calm.ts undecidedCalm). */
 
 import { useEffect } from "react";
 import { useConfig, useInstances } from "../state/queries";
 import { useSetup } from "../components/setup/useSetup";
 import { isVerifySession } from "../components/dialogs/verify";
-import { calmDecision, readCalmHint, writeCalmHint } from "./calm";
+import { calmDecision, readCalmHint, undecidedCalm, writeCalmHint } from "./calm";
 
 export function useCalm(): boolean {
   const { data: instances } = useInstances();
@@ -24,6 +25,5 @@ export function useCalm(): boolean {
   }, [decided]);
   if (decided !== null) return decided;
   const hint = readCalmHint();
-  if (hint !== null) return hint;
-  return config?.onboarded === false;
+  return undecidedCalm(hint);
 }
