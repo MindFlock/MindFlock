@@ -39,11 +39,27 @@ describe("the tracker flow keeps the guardrails", () => {
     expect(has(TICKETS, 'const fresh = { id, provider, needs_filter: "on" } as Source;')).toBe(true);
   });
 
-  it("saves at Test, so the verdict is recorded on a SAVED source", () => {
-    const flow = TICKETS.slice(TICKETS.indexOf("const testAndContinue = async"));
-    expect(flow.indexOf("await saveDraft()")).toBeGreaterThan(-1);
-    expect(flow.indexOf("await saveDraft()")).toBeLessThan(flow.indexOf("await runTest(src, draftMeta)"));
-    expect(has(TICKETS, "await persist(latest.current || [], { changed: draft.id });")).toBe(true);
+  // Round 5: Test used to save the draft first (so its verdict could be
+  // recorded) — a Test then Cancel left a broken source behind and ticked
+  // "Connect your tracker". Test is a look now; Finish is the one save.
+  it("Test saves nothing; Finish stores the source, then records its test", () => {
+    const test = TICKETS.slice(TICKETS.indexOf("const testAndContinue = async"), TICKETS.indexOf("const finish = async"));
+    expect(test).toContain("await testDraftSource(src, draftMeta)");
+    expect(test).not.toContain("persist(");
+    expect(test).not.toContain("runTest(");
+    // The look-only test never asks the server to record anything.
+    const look = TICKETS.slice(TICKETS.indexOf("const testDraftSource = useCallback"), TICKETS.indexOf("const persist = useCallback"));
+    expect(look).toContain('"/api/settings/test/ticketing"');
+    expect(look).not.toContain("record");
+    // Finish: the one save (draft included), THEN the recorded test.
+    const fin = TICKETS.slice(TICKETS.indexOf("const finish = async"));
+    expect(has(TICKETS, "await persist(latest.current || [], { changed: draft.id, withDraft: true });")).toBe(true);
+    expect(fin.indexOf("withDraft: true")).toBeGreaterThan(-1);
+    expect(fin.indexOf("withDraft: true")).toBeLessThan(fin.indexOf("await runTest(stored, draftMeta)"));
+    // Every other save leaves the unsaved draft out.
+    expect(TICKETS).toContain("const pending = opts.withDraft ? \"\" : pendingDraft.current;");
+    // An edit to the draft is local.
+    expect(TICKETS).toContain("updateDraft(id, patch);");
   });
 
   it("Finish refuses Anyone's without a state, and a source with no repo", () => {

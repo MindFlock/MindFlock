@@ -33,12 +33,10 @@ import {
 import { toast } from "../../lib/toast";
 import { errorPop } from "../../lib/errorPop";
 import { useUi } from "../../state/store";
-import { InlineConfirm } from "../InlineConfirm";
 import { startTogetherText } from "../../lib/runStart";
 import {
   AddFlowShell,
   ArmButton,
-  AutomationSwitch,
   HeadAction,
   SourcePill,
   TestButton,
@@ -51,7 +49,7 @@ import {
   ageText,
   panelNote,
   reopenIntakeItem,
-  repoNameOf,
+  repoSlugOf,
   trackerKinds,
   useToggleSet,
   ONLY_REPO,
@@ -61,9 +59,11 @@ import {
   type TestResult,
 } from "./kit";
 import {
+  TOKEN_URLS,
   filterSummary,
   friendlySourceError,
   friendlyStartError,
+  friendlyTestError,
   listNames,
   savedFilter,
   savedLabels,
@@ -78,6 +78,7 @@ import {
   clearSecretPatch,
   fieldErrorsFrom,
   hasSecret,
+  isTestSensitive,
   lastTestOf,
   missingAutoFields,
   putBody,
@@ -112,6 +113,7 @@ import { MergeButton, MergeDrawer } from "./MergeTicket";
 import { RepoListField } from "./RepoListField";
 import { AddRepoFlow } from "./RepoSources";
 import { sourceRepos } from "./repoList";
+import { AutoStartLink } from "./AutoStartSwitches";
 import type {
   TicketClaimedBy,
   TicketingCatalogEntry,
@@ -133,104 +135,6 @@ type Source = TicketingSource;
 interface AgentChoices {
   names: string[];
   fallback: string;
-}
-
-/** The "Auto-start tickets" switch — the Intake-tab twin of the sidebar's
- * Tickets bar. Same server contract (GET /api/mindflock/status for the
- * desired state, POST /api/mindflock/{start,stop} to flip it) and the same
- * shared status query (useMindflockStatus), so the two switches stay in
- * lock-step. Clicking the row text does nothing — only the switch flips it.
- *
- * It will not quietly switch on over a source that can't connect: auto-start
- * would then sit there doing nothing while the sidebar dot said "waiting".
- * Turning it on with one (a failed Test, or the listing couldn't reach it)
- * asks first, naming the source and why; while it is on, the row says so. */
-function IngestionToggle({
-  sourceCount,
-  broken,
-}: {
-  sourceCount: number;
-  /** Saved sources that can't connect right now: display name + the sentence
-   * saying why (friendlySourceError — it already starts with the name). */
-  broken: Array<{ name: string; why: string }>;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [optimistic, setOptimistic] = useState<boolean | null>(null);
-  const [asking, setAsking] = useState(false);
-  const { data: status, refetch } = useMindflockStatus();
-
-  // No engine installed / reachable — nothing to toggle (matches the sidebar).
-  if (!status || !status.available) return null;
-  const running = !!status.running;
-  const desired = optimistic ?? (status.desired ?? running);
-
-  const toggle = async (start: boolean) => {
-    if (busy) return;
-    setBusy(true);
-    setOptimistic(start);
-    try {
-      await api(`/api/mindflock/${start ? "start" : "stop"}`, { method: "POST" });
-      toast(start ? "Auto-start tickets on" : "Auto-start tickets off");
-    } catch (err) {
-      // Failures go to the bottom-right card (lib/errorPop.ts), not to the
-      // confirmation strip: the switch has snapped back and the reason why is
-      // the only thing left worth reading.
-      errorPop(
-        `Auto-start tickets didn't turn ${start ? "on" : "off"}`,
-        (err as Error).message || "the server gave no reason"
-      );
-    } finally {
-      setBusy(false);
-      setOptimistic(null);
-      refetch();
-    }
-  };
-
-  const names = listNames(broken.map((b) => b.name));
-  const one = broken.length === 1;
-  return (
-    <>
-      <AutomationSwitch
-        label="Auto-start tickets"
-        title="Start a session on its own for each ticket in your auto-start states. Stays as you leave it across restarts."
-        rowId="tk-ingestion-toggle-row"
-        inputId="tk-ingestion-enabled"
-        statusId="tk-ingestion-status"
-        checked={desired}
-        onChange={(next) => {
-          if (busy) return;
-          if (next && broken.length) setAsking(true);
-          else toggle(next);
-        }}
-        note={
-          !sourceCount
-            ? "Add a ticket source first — + Add source"
-            : desired && broken.length
-              ? names + " can't connect — nothing starts from " + (one ? "it" : "them") + " until fixed"
-              : undefined
-        }
-      />
-      {asking && (
-        <InlineConfirm
-          id="tk-ingestion-confirm"
-          title={names + " can't connect."}
-          body={
-            <>
-              {broken.map((b) => b.why).join(" ")} Auto-start does nothing for{" "}
-              {one ? "it" : "them"} until then.
-            </>
-          }
-          confirmLabel="Turn on anyway"
-          cancelLabel="Not now"
-          onConfirm={() => {
-            setAsking(false);
-            toggle(true);
-          }}
-          onCancel={() => setAsking(false)}
-        />
-      )}
-    </>
-  );
 }
 
 /** Stable "nothing yet" identities, so a tab rendering before its caches land
@@ -262,6 +166,10 @@ export function sourceDisplayName(source: Source, catalog: CatalogEntry[]): stri
  * pause, blur or Enter) — the card says "Saving…" then, never "Saved ✓". */
 type SaveState = { state: "pending" | "saving" | "saved" | "failed"; at: number };
 
+/** The add flow's footer lines for fields still to fill / that a save refused. */
+const FILL_FIELDS = "Fill in the marked fields first.";
+const FIX_FIELDS = "Fix the marked fields first.";
+
 export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProps) {
   // Catalog, saved sources and agent names all come from the shared query cache
   // (see state/queries), warmed at app startup. They used to be three requests
@@ -285,6 +193,12 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
     new Set((savedSources.data || []).map((s) => s.id))
   );
   const seq = useRef(0);
+  // What the last save refused, per source — read straight after the save by
+  // the add flow's Finish (the state copy below lands a render later).
+  const lastRefused = useRef<Record<string, FieldErrors>>({});
+  // The add flow's draft while it is not stored yet: every other save leaves
+  // it out, so editing another source mid-add can't store it early.
+  const pendingDraft = useRef("");
   // Per source: what the server refused on the last save (shown inline, and
   // the card reads "not saved" until it passes), and what its Test is doing
   // or last said — one line for a click's test and a save's test alike.
@@ -331,6 +245,7 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
   const edit = useEditing(focus);
   // The tracker draft "+ Add source" is building, and which step it is on.
   const [draft, setDraft] = useState<{ id: string; step: 2 | 3 } | null>(null);
+  pendingDraft.current = draft && !storedIds.current.has(draft.id) ? draft.id : "";
   // Step 1's pick: "" until the person presses a tile — nothing is chosen for
   // them (a preselected tracker read as "you are configuring GitHub Issues"
   // to someone who hadn't picked one). Continue makes the draft.
@@ -412,27 +327,98 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
           )
         );
       }
-      const msg = String(r?.message || r?.error || (r?.ok ? "Connected" : "test failed"));
+      const raw = String(r?.message || r?.error || (r?.ok ? "Connected" : "test failed"));
+      const msg = r?.ok ? raw : friendlyTestError(src.provider, raw, src.base_url);
       setTests((prev) => ({ ...prev, [src.id]: { testing: false, ok: !!r?.ok, msg } }));
       if (!r?.ok) throw new Error(msg);
       refreshConfig();
       return msg;
     } catch (err) {
-      const msg = (err as Error).message || "test failed";
+      const msg = friendlyTestError(src.provider, (err as Error).message || "test failed", src.base_url);
       setTests((prev) => ({ ...prev, [src.id]: { testing: false, ok: false, msg } }));
-      throw err;
+      throw new Error(msg);
+    }
+  }, []);
+
+  /** Test a DRAFT's typed values without saving or recording anything (no
+   * `record`: the server only looks). The verdict, the states it listed and
+   * the member id it resolved land on the local draft, so step 3's pickers
+   * fill in — the source itself is stored only by Finish, which then tests
+   * again with `record: true` so its stored verdict is an honest one. */
+  const testDraftSource = useCallback(async (src: Source, meta: CatalogEntry | null) => {
+    const payload: Record<string, unknown> = { id: src.id, provider: src.provider };
+    for (const f of meta?.fields || []) {
+      const v = src[f.key];
+      if (f.secret && (!v || v === "•••set")) continue;
+      if (v != null && v !== "") payload[f.key] = v;
+    }
+    if (src.repo_url) payload.repo_url = src.repo_url;
+    setTests((prev) => ({ ...prev, [src.id]: { testing: true } }));
+    try {
+      const r = await api<{
+        ok?: boolean;
+        error?: string;
+        message?: string;
+        member_id?: string;
+        project?: string;
+        states?: TicketingWorkflowState[];
+        workspaces?: { gid: string; name: string }[];
+      }>("/api/settings/test/ticketing", { json: payload });
+      const raw = String(r?.message || r?.error || (r?.ok ? "Connected" : "test failed"));
+      const msg = r?.ok ? raw : friendlyTestError(src.provider, raw, src.base_url);
+      const verdict: TicketingLastTest = {
+        ok: !!r?.ok,
+        at: new Date().toISOString(),
+        message: msg,
+        ...(r?.member_id ? { member_id: r.member_id } : {}),
+        ...(r?.states?.length ? { states: r.states } : {}),
+        ...(r?.workspaces?.length ? { workspaces: r.workspaces } : {}),
+      };
+      const next = (latest.current || []).map((s) =>
+        s.id === src.id
+          ? withLastTest(
+              {
+                ...s,
+                member_id: (r?.ok && r?.member_id) || s.member_id || "",
+                project: s.project || (r?.ok && r?.project) || "",
+              } as Source,
+              verdict
+            )
+          : s
+      );
+      latest.current = next;
+      setSources(next);
+      setTests((prev) => ({ ...prev, [src.id]: { testing: false, ok: !!r?.ok, msg } }));
+      if (!r?.ok) throw new Error(msg);
+      return msg;
+    } catch (err) {
+      const msg = friendlyTestError(src.provider, (err as Error).message || "test failed", src.base_url);
+      setTests((prev) => ({ ...prev, [src.id]: { testing: false, ok: false, msg } }));
+      throw new Error(msg);
     }
   }, []);
 
   const persist = useCallback(
     async (
       list: Source[],
-      opts: { nulls?: Record<string, string[]>; autoTest?: string; changed?: string } = {}
+      opts: {
+        nulls?: Record<string, string[]>;
+        autoTest?: string;
+        changed?: string;
+        /** Finish: the draft goes too (the add flow's one save). */
+        withDraft?: boolean;
+      } = {}
     ) => {
       const mySeq = ++seq.current;
+      lastRefused.current = {};
+      const pending = opts.withDraft ? "" : pendingDraft.current;
       // A new card still missing a typed required field stays local with its
       // inline errors; the rest of the list saves without it.
-      const { send, held } = splitForSave(list, catalog, storedIds.current);
+      const { send, held } = splitForSave(
+        pending ? list.filter((s) => s.id !== pending) : list,
+        catalog,
+        storedIds.current
+      );
       const changed = opts.changed ? [opts.changed] : [];
       if (!send.length && !storedIds.current.size) {
         // Nothing stored and nothing ready: no request to make.
@@ -477,6 +463,7 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
       } catch (err) {
         const fieldErrors = err instanceof ApiError && err.status === 400 ? fieldErrorsFrom(err.body) : {};
         if (Object.keys(fieldErrors).length) {
+          lastRefused.current = fieldErrors;
           // Not saved: the fields are marked on their cards, which stay as
           // typed — the next blur retries the whole list.
           if (mySeq === seq.current) setErrors({ ...held, ...fieldErrors });
@@ -519,7 +506,46 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
     return id === base || new RegExp(`^${base.replace(/[^\w]/g, "\\$&")}-\\d+$`).test(id);
   };
 
+  /** An edit to the DRAFT: local only. Nothing is stored until Finish — a
+   * Test, a Back or a Cancel before it leaves no trace on the server (round 5:
+   * Test used to save a half-built source, and Cancel left it behind). */
+  const updateDraft = (id: string, patch: Record<string, string | null>) => {
+    const strings: Record<string, string> = {};
+    for (const [k, v] of Object.entries(patch)) strings[k] = v ?? "";
+    const next = (latest.current || []).map((s) => (s.id === id ? ({ ...s, ...strings } as Source) : s));
+    latest.current = next;
+    setSources(next);
+    const merged = next.find((s) => s.id === id);
+    if (!merged) return;
+    const meta = catalog.find((p) => p.id === merged.provider) || null;
+    // A field filled in loses its "Required"; once none is missing, the
+    // footer's "Fill in the marked fields first." goes too.
+    const { held } = splitForSave([merged], catalog, new Set());
+    setErrors((prev) => {
+      if (!prev[id]) return prev;
+      const out = { ...prev };
+      if (held[id]) out[id] = held[id];
+      else delete out[id];
+      return out;
+    });
+    if (!held[id]) setFlowError((f) => (f === FILL_FIELDS ? "" : f));
+    // A changed credential makes the last Test's verdict about something else.
+    if (isTestSensitive(meta, patch)) {
+      setTests((prev) => {
+        if (!prev[id]) return prev;
+        const out = { ...prev };
+        delete out[id];
+        return out;
+      });
+      setFlowError((f) => (f.startsWith("Test failed") ? "" : f));
+    }
+  };
+
   const update = (id: string, patch: Record<string, string | null>) => {
+    if (draft && id === draft.id && !storedIds.current.has(id)) {
+      updateDraft(id, patch);
+      return;
+    }
     {
       const list = latest.current || [];
       // A null clears the field (a secret's Clear control): locally it reads
@@ -625,6 +651,16 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
   };
   const dropDraft = () => {
     if (draft) {
+      const gone = draft.id;
+      for (const set of [setErrors, setTests] as Array<
+        React.Dispatch<React.SetStateAction<Record<string, unknown>>>
+      >)
+        set((prev) => {
+          if (!(gone in prev)) return prev;
+          const out = { ...prev };
+          delete out[gone];
+          return out;
+        });
       if (storedIds.current.has(draft.id)) remove(draft.id, true);
       else {
         latest.current = (latest.current || []).filter((x) => x.id !== draft.id);
@@ -645,30 +681,33 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
   const draftSource = draft ? sources.find((x) => x.id === draft.id) || null : null;
   const draftMeta = draftSource ? catalog.find((p) => p.id === draftSource.provider) || null : null;
 
-  /** Let a field's blur-save land, then save the draft and report whether the
-   * server holds it. */
-  const saveDraft = async (): Promise<Source | null> => {
+  /** The draft as typed, once a field's pending autosave has landed (a
+   * field flushes on blur, which a click on a footer button fires first). */
+  const settledDraft = async (): Promise<Source | null> => {
     await new Promise((r) => setTimeout(r, 0));
     if (!draft) return null;
-    await persist(latest.current || [], { changed: draft.id });
-    const src = (latest.current || []).find((x) => x.id === draft.id) || null;
-    if (!src || !storedIds.current.has(draft.id)) {
-      setFlowError("Fill in the marked fields first.");
-      return null;
-    }
-    return src;
+    return (latest.current || []).find((x) => x.id === draft.id) || null;
+  };
+  /** Whether the draft has every field the user must type; marks the ones it
+   * doesn't. Local — nothing is sent. */
+  const draftComplete = (src: Source): boolean => {
+    const { held } = splitForSave([src], catalog, new Set());
+    if (!held[src.id]) return true;
+    setErrors((prev) => ({ ...prev, [src.id]: held[src.id] }));
+    setFlowError(FILL_FIELDS);
+    return false;
   };
   const testAndContinue = async (skip = false) => {
     if (!draft || busy) return;
     setBusy(true);
     try {
-      const src = await saveDraft();
-      if (!src) return;
+      const src = await settledDraft();
+      if (!src || !draftComplete(src)) return;
       if (!skip) {
         try {
-          // Saved first, so the verdict is RECORDED on the source (last_test),
-          // and the states it lists fill the next step's pickers.
-          await runTest(src, draftMeta);
+          // A look, not a save: the typed values are tested in memory and
+          // the states it lists fill the next step's pickers.
+          await testDraftSource(src, draftMeta);
         } catch (err) {
           setFlowError(
             "Test failed — " + ((err as Error).message || "no answer") + ". Fix it, or continue anyway."
@@ -686,8 +725,11 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
     if (!draft || busy) return;
     setBusy(true);
     try {
-      const src = await saveDraft();
-      if (!src) return;
+      const src = await settledDraft();
+      if (!src || !draftComplete(src)) {
+        if (src) setDraft({ id: draft.id, step: 2 });
+        return;
+      }
       const anyone = src.assignee_scope === "anyone";
       const hasFilter = savedFilter(src).length > 0 || savedLabels(src).length > 0;
       if (anyone && !hasFilter) {
@@ -698,14 +740,30 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
         );
         return;
       }
-      if (Object.keys(errors[draft.id] || {}).length) {
-        setFlowError("Fix the marked fields first.");
-        return;
-      }
       if (!sourceRepos(src).length) {
         // The pipeline skips a source with nowhere to start its tickets.
         setFlowError("Add the repository its tickets are worked on (Repo URL).");
         return;
+      }
+      // The ONE save of the add flow.
+      await persist(latest.current || [], { changed: draft.id, withDraft: true });
+      if (!storedIds.current.has(draft.id)) {
+        // Refused: the fields are marked. A refused credential sits on step 2.
+        const refused = Object.keys(lastRefused.current[draft.id] || {});
+        const credKeys = new Set(basicFields(draftMeta).filter((f) => f.type !== "state").map((f) => f.key));
+        if (refused.some((k) => credKeys.has(k))) setDraft({ id: draft.id, step: 2 });
+        setFlowError(FIX_FIELDS);
+        return;
+      }
+      // Now that it is stored, test it again WITH record, so its stored
+      // verdict (and the "Connect your tracker" step, which the server ticks
+      // only on a saved source whose test passed) is the honest one.
+      const stored = (latest.current || []).find((x) => x.id === draft.id) || src;
+      let connectNote = "";
+      try {
+        await runTest(stored, draftMeta);
+      } catch (err) {
+        connectNote = " — can't connect yet: " + ((err as Error).message || "the test failed");
       }
       const name = sourceDisplayName(src, catalog);
       setDraft(null);
@@ -717,7 +775,9 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
       // Never switches Auto-start tickets on: adding a source is not consent
       // to start sessions from it.
       toast(
-        "Added " + name + (hasFilter ? "" : " — nothing auto-starts until you pick a state")
+        "Added " +
+          name +
+          (connectNote || (hasFilter ? "" : " — nothing auto-starts until you pick a state"))
       );
     } finally {
       setBusy(false);
@@ -731,12 +791,6 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
   const panelErrors = new Map(
     (ticketsPanel.data?.errors || []).map((e) => [e.source, e.error])
   );
-  const broken = stored.flatMap((s) => {
-    const name = sourceDisplayName(s, catalog);
-    const test = lastTestOf(s);
-    const raw = panelErrors.get(s.id) || (test && !test.ok ? test.message || "test failed" : "");
-    return raw ? [{ name, why: friendlySourceError(name, raw) }] : [];
-  });
 
   /** A source heading's state: whether it needs fixing, and the sentence. */
   const headOf = (id: string, listError?: string): { broken: boolean; message: string } => {
@@ -757,7 +811,13 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
     // A stale-but-passing test is not broken (the listing just worked); a
     // failed one, no credentials, or a Test-filled field still empty is.
     if (verdict.state === "off") return { broken: true, message: "no credentials yet" };
-    if (last && !last.ok) return { broken: true, message: "can't connect — " + (last.message || "the last test failed") };
+    if (last && !last.ok)
+      return {
+        broken: true,
+        message:
+          "can't connect — " +
+          (friendlyTestError(src.provider, last.message || "", src.base_url) || "the last test failed"),
+      };
     if (last && missingAutoFields(meta, src).length) return { broken: true, message: verdict.message };
     return { broken: false, message: "" };
   };
@@ -883,9 +943,22 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
           </>
         ) : (
           <>
-            <span className="ik-add-error" role="alert">
-              {flowError}
-            </span>
+            {flowError || !tests[draft.id]?.msg ? (
+              <span className="ik-add-error" role="alert">
+                {flowError}
+              </span>
+            ) : (
+              // What step 2's Test found, carried over — or, after "Continue
+              // anyway", that Finish saves it and tests it once more.
+              <span
+                className={"ik-add-note" + (tests[draft.id]?.ok ? " ok" : "")}
+                id="ik-add-test-note"
+              >
+                {tests[draft.id]?.ok
+                  ? "✓ " + tests[draft.id]?.msg
+                  : "Not connected yet — Finish saves it and tests it again."}
+              </span>
+            )}
             <button
               type="button"
               className="ik-quiet-btn"
@@ -924,7 +997,7 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
             }}
             saved={storedIds.current.has(draftSource.id)}
             test={tests[draftSource.id]}
-            onTest={() => runTest(draftSource, draftMeta)}
+            onTest={() => testDraftSource(draftSource, draftMeta)}
             onChange={(patch) => update(draftSource.id, patch)}
             onRemove={dropDraft}
           />
@@ -940,7 +1013,8 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
         Connect a tracker. Tickets in the states you pick start as sessions — on their own
         while auto-start is on, or when you press <strong>Start</strong>.
       </p>
-      <IngestionToggle sourceCount={stored.length} broken={broken} />
+      {/* The switch itself lives on the Auto-start tab, beside the other two. */}
+      <AutoStartLink kind="tickets" gotoTab={gotoTab} />
       {/* WORK, with each source's heading as its handle: Edit (or Fix) opens
           the source's settings under its heading. There is no card list
           below any more — "+ Add source" in the dialog head adds one. */}
@@ -1369,6 +1443,8 @@ function AssignedTickets({
     ingest_states?: Record<string, string[]>;
     bucket_meta?: Record<string, { group?: string; label?: string }>;
     errors?: Array<{ source: string; error: string }>;
+    /** Per source: "can't connect — <reason>", or null when it lists. */
+    source_status?: Record<string, { connect_error?: string | null }>;
     stale?: boolean;
   }>("tickets");
   const load = ticketsQuery.refresh; // Refresh button: force a sweep
@@ -1540,6 +1616,23 @@ function AssignedTickets({
    * group heading already carries its own, so the panel-level hint points there
    * instead of inventing a union. */
   const only = sourceOrder.length === 1 ? filterOf(sourceOrder[0]) : null;
+  // The heading's button, named as it reads right now: Fix on a source that
+  // can't connect, Edit otherwise.
+  const onlyAction =
+    sourceOrder.length === 1 && headOf(sourceOrder[0], sourceErrors.get(sourceOrder[0])).broken
+      ? "Fix"
+      : "Edit";
+  /** The sentence a source that can't connect shows in place of its list —
+   * the server's `connect_error` (listing failure or a failed stored test),
+   * with Jira's bare HTTP codes put into words. */
+  const connectErrorOf = (key: string): string => {
+    const raw = ticketsQuery.data?.source_status?.[key]?.connect_error || "";
+    if (!raw) return "";
+    const src = configured.get(key);
+    const reason = raw.replace(/^can't connect\s*[—-]\s*/i, "");
+    const words = src ? friendlyTestError(src.provider, reason, src.base_url) : reason;
+    return "Can't connect — " + words.replace(/\.$/, "") + " — press Fix.";
+  };
   const ingestSummary = !only ? (
     <>
       Each source's heading says which tickets it auto-starts — press it to change them;{" "}
@@ -1548,12 +1641,13 @@ function AssignedTickets({
   ) : only.kind === "waiting" ? (
     <>
       This source auto-starts <strong>nothing</strong> until you pick a state — press{" "}
-      <strong>Edit</strong> on its heading. <strong>Start</strong> starts any ticket now.
+      <strong>{onlyAction}</strong> on its heading. <strong>Start</strong> starts any ticket now.
     </>
   ) : only.kind === "none" ? (
     <>
-      Auto-start takes tickets in <strong>every state</strong> — press <strong>Edit</strong> on
-      its heading to narrow it. <strong>Start</strong> starts any ticket now.
+      Auto-start takes tickets in <strong>every state</strong> — press{" "}
+      <strong>{onlyAction}</strong> on its heading to narrow it. <strong>Start</strong> starts
+      any ticket now.
     </>
   ) : (
     <>
@@ -1724,8 +1818,13 @@ function AssignedTickets({
                 );
               });
 
+          const cantConnect = connectErrorOf(src);
           const buckets =
-            tickets === null || (filter.active && !total) ? null : srcError ? (
+            tickets === null || (filter.active && !total) ? null : cantConnect && !inner.size ? (
+              <div className="repo-empty ik-source-error" data-connect-error={src}>
+                {cantConnect}
+              </div>
+            ) : srcError ? (
               <div className="repo-empty ik-source-error">{friendlySourceError(label, srcError)}</div>
             ) : !inner.size ? (
               // Nothing at all, vs. nothing in the buckets you chose to show —
@@ -1893,10 +1992,11 @@ function AssignedTicketRow({
       route={
         t.route ||
         (t.repo_url
-          ? { repos: [repoNameOf(t.repo_url)], repo_url: t.repo_url, method: ONLY_REPO }
+          ? { repos: [repoSlugOf(t.repo_url)], repo_url: t.repo_url, method: ONLY_REPO }
           : undefined)
       }
       hasSession={t.has_session}
+      session={t.session}
       elsewhere={t.elsewhere?.label}
       eligible={t.eligible}
       eligibleLabel={eligibleLabel}
@@ -1997,6 +2097,46 @@ function AssignedTicketRow({
       }}
     />
   );
+}
+
+/** The source editor's three parts — the add flow's steps, minus picking
+ * the tracker (that is fixed once it exists). */
+type EditPart = "connect" | "takes" | "goes";
+const EDIT_PARTS: Array<[EditPart, string]> = [
+  ["connect", "Connect"],
+  ["takes", "What it takes"],
+  ["goes", "Where it goes"],
+];
+
+/** One line naming what the Advanced fold holds that differs from the
+ * defaults ("Name: Jira – EU · Effort: high · Claim label: mindflock") — so a
+ * closed fold still says what it changes. "" when nothing in it is set. */
+export function advancedSummaryOf(
+  meta: CatalogEntry | null,
+  source: Source,
+  states: TicketingWorkflowState[] = [],
+  effortUsable = true
+): string {
+  const parts: string[] = [];
+  if ((source.label || "").trim()) parts.push("Name: " + source.label.trim());
+  if (effortUsable && (source.effort || "").trim()) parts.push("Effort: " + source.effort);
+  for (const f of advancedFields(meta)) {
+    if (f.auto) continue;
+    const v = (source[f.key] || "").trim();
+    if (!v) continue;
+    const shown =
+      f.type === "state_one" || f.type === "state"
+        ? v
+            .split(",")
+            .map((id) => stateName(id.trim(), states) || id.trim())
+            .join(", ")
+        : f.type === "choice"
+          ? (f.options || []).find((o) => o.value === v)?.label || v
+          : v;
+    parts.push(f.label + ": " + shown);
+  }
+  if (parts.length <= 3) return parts.join(" · ");
+  return parts.slice(0, 3).join(" · ") + " · +" + (parts.length - 3) + " more";
 }
 
 /** One ticket source's settings, in the order a first-timer fills them:
@@ -2179,6 +2319,7 @@ function TicketSourceEditor({
         key={f.key}
         field={f}
         source={source}
+        saved={saved}
         error={errs[f.key]}
         onChange={onChange}
         onDirty={(on) => onDirty(f.key, on)}
@@ -2211,20 +2352,50 @@ function TicketSourceEditor({
           ? "Saved ✓"
           : "";
   const name = sourceDisplayName(source, catalog);
-  const showConnect = section !== "setup";
-  const showSetup = section !== "connect";
+  // The editor under a heading is the add flow's steps again, one at a time:
+  // Connect, What it takes, Where it goes — a source that can't connect opens
+  // on Connect, a working one on what it takes (the heading's note is a
+  // shortcut there). Round 5: all of it on one scroll was ~17 controls.
+  const [part, setPart] = useState<EditPart>(() =>
+    pillState === "connected" && !unsaved ? "takes" : "connect"
+  );
   const heads = section === "edit";
+  const showConnect = section === "connect" || (heads && part === "connect");
+  const showTakes = section === "setup" || (heads && part === "takes");
+  const showGoes = section === "setup" || (heads && part === "goes");
+  const advancedSummary = advancedSummaryOf(meta, source, states, effortUsable);
 
   return (
-    <div className="ik-editor-body tk-source-editor" data-source-id={source.id} data-section={section}>
+    <div
+      className="ik-editor-body tk-source-editor"
+      data-source-id={source.id}
+      data-section={section}
+      data-part={heads ? part : undefined}
+    >
+      {heads ? (
+        <div className="ik-edit-steps" role="tablist" aria-label={"Settings for " + name}>
+          {EDIT_PARTS.map(([key, label], i) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={part === key}
+              className={"ik-edit-step" + (part === key ? " cur" : "")}
+              data-part={key}
+              onClick={() => setPart(key)}
+            >
+              <span className="ik-step-num">{i + 1}</span>
+              {label}
+              {key === "connect" ? (
+                <SourcePill state={pillState} label={pillLabel} message={pillMessage} />
+              ) : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
       {showConnect ? (
         <>
-          {heads ? (
-            <div className="ik-editor-hrow">
-              <h4 className="ik-editor-h">Connection</h4>
-              <SourcePill state={pillState} label={pillLabel} message={pillMessage} />
-            </div>
-          ) : meta?.blurb ? (
+          {heads ? null : meta?.blurb ? (
             <p className="set-hint tk-blurb">{meta.blurb}</p>
           ) : null}
           {source.provider === "github_issues" && section === "connect" ? (
@@ -2251,7 +2422,9 @@ function TicketSourceEditor({
           )}
           <div className="tk-fields">{credFields.map(renderField)}</div>
           {/* Test sits right under the credentials it checks — it is also what
-              loads the workflow states the fields below pick from. */}
+              loads the workflow states the fields below pick from. In the add
+              flow "Test & continue" is the test, so there is no second button. */}
+          {section === "connect" ? null : (
           <div className="set-row tk-test-row">
             <span className="test-row">
               <TestButton label={stored ? "Test again" : "Test"} onTest={onTest} result={test} />
@@ -2262,11 +2435,12 @@ function TicketSourceEditor({
               ) : null}
             </span>
           </div>
+          )}
         </>
       ) : null}
-      {showSetup ? (
+      {showTakes ? (
         <>
-          {heads || section === "setup" ? <h4 className="ik-editor-h">What it takes</h4> : null}
+          {section === "setup" ? <h4 className="ik-editor-h">What it takes</h4> : null}
           {paired ? (
             <div className="ik-grid ik-grid-2">
               {renderField(filterFields[0])}
@@ -2274,7 +2448,12 @@ function TicketSourceEditor({
             </div>
           ) : null}
           <div className="tk-fields">{(paired ? filterFields.slice(2) : filterFields).map(renderField)}</div>
-          <h4 className="ik-editor-h">Where it goes, and who works it</h4>
+        </>
+      ) : null}
+      {showGoes ? (
+        <>
+          {section === "setup" ? <h4 className="ik-editor-h">Where it goes, and who works it</h4> : null}
+          <div data-tour="intake-repo">
           {/* One repo, or a set of them with per-repo hints (repoList.ts). */}
           <RepoListField
             source={source}
@@ -2285,6 +2464,7 @@ function TicketSourceEditor({
             onPending={() => onDirty("repos", true)}
             onSettled={() => onDirty("repos", false)}
           />
+          </div>
           <div className="ik-grid ik-grid-2">
             <label className="set-row">
               <span className="set-label">Agent</span>
@@ -2338,7 +2518,12 @@ function TicketSourceEditor({
             open={advancedOpen}
             onToggle={(e) => setAdvancedOpen((e.currentTarget as HTMLDetailsElement).open)}
           >
-            <summary>Advanced options</summary>
+            <summary>
+              Advanced options
+              <span className="tk-advanced-sum" data-tk-advanced-sum>
+                {" — " + (advancedSummary || "nothing changed")}
+              </span>
+            </summary>
             <div className="tk-advanced-body">
               <label className="set-row">
                 <span className="set-label">Name</span>
@@ -2432,7 +2617,7 @@ function FieldLabel({ field }: { field: CatalogField }) {
           className={"ik-field-marker" + (marker === "required" ? " required" : "")}
           data-marker={marker}
         >
-          {marker === "required" ? "*" : marker}
+          {marker === "required" ? "*" : "(filled in by Test)"}
         </span>
       ) : null}
     </span>
@@ -2451,12 +2636,17 @@ function FieldNote({ field, error }: { field: CatalogField; error?: string }) {
 function CatalogInput({
   field: f,
   source,
+  saved = true,
   error,
   onChange,
   onDirty,
 }: {
   field: CatalogField;
   source: Source;
+  /** Whether the server holds this source. An add-flow draft doesn't: its
+   * typed secret stays in the box — never "•••set (saved)" over a token
+   * nothing has saved. */
+  saved?: boolean;
   error?: string;
   onChange(patch: Record<string, string | null>): void;
   /** The box holds typed text not sent yet (`true`), or no longer (`false`). */
@@ -2499,7 +2689,7 @@ function CatalogInput({
       </label>
     );
   }
-  const stored = hasSecret(source, f);
+  const stored = saved && hasSecret(source, f);
   const input = (
     <input
       // A cleared secret remounts the (uncontrolled) input, so the old
@@ -2511,7 +2701,7 @@ function CatalogInput({
       className={error ? "field-missing" : ""}
       aria-invalid={error ? true : undefined}
       placeholder={f.secret && stored ? "•••set (saved) — type to replace" : f.placeholder || ""}
-      defaultValue={f.secret ? "" : source[f.key] || ""}
+      defaultValue={f.secret && saved ? "" : source[f.key] || ""}
       onChange={(e) => save.schedule(e.target.value)}
       onBlur={save.flush}
       onKeyDown={(e) => {
@@ -2522,8 +2712,9 @@ function CatalogInput({
       }}
     />
   );
+  const tokenUrl = f.secret ? TOKEN_URLS[source.provider] : "";
   return (
-    <label className="set-row">
+    <label className="set-row" data-tour={f.secret ? "intake-token" : undefined}>
       <FieldLabel field={f} />
       {f.secret && stored ? (
         <span className="ik-secret-row">
@@ -2545,6 +2736,17 @@ function CatalogInput({
         input
       )}
       <FieldNote field={f} error={error} />
+      {tokenUrl ? (
+        <a
+          className="ik-token-link"
+          href={tokenUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-tk-token-link={source.provider}
+        >
+          Create a token ↗
+        </a>
+      ) : null}
     </label>
   );
 }

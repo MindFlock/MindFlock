@@ -34,10 +34,10 @@ import type { TicketingSource } from "../../api/types";
 import { SettingField, useSettings } from "../settings/useSettings";
 import { useAgentChoices } from "../settings/screens/AgentPicker";
 import { WorkItemRow, ageText, panelNote, useListFilter } from "./kit";
-import { friendlySourceError } from "./vocab";
 import type { RepoOverrides } from "./RepoSources";
 import { queuedMatches } from "./search";
-import { ScheduledTemplates } from "./ScheduledTemplates";
+import { ScheduledTemplates, nextScheduledText, useScheduledTemplates } from "./ScheduledTemplates";
+import { AutoStartSwitches, useBrokenTicketSources } from "./AutoStartSwitches";
 import {
   byGroup,
   collectQueued,
@@ -75,9 +75,9 @@ interface Section {
   label: string;
   tab: IntakeTabKey;
   state: QueueRunState;
-  /** The switch that would make this section's rows move, named as its tab
-   * names it ("Auto-start tickets"). */
-  blockedOn: string;
+  /** The switch that would make this section's rows move, named as the
+   * Auto-start tab's switches name it ("Tickets", "PR review comments"). */
+  switchName: string;
   /** Set when every configured source of this kind can't connect: the
    * sentence saying which and where to fix it. */
   broken?: string;
@@ -110,26 +110,36 @@ function StateChip({
   return <span className="pr-open-chip">auto-start off</span>;
 }
 
-/** Why these rows are not moving and which switch fixes it. One sentence shape
- * for every kind; only the switch's name changes. Run elsewhere, nothing here
- * needs fixing: say where they run, and that the switch isn't the reason. */
-function StalledNote({ s }: { s: Section }) {
-  const many = s.items.length !== 1;
+/** Why these rows are not moving, derived from the SAME state the section's
+ * chip shows — so the chip and the sentence can never disagree (round 5: a
+ * "not set up" chip sat over "auto-start is off — turn on Auto-start tickets"
+ * while that switch was on). Run elsewhere, nothing here needs fixing: say
+ * where they run, and that the switch isn't the reason. */
+export function stalledText(
+  s: Pick<Section, "state" | "label" | "switchName" | "runsOn" | "broken">,
+  many: boolean
+): string {
+  const they = many ? "They" : "It";
+  const any = many ? "any of them" : "it";
+  if (s.broken) return s.broken;
   if (s.state === "elsewhere")
     return (
-      <div className="ik-queue-stalled" data-runs-on={s.runsOn || ""}>
-        {runsOnText(s.runsOn)} — {s.runsOn || "that device"} starts{" "}
-        {many ? "these" : "this one"} on its own; this computer doesn't (to move them here, choose{" "}
-        <strong>Run here</strong> in Settings → Your devices). You can
-        still start {many ? "any of them" : "it"} here, with <strong>Start</strong>.
-      </div>
+      runsOnText(s.runsOn) + " — " + (s.runsOn || "that device") + " starts " + (many ? "these" : "this one") +
+      " on its own; this computer doesn't (to move them here, choose Run here in Settings → Your devices). You can still start " +
+      any + " here, with Start."
     );
+  if (s.state === "unset")
+    return "Not set up — auto-start isn't available for " + s.label + " here yet. You can still start " + any + " with Start.";
   return (
-    <div className="ik-queue-stalled">
-      {many ? "These are" : "This one is"} ready, but auto-start is off —{" "}
-      {many ? "they" : "it"} won't start on {many ? "their" : "its"} own until{" "}
-      <strong>{s.blockedOn}</strong> is on (the {s.label} tab). You can still start{" "}
-      {many ? "any of them" : "it"} here, with <strong>Start</strong>.
+    they + " won't start on " + (many ? "their" : "its") + " own: " + s.switchName +
+    " is off (above). You can still start " + any + " here, with Start."
+  );
+}
+
+function StalledNote({ s }: { s: Section }) {
+  return (
+    <div className="ik-queue-stalled" data-runs-on={s.state === "elsewhere" ? s.runsOn || "" : undefined}>
+      {stalledText(s, s.items.length !== 1)}
     </div>
   );
 }
@@ -184,12 +194,13 @@ function SectionBlock({
           {s.broken
             ? ""
             : s.state === "unset"
-              ? "Nothing set up yet — set it up on the " + s.label + " tab."
+              ? "Not set up yet — set it up on the " + s.label + " tab."
               : "Nothing waiting."}
         </div>
       ) : (
         <>
-          {s.state !== "on" && <StalledNote s={s} />}
+          {/* A section that can't connect already said so, once, above. */}
+          {s.state !== "on" && !s.broken && <StalledNote s={s} />}
           {groups.map((g) => (
             <div className="ik-queue-group" key={g.group}>
               {groups.length > 1 && <div className="ik-queue-group-name">{g.group}</div>}
@@ -323,7 +334,7 @@ export function QueueTab({ gotoTab }: TabProps) {
     const panel =
       item.kind === "tickets" ? ticketsQ : item.kind === "prs" ? prsQ : issuesQ;
     setTimeout(() => void panel.refetch(), 5000);
-    return { message: "Session " + title, title };
+    return { message: title ? "Session " + title : "Session for " + item.reference, title };
   };
 
   const payloads = {
@@ -348,19 +359,20 @@ export function QueueTab({ gotoTab }: TabProps) {
   // so by name ("Shortcut can't connect"), rather than "not set up" — which
   // sends you to set up something that already is.
   const configuredTickets = (ticketSources || []).length;
-  const ticketErrors = ((ticketsQ.data as { errors?: Array<{ source: string; error: string }> } | null)?.errors || [])
-    .filter((e) => (ticketSources || []).some((x) => x.id === e.source));
-  const listedTickets = (ticketsQ.data?.sources || []).length;
   const catalog = useTicketingCatalog(true).data || [];
   const nameOfSource = (id: string) => {
     const src = (ticketSources || []).find((x) => x.id === id);
     return src ? sourceDisplayName(src as unknown as TicketingSource, catalog) : id;
   };
+  // Every saved source can't connect: the section says so by name and where
+  // to fix it — "Can't connect — Jira: No Jira site at … — press Fix on the
+  // Tickets tab" — never "Nothing waiting" or "auto-start is off".
+  const brokenSources = useBrokenTicketSources();
   const ticketsBroken =
-    configuredTickets && ticketErrors.length && !listedTickets
-      ? ticketErrors
-          .map((e) => friendlySourceError(nameOfSource(e.source), e.error).replace(/ — press Fix on its heading\.$/, "."))
-          .join(" ") + " Fix it on the Tickets tab."
+    configuredTickets && brokenSources.length >= configuredTickets
+      ? "Can't connect — " +
+        brokenSources.map((b) => b.why.replace(/ — press Fix on its heading\.$/, ".")).join(" ") +
+        " Press Fix on the Tickets tab."
       : "";
 
   const sections: Section[] = [
@@ -375,9 +387,13 @@ export function QueueTab({ gotoTab }: TabProps) {
         // Tickets have no switch of their own — the engine is it.
         switchOn: true,
       }),
-      blockedOn: "Auto-start tickets",
+      switchName: "Tickets",
       broken: ticketsBroken,
-      items: queuedOf("tickets", payloads),
+      // Grouped under the source's name as the Tickets tab says it ("Jira —
+      // payments"), never its id ("JIRA-1").
+      items: queuedOf("tickets", payloads).map((i) =>
+        i.target.kind === "tickets" ? { ...i, group: nameOfSource(i.target.source) } : i
+      ),
       note: noteFor(ticketsQ, "tickets"),
     },
     {
@@ -397,7 +413,7 @@ export function QueueTab({ gotoTab }: TabProps) {
         // and that IS the thing to fix.
         runsElsewhere: runsElsewhere && gh.enabled !== false,
       }),
-      blockedOn: "Auto-address review comments",
+      switchName: "PR review comments",
       runsOn,
       items: queuedOf("prs", payloads),
       note: noteFor(prsQ, "PRs"),
@@ -413,7 +429,7 @@ export function QueueTab({ gotoTab }: TabProps) {
         switchOn: status?.issues_enabled === true,
         runsElsewhere: runsElsewhere && gh.issues_enabled === true,
       }),
-      blockedOn: "Auto-start new issues",
+      switchName: "New issues",
       runsOn,
       items: queuedOf("issues", payloads),
       note: noteFor(issuesQ, "issues"),
@@ -448,9 +464,13 @@ export function QueueTab({ gotoTab }: TabProps) {
   };
 
   const held = status?.held_for_slot;
+  // Scheduled templates start on their own too: the count says so.
+  const sched = useScheduledTemplates();
+  const nextSched = nextScheduledText(sched.templates, sched.status);
 
   return (
     <>
+      <AutoStartSwitches gotoTab={gotoTab} />
       <label className="set-row" id="ik-max-sessions-row">
         <span className="set-label">Max ticket sessions at once</span>
         <SettingField group="engine" field="max_sessions" type="number" placeholder="no limit" />
@@ -475,7 +495,9 @@ export function QueueTab({ gotoTab }: TabProps) {
           {total ? filter.control : null}
           <span className="pr-open-note">
             {total === 0
-              ? "Nothing waiting to start"
+              ? nextSched
+                ? "Next to start on its own: " + nextSched
+                : "Nothing waiting to start"
               : filter.active
                 ? shownTotal + " of " + total + " shown"
                 : autoTotal === total

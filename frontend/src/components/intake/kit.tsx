@@ -532,6 +532,82 @@ export function GithubStatusLine({ buttonId, needFor }: { buttonId?: string; nee
   );
 }
 
+/** The GitHub PRs / GitHub issues tab with nothing watched yet: ONE card,
+ * three steps — Connect GitHub → Pick a repo → Turn on. It replaced the
+ * generic "Add a source" wizard that opened on its own there PLUS a separate
+ * "GitHub — not connected" box: two Connect GitHub buttons and two ways to
+ * add on one screen (round 5). The wizard is still one press away, behind
+ * "+ Add source" — and "Pick a repo…" opens its repository step. */
+export function GithubSetupCard({
+  what,
+  onPickRepo,
+  onTurnOn,
+}: {
+  /** "PR review comments" / "new issues" — what step 3 turns on. */
+  what: string;
+  onPickRepo(): void;
+  onTurnOn(): void;
+}) {
+  const st = useGithubStatus(true).data;
+  const connected = !!st?.connected;
+  const steps: Array<{ key: string; label: string; done: boolean; body: React.ReactNode }> = [
+    {
+      key: "github",
+      label: "Connect GitHub",
+      done: connected,
+      body: connected ? (
+        <span className="ik-setup-done">connected{st?.login ? " as @" + st.login : ""}</span>
+      ) : (
+        <button type="button" className="btn-primary" id="ik-setup-connect" onClick={() => openConnectGitHub()}>
+          Connect GitHub
+        </button>
+      ),
+    },
+    {
+      key: "repo",
+      label: "Pick a repo",
+      done: false,
+      body: (
+        <button
+          type="button"
+          className={connected ? "btn-primary" : "test-btn"}
+          id="ik-setup-repo"
+          onClick={onPickRepo}
+        >
+          Pick a repo…
+        </button>
+      ),
+    },
+    {
+      key: "on",
+      label: "Turn on",
+      done: false,
+      body: (
+        <span className="set-hint">
+          Then switch on <strong>{what}</strong> on the{" "}
+          <button type="button" className="linklike" onClick={onTurnOn}>
+            Auto-start tab
+          </button>
+          .
+        </span>
+      ),
+    },
+  ];
+  return (
+    <section className="ik-setup-card" id="ik-github-setup" aria-label="Set up">
+      <ol className="ik-setup-steps">
+        {steps.map((s, i) => (
+          <li key={s.key} className={"ik-setup-step" + (s.done ? " done" : "")} data-step={s.key}>
+            <span className="ik-step-num">{s.done ? "✓" : i + 1}</span>
+            <span className="ik-setup-label">{s.label}</span>
+            <span className="ik-setup-body">{s.body}</span>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 /** One kind of source the add flow can create: a tracker, or a repository. */
 export interface AddKind {
   key: string;
@@ -611,7 +687,7 @@ export function AddFlowShell({
         </button>
       </div>
       {kinds.length > 1 && step < 3 ? (
-        <div className="ik-kinds" role="radiogroup" aria-label="What to add">
+        <div className="ik-kinds" role="radiogroup" aria-label="What to add" data-tour="intake-tiles">
           {kinds.map((k) => (
             <button
               key={k.key}
@@ -759,6 +835,23 @@ export function repoNameOf(url: string): string {
   return u.split(/[/:\\]/).pop() || u;
 }
 
+/** A repo as a person names it: `owner/name` for a GitHub-style clone URL
+ * (`git@github.com:acme/api.git`, `https://github.com/acme/api`), else the
+ * folder name — "→ acme/api" says which acme's api. */
+export function repoSlugOf(url: string): string {
+  const u = (url || "").trim().replace(/\/+$/, "").replace(/\.git$/, "");
+  const m = u.match(/^(?:[a-z+]+:\/\/)?(?:[^@/]+@)?[^/:]+[/:]([^/:]+)\/([^/]+)$/i);
+  if (m && !/^[./~]/.test(u)) return m[1] + "/" + m[2];
+  return repoNameOf(u);
+}
+
+/** Close Intake and bring a session forward — "Open session ›" on any row.
+ * The dialog remembers its tab, so Alt+I comes back to the same place. */
+export function openSessionFromIntake(title: string) {
+  useUi.getState().closeDialog();
+  if (title) selectSession(title);
+}
+
 /** "→ billing-service · label 'billing'" / "→ repo picked when it starts". */
 export function routeText(route: ItemRoute | null | undefined): string {
   if (!route) return "";
@@ -856,6 +949,7 @@ export function WorkItemRow({
   meta,
   tooltip,
   hasSession,
+  session,
   elsewhere,
   eligible,
   eligibleLabel,
@@ -884,6 +978,9 @@ export function WorkItemRow({
   meta: React.ReactNode;
   tooltip: string;
   hasSession?: boolean;
+  /** The title of the session this row already has (the panels' `session`):
+   * "Open session ›" goes to it. */
+  session?: string;
   /** Another of the user's devices already has this one (fleet claims): the
    * device's name. The row reads as taken there — no start button here. */
   elsewhere?: string;
@@ -1004,7 +1101,10 @@ export function WorkItemRow({
   // one line, with Fast-track named the way New's Options summary names it.
   const pickedRepo = repo ? repoChoices.find((c) => c.url === repo) : undefined;
   const where = pickedRepo ? "→ " + pickedRepo.name + " · your pick" : routeText(route);
+  // Where it starts leads (round 5: "the row doesn't say where the session
+  // will go"); an effort is named only when one is set.
   const uses = [
+    where,
     agent || configuredAgent || (agents && agents.length > 0 ? "app default" : ""),
     "Fast-track: " + (depth ? laneLabel(depth) : defaultDepth),
     !effortUsable
@@ -1013,10 +1113,24 @@ export function WorkItemRow({
         ? (EFFORT_LABELS[effort] || effort) + " effort"
         : effortDefault
           ? effortDefault + " effort"
-          : "default effort",
+          : "",
   ]
     .filter(Boolean)
     .join(" · ");
+  // The route is on the uses line while that line shows; a row without one
+  // (a session is open, or it is taken elsewhere) keeps it in the meta line.
+  const routeInMeta = hasSession || !!elsewhere;
+  const routeTitle =
+    route?.method === ONLY_REPO
+      ? "The repo this starts in — this source's only repo. Add more with Edit on its heading."
+      : (route?.method === "pending" || !(route?.repos || []).length
+          ? "Nothing on the ticket names one of this source's repos, so the agent reads the ticket and picks when it starts."
+          : "The repo this starts in, and why.") +
+        (canPickRepo
+          ? " To start it in another repo, pick one under Options."
+          : " To send it elsewhere, give the ticket a label that matches another repo's name or hint (on the source card).");
+  const openLabel = "Open session ›";
+  const openTitle = "Close Intake and go to this session";
   const willAutoStart = !!eligible && eligibleOn && !hasSession;
   const housekeepingBlock = housekeeping ? (
     <div className="ik-item-housekeeping" role="group" aria-label="On the tracker">
@@ -1081,21 +1195,8 @@ export function WorkItemRow({
       </div>
       <div className="pr-open-meta">
         <span>{meta}</span>
-        {where ? (
-          <span
-            className="ik-item-route"
-            data-route={route?.method || ""}
-            title={
-              route?.method === ONLY_REPO
-                ? "The repo this starts in — this source's only repo. Add more with Edit on its heading."
-                : (route?.method === "pending" || !(route?.repos || []).length
-                    ? "Nothing on the ticket names one of this source's repos, so the agent reads the ticket and picks when it starts."
-                    : "The repo this starts in, and why.") +
-                  (canPickRepo
-                    ? " To start it in another repo, pick one under Options."
-                    : " To send it elsewhere, give the ticket a label that matches another repo's name or hint (on the source card).")
-            }
-          >
+        {where && routeInMeta ? (
+          <span className="ik-item-route" data-route={route?.method || ""} title={routeTitle}>
             {where}
           </span>
         ) : null}
@@ -1152,8 +1253,16 @@ export function WorkItemRow({
         // actions (a ticket can be merged away while its session keeps running),
         // and they have to stack under the button the same way they do below.
         <div className="ik-item-start">
-          <button type="button" className="btn-primary pr-review-btn" disabled>
-            Session open
+          {/* One control for "this row has a session", on every tab: it
+              closes Intake and brings the session forward (round 5 found
+              three — "Open session ›", "Started", a dead "Session open"). */}
+          <button
+            type="button"
+            className="btn-primary pr-review-btn ik-open-session"
+            title={openTitle}
+            onClick={() => openSessionFromIntake(session || "")}
+          >
+            {openLabel}
           </button>
           {actionExtra}
           {housekeepingFold}
@@ -1207,7 +1316,11 @@ export function WorkItemRow({
               start ends up doing something nobody can see on screen. */}
           {!picked && (
             <div className="ik-item-optline">
-              {!showPicks && <span className="ik-item-uses">{uses}</span>}
+              {!showPicks && (
+                <span className="ik-item-uses" title={where ? routeTitle : undefined} data-route={route?.method || undefined}>
+                  {uses}
+                </span>
+              )}
               <button
                 type="button"
                 className="linklike ik-item-opts"
@@ -1356,17 +1469,18 @@ export function WorkItemRow({
                   ? "test-btn pr-review-btn ik-start-quiet"
                   : "btn-primary pr-review-btn"
             }
-            disabled={state === "starting" || (state === "started" && !startedTitle)}
+            disabled={state === "starting"}
+            data-tour={state === "idle" ? "intake-start" : undefined}
             title={
-              state === "started" && startedTitle
-                ? "Go to the new session"
+              state === "started"
+                ? openTitle
                 : canReopen
                   ? actionLabel + " starts a NEW session, leaving the workspace above alone"
                   : "Start a session for " + reference + " now"
             }
             onClick={async () => {
               if (state === "started") {
-                if (startedTitle) selectSession(startedTitle);
+                openSessionFromIntake(startedTitle || session || "");
                 return;
               }
               setState("starting");
@@ -1398,9 +1512,7 @@ export function WorkItemRow({
             {state === "starting"
               ? "Starting…"
               : state === "started"
-                ? startedTitle
-                  ? "Open session ›"
-                  : "Started"
+                ? openLabel
                 : actionLabel}
           </button>
           {actionExtra}

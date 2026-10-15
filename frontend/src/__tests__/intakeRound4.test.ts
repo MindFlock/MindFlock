@@ -101,8 +101,10 @@ describe("the safe default (M2): a new source starts nothing until a state is pi
 
 describe("one truth for auto-start (M4, M5)", () => {
   // "Pause intake" (and its server-side record) is gone — intakeNoPause.test.
-  it("the Intake header says what auto-starts, and offers Turn on… when nothing does", () => {
-    expect(DIALOG).toContain("Turn on…");
+  it("the Intake header says what auto-starts, and leads to the switches", () => {
+    // Round 5: its link goes to the Auto-start tab's switches, whatever is on.
+    expect(DIALOG).toContain('"Turn on ›"');
+    expect(DIALOG).toContain('onClick={() => gotoTab("autostart")}');
     expect(DIALOG).not.toContain("Pause intake");
     const bar = code(AUTOMATION_BAR_RAW);
     expect(bar).toContain('<label className="dc-switch"');
