@@ -234,6 +234,21 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
         ...planOf(env, d),
       };
     }
+    // A PERSON's Fail turned the checklist red (the agent's runs arrive as
+    // test_plan_checked above). Same rule, same row: a click opens Verify on
+    // that checklist.
+    case "session.test_plan_step_failed": {
+      const step = Number((d as { step?: number }).step) || 0;
+      const text = String((d as { text?: string }).text || "");
+      return {
+        text:
+          "checklist failed" +
+          (step ? " — step " + step + (text ? " " + (text.length > 60 ? text.slice(0, 59) + "…" : text) : "") : ""),
+        cls: "n-warn",
+        rule: "verify_run_failed",
+        ...planOf(env, d),
+      };
+    }
     // Agent-to-agent traffic (MindFlock MCP): only a worker's REPORT is news
     // (done / blocked / failed, filed under the parent it reported to). Plain
     // messages between agents are toasted but stay out of the feed — the bell

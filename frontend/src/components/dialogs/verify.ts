@@ -396,7 +396,23 @@ export function isWaitingOnYou(plan: TestPlan): boolean {
   if (plan.state === "running" || plan.state === "generating") return false;
   // An empty checklist a person started is theirs to fill in.
   if (isEmptyByChoice(plan)) return true;
+  // A wait that CANNOT END ("origin has no branch 'production'") is a setting
+  // only the reader can fix, so it waits on them, not on a merge (m10).
+  if (isConfigBlocked(plan)) return true;
   return plan.state === "due" || needsConfirmation(plan);
+}
+
+/** A written, unmerged, unchecked checklist whose wait for the live branch
+ * cannot end — the repo's setting names a branch origin doesn't have. */
+export function isConfigBlocked(plan: TestPlan): boolean {
+  return (
+    !!plan.live_problem &&
+    plan.state === "generated" &&
+    !plan.live_at &&
+    !plan.merged_at &&
+    (plan.steps || []).length > 0 &&
+    !latestRun(plan)
+  );
 }
 
 /** A checklist created empty on purpose (`origin: "manual"`) that has no
@@ -413,19 +429,35 @@ export function isEmptyByChoice(plan: TestPlan): boolean {
   );
 }
 
-/** Whether this checklist has FAILED — a step that didn't do what was
- * expected, or a checklist that could not be written at all (the generator
- * gave up, it came back empty, or writing it stalled part-way).
+/** Whether this checklist has FAILED — a step didn't do what was expected.
+ * Red, the loud group, and on the badge: the answer somebody about to merge
+ * most needs to see.
  *
- * Both are the loud red group and both count on the badge: they are answers,
- * not asks, but they are the answers somebody about to merge most needs to
- * see. Nothing an agent is working on right now counts — its result is not in
- * yet — except a write that has visibly stalled. */
+ * ONLY that, since round 5. A checklist that could not be WRITTEN (the writer
+ * gave up, it came back empty, writing stalled, the branch had no commits) is
+ * :func:`isUnwritten` — its own grey state, "Not written yet". Filing both under
+ * one red "Failed" told a reader whose branch had no commits yet that their
+ * change didn't work. */
 export function isFailing(plan: TestPlan): boolean {
+  if (plan.state === "running" || plan.state === "generating") return false;
+  if (!(plan.steps || []).length) return false;
+  return verdictOf(plan) === "fail";
+}
+
+/** A checklist with no steps that nobody is writing and nobody chose to leave
+ * empty: the writer failed, came back empty, or stalled part-way. Grey, not
+ * red; not on the badge — see :func:`isFailing`. */
+export function isUnwritten(plan: TestPlan): boolean {
   if (plan.state === "running") return false;
   if (plan.state === "generating") return isGenerationStalled(plan);
-  if (!(plan.steps || []).length) return !isEmptyByChoice(plan);
-  return verdictOf(plan) === "fail";
+  return !(plan.steps || []).length && !isEmptyByChoice(plan);
+}
+
+/** The writer's failure was "the branch had no commits" — the one that fixes
+ * itself (the server re-writes it once the session commits). */
+export function isNoCommits(plan: TestPlan): boolean {
+  const text = String(plan?.error || "").toLowerCase();
+  return text.includes("this branch has no commits") || text.includes("this branch changed nothing");
 }
 
 /** What the top-bar badge shows: the checklists in "Needs you" and "Failed".
@@ -633,6 +665,10 @@ export interface ChecklistTarget {
   closed: boolean;
   /** Why it can't be picked, in a few words; "" when it can. */
   reason: string;
+  /** The session's branch has nothing on it yet — no commits and no edits
+   * (its `diff_stat` counts zero files). Also set in `reason`; kept apart so
+   * "Start an empty checklist" can still offer the branch. */
+  noCommits?: boolean;
   /** The checklist that already covers this branch, when one does. */
   planId: string;
 }
@@ -662,22 +698,35 @@ export function checklistTargets(
   );
   const out: ChecklistTarget[] = [];
   const seen = new Set<string>();
-  const take = (title: string, branch: string | undefined, repo: string, isClosed: boolean) => {
+  const take = (
+    title: string,
+    branch: string | undefined,
+    repo: string,
+    isClosed: boolean,
+    empty = false,
+  ) => {
     const b = (branch || "").trim();
     if (!title || !b || seen.has(title)) return;
     seen.add(title);
     const covering =
       byTitle.get(title) ||
       (repo ? byBranch.get(coverageKey(repo, b)) : plansByBranchOnly.get(b));
+    const onLive = shipsFrom.has(b);
+    // M1: a branch with nothing on it yet has nothing for the agent to read —
+    // the server refuses it, so the picker says so first.
+    const noCommits = !covering && !onLive && empty;
     const reason = covering
       ? "has a checklist"
-      : shipsFrom.has(b)
+      : onLive
         ? "on " + b + " — nothing to compare"
-        : "";
-    out.push({ title, branch: b, closed: isClosed, reason, planId: covering?.id || "" });
+        : noCommits
+          ? "no commits yet"
+          : "";
+    out.push({ title, branch: b, closed: isClosed, reason, planId: covering?.id || "", noCommits });
   };
   const live = new Set((instances || []).map((i) => i.title));
-  for (const inst of instances || []) take(inst.title, inst.branch, inst.repo, false);
+  for (const inst of instances || [])
+    take(inst.title, inst.branch, inst.repo, false, !!inst.diff_stat && inst.diff_stat.files === 0);
   for (const entry of closed || [])
     take(entry.title, entry.branch, "", !live.has(entry.title));
   // Pickable first, in the order they came (open sessions, then closed); the
@@ -734,6 +783,9 @@ const GROUPS: Array<{ key: string; label: string }> = [
   { key: "fail", label: "Failed" },
   { key: "due", label: "Needs you" },
   { key: "generated", label: "In progress" },
+  // "Couldn't be written" is back in its own group (round 5): grey, after the
+  // work in flight, and never on the badge — see `isUnwritten`.
+  { key: "failed", label: "Not written yet" },
   { key: "partial", label: "Not verified" },
   { key: "done", label: "Verified" },
 ];
@@ -759,6 +811,7 @@ export function groupLabel(key: string): string {
 export function planGroup(plan: TestPlan): string {
   if (isFailing(plan)) return "fail";
   if (isWaitingOnYou(plan)) return "due";
+  if (isUnwritten(plan)) return "failed";
   if (plan.state === "running" || plan.state === "generating") return "generated";
   if (verdictOf(plan) === "pass") return "done";
   if (latestRun(plan)) return "partial";
@@ -842,11 +895,8 @@ export function groupPlans(
         },
         { yours: 0, failed: 0 },
       );
-      const unwritten = g.key === "fail" ? found.filter((p) => !failCount(p)).length : 0;
       const bits: string[] = [];
       if (sum.failed) bits.push(sum.failed + (sum.failed === 1 ? " step failed" : " steps failed"));
-      if (unwritten)
-        bits.push(unwritten + (unwritten === 1 ? " checklist" : " checklists") + " couldn't be written");
       if (sum.yours) bits.push(sum.yours + (sum.yours === 1 ? " step needs" : " steps need") + " you");
       return {
         key: g.key,
@@ -918,6 +968,13 @@ export const GENERATION_STALE_S = 300;
 export function isGenerationStalled(plan: TestPlan, now = Date.now() / 1000): boolean {
   if (!plan || plan.state !== "generating") return false;
   return now - (plan.gen_started || 0) >= GENERATION_STALE_S;
+}
+
+/** Past the "up to three minutes" the row promised, but not yet stalled. */
+export const GENERATION_SLOW_S = 180;
+export function isGenerationSlow(plan: TestPlan, now = Date.now() / 1000): boolean {
+  if (!plan || plan.state !== "generating" || !plan.gen_started) return false;
+  return now - plan.gen_started >= GENERATION_SLOW_S;
 }
 
 /** An epoch-seconds stamp as a rough age ("4m ago").
@@ -1065,12 +1122,19 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
     // cause sends somebody to check the wrong thing.
     if (isGenerationStalled(plan))
       return at(
-        "broken",
-        "Writing this checklist stopped part-way — nothing has been written for five minutes.",
+        "wait",
+        "Not written yet — writing stopped part-way, nothing for five minutes.",
         "rewrite",
         "Rewrite the checklist",
       );
-    return at("wait", "Writing the checklist from the diff — up to three minutes.", "none");
+    // "Up to three minutes" is a promise; past it, the row says so (m11).
+    return at(
+      "wait",
+      isGenerationSlow(plan)
+        ? "Writing the checklist — taking longer than usual…"
+        : "Writing the checklist from the diff — up to three minutes.",
+      "none",
+    );
   }
 
   // The generator failed AND there is nothing to fall back on. A defect in the
@@ -1085,13 +1149,27 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
   // with steps in `failed` at all (see `test_plans._fail`), but a plan stored by
   // an older build can still be in exactly that state, and the row has to read
   // truthfully about it rather than depend on the fix upstream.
-  if (plan.state === "failed" && !steps.length)
+  // NOT WRITTEN YET, in grey, with the reason in the headline (M1, M4). The
+  // stored error's first sentence is the reason; the one reason that fixes
+  // itself — no commits — offers nothing to press, because the server writes
+  // it on its own once the session commits.
+  if (plan.state === "failed" && !steps.length) {
+    if (isNoCommits(plan))
+      return at(
+        "wait",
+        "Not written yet — this branch has no commits. Comes back automatically when the session commits.",
+        "none",
+      );
+    const why = errorHeadline(plan);
     return at(
-      "broken",
-      "The agent couldn't write a checklist for this.",
+      "wait",
+      why
+        ? "Not written yet — " + why.charAt(0).toLowerCase() + why.slice(1)
+        : "Not written yet — the agent couldn't write a checklist for this.",
       "rewrite",
       "Rewrite the checklist",
     );
+  }
   // Steps, and a recorded failure: an older store's rewrite that timed out.
   // (The server files a checklist that gains a step out of `failed` now.)
   if (plan.state === "failed")
@@ -1110,8 +1188,8 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
   // it has to say which it is.
   if (!steps.length)
     return at(
-      "broken",
-      "No steps — the checklist came back empty.",
+      "wait",
+      "Not written yet — it came back with no steps.",
       "rewrite",
       "Rewrite the checklist",
     );
@@ -1351,14 +1429,16 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
   // item away in the ⋯, where re-doing settled work belongs.
   // ...on the BRANCH, when it has not merged yet: the same good news, plus the
   // half that keeps it honest — it is checked again where users are.
+  // "Every step passed", not "it works" (M7): the legend's own rule is that
+  // only Pass says it works, and who passed it is on the verdict pill.
   if (unshipped)
     return at(
       "ok",
-      "Works on the branch — it comes back to be checked again after merge.",
+      "Every step passed on the branch — it comes back to be checked again after merge.",
       "answer",
       "See the answers",
     );
-  return at("ok", "Every step has an answer — it works.", "answer", "See the answers");
+  return at("ok", "Every step passed.", "answer", "See the answers");
 }
 
 /** A step's text cut to fit one row, at a word boundary. */
@@ -1381,7 +1461,7 @@ function clip(text: string, max: number): string {
  * - **Being written** / **Agent checking** — an agent is at work;
  * - **Empty — add a step** — made empty on purpose (`origin: "manual"`): no
  *   steps yet because a person is writing them, not because writing failed;
- * - **Couldn't be written** — no steps (failed, empty, or stalled);
+ * - **Not written yet** — no steps (failed, empty, or stalled), in grey;
  * - **Failed** — a step didn't do what was expected;
  * - **Verified on branch** / **Verified live** — every step passed, before or
  *   after it shipped;
@@ -1408,6 +1488,23 @@ export interface PlanVerdict {
   glyph: string;
 }
 
+/** Who recorded the passes on a verified checklist — "you", "the agent", or
+ * "you and the agent" — so one hand-clicked Pass doesn't read the same as an
+ * agent's run (M7). "" when nothing passed. */
+export function passedBy(plan: TestPlan): string {
+  const run = latestRun(plan);
+  const results = run?.results || {};
+  let you = false;
+  let agent = false;
+  for (const step of plan.steps || []) {
+    const entry = results[step.id];
+    if (entry?.result !== "pass") continue;
+    if (entry.by === "human") you = true;
+    else agent = true;
+  }
+  return you && agent ? "you and the agent" : you ? "you" : agent ? "the agent" : "";
+}
+
 export function planVerdict(plan: TestPlan): PlanVerdict {
   const v = (key: VerdictKey, label: string, tone: PlanVerdict["tone"], glyph: string, short = label) =>
     ({ key, label, short, tone, glyph }) as PlanVerdict;
@@ -1416,14 +1513,18 @@ export function planVerdict(plan: TestPlan): PlanVerdict {
     return v("writing", "Being written", "busy", "\u2026", "Checklist…");
   if (plan.state === "running") return v("checking", "Agent checking", "busy", "\u2026", "Checking…");
   if (isEmptyByChoice(plan)) return v("empty", "Empty — add a step", "you", "+", "Empty");
+  // Grey, not red: nothing about the change is known yet (M4).
   if (!steps.length || isGenerationStalled(plan))
-    return v("unwritten", "Couldn't be written", "bad", "\u2717", "No checklist");
+    return v("unwritten", "Not written yet", "wait", "\u25cb", "Not written");
   const verdict = verdictOf(plan);
   if (verdict === "fail") return v("failed", "Failed", "bad", "\u2717");
-  if (verdict === "pass")
+  if (verdict === "pass") {
+    const by = passedBy(plan);
+    const who = by ? " \u00b7 by " + by : "";
     return plan.live_at
-      ? v("live", "Verified live", "ok", "\u2713")
-      : v("branch", "Verified on branch", "ok", "\u2713", "Verified");
+      ? v("live", "Verified live" + who, "ok", "\u2713", "Verified live")
+      : v("branch", "Verified on branch" + who, "ok", "\u2713", "Verified");
+  }
   if (!latestRun(plan) && plan.merged_at && !plan.live_at)
     return v("shipping", "Waiting to ship", "wait", "\u25f7");
   const t = checkTally(plan);

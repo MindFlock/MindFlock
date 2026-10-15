@@ -31,15 +31,25 @@ async function request(path: string, opts?: RequestInit & { json?: unknown }): P
   const text = await r.text();
   if (!r.ok) {
     const body = parse(text);
-    let msg = `${path} -> ${r.status}`;
+    // Words, never the request: "/api/test-plans/x/fix -> 500" in a toast is
+    // the server's address, not a reason. `detail` is the plain sentence a
+    // route writes for people; `error` is the older terse field.
+    let msg = statusSentence(r.status);
     if (body && typeof body === "object") {
       const b = body as Json;
-      if (typeof b.error === "string" && b.error) msg = b.error;
-      else if (typeof b.detail === "string" && b.detail) msg = b.detail;
+      if (typeof b.detail === "string" && b.detail) msg = b.detail;
+      else if (typeof b.error === "string" && b.error) msg = b.error;
     }
     throw new ApiError(r.status, msg, body);
   }
   return text;
+}
+
+/** What a failed request says when the server sent no reason of its own. */
+export function statusSentence(status: number): string {
+  if (status === 404) return "MindFlock couldn't find that — it may have just been removed.";
+  if (status >= 500) return "MindFlock hit an error (details in the log).";
+  return "MindFlock couldn't do that (error " + status + ").";
 }
 
 function parse(text: string): unknown {

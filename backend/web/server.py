@@ -9537,6 +9537,8 @@ async def write_test_plan_for_branch(payload: dict) -> JSONResponse:
                     status_code=409,
                 ),
             )
+        if not empty and _test_plans.branch_has_no_commits(root, live, sha):
+            return None, "", _no_commits_response()
         plan_id = _test_plans.branch_plan_id(root, branch)
         plan = _test_plans.ensure_plan_for(
             plan_id, branch, sha, root, live, intent="", manual=empty
@@ -9585,8 +9587,63 @@ async def write_test_plan_for_branch(payload: dict) -> JSONResponse:
 # that is the only spelling that is the same in every clone and every worktree.
 
 
+def _no_commits_response() -> JSONResponse:
+    """409 for "Ask the agent" on a branch with nothing on it yet. ``detail``
+    is the sentence the card shows; ``reason`` lets the picker say it too."""
+    return JSONResponse(
+        {
+            "error": "nothing committed on this branch yet",
+            "detail": _test_plans.NO_COMMITS_DETAIL + ".",
+            "reason": "no_commits",
+        },
+        status_code=409,
+    )
+
+
+def _empty_plan_for_closed(title: str) -> JSONResponse:
+    """``empty: true`` for a CLOSED session: the checklist is made empty
+    (``origin: "manual"``) from what the closed entry remembers, and nothing is
+    generated — the closed-session writer would start a model call."""
+    branch, sha, repo_root, _program = _closed_session_plan_inputs(title)
+    if not repo_root:
+        return JSONResponse({"error": "no such session: %s" % title}, status_code=404)
+    if not branch or not sha:
+        return JSONResponse(
+            {
+                "error": "that session's branch is gone",
+                "detail": "That session's branch is gone, so there is nothing to attach a checklist to.",
+            },
+            status_code=409,
+        )
+    plan = _test_plans.ensure_plan_for(
+        title,
+        branch,
+        sha,
+        repo_root,
+        _test_plans.resolve_live_branch(repo_root),
+        intent="",
+        manual=True,
+    )
+    if plan is None:
+        owner = _test_plans.owner_for_branch(title, repo_root, branch) or title
+        existing = _test_plans.get(owner) or {}
+        return JSONResponse(
+            {
+                "ok": True,
+                "plan": owner,
+                "existing": True,
+                "state": existing.get("state", ""),
+            }
+        )
+    return JSONResponse(
+        {"ok": True, "plan": title, "existing": False, "empty": True}, status_code=201
+    )
+
+
 @app.post("/api/instances/{title}/test-plan")
-async def instance_write_test_plan(title: str) -> JSONResponse:
+async def instance_write_test_plan(
+    title: str, payload: Optional[dict] = None
+) -> JSONResponse:
     """Write a test plan for this session, because a person asked for one.
 
     The normal way to get a plan. Automatic generation is opt-in per repo (on
@@ -9603,11 +9660,19 @@ async def instance_write_test_plan(title: str) -> JSONResponse:
     ``existing: true`` with a 200 rather than an error: the honest answer to
     "write a plan for this" when one is already written is to point at it, and
     the dialog opens it. Regenerating is a different button and says so.
+
+    ``{"empty": true}`` makes the checklist EMPTY instead (``origin:
+    "manual"``, 201) and starts no generation — "Start an empty checklist".
+    Without it, a branch with no commits (and a clean tree) is refused with
+    409 ``reason: "no_commits"``: there is nothing for the agent to read.
     """
     if not git_available():
         return _no_git_response()
+    empty = isinstance(payload, dict) and payload.get("empty") is True
     inst, err = _inst_or_404(title)
     if err is not None:
+        if empty:
+            return await asyncio.to_thread(_empty_plan_for_closed, title)
         # ...unless the session was merely CLOSED. A checklist is worth asking
         # for precisely when the work is finished and the window has been put
         # away, so refusing there made the button useless at the only moment
@@ -9655,13 +9720,19 @@ async def instance_write_test_plan(title: str) -> JSONResponse:
         # live branch is resolved FOR must be the same one, or a repo whose
         # override says "staging" gets a plan that waits for "main" forever.
         root = repo_root or wt
+        live = _test_plans.resolve_live_branch(root)
+        # A session ON the live branch (this folder directly) is left alone:
+        # the writer reads its newest commit instead of a range.
+        if not empty and branch != live and _test_plans.branch_has_no_commits(wt, live):
+            return None, "", _no_commits_response()
         plan = _test_plans.ensure_plan_for(
             title,
             branch,
             sha,
             root,
-            _test_plans.resolve_live_branch(root),
-            intent=_test_plan_intent(title),
+            live,
+            intent="" if empty else _test_plan_intent(title),
+            manual=empty,
         )
         # Which plan the "there is already one" answer is ABOUT. Usually this
         # session's own, but a branch open in two windows has one checklist
@@ -9687,6 +9758,11 @@ async def instance_write_test_plan(title: str) -> JSONResponse:
                 "existing": True,
                 "state": existing.get("state", ""),
             }
+        )
+    if empty:
+        return JSONResponse(
+            {"ok": True, "plan": title, "existing": False, "empty": True},
+            status_code=201,
         )
     _start_test_plan_generation(title, getattr(inst, "Program", "") or "", wt)
     return JSONResponse({"ok": True, "plan": title, "existing": False}, status_code=202)
@@ -10314,6 +10390,7 @@ def record_test_plan_result(plan_id: str, payload: dict) -> JSONResponse:
     step_id = str(payload.get("step_id", "") or "").strip()
     result = str(payload.get("result", "") or "").strip()
     note = str(payload.get("note", "") or "")
+    was_failing = bool(_test_plans.failed_steps(_test_plans.get(plan_id) or {}))
     try:
         plan = _test_plans.record_result(plan_id, step_id, result, note, by="human")
     except ValueError as err:
@@ -10326,7 +10403,34 @@ def record_test_plan_result(plan_id: str, payload: dict) -> JSONResponse:
             {"error": "test plan or step not found: %s / %s" % (plan_id, step_id)},
             status_code=404,
         )
+    if result == "fail" and not was_failing:
+        _announce_step_failed(plan, step_id)
     return JSONResponse({"ok": True, "plan": plan})
+
+
+def _announce_step_failed(plan: dict, step_id: str) -> None:
+    """``session.test_plan_step_failed``: a person's Fail just turned this
+    checklist from not-failed to failed. The agent's own runs announce through
+    ``session.test_plan_checked``; a hand-recorded Fail was silent, so the bell
+    said "No notifications yet." beside a red Verify badge. Once per
+    transition — a second Fail on an already-failed checklist is not news."""
+    steps = plan.get("steps") or []
+    idx = next((i for i, st in enumerate(steps) if st.get("id") == step_id), -1)
+    try:
+        _events.BUS.emit(
+            "session.test_plan_step_failed",
+            session=str(plan.get("id") or ""),
+            new="failed",
+            data={
+                "plan": str(plan.get("id") or ""),
+                "title": plan.get("title") or plan.get("id") or "",
+                "branch": plan.get("branch") or "",
+                "step": idx + 1,
+                "text": str(steps[idx].get("text") or "")[:200] if idx >= 0 else "",
+            },
+        )
+    except Exception:  # noqa: BLE001 — an announcement never fails the answer
+        pass
 
 
 @app.post("/api/test-plans/{plan_id:path}/deployed")

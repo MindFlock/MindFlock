@@ -432,8 +432,10 @@ describe("dueCount", () => {
     ).toBe(0);
   });
 
-  it("counts failures — a failed step, and a checklist that couldn't be written", () => {
+  it("counts a failed step — and NOT a checklist that couldn't be written", () => {
     // Round 4: failures are loud, and the badge is where a lead looks first.
+    // Round 5 (M4): "Not written yet" is grey and off the badge — it says
+    // nothing about whether the change works.
     expect(
       dueCount([
         plan({
@@ -444,13 +446,13 @@ describe("dueCount", () => {
         }),
         plan({ id: "b", state: "failed", error: "no <testplan> block" }),
       ]),
-    ).toBe(2);
+    ).toBe(1);
     expect(
       failingCount([
         plan({ id: "b", state: "failed", error: "no <testplan> block" }),
         plan({ id: "c", state: "due", steps: one }),
       ]),
-    ).toBe(1);
+    ).toBe(0);
   });
 
   it("ignores a verified plan", () => {
@@ -534,7 +536,10 @@ describe("the badge and the first two groups are one set", () => {
     const due = groupPlans(everything).find((g) => g.key === "due");
     expect(due?.plans.map((p) => p.id)).toEqual(["due", "handed-back"]);
     const fail = groupPlans(everything).find((g) => g.key === "fail");
-    expect(fail?.plans.map((p) => p.id)).toEqual(["nogen", "flunked"]);
+    expect(fail?.plans.map((p) => p.id)).toEqual(["flunked"]);
+    expect(groupPlans(everything).find((g) => g.key === "failed")?.plans.map((p) => p.id)).toEqual([
+      "nogen",
+    ]);
     expect(everything.filter(isWaitingOnYou).map((p) => p.id)).toEqual(["due", "handed-back"]);
   });
 
@@ -676,7 +681,8 @@ describe("planStatus (the one sentence and the one button)", () => {
     const status = planStatus(clean, "main");
     expect(status.group).toBe("done");
     expect(status.tone).toBe("ok");
-    expect(status.line).toBe("Every step has an answer — it works.");
+    // M7: "Every step passed", never "it works" — the legend's own rule.
+    expect(status.line).toBe("Every step passed.");
   });
 
   it("asks you to run a shipped plan nobody has touched", () => {
@@ -726,7 +732,7 @@ describe("planStatus (the one sentence and the one button)", () => {
     const status = planStatus(early, "main");
     expect(status.tone).toBe("ok");
     expect(status.line).toBe(
-      "Works on the branch — it comes back to be checked again after merge.",
+      "Every step passed on the branch — it comes back to be checked again after merge.",
     );
   });
 
@@ -754,7 +760,7 @@ describe("planStatus (the one sentence and the one button)", () => {
       "Writing the checklist from the diff — up to three minutes.",
     );
     expect(planStatus(plan({ state: "due", steps: [] })).line).toBe(
-      "No steps — the checklist came back empty.",
+      "Not written yet — it came back with no steps.",
     );
     expect(planStatus(plan({ state: "due", steps: [] })).action).toBe("rewrite");
   });
@@ -770,7 +776,8 @@ describe("planStatus (the one sentence and the one button)", () => {
       gen_started: Date.now() / 1000 - (GENERATION_STALE_S + 1),
     });
     const status = planStatus(stuck, "main");
-    expect(status.tone).toBe("broken");
+    // Grey since round 5 (M4): not written is not a failure.
+    expect(status.tone).toBe("wait");
     expect(status.action).toBe("rewrite");
     expect(status.actionLabel).toBe("Rewrite the checklist");
     expect(status.line).toContain("stopped part-way");
@@ -803,8 +810,29 @@ describe("planStatus (the one sentence and the one button)", () => {
   it("hands a failed generation the only button that helps", () => {
     const broken = plan({ state: "failed", error: "no <testplan> block" });
     const status = planStatus(broken, "main");
-    expect(status.group).toBe("fail");
+    expect(status.group).toBe("failed");
+    expect(status.tone).toBe("wait");
     expect(status.actionLabel).toBe("Rewrite the checklist");
+    // M1: the reason is in the headline, not only in the expanded body.
+    expect(status.line).toBe("Not written yet — no <testplan> block.");
+  });
+
+  it("offers nothing to press when the branch simply has no commits yet (M1)", () => {
+    const empty = plan({
+      state: "failed",
+      error: "nothing to check yet — this branch has no commits",
+    });
+    const status = planStatus(empty, "main");
+    expect(status.action).toBe("none");
+    expect(status.line).toBe(
+      "Not written yet — this branch has no commits. Comes back automatically when the session commits.",
+    );
+  });
+
+  it("says a write past three minutes is taking longer than usual (m11)", () => {
+    const slow = plan({ state: "generating", gen_started: Date.now() / 1000 - 200 });
+    expect(planStatus(slow).line).toBe("Writing the checklist — taking longer than usual…");
+    expect(planStatus(slow).action).toBe("none");
   });
 
   it("takes its group from planGroup rather than deciding twice", () => {
@@ -868,15 +896,17 @@ describe("groupPlans", () => {
       }),
       plan({ id: "a", state: "due", steps: one }),
     ]);
-    expect(groups.map((g) => g.key)).toEqual(["fail", "due", "generated", "partial", "done"]);
+    expect(groups.map((g) => g.key)).toEqual(["fail", "due", "generated", "failed", "partial", "done"]);
     expect(groups.map((g) => g.label)).toEqual([
       "Failed",
       "Needs you",
       "In progress",
+      "Not written yet",
       "Not verified",
       "Verified",
     ]);
-    expect(groups[0].plans.map((p) => p.id)).toEqual(["e", "f"]);
+    expect(groups[0].plans.map((p) => p.id)).toEqual(["f"]);
+    expect(groups[3].plans.map((p) => p.id)).toEqual(["e"]);
   });
 
   it("files a branch that passed before merge under Verified, not 'not shipped'", () => {
@@ -992,7 +1022,7 @@ describe("groupPlans", () => {
     expect(groups[1].plans.map((p) => p.id)).toEqual(["b", "c", "d"]);
   });
 
-  it("files a write that stalled under Failed", () => {
+  it("files a write that stalled under Not written yet, with no detail line", () => {
     const groups = groupPlans([
       plan({
         id: "a",
@@ -1000,8 +1030,8 @@ describe("groupPlans", () => {
         gen_started: Date.now() / 1000 - (GENERATION_STALE_S + 1),
       }),
     ]);
-    expect(groups.map((g) => g.key)).toEqual(["fail"]);
-    expect(groups[0].detail).toBe("1 checklist couldn't be written");
+    expect(groups.map((g) => g.key)).toEqual(["failed"]);
+    expect(groups[0].detail).toBeUndefined();
   });
 
   it("preserves the caller's order inside a group", () => {
@@ -1039,7 +1069,9 @@ describe("planVerdict (the yes-or-no on every row)", () => {
     const v = planVerdict(
       plan({ state: "generated", steps: one, runs: ran({ s1: "pass" }, { prelive: true }) }),
     );
-    expect(v.label).toBe("Verified on branch");
+    // M7: who checked it is on the pill; the sidebar's short stays one word.
+    expect(v.label).toBe("Verified on branch · by the agent");
+    expect(v.short).toBe("Verified");
     expect(v.tone).toBe("ok");
   });
 
@@ -1047,10 +1079,31 @@ describe("planVerdict (the yes-or-no on every row)", () => {
     const v = planVerdict(
       plan({ state: "done", live_at: 500, steps: one, runs: ran({ s1: "pass" }) }),
     );
-    expect(v.label).toBe("Verified live");
+    expect(v.label).toBe("Verified live · by the agent");
+    expect(v.short).toBe("Verified live");
   });
 
-  it("says Failed, Agent checking, Being written, Couldn't be written", () => {
+  it("says who passed it: you, the agent, or both", () => {
+    const by = (who: Record<string, string>) =>
+      planVerdict(
+        plan({
+          state: "done",
+          live_at: 500,
+          steps: [step("s1"), step("s2")],
+          runs: [
+            run({
+              results: Object.fromEntries(
+                Object.entries(who).map(([id, b]) => [id, { result: "pass", note: "", at: 1, by: b }]),
+              ),
+            }),
+          ],
+        }),
+      ).label;
+    expect(by({ s1: "human", s2: "human" })).toBe("Verified live · by you");
+    expect(by({ s1: "agent", s2: "human" })).toBe("Verified live · by you and the agent");
+  });
+
+  it("says Failed, Agent checking, Being written, Not written yet", () => {
     expect(planVerdict(plan({ state: "done", steps: one, runs: ran({ s1: "fail" }) })).label).toBe(
       "Failed",
     );
@@ -1058,7 +1111,7 @@ describe("planVerdict (the yes-or-no on every row)", () => {
       planVerdict(plan({ state: "running", steps: one, run_session: "verify-a" })).label,
     ).toBe("Agent checking");
     expect(planVerdict(plan({ state: "generating" })).label).toBe("Being written");
-    expect(planVerdict(plan({ state: "failed", error: "x" })).label).toBe("Couldn't be written");
+    expect(planVerdict(plan({ state: "failed", error: "x" })).label).toBe("Not written yet");
   });
 
   it("says Waiting to ship while a merged branch waits out its deploy", () => {
@@ -1090,13 +1143,13 @@ describe("planVerdict (the yes-or-no on every row)", () => {
   it("agrees with the group it files under", () => {
     const cases: Array<[TestPlan, string]> = [
       [plan({ state: "done", steps: one, runs: ran({ s1: "fail" }) }), "fail"],
-      [plan({ state: "failed" }), "fail"],
+      [plan({ state: "failed" }), "failed"],
       [plan({ state: "done", steps: one, runs: ran({ s1: "pass" }) }), "done"],
       [plan({ state: "running", steps: one, run_session: "v" }), "generated"],
     ];
     const verdictGroup: Record<string, string> = {
       failed: "fail",
-      unwritten: "fail",
+      unwritten: "failed",
       branch: "done",
       live: "done",
       checking: "generated",
@@ -1999,7 +2052,8 @@ describe("a run that died says so on the row", () => {
 
   it("says nothing twice when the sentence is already about the failure", () => {
     const failed = plan({ state: "failed", steps: [], error: "boom. detail" });
-    expect(planStatus(failed).line).toBe("The agent couldn't write a checklist for this.");
+    // The reason IS the sentence now (M1) — said once, not appended again.
+    expect(planStatus(failed).line).toBe("Not written yet — boom.");
     // A rewrite in flight owns the row; the stored error is the attempt it is
     // replacing.
     const rewriting = plan({

@@ -23,8 +23,11 @@ import {
   CHECK_MARK,
   beforeMergeRun,
   beforeMergeSummary,
-  checkTally,
   failCount,
+  isConfigBlocked,
+  isNoCommits,
+  planVerdict,
+  stepCheck,
   latestRun,
   openHumanSteps,
   isVerifySession,
@@ -98,6 +101,10 @@ export function PlanRow({
   const session =
     (instances || []).find((i) => !isVerifySession(i) && planForSession([plan], i) === plan) ||
     null;
+  // A fix session the route opened (`fix-<plan>`) that is still open: while it
+  // is, the card says the failure is being fixed (B1) — the press otherwise
+  // left no trace on the checklist it came from.
+  const fixSession = (instances || []).find((i) => i.title === "fix-" + plan.id) || null;
   const [busy, setBusy] = useState("");
   const [stepBusy, setStepBusy] = useState("");
   const [focusStep, setFocusStep] = useState("");
@@ -161,6 +168,18 @@ export function PlanRow({
   const steps = plan.steps || [];
   const status = planStatus(plan, liveBranch);
   const open = openHumanSteps(plan);
+  const verdict = planVerdict(plan);
+  // CHECK NOW, VISIBLE (M3): on every card with an agent step nobody has
+  // answered, beside the row's main button — not only when it IS the main
+  // button. The intro's first instruction is "press Check now", and on a
+  // failed or needs-you card it lived in the ⋯.
+  const uncheckedAgent = steps.filter(
+    (s) => s.actor !== "human" && stepCheck(plan, s.id) === "pending",
+  ).length;
+  const statusRuns =
+    status.action === "run" || status.action === "rerun" || status.action === "early";
+  const showCheckNow =
+    !running && plan.state !== "generating" && uncheckedAgent > 0 && !statusRuns;
   // What THIS PLAN'S REPO calls live today, which is the only branch the plan's
   // own stamp can honestly be compared with. "What counts as shipped" is a
   // per-repo fact and a plan records the per-repo answer, so measuring it
@@ -407,7 +426,7 @@ export function PlanRow({
     };
     menu.push({
       key: "open-session",
-      label: "Open session",
+      label: "Open the work session",
       title: "Show " + session.title + " in the grid",
       onSelect: () => go(),
     });
@@ -433,14 +452,14 @@ export function PlanRow({
   if (watchSession && !watchingHere)
     menu.push({
       key: "watch-here",
-      label: running ? "Show the run here" : "Show the last run here",
+      label: running ? "Show the checking run here" : "Show the last checking run here",
       title: "Show " + watchSession + " under this checklist",
       onSelect: () => setWatchingHere(true),
     });
   if (watchSession)
     menu.push({
       key: "watch",
-      label: "Open the session in its own window",
+      label: "Open the checking run",
       title: "Open " + watchSession + " as a pane — closing it doesn't stop the check",
       onSelect: watch,
     });
@@ -471,12 +490,7 @@ export function PlanRow({
     // failure, whose button opens the evidence. Re-checking after a fix is the
     // right thing to do second, not first. (Check now on unmerged work is the
     // PRIMARY button now, not a ⋯ item.)
-    if (
-      agentCan &&
-      status.action !== "run" &&
-      status.action !== "rerun" &&
-      status.action !== "early"
-    )
+    if (agentCan && !statusRuns && !showCheckNow)
       menu.push({
         key: "run",
         label: "Check now",
@@ -571,7 +585,10 @@ export function PlanRow({
             red", on the same baseline, so a list of eight is one pass. */}
         <div className="vf-plan-line">
           {/* THE VERDICT first — the yes-or-no a lead reads before merging. */}
-          <VerdictBadge plan={plan} />
+          {/* ONE COUNTER PER CARD (m1): a partly-checked verdict IS a count
+              ("1 of 3 checked"), so the tally beside the sentence carries it
+              alone and the pill is dropped. */}
+          {verdict.key !== "partial" ? <VerdictBadge plan={plan} /> : null}
           <div className="vf-stopline" data-tone={status.tone}>
             {/* THE WHEEL. `generating` is the one state with nothing to press
                 and nothing on screen changing for up to three minutes; without
@@ -582,7 +599,23 @@ export function PlanRow({
             {plan.state === "generating" && status.tone === "wait" ? (
               <span className="vf-spin" aria-hidden="true" />
             ) : null}
-            {status.line}
+            {isConfigBlocked(plan) ? <ConfigLine line={status.line} /> : status.line}
+            {fixSession && failedCount > 0 ? (
+              <span className="vf-fixing">
+                {" "}Being fixed in{" "}
+                <button
+                  type="button"
+                  className="linklike"
+                  onClick={() => {
+                    closeDialog();
+                    selectSession(fixSession.title);
+                  }}
+                >
+                  {fixSession.title}
+                </button>
+                .
+              </span>
+            ) : null}
           </div>
           <PlanTally plan={plan} />
         </div>
@@ -600,6 +633,7 @@ export function PlanRow({
               and "it's got as far as staging" are told apart without reading. */}
           <span
             className="vf-plan-landed"
+            data-tour="verify-merge"
             data-live={landed === nowLive && !!nowLive ? "yes" : "no"}
             title={whereTitle}
           >
@@ -615,12 +649,32 @@ export function PlanRow({
         {!running && failedCount > 0 ? (
           <button
             type="button"
-            className="test-btn vf-fix"
+            className="vf-fix"
             disabled={busy !== ""}
-            title="Start a session to fix what failed"
+            title={
+              fixSession
+                ? "Sends the failure to " + fixSession.title + " again"
+                : "Starts a new session with the failure attached"
+            }
             onClick={() => void fixFailures()}
           >
-            {busy === "fix" ? "Opening…" : "Fix…"}
+            {busy === "fix" ? "Opening…" : "Fix in a new session"}
+          </button>
+        ) : null}
+        {showCheckNow ? (
+          <button
+            type="button"
+            className="test-btn vf-checknow"
+            data-tour="verify-check"
+            disabled={busy !== "" || stepBusy !== ""}
+            title={
+              plan.live_at
+                ? "An agent checks the steps it can — takes a few minutes"
+                : "An agent checks the branch now — it's checked again after merge"
+            }
+            onClick={() => void startRun()}
+          >
+            {busy === "run" ? "Starting…" : "Check now"}
           </button>
         ) : null}
         {status.action !== "none" ? (
@@ -628,6 +682,7 @@ export function PlanRow({
             type="button"
             className={(status.tone === "you" ? "btn-primary" : "test-btn") + " vf-primary"}
             data-action={status.action}
+            data-tour={statusRuns ? "verify-check" : undefined}
             // `stepBusy` too: a per-step Re-check and this button start the SAME
             // request, and two of them in flight for one plan is how a title
             // gets claimed twice — one create wins, the loser's failure lands on
@@ -690,13 +745,15 @@ export function PlanRow({
                   each writer stores a self-describing one — so a heading that
                   guessed would be wrong a third of the time. */}
               <strong>
-                {steps.length ? "That didn't work." : "Couldn't write the checklist."}
+                {steps.length ? "That didn't work." : "Not written yet."}
               </strong>{" "}
               {plan.error || "no reason recorded"}
               <div className="vf-note">
                 {steps.length
                   ? "The steps below are unchanged."
-                  : "Try Rewrite, or add steps yourself below."}
+                  : isNoCommits(plan)
+                    ? "Comes back automatically when the session commits — or add steps yourself below."
+                    : "Rewrite to try again, or add steps yourself below."}
               </div>
             </div>
           )}
@@ -708,12 +765,6 @@ export function PlanRow({
           {/* Before merge: what an answer here is about, and what happens
               next. (It used to warn that answering closed the checklist for
               good; the server keeps it open now.) */}
-          {plan.state === "generated" && !plan.live_at && steps.length > 0 && (
-            <div className="vf-note vf-moment">
-              Not merged yet — answers here check the branch. After merge it comes
-              back to be checked again.
-            </div>
-          )}
           {earlier && (
             <div className="vf-note vf-moment">
               Checked before merge: {beforeMergeSummary(plan, earlier)}
@@ -802,7 +853,6 @@ export function PlanRow({
               onHide={() => setWatchingHere(false)}
             />
           )}
-          {steps.length > 0 && <ChecksHead plan={plan} />}
           {steps.length > 0 ? (
             <div className="vf-steps">
               {steps.map((step, i) => (
@@ -864,38 +914,6 @@ export function PlanRow({
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-/** The roll-up line above the steps — the "checks" summary.
- *
- * WHY THIS EXISTS NEXT TO A STATUS SENTENCE THAT ALREADY SAYS SOMETHING.
- * `planStatus` is one ordered decision producing one sentence, which is what
- * stops the row contradicting itself — but it can only ever say the LOUDEST true
- * thing ("2 steps need your eyes"), and the question somebody has on opening a
- * twelve-step checklist is a different one: how much of this is settled, and
- * how. That is the question a checks panel answers at a glance, and it is why
- * every CI surface has one. Computed from the same run the sentence read, so the
- * two are two renderings of one state rather than two opinions.
- *
- * Zeroes are omitted rather than shown as "0 failed". A row of zeroes reads as a
- * form, and the one number that matters is the one that is not zero. */
-function ChecksHead({ plan }: { plan: TestPlan }) {
-  const t = checkTally(plan);
-  return (
-    <div className="vf-checks-head">
-      <span className="vf-checks-total">
-        {t.total} {t.total === 1 ? "step" : "steps"}
-      </span>
-      {tallyBits(plan).map((bit) => (
-        <span key={bit.state} className="vf-checks-bit" data-check={bit.state}>
-          <span className="vf-mark-glyph" aria-hidden="true">
-            {CHECK_MARK[bit.state]}
-          </span>
-          {bit.count} {bit.label}
-        </span>
-      ))}
     </div>
   );
 }
@@ -1002,5 +1020,30 @@ function RunWatch({
       </div>
       <div className="vf-runwatch-term" ref={hostRef} />
     </div>
+  );
+}
+
+/** A config-blocked status line with its "Edit repositories" made a link
+ * (m10): it opens the repositories editor above the list. */
+function ConfigLine({ line }: { line: string }) {
+  const at = line.indexOf("Edit repositories");
+  if (at < 0) return <>{line}</>;
+  return (
+    <>
+      {line.slice(0, at)}
+      <button
+        type="button"
+        className="linklike"
+        onClick={() => {
+          const btn = document.getElementById("vf-repos-edit");
+          if (!btn) return;
+          if (btn.getAttribute("aria-expanded") !== "true") btn.click();
+          btn.scrollIntoView({ block: "center", behavior: "smooth" });
+        }}
+      >
+        Edit repositories
+      </button>
+      {line.slice(at + "Edit repositories".length)}
+    </>
   );
 }
