@@ -72,24 +72,23 @@ def test_first_run(mf_server, page, open_app):
         expect(page.locator("#welcome-tour")).to_have_count(0)
     expect(card).to_be_visible()
 
-    # Doctor items (the doctor takes a few seconds): the card lists only what
-    # getting started is missing — the agent CLI here...
-    missing = card.locator("ul.doctor-list-essential li.doctor-check")
-    expect(missing.first).to_be_visible(timeout=30_000)
-    labels = [t.strip() for t in missing.locator(".doctor-label").all_inner_texts()]
-    assert any("agent" in t.lower() for t in labels), labels
-    # ...and every check, tmux included, is one click away under "All checks".
+    # The install button names what is missing (the agent CLI here). Round 5:
+    # the row it fixes is not repeated above it — the button IS the row.
+    install = card.locator("#doctor-install-btn")
+    expect(install).to_be_visible(timeout=30_000)
+    expect(install).to_contain_text("Install")
+    # Every check that blocks getting started, tmux included, is one click
+    # away under "All checks" — never the phone / tailnet extras.
     card.locator(".setup-allchecks > summary").first.click()
     items = card.locator(".setup-allchecks ul.doctor-list li.doctor-check")
     expect(items.first).to_be_visible()
     labels = [t.strip() for t in items.locator(".doctor-label").all_inner_texts()]
     assert labels and all(labels), labels
     assert any("tmux" in t for t in labels), labels
-
-    # The install button names what is missing (the agent CLI here).
-    install = card.locator("#doctor-install-btn")
-    expect(install).to_be_visible(timeout=10_000)
-    expect(install).to_contain_text("Install")
+    assert any("agent" in t.lower() or "claude" in t.lower() for t in labels), labels
+    assert not any(
+        "tailscale" in t.lower() or "mtu" in t.lower() for t in labels
+    ), labels
 
     # ...and the way forward.
     new_btn = card.locator("button.setup-new")
@@ -132,7 +131,7 @@ def test_new_session(mf_server, page, open_app):
     expect(dialog.locator("#new-program")).to_have_value("claude")
 
     create = dialog.locator("#new-form button[type='submit']")
-    expect(create).to_contain_text("Create")
+    expect(create).to_contain_text("Start")  # round 5: one verb, Start
     create.click()
     expect(dialog).to_have_count(0, timeout=SESSION_UP_TIMEOUT_MS)
 
@@ -287,6 +286,10 @@ def test_intake_add_a_repository_once_and_edit_it_where_it_shows(
     expect(panel).to_be_visible(timeout=10_000)
     page.locator("#intake-tab-prs").click()
 
+    # Round 5: an empty PRs tab shows one setup card (Connect GitHub → Pick a
+    # repo → Turn on); the add flow opens from its "Pick a repo…", never by itself.
+    expect(panel.locator("#ik-add-flow")).to_have_count(0)
+    panel.get_by_role("button", name="Pick a repo…").click()
     flow = panel.locator("#ik-add-flow")
     expect(flow).to_be_visible(timeout=10_000)
     expect(flow.locator(".ik-kind[data-kind='repo']")).to_have_attribute(
