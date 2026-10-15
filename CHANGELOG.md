@@ -49,6 +49,24 @@ given a short, replayable tour second.
   a **Create this folder** button — nothing is created, git-inited or
   remembered on its own. A non-git folder asks one question: make it a git
   repo first, or just run in it.
+- **A draggable folder picker.** Every editable folder field (Settings →
+  Workspace folder, New's Folder, "Runs in", the template editor, peer links)
+  has a 📁 Browse… button that opens one floating "Pick a folder" window you
+  can drag and resize; Esc closes it, Enter picks, and it remembers where you
+  left it.
+- **Every tour scrolls to its step** (and opens a closed fold first), so no
+  step hides below the fold. The Settings tour now walks seven stops across
+  Connections, search, Agents, Workspace, "Show advanced settings" and Help.
+  Tours and the hints switch live under **Help** at the bottom of Settings →
+  General.
+- **Settings search says what is behind each result** ("Phone alerts — push
+  notifications to your phone (ntfy)" vs "Your phone — use MindFlock itself
+  from your phone"), in Settings and in the palette; title matches rank first.
+- **The top bar fits any width ≥ 360 px**: Settings, Schedule and Verify fold
+  into one ⋯ (with their badges) as the window narrows; New, Intake and the
+  palette never fold. Session menus flip and scroll so Delete… is always on
+  screen. The Close toast has a real **Undo** button that holds the toast
+  while you hover or focus it.
 - **Schedule shows the same one-line schedule everywhere** (card, New's
   template chip, Intake → Auto-start): "Every day at 07:30 EDT · next Fri
   07:30 (tomorrow skipped)". A compact in-card editor changes just the

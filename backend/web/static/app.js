@@ -24187,6 +24187,7 @@ function nudgeUsage(now, lastRefreshAt, trailingQueued, coalesceMs = USAGE_COALE
 //#endregion
 //#region src/lib/toast.ts
 var toastTimer;
+var ACTION_LINGER_MS = 2e3;
 function toast(msg, opts) {
 	const o = opts || {};
 	let el = document.getElementById("cs-toast");
@@ -24195,17 +24196,50 @@ function toast(msg, opts) {
 		el.id = "cs-toast";
 		document.body.appendChild(el);
 	}
-	el.textContent = msg;
-	el.classList.toggle("clickable", !!o.onClick);
-	el.onclick = o.onClick ? () => {
-		el.classList.remove("show", "clickable");
-		el.onclick = null;
+	const box = el;
+	const hide = () => {
+		clearTimeout(toastTimer);
+		box.classList.remove("show", "clickable", "has-action");
+		box.onclick = null;
+	};
+	const linger = () => {
+		clearTimeout(toastTimer);
+		toastTimer = setTimeout(hide, ACTION_LINGER_MS);
+	};
+	const hold = () => clearTimeout(toastTimer);
+	if (o.action) {
+		const act = o.action;
+		const text = document.createElement("span");
+		text.className = "cs-toast-msg";
+		text.textContent = msg;
+		const btn = document.createElement("button");
+		btn.type = "button";
+		btn.className = "cs-toast-act";
+		btn.textContent = act.label;
+		btn.setAttribute("aria-label", act.ariaLabel || act.label + ": " + msg);
+		if (o.title) btn.title = o.title;
+		btn.onfocus = hold;
+		btn.onblur = linger;
+		btn.onclick = (e) => {
+			e.stopPropagation();
+			hide();
+			act.onClick();
+		};
+		box.replaceChildren(text, btn);
+	} else box.textContent = msg;
+	box.title = o.title || "";
+	box.classList.toggle("clickable", !!o.onClick);
+	box.classList.toggle("has-action", !!o.action);
+	box.onclick = o.onClick ? () => {
+		hide();
 		o.onClick();
 	} : null;
-	el.classList.add("show");
+	box.onmouseenter = o.action ? hold : null;
+	box.onmouseleave = o.action ? linger : null;
+	box.classList.add("show");
 	clearTimeout(toastTimer);
-	const dur = o.duration || (o.onClick ? 6e3 : 1400);
-	toastTimer = setTimeout(() => el.classList.remove("show"), dur);
+	const dur = o.duration || (o.onClick || o.action ? 6e3 : 1400);
+	toastTimer = setTimeout(() => box.classList.remove("show", "has-action"), dur);
 }
 function publishToast() {
 	const w = window;
@@ -28714,7 +28748,7 @@ function adoptAccent(name) {
 	} catch {}
 	rethemeAll();
 }
-function current(dim) {
+function current$1(dim) {
 	return document.documentElement.getAttribute(dim.attr) || "";
 }
 function apply$1(dim, name) {
@@ -28729,8 +28763,8 @@ function apply$1(dim, name) {
 }
 function Appearance(_) {
 	const themeLight = useUi((s) => s.themeLight);
-	const [accent, setAccent] = (0, import_react.useState)(() => current(DIMS.accent));
-	const [surface, setSurface] = (0, import_react.useState)(() => current(DIMS.surface));
+	const [accent, setAccent] = (0, import_react.useState)(() => current$1(DIMS.accent));
+	const [surface, setSurface] = (0, import_react.useState)(() => current$1(DIMS.surface));
 	const surfaceSwatch = ([name, label, ...tones]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 		type: "button",
 		className: "accent-swatch surface-swatch" + (surface === name ? " active" : ""),
@@ -30882,15 +30916,21 @@ async function closeSession(title) {
 	closeUndo.push(title);
 	const kept = keptRunningText(r);
 	toast(closedToastText(displayName(title), kept), {
-		onClick: () => void undoLastClose(),
+		action: {
+			label: "Undo",
+			onClick: () => void undoLastClose(),
+			ariaLabel: "Undo closing “" + displayName(title) + "”"
+		},
+		title: CLOSED_UNDO_HINT,
 		duration: 7e3
 	});
 	refreshRecentlyClosed();
 	await refreshInstances();
 }
 function closedToastText(name, kept) {
-	return "Closed “" + name + "” — click to Undo (Ctrl+Shift+T)" + (kept ? " · " + kept : "");
+	return "Closed “" + name + "”" + (kept ? " · " + kept : "");
 }
+var CLOSED_UNDO_HINT = "Reopen it — click to Undo (Ctrl+Shift+T)";
 function deleteConfirmText(inst) {
 	if (inst?.in_place) return "Removes this session. Its folder and branch stay as they are; Close keeps the session to reopen.";
 	return "Deletes the folder and branch" + (inst?.branch ? " “" + inst.branch + "”" : "") + ", including uncommitted changes. This can't be undone — use Close to keep it.";
@@ -32884,11 +32924,11 @@ var records = /* @__PURE__ */ new Map();
 var known = /* @__PURE__ */ new Map();
 var epochCounter = 0;
 var version = 0;
-var listeners$1 = /* @__PURE__ */ new Set();
+var listeners$2 = /* @__PURE__ */ new Set();
 function subscribeHost(cb) {
-	listeners$1.add(cb);
+	listeners$2.add(cb);
 	return () => {
-		listeners$1.delete(cb);
+		listeners$2.delete(cb);
 	};
 }
 function hostVersion() {
@@ -32896,7 +32936,7 @@ function hostVersion() {
 }
 function bump() {
 	version++;
-	for (const cb of listeners$1) cb();
+	for (const cb of listeners$2) cb();
 }
 function buildTarget(extId, surfaceId, ref) {
 	return extId + ":" + surfaceId + (ref ? ":" + ref : "");
@@ -37343,6 +37383,24 @@ function engineVersion(raw) {
 	const v = (raw || "").trim();
 	return !v || !/^\d/.test(v) || v.startsWith("0+") ? "" : v;
 }
+function fitTopBar({ room, fixed, brand, items, more }) {
+	const fits = (w) => w <= room + .5;
+	const upTo = (n) => items.slice(0, n).reduce((a, b) => a + b, fixed);
+	if (fits(upTo(items.length) + brand)) return {
+		brand: true,
+		shown: items.length
+	};
+	if (fits(upTo(items.length))) return {
+		brand: false,
+		shown: items.length
+	};
+	let shown = items.length - 1;
+	while (shown > 0 && !fits(upTo(shown) + more)) shown--;
+	return {
+		brand: false,
+		shown
+	};
+}
 function TopBar() {
 	const ui = useUi();
 	const light = useUi((s) => s.themeLight);
@@ -37387,6 +37445,126 @@ function TopBar() {
 		const k = shortcutLabels(id, (l) => !tab || !browserReserved(l));
 		return k.length ? " (" + k.join(" / ") + ")" : "";
 	};
+	const verifyTitle = "Verify — " + VERIFY_BLURB + keys("verify") + "\n" + verifyCountLine(due, failing);
+	const scheduleTitle = "Schedule — templates; starts sessions on a timer" + keys("schedule") + (schedFailing > 0 ? "\n" + (schedFailing === 1 ? "1 scheduled template's last run failed" : schedFailing + " scheduled templates' last runs failed") : "");
+	const foldable = [
+		shows.verify && {
+			key: "verify",
+			label: "Verify",
+			title: verifyTitle,
+			count: due,
+			failing: failing > 0,
+			open: () => ui.openDialogFor("verify")
+		},
+		shows.schedule && {
+			key: "schedule",
+			label: "Schedule",
+			title: scheduleTitle,
+			count: schedFailing,
+			failing: true,
+			open: () => ui.openDialogFor("schedule")
+		},
+		{
+			key: "settings",
+			label: "Settings",
+			title: "Settings",
+			count: 0,
+			failing: false,
+			open: () => openSettings()
+		}
+	].filter((f) => !!f);
+	const [fit, setFit] = (0, import_react.useState)({
+		brand: true,
+		shown: Infinity
+	});
+	const folded = foldable.slice(fit.shown);
+	const isFolded = (key) => folded.some((f) => f.key === key);
+	const barRef = (0, import_react.useRef)(null);
+	const startRef = (0, import_react.useRef)(null);
+	const menuRef = (0, import_react.useRef)(null);
+	const brandRef = (0, import_react.useRef)(null);
+	const widths = (0, import_react.useRef)({});
+	const measure = (0, import_react.useRef)(() => {});
+	measure.current = () => {
+		const bar = barRef.current;
+		const start = startRef.current;
+		const menu = menuRef.current;
+		if (!bar || !start || !menu) return;
+		const w = (el) => el ? el.getBoundingClientRect().width : 0;
+		const gap = (el) => parseFloat(getComputedStyle(el).columnGap) || 0;
+		const seen = widths.current;
+		const menuGap = gap(menu);
+		let fixed = 0;
+		for (const el of Array.from(menu.children)) {
+			const key = el.dataset.fold || (el.classList.contains("tb-more") ? "more" : "");
+			const width = w(el);
+			if (!key) fixed += width + menuGap;
+			else if (width > 0) seen[key] = width;
+		}
+		const brandW = w(brandRef.current);
+		if (brandW > 0) seen.brand = brandW;
+		const cs = getComputedStyle(bar);
+		const barGap = gap(bar);
+		const end = bar.querySelector(".tb-end");
+		const winctl = document.getElementById("mf-winctl");
+		const next = fitTopBar({
+			room: bar.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0) - w(winctl),
+			fixed: w(start.firstElementChild) + gap(start) + fixed - menuGap + barGap + (end ? barGap + w(end) : 0),
+			brand: (seen.brand || 0) + barGap,
+			items: foldable.map((f) => (seen[f.key] || 0) + menuGap),
+			more: (seen.more || w(document.getElementById("palette-btn"))) + menuGap
+		});
+		setFit((prev) => {
+			if (prev.brand === next.brand && prev.shown === next.shown) return prev;
+			return next;
+		});
+	};
+	(0, import_react.useLayoutEffect)(() => measure.current());
+	(0, import_react.useEffect)(() => {
+		const bar = barRef.current;
+		if (!bar || typeof ResizeObserver === "undefined") return;
+		const ro = new ResizeObserver(() => (0, import_react_dom.flushSync)(() => measure.current()));
+		ro.observe(bar);
+		if (menuRef.current) ro.observe(menuRef.current);
+		if (startRef.current?.firstElementChild) ro.observe(startRef.current.firstElementChild);
+		return () => ro.disconnect();
+	}, []);
+	const [moreOpen, setMoreOpen] = (0, import_react.useState)(false);
+	const moreRef = (0, import_react.useRef)(null);
+	const moreBtn = (0, import_react.useRef)(null);
+	const hasFolded = folded.length > 0;
+	(0, import_react.useEffect)(() => {
+		if (!hasFolded) setMoreOpen(false);
+	}, [hasFolded]);
+	(0, import_react.useEffect)(() => {
+		if (!moreOpen) return;
+		moreRef.current?.querySelector("[role=\"menuitem\"]")?.focus();
+		const onDown = (e) => {
+			if (!moreRef.current?.contains(e.target)) setMoreOpen(false);
+		};
+		const onKey = (e) => {
+			if (e.key === "Escape") {
+				e.stopPropagation();
+				e.preventDefault();
+				setMoreOpen(false);
+				moreBtn.current?.focus();
+				return;
+			}
+			if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+			const rows = Array.from(moreRef.current?.querySelectorAll("[role=\"menuitem\"]") || []);
+			if (!rows.length) return;
+			e.preventDefault();
+			rows[(rows.indexOf(document.activeElement) + (e.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length].focus();
+		};
+		document.addEventListener("mousedown", onDown);
+		document.addEventListener("keydown", onKey, true);
+		return () => {
+			document.removeEventListener("mousedown", onDown);
+			document.removeEventListener("keydown", onKey, true);
+		};
+	}, [moreOpen]);
+	const foldedCount = folded.reduce((n, f) => n + f.count, 0);
+	const foldedFailing = folded.some((f) => f.count > 0 && f.failing);
 	const logo = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		id: "brand-logo",
 		"aria-hidden": "true"
@@ -37420,11 +37598,13 @@ function TopBar() {
 	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "topbar",
+		ref: barRef,
 		"data-mac": mac ? "" : void 0,
 		"data-mac-lights": mac && !fullScreen ? "" : void 0,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "tb-start",
+				ref: startRef,
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "tb-left",
 					children: [
@@ -37462,6 +37642,7 @@ function TopBar() {
 					]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
 					className: "tb-menu",
+					ref: menuRef,
 					"aria-label": "Main actions",
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -37481,9 +37662,10 @@ function TopBar() {
 						}),
 						shows.verify && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 							id: "verify-btn",
-							className: "tb-item",
+							className: "tb-item" + (isFolded("verify") ? " tb-folded" : ""),
+							"data-fold": "verify",
 							type: "button",
-							title: "Verify — " + VERIFY_BLURB + keys("verify") + "\n" + verifyCountLine(due, failing),
+							title: verifyTitle,
 							onClick: () => ui.openDialogFor("verify"),
 							children: ["Verify", due > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "tb-count" + (failing > 0 ? " is-failing" : ""),
@@ -37492,9 +37674,10 @@ function TopBar() {
 						}),
 						shows.schedule && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 							id: "schedule-btn",
-							className: "tb-item",
+							className: "tb-item" + (isFolded("schedule") ? " tb-folded" : ""),
+							"data-fold": "schedule",
 							type: "button",
-							title: "Schedule — templates; starts sessions on a timer" + keys("schedule") + (schedFailing > 0 ? "\n" + (schedFailing === 1 ? "1 scheduled template's last run failed" : schedFailing + " scheduled templates' last runs failed") : ""),
+							title: scheduleTitle,
 							onClick: () => ui.openDialogFor("schedule"),
 							children: ["Schedule", schedFailing > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "tb-count is-failing",
@@ -37503,12 +37686,74 @@ function TopBar() {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							id: "settings-btn",
-							className: "tb-item",
+							className: "tb-item" + (isFolded("settings") ? " tb-folded" : ""),
+							"data-fold": "settings",
 							type: "button",
 							title: "Settings",
 							"aria-label": "Open settings",
 							onClick: () => openSettings(),
 							children: "Settings"
+						}),
+						hasFolded && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "tb-more",
+							ref: moreRef,
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								id: "more-btn",
+								ref: moreBtn,
+								className: "tb-item",
+								type: "button",
+								title: "More — " + folded.map((f) => f.label).join(", "),
+								"aria-label": "More actions",
+								"aria-haspopup": "menu",
+								"aria-expanded": moreOpen,
+								onClick: () => setMoreOpen((v) => !v),
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+									viewBox: "0 0 24 24",
+									width: "15",
+									height: "15",
+									"aria-hidden": "true",
+									fill: "currentColor",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+											cx: "5",
+											cy: "12",
+											r: "1.9"
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+											cx: "12",
+											cy: "12",
+											r: "1.9"
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+											cx: "19",
+											cy: "12",
+											r: "1.9"
+										})
+									]
+								}), foldedCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "tb-count" + (foldedFailing ? " is-failing" : ""),
+									children: foldedCount
+								})]
+							}), moreOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "tb-more-menu",
+								role: "menu",
+								"aria-label": "More actions",
+								children: folded.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
+									role: "menuitem",
+									className: "tb-more-item",
+									"data-fold-item": f.key,
+									title: f.title,
+									onClick: () => {
+										setMoreOpen(false);
+										f.open();
+									},
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: f.label }), f.count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "tb-count" + (f.failing ? " is-failing" : ""),
+										children: f.count
+									})]
+								}, f.key))
+							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							id: "palette-btn",
@@ -37537,7 +37782,8 @@ function TopBar() {
 				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "tb-brand",
+				className: "tb-brand" + (fit.brand ? "" : " tb-folded"),
+				ref: brandRef,
 				children: [
 					"MindFlock",
 					window.mfshell?.dev && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -38348,6 +38594,7 @@ function useAdvancedSettings() {
 function AdvancedToggle({ advanced, hidden, onChange }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "set-mode-foot",
+		"data-tour": "settings-advanced",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			type: "button",
 			id: "settings-advanced-toggle",
@@ -38642,10 +38889,12 @@ function ConnectionRowView({ c, deps, result, testing, onTest, onChanged, tourNe
 	const handler = a && !copyIsFix && a.target !== "agent-sign-in" && a.target !== "agent-install" ? actionHandler(a, deps) : null;
 	const legacy = a === void 0 ? configureAction(c, deps.gotoScreen) : null;
 	const showTest = !!c.test && !!onTest && !(c.kind === "github" && status === "off") && (stage === null || stage === "test");
+	const githubOnButton = c.kind === "github" && !!handler && !tourNext;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "conn-row",
 		"data-conn": c.id,
 		"data-status": status,
+		"data-tour": c.kind === "github" && !githubOnButton ? "settings-github" : void 0,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "conn-main",
@@ -38711,7 +38960,7 @@ function ConnectionRowView({ c, deps, result, testing, onTest, onChanged, tourNe
 					handler && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: stage && a.kind === "screen" ? "linklike conn-configure conn-link" : "test-btn conn-configure",
-						"data-tour": tourNext ? "setup-next" : void 0,
+						"data-tour": tourNext ? "setup-next" : githubOnButton ? "settings-github" : void 0,
 						onClick: handler,
 						children: a.label
 					}),
@@ -38812,6 +39061,7 @@ function Connections({ gotoScreen }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
 			className: "set-section-title",
+			"data-tour": "settings-status",
 			children: [
 				"Connections",
 				" ",
@@ -39113,7 +39363,7 @@ async function stopBackgroundJob(title, pid) {
 var KEY = "mf_codemap_seen";
 var MAX_TITLES = 200;
 var cache = null;
-var listeners = /* @__PURE__ */ new Set();
+var listeners$1 = /* @__PURE__ */ new Set();
 function load() {
 	if (cache) return cache;
 	try {
@@ -39148,11 +39398,11 @@ function markCodemapSeen(title, ts) {
 	try {
 		localStorage.setItem(KEY, JSON.stringify(next));
 	} catch {}
-	listeners.forEach((l) => l());
+	listeners$1.forEach((l) => l());
 }
 function subscribeCodemapSeen(cb) {
-	listeners.add(cb);
-	return () => listeners.delete(cb);
+	listeners$1.add(cb);
+	return () => listeners$1.delete(cb);
 }
 function redZoneChip(rz, seenAt) {
 	if (!rz) return null;
@@ -39191,6 +39441,19 @@ function redZoneChip(rz, seenAt) {
 function SessionMenu({ model, onDone, onInUse }) {
 	const [moreOpen, setMoreOpen] = (0, import_react.useState)(false);
 	const [deleteArmed, setDeleteArmed] = (0, import_react.useState)(false);
+	const moreRef = (0, import_react.useRef)(null);
+	(0, import_react.useLayoutEffect)(() => {
+		const fold = moreRef.current;
+		if (!moreOpen || !fold) return;
+		let box = fold.parentElement;
+		while (box && !(box.scrollHeight > box.clientHeight && /auto|scroll/.test(getComputedStyle(box).overflowY))) box = box.parentElement;
+		if (!box) return;
+		const view = box.getBoundingClientRect();
+		const foot = fold.parentElement?.querySelector(".sm-danger")?.getBoundingClientRect();
+		const r = fold.getBoundingClientRect();
+		const by = Math.min(r.bottom - (foot ? foot.top : view.bottom), r.top - view.top);
+		if (by > 0) box.scrollTop += by;
+	}, [moreOpen]);
 	const fire = (it) => (e) => {
 		e.stopPropagation();
 		if (it.disabled) return;
@@ -39274,6 +39537,7 @@ function SessionMenu({ model, onDone, onInUse }) {
 			body.map((g, i) => group(g, i === 0)),
 			model.more.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "sm-group sm-more-group",
+				ref: moreRef,
 				children: [
 					body.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -39353,7 +39617,7 @@ function RowMenu({ id, at, label, opener, onClose, children }) {
 		focused.current = false;
 		const fit = () => {
 			const w = el.offsetWidth;
-			const h = el.scrollHeight;
+			const h = el.offsetHeight - el.clientHeight + el.scrollHeight;
 			const next = placed.current ? refitMenu(placed.current, w, h, window.innerWidth, window.innerHeight) : placeMenu(at, w, h, window.innerWidth, window.innerHeight);
 			placed.current = next;
 			setPlace(next);
@@ -51237,7 +51501,7 @@ function cachedModel(repo, raw) {
 	return MODELS.get(repo + "\0" + dataSig(raw)) || null;
 }
 var worker;
-var nextId = 1;
+var nextId$1 = 1;
 var waiting = /* @__PURE__ */ new Map();
 function getWorker() {
 	if (worker !== void 0) return worker;
@@ -51277,7 +51541,7 @@ function getWorker() {
 function inWorker(raw, warm, prog) {
 	const w = getWorker();
 	if (!w) return Promise.reject(/* @__PURE__ */ new Error("no worker"));
-	const id = nextId++;
+	const id = nextId$1++;
 	return new Promise((ok, bad) => {
 		waiting.set(id, {
 			ok,
@@ -61769,7 +62033,7 @@ var TOURS = {
 		title: "Schedule",
 		steps: [
 			{
-				target: "#schedule-btn, [data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
+				target: "#schedule-btn, #more-btn, [data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
 				title: "Sessions you'll want again",
 				body: "Schedule keeps templates — a folder, an agent and a task — so a session starts with one click, or by itself."
 			},
@@ -61805,24 +62069,45 @@ var TOURS = {
 		title: "Settings",
 		steps: [
 			{
-				target: ".set-nav-item[data-screen=\"connections\"]",
+				target: "[data-tour=\"settings-status\"]",
+				screen: "connections",
 				title: "Your status page",
 				body: "Connections lists everything MindFlock talks to: what is connected and what needs you."
 			},
 			{
-				target: "[data-tour=\"settings-github\"], [data-conn=\"github\"]",
+				target: "[data-tour=\"settings-github\"]",
+				screen: "connections",
 				title: "Connect GitHub when you need PRs",
 				body: "Agents need GitHub to open pull requests; pushing already works without it."
 			},
 			{
 				target: "#settings-search",
+				screen: "connections",
 				title: "Search finds any setting",
 				body: "Type a word like dark, phone or parallel and jump straight to it."
 			},
 			{
-				target: "#settings-advanced-toggle",
+				target: "[data-tour=\"settings-default-agent\"], #default-provider-select",
+				screen: "coding",
+				title: "Pick your default agent",
+				body: "New sessions start with this agent; you can still pick another one when you start a session."
+			},
+			{
+				target: "[data-tour=\"settings-worktrees\"], #workspace-paths",
+				screen: "workspace",
+				title: "Where your worktrees live",
+				body: "Each session gets a separate worktree, its own branch and copy of your repo, kept in these folders."
+			},
+			{
+				target: "[data-tour=\"settings-advanced\"], #settings-advanced-toggle",
 				title: "The rest waits here",
 				body: "Phones, other computers, local models and troubleshooting live behind Show advanced settings."
+			},
+			{
+				target: "[data-tour=\"settings-tours\"], #general-tours",
+				screen: "general",
+				title: "Replay any tour",
+				body: "Every tour lives here under Help, next to the switch for hints."
 			}
 		]
 	}
@@ -61886,6 +62171,66 @@ function findTarget(root, selector) {
 	}
 	return null;
 }
+function scrollPanes(el) {
+	const out = [];
+	for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+		const o = getComputedStyle(p).overflowY;
+		if ((o === "auto" || o === "scroll" || o === "overlay") && p.scrollHeight > p.clientHeight) out.push(p);
+	}
+	return out;
+}
+function whollyShown(el) {
+	const r = el.getBoundingClientRect();
+	const M = 4;
+	if (r.top < M || r.bottom > window.innerHeight - M) return false;
+	for (const p of scrollPanes(el)) {
+		const b = p.getBoundingClientRect();
+		if (r.top < b.top + M || r.bottom > b.bottom - M) return false;
+	}
+	return true;
+}
+function reducedMotion() {
+	if (useUi.getState().reduceMotion) return true;
+	try {
+		return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+	} catch {
+		return false;
+	}
+}
+function revealTarget(scope, selector) {
+	if (!selector || typeof window === "undefined") return null;
+	let el = findTarget(scope, selector);
+	if (!el) {
+		let all = [];
+		try {
+			all = Array.from(scope.querySelectorAll(selector));
+		} catch {
+			return null;
+		}
+		const folded = all.find((c) => c.parentElement?.closest("details:not([open])"));
+		if (!folded) return null;
+		for (let d = folded.parentElement?.closest("details:not([open])"); d; d = d.parentElement?.closest("details:not([open])")) d.open = true;
+		el = findTarget(scope, selector);
+		if (!el) return null;
+	}
+	if (whollyShown(el)) return {
+		el,
+		scrolled: false
+	};
+	const pane = scrollPanes(el)[0];
+	const room = pane ? pane.clientHeight : window.innerHeight;
+	try {
+		el.scrollIntoView({
+			block: el.getBoundingClientRect().height > room - 16 ? "start" : "center",
+			inline: "nearest",
+			behavior: reducedMotion() ? "auto" : "smooth"
+		});
+	} catch {}
+	return {
+		el,
+		scrolled: true
+	};
+}
 function CoachTour({ steps, onClose, rootRef, step: controlled, onStep, prefix = "coach", buttonClass = "coach-btn", skipLabel = "Skip tour", labelId = prefix + "-title" }) {
 	const [own, setOwn] = (0, import_react.useState)(0);
 	const i = Math.max(0, Math.min(controlled ?? own, steps.length - 1));
@@ -61942,10 +62287,49 @@ function CoachTour({ steps, onClose, rootRef, step: controlled, onStep, prefix =
 	}, [rootRef, step]);
 	(0, import_react.useLayoutEffect)(measure, [measure, i]);
 	(0, import_react.useEffect)(() => {
+		if (!step?.target) return;
+		let stopped = false;
+		const timers = [];
+		let tries = 0;
+		const attempt = () => {
+			if (stopped) return;
+			const scope = rootRef ? rootRef.current : document;
+			const hit = scope ? revealTarget(scope, step.target) : null;
+			if (hit) {
+				measure();
+				if (hit.scrolled) for (const ms of [
+					120,
+					350,
+					700
+				]) timers.push(window.setTimeout(measure, ms));
+				return;
+			}
+			if (++tries < 40) timers.push(window.setTimeout(attempt, 100));
+		};
+		const raf = window.requestAnimationFrame(attempt);
+		return () => {
+			stopped = true;
+			window.cancelAnimationFrame(raf);
+			for (const t of timers) window.clearTimeout(t);
+		};
+	}, [
+		i,
+		step,
+		rootRef,
+		measure
+	]);
+	(0, import_react.useEffect)(() => {
 		const root = rootRef?.current;
 		const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => measure()) : null;
 		if (root && ro) ro.observe(root);
-		if (contained) return () => ro?.disconnect();
+		if (contained) {
+			const onScroll = () => measure();
+			root?.addEventListener("scroll", onScroll, true);
+			return () => {
+				ro?.disconnect();
+				root?.removeEventListener("scroll", onScroll, true);
+			};
+		}
 		const onMove = () => measure();
 		window.addEventListener("resize", onMove);
 		window.addEventListener("scroll", onMove, true);
@@ -63901,18 +64285,37 @@ function FastTrackMenu({ title, anchor, onClose }) {
 }
 //#endregion
 //#region src/components/grid/PaneMoreMenu.tsx
+function naturalHeight(el) {
+	let h = el.offsetHeight;
+	for (const c of Array.from(el.children)) h += c.scrollHeight - c.clientHeight;
+	return h;
+}
 function PaneMoreMenu({ children, btnRef }) {
 	const [open, setOpen] = (0, import_react.useState)(false);
-	const [pos, setPos] = (0, import_react.useState)(null);
+	const [place, setPlace] = (0, import_react.useState)(null);
 	const btn = (0, import_react.useRef)(null);
 	const menu = (0, import_react.useRef)(null);
 	(0, import_react.useLayoutEffect)(() => {
-		if (!open || !btn.current) return;
+		setPlace(null);
+		const el = menu.current;
+		if (!open || !el || !btn.current) return;
 		const r = btn.current.getBoundingClientRect();
-		setPos({
-			top: r.bottom + 4,
-			right: Math.max(4, window.innerWidth - r.right)
-		});
+		let placed = null;
+		const fit = () => {
+			const w = el.offsetWidth;
+			const h = naturalHeight(el);
+			placed = placed ? refitMenu(placed, w, h, window.innerWidth, window.innerHeight) : placeMenu({
+				x: r.right,
+				y: r.bottom + 4,
+				flipY: r.top - 4,
+				align: "end"
+			}, w, h, window.innerWidth, window.innerHeight);
+			setPlace(placed);
+		};
+		fit();
+		const ro = typeof ResizeObserver === "function" ? new ResizeObserver(fit) : null;
+		for (const c of Array.from(el.querySelectorAll(":scope > *, .session-menu > *"))) ro?.observe(c);
+		return () => ro?.disconnect();
 	}, [open]);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
@@ -63953,13 +64356,18 @@ function PaneMoreMenu({ children, btnRef }) {
 			setOpen((v) => !v);
 		},
 		children: "⋯"
-	}), open && pos && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	}), open && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		ref: menu,
 		className: "pane-more-menu",
 		role: "menu",
-		style: {
-			top: pos.top,
-			right: pos.right
+		style: place ? {
+			left: place.left,
+			top: place.top,
+			maxHeight: place.maxHeight
+		} : {
+			left: 0,
+			top: 0,
+			visibility: "hidden"
 		},
 		onMouseDown: (e) => e.stopPropagation(),
 		children: children(() => setOpen(false))
@@ -65856,19 +66264,34 @@ var SETTINGS_SEARCH = [
 	{
 		key: "general",
 		label: "General",
+		sub: "Tours, hints and terminal scroll speed",
 		terms: [
 			"general",
 			"hints",
 			"tips",
-			"tour",
-			"tours",
-			"replay",
-			"help"
+			"scroll"
 		]
 	},
 	{
 		key: "general",
+		label: "General → Tours",
+		sub: "Replay the welcome tour and the menu tours",
+		terms: [
+			"tour",
+			"tours",
+			"replay",
+			"welcome",
+			"walkthrough",
+			"tutorial",
+			"getting started",
+			"help"
+		],
+		anchor: "#general-tours"
+	},
+	{
+		key: "general",
 		label: "General → Budgets, resume and sleep",
+		sub: "Cost alerts, carrying on after a usage reset, idle agents",
 		terms: [
 			"budget",
 			"cost",
@@ -65887,6 +66310,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "connections",
 		label: "Connections",
+		sub: "Everything MindFlock talks to: your agent, GitHub, ticket trackers",
 		terms: [
 			"connections",
 			"connect",
@@ -65907,6 +66331,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "connections",
 		label: "Connections → GitHub",
+		sub: "Connect GitHub so agents can open pull requests",
 		terms: [
 			"github",
 			"gh",
@@ -65921,6 +66346,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "notifications",
 		label: "Notifications",
+		sub: "Which events alert you, and where: bell, desktop, phone",
 		terms: [
 			"notifications",
 			"notification",
@@ -65937,6 +66363,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "notifications",
 		label: "Notifications → Phone alerts",
+		sub: "Push notifications to your phone (ntfy)",
 		terms: [
 			"phone",
 			"mobile",
@@ -65950,6 +66377,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "coding",
 		label: "Agents",
+		sub: "Your default agent, its sign-in and extra launch flags",
 		terms: [
 			"agents",
 			"agent",
@@ -65969,6 +66397,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "coding",
 		label: "Agents → Sessions running at once",
+		sub: "How many ticket sessions run at the same time",
 		terms: [
 			"parallel",
 			"concurrency",
@@ -65986,6 +66415,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "providers",
 		label: "Custom agents",
+		sub: "Point an agent at its own build, or add one MindFlock doesn't ship",
 		terms: [
 			"custom agent",
 			"add agent",
@@ -66000,6 +66430,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "accounts",
 		label: "Accounts",
+		sub: "Run sessions as different sign-ins or API keys",
 		terms: [
 			"accounts",
 			"account",
@@ -66013,6 +66444,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "localmodel",
 		label: "Local model",
+		sub: "Use a model running on this computer (Ollama and others)",
 		terms: [
 			"local model",
 			"ollama",
@@ -66023,6 +66455,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "orchestration",
 		label: "Agent orchestration",
+		sub: "Let agents start and steer sessions of their own, and how far",
 		terms: [
 			"orchestration",
 			"mcp",
@@ -66038,6 +66471,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "workspace",
 		label: "Workspace",
+		sub: "Where sessions' files live and how ticket sessions copy a repo",
 		terms: [
 			"workspace",
 			"worktree",
@@ -66054,6 +66488,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "workspace",
 		label: "Workspace → Where worktrees live",
+		sub: "The folders new sessions' worktrees are made in",
 		terms: [
 			"where are worktrees",
 			"worktree folder",
@@ -66067,6 +66502,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "workspace",
 		label: "Workspace → Worktree or clone",
+		sub: "A worktree shares your repo's history; a clone is fully separate",
 		terms: [
 			"worktree mode",
 			"clone",
@@ -66079,6 +66515,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "ide",
 		label: "IDE",
+		sub: "Which editor “Open in editor” uses",
 		terms: [
 			"ide",
 			"editor",
@@ -66091,6 +66528,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "security",
 		label: "Security",
+		sub: "Require an access token to open MindFlock from a browser",
 		terms: [
 			"security",
 			"access token",
@@ -66104,12 +66542,10 @@ var SETTINGS_SEARCH = [
 	{
 		key: "appearance",
 		label: "Appearance",
+		sub: "Light or dark, colours, motion and break reminders",
 		terms: [
 			"appearance",
 			"theme",
-			"dark",
-			"light",
-			"dark mode",
 			"color",
 			"colour",
 			"accent",
@@ -66122,8 +66558,23 @@ var SETTINGS_SEARCH = [
 		]
 	},
 	{
+		key: "appearance",
+		label: "Appearance → Mode",
+		sub: "Light or dark (the moon in the top bar switches too)",
+		terms: [
+			"dark",
+			"light",
+			"dark mode",
+			"light mode",
+			"night mode",
+			"mode"
+		],
+		anchor: "#mode-swatches"
+	},
+	{
 		key: "devices",
 		label: "Your devices",
+		sub: "Pair your other computers and share settings between them",
 		terms: [
 			"devices",
 			"device",
@@ -66140,6 +66591,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "mobile",
 		label: "Your phone",
+		sub: "Use MindFlock itself from your phone, over Tailscale",
 		terms: [
 			"phone",
 			"mobile",
@@ -66152,6 +66604,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "peer",
 		label: "People",
+		sub: "Invite someone and share one folder with their agent",
 		terms: [
 			"people",
 			"peer",
@@ -66164,6 +66617,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "extensions",
 		label: "Extensions",
+		sub: "Add-ons that bring their own sidebar bar and commands",
 		terms: [
 			"extensions",
 			"extension",
@@ -66175,6 +66629,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "doctor",
 		label: "Doctor",
+		sub: "Check git, tmux and your agent are installed, and fix what's missing",
 		terms: [
 			"doctor",
 			"install",
@@ -66189,6 +66644,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "logs",
 		label: "System logs",
+		sub: "MindFlock's own logs, to paste into a bug report",
 		terms: [
 			"logs",
 			"log",
@@ -66199,13 +66655,15 @@ var SETTINGS_SEARCH = [
 	{
 		key: "advanced",
 		label: "Engine & updates",
+		sub: "Version and updates, restart, uninstall",
 		terms: [
 			"engine",
 			"update",
 			"updates",
 			"upgrade",
 			"version",
-			"restart server"
+			"restart server",
+			"uninstall"
 		]
 	}
 ];
@@ -66213,11 +66671,15 @@ function settingsMatchScore(entry, q) {
 	if (q.length < 2) return -1;
 	const label = entry.label.toLowerCase();
 	const terms = entry.terms.map((t) => t.toLowerCase());
-	if (terms.includes(q) || label === q) return 0;
-	if (terms.some((t) => t.startsWith(q)) || label.startsWith(q)) return 1;
-	if (label.includes(q)) return 2;
-	if (q.length >= 3 && terms.some((t) => t.includes(q))) return 3;
-	if (terms.some((t) => t.length >= 3 && q.includes(t))) return 4;
+	const wordStart = (text) => (" " + text.replace(/[^a-z0-9]+/g, " ")).includes(" " + q);
+	if (label === q || label.split(" → ").includes(q)) return 0;
+	if (terms.includes(q)) return 1;
+	if (wordStart(label)) return 2;
+	if (terms.some((t) => t.startsWith(q))) return 3;
+	if (label.includes(q)) return 4;
+	if (q.length >= 3 && terms.some((t) => t.includes(q))) return 5;
+	if (q.length >= 3 && wordStart(entry.sub.toLowerCase())) return 6;
+	if (terms.some((t) => t.length >= 3 && q.includes(t))) return 7;
 	return -1;
 }
 function searchSettings(query, limit = 5) {
@@ -66246,6 +66708,7 @@ function revealInSettings(selector) {
 function settingsActions(query) {
 	return searchSettings(query).map((e) => ({
 		label: "Settings → " + e.label,
+		sub: e.sub,
 		hint: "settings",
 		run: () => {
 			openSettings(e.key);
@@ -66629,7 +67092,16 @@ function CommandPalette({ host }) {
 					className: "palette-item" + (i === sel ? " selected" : ""),
 					onMouseMove: () => setSel(i),
 					onClick: () => run(a),
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					children: [a.sub ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "palette-text",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "palette-label",
+							children: a.label
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "palette-sub",
+							children: a.sub
+						})]
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "palette-label",
 						children: a.label
 					}), a.hint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -67195,170 +67667,152 @@ function ModelRow({ selectedProfile, profileId, profileModel, setProfileModel, p
 	] });
 }
 //#endregion
-//#region src/components/dialogs/newSession/FolderBrowser.tsx
-function FolderBrowser({ device = "", initialPath, selected, onSelect, onPick }) {
-	const [data, setData] = (0, import_react.useState)(null);
-	const [error, setError] = (0, import_react.useState)("");
-	const [newFolder, setNewFolder] = (0, import_react.useState)(null);
-	const [making, setMaking] = (0, import_react.useState)(false);
-	const listRef = (0, import_react.useRef)(null);
-	const newFolderRef = (0, import_react.useRef)(null);
-	const leaving = (0, import_react.useRef)(null);
-	const load = (0, import_react.useCallback)(async (path) => {
-		setError("");
-		try {
-			const q = path ? "?path=" + encodeURIComponent(path) : "";
-			setData(await deviceApi(device)("/api/browse" + q));
-		} catch (err) {
-			leaving.current = null;
-			setError(err.message);
-		}
-	}, [device]);
-	(0, import_react.useEffect)(() => {
-		load(initialPath);
-	}, []);
-	(0, import_react.useEffect)(() => {
-		const from = leaving.current;
-		if (from === null || !data) return;
-		leaving.current = null;
-		const idx = focusRowIndex((data.entries || []).map((e) => e.path), from);
-		const rows = listRef.current?.querySelectorAll(".rb-item:not(.rb-use)");
-		(idx >= 0 ? rows?.[idx] : listRef.current?.querySelector(".rb-use"))?.focus();
-	}, [data]);
-	const keyLoad = (to) => {
-		leaving.current = data?.path || "";
-		load(to);
+//#region src/lib/folderPicker.ts
+var current = null;
+var nextId = 1;
+var listeners = /* @__PURE__ */ new Set();
+var emit = () => listeners.forEach((l) => l());
+function getFolderPicker() {
+	return current;
+}
+function openFolderPicker(req) {
+	const prev = current;
+	const id = nextId++;
+	current = {
+		...req,
+		id
 	};
-	const mkdir = async () => {
-		const name = (newFolder || "").trim();
-		if (!data?.path || !name || making) return;
-		setError("");
-		setMaking(true);
-		try {
-			const r = await deviceApi(device)("/api/mkdir", { json: {
-				path: data.path,
-				name
-			} });
-			setNewFolder(null);
-			onPick(r.path);
-		} catch (err) {
-			setError(err.message);
-		} finally {
-			setMaking(false);
-		}
+	emit();
+	prev?.onCancel?.();
+	return id;
+}
+function closeFolderPicker(id, notify = true) {
+	if (!current || id !== void 0 && current.id !== id) return;
+	const r = current;
+	current = null;
+	emit();
+	if (notify) r.onCancel?.();
+}
+function pickFolder(path) {
+	if (!current) return;
+	const r = current;
+	current = null;
+	emit();
+	r.onPick(path);
+}
+function subscribe(l) {
+	listeners.add(l);
+	return () => {
+		listeners.delete(l);
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		id: "repo-browser",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "rb-head",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "rb-up",
-						title: "Parent folder",
-						"aria-label": "Parent folder",
-						disabled: !data?.parent,
-						onClick: () => data?.parent && load(data.parent),
-						children: "←"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						id: "rb-cwd",
-						className: "rb-cwd",
-						title: data?.path || "",
-						children: data?.path || ""
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "rb-mkdir",
-						title: "Create a new folder here",
-						"aria-expanded": newFolder !== null,
-						onClick: () => {
-							setNewFolder(newFolder === null ? "" : null);
-							setError("");
-						},
-						children: "+ Folder"
-					})
-				]
-			}),
-			newFolder !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "rb-new",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					ref: newFolderRef,
-					type: "text",
-					className: "rb-new-name",
-					value: newFolder,
-					autoFocus: true,
-					autoComplete: "off",
-					spellCheck: false,
-					placeholder: "New folder name",
-					"aria-label": "New folder in " + (data?.path || ""),
-					readOnly: making,
-					onChange: (e) => setNewFolder(e.target.value),
-					onKeyDown: (e) => {
-						e.stopPropagation();
-						if (e.key === "Enter") {
-							e.preventDefault();
-							mkdir();
-						} else if (e.key === "Escape") {
-							e.preventDefault();
-							setNewFolder(null);
-						}
-					}
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "rb-new-go",
-					disabled: !newFolder.trim() || making,
-					onClick: mkdir,
-					children: making ? "Creating…" : "Create"
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				id: "rb-list",
-				ref: listRef,
-				children: [data && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "rb-item rb-use" + (data.is_git ? " is-git" : "") + (selected === data.path ? " rb-sel" : ""),
-					title: "Use " + data.path + " and close the browser",
-					onClick: () => onPick(data.path),
-					children: (data.is_git ? "✓ use this repo — " : "use this folder — ") + leafName(data.path)
-				}), (data?.entries || []).map((e) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "rb-item" + (e.is_git ? " is-git" : "") + (selected === e.path ? " rb-sel" : ""),
-					"aria-pressed": selected === e.path,
-					title: e.path,
-					onClick: () => onSelect(e.path),
-					onDoubleClick: () => {
-						onSelect(e.path);
-						load(e.path);
-					},
-					onKeyDown: (ev) => {
-						if (ev.key === "ArrowRight") {
-							ev.preventDefault();
-							onSelect(e.path);
-							keyLoad(e.path);
-						} else if (ev.key === "ArrowLeft" && data?.parent) {
-							ev.preventDefault();
-							keyLoad(data.parent);
-						}
-					},
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "rb-name",
-						children: (e.is_git ? "📦 " : "📁 ") + e.name
-					})
-				}, e.path))]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "rb-hint",
-				children: "Click selects · double-click or → opens · ← up · Esc cancels"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				id: "rb-error",
-				className: "error",
-				children: error
-			})
-		]
-	});
+}
+function useFolderPicker() {
+	return (0, import_react.useSyncExternalStore)(subscribe, getFolderPicker, getFolderPicker);
+}
+function useFolderPickerWhile(open, req) {
+	const latest = (0, import_react.useRef)(req);
+	latest.current = req;
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const id = openFolderPicker({
+			...latest.current(),
+			onSelect: (p) => latest.current().onSelect?.(p),
+			onPick: (p) => latest.current().onPick(p),
+			onCancel: () => latest.current().onCancel?.()
+		});
+		return () => closeFolderPicker(id, false);
+	}, [open]);
+}
+function parentPath(p) {
+	const t = p.length > 1 ? p.replace(/[\\/]+$/, "") : p;
+	if (t === "/" || t === "~" || t === "." || t === "") return "";
+	const i = Math.max(t.lastIndexOf("/"), t.lastIndexOf("\\"));
+	if (i < 0) return "";
+	if (i === 0) return "/";
+	return t.slice(0, i);
+}
+function seedChain(value) {
+	const out = [];
+	let p = value.trim();
+	while (p && out.length < 32) {
+		out.push(p);
+		p = parentPath(p);
+	}
+	out.push("");
+	return out;
+}
+var PICKER_RECT_KEY = "mf_folder_picker_rect";
+var PICKER_MARGIN = 8;
+var PICKER_MIN = {
+	w: 280,
+	h: 240
+};
+var PICKER_DEFAULT = {
+	w: 440,
+	h: 440
+};
+function clampRect(r, vw, vh, m = PICKER_MARGIN) {
+	const maxW = Math.max(0, vw - 2 * m);
+	const maxH = Math.max(0, vh - 2 * m);
+	const w = Math.min(Math.max(r.w, PICKER_MIN.w), maxW);
+	const h = Math.min(Math.max(r.h, PICKER_MIN.h), maxH);
+	const x = Math.min(Math.max(r.x, m), vw - m - w);
+	const y = Math.min(Math.max(r.y, m), vh - m - h);
+	return {
+		x: Math.round(x),
+		y: Math.round(y),
+		w: Math.round(w),
+		h: Math.round(h)
+	};
+}
+function dragRect(from, sx, sy, px, py, vw, vh) {
+	return clampRect({
+		...from,
+		x: from.x + (px - sx),
+		y: from.y + (py - sy)
+	}, vw, vh);
+}
+function defaultRect(anchor, vw, vh, size = PICKER_DEFAULT) {
+	const gap = 12;
+	const { w, h } = size;
+	const centred = {
+		x: (vw - w) / 2,
+		y: (vh - h) / 2,
+		w,
+		h
+	};
+	if (!anchor) return clampRect(centred, vw, vh);
+	const y = anchor.top - 60;
+	if (anchor.right + gap + w <= vw - PICKER_MARGIN) return clampRect({
+		x: anchor.right + gap,
+		y,
+		w,
+		h
+	}, vw, vh);
+	if (anchor.left - gap - w >= PICKER_MARGIN) return clampRect({
+		x: anchor.left - gap - w,
+		y,
+		w,
+		h
+	}, vw, vh);
+	return clampRect(centred, vw, vh);
+}
+function loadPickerRect() {
+	try {
+		const v = JSON.parse(localStorage.getItem(PICKER_RECT_KEY) || "null");
+		if (v && [
+			v.x,
+			v.y,
+			v.w,
+			v.h
+		].every((n) => typeof n === "number" && Number.isFinite(n))) return v;
+	} catch {}
+	return null;
+}
+function savePickerRect(r) {
+	try {
+		localStorage.setItem(PICKER_RECT_KEY, JSON.stringify(r));
+	} catch {}
 }
 //#endregion
 //#region src/components/dialogs/newSession/FolderPicker.tsx
@@ -67596,21 +68050,41 @@ function FolderField({ scope = "new", placeholder = "/home/me/projects/foo — o
 						setSearchOpen(false);
 					}
 				}
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 				type: "button",
 				id: ids.browse,
 				className: "repo-browse",
-				title: browserOpen ? "Close the browser and keep this folder (Esc puts the old one back)" : "Browse local folders",
+				title: browserOpen ? "Close the picker and keep this folder (Esc puts the old one back)" : "Pick a folder in a window you can move",
+				"aria-expanded": browserOpen,
 				onClick: () => folderDo(browserOpen ? {
 					t: "browse-commit",
 					path: repoPath
 				} : { t: "browse-open" }),
-				children: "Browse…"
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					"aria-hidden": "true",
+					children: "📁 "
+				}), "Browse…"]
 			})]
 		})]
 	});
 }
 function FolderAids({ scope = "new", searchHits, selIndex, searchListRef, setSearchSel, pickMatch, homePath, newFolderRow, plainFolder, initRepo, armInitRepo, suggestions, folderPath, folderDo, browserOpen, device, gitAsked = false }) {
+	useFolderPickerWhile(browserOpen, () => ({
+		title: scope === "tpl" ? "Pick the template's folder" : "Pick a folder",
+		device,
+		start: folderPath || homePath || "",
+		selected: folderPath,
+		anchor: document.getElementById(folderIds(scope).browse),
+		onSelect: (p) => folderDo({
+			t: "browse-select",
+			path: p
+		}),
+		onPick: (p) => folderDo({
+			t: "browse-commit",
+			path: p
+		}),
+		onCancel: () => folderDo({ t: "browse-cancel" })
+	}));
 	const onlyCurrent = suggestions.length > 0 && suggestions.every((s) => s.path === folderPath);
 	const ids = folderIds(scope);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -67692,19 +68166,6 @@ function FolderAids({ scope = "new", searchHits, selIndex, searchListRef, setSea
 			suggestions,
 			folderPath,
 			folderDo
-		}),
-		browserOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
-			device,
-			initialPath: folderPath || homePath || "",
-			selected: folderPath,
-			onSelect: (p) => folderDo({
-				t: "browse-select",
-				path: p
-			}),
-			onPick: (p) => folderDo({
-				t: "browse-commit",
-				path: p
-			})
 		})
 	] });
 }
@@ -71508,7 +71969,26 @@ function useDescribeFocus({ open, page, focusFolderNext, focusOpeningNext, opene
 		el.focus();
 	}, [open, page]);
 }
-function DescribeSection({ batch, describe, setDescribe, describing, describeRef, runMode, runDescribe, cancelDescribe, draft, planNoteShown, planError, setPlanError, describeFailed, fillFormInstead, newFolderRow, runBrowse, setRunBrowse, runBrowseRef, repoPath, folderDo, suggestions, device, homePath, onClear, agentNote, startsIn, agentLabel, describeSince, startInstead, onEnterStart }) {
+function DescribeSection({ batch, describe, setDescribe, describing, describeRef, runMode, runDescribe, cancelDescribe, draft, planNoteShown, planError, setPlanError, describeFailed, fillFormInstead, newFolderRow, runBrowse, setRunBrowse, repoPath, folderDo, suggestions, device, homePath, onClear, agentNote, startsIn, agentLabel, describeSince, startInstead, onEnterStart }) {
+	useFolderPickerWhile(runBrowse, () => ({
+		title: runMode ? "Pick the folder the tasks start in" : "Pick the folder it runs in",
+		device,
+		start: repoPath || homePath || "",
+		selected: repoPath,
+		anchor: document.querySelector("#new-run-repo, #new-describe-folder"),
+		onSelect: (p) => folderDo({
+			t: "user-set",
+			path: p
+		}),
+		onPick: (p) => {
+			folderDo({
+				t: "user-set",
+				path: p
+			});
+			setRunBrowse(false);
+		},
+		onCancel: () => setRunBrowse(false)
+	}));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "new-describe",
 		className: "new-templates nf-describe",
@@ -71633,35 +72113,6 @@ function DescribeSection({ batch, describe, setDescribe, describing, describeRef
 					})
 				}) : null,
 				splitBox: null
-			}),
-			runBrowse && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "rt-browse",
-				"data-run-browse": "",
-				ref: runBrowseRef,
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "rt-browse-head",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: runMode ? "Pick the folder the tasks start in" : "Pick the folder it runs in" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "rt-browse-done",
-						onClick: () => setRunBrowse(false),
-						children: "Done"
-					})]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
-					device,
-					initialPath: repoPath || homePath || "",
-					selected: repoPath,
-					onSelect: (p) => folderDo({
-						t: "user-set",
-						path: p
-					}),
-					onPick: (p) => {
-						folderDo({
-							t: "user-set",
-							path: p
-						});
-						setRunBrowse(false);
-					}
-				})]
 			}),
 			planNoteShown && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "nf-describe-note",
@@ -72336,11 +72787,6 @@ function NewSessionDialog() {
 	(0, import_react.useEffect)(() => {
 		if (!open) setRunBrowse(false);
 	}, [open]);
-	const runBrowseRef = (0, import_react.useRef)(null);
-	(0, import_react.useEffect)(() => {
-		const el = runBrowseRef.current;
-		if (runBrowse && el && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
-	}, [runBrowse]);
 	const laneAtPress = (0, import_react.useRef)({
 		lane: "leave",
 		askFirst: false
@@ -72762,7 +73208,6 @@ function NewSessionDialog() {
 		newFolderRow: missingRow,
 		runBrowse,
 		setRunBrowse,
-		runBrowseRef,
 		repoPath,
 		folderDo,
 		suggestions,
@@ -79574,14 +80019,20 @@ function SettingsSearch({ onPick }) {
 			className: "set-search-results",
 			role: "listbox",
 			"aria-label": "Matching settings",
-			children: hits.length ? hits.map((h, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			children: hits.length ? hits.map((h, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 				type: "button",
 				role: "option",
 				"aria-selected": i === cursor,
 				className: "set-search-hit" + (i === cursor ? " active" : ""),
 				onMouseEnter: () => setCursor(i),
 				onClick: () => pick(h),
-				children: h.label
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-search-title",
+					children: h.label
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-search-sub",
+					children: h.sub
+				})]
 			}, h.label)) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "set-search-none",
 				children: [
@@ -79596,7 +80047,7 @@ function SettingsSearch({ onPick }) {
 //#endregion
 //#region src/components/settings/screens/General.tsx
 function General(_) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tours, {}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(AdvancedFold, {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(AdvancedFold, {
 		id: "general-advanced",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
@@ -79642,7 +80093,7 @@ function General(_) {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollSpeedRow, {})
 		]
-	})] });
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tours, {})] });
 }
 function ResumeOnUsageResetRow() {
 	const s = useSettings();
@@ -79724,11 +80175,16 @@ function Tours() {
 	const enabled = useUi((s) => s.hintsEnabled);
 	const setHintsEnabled = useUi((s) => s.setHintsEnabled);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "onboarding-block",
+		className: "onboarding-block general-help",
 		id: "general-tours",
+		"data-tour": "settings-tours",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 				className: "set-section-title",
+				children: "Help"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+				className: "set-subtitle",
 				children: "Tours"
 			}),
 			TOUR_IDS.map((id) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -80343,6 +80799,69 @@ function UrlList({ urls }) {
 				children: u.url
 			}) })]
 		}, u.url))
+	});
+}
+//#endregion
+//#region src/components/PathField.tsx
+function pathFieldRequest(opts) {
+	const start = opts.value.trim();
+	return {
+		title: opts.title,
+		device: opts.device || "",
+		start,
+		selected: start,
+		anchor: opts.anchor,
+		onPick: (p) => {
+			opts.onDone?.();
+			opts.onChange(p);
+			opts.onPicked?.(p);
+		},
+		onCancel: () => opts.onDone?.()
+	};
+}
+function PathField({ value, onChange, onPicked, device = "", pickerTitle, browseLabel = "Browse…", className, ...input }) {
+	const btnRef = (0, import_react.useRef)(null);
+	const openId = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => () => {
+		if (openId.current !== null) closeFolderPicker(openId.current, false);
+	}, []);
+	const browse = () => {
+		openId.current = openFolderPicker(pathFieldRequest({
+			value,
+			onChange,
+			onPicked,
+			device,
+			title: pickerTitle,
+			anchor: btnRef.current,
+			onDone: () => {
+				openId.current = null;
+			}
+		}));
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "path-field" + (className ? " " + className : ""),
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+			type: "text",
+			autoComplete: "off",
+			spellCheck: false,
+			...input,
+			value,
+			onChange: (e) => onChange(e.target.value)
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			type: "button",
+			ref: btnRef,
+			className: "path-field-browse",
+			id: input.id ? input.id + "-browse" : void 0,
+			title: "Pick a folder in a window you can move",
+			onClick: (e) => {
+				e.preventDefault();
+				browse();
+			},
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				"aria-hidden": "true",
+				children: "📁 "
+			}), browseLabel]
+		})]
 	});
 }
 //#endregion
@@ -81092,7 +81611,6 @@ function PeerLinkCard(props) {
 	const [target, setTarget] = (0, import_react.useState)("");
 	const [exportBranch, setExportBranch] = (0, import_react.useState)("peer/" + (link.peer_name || "work").replace(/[^A-Za-z0-9._-]+/g, "-"));
 	const [confirm, setConfirm] = (0, import_react.useState)("");
-	const [browsing, setBrowsing] = (0, import_react.useState)("");
 	const [deleteFiles, setDeleteFiles] = (0, import_react.useState)(false);
 	const [reconnect, setReconnect] = (0, import_react.useState)("");
 	const [msgsOpen, setMsgsOpen] = (0, import_react.useState)(false);
@@ -81259,17 +81777,11 @@ function PeerLinkCard(props) {
 							className: "set-label",
 							children: "Bring work home"
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
 							placeholder: "your repo to bring it into",
 							value: target,
-							onChange: (e) => setTarget(e.target.value)
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							"aria-expanded": browsing === "export",
-							onClick: () => setBrowsing(browsing === "export" ? "" : "export"),
-							children: "Browse…"
+							onChange: setTarget,
+							pickerTitle: "Pick the repo to bring it into"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 							placeholder: "peer/branch",
@@ -81288,15 +81800,6 @@ function PeerLinkCard(props) {
 						})
 					]
 				}),
-				browsing === "export" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
-					initialPath: target.trim(),
-					selected: target.trim(),
-					onSelect: setTarget,
-					onPick: (p) => {
-						setTarget(p);
-						setBrowsing("");
-					}
-				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "test-btn",
@@ -81304,20 +81807,14 @@ function PeerLinkCard(props) {
 					onClick: () => setConfirm("unshare"),
 					children: "Stop sharing…"
 				})
-			] }) : sandbox ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			] }) : sandbox ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "set-row",
 				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
 						placeholder: "folder to share",
 						value: repo,
-						onChange: (e) => setRepo(e.target.value)
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						"aria-expanded": browsing === "share",
-						onClick: () => setBrowsing(browsing === "share" ? "" : "share"),
-						children: "Browse…"
+						onChange: setRepo,
+						pickerTitle: "Pick the folder to share"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						placeholder: "branch (optional)",
@@ -81348,15 +81845,7 @@ function PeerLinkCard(props) {
 						children: busy === "share" ? "Sharing…" : "Share a folder"
 					})
 				]
-			}), browsing === "share" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
-				initialPath: repo.trim(),
-				selected: repo.trim(),
-				onSelect: setRepo,
-				onPick: (p) => {
-					setRepo(p);
-					setBrowsing("");
-				}
-			})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			}) }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "set-hint",
 				children: [
 					"Here you can message ",
@@ -82241,6 +82730,7 @@ function CodingCli({ gotoScreen }) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 			className: "set-row",
+			"data-tour": "settings-default-agent",
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-label",
@@ -83569,6 +84059,7 @@ function WorktreeHome() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "ws-home",
 		id: "workspace-paths",
+		"data-tour": "settings-worktrees",
 		"aria-label": "Where your worktrees live",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
@@ -83594,19 +84085,18 @@ function WorktreeHome() {
 						className: "set-label",
 						children: "Workspace folder (ticket and PR sessions)"
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
 						"data-group": "repository",
 						"data-field": "workspace_dir",
 						id: "workspace-dir-input",
-						autoComplete: "off",
-						spellCheck: false,
 						placeholder: "./workspaces",
 						value: typed,
 						"aria-invalid": bad ? true : void 0,
 						"aria-describedby": "workspace-dir-check",
-						onChange: (e) => setTyped(e.target.value),
+						pickerTitle: "Pick the workspace folder",
+						onChange: setTyped,
 						onBlur: () => typed.trim() !== stored && s.saveField("repository", "workspace_dir", typed.trim()),
+						onPicked: (p) => p.trim() !== stored && s.saveField("repository", "workspace_dir", p.trim()),
 						onKeyDown: (e) => {
 							if (e.key === "Enter") e.target.blur();
 						}
@@ -88842,6 +89332,17 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 		open,
 		target,
 		openDialogFor,
+		keys
+	]);
+	const tourStep = useUi((s) => s.coachTour?.id === "settings" ? s.coachTour.step : -1);
+	(0, import_react.useEffect)(() => {
+		if (!open || tourStep < 0) return;
+		const want = TOURS.settings.steps[tourStep]?.screen;
+		const key = want ? resolveScreenKey(want, keys) : null;
+		if (key) setScreen(key);
+	}, [
+		open,
+		tourStep,
 		keys
 	]);
 	if (!open) return null;
@@ -95547,6 +96048,396 @@ function IdleFlock({ idle }) {
 	});
 }
 //#endregion
+//#region src/components/dialogs/newSession/FolderBrowser.tsx
+function FolderBrowser({ device = "", initialPath, selected, onSelect, onPick, fallback = false, onListing }) {
+	const [data, setData] = (0, import_react.useState)(null);
+	const [error, setError] = (0, import_react.useState)("");
+	const [newFolder, setNewFolder] = (0, import_react.useState)(null);
+	const [making, setMaking] = (0, import_react.useState)(false);
+	const listRef = (0, import_react.useRef)(null);
+	const newFolderRef = (0, import_react.useRef)(null);
+	const leaving = (0, import_react.useRef)(null);
+	const load = (0, import_react.useCallback)(async (path, quiet = false) => {
+		setError("");
+		try {
+			const q = path ? "?path=" + encodeURIComponent(path) : "";
+			setData(await deviceApi(device)("/api/browse" + q));
+			return true;
+		} catch (err) {
+			if (quiet) return false;
+			leaving.current = null;
+			setError(err.message);
+			return false;
+		}
+	}, [device]);
+	(0, import_react.useEffect)(() => {
+		if (!fallback) {
+			load(initialPath);
+			return;
+		}
+		let live = true;
+		(async () => {
+			const chain = seedChain(initialPath);
+			for (let i = 0; i < chain.length && live; i++) if (await load(chain[i], i < chain.length - 1)) return;
+		})();
+		return () => {
+			live = false;
+		};
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (data) onListing?.(data.path, (data.entries || []).map((e) => e.path));
+	}, [data]);
+	(0, import_react.useEffect)(() => {
+		const from = leaving.current;
+		if (from === null || !data) return;
+		leaving.current = null;
+		const idx = focusRowIndex((data.entries || []).map((e) => e.path), from);
+		const rows = listRef.current?.querySelectorAll(".rb-item:not(.rb-use)");
+		(idx >= 0 ? rows?.[idx] : listRef.current?.querySelector(".rb-use"))?.focus();
+	}, [data]);
+	const keyLoad = (to) => {
+		leaving.current = data?.path || "";
+		load(to);
+	};
+	const mkdir = async () => {
+		const name = (newFolder || "").trim();
+		if (!data?.path || !name || making) return;
+		setError("");
+		setMaking(true);
+		try {
+			const r = await deviceApi(device)("/api/mkdir", { json: {
+				path: data.path,
+				name
+			} });
+			setNewFolder(null);
+			onPick(r.path);
+		} catch (err) {
+			setError(err.message);
+		} finally {
+			setMaking(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "repo-browser",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rb-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "rb-up",
+						title: "Parent folder",
+						"aria-label": "Parent folder",
+						disabled: !data?.parent,
+						onClick: () => data?.parent && load(data.parent),
+						children: "←"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						id: "rb-cwd",
+						className: "rb-cwd",
+						title: data?.path || "",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							dir: "ltr",
+							children: data?.path || ""
+						})
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "rb-mkdir",
+						title: "Create a new folder here",
+						"aria-expanded": newFolder !== null,
+						onClick: () => {
+							setNewFolder(newFolder === null ? "" : null);
+							setError("");
+						},
+						children: "+ Folder"
+					})
+				]
+			}),
+			newFolder !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rb-new",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					ref: newFolderRef,
+					type: "text",
+					className: "rb-new-name",
+					value: newFolder,
+					autoFocus: true,
+					autoComplete: "off",
+					spellCheck: false,
+					placeholder: "New folder name",
+					"aria-label": "New folder in " + (data?.path || ""),
+					readOnly: making,
+					onChange: (e) => setNewFolder(e.target.value),
+					onKeyDown: (e) => {
+						e.stopPropagation();
+						if (e.key === "Enter") {
+							e.preventDefault();
+							mkdir();
+						} else if (e.key === "Escape") {
+							e.preventDefault();
+							setNewFolder(null);
+						}
+					}
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "rb-new-go",
+					disabled: !newFolder.trim() || making,
+					onClick: mkdir,
+					children: making ? "Creating…" : "Create"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				id: "rb-list",
+				ref: listRef,
+				children: [data && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "rb-item rb-use" + (data.is_git ? " is-git" : "") + (selected === data.path ? " rb-sel" : ""),
+					title: "Use " + data.path + " and close the browser",
+					onClick: () => onPick(data.path),
+					children: (data.is_git ? "✓ use this repo — " : "use this folder — ") + leafName(data.path)
+				}), (data?.entries || []).map((e) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "rb-item" + (e.is_git ? " is-git" : "") + (selected === e.path ? " rb-sel" : ""),
+					"aria-pressed": selected === e.path,
+					title: e.path,
+					"data-path": e.path,
+					onClick: () => onSelect(e.path),
+					onDoubleClick: () => {
+						onSelect(e.path);
+						load(e.path);
+					},
+					onKeyDown: (ev) => {
+						if (ev.key === "ArrowRight") {
+							ev.preventDefault();
+							onSelect(e.path);
+							keyLoad(e.path);
+						} else if (ev.key === "ArrowLeft" && data?.parent) {
+							ev.preventDefault();
+							keyLoad(data.parent);
+						}
+					},
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rb-name",
+						children: (e.is_git ? "📦 " : "📁 ") + e.name
+					})
+				}, e.path))]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "rb-hint",
+				children: "Click selects · double-click or → opens · ← up · Esc cancels"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				id: "rb-error",
+				className: "error",
+				children: error
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/FolderPickerWindow.tsx
+function pickerEscape(e) {
+	if (e.key !== "Escape" || !getFolderPicker()) return false;
+	const t = e.target;
+	if (t && typeof t.closest === "function" && t.closest(".fpw .rb-new")) return false;
+	return true;
+}
+if (typeof window !== "undefined") window.addEventListener("keydown", (e) => {
+	if (!pickerEscape(e)) return;
+	e.preventDefault();
+	e.stopPropagation();
+	closeFolderPicker();
+}, true);
+function viewport() {
+	return {
+		vw: window.innerWidth,
+		vh: window.innerHeight
+	};
+}
+function FolderPickerWindow() {
+	const req = useFolderPicker();
+	const [rect, setRect] = (0, import_react.useState)(null);
+	const [chosen, setChosen] = (0, import_react.useState)("");
+	const rootRef = (0, import_react.useRef)(null);
+	const drag = (0, import_react.useRef)(null);
+	const rectRef = (0, import_react.useRef)(null);
+	rectRef.current = rect;
+	(0, import_react.useLayoutEffect)(() => {
+		if (!req) return;
+		setChosen((req.selected ?? req.start).trim());
+		if (!rectRef.current) {
+			const { vw, vh } = viewport();
+			const saved = loadPickerRect();
+			const a = req.anchor?.getBoundingClientRect?.() || null;
+			setRect(saved ? clampRect(saved, vw, vh) : defaultRect(a, vw, vh, PICKER_DEFAULT));
+		}
+	}, [req?.id]);
+	const shown = !!req && !!rect;
+	(0, import_react.useEffect)(() => {
+		if (shown) rootRef.current?.focus({ preventScroll: true });
+	}, [req?.id, shown]);
+	(0, import_react.useEffect)(() => {
+		if (!req) return;
+		const onResize = () => {
+			const r = rectRef.current;
+			if (!r) return;
+			const { vw, vh } = viewport();
+			setRect(clampRect(r, vw, vh));
+		};
+		window.addEventListener("resize", onResize);
+		return () => window.removeEventListener("resize", onResize);
+	}, [req]);
+	(0, import_react.useEffect)(() => {
+		const el = rootRef.current;
+		if (!req || !el || typeof ResizeObserver === "undefined") return;
+		let timer = 0;
+		const ro = new ResizeObserver(() => {
+			const r = rectRef.current;
+			if (!r || drag.current) return;
+			const w = el.offsetWidth;
+			const h = el.offsetHeight;
+			if (Math.abs(w - r.w) < 2 && Math.abs(h - r.h) < 2) return;
+			window.clearTimeout(timer);
+			timer = window.setTimeout(() => {
+				const { vw, vh } = viewport();
+				const next = clampRect({
+					...r,
+					w,
+					h
+				}, vw, vh);
+				setRect(next);
+				savePickerRect(next);
+			}, 150);
+		});
+		ro.observe(el);
+		return () => {
+			ro.disconnect();
+			window.clearTimeout(timer);
+		};
+	}, [req?.id, shown]);
+	if (!req || !rect) return null;
+	const onBarDown = (e) => {
+		if (e.button !== 0 || e.target.closest("button")) return;
+		e.preventDefault();
+		drag.current = {
+			sx: e.clientX,
+			sy: e.clientY,
+			from: rect
+		};
+		e.currentTarget.setPointerCapture?.(e.pointerId);
+	};
+	const onBarMove = (e) => {
+		const d = drag.current;
+		if (!d) return;
+		const { vw, vh } = viewport();
+		setRect(dragRect(d.from, d.sx, d.sy, e.clientX, e.clientY, vw, vh));
+	};
+	const onBarUp = (e) => {
+		if (!drag.current) return;
+		drag.current = null;
+		e.currentTarget.releasePointerCapture?.(e.pointerId);
+		if (rectRef.current) savePickerRect(rectRef.current);
+	};
+	const rows = () => Array.from(rootRef.current?.querySelectorAll("#rb-list .rb-item") || []);
+	const onKeyDown = (e) => {
+		const t = e.target;
+		if (t.closest(".rb-new")) return;
+		if (e.key === "Enter") {
+			const row = t.closest(".rb-item:not(.rb-use)");
+			if (row?.dataset.path) {
+				e.preventDefault();
+				e.stopPropagation();
+				pickFolder(row.dataset.path);
+			} else if (t.tagName !== "BUTTON" && chosen) {
+				e.preventDefault();
+				e.stopPropagation();
+				pickFolder(chosen);
+			}
+		} else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+			const list = rows();
+			if (!list.length) return;
+			e.preventDefault();
+			const at = list.indexOf(t);
+			const step = e.key === "ArrowDown" ? 1 : -1;
+			list[at < 0 ? step > 0 ? 0 : list.length - 1 : Math.max(0, Math.min(list.length - 1, at + step))].focus();
+		}
+	};
+	const win = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		ref: rootRef,
+		className: "fpw",
+		id: "folder-picker",
+		role: "dialog",
+		"aria-modal": "false",
+		"aria-labelledby": "fpw-title",
+		tabIndex: -1,
+		style: {
+			left: rect.x,
+			top: rect.y,
+			width: rect.w,
+			height: rect.h
+		},
+		onKeyDown,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fpw-bar",
+				title: "Drag to move",
+				onPointerDown: onBarDown,
+				onPointerMove: onBarMove,
+				onPointerUp: onBarUp,
+				onPointerCancel: onBarUp,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fpw-title",
+					id: "fpw-title",
+					children: req.title || "Pick a folder"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "fpw-close",
+					id: "fpw-close",
+					"aria-label": "Close",
+					title: "Close without picking (Esc)",
+					onClick: () => closeFolderPicker(req.id),
+					children: "✕"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "fpw-body",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
+					device: req.device || "",
+					initialPath: req.start.trim(),
+					selected: chosen,
+					fallback: true,
+					onSelect: (p) => {
+						setChosen(p);
+						req.onSelect?.(p);
+					},
+					onPick: (p) => pickFolder(p),
+					onListing: (path, entries) => setChosen((c) => c === path || entries.includes(c) ? c : path)
+				}, req.id)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fpw-foot",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fpw-chosen",
+					title: chosen,
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						dir: "ltr",
+						children: chosen
+					})
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "fpw-use",
+					id: "fpw-use",
+					disabled: !chosen,
+					title: chosen ? "Fill the field with " + chosen + " (Enter)" : void 0,
+					onClick: () => pickFolder(chosen),
+					children: "Use this folder"
+				})]
+			})
+		]
+	});
+	return (0, import_react_dom.createPortal)(win, document.body);
+}
+//#endregion
 //#region src/lib/surfaceHash.ts
 var BY_HASH = {
 	new: "new-session",
@@ -95796,6 +96687,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShortcutsSheet, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WelcomeTour, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CoachTourHost, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderPickerWindow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Breaks, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(EventToasts, {})
 	] });

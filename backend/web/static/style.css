@@ -1117,6 +1117,41 @@
 .tk-repo-row {
   row-gap: 4px;
 }
+/* "Search settings…" results: the label, and under it one small line saying
+   what is behind it (settingsSearch.ts `sub`). The box and row chrome live
+   with the rest of the nav in screens/screens.css. */
+.set-search-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.set-search-title {
+  color: var(--text);
+}
+
+.set-search-sub {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--muted);
+}
+/* Help (the tours and the hints switch) sits LAST on General, after the
+   Advanced fold: its divider goes above it rather than below (the shared
+   .onboarding-block rule in SettingsDialog.css draws one underneath, from
+   when it led the screen). */
+.onboarding-block.general-help {
+  padding-top: var(--set-rhythm, 24px);
+  padding-bottom: 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+}
+
+/* Basic mode renders no fold, so Help is all General shows: no rule over
+   nothing. */
+.set-screen > .onboarding-block.general-help:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
 /* "Tailscale on this device" (TailscaleCard.tsx). Reuses .sl-snippet,
    .sl-admin-link and .qr-card from mobileLogs.css. */
 .ts-card {
@@ -2651,13 +2686,14 @@ body #mf-winctl {
   justify-content: flex-start;
 }
 
-/* The menu carries New, Intake, Verify (once it has something to check),
-   Settings and the palette's icon. The type and the spacing stay tighter than
+/* The menu carries New, Intake, Verify and Schedule (once the calm first hour
+   lets them on), Settings, a ⋯ when a narrow window folds some of those (see
+   .tb-folded at the end), and the palette's icon. The type and the spacing stay tighter than
    the rest of the app — here, on #topbar button, on .tb-item and on #new-btn,
    which must all move together or the row goes ragged.
-   The bar must stay ONE line at the narrowest window anyone actually uses: it is
-   fixed and full-width, so an item that wraps does not push anything down, it
-   disappears under the edge of the window. 11px is the floor — these are the
+   The bar stays ONE line at any width: it is fixed and full-width, so an item
+   that wraps does not push anything down, it disappears under the edge of the
+   window — which is why a narrow bar folds instead. 11px is the floor — these are the
    app's primary navigation and the next notch down stops reading as a label. */
 #topbar .tb-menu {
   display: flex;
@@ -2839,26 +2875,73 @@ body #mf-winctl {
   position: relative;
 }
 
-
-/* A phone-narrow window: the wordmark has no room left beside the menu and
-   got clipped to "Mi". The menu is the bar's job; the name steps aside. */
-@media (max-width: 560px) {
-  #topbar .tb-brand {
-    display: none;
-  }
+/* A narrow window: the bar measures itself and folds (fitTopBar in TopBar.tsx)
+   — the wordmark steps aside first, then Settings, Schedule and Verify move,
+   right to left, into one ⋯ before the palette icon. Measured rather than a
+   list of breakpoints: the words' widths move with the font, a badge, the mac
+   lights' gap. display:none (not visibility) so a folded button has no box —
+   the tours' target lookup skips it, and nothing can be tabbed to under ⋯. */
+#topbar .tb-menu .tb-folded,
+#topbar .tb-brand.tb-folded {
+  display: none;
 }
 
-/* Narrower still (a browser tab squeezed to a side): the worded items close
-   up rather than pushing the palette icon past the edge — the bar is fixed
-   and never wraps, so whatever doesn't fit is simply gone. */
-@media (max-width: 520px) {
-  #topbar #new-btn.tb-new,
-  #topbar #intake-btn,
-  #topbar #verify-btn,
-  #topbar #schedule-btn,
-  #topbar #settings-btn {
-    padding: 0 5px;
-  }
+/* ⋯ is the palette icon's twin (.tb-item, a 15px monochrome glyph); the count
+   it carries for the items folded into it rides after the glyph the way
+   Verify's rides after its word. */
+#topbar .tb-more {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+#topbar #more-btn[aria-expanded="true"] {
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+
+/* The folded items as rows. App furniture, not bar chrome: the --app-* tokens
+   opt out of the bar's region hue (styles/tokens.css), the way the bell's
+   panel does, and no-drag so a click in it is a click in the Electron shell. */
+#topbar .tb-more-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 70;
+  min-width: 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px;
+  background: var(--app-panel, var(--panel));
+  border: 1px solid var(--app-border, var(--border));
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38);
+  -webkit-app-region: no-drag;
+}
+
+#topbar .tb-more-menu .tb-more-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 9px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--app-text, var(--text));
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+#topbar .tb-more-menu .tb-more-item:hover,
+#topbar .tb-more-menu .tb-more-item:focus-visible {
+  background: var(--app-panel-2, var(--panel-2));
+  outline: none;
 }
 }
 
@@ -14298,11 +14381,25 @@ button.ct-chip:hover {
   border-color: var(--red);
 }
 
-/* In the pane popover: tall menus scroll instead of running off the screen. */
+/* In the pane popover: the popover's max-height (PaneMoreMenu, placed by
+   lib/menuPlace) caps it at the window, and the items scroll under the
+   summary line instead of running off the screen. */
 .pane-more-menu .session-menu {
-  max-height: calc(100vh - 120px);
+  min-height: 0;
   overflow-y: auto;
   min-width: 220px;
+}
+
+/* A window too short for the whole menu (More ▸ unfolded on a laptop
+   screen): Close and Delete… stay pinned at its foot while the rest scrolls,
+   so the two ends are never below the fold. Opaque, so what scrolls under
+   them doesn't show through, and its shadow fills the row popover's bottom
+   padding, which would otherwise show a sliver of what scrolls under it. */
+.session-menu .sm-danger {
+  position: sticky;
+  bottom: 0;
+  background: var(--panel);
+  box-shadow: 0 4px 0 var(--panel);
 }
 }
 
@@ -17144,31 +17241,6 @@ button.ct-chip:hover {
   color: var(--text);
 }
 
-/* List mode → "tasks start in" → Browse…: the Folder field's own browser,
-   inline under the choices. */
-#new-form .rt-browse {
-  margin: 8px 0 4px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 10px;
-}
-
-#new-form .rt-browse-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 6px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-#new-form .rt-browse-done {
-  font: inherit;
-  font-size: 12px;
-  padding: 2px 10px;
-}
-
 /* Page 2's Prompt fold: "Manage…" is a link to Customize → Prompts, not a
    fourth pill. The id outranks contextPresets.css's `.preset-row button`. */
 .preset-row #preset-manage {
@@ -19773,6 +19845,51 @@ body.conn-lost #cs-errors {
 /* 200 */
 
 @layer components{
+/* The toast's action button (lib/toast.ts `action`): the one thing to press,
+   instead of the whole toast being the click target. The toast itself is
+   styled in NewSessionDialog.css (#cs-toast) and ConnBanner.css (.clickable). */
+#cs-toast.has-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px 6px 14px;
+  pointer-events: auto;
+  /* `left: 50%` would otherwise shrink-wrap a long name into half the window. */
+  width: max-content;
+  max-width: calc(100vw - 32px);
+}
+
+#cs-toast .cs-toast-act {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid rgba(var(--accent-rgb), 0.55);
+  border-radius: 6px;
+  background: rgba(var(--accent-rgb), 0.14);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#cs-toast .cs-toast-act:hover {
+  background: rgba(var(--accent-rgb), 0.26);
+}
+
+#cs-toast .cs-toast-act:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Faded out = gone: no tab stop on an invisible button. */
+#cs-toast:not(.show) .cs-toast-act {
+  visibility: hidden;
+}
+}
+
+/* after ConnBanner.css, whose
+   #cs-toast.clickable the action toast sits next to */
+
+@layer components{
 /* --------------------------------------------------------------------------- *
  * Downgrade notice. Top-centre rather than the bottom-right corner ConnBanner
  * uses: this explains why the grid the user is staring at is empty, so it has
@@ -20685,6 +20802,29 @@ button.linklike {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* A row with a subtitle (the Settings rows): label on top, one small muted
+   line under it saying what is behind it. */
+.palette-item .palette-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.palette-item .palette-sub {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette-item.selected .palette-sub {
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .palette-item .palette-hint {
@@ -27853,6 +27993,204 @@ button.infotip-btn:focus-visible {
 /* 320 — after
    smallDialogs.css, whose `.ws-head button` pill the icon must not wear */
 
+@layer components{
+/* The floating folder picker (FolderPickerWindow.tsx).
+
+   Above every dialog (a .modal has no z-index of its own; the tallest thing a
+   dialog draws is ~70) and under the toast (#cs-toast, 1000), so a "Folder
+   created" toast still reads over it. Position and size come inline from the
+   component; `resize: both` gives it a corner handle. */
+.fpw {
+  position: fixed;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  resize: both;
+}
+
+.fpw:focus {
+  outline: none;
+}
+
+.fpw:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The title bar is the drag handle. touch-action: none, or a finger drag on a
+   phone scrolls the page instead of moving the window. */
+.fpw-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 6px 6px 6px 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+.fpw-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fpw-close {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.fpw-close:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.fpw-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+}
+
+/* The New form's inline browser is capped at 262px; in a window the list takes
+   whatever height the window has. */
+.fpw #repo-browser {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+
+.fpw #rb-list {
+  flex: 1;
+  min-height: 0;
+}
+
+.fpw .rb-hint {
+  flex: none;
+}
+
+.fpw #rb-error:empty {
+  display: none;
+}
+
+.fpw-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* The folder "Use this folder" takes — its END, which is the part that names
+   it, so a long path loses its head, not its leaf. */
+.fpw-chosen {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.fpw-use {
+  flex: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.fpw-use:hover:not(:disabled) {
+  background: var(--accent-deep);
+}
+
+.fpw-use:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.fpw-use:focus-visible,
+.fpw-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+}
+
+/* 330 — after
+   NewSessionDialog.css, whose #repo-browser the window stretches to its height */
+
+@layer components{
+/* A typed path with its "📁 Browse…" button (PathField.tsx): the box takes the
+   row, the button keeps its natural width beside it, both the same height. */
+.path-field {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.path-field > input {
+  flex: 1;
+  min-width: 0;
+}
+
+.path-field-browse {
+  flex: none;
+  border-radius: 7px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.path-field-browse:hover {
+  border-color: var(--accent);
+}
+
+.path-field-browse:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+}
+
+/* 340 */
+
 @layer theme{
 /* ---------------------------------------------------------------------------
  * Region hues — the one file that knows how a multi-color theme set reaches
@@ -28133,6 +28471,11 @@ button.infotip-btn:focus-visible {
 
 .light .infotip code {
   background: var(--app-panel-2, var(--panel-2));
+}
+
+/* The folder picker window's shadow is tuned for the dark page. */
+.light .fpw {
+  box-shadow: 0 12px 36px rgba(20, 24, 40, 0.18);
 }
 }
 

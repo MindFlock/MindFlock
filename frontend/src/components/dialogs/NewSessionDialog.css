@@ -1642,31 +1642,6 @@
   color: var(--text);
 }
 
-/* List mode → "tasks start in" → Browse…: the Folder field's own browser,
-   inline under the choices. */
-#new-form .rt-browse {
-  margin: 8px 0 4px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 10px;
-}
-
-#new-form .rt-browse-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 6px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-#new-form .rt-browse-done {
-  font: inherit;
-  font-size: 12px;
-  padding: 2px 10px;
-}
-
 /* Page 2's Prompt fold: "Manage…" is a link to Customize → Prompts, not a
    fourth pill. The id outranks contextPresets.css's `.preset-row button`. */
 .preset-row #preset-manage {
