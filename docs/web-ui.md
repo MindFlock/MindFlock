@@ -41,6 +41,17 @@ in. The **MindFlock** wordmark (carrying the *running engine's* version, plus a
 red `-DEV` badge under a dev shell) sits centered, and the empty strip beside it
 is the drag region that moves the desktop shell's window.
 
+The bar never wraps and never clips (any width from 360 px up): it measures
+itself, before paint and on every resize, and gives things up in a fixed order
+(`fitTopBar` in `TopBar.tsx`). The wordmark goes first, then Settings, Schedule
+and Verify move, from the right, into one **⋯** (`#more-btn`) that sits where
+they stood, just before the magnifier. **New**, **Intake** and the magnifier
+never fold. The ⋯ carries the folded items' counts (Verify's red count rides on
+it while Verify is folded), and its menu lists the folded items with their own
+counts and tooltips (↑/↓ move, Esc closes). A folded item keeps its id
+(`#verify-btn` &c., hidden), its shortcut and its palette entry; the calm rule
+below still decides which items are on the bar at all.
+
 **Verify** is always on the bar once the [calm first hour](#layout) is over
 (or its first checklist exists — before that it waits, and so does
 **Schedule** until its first template; Alt+V / Alt+S and the palette work
