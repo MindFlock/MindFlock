@@ -1,0 +1,340 @@
+/* Settings → People, round 6: the header's tour "?", the joint task on a link
+   card (start form, proposal, active card with its two halves, the Contract
+   panel, the Mirror row and the joint checklist). The older People rules
+   (invite / join boxes, the card itself) stay in screens.css. */
+
+.peer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.peer-head .set-section-title {
+  margin-right: auto;
+}
+
+.peer-link-card + .peer-link-card {
+  margin-top: 12px;
+}
+
+/* The joint task: one bordered block inside the card. */
+.peer-joint {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+.peer-joint[data-joint-phase="none"],
+.peer-joint[data-joint-phase="ended"] {
+  background: transparent;
+  border-style: dashed;
+}
+.peer-joint p {
+  margin: 0;
+  font-size: 13px;
+}
+.peer-joint .peer-joint-title {
+  font-size: 14px;
+}
+.peer-joint-cta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.peer-joint-form,
+.peer-joint-proposal,
+.peer-joint-active,
+.peer-joint-waiting,
+.peer-joint-accept-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.peer-joint-form .set-subtitle {
+  margin: 0;
+}
+.peer-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.peer-joint textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+.peer-joint-contract,
+.peer-contract-editor textarea {
+  font: 12px ui-monospace, Menlo, Consolas, monospace;
+}
+/* A row of controls inside the joint block (Settings' .set-row stacks). */
+.peer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.peer-row > .peer-joint-repo {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+/* Same look as a Settings row's select (SettingsDialog.css .set-row select). */
+.peer-row select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-family: inherit;
+}
+.peer-row > input,
+.peer-row > select {
+  flex: 0 1 170px;
+  min-width: 0;
+}
+.peer-joint-brief-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.peer-joint-ended {
+  overflow-wrap: anywhere;
+}
+
+/* Both halves side by side; stacked on a phone. */
+.peer-halves {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+.peer-half {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  min-width: 0;
+}
+.peer-half .set-hint {
+  overflow-wrap: anywhere;
+}
+
+/* The contract: rendered Markdown in a bounded, scrollable box. */
+.peer-contract {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.peer-contract-head,
+.peer-joint-check-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+.peer-contract-head .peer-contract-edit {
+  margin-left: auto;
+}
+.peer-md {
+  max-height: 260px;
+  overflow: auto;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  font-size: 12.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.peer-md h5,
+.peer-md h6 {
+  margin: 8px 0 2px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.peer-md h6 {
+  color: var(--muted);
+}
+.peer-md > :first-child {
+  margin-top: 0;
+}
+.peer-md p,
+.peer-md ul,
+.peer-md ol {
+  margin: 2px 0 6px;
+}
+.peer-md ul,
+.peer-md ol {
+  padding-left: 18px;
+}
+.peer-md pre {
+  margin: 4px 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  font: 11.5px ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+}
+.peer-md code {
+  font: 11.5px ui-monospace, Menlo, Consolas, monospace;
+}
+.peer-joint-preview > summary {
+  cursor: pointer;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+/* An agent's proposed change, waiting for a person. */
+.peer-proposals {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.peer-proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--gold);
+  border-radius: 0 6px 6px 0;
+  background: var(--panel);
+}
+
+.peer-diff-lines {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  font: 11.5px/1.5 ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.peer-diff-lines > span {
+  display: block;
+}
+.peer-diff-add {
+  color: var(--green);
+}
+.peer-diff-del {
+  color: var(--red);
+  text-decoration: line-through;
+}
+.peer-proposal details > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Mirror: "Mirror their work into [repo] as [peer/…] Enable". */
+.peer-mirror {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.peer-mirror-form,
+.peer-mirror-on {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.peer-mirror-form .peer-mirror-repo {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.peer-mirror-branch {
+  flex: 0 1 160px;
+  min-width: 0;
+}
+.peer-mirror-status {
+  overflow-wrap: anywhere;
+}
+.peer-mirror-error {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The joint checklist (filled in by wave 2). */
+.peer-joint-check {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.peer-verdict {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--tone-neutral);
+  color: var(--tone-neutral-ink);
+}
+.peer-verdict-verified {
+  background: var(--tone-working);
+  color: var(--tone-working-ink);
+}
+.peer-verdict-failed {
+  background: var(--tone-broken);
+  color: var(--tone-broken-ink);
+}
+.peer-verdict-needs_you {
+  background: var(--tone-attention);
+  color: var(--tone-attention-ink);
+}
+.peer-verdict-in_progress {
+  background: var(--tone-waiting);
+  color: var(--tone-waiting-ink);
+}
+.peer-joint-steps {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+}
+.peer-joint-step {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 8px;
+}
+.peer-joint-step-who {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 11px;
+}
+.peer-joint-step-text {
+  overflow-wrap: anywhere;
+}
+.peer-joint-step-pass .peer-joint-step-result {
+  color: var(--green);
+}
+.peer-joint-step-fail .peer-joint-step-result {
+  color: var(--red);
+}
+
+.peer-joint-end {
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 520px) {
+  .peer-link-card {
+    padding: 10px 12px;
+  }
+  .peer-joint {
+    padding: 8px 10px;
+  }
+  .peer-contract-head .peer-contract-edit {
+    margin-left: 0;
+  }
+}

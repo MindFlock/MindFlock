@@ -270,7 +270,14 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
     case "peer.link_added":
     case "peer.link_removed":
     case "peer.message":
-    case "peer.relay_changed": {
+    case "peer.relay_changed":
+    // A joint task: proposed to you, answered or ended by them, an agent's
+    // contract change waiting on a person; the mirror moved or failed.
+    case "peer.joint_proposed":
+    case "peer.joint_state":
+    case "peer.joint_contract":
+    case "peer.mirror_updated":
+    case "peer.mirror_failed": {
       const n = peerEventNote(env.event, d);
       return n ? { text: n.text, cls: n.cls, peer: true } : null;
     }

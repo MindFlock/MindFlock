@@ -14,6 +14,10 @@
  *    as the surface changes; hooks it adds are named
  *    `data-tour="<surface>-<thing>"` once and kept (tests pin them).
  *
+ * People (Settings → People) is the one tour of a Settings screen: its "?"
+ * sits in that screen's header, and replaying it opens Settings on People
+ * (settings/screens/peer/replayPeopleTour).
+ *
  * Rendered by components/onboarding/CoachTour.tsx (CoachTourHost), opened by
  * the store's `openCoachTour(id)` — from a dialog header's "?"
  * (onboarding/TourButton), Settings → General → Tours, the palette, or ONCE
@@ -26,8 +30,9 @@ import { INTAKE_TOUR } from "./intake";
 import { VERIFY_TOUR } from "./verify";
 import { SCHEDULE_TOUR } from "./schedule";
 import { SETTINGS_TOUR } from "./settings";
+import { PEOPLE_TOUR } from "./people";
 
-export type TourId = "welcome" | "new" | "intake" | "verify" | "schedule" | "settings";
+export type TourId = "welcome" | "new" | "intake" | "verify" | "schedule" | "settings" | "people";
 
 export interface TourStep {
   /** CSS selector resolved in `document`; "" centres the card. */
@@ -57,10 +62,11 @@ export const TOURS: Record<TourId, TourDef> = {
   verify: VERIFY_TOUR,
   schedule: SCHEDULE_TOUR,
   settings: SETTINGS_TOUR,
+  people: PEOPLE_TOUR,
 };
 
 /** Every tour, in the order Settings → General → Tours lists them. */
-export const TOUR_IDS: readonly TourId[] = ["welcome", "new", "intake", "verify", "schedule", "settings"];
+export const TOUR_IDS: readonly TourId[] = ["welcome", "new", "intake", "verify", "schedule", "settings", "people"];
 
 export function isTourId(v: unknown): v is TourId {
   return typeof v === "string" && (TOUR_IDS as readonly string[]).includes(v);

@@ -30,6 +30,7 @@ import { settingsActions } from "./settingsSearch";
 import { VERIFY_BLURB } from "../../lib/vocab";
 import { TOURS, TOUR_IDS } from "../../lib/tours";
 import { replayTour } from "../onboarding/replayTour";
+import { replayPeopleTour } from "../settings/screens/peer/replayPeopleTour";
 
 /** The focused session's entries, in palette order (the table holds what
  * each one says and when it applies). Pause and Resume never both apply;
@@ -218,7 +219,8 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         hint: id === "welcome" ? "the three steps to your first session" : `how ${t.title} works`,
         keywords: "tour help how guide tutorial walkthrough show me around " + t.title.toLowerCase(),
         top: id === "welcome" ? TOP.tour : undefined,
-        run: () => replayTour(id),
+        // People is a Settings screen, not a top-bar dialog: its own replay.
+        run: () => (id === "people" ? replayPeopleTour() : replayTour(id)),
       });
     }
     acts.push({ label: "Toggle sidebar", hint: "Ctrl+B", run: () => ui.toggleSidebar() });

@@ -7,6 +7,7 @@
  * router: an `mfp1:`/`mfp2:` code goes here, a device code to Devices. */
 
 import { api } from "../api/client";
+import { relTime } from "./format";
 import type { SettingsScreen } from "./openSettings";
 
 export interface PeerLink {
@@ -32,7 +33,92 @@ export interface PeerLink {
   peer_app?: string | null;
   /** THEIR shared session as they last reported it (asked over the link
    * every ~10s while connected): null when not connected or not asked yet. */
-  their_share?: { shared: boolean; agent: "running" | "stopped" | "none" | string } | null;
+  their_share?: { shared: boolean; agent: "running" | "stopped" | "none" | string; head?: string } | null;
+  /** The link's joint task in short (null/absent: none, or an older server). */
+  joint?: PeerJointSummary | null;
+  /** The standing mirror of their work into one of my repos (null: off). */
+  mirror?: PeerMirror | null;
+}
+
+/** Whose side something came from, as the side reading it sees it. */
+export type JointWho = "me" | "peer";
+export type JointState = "proposed" | "active" | "done" | "cancelled";
+
+/** `link_view.joint` — enough for the card to know whether to fetch more. */
+export interface PeerJointSummary {
+  id: string;
+  state: JointState;
+  brief_head: string;
+  contract_rev: number;
+  open_proposals: number;
+  mine_shared: boolean;
+  theirs_shared: boolean;
+}
+
+/** A proposed edit to the contract (the whole new text), and its fate. */
+export interface JointProposal {
+  id: string;
+  by: JointWho;
+  text: string;
+  at: string;
+  state: "open" | "accepted" | "rejected";
+}
+
+export interface JointCheckStep {
+  id: string;
+  text: string;
+  expect: string;
+  actor: "agent" | "human";
+  side: "mine" | "theirs";
+}
+
+export interface JointCheckResult {
+  result: "pass" | "fail" | "blocked" | "";
+  note: string;
+  at: string;
+  by: "agent" | "human";
+}
+
+export interface JointCheckSide {
+  results: Record<string, JointCheckResult>;
+  tested_sha: string;
+  at: string;
+}
+
+export type JointVerdict = "verified" | "failed" | "needs_you" | "in_progress" | "empty";
+
+/** The joint checklist (wave 2): steps split by side, each side's results. */
+export interface JointCheckData {
+  steps: JointCheckStep[];
+  mine: JointCheckSide;
+  theirs: JointCheckSide;
+  verdict: JointVerdict;
+}
+
+/** GET /api/peer/links/{id}/joint → `{joint}`: one task, two halves, one
+ * contract both agents follow. */
+export interface PeerJoint {
+  id: string;
+  brief: string;
+  proposed_by: JointWho;
+  created: string;
+  state: JointState;
+  mine: { repo_path: string; branch: string; program: string; share_id: string; session_title: string };
+  theirs: { repo_name: string; branch: string; program: string; shared: boolean };
+  contract: { text: string; rev: number; updated: string; by: JointWho };
+  proposals: JointProposal[];
+  check?: JointCheckData | null;
+}
+
+/** `link_view.mirror`: their shared work fetched into my repo as a branch
+ * whenever their HEAD moves. */
+export interface PeerMirror {
+  repo_path: string;
+  branch: string;
+  enabled: boolean;
+  last_head: string;
+  last_at: string;
+  last_error: string;
 }
 
 export interface PeerRelay {
@@ -223,7 +309,195 @@ export function peerEventNote(
       const text = "Your relay address changed — send " + who + " a fresh invite to reconnect";
       return { text, cls: "n-warn", toast: text };
     }
+    case "peer.joint_proposed": {
+      const text = name + " proposes a joint task — accept in People";
+      const brief = String(d.brief || "").trim();
+      return { text: brief ? text + ": " + clip(brief, 80) : text, cls: "n-info", toast: text };
+    }
+    case "peer.joint_contract": {
+      // Only an open proposal waits on a person; a synced revision is not news.
+      const p = (d.proposal || null) as { by?: string; state?: string } | null;
+      if (!p || p.state !== "open") return null;
+      const text = (p.by === "me" ? "Your agent" : name + "'s agent") + " proposes a contract change";
+      return { text, cls: "n-info", toast: text };
+    }
+    case "peer.joint_state": {
+      // Their answer to my proposal, or their side ending it; my own clicks
+      // are not news.
+      if (d.by !== "peer") return null;
+      const state = String(d.state || "");
+      const text =
+        state === "active"
+          ? name + " accepted the joint task"
+          : state === "done"
+          ? name + " marked the joint task done"
+          : state === "cancelled"
+          ? name + " cancelled the joint task"
+          : "";
+      if (!text) return null;
+      return { text, cls: state === "cancelled" ? "n-warn" : "n-done", toast: text };
+    }
+    case "peer.mirror_updated": {
+      const text = name + "'s work updated " + mirrorBranchText(d.branch) + " in " + repoText(d);
+      return { text, cls: "n-done", toast: text };
+    }
+    case "peer.mirror_failed": {
+      const err = String(d.error || "").trim();
+      const text = "Couldn't mirror " + name + "'s work into " + repoText(d) + (err ? ": " + err : "");
+      return { text, cls: "n-warn", toast: "Couldn't mirror " + name + "'s work into " + repoText(d) };
+    }
     default:
       return null;
   }
+}
+
+function clip(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s;
+}
+
+/** The last folder name of a path ("/home/a/api" → "api"). */
+export function baseName(path: string): string {
+  const parts = String(path || "").replace(/[\\/]+$/, "").split(/[\\/]/);
+  return parts[parts.length - 1] || String(path || "");
+}
+
+function repoText(d: Record<string, unknown>): string {
+  return String(d.repo_name || "").trim() || baseName(String(d.repo_path || "")) || "your repo";
+}
+
+function mirrorBranchText(branch: unknown): string {
+  return String(branch || "").trim() || "its peer/ branch";
+}
+
+/** Every peer.* event the People screen refetches on (and the bell / toasts
+ * know about). */
+export const PEER_LIVE_EVENTS = [
+  "peer.link_added",
+  "peer.link_removed",
+  "peer.state",
+  "peer.message",
+  "peer.relay_changed",
+  "peer.joint_proposed",
+  "peer.joint_state",
+  "peer.joint_contract",
+  "peer.mirror_updated",
+  "peer.mirror_failed",
+] as const;
+
+/** The peer.* events that can be news (a bell row / a toast). */
+export const PEER_NEWS_EVENTS = [
+  "peer.link_added",
+  "peer.link_removed",
+  "peer.message",
+  "peer.relay_changed",
+  "peer.joint_proposed",
+  "peer.joint_state",
+  "peer.joint_contract",
+  "peer.mirror_updated",
+  "peer.mirror_failed",
+] as const;
+
+// --------------------------------------------------------------------------
+// Joint tasks (docs/peer-link.md → Joint tasks)
+// --------------------------------------------------------------------------
+
+/** Where a link's joint task stands, from THIS side: what the card shows. */
+export type JointPhase = "none" | "proposed-by-me" | "proposed-by-peer" | "active" | "ended";
+
+export function jointPhase(joint: Pick<PeerJoint, "state" | "proposed_by"> | null | undefined): JointPhase {
+  if (!joint) return "none";
+  if (joint.state === "active") return "active";
+  if (joint.state === "proposed") return joint.proposed_by === "peer" ? "proposed-by-peer" : "proposed-by-me";
+  return "ended";
+}
+
+/** The starter contract a new joint task's form is prefilled with. */
+export const CONTRACT_TEMPLATE = [
+  "## What we're building",
+  "",
+  "",
+  "## Interfaces between the halves",
+  "",
+  "",
+  "## Who owns what",
+  "",
+  "",
+  "## Done means",
+  "",
+].join("\n");
+
+/** The open proposals, oldest first. */
+export function openProposals(joint: Pick<PeerJoint, "proposals"> | null | undefined): JointProposal[] {
+  return (joint?.proposals || []).filter((p) => p.state === "open");
+}
+
+/** "/api/peer/links/<id>/joint" plus a tail ("/accept", "/contract", …). */
+export function jointPath(linkId: string, tail = ""): string {
+  return "/api/peer/links/" + encodeURIComponent(linkId) + "/joint" + tail;
+}
+
+/** The mirror branch a new mirror suggests: peer/<their name>. */
+export function defaultMirrorBranch(peerName: string): string {
+  return "peer/" + ((peerName || "work").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "work");
+}
+
+/** An ISO time (or "") as epoch seconds, NaN when unreadable. */
+export function isoSeconds(iso: string | null | undefined): number {
+  return iso ? Date.parse(iso) / 1000 : NaN;
+}
+
+/** The mirror row's status line: what it is doing, and when it last did it. */
+export function mirrorStatusText(m: PeerMirror, peerName: string, now = Date.now() / 1000): string {
+  const where = m.branch + " in " + baseName(m.repo_path);
+  if (!m.enabled) return "Mirror is off.";
+  const t = isoSeconds(m.last_at);
+  if (!m.last_head || !Number.isFinite(t)) return "Mirroring " + peerName + "'s work into " + where + " — waiting for their first change.";
+  const ago = relTime(t, { now });
+  return "Mirroring " + peerName + "'s work into " + where + " — last updated " + ago + " (" + m.last_head.slice(0, 7) + ").";
+}
+
+/** The joint checklist's verdict as words for its chip. */
+export function jointVerdictText(v: JointVerdict | string | undefined): string {
+  switch (v) {
+    case "verified":
+      return "Both halves agree";
+    case "failed":
+      return "A step failed";
+    case "needs_you":
+      return "Needs you";
+    case "in_progress":
+      return "Checking…";
+    default:
+      return "No steps yet";
+  }
+}
+
+/** What a proposed contract changes, line by line: the lines it adds ("+")
+ * and removes ("-"), in order, blank lines left out — so a person reviews the
+ * change, not the whole contract again. A longest-common-subsequence diff;
+ * contracts are short. */
+export function contractLineDiff(before: string, after: string): Array<{ op: "+" | "-"; text: string }> {
+  const a = String(before || "").replace(/\r\n?/g, "\n").split("\n");
+  const b = String(after || "").replace(/\r\n?/g, "\n").split("\n");
+  const n = a.length;
+  const m = b.length;
+  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--) lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+  const out: Array<{ op: "+" | "-"; text: string }> = [];
+  let i = 0;
+  let j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && a[i] === b[j]) {
+      i++;
+      j++;
+    } else if (j < m && (i >= n || lcs[i][j + 1] > lcs[i + 1][j])) {
+      if (b[j].trim()) out.push({ op: "+", text: b[j] });
+      j++;
+    } else {
+      if (a[i].trim()) out.push({ op: "-", text: a[i] });
+      i++;
+    }
+  }
+  return out;
 }

@@ -265,8 +265,9 @@ describe("first-run state has exactly one authority", () => {
 
   it("each dialog's tour opens by itself from ONE hook, in the calm first hour, on a synced flag", () => {
     // The files that may open a coach tour at all: the store (the action),
-    // the "?" button, Replay (palette / Settings → General → Tours), the
-    // welcome card's "Let's go" — and useAutoTour, the ONE automatic opener.
+    // the "?" button, Replay (palette / Settings → General → Tours — and
+    // People's own replay, a Settings screen rather than a top-bar dialog),
+    // the welcome card's "Let's go" — and useAutoTour, the ONE automatic opener.
     const openers = sources
       .filter((f) => /\bopenCoachTour\(/.test(f.text))
       .map((f) => f.path)
@@ -276,6 +277,7 @@ describe("first-run state has exactly one authority", () => {
       "components/onboarding/WelcomeTour.tsx",
       "components/onboarding/replayTour.ts",
       "components/onboarding/useAutoTour.ts",
+      "components/settings/screens/peer/replayPeopleTour.ts",
       "state/store.ts",
     ]);
     const auto = sources.find((f) => f.path === "components/onboarding/useAutoTour.ts")!;

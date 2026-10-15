@@ -18,6 +18,10 @@ import CONNECTIONS_SRC from "../components/settings/screens/Connections.tsx?raw"
 import CODING_SRC from "../components/settings/screens/CodingCli.tsx?raw";
 import WORKSPACE_SRC from "../components/settings/screens/Workspace.tsx?raw";
 import SETTINGS_MODE_SRC from "../components/settings/settingsMode.tsx?raw";
+import PEOPLE_SRC from "../components/settings/screens/PeerLinks.tsx?raw";
+import PEER_CARD_SRC from "../components/settings/screens/peer/PeerLinkCard.tsx?raw";
+import JOINT_SRC from "../components/settings/screens/peer/JointTask.tsx?raw";
+import REPLAY_PEOPLE_SRC from "../components/settings/screens/peer/replayPeopleTour.ts?raw";
 
 vi.mock("../api/client", () => ({ api: vi.fn(async () => ({})) }));
 vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
@@ -38,8 +42,8 @@ const { topBarShows } = await import("../lib/calm");
 const { useUi } = await import("../state/store");
 
 describe("the tours registry", () => {
-  it("has the six tours, each under its own id", () => {
-    expect([...TOUR_IDS]).toEqual(["welcome", "new", "intake", "verify", "schedule", "settings"]);
+  it("has the seven tours, each under its own id", () => {
+    expect([...TOUR_IDS]).toEqual(["welcome", "new", "intake", "verify", "schedule", "settings", "people"]);
     expect(Object.keys(TOURS).sort()).toEqual([...TOUR_IDS].sort());
     for (const id of TOUR_IDS) expect(TOURS[id].id).toBe(id);
     expect(isTourId("intake")).toBe(true);
@@ -91,6 +95,17 @@ describe("the tours registry", () => {
       "intake-start",
       "intake-autostart",
     ]);
+  });
+
+  it("walks People from pairing to a joint task by its data-tour hooks", () => {
+    expect(TOURS.people.steps.map((s) => s.target.match(/data-tour="([^"]+)"/)?.[1])).toEqual([
+      "people-invite",
+      "people-join",
+      "people-safety",
+      "people-share",
+      "people-joint",
+    ]);
+    expect(TOURS.people.title).toBe("People");
   });
 
   it("uses the dialogs' stable ids where they exist", () => {
@@ -151,6 +166,27 @@ describe("the Settings tour's hooks live on its screens", () => {
   it("Settings follows the tour step's screen", () => {
     expect(SETTINGS_DIALOG_SRC).toContain('s.coachTour?.id === "settings" ? s.coachTour.step : -1');
     expect(SETTINGS_DIALOG_SRC).toContain("TOURS.settings.steps[tourStep]?.screen");
+  });
+});
+
+describe("the People tour's hooks live on the People screen", () => {
+  it("each hook is on the control its step rings, and the ? sits in the header", () => {
+    expect(PEOPLE_SRC).toContain('<div className="peer-action" data-tour="people-invite">');
+    expect(PEOPLE_SRC).toContain('<div className="peer-action" data-tour="people-join">');
+    // the safety number: the "they joined" box, and every link card's row
+    expect(PEOPLE_SRC).toContain('id="peer-joined" className="peer-invite" data-tour="people-safety"');
+    expect(PEER_CARD_SRC.match(/data-tour="people-safety"/g)).toHaveLength(2);
+    // the share form, the shared row, or the "needs Linux or macOS" line
+    expect(PEER_CARD_SRC.match(/data-tour="people-share"/g)).toHaveLength(3);
+    expect(JOINT_SRC).toContain('<div className="peer-joint" data-tour="people-joint"');
+    expect(PEOPLE_SRC).toMatch(/<h3 className="set-section-title">People<\/h3>\s*<TourButton tour="people" \/>/);
+  });
+
+  it("replays from Settings → General and the palette by opening People first", () => {
+    expect(GENERAL_SRC).toContain('id === "people" ? replayPeopleTour() : replayTour(id)');
+    expect(PALETTE_SRC).toContain('id === "people" ? replayPeopleTour() : replayTour(id)');
+    expect(REPLAY_PEOPLE_SRC).toContain("openSettings(PEER_SCREEN)");
+    expect(REPLAY_PEOPLE_SRC).toContain('openCoachTour("people")');
   });
 });
 
