@@ -869,9 +869,13 @@ the verb (*stops the agent and moves it to Recently closed*). The row's ✕ is
 labelled *Close session*, and on a session with uncommitted changes it asks
 first, on a strip under the row: *Close session? Its N uncommitted changes
 stay in its folder — reopen it from Recently closed.* **Close session** /
-**Cancel** (focus on Cancel). The Close toast is its own **Undo**: *Closed
-“<name>” — click to Undo (Ctrl+Shift+T)* — a click reopens exactly that
-session, and **Recently closed (n)** refreshes on the close and on the undo.
+**Cancel** (focus on Cancel). The Close toast carries an **Undo** button:
+*Closed “<name>”* **Undo** (its tooltip names the shortcut, Ctrl+Shift+T) —
+pressing it reopens exactly that session, and **Recently closed (n)** refreshes
+on the close and on the undo. Only the button reopens; a click on the rest of
+the toast does nothing, and the toast stays up while the pointer is on it or
+the button has focus. (The toast helper takes an optional
+`action: { label, onClick }` for a button like this; `lib/toast.ts`.)
 After a ✕ the next row slides up under the pointer, so the row's ✕ ignores a
 second click within 400 ms. **Delete…** removes the worktree and its branch; the
 first click turns the item into an inline strip — *Deletes the folder and

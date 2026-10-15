@@ -129,8 +129,9 @@ describe("after Start (findings 8, 10, 12, 20)", () => {
     expect(ship({ diff_stat: some }).find((i) => i.key === "pr")!.disabled).toBeFalsy();
   });
 
-  it("Close's toast is its Undo; Delete says what it costs", () => {
-    expect(closedToastText("fix-typo")).toBe("Closed “fix-typo” — click to Undo (Ctrl+Shift+T)");
+  it("Close's toast carries its Undo; Delete says what it costs", () => {
+    expect(closedToastText("fix-typo")).toBe("Closed “fix-typo”");
+    expect(closedToastText("fix-typo", "2 still running")).toBe("Closed “fix-typo” · 2 still running");
     expect(deleteConfirmText({ branch: "me/fix-typo" })).toBe(
       "Deletes the folder and branch “me/fix-typo”, including uncommitted changes. This can't be undone — use Close to keep it."
     );

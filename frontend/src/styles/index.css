@@ -61,6 +61,8 @@
 @import "../components/dialogs/ScheduleDialog.css" layer(components); /* 186 — after
    NewSessionDialog.css, whose .tpl-* card and editor rules Schedule builds on */
 @import "../components/ConnBanner.css" layer(components); /* 200 */
+@import "../lib/toast.css" layer(components); /* after ConnBanner.css, whose
+   #cs-toast.clickable the action toast sits next to */
 @import "../components/StateNotice.css" layer(components); /* 200 */
 @import "../components/PeerSessionViewer.css" layer(components); /* 200 */
 @import "../components/MemoryNotice.css" layer(components); /* 200 */

@@ -243,21 +243,25 @@ export async function closeSession(title: string) {
   forgetLocally(title);
   closeUndo.push(title);
   const kept = keptRunningText(r);
-  // The toast IS the Undo: a click on it reopens exactly this session (the
-  // same path as Ctrl+Shift+T), and it stays up long enough to be clicked.
-  toast(closedToastText(displayName(title), kept), { onClick: () => void undoLastClose(), duration: 7000 });
+  // The toast carries the Undo: its button reopens exactly this session (the
+  // same path as Ctrl+Shift+T), and it stays up long enough to be pressed.
+  toast(closedToastText(displayName(title), kept), {
+    action: { label: "Undo", onClick: () => void undoLastClose(), ariaLabel: "Undo closing “" + displayName(title) + "”" },
+    title: CLOSED_UNDO_HINT,
+    duration: 7000,
+  });
   void refreshRecentlyClosed();
   await refreshInstances();
 }
 
-/** The Close toast's words: what closed, the Undo the toast itself is, and
- * where it lives afterwards. */
+/** The Close toast's words: what closed and where it lives afterwards. Its
+ * Undo is a button beside them, and the keyboard road is the tooltip. */
 export function closedToastText(name: string, kept?: string | null): string {
-  return (
-    "Closed “" + name + "” — click to Undo (Ctrl+Shift+T)" +
-    (kept ? " · " + kept : "")
-  );
+  return "Closed “" + name + "”" + (kept ? " · " + kept : "");
 }
+
+/** The Close toast's tooltip: the Undo button, and its shortcut. */
+export const CLOSED_UNDO_HINT = "Reopen it — click to Undo (Ctrl+Shift+T)";
 
 /** Delete's question, wherever it is asked (the menu's inline strip, the
  * corner card): what goes, that uncommitted work goes with it, and that Close
