@@ -269,15 +269,20 @@ def _pid_alive(pid) -> bool:
     return True
 
 
+#: Loopback only, so never through a proxy: ``urlopen``'s default opener reads
+#: the proxy settings (the environment, and on macOS the system's), and one
+#: that doesn't exempt 127.0.0.1 would swallow every health check — the
+#: bridge would read as never started.
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def _health(port: int, token: str, timeout: float = HEALTH_TIMEOUT_S) -> Optional[dict]:
     req = urllib.request.Request(
         "http://127.0.0.1:%d/health" % port,
         headers={"Authorization": "Bearer " + token},
     )
     try:
-        with urllib.request.urlopen(
-            req, timeout=timeout
-        ) as resp:  # noqa: S310 — loopback
+        with _DIRECT.open(req, timeout=timeout) as resp:  # noqa: S310 — loopback
             data = json.loads(resp.read() or b"{}")
     except (OSError, ValueError, urllib.error.URLError):
         return None

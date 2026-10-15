@@ -247,10 +247,26 @@ def test_a_sharing_failure_never_fails_the_launch(monkeypatch, tmp_path):
 # --------------------------------------------------------------------------- #
 # The real bridge process: start, reuse, same port after a restart, stop
 # --------------------------------------------------------------------------- #
+def _bridge_log() -> str:
+    """The bridge's own log (its stdout/stderr), for a failure message: the
+    one place a start that never came up says why."""
+    path = os.path.join(mcp_share.state_dir(), "logs", "bridge.log")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()[-4000:]
+    except OSError as err:
+        return "(no bridge log: %s)" % err
+
+
 def test_bridge_lifecycle(tmp_path):
     first = mcp_share.ensure_bridge()
     try:
-        assert first and first["port"] and first["token"]
+        assert (
+            first and first["port"] and first["token"]
+        ), "the bridge never came up; bridge.json=%r\nlog:\n%s" % (
+            mcp_share._read_json(os.path.join(mcp_share.state_dir(), "bridge.json")),
+            _bridge_log(),
+        )
         assert mcp_share.ensure_bridge()["pid"] == first["pid"]  # reused, not restarted
         state = mcp_share.state_dir()
         assert oct(os.stat(state).st_mode & 0o777) == "0o700"
