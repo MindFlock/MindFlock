@@ -4300,7 +4300,7 @@ def test_a_run_refuses_a_repo_that_is_no_longer_there(client, monkeypatch, tmp_p
 
     monkeypatch.setattr(server, "_is_verify_repo_usable", client.real_repo_usable)
 
-    async def _create(payload):  # must NOT be reached
+    async def _create(payload, request=None):  # must NOT be reached
         raise AssertionError("started a session in a repo that is gone")
 
     monkeypatch.setattr(server, "create_instance", _create)
@@ -4344,7 +4344,7 @@ def test_a_rerun_reuses_the_open_session_instead_of_colliding(
         sent.append((title, payload["text"]))
         return JSONResponse({"sent": True})
 
-    async def _create(payload):  # must NOT be reached
+    async def _create(payload, request=None):  # must NOT be reached
         raise AssertionError("create_instance called for an existing session")
 
     monkeypatch.setattr(server, "instance_send", _send)
@@ -4377,7 +4377,7 @@ def test_a_verify_session_whose_workspace_is_gone_is_replaced_not_reused(
         server.ENGINE.instances.pop(title, None)
         return True
 
-    async def _create(payload):
+    async def _create(payload, request=None):
         created.append(payload["title"])
         return JSONResponse({"ok": True}, status_code=202)
 
@@ -4408,7 +4408,7 @@ def test_a_plan_deleted_mid_provisioning_does_not_leave_a_billed_agent(
 
     ended: list = []
 
-    async def _create(payload):
+    async def _create(payload, request=None):
         tp.delete("sc-1")  # the user deleted it while we provisioned
         return JSONResponse({"ok": True}, status_code=202)
 
@@ -4432,7 +4432,7 @@ def test_the_run_route_answers_with_the_plan_it_just_started(client, monkeypatch
     synthesising a state without it."""
     from backend.web import server
 
-    async def _create(payload):
+    async def _create(payload, request=None):
         return JSONResponse({"ok": True}, status_code=202)
 
     monkeypatch.setattr(server, "create_instance", _create)
@@ -4809,7 +4809,7 @@ def test_a_new_commit_gets_a_FRESH_session_not_the_last_branch_s(
 
     created: list = []
 
-    async def _create(payload):
+    async def _create(payload, request=None):
         created.append(payload["title"])
         return JSONResponse({"ok": True}, status_code=202)
 
@@ -6290,7 +6290,7 @@ def test_the_fix_route_opens_an_ordinary_session_not_the_verify_one(
 
     made: list = []
 
-    async def fake_create(payload):
+    async def fake_create(payload, request=None):
         made.append(payload)
         return JSONResponse({"ok": True}, status_code=201)
 
@@ -6315,6 +6315,114 @@ def test_the_fix_route_refuses_when_nothing_failed(client):
     r = client.post("/api/test-plans/sc-1/fix", json={})
     assert r.status_code == 409
     assert "nothing on this checklist failed" in r.json()["error"]
+    assert r.json()["detail"] == (
+        "Nothing on this checklist failed, so there is nothing to fix."
+    )
+
+
+def test_the_fix_route_reaches_the_REAL_create_instance(client, monkeypatch):
+    """Round-5 blocker B1: Fix… 500'd with ``create_instance() missing 1
+    required positional argument: 'request'`` — every other fix test stubs
+    ``create_instance`` with a one-argument fake, so none of them noticed the
+    route's call had stopped matching the real signature. This one stubs a
+    layer lower, so the route → create_instance call itself is exercised."""
+    from backend.web import server
+
+    made: list = []
+
+    async def fake_create(payload, person=""):
+        made.append((payload, person))
+        return JSONResponse({"ok": True}, status_code=202)
+
+    monkeypatch.setattr(server._session_create, "create", fake_create)
+    monkeypatch.setattr(server, "_kill_orphan_plan_tmux", lambda t: "")
+    monkeypatch.setattr(server, "_reclaim_plan_worktree", lambda repo, t: ("", ""))
+    tp.upsert(_plan("sc-1", state="due", live_at=1.0, repo_root="/repo"))
+    tp.record_result("sc-1", "s1", "fail", note="showed 3")
+
+    r = client.post("/api/test-plans/sc-1/fix", json={})
+
+    assert r.status_code == 202, r.text
+    assert r.json()["session"] == "fix-sc-1"
+    assert made and made[0][0]["title"] == "fix-sc-1"
+    assert "showed 3" in made[0][0]["prompt"]
+
+
+def test_the_run_route_reaches_the_REAL_create_instance(client, monkeypatch):
+    """The checklist Run route had the same missing ``request`` as Fix…."""
+    from backend.web import server
+
+    made: list = []
+
+    async def fake_create(payload, person=""):
+        made.append(payload)
+        return JSONResponse({"ok": True}, status_code=202)
+
+    monkeypatch.setattr(server._session_create, "create", fake_create)
+    monkeypatch.setattr(server, "_kill_orphan_plan_tmux", lambda t: "")
+    monkeypatch.setattr(server, "_free_stale_verify_worktree", lambda repo, t: "")
+    monkeypatch.setattr(server, "_clear_verify_results", lambda t: None)
+    tp.upsert(_plan("sc-1", state="due", live_at=1.0, repo_root="/repo"))
+
+    r = client.post("/api/test-plans/sc-1/run", json={})
+
+    assert r.status_code == 202, r.text
+    assert made and made[0]["hidden_by"] == "verify"
+
+
+def test_a_fix_crash_is_a_plain_sentence_not_a_traceback(client, monkeypatch):
+    """Whatever breaks underneath, the toast gets one sentence — never the API
+    path, a folder or a Python traceback."""
+    from backend.web import server
+
+    async def boom(payload, person=""):
+        raise TypeError("create_instance() missing 1 required positional argument")
+
+    monkeypatch.setattr(server._session_create, "create", boom)
+    monkeypatch.setattr(server, "_kill_orphan_plan_tmux", lambda t: "")
+    monkeypatch.setattr(server, "_reclaim_plan_worktree", lambda repo, t: ("", ""))
+    tp.upsert(_plan("sc-1", state="due", live_at=1.0, repo_root="/repo"))
+    tp.record_result("sc-1", "s1", "fail", note="showed 3")
+
+    r = client.post("/api/test-plans/sc-1/fix", json={})
+
+    assert r.status_code == 500
+    detail = r.json()["detail"]
+    assert detail == (
+        "Couldn't start a fix session — MindFlock hit an error (details in the log)."
+    )
+    assert "/api/" not in r.text and "Traceback" not in r.text
+
+
+def test_a_downstream_fix_refusal_with_a_path_gets_a_generic_detail(
+    client, monkeypatch
+):
+    from backend.web import server
+
+    async def refuse(payload, person=""):
+        return JSONResponse(
+            {"error": "repo_path is not a git repo: /home/x/repo"}, status_code=400
+        )
+
+    async def plain(payload, person=""):
+        return JSONResponse({"error": "too many sessions open"}, status_code=409)
+
+    monkeypatch.setattr(server, "_kill_orphan_plan_tmux", lambda t: "")
+    monkeypatch.setattr(server, "_reclaim_plan_worktree", lambda repo, t: ("", ""))
+    tp.upsert(_plan("sc-1", state="due", live_at=1.0, repo_root="/repo"))
+    tp.record_result("sc-1", "s1", "fail", note="showed 3")
+
+    monkeypatch.setattr(server._session_create, "create", refuse)
+    r = client.post("/api/test-plans/sc-1/fix", json={})
+    assert r.status_code == 400
+    assert "/home/x" not in r.json()["detail"]
+    assert r.json()["error"] == "repo_path is not a git repo: /home/x/repo"
+
+    monkeypatch.setattr(server._session_create, "create", plain)
+    r = client.post("/api/test-plans/sc-1/fix", json={})
+    assert r.json()["detail"] == (
+        "Couldn't start a fix session — too many sessions open."
+    )
 
 
 def test_a_finished_result_file_is_eaten_so_it_cannot_settle_the_next_run(
@@ -6429,7 +6537,7 @@ def test_the_fix_route_will_not_silently_widen_a_malformed_filter(client, monkey
     failure on the checklist" — a bigger session than the one asked for."""
     from backend.web import server
 
-    async def _create(payload):  # must NOT be reached
+    async def _create(payload, request=None):  # must NOT be reached
         raise AssertionError("started a session for a malformed request")
 
     monkeypatch.setattr(server, "create_instance", _create)
@@ -6461,7 +6569,7 @@ def test_the_fix_route_clears_the_wedge_before_it_creates_anything(client, monke
         lambda repo, title: (order.append("worktree:" + title), ("/tmp/freed", ""))[1],
     )
 
-    async def _create(payload):
+    async def _create(payload, request=None):
         order.append("create")
         return JSONResponse({"ok": True}, status_code=202)
 
@@ -6521,7 +6629,7 @@ def test_the_fix_route_refuses_rather_than_deleting_someones_work(client, monkey
     landing in the notifications bell minutes later."""
     from backend.web import server
 
-    async def _create(payload):  # must NOT be reached
+    async def _create(payload, request=None):  # must NOT be reached
         raise AssertionError("created a session that was going to collide")
 
     monkeypatch.setattr(server, "create_instance", _create)
@@ -6550,7 +6658,7 @@ def test_the_fix_route_refuses_a_repo_that_is_no_longer_there(
     monkeypatch.setattr(server, "_is_verify_repo_usable", client.real_repo_usable)
     monkeypatch.setattr(server.ENGINE, "instances", {})
 
-    async def _create(payload):  # must NOT be reached
+    async def _create(payload, request=None):  # must NOT be reached
         raise AssertionError("started a fix session in a repo that is gone")
 
     monkeypatch.setattr(server, "create_instance", _create)
@@ -7392,7 +7500,7 @@ def test_the_run_route_clears_the_orphan_before_it_creates_anything(
         lambda repo, title: (order.append("worktree"), "")[1],
     )
 
-    async def _create(payload):
+    async def _create(payload, request=None):
         order.append("create")
         return JSONResponse({"ok": True}, status_code=202)
 

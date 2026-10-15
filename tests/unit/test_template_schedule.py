@@ -35,6 +35,12 @@ def ny_tz(monkeypatch):
 def stores(monkeypatch, tmp_path):
     monkeypatch.setenv("MINDFLOCK_TEMPLATES_FILE", str(tmp_path / "tpl.json"))
     monkeypatch.setenv("MINDFLOCK_TEMPLATE_RUNS_FILE", str(tmp_path / "runs.json"))
+    # The launch preconditions read this machine (is the agent on PATH, is
+    # GitHub connected); pinned so these answer the same on a bare CI box.
+    from backend.web.addons import templates as _tpl_addon
+
+    monkeypatch.setattr(_tpl_addon, "_agent_installed", lambda program: True)
+    monkeypatch.setattr(_tpl_addon, "_github_connected", lambda: True)
     return tmp_path
 
 
@@ -277,7 +283,14 @@ def test_run_now_route(stores, fake_create):
     assert client.post("/api/templates/nope/run").status_code == 404
     client.post("/api/templates", json={"name": "loose", "prompt": "p"})
     r = client.post("/api/templates/loose/run")
-    assert r.status_code == 400 and "folder" in r.json()["error"]
+    # Round 5: a launch precondition is a 409 with a sentence and a reason,
+    # said before any session is made (and recorded as a failed run).
+    assert r.status_code == 409 and "folder" in r.json()["error"]
+    assert r.json()["reason"] == "no_folder"
+    assert (
+        r.json()["detail"]
+        == "Couldn't start loose: it has no folder — edit it and pick one"
+    )
     assert len(fake_create) == 1
 
 

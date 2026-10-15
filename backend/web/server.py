@@ -139,6 +139,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import weakref
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -8661,7 +8662,50 @@ async def assigned_tickets(fresh: bool = False) -> JSONResponse:
         )
     await _annotate_fleet_holders(data.get("tickets", []))
     await _annotate_workspaces(data.get("tickets", []), _ticket_workspace_args)
+    data["source_status"] = await asyncio.to_thread(_ticket_source_status, data)
     return JSONResponse(data)
+
+
+def _ticket_source_status(listing: dict) -> dict:
+    """``{source key: {"connect_error", "last_test_ok", "last_test_at"}}`` for
+    every CONFIGURED ticket source — so a source that cannot connect is never
+    shown as "No tickets are assigned to you" (round 5).
+
+    ``connect_error`` is ``"can't connect — <reason>"`` or ``None``. The reason
+    is the listing's own error for that source; a source the listing did not
+    reach (the cached fan-out predates it) falls back to its stored Test
+    verdict, which is read fresh here, while one the listing reached cleanly
+    is connected whatever an older Test said. ``last_test_ok`` /
+    ``last_test_at`` restate that stored verdict (``None`` = never tested)."""
+    try:
+        from backend.config import settings as _settings
+
+        sources = list(_settings.load_settings().ticketing.sources)
+    except Exception:  # noqa: BLE001 — no settings yet: nothing configured
+        return {}
+    errors: dict = {}
+    for e in listing.get("errors") or []:
+        if isinstance(e, dict) and e.get("source"):
+            errors.setdefault(str(e["source"]), str(e.get("error") or ""))
+    listed = {str(k) for k in (listing.get("sources") or [])}
+    out: dict = {}
+    for src in sources:
+        key = str(src.id or src.provider or "")
+        if not key:
+            continue
+        test = src.last_test if isinstance(src.last_test, dict) else {}
+        test_ok = bool(test["ok"]) if "ok" in test else None
+        reason = None
+        if key in errors:
+            reason = errors[key] or "the tracker refused the request"
+        elif key not in listed and test_ok is False:
+            reason = str(test.get("message") or "") or "the last test failed"
+        out[key] = {
+            "connect_error": ("can't connect — %s" % reason) if reason else None,
+            "last_test_ok": test_ok,
+            "last_test_at": str(test.get("at") or "") or None,
+        }
+    return out
 
 
 async def _annotate_fleet_holders(tickets: list) -> None:
@@ -9648,7 +9692,9 @@ async def instance_write_test_plan(title: str) -> JSONResponse:
 
 
 @app.post("/api/test-plans/{plan_id:path}/run")
-async def run_test_plan(plan_id: str, payload: Optional[dict] = None) -> JSONResponse:
+async def run_test_plan(
+    plan_id: str, request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
     """Start a real session that works through this plan's agent steps.
 
     Deliberately a full session and not a headless one-shot (the asymmetry the
@@ -9851,7 +9897,8 @@ async def run_test_plan(plan_id: str, payload: Optional[dict] = None) -> JSONRes
                 # title prefix is NOT the signal: a user may name a session
                 # `verify-anything` and it must stay listed.
                 "hidden_by": "verify",
-            }
+            },
+            request,
         )
         if resp.status_code >= 400:
             return resp
@@ -9884,9 +9931,65 @@ async def run_test_plan(plan_id: str, payload: Optional[dict] = None) -> JSONRes
     )
 
 
+def _fix_refusal(status: int, error: str, detail: str, **extra) -> JSONResponse:
+    """A Fix… refusal: the legacy ``error`` plus ``detail``, the one plain
+    sentence the dialog shows as-is (no API path, no traceback, no folder)."""
+    body = {"error": error, "detail": detail}
+    body.update(extra)
+    return JSONResponse(body, status_code=status)
+
+
+_FIX_GENERIC_DETAIL = (
+    "Couldn't start a fix session — MindFlock hit an error (details in the log)."
+)
+
+
+def _fix_detail_for(resp: JSONResponse) -> JSONResponse:
+    """Give a downstream failure (create / send) the route's ``detail``.
+
+    Those routes answer in their own ``error`` words, which may name a folder or
+    a git line; the sentence is passed through only when it carries neither."""
+    try:
+        body = json.loads(bytes(resp.body).decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError):
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    if body.get("detail"):
+        return resp
+    err = str(body.get("error") or "").strip().splitlines()
+    first = err[0].rstrip(".") if err else ""
+    if first and "/" not in first and "Traceback" not in first and len(first) < 200:
+        body["detail"] = "Couldn't start a fix session — %s." % first
+    else:
+        body["detail"] = _FIX_GENERIC_DETAIL
+    body.setdefault("error", first or "fix session failed")
+    return JSONResponse(body, status_code=resp.status_code)
+
+
 @app.post("/api/test-plans/{plan_id:path}/fix")
 async def fix_failed_test_plan_steps(
-    plan_id: str, payload: Optional[dict] = None
+    plan_id: str, request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Open a session to fix what a check found → **202** ``{session}``.
+
+    Every refusal carries ``detail``: one plain sentence the dialog shows
+    verbatim (round 5 — the toast used to print the raw API path of a 500).
+    An unexpected failure is a 500 with the same shape, never a traceback.
+    """
+    try:
+        resp = await _fix_failed_test_plan_steps(plan_id, request, payload)
+    except Exception:  # noqa: BLE001 — answered as a sentence, logged in full
+        if log.ErrorLog is not None:
+            log.ErrorLog.Printf("fix %s: %s", plan_id, traceback.format_exc())
+        return _fix_refusal(500, "fix session failed", _FIX_GENERIC_DETAIL)
+    if resp.status_code >= 400:
+        return _fix_detail_for(resp)
+    return resp
+
+
+async def _fix_failed_test_plan_steps(
+    plan_id: str, request: Request, payload: Optional[dict]
 ) -> JSONResponse:
     """Open a session to fix what a check found → **202** ``{session}``.
 
@@ -9908,11 +10011,17 @@ async def fix_failed_test_plan_steps(
     """
     plan = _test_plans.get(plan_id)
     if plan is None:
-        return JSONResponse(
-            {"error": "test plan not found: %s" % plan_id}, status_code=404
+        return _fix_refusal(
+            404,
+            "test plan not found: %s" % plan_id,
+            "That checklist no longer exists.",
         )
     if not git_available():
-        return JSONResponse({"error": "git is not available"}, status_code=409)
+        return _fix_refusal(
+            409,
+            "git is not available",
+            "Git isn't installed, so MindFlock can't open a fix session.",
+        )
     failures = _test_plans.failed_steps(plan)
     only = (payload or {}).get("steps")
     if only is not None:
@@ -9924,39 +10033,41 @@ async def fix_failed_test_plan_steps(
         # on a checklist with three red steps — which reads as the feature being
         # broken rather than the request being wrong.
         if not isinstance(only, list) or not only:
-            return JSONResponse(
-                {"error": "steps must be a non-empty list of step ids"},
-                status_code=400,
+            return _fix_refusal(
+                400,
+                "steps must be a non-empty list of step ids",
+                "Pick at least one failed step to fix.",
             )
         wanted = [str(s) for s in only]
         by_id = {s["id"] for s in plan["steps"]}
         unknown = [s for s in wanted if s not in by_id]
         if unknown:
-            return JSONResponse(
-                {
-                    "error": "no such step: %s" % ", ".join(unknown),
-                    "unknown_steps": unknown,
-                },
-                status_code=400,
+            return _fix_refusal(
+                400,
+                "no such step: %s" % ", ".join(unknown),
+                "That step isn't on this checklist any more — refresh and try again.",
+                unknown_steps=unknown,
             )
         chosen = {f["step"]["id"] for f in failures if f["step"]["id"] in wanted}
         missing = [s for s in wanted if s not in chosen]
         if missing:
-            return JSONResponse(
-                {
-                    "error": "%s didn't fail — there is nothing to fix there"
-                    % ", ".join(missing)
-                },
-                status_code=409,
+            return _fix_refusal(
+                409,
+                "%s didn't fail — there is nothing to fix there" % ", ".join(missing),
+                "That step didn't fail, so there is nothing to fix there.",
             )
         failures = [f for f in failures if f["step"]["id"] in chosen]
     if not failures:
-        return JSONResponse(
-            {"error": "nothing on this checklist failed"}, status_code=409
+        return _fix_refusal(
+            409,
+            "nothing on this checklist failed",
+            "Nothing on this checklist failed, so there is nothing to fix.",
         )
     if not plan.get("repo_root"):
-        return JSONResponse(
-            {"error": "this checklist has no repository to work in"}, status_code=409
+        return _fix_refusal(
+            409,
+            "this checklist has no repository to work in",
+            "This checklist isn't tied to a repo, so a fix session has nowhere to work.",
         )
     title = "fix-%s" % plan_id
     prompt = _test_plans.build_fix_prompt(plan, failures)
@@ -9983,13 +10094,14 @@ async def fix_failed_test_plan_steps(
         if not await asyncio.to_thread(
             _is_verify_repo_usable, plan.get("repo_root") or ""
         ):
-            return JSONResponse(
-                {
-                    "error": "the repo this checklist was written from is gone "
-                    "(%s) — a fix session needs it to work in"
-                    % (plan.get("repo_root") or "no path recorded")
-                },
-                status_code=409,
+            return _fix_refusal(
+                409,
+                "the repo this checklist was written from is gone "
+                "(%s) — a fix session needs it to work in"
+                % (plan.get("repo_root") or "no path recorded"),
+                "The repo this checklist was written from is gone — "
+                "a fix session needs it to work in.",
+                repo_root=plan.get("repo_root") or "",
             )
         # THE SAME WEDGE /run CLEARS, and this route had none of it. The title
         # is derived from the plan, so the branch and the tmux name repeat on
@@ -10019,18 +10131,20 @@ async def fix_failed_test_plan_steps(
             # would delete them. Said now, naming the directory, instead of
             # dying in `_bg_start` minutes later with a raw git line that lands
             # in the notifications bell and never reaches this checklist.
-            return JSONResponse(
-                {
-                    "error": "the last fix session's workspace is still holding "
-                    "this branch and has uncommitted work in it (%s) — reopen it "
-                    "from Recently closed to finish or discard that work, then "
-                    "press Fix again" % held,
-                    "worktree": held,
-                },
-                status_code=409,
+            return _fix_refusal(
+                409,
+                "the last fix session's workspace is still holding "
+                "this branch and has uncommitted work in it (%s) — reopen it "
+                "from Recently closed to finish or discard that work, then "
+                "press Fix again" % held,
+                "The last fix session still has unsaved work on this branch — "
+                "reopen it from Recently closed to finish or discard it, then "
+                "press Fix again.",
+                worktree=held,
             )
         resp = await create_instance(
-            {"title": title, "repo_path": plan["repo_root"], "prompt": prompt}
+            {"title": title, "repo_path": plan["repo_root"], "prompt": prompt},
+            request,
         )
     if resp.status_code >= 400:
         return resp

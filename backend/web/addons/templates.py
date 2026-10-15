@@ -27,6 +27,7 @@ far each run's session carries its work on its own.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import threading
 from typing import List, Optional
@@ -107,6 +108,160 @@ def _clean(body: dict) -> dict:
     return out
 
 
+# --------------------------------------------------------------------------- #
+# Launch preconditions (round 5): said before a session is made, never after
+# --------------------------------------------------------------------------- #
+#: Fast-track depths that need GitHub to finish what they start.
+_GITHUB_DEPTHS = ("pr", "merge")
+
+
+def agent_of(tpl: dict) -> str:
+    """The agent a template launches: its own ``program``, else the flock's
+    default (what the create path would pick)."""
+    program = str((tpl or {}).get("program") or "").strip()
+    if program:
+        return program
+    try:
+        from backend.web import server
+
+        return str(server.ENGINE.default_program() or "").strip() or "claude"
+    except Exception:  # noqa: BLE001 — no engine (CLI import): the registry default
+        from backend import providers
+
+        return providers.DEFAULT_PROVIDER
+
+
+def _agent_name(program: str) -> str:
+    """The word a person knows the agent by: the command's first token, as a
+    file name ("codex", not "/opt/bin/codex --fast")."""
+    head = (program or "").strip().split()
+    return os.path.basename(head[0]) if head else ""
+
+
+def _agent_installed(program: str) -> bool:
+    """Whether ``program`` can launch on this machine. A registered agent is
+    asked through its own binary resolution (settings/env override, the
+    provider's ``binary_path``); anything else is a command, looked up as one.
+    Never raises; an unknowable answer is "installed" (never block on a guess)."""
+    from backend.web.core import settings_hooks
+
+    head = (program or "").strip().split()
+    if not head:
+        return True
+    try:
+        from backend import providers
+
+        if providers.get(head[0]) is not None:
+            return settings_hooks.provider_installed(head[0])
+        return bool(settings_hooks.installed_path(head[0]))
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _github_connected() -> bool:
+    """Whether a GitHub credential resolves (token, env, ``gh``). Never raises."""
+    try:
+        from backend.web.core import github_auth
+
+        _source, tok = github_auth.resolve_full_chain()
+        return bool(tok)
+    except (
+        Exception
+    ):  # noqa: BLE001 — unknowable reads as connected: never block on a guess
+        return True
+
+
+def launch_refusal(tpl: dict) -> Optional[dict]:
+    """Why ``tpl`` can't start a session right now, as the run route's 409 body
+    ``{"error", "detail", "reason"}`` — ``None`` when it can. ``reason`` is
+    ``"no_folder"`` or ``"agent_missing"``."""
+    name = str((tpl or {}).get("name") or "").strip() or "this template"
+    problem = _schedule.run_problem(tpl)
+    if problem:
+        return {
+            "error": problem,
+            "detail": "Couldn't start %s: it has no folder — edit it and pick one"
+            % name,
+            "reason": "no_folder",
+        }
+    program = agent_of(tpl)
+    if not _agent_installed(program):
+        agent = _agent_name(program)
+        return {
+            "error": "%s isn't installed" % agent,
+            "detail": "Couldn't start %s: %s isn't installed" % (name, agent),
+            "reason": "agent_missing",
+            "agent": agent,
+        }
+    return None
+
+
+def save_refusal(body: dict) -> Optional[dict]:
+    """Why saving ``body`` would leave a template that can't do its job, as a
+    409 body ``{"error", "detail", "reason"}`` naming the fix — ``None`` when it
+    can be saved. A SCHEDULED template whose agent isn't installed would fail
+    every night with nobody watching (``agent_missing``); a Fast-track of
+    "Open a PR" / "Merge" can't finish without GitHub (``github_required``)."""
+    if _schedule.schedule_or_none(body.get("schedule")):
+        program = agent_of(body)
+        if not _agent_installed(program):
+            agent = _agent_name(program)
+            return {
+                "error": "%s isn't installed" % agent,
+                "detail": "%s isn't installed — install it or pick another agent "
+                "before scheduling this template" % agent,
+                "reason": "agent_missing",
+                "agent": agent,
+            }
+    depth = str(body.get("autopilot") or "").strip().lower()
+    if depth in _GITHUB_DEPTHS and not _github_connected():
+        return {
+            "error": "Fast-track to a PR needs GitHub connected",
+            "detail": "Fast-track “%s” needs GitHub — connect GitHub, or pick "
+            "Commit or Push"
+            % ("Merge when green" if depth == "merge" else "Open a PR"),
+            "reason": "github_required",
+        }
+    return None
+
+
+def record_refused_run(tpl: dict, refusal: dict, trigger: str = "manual") -> None:
+    """Put a run that never started into the template's history as a FAILED
+    run (``status: "failed"``, ``reason``), so the card says "Last run failed"
+    and the top-bar badge counts it. Never raises."""
+    import time as _time
+
+    now = _time.time()
+    err = str(refusal.get("error") or "")
+    try:
+        _schedule.record_run(
+            _schedule._key(tpl.get("name")),
+            {
+                "at": now,
+                "trigger": trigger,
+                "status": "failed",
+                "reason": str(refusal.get("reason") or ""),
+                "error": err,
+            },
+            last_error=err,
+            last_error_at=now,
+            last_reason=str(refusal.get("reason") or ""),
+        )
+    except Exception:  # noqa: BLE001 — the refusal still answers
+        pass
+
+
+def _history_status(entry: dict) -> str:
+    """One history entry's outcome: ``failed`` / ``skipped`` / ``started``."""
+    if entry.get("status"):
+        return str(entry["status"])
+    if entry.get("error"):
+        return "failed"
+    if entry.get("skipped"):
+        return "skipped"
+    return "started"
+
+
 def list_templates() -> List[dict]:
     with _LOCK:
         return _load()
@@ -160,7 +315,24 @@ class TemplatesAddon(Addon):
             # ``runs``: next/last run per template (by lowercased name), from
             # this device's run record; ``runs_here`` / ``runs_on``: whether
             # schedules fire here or on which other device.
-            return JSONResponse({"templates": items, **_schedule.status_for(items)})
+            status = _schedule.status_for(items)
+            # Every history entry says how it ended (``status``), and the row
+            # says whether its newest run failed (``last_status``): the card's
+            # "Last run failed: …" and the top-bar badge read these.
+            for row in (status.get("runs") or {}).values():
+                hist = [dict(h) for h in row.get("history") or []]
+                for h in hist:
+                    h["status"] = _history_status(h)
+                row["history"] = hist
+                row["last_status"] = hist[0]["status"] if hist else ""
+                if hist and hist[0]["status"] == "failed":
+                    row["last_reason"] = str(hist[0].get("reason") or "launch_failed")
+            # ``agent_installed`` per template: a response field only, never
+            # stored (the stored shape is what settings sync compares).
+            shown = [
+                {**t, "agent_installed": _agent_installed(agent_of(t))} for t in items
+            ]
+            return JSONResponse({"templates": shown, **status})
 
         # What a cron field means, as it is typed: its words and next runs
         # (or why it can't be saved). Read-only.
@@ -171,9 +343,39 @@ class TemplatesAddon(Addon):
         # Run now: a fresh session from the template, its prompt already
         # sent — the same create path as the New dialog (no may_configure:
         # starting a session isn't configuring anything).
+        #
+        # A template that can't launch (no folder, its agent not installed) is
+        # refused BEFORE a session is made — 409 ``{error, detail, reason}`` —
+        # and the attempt goes into its history as a failed run. Before this,
+        # Run now answered "Started …" while the session died on its own a
+        # second later and the card still read as a success.
         @router.post("/{name}/run")
         async def run_template(name: str) -> JSONResponse:
+            key = _schedule._key(name)
+            tpl = next(
+                (t for t in list_templates() if _schedule._key(t.get("name")) == key),
+                None,
+            )
+            if tpl is not None:
+                refusal = await asyncio.to_thread(launch_refusal, tpl)
+                if refusal is not None:
+                    await asyncio.to_thread(record_refused_run, tpl, refusal)
+                    return JSONResponse(refusal, status_code=409)
             status, body = await _schedule.run_template(name)
+            if status >= 400 and isinstance(body, dict) and not body.get("detail"):
+                # The create's own refusal, said as one sentence for the toast.
+                shown = str((tpl or {}).get("name") or name)
+                err = str(body.get("error") or "it couldn't start").strip()
+                body = {
+                    **body,
+                    "detail": (
+                        "There's no template named %s." % shown
+                        if status == 404
+                        else "Couldn't start %s: %s" % (shown, err)
+                    ),
+                    "reason": body.get("reason")
+                    or ("not_found" if status == 404 else "launch_failed"),
+                }
             return JSONResponse(body, status_code=status)
 
         # A template names a program and a prompt that start sessions, and
@@ -228,6 +430,9 @@ class TemplatesAddon(Addon):
                     return JSONResponse(
                         {"error": "can't schedule it: " + problem}, status_code=400
                     )
+            refusal = save_refusal(body)
+            if refusal is not None:
+                return JSONResponse(refusal, status_code=409)
             saved = save_template(body)
             return JSONResponse({"template": saved, "templates": list_templates()})
 

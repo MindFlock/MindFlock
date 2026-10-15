@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 from backend.web.core import git_merge as _git_merge
 from backend.web.core import hidden_sessions as _hidden_sessions
 from backend.web.core import person_sessions as _person_sessions
+from backend.web.core import plain_repo as _plain_repo
 from backend.web.core import shared_branch as _shared_branch
 
 __all__ = [
@@ -445,9 +446,26 @@ async def create(
         # The pair that genuinely cannot coexist is in_place and provisioning
         # (a separate worktree/clone), which the line above already enforces.
         init_repo = bool(payload.get("init_repo", False))
+        # A folder that doesn't exist is made only when the request says so
+        # (the New dialog's explicit "Create this folder"): a typo must not
+        # become a new repo, a running agent and the next Recent folder.
+        # (Passed only when set, so the two-argument call stays the default.)
+        create_kw = (
+            {"create_folder": True} if payload.get("create_folder") is True else {}
+        )
         try:
             plain_path, git_enabled = await asyncio.to_thread(
-                srv._prepare_plain_repo, repo_path, init_repo
+                srv._prepare_plain_repo, repo_path, init_repo, **create_kw
+            )
+        except _plain_repo.NoFolderError as err:
+            return JSONResponse(
+                {
+                    "error": str(err),
+                    "detail": str(err),
+                    "reason": "no_folder",
+                    "path": err.path,
+                },
+                status_code=400,
             )
         except ValueError as err:
             return JSONResponse({"error": str(err)}, status_code=400)
@@ -736,23 +754,28 @@ async def create(
     # Thread — the queue path above clears inst.Prompt.
     srv._thread.note_seed(title, srv._created_epoch(inst), prompt)
     srv._mark_onboarded()  # the checklist's "Pick a repo" step: done on the first-ever session
-    # Remember the folder this session chose so the NEXT New Session dialog opens
-    # on it and the repo suggestions rank it first — the second session in a repo
-    # should not be another walk down the folder tree. "." is the server's own
-    # cwd (a provisioned session with no chosen repo), which the user never
-    # picked, so it isn't worth remembering.
-    if plain_path and plain_path != "." and not peer_share:
-        try:
-            from backend.config import settings as _settings
 
-            _settings.update_settings(general={"last_repo_path": plain_path})
-        except Exception:  # noqa: BLE001 — a convenience hint never fails a create
-            pass
+    def _remember_folder() -> None:
+        # Remember the folder this session chose so the NEXT New Session dialog
+        # opens on it and the repo suggestions rank it first — the second
+        # session in a repo should not be another walk down the folder tree.
+        # "." is the server's own cwd (a provisioned session with no chosen
+        # repo), which the user never picked, so it isn't worth remembering.
+        # Only once the session has actually STARTED: a create that dies in
+        # the background must not become the next Recent folder.
+        if plain_path and plain_path != "." and not peer_share:
+            try:
+                from backend.config import settings as _settings
+
+                _settings.update_settings(general={"last_repo_path": plain_path})
+            except Exception:  # noqa: BLE001 — a convenience hint never fails a create
+                pass
 
     async def _bg_start() -> None:
         try:
             await asyncio.to_thread(inst.Start, True)
             srv.ENGINE.save()
+            await asyncio.to_thread(_remember_folder)
             if setup_cfg is not None and setup_cfg.has_setup:
                 try:
                     srv._wt_setup.start_setup(

@@ -24,6 +24,8 @@ onboarded/last-repo writes never touch the user's own ``settings.json``.
 
 from __future__ import annotations
 
+import asyncio
+
 import json
 import os
 import subprocess
@@ -751,9 +753,12 @@ class TestLastRepoPathSetting:
             server, "_prepare_plain_repo", lambda repo, init: (chosen, True)
         )
         monkeypatch.setattr(server, "_instance_json", lambda inst, **kw: {})
-        monkeypatch.setattr(server, "_register_task", lambda coro: coro.close())
+        started: list = []
+        monkeypatch.setattr(server, "_register_task", started.append)
         monkeypatch.setattr(server._ports, "env_for", lambda title: {})
         monkeypatch.setattr(server.ENGINE, "instances", {})
+        # The background start saves the engine: never the live state.json.
+        monkeypatch.setattr(server.ENGINE, "save", lambda *a, **k: None)
 
         r = TestClient(server.app).post(
             "/api/instances",
@@ -761,7 +766,61 @@ class TestLastRepoPathSetting:
         )
 
         assert r.status_code == 202
+        # Round 5: remembered once the session has actually STARTED, not when
+        # the create was merely accepted.
+        assert S.load_settings().general.last_repo_path != chosen
+        assert len(started) == 1
+        asyncio.run(started[0])
         assert S.load_settings().general.last_repo_path == chosen
+        S.invalidate()
+
+    def test_a_session_that_never_starts_is_not_remembered(
+        self, tmp_path, home, monkeypatch
+    ):
+        """A create that dies in the background must not become the next
+        Recent folder (round 5, r5-new finding 1)."""
+        monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(tmp_path / "settings.json"))
+        S.invalidate()
+        chosen = str(home / "never-started")
+
+        class _FailingInst:
+            def __init__(self, opts):
+                self.Title = opts.title
+                self.Branch = ""
+                self.Prompt = getattr(opts, "prompt", "") or ""
+                self.ExtraEnv = {}
+
+            def SetStatus(self, status):  # noqa: N802
+                return None
+
+            def Started(self):  # noqa: N802
+                return False
+
+            def Start(self, *a, **k):  # noqa: N802
+                raise RuntimeError("agent could not start")
+
+            def GetWorktreePath(self):  # noqa: N802
+                return ""
+
+        monkeypatch.setattr(server.session, "NewInstance", _FailingInst)
+        monkeypatch.setattr(
+            server, "_prepare_plain_repo", lambda repo, init: (chosen, True)
+        )
+        monkeypatch.setattr(server, "_instance_json", lambda inst, **kw: {})
+        started: list = []
+        monkeypatch.setattr(server, "_register_task", started.append)
+        monkeypatch.setattr(server._ports, "env_for", lambda title: {})
+        monkeypatch.setattr(server.ENGINE, "instances", {})
+        monkeypatch.setattr(server.ENGINE, "save", lambda *a, **k: None)
+        monkeypatch.setattr(server, "_note_create_failure", lambda *a, **k: None)
+
+        r = TestClient(server.app).post(
+            "/api/instances",
+            json={"title": "never", "program": "bash", "repo_path": chosen},
+        )
+        assert r.status_code == 202
+        asyncio.run(started[0])
+        assert S.load_settings().general.last_repo_path != chosen
         S.invalidate()
 
 

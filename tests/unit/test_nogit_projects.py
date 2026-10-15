@@ -34,14 +34,22 @@ def test_non_git_folder_is_allowed_without_git(tmp_path):
 def test_missing_folder_is_created_as_plain_workspace(tmp_path):
     folder = tmp_path / "brand-new"
     assert not folder.exists()
-    path, git_enabled = server._prepare_plain_repo(str(folder), False)
+    # Created only when the request asks for it (round 5: never implicitly).
+    with pytest.raises(ValueError, match="No folder at"):
+        server._prepare_plain_repo(str(folder), False)
+    assert not folder.exists()
+    path, git_enabled = server._prepare_plain_repo(
+        str(folder), False, create_folder=True
+    )
     assert folder.is_dir()  # created for the user
     assert git_enabled is False  # plain folder, no git required
 
 
 def test_init_repo_makes_it_git_enabled(tmp_path):
     folder = tmp_path / "with-git"
-    path, git_enabled = server._prepare_plain_repo(str(folder), True)
+    path, git_enabled = server._prepare_plain_repo(
+        str(folder), True, create_folder=True
+    )
     assert git_enabled is True
     # It's a real repo with at least one commit (worktree off HEAD works).
     assert (folder / ".git").exists()

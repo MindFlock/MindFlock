@@ -227,12 +227,12 @@ def test_create_can_git_init_the_folder_it_then_works_directly_in(
     _stub_create(monkeypatch, captured=captured)
     asked = []
 
-    def _spy(repo, init):
+    def _spy(repo, init, **kw):
         # A spy over the REAL preparation, not a stand-in for it: what was asked
         # for (``init``) is the flag this test exists for, and what it does to
         # the folder is the proof it was honoured.
         asked.append((repo, init))
-        return plain_repo._prepare_plain_repo(repo, init)
+        return plain_repo._prepare_plain_repo(repo, init, **kw)
 
     monkeypatch.setattr(server, "_prepare_plain_repo", _spy)
     folder = tmp_path / "brand-new-project"
@@ -247,6 +247,9 @@ def test_create_can_git_init_the_folder_it_then_works_directly_in(
                 "repo_path": str(folder),
                 "in_place": True,
                 "init_repo": True,
+                # The folder doesn't exist yet: since round 5 it is only made
+                # when the request says so.
+                "create_folder": True,
             },
         )
         assert r.status_code == 202
