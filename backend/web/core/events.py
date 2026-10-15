@@ -289,6 +289,14 @@ EVENT_NAMES = (
     # through the old one still exist — they need a fresh invite to
     # reconnect (data: {"host", "peers": [names]}; never the ingress token).
     "peer.relay_changed",
+    # The standing mirror fetched their newest checkpoint into your repo
+    # (backend.peer.mirror; data: {"link_id", "peer_name", "repo_path",
+    # "branch" — "peer/…", "sha" — the branch's new tip, "head" — their
+    # share's HEAD}).
+    "peer.mirror_updated",
+    # A mirror update failed (data: {"link_id", "peer_name", "repo_path",
+    # "branch", "error" — what to do}). Once per distinct error.
+    "peer.mirror_failed",
     # A newer MindFlock release is out and this device, or another of "Your
     # devices", runs an older one (core.update_watch; ``session`` is ""). Once
     # per release and set of devices behind it (data: {"latest", "tag",

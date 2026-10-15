@@ -778,7 +778,8 @@ control) can't change this group: `POST /api/settings` answers 403 for it.
 
 State lives under `~/.mindflock/peer/` (`MINDFLOCK_PEER_HOME` overrides):
 `identity/` (this instance's Ed25519 key), `links.json` (0600),
-`shares/<id>/` (one shared folder each) and `relay/` (the relay's ingress
+`shares/<id>/` (one shared folder each), `mirror/<link_id>.json` (a link's
+standing mirror, see [The mirror](peer-link.md#the-mirror--contract-mirrorpy)) and `relay/` (the relay's ingress
 token and cloudflared's private home/config). `cloudflared` is found on
 `PATH`, or at the absolute path in the `MINDFLOCK_CLOUDFLARED` environment
 variable (deliberately not a setting); MindFlock never downloads it.

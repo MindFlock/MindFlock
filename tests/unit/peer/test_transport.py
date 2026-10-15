@@ -1020,3 +1020,98 @@ async def test_progress_stages_for_a_direct_join(make_node):
     stages: list[str] = []
     await b.t.pair(a.code(), progress=stages.append)
     assert stages == ["connecting", "verifying"]
+
+
+# --------------------------------------------------------------------------- #
+# The standing mirror over two real transports (backend.peer.mirror)
+# --------------------------------------------------------------------------- #
+async def test_a_checkpoint_lands_in_the_other_sides_mirror_in_one_poll(
+    make_node, tmp_path, monkeypatch
+):
+    """A shares a (shallow) clone of its repo; B mirrors it into B's own,
+    unrelated repo. A checkpoint on A's side is in B's repo as
+    ``peer/<name>`` after ONE ``status`` poll: head moved → mirror_pull
+    over the link → fetched as a branch, B's work tree untouched."""
+    import subprocess
+    from types import SimpleNamespace
+
+    from backend.peer import mirror
+    from backend.peer import service as svc_mod
+    from backend.peer import share as share_mod
+
+    # Until transport._OP_PERM carries the op itself (needs the transport's
+    # owner): the transport looks up every inbound op's permission there.
+    if "mirror_pull" not in transport._OP_PERM:
+        monkeypatch.setitem(transport._OP_PERM, "mirror_pull", "read_file")
+
+    def git(cwd, *args):
+        return subprocess.run(
+            ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    def repo(name, files):
+        r = tmp_path / name
+        r.mkdir()
+        git(r, "init", "-q", "-b", "main")
+        for fname, text in files.items():
+            (r / fname).write_text(text)
+        git(r, "add", "-A")
+        git(r, "commit", "-qm", "init " + name)
+        return r
+
+    a_repo = repo("a-service", {"app.py": "items = []\n"})
+    (a_repo / "app.py").write_text("items = [1]\n")
+    git(a_repo, "commit", "-qam", "second")  # so A's share is truly shallow
+    b_repo = repo("b-client", {"client.py": "print('hi')\n"})
+
+    a, b = make_node("alice"), make_node("bob")
+    lk = await paired(a, b)
+    lid = lk.link_id
+
+    def service(node, name):
+        svc = svc_mod.PeerService(
+            identity_factory=lambda: node.ident,
+            store_factory=lambda: node.store,
+            invites_factory=lambda: node.invites,
+            transport_factory=lambda *x: node.t,
+            settings_getter=lambda: {"enabled": True, "display_name": name},
+        )
+        svc._server_mod = SimpleNamespace(ENGINE=SimpleNamespace(instances={}))
+        svc._transport, svc._transport_started = node.t, True
+        node.t.handler = svc
+        return svc
+
+    svc_a, svc_b = service(a, "alice"), service(b, "bob")
+    seen = []
+    svc_b._emit = lambda event, data: seen.append((event, data))
+
+    sh = share_mod.create_share(lid, str(a_repo))
+    a.store.update(lid, share_id=sh.share_id)
+
+    b_head = git(b_repo, "rev-parse", "HEAD")
+    await svc_b.enable_mirror(lid, str(b_repo))  # also fetches what's there
+    branch = "peer/" + b.store.get(lid).peer_name.lower()
+    assert await eventually(lambda: seen, timeout=10)
+    assert seen[-1][0] == "peer.mirror_updated"
+    assert git(b_repo, "show", branch + ":app.py") == "items = [1]"
+
+    with open(os.path.join(sh.work, "items.json"), "w") as f:
+        f.write('[{"id": 1}]\n')
+    head = share_mod.checkpoint(sh, "GET /items returns a list")
+    await svc_b._refresh_their_status(lid)  # one status poll
+    assert await eventually(lambda: len(seen) == 2, timeout=10)
+    event, data = seen[-1]
+    assert event == "peer.mirror_updated" and data["head"] == head
+    assert data["branch"] == branch and data["repo_path"] == str(b_repo.resolve())
+    assert git(b_repo, "show", branch + ":items.json") == '[{"id": 1}]'
+    assert (
+        git(b_repo, "log", "-1", "--format=%s", branch) == "GET /items returns a list"
+    )
+    # B's own work: untouched
+    assert git(b_repo, "rev-parse", "HEAD") == b_head
+    assert git(b_repo, "status", "--porcelain") == ""
+    assert svc_b.link_view(b.store.get(lid))["mirror"]["last_head"] == head
+    for svc in (svc_a, svc_b):
+        if svc._mirror_task is not None:
+            svc._mirror_task.cancel()
+    mirror.drop(lid)

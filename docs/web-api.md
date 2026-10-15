@@ -2484,7 +2484,8 @@ websockets alike — via one ASGI middleware (`web/core/auth.py`).
   of the batch is saved, and the answer names them in `refused`), `POST /api/notify/ntfy`,
   `POST /api/notify/rules/{id}`, the repo-scope `/api/red-zones` writes
   (add, delete, companions, plan-first), `POST /api/cursor/autoadopt`, the
-  `/api/peer` writes (invites, join, unlink, address, perms, share, export)
+  `/api/peer` writes (invites, join, unlink, address, perms, share, export,
+  mirror)
   and `POST /api/settings/sync{,/now,/resume,/pin}`, plus `POST
   /api/settings/auth-token/rotate`, `POST /api/providers/{name}/login-close`,
   the stored-secret Test routes and a session's repo-scope red-zone writes —
