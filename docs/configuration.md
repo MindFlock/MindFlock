@@ -512,6 +512,20 @@ Notes on individual keys:
   it is plain `git push` over the remote the repo already has.
 - `github.base_branch` — also used by provisioned mode as the base branch
   worktrees fork from (default `main`).
+- `repository.repo_branches` (settings store; Settings → Workspace →
+  **Per-repo branches**) — per-repo overrides of the flock-wide
+  `repository.base_branch` / `repository.pr_base_branch`, keyed by `owner/name`:
+  `{"acme/beacon": {"base_branch": "main", "pr_base_branch": "main"}}`. Where a
+  session forks from: the repo's `base_branch` → `MINDFLOCK_BASE_BRANCH` →
+  `repository.base_branch` → `github.base_branch` → `main` (ticket and
+  provisioned sessions; a local-repo provisioned session otherwise uses the
+  checkout's current branch). Where **Open PR** / fast-track points: the
+  repo's `pr_base_branch` → the repo's `base_branch` → `repository.pr_base_branch`
+  → the session's own fork base. A block's blank `pr_base_branch` means its own
+  `base_branch`, never the flat PR base — a main-only repo must not inherit a
+  `staging` target. Extra repos of a multi-repo ticket get the same answer in
+  their prompt instructions. None of these ever asks GitHub for the repo's
+  default branch; with nothing configured the fork base is literally `main`.
 - `github.repo_settings` / `github.issue_repo_settings` — the per-repo override
   tables, spelled as nested tables whose key is the quoted repo slug
   (`[github.repo_settings."owner/name"]`). Each block accepts `agent`,

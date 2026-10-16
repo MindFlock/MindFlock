@@ -610,6 +610,22 @@ class RepositorySettings:
     # PRs into e.g. "staging" instead of whatever branch it happened to be cut
     # from. Blank = use the session's own base (the prior behaviour).
     pr_base_branch: str = ""
+    #: Per-repo overrides of the two branches above, keyed by ``owner/name``:
+    #: ``{"owner/name": {"base_branch": str, "pr_base_branch": str}}``. The flat
+    #: pair is the default for every repo; a repo whose trunk is not that
+    #: branch (most repos fork from ``staging``, a few only have ``main``) says
+    #: so here instead of the whole flock being switched to it.
+    #:
+    #: Inside a block, a blank ``pr_base_branch`` means "this repo's own
+    #: ``base_branch``", NOT the flat ``pr_base_branch``: a repo was given a
+    #: block because its branches differ from the flock's, and inheriting the
+    #: flock's PR target would point a main-only repo's PRs at a ``staging`` it
+    #: does not have. Resolution lives in :func:`repo_branches_for`.
+    #:
+    #: Keyed by slug, compared case-insensitively, like ``verify_repo_settings``
+    #: and ``github.repo_settings``: a slug is the repo in every clone and
+    #: worktree, where a path is a different key in each.
+    repo_branches: Dict[str, dict] = field(default_factory=dict)
     # The branch that means "this is in front of users". Verify watches it: once
     # a pushed session's sha is an ancestor of ``origin/<live_branch>``, that
     # session's manual test plan becomes due, because the change is now
@@ -759,6 +775,8 @@ class RepositorySettings:
             d["base_branch"] = self.base_branch
         if self.pr_base_branch:
             d["pr_base_branch"] = self.pr_base_branch
+        if self.repo_branches:
+            d["repo_branches"] = {k: dict(v) for k, v in self.repo_branches.items()}
         # Blank stays unwritten here too: an emitted "" would pin the empty
         # string and cut the live_branch -> pr_base_branch -> base_branch ->
         # "main" chain off at its first link.
@@ -809,6 +827,7 @@ class RepositorySettings:
             workspace_dir=str(d.get("workspace_dir", "") or ""),
             base_branch=str(d.get("base_branch", "") or ""),
             pr_base_branch=str(d.get("pr_base_branch", "") or ""),
+            repo_branches=_repo_branches(d.get("repo_branches")),
             live_branch=str(d.get("live_branch", "") or ""),
             git_transport=_git_transport(d.get("git_transport")),
             fasttrack_depth=str(d.get("fasttrack_depth", "") or ""),
@@ -2292,6 +2311,58 @@ def _verify_repo_settings(v: Any) -> Dict[str, dict]:
         if clean:
             out[slug] = clean
     return out
+
+
+#: The keys a ``repository.repo_branches`` block may carry.
+REPO_BRANCH_KEYS = ("base_branch", "pr_base_branch")
+
+
+def _repo_branches(v: Any) -> Dict[str, dict]:
+    """Normalize a ``{"owner/name": {"base_branch": …, "pr_base_branch": …}}`` map.
+
+    Tolerant like :func:`_repo_overrides`: a non-map, a blank slug, an unknown
+    key and a blank value are dropped, and a block left with nothing in it is
+    dropped whole — so a repo with no override costs nothing in settings.json.
+    """
+    if not isinstance(v, dict):
+        return {}
+    out: Dict[str, dict] = {}
+    for repo, block in v.items():
+        slug = str(repo or "").strip()
+        if not slug or not isinstance(block, dict):
+            continue
+        clean = {
+            k: str(block[k]).strip()
+            for k in REPO_BRANCH_KEYS
+            if k in block and str(block[k] or "").strip()
+        }
+        if clean:
+            out[slug] = clean
+    return out
+
+
+def repo_branches_for(slug: str, settings: Optional["Settings"] = None) -> tuple:
+    """``(base_branch, pr_base_branch)`` configured for repo ``slug``.
+
+    ``("", "")`` when the repo has no ``repository.repo_branches`` block (or no
+    slug is known): the caller then applies the flock-wide chain unchanged. A
+    block with only ``base_branch`` answers it for both — see the field's
+    comment for why the flat ``pr_base_branch`` is not inherited there.
+    """
+    want = str(slug or "").strip().lower()
+    if not want:
+        return ("", "")
+    try:
+        st = settings if settings is not None else load_settings()
+        table = st.repository.repo_branches or {}
+    except Exception:  # noqa: BLE001 — a settings fault must never block a launch
+        return ("", "")
+    for key, block in table.items():
+        if str(key).strip().lower() == want and isinstance(block, dict):
+            base = str(block.get("base_branch") or "").strip()
+            pr = str(block.get("pr_base_branch") or "").strip() or base
+            return (base, pr)
+    return ("", "")
 
 
 # --------------------------------------------------------------------------- #

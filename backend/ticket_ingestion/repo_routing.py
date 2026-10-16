@@ -590,6 +590,29 @@ def _worktree_dir(path: str, slug: str) -> str:
     return os.path.join(os.path.dirname(base), safe)
 
 
+def _extra_branches(url: str, path: str) -> tuple[str, str]:
+    """``(fork base, PR base)`` for an extra repo of a multi-repo ticket.
+
+    The same answer its own ticket session would get: the repo's
+    ``repository.repo_branches`` block, else the flock-wide base / PR base.
+    ``("", "")`` when nothing is configured — the prompt then keeps
+    ``origin/HEAD`` and leaves the PR target to the repo's default. Never
+    raises: it only shapes prompt text.
+    """
+    try:
+        from backend.config import settings as _s
+        from backend.session.provisioned import repo_slug_for
+
+        st = _s.load_settings()
+        base, pr = _s.repo_branches_for(repo_slug_for(url or path), st)
+        if base:
+            return base, pr
+        base = (st.repository.base_branch or st.github.base_branch or "").strip()
+        return base, (st.repository.pr_base_branch or "").strip() or base
+    except Exception:  # noqa: BLE001
+        return "", ""
+
+
 def other_repos_section(story, branch: str) -> str:
     """The prompt section for a routed ticket, or ``""``.
 
@@ -637,10 +660,25 @@ def other_repos_section(story, branch: str) -> str:
         url = str(e.get("url") or "").strip()
         lines.append(f"### {name}")
         lines.append("")
+        base, pr_base = _extra_branches(url, path)
+        if pr_base:
+            open_pr = (
+                f"3. Open a pull request for it in that repository into "
+                f"`{pr_base}` (`--base {shlex.quote(pr_base)}`; the repo's "
+                "default branch only if it has no such branch)."
+            )
+        else:
+            open_pr = "3. Open a pull request for it in that repository."
         if path:
             wt = _worktree_dir(path, slug)
             # Quoted for the shell: a macOS path may well hold a space.
             qp, qwt, qb = shlex.quote(path), shlex.quote(wt), shlex.quote(branch)
+            if base:
+                start = shlex.quote("origin/" + base)
+                fallback = f"use `origin/HEAD` if `origin/{base}` does not exist"
+            else:
+                start = "origin/HEAD"
+                fallback = "use the repo's default branch if `origin/HEAD` is not set"
             lines += [
                 f"Local checkout: `{path}`"
                 + (f" (clone of `{url}`)" if url != path else ""),
@@ -648,21 +686,20 @@ def other_repos_section(story, branch: str) -> str:
                 "1. Work in a separate worktree so that checkout (which may be in "
                 "use) is left alone:",
                 f"   `git -C {qp} fetch origin && git -C {qp} worktree add "
-                f"{qwt} -b {qb} origin/HEAD` (use the repo's default branch "
-                "if `origin/HEAD` is not set; if the branch already exists, "
-                "check it out instead of creating it).",
+                f"{qwt} -b {qb} {start}` ({fallback}; if the branch already "
+                "exists, check it out instead of creating it).",
                 f"2. Make the change in `{wt}`, commit it there, and push it: "
                 f"`git -C {qwt} push -u origin {qb}`.",
-                "3. Open a pull request for it in that repository.",
+                open_pr,
             ]
         else:
             lines += [
                 f"Repository: `{url}` (no local checkout yet)",
                 "",
                 "1. Clone it next to this workspace and create the branch "
-                f"`{branch}` there.",
+                f"`{branch}` there" + (f", from `{base}`." if base else "."),
                 "2. Make the change, commit it, and push the branch.",
-                "3. Open a pull request for it in that repository.",
+                open_pr,
             ]
         lines.append("")
     lines += [

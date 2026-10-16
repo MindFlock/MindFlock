@@ -829,7 +829,7 @@ def test_branches_lists_remote_heads(registered, monkeypatch, tmp_path):
     monkeypatch.setattr(server, "_run_capped", _fake_run)
     monkeypatch.setattr(proc, "run_capped", _fake_run)
     monkeypatch.setattr(server, "_current_branch", lambda w: "feat/x")
-    monkeypatch.setattr(server, "_configured_pr_base", lambda: "main")
+    monkeypatch.setattr(server, "_configured_pr_base", lambda *_a: "main")
     r = client.get("/api/instances/gt-8/branches")
     assert r.status_code == 200
     body = r.json()
@@ -903,7 +903,7 @@ def _prime(registered, monkeypatch, tmp_path, title, *, branch="feat/x", base="m
     wt.mkdir()
     registered(title, wt=str(wt))
     monkeypatch.setattr(server, "git_available", lambda: True)
-    monkeypatch.setattr(server, "_configured_pr_base", lambda: base)
+    monkeypatch.setattr(server, "_configured_pr_base", lambda *_a: base)
     monkeypatch.setattr(server, "_current_branch", lambda w: branch)
     monkeypatch.setattr(server, "_forget_probes", lambda t: None)
     return str(wt)

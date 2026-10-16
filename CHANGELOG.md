@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Per-repo base branches.** Settings → Workspace → **Per-repo branches**
+  gives a repo its own base branch (where its sessions fork from) and PR base
+  branch (where its PRs point), overriding the Workspace defaults — for a repo
+  that only has `main` while the rest fork from `staging`. A row's blank PR
+  base means that repo's own base branch. Ticket sessions, Open PR,
+  fast-track and the multi-repo ticket instructions all honour it.
+
 ### Changed
 
 - **New is easier to read.** The line under the box says *Runs in [folder ▾]

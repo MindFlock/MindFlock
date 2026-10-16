@@ -5522,6 +5522,28 @@ p.set-hint {
   min-width: 0;
 }
 
+/* Settings → Workspace → Per-repo branches: repo · base · PR base · Remove. */
+.ws-repo-branches {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 6px 8px;
+  align-items: center;
+}
+
+.ws-repo-branches input {
+  min-width: 0;
+}
+
+.ws-repo-branches input[aria-invalid] {
+  border-color: var(--red);
+}
+
+@media (max-width: 560px) {
+  .ws-repo-branches {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
 .ws-path {
   flex: 1;
   min-width: 0;

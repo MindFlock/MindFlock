@@ -105,7 +105,7 @@ def repo(tmp_path, monkeypatch):
     _git(r, "checkout", "-qb", "feature")
     monkeypatch.setattr(server, "_session_fork_point", lambda inst, wt: base)
     monkeypatch.setattr(server, "_session_base_branch", lambda inst: "main")
-    monkeypatch.setattr(server, "_configured_pr_base", lambda: "")
+    monkeypatch.setattr(server, "_configured_pr_base", lambda *_a: "")
     return r
 
 

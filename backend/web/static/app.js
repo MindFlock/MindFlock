@@ -88121,6 +88121,165 @@ function AgentMcpRows() {
 	})] });
 }
 //#endregion
+//#region src/lib/repoBranches.ts
+function normalizeRepo(raw) {
+	let v = raw.trim().replace(/\/+$/, "").replace(/\.git$/, "");
+	const scp = /^[^\s/@]+@[^\s/:]+:(.+)$/.exec(v);
+	if (scp) v = scp[1];
+	else v = v.replace(/^[a-z+]+:\/\/[^/]+\//i, "");
+	const parts = v.split("/").filter(Boolean);
+	if (parts.length < 2) return "";
+	const slug = parts.slice(-2).join("/");
+	return /^[^\s/]+\/[^\s/]+$/.test(slug) ? slug : "";
+}
+function rowsFrom(stored) {
+	if (!stored || typeof stored !== "object" || Array.isArray(stored)) return [];
+	return Object.entries(stored).map(([repo, block]) => {
+		const b = block && typeof block === "object" ? block : {};
+		return {
+			repo,
+			base: String(b.base_branch || ""),
+			pr: String(b.pr_base_branch || "")
+		};
+	});
+}
+function mapFrom(rows) {
+	const out = {};
+	for (const r of rows) {
+		const slug = normalizeRepo(r.repo);
+		const block = {};
+		if (r.base.trim()) block.base_branch = r.base.trim();
+		if (r.pr.trim()) block.pr_base_branch = r.pr.trim();
+		if (slug && Object.keys(block).length) out[slug] = block;
+	}
+	return out;
+}
+//#endregion
+//#region src/components/settings/screens/RepoBranches.tsx
+function RepoBranches() {
+	const s = useSettings();
+	const stored = s.get("repository", "repo_branches");
+	const storedKey = JSON.stringify(stored || {});
+	const defaultBase = String(s.get("repository", "base_branch") || "") || "main";
+	const [rows, setRows] = (0, import_react.useState)(() => rowsFrom(stored));
+	(0, import_react.useEffect)(() => {
+		setRows((prev) => JSON.stringify(mapFrom(prev)) === storedKey ? prev : rowsFrom(stored));
+	}, [storedKey]);
+	const save = (next) => {
+		const map = mapFrom(next);
+		if (JSON.stringify(map) === storedKey) return;
+		s.saveGroups({ repository: { repo_branches: map } }, "Saved per-repo branches");
+	};
+	const edit = (i, patch) => setRows((prev) => prev.map((r, j) => j === i ? {
+		...r,
+		...patch
+	} : r));
+	const remove = (i) => {
+		const next = rows.filter((_, j) => j !== i);
+		setRows(next);
+		save(next);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row",
+		id: "workspace-repo-branches",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Per-repo branches"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint",
+				children: [
+					"For a repo whose branches differ from the defaults above, e.g. one that only has",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "main" }),
+					". Blank PR base = that repo's base branch."
+				]
+			}),
+			rows.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ws-repo-branches",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Repository"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Base branch"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "PR base branch"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {}),
+					rows.map((r, i) => {
+						const bad = r.repo.trim() !== "" && !normalizeRepo(r.repo);
+						return [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								"data-field": "repo",
+								"aria-label": "Repository",
+								"aria-invalid": bad || void 0,
+								title: bad ? "owner/name, or the repo's GitHub URL" : void 0,
+								placeholder: "owner/name",
+								autoComplete: "off",
+								spellCheck: false,
+								value: r.repo,
+								onChange: (e) => edit(i, { repo: e.target.value }),
+								onBlur: () => {
+									const slug = normalizeRepo(r.repo);
+									const next = rows.map((x, j) => j === i && slug ? {
+										...x,
+										repo: slug
+									} : x);
+									setRows(next);
+									save(next);
+								}
+							}, "repo" + i),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								"data-field": "base_branch",
+								"aria-label": "Base branch",
+								placeholder: defaultBase,
+								autoComplete: "off",
+								spellCheck: false,
+								value: r.base,
+								onChange: (e) => edit(i, { base: e.target.value }),
+								onBlur: () => save(rows)
+							}, "base" + i),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								"data-field": "pr_base_branch",
+								"aria-label": "PR base branch",
+								placeholder: r.base.trim() || "same as base",
+								autoComplete: "off",
+								spellCheck: false,
+								value: r.pr,
+								onChange: (e) => edit(i, { pr: e.target.value }),
+								onBlur: () => save(rows)
+							}, "pr" + i),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn",
+								"aria-label": "Remove " + (r.repo || "row"),
+								onClick: () => remove(i),
+								children: "Remove"
+							}, "rm" + i)
+						];
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				onClick: () => setRows((prev) => [...prev, {
+					repo: "",
+					base: "",
+					pr: ""
+				}]),
+				children: "+ Add repo"
+			}) })
+		]
+	});
+}
+//#endregion
 //#region src/components/settings/screens/Workspace.tsx
 function pathsUrl(typed) {
 	return "/api/settings/workspace-paths" + (typed === void 0 ? "" : "?dir=" + encodeURIComponent(typed));
@@ -88327,6 +88486,7 @@ function Workspace({ gotoScreen }) {
 				})
 			]
 		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoBranches, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(AdvancedFold, {
 			id: "workspace-advanced",
 			children: [

@@ -289,7 +289,12 @@ def load_provision_settings(
         _logger.warning("provision: invalid [workspace] config (%s); ignoring", err)
         setup_commands, caches = None, []
 
-    base_branch = _s.resolve_str(
+    # The repo's own override (``repository.repo_branches``) beats every
+    # flock-wide layer: one global base applied to every repo a ticket source
+    # covers is wrong the moment one of them has no such branch.
+    base_branch = _s.repo_branches_for(repo_slug_for(str(repo_url)))[
+        0
+    ] or _s.resolve_str(
         env="MINDFLOCK_BASE_BRANCH",
         settings_getter=lambda s: s.repository.base_branch or s.github.base_branch,
         toml_value=github.get("base_branch"),
@@ -392,7 +397,9 @@ def local_settings_for(repo_path: str | Path) -> Optional[ProvisionSettings]:
     """Provision settings for an arbitrary LOCAL git repo (universal flow).
 
     ``repo_url`` is the absolute repo path (``git clone`` / ``git worktree``
-    both accept local paths), ``base_branch`` is the repo's current branch, and
+    both accept local paths), ``base_branch`` is the repo's own
+    ``repository.repo_branches`` base when one is configured for its origin,
+    else the repo's current branch, and
     setup commands are auto-detected per workspace
     (:func:`backend.workspace_setup.auto_setup_commands`). The globally
     configured cache seeds are NOT applied — they are built against the
@@ -408,10 +415,17 @@ def local_settings_for(repo_path: str | Path) -> Optional[ProvisionSettings]:
     repo = Path(repo_path).expanduser()
     if not (repo / ".git").exists():
         return None
-    branch = _git_current_branch(repo) or "main"
+    from backend.config import settings as _s
+
+    origin = _git_origin_url(repo)
+    branch = (
+        _s.repo_branches_for(repo_slug_for(origin))[0]
+        or _git_current_branch(repo)
+        or "main"
+    )
     return ProvisionSettings(
         repo_url=str(repo.resolve()),
-        origin_url=_git_origin_url(repo),
+        origin_url=origin,
         workspace_dir=default_workspace_dir(),
         base_branch=branch,
         open_cursor=False,
@@ -419,6 +433,30 @@ def local_settings_for(repo_path: str | Path) -> Optional[ProvisionSettings]:
         setup_commands=None,  # auto-detect per workspace
         caches=[],
     )
+
+
+def repo_slug_for(url_or_path: str) -> str:
+    """The ``owner/name`` a remote URL or a local checkout names, or ``""``.
+
+    A local path is followed to its own ``origin`` (up to two hops): provisioned clones
+    are cloned from the user's checkout, so the path is often all a caller
+    has. Never raises — this feeds a settings lookup, and no slug just means
+    the flock-wide branches apply.
+    """
+    u = (url_or_path or "").strip()
+    if not u:
+        return ""
+    try:
+        # Two hops: a session worktree -> the user's checkout -> the forge
+        # (an older provisioned clone's origin is still the local path).
+        for _ in range(2):
+            if not (remote_url.is_local_path(u) or os.path.isdir(u)):
+                break
+            u = _git_origin_url(os.path.expanduser(u.replace("file://", "", 1)))
+        ref = remote_url.parse_remote(u)
+    except Exception:  # noqa: BLE001
+        return ""
+    return ref.slug if ref is not None else ""
 
 
 def _same_repo_url(a: str, b: str) -> bool:
