@@ -181,6 +181,27 @@
   outline-offset: 1px;
 }
 
+/* A "needs you" chip is a door to where you act (the bell's answer row, the
+   Terminal, a setup re-run, the PR): a button that still reads as the chip. */
+.inst .stagechip.chip-needs {
+  cursor: pointer;
+  border: 0;
+  font: inherit;
+  font-size: 10px;
+  line-height: inherit;
+}
+
+.inst .stagechip.chip-needs:hover {
+  filter: brightness(1.12);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.inst .stagechip.chip-needs:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* Sleeping (backend core/sleep.py) is calm: the Wake remedy appears only
    on hover / keyboard focus, never as a standing call to action. */
 .inst .stagechip.chip-wake .chip-act {
@@ -473,8 +494,9 @@
   margin-left: 82px;
 }
 
-/* A row carrying an answer strip is focusable (Tab, then 1–9). A mouse click
-   focuses it too; only keyboard focus draws the ring. */
+/* Every row is focusable (Tab to the list, ↑/↓ between rows; a row carrying
+   an answer strip, then 1–9). A mouse click focuses it too; only keyboard
+   focus draws the ring. */
 .inst:focus {
   outline: none;
 }

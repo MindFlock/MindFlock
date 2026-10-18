@@ -32,17 +32,20 @@ import type { TestPlan, TestPlansResponse } from "../api/types";
 import type { SessionMenuModel } from "./sessionMenu";
 import { planForSession, planVerdict } from "../components/dialogs/verify";
 
+/** The ship stage's chip words. Sentence case, like the session state's
+ * ("Working", "Question") they sit in the same chip slot as, and a verdict
+ * mark goes AFTER the word ("Pre-commit ✗", "Checks ✓") everywhere. */
 const STAGE_META: Record<string, { label: string }> = {
-  provisioning: { label: "provisioning" },
-  agent: { label: "agent" },
-  precommit: { label: "pre-commit" },
-  interrupt: { label: "pre-commit ✗" },
-  committed: { label: "committed" },
-  pushed: { label: "pushed" },
+  provisioning: { label: "Provisioning" },
+  agent: { label: "Agent" },
+  precommit: { label: "Pre-commit" },
+  interrupt: { label: "Pre-commit ✗" },
+  committed: { label: "Committed" },
+  pushed: { label: "Pushed" },
   pr: { label: "PR open" },
   // F4: the server never emits "merged" (a merged PR moves the stage off
   // "pr"); kept as a harmless defensive default.
-  merged: { label: "complete ✓" },
+  merged: { label: "Complete ✓" },
 };
 
 export function stageMeta(stage: string) {
@@ -220,11 +223,11 @@ export function checkChip(
   if (!c || !c.state) return null;
   const cmd = String((c as { command?: string }).command || "");
   if (c.state === "running")
-    return { label: "checks…", cls: "s-provisioning", title: "Checks running: " + cmd };
+    return { label: "Checks…", cls: "s-provisioning", title: "Checks running: " + cmd };
   if (c.state === "failed") {
     const rc = (c as { rc?: number | null }).rc;
     return {
-      label: "✗ checks",
+      label: "Checks ✗",
       cls: "s-interrupt",
       title:
         "Checks failed (exit " + (rc == null ? "?" : rc) + ") — push is gated until they pass (or push anyway)",
@@ -233,11 +236,11 @@ export function checkChip(
   if (c.state === "ok") {
     return (c as { stale?: boolean }).stale
       ? {
-          label: "✓ stale",
+          label: "Checks stale",
           cls: "s-idle",
           title: "Checks passed for an older commit — a fresh run starts after the next commit",
         }
-      : { label: "✓ checks", cls: "s-committed", title: "Checks passed for this commit" };
+      : { label: "Checks ✓", cls: "s-committed", title: "Checks passed for this commit" };
   }
   return null;
 }

@@ -385,8 +385,9 @@ describe("Sidebar: run groups never renumber the rail", () => {
     // d is in no family, but it is in a group: its prompt is answerable in place
     // (the strip's dialog loads client-side; the focus stop is the SSR tell).
     expect(by("d")).toContain('tabindex="0"');
-    // A session in no group and with no lane keeps today's row.
-    const loner = renderRail([inst("loner", { activity: "clarify" }), inst("other")], []);
-    expect(loner[0].html).not.toContain("tabindex");
+    // A session in no group and with no lane, its pane on screen, keeps
+    // today's row: no strip, no Tab stop of its own.
+    const loner = renderRail([inst("other"), inst("loner", { activity: "clarify" })], []);
+    expect(loner[1].html).toContain('tabindex="-1"');
   });
 });

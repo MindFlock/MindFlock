@@ -18,7 +18,14 @@ import type { BackgroundJob, Instance } from "../../api/types";
 import { queryClient, useConfig } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { chipState, checkChip, effectiveActivity } from "../../lib/stage";
-import { agentBlocked, agentBlockedLine, agentBlockedState, deriveSessionState } from "../../lib/sessionState";
+import {
+  agentBlocked,
+  agentBlockedLine,
+  agentBlockedState,
+  deriveSessionState,
+  needsYouAction,
+  type NeedsYouAct,
+} from "../../lib/sessionState";
 import { AgentBlockedChip } from "../setup/AgentBlocked";
 import { useSetup } from "../setup/useSetup";
 import { reviveSession } from "../../lib/revive";
@@ -32,6 +39,7 @@ import {
   cleanupMissing,
   folderInUseText,
   ideSession,
+  rerunSetup,
   selectSession,
 } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
@@ -67,9 +75,8 @@ import { openSettings } from "../../lib/openSettings";
 import { VerdictChip } from "../dialogs/VerdictChip";
 import { JointVerdictChip } from "../settings/screens/peer/JointCheck";
 
-/** How long a click on the selected row waits for a second click before it
- * turns into an inline rename. Under the browser's ~500ms dblclick ceiling,
- * but long enough that an unhurried double-click still opens the IDE. */
+/** After an inline rename ends, a click this soon is the same gesture (the
+ * click that blurred the input) and must not also act on the row. */
 const DBLCLICK_MS = 300;
 
 function displayTitle(inst: Instance): string {
@@ -147,6 +154,47 @@ export function closeGuarded(now: number): boolean {
   return false;
 }
 
+/** What a key pressed on a rail row itself (not a control inside it) does:
+ * ↑/↓ (and Home/End) move between rows, Enter selects, F2 renames. Null for
+ * any other key, or one with a modifier held. */
+export function railRowKey(e: {
+  key: string;
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  altKey?: boolean;
+  shiftKey?: boolean;
+}): "up" | "down" | "first" | "last" | "select" | "rename" | null {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return null;
+  switch (e.key) {
+    case "ArrowUp":
+      return "up";
+    case "ArrowDown":
+      return "down";
+    case "Home":
+      return "first";
+    case "End":
+      return "last";
+    case "Enter":
+      return "select";
+    case "F2":
+      return "rename";
+    default:
+      return null;
+  }
+}
+
+/** Move the keyboard to the row above / below (or the first / last) in the
+ * rail as drawn — rows of every device group and family alike. */
+function moveRowFocus(from: HTMLElement, dir: "up" | "down" | "first" | "last") {
+  const list = from.closest("#instance-list") || from.parentElement;
+  if (!list) return;
+  const rows = Array.from(list.querySelectorAll<HTMLElement>("li.inst[tabindex]"));
+  const at = rows.indexOf(from);
+  const next =
+    dir === "first" ? rows[0] : dir === "last" ? rows[rows.length - 1] : rows[at + (dir === "up" ? -1 : 1)];
+  next?.focus();
+}
+
 export const SidebarRow = memo(function SidebarRow({
   inst,
   idx,
@@ -185,7 +233,6 @@ export const SidebarRow = memo(function SidebarRow({
   // Escape must abandon the edit; unmounting the focused input can still run
   // the blur handler, so the cancel is flagged rather than inferred.
   const cancelled = useRef(false);
-  const renameTimer = useRef<number | null>(null);
   // When a click ends an edit, that same click also reaches the row — without
   // this the dismiss would immediately re-arm the rename.
   const editEndedAt = useRef(0);
@@ -226,8 +273,8 @@ export const SidebarRow = memo(function SidebarRow({
   const chip =
     runTask?.state === "integrated"
       ? runTask.sameFolder
-        ? { ...chip0, label: "committed", cls: "s-committed", title: "MindFlock committed its paths on its lead's branch" }
-        : { ...chip0, label: "merged", cls: "s-committed", title: "Merged back into its lead's branch" }
+        ? { ...chip0, label: "Committed", cls: "s-committed", title: "MindFlock committed its paths on its lead's branch" }
+        : { ...chip0, label: "Merged", cls: "s-committed", title: "Merged back into its lead's branch" }
       : chip0;
   const check = checkChip(inst);
   const num = numbered && idx < 9 ? String(idx + 1) : "";
@@ -315,12 +362,27 @@ export const SidebarRow = memo(function SidebarRow({
   const openBell = () => {
     document.dispatchEvent(new CustomEvent("mf-open-bell", { detail: { title } }));
   };
-  // The answer strip: a family member stuck on a dialog gets that dialog's own
-  // buttons under its row (the orchestrator's spawn_session permission
-  // prompts land here too — from its very first one, via its playbook). Keys
-  // 1–9 press them while the ROW has focus.
+  // A "needs you" chip's click (lib/sessionState needsYouAction).
+  const needsAct = runTask?.state === "integrated" ? null : needsYouAction(ss, inst.pr_url || inst.merge_state?.url);
+  const runNeedsAct = (what: NeedsYouAct) => {
+    if (what === "bell") return openBell();
+    if (what === "setup") return void rerunSetup(title);
+    if (what === "pr") {
+      const url = inst.pr_url || inst.merge_state?.url;
+      if (url) window.open(url, "_blank");
+      return;
+    }
+    selectSession(title, { noKeyboard: true });
+    useUi.getState().setLastTab(title, "shell");
+  };
+  // The answer strip: a session stuck on a dialog gets that dialog's own
+  // buttons under its row — a family member (the orchestrator's
+  // spawn_session permission prompts land here too, from its very first one,
+  // via its playbook), one MindFlock is carrying, and any whose pane is not on
+  // screen (nothing else there shows the question). Keys 1–9 press them while
+  // the ROW has focus.
   const answering =
-    (inFamily(inst, isWorker, kids.length) || shipLane) && activity === "clarify" && !missing && !paused;
+    (inFamily(inst, isWorker, kids.length) || shipLane || !onScreen) && activity === "clarify" && !missing && !paused;
   // What the session was asked to do, under its name — its task headline, a
   // short verb phrase of the newest meaningful prompt (TaskLine) — when
   // nothing more pressing (a ship line, a family line) has the slot.
@@ -370,20 +432,12 @@ export const SidebarRow = memo(function SidebarRow({
   // The ⋯ menu's verbs come from the session action table — the same rows
   // the palette and the Ctrl+K chords read — grouped by lib/sessionMenu.
   const ctx = actionCtx(title, { inst, caps, ideName, hidden });
-  const clearRenameTimer = () => {
-    if (renameTimer.current !== null) {
-      clearTimeout(renameTimer.current);
-      renameTimer.current = null;
-    }
-  };
-  useEffect(() => clearRenameTimer, []);
 
   /** Hang the menu under the ⋮, right edges aligned (the pane header's ⋯
    * popover does the same). */
   const openAtKebab = (keyboard: boolean) => {
     const b = kebab.current?.getBoundingClientRect();
     if (!b) return;
-    clearRenameTimer();
     setMenuAt({ x: b.right, y: b.bottom + 4, flipY: b.top - 4, align: "end", keyboard });
   };
   const closeMenu = (refocus = false) => {
@@ -398,23 +452,30 @@ export const SidebarRow = memo(function SidebarRow({
     if (isEditingTarget(t) || t.closest?.("a[href]")) return;
     e.preventDefault();
     e.stopPropagation();
-    clearRenameTimer();
     // The Menu key / Shift+F10 also arrive as a contextmenu event, with no
     // pointer behind them: those hang the menu from the ⋮.
     if (e.button !== 2 && e.clientX === 0 && e.clientY === 0) return openAtKebab(true);
     setMenuAt({ x: e.clientX, y: e.clientY, flipY: e.clientY, align: "start", keyboard: false });
   };
 
-  /** Click on the row that's ALREADY selected → edit the name in place. The
-   * second click of a double-click also lands here, so the edit is held for
-   * the double-click window and cancelled by onDoubleClick (open in IDE). */
-  const armRename = () => {
-    clearRenameTimer();
-    renameTimer.current = window.setTimeout(() => {
-      renameTimer.current = null;
-      cancelled.current = false;
-      setEditing(true);
-    }, DBLCLICK_MS);
+  /** Edit the name in place: a double-click on the name, or F2 on the row.
+   * (A click on the row that is already selected used to arm this after a
+   * pause — a re-select read as "rename", so going back to a session's
+   * terminal from its row started an edit instead.) */
+  const startRename = () => {
+    if (pending || picking) return;
+    cancelled.current = false;
+    setEditing(true);
+  };
+
+  /** Select this session — again, if it already is: its terminal takes the
+   * keyboard, and a narrow window's drawer closes the way it does when the
+   * pick changes (App closes it on a selection CHANGE only). */
+  const reselect = () => {
+    if (pending) return;
+    selectSession(title);
+    const ui = useUi.getState();
+    if (ui.narrow && !ui.sidebarHidden) ui.toggleSidebar();
   };
 
   const commitRename = (raw: string) => {
@@ -455,10 +516,31 @@ export const SidebarRow = memo(function SidebarRow({
       <li
         className={rowCls}
         data-title={title}
-        // Focusable only while it carries an answer strip, so Tab reaches a
-        // blocked worker and 1–9 answer it — never a bare digit typed elsewhere.
-        tabIndex={answering ? 0 : undefined}
+        // Every row is focusable: one Tab stop for the list (the selected row,
+        // else the first) plus any row carrying an answer strip, so Tab reaches
+        // a blocked worker and 1–9 answer it. ↑/↓ move between rows, Enter
+        // selects, F2 renames (railRowKey).
+        tabIndex={pending ? undefined : answering || focused === title || (idx === 0 && !focused) ? 0 : -1}
+        aria-current={focused === title ? "true" : undefined}
         onKeyDown={(e) => {
+          if (e.target === e.currentTarget && !editing) {
+            const k = railRowKey(e);
+            if (k === "select") {
+              e.preventDefault();
+              reselect();
+              return;
+            }
+            if (k === "rename") {
+              e.preventDefault();
+              startRename();
+              return;
+            }
+            if (k) {
+              e.preventDefault();
+              moveRowFocus(e.currentTarget, k);
+              return;
+            }
+          }
           // Shift+F10 / the Menu key on anything focused in the row (its ⋮, a
           // chip, the answer strip): the row's menu, under the ⋮.
           if (
@@ -497,18 +579,14 @@ export const SidebarRow = memo(function SidebarRow({
             // Picking rows for the bulk bar: Ctrl/⌘ toggles one, Shift takes the
             // range from the last pick, and in select mode a plain click toggles.
             if (!pending && (e.ctrlKey || e.metaKey || e.shiftKey || picking)) {
-              clearRenameTimer();
               useUi.getState().pickRow(title, e.shiftKey);
               return;
             }
-            if (focused !== title) {
-              selectSession(title);
-              return;
-            }
-            if (!pending) armRename();
+            // The selected row too: a click on it is "back to this session"
+            // (its terminal, a narrow window's drawer closed), never a rename.
+            reselect();
           }}
           onDoubleClick={() => {
-            clearRenameTimer();
             if (picking) return;
             if (!missing && !pending) ideSession(title, true);
           }}
@@ -562,6 +640,13 @@ export const SidebarRow = memo(function SidebarRow({
             ) : (
               <span
                 className="title"
+                // The name's own double-click renames; the rest of the row's
+                // opens the IDE.
+                onDoubleClick={(e) => {
+                  if (picking || pending) return;
+                  e.stopPropagation();
+                  startRename();
+                }}
                 title={[
                   shown,
                   // A ticket/PR label's slug, until the session is renamed: then
@@ -569,7 +654,7 @@ export const SidebarRow = memo(function SidebarRow({
                   label.kind && !alias ? `session: ${displayTitle(inst)}` : "",
                   inst.branch ? `branch: ${inst.branch}` : "",
                   wline ? wline.title : lineage ? lineage.title : "",
-                  focused === title && !picking ? "Click again to rename" : "",
+                  !picking && !pending ? "Double-click to rename (F2)" : "",
                   picking ? "" : "Ctrl+click or Shift+click to select several",
                 ]
                   .filter(Boolean)
@@ -757,6 +842,20 @@ export const SidebarRow = memo(function SidebarRow({
               <span className="chip-act" aria-hidden="true">
                 Wake
               </span>
+            </button>
+          ) : needsAct && !pending && !paused && !missing ? (
+            // "Needs you" is a door to where you act (lib/sessionState
+            // needsYouAction): the bell's answer row, the Terminal, a setup
+            // re-run, the PR.
+            <button
+              type="button"
+              className={"stagechip chip-needs " + chip.cls}
+              title={chip.title + "\n" + needsAct.aria.replace(/^[^—]*— /, "Click to ")}
+              aria-label={needsAct.aria}
+              onClick={(e) => act(() => runNeedsAct(needsAct.act), e)}
+              onDoubleClick={(e) => e.stopPropagation()}
+            >
+              {chip.label}
             </button>
           ) : (
             <span className={"stagechip " + chip.cls} title={chip.title}>{chip.label}</span>
