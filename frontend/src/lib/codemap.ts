@@ -345,25 +345,40 @@ export function nameList(names: string[], max = 2): string {
  * no hook, what went missing), falling back to our explanation when `detail`
  * is empty or merely repeats the label (older servers sent the label there,
  * which left the explanation unreachable). No guard yet (before the first
- * poll): enforced zones read as guarded, none as "No zones".
+ * poll): enforced zones read as guarded, none as "No rules".
  *
  * Green mode (any enforced green zone, `green` = their names) takes over the
  * label — "✓ Only here: providers" is what the user most needs to see — and
  * keeps the state in the class and the tooltip, so a guard that is off or
- * detect-only still reads amber/red and says why. */
+ * detect-only still reads amber/red and says why.
+ *
+ * Breaches outrank both: while any exist the pill reads red "N breaches"
+ * (pushing is blocked). A server "none" while rules exist is a verdict from
+ * before the rule was added (the guard loop hasn't ticked yet): it reads
+ * "Arming…", never a flash of "No rules" right after adding one. */
 export function guardPill(
   guard: { state?: string; detail?: string } | null | undefined,
   zonesEnforced: number,
   provider: string,
-  green: string[] = []
+  green: string[] = [],
+  breaches = 0
 ): GuardPill {
-  const state = guard?.state || (zonesEnforced ? "guarded" : "none");
+  if (breaches > 0)
+    return {
+      cls: "g-breach",
+      label: `${breaches} breach${breaches === 1 ? "" : "es"}`,
+      title:
+        (breaches === 1 ? "A changed file breaks a rule" : `${breaches} changed files break a rule`) +
+        " — pushing, PRs and merges are blocked until they're reverted or the rule is removed.",
+    };
+  const stale = guard?.state === "none" && zonesEnforced > 0;
+  const state = stale ? "arming" : guard?.state || (zonesEnforced ? "guarded" : "none");
   let cls: string, label: string, explain: string;
   switch (state) {
     case "guarded":
       cls = "g-guarded";
       label = "Guarded";
-      explain = "Edits to red zones are blocked before they happen (hook guard armed).";
+      explain = "Edits the rules forbid are blocked before they happen (hook guard armed).";
       break;
     case "arming":
       cls = "g-arming";
@@ -374,7 +389,7 @@ export function guardPill(
       cls = "g-detect";
       label = `Detect-only${provider ? " (" + provider + ")" : ""}`;
       explain =
-        "This agent CLI has no hook guard MindFlock manages: red-zone edits are detected, flagged and block pushes, but not prevented.";
+        "This agent CLI has no hook guard MindFlock manages: edits inside ⛔ Keep out are detected, flagged and block pushes, but not prevented.";
       break;
     case "off":
       cls = "g-off";
@@ -383,10 +398,10 @@ export function guardPill(
       break;
     default:
       cls = "g-none";
-      label = "No zones";
+      label = "No rules";
       explain = "Nothing is off-limits in this repo yet.";
   }
-  const d = String(guard?.detail || "").trim();
+  const d = stale ? "" : String(guard?.detail || "").trim();
   if (green.length) {
     const g = nameList(green);
     const how =
@@ -861,4 +876,70 @@ export function effectiveTests(snap: { files?: Array<[string, number, number?]> 
   }
   for (const i of importedByCode) flagged.delete(i);
   return flagged;
+}
+
+// --- Guidance: the next step, and rules that would block your own work -----
+
+/** What this session's row in the bird index offers next, by state — the one
+ * thing to do now. Breaches first (pushing is blocked), then a question the
+ * agent is waiting on, then a plan waiting for Go, then changes to review;
+ * with nothing yet, ask for a plan (when the CLI can declare one). */
+export type NextStep =
+  | { kind: "breaches"; n: number }
+  | { kind: "question" }
+  | { kind: "review-plan"; files: number }
+  | { kind: "review-changes"; changed: number; risky: number }
+  | { kind: "ask-plan" }
+  | { kind: "none" };
+
+export function nextStep(o: {
+  breaches: number;
+  clarify: boolean;
+  /** files in a plan that is waiting for Go (0 = none waiting) */
+  planWaiting: number;
+  /** this session's changed files */
+  changed: number;
+  /** files that import what changed (⚠ Could break) */
+  risky: number;
+  planSupported: boolean;
+}): NextStep {
+  if (o.breaches > 0) return { kind: "breaches", n: o.breaches };
+  if (o.clarify) return { kind: "question" };
+  if (o.planWaiting > 0) return { kind: "review-plan", files: o.planWaiting };
+  if (o.changed > 0) return { kind: "review-changes", changed: o.changed, risky: o.risky };
+  if (o.planSupported) return { kind: "ask-plan" };
+  return { kind: "none" };
+}
+
+/** The next step as one sentence (the tour's last card). */
+export function nextStepText(s: NextStep): string {
+  switch (s.kind) {
+    case "breaches":
+      return `${s.n} breach${s.n === 1 ? "" : "es"} — review ${s.n === 1 ? "it" : "them"} first: pushing is blocked until they're reverted or the rule is removed.`;
+    case "question":
+      return "The agent is asking you something — answer it in the terminal.";
+    case "review-plan":
+      return `A plan of ${s.files} file${s.files === 1 ? "" : "s"} is waiting — review it, then Go.`;
+    case "review-changes":
+      return `${s.changed} changed — ${s.risky ? "start with ⚠ Could break, then open the diff" : "open the diff to review them"}.`;
+    case "ask-plan":
+      return "Nothing changed yet — ask for a plan to see every file it means to touch, before it touches them.";
+    default:
+      return "Nothing changed yet.";
+  }
+}
+
+/** Which of `changed` (this session's changed files) lie at or under `dir` —
+ * what a ⛔ Keep out on `dir` would turn into breaches at once. */
+export function changedUnder(changed: Iterable<string>, dir: string, ci = false): string[] {
+  const d = ci ? dir.toLowerCase() : dir;
+  const out: string[] = [];
+  for (const p of changed) if (underPath(ci ? p.toLowerCase() : p, d)) out.push(p);
+  return out;
+}
+
+/** The inline confirm before a keep-out over files this session already
+ * changed: they'd be breaches at once, and pushing blocked. */
+export function keepOutWarn(k: number): string {
+  return `${k} changed file${k === 1 ? " is" : "s are"} inside — pushing will be blocked until ${k === 1 ? "it's" : "they're"} reverted or you remove the rule.`;
 }

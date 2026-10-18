@@ -1,0 +1,88 @@
+/* The Map's guidance (CodeMapTab.tsx, BirdIndex.tsx): the next-step line,
+   the breach pill, the data notes, the stale-map note and the section flash
+   when "Open map" lands on a Plan & lists section. Layout and the tree's
+   own styles live in CodeMapTab.css. */
+
+/* This session's next step, under what it is doing now. */
+.ct-next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 4px;
+}
+
+.ct-next-k {
+  color: var(--muted);
+}
+
+.ct-next .warn {
+  color: var(--gold);
+}
+
+.ct-next .ct-link:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Breaches outrank every guard state: red, whatever the guard says. */
+.cm-guard.g-breach {
+  color: var(--red);
+  border-color: rgba(var(--cm-red-rgb), 0.55);
+  background: rgba(var(--cm-red-rgb), 0.08);
+}
+
+.cm-guard.g-breach .cm-guard-dot {
+  display: block;
+  background: var(--red);
+}
+
+/* "Showing the first 40,000 files" / "Imports still indexing" under Changes. */
+.ct-bix-note {
+  margin: 2px 0;
+  font-size: 10.5px;
+  font-style: italic;
+}
+
+/* The error notes sit over the canvas, above the tree's own HUD. */
+.cm-body > .cm-note {
+  z-index: 6;
+}
+
+.cm-note.cm-note-err .cm-btn {
+  align-self: center;
+  margin-top: 6px;
+}
+
+.cm-note.cm-note-stale {
+  font-size: 11px;
+  color: var(--muted);
+  pointer-events: auto;
+}
+
+/* A section "Open map" landed on: a brief outline, then calm. */
+.cm-sec.cm-sec-flash {
+  animation: cm-sec-flash 1.6s ease-out 1;
+  border-radius: 6px;
+}
+
+@keyframes cm-sec-flash {
+  0%,
+  30% {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  100% {
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cm-sec.cm-sec-flash {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+}
+
+/* The confirm toast's two buttons stay on its line. */
+.ct-toast .cm-btn + .cm-btn {
+  margin-left: 4px;
+}

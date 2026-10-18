@@ -198,7 +198,14 @@ export function activityRows(M: Model, agents: AgentState[], feed: FeedRecord[],
   for (const z of zones)
     if (z.created) out.push({ key: "z" + z.id, ts: z.created, A: null, path: "", bad: false, rule: isGreen(z) ? "only" : "keep", text: `${isGreen(z) ? "✓ only here" : "⛔ keep out"} set on ${z.name || z.pattern}` });
   out.sort((a, b) => b.ts - a.ts);
-  return out.slice(0, 48);
+  // the branch's changes the feed never saw (made before the map armed, or by hand): say so, last — never "Nothing yet"
+  // beside a tree full of changed leaves
+  let before = 0;
+  if (prim0) for (const ts of prim0.edits.values()) if (!ts) before++;
+  const rows = out.slice(0, before ? 47 : 48);
+  if (before)
+    rows.push({ key: "before", ts: 0, A: prim0, path: "", bad: false, text: `${before} file${before === 1 ? "" : "s"} changed before the map started watching` });
+  return rows;
 }
 
 export function ActivityCard(p: {
@@ -347,6 +354,9 @@ export function FileCard(p: FileCardProps) {
   }
   const zf = zoneOfFile(f, p.zones);
   const hasOnly = p.zones.some((z) => z.type === "only" && !z.waived);
+  // a rule set on exactly this file (the tree's paint toggles it off again)
+  const keepZ = p.zones.find((z) => z.type === "keep" && !z.waived && z.file === f.id) || null;
+  const onlyZ = p.zones.find((z) => z.type === "only" && !z.waived && z.file === f.id) || null;
   const { cls, fns, routes } = outline(p.fv);
   const lines = p.fv && p.fv.loc ? `${p.fv.loc.toLocaleString()} lines` : linesTxt(f);
   return (
@@ -365,10 +375,10 @@ export function FileCard(p: FileCardProps) {
       {who}
       {zf ? (
         <div className="ct-who block">
-          ⛔ {zf.type === "keep" ? "inside keep out" : "outside the only-here zone"} ({zf.z.label}) — {zf.type === "keep" ? "reads allowed, edits blocked" : "edits blocked here"}
+          ⛔ {zf.type === "keep" ? "inside keep out" : "outside ✓ only here"} ({zf.z.label}) — {zf.type === "keep" ? "reads allowed, edits blocked" : "edits blocked here"}
         </div>
       ) : hasOnly ? (
-        <div className="ct-who only">✓ inside the only-here zone — edits allowed</div>
+        <div className="ct-who only">✓ inside ✓ only here — edits allowed</div>
       ) : null}
       {p.fvErr && !p.fv ? <p className="ct-muted">Couldn't read its outline: {p.fvErr}</p> : !p.fv ? <p className="ct-muted">Reading its outline…</p> : null}
       {cls.length > 0 && (
@@ -423,10 +433,21 @@ export function FileCard(p: FileCardProps) {
             Open diff
           </button>
         )}
-        <button type="button" className="cm-btn red" onClick={p.onKeep} title="Keep agents out of this file (reads stay allowed)">
-          ⛔ Keep out
-        </button>
-        {p.outside ? (
+        {/* a rule on this very file shows as on, like the folder card: the same button takes it off */}
+        {keepZ ? (
+          <button type="button" className="cm-btn red" onClick={p.onKeep} title="Agents may edit this file again">
+            Remove ⛔ keep out
+          </button>
+        ) : (
+          <button type="button" className="cm-btn red" onClick={p.onKeep} title="Agents may read this file; every edit is blocked">
+            ⛔ Keep out
+          </button>
+        )}
+        {onlyZ ? (
+          <button type="button" className="cm-btn green" onClick={p.onOnly} title="Agents may edit outside this file again">
+            Remove ✓ only here
+          </button>
+        ) : p.outside ? (
           <button type="button" className="cm-btn green" onClick={p.onAllow} disabled={p.allowState === "busy" || p.allowState === "done"} title="Add this file to the green zones (this worktree) and tell the agent">
             {p.allowState === "busy" ? "Allowing…" : p.allowState === "done" ? "Allowed ✓" : "Allow this file"}
           </button>
@@ -498,7 +519,7 @@ export function NodeCard(p: NodeCardProps) {
   }
   const hasOnly = p.zones.some((z) => z.type === "only" && !z.waived);
   if (!keepZ && !onlyZ && !inherited && hasOnly && !isTrunk)
-    inherited = n.lit ? <div className="ct-who only">✓ inside the only-here zone — edits allowed</div> : <div className="ct-who block">⛔ outside the only-here zone — edits blocked here</div>;
+    inherited = n.lit ? <div className="ct-who only">✓ inside ✓ only here — edits allowed</div> : <div className="ct-who block">⛔ outside ✓ only here — edits blocked here</div>;
   const kids = (n.kids || []).filter((k) => k.nFiles).slice().sort((a, b) => b.nFiles - a.nFiles);
   return (
     <>
@@ -578,7 +599,7 @@ export function NodeCard(p: NodeCardProps) {
             </button>
           ) : (
             <button type="button" className="cm-btn red" onClick={p.onKeep} title="Agents may read here; every edit is blocked">
-              ⛔ Keep agents out
+              ⛔ Keep out
             </button>
           ))}
         {!isTrunk &&
@@ -708,8 +729,8 @@ export function TipBody({ M, hit, agents, zones, tool, folded }: { M: Model; hit
         </div>
         {rows}
         {zf && zf.type === "keep" && <div className="keep">⛔ inside keep out ({zf.z.label}) — reads allowed, edits blocked</div>}
-        {zf && zf.type === "only" && <div className="keep">⛔ outside the only-here zone ({zf.z.label}) — edits here are blocked</div>}
-        {!zf && zones.some((z) => z.type === "only" && !z.waived) && <div className="only">✓ inside the only-here zone — edits allowed</div>}
+        {zf && zf.type === "only" && <div className="keep">⛔ outside ✓ only here ({zf.z.label}) — edits here are blocked</div>}
+        {!zf && zones.some((z) => z.type === "only" && !z.waived) && <div className="only">✓ inside ✓ only here — edits allowed</div>}
         <div>{tool !== "explore" ? <span className={"act " + tool}>click to paint {tool === "keep" ? "⛔ keep out" : "✓ only here"} on this file</span> : <i>click for details</i>}</div>
       </>
     );

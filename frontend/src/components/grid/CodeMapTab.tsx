@@ -9,10 +9,11 @@
  * leaf it touches (dot = read, its colour = edited, bud = planned); gold
  * leaves import what a bird edited, with per-folder "N depend on …" badges.
  * Keep out (red hatched band) and Only here (the rest dims to dusk) are the
- * server's zones — painted from the tree, the Rules card, + Zone or the
- * Zones dialog, never kept client-side. The Session panel keeps the plan
- * loop (Ask for plan, Go, Go — only the planned files), scope requests,
- * breaches and the full lists: the accessible twin of the picture.
+ * user's rules (the server's zones) — painted from the tree, the Rules card,
+ * + Rule… or the Zones dialog, never kept client-side. The Plan & lists
+ * panel keeps the plan loop (Ask for plan, Go, Go — only the planned files),
+ * scope requests, breaches and the full lists: the accessible twin of the
+ * picture. This session's row in the bird index always says the next step.
  *
  * Cost discipline, because up to nine panes can mount one: nothing mounts
  * until the tab is first opened; nothing polls or draws unless the tab is
@@ -28,13 +29,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { ApiError } from "../../api/client";
 import type { CodeMapLive, CodeMapSnapshot, FeedRecord, PlanItem, RedZone, RedZonePreview, SearchItem } from "../../api/types";
 import { refreshInstances } from "../../state/queries";
-import { useUi } from "../../state/store";
+import { useUi, type MapFocus, type MapSection } from "../../state/store";
 import { errMsg } from "../../lib/format";
 import { instances } from "../../lib/sessionActions";
 import {
   autoMode,
   blastFrom,
   blastRows,
+  changedUnder,
   classifyPath,
   currentBreaches,
   effectiveTests,
@@ -45,7 +47,9 @@ import {
   isGreen,
   isGreenDeny,
   isTestPath,
+  keepOutWarn,
   liveAllowState,
+  nextStep,
   planProgress,
   reverseIndex,
   scopeRequests,
@@ -53,6 +57,7 @@ import {
   snapStale,
   zoneAddTell,
   zoneDoc,
+  type NextStep,
   type RevIndex,
   type ZoneClass,
 } from "../../lib/codemap";
@@ -71,7 +76,7 @@ import {
   type GoResult,
 } from "../../lib/codemapApi";
 import { markCodemapSeen, serverNow } from "../../lib/codemapSeen";
-import { cachedModel, layoutModel, LAST_INFO } from "../../lib/codetree/engine";
+import { cachedModel, layoutModel } from "../../lib/codetree/engine";
 import { rawFromSnapshot } from "../../lib/codetree/input";
 import { LiveBirds } from "../../lib/codetree/live";
 import { isUnder, type Model, type RawRepo, type TFile, type TNode } from "../../lib/codetree/model";
@@ -84,6 +89,8 @@ import { SearchBox } from "./codemap/SearchBox";
 import { SessionPanel, recKey } from "./codemap/SessionPanel";
 import type { TreeCtl } from "./codemap/treeCtl";
 import { MapTour } from "./codemap/MapTour";
+import { MapGuideContext, type MapGuide } from "./codemap/mapGuide";
+import "./codemap/guidance.css";
 
 // --- Module-level state (survives tab switches and pane remounts) ----------
 
@@ -93,7 +100,10 @@ interface Entry {
   feed: FeedRecord[];
   since: number;
   skew: number;
+  /** the live poll's error */
   err: string;
+  /** the snapshot's error, while there is no snapshot (a working poll doesn't clear it) */
+  snapErr: string;
   snapAt: number;
 }
 
@@ -116,7 +126,7 @@ function entryFor(title: string): Entry {
     ENTRIES.set(title, e); // LRU bump
     return e;
   }
-  e = { snap: null, live: null, feed: [], since: 0, skew: 0, err: "", snapAt: 0 };
+  e = { snap: null, live: null, feed: [], since: 0, skew: 0, err: "", snapErr: "", snapAt: 0 };
   ENTRIES.set(title, e);
   while (ENTRIES.size > ENTRY_MAX) ENTRIES.delete(ENTRIES.keys().next().value!);
   return e;
@@ -193,6 +203,8 @@ interface Toast {
   detail?: string;
   bad?: boolean;
   undo?: () => void;
+  /** an inline confirm: [label] runs it, Cancel dismisses */
+  confirm?: { label: string; run: () => void };
   ms?: number;
 }
 
@@ -202,6 +214,18 @@ const PREFETCHING = new Set<string>();
 /** The title whose Map is showing the tour ("" = none): two Map tabs open at
  * once must not both start it. */
 let TOUR_ON = "";
+/** The last `mapFocus.seq` applied (seqs only grow, across every Map): a
+ * focus lands once, never again on a remount or a re-render. */
+let FOCUS_DONE = 0;
+
+/** Whether a Map focus is this tab's to apply now: for this title, not yet
+ * applied, and — when it flies somewhere or opens ⚠ Could break — once the
+ * tree is laid out (it waits until then rather than being dropped). (Pure,
+ * for the tests.) */
+export function focusDue(f: MapFocus | null, title: string, active: boolean, treeReady: boolean, done: number): boolean {
+  if (!f || f.title !== title || !active || f.seq <= done) return false;
+  return treeReady || (!f.path && f.section !== "risk");
+}
 
 /** Whether a prefetch for `title` has anything left to do: no snapshot yet,
  * or a snapshot whose tree is not laid out. (Pure, for the tests.) */
@@ -226,7 +250,7 @@ export async function prefetchCodeMap(title: string): Promise<void> {
       if (!d || ("unchanged" in d && d.unchanged)) return;
       en.snap = d as CodeMapSnapshot;
       en.snapAt = Date.now();
-      en.err = "";
+      en.snapErr = "";
     }
     if (MODEL_OF.has(title)) return;
     const snap = en.snap;
@@ -265,6 +289,7 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
   const [live, setLive] = useState<CodeMapLive | null>(e0.live);
   const [feed, setFeed] = useState<FeedRecord[]>(e0.feed);
   const [err, setErr] = useState(e0.err);
+  const [snapErr, setSnapErr] = useState(e0.snapErr);
   const [model, setModel] = useState<Model | null>(MODEL_OF.get(title) || null);
   const [growing, setGrowing] = useState<number | null>(null);
   const [growErr, setGrowErr] = useState("");
@@ -309,13 +334,14 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
         en.snap = d as CodeMapSnapshot;
         setSnap(en.snap);
       }
-      en.err = "";
-      setErr("");
+      en.snapErr = "";
+      setSnapErr("");
     } catch (x) {
       en.snapAt = Date.now();
+      // with a snapshot in hand a failed refresh only means it may be out of date (the poll says so)
       if (!en.snap) {
-        en.err = errMsg(x);
-        setErr(en.err);
+        en.snapErr = errMsg(x);
+        setSnapErr(en.snapErr);
       }
     } finally {
       snapLoading.current = false;
@@ -361,17 +387,15 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
             const pushDeny = fresh.filter((r) => r.deny?.push);
             const br = fresh.filter((r) => r.breach && r.breach.length);
             if (br.length)
-              setAnnounce("Zone breached: " + br.flatMap((r) => (r.breach || []).map((b) => b.path)).slice(0, 3).join(", "));
+              setAnnounce("Rule breached: " + br.flatMap((r) => (r.breach || []).map((b) => b.path)).slice(0, 3).join(", "));
             else if (green.length)
-              setAnnounce(
-                "Scope guard stopped an edit outside the green zone: " + green.map((r) => r.deny!.path).slice(0, 3).join(", ")
-              );
+              setAnnounce("Only here stopped an edit outside it: " + green.map((r) => r.deny!.path).slice(0, 3).join(", "));
             else if (deny.length)
               setAnnounce(
-                `Red zone blocked ${deny.length === 1 ? "an edit" : deny.length + " edits"} to ` +
+                `Keep out blocked ${deny.length === 1 ? "an edit" : deny.length + " edits"} to ` +
                   deny.map((r) => r.deny!.path).slice(0, 3).join(", ")
               );
-            else if (pushDeny.length) setAnnounce("A zone blocked a push: this branch changes a protected file.");
+            else if (pushDeny.length) setAnnounce("A rule blocked a push: this branch changes a protected file.");
           }
           setFeed(en.feed);
         }
@@ -428,6 +452,11 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
       document.removeEventListener("visibilitychange", onVis);
     };
   }, [active, title, poll, loadSnap]);
+  /** Retry both reads now (the error notes' button). */
+  const retry = () => {
+    void poll();
+    void loadSnap();
+  };
 
   // --- The tree: snapshot → input → layout (worker, cached) -------------------
 
@@ -557,7 +586,7 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
   const breachS = useMemo(() => currentBreaches(breachList), [breachList]);
   const changedSet = useMemo(() => new Set(changed.map((c) => c.path)), [changed]);
 
-  // The Session panel's blast list: the same set the tree paints gold — the
+  // Plan & lists' blast list: the same set the tree paints gold — the
   // DIRECT importers of this session's edits (the branch's changes + the feed's).
   const seeds = useMemo(() => {
     if (!graph) return [] as string[];
@@ -671,7 +700,16 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
   // Sessions sharing this WORKTREE (`folder`), not the repo (`path`).
   const sessionsHere = sessionsOnWorktree(instances(), title);
   const zonesEnforced = zones.filter((z) => !z.waived).length;
-  const guard = guardPill(live?.guard, zonesEnforced, provider.split(/\s+/)[0] || "", greenNames);
+  const guard = guardPill(live?.guard, zonesEnforced, provider.split(/\s+/)[0] || "", greenNames, breachList.length);
+  // the one thing to do now, on this session's row in the bird index
+  const next: NextStep = nextStep({
+    breaches: breachList.length,
+    clarify,
+    planWaiting: plan && mode === "plan" ? plan.items.length : 0,
+    changed: changed.length,
+    risky: mode === "watch" ? dependents.size : 0,
+    planSupported,
+  });
 
   // --- Actions ---------------------------------------------------------------
 
@@ -698,7 +736,9 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
     setTimeout(() => addInputRef.current?.focus(), 0);
   };
 
-  const submitAdd = async (tellOverride?: boolean) => {
+  /** `confirmed`: the pattern whose "Add anyway" was clicked (a keep-out over
+   * this session's changed files asks first, like painting one). */
+  const submitAdd = async (tellOverride?: boolean, confirmed?: string) => {
     if (!add) return;
     const pattern = (add.done && tellOverride ? add.done.pattern : add.pattern).trim();
     if (!pattern) {
@@ -707,6 +747,26 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
     }
     const kind = add.done && tellOverride ? add.done.kind : add.kind;
     setAdd({ ...add, busy: true, err: "" });
+    if (kind === "red" && !(add.done && tellOverride) && confirmed !== pattern) {
+      // the server's own matcher, on this worktree's changed files (the live preview may lag the typing)
+      let inside: string[] = [];
+      try {
+        inside = (await previewZone(title, pattern, "red")).changed || [];
+      } catch {
+        /* the add itself reports a bad pattern */
+      }
+      if (inside.length) {
+        setAdd({ ...add, busy: false, err: "" });
+        showToast({
+          text: keepOutWarn(inside.length),
+          detail: `⛔ Keep out on ${pattern} — already changed: ${inside.slice(0, 6).join(", ")}${inside.length > 6 ? " …" : ""}`,
+          bad: true,
+          confirm: { label: "Add anyway", run: () => void submitRef.current(tellOverride, pattern) },
+          ms: 30000,
+        });
+        return;
+      }
+    }
     // The checkbox shows unchecked (and disabled) while the agent waits on a
     // prompt; the request says the same.
     const tell = zoneAddTell(add.tell, tellOverride, clarify);
@@ -740,6 +800,9 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
       setAdd({ ...add, busy: false, err: errMsg(x) });
     }
   };
+  // a confirm toast outlives the render that made it: it calls the latest submitAdd (the row as it is now)
+  const submitRef = useRef(submitAdd);
+  submitRef.current = submitAdd;
 
   const treatAsBreaches = async () => {
     if (!add?.done) return;
@@ -772,11 +835,12 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
     }
   };
 
-  const removeZone = async (z: RedZone, undoable = true) => {
+  /** Remove a rule; true once the server has removed it (an Undo says "Undone" only then). */
+  const removeZone = async (z: RedZone, undoable = true): Promise<boolean> => {
     if (zoneLocked(z)) {
       // A fence an orchestrator set on this session: it lifts it (fence_session).
       showToast({ text: `That fence was set by ${z.by || "this session's orchestrator"} — only it can lift it`, bad: true });
-      return;
+      return false;
     }
     setZoneBusy(z.id);
     try {
@@ -784,8 +848,10 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
       applyZones(r.zones);
       if (undoable)
         showToast({ text: `Removed ${isGreen(z) ? "✓ only here" : "⛔ keep out"} · ${z.name || z.pattern}`, undo: () => void readd(z) });
+      return true;
     } catch (x) {
-      showToast({ text: "Couldn't remove that zone: " + errMsg(x), bad: true });
+      showToast({ text: "Couldn't remove that rule: " + errMsg(x), bad: true });
+      return false;
     } finally {
       setZoneBusy("");
     }
@@ -798,15 +864,17 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
       const r = await apiWaiveZone(title, z.id, waived);
       applyZones(r.zones);
     } catch (x) {
-      setActionMsg({ text: "Couldn't change that zone: " + errMsg(x), bad: true });
+      setActionMsg({ text: "Couldn't change that rule: " + errMsg(x), bad: true });
     } finally {
       setZoneBusy("");
     }
   };
 
   /** Paint a rule from the tree (a tool click or a card button): one POST; the
-   * tree draws it from the server's answer. Undo removes it again. */
-  const paint = async (tool: "keep" | "only", target: { node?: TNode | null; file?: TFile | null }) => {
+   * tree draws it from the server's answer. Undo removes it again. A keep-out
+   * over files this session already changed asks first (they'd be breaches at
+   * once, and pushing blocked); `confirmed` is the "Add anyway". */
+  const paint = async (tool: "keep" | "only", target: { node?: TNode | null; file?: TFile | null }, confirmed = false) => {
     const M = model;
     if (!M) return;
     const node = target.file ? null : target.node || null;
@@ -828,6 +896,20 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
     if ("error" in pat) {
       showToast({ text: pat.error, bad: true });
       return;
+    }
+    if (tool === "keep" && !confirmed) {
+      // the label is the folder (or file) the pattern covers, worktree-relative
+      const inside = changedUnder(changedSet, pat.label, ci);
+      if (inside.length) {
+        showToast({
+          text: keepOutWarn(inside.length),
+          detail: `⛔ Keep out on ${pat.label} — already changed: ${inside.slice(0, 6).join(", ")}${inside.length > 6 ? " …" : ""}`,
+          bad: true,
+          confirm: { label: "Add anyway", run: () => void paint(tool, target, true) },
+          ms: 30000,
+        });
+        return;
+      }
     }
     const kind = tool === "only" ? "green" : "red";
     const tell = zoneAddTell(kind === "green", undefined, clarify);
@@ -859,7 +941,8 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
       showToast({
         text: short,
         detail: `${tool === "keep" ? "⛔ Keep out" : "✓ Only here"} set on ${pat.label} (${what})${hit.length ? " · " + hit.slice(0, 2).join("; ") : ""}${ex}${told}`,
-        undo: zid ? () => void removeZone({ ...(r.zone as RedZone) }, false).then(() => showToast({ text: "Undone", ms: 1800 })) : undefined,
+        // "Undone" only once the rule is really gone (removeZone toasts its own failure)
+        undo: zid ? () => void removeZone({ ...(r.zone as RedZone) }, false).then((ok) => ok && showToast({ text: "Undone", ms: 1800 })) : undefined,
         ms: 12000,
       });
       ctlRef.current?.showRule(node, file);
@@ -894,17 +977,21 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
     }
   };
 
-  const askPlan = async () => {
+  /** Ask for the plan; resolves to what the panel says about it (the bird index's button toasts it). */
+  const askPlan = async (): Promise<{ text: string; bad: boolean }> => {
     setBusy("ask");
     setActionMsg(null);
+    let m: { text: string; bad: boolean };
     try {
       const r = await apiAskPlan(title, midFlight ? "remaining" : "plan");
-      setActionMsg(tellText(r.told, r.reason));
+      m = tellText(r.told, r.reason);
     } catch (x) {
-      setActionMsg({ text: errMsg(x), bad: true });
+      m = { text: errMsg(x), bad: true };
     } finally {
       setBusy("");
     }
+    setActionMsg(m);
+    return m;
   };
 
   const go = async (scopeToPlan: boolean) => {
@@ -968,6 +1055,51 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
     else if (!c.v || !model?.byPath.has(it.path)) selectPath(it.path);
   };
 
+  // --- Landing where "Open map" pointed (the store's mapFocus) ---------------
+
+  /** Asks for the bird index's ⚠ Could break layer (it switches it on once per ask). */
+  const [riskAsk, setRiskAsk] = useState(0);
+  /** The Plan & lists section to bring into view once the panel has rendered. */
+  const [secAsk, setSecAsk] = useState<{ sec: MapSection; n: number } | null>(null);
+  const openPanel = useCallback((sec: MapSection) => {
+    if (sec === "risk") {
+      setRiskAsk((n) => n + 1);
+      return;
+    }
+    setDrawer(true);
+    setSecAsk((s) => ({ sec, n: (s?.n || 0) + 1 }));
+  }, []);
+  useEffect(() => {
+    if (!secAsk || !drawer) return;
+    const t = setTimeout(() => {
+      const el = rootRef.current?.querySelector<HTMLElement>(`.ct-drawer [data-sec="${secAsk.sec}"]`);
+      if (!el) return; // not in the panel now (no breaches, no plan support): the panel itself is the answer
+      try {
+        el.scrollIntoView({ block: "start", behavior: reducedMotion ? "auto" : "smooth" });
+      } catch {
+        /* an old engine without the options form */
+      }
+      el.classList.remove("cm-sec-flash");
+      void el.offsetWidth; // restart the flash on a repeat
+      el.classList.add("cm-sec-flash");
+    }, 0);
+    return () => clearTimeout(t);
+  }, [secAsk, drawer, reducedMotion]);
+
+  const mapFocus = useUi((s) => s.mapFocus);
+  const applyFocus = useCallback(() => {
+    const f = useUi.getState().mapFocus;
+    const c = ctlRef.current;
+    if (!focusDue(f, title, active, !!(model && c && c.v && c.M === model), FOCUS_DONE)) return;
+    FOCUS_DONE = f!.seq;
+    if (f!.path && c && !c.revealPath(f!.path))
+      showToast({ text: `${f!.path} isn't on the tree (yet) — it appears once the map re-reads the worktree.` });
+    if (f!.section) openPanel(f!.section);
+  }, [title, active, model, openPanel, showToast]);
+  // a focus that arrives before the tree is laid out waits: this runs again when the model lands, and the
+  // controller's own change callback (onChange below) retries once it has the model
+  useEffect(applyFocus, [applyFocus, mapFocus]);
+
   // "/" focuses the search from anywhere in the tab (not while typing).
   const onRootKey = (ev: React.KeyboardEvent<HTMLDivElement>) => {
     if (ev.defaultPrevented) return;
@@ -1025,28 +1157,66 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
   const tool = ctl?.v?.tool || "explore";
   const histN = ctl ? ctl.hist.length : 0;
   const sessionCount = requests.length + breachList.length;
-  const primaryExtra: ReactNode =
-    plan || requests.length || breachList.length ? (
-      <div className="ct-agent-extra">
-        {plan && (
-          <button type="button" className="ct-link" onClick={() => setDrawer(true)} title="Open the plan: Go, or Go — only the planned files">
-            Plan · {plan.items.length} file{plan.items.length === 1 ? "" : "s"} — review
+  // This session's next step, on its row in the bird index: one line, by state (lib/codemap nextStep).
+  const nextAction: ReactNode =
+    next.kind === "breaches" ? (
+      <button type="button" className="ct-link bad" onClick={() => openPanel("breaches")} title="Pushing, PRs and merges are blocked until these are reverted or the rule is removed">
+        {next.n} breach{next.n === 1 ? "" : "es"} — review
+      </button>
+    ) : next.kind === "question" ? (
+      <span className="warn">it's asking you something — answer in the terminal</span>
+    ) : next.kind === "review-plan" ? (
+      <button type="button" className="ct-link" onClick={() => openPanel("plan")} title="Open the plan: Go, or Go — only the planned files">
+        Review plan · Go
+      </button>
+    ) : next.kind === "review-changes" ? (
+      <>
+        {next.risky > 0 ? (
+          <button type="button" className="ct-link" onClick={() => openPanel("risk")} title="Show on the map which folders import the changed files, and rank the changed files">
+            Review: ⚠ Could break ({next.risky})
           </button>
+        ) : (
+          <span>{next.changed} changed</span>
+        )}
+        {" · "}
+        <button type="button" className="ct-link" onClick={openDiff}>
+          Open diff
+        </button>
+      </>
+    ) : next.kind === "ask-plan" ? (
+      <button
+        type="button"
+        className="ct-link"
+        disabled={busy === "ask"}
+        title="Ask the agent which files it means to touch, before it touches them"
+        onClick={() => void askPlan().then((m) => m && showToast({ text: m.text, bad: m.bad }))}
+      >
+        {busy === "ask" ? "Asking…" : "Ask for plan"}
+      </button>
+    ) : null;
+  const primaryExtra: ReactNode =
+    nextAction || requests.length ? (
+      <div className="ct-agent-extra">
+        {nextAction && (
+          <div className="ct-next" role="group" aria-label="Next step">
+            <span className="ct-next-k">Next:</span> {nextAction}
+          </div>
         )}
         {requests.length > 0 && (
-          <button type="button" className="ct-link warn" onClick={() => setDrawer(true)}>
+          <button type="button" className="ct-link warn" onClick={() => openPanel("scope")}>
             {requests.length} ask{requests.length === 1 ? "s" : ""} to edit outside scope — review
-          </button>
-        )}
-        {breachList.length > 0 && (
-          <button type="button" className="ct-link bad" onClick={() => setDrawer(true)}>
-            {breachList.length} breach{breachList.length === 1 ? "" : "es"} — pushing is blocked
           </button>
         )}
       </div>
     ) : null;
-  const info = LAST_INFO.get(repoKey);
-  const growNote = model && info && info.how !== "memory" ? `${info.how === "replay" ? "cached" : info.how} layout · ${info.ms} ms` : "";
+  // quiet notes about the data under the Changes header: what the counts can't see
+  const dataNotes = useMemo(() => {
+    const out: string[] = [];
+    if (snap?.truncated) out.push(`Showing the first ${(snap.files?.length || 0).toLocaleString()} files`);
+    if (snap?.graph_partial) out.push("Imports still indexing — counts may be low");
+    return out;
+  }, [snap]);
+  const guide = useMemo<MapGuide>(() => ({ notes: dataNotes, riskAsk, openPanel }), [dataNotes, riskAsk, openPanel]);
 
   const toastNode = toast ? (
     <div className={"ct-toast" + (toast.bad ? " bad" : "")} role="status" aria-live="polite" title={toast.detail || toast.text} onPointerEnter={() => setToast({ ...toast, ms: 60000 })}>
@@ -1065,9 +1235,28 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
           Undo
         </button>
       )}
-      <button type="button" className="ct-x" aria-label="Dismiss" onClick={() => setToast(null)}>
-        ×
-      </button>
+      {toast.confirm ? (
+        <>
+          <button
+            type="button"
+            className="cm-btn on"
+            onClick={() => {
+              const c = toast.confirm!;
+              setToast(null);
+              c.run();
+            }}
+          >
+            {toast.confirm.label}
+          </button>
+          <button type="button" className="cm-btn" onClick={() => setToast(null)}>
+            Cancel
+          </button>
+        </>
+      ) : (
+        <button type="button" className="ct-x" aria-label="Dismiss" onClick={() => setToast(null)}>
+          ×
+        </button>
+      )}
     </div>
   ) : null;
 
@@ -1091,7 +1280,7 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
                 className={"red" + (tool === "keep" ? " on" : "")}
                 aria-pressed={tool === "keep"}
                 disabled={!model}
-                title="Keep out: fence a folder or file off — agents may read there, every edit is blocked"
+                title="Keep out: agents may read a folder or file, every edit there is blocked"
                 onClick={() => {
                   ctl?.setTool("keep");
                   setTick((x) => x + 1);
@@ -1116,16 +1305,16 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
             <button
               type="button"
               className="cm-btn"
-              title="Keep agents out of a path — or scope them to only some paths — by typing a pattern"
+              title="Type a rule instead of painting one: ⛔ Keep out or ✓ Only here on a path or pattern"
               onClick={() => (add ? setAdd(null) : openAdd("red", ""))}
             >
-              {add ? "Close" : "+ Zone"}
+              {add ? "Close" : "+ Rule…"}
             </button>
           </span>
           <span className="cm-grow" />
           <SearchBox ref={searchRef} title={title} onPick={onPick} />
-          {/* the guard pill matters once there is a rule to guard; before that it only said "No zones" */}
-          {zones.length > 0 && (
+          {/* the guard pill matters once there is a rule to guard (or a breach); before that it only said "No rules" */}
+          {(zones.length > 0 || breachList.length > 0) && (
             <span className={"cm-guard " + guard.cls} title={guard.title}>
               <span className="cm-guard-dot" aria-hidden="true" />
               <span className="lbl">{guard.label}</span>
@@ -1133,13 +1322,14 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
           )}
           <button
             type="button"
-            className={"cm-btn" + (drawer ? " on" : "")}
+            className={"cm-btn ct-plan-btn" + (drawer ? " on" : "")}
             aria-pressed={drawer}
             aria-controls={"ct-session-" + title}
-            title="The session as lists: plan (Go), scope requests, breaches, blast radius, zones, changes"
+            aria-label="Plan & lists"
+            title="Plan & lists: the plan (Ask for plan, Go), scope requests, breaches, blast radius, rules, changes"
             onClick={() => setDrawer(!drawer)}
           >
-            Session{sessionCount ? <span className="cm-count bad">{sessionCount}</span> : plan ? <span className="cm-count">plan</span> : null}
+            Plan &amp; lists{sessionCount ? <span className="cm-count bad">{sessionCount}</span> : plan ? <span className="cm-count">plan</span> : null}
           </button>
           <button
             type="button"
@@ -1164,7 +1354,6 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
           clarify={clarify}
           repoLabel={repoLabel}
           sessionsHere={sessionsHere}
-          quick={[]}
           onSubmit={(t) => void submitAdd(t)}
           onTreatAsBreaches={() => void treatAsBreaches()}
         />
@@ -1175,13 +1364,18 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
           <div className="cm-note cm-note-err" role="alert">
             <b>Code map unavailable.</b>
             <span className="muted">{err}</span>
+            <button type="button" className="cm-btn" onClick={retry}>
+              Retry
+            </button>
           </div>
         ) : (
+          <MapGuideContext.Provider value={guide}>
           <CodeTree
             title={title}
             active={active}
             model={model}
-            growing={growing ?? (snap ? null : 0)}
+            // no snapshot and its read failed: the error below, never "Growing the tree…" forever
+            growing={growing ?? (snap || snapErr ? null : 0)}
             growErr={growErr}
             files={raw ? raw.files.length : snap?.files?.length || 0}
             agents={agents}
@@ -1212,15 +1406,34 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
                 toolbarSig.current = sig;
                 setTick((x) => (x + 1) & 0xffff);
               }
+              // the controller just took the model: a focus that was waiting for the tree lands now
+              if (c && c.M === model && focusDue(useUi.getState().mapFocus, title, active, true, FOCUS_DONE)) setTimeout(applyFocus, 0);
             }}
           />
+          </MapGuideContext.Provider>
+        )}
+        {!failed && !snap && snapErr && !model && (
+          <div className="cm-note cm-note-err" role="alert">
+            <b>Couldn't read the worktree.</b>
+            <span className="muted">{snapErr}</span>
+            <button type="button" className="cm-btn" onClick={() => void loadSnap()}>
+              Retry
+            </button>
+          </div>
+        )}
+        {!failed && err && (snap || live || model) && (
+          <div className="cm-note cm-note-bottom cm-note-stale" role="status" title={err}>
+            map may be out of date ·{" "}
+            <button type="button" className="ct-link" onClick={retry}>
+              Retry
+            </button>
+          </div>
         )}
         {drawer && !failed && (
-          <aside className="cm-side ct-drawer" id={"ct-session-" + title} aria-label="Session details">
+          <aside className="cm-side ct-drawer" id={"ct-session-" + title} aria-label="Plan & lists">
             <div className="ct-drawer-head">
-              <h3>Session</h3>
-              {growNote && <span className="ct-muted" title="How the tree's layout was obtained">{growNote}</span>}
-              <button type="button" className="ct-x" aria-label="Close the Session panel" onClick={() => setDrawer(false)}>
+              <h3>Plan &amp; lists</h3>
+              <button type="button" className="ct-x" aria-label="Close Plan & lists" onClick={() => setDrawer(false)}>
                 ×
               </button>
             </div>
@@ -1251,7 +1464,6 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
                 goExempt,
                 blast,
                 blastTests,
-                depth: 1,
                 seeds: seeds.length,
                 graphPartial: !!snap?.graph_partial,
                 changed,
@@ -1284,7 +1496,7 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
       <div className="cm-sr" aria-live="polite" role="status">
         {announce}
       </div>
-      {tour && model && !failed && <MapTour rootRef={rootRef} onClose={closeTour} />}
+      {tour && model && !failed && <MapTour rootRef={rootRef} onClose={closeTour} ctx={{ changed: agents.reduce((n, A) => n + A.edits.size, 0), next, planSupported }} />}
     </div>
   );
 }
