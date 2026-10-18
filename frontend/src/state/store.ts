@@ -314,6 +314,14 @@ interface UiState {
    * message goes to. `seq` bumps on every open, so a second Ctrl+K S at the
    * same target still moves the caret into the composer. Transient. */
   threadComposeTarget: ThreadComposeTarget | null;
+  /** Where the Map tab should land, set by `openMap`: the session, then an
+   * optional file to fly to and open the card of, and/or a part of the Map to
+   * show (a Session-panel section, or the ⚠ Could break layer). `seq` bumps on
+   * every open so the same focus twice still re-flies. Transient; the Map tab
+   * consumes it when it is active and has the tree. */
+  mapFocus: MapFocus | null;
+  /** The file the Diff tab should select, set by `openDiff`. Transient. */
+  diffFocus: DiffFocus | null;
   /** When this browser last looked at each session's Thread tab (epoch ms) —
    * the tab's badge counts results newer than this. Persisted. */
   threadLastSeen: Record<string, number>;
@@ -390,6 +398,12 @@ interface UiState {
   /** Bring a session's pane forward on its Thread tab, with the composer
    * addressed to `composeTo` (default: the session itself). */
   threadOpen(title: string, opts?: { composeTo?: string }): void;
+  /** Bring a session's pane forward on its Map tab, optionally flying to a
+   * file and/or opening a part of the Map (see `mapFocus`). Every "Open map"
+   * in the app goes through here, so it lands where the user was looking. */
+  openMap(title: string, focus?: { path?: string; section?: MapSection }): void;
+  /** Bring a session's pane forward on its Diff tab, optionally on one file. */
+  openDiff(title: string, path?: string): void;
   /** Record that the Thread tab of `title` was looked at (now, by default). */
   setThreadLastSeen(title: string, ts?: number): void;
   /** Open the ⏩ fast-track picker on a session's pane, or close it (null). */
@@ -404,6 +418,23 @@ interface UiState {
 export interface ThreadComposeTarget {
   title: string;
   to: string;
+  seq: number;
+}
+
+/** A part of the Map `openMap` can open: a Session-panel section, or the
+ * bird index's ⚠ Could break layer ("risk"). */
+export type MapSection = "breaches" | "scope" | "plan" | "blast" | "zones" | "changed" | "others" | "risk";
+
+export interface MapFocus {
+  title: string;
+  path?: string;
+  section?: MapSection;
+  seq: number;
+}
+
+export interface DiffFocus {
+  title: string;
+  path?: string;
   seq: number;
 }
 
@@ -422,6 +453,7 @@ export function setSessionSelector(fn: SessionSelector | null): void {
   _selectSession = fn;
 }
 let _threadSeq = 0;
+let _focusSeq = 0;
 
 export const useUi = create<UiState>((set, get) => ({
   focused: null,
@@ -477,6 +509,8 @@ export const useUi = create<UiState>((set, get) => ({
   dialogTarget: null,
   prBaseByRepo: load<Record<string, string>>("mf_prbase", {}),
   threadComposeTarget: null,
+  mapFocus: null,
+  diffFocus: null,
   threadLastSeen: load<Record<string, number>>("mf_thread_seen", {}),
   fastTrackMenu: null,
   newPrefill: "",
@@ -787,6 +821,28 @@ export const useUi = create<UiState>((set, get) => ({
       fastTrackMenu: null,
       threadComposeTarget: { title, to: opts?.composeTo || title, seq: ++_threadSeq },
     });
+  },
+  openMap: (title, focus) => {
+    if (!title) return;
+    if (_selectSession) _selectSession(title, { noKeyboard: true });
+    else {
+      get().setHidden(title, false);
+      get().touchMru(title);
+      get().setFocused(title);
+    }
+    get().setLastTab(title, "map");
+    set({ mapFocus: { title, path: focus?.path || undefined, section: focus?.section, seq: ++_focusSeq } });
+  },
+  openDiff: (title, path) => {
+    if (!title) return;
+    if (_selectSession) _selectSession(title, { noKeyboard: true });
+    else {
+      get().setHidden(title, false);
+      get().touchMru(title);
+      get().setFocused(title);
+    }
+    get().setLastTab(title, "diff");
+    set({ diffFocus: { title, path: path || undefined, seq: ++_focusSeq } });
   },
   setThreadLastSeen: (title, ts) => {
     if (!title) return;
