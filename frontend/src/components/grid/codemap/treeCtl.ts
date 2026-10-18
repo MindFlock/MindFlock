@@ -72,6 +72,8 @@ export class TreeCtl {
   insets: Insets = { top: 8, bot: 8, left: 8, right: 8 };
   /** insets while a card is open (the card sits over the right) */
   cardInset = 0;
+  /** …or, in a small pane, the card's bottom sheet (over the bottom) */
+  cardBot = 0;
   /** zoomed in past the whole-tree view: only then is the minimap worth its corner */
   zoomedIn = false;
   active = false;
@@ -252,7 +254,7 @@ export class TreeCtl {
     this.insets = insets;
     if (!this.v) return;
     this.v.hudRects = rects;
-    this.v.free = { x0: insets.left, y0: insets.top, x1: this.v.W - insets.right, y1: this.v.H - insets.bot };
+    this.v.free = { x0: insets.left, y0: insets.top, x1: this.v.W - insets.right, y1: this.v.H - insets.bot - this.cardBot };
     this.v.fitZv = this.fitZ();
     if (whole) this.setCam(this.wholeCam());
     this.dirty = true;
@@ -281,9 +283,11 @@ export class TreeCtl {
       v.W = W;
       v.H = H;
       v.dpr = dpr;
-      v.free = { x0: this.insets.left, y0: this.insets.top, x1: W - this.insets.right, y1: H - this.insets.bot };
+      v.free = { x0: this.insets.left, y0: this.insets.top, x1: W - this.insets.right, y1: H - this.insets.bot - this.cardBot };
       v.fitZv = this.fitZ();
-      if (was <= 1 && this.M) this.fitAll(true);
+      // a canvas getting its first size frames the whole tree — unless something was already aimed at
+      // (Diff -> Map flying to a file while the tab was still hidden): that flight goes on
+      if (was <= 1 && this.M && !this.fly && !this.info) this.fitAll(true);
       else if (whole) this.setCam(this.wholeCam());
       if (this.mini) buildMini(v, this.mini);
     }
@@ -308,6 +312,7 @@ export class TreeCtl {
     const v = this.v!;
     const I = { ...this.insets };
     I.right += this.cardInset;
+    I.bot += this.cardBot;
     const w = Math.max(40, v.W - I.left - I.right),
       h = Math.max(40, v.H - I.top - I.bot);
     const z = Math.min((w * pad) / Math.max(1, x1 - x0), (h * pad) / Math.max(1, y1 - y0));
@@ -412,7 +417,7 @@ export class TreeCtl {
     const v = this.v;
     if (!v) return;
     const zz = z || Math.max(v.cam.z, 2.6);
-    const I = { ...this.insets, right: this.insets.right + this.cardInset };
+    const I = { ...this.insets, right: this.insets.right + this.cardInset, bot: this.insets.bot + this.cardBot };
     this.navTo({ x: l.x - (I.left - I.right) / 2 / zz, y: l.y - (I.top - I.bot) / 2 / zz, z: zz });
     v.pulse = { x: l.x, y: l.y, r: l.len, t0: performance.now() + 600 };
   }
@@ -889,7 +894,7 @@ export class TreeCtl {
   }
   /** The camera that puts world point p in the middle of the free canvas. */
   followCam(p: [number, number], z: number): Cam {
-    const I = { ...this.insets, right: this.insets.right + (this.info ? this.cardInset : 0) };
+    const I = { ...this.insets, right: this.insets.right + (this.info ? this.cardInset : 0), bot: this.insets.bot + (this.info ? this.cardBot : 0) };
     return { x: p[0] - (I.left - I.right) / 2 / z, y: p[1] - (I.top - I.bot) / 2 / z, z };
   }
   /** Follow a bird (a card, a chip or the bird itself was clicked): glide to it
@@ -1047,13 +1052,23 @@ export class TreeCtl {
     const moving = !!this.fly || this.dirty || this.camMoving() || (v.anim && !this.reducedMotion) || (!this.reducedMotion && v.agents.length > 0);
     if (moving) this.kick();
   }
-  /** Where the picture sits on the canvas, as `data-tree="x0 y0 x1 y1"` on the stage (canvas px): the Map
-   * tour keeps its card off the tree with it. */
+  /** Where the picture sits on the canvas, as `data-tree="x0 y0 x1 y1;…"` on the stage (canvas px): the whole
+   * picture, then its parts — the canopy, the roots and each ground pile with its name. The Map tour keeps its
+   * card off them. */
   private markTree() {
-    const v = this.v;
-    if (!v || !this.M) return;
-    const b = boxOnScreen(pictureBox(this.M), v.cam, v.W, v.H);
-    const s = [b.x0, b.y0, b.x1, b.y1].map(Math.round).join(" ");
+    const v = this.v,
+      M = this.M;
+    if (!v || !M) return;
+    const S = (B: { x0: number; y0: number; x1: number; y1: number }, padPx = 0, under = 0) => {
+      const b = boxOnScreen(B, v.cam, v.W, v.H);
+      return [b.x0 - padPx, b.y0 - padPx, b.x1 + padPx, b.y1 + padPx + under].map(Math.round).join(" ");
+    };
+    const C = M.crownBounds,
+      parts = [S(pictureBox(M)), S({ x0: C.x0, y0: C.y0, x1: C.x1, y1: M.groundY }, 12)];
+    if (M.roots.cnt) parts.push(S({ x0: M.roots.bx0, y0: M.groundY, x1: M.roots.bx1, y1: M.roots.by1 }, 12));
+    // a pile and the name under it (~30 px below the ground line)
+    for (const p of M.piles) parts.push(S({ x0: p.cx! - (p.pw || 0) * 0.6, y0: M.groundY - (p.h || 0) * 2, x1: p.cx! + (p.pw || 0) * 0.6, y1: M.groundY }, 10, 30));
+    const s = parts.join(";");
     if (this.host.dataset.tree !== s) this.host.dataset.tree = s;
   }
   private camMoving(): boolean {

@@ -590,8 +590,17 @@ export function buildModel(raw: RawRepo, opts: BuildOpts = {}): Model {
   // ---- ground piles (docs / CI / config) ----
   M.piles = [];
   const gg = [...groundGroups.entries()].sort((a, b) => b[1].length - a[1].length || cmpStr(a[0], b[0]));
-  let xl = -S0 * 9 - M.trunkW,
-    xr = S0 * 9 + M.trunkW;
+  // the piles start just past the roots (their names sit under the ground line, clear of the root clumps) — not
+  // a fixed stride out, which left a small tree a sliver between far-flung piles
+  let rx0 = 0,
+    rx1 = 0;
+  for (const t of LR.terms)
+    for (const l of t.leaves || []) {
+      rx0 = Math.min(rx0, l.x);
+      rx1 = Math.max(rx1, l.x);
+    }
+  let xl = Math.min(-S0 * 4, rx0 - S0 * 2.5) - M.trunkW,
+    xr = Math.max(S0 * 4, rx1 + S0 * 2.5) + M.trunkW;
   gg.forEach(([k, fs], i) => {
     fs.sort((a, b) => b.lines - a.lines || cmpStr(a.name, b.name));
     const n = fs.length,

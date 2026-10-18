@@ -3,7 +3,7 @@
 // gets "/" (CodeTree's slashFinds) and the CSS that docks the Session panel,
 // pins a small pane's card actions and keeps toasts off the agents column.
 import { describe, expect, it } from "vitest";
-import { boxOnScreen, fitWhole, pictureBox, WHOLE_PAD } from "../lib/codetree/fit";
+import { boxOnScreen, fitWhole, pictureBox, WHOLE_MAX_Z, WHOLE_PAD } from "../lib/codetree/fit";
 import { S0 } from "../lib/codetree/model";
 import { placeMapCard, type MapScene } from "../components/grid/codemap/tourPlace";
 import { slashFinds } from "../components/grid/codemap/CodeTree";
@@ -16,7 +16,7 @@ describe("the whole-tree view", () => {
     expect(B).toEqual({ x0: -100, y0: -300, x1: 200, y1: 40 }); // the ground line under the trunk counts
   });
 
-  it("a wide, short tree: centred across the free canvas, spare height to the sky, a thin band of soil", () => {
+  it("a wide, short tree: centred across the free canvas, a band of soil — never a third of the pane", () => {
     const B = { x0: -600, y0: -200, x1: 600, y1: 0 };
     const W = 1320,
       H = 860;
@@ -25,17 +25,27 @@ describe("the whole-tree view", () => {
     // as wide as the free canvas allows
     expect(s.x0).toBeCloseTo(I.left + WHOLE_PAD.side, 3);
     expect(s.x1).toBeCloseTo(W - I.right - WHOLE_PAD.side, 3);
-    // the ground line sits just above the pile names at the bottom: the soil is thin, not a third of the canvas
-    expect(H - s.y1).toBeCloseTo(I.bot + WHOLE_PAD.piles, 3);
-    expect((H - s.y1) / H).toBeLessThan(0.06);
-    // and the sky takes the rest
+    // the spare height lifts the picture off the bottom, but the soil under it stays a band
+    const h = H - I.top - I.bot - WHOLE_PAD.top - WHOLE_PAD.piles;
+    expect(H - s.y1).toBeCloseTo(I.bot + WHOLE_PAD.piles + h * 0.12, 3);
+    expect((H - s.y1) / H).toBeLessThan(0.16);
     expect(s.y0).toBeGreaterThan(H * 0.4);
   });
 
   it("no piles and no roots: the soil is thinner still", () => {
     const B = { x0: -600, y0: -200, x1: 600, y1: 0 };
     const c = fitWhole(B, 0, false, 1320, 860, I);
-    expect(860 - boxOnScreen(B, c, 1320, 860).y1).toBeCloseTo(I.bot + WHOLE_PAD.bot, 3);
+    const h = 860 - I.top - I.bot - WHOLE_PAD.top - WHOLE_PAD.bot;
+    expect(860 - boxOnScreen(B, c, 1320, 860).y1).toBeCloseTo(I.bot + WHOLE_PAD.bot + h * 0.12, 3);
+  });
+
+  it("a tiny tree is drawn large but not past the zoom cap, in the middle of the free canvas", () => {
+    const B = { x0: -20, y0: -30, x1: 20, y1: 0 };
+    const c = fitWhole(B, 0, false, 1320, 860, I);
+    expect(c.z).toBe(WHOLE_MAX_Z);
+    const s = boxOnScreen(B, c, 1320, 860);
+    expect((s.x0 + s.x1) / 2).toBeCloseTo((I.left + 1320 - I.right) / 2, 3);
+    expect((s.y0 + s.y1) / 2).toBeCloseTo((I.top + WHOLE_PAD.top + 860 - I.bot - WHOLE_PAD.bot) / 2, 3);
   });
 
   it("a tall tree fills the height, centred across what is left of the bird index and a panel", () => {
@@ -91,6 +101,22 @@ describe("the Map tour's card", () => {
     expect(ov(r3, risk)).toBe(0);
     expect(covers(r3, risk.x + risk.w / 2, risk.y + risk.h / 2)).toBe(false);
     expect(r3.x).toBeGreaterThanOrEqual(column.x + column.w);
+  });
+
+  it("keeps off the ground piles and their names, even when the zoomed tree fills the canvas", () => {
+    // zoomed onto a file: its card top right, the agents column top left, Activity bottom right, the docs pile
+    // bottom left — the tree's box covers everything
+    const docs = { x: 280, y: 790, w: 340, h: 120 };
+    const zoomed: MapScene = {
+      area,
+      tree: { x: 0, y: 40, w: W, h: H - 40 },
+      parts: [{ x: 880, y: 410, w: 280, h: 200 }, docs],
+      avoid: [column, { x: 1280, y: 48, w: 300, h: 380 }, activity],
+    };
+    const r = rect(placeMapCard(null, W, H, cardH, zoomed));
+    expect(ov(r, docs)).toBe(0);
+    expect(ov(r, zoomed.parts![0])).toBe(0);
+    expect(ov(r, column)).toBe(0);
   });
 
   it("stays inside a small pane", () => {

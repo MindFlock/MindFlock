@@ -228,6 +228,21 @@ describe("folder names stay pinned to their own cluster (the rig's scenario)", (
   });
 });
 
+describe("changed files are named even at the whole-tree zoom", () => {
+  for (const sz of [SIZES[0], SIZES[3]])
+    it(sz.name, () => {
+      const v = view(sz, "main");
+      render(v, 1000);
+      const edited = new Set<number>();
+      for (const A of v.agents) for (const k of A.edits.keys()) edited.add(k);
+      const named = (v.labelHits || []).filter((h) => h.leaf);
+      // only changed files (and a bird's current file, named in its colour) out here, a handful at most
+      expect(named.filter((h) => edited.has(h.leaf!.file.id)).length).toBeGreaterThan(0);
+      expect(named.length).toBeLessThanOrEqual(8 + v.agents.length);
+      for (const h of named) if (!edited.has(h.leaf!.file.id)) expect(v.agents.some((A) => A.file === h.leaf!.file)).toBe(true);
+    });
+});
+
 describe("file names once the view is close enough to show them", () => {
   // zoomed onto each changed file in turn (leaves ~30 px: names show, sparsely), at a full pane and a small one
   for (const sz of [SIZES[0], SIZES[3]])

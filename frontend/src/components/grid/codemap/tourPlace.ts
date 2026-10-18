@@ -1,8 +1,9 @@
 /** Where the Map tour's card goes (MapTour.tsx hands this to the shared
  * CoachTour): beside the ring of the part it explains, on the side with the
  * most room, off the tree and the HUD panels; docked in a corner of the canvas
- * when the step is about the tree as a whole — never over the centre of what
- * it explains. Pure, for the tests, except `mapScene` (reads the tab's DOM). */
+ * (or an edge's middle) when the step is about the tree as a whole — never
+ * over the centre of what it explains, and off the canopy, the roots and the
+ * ground piles with their names wherever there is room. Pure, for the tests, except `mapScene` (reads the tab's DOM). */
 
 export interface Rect {
   x: number;
@@ -12,10 +13,12 @@ export interface Rect {
 }
 
 /** What the card should keep off, in the Map root's px: the canvas (`area`),
- * the picture on it (`tree`, from the stage's data-tree) and the HUD panels. */
+ * the picture on it (`tree`, from the stage's data-tree) and its parts — the
+ * canopy, the roots, each ground pile and its name — and the HUD panels. */
 export interface MapScene {
   area: Rect;
   tree: Rect | null;
+  parts?: Rect[];
   avoid: Rect[];
 }
 
@@ -39,12 +42,17 @@ export function placeMapCard(t: Rect | null, W: number, H: number, cardH: number
   const area = s ? s.area : { x: 0, y: 0, w: W, h: H };
   const tree = s && s.tree ? s.tree : null;
   const avoid = s ? s.avoid : [];
+  const parts = (s && s.parts) || [];
   // what the card must never sit on the middle of
   const focus = t || tree || area;
   const fx = focus.x + focus.w / 2,
     fy = focus.y + focus.h / 2;
-  // covering the tree or a panel costs its area (a little less for the panel the target sits in)
-  const cost = (c: Rect) => (tree ? overlap(c, tree) : 0) + avoid.reduce((a, r) => a + (t && inside(t, r) ? 0.5 : 1) * overlap(c, r), 0);
+  // covering a part of the picture costs twice its area, the empty rest of the picture's box a little, a panel
+  // its area (half for the panel the target sits in)
+  const cost = (c: Rect) =>
+    (tree ? overlap(c, tree) * (parts.length ? 0.25 : 1) : 0) +
+    parts.reduce((a, r) => a + 2 * overlap(c, r), 0) +
+    avoid.reduce((a, r) => a + (t && inside(t, r) ? 0.5 : 1) * overlap(c, r), 0);
   const pick = (cands: Rect[]): Rect | null => {
     let best: Rect | null = null,
       bc = Infinity;
@@ -63,6 +71,11 @@ export function placeMapCard(t: Rect | null, W: number, H: number, cardH: number
     clamp(area.x + area.w - cw - EDGE, area.y + area.h - cardH - EDGE),
     clamp(area.x + EDGE, area.y + area.h - cardH - EDGE),
     clamp(area.x + EDGE, area.y + EDGE),
+    // the middles of the edges, when every corner is taken (a card, the agents column, a pile)
+    clamp(area.x + (area.w - cw) / 2, area.y + EDGE),
+    clamp(area.x + area.w - cw - EDGE, area.y + (area.h - cardH) / 2),
+    clamp(area.x + (area.w - cw) / 2, area.y + area.h - cardH - EDGE),
+    clamp(area.x + EDGE, area.y + (area.h - cardH) / 2),
   ];
   if (!t) {
     const c = pick(corners) || corners[0];
@@ -91,17 +104,19 @@ export function mapScene(root: HTMLElement | null): MapScene | null {
   const r0 = root.getBoundingClientRect();
   const rel = (r: DOMRect): Rect => ({ x: r.left - r0.left, y: r.top - r0.top, w: r.width, h: r.height });
   const area = rel(st.getBoundingClientRect());
-  const b = (st.dataset.tree || "").split(" ").map(Number);
-  let tree: Rect | null = null;
-  if (b.length === 4 && b.every(Number.isFinite)) {
+  // "x0 y0 x1 y1;…" in stage px: the whole picture first, then its parts (clipped to the stage)
+  const boxes: Rect[] = [];
+  for (const one of (st.dataset.tree || "").split(";")) {
+    const b = one.split(" ").map(Number);
+    if (b.length !== 4 || !b.every(Number.isFinite)) continue;
     const x0 = Math.max(0, b[0]),
       y0 = Math.max(0, b[1]),
       x1 = Math.min(area.w, b[2]),
       y1 = Math.min(area.h, b[3]);
-    if (x1 > x0 && y1 > y0) tree = { x: area.x + x0, y: area.y + y0, w: x1 - x0, h: y1 - y0 };
+    if (x1 > x0 && y1 > y0) boxes.push({ x: area.x + x0, y: area.y + y0, w: x1 - x0, h: y1 - y0 });
   }
   const avoid = Array.from(st.querySelectorAll<HTMLElement>("[data-hud]"))
     .map((el) => rel(el.getBoundingClientRect()))
     .filter((r) => r.w > 2 && r.h > 2);
-  return { area, tree, avoid };
+  return { area, tree: boxes[0] || null, parts: boxes.slice(1), avoid };
 }

@@ -136,7 +136,8 @@ export function CodeTree(p: CodeTreeProps) {
     let left = 8,
       top = 8,
       bot = 8,
-      card = 0;
+      card = 0,
+      sheet = 0;
     for (const el of Array.from(st.querySelectorAll<HTMLElement>("[data-hud]"))) {
       const r = el.getBoundingClientRect();
       if (r.width < 2 || r.height < 2) continue;
@@ -150,7 +151,9 @@ export function CodeTree(p: CodeTreeProps) {
       if (kind === "left") left = Math.max(left, x1 + 8);
       // (the paint-tool hint sits at the bottom and insets nothing: arming a tool never moves what you aim at)
       if (kind === "info" && !isNarrow) card = Math.max(card, r.width + 16);
-      if (kind === "info" && isNarrow) bot = Math.max(bot, r0.height - y0 + 6);
+      // (a small pane's card is a bottom sheet: like the wide card it is kept apart, so the whole tree frames the
+      // same with or without it)
+      if (kind === "info" && isNarrow) sheet = Math.max(sheet, r0.height - y0 + 6);
       if (kind === "activity" && isNarrow) bot = Math.max(bot, r0.height - y0 + 6);
       // a wide pane's folded Activity sits on the ground at the bottom right: the whole tree stands clear of it
       // (a fixed allowance, so unfolding it never moves the picture)
@@ -171,6 +174,7 @@ export function CodeTree(p: CodeTreeProps) {
     card = Math.max(0, card - (right - 8));
     const insets: Insets = { top, bot, left, right };
     c.cardInset = card;
+    c.cardBot = Math.max(0, sheet - bot);
     c.setHud(rects, insets);
   };
   useLayoutEffect(measure);
