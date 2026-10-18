@@ -727,37 +727,76 @@ function DeviceHeader(props: {
   member?: boolean;
   onToggle(): void;
 }) {
+  // The ✕ forgets the device's token — pairing it again is the only way
+  // back — so it asks first, on a strip under the header (the row ✕'s
+  // close-confirm; never confirm(): the desktop app has none).
+  const [armed, setArmed] = useState(false);
+  const disconnect = async () => {
+    setArmed(false);
+    try {
+      await api(`/api/devices/${encodeURIComponent(props.devKey!)}/disconnect`, {
+        method: "POST",
+      });
+      toast("Disconnected " + props.label);
+      refreshInstances();
+    } catch (err) {
+      toast("Disconnect failed: " + (err as Error).message);
+    }
+  };
   return (
-    <li className="device-group" title={props.title} onClick={props.onToggle}>
-      <span className="dev-caret">{props.collapsed ? "▸" : "▾"}</span>
-      <span className="dev-name">{props.label}</span>
-      {props.member && (
-        <span className="dev-member" aria-label="One of your devices">
-          yours
-        </span>
-      )}
-      <span className={"dev-badge" + (props.badgeOff ? " off" : "")}>{props.badge}</span>
-      {props.showForget && props.devKey && (
+    <>
+      <li className="device-group" title={props.title}>
+        {/* The header is the fold toggle: a real button, so Tab reaches it and
+            a screen reader hears whether the group is open. */}
         <button
-          className="dev-forget"
-          title="Disconnect — forget this device's token"
-          onClick={async (e) => {
-            e.stopPropagation();
-            try {
-              await api(`/api/devices/${encodeURIComponent(props.devKey!)}/disconnect`, {
-                method: "POST",
-              });
-              toast("Disconnected");
-              refreshInstances();
-            } catch (err) {
-              toast("Disconnect failed: " + (err as Error).message);
-            }
-          }}
+          type="button"
+          className="dev-toggle"
+          aria-expanded={!props.collapsed}
+          onClick={props.onToggle}
         >
-          ✕
+          <span className="dev-caret" aria-hidden="true">
+            {props.collapsed ? "▸" : "▾"}
+          </span>
+          <span className="dev-name">{props.label}</span>
+          {props.member && (
+            <span className="dev-member" aria-label="One of your devices">
+              yours
+            </span>
+          )}
+          <span className={"dev-badge" + (props.badgeOff ? " off" : "")}>{props.badge}</span>
         </button>
+        {props.showForget && props.devKey && (
+          <button
+            type="button"
+            className="dev-forget"
+            title="Disconnect — forget this device's token"
+            aria-label={"Disconnect " + props.label}
+            aria-expanded={armed}
+            onClick={(e) => {
+              e.stopPropagation();
+              setArmed(!armed);
+            }}
+          >
+            ✕
+          </button>
+        )}
+      </li>
+      {armed && props.showForget && props.devKey && (
+        <li className="device-forget-confirm" role="group" aria-label={`Disconnect ${props.label}?`}>
+          <span className="del-q">
+            Disconnect {props.label}? This forgets its token — its sessions leave this list until you pair it again.
+          </span>
+          <span className="del-acts">
+            <button type="button" className="danger" onClick={() => void disconnect()}>
+              Disconnect
+            </button>
+            <button type="button" autoFocus onClick={() => setArmed(false)}>
+              Cancel
+            </button>
+          </span>
+        </li>
       )}
-    </li>
+    </>
   );
 }
 

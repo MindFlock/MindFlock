@@ -161,6 +161,18 @@ describe("shortcut hints say keys that work here", () => {
   });
 });
 
+describe("a device group's header", () => {
+  it("is a button with aria-expanded, and its ✕ asks before forgetting the token", () => {
+    const head = fn("components/sidebar/Sidebar.tsx", "DeviceHeader");
+    expect(has(head, 'className="dev-toggle" aria-expanded={!props.collapsed} onClick={props.onToggle}')).toBe(true);
+    expect(head).not.toMatch(/<li className="device-group"[^>]*onClick/);
+    // The ✕ only arms the strip; the POST is the strip's Disconnect.
+    expect(has(head, "setArmed(!armed);")).toBe(true);
+    expect(has(head, 'className="danger" onClick={() => void disconnect()}')).toBe(true);
+    expect(head.indexOf("/disconnect")).toBeLessThan(head.indexOf("<li"));
+  });
+});
+
 describe("the Queue tab", () => {
   it("Ctrl/⌘+Enter sends now, Alt+Enter queues, Enter is a newline", async () => {
     const { composerKey } = await import("../components/grid/QueueTab");
