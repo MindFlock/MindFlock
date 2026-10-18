@@ -16,6 +16,7 @@ import type { Instance } from "../../api/types";
 import { queryClient } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { submitMakePr } from "../../lib/sessionActions";
+import { digestLine, useMapDigest } from "../../lib/mapDigest";
 import { Modal } from "../Modal";
 
 interface BranchInfo {
@@ -81,6 +82,9 @@ export function MakePrDialog() {
   useEffect(() => {
     setActive((a) => Math.min(a, Math.max(0, filtered.length - 1)));
   }, [filtered.length]);
+
+  // What could break: the Map's blast radius as one line (lib/mapDigest).
+  const risk = digestLine(useMapDigest(target || "", open && !!target));
 
   if (!open || !target) return null;
 
@@ -187,6 +191,21 @@ export function MakePrDialog() {
             )}
           </div>
         </label>
+        {risk && (
+          <p className="set-hint" id="make-pr-risk">
+            ⚠ Could break: {risk} —{" "}
+            <button
+              type="button"
+              className="linklike"
+              onClick={() => {
+                closeDialog();
+                useUi.getState().openMap(target, { section: "risk" });
+              }}
+            >
+              See on map
+            </button>
+          </p>
+        )}
         {onBase ? (
           <p className="error" id="make-pr-error">
             Can’t PR a branch into itself — pick a different target.
