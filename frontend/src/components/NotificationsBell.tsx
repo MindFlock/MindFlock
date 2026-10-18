@@ -29,7 +29,7 @@ import { openThread } from "../lib/flockActions";
 import { AnswerStrip } from "./AnswerStrip";
 import { runNote } from "../lib/runs";
 import { ruleOn, runLookups, useNotifyConfig, useOutbox, useRuns } from "../state/runs";
-import { needsAttention } from "./outbox/outbox";
+import { needsAttention, withPlanReady } from "./outbox/outbox";
 import { REASON_LABEL, STATE_LABEL } from "../lib/sessionState";
 import { WaitingRow } from "./outbox/WaitingRow";
 import { showGroup } from "../lib/showGroup";
@@ -386,7 +386,9 @@ export function NotificationsBell() {
   const byTitle = useMemo(() => new Map(instances.map((i) => [i.title, i])), [instances]);
   // ONE list: the sessions' own attention items and the server's waiting rows,
   // one row per session (outbox.ts `needsAttention` says how they merge).
-  const attn = needsAttention(attentionItems(instances), outbox?.groups?.waiting);
+  // A plan waiting for Go joins it (withPlanReady), so Plan first is seen
+  // with the Map closed.
+  const attn = withPlanReady(needsAttention(attentionItems(instances), outbox?.groups?.waiting), instances);
   // MindFlock MCP families: a worker's (or an orchestrator's) "needs your
   // answer" item names whose worker it is, and its strip can redirect the
   // question to the lead's Thread — answerable from any screen, two clicks.
@@ -542,6 +544,28 @@ export function NotificationsBell() {
                           group={runId ? w.run?.name || runName(runId) : ""}
                           runInfo={runId ? runs?.find((r) => r.id === runId) : undefined}
                         />
+                      </div>
+                    );
+                  }
+                  if (it.plan) {
+                    // A plan waiting for Go: straight to the Map's Plan section.
+                    return (
+                      <div
+                        key={"plan:" + it.key}
+                        className={"attn-item p1" + (flashing ? " flash" : "")}
+                        data-attn={it.title}
+                        data-needs={it.key}
+                        onClick={() => {
+                          setOpen(false);
+                          useUi.getState().openMap(it.title, { section: "plan" });
+                        }}
+                      >
+                        <span className="attn-dot" />
+                        <span className="attn-title">{windowName(it.title)}</span>
+                        <span className="attn-reason">Plan ready — review &amp; Go</span>
+                        <div className="attn-snippet">
+                          {it.plan} planned file{it.plan === 1 ? "" : "s"}
+                        </div>
                       </div>
                     );
                   }

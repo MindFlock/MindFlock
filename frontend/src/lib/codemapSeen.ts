@@ -12,6 +12,8 @@
  * Subscribable (useSyncExternalStore) so a row clears its chip the moment the
  * Map opens, not on the next instances poll. */
 
+import type { MapSection } from "../state/store";
+
 const KEY = "mf_codemap_seen";
 const MAX_TITLES = 200;
 
@@ -67,11 +69,32 @@ export function subscribeCodemapSeen(cb: () => void): () => void {
   return () => listeners.delete(cb);
 }
 
-/** The rail chip for a row's red-zone summary, or null for no chip. Pure. */
+export interface RedZoneChip {
+  cls: string;
+  label: string;
+  title: string;
+  /** The part of the Map a click should open (`openMap(title, {section})`):
+   * "breaches" for ⛔, "plan" for a plan waiting for Go, "zones" otherwise. */
+  section: MapSection;
+}
+
+/** The rail chip for a row's red-zone summary, or null for no chip. Pure.
+ * Loudest first: breaches, an unseen block, a guard that isn't holding, a plan
+ * waiting for Go (`plan_pending`), then the quiet shield / green check. */
 export function redZoneChip(
-  rz: { zones: number; breaches: number; last_block_ts: number | null; guard: string; mode?: string | null } | null | undefined,
+  rz:
+    | {
+        zones: number;
+        breaches: number;
+        last_block_ts: number | null;
+        guard: string;
+        mode?: string | null;
+        plan_pending?: number;
+      }
+    | null
+    | undefined,
   seenAt: number
-): { cls: string; label: string; title: string } | null {
+): RedZoneChip | null {
   if (!rz) return null;
   const zones = rz.zones || 0;
   const breaches = rz.breaches || 0;
@@ -81,12 +104,14 @@ export function redZoneChip(
       cls: "rz-breach",
       label: "⛔" + breaches,
       title: `${breaches} red-zone file${breaches === 1 ? "" : "s"} changed on this branch — pushing is blocked until reverted. Click to open the map.`,
+      section: "breaches",
     };
   if (blockTs > seenAt)
     return {
       cls: "rz-breach",
       label: "⛔",
       title: "A red zone blocked an edit since you last looked. Click to open the map.",
+      section: "breaches",
     };
   if (zones > 0 && (rz.guard === "off" || rz.guard === "arming"))
     return {
@@ -96,18 +121,30 @@ export function redZoneChip(
         rz.guard === "off"
           ? "Red-zone guard is off — MindFlock is re-arming it. Edits are detected, not blocked, until then."
           : "Red-zone guard is arming — it takes effect on the agent's next tool call.",
+      section: "zones",
+    };
+  const planned = rz.plan_pending || 0;
+  if (planned > 0)
+    return {
+      // Amber like a warning (it waits on you); rz-plan tells it apart.
+      cls: "rz-warn rz-plan",
+      label: "plan · " + planned,
+      title: "Plan ready — review & Go",
+      section: "plan",
     };
   if (zones > 0 && rz.guard === "guarded" && rz.mode === "green")
     return {
       cls: "rz-ok",
       label: "✓",
       title: "Scoped to its green zones — edits outside them are blocked. Click to open the map.",
+      section: "zones",
     };
   if (zones > 0 && rz.guard === "guarded")
     return {
       cls: "rz-ok",
       label: "🛡",
       title: `${zones} red zone${zones === 1 ? "" : "s"} guarded — edits there are blocked. Click to open the map.`,
+      section: "zones",
     };
   // Detect-only (a provider with no hook guard) gets no shield on purpose: a
   // shield would claim a protection that isn't there. Its breaches still
