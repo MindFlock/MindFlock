@@ -161,6 +161,25 @@ describe("shortcut hints say keys that work here", () => {
   });
 });
 
+describe("the bell, for a screen reader and a keyboard", () => {
+  it("says the count its badge shows", async () => {
+    const { bellLabel } = await import("../components/NotificationsBell");
+    expect(bellLabel(3, 0)).toBe("Notifications, 3 need you");
+    expect(bellLabel(1, 4)).toBe("Notifications, 1 needs you");
+    expect(bellLabel(0, 2)).toBe("Notifications, 2 new");
+    expect(bellLabel(0, 0)).toBe("Notifications");
+  });
+
+  it("its click-target rows are keyboard stops; a question's row keeps the strip's buttons", () => {
+    const bell = code("components/NotificationsBell.tsx");
+    expect(bell).toContain("aria-label={bellLabel(attn.length, unread)}");
+    expect(bell).toContain("aria-expanded={open}");
+    expect(has(bell, 'role={a.p === 0 ? undefined : "button"} tabIndex={a.p === 0 ? undefined : 0}')).toBe(true);
+    expect(has(bell, 'role="button" tabIndex={0} onKeyDown={rowKey}')).toBe(true);
+    expect(has(fn("components/NotificationsBell.tsx", "rowKey"), "if (e.target !== e.currentTarget")).toBe(true);
+  });
+});
+
 describe("a device group's header", () => {
   it("is a button with aria-expanded, and its ✕ asks before forgetting the token", () => {
     const head = fn("components/sidebar/Sidebar.tsx", "DeviceHeader");
