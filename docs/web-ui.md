@@ -1619,19 +1619,28 @@ wasn't in the plan is marked off-plan, and planned files outside the green
 zones are flagged. Ask/Go/Tell are disabled while the agent is waiting on a
 question in the terminal. Plan-first can be set at launch (the New-session
 dialog's **Plan first** checkbox) or per repo (Zones…) for sessions started
-from Intake.
+from Intake. A Plan-first start opens on the Map's Plan section, to watch the
+plan arrive.
+
+A plan waiting for Go doesn't need the Map open to be seen: the server's
+red-zone loop counts it (`redzone.plan_pending`, see web-api.md), so the rail
+chip reads **plan · n**, the 🔔 lists **Plan ready — review & Go** (both open
+the Map's Plan section), and the phone shows a plan card with **Go** and **Go —
+only the planned files**. It clears once Go is delivered or the agent starts a
+tool call.
 
 ### The rail chip
 
 A session's sidebar row carries a zone chip when there is something to
 say: red **⛔n** for breached files on the branch (or **⛔** for a block you
 haven't looked at since you last opened its Map), amber **!** while the guard is
-arming or off, and a quiet **🛡** while it is guarded (**✓** when the
-worktree is scoped by green zones). "Since you last
+arming or off, amber **plan · n** while a plan waits for Go, and a quiet **🛡**
+while it is guarded (**✓** when the worktree is scoped by green zones). "Since you last
 looked" is kept on the server's clock (the block time is the server's), so a
 browser on another machine, or a WSL2 clock that drifted after sleep, neither
 hides a block nor keeps a seen one red. Clicking it selects the
-session and opens its Map. Blocks, breaches and tampering also arrive as toasts
+session and opens its Map on the part the chip is about (`redZoneChip`'s
+`section`: Breaches for ⛔, Plan for **plan · n**, Zones otherwise). Blocks, breaches and tampering also arrive as toasts
 (clickable, straight to the Map) and in the 🔔 feed; the "Red zone blocked an
 edit" notification rule is off by default, the other two are on.
 
@@ -1646,7 +1655,9 @@ sessions whose [one state](#one-session-state) is "in the bell" — **Question**
 **Pre-commit failed** (with the hook), **Setup failed**, **Offline**, **Checks
 failing**, and an **Idle** session 20 minutes into uncommitted work — plus a
 branch ready for its PR, and the `waiting` group of `GET /api/outbox`
-(ask-first approvals, stuck team run lines, budget pauses, a lead's plan or PR).
+(ask-first approvals, stuck team run lines, budget pauses, a lead's plan or PR),
+and a session whose agent waits on Go for its plan (**Plan ready — review &
+Go**, ranked like an approval; it opens the Map's Plan section).
 The words are the state's own labels, the same ones the row's chip and the
 toast use. It is sorted by urgency: answers first, then approvals and team run
 escalations, then broken (pre-commit, setup, offline, stuck), failing and
@@ -2936,6 +2947,11 @@ also just type a name. The session's own branch is flagged and can't be the
 target. The **last base chosen per repo is remembered** (`prBaseByRepo`,
 persisted) and pre-selected next time (falling back to the server-computed
 default); submitting calls `submitMakePr` → `POST /api/instances/{title}/make-pr`.
+Under the base field one line says what the PR could break — **⚠ Could break:
+9 files in 3 folders (2 tests) — See on map** (the Map's blast radius:
+direct importers of the changes, from `lib/mapDigest`; See on map opens the
+⚠ Could break layer). It stays hidden while loading and when nothing imports
+the changes.
 
 ## Recently closed
 
@@ -4171,8 +4187,8 @@ has answered shows **Check now** as a visible secondary button. A partly
 checked row carries one counter (the tally), not a pill as well. The landing
 chip reads **not merged** or **merged → main · 4m ago** (never "local" — the
 branch was pushed). Everything rare is in the row's ⋯ menu, which starts with
-**Open the work session**, **View diff** and **Open PR ↗** while the session is
-open; the verify run is **Open the checking run** / **Show the checking run
+**Open the work session**, **View diff**, **What could break** (the session's
+Map on its ⚠ Could break layer) and **Open PR ↗** while the session is open; the verify run is **Open the checking run** / **Show the checking run
 here**. A finished row says *Every step passed.* (never "it works").
 
 **"Check now" means one thing** — start the agent's steps — on the row, in the ⋯
@@ -5335,7 +5351,11 @@ QR; the full banner appears only on the operator's console.
 
 **Sessions and their actions** — the picker is a button that opens a
 **Sessions** sheet, attention first; each row reads like the rail's: a tone dot,
-the name, the state word and the repo. The words and tones are the rail's one
+the name, the state word, the rail's zone chip (⛔ / ! / **plan · n** / 🛡 / ✓,
+the same rules; a block counts as seen once the session is opened on the
+phone) and the repo. When the current session's agent waits on Go for its
+plan, a card under the header lists the plan and offers **Go** and **Go — only
+the planned files** (the Map's own `code-map/live` and `code-map/go`). The words and tones are the rail's one
 state table ([One session state](#one-session-state)) copied into
 `mobile.js` `SESSION_STATES`: *Starting*, *Working*, *Question* / *Pre-commit
 failed* / *Checks failing* / *Setup failed*, *Idle*, *Waiting on limit*
