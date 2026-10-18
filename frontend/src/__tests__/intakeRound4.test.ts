@@ -83,7 +83,8 @@ describe("the safe default (M2): a new source starts nothing until a state is pi
     // a state.
     expect(TICKETS).toContain('const fresh = { id, provider, needs_filter: "on" } as Source;');
     expect(TICKETS).not.toContain("const provider = catalog[0]?.id");
-    expect(TICKETS).toContain('picked={draftSource?.provider || (draft ? "" : choice)}');
+    // Back on step 1 (the draft kept) the tiles show the choice again.
+    expect(TICKETS).toContain('picked={pastPick ? draftSource?.provider || "" : choice}');
     expect(TICKETS).toContain('const [choice, setChoice] = useState("");');
     expect(TICKETS).toContain("step={draft ? draft.step : 1}");
   });

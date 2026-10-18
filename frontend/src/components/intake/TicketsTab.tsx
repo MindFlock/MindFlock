@@ -71,6 +71,18 @@ import {
 } from "./vocab";
 import { useAutosave } from "./autosave";
 import {
+  backStep,
+  beginSave,
+  continueWith as continueChoice,
+  finishRefusal,
+  restoreStash,
+  settleSave,
+  stashOf,
+  type PersistResult,
+  type SaveSeqs,
+  type TrackerDraft,
+} from "./addDraft";
+import {
   TEST_STATE_LABELS,
   advancedFields,
   advancedHasValues,
@@ -170,7 +182,7 @@ type SaveState = { state: "pending" | "saving" | "saved" | "failed"; at: number 
 const FILL_FIELDS = "Fill in the marked fields first.";
 const FIX_FIELDS = "Fix the marked fields first.";
 
-export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProps) {
+export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd, draftStash }: TabProps) {
   // Catalog, saved sources and agent names all come from the shared query cache
   // (see state/queries), warmed at app startup. They used to be three requests
   // fired in series from this component's mount, behind a full-tab "Loading…" —
@@ -193,9 +205,10 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
     new Set((savedSources.data || []).map((s) => s.id))
   );
   const seq = useRef(0);
-  // What the last save refused, per source — read straight after the save by
-  // the add flow's Finish (the state copy below lands a render later).
-  const lastRefused = useRef<Record<string, FieldErrors>>({});
+  // Per card, its newest save (addDraft.settleSave): an older answer landing
+  // late neither strands the card on "Saving…" nor marks it failed after a
+  // newer save went through.
+  const saveSeqs = useRef<SaveSeqs>({ card: {}, ok: 0 });
   // The add flow's draft while it is not stored yet: every other save leaves
   // it out, so editing another source mid-add can't store it early.
   const pendingDraft = useRef("");
@@ -244,7 +257,7 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
   // from a deep link (Settings → Connections → "Open in Intake").
   const edit = useEditing(focus);
   // The tracker draft "+ Add source" is building, and which step it is on.
-  const [draft, setDraft] = useState<{ id: string; step: 2 | 3 } | null>(null);
+  const [draft, setDraft] = useState<TrackerDraft | null>(null);
   pendingDraft.current = draft && !storedIds.current.has(draft.id) ? draft.id : "";
   // Step 1's pick: "" until the person presses a tile — nothing is chosen for
   // them (a preselected tracker read as "you are configuring GitHub Issues"
@@ -284,6 +297,25 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
     storedIds.current = new Set(savedSources.data.map((s) => s.id));
     setSources(savedSources.data);
   }, [savedSources.data, savedSources.isError]);
+
+  // A draft typed on this tab before a switch to another one comes back as
+  // it was (the dialog kept it — addDraft.ts), once the list is here.
+  const restored = useRef(false);
+  useEffect(() => {
+    if (restored.current || sources === null) return;
+    restored.current = true;
+    const r = restoreStash(sources, draftStash?.current ?? null);
+    if (!r.draft) return;
+    latest.current = r.list;
+    setSources(r.list);
+    setDraft(r.draft);
+    setChoice(r.list.find((x) => x.id === r.draft!.id)?.provider || "");
+  }, [sources, draftStash]);
+  // ...and is kept current for the next switch. Only Cancel (or Finish)
+  // clears it.
+  useEffect(() => {
+    if (draftStash && restored.current) draftStash.current = stashOf(sources, draft, storedIds.current);
+  }, [sources, draft, draftStash]);
 
   /** Run Test on a SAVED source and record the verdict on it (the server
    * stamps `last_test`, fills the member id / Asana workspace, and hands the
@@ -408,9 +440,8 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
         /** Finish: the draft goes too (the add flow's one save). */
         withDraft?: boolean;
       } = {}
-    ) => {
+    ): Promise<PersistResult> => {
       const mySeq = ++seq.current;
-      lastRefused.current = {};
       const pending = opts.withDraft ? "" : pendingDraft.current;
       // A new card still missing a typed required field stays local with its
       // inline errors; the rest of the list saves without it.
@@ -423,16 +454,29 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
       if (!send.length && !storedIds.current.size) {
         // Nothing stored and nothing ready: no request to make.
         setErrors(held);
-        return;
+        return { ok: false, fieldErrors: held };
       }
       const sending = changed.filter((id) => !held[id]);
+      saveSeqs.current = beginSave(saveSeqs.current, mySeq, sending);
       markSave(sending, "saving");
+      /** This save answered: mark the cards it still owns. */
+      const settle = (ok: boolean) => {
+        const r = settleSave(saveSeqs.current, mySeq, sending, ok);
+        saveSeqs.current = r.seqs;
+        markSave(r.saved, "saved");
+        markSave(r.failed, "failed");
+      };
       try {
         const r = await api<{ sources?: Source[] }>("/api/settings/ticketing/sources", {
           method: "PUT",
           json: putBody(send, opts.nulls),
         });
-        if (mySeq !== seq.current) return;
+        if (mySeq !== seq.current) {
+          // A newer save is on its way with the whole list; this one still
+          // landed, so the cards it carried are saved, not "Saving…" forever.
+          settle(true);
+          return { ok: true, fieldErrors: {} };
+        }
         storedIds.current = new Set((r?.sources || send).map((s) => s.id));
         setErrors(held);
         // The server decides whether a source's stored test still vouches for
@@ -448,7 +492,7 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
         putTicketingSources(r?.sources || send);
         // The card says "Saved ✓" itself; a held card says what it still needs
         // (its pill and its marked fields), so no toast restates either.
-        markSave(sending, "saved");
+        settle(true);
         // Connecting/removing a source flips the ticketing capability.
         refreshConfig();
         if (opts.autoTest) {
@@ -460,21 +504,20 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
             });
           }
         }
+        return { ok: true, fieldErrors: {} };
       } catch (err) {
         const fieldErrors = err instanceof ApiError && err.status === 400 ? fieldErrorsFrom(err.body) : {};
+        settle(false);
         if (Object.keys(fieldErrors).length) {
-          lastRefused.current = fieldErrors;
           // Not saved: the fields are marked on their cards, which stay as
           // typed — the next blur retries the whole list.
           if (mySeq === seq.current) setErrors({ ...held, ...fieldErrors });
-          markSave(sending, "failed");
-          return;
+          return { ok: false, fieldErrors };
         }
-        markSave(sending, "failed");
-        errorPop(
-          "Ticket sources not saved",
-          (err as Error).message || "the server rejected the ticket sources"
-        );
+        const message = (err as Error).message || "the server rejected the ticket sources";
+        // A newer save already stored the list: this late failure is moot.
+        if (saveSeqs.current.ok < mySeq) errorPop("Ticket sources not saved", message);
+        return { ok: false, fieldErrors: {}, message };
       }
     },
     [catalog, runTest]
@@ -515,6 +558,9 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
     const next = (latest.current || []).map((s) => (s.id === id ? ({ ...s, ...strings } as Source) : s));
     latest.current = next;
     setSources(next);
+    // Written here too: a field flushed as the tab unmounts never reaches the
+    // effect above.
+    if (draftStash) draftStash.current = stashOf(next, draft, storedIds.current);
     const merged = next.find((s) => s.id === id);
     if (!merged) return;
     const meta = catalog.find((p) => p.id === merged.provider) || null;
@@ -746,13 +792,14 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
         return;
       }
       // The ONE save of the add flow.
-      await persist(latest.current || [], { changed: draft.id, withDraft: true });
-      if (!storedIds.current.has(draft.id)) {
-        // Refused: the fields are marked. A refused credential sits on step 2.
-        const refused = Object.keys(lastRefused.current[draft.id] || {});
+      const saved = await persist(latest.current || [], { changed: draft.id, withDraft: true });
+      if (!saved.ok || !storedIds.current.has(draft.id)) {
+        // Refused: the fields are marked, and a refused credential sits on
+        // step 2. A failure with nothing to mark says what went wrong instead.
+        const refused = Object.keys(saved.fieldErrors[draft.id] || {});
         const credKeys = new Set(basicFields(draftMeta).filter((f) => f.type !== "state").map((f) => f.key));
         if (refused.some((k) => credKeys.has(k))) setDraft({ id: draft.id, step: 2 });
-        setFlowError(FIX_FIELDS);
+        setFlowError(finishRefusal(saved, draft.id, FIX_FIELDS));
         return;
       }
       // Now that it is stored, test it again WITH record, so its stored
@@ -852,7 +899,12 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
   // repository flow. Only ever from a tile the person pressed.
   const continueWith = (key: string) => {
     if (!key) return;
-    if (key === "repo") {
+    const how = continueChoice(draft, draftSource?.provider, key);
+    if (how === "resume" && draft) {
+      // Back on step 1 and on to the same tracker: the draft as it was typed.
+      setDraft({ id: draft.id, step: 2 });
+      setFlowError("");
+    } else if (how === "repo") {
       dropDraft();
       setChoice("");
       startAdd({ kind: "repo", uses: ["pr"] });
@@ -860,7 +912,8 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
   };
   // The title names a tracker only once one is chosen — before that it is the
   // neutral "Add a source", never the first tile's name.
-  const addTitle = draftMeta ? "Add " + draftMeta.label : "Add a source";
+  const pastPick = !!draft && draft.step > 1;
+  const addTitle = pastPick && draftMeta ? "Add " + draftMeta.label : "Add a source";
   const addFlow = !showAdd ? null : adding?.kind === "repo" && !draft ? (
     <AddRepoFlow
       key="add-repo"
@@ -879,18 +932,18 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
       title={addTitle}
       step={draft ? draft.step : 1}
       kinds={[...trackers, REPO_KIND]}
-      picked={draftSource?.provider || (draft ? "" : choice)}
+      picked={pastPick ? draftSource?.provider || "" : choice}
       onPick={(key) => {
         // Step 1 only marks the tile (Continue goes on); once past it, a
         // different tile switches the draft straight over.
-        if (!draft) {
+        if (!pastPick) {
           setChoice(key);
           setFlowError("");
         } else if (key !== draftSource?.provider) continueWith(key);
       }}
       onCancel={closeAdd}
       footer={
-        !draft ? (
+        !draft || draft.step === 1 ? (
           <>
             <span className="ik-add-hint" id="ik-add-pick-hint">
               {!choice ? (
@@ -928,7 +981,16 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
                 </>
               ) : null}
             </span>
-            <button type="button" className="ik-quiet-btn" onClick={dropDraft}>
+            {/* Back keeps the draft — a pasted token included — and goes to
+                the tiles; only Cancel drops it. */}
+            <button
+              type="button"
+              className="ik-quiet-btn"
+              onClick={() => {
+                setDraft({ id: draft.id, step: backStep(draft.step) });
+                setFlowError("");
+              }}
+            >
               ‹ Back
             </button>
             <button
@@ -979,7 +1041,7 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProp
         )
       }
     >
-      {draftSource ? (
+      {draftSource && pastPick ? (
         <div className="ik-add-body">
           <TicketSourceEditor
             section={draft!.step === 2 ? "connect" : "setup"}
