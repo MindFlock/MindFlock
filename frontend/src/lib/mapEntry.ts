@@ -60,10 +60,10 @@ export function baseName(path: string): string {
  * else the zones. */
 export function zoneChipFocus(
   rz: { breaches?: number; mode?: string | null } | null | undefined,
-  chip: { cls: string } | null
+  chip: { cls: string; section?: MapSection } | null
 ): MapTarget {
   if ((rz?.breaches || 0) > 0) return { section: "breaches" };
-  if (chip && /plan/.test(chip.cls)) return { section: "plan" };
+  if (chip?.section === "plan" || (chip && /plan/.test(chip.cls))) return { section: "plan" };
   if (rz?.mode === "green") return { section: "scope" };
   return { section: "zones" };
 }
