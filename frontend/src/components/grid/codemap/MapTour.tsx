@@ -13,6 +13,7 @@
 
 import type { RefObject } from "react";
 import { CoachTour, placeCard, type CoachStep } from "../../onboarding/CoachTour";
+import { mapScene, placeMapCard } from "./tourPlace";
 
 /** A Map step: its `target` is a CSS selector inside the Map's root; "" =
  * the tree as a whole. */
@@ -98,5 +99,15 @@ export function MapTour({
 }) {
   // The generic coach tour (onboarding/CoachTour), contained in the Map's
   // root and dressed in the Map's own .mt-* / .cm-btn styles.
-  return <CoachTour steps={steps} onClose={onClose} rootRef={rootRef} prefix="mt" buttonClass="cm-btn" labelId="mt-title" />;
+  return (
+    <CoachTour
+      steps={steps}
+      onClose={onClose}
+      rootRef={rootRef}
+      prefix="mt"
+      buttonClass="cm-btn"
+      labelId="mt-title"
+      place={(t, W, H, cardH) => placeMapCard(t, W, H, cardH, mapScene(rootRef.current))}
+    />
+  );
 }
