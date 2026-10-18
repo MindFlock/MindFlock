@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The map in the flow: the Map is where you already are — a tab on every git
+pane, a chip on the row, a line in Make PR, a row in the bell — and every way
+into it lands on the file or section you came for. Plus a sweep of the
+day-to-day loop and of starting and finishing work, from five audits and a
+hands-on walk of 0.9.0.
+
+### Added
+
+- **The Map tab is on by default** for git sessions (a header you customized
+  keeps your choice), with a badge: the rail's zone chip (⛔ breaches, an
+  unseen block, *plan · n*) or the changed-files count. In the calm first hour
+  it waits in ⋯ until the session has changed something.
+- **Every "Open map" lands on the spot.** Toasts, the push/PR refusal card,
+  the commit warning, the rail chip, the bell, Thread worker rows (**Map**),
+  Verify (**What could break**) and the palette (**Find file on map…**, straight
+  into the find box) open the Map flown to the file and/or opened at the right
+  part: breaches, scope requests, the plan, ⚠ Could break.
+- **Plan ready reaches you.** While a declared plan waits for Go, the session's
+  `redzone` summary carries `plan_pending`; the row and the Map tab show
+  **plan · n**, the bell has a *Plan ready — review & Go* row, a Plan-first
+  start opens the Map on its plan, and the phone shows the plan with **Go** /
+  **Go — only the planned files**.
+- **What could break, before you ship.** Make PR says "⚠ Could break: 9 files
+  in 3 folders (2 tests) — See on map" under the base branch.
+- **The Map says what to do next.** This session's row in the agents column
+  ends on one next step — *Ask for plan*, *Review plan · Go*, *Review: ⚠ Could
+  break (N) · Open diff*, or *N breaches — review*. The tour is built from what
+  is on screen (no changes → no change steps; hidden targets skipped), adds
+  *Plan first*, and ends on that next step.
+- **Diff ⇄ Map per file.** Each Diff file header has a Map button; the Map's
+  Open diff (file card, breach rows) opens that file. The Diff follows the
+  session as it changes, has ↻, and is Unified in a narrow pane unless you
+  picked Split.
+- **Allow a file from the toast** when an only-here rule refuses one edit.
+- **Ctrl+K N** jumps to the next session that needs you, in the bell's order;
+  the palette lists those sessions first, with their state.
+
+### Changed
+
+- **The Map fits the pane.** The whole-tree view fits the tree itself between
+  the agents column and any open panel, the ground is a thin band when there
+  are no tests, **Plan & lists** (was *Session*) docks beside the tree in a wide
+  pane instead of covering the card its rows open, tour cards sit beside what
+  they explain, changed files are always named and names sit on a backing.
+  In a small pane the card sheet scrolls with its actions on top, Esc or a
+  canvas click folds the agents column, and `/` finds from anywhere in the pane.
+- **Adding a keep-out over your own changes asks first** ("4 changed files
+  are inside — pushing will be blocked…"), and the guard pill reads red
+  **N breaches** whenever there are any.
+- **One word per thing on the Map:** rules (⛔ Keep out / ✓ Only here,
+  **+ Rule…**), fences only for an orchestrator's limits; other sessions read
+  idle / waiting instead of "editing on its own branch".
+- **Toasts last and are heard.** An Undo is no longer replaced by the next
+  message, time on screen follows the text, and toasts are a live region.
+- **Clicking the selected row takes you back to it** (terminal focus, drawer
+  closed) instead of renaming it; rename is a double-click on the name, F2 or
+  the menu. "Needs you" chips are buttons (Question → the bell, Pre-commit
+  failed → Terminal, Setup failed → re-run, Checks failing → the PR), a stuck
+  idle session reads **Idle 25m**, and chips are sentence case ("Committed",
+  "Checks ✗").
+- **Queue:** Ctrl/⌘+Enter sends now, Alt+Enter queues, ✕ offers Undo.
+
+### Fixed
+
+- Open PR succeeded silently (a popup-blocked `window.open`); it now offers
+  the link, and Merge says "Merged <name> into <base>".
+- The Map spun on "Growing the tree…" forever when the snapshot failed but
+  the live poll worked; failures now say so with **Retry**, and a stale map
+  says "may be out of date". Undo after a rule could say "Undone" when it
+  failed. The file card's rule buttons now show an existing rule.
+- Settings and Intake saves that failed still toasted success (and Intake
+  re-swept); typed Intake fields saved only on blur.
+- Saving a template under an existing name silently replaced it, schedule and
+  all; the template editor dropped unsaved edits on a backdrop click or Esc.
+- "Insert saved text" replaced the Task instead of inserting at the caret.
+- Intake's ‹ Back and tab switches dropped a new ticket source, pasted token
+  included; a failed save said "Fix the marked fields" with nothing marked.
+- New kept an "agent not installed / not signed in" warning after you fixed
+  it, kept the last opening's "work on the branch itself", and a missing
+  non-default agent sent you to Setup, which only checks the default one.
+- Verify closed a step editor and cleared the retry banner after a failed
+  save; settings search could land on a hidden advanced fold.
+- Device ✕ in the sidebar disconnected in one click (now asks inline).
+- Accessibility: pane tabs are a tablist, sidebar rows take ↑/↓, the bell
+  says how many need you, the palette is a listbox, and New / Settings /
+  Setup / Intake controls are labelled and announced.
+
 ## [0.9.0] - 2026-10-15
 
 ### Added
