@@ -213,9 +213,9 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
     <SettingsCtx.Provider value={model}>
       <SettingsModeCtx.Provider value={advanced}>
       <Modal id="settings-dialog" onClose={closeDialog}>
-        <div id="settings-panel">
+        <div id="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
           <div className="ws-head">
-            <h2>Settings</h2>
+            <h2 id="settings-title">Settings</h2>
             <TourButton tour="settings" />
             <button type="button" id="settings-close" onClick={closeDialog}>
               Close

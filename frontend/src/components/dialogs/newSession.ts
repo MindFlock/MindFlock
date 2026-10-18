@@ -436,7 +436,7 @@ export function describeBlockReason(where: { text: string; busy: boolean }): str
  * ignores you is worse than one that explains itself. */
 export function submitHoldReason(armAt: number, now: number): string {
   if (!armAt || now >= armAt) return "";
-  return "Just filled the form in \u2014 check the folder, then press Create.";
+  return "Just filled the form in \u2014 check the folder, then press Start.";
 }
 
 /** The plan's in-place flag, defaulting TRUE when the key is missing.

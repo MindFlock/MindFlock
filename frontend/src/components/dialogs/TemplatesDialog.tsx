@@ -1005,25 +1005,53 @@ export function TemplatesDialog() {
     }
   };
 
-  const save = async (f: TemplateForm = form) => {
+  /** Stop schedule's Undo: the template as it was, schedule and all. */
+  const undoStop = async (before: Template) => {
+    try {
+      await saveTemplate(before);
+      setList(templatesNow());
+      await ensureTemplates(true).catch(() => {});
+      setRuns(templateRunsNow());
+      toast(`“${before.name}” runs on its schedule again — ${templateScheduleLine(before, templateRunsNow())}`);
+    } catch (err) {
+      toast("Couldn't put the schedule back: " + errMsg(err));
+    }
+  };
+
+  const save = async (f: TemplateForm = form, stopping = false) => {
     const r = templateBody(f, installed, templates, ui.editing);
     if ("error" in r) {
       dispatch({ t: "error", message: r.error, reason: /isn't installed/.test(r.error) ? "agent_missing" : "" });
       return;
     }
+    const before = ui.editing ? templates.find((x) => x.name === ui.editing) || null : null;
     setBusy(true);
     try {
       await saveTemplate(r.body);
       const gone = ui.editing ? renameLeaves(ui.editing, r.body.name) : null;
       if (gone) await deleteTemplate(gone);
-      // The next run moves with a new schedule.
+      const body = r.body;
+      // The next run moves with a new schedule; a scheduled save says THE
+      // schedule line (as the card will) once the server has placed it.
       void ensureTemplates(true)
-        .then(() => setRuns(templateRunsNow()))
-        .catch(() => {});
+        .catch(() => {})
+        .then(() => {
+          const st = templateRunsNow();
+          setRuns(st);
+          if (body.schedule && !stopping) toast(`Saved “${body.name}” — ${templateScheduleLine(body, st)}`);
+        });
       setList(templatesNow());
       dispatch({ t: "saved" });
-      // Saved, but it can't run yet: say what's missing, once.
-      toast(runProblem(r.body) ? "Saved — add a folder to run it" : `Saved template “${r.body.name}”`);
+      if (stopping && before && hasSchedule(before)) {
+        // Stopping a schedule is one click from a nightly run never
+        // happening again: say so, and offer it back.
+        toast(`Stopped the schedule of “${body.name}” — nothing starts on its own`, {
+          action: { label: "Undo", onClick: () => void undoStop(before) },
+        });
+      } else if (!body.schedule) {
+        // Saved, but it can't run yet: say what's missing, once.
+        toast(runProblem(body) ? "Saved — add a folder to run it" : `Saved template “${body.name}”`);
+      }
     } catch (err) {
       // The server's own sentence and what would fix it (409 agent_missing /
       // github_required), not its terse error.
@@ -1130,7 +1158,7 @@ export function TemplatesDialog() {
       scheduleFocus={scheduleFocus}
       tz={Object.values(runs.runs || {}).map((r) => r.tz).find(Boolean) || runs.tz || localZone()}
       onSave={() => void save()}
-      onStopSchedule={() => void save({ ...form, scheduled: false })}
+      onStopSchedule={() => void save({ ...form, scheduled: false }, true)}
       onDelete={(name) => void del(name)}
       onClose={() => (dirty ? dispatch({ t: "ask-discard", then: "close" }) : close())}
       installed={installed}

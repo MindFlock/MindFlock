@@ -1384,7 +1384,7 @@ export function NewSessionDialog() {
       // Points at the strip it just appeared in (▶ / ⏰ on its chip); a click
       // opens Templates itself. Up for 6s — a link needs time to be read.
       toast(
-        `Saved template “${body.name}” — ▶ runs it and ⏰ schedules it, in Templates at the top of New. Click to open Schedule.`,
+        `Saved template “${body.name}” — ▶ on its chip at the top of New runs it, ⏰ schedules it. Click to open Schedule.`,
         {
           onClick: () =>
             useUi.getState().openDialogFor("templates", templatesTarget({ fromNew: true, schedule: null })),

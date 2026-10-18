@@ -400,7 +400,7 @@ describe("submitHoldReason — the Enter that landed on a form nobody has read",
     // submit() closes the dialog optimistically before the POST, so an Enter
     // that gets through leaves nothing on screen to cancel.
     const held = submitHoldReason(armAt, filledAt + 120);
-    expect(held).toBe("Just filled the form in — check the folder, then press Create.");
+    expect(held).toBe("Just filled the form in — check the folder, then press Start.");
     // It explains itself rather than swallowing the key.
     expect(held).toContain("check the folder");
   });

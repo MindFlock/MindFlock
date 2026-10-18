@@ -7,6 +7,7 @@ import { friendlyTestError, siteHost, TOKEN_URLS } from "../components/intake/vo
 import { everyText, pollSeconds } from "../components/intake/AutoStartSwitches";
 import { nextScheduledText, scheduledRows, scheduleLine, skippedText } from "../components/intake/ScheduledTemplates";
 import { repoSlugOf } from "../components/intake/kit";
+import { templateScheduleLine } from "../lib/templates";
 import { stalledText } from "../components/intake/QueueTab";
 import { advancedSummaryOf } from "../components/intake/TicketsTab";
 import { code } from "./sourceText";
@@ -83,7 +84,9 @@ describe("schedules count as starting on their own", () => {
   });
   it("one line per template, the zone and the skip included", () => {
     const [row] = scheduledRows(list, status as never, NOW);
-    expect(scheduleLine(row)).toMatch(/^Every day at 07:30 EDT · next \w{3} 07:30 · tomorrow's run skipped$/);
+    // THE schedule line, as Schedule's card and New's chip say it.
+    expect(scheduleLine(row)).toMatch(/^Every day at 07:30 EDT · next \w{3} 07:30 \(tomorrow skipped\)$/);
+    expect(scheduleLine(row)).toBe(templateScheduleLine(list[0], status as never, NOW));
   });
 });
 

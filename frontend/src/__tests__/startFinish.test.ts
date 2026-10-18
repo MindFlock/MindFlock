@@ -111,6 +111,87 @@ describe("Verify keeps an edit or a retry when the server refused", () => {
   });
 });
 
+describe("one name per thing", () => {
+  it("New's link to Schedule says Schedule, and so does its save toast", () => {
+    const strip = code("components/dialogs/newSession/TemplatesStrip.tsx");
+    expect(strip).toContain("Open Schedule…");
+    expect(strip).not.toContain("All templates…");
+    expect(code("components/dialogs/NewSessionDialog.tsx")).not.toContain("in Templates at the top of New");
+  });
+
+  it("page 1's link to the form is 'More options', like the footer's", () => {
+    const d = code("components/dialogs/newSession/DescribeSection.tsx");
+    expect(squash(d)).toMatch(/id="new-describe-change"[^>]*>\s*More options\s*<\/button>/);
+    expect(d).not.toContain("function NewFolderRow");
+    expect(code("components/dialogs/newSession.ts")).not.toContain("then press Create.");
+  });
+
+  it("the welcome tour names no agent of its own", () => {
+    const tour = code("lib/tours/welcome.ts");
+    expect(tour).not.toContain("Claude");
+    expect(tour).toContain("① Install your agent");
+  });
+
+  it("Intake's scheduled rows say THE schedule line", () => {
+    expect(code("components/intake/ScheduledTemplates.tsx")).toContain("line: templateScheduleLine(t, status, now),");
+  });
+
+  it("the New dialog's disclosures draw their chevron, not a 10px glyph", () => {
+    const css = code("components/dialogs/NewSessionDialog.css");
+    for (const sel of [".nf-advanced>summary::before {", ".rt-fold>summary::before {"]) {
+      const rule = css.slice(css.indexOf(sel), css.indexOf("}", css.indexOf(sel)));
+      expect(rule).toContain('content: "";');
+      expect(rule).toContain("border-right: 1.5px solid currentColor;");
+    }
+  });
+});
+
+describe("accessible names and live regions", () => {
+  it("New's error is an alert and the sentence box is named by its question", () => {
+    expect(code("components/dialogs/newSession/FooterActions.tsx")).toContain(
+      '<p id="new-error" className="error" role="alert">'
+    );
+    expect(code("components/dialogs/newSession/DescribeSection.tsx")).toContain('aria-labelledby="new-describe-label"');
+  });
+
+  it("Browse… and Manage sit outside the <label>s", () => {
+    expect(code("components/dialogs/newSession/FolderPicker.tsx")).toContain("<label htmlFor={ids.input}>Folder</label>");
+    const agent = code("components/dialogs/newSession/AgentAccount.tsx");
+    expect(agent).toContain('<label htmlFor={scope + "-program"}>Agent</label>');
+    expect(agent).not.toContain('<label className="nf-agent">');
+  });
+
+  it("Settings and Setup are modal dialogs to assistive tech", () => {
+    expect(code("components/settings/SettingsDialog.tsx")).toContain(
+      '<div id="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">'
+    );
+    expect(code("components/dialogs/SetupDialog.tsx")).toContain(
+      '<div id="setup-panel-dlg" role="dialog" aria-modal="true" aria-labelledby="setup-title">'
+    );
+  });
+
+  it("the template editors' error line is mounted before it has anything to say", () => {
+    const ed = code("components/dialogs/TemplateEditor.tsx");
+    expect(ed).not.toContain('{p.error && (\n          <p className="error"');
+    expect(ed.match(/<p className="error" aria-live="polite">\n\s*\{p\.error/g)).toHaveLength(2);
+  });
+});
+
+describe("finishing says what happened", () => {
+  it("Run now in Intake closes Intake on the new session", () => {
+    expect(squash(code("components/intake/ScheduledTemplates.tsx"))).toContain(
+      "const title = await runTemplateNow(r.name); if (title) openSessionFromIntake(title);"
+    );
+  });
+
+  it("a scheduled save toasts its schedule line; Stop schedule offers Undo", () => {
+    const d = squash(code("components/dialogs/TemplatesDialog.tsx"));
+    expect(d).toContain("toast(`Saved “${body.name}” — ${templateScheduleLine(body, st)}`)");
+    expect(d).toContain('action: { label: "Undo", onClick: () => void undoStop(before) }');
+    expect(d).toContain("onStopSchedule={() => void save({ ...form, scheduled: false }, true)}");
+  });
+});
+
 describe("settings search reaches advanced-only controls", () => {
   // Every AdvancedFold a basic screen hides entirely (no `basic`).
   const hidden = new Set<string>();

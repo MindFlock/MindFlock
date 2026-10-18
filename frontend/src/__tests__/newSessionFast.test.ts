@@ -285,11 +285,13 @@ describe("Base branch — the Git & workspace fold's picker", () => {
 });
 
 describe("Templates strip — one list, shown once there is one", () => {
-  it("hides when empty, and its All templates… opens the React dialog", () => {
+  it("hides when empty, and its Open Schedule… opens the React dialog", () => {
     const strip = TEMPLATES.slice(TEMPLATES.indexOf('id="new-templates"'));
     expect(strip).toContain('id="new-templates-manage"');
     expect(strip).toContain('openDialogFor("templates", templatesTarget({ fromNew: true, schedule: null }))');
-    expect(strip).toContain("All templates…");
+    // Named for the dialog it opens (titled Schedule), not "All templates…".
+    expect(strip).toContain("Open Schedule…");
+    expect(strip).not.toContain("All templates…");
     // No templates: no strip at all (Save as template… makes the first).
     expect(TEMPLATES).toContain("if (!templates.length) return null;");
     expect(SRC).not.toContain("mindflockAddons");

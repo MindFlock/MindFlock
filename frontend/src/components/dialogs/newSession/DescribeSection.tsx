@@ -445,54 +445,6 @@ export function useDescribeFocus({
   }, [open, page]);
 }
 
-/* The confirm row, built once and drawn on BOTH pages: under the sentence on
-   page 1, and under the Folder field on page 2. It used to live only in the
-   Describe strip, which "Review details first" leaves behind — so a plan that
-   proposed a new folder landed on a page whose Create refused, naming a tick
-   that was on the other page. The one control in this dialog whose "no" is
-   the safe answer, so it is drawn as a question and not as a fourth checkbox:
-   a folder is the only thing a plan proposes that survives the session, and
-   an option row reads as something you may skim past.
-
-   It is announced as well as the note above it. Two polite regions firing
-   together is a little chatty; a gate a screen reader never mentioned, on a
-   form whose Create then refuses, is worse. */
-export function NewFolderRow({
-  ask: newFolderAsk,
-  ok: newFolderOk,
-  onOk: setNewFolderOk,
-}: {
-  ask: string;
-  ok: boolean;
-  onOk(ok: boolean): void;
-}) {
-  if (!newFolderAsk) return null;
-  return (
-  <div className="nf-newfolder" role="group" aria-labelledby="new-describe-newfolder-q">
-    <p id="new-describe-newfolder-q" className="nf-newfolder-q" aria-live="polite">
-      There is no folder at <b>{newFolderAsk}</b> yet. Make it?
-    </p>
-    <label className="check">
-      <input
-        type="checkbox"
-        id="new-describe-newfolder"
-        checked={newFolderOk}
-        onChange={(e) => setNewFolderOk(e.target.checked)}
-      />
-      {/* Word for word what newFolderBlockReason quotes, because the
-          refusal is read several screens below this row and has to
-          name a control the user can go and find. */}
-      Yes, create {newFolderAsk}{" "}
-      <span className="muted">
-        — a new directory, made when you press Create. Not the same as “Create a git repo in
-        this folder” under Git &amp; workspace, which runs git init inside it; a new project
-        usually wants both.
-      </span>
-    </label>
-  </div>
-  );
-}
-
 export interface DescribeSectionProps {
   batch: boolean;
   describe: string;
@@ -593,7 +545,7 @@ export function DescribeSection({
   return (
     <div id="new-describe" className="new-templates nf-describe">
       <div className="nt-head">
-        <span>
+        <span id="new-describe-label">
           {batch ? "Starting together — one session per line or ticket ID" : "What do you want to work on?"}
         </span>
       </div>
@@ -605,6 +557,8 @@ export function DescribeSection({
             another line, and in a batch or an auto-split Enter does too. */}
         <textarea
           id="new-describe-text"
+          // The question above it is its name.
+          aria-labelledby="new-describe-label"
           ref={describeRef}
           rows={Math.min(8, Math.max(3, describe.split("\n").length))}
           value={describe}
@@ -668,7 +622,7 @@ export function DescribeSection({
       </div>
       {/* Where Start runs, as ONE line under the box: the folder is a real
           picker (recent folders + Browse…), the branch is shown, and
-          "change" opens the full form. Nothing about the quick path is
+          "More options" opens the full form. Nothing about the quick path is
           hidden in a paragraph any more. */}
       {!runMode && (
       <>
@@ -854,8 +808,15 @@ function StartsInLine({
       </select>
       {startsIn}
       {" · "}
-      <button type="button" className="linklike" id="new-describe-change" onClick={onChange}>
-        change
+      {/* The footer's "More options" is the same move: one name for it. */}
+      <button
+        type="button"
+        className="linklike"
+        id="new-describe-change"
+        title="The full form — folder, agent, task, name and Fast-track"
+        onClick={onChange}
+      >
+        More options
       </button>
     </p>
   );

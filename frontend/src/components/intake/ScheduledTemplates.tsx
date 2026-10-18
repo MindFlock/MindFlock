@@ -12,6 +12,7 @@ import {
   hasSchedule,
   runProblem,
   scheduleLabel,
+  templateScheduleLine,
   TEMPLATES_CHANGED,
   templateRunsNow,
   templatesNow,
@@ -21,6 +22,7 @@ import {
 } from "../../lib/templates";
 import { runTemplateNow } from "../../lib/templateRun";
 import { useUi } from "../../state/store";
+import { openSessionFromIntake } from "./kit";
 
 export interface ScheduledRow {
   name: string;
@@ -33,6 +35,9 @@ export interface ScheduledRow {
   problem: string;
   /** "tomorrow's run skipped" — set only while Skip next holds a slot. */
   skipped?: string;
+  /** THE schedule line (lib/templates' templateScheduleLine), word for word
+   * what the Schedule card and New's ⏰ chip say. */
+  line: string;
 }
 
 /** "tomorrow's run skipped" / "Fri's run skipped" for a skipped slot. */
@@ -43,14 +48,11 @@ export function skippedText(epochSec: number | null | undefined, now: Date = new
 }
 
 /** The one-line summary of a scheduled template, as the Schedule dialog
- * says it: cadence, when next, and a skipped slot — "Every day at 07:30 EDT ·
- * next Fri 07:30 · tomorrow's run skipped".
- *
- * Written here until the Schedule surface exports one shared line
- * (`templateScheduleLine()` in lib/templates.ts, round 5); swap this for it
- * when it lands. */
+ * says it — "Every day at 07:30 EDT · next Fri 07:30 (tomorrow skipped)".
+ * It is `templateScheduleLine`, the one line every surface shares; Intake
+ * used to build a near-copy of its own. */
 export function scheduleLine(row: ScheduledRow): string {
-  return [row.when, row.next, row.skipped].filter(Boolean).join(" · ");
+  return row.line;
 }
 
 /** The scheduled templates, in the list's order. Pure, for tests. */
@@ -78,6 +80,7 @@ export function scheduledRows(
         when: (info.schedule_label || scheduleLabel(t.schedule)) + (tz && t.schedule?.at ? " " + tz : ""),
         next,
         problem: runProblem(t),
+        line: templateScheduleLine(t, status, now),
       };
       if (skipping) row.skipped = skippedText(skipping, now);
       return row;
@@ -161,7 +164,10 @@ export function ScheduledTemplates() {
               onClick={async () => {
                 setRunning(r.name);
                 try {
-                  await runTemplateNow(r.name);
+                  // Started: Intake steps aside and the new session is what
+                  // shows — it used to stay covered by this dialog.
+                  const title = await runTemplateNow(r.name);
+                  if (title) openSessionFromIntake(title);
                 } finally {
                   setRunning("");
                 }
