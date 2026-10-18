@@ -246,8 +246,8 @@ def test_the_palette_lists_commands_before_focus_rows():
         'label: "New session…"',
         'label: "Open Intake"',
         'label: "Customize…"',
-        "label: `${actionLabel(id, c)} — ${t}`",
-        'label: "Focus: " + name',
+        "label: `${actionLabel(id, c)} — ${name}`",
+        'label: "Focus: " + windowName(inst.title)',
     ]
     at = [src.index(x) for x in order]
     assert at == sorted(at), order
