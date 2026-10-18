@@ -135,7 +135,8 @@ export function TemplatesStrip({
           title="Run, schedule, edit and delete templates in Schedule — you come back here on Close"
           onClick={() => useUi.getState().openDialogFor("templates", templatesTarget({ fromNew: true, schedule: null }))}
         >
-          All templates…
+          {/* The dialog's own name: it is titled Schedule everywhere else. */}
+          Open Schedule…
         </button>
       </div>
       <div id="new-templates-list" className="nt-list">
@@ -161,7 +162,7 @@ export function TemplatesStrip({
                   type="button"
                   className="nt-act nt-run"
                   aria-label={"Run “" + t.name + "” now"}
-                  title={problem ? problem + " (All templates… → Edit)" : "Run now — starts a new session from “" + t.name + "”"}
+                  title={problem ? problem + " (Open Schedule… → Edit)" : "Run now — starts a new session from “" + t.name + "”"}
                   disabled={!!problem}
                   onClick={() => onRun(t)}
                 >

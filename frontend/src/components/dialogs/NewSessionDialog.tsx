@@ -122,6 +122,7 @@ import {
   remoteBranchName,
   sessionsInFolder,
   templateFromForm,
+  templateNameTaken,
   type InstalledMap,
   type NewTab,
   type PlanRun,
@@ -421,6 +422,32 @@ export function NewSessionDialog() {
   deviceRef.current = device;
   const loadedDevice = useRef<string | null>(null);
 
+  /** Which agents this device has installed and signed in to, asked again.
+   * An opening that keeps the form (a typed draft, a hand-back) skips the
+   * full load — and so kept saying "not installed" / "isn't signed in" after
+   * the person fixed it in Settings → Agents and came back. This device
+   * only, like the load's own copies of these two. */
+  const refreshAgentState = () => {
+    if (deviceRef.current) return;
+    const here = () => !deviceRef.current;
+    deviceApi("")<{ logins?: Array<{ name: string; logged_in: boolean | null }> }>("/api/setup")
+      .then((st) => {
+        if (!here()) return;
+        const out: Record<string, boolean> = {};
+        for (const l of st.logins || []) if (l.logged_in === false) out[l.name] = true;
+        setSignedOut(out);
+      })
+      .catch(() => {});
+    deviceApi("")<{ providers?: Array<{ name: string; installed?: boolean }> }>("/api/providers/status")
+      .then((d) => {
+        if (!here()) return;
+        const have: InstalledMap = {};
+        for (const x of d.providers || []) if (typeof x.installed === "boolean") have[x.name] = x.installed;
+        setInstalled(have);
+      })
+      .catch(() => {});
+  };
+
   /** Load what the form offers from the device the session will live on:
    * folder suggestions, config (home, default agent), launch-flag defaults,
    * templates and the agent list. Returns the cleanup that silences answers
@@ -575,7 +602,7 @@ export function NewSessionDialog() {
     setLaunchArgs("");
     // The Describe box and everything it leaves behind. Each of these is here
     // because a useState without a reset line leaks from one opening to the
-    // next — `strategy` is the standing counter-example — and a leaked note is
+    // next (`strategy` and `continueOn` did, until they got theirs) — and a leaked note is
     // worse than a leaked field: it is a sentence about a folder the form is no
     // longer showing.
     // Intake's "Start together…" hands its ticked tickets over as the box's
@@ -583,6 +610,10 @@ export function NewSessionDialog() {
     setDescribe(prefill);
     setBatch(!!prefill);
     setBaseBranch("");
+    // ...and what goes with the base branch: "continue on it" and how the
+    // workspace is copied were the two that still leaked.
+    setContinueOn("");
+    setStrategy("worktree");
     setBranches(null);
     setDescribing(false);
     setDescribeSlow(false);
@@ -682,6 +713,7 @@ export function NewSessionDialog() {
       openedPage.current = 2;
       openedFocus.current = "title";
       setAdvancedOpen(true);
+      refreshAgentState();
       return;
     }
     const prefill = useUi.getState().takeNewPrefill();
@@ -721,6 +753,7 @@ export function NewSessionDialog() {
         void ensureTemplates(true)
           .then((list) => setTemplates(list))
           .catch(() => {});
+      refreshAgentState();
       return;
     }
     resetForm(prefill);
@@ -1315,11 +1348,12 @@ export function NewSessionDialog() {
   };
 
   /** Save as template…: the whole form, under the typed name. */
+  // Another template's name is refused, not saved over: the server upserts
+  // by name, so it would silently replace that one.
   const saveTplBlocked = !(saveTplName || "").trim()
     ? "Give it a name."
-    : !folderPath && !prompt.trim()
-    ? "Pick a folder or write a task first."
-    : "";
+    : templateNameTaken(saveTplName || "", device ? templates : templatesNow()) ||
+      (!folderPath && !prompt.trim() ? "Pick a folder or write a task first." : "");
   const saveAsTemplate = async () => {
     if (saveTplBlocked || saveTplName === null) return;
     const body = templateFromForm(
@@ -1350,7 +1384,7 @@ export function NewSessionDialog() {
       // Points at the strip it just appeared in (▶ / ⏰ on its chip); a click
       // opens Templates itself. Up for 6s — a link needs time to be read.
       toast(
-        `Saved template “${body.name}” — ▶ runs it and ⏰ schedules it, in Templates at the top of New. Click to open Schedule.`,
+        `Saved template “${body.name}” — ▶ on its chip at the top of New runs it, ⏰ schedules it. Click to open Schedule.`,
         {
           onClick: () =>
             useUi.getState().openDialogFor("templates", templatesTarget({ fromNew: true, schedule: null })),

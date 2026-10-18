@@ -7,7 +7,6 @@
  * issues" ticked. The GitHub credential is shared with review and has one home,
  * the Connect GitHub dialog; this tab shows its state on one line. */
 
-import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import {
   refreshInstances,
@@ -20,6 +19,7 @@ import {
   GithubSetupCard,
   GithubStatusLine,
   HeadAction,
+  LoginListInput,
   repoGroupOrder,
   useEditing,
   useListFilter,
@@ -83,8 +83,6 @@ export function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProps
     : gh.issue_skip_authors || "";
   const edit = useEditing(focus);
 
-  const [skipDraft, setSkipDraft] = useState(String(skipAuthors));
-  useEffect(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
   // Cached in the query client so reopening the tab keeps the last list.
   const issuesQuery = usePanelQuery<{
     issues?: OpenIssue[];
@@ -338,17 +336,11 @@ export function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProps
           </label>
           <label className="set-row">
             <span className="set-label">Ignore issues from</span>
-            <input
-              type="text"
+            <LoginListInput
               id="gh-issue-skip-authors"
+              stored={String(skipAuthors)}
               placeholder="dependabot, renovate"
-              autoComplete="off"
-              value={skipDraft}
-              onChange={(e) => setSkipDraft(e.target.value)}
-              onBlur={() => {
-                const list = skipDraft.split(",").map((x) => x.trim()).filter(Boolean);
-                saveGithub({ issue_skip_authors: list }, "Saved");
-              }}
+              onSave={(list) => void saveGithub({ issue_skip_authors: list }, "Saved")}
             />
             <span className="set-hint">GitHub logins, comma-separated.</span>
           </label>

@@ -76,7 +76,8 @@ export function FooterActions({
   return (
     <>
       <div className="modal-actions nf-actions">
-        <p id="new-error" className="error">{error}</p>
+        {/* Announced when it lands: it is why Start did nothing. */}
+        <p id="new-error" className="error" role="alert">{error}</p>
         {page === 1 ? (
           <>
             {/* ONE primary. "More options" (the full form, nothing read) is

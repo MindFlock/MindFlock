@@ -35,6 +35,7 @@ import { QueueTab } from "./QueueTab";
 import { collectQueued, isQueued } from "./queue";
 import { kindsText, useIntakeSwitches } from "./switches";
 import type { RepoUse } from "./repoUses";
+import type { DraftStash } from "./addDraft";
 import { nextScheduledText, useScheduledTemplates } from "./ScheduledTemplates";
 import { TourButton } from "../onboarding/TourButton";
 import { useAutoTour } from "../onboarding/useAutoTour";
@@ -60,6 +61,10 @@ export interface TabProps {
   adding: AddIntent | null;
   startAdd(intent: AddIntent, tab?: IntakeTabKey): void;
   endAdd(): void;
+  /** The Tickets tab's unsaved "+ Add source" draft, kept here while another
+   * tab is showing — switching tabs unmounts the tab, and used to drop what
+   * was typed (a pasted token included). Cleared when the dialog closes. */
+  draftStash?: { current: DraftStash | null };
 }
 
 /** A dialog target: a tab key, a legacy Settings screen key, or either with a
@@ -275,6 +280,7 @@ export function IntakeDialog() {
   const model = useSettingsModel(open);
   const savedSources = useTicketingSources(open).data || [];
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const draftStash = useRef<DraftStash | null>(null);
 
   // The target may be a tab key, one of the legacy Settings screen keys, or
   // either with a source after a colon (see parseIntakeTarget).
@@ -282,6 +288,7 @@ export function IntakeDialog() {
     if (!open) {
       setAdding(null);
       setFocus("");
+      draftStash.current = null;
       return;
     }
     const t = target ? parseIntakeTarget(target) : { tab: lastPlace.tab, focus: "" };
@@ -324,6 +331,7 @@ export function IntakeDialog() {
     adding,
     startAdd,
     endAdd: () => setAdding(null),
+    draftStash,
   };
   // What the head button adds from each tab: the kind that tab shows.
   const addFrom = (): [AddIntent, IntakeTabKey] =>

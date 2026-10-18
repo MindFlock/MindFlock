@@ -329,12 +329,13 @@ export async function recordStepAnswer(
   void refreshTestPlans();
 }
 
-/** Change one step's wording or who answers it. */
+/** Change one step's wording or who answers it. Resolves whether it took:
+ * the editor stays open with the typed text when it didn't. */
 export async function editPlanStep(
   plan: TestPlan,
   step: TestStep,
   fields: Partial<TestStep>
-): Promise<void> {
+): Promise<boolean> {
   try {
     const r = await api<{ plan?: TestPlan }>(
       planPath(plan.id) +
@@ -344,8 +345,10 @@ export async function editPlanStep(
     );
     if (r?.plan) patchPlan(plan.id, () => r.plan as TestPlan);
     void refreshTestPlans();
+    return true;
   } catch (err) {
     errorPop("Couldn't change that step", errMsg(err));
+    return false;
   }
 }
 
@@ -414,7 +417,9 @@ export async function writePlanForBranch(repo: VerifyRepo, branch: string): Prom
   }
 }
 
-export async function writePlanFor(target: string): Promise<void> {
+/** "Ask the agent for a checklist" for a session. Resolves whether the server
+ * took it, so a "No checklist yet" banner stays up (to try again) when not. */
+export async function writePlanFor(target: string): Promise<boolean> {
   try {
     const r = await api<{ plan: string; existing: boolean }>(
       "/api/instances/" + encodeURIComponent(target) + "/test-plan",
@@ -436,7 +441,9 @@ export async function writePlanFor(target: string): Promise<void> {
         : "Asked the agent for a checklist for " + target + " — it'll appear in Verify (up to three minutes)"
     );
     refreshTestPlans();
+    return true;
   } catch (err) {
     errorPop("Couldn't write a checklist", errMsg(err));
+    return false;
   }
 }

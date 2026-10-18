@@ -24,7 +24,7 @@
  * inherits the tab-wide default, which every placeholder names.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
 import type { Json } from "../../api/types";
 import { toast } from "../../lib/toast";
@@ -36,6 +36,7 @@ import {
   useTicketingSources,
 } from "../../state/queries";
 import { useSettings } from "../settings/useSettings";
+import { useAutosave } from "./autosave";
 import { LANE_LABEL, SOURCE_DEPTHS } from "../../lib/autopilot";
 import {
   AddFlowShell,
@@ -164,7 +165,9 @@ function useDefaults(use: RepoUse, liveBranch?: string): RepoDefaults {
   return repoDefaults(s.settings, use, agents?.fallback || "", liveBranch ?? cached);
 }
 
-/** One text field of a repository's block: uncontrolled, saved on blur/Enter.
+/** One text field of a repository's block: uncontrolled, sent as you type
+ * (autosave.ts — on a pause, blur, Enter or the dialog closing; blur alone
+ * lost what was typed to Escape or Close). An unchanged value isn't sent.
  * Keyed by repo by its caller, so a different repository remounts it. */
 function BlockInput({
   label,
@@ -187,6 +190,9 @@ function BlockInput({
   narrow?: boolean;
   onSave(field: string, value: string): void;
 }) {
+  const autosave = useAutosave<string>((v) => {
+    if (v.trim() !== value) onSave(field, v);
+  });
   return (
     <label className="set-row">
       <span className="set-label">{label}</span>
@@ -201,11 +207,10 @@ function BlockInput({
         data-repo-field={field}
         placeholder={placeholder}
         defaultValue={value}
-        onBlur={(e) => {
-          if (e.target.value.trim() !== value) onSave(field, e.target.value);
-        }}
+        onChange={(e) => autosave.schedule(e.target.value)}
+        onBlur={() => autosave.flush()}
         onKeyDown={(e) => {
-          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          if (e.key === "Enter") autosave.flush();
         }}
       />
       <span className="set-hint">{hint}</span>
@@ -239,17 +244,31 @@ export function RepoFields({
   // two edits in quick succession must compose (the map is written wholesale).
   const saved = blocksFor(s.settings, use);
   const savedKey = JSON.stringify(saved);
-  const [blocks, setBlocks] = useState<Record<string, Json>>(saved);
+  const [blocks, setBlocksState] = useState<Record<string, Json>>(saved);
+  // Read by `save`, so two fields flushed together (the dialog closing with
+  // both typed in) compose instead of the second writing over the first.
+  const blocksRef = useRef(blocks);
+  const setBlocks = (next: Record<string, Json>) => {
+    blocksRef.current = next;
+    setBlocksState(next);
+  };
   useEffect(() => {
-    setBlocks((prev) => (JSON.stringify(prev) === savedKey ? prev : saved));
+    if (JSON.stringify(blocksRef.current) !== savedKey) setBlocks(saved);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [savedKey]);
   const o = ((blocks[repo] || {}) as RepoOverride) || {};
   const save = (field: string, value: string) => {
-    const { patch, blocks: next } = fieldPatch(blocks, use, repo, field, value);
+    const before = blocksRef.current;
+    const { patch, blocks: next } = fieldPatch(before, use, repo, field, value);
     setBlocks(next);
-    void s.saveGroups(patch, "Saved " + repo);
+    void s.saveGroups(patch, "Saved " + repo).then((ok) => {
+      // "Save failed" is toasted; put the editor back on what is stored.
+      if (!ok && blocksRef.current === next) setBlocks(before);
+    });
   };
+  const promptSave = useAutosave<string>((v) => {
+    if (v.trim() !== (o.prompt || "")) save("prompt", v);
+  });
   const text = (field: keyof RepoOverride) => listText(o[field]);
 
   if (use === "verify") {
@@ -310,9 +329,8 @@ export function RepoFields({
               "Ignore anything under vendor/."
             }
             defaultValue={o.prompt || ""}
-            onBlur={(e) => {
-              if (e.target.value.trim() !== (o.prompt || "")) save("prompt", e.target.value);
-            }}
+            onChange={(e) => promptSave.schedule(e.target.value)}
+            onBlur={() => promptSave.flush()}
           />
           <span className="set-hint">Added to every checklist for this repo.</span>
         </label>
@@ -520,7 +538,7 @@ export function RepoEditor({
           ? repo + " — now also " + usesText(added)
           : repo + " — no longer " + usesText(dropped)
       )
-      .then(() => resweep([...added, ...dropped]));
+      .then((ok) => ok && resweep([...added, ...dropped]));
   };
   return (
     <div className="ik-editor-body" data-repo={repo} data-use={use}>
@@ -547,7 +565,7 @@ export function RepoEditor({
                 ),
                 "Removed " + repo
               )
-              .then(() => resweep([use]));
+              .then((ok) => ok && resweep([use]));
           }}
         />
       </div>
@@ -667,7 +685,12 @@ export function AddRepoFlow({
       const fresh = ticks.filter((u) => !already.includes(u));
       const patch = usesPatch(s.settings, repo, want);
       if (Object.keys(patch).length) {
-        await s.saveGroups(patch, "Added " + repo + (fresh.length ? " — " + usesText(fresh) : ""));
+        const ok = await s.saveGroups(patch, "Added " + repo + (fresh.length ? " — " + usesText(fresh) : ""));
+        if (!ok) {
+          // The toast said why; stay on this step with what was typed.
+          setError("Couldn't add " + repo + " — try again.");
+          return;
+        }
         resweep(fresh);
       }
       const shown = ticks.length ? ticks : already;

@@ -20,15 +20,17 @@ export const SECRET_MASK = "•••set";
 export interface SettingsModel {
   settings: Json;
   reload(): Promise<void>;
-  /** Persist one field; re-applies the server's echo. */
-  saveField(group: string, field: string, value: unknown): Promise<void>;
+  /** Persist one field; re-applies the server's echo. Resolves false when the
+   * save failed (already toasted) so a caller never reports success for it. */
+  saveField(group: string, field: string, value: unknown): Promise<boolean>;
   /** Persist a whole group patch (e.g. the PR-review repos array). */
-  saveGroup(group: string, patch: Json, okMsg?: string): Promise<void>;
+  saveGroup(group: string, patch: Json, okMsg?: string): Promise<boolean>;
   /** Persist several groups in ONE `POST /api/settings` — one echo, one
    * settings-hook pass, so a change that spans `github` and `repository` (a
    * repository's "Use it for" ticks) restarts the pipeline once, and can't
-   * land half-applied. */
-  saveGroups(patches: Record<string, Json>, okMsg?: string): Promise<void>;
+   * land half-applied. Resolves false on failure — "Save failed" is already
+   * toasted, and the caller must not follow it with its own success line. */
+  saveGroups(patches: Record<string, Json>, okMsg?: string): Promise<boolean>;
   get(group: string, field: string): unknown;
 }
 
@@ -70,9 +72,11 @@ export function useSettingsModel(open: boolean): SettingsModel {
         // when there is no such control on screen. Just "Saved" either way:
         // the raw key ("Saved window budget usd") was config vocabulary.
         if (!flashSaved()) toast("Saved");
+        return true;
       } catch (err) {
         toast("Save failed: " + ((err as Error).message || field));
         reload(); // re-sync on failure
+        return false;
       }
     },
     [reload]
@@ -81,15 +85,17 @@ export function useSettingsModel(open: boolean): SettingsModel {
   const saveGroups = useCallback(
     async (patches: Record<string, Json>, okMsg?: string) => {
       const groups = Object.keys(patches);
-      if (!groups.length) return;
+      if (!groups.length) return true;
       try {
         const r = await api<{ settings?: Json }>("/api/settings", { json: patches });
         putSettingsDoc(r?.settings || {});
         void refreshConfig();
         if (okMsg) toast(okMsg);
+        return true;
       } catch (err) {
         toast("Save failed: " + ((err as Error).message || groups.join(", ")));
         reload();
+        return false;
       }
     },
     [reload]

@@ -49,6 +49,7 @@ import { LANE_LABEL, SESSION_DEPTHS, laneLabel } from "../../lib/autopilot";
 import { searchTokens } from "../../lib/rowSearch";
 import { useUi } from "../../state/store";
 import { DialogFilter } from "../dialogs/DialogFilter";
+import { useAutosave } from "./autosave";
 import {
   EFFORTS,
   EFFORT_LABELS,
@@ -179,8 +180,10 @@ export function AutomationSwitch({
       <label className="ca-switch">
         <input
           type="checkbox"
+          role="switch"
           id={inputId}
           checked={checked}
+          aria-checked={checked}
           disabled={disabled}
           aria-labelledby={nameId}
           aria-describedby={note ? statusId : undefined}
@@ -189,6 +192,56 @@ export function AutomationSwitch({
         <span className="ca-slider" />
       </label>
     </div>
+  );
+}
+
+/** "dependabot, renovate" -> ["dependabot", "renovate"]. */
+export function splitLogins(text: string): string[] {
+  return text
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+/** A comma-separated list of GitHub logins ("Ignore comments from"), sent as
+ * you type (autosave.ts) — it used to save on blur only, so Escape or Close
+ * dropped what was typed. A value equal to the stored one isn't sent. */
+export function LoginListInput({
+  id,
+  stored,
+  placeholder,
+  onSave,
+}: {
+  id: string;
+  /** The saved list, as text. */
+  stored: string;
+  placeholder: string;
+  onSave(list: string[]): void;
+}) {
+  const [draft, setDraft] = useState(stored);
+  const save = useAutosave<string>((v) => {
+    const list = splitLogins(v);
+    if (list.join(",") !== splitLogins(stored).join(",")) onSave(list);
+  });
+  useEffect(() => {
+    if (!save.isPending()) setDraft(stored);
+  }, [stored, save]);
+  return (
+    <input
+      type="text"
+      id={id}
+      placeholder={placeholder}
+      autoComplete="off"
+      value={draft}
+      onChange={(e) => {
+        setDraft(e.target.value);
+        save.schedule(e.target.value);
+      }}
+      onBlur={() => save.flush()}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") save.flush();
+      }}
+    />
   );
 }
 
@@ -238,7 +291,8 @@ export function TestButton({
       >
         {label}
       </button>
-      <span className={"test-result" + (state.msg ? (state.ok ? " ok" : " bad") : "")}>
+      {/* A live region, so the verdict is read out when it lands. */}
+      <span className={"test-result" + (state.msg ? (state.ok ? " ok" : " bad") : "")} role="status">
         {state.testing ? "testing…" : state.msg ? (state.ok ? "✓ " : "✗ ") + state.msg : ""}
       </span>
     </>

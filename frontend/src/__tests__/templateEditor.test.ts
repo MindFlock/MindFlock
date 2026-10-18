@@ -83,10 +83,11 @@ describe("the template editor draws the New form's parts", () => {
     const html = editor();
     expect(html).toContain('placeholder="The repo it works in"');
     expect(html).not.toContain("— needed to Run now or schedule");
-    // Folder and Agent share New's row, each a label with one line of head
-    // (Folder in a wrap "Add one" rings and the tour points at).
+    // Folder and Agent share New's row, each with one line of head (Folder
+    // in a wrap "Add one" rings and the tour points at). The words are the
+    // <label>; Browse… sits outside it, so it isn't part of the field's name.
     expect(html).toMatch(
-      /<div class="nf-quick"><div class="tpl-folder-wrap" data-tour="schedule-folder"><label class="nf-folder"[^>]*>Folder<span class="repo-path-row">/
+      /<div class="nf-quick"><div class="tpl-folder-wrap" data-tour="schedule-folder"><div class="nf-folder"[^>]*><label for="tpl-repo[^"]*">Folder<\/label><span class="repo-path-row">/
     );
     // One height for the input, Browse… and the select: one baseline.
     const row = CSS.slice(CSS.indexOf(".tpl-editor .nf-quick input,"));

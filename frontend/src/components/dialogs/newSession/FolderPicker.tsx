@@ -392,12 +392,14 @@ export function FolderField({
     const el = inputRef.current;
     if (el && document.activeElement !== el) el.scrollLeft = el.scrollWidth;
   }, [repoPath]);
+  // A <div>, not a <label> around everything: a label wrapping Browse… made
+  // the button's text part of the field's name ("Folder 📁 Browse…").
   return (
-    <label
+    <div
       className="nf-folder"
       title="Any folder works — git features (diff / commit / PR) turn on automatically when it's a git repo."
     >
-      Folder
+      <label htmlFor={ids.input}>Folder</label>
       <span className="repo-path-row">
         <input
           id={ids.input}
@@ -514,7 +516,7 @@ export function FolderField({
           Browse…
         </button>
       </span>
-    </label>
+    </div>
   );
 }
 

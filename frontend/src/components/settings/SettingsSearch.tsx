@@ -31,7 +31,9 @@ function highlight(selector: string): void {
   setTimeout(look, 0);
 }
 
-export function SettingsSearch({ onPick }: { onPick(key: string): void }) {
+/** `onPick(key, advanced)`: `advanced` = the result sits in an AdvancedFold,
+ * so the dialog turns advanced settings on before showing it. */
+export function SettingsSearch({ onPick }: { onPick(key: string, advanced?: boolean): void }) {
   const [q, setQ] = useState("");
   const [cursor, setCursor] = useState(0);
   const query = q.trim();
@@ -40,7 +42,7 @@ export function SettingsSearch({ onPick }: { onPick(key: string): void }) {
   const pick = (e: SettingsSearchEntry) => {
     setQ("");
     setCursor(0);
-    onPick(e.key);
+    onPick(e.key, !!e.advanced);
     if (e.anchor) {
       revealInSettings(e.anchor);
       highlight(e.anchor);

@@ -348,7 +348,8 @@ def test_new_page_two_templates_strip_says_what_a_template_is():
     src = _src("components/dialogs/newSession/TemplatesStrip.tsx")
     # Round 4: the head says what each part of a chip does (▶ runs, ⏰
     # schedules, the name fills the form), and the door to the dialog reads
-    # "All templates…" rather than an edit-only "Manage…".
+    # "Open Schedule…" — the dialog's own name — rather than an edit-only
+    # "Manage…" (or the "All templates…" that opened a dialog titled Schedule).
     assert '<span title="Your templates — one list on every device">' in src
     assert "— ▶ runs one now · ⏰ schedules it · its name fills the form" in src
-    assert "All templates…" in src
+    assert "Open Schedule…" in src

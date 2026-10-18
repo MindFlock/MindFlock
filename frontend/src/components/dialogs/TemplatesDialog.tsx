@@ -106,6 +106,10 @@ export interface TemplatesUiState {
   error: string;
   /** Why the server refused ("agent_missing" / "github_required" / …). */
   reason?: string;
+  /** The open editor has unsaved changes and something asked to leave it:
+   * the "Discard changes?" row is up, and `then` is what Discard goes on to
+   * do ("close" = close the dialog). */
+  discarding?: { then: TemplatesUiAction | "close" };
 }
 
 export type TemplatesUiAction =
@@ -114,6 +118,10 @@ export type TemplatesUiAction =
   | { t: "new" }
   | { t: "ask-delete"; name: string }
   | { t: "cancel" }
+  /** Escape on an open editor: Cancel, but asked first when it has changes. */
+  | { t: "dismiss" }
+  | { t: "ask-discard"; then: TemplatesUiAction | "close" }
+  | { t: "keep-editing" }
   | { t: "saved" }
   | { t: "deleted" }
   | { t: "error"; message: string; reason?: string };
@@ -133,12 +141,32 @@ export function templatesReducer(s: TemplatesUiState, a: TemplatesUiAction): Tem
     case "ask-delete":
       return { editing: null, confirming: a.name, error: "" };
     case "cancel":
+    case "dismiss":
     case "saved":
     case "deleted":
       return { editing: null, confirming: null, error: "" };
+    case "ask-discard":
+      return { ...s, discarding: { then: a.then } };
+    case "keep-editing":
+      return { ...s, discarding: undefined };
     case "error":
       return { ...s, error: a.message, reason: a.reason };
   }
+}
+
+/** Whether the form differs from what its editor opened with. */
+export function formDirty(form: TemplateForm, seed: TemplateForm | null): boolean {
+  return !!seed && JSON.stringify(form) !== JSON.stringify(seed);
+}
+
+/** Whether `a` would throw away the open editor's changes — another card's
+ * Edit / Schedule… / Delete, + New, Escape — and so asks "Discard changes?"
+ * first. Cancel is itself the answer, and needs no question. */
+export function needsDiscard(ui: TemplatesUiState, a: TemplatesUiAction, dirty: boolean): boolean {
+  if (ui.editing === null || !dirty) return false;
+  // Schedule-only row → its whole form: the same template, the edits go along.
+  if (a.t === "edit" && a.name === ui.editing) return false;
+  return a.t === "edit" || a.t === "schedule" || a.t === "new" || a.t === "ask-delete" || a.t === "dismiss";
 }
 
 /** A rename is a save under the new name AND a delete of the old one — the
@@ -309,6 +337,10 @@ interface ViewProps {
   otherDevices?: boolean;
   /** A card's "Stop schedule" (the compact row): save it unscheduled. */
   onStopSchedule?: () => void;
+  /** The open editor has unsaved changes: a backdrop press doesn't close. */
+  dirty?: boolean;
+  /** "Discard changes?" → Discard: drop the edits and do what was asked. */
+  onDiscard?: () => void;
 }
 
 /** Markup only: everything it shows comes in as props. */
@@ -318,6 +350,19 @@ export function TemplatesDialogView(p: ViewProps) {
   const loadError = p.loadError || "";
   // The editor's folder browser takes Escape first (it puts the folder back).
   const escapeRef = useRef<(() => boolean) | null>(null);
+  // Leaving an editor with changes asks first (Edit on another card, + New,
+  // Delete, Escape, Close) rather than dropping what was typed.
+  const discardRow = ui.discarding ? (
+    <div className="tpl-confirm tpl-discard" role="alert">
+      <span>Discard changes{ui.editing ? ` to “${ui.editing}”` : ""}?</span>
+      <button type="button" className="tpl-btn tpl-del" onClick={p.onDiscard}>
+        Discard
+      </button>
+      <button type="button" className="tpl-btn" onClick={() => p.dispatch({ t: "keep-editing" })}>
+        Keep editing
+      </button>
+    </div>
+  ) : null;
   const editor = (
     <TemplateEditor
       form={form}
@@ -550,6 +595,7 @@ export function TemplatesDialogView(p: ViewProps) {
     if (ui.editing === t.name && !ui.scheduleOnly)
       return (
         <div key={t.name} className="tpl-card tpl-card-editing" data-name={t.name}>
+          {discardRow}
           {editor}
         </div>
       );
@@ -578,7 +624,10 @@ export function TemplatesDialogView(p: ViewProps) {
           {actions(t)}
         </div>
         {schedOpen ? (
-          <div className="tpl-sched-row">{scheduleEditor(t)}</div>
+          <div className="tpl-sched-row">
+            {discardRow}
+            {scheduleEditor(t)}
+          </div>
         ) : (
           scheduled && strip(t, info)
         )}
@@ -638,11 +687,18 @@ export function TemplatesDialogView(p: ViewProps) {
       // editor grows the card down instead of re-centring it.
       className="top-dialog"
       onClose={p.onClose}
-      // Escape withdraws an open editor or delete question first.
+      // A press outside never throws away a half-edited template.
+      closeOnBackdrop={!p.dirty}
+      // Escape withdraws an open editor or delete question first; on "Discard
+      // changes?" it keeps editing.
       onEscape={() => {
+        if (ui.discarding) {
+          p.dispatch({ t: "keep-editing" });
+          return true;
+        }
         if (ui.editing !== null && escapeRef.current?.()) return true;
         if (ui.editing === null && !ui.confirming) return false;
-        p.dispatch({ t: "cancel" });
+        p.dispatch(ui.editing !== null ? { t: "dismiss" } : { t: "cancel" });
         return true;
       }}
     >
@@ -674,7 +730,12 @@ export function TemplatesDialogView(p: ViewProps) {
           </p>
         )}
         <div className="tpl-list" id="templates-list">
-          {ui.editing === "" && <div className="tpl-card tpl-card-editing tpl-card-new">{editor}</div>}
+          {ui.editing === "" && (
+            <div className="tpl-card tpl-card-editing tpl-card-new">
+              {discardRow}
+              {editor}
+            </div>
+          )}
           {loadError && (
             <p className="error tpl-load-error" role="alert">
               Could not load templates: {loadError}
@@ -761,6 +822,8 @@ export function TemplatesDialog() {
   const [loadError, setLoadError] = useState("");
   const [ui, dispatch] = useReducer(templatesReducer, TEMPLATES_UI_INIT);
   const [form, setForm] = useState<TemplateForm>(() => formFromTemplate(null));
+  // What the open editor started from: the form differs from it = unsaved.
+  const [seed, setSeed] = useState<TemplateForm | null>(null);
   const [busy, setBusy] = useState(false);
   const [runs, setRuns] = useState<TemplateRunsStatus>(() => templateRunsNow());
   const [running, setRunning] = useState("");
@@ -805,7 +868,10 @@ export function TemplatesDialog() {
     if (folderSeeded.current || !folderSuggestions.length) return;
     folderSeeded.current = true;
     const path = defaultFolder(folderSuggestions);
-    if (path) setForm((f) => (f.repo_path ? f : { ...f, repo_path: path }));
+    if (path) {
+      setForm((f) => (f.repo_path ? f : { ...f, repo_path: path }));
+      setSeed((f) => (f && !f.repo_path ? { ...f, repo_path: path } : f));
+    }
   }, [ui.editing, folderSuggestions]);
 
   // Delete says "your other linked devices" only when there are some.
@@ -921,10 +987,13 @@ export function TemplatesDialog() {
     // template…: the schedule already on.
     if (scheduleFocus || ui.scheduleOnly) f.scheduled = true;
     setForm(f);
+    setSeed(f);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ui.editing, templates]);
 
   if (!open) return null;
+
+  const dirty = ui.editing !== null && formDirty(form, seed);
 
   const close = () => {
     closeDialog();
@@ -936,25 +1005,53 @@ export function TemplatesDialog() {
     }
   };
 
-  const save = async (f: TemplateForm = form) => {
-    const r = templateBody(f, installed);
+  /** Stop schedule's Undo: the template as it was, schedule and all. */
+  const undoStop = async (before: Template) => {
+    try {
+      await saveTemplate(before);
+      setList(templatesNow());
+      await ensureTemplates(true).catch(() => {});
+      setRuns(templateRunsNow());
+      toast(`“${before.name}” runs on its schedule again — ${templateScheduleLine(before, templateRunsNow())}`);
+    } catch (err) {
+      toast("Couldn't put the schedule back: " + errMsg(err));
+    }
+  };
+
+  const save = async (f: TemplateForm = form, stopping = false) => {
+    const r = templateBody(f, installed, templates, ui.editing);
     if ("error" in r) {
       dispatch({ t: "error", message: r.error, reason: /isn't installed/.test(r.error) ? "agent_missing" : "" });
       return;
     }
+    const before = ui.editing ? templates.find((x) => x.name === ui.editing) || null : null;
     setBusy(true);
     try {
       await saveTemplate(r.body);
       const gone = ui.editing ? renameLeaves(ui.editing, r.body.name) : null;
       if (gone) await deleteTemplate(gone);
-      // The next run moves with a new schedule.
+      const body = r.body;
+      // The next run moves with a new schedule; a scheduled save says THE
+      // schedule line (as the card will) once the server has placed it.
       void ensureTemplates(true)
-        .then(() => setRuns(templateRunsNow()))
-        .catch(() => {});
+        .catch(() => {})
+        .then(() => {
+          const st = templateRunsNow();
+          setRuns(st);
+          if (body.schedule && !stopping) toast(`Saved “${body.name}” — ${templateScheduleLine(body, st)}`);
+        });
       setList(templatesNow());
       dispatch({ t: "saved" });
-      // Saved, but it can't run yet: say what's missing, once.
-      toast(runProblem(r.body) ? "Saved — add a folder to run it" : `Saved template “${r.body.name}”`);
+      if (stopping && before && hasSchedule(before)) {
+        // Stopping a schedule is one click from a nightly run never
+        // happening again: say so, and offer it back.
+        toast(`Stopped the schedule of “${body.name}” — nothing starts on its own`, {
+          action: { label: "Undo", onClick: () => void undoStop(before) },
+        });
+      } else if (!body.schedule) {
+        // Saved, but it can't run yet: say what's missing, once.
+        toast(runProblem(body) ? "Saved — add a folder to run it" : `Saved template “${body.name}”`);
+      }
     } catch (err) {
       // The server's own sentence and what would fix it (409 agent_missing /
       // github_required), not its terse error.
@@ -1036,8 +1133,24 @@ export function TemplatesDialog() {
       loadError={loadError}
       onForm={(patch) => setForm((f) => ({ ...f, ...patch }))}
       dispatch={(a) => {
-        setScheduleFocus(a.t === "schedule");
+        if (needsDiscard(ui, a, dirty)) {
+          dispatch({ t: "ask-discard", then: a });
+          return;
+        }
+        if (a.t !== "keep-editing") setScheduleFocus(a.t === "schedule");
         dispatch(a);
+      }}
+      dirty={dirty}
+      onDiscard={() => {
+        const then = ui.discarding?.then;
+        if (!then) return;
+        dispatch({ t: "cancel" });
+        if (then === "close") {
+          close();
+          return;
+        }
+        setScheduleFocus(then.t === "schedule");
+        dispatch(then);
       }}
       agents={agents}
       folderSuggestions={folderSuggestions}
@@ -1045,9 +1158,9 @@ export function TemplatesDialog() {
       scheduleFocus={scheduleFocus}
       tz={Object.values(runs.runs || {}).map((r) => r.tz).find(Boolean) || runs.tz || localZone()}
       onSave={() => void save()}
-      onStopSchedule={() => void save({ ...form, scheduled: false })}
+      onStopSchedule={() => void save({ ...form, scheduled: false }, true)}
       onDelete={(name) => void del(name)}
-      onClose={close}
+      onClose={() => (dirty ? dispatch({ t: "ask-discard", then: "close" }) : close())}
       installed={installed}
       githubConnected={github.data ?? null}
       liveSessions={liveSessions}

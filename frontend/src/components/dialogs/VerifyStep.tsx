@@ -197,7 +197,8 @@ export function StepRow({
   onRemove?: (step: TestStep) => Promise<void>;
   /** Change this step's wording or who answers it. Absent while a run is in
    * flight — the agent is working from these sentences right now. */
-  onEdit?: (step: TestStep, fields: Partial<TestStep>) => Promise<void>;
+  /** Resolves false when the change didn't take: the editor stays open. */
+  onEdit?: (step: TestStep, fields: Partial<TestStep>) => Promise<boolean | void>;
   /** Open a session to fix this failed step. Absent while nothing can start
    * one (a run in flight, or another action busy on the plan). */
   onFix?: (step: TestStep) => void;
@@ -476,8 +477,8 @@ export function StepRow({
             step={step}
             onCancel={() => setEditing(false)}
             onSave={async (fields) => {
-              await onEdit(step, fields);
-              setEditing(false);
+              // A refused edit keeps the editor and what was typed in it.
+              if ((await onEdit(step, fields)) !== false) setEditing(false);
             }}
           />
         ) : (

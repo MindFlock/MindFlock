@@ -669,7 +669,9 @@ newest thing you actually asked.
   the PR chip and opens it in one click.
 - **An agent that isn't installed, or isn't signed in.** When the session's
   agent CLI is missing on this computer (`/api/setup`'s `logins`), a line over
-  the terminal says so with **Install <agent>…** (the Setup checklist), and the
+  the terminal says so with **Install <agent>…** (the Setup checklist for the
+  default agent; Settings → Agents on that agent's card for any other, since
+  Setup only checks the default), and the
   rail row reads *Failed: claude isn't installed* with an **Install** chip —
   never Idle or Offline/Restart. Once it is installed, the row's usual Restart
   takes over. When the CLI is installed but its login probe found nothing
@@ -2198,7 +2200,9 @@ task, fast-track) to run again or schedule.* — then **Folder** and **Agent**,
   (Settings → Agents) — under the field and on page 1. A note, not a block.
 - **Task** — what the agent starts on (blank starts it idle), always on the
   form — two rows to start, growing with its text up to 220 px, then
-  scrolling — with **Insert saved text…** (built-ins first, then yours) and
+  scrolling — with **Insert saved text…** (built-ins first, then yours; it
+  goes in at the caret, or after what is there with a blank line between —
+  never over the Task) and
   **Manage…**, which opens the Prompts dialog and comes back to this form as
   it was — there, clicking a prompt puts it in this Task box (no *Paste
   into*: you are making a new session, not talking to a running one).
@@ -2283,10 +2287,11 @@ Esc cancels without closing the dialog; never a `prompt()`) and saves the
 fast-track — stored as the template's autopilot (*Commit*, *Commit + push* or
 *Open a PR*; a template never merges unattended, so *Merge when green* saves as
 *Open a PR*) — not Plan first or Auto-split.
-Saving over a template that has a schedule keeps the schedule. The strip
-appears (or updates) at once — no reopen — and the toast (6 s, clickable)
-says where: *▶ runs it and ⏰ schedules it, in Templates at the top of New.
-Click to open Schedule.*
+A name another template already has (ignoring case) is refused on the row —
+*A template named “nightly” already exists — pick another name.* — since the
+server upserts by name and would replace it. The strip appears (or updates)
+at once — no reopen — and the toast (6 s, clickable) says where: *▶ on its
+chip at the top of New runs it, ⏰ schedules it. Click to open Schedule.*
 
 **One Templates list.** The **Templates** strip (*Templates — ▶ runs one now ·
 ⏰ schedules it · its name fills the form*) is on **both pages**: under the
@@ -2302,7 +2307,7 @@ when it has no folder) and New steps aside, keeping your draft; **⏰** opens
 scheduled template's ⏰ says its time on its face (*⏰ 07:30*, *⏰ paused*) and
 its tooltip is the same one schedule line the Schedule card shows (*Weekdays
 at 07:30 EDT · next tomorrow 07:30 — change or stop it*).
-**All templates…** opens **Schedule** (also the top bar's **Schedule**, `Alt+S`,
+**Open Schedule…** opens **Schedule** (also the top bar's **Schedule**, `Alt+S`,
 and the palette's **Schedule…** / **Templates…**). ▶ and ⏰ are this device's: they are not drawn when the
 session would run on another device.
 Closing Schedule brings New back **as it was left**, with the list
@@ -2343,7 +2348,13 @@ and *To send text to a session that's already running, use Prompts.*, with
 Every card has **▶ Run now**, **Edit** and **Delete** at its top right.
 With no templates at all the surface is one dashed panel: *Save a session as
 a template once, then start it with one click — or every night by itself.* and a
-**Create a template** button (the new-template editor). **Edit** opens the
+**Create a template** button (the new-template editor). An editor with unsaved
+changes is never dropped by the next click: another card's **Edit** /
+**Schedule…** / **Delete**, **+ New template**, `Esc` or **Close** first show an
+inline *Discard changes to “name”?* row (**Discard** / **Keep editing**; `Esc`
+keeps editing), and a press on the backdrop doesn't close it. Saving under
+another template's name is refused (*A template named “x” already exists —
+pick another name.*). **Edit** opens the
 editor inline in the card — the New form's own parts, laid out the way New
 lays them out (`TemplateEditor.tsx`; `scope="tpl"` ids): **Name**; then the
 New form's Folder row — **Folder** (placeholder *The repo it works in*; a
@@ -2398,7 +2409,9 @@ is visibly disabled and the card says *Run now and schedules need a folder.*
 palette leaves it out. **Schedule…** (or a scheduled card's **Change
 schedule**) opens a compact row inside the card — just the schedule, **Save**
 and **Cancel** (and **Stop schedule** on a scheduled one, which saves it
-unscheduled); **Edit** keeps the whole form. Either way the schedule is
+unscheduled and offers **Undo** in its toast); **Edit** keeps the whole form.
+Saving a schedule toasts its schedule line (*Saved “nightly” — Weekdays at
+07:30 EDT · next tomorrow 07:30*). Either way the schedule is
 **Every day** / **Weekdays** **at** a 24-hour time (a text field, *07:30* —
 one format everywhere; *7:30* and *730* are read as 07:30), or **Custom
 (cron)**: a 5-field cron expression (`*/30 * * * *`, `0 21 * * 1-5`,
@@ -2423,8 +2436,9 @@ row (a failure is a default-on push, *A scheduled template run can't
 start*). A schedule fires once per slot, starts counting from when it was
 saved, and after the server was down fires only the most recent missed slot —
 see [web-api.md](web-api.md) (Templates → Schedules). Scheduled templates are
-also listed last on **Intake → Auto-start** (*Scheduled templates*: name ·
-schedule · next run or *paused*, with **Run now**, and **Open Schedule ›**), since they answer the same "what
+also listed last on **Intake → Auto-start** (*Scheduled templates*: name and
+the same schedule line the card says, with **Run now** — which closes Intake on
+the new session — and **Open Schedule ›**), since they answer the same "what
 starts on its own?" question as the ticket, PR and issue queues there. From a
 shell, `mindflock run <template>` is Run now and `mindflock templates` lists
 schedules and last runs.
@@ -2927,8 +2941,8 @@ a `screen` of its surface to switch to first (`TourStep.screen`); Settings is
 the one surface that reads it.
 
 There are seven (`lib/tours/`, one file per tour, `TOURS` in `index.ts`):
-**Welcome** (over the Get set up checklist: the *next:* line, ① Install
-Claude Code, ② Sign in to your agent, ③ Start your first session, then the
+**Welcome** (over the Get set up checklist: the *next:* line, ① Install your
+agent (the checklist names which), ② Sign in to your agent, ③ Start your first session, then the
 first sidebar row), **New** (the task box, the *Runs in* folder picker,
 **Start**, then a session pane's Agent / Diff tabs and its ⋯ — hooks
 `new-task`, `new-folder`, `new-start`, `pane-tabs`, `pane-menu`; the last
@@ -3361,7 +3375,9 @@ tab on its own until you Cancel it (then an empty line offers **+ Add a ticket
 source** / **+ Add a repository**). The tracker and repository halves:
 
 - **A tracker** — picking its tile and pressing **Continue** (‹ Back keeps the
-  tile picked; past step 1 another tile switches the draft straight over)
+  tile picked AND the draft as typed, a pasted token included — **Continue** on
+  the same tile resumes it; past step 1 another tile switches the draft
+  straight over; switching Intake tabs keeps it too — only **Cancel** drops it)
   starts a draft (`needs_filter: "on"`: it
   auto-starts nothing until a state or label is picked). **Connect** is the
   credentials, each tracker's **API token** with a **Create a token ↗** link to
@@ -3380,8 +3396,9 @@ source** / **+ Add a repository**). The tracker and repository halves:
   **Finish is the one save**: it PUTs the source, then tests it again with
   `record: true` so the stored verdict is honest (a source that still can't
   connect is added with *can't connect yet: …* in the toast; the server, not the
-  page, decides whether *Connect your tracker* is done). Cancel or ‹ Back to the
-  tiles leaves nothing behind — nothing was stored. Picking **GitHub Issues** offers *Add it
+  page, decides whether *Connect your tracker* is done; a save that fails with
+  nothing to mark says so — *Not saved — …. Try again.*). Cancel leaves nothing
+  behind — nothing was stored. Picking **GitHub Issues** offers *Add it
   as a Repository instead* for "every new issue in a repo".
 - **A repository** — the slug once (`owner/name`; the hint names repositories
   already known — on any list, or a ticket source's GitHub repo), **Test
@@ -3504,7 +3521,7 @@ buckets inside a source, and only the two GitHub tabs share one credential.
   with `github.enabled: false`; saved settings from before keep their meaning
   (unset with repos = on). **Your open pull requests** with **Start**, one
   heading per watched repository; **Skip authors** is now **Ignore comments
-  from**. Under the switch, the **GitHub line** says the credential's real state
+  from** (saved as you type, like a repository's own fields). Under the switch, the **GitHub line** says the credential's real state
   — *GitHub — connected as @you — one sign-in for PRs, issues, Verify and Open
   PR · Manage…*, or, amber, *GitHub — not connected — your PRs can't be listed
   or started · Connect GitHub* (`#gh-connect-btn`, from `GET /api/github/status`,
@@ -4625,7 +4642,9 @@ A few screens got quieter:
   welcome tour and the menu tours*, "dark" → **Appearance → Mode** *Light or
   dark*); ↑/↓ and Enter (or a click) open the
   screen, scroll to the control (opening a fold around it) and outline it for
-  a moment; Escape clears the box before it closes Settings.
+  a moment — a control that only exists in advanced mode (General's *Budgets,
+  resume and sleep*) turns **Show advanced settings** on first; Escape clears
+  the box before it closes Settings.
 - **Notifications** opens on **Where alerts go**: In MindFlock (the bell,
   always on), **Desktop notifications** (the only desktop on/off toggle; the
   bell carries no copy) and **Phone alerts** (**Set up** opens the ntfy fold),
@@ -5326,7 +5345,7 @@ labels above the inputs.
   and refill it later (templates addon, `/api/templates`, synced between
   devices). A template only ever *starts* a session — CLI, repo, workspace
   and an opening prompt; New's **Templates** strip lists them on both pages
-  (▶ runs one, ⏰ schedules it) and its **All templates…** (or the top bar's
+  (▶ runs one, ⏰ schedules it) and its **Open Schedule…** (or the top bar's
   **Schedule**, `Alt+S`) opens [Schedule](#schedule).
   A template's **Run now** (its card, its ▶ in New, or the palette's **Run template: …**)
   starts a fresh session from it with the prompt already sent, and an

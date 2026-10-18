@@ -33,10 +33,10 @@ export function SetupDialog() {
 
   return (
     <Modal id="setup-dialog" onClose={closeDialog}>
-      <div id="setup-panel-dlg">
+      <div id="setup-panel-dlg" role="dialog" aria-modal="true" aria-labelledby="setup-title">
         <div className="ws-head">
           {/* The progress line is the checklist's own first line. */}
-          <h2>Setup</h2>
+          <h2 id="setup-title">Setup</h2>
           <button type="button" id="setup-close" onClick={closeDialog}>
             Close
           </button>
