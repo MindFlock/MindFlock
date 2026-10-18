@@ -45,7 +45,7 @@ export interface CodeTreeProps {
   onPaint: (tool: "keep" | "only", target: { node?: TNode | null; file?: TFile | null }) => void;
   onRemoveZone: (z: RedZone) => void;
   onAllow: (path: string) => void;
-  onOpenDiff: () => void;
+  onOpenDiff: (path?: string) => void;
   onNote: (msg: string) => void;
   /** the controller's HUD state moved (tool, history, selection) */
   onChange?: () => void;
@@ -277,7 +277,7 @@ export function CodeTree(p: CodeTreeProps) {
               ctl.flyToNode(f.node, 0.8);
             }
           }}
-          onDiff={p.onOpenDiff}
+          onDiff={() => p.onOpenDiff(f.path)}
           onKeep={() => p.onPaint("keep", { file: f })}
           onOnly={() => p.onPaint("only", { file: f })}
           onAllow={() => p.onAllow(f.path)}

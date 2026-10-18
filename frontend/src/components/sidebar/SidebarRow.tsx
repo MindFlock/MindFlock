@@ -38,6 +38,7 @@ import { toast } from "../../lib/toast";
 import { nameTakenBy } from "../../lib/windowName";
 import { peekTerm, subscribeTermStates } from "../../lib/terminals";
 import { codemapSeenAt, redZoneChip, subscribeCodemapSeen } from "../../lib/codemapSeen";
+import { zoneChipFocus } from "../../lib/mapEntry";
 import {
   inFamily,
   lineageMark,
@@ -831,12 +832,7 @@ export const SidebarRow = memo(function SidebarRow({
               className={"stagechip rzchip " + rz.cls}
               title={rz.title}
               aria-label={rz.title}
-              onClick={(e) =>
-                act(() => {
-                  selectSession(title);
-                  useUi.getState().setLastTab(title, "map");
-                }, e)
-              }
+              onClick={(e) => act(() => useUi.getState().openMap(title, zoneChipFocus(inst.redzone, rz)), e)}
             >
               {rz.label}
             </button>

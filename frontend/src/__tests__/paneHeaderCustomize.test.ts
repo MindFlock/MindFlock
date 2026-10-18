@@ -53,13 +53,13 @@ const ctx = (o: Partial<Parameters<typeof headerItems>[1]> = {}) => ({
 });
 
 describe("the default set and the rules", () => {
-  it("is the owner's list: Agent · Terminal · Diff · Queue, then ⏩ and Copy entire history", () => {
+  it("is the owner's list: Agent · Terminal · Diff · Queue · Map, then ⏩ and Copy entire history", () => {
     expect(headerItems(null, ctx())).toEqual({
-      tabs: ["agent", "shell", "diff", "queue"],
+      tabs: ["agent", "shell", "diff", "queue", "map"],
       buttons: ["fasttrack", "copy"],
     });
     const r = resolvePaneHeader(null);
-    for (const off of ["map", "thread", "next", "history", "cost", "diffstat", "hide"] as const)
+    for (const off of ["thread", "next", "history", "cost", "diffstat", "hide"] as const)
       expect(r.shown.has(off), off).toBe(false);
   });
 
@@ -70,7 +70,9 @@ describe("the default set and the rules", () => {
   });
 
   it("switches and reorders within each kind", () => {
-    let p = togglePaneItem(null, "map");
+    let p = togglePaneItem(null, "map"); // Map is on by default: this hides it
+    expect(headerItems(p, ctx()).tabs).not.toContain("map");
+    p = togglePaneItem(p, "map");
     p = togglePaneItem(p, "history");
     p = togglePaneItem(p, "queue");
     expect(headerItems(p, ctx())).toEqual({

@@ -1024,7 +1024,7 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
 
   // --- Navigation ------------------------------------------------------------
 
-  const openDiff = () => useUi.getState().setLastTab(title, "diff");
+  const openDiff = (path?: unknown) => useUi.getState().openDiff(title, typeof path === "string" ? path : undefined);
   const selectPath = (p: string) => {
     if (!ctlRef.current?.revealPath(p)) showToast({ text: `${p} isn't on the tree (yet) — it appears once the map re-reads the worktree.` });
   };
