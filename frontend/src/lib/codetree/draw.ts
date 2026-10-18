@@ -4135,18 +4135,27 @@ function drawLabels(
     v.labelBudget = (v.labelBudget || 0) - 1;
   }
   g.globalAlpha = 1;
-  // leaf labels when zoomed in
-  if (phase === "rest" && leafPx >= 20) {
+  // leaf labels when zoomed in — and a changed file's name at any zoom: further out, only the changed files are
+  // named (a handful at most), the grey ones wait for the zoom
+  const edited = new Set<number>();
+  if (phase === "rest")
+    for (const A of v.agents) {
+      for (const k of A.edits.keys()) edited.add(k);
+      for (const k of A.created) edited.add(k);
+    }
+  const few = leafPx < 20;
+  if (phase === "rest" && (!few || (edited.size > 0 && leafPx >= 3))) {
     const L: Leaf[] = [];
     for (const t of M.terms) {
       if (t.node.fAnc) continue;
       if (!inView(t.cx - t.rad, t.cy - t.rad, t.cx + t.rad, t.cy + t.rad)) continue;
       for (const l of t.leaves) {
         if (l.file.ghost && !createdGhost.has(l.file.id)) continue;
+        if (few && !edited.has(l.file.id)) continue;
         L.push(l);
       }
     }
-    for (const p of M.piles) for (const l of p.leaves || []) if (inView(l.x - 5, l.y - 5, l.x + 5, l.y + 5)) L.push(l);
+    for (const p of M.piles) for (const l of p.leaves || []) if ((!few || edited.has(l.file.id)) && inView(l.x - 5, l.y - 5, l.x + 5, l.y + 5)) L.push(l);
     if (L.length < 1400) {
       const touched = new Set<number>();
       for (const A of v.agents) {
@@ -4156,12 +4165,7 @@ function drawLabels(
       }
       const gold = new Set<number>();
       for (const bd of v.badges || []) for (const id of bd.ids) gold.add(id);
-      // a changed file is always named once names show (a leader line if it has to sit off to one side)
-      const edited = new Set<number>();
-      for (const A of v.agents) {
-        for (const k of A.edits.keys()) edited.add(k);
-        for (const k of A.created) edited.add(k);
-      }
+      // a changed file is always named (a leader line if it has to sit off to one side)
       const pri = (l: Leaf) => (touched.has(l.file.id) ? 2 : 0) + (gold.has(l.file.id) ? 1 : 0);
       // names only where there is something to see — the clump at the middle of the view (or the selected
       // folder), the leaf under the pointer, and files a bird touched or that depend on an edit; every other file
@@ -4213,7 +4217,7 @@ function drawLabels(
       let cnt = 0;
       for (const l of L) {
         const must = edited.has(l.file.id);
-        if (cnt > (sparse ? 30 : 70) && !must) continue;
+        if (few ? cnt >= 8 : cnt > (sparse ? 30 : 70) && !must) continue;
         if (named.has(l)) continue;
         const [sx, sy] = toS(l.x, l.y);
         if (!onScreen(sx, sy, 0)) continue;
