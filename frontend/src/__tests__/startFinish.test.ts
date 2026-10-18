@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { code, fn, squash } from "./sourceText";
 import { splitLogins } from "../components/intake/kit";
+import { insertSaved } from "../components/dialogs/newSession/PromptFold";
 
 const SETTINGS = code("components/settings/useSettings.tsx");
 const AUTOSTART = code("components/intake/AutoStartSwitches.tsx");
@@ -49,6 +50,17 @@ describe("typed fields save as you type, not on blur alone", () => {
       expect(c).toContain("<LoginListInput");
       expect(c).not.toContain("skipDraft");
     }
+  });
+
+  it("Insert saved text goes in at the caret, or after a blank line — never over the Task", () => {
+    expect(insertSaved("", "Fix it", null)).toBe("Fix it");
+    expect(insertSaved("Do A\n", "Fix it", null)).toBe("Do A\n\nFix it");
+    expect(insertSaved("Do A then B", "X ", { start: 8, end: 8 })).toBe("Do A theX n B");
+    expect(insertSaved("Do A then B", "C", { start: 10, end: 11 })).toBe("Do A then C");
+    expect(insertSaved("abc", "Z", { start: 99, end: 99 })).toBe("abcZ");
+    expect(code("components/dialogs/newSession/PromptFold.tsx")).toContain(
+      "setPrompt((cur) => insertSaved(cur, p.prompt, caret.current));"
+    );
   });
 
   it("splitLogins trims and drops blanks", () => {

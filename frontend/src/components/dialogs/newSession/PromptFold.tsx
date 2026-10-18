@@ -32,6 +32,21 @@ export interface TaskFieldProps {
 /** The tallest the Task box grows to by itself before it scrolls. */
 const TASK_MAX_PX = 220;
 
+/** The Task with saved text inserted: at the caret (over a selection) when
+ * the box has had one, else after what is there with a blank line between —
+ * it used to REPLACE the Task, and whatever was typed was gone. */
+export function insertSaved(
+  text: string,
+  insert: string,
+  caret: { start: number; end: number } | null
+): string {
+  if (!text.trim()) return insert;
+  if (!caret) return text.replace(/\s+$/, "") + "\n\n" + insert;
+  const start = Math.max(0, Math.min(caret.start, text.length));
+  const end = Math.max(start, Math.min(caret.end, text.length));
+  return text.slice(0, start) + insert + text.slice(end);
+}
+
 export function TaskField({
   scope = "new",
   hint = "what the agent starts on; blank starts it idle",
@@ -46,6 +61,13 @@ export function TaskField({
   // was a third of the card — growing with what is typed (or inserted, or
   // carried over from page 1) up to TASK_MAX_PX, then scrolling.
   const ref = useRef<HTMLTextAreaElement | null>(null);
+  // Where the caret was when the box last had it (null = never touched):
+  // picking a saved text moves focus to the select, so it's kept here.
+  const caret = useRef<{ start: number; end: number } | null>(null);
+  const noteCaret = () => {
+    const ta = ref.current;
+    if (ta) caret.current = { start: ta.selectionStart, end: ta.selectionEnd };
+  };
   useLayoutEffect(() => {
     const ta = ref.current;
     if (!ta) return;
@@ -64,12 +86,16 @@ export function TaskField({
             <select
               id="new-preset"
               aria-label="Insert saved text"
-              title="Put one of your saved prompts in the Task box (you can edit it after)"
+              title="Put one of your saved prompts in the Task box, at the caret (you can edit it after)"
               value={presetValue}
               onChange={(e) => {
-                setPresetValue(e.target.value);
                 const p = findPreset(e.target.value);
-                if (p) setPrompt(p.prompt);
+                // A one-shot action: the select goes back to its prompt, so
+                // the same text can be inserted twice.
+                setPresetValue("");
+                if (!p) return;
+                setPrompt((cur) => insertSaved(cur, p.prompt, caret.current));
+                caret.current = null;
               }}
             >
               <option value="">Insert saved text…</option>
@@ -115,6 +141,8 @@ export function TaskField({
         placeholder={placeholder}
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
+        onSelect={noteCaret}
+        onBlur={noteCaret}
       />
     </div>
   );
