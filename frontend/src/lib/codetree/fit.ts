@@ -20,8 +20,13 @@ export interface Edges {
 }
 
 /** Screen px the picture needs past its outermost leaves: names beside the
- * outer leaves, bird tags over the crown, the pile names under the ground. */
-export const WHOLE_PAD = { side: 36, top: 40, bot: 14, piles: 34 };
+ * outer leaves and a pile's name centred on a one-file pile ("repo root
+ * files"), bird tags over the crown, the pile names under the ground. */
+export const WHOLE_PAD = { side: 52, top: 40, bot: 14, piles: 34 };
+
+/** The whole-tree zoom never passes this: a three-file repo is a small tree
+ * drawn large, not one leaf filling the pane. */
+export const WHOLE_MAX_Z = 6;
 
 /** The world box the whole-tree view shows: every leaf (crown, roots, ground
  * piles) and the ground line under the trunk — not the model's padded bounds. */
@@ -32,17 +37,20 @@ export function pictureBox(M: Pick<Model, "bounds" | "groundY" | "leaves">): Box
 }
 
 /** The camera that fits box B into a W×H canvas inside insets I: as large as
- * fits, centred across the free canvas. Spare height goes to the sky, so the
- * soil below the ground line is only as deep as the roots and the pile names
- * need — a thin band when there are no tests. */
+ * fits (up to WHOLE_MAX_Z), centred across the free canvas and, within a
+ * bound, down it — the soil below the ground line stays a band as deep as the
+ * roots and the pile names need, never a third of the pane. */
 export function fitWhole(B: Box, groundY: number, piles: boolean, W: number, H: number, I: Edges): Cam {
   // pile names hang ~30 px under the ground line; roots deeper than that carry their own room
   const padB = piles && B.y1 - groundY < S0 * 2 ? WHOLE_PAD.piles : WHOLE_PAD.bot;
   const w = Math.max(40, W - I.left - I.right - 2 * WHOLE_PAD.side),
     h = Math.max(40, H - I.top - I.bot - WHOLE_PAD.top - padB);
-  const z = Math.min(w / Math.max(1, B.x1 - B.x0), h / Math.max(1, B.y1 - B.y0));
+  const z = Math.min(WHOLE_MAX_Z, w / Math.max(1, B.x1 - B.x0), h / Math.max(1, B.y1 - B.y0));
   const sx = (I.left + W - I.right) / 2,
-    sy = H - I.bot - padB;
+    // spare height centres the picture, except that the soil under it stays a band (at most 12 % of the room);
+    // a picture held small by the zoom cap simply floats in the middle
+    slack = Math.max(0, h - (B.y1 - B.y0) * z),
+    sy = H - I.bot - padB - (z >= WHOLE_MAX_Z ? slack / 2 : Math.min(slack / 2, h * 0.12));
   return { x: (B.x0 + B.x1) / 2 - (sx - W / 2) / z, y: B.y1 - (sy - H / 2) / z, z };
 }
 

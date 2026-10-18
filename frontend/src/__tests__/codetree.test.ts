@@ -144,15 +144,51 @@ function synthRepo(n: number, seed = 7): RawRepo {
 describe("layout", () => {
   it("is the approved prototype's layout (same data → the same leaf positions)", () => {
     let mx = 0,
-      n = 0;
+      n = 0,
+      pile = 0;
     for (const l of COLD.leaves) {
       const g = FX.golden[l.file.path];
       expect(g, l.file.path).toBeDefined();
-      mx = Math.max(mx, Math.hypot(g[0] - l.x, g[1] - l.y));
       n++;
+      // the crown and the roots are the prototype's; the ground piles moved in to just past the roots (below)
+      if (l.region === "ground") {
+        // within a pile, each leaf keeps its place relative to the pile's own centre
+        pile++;
+        continue;
+      }
+      mx = Math.max(mx, Math.hypot(g[0] - l.x, g[1] - l.y));
     }
     expect(n).toBe(FX.files.length);
+    expect(pile).toBeGreaterThan(0);
     expect(mx).toBeLessThan(1e-4);
+    // a pile is the prototype's pile, shifted sideways as a whole
+    for (const p of COLD.piles) {
+      const ls = p.leaves || [];
+      const dx = FX.golden[ls[0].file.path][0] - ls[0].x;
+      for (const l of ls) {
+        const g = FX.golden[l.file.path];
+        expect(Math.abs(g[0] - l.x - dx), l.file.path).toBeLessThan(1e-4);
+        expect(Math.abs(g[1] - l.y), l.file.path).toBeLessThan(1e-4);
+      }
+    }
+  });
+
+  it("puts the ground piles just past the roots, not a fixed stride out", () => {
+    let rx0 = 0,
+      rx1 = 0;
+    for (const l of COLD.leaves)
+      if (l.region === "root") {
+        rx0 = Math.min(rx0, l.x);
+        rx1 = Math.max(rx1, l.x);
+      }
+    const near = Math.min(...COLD.piles.map((p) => Math.abs(p.cx!) - (p.pw || 0) / 2));
+    // clear of the roots…
+    for (const p of COLD.piles) {
+      const inner = p.cx! < 0 ? p.cx! + (p.pw || 0) / 2 : p.cx! - (p.pw || 0) / 2;
+      expect(inner < 0 ? inner <= rx0 : inner >= rx1).toBe(true);
+    }
+    // …and no further out than it takes
+    expect(near).toBeLessThan(Math.max(Math.abs(rx0), rx1) + S0 * 4 + COLD.trunkW);
   });
 
   it("is deterministic", () => {

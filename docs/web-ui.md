@@ -1413,8 +1413,9 @@ device that has never pulled the synced value may show it once more.
   top-level folders and folders that hold changes, a nest, a rule or the
   selection; file names wait until you zoom close, and even then only the
   files a bird touched, the hovered one and the folder you are looking at. A
-  changed file is always named once names show (on a short leader line if it
-  has to sit off to one side). A file name sits on a soft backing, so no leaf,
+  changed file is always named, even at the whole-tree zoom where the grey
+  names wait (a handful at most there; on a short leader line if it has to sit
+  off to one side). A file name sits on a soft backing, so no leaf,
   twig or zone hatching runs through it, and it moves off neighbouring leaves
   when there is room beside its own.
 - **What could break is on demand, never the default layer.** Hover or select
@@ -1459,11 +1460,12 @@ web`) says where you are once zoomed in.
 
 **Moving around:** scroll to zoom (gently — one notch ≈ ×1.15, a flick never
 jumps from a leaf to the whole tree), drag or arrow keys to pan, double-click a
-folder to zoom to it, `0` / **⌂ Whole tree** (it fits the tree's own leaves
-into the canvas left of any panel and right of the agents column, centred
-across; spare height goes to the sky, so the soil is only as deep as the roots
-and the pile names need — thin with no tests. A panel that opens, docks or
-grows keeps a whole-tree view whole), **← Back** (`Backspace`) undoes
+folder to zoom to it, `0` / **⌂ Whole tree** (it fits the whole picture —
+canopy, roots and the ground piles with their names — into the canvas left of
+any panel and right of the agents column, centred, as large as fits up to a
+cap, so a small tree is drawn large; the soil under it stays a band. The
+ground piles sit just past the roots rather than a fixed stride out. A panel or
+card that opens, docks or grows keeps a whole-tree view whole), **← Back** (`Backspace`) undoes
 the last move, the minimap (bottom-left, shown only once you zoom in past the
 whole-tree view — there it would only repeat the canvas) jumps. **Find file or symbol** (`/`
 from anywhere in the pane, or with nothing focused while the pointer is over
