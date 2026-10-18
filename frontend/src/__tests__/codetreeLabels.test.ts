@@ -11,7 +11,7 @@ import type { CodeMapLive, FeedRecord, RedZone } from "../api/types";
 import { convexHull, prepGeometry, rectPolyDist, render, terrPad, zoneLobes } from "../lib/codetree/draw";
 import { rawFromSnapshot } from "../lib/codetree/input";
 import { LiveBirds } from "../lib/codetree/live";
-import { buildModel, isUnder, type Model, type TNode } from "../lib/codetree/model";
+import { S0, buildModel, isUnder, type Model, type TNode } from "../lib/codetree/model";
 import { readPalette } from "../lib/codetree/palette";
 import type { AgentState, TreeView, TZone } from "../lib/codetree/types";
 import { treeZones } from "../lib/codetree/zones";
@@ -226,6 +226,39 @@ describe("folder names stay pinned to their own cluster (the rig's scenario)", (
     const names = new Set((v.labelHits || []).filter((h) => h.n).map((h) => h.n!.path));
     for (const A of v.agents) if (A.nest && A.cur && !A.ag.parent && A.nest.depth >= 1) expect(names.has(A.nest.path)).toBe(true);
   });
+});
+
+describe("file names once the view is close enough to show them", () => {
+  // zoomed onto each changed file in turn (leaves ~30 px: names show, sparsely), at a full pane and a small one
+  for (const sz of [SIZES[0], SIZES[3]])
+    it(`every changed file on screen is named · ${sz.name}`, () => {
+      const v0 = view(sz, "main");
+      const edited = new Set<number>();
+      for (const A of v0.agents) for (const k of A.edits.keys()) edited.add(k);
+      expect(edited.size).toBeGreaterThan(0);
+      const missing: string[] = [];
+      for (const id of [...edited].slice(0, 12)) {
+        const l = M.files[id].leaf;
+        if (!l || l.term?.node.fAnc) continue;
+        const v = view(sz, "main");
+        const z = 30 / S0;
+        const fx = (sz.left + sz.W - 8) / 2,
+          fy = (8 + sz.H - sz.bot) / 2;
+        v.cam = { x: l.x - (fx - sz.W / 2) / z, y: l.y - (fy - sz.H / 2) / z, z };
+        render(v, 1000);
+        const toS = v.toS!;
+        const named = new Set((v.labelHits || []).filter((h) => h.leaf).map((h) => h.leaf!.file.id));
+        // each changed leaf in the free canvas has its name (a far one may carry a leader line)
+        for (const e of edited) {
+          const f = M.files[e];
+          if (!f.leaf || f.leaf.term?.node.fAnc) continue;
+          const [sx, sy] = toS(f.leaf.x, f.leaf.y);
+          if (sx < sz.left + 40 || sx > sz.W - 120 || sy < 30 || sy > sz.H - sz.bot - 30) continue;
+          if (!named.has(e)) missing.push(`${f.path} @ ${M.files[id].path}`);
+        }
+      }
+      expect(missing).toEqual([]);
+    });
 });
 
 describe("territory geometry", () => {

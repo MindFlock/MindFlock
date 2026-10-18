@@ -1298,7 +1298,10 @@ first** (the **Plan & lists** button), and getting around (`/`, scroll, drag,
 with ⚠ Could break, then open the diff"). The steps are picked from what is on
 screen when it opens: with nothing changed the changes step says so and
 **⚠ Could break** is left out, and a step whose target isn't visible (the agents
-column folded to a rail) is skipped. It is non-modal, so the map keeps
+column folded to a rail) is skipped. The card sits beside the ring, on the
+side with the most free canvas and off the tree and the HUD panels; a step
+about the tree as a whole docks it in a corner of the canvas. It never covers
+the middle of what it explains. It is non-modal, so the map keeps
 moving underneath. `→` / `Enter` steps forward, `←` back, and `Esc`, **Skip
 tour** or **Done** end it and mark it seen. **? Guide** at the right of the
 toolbar replays it. Only one pane runs it at a time. Switching tabs mid-tour hides it
@@ -1365,7 +1368,11 @@ device that has never pulled the synced value may show it once more.
   opens its folder card (Keep out / Only here are there). Labels appear only on
   top-level folders and folders that hold changes, a nest, a rule or the
   selection; file names wait until you zoom close, and even then only the
-  files a bird touched, the hovered one and the folder you are looking at.
+  files a bird touched, the hovered one and the folder you are looking at. A
+  changed file is always named once names show (on a short leader line if it
+  has to sit off to one side). A file name sits on a soft backing, so no leaf,
+  twig or zone hatching runs through it, and it moves off neighbouring leaves
+  when there is room beside its own.
 - **What could break is on demand, never the default layer.** Hover or select
   a changed leaf and the files that import it light up **gold** (no per-folder
   pills — the file card carries the count); **Show the N that depend on it**
@@ -1408,10 +1415,16 @@ web`) says where you are once zoomed in.
 
 **Moving around:** scroll to zoom (gently — one notch ≈ ×1.15, a flick never
 jumps from a leaf to the whole tree), drag or arrow keys to pan, double-click a
-folder to zoom to it, `0` / **⌂ Whole tree**, **← Back** (`Backspace`) undoes
+folder to zoom to it, `0` / **⌂ Whole tree** (it fits the tree's own leaves
+into the canvas left of any panel and right of the agents column, centred
+across; spare height goes to the sky, so the soil is only as deep as the roots
+and the pile names need — thin with no tests. A panel that opens, docks or
+grows keeps a whole-tree view whole), **← Back** (`Backspace`) undoes
 the last move, the minimap (bottom-left, shown only once you zoom in past the
-whole-tree view — there it would only repeat the canvas) jumps. **Find file or symbol** (`/`)
-flies to a file — or to the file holding a symbol — and opens its card.
+whole-tree view — there it would only repeat the canvas) jumps. **Find file or symbol** (`/`
+from anywhere in the pane, or with nothing focused while the pointer is over
+it; never from a text field) flies to a file — or to the file holding a symbol
+— and opens its card.
 
 **Cards:** click a leaf for its **file card** (lines, kind, used by N, imports,
 what each bird did to it, its zone, then Classes / Functions — public first —
@@ -1480,9 +1493,12 @@ pane a one-line ticker, never a block over the roots; changes the feed never saw
 before the map started watching`, never "Nothing yet". Labels and
 badges keep off the HUD. Below 760 × 560 px the column becomes a slim left
 **rail** (glyph + short name + changed count per bird, then `✎9 changed` /
-`⛔1 rule` tiles — the rule tile only once there is one); `»` (or a tile) expands the full column over the canvas and
-cards open as a bottom sheet; the paint-tool hint sits at the bottom, so arming
-a tool never moves what you aim at.
+`⛔1 rule` tiles — the rule tile only once there is one); `»` (or a tile) expands the full column over the canvas
+(`Esc` or a click on the canvas folds it back) and cards open as a bottom
+sheet that scrolls on its own, its actions pinned at its top; the paint-tool
+hint sits at the bottom, so arming a tool never moves what you aim at. Toasts
+keep right of the column, and the toolbar's buttons shrink to their icons (the
+words stay their accessible names).
 
 **Painting rules:** the toolbar's **Rules** group holds **⛔ Keep out**,
 **✓ Only here** and **+ Rule…**. The first two arm a
@@ -1505,6 +1521,11 @@ twin of the picture: **Breaches**, **Scope requests** (green mode, each with
 planned files), **Blast radius** (direct importers of what changed, per
 folder), **Rules**, **Changed**, **Workers' fences** and **Other agents
 here**. Blocks and breaches are also announced through a polite live region.
+In a pane at least 1100 px wide it docks as a column beside the tree (the
+canvas shrinks and a whole-tree view re-centres in what is left); in a smaller
+one it lies over the tree's right side, and a card its rows open stacks above
+it.
+
 `openMap(title, {path, section})` (every "Open map" in the app) lands on the
 Map at a file (flown to, its card open — once the tree is laid out, if it
 arrives earlier) and/or a part of it: a Plan & lists section (the panel opens,
@@ -1547,7 +1568,8 @@ things happen ahead of the click, so the first open is a cache hit:
 
 Measured with a server made to take 3 s for the snapshot: the Map became usable
 3.2 s after the click without the prefetch and 0.4 s after it with the prefetch. The layout search runs in a Web Worker (`/codetree-worker.js`)
-behind a "Growing the tree…" state with progress; its placements are cached
+behind a "Growing the tree…" state with progress (a failed layout says
+"Couldn't grow the tree" with **Retry**); its placements are cached
 per repo and data in IndexedDB, so the next open replays them in milliseconds,
 and a changed worktree warm-starts from the previous layout — unchanged
 subtrees keep their place, a changed folder is pushed clear of its neighbours —

@@ -2928,6 +2928,16 @@ function drawBreadcrumb(v: TreeView, g: G2, free: TreeView["free"], fits: Fits, 
 
 /** The map's one label chrome: a soft panel-coloured lozenge with no coloured outline, so labels never compete
  * with the changed leaves (the loudest thing on the map); the counts inside carry the birds' colours. */
+/** A file name's backing: a soft pill in the halo colour under the 14 px text box at (x, y), so no leaf, twig
+ * or zone hatching runs through the letters. */
+function labelBack(g: G2, P: Palette, x: number, y: number, w: number) {
+  const fs = g.fillStyle;
+  roundRect(g, x - 3, y + 0.5, w + 6, 13, 4);
+  g.fillStyle = P.halo;
+  g.fill();
+  g.fillStyle = fs;
+}
+
 function quietPill(g: G2, P: Palette, x: number, y: number, w: number, h: number) {
   roundRect(g, x, y, w, h, h / 2);
   g.fillStyle = P.pill;
@@ -3666,6 +3676,7 @@ function drawPriorityLeafLabels(
       g.stroke();
       g.restore();
     }
+    labelBack(g, P, placedAt[0], placedAt[1] - 7, tw);
     g.strokeText(txt, placedAt[0], placedAt[1]);
     g.fillStyle = col;
     g.fillText(txt, placedAt[0], placedAt[1]);
@@ -4145,6 +4156,12 @@ function drawLabels(
       }
       const gold = new Set<number>();
       for (const bd of v.badges || []) for (const id of bd.ids) gold.add(id);
+      // a changed file is always named once names show (a leader line if it has to sit off to one side)
+      const edited = new Set<number>();
+      for (const A of v.agents) {
+        for (const k of A.edits.keys()) edited.add(k);
+        for (const k of A.created) edited.add(k);
+      }
       const pri = (l: Leaf) => (touched.has(l.file.id) ? 2 : 0) + (gold.has(l.file.id) ? 1 : 0);
       // names only where there is something to see — the clump at the middle of the view (or the selected
       // folder), the leaf under the pointer, and files a bird touched or that depend on an edit; every other file
@@ -4180,9 +4197,23 @@ function drawLabels(
       g.lineWidth = 3;
       const named = new Set<Leaf>();
       for (const h of v.labelHits || []) if (h.leaf) named.add(h.leaf); // the priority pass already named these
+      // a name covers no other leaf when a spot beside its own is free (a covered leaf reads as crossed out)
+      const onLeaves = (x0: number, y0: number, w: number, self: Leaf) => {
+        const wx = (x0 + w / 2 - W / 2) / z + v.cam.x,
+          wy = (y0 + 7 - H / 2) / z + v.cam.y;
+        for (const it of M.grid.near(wx, wy, Math.hypot(w / 2, 7) / z + S0)) {
+          const o = it.leaf;
+          if (!o || o === self || (o.term && o.term.node.fAnc) || (o.file.ghost && !createdGhost.has(o.file.id))) continue;
+          const [ox, oy] = toS(o.x, o.y),
+            e = Math.max(2, (o.len || S0) * z * 0.3);
+          if (ox + e > x0 && ox - e < x0 + w && oy + e > y0 && oy - e < y0 + 14) return true;
+        }
+        return false;
+      };
       let cnt = 0;
       for (const l of L) {
-        if (cnt > (sparse ? 30 : 70)) break;
+        const must = edited.has(l.file.id);
+        if (cnt > (sparse ? 30 : 70) && !must) continue;
         if (named.has(l)) continue;
         const [sx, sy] = toS(l.x, l.y);
         if (!onScreen(sx, sy, 0)) continue;
@@ -4191,27 +4222,75 @@ function drawLabels(
         const off = l.len * z * 0.5 + 3;
         let x0 = sx + off,
           y0 = sy - 7,
-          ok = false;
-        // right of the leaf, else left of it; a 3 px gutter so neighbours never run together
+          ok = false,
+          far = false;
+        // right of the leaf, else left of it; a 3 px gutter so neighbours never run together; off other leaves
+        // first, then anywhere free
         const own = l.term ? l.term.node : null;
-        for (const [ax, ay] of [
+        const near: Array<[number, number]> = [
           [off, 0],
           [-off - tw, 0],
           [off, -13],
           [off, 13],
-        ]) {
-          x0 = sx + ax;
-          y0 = sy + ay - 7;
-          if (fits(x0 - 3, y0, x0 + tw + 3, y0 + 14) && !(own && fol && fol.hit(x0, y0 + 1, x0 + tw, y0 + 13, own, false))) {
-            ok = true;
-            break;
+          [-off - tw, -13],
+          [-off - tw, 13],
+        ];
+        const free = (clean: boolean) => fits(x0 - 3, y0, x0 + tw + 3, y0 + 14) && !(own && fol && fol.hit(x0, y0 + 1, x0 + tw, y0 + 13, own, false)) && !(clean && onLeaves(x0, y0, tw, l));
+        for (const [clean, cands] of [
+          [true, near],
+          [false, near.slice(0, 4)],
+        ] as Array<[boolean, Array<[number, number]>]>) {
+          for (const [ax, ay] of cands) {
+            x0 = sx + ax;
+            y0 = sy + ay - 7;
+            if (free(clean)) {
+              ok = true;
+              break;
+            }
+          }
+          if (ok) break;
+        }
+        if (!ok && must) {
+          // a changed file: further out with a leader line, else right of the leaf anyway (unless under a panel)
+          for (const [ax, ay] of [
+            [off + 10, -18],
+            [off + 10, 18],
+            [-off - tw - 10, -18],
+            [-off - tw - 10, 18],
+            [-tw / 2, -off - 22],
+            [-tw / 2, off + 22],
+          ]) {
+            x0 = sx + ax;
+            y0 = sy + ay - 7;
+            if (fits(x0 - 3, y0, x0 + tw + 3, y0 + 14)) {
+              ok = far = true;
+              break;
+            }
+          }
+          if (!ok) {
+            x0 = sx + off;
+            y0 = sy - 7;
+            ok = !(v.hudRects || []).some((r) => x0 + tw > r[0] && x0 < r[2] && y0 + 14 > r[1] && y0 < r[3]);
           }
         }
         if (!ok) continue;
         reserve(x0 - 3, y0, x0 + tw + 3, y0 + 14);
         v.labelHits!.push({ r: [x0, y0, x0 + tw, y0 + 14], leaf: l });
         const dusk = hasOnly && !(l.term ? l.term.node.lit : l.pile && l.pile.lit);
-        g.fillStyle = dusk ? P.duskLeafLabel : l.file.kind === "c" ? P.leafLabel : P.muted;
+        const col = dusk ? P.duskLeafLabel : l.file.kind === "c" ? P.leafLabel : P.muted;
+        if (far) {
+          g.save();
+          g.strokeStyle = col;
+          g.lineWidth = 1;
+          g.globalAlpha = 0.7;
+          g.beginPath();
+          g.moveTo(sx, sy);
+          g.lineTo(Math.max(x0, Math.min(x0 + tw, sx)), y0 + (y0 + 7 < sy ? 14 : 0));
+          g.stroke();
+          g.restore();
+        }
+        labelBack(g, P, x0, y0, tw);
+        g.fillStyle = col;
         halo(txt, x0, y0 + 7);
         cnt++;
       }

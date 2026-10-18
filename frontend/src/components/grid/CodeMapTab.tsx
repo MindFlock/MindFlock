@@ -293,6 +293,7 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
   const [model, setModel] = useState<Model | null>(MODEL_OF.get(title) || null);
   const [growing, setGrowing] = useState<number | null>(null);
   const [growErr, setGrowErr] = useState("");
+  const [growTry, setGrowTry] = useState(0); // "Retry" on a failed layout
   const [drawer, setDrawer] = useState(false);
   const [hiZone, setHiZone] = useState<RedZone | null>(null);
   const [preview, setPreview] = useState<RedZonePreview | null>(null);
@@ -498,7 +499,7 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
     return () => {
       dead = true;
     };
-  }, [raw, repoKey, title, active]);
+  }, [raw, repoKey, title, active, growTry]);
 
   // --- Derived model ---------------------------------------------------------
 
@@ -1377,6 +1378,7 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
             // no snapshot and its read failed: the error below, never "Growing the tree…" forever
             growing={growing ?? (snap || snapErr ? null : 0)}
             growErr={growErr}
+            onRetry={() => setGrowTry((n) => n + 1)}
             files={raw ? raw.files.length : snap?.files?.length || 0}
             agents={agents}
             tzones={tzones}
