@@ -68,7 +68,7 @@ export interface PanelModel {
 
 export interface PanelActions {
   selectPath: (p: string) => void;
-  openDiff: () => void;
+  openDiff: (path?: string) => void;
   askPlan: () => void;
   go: (scopeToPlan: boolean) => void;
   removeZone: (z: RedZone) => void;
@@ -139,7 +139,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
                 </span>
               </button>
               {b.kind === "green" && <AllowBtn path={b.path} busy={m.reqBusy[b.path] || ""} onAllow={a.allow} />}
-              <button type="button" className="cm-row-act" onClick={a.openDiff}>
+              <button type="button" className="cm-row-act" onClick={() => a.openDiff(b.path)}>
                 Open diff
               </button>
             </li>
@@ -518,7 +518,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
           })}
         </ul>
         <div className="cm-actions">
-          <button type="button" onClick={a.openDiff}>
+          <button type="button" onClick={() => a.openDiff()}>
             Open diff
           </button>
         </div>
