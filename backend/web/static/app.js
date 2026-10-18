@@ -24186,27 +24186,58 @@ function nudgeUsage(now, lastRefreshAt, trailingQueued, coalesceMs = USAGE_COALE
 }
 //#endregion
 //#region src/lib/toast.ts
-var toastTimer;
+var timers$1 = /* @__PURE__ */ new WeakMap();
+var MAIN_ID = "cs-toast";
+var HELD_ID = "cs-toast-held";
 var ACTION_LINGER_MS = 2e3;
+function looksLikeError(msg) {
+	return /^(couldn[’']t|could not|can[’']t|cannot|error\b)|\bfailed\b/i.test(String(msg || "").trim());
+}
+function toastDuration(msg, o = {}) {
+	if (o.duration) return o.duration;
+	const err = o.error ?? looksLikeError(msg);
+	const floor = o.action || o.onClick ? 6e3 : err ? 2500 : 1400;
+	const read = 600 + 45 * String(msg || "").length;
+	return Math.min(1e4, Math.max(floor, read));
+}
+function retire(box) {
+	clearTimeout(timers$1.get(box));
+	box.classList.remove("show", "clickable", "has-action");
+	box.onclick = null;
+	if (box.id === HELD_ID) setTimeout(() => box.remove?.(), 200);
+}
+function setTimer(box, ms) {
+	clearTimeout(timers$1.get(box));
+	timers$1.set(box, setTimeout(() => retire(box), ms));
+}
+function dropHeld() {
+	const held = document.getElementById(HELD_ID);
+	if (!held) return;
+	clearTimeout(timers$1.get(held));
+	held.remove?.();
+}
 function toast(msg, opts) {
 	const o = opts || {};
-	let el = document.getElementById("cs-toast");
+	let el = document.getElementById(MAIN_ID);
+	if (el && o.action) dropHeld();
+	else if (el && el.classList.contains("has-action") && el.classList.contains("show")) {
+		dropHeld();
+		el.id = HELD_ID;
+		el.classList.add("held");
+		el = null;
+	}
 	if (!el) {
 		el = document.createElement("div");
-		el.id = "cs-toast";
+		el.id = MAIN_ID;
 		document.body.appendChild(el);
 	}
 	const box = el;
-	const hide = () => {
-		clearTimeout(toastTimer);
-		box.classList.remove("show", "clickable", "has-action");
-		box.onclick = null;
-	};
-	const linger = () => {
-		clearTimeout(toastTimer);
-		toastTimer = setTimeout(hide, ACTION_LINGER_MS);
-	};
-	const hold = () => clearTimeout(toastTimer);
+	const err = o.error ?? looksLikeError(msg);
+	box.setAttribute?.("role", err ? "alert" : "status");
+	box.setAttribute?.("aria-live", err ? "assertive" : "polite");
+	const hide = () => retire(box);
+	const linger = () => setTimer(box, ACTION_LINGER_MS);
+	const hold = () => clearTimeout(timers$1.get(box));
 	if (o.action) {
 		const act = o.action;
 		const text = document.createElement("span");
@@ -24230,6 +24261,7 @@ function toast(msg, opts) {
 	box.title = o.title || "";
 	box.classList.toggle("clickable", !!o.onClick);
 	box.classList.toggle("has-action", !!o.action);
+	box.classList.toggle("is-error", err);
 	box.onclick = o.onClick ? () => {
 		hide();
 		o.onClick();
@@ -24237,9 +24269,7 @@ function toast(msg, opts) {
 	box.onmouseenter = o.action ? hold : null;
 	box.onmouseleave = o.action ? linger : null;
 	box.classList.add("show");
-	clearTimeout(toastTimer);
-	const dur = o.duration || (o.onClick || o.action ? 6e3 : 1400);
-	toastTimer = setTimeout(() => box.classList.remove("show", "has-action"), dur);
+	setTimer(box, toastDuration(msg, o));
 }
 function publishToast() {
 	const w = window;
@@ -25165,8 +25195,8 @@ function deriveSessionState(inst, extras) {
 	if (idleFor > STUCK_IDLE_S && uncommittedWork(inst)) return {
 		state: "idle",
 		reason: "stuck",
-		label: STATE_LABEL.idle,
-		tone: "neutral",
+		label: STATE_LABEL.idle + " " + spanWord(idleFor),
+		tone: "attention",
 		inBell: true,
 		restartable: false,
 		hint: "Idle " + spanWord(idleFor) + " with unfinished work — possibly stuck"
@@ -25179,6 +25209,31 @@ function deriveSessionState(inst, extras) {
 		restartable: false,
 		hint: bgHint || "Agent is idle — waiting for input"
 	};
+}
+function needsYouAction(ss, prUrl) {
+	if (ss.state !== "needs_you") return null;
+	switch (ss.reason) {
+		case "question": return {
+			act: "bell",
+			aria: "Question — answer it in the bell"
+		};
+		case "precommit_failed": return {
+			act: "terminal",
+			aria: "Pre-commit failed — open its Terminal"
+		};
+		case "setup_failed": return {
+			act: "setup",
+			aria: "Setup failed — re-run worktree setup"
+		};
+		case "checks_failing": return prUrl ? {
+			act: "pr",
+			aria: "Checks failing — open the PR"
+		} : {
+			act: "terminal",
+			aria: "Checks failing — open its Terminal (output in .mindflock_check.log)"
+		};
+		default: return null;
+	}
 }
 function attentionReason(ss) {
 	return ss.reason === "stuck" && ss.hint ? ss.hint : ss.label;
@@ -26673,7 +26728,7 @@ var PANE_TABS = [
 		kind: "tab",
 		label: "Map",
 		note: "The worktree as a tree: agents, zones, blast radius (git sessions)",
-		on: false
+		on: true
 	},
 	{
 		id: "thread",
@@ -26818,7 +26873,7 @@ function placePaneItem(pref, id, before) {
 function headerItems(pref, ctx) {
 	const r = resolvePaneHeader(pref);
 	const possible = (id) => !(id === "shell" && ctx.sharedFolder) && !((id === "diff" || id === "map") && !ctx.git) && !(id === "thread" && !ctx.thread);
-	const calmFolds = (id) => ctx.calm && pref === null && (id === "queue" && !ctx.queueBusy || id === "fasttrack" && !ctx.ftBusy);
+	const calmFolds = (id) => ctx.calm && pref === null && (id === "queue" && !ctx.queueBusy || id === "map" && !ctx.mapBusy || id === "fasttrack" && !ctx.ftBusy);
 	return {
 		tabs: r.tabs.filter((id) => possible(id) && (id === ctx.active || r.shown.has(id) && !calmFolds(id))),
 		buttons: r.buttons.filter((id) => r.shown.has(id) && !calmFolds(id))
@@ -26890,6 +26945,7 @@ function setSessionSelector(fn) {
 	_selectSession = fn;
 }
 var _threadSeq = 0;
+var _focusSeq = 0;
 var useUi = create((set, get) => ({
 	focused: null,
 	viewMode: load$1("cs_viewmode", "auto", false),
@@ -26937,6 +26993,8 @@ var useUi = create((set, get) => ({
 	dialogTarget: null,
 	prBaseByRepo: load$1("mf_prbase", {}),
 	threadComposeTarget: null,
+	mapFocus: null,
+	diffFocus: null,
 	threadLastSeen: load$1("mf_thread_seen", {}),
 	fastTrackMenu: null,
 	newPrefill: "",
@@ -27285,6 +27343,37 @@ var useUi = create((set, get) => ({
 				seq: ++_threadSeq
 			}
 		});
+	},
+	openMap: (title, focus) => {
+		if (!title) return;
+		if (_selectSession) _selectSession(title, { noKeyboard: true });
+		else {
+			get().setHidden(title, false);
+			get().touchMru(title);
+			get().setFocused(title);
+		}
+		get().setLastTab(title, "map");
+		set({ mapFocus: {
+			title,
+			path: focus?.path || void 0,
+			section: focus?.section,
+			seq: ++_focusSeq
+		} });
+	},
+	openDiff: (title, path) => {
+		if (!title) return;
+		if (_selectSession) _selectSession(title, { noKeyboard: true });
+		else {
+			get().setHidden(title, false);
+			get().touchMru(title);
+			get().setFocused(title);
+		}
+		get().setLastTab(title, "diff");
+		set({ diffFocus: {
+			title,
+			path: path || void 0,
+			seq: ++_focusSeq
+		} });
 	},
 	setThreadLastSeen: (title, ts) => {
 		if (!title) return;
@@ -30509,14 +30598,14 @@ function rewriteBlockedReason(plan) {
 //#endregion
 //#region src/lib/stage.ts
 var STAGE_META = {
-	provisioning: { label: "provisioning" },
-	agent: { label: "agent" },
-	precommit: { label: "pre-commit" },
-	interrupt: { label: "pre-commit ✗" },
-	committed: { label: "committed" },
-	pushed: { label: "pushed" },
+	provisioning: { label: "Provisioning" },
+	agent: { label: "Agent" },
+	precommit: { label: "Pre-commit" },
+	interrupt: { label: "Pre-commit ✗" },
+	committed: { label: "Committed" },
+	pushed: { label: "Pushed" },
 	pr: { label: "PR open" },
-	merged: { label: "complete ✓" }
+	merged: { label: "Complete ✓" }
 };
 function stageMeta(stage) {
 	return STAGE_META[stage] || STAGE_META.agent;
@@ -30617,24 +30706,24 @@ function checkChip(inst) {
 	if (!c || !c.state) return null;
 	const cmd = String(c.command || "");
 	if (c.state === "running") return {
-		label: "checks…",
+		label: "Checks…",
 		cls: "s-provisioning",
 		title: "Checks running: " + cmd
 	};
 	if (c.state === "failed") {
 		const rc = c.rc;
 		return {
-			label: "✗ checks",
+			label: "Checks ✗",
 			cls: "s-interrupt",
 			title: "Checks failed (exit " + (rc == null ? "?" : rc) + ") — push is gated until they pass (or push anyway)"
 		};
 	}
 	if (c.state === "ok") return c.stale ? {
-		label: "✓ stale",
+		label: "Checks stale",
 		cls: "s-idle",
 		title: "Checks passed for an older commit — a fresh run starts after the next commit"
 	} : {
-		label: "✓ checks",
+		label: "Checks ✓",
 		cls: "s-committed",
 		title: "Checks passed for this commit"
 	};
@@ -30821,7 +30910,7 @@ function fastTrackStep(inst) {
 		title: tip
 	};
 }
-function nextStep(inst) {
+function nextStep$1(inst) {
 	const title = inst.title;
 	const caps = queryClient.getQueryData(["config"])?.caps;
 	if (caps && !caps.git) return null;
@@ -31004,6 +31093,9 @@ function requireGit() {
 }
 var PR_REMEDY = "add a GitHub token in Settings → Connections → GitHub → Connect, or install the GitHub CLI";
 var PR_FALLBACK_HINT = "MindFlock can’t open or merge the PR for you yet — " + PR_REMEDY + ".\nThis still works: it opens GitHub’s prefilled page in your browser instead.";
+function mergedText(name, base) {
+	return "Merged " + name + (base ? " into " + base : "");
+}
 function hasPrSupport(c) {
 	return (c ?? caps()).github !== false;
 }
@@ -31277,10 +31369,10 @@ function offerRedZoneOverride(title, verb, breaches, retry) {
 	const green = breaches.every((b) => b.kind === "green");
 	errorPop(green ? `${verb} blocked — changes outside the green zone` : `${verb} blocked — red zone changed`, `${displayName(title)} changed ${n} ${green ? "file" + (n === 1 ? "" : "s") + " outside its scope" : "protected file" + (n === 1 ? "" : "s")}: ${shown}` + (n > 5 ? ` · and ${n - 5} more` : "") + ". Revert them (the agent can: “revert your changes to …”), or override for this " + verb.toLowerCase() + " only.", [{
 		label: "Open map",
-		run: () => {
-			selectSession(title);
-			useUi.getState().setLastTab(title, "map");
-		}
+		run: () => useUi.getState().openMap(title, {
+			section: "breaches",
+			path: breaches[0]?.path
+		})
 	}, {
 		label: verb + " anyway",
 		primary: true,
@@ -31390,7 +31482,9 @@ async function submitMakePr(title, base, overrideRedZones = false) {
 			if (r.compare_url) offerUrl(r.compare_url, "Opened GitHub’s compare page — " + msg);
 			else toast(msg, { duration: 9e3 });
 		} else {
-			if (r?.url) window.open(r.url, "_blank");
+			const said = (r?.note ? "PR already open for " : "Opened PR for ") + displayName(title);
+			if (r?.url) offerUrl(r.url, said);
+			else toast(said);
 			await resetStage(title, { quiet: true });
 		}
 	} catch (err) {
@@ -31418,7 +31512,7 @@ async function mergeSession(title, overrideRedZones = false, confirmed = false) 
 			const msg = r.message || PR_REMEDY;
 			if (r.pr_url) offerUrl(r.pr_url, "Opened the PR on GitHub to merge there — " + msg);
 			else toast(msg, { duration: 9e3 });
-		}
+		} else toast(mergedText(displayName(title), r?.base));
 	} catch (err) {
 		clearStep(title);
 		const rz = redZoneBreaches(err);
@@ -31426,6 +31520,16 @@ async function mergeSession(title, overrideRedZones = false, confirmed = false) 
 		else errorPop("Merge failed", errMsg(err));
 	}
 	await freshStage(title);
+}
+async function rerunSetup(title) {
+	if (!title) return;
+	try {
+		await instApi(title, "/setup/rerun", { method: "POST" });
+		toast("Worktree setup re-running — watch the setup chip");
+	} catch (err) {
+		errorPop("Setup re-run failed", errMsg(err));
+	}
+	await refreshInstances();
 }
 function hideSession(title) {
 	if (!title) return;
@@ -31749,10 +31853,7 @@ var SESSION_ACTIONS = {
 		keys: "Ctrl+K M",
 		chord: "m",
 		enabled: git,
-		run: (t) => {
-			selectSession(t, { noKeyboard: true });
-			useUi.getState().setLastTab(t, "map");
-		}
+		run: (t) => useUi.getState().openMap(t)
 	},
 	pause: {
 		label: "Pause session",
@@ -31837,6 +31938,718 @@ var SKIP_PERMS_LABEL = "⚠ Skip permission prompts";
 var SKIP_PERMS_TITLE = "The agent runs commands and edits files without asking you";
 var NOTHING_TO_PUSH = "Nothing to push yet";
 var CONNECT_GITHUB_FOR_PRS = "Connect GitHub to open PRs";
+//#endregion
+//#region src/lib/splitRun.ts
+function firstLine(text, max = 120) {
+	const s = String(text || "").trim().split(/\r?\n/)[0].trim();
+	return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
+}
+function testsLabel(tests) {
+	if (typeof tests === "number") return tests > 0 ? tests + (tests === 1 ? " test" : " tests") : "";
+	const s = String(tests || "");
+	const m = s.match(/(\d+)\s+(?:tests?\s+)?passed/i) || s.match(/(\d+)\s+tests?\b/i);
+	if (!m) return "";
+	const n = Number(m[1]);
+	return n + (n === 1 ? " test" : " tests");
+}
+function memberTasks(run) {
+	return (run.tasks || []).filter((t) => t.state !== "cancelled" || !!t.title);
+}
+function pieceLabel(t, run) {
+	const pieces = run.plan?.pieces || [];
+	const ix = (run.tasks || []).filter((x) => x.kind === "piece").indexOf(t);
+	const p = t.kind === "piece" && ix >= 0 ? pieces[ix] : void 0;
+	if (p) return {
+		name: p.title,
+		what: firstLine(p.prompt, 90)
+	};
+	const what = firstLine(t.text, 90);
+	return {
+		name: t.title || what || t.id,
+		what: t.title && what !== t.title ? what : ""
+	};
+}
+function pathsText(paths) {
+	return (paths || []).filter(Boolean).join(", ");
+}
+function isSameFolder(run) {
+	return run?.mode === "same_folder";
+}
+function pieceStatus(t, leadName, mode) {
+	const tests = testsLabel(t.tests);
+	const files = (t.conflict?.files || []).join(", ");
+	if (mode === "same_folder") {
+		if (t.state === "integrated") return {
+			word: "committed ✓",
+			cls: "ok",
+			detail: tests
+		};
+		if (t.state === "integrating") return {
+			word: "committing…",
+			cls: "work",
+			detail: ""
+		};
+	}
+	switch (t.state) {
+		case "integrated": return {
+			word: "merged back ✓",
+			cls: "ok",
+			detail: tests
+		};
+		case "integrating":
+			if (t.reason === "conflict" || t.conflict) return {
+				word: "conflict",
+				cls: "needs",
+				detail: leadName + " is resolving" + (files ? " " + files : " it")
+			};
+			return {
+				word: "merging…",
+				cls: "work",
+				detail: ""
+			};
+		case "needs_you": return {
+			word: t.reason === "conflict" ? "conflict — needs you" : "needs you",
+			cls: "needs",
+			detail: t.detail || ""
+		};
+		case "failed": return {
+			word: "failed",
+			cls: "bad",
+			detail: t.detail || ""
+		};
+		case "shipping": return {
+			word: "committing",
+			cls: "work",
+			detail: ""
+		};
+		case "working": return {
+			word: "working",
+			cls: "work",
+			detail: ""
+		};
+		case "starting": return {
+			word: "starting",
+			cls: "idle",
+			detail: ""
+		};
+		case "queued": return {
+			word: "queued",
+			cls: "idle",
+			detail: ""
+		};
+		case "skipped":
+		case "cancelled": return {
+			word: "left out",
+			cls: "idle",
+			detail: t.detail || ""
+		};
+		case "shipped": return {
+			word: "done",
+			cls: "ok",
+			detail: tests
+		};
+		default: return {
+			word: t.state || "—",
+			cls: "idle",
+			detail: ""
+		};
+	}
+}
+function plural$6(n, one, many = one + "s") {
+	return n + " " + (n === 1 ? one : many);
+}
+function leadSubline(run, leadName) {
+	const split = !!run.split;
+	const tasks = memberTasks(run);
+	const n = split && run.plan && run.state === "plan_ready" ? run.plan.pieces.length : tasks.length;
+	const branch = run.lead?.branch || run.release?.branch || "";
+	if (run.state === "planning") return [{ text: run.optional ? "Waiting for " + leadName + " to decide whether to split — it reads the code first; a plan shows here, or it just does the task." : "Waiting for " + leadName + " to propose the pieces — it reads the code first, then MindFlock shows the plan here." }];
+	if (run.state === "plan_ready") return [
+		{ text: leadName + " proposed " },
+		{
+			text: plural$6(n, "piece") + " with separate paths",
+			b: true
+		},
+		{ text: " — approve them and MindFlock starts the workers." }
+	];
+	const parts = split ? [{ text: "Split into " }, {
+		text: plural$6(n, "piece") + " with separate paths",
+		b: true
+	}] : [{
+		text: plural$6(n, "line") + ", one PR",
+		b: true
+	}];
+	const merged = tasks.filter((t) => t.state === "integrated").length;
+	const live = tasks.filter((t) => ![
+		"cancelled",
+		"skipped",
+		"failed"
+	].includes(t.state)).length;
+	if (isSameFolder(run)) {
+		parts.push({ text: " in " + leadName + "'s folder · " });
+		if (merged) {
+			parts.push({
+				text: merged === live && merged > 1 ? "all " + merged + " committed" : merged + " of " + live + " committed",
+				cls: "ok"
+			});
+			parts.push({ text: " on " });
+			parts.push({
+				text: branch || "the lead's branch",
+				b: true
+			});
+		} else {
+			parts.push({ text: "each piece is committed on " });
+			parts.push({
+				text: branch || "the lead's branch",
+				b: true
+			});
+			parts.push({ text: " as it finishes" });
+		}
+	} else if (merged) {
+		parts.push({ text: " · " });
+		parts.push({
+			text: merged === live && merged > 1 ? "all " + merged + " merged back" : merged + " of " + live + " merged back",
+			cls: "ok"
+		});
+		if (branch) {
+			parts.push({ text: " into " });
+			parts.push({
+				text: branch,
+				b: true
+			});
+		}
+	} else if (live) {
+		parts.push({ text: " · merging back into " });
+		parts.push({
+			text: branch || "the lead's branch",
+			b: true
+		});
+		parts.push({ text: " as each finishes" });
+	}
+	const conflicts = tasks.filter((t) => t.state === "integrating" && (t.reason === "conflict" || t.conflict)).length;
+	if (conflicts) parts.push({
+		text: " · " + plural$6(conflicts, "conflict") + " with " + leadName,
+		cls: "needs"
+	});
+	const c = run.check;
+	if (c && c.state === "ok") {
+		const tests = testsLabel(c.tests ?? null);
+		parts.push({ text: " · " });
+		parts.push({
+			text: tests ? tests + " pass" : "the check passed",
+			cls: "ok"
+		});
+		parts.push({ text: " after the last merge" });
+	} else if (c && c.state === "running") parts.push({ text: " · running the check on the merged branch" });
+	else if (c && c.state === "failed") parts.push({
+		text: " · the check failed on the merged branch",
+		cls: "bad"
+	});
+	return parts;
+}
+function modeChoices(run, leadName) {
+	const lead = run.lead || { title: "" };
+	const branch = lead.branch || "";
+	return [{
+		mode: "worktrees",
+		label: "In separate worktrees (merge back) — default",
+		hint: !lead.in_place && !lead.trunk ? "Each piece in its own worktree, merged back into " + (branch || leadName + "'s branch") + "; conflicts go to " + leadName + "." : "MindFlock starts " + leadName + "-split from " + leadName + "'s last commit and merges the pieces there — " + leadName + " itself is left as it is.",
+		blocked: ""
+	}, {
+		mode: "same_folder",
+		label: "In this folder (no merge)",
+		hint: "Each piece runs in " + leadName + "'s folder; MindFlock commits each piece's paths as it finishes — nothing to merge, no per-piece undo.",
+		blocked: lead.trunk ? leadName + " is on " + (branch || "its trunk") + " — the pieces would commit onto it" : ""
+	}];
+}
+function startedText(n, mode, leadName) {
+	const w = startWorkersLabel(n).replace(/^Start/, "Starting");
+	return mode === "same_folder" ? w + " in " + leadName + "'s folder — each fenced to its paths" : w + " — each fenced to its paths";
+}
+function planRows(pieces) {
+	return (pieces || []).map((p) => ({
+		title: String(p.title || ""),
+		prompt: String(p.prompt || ""),
+		paths: (p.paths || []).map(String),
+		pathsText: pathsText(p.paths)
+	}));
+}
+function startWorkersLabel(n) {
+	return "Start " + plural$6(n, "worker");
+}
+function parsePaths(text) {
+	return String(text || "").split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+}
+function editPlan(pieces, i, next) {
+	return pieces.map((p, j) => j === i ? {
+		title: next.title.trim(),
+		prompt: next.prompt.trim(),
+		paths: parsePaths(next.paths)
+	} : {
+		...p,
+		paths: [...p.paths]
+	});
+}
+function planProblems(body) {
+	const b = body || {};
+	const out = (b.problems || []).map((p) => (p.piece ? p.piece + ": " : "") + String(p.error || "")).filter(Boolean);
+	if (!out.length && b.error) out.push(String(b.error));
+	return out;
+}
+function releaseCard(run) {
+	const r = run.release || { state: "none" };
+	const base = r.base || "the base branch";
+	const branch = r.branch || run.lead?.branch || "";
+	const files = Number(r.files) || 0;
+	const stat = files ? plural$6(files, "file") + " +" + (Number(r.add) || 0) + " −" + (Number(r.del) || 0) : "";
+	const fixes = Number(r.conflict_fixes) || 0;
+	const split = !!run.split;
+	return {
+		title: r.title || run.name,
+		into: base + " ← " + (branch || "its branch"),
+		stat,
+		commits: (isSameFolder(run) ? "one per piece, committed by MindFlock with only its paths" : split ? "one per piece, kept as written" : "one per line, kept as written") + (fixes ? " + " + plural$6(fixes, "conflict fix", "conflict fixes") + " by the lead" : ""),
+		body: split ? "a section per piece: what changed, the tests it ran" : "a section per line: what changed, the tests it ran"
+	};
+}
+function checkLine(run) {
+	const c = run.check;
+	const cmd = c?.command ? "`" + c.command + "`" : "the check";
+	switch (c?.state) {
+		case "none": return "no check configured — add a check_command to .mindflock.toml to run one";
+		case "ok": return cmd + " passed" + (c.tests ? " (" + c.tests + " tests)" : "");
+		case "failed": return cmd + " failed" + (c.summary ? ": " + c.summary : "");
+		case "running": return cmd + " is running on the merged branch…";
+		case "fixing": return cmd + " failed — the lead is fixing it";
+		case "pending": return isSameFolder(run) ? "runs once every piece is committed" : "runs once every piece is merged back";
+		default: return "";
+	}
+}
+function releaseChoices(lane, localOrigin) {
+	if (localOrigin) return [{
+		merge: false,
+		label: "Push to the local folder",
+		primary: true,
+		title: "Push the team run's branch to " + localOrigin + " — a folder on this machine, not GitHub: no PR can be opened"
+	}];
+	if (lane === "push") return [{
+		merge: false,
+		label: "Push the branch",
+		primary: true,
+		title: "Push the team run's branch — no PR is opened"
+	}];
+	const pr = {
+		merge: false,
+		label: lane === "merge" ? "Open PR only" : "Open PR",
+		primary: lane !== "merge",
+		title: "Open the team run's one PR — it is not merged"
+	};
+	const merge = {
+		merge: true,
+		label: lane === "merge" ? "Open PR, merge when checks pass" : "Open it, merge when checks pass",
+		primary: lane === "merge",
+		title: "Open the team run's one PR and merge it once its checks pass"
+	};
+	return lane === "merge" ? [merge, pr] : [pr, merge];
+}
+function laneNote(lane) {
+	const t = String(lane?.target || "");
+	if (!t) return "";
+	return "fast-track: " + (t === "leave" ? "off" : LANE_HEAD[t] || "→ " + t) + (lane?.ask_first ? ", asks first" : "");
+}
+function releaseOutcome(run) {
+	const r = run.release;
+	const lane = run.policy?.lane || "";
+	const local = r?.local_origin || "";
+	if (run.state === "releasing" || r?.state === "releasing") return {
+		text: local ? "Pushing the branch to " + local + "…" : lane === "push" ? "Pushing the branch…" : "Opening the PR…",
+		cls: "work",
+		url: "",
+		link: ""
+	};
+	if (r?.state === "done" && r.pr_url) {
+		const m = r.pr_url.match(/\/pull\/(\d+)/);
+		return {
+			text: "✓ " + (m ? "PR #" + m[1] : "PR") + " opened",
+			cls: "ok",
+			url: r.pr_url,
+			link: "View PR ↗"
+		};
+	}
+	if ((r?.state === "handoff" || r?.state === "done") && local) return {
+		text: "Pushed " + (r.branch || run.lead?.branch || "the branch") + " to " + local + " — a folder on this machine, not GitHub, so no PR was opened. Push the branch to your forge and open the PR there" + (r.title ? " (copy its title and body below)" : ""),
+		cls: "idle",
+		url: "",
+		link: ""
+	};
+	if (r?.state === "handoff") return {
+		text: r.compare_url ? "Pushed — MindFlock couldn't open the PR here (no gh or token)" : "Pushed — MindFlock couldn't open the PR here: copy its title and body below into a PR on your host",
+		cls: "idle",
+		url: r.compare_url || "",
+		link: r.compare_url ? "Open the compare page ↗" : ""
+	};
+	if (r?.state === "failed") return {
+		text: "The release stopped: " + (r.detail || "see the lead's pane"),
+		cls: "bad",
+		url: "",
+		link: ""
+	};
+	if (r?.state === "done") return {
+		text: lane === "push" ? "✓ pushed" : "✓ released",
+		cls: "ok",
+		url: "",
+		link: ""
+	};
+	if (run.state === "done" && (lane === "commit" || lane === "leave")) return {
+		text: "All merged into " + (run.lead?.branch || "the lead's branch") + " — nothing pushed (this team run is fast-tracked to " + (lane === "commit" ? "Commit" : "Off") + ")",
+		cls: "ok",
+		url: "",
+		link: ""
+	};
+	return null;
+}
+function railExtraChips(check, rz, o) {
+	if (!o.integrated && !o.leadAsks) return {
+		check,
+		rz
+	};
+	const loud = (c) => !!c && /(interrupt|breach|warn)/.test(c.cls);
+	return {
+		check: loud(check) ? check : null,
+		rz: loud(rz) ? rz : null
+	};
+}
+function leadChip(run) {
+	if (!run) return null;
+	if (run.state === "release_ready") {
+		const lane = run.policy?.lane || "pr";
+		return {
+			label: lane === "push" ? "→ push?" : lane === "merge" ? "→ merge?" : "→ PR?",
+			title: "Everything merged back and checked — open its Thread to release the one PR"
+		};
+	}
+	if (run.state === "plan_ready") return {
+		label: "plan?",
+		title: "The lead proposed the pieces — open its Thread to approve them"
+	};
+	return null;
+}
+function leadLine(run) {
+	if (!run) return null;
+	const tasks = memberTasks(run);
+	const merged = tasks.filter((t) => t.state === "integrated").length;
+	const live = tasks.filter((t) => ![
+		"cancelled",
+		"skipped",
+		"failed"
+	].includes(t.state)).length;
+	switch (run.state) {
+		case "planning": return {
+			text: run.optional ? "deciding whether to split…" : "proposing the pieces…",
+			cls: ""
+		};
+		case "plan_ready": return {
+			text: "plan ready — approve it",
+			cls: "needs"
+		};
+		case "checking": return run.check?.state === "failed" ? {
+			text: "the check failed",
+			cls: "bad"
+		} : {
+			text: "running the check",
+			cls: ""
+		};
+		case "releasing": return {
+			text: "opening the PR",
+			cls: ""
+		};
+		case "cancelled": return {
+			text: "cancelled",
+			cls: ""
+		};
+	}
+	if (run.release?.state === "done" && run.release.pr_url) {
+		const m = run.release.pr_url.match(/\/pull\/(\d+)/);
+		return {
+			text: "✓ " + (m ? "PR #" + m[1] : "PR"),
+			cls: "ok",
+			url: run.release.pr_url
+		};
+	}
+	if (run.release?.local_origin && (run.release.state === "handoff" || run.release.state === "done")) return {
+		text: "⇡ pushed to a local folder — no PR",
+		cls: ""
+	};
+	if (run.release?.state === "handoff") return {
+		text: "⇡ pushed — open the PR",
+		cls: "",
+		url: run.release.compare_url || void 0
+	};
+	if (tasks.some((t) => t.state === "integrating" && (t.reason === "conflict" || t.conflict))) return {
+		text: "resolving a conflict",
+		cls: "needs"
+	};
+	if (!live) return null;
+	return {
+		text: merged + " of " + live + (isSameFolder(run) ? " committed" : " merged back"),
+		cls: merged === live ? "ok" : ""
+	};
+}
+//#endregion
+//#region src/components/outbox/outbox.ts
+function dedupe(list) {
+	const seen = /* @__PURE__ */ new Set();
+	const out = [];
+	for (const it of list || []) {
+		const k = it.key || it.title || "";
+		if (k && seen.has(k)) continue;
+		if (k) seen.add(k);
+		out.push(it);
+	}
+	return out;
+}
+function summaryFor(data, runId) {
+	if (!runId) return null;
+	const s = (data?.summaries || []).find((x) => x.run === runId);
+	return s && String(s.text_md || "").trim() ? s : null;
+}
+function summaryText(data, runId, run) {
+	const kept = summaryFor(data, runId);
+	if (kept) return kept.text_md;
+	const own = String(run?.summary?.text_md || "");
+	return own.trim() ? own : "";
+}
+function shipVerb(step) {
+	switch (String(step || "")) {
+		case "push": return "Push";
+		case "pr":
+		case "make_pr": return "Open PR";
+		case "merge": return "Merge";
+		default: return "Commit";
+	}
+}
+var LADDER = [
+	"commit",
+	"push",
+	"pr",
+	"merge"
+];
+var STEP_WORD = {
+	commit: "commit",
+	push: "push",
+	pr: "PR",
+	merge: "merge"
+};
+function thenText(step, laneTarget) {
+	const s = String(step || "commit") === "make_pr" ? "pr" : String(step || "commit");
+	const lane = String(laneTarget || s);
+	const from = LADDER.indexOf(s);
+	const to = LADDER.indexOf(lane);
+	if (from < 0 || to <= from) return s === "commit" ? "stays local — its fast-track ends at commit" : "its fast-track ends at " + (STEP_WORD[s] || s);
+	return "then " + LADDER.slice(from + 1, to + 1).map((x) => STEP_WORD[x]).join(", ");
+}
+function waitingChip(w) {
+	if (w.kind === "prompt") return {
+		text: w.reason || "its agent is asking",
+		cls: "warn"
+	};
+	if (w.kind === "plan") return {
+		text: w.reason || "the lead proposed the pieces — approve them",
+		cls: "warn"
+	};
+	if (w.kind === "release") return {
+		text: w.reason || "one PR is ready to open",
+		cls: ""
+	};
+	if (w.kind === "check_failed") return {
+		text: w.reason || "the check failed on the merged branch",
+		cls: "bad"
+	};
+	if (w.kind === "stray") return {
+		text: w.reason || "changes no piece owns in the lead's folder",
+		cls: "warn"
+	};
+	if (w.kind === "approve") return {
+		text: "ready to " + shipVerb(w.step).toLowerCase().replace("open pr", "open the PR") + " — you asked to see it first",
+		cls: ""
+	};
+	return {
+		text: w.reason || "needs you",
+		cls: "bad"
+	};
+}
+function approvalKey(w) {
+	return w.title + "@" + String(w.armed_at || w.since || "");
+}
+function messageHead(msg) {
+	const s = String(msg || "");
+	const i = s.indexOf("\n");
+	return i < 0 ? s : s.slice(0, i).trimEnd() + " …";
+}
+function statText(p) {
+	if (!p) return "";
+	const bits = [];
+	if (p.files) bits.push(p.files + (p.files === 1 ? " file" : " files"));
+	if (p.add || p.del) bits.push("+" + (p.add || 0) + " −" + (p.del || 0));
+	return bits.join(" ");
+}
+var LEAD_KINDS = /* @__PURE__ */ new Set([
+	"plan",
+	"release",
+	"check_failed",
+	"conflict",
+	"stray"
+]);
+function waitingActions(w, can) {
+	const a = new Set(w.actions || []);
+	const out = [];
+	const open = (title) => {
+		if (can.row && (a.has("open") || LEAD_KINDS.has(w.kind))) out.push({
+			key: "open",
+			label: LEAD_KINDS.has(w.kind) ? "Open the Thread ↗" : "Open ↗",
+			primary: false,
+			title
+		});
+	};
+	if (w.kind === "plan") {
+		const n = w.preview?.pieces?.length || 0;
+		if (a.has("approve") && can.run) out.push({
+			key: "approve",
+			label: n ? "Start " + n + (n === 1 ? " worker" : " workers") : "Approve the plan",
+			primary: true,
+			title: "MindFlock starts one worker per piece, each fenced to its paths"
+		});
+		open("Read the plan in the lead's Thread tab — edit a piece there");
+		return out;
+	}
+	if (w.kind === "release") {
+		if (a.has("release") && can.run) for (const c of releaseChoices(w.preview?.lane, w.preview?.local_origin)) out.push({
+			key: c.merge ? "release_merge" : "release",
+			label: c.label,
+			primary: c.primary,
+			title: c.title
+		});
+		open("The lead's Thread has the PR's title, body and the merged diff");
+		return out;
+	}
+	if (w.kind === "lead_gone") {
+		if (a.has("cancel_group") && can.run) out.push({
+			key: "cancel_group",
+			label: "Cancel the team run",
+			primary: true,
+			title: "Stop the team run — its sessions and branches are kept"
+		});
+		return out;
+	}
+	if (w.kind === "check_failed") {
+		if (a.has("retry_check") && can.run) out.push({
+			key: "retry_check",
+			label: "Run the check again",
+			primary: true
+		});
+		open();
+		return out;
+	}
+	if (a.has("retry") && can.run && can.task) out.push({
+		key: "retry",
+		label: "Retry",
+		primary: true
+	});
+	if (a.has("retry_fresh") && can.run && can.task) out.push({
+		key: "retry_fresh",
+		label: "Retry fresh",
+		primary: false,
+		title: "Start it again on a new branch; the old one is kept"
+	});
+	if (can.row) out.push({
+		key: "open",
+		label: w.kind === "conflict" ? "Open the Thread ↗" : "Open ↗",
+		primary: false
+	});
+	if (a.has("skip") && can.run && can.task) out.push({
+		key: "skip",
+		label: "Skip",
+		primary: false,
+		title: "Take it out of the team run — its session and branch stay"
+	});
+	return out;
+}
+function needsAttention(attn, waiting) {
+	const rows = /* @__PURE__ */ new Map();
+	for (const a of attn) if (!rows.has(a.title)) rows.set(a.title, {
+		key: a.title,
+		title: a.title,
+		rank: a.p === 0 ? 0 : a.p + 1,
+		attn: a
+	});
+	for (const w of dedupe(waiting).filter((x) => x.kind !== "prompt")) {
+		if (w.title) {
+			const had = rows.get(w.title);
+			if (had && (had.rank === 0 || had.waiting)) continue;
+			rows.set(w.title, {
+				key: w.title,
+				title: w.title,
+				rank: 1,
+				waiting: w
+			});
+			continue;
+		}
+		const key = w.key || "run:" + (w.run?.id || "") + (w.run?.task ? ":" + w.run.task : "");
+		if (rows.has(key)) continue;
+		rows.set(key, {
+			key,
+			title: "",
+			rank: 1,
+			waiting: w
+		});
+	}
+	return [...rows.values()].sort((a, b) => a.rank - b.rank);
+}
+function withPlanReady(rows, instances) {
+	const out = [...rows];
+	let added = false;
+	for (const inst of instances || []) {
+		const n = inst.redzone?.plan_pending || 0;
+		if (n <= 0 || inst.workspace_missing || inst.status === "paused") continue;
+		const at = out.findIndex((r) => r.title === inst.title);
+		const plan = {
+			key: inst.title,
+			title: inst.title,
+			rank: 1,
+			plan: n
+		};
+		if (at < 0) out.push(plan);
+		else if (out[at].rank > 1) out[at] = plan;
+		else continue;
+		added = true;
+	}
+	return added ? out.sort((a, b) => a.rank - b.rank) : out;
+}
+//#endregion
+//#region src/lib/needsYou.ts
+function needsYouTitles(instances, waiting) {
+	const live = new Set(instances.map((i) => i.title));
+	const out = [];
+	for (const r of needsAttention(attentionItems(instances), waiting)) if (r.title && live.has(r.title) && !out.includes(r.title)) out.push(r.title);
+	return out;
+}
+function nextNeedsYou(order, current) {
+	if (!order.length) return null;
+	return order[((current ? order.indexOf(current) : -1) + 1) % order.length];
+}
+function needsYouNow() {
+	return needsYouTitles(queryClient.getQueryData(["instances"]) || [], queryClient.getQueryData(["outbox"])?.groups?.waiting);
+}
+function jumpToNeedsYou(current) {
+	const order = needsYouNow();
+	const next = nextNeedsYou(order, current);
+	if (!next) {
+		toast("Nothing needs you right now");
+		return;
+	}
+	selectSession(next);
+	toast(windowName(next) + " — " + (order.indexOf(next) + 1) + " of " + order.length + " that need you");
+}
 //#endregion
 //#region src/lib/keymap.ts
 var _host = null;
@@ -31996,12 +32809,22 @@ var _rebindCapturing = false;
 function setRebindCapturing(on) {
 	_rebindCapturing = on;
 }
-var CHORDS = Object.fromEntries(CHORD_ACTIONS.map((id) => [sessionAction(id).chord, {
-	get desc() {
-		return chordDesc(id);
-	},
-	run: (t) => runChordAction(id, t)
-}]));
+var CHORDS = {
+	...Object.fromEntries(CHORD_ACTIONS.map((id) => [sessionAction(id).chord, {
+		get desc() {
+			return chordDesc(id);
+		},
+		run: (t) => {
+			if (t) runChordAction(id, t);
+		}
+	}])),
+	n: {
+		desc: "Next session that needs you — in the bell's order",
+		global: true,
+		group: "Navigation",
+		run: (t) => jumpToNeedsYou(t)
+	}
+};
 function chordKeyFor(id) {
 	return String(_keyOv.chords[id] || id).toLowerCase();
 }
@@ -32043,6 +32866,10 @@ function _handleChordKey(e) {
 		return;
 	}
 	const focused = useUi.getState().focused;
+	if (chord.global) {
+		chord.run(focused);
+		return;
+	}
 	if (!focused) {
 		toast("No focused session");
 		return;
@@ -34170,673 +34997,6 @@ function AnswerStrip({ title, activity, variant, onOpen, onRedirect, children, r
 	});
 }
 //#endregion
-//#region src/lib/splitRun.ts
-function firstLine(text, max = 120) {
-	const s = String(text || "").trim().split(/\r?\n/)[0].trim();
-	return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
-}
-function testsLabel(tests) {
-	if (typeof tests === "number") return tests > 0 ? tests + (tests === 1 ? " test" : " tests") : "";
-	const s = String(tests || "");
-	const m = s.match(/(\d+)\s+(?:tests?\s+)?passed/i) || s.match(/(\d+)\s+tests?\b/i);
-	if (!m) return "";
-	const n = Number(m[1]);
-	return n + (n === 1 ? " test" : " tests");
-}
-function memberTasks(run) {
-	return (run.tasks || []).filter((t) => t.state !== "cancelled" || !!t.title);
-}
-function pieceLabel(t, run) {
-	const pieces = run.plan?.pieces || [];
-	const ix = (run.tasks || []).filter((x) => x.kind === "piece").indexOf(t);
-	const p = t.kind === "piece" && ix >= 0 ? pieces[ix] : void 0;
-	if (p) return {
-		name: p.title,
-		what: firstLine(p.prompt, 90)
-	};
-	const what = firstLine(t.text, 90);
-	return {
-		name: t.title || what || t.id,
-		what: t.title && what !== t.title ? what : ""
-	};
-}
-function pathsText(paths) {
-	return (paths || []).filter(Boolean).join(", ");
-}
-function isSameFolder(run) {
-	return run?.mode === "same_folder";
-}
-function pieceStatus(t, leadName, mode) {
-	const tests = testsLabel(t.tests);
-	const files = (t.conflict?.files || []).join(", ");
-	if (mode === "same_folder") {
-		if (t.state === "integrated") return {
-			word: "committed ✓",
-			cls: "ok",
-			detail: tests
-		};
-		if (t.state === "integrating") return {
-			word: "committing…",
-			cls: "work",
-			detail: ""
-		};
-	}
-	switch (t.state) {
-		case "integrated": return {
-			word: "merged back ✓",
-			cls: "ok",
-			detail: tests
-		};
-		case "integrating":
-			if (t.reason === "conflict" || t.conflict) return {
-				word: "conflict",
-				cls: "needs",
-				detail: leadName + " is resolving" + (files ? " " + files : " it")
-			};
-			return {
-				word: "merging…",
-				cls: "work",
-				detail: ""
-			};
-		case "needs_you": return {
-			word: t.reason === "conflict" ? "conflict — needs you" : "needs you",
-			cls: "needs",
-			detail: t.detail || ""
-		};
-		case "failed": return {
-			word: "failed",
-			cls: "bad",
-			detail: t.detail || ""
-		};
-		case "shipping": return {
-			word: "committing",
-			cls: "work",
-			detail: ""
-		};
-		case "working": return {
-			word: "working",
-			cls: "work",
-			detail: ""
-		};
-		case "starting": return {
-			word: "starting",
-			cls: "idle",
-			detail: ""
-		};
-		case "queued": return {
-			word: "queued",
-			cls: "idle",
-			detail: ""
-		};
-		case "skipped":
-		case "cancelled": return {
-			word: "left out",
-			cls: "idle",
-			detail: t.detail || ""
-		};
-		case "shipped": return {
-			word: "done",
-			cls: "ok",
-			detail: tests
-		};
-		default: return {
-			word: t.state || "—",
-			cls: "idle",
-			detail: ""
-		};
-	}
-}
-function plural$6(n, one, many = one + "s") {
-	return n + " " + (n === 1 ? one : many);
-}
-function leadSubline(run, leadName) {
-	const split = !!run.split;
-	const tasks = memberTasks(run);
-	const n = split && run.plan && run.state === "plan_ready" ? run.plan.pieces.length : tasks.length;
-	const branch = run.lead?.branch || run.release?.branch || "";
-	if (run.state === "planning") return [{ text: run.optional ? "Waiting for " + leadName + " to decide whether to split — it reads the code first; a plan shows here, or it just does the task." : "Waiting for " + leadName + " to propose the pieces — it reads the code first, then MindFlock shows the plan here." }];
-	if (run.state === "plan_ready") return [
-		{ text: leadName + " proposed " },
-		{
-			text: plural$6(n, "piece") + " with separate paths",
-			b: true
-		},
-		{ text: " — approve them and MindFlock starts the workers." }
-	];
-	const parts = split ? [{ text: "Split into " }, {
-		text: plural$6(n, "piece") + " with separate paths",
-		b: true
-	}] : [{
-		text: plural$6(n, "line") + ", one PR",
-		b: true
-	}];
-	const merged = tasks.filter((t) => t.state === "integrated").length;
-	const live = tasks.filter((t) => ![
-		"cancelled",
-		"skipped",
-		"failed"
-	].includes(t.state)).length;
-	if (isSameFolder(run)) {
-		parts.push({ text: " in " + leadName + "'s folder · " });
-		if (merged) {
-			parts.push({
-				text: merged === live && merged > 1 ? "all " + merged + " committed" : merged + " of " + live + " committed",
-				cls: "ok"
-			});
-			parts.push({ text: " on " });
-			parts.push({
-				text: branch || "the lead's branch",
-				b: true
-			});
-		} else {
-			parts.push({ text: "each piece is committed on " });
-			parts.push({
-				text: branch || "the lead's branch",
-				b: true
-			});
-			parts.push({ text: " as it finishes" });
-		}
-	} else if (merged) {
-		parts.push({ text: " · " });
-		parts.push({
-			text: merged === live && merged > 1 ? "all " + merged + " merged back" : merged + " of " + live + " merged back",
-			cls: "ok"
-		});
-		if (branch) {
-			parts.push({ text: " into " });
-			parts.push({
-				text: branch,
-				b: true
-			});
-		}
-	} else if (live) {
-		parts.push({ text: " · merging back into " });
-		parts.push({
-			text: branch || "the lead's branch",
-			b: true
-		});
-		parts.push({ text: " as each finishes" });
-	}
-	const conflicts = tasks.filter((t) => t.state === "integrating" && (t.reason === "conflict" || t.conflict)).length;
-	if (conflicts) parts.push({
-		text: " · " + plural$6(conflicts, "conflict") + " with " + leadName,
-		cls: "needs"
-	});
-	const c = run.check;
-	if (c && c.state === "ok") {
-		const tests = testsLabel(c.tests ?? null);
-		parts.push({ text: " · " });
-		parts.push({
-			text: tests ? tests + " pass" : "the check passed",
-			cls: "ok"
-		});
-		parts.push({ text: " after the last merge" });
-	} else if (c && c.state === "running") parts.push({ text: " · running the check on the merged branch" });
-	else if (c && c.state === "failed") parts.push({
-		text: " · the check failed on the merged branch",
-		cls: "bad"
-	});
-	return parts;
-}
-function modeChoices(run, leadName) {
-	const lead = run.lead || { title: "" };
-	const branch = lead.branch || "";
-	return [{
-		mode: "worktrees",
-		label: "In separate worktrees (merge back) — default",
-		hint: !lead.in_place && !lead.trunk ? "Each piece in its own worktree, merged back into " + (branch || leadName + "'s branch") + "; conflicts go to " + leadName + "." : "MindFlock starts " + leadName + "-split from " + leadName + "'s last commit and merges the pieces there — " + leadName + " itself is left as it is.",
-		blocked: ""
-	}, {
-		mode: "same_folder",
-		label: "In this folder (no merge)",
-		hint: "Each piece runs in " + leadName + "'s folder; MindFlock commits each piece's paths as it finishes — nothing to merge, no per-piece undo.",
-		blocked: lead.trunk ? leadName + " is on " + (branch || "its trunk") + " — the pieces would commit onto it" : ""
-	}];
-}
-function startedText(n, mode, leadName) {
-	const w = startWorkersLabel(n).replace(/^Start/, "Starting");
-	return mode === "same_folder" ? w + " in " + leadName + "'s folder — each fenced to its paths" : w + " — each fenced to its paths";
-}
-function planRows(pieces) {
-	return (pieces || []).map((p) => ({
-		title: String(p.title || ""),
-		prompt: String(p.prompt || ""),
-		paths: (p.paths || []).map(String),
-		pathsText: pathsText(p.paths)
-	}));
-}
-function startWorkersLabel(n) {
-	return "Start " + plural$6(n, "worker");
-}
-function parsePaths(text) {
-	return String(text || "").split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
-}
-function editPlan(pieces, i, next) {
-	return pieces.map((p, j) => j === i ? {
-		title: next.title.trim(),
-		prompt: next.prompt.trim(),
-		paths: parsePaths(next.paths)
-	} : {
-		...p,
-		paths: [...p.paths]
-	});
-}
-function planProblems(body) {
-	const b = body || {};
-	const out = (b.problems || []).map((p) => (p.piece ? p.piece + ": " : "") + String(p.error || "")).filter(Boolean);
-	if (!out.length && b.error) out.push(String(b.error));
-	return out;
-}
-function releaseCard(run) {
-	const r = run.release || { state: "none" };
-	const base = r.base || "the base branch";
-	const branch = r.branch || run.lead?.branch || "";
-	const files = Number(r.files) || 0;
-	const stat = files ? plural$6(files, "file") + " +" + (Number(r.add) || 0) + " −" + (Number(r.del) || 0) : "";
-	const fixes = Number(r.conflict_fixes) || 0;
-	const split = !!run.split;
-	return {
-		title: r.title || run.name,
-		into: base + " ← " + (branch || "its branch"),
-		stat,
-		commits: (isSameFolder(run) ? "one per piece, committed by MindFlock with only its paths" : split ? "one per piece, kept as written" : "one per line, kept as written") + (fixes ? " + " + plural$6(fixes, "conflict fix", "conflict fixes") + " by the lead" : ""),
-		body: split ? "a section per piece: what changed, the tests it ran" : "a section per line: what changed, the tests it ran"
-	};
-}
-function checkLine(run) {
-	const c = run.check;
-	const cmd = c?.command ? "`" + c.command + "`" : "the check";
-	switch (c?.state) {
-		case "none": return "no check configured — add a check_command to .mindflock.toml to run one";
-		case "ok": return cmd + " passed" + (c.tests ? " (" + c.tests + " tests)" : "");
-		case "failed": return cmd + " failed" + (c.summary ? ": " + c.summary : "");
-		case "running": return cmd + " is running on the merged branch…";
-		case "fixing": return cmd + " failed — the lead is fixing it";
-		case "pending": return isSameFolder(run) ? "runs once every piece is committed" : "runs once every piece is merged back";
-		default: return "";
-	}
-}
-function releaseChoices(lane, localOrigin) {
-	if (localOrigin) return [{
-		merge: false,
-		label: "Push to the local folder",
-		primary: true,
-		title: "Push the team run's branch to " + localOrigin + " — a folder on this machine, not GitHub: no PR can be opened"
-	}];
-	if (lane === "push") return [{
-		merge: false,
-		label: "Push the branch",
-		primary: true,
-		title: "Push the team run's branch — no PR is opened"
-	}];
-	const pr = {
-		merge: false,
-		label: lane === "merge" ? "Open PR only" : "Open PR",
-		primary: lane !== "merge",
-		title: "Open the team run's one PR — it is not merged"
-	};
-	const merge = {
-		merge: true,
-		label: lane === "merge" ? "Open PR, merge when checks pass" : "Open it, merge when checks pass",
-		primary: lane === "merge",
-		title: "Open the team run's one PR and merge it once its checks pass"
-	};
-	return lane === "merge" ? [merge, pr] : [pr, merge];
-}
-function laneNote(lane) {
-	const t = String(lane?.target || "");
-	if (!t) return "";
-	return "fast-track: " + (t === "leave" ? "off" : LANE_HEAD[t] || "→ " + t) + (lane?.ask_first ? ", asks first" : "");
-}
-function releaseOutcome(run) {
-	const r = run.release;
-	const lane = run.policy?.lane || "";
-	const local = r?.local_origin || "";
-	if (run.state === "releasing" || r?.state === "releasing") return {
-		text: local ? "Pushing the branch to " + local + "…" : lane === "push" ? "Pushing the branch…" : "Opening the PR…",
-		cls: "work",
-		url: "",
-		link: ""
-	};
-	if (r?.state === "done" && r.pr_url) {
-		const m = r.pr_url.match(/\/pull\/(\d+)/);
-		return {
-			text: "✓ " + (m ? "PR #" + m[1] : "PR") + " opened",
-			cls: "ok",
-			url: r.pr_url,
-			link: "View PR ↗"
-		};
-	}
-	if ((r?.state === "handoff" || r?.state === "done") && local) return {
-		text: "Pushed " + (r.branch || run.lead?.branch || "the branch") + " to " + local + " — a folder on this machine, not GitHub, so no PR was opened. Push the branch to your forge and open the PR there" + (r.title ? " (copy its title and body below)" : ""),
-		cls: "idle",
-		url: "",
-		link: ""
-	};
-	if (r?.state === "handoff") return {
-		text: r.compare_url ? "Pushed — MindFlock couldn't open the PR here (no gh or token)" : "Pushed — MindFlock couldn't open the PR here: copy its title and body below into a PR on your host",
-		cls: "idle",
-		url: r.compare_url || "",
-		link: r.compare_url ? "Open the compare page ↗" : ""
-	};
-	if (r?.state === "failed") return {
-		text: "The release stopped: " + (r.detail || "see the lead's pane"),
-		cls: "bad",
-		url: "",
-		link: ""
-	};
-	if (r?.state === "done") return {
-		text: lane === "push" ? "✓ pushed" : "✓ released",
-		cls: "ok",
-		url: "",
-		link: ""
-	};
-	if (run.state === "done" && (lane === "commit" || lane === "leave")) return {
-		text: "All merged into " + (run.lead?.branch || "the lead's branch") + " — nothing pushed (this team run is fast-tracked to " + (lane === "commit" ? "Commit" : "Off") + ")",
-		cls: "ok",
-		url: "",
-		link: ""
-	};
-	return null;
-}
-function railExtraChips(check, rz, o) {
-	if (!o.integrated && !o.leadAsks) return {
-		check,
-		rz
-	};
-	const loud = (c) => !!c && /(interrupt|breach|warn)/.test(c.cls);
-	return {
-		check: loud(check) ? check : null,
-		rz: loud(rz) ? rz : null
-	};
-}
-function leadChip(run) {
-	if (!run) return null;
-	if (run.state === "release_ready") {
-		const lane = run.policy?.lane || "pr";
-		return {
-			label: lane === "push" ? "→ push?" : lane === "merge" ? "→ merge?" : "→ PR?",
-			title: "Everything merged back and checked — open its Thread to release the one PR"
-		};
-	}
-	if (run.state === "plan_ready") return {
-		label: "plan?",
-		title: "The lead proposed the pieces — open its Thread to approve them"
-	};
-	return null;
-}
-function leadLine(run) {
-	if (!run) return null;
-	const tasks = memberTasks(run);
-	const merged = tasks.filter((t) => t.state === "integrated").length;
-	const live = tasks.filter((t) => ![
-		"cancelled",
-		"skipped",
-		"failed"
-	].includes(t.state)).length;
-	switch (run.state) {
-		case "planning": return {
-			text: run.optional ? "deciding whether to split…" : "proposing the pieces…",
-			cls: ""
-		};
-		case "plan_ready": return {
-			text: "plan ready — approve it",
-			cls: "needs"
-		};
-		case "checking": return run.check?.state === "failed" ? {
-			text: "the check failed",
-			cls: "bad"
-		} : {
-			text: "running the check",
-			cls: ""
-		};
-		case "releasing": return {
-			text: "opening the PR",
-			cls: ""
-		};
-		case "cancelled": return {
-			text: "cancelled",
-			cls: ""
-		};
-	}
-	if (run.release?.state === "done" && run.release.pr_url) {
-		const m = run.release.pr_url.match(/\/pull\/(\d+)/);
-		return {
-			text: "✓ " + (m ? "PR #" + m[1] : "PR"),
-			cls: "ok",
-			url: run.release.pr_url
-		};
-	}
-	if (run.release?.local_origin && (run.release.state === "handoff" || run.release.state === "done")) return {
-		text: "⇡ pushed to a local folder — no PR",
-		cls: ""
-	};
-	if (run.release?.state === "handoff") return {
-		text: "⇡ pushed — open the PR",
-		cls: "",
-		url: run.release.compare_url || void 0
-	};
-	if (tasks.some((t) => t.state === "integrating" && (t.reason === "conflict" || t.conflict))) return {
-		text: "resolving a conflict",
-		cls: "needs"
-	};
-	if (!live) return null;
-	return {
-		text: merged + " of " + live + (isSameFolder(run) ? " committed" : " merged back"),
-		cls: merged === live ? "ok" : ""
-	};
-}
-//#endregion
-//#region src/components/outbox/outbox.ts
-function dedupe(list) {
-	const seen = /* @__PURE__ */ new Set();
-	const out = [];
-	for (const it of list || []) {
-		const k = it.key || it.title || "";
-		if (k && seen.has(k)) continue;
-		if (k) seen.add(k);
-		out.push(it);
-	}
-	return out;
-}
-function summaryFor(data, runId) {
-	if (!runId) return null;
-	const s = (data?.summaries || []).find((x) => x.run === runId);
-	return s && String(s.text_md || "").trim() ? s : null;
-}
-function summaryText(data, runId, run) {
-	const kept = summaryFor(data, runId);
-	if (kept) return kept.text_md;
-	const own = String(run?.summary?.text_md || "");
-	return own.trim() ? own : "";
-}
-function shipVerb(step) {
-	switch (String(step || "")) {
-		case "push": return "Push";
-		case "pr":
-		case "make_pr": return "Open PR";
-		case "merge": return "Merge";
-		default: return "Commit";
-	}
-}
-var LADDER = [
-	"commit",
-	"push",
-	"pr",
-	"merge"
-];
-var STEP_WORD = {
-	commit: "commit",
-	push: "push",
-	pr: "PR",
-	merge: "merge"
-};
-function thenText(step, laneTarget) {
-	const s = String(step || "commit") === "make_pr" ? "pr" : String(step || "commit");
-	const lane = String(laneTarget || s);
-	const from = LADDER.indexOf(s);
-	const to = LADDER.indexOf(lane);
-	if (from < 0 || to <= from) return s === "commit" ? "stays local — its fast-track ends at commit" : "its fast-track ends at " + (STEP_WORD[s] || s);
-	return "then " + LADDER.slice(from + 1, to + 1).map((x) => STEP_WORD[x]).join(", ");
-}
-function waitingChip(w) {
-	if (w.kind === "prompt") return {
-		text: w.reason || "its agent is asking",
-		cls: "warn"
-	};
-	if (w.kind === "plan") return {
-		text: w.reason || "the lead proposed the pieces — approve them",
-		cls: "warn"
-	};
-	if (w.kind === "release") return {
-		text: w.reason || "one PR is ready to open",
-		cls: ""
-	};
-	if (w.kind === "check_failed") return {
-		text: w.reason || "the check failed on the merged branch",
-		cls: "bad"
-	};
-	if (w.kind === "stray") return {
-		text: w.reason || "changes no piece owns in the lead's folder",
-		cls: "warn"
-	};
-	if (w.kind === "approve") return {
-		text: "ready to " + shipVerb(w.step).toLowerCase().replace("open pr", "open the PR") + " — you asked to see it first",
-		cls: ""
-	};
-	return {
-		text: w.reason || "needs you",
-		cls: "bad"
-	};
-}
-function approvalKey(w) {
-	return w.title + "@" + String(w.armed_at || w.since || "");
-}
-function messageHead(msg) {
-	const s = String(msg || "");
-	const i = s.indexOf("\n");
-	return i < 0 ? s : s.slice(0, i).trimEnd() + " …";
-}
-function statText(p) {
-	if (!p) return "";
-	const bits = [];
-	if (p.files) bits.push(p.files + (p.files === 1 ? " file" : " files"));
-	if (p.add || p.del) bits.push("+" + (p.add || 0) + " −" + (p.del || 0));
-	return bits.join(" ");
-}
-var LEAD_KINDS = /* @__PURE__ */ new Set([
-	"plan",
-	"release",
-	"check_failed",
-	"conflict",
-	"stray"
-]);
-function waitingActions(w, can) {
-	const a = new Set(w.actions || []);
-	const out = [];
-	const open = (title) => {
-		if (can.row && (a.has("open") || LEAD_KINDS.has(w.kind))) out.push({
-			key: "open",
-			label: LEAD_KINDS.has(w.kind) ? "Open the Thread ↗" : "Open ↗",
-			primary: false,
-			title
-		});
-	};
-	if (w.kind === "plan") {
-		const n = w.preview?.pieces?.length || 0;
-		if (a.has("approve") && can.run) out.push({
-			key: "approve",
-			label: n ? "Start " + n + (n === 1 ? " worker" : " workers") : "Approve the plan",
-			primary: true,
-			title: "MindFlock starts one worker per piece, each fenced to its paths"
-		});
-		open("Read the plan in the lead's Thread tab — edit a piece there");
-		return out;
-	}
-	if (w.kind === "release") {
-		if (a.has("release") && can.run) for (const c of releaseChoices(w.preview?.lane, w.preview?.local_origin)) out.push({
-			key: c.merge ? "release_merge" : "release",
-			label: c.label,
-			primary: c.primary,
-			title: c.title
-		});
-		open("The lead's Thread has the PR's title, body and the merged diff");
-		return out;
-	}
-	if (w.kind === "lead_gone") {
-		if (a.has("cancel_group") && can.run) out.push({
-			key: "cancel_group",
-			label: "Cancel the team run",
-			primary: true,
-			title: "Stop the team run — its sessions and branches are kept"
-		});
-		return out;
-	}
-	if (w.kind === "check_failed") {
-		if (a.has("retry_check") && can.run) out.push({
-			key: "retry_check",
-			label: "Run the check again",
-			primary: true
-		});
-		open();
-		return out;
-	}
-	if (a.has("retry") && can.run && can.task) out.push({
-		key: "retry",
-		label: "Retry",
-		primary: true
-	});
-	if (a.has("retry_fresh") && can.run && can.task) out.push({
-		key: "retry_fresh",
-		label: "Retry fresh",
-		primary: false,
-		title: "Start it again on a new branch; the old one is kept"
-	});
-	if (can.row) out.push({
-		key: "open",
-		label: w.kind === "conflict" ? "Open the Thread ↗" : "Open ↗",
-		primary: false
-	});
-	if (a.has("skip") && can.run && can.task) out.push({
-		key: "skip",
-		label: "Skip",
-		primary: false,
-		title: "Take it out of the team run — its session and branch stay"
-	});
-	return out;
-}
-function needsAttention(attn, waiting) {
-	const rows = /* @__PURE__ */ new Map();
-	for (const a of attn) if (!rows.has(a.title)) rows.set(a.title, {
-		key: a.title,
-		title: a.title,
-		rank: a.p === 0 ? 0 : a.p + 1,
-		attn: a
-	});
-	for (const w of dedupe(waiting).filter((x) => x.kind !== "prompt")) {
-		if (w.title) {
-			const had = rows.get(w.title);
-			if (had && (had.rank === 0 || had.waiting)) continue;
-			rows.set(w.title, {
-				key: w.title,
-				title: w.title,
-				rank: 1,
-				waiting: w
-			});
-			continue;
-		}
-		const key = w.key || "run:" + (w.run?.id || "") + (w.run?.task ? ":" + w.run.task : "");
-		if (rows.has(key)) continue;
-		rows.set(key, {
-			key,
-			title: "",
-			rank: 1,
-			waiting: w
-		});
-	}
-	return [...rows.values()].sort((a, b) => a.rank - b.rank);
-}
-//#endregion
 //#region src/components/outbox/WaitingRow.tsx
 function openSession(title, tab) {
 	selectSession(title);
@@ -35369,12 +35529,12 @@ function peerEventNote(event, data) {
 function clip$3(s, n) {
 	return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s;
 }
-function baseName(path) {
+function baseName$1(path) {
 	const parts = String(path || "").replace(/[\\/]+$/, "").split(/[\\/]/);
 	return parts[parts.length - 1] || String(path || "");
 }
 function repoText(d) {
-	return String(d.repo_name || "").trim() || baseName(String(d.repo_path || "")) || "your repo";
+	return String(d.repo_name || "").trim() || baseName$1(String(d.repo_path || "")) || "your repo";
 }
 function mirrorBranchText(branch) {
 	return String(branch || "").trim() || "its peer/ branch";
@@ -35436,7 +35596,7 @@ function isoSeconds(iso) {
 	return iso ? Date.parse(iso) / 1e3 : NaN;
 }
 function mirrorStatusText(m, peerName, now = Date.now() / 1e3) {
-	const where = m.branch + " in " + baseName(m.repo_path);
+	const where = m.branch + " in " + baseName$1(m.repo_path);
 	if (!m.enabled) return "Mirror is off.";
 	if (m.updating) return "Mirroring " + peerName + "'s work into " + where + " — updating now…";
 	const t = isoSeconds(m.last_at);
@@ -35481,7 +35641,7 @@ function isCutOffInvite(text) {
 function exportDoneText(r, repo) {
 	if (r?.commits === 0) return "Nothing new to bring home yet";
 	const branch = r?.branch || "the branch";
-	const where = baseName(r?.repo_path || r?.target || repo);
+	const where = baseName$1(r?.repo_path || r?.target || repo);
 	const n = r?.commits;
 	const count = typeof n === "number" ? " (" + n + (n === 1 ? " commit)" : " commits)") : "";
 	return "Brought home as " + branch + " in " + where + count;
@@ -36388,6 +36548,16 @@ function notifFromEvent(env) {
 		default: return null;
 	}
 }
+function bellLabel(needs, unread) {
+	if (needs > 0) return "Notifications, " + needs + (needs === 1 ? " needs you" : " need you");
+	if (unread > 0) return "Notifications, " + unread + " new";
+	return "Notifications";
+}
+function rowKey(e) {
+	if (e.target !== e.currentTarget || e.key !== "Enter" && e.key !== " ") return;
+	e.preventDefault();
+	e.currentTarget.click();
+}
 function NotificationsBell() {
 	const { data: instances = [] } = useInstances();
 	const { data: outbox } = useOutbox();
@@ -36448,7 +36618,7 @@ function NotificationsBell() {
 	}, [open]);
 	const families = (0, import_react.useMemo)(() => childrenByParent(instances), [instances]);
 	const byTitle = (0, import_react.useMemo)(() => new Map(instances.map((i) => [i.title, i])), [instances]);
-	const attn = needsAttention(attentionItems(instances), outbox?.groups?.waiting);
+	const attn = withPlanReady(needsAttention(attentionItems(instances), outbox?.groups?.waiting), instances);
 	const familyOf = (title) => {
 		const inst = byTitle.get(title);
 		if (!inst || inst.device) return null;
@@ -36519,7 +36689,8 @@ function NotificationsBell() {
 		className: "tb-item" + (attn.length > 0 ? " has-attn" : "") + (attn.length === 0 && unread > 0 ? " has-unread" : ""),
 		type: "button",
 		title: "Notifications — what needs you, and what happened while you were away",
-		"aria-label": "Notifications",
+		"aria-label": bellLabel(attn.length, unread),
+		"aria-expanded": open,
 		onClick: (e) => {
 			e.stopPropagation();
 			open ? setOpen(false) : openPanel();
@@ -36583,12 +36754,43 @@ function NotificationsBell() {
 								})
 							}, "w:" + it.key);
 						}
+						if (it.plan) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "attn-item p1" + (flashing ? " flash" : ""),
+							"data-attn": it.title,
+							"data-needs": it.key,
+							onClick: () => {
+								setOpen(false);
+								useUi.getState().openMap(it.title, { section: "plan" });
+							},
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "attn-dot" }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "attn-title",
+									children: windowName(it.title)
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "attn-reason",
+									children: "Plan ready — review & Go"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "attn-snippet",
+									children: [
+										it.plan,
+										" planned file",
+										it.plan === 1 ? "" : "s"
+									]
+								})
+							]
+						}, "plan:" + it.key);
 						const a = it.attn;
 						const fam = a.p === 0 ? familyOf(it.title) : null;
 						return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "attn-item p" + a.p + (flashing ? " flash" : ""),
 							"data-attn": it.title,
 							"data-needs": it.key,
+							role: a.p === 0 ? void 0 : "button",
+							tabIndex: a.p === 0 ? void 0 : 0,
+							onKeyDown: a.p === 0 ? void 0 : rowKey,
 							onClick: () => jump(it.title),
 							children: [
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "attn-dot" }),
@@ -36641,6 +36843,9 @@ function NotificationsBell() {
 				children: [...notifs].reverse().map((n, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "notif-item " + n.cls + (n.ts > seenTs ? " unread" : ""),
 					"data-session": n.session,
+					role: "button",
+					tabIndex: 0,
+					onKeyDown: rowKey,
 					onClick: () => {
 						if (n.lead) {
 							setOpen(false);
@@ -36747,7 +36952,7 @@ function desktopNoteFor(event, data) {
 		}
 		case "peer.mirror_failed": {
 			const name = String(d.peer_name || "your peer");
-			const repo = String(d.repo_name || "").trim() || baseName(String(d.repo_path || "")) || "your repo";
+			const repo = String(d.repo_name || "").trim() || baseName$1(String(d.repo_path || "")) || "your repo";
 			return {
 				title: "Couldn't mirror " + name + "'s work into " + repo,
 				body: String(d.error || "").trim() || "See the Mirror row in People",
@@ -37070,6 +37275,192 @@ function useTitleBadge() {
 	}, []);
 }
 //#endregion
+//#region src/lib/codemapApi.ts
+var arr = (v) => Array.isArray(v) ? v : [];
+var num$3 = (v, d = 0) => typeof v === "number" && isFinite(v) ? v : d;
+var str$2 = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
+var obj$2 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
+var enc = encodeURIComponent;
+function normSym(v) {
+	const o = obj$2(v);
+	return {
+		name: str$2(o.name),
+		kind: str$2(o.kind, "function"),
+		line: num$3(o.line),
+		end: num$3(o.end),
+		public: o.public !== false,
+		sig: str$2(o.sig),
+		parent: o.parent == null ? null : str$2(o.parent),
+		children: arr(o.children).map(normSym)
+	};
+}
+function normEntry(v) {
+	const o = obj$2(v);
+	return {
+		kind: str$2(o.kind, "http"),
+		method: str$2(o.method, "ANY"),
+		route: str$2(o.route),
+		line: num$3(o.line),
+		handler: str$2(o.handler),
+		path: o.path == null ? void 0 : str$2(o.path),
+		changed: o.changed === true ? true : void 0
+	};
+}
+var normDep = (v) => ({
+	path: str$2(obj$2(v).path),
+	names: arr(obj$2(v).names).map((x) => str$2(x))
+});
+function normFileView(v) {
+	const o = obj$2(v);
+	const imp = obj$2(o.imports);
+	const z = obj$2(o.zones);
+	return {
+		path: str$2(o.path),
+		lang: str$2(o.lang),
+		loc: num$3(o.loc),
+		symbols: arr(o.symbols).map(normSym),
+		imports: {
+			internal: arr(imp.internal).map(normDep).filter((d) => d.path),
+			external: arr(imp.external).map((x) => str$2(x))
+		},
+		entry: arr(o.entry).map(normEntry),
+		used_by: arr(o.used_by).map(normDep).filter((d) => d.path),
+		changed_lines: arr(o.changed_lines).filter((h) => Array.isArray(h) && h.length >= 2).map((h) => [num$3(h[0]), num$3(h[1])]),
+		changed_symbols: arr(o.changed_symbols).map((x) => str$2(x)),
+		zones: {
+			red: !!z.red,
+			green: z.green == null ? null : !!z.green
+		},
+		partial: !!o.partial,
+		tested_by: arr(o.tested_by).map((x) => str$2(x))
+	};
+}
+async function fetchFileView(title, path) {
+	return normFileView(await instApi(title, "/code-map/file?path=" + enc(path)));
+}
+async function searchCode(title, q) {
+	return arr(obj$2(await instApi(title, "/code-map/search?q=" + enc(q))).items).map((v) => {
+		const o = obj$2(v);
+		return {
+			path: str$2(o.path),
+			name: str$2(o.name),
+			kind: str$2(o.kind, "file"),
+			line: num$3(o.line),
+			score: num$3(o.score)
+		};
+	});
+}
+function fetchSnapshot(title, fp) {
+	return instApi(title, "/code-map" + (fp ? "?fp=" + enc(fp) : ""));
+}
+function fetchLive(title, since) {
+	return instApi(title, "/code-map/live?since=" + since);
+}
+function askPlan(title, mode) {
+	return instApi(title, "/code-map/ask-plan", { json: { mode } });
+}
+function goPlan(title, zoneIds, scopeToPlan) {
+	return instApi(title, "/code-map/go", { json: {
+		zone_ids: zoneIds,
+		scope_to_plan: scopeToPlan
+	} });
+}
+function addZone(title, body) {
+	return instApi(title, "/red-zones", { json: body });
+}
+function previewZone(title, pattern, kind) {
+	return instApi(title, "/red-zones/preview", { json: {
+		pattern,
+		kind
+	} });
+}
+function removeZone(title, id) {
+	return instApi(title, "/red-zones/" + enc(id), { method: "DELETE" });
+}
+function waiveZone(title, id, waived) {
+	return instApi(title, "/red-zones/" + enc(id) + "/waive", { json: { waived } });
+}
+function allowPath(title, path) {
+	return instApi(title, "/red-zones/allow", { json: { path } });
+}
+function setExempt(title, paths, exempt) {
+	return instApi(title, "/red-zones/exempt", { json: {
+		paths,
+		exempt
+	} });
+}
+function normCompanions(v) {
+	const d = obj$2(v);
+	return {
+		companions: arr(Array.isArray(d.patterns) ? d.patterns : d.companions).map((x) => str$2(x)),
+		defaults: arr(d.defaults).map((x) => str$2(x))
+	};
+}
+async function fetchCompanions(repoId) {
+	return normCompanions(await api("/api/red-zones/companions?repo_id=" + enc(repoId)));
+}
+async function saveCompanions(repoId, companions, label = "") {
+	return normCompanions(await api("/api/red-zones/companions", {
+		method: "PUT",
+		json: {
+			repo_id: repoId,
+			patterns: companions,
+			...label ? { label } : {}
+		}
+	}));
+}
+//#endregion
+//#region src/lib/mapEntry.ts
+function breachFocus(breaches) {
+	return {
+		section: "breaches",
+		path: breaches[0]?.path || void 0
+	};
+}
+function redZoneEventFocus(event, data) {
+	const d = data || {};
+	const path = Array.isArray(d.paths) && d.paths.length ? String(d.paths[0]) : void 0;
+	if (event === "session.red_zone_breached" || event === "session.red_zone_blocked" && d.push) return {
+		section: "breaches",
+		path
+	};
+	if (event === "session.red_zone_blocked") return {
+		section: d.kind === "green" ? "scope" : "zones",
+		path
+	};
+	return { section: "zones" };
+}
+function allowableBlock(event, data) {
+	const d = data || {};
+	if (event !== "session.red_zone_blocked" || d.push || d.kind !== "green") return null;
+	const paths = Array.isArray(d.paths) ? d.paths.filter(Boolean) : [];
+	return paths.length === 1 ? String(paths[0]) : null;
+}
+function baseName(path) {
+	const parts = path.split("/").filter(Boolean);
+	return parts[parts.length - 1] || path;
+}
+function zoneChipFocus(rz, chip) {
+	if ((rz?.breaches || 0) > 0) return { section: "breaches" };
+	if (chip?.section === "plan" || chip && /plan/.test(chip.cls)) return { section: "plan" };
+	if (rz?.mode === "green") return { section: "scope" };
+	return { section: "zones" };
+}
+function mapTabBadge(chip, changedFiles) {
+	if (chip && chip.cls !== "rz-ok") return chip;
+	const n = Math.max(0, changedFiles || 0);
+	if (n > 0) return {
+		cls: "map-changed",
+		label: n > 99 ? "99+" : String(n),
+		title: `${n} changed file${n === 1 ? "" : "s"}`
+	};
+	return chip;
+}
+function mapHasState(inst, chip) {
+	const rz = inst.redzone;
+	return (inst.diff_stat?.files || 0) > 0 || !!chip || !!rz && ((rz.zones || 0) > 0 || (rz.breaches || 0) > 0 || (rz.last_block_ts || 0) > 0);
+}
+//#endregion
 //#region src/components/EventToasts.tsx
 function instances() {
 	return queryClient.getQueryData(["instances"]) || [];
@@ -37092,13 +37483,31 @@ function namedSlot(session) {
 function instByTitle(title) {
 	return instances().find((i) => i.title === title) || null;
 }
-function openMap(session) {
+function openMap(env) {
+	const session = env.session;
 	if (!session || !instByTitle(session)) {
 		useUi.getState().openDialogFor("red-zones");
 		return;
 	}
-	selectSession(session);
-	useUi.getState().setLastTab(session, "map");
+	useUi.getState().openMap(session, redZoneEventFocus(env.event, env.data));
+}
+async function allowFromToast(session, path) {
+	try {
+		await allowPath(session, path);
+		refreshInstances();
+		toast("Allowed " + path + " for " + displayName(session), { onClick: () => useUi.getState().openMap(session, {
+			path,
+			section: "scope"
+		}) });
+	} catch (x) {
+		toast("Couldn't allow " + path + ": " + errMsg(x), {
+			onClick: () => useUi.getState().openMap(session, {
+				path,
+				section: "scope"
+			}),
+			duration: 8e3
+		});
+	}
 }
 function redZoneToast(env, name) {
 	const d = env.data || {};
@@ -37243,9 +37652,15 @@ function EventToasts() {
 			if (isReplay(env)) return;
 			const msg = redZoneToast(env, env.session ? namedSlot(env.session) : "");
 			if (!msg) return;
+			const allow = env.session && instByTitle(env.session) ? allowableBlock(env.event, env.data) : null;
 			notifyOnce(env.session || "*", name, msg, {
-				onClick: () => openMap(env.session),
-				duration: name === "session.red_zone_blocked" ? 6e3 : 9e3
+				onClick: () => openMap(env),
+				action: allow ? {
+					label: "Allow " + baseName(allow),
+					ariaLabel: "Allow " + allow + " for " + displayName(env.session) + " (outside its only-here zone)",
+					onClick: () => void allowFromToast(env.session, allow)
+				} : void 0,
+				duration: allow ? 1e4 : name === "session.red_zone_blocked" ? 6e3 : 9e3
 			});
 		}));
 		unsubs.push(ev.subscribe("session.message", (env) => {
@@ -37401,6 +37816,9 @@ function browserReserved(combo) {
 	const c = combo.trim().replace(/^⌘/, "Ctrl+").replace(/\s+/g, " ");
 	return /^Ctrl\+(N|W|T|Shift\+N|Shift\+W|Shift\+T|Tab|Shift\+Tab|PgDn|PgUp|1 … 9|[1-9])$/i.test(c);
 }
+function usableShortcuts(id, inBrowser = !inShell()) {
+	return shortcutLabels(id, (l) => !inBrowser || !browserReserved(l));
+}
 function browserOrder(keysLabel, desc, inBrowser) {
 	const all = keysLabel.split(" / ").map((combo) => ({
 		combo,
@@ -37451,7 +37869,7 @@ function buildSheet() {
 	for (const k of Object.keys(CHORDS)) {
 		const suf = chordKeyFor(k);
 		const by = chordShadowedBy(k);
-		rows["Focused session"].push([
+		rows[CHORDS[k].group || "Focused session"].push([
 			by ? "Ctrl+K " + suf.toUpperCase() + " (taken)" : "Ctrl+K " + suf.toUpperCase(),
 			by ? CHORDS[k].desc + " — your Ctrl+K " + suf.toUpperCase() + " runs “" + CHORDS[by].desc + "”; click to pick a key" : CHORDS[k].desc,
 			{
@@ -37896,7 +38314,7 @@ function TopBar() {
 	(0, import_react.useEffect)(() => subscribeKeymap(() => setKeysVer(keymapVersion())), []);
 	const tab = !inShell();
 	const keys = (id) => {
-		const k = shortcutLabels(id, (l) => !tab || !browserReserved(l));
+		const k = usableShortcuts(id, tab);
 		return k.length ? " (" + k.join(" / ") + ")" : "";
 	};
 	const verifyTitle = "Verify — " + VERIFY_BLURB + keys("verify") + "\n" + verifyCountLine(due, failing);
@@ -39689,6 +40107,909 @@ function AgentSignIn({ provider, profile, label, onDone, className, dataTour }) 
 	})] });
 }
 //#endregion
+//#region src/components/settings/savedCue.ts
+var ROW = ".set-row, .notif-channel, .ntfy-field-row, .set-switch-row";
+var SHOW_MS = 1600;
+var FRESH_MS = 5e3;
+var touched = null;
+var timers = /* @__PURE__ */ new WeakMap();
+function noteTouched(target) {
+	if (target && typeof target.closest === "function") touched = {
+		el: target,
+		at: Date.now()
+	};
+}
+function cueTarget(el) {
+	const row = el.closest(ROW);
+	if (!row) return null;
+	return row.querySelector(".set-label") || row;
+}
+function flashSaved(el) {
+	const source = el ?? (touched && Date.now() - touched.at < FRESH_MS ? touched.el : null);
+	if (!source || !source.isConnected) return false;
+	const target = cueTarget(source);
+	if (!target) return false;
+	target.setAttribute("data-saved", "");
+	const prev = timers.get(target);
+	if (prev) clearTimeout(prev);
+	timers.set(target, setTimeout(() => target.removeAttribute("data-saved"), SHOW_MS));
+	return true;
+}
+//#endregion
+//#region src/components/intake/autosave.ts
+var AUTOSAVE_MS = 700;
+function makeAutosave(commit, onPending, delay = AUTOSAVE_MS) {
+	let timer = null;
+	let pending = null;
+	const flush = () => {
+		if (timer) clearTimeout(timer);
+		timer = null;
+		const p = pending;
+		pending = null;
+		if (p) commit()(p.value);
+	};
+	return {
+		schedule(value) {
+			pending = { value };
+			onPending()?.();
+			if (timer) clearTimeout(timer);
+			timer = setTimeout(flush, delay);
+		},
+		flush,
+		isPending: () => pending !== null
+	};
+}
+function useAutosave(commit, onPending, delay = AUTOSAVE_MS) {
+	const commitRef = (0, import_react.useRef)(commit);
+	commitRef.current = commit;
+	const pendingRef = (0, import_react.useRef)(onPending);
+	pendingRef.current = onPending;
+	const saver = (0, import_react.useRef)(null);
+	if (!saver.current) saver.current = makeAutosave(() => commitRef.current, () => pendingRef.current, delay);
+	const s = saver.current;
+	(0, import_react.useEffect)(() => () => s.flush(), [s]);
+	return s;
+}
+//#endregion
+//#region src/lib/providerRows.ts
+function signInState(p) {
+	if (!p.installed) return "not-installed";
+	if (p.authenticated) return "signed-in";
+	if (p.has_login === false) return "none";
+	if (p.auth_probe) return "not-signed-in";
+	return "unknown";
+}
+var SIGN_IN_LABEL = {
+	"signed-in": "signed in",
+	"not-signed-in": "not signed in",
+	unknown: "sign-in unknown",
+	none: "no sign-in needed",
+	"not-installed": ""
+};
+function signInDetail(p, state) {
+	if (state === "signed-in") return p.auth_detail || "login found";
+	if (state === "none") return "reads API keys or has no login step — nothing to sign in to";
+	if (state === "not-signed-in") return "CLI is installed but no sign of a login was found";
+	if (state === "unknown") return "this CLI keeps its login where MindFlock doesn't look — check inside the CLI";
+	return "";
+}
+function providerRow(p) {
+	const state = signInState(p);
+	return {
+		kind: "provider",
+		name: p.name,
+		isDefault: !!p.is_default,
+		installed: !!p.installed,
+		installLabel: p.installed ? "installed" : "not installed",
+		installTitle: p.installed ? p.path || "on PATH" : p.binary_override ? `${p.binary_override} is not an executable file` : "not found on PATH",
+		installHint: !p.installed ? p.install_hint || "" : "",
+		launchHint: !p.installed ? p.launch_hint || "" : "",
+		signIn: state,
+		signInLabel: SIGN_IN_LABEL[state],
+		signInDetail: signInDetail(p, state),
+		canSignIn: !!p.installed && !!p.has_login && !p.authenticated,
+		binaryPath: p.binary_override || "",
+		binaryPinnedBy: p.binary_override_env || ""
+	};
+}
+function errorRow(e) {
+	return {
+		kind: "error",
+		file: e.file,
+		error: e.error
+	};
+}
+function providerRows(statuses, errors) {
+	return [...statuses.map(providerRow), ...(errors || []).map(errorRow)];
+}
+function pickerOptions(statuses) {
+	return statuses.map((p) => ({
+		name: p.name,
+		disabled: !p.installed,
+		label: p.installed ? agentName(p.name) : `${agentName(p.name)} — not installed`
+	}));
+}
+//#endregion
+//#region src/components/dialogs/FlagChips.tsx
+var SKIP = {
+	label: SKIP_PERMS_LABEL,
+	title: SKIP_PERMS_TITLE
+};
+var LAUNCH_FLAG_PRESETS = {
+	claude: [
+		{
+			...SKIP,
+			flag: "--dangerously-skip-permissions"
+		},
+		{
+			label: "Plan mode",
+			flag: "--permission-mode plan"
+		},
+		{
+			label: "Verbose",
+			flag: "--verbose"
+		}
+	],
+	codex: [{
+		...SKIP,
+		flag: "--dangerously-bypass-approvals-and-sandbox"
+	}, {
+		label: "Web search",
+		flag: "--search"
+	}],
+	antigravity: [{
+		...SKIP,
+		flag: "--dangerously-skip-permissions"
+	}, {
+		label: "Sandbox",
+		flag: "--sandbox"
+	}],
+	aider: [{
+		...SKIP,
+		flag: "--yes-always"
+	}, {
+		label: "No auto-commit",
+		flag: "--no-auto-commits"
+	}],
+	opencode: [{
+		...SKIP,
+		flag: "--auto"
+	}]
+};
+function tokenize(s) {
+	if (!s) return [];
+	const out = [];
+	const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+	let m;
+	while ((m = re.exec(s)) !== null) out.push(m[1] || m[2] || m[3] || "");
+	return out.filter(Boolean);
+}
+var quote = (t) => /\s/.test(t) ? "\"" + t + "\"" : t;
+function joinTokens(tokens) {
+	return tokens.map(quote).join(" ");
+}
+function seqIndex(tokens, seq) {
+	if (!seq.length) return -1;
+	for (let i = 0; i + seq.length <= tokens.length; i++) {
+		let ok = true;
+		for (let j = 0; j < seq.length; j++) if (tokens[i + j] !== seq[j]) {
+			ok = false;
+			break;
+		}
+		if (ok) return i;
+	}
+	return -1;
+}
+function FlagChips({ provider, value, onChange }) {
+	const presets = LAUNCH_FLAG_PRESETS[(provider || "").trim().toLowerCase()] || [];
+	if (!presets.length) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "flag-chips" });
+	const tokens = tokenize(value);
+	const toggle = (p) => {
+		let next = tokenize(value);
+		const seq = tokenize(p.flag);
+		const at = seqIndex(next, seq);
+		if (at >= 0) next.splice(at, seq.length);
+		else {
+			if (p.group) for (const other of presets) {
+				if (other === p || other.group !== p.group) continue;
+				const osq = tokenize(other.flag);
+				let oi;
+				while ((oi = seqIndex(next, osq)) >= 0) next.splice(oi, osq.length);
+			}
+			next = next.concat(seq);
+		}
+		onChange(next.map(quote).join(" "));
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "flag-chips",
+		children: presets.map((p) => {
+			const on = seqIndex(tokens, tokenize(p.flag)) >= 0;
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "flag-chip" + (on ? " active" : ""),
+				"data-flag": p.flag,
+				title: p.title,
+				"aria-pressed": on,
+				onClick: (e) => {
+					e.preventDefault();
+					toggle(p);
+				},
+				children: p.label
+			}, p.flag);
+		})
+	});
+}
+//#endregion
+//#region src/components/InlineConfirm.tsx
+function InlineConfirm(props) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-confirm",
+		role: "alertdialog",
+		"aria-label": props.title,
+		id: props.id,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-confirm-text",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: props.title }),
+				" ",
+				props.body
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-confirm-actions",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn set-confirm-yes",
+				disabled: props.busy,
+				onClick: props.onConfirm,
+				children: props.confirmLabel
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				autoFocus: true,
+				disabled: props.busy,
+				onClick: props.onCancel,
+				children: props.cancelLabel ?? "Cancel"
+			})]
+		})]
+	});
+}
+//#endregion
+//#region src/components/settings/useSettings.tsx
+var SECRET_MASK = "•••set";
+var EMPTY_SETTINGS = {};
+function useSettingsModel(open) {
+	const settings = useSettingsDoc(open).data ?? EMPTY_SETTINGS;
+	const reload = (0, import_react.useCallback)(async () => {
+		try {
+			await fetchSettingsDoc();
+		} catch {}
+	}, []);
+	const saveField = (0, import_react.useCallback)(async (group, field, value) => {
+		try {
+			putSettingsDoc((await api("/api/settings", { json: { [group]: { [field]: value } } }))?.settings || {});
+			refreshConfig();
+			if (!flashSaved()) toast("Saved");
+			return true;
+		} catch (err) {
+			toast("Save failed: " + (err.message || field));
+			reload();
+			return false;
+		}
+	}, [reload]);
+	const saveGroups = (0, import_react.useCallback)(async (patches, okMsg) => {
+		const groups = Object.keys(patches);
+		if (!groups.length) return true;
+		try {
+			putSettingsDoc((await api("/api/settings", { json: patches }))?.settings || {});
+			refreshConfig();
+			if (okMsg) toast(okMsg);
+			return true;
+		} catch (err) {
+			toast("Save failed: " + (err.message || groups.join(", ")));
+			reload();
+			return false;
+		}
+	}, [reload]);
+	return {
+		settings,
+		reload,
+		saveField,
+		saveGroup: (0, import_react.useCallback)((group, patch, okMsg) => saveGroups({ [group]: patch }, okMsg), [saveGroups]),
+		saveGroups,
+		get: (0, import_react.useCallback)((group, field) => {
+			const g = settings[group];
+			return g && typeof g === "object" ? g[field] : void 0;
+		}, [settings])
+	};
+}
+var SettingsCtx = (0, import_react.createContext)(null);
+function useSettings() {
+	const ctx = (0, import_react.useContext)(SettingsCtx);
+	if (!ctx) throw new Error("useSettings outside SettingsDialog");
+	return ctx;
+}
+function numberFieldError(raw, min = 0, placeholder = "") {
+	const v = raw.trim();
+	if (!v) return "";
+	const n = Number(v);
+	if (Number.isFinite(n) && n >= min) return "";
+	const blank = placeholder && !/^[\d.]+$/.test(placeholder) ? ", or leave it blank for " + placeholder : "";
+	return "Enter a number, " + min + " or more" + blank + ".";
+}
+function SettingField(props) {
+	const s = useSettings();
+	const stored = s.get(props.group, props.field);
+	const isSecret = props.type === "password";
+	const display = isSecret ? "" : stored == null ? "" : String(stored);
+	const [value, setValue] = (0, import_react.useState)(display);
+	const [error, setError] = (0, import_react.useState)("");
+	(0, import_react.useEffect)(() => setValue(display), [display]);
+	const commit = () => {
+		if (isSecret && value === "") return;
+		if (props.type === "number") {
+			const why = numberFieldError(value, props.min ?? 0, props.placeholder || "");
+			setError(why);
+			if (why) return;
+		}
+		if (value === display && !isSecret) return;
+		s.saveField(props.group, props.field, value);
+		if (isSecret) setValue("");
+	};
+	if (props.options) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+		"data-group": props.group,
+		"data-field": props.field,
+		className: props.className,
+		title: props.title,
+		value: display,
+		onChange: (e) => s.saveField(props.group, props.field, e.target.value),
+		children: props.options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+			value: o.value,
+			children: o.label
+		}, o.value))
+	});
+	const input = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+		"data-group": props.group,
+		"data-field": props.field,
+		type: props.type || "text",
+		min: props.type === "number" ? props.min ?? 0 : void 0,
+		"aria-invalid": error ? true : void 0,
+		className: props.className,
+		autoComplete: "off",
+		spellCheck: false,
+		placeholder: isSecret && stored === SECRET_MASK ? "•••set (saved)" : props.placeholder,
+		title: props.title,
+		value,
+		onChange: (e) => {
+			setValue(e.target.value);
+			if (error) setError("");
+		},
+		onBlur: commit,
+		onKeyDown: (e) => {
+			if (e.key === "Enter") e.target.blur();
+		}
+	});
+	if (!error) return input;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [input, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "set-field-error",
+		role: "alert",
+		children: error
+	})] });
+}
+//#endregion
+//#region src/components/setup/AgentCard.tsx
+var SHARE_MS = 3e3;
+var shared = null;
+function loadAgentRows(refresh = false) {
+	const now = Date.now();
+	if (!refresh && shared && now - shared.at < SHARE_MS) return shared.rows;
+	const rows = api("/api/connections" + (refresh ? "?refresh=1" : "")).then((d) => (d?.connections || []).filter((c) => c.kind === "agent")).catch(() => []);
+	shared = {
+		at: now,
+		rows
+	};
+	return rows;
+}
+function agentRowFor(rows, provider) {
+	const want = (provider || "").toLowerCase();
+	const prov = (c) => c.provider;
+	return want && rows.find((c) => prov(c) === want) || (!want ? rows.find((c) => c.default) : null) || null;
+}
+function AgentCard({ provider, here, gotoScreen, onChanged, tourNext = false }) {
+	const [row, setRow] = (0, import_react.useState)(void 0);
+	const [result, setResult] = (0, import_react.useState)();
+	const [testing, setTesting] = (0, import_react.useState)(false);
+	const openDialogFor = useUi((st) => st.openDialogFor);
+	const closeDialog = useUi((st) => st.closeDialog);
+	const load = (0, import_react.useCallback)(async (refresh = false) => {
+		const rows = await loadAgentRows(refresh);
+		setRow(agentRowFor(rows, provider));
+	}, [provider]);
+	(0, import_react.useEffect)(() => {
+		setResult(void 0);
+		load();
+	}, [load]);
+	(0, import_react.useEffect)(() => {
+		const on = () => {
+			setResult(void 0);
+			load(true);
+		};
+		window.addEventListener(CONNECTIONS_CHANGED_EVENT, on);
+		return () => window.removeEventListener(CONNECTIONS_CHANGED_EVENT, on);
+	}, [load]);
+	if (row === void 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "agent-card agent-card-loading",
+		"aria-busy": "true",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "set-hint",
+			children: [
+				"Checking ",
+				agentName(provider || "claude"),
+				"…"
+			]
+		})
+	});
+	if (row === null) return null;
+	const shown = !!here && row.action?.kind === "screen" && row.action.target === here ? {
+		...row,
+		action: null,
+		settings_screen: ""
+	} : row;
+	const go = gotoScreen || ((name) => openSettings(name));
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "agent-card",
+		"data-provider": row.provider || "",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectionRowView, {
+			c: shown,
+			deps: {
+				gotoScreen: go,
+				openDialogFor,
+				closeDialog
+			},
+			result,
+			testing,
+			tourNext,
+			onTest: row.test ? async () => {
+				setTesting(true);
+				const out = await runTest(row.test);
+				setTesting(false);
+				setResult(out);
+				load(true);
+				onChanged?.();
+			} : void 0,
+			onChanged: () => {
+				load(true);
+				onChanged?.();
+			}
+		})
+	});
+}
+//#endregion
+//#region src/components/settings/screens/CodingCli.tsx
+var FLAG_EXAMPLES = {
+	claude: "e.g. --model opus",
+	codex: "e.g. --search",
+	antigravity: "e.g. --sandbox",
+	aider: "e.g. --no-auto-commits"
+};
+var SKIP_PERMISSION_FLAGS = [
+	"--dangerously-skip-permissions",
+	"--dangerously-bypass-approvals-and-sandbox",
+	"--yes-always",
+	"--auto"
+];
+var SKIP_PERMISSIONS_LABEL = SKIP_PERMS_LABEL;
+var SKIP_PERMISSIONS_TIP = SKIP_PERMS_TITLE;
+function skipsPermissions$1(flags) {
+	const tokens = (flags || "").split(/\s+/);
+	return SKIP_PERMISSION_FLAGS.some((f) => tokens.includes(f));
+}
+function flagsPlaceholder(provider) {
+	return FLAG_EXAMPLES[(provider || "").trim().toLowerCase()] || "";
+}
+var agentsFocus = { provider: "" };
+function openAgentSettings(provider) {
+	agentsFocus.provider = provider;
+	openSettings("coding");
+}
+function CodingCli({ gotoScreen }) {
+	const s = useSettings();
+	const [providers, setProviders] = (0, import_react.useState)([]);
+	const [selected, setSelected] = (0, import_react.useState)("");
+	const [flags, setFlags] = (0, import_react.useState)("");
+	const flagsMap = (0, import_react.useRef)({});
+	const [focusAgent] = (0, import_react.useState)(() => {
+		const p = agentsFocus.provider;
+		agentsFocus.provider = "";
+		return p;
+	});
+	const [otherProvider, setOtherProvider] = (0, import_react.useState)(focusAgent);
+	(0, import_react.useEffect)(() => {
+		if (!focusAgent) return;
+		const t = setTimeout(() => {
+			document.getElementById("coding-other-agent-fold")?.scrollIntoView?.({ block: "start" });
+		}, 0);
+		return () => clearTimeout(t);
+	}, [focusAgent, providers.length]);
+	(0, import_react.useEffect)(() => {
+		(async () => {
+			let provs = [];
+			let saved = "";
+			try {
+				const [d, st] = await Promise.all([api("/api/providers/status"), api("/api/settings")]);
+				provs = d?.providers || [];
+				const cc = st?.settings?.coding_cli;
+				if (cc?.default_provider != null) saved = String(cc.default_provider).trim();
+				flagsMap.current = cc?.default_launch_args && typeof cc.default_launch_args === "object" ? { ...cc.default_launch_args } : {};
+			} catch {}
+			setProviders(provs);
+			const installed = provs.filter((p) => p.installed);
+			const lower = saved.toLowerCase();
+			const match = installed.find((p) => (p.name || "").toLowerCase() === lower || (p.aliases || []).some((a) => String(a).toLowerCase() === lower) || String(p.command || "").toLowerCase() === lower);
+			const value = match ? match.name : saved ? installed[0]?.name || "" : "";
+			setSelected(value);
+			setFlags(flagsMap.current[value] || "");
+			if (saved && !match && value) s.saveField("coding_cli", "default_provider", value);
+		})();
+	}, []);
+	const [defaultSaved, setDefaultSaved] = (0, import_react.useState)(0);
+	const pickProvider = (name) => {
+		setSelected(name);
+		setFlags(flagsMap.current[name] || "");
+		s.saveField("coding_cli", "default_provider", name).then((ok) => ok && setDefaultSaved((n) => n + 1));
+	};
+	const saveFlags = (0, import_react.useCallback)(async (value) => {
+		const prov = selected.trim();
+		if (!prov) return;
+		const val = value.trim();
+		if (val) flagsMap.current[prov] = val;
+		else delete flagsMap.current[prov];
+		try {
+			await api("/api/settings", { json: { coding_cli: { default_launch_args: flagsMap.current } } });
+			toast("Saved launch flags");
+		} catch {
+			toast("Save failed: launch flags");
+		}
+	}, [selected]);
+	const others = providers.filter((p) => p.name !== selected);
+	const missing = others.filter((p) => !p.installed);
+	const other = others.find((p) => p.name === otherProvider)?.name || missing[0]?.name || others[0]?.name || "";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Agents"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			"data-tour": "settings-default-agent",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Default agent"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+					id: "default-provider-select",
+					value: selected,
+					onChange: (e) => pickProvider(e.target.value),
+					children: pickerOptions(providers).map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: o.name,
+						disabled: o.disabled,
+						children: o.label
+					}, o.name))
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "hidden",
+					id: "default-provider-input",
+					"data-group": "coding_cli",
+					"data-field": "default_provider",
+					value: selected,
+					readOnly: true
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "New sessions start with this agent."
+				})
+			]
+		}),
+		others.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+			className: "pr-advanced set-adv-fold coding-other-fold",
+			id: "coding-other-agent-fold",
+			open: focusAgent && focusAgent !== selected ? true : void 0,
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: missing.length ? "Not installed — how to install" : "Set up another agent" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row",
+				id: "coding-other-agent",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Set up another agent"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+						id: "agent-test-provider",
+						"aria-label": "Another agent",
+						value: other,
+						onChange: (e) => setOtherProvider(e.target.value),
+						children: others.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: p.name,
+							children: agentName(p.name) + (p.installed ? "" : " — not installed")
+						}, p.name))
+					}),
+					other && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentCard, {
+						provider: other,
+						here: "coding",
+						gotoScreen
+					}, other)
+				]
+			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row coding-agent-status",
+			id: "coding-agent-status",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Status"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentCard, {
+				provider: selected,
+				here: "coding",
+				gotoScreen
+			}, selected + ":" + defaultSaved)]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Extra flags for new sessions"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "text",
+					id: "default-launch-args-input",
+					autoComplete: "off",
+					placeholder: flagsPlaceholder(selected),
+					value: flags,
+					onChange: (e) => setFlags(e.target.value),
+					onBlur: () => saveFlags(flags),
+					onKeyDown: (e) => {
+						if (e.key === "Enter") e.target.blur();
+					}
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlagChips, {
+					provider: selected,
+					value: flags,
+					onChange: (v) => {
+						setFlags(v);
+						saveFlags(v);
+					}
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "Added every time the default agent starts."
+				}),
+				skipsPermissions$1(flags) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "set-hint flags-danger",
+					id: "default-launch-args-warning",
+					role: "note",
+					children: [
+						SKIP_PERMISSIONS_LABEL,
+						": ",
+						SKIP_PERMISSIONS_TIP.charAt(0).toLowerCase() + SKIP_PERMISSIONS_TIP.slice(1),
+						"."
+					]
+				})
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionsAtOnce, { gotoScreen }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdvancedFold, {
+			id: "coding-advanced",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WindowRefresh, {})
+		})
+	] });
+}
+function SessionsAtOnce({ gotoScreen }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			id: "coding-sessions-at-once",
+			children: "Sessions running at once"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			children: "Sessions you start yourself have no limit. Start as many as you like."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Ticket sessions at once"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+					group: "engine",
+					field: "max_sessions",
+					type: "number",
+					placeholder: "no limit"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "The most auto-started ticket sessions running together. Extra tickets wait their turn."
+				})
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			children: [
+				"Sessions an agent starts for you have their own limits, under",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					"data-goto-screen": "orchestration",
+					onClick: () => gotoScreen("orchestration"),
+					children: "Agent orchestration"
+				}),
+				"."
+			]
+		})
+	] });
+}
+function WindowRefresh() {
+	const [cfg, setCfg] = (0, import_react.useState)({});
+	const load = (0, import_react.useCallback)(async () => {
+		try {
+			setCfg(await api("/api/window-refresh"));
+		} catch {}
+	}, []);
+	(0, import_react.useEffect)(() => {
+		load();
+	}, [load]);
+	const save = async (patch, el) => {
+		try {
+			await api("/api/window-refresh", { json: patch });
+			await load();
+			if (!flashSaved(el)) toast("Saved");
+		} catch {
+			toast("Couldn't update window refresh");
+		}
+	};
+	const anchorEl = (0, import_react.useRef)(null);
+	const intervalEl = (0, import_react.useRef)(null);
+	const anchorSave = useAutosave((v) => {
+		if (v !== (cfg.anchor_time || "")) save({ anchor_time: v }, anchorEl.current);
+	});
+	const intervalSave = useAutosave((v) => {
+		if (v !== cfg.interval_hours) save({ interval_hours: v }, intervalEl.current);
+	});
+	const selected = new Set(cfg.providers || []);
+	const opts = cfg.options || [];
+	const fmtWhen = (epoch) => {
+		try {
+			return (/* @__PURE__ */ new Date(epoch * 1e3)).toLocaleString();
+		} catch {
+			return "soon";
+		}
+	};
+	const statusLines = opts.filter((o) => selected.has(o.name) && o.next_fire).map((o) => o.name + ": next ~" + fmtWhen(o.next_fire));
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Keep usage windows warm"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row set-switch-row",
+			title: "Send a tiny, connection-free ping on a schedule so a provider's rolling usage window anchors when you want it to.",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Scheduled refresh"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "ca-switch",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					id: "wr-enabled",
+					checked: !!cfg.enabled,
+					onChange: (e) => save({ enabled: e.target.checked }, e.currentTarget)
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			children: "Sends a tiny message on a schedule so a fresh usage window starts when you want it, such as the start of your work day."
+		}),
+		cfg.enabled && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: "wr-opts",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Fresh window at"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "time",
+							id: "wr-anchor",
+							ref: anchorEl,
+							className: "num-sm",
+							defaultValue: cfg.anchor_time || "",
+							onChange: (e) => anchorSave.schedule(e.target.value || ""),
+							onBlur: () => anchorSave.flush()
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Daily, at this local time. Leave empty to use a fixed interval."
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row" + ((cfg.anchor_time || "").trim() ? " feature-off" : ""),
+					id: "wr-interval-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Or every"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "number",
+							id: "wr-interval",
+							ref: intervalEl,
+							className: "num-sm",
+							min: .25,
+							max: 168,
+							step: .25,
+							defaultValue: typeof cfg.interval_hours === "number" ? cfg.interval_hours : void 0,
+							onChange: (e) => {
+								const v = parseFloat(e.target.value);
+								if (!isNaN(v)) intervalSave.schedule(v);
+							},
+							onBlur: () => intervalSave.flush()
+						}),
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "muted",
+							children: "hours"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Used when no time is set (Claude and Codex: 5 hours)."
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Agents"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							id: "wr-providers",
+							className: "wr-providers",
+							children: opts.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								className: "wr-prov",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "checkbox",
+									checked: selected.has(o.name),
+									onChange: (e) => {
+										const next = new Set(selected);
+										if (e.target.checked) next.add(o.name);
+										else next.delete(o.name);
+										save({ providers: [...next] }, e.currentTarget);
+									}
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									title: o.window?.note || "",
+									children: o.name + (o.window?.hours ? " · " + o.window.hours + "h window" : o.window?.kind ? " · " + o.window.kind : "")
+								})]
+							}, o.name))
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							id: "wr-status",
+							children: cfg.enabled && statusLines.length ? statusLines.join(" · ") : ""
+						})
+					]
+				})
+			]
+		})
+	] });
+}
+//#endregion
 //#region src/components/setup/AgentBlocked.tsx
 var BLOCKED_POLL_MS = 8e3;
 function blockedSentence(b) {
@@ -39697,6 +41018,16 @@ function blockedSentence(b) {
 	if (b.exited) return who + " isn't signed in, so this session's agent stopped. Sign in, and it restarts.";
 	if (b.name === "claude") return who + " isn't signed in yet. Answer its questions in the terminal below — a text style, then how to log in — and open the link it shows.";
 	return who + " isn't signed in yet. Answer its sign-in prompts in the terminal below.";
+}
+function installTarget(name, defaultAgent) {
+	return !!name && name === defaultAgent ? "setup" : "agents";
+}
+function useOpenInstall(name) {
+	const defaultAgent = useSetup().data?.default_provider || "";
+	return () => {
+		if (installTarget(name, defaultAgent) === "setup") useUi.getState().openDialogFor("setup");
+		else openAgentSettings(name);
+	};
 }
 function blockedAction(b) {
 	return b.why === "missing" ? "Install" : "Sign in";
@@ -39725,10 +41056,11 @@ function useSignInThenRestart(title, b) {
 }
 function AgentBlockedChip({ block, title, className, hint }) {
 	const signIn = useSignInThenRestart(title, block);
+	const install = useOpenInstall(block.name);
 	const act = blockedAction(block);
 	const onClick = (e) => {
 		e.stopPropagation();
-		if (block.why === "missing") useUi.getState().openDialogFor("setup");
+		if (block.why === "missing") install();
 		else if (block.exited) signIn.start();
 		else selectSession(title);
 	};
@@ -39756,6 +41088,7 @@ function AgentBlockedBanner({ block, title }) {
 }
 function Banner({ block, title }) {
 	const signIn = useSignInThenRestart(title, block);
+	const install = useOpenInstall(block.name);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "pane-noagent",
 		role: "alert",
@@ -39766,11 +41099,11 @@ function Banner({ block, title }) {
 				type: "button",
 				onClick: (e) => {
 					e.stopPropagation();
-					useUi.getState().openDialogFor("setup");
+					install();
 				},
 				children: [
 					"Install ",
-					block.name,
+					agentName(block.name),
 					"…"
 				]
 			}) : block.exited ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -39882,27 +41215,39 @@ function redZoneChip(rz, seenAt) {
 	if (breaches > 0) return {
 		cls: "rz-breach",
 		label: "⛔" + breaches,
-		title: `${breaches} red-zone file${breaches === 1 ? "" : "s"} changed on this branch — pushing is blocked until reverted. Click to open the map.`
+		title: `${breaches} red-zone file${breaches === 1 ? "" : "s"} changed on this branch — pushing is blocked until reverted. Click to open the map.`,
+		section: "breaches"
 	};
 	if (blockTs > seenAt) return {
 		cls: "rz-breach",
 		label: "⛔",
-		title: "A red zone blocked an edit since you last looked. Click to open the map."
+		title: "A red zone blocked an edit since you last looked. Click to open the map.",
+		section: "breaches"
 	};
 	if (zones > 0 && (rz.guard === "off" || rz.guard === "arming")) return {
 		cls: "rz-warn",
 		label: "!",
-		title: rz.guard === "off" ? "Red-zone guard is off — MindFlock is re-arming it. Edits are detected, not blocked, until then." : "Red-zone guard is arming — it takes effect on the agent's next tool call."
+		title: rz.guard === "off" ? "Red-zone guard is off — MindFlock is re-arming it. Edits are detected, not blocked, until then." : "Red-zone guard is arming — it takes effect on the agent's next tool call.",
+		section: "zones"
+	};
+	const planned = rz.plan_pending || 0;
+	if (planned > 0) return {
+		cls: "rz-warn rz-plan",
+		label: "plan · " + planned,
+		title: "Plan ready — review & Go",
+		section: "plan"
 	};
 	if (zones > 0 && rz.guard === "guarded" && rz.mode === "green") return {
 		cls: "rz-ok",
 		label: "✓",
-		title: "Scoped to its green zones — edits outside them are blocked. Click to open the map."
+		title: "Scoped to its green zones — edits outside them are blocked. Click to open the map.",
+		section: "zones"
 	};
 	if (zones > 0 && rz.guard === "guarded") return {
 		cls: "rz-ok",
 		label: "🛡",
-		title: `${zones} red zone${zones === 1 ? "" : "s"} guarded — edits there are blocked. Click to open the map.`
+		title: `${zones} red zone${zones === 1 ? "" : "s"} guarded — edits there are blocked. Click to open the map.`,
+		section: "zones"
 	};
 	return null;
 }
@@ -40374,7 +41719,7 @@ function sessionMenu(inst, ctx, opts = {}) {
 			key: "diff",
 			label: "Diff",
 			title: "What this session changed",
-			run: () => openTab(title, "diff")
+			run: () => useUi.getState().openDiff(title)
 		},
 		ctx.caps.git !== false && !tabs.has("map") && fromTable("map"),
 		fromTable("thread", { note: actionNote("thread", ctx) }),
@@ -40989,7 +42334,6 @@ function JointVerdictChip({ linkId, peerName, where }) {
 }
 //#endregion
 //#region src/components/sidebar/SidebarRow.tsx
-var DBLCLICK_MS = 300;
 function displayTitle(inst) {
 	return inst.display_title || inst.title || "";
 }
@@ -41046,6 +42390,25 @@ function closeGuarded(now) {
 	lastCloseClick = now;
 	return false;
 }
+function railRowKey(e) {
+	if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return null;
+	switch (e.key) {
+		case "ArrowUp": return "up";
+		case "ArrowDown": return "down";
+		case "Home": return "first";
+		case "End": return "last";
+		case "Enter": return "select";
+		case "F2": return "rename";
+		default: return null;
+	}
+}
+function moveRowFocus(from, dir) {
+	const list = from.closest("#instance-list") || from.parentElement;
+	if (!list) return;
+	const rows = Array.from(list.querySelectorAll("li.inst[tabindex]"));
+	const at = rows.indexOf(from);
+	(dir === "first" ? rows[0] : dir === "last" ? rows[rows.length - 1] : rows[at + (dir === "up" ? -1 : 1)])?.focus();
+}
 var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbered = true, onScreen, dropCue, onDragState, onDropCue, onDropRow, nest = FLAT, kids = NO_KIDS, parentLive = false, runTask = null, leadRun = null }) {
 	const [menuAt, setMenuAt] = (0, import_react.useState)(null);
 	const expanded = !!menuAt;
@@ -41059,7 +42422,6 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const strip = (0, import_react.useRef)(null);
 	const [editing, setEditing] = (0, import_react.useState)(false);
 	const cancelled = (0, import_react.useRef)(false);
-	const renameTimer = (0, import_react.useRef)(null);
 	const editEndedAt = (0, import_react.useRef)(0);
 	const { data: config } = useConfig();
 	const focused = useUi((s) => s.focused);
@@ -41088,12 +42450,12 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const chip0 = chipState(inst, ss);
 	const chip = runTask?.state === "integrated" ? runTask.sameFolder ? {
 		...chip0,
-		label: "committed",
+		label: "Committed",
 		cls: "s-committed",
 		title: "MindFlock committed its paths on its lead's branch"
 	} : {
 		...chip0,
-		label: "merged",
+		label: "Merged",
 		cls: "s-committed",
 		title: "Merged back into its lead's branch"
 	} : chip0;
@@ -41141,7 +42503,19 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const openBell = () => {
 		document.dispatchEvent(new CustomEvent("mf-open-bell", { detail: { title } }));
 	};
-	const answering = (inFamily(inst, isWorker, kids.length) || shipLane) && activity === "clarify" && !missing && !paused;
+	const needsAct = runTask?.state === "integrated" ? null : needsYouAction(ss, inst.pr_url || inst.merge_state?.url);
+	const runNeedsAct = (what) => {
+		if (what === "bell") return openBell();
+		if (what === "setup") return void rerunSetup(title);
+		if (what === "pr") {
+			const url = inst.pr_url || inst.merge_state?.url;
+			if (url) window.open(url, "_blank");
+			return;
+		}
+		selectSession(title, { noKeyboard: true });
+		useUi.getState().setLastTab(title, "shell");
+	};
+	const answering = (inFamily(inst, isWorker, kids.length) || shipLane || !onScreen) && activity === "clarify" && !missing && !paused;
 	const task = taskLineOf(inst).text;
 	const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !!task;
 	const subline = !editing && (ship || wline || roll || lline || lineage || taskLine || !!noAgent);
@@ -41167,17 +42541,9 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 		ideName,
 		hidden
 	});
-	const clearRenameTimer = () => {
-		if (renameTimer.current !== null) {
-			clearTimeout(renameTimer.current);
-			renameTimer.current = null;
-		}
-	};
-	(0, import_react.useEffect)(() => clearRenameTimer, []);
 	const openAtKebab = (keyboard) => {
 		const b = kebab.current?.getBoundingClientRect();
 		if (!b) return;
-		clearRenameTimer();
 		setMenuAt({
 			x: b.right,
 			y: b.bottom + 4,
@@ -41196,7 +42562,6 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 		if (isEditingTarget(t) || t.closest?.("a[href]")) return;
 		e.preventDefault();
 		e.stopPropagation();
-		clearRenameTimer();
 		if (e.button !== 2 && e.clientX === 0 && e.clientY === 0) return openAtKebab(true);
 		setMenuAt({
 			x: e.clientX,
@@ -41206,13 +42571,15 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 			keyboard: false
 		});
 	};
-	const armRename = () => {
-		clearRenameTimer();
-		renameTimer.current = window.setTimeout(() => {
-			renameTimer.current = null;
-			cancelled.current = false;
-			setEditing(true);
-		}, DBLCLICK_MS);
+	const startRename = () => {
+		if (pending || picking) return;
+		cancelled.current = false;
+		setEditing(true);
+	};
+	const reselect = () => {
+		selectSession(title);
+		const ui = useUi.getState();
+		if (ui.narrow && !ui.sidebarHidden) ui.toggleSidebar();
 	};
 	const commitRename = (raw) => {
 		setEditing(false);
@@ -41235,8 +42602,27 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 			className: rowCls,
 			"data-title": title,
-			tabIndex: answering ? 0 : void 0,
+			tabIndex: pending ? void 0 : answering || focused === title || idx === 0 && !focused ? 0 : -1,
+			"aria-current": focused === title ? "true" : void 0,
 			onKeyDown: (e) => {
+				if (e.target === e.currentTarget && !editing) {
+					const k = railRowKey(e);
+					if (k === "select") {
+						e.preventDefault();
+						reselect();
+						return;
+					}
+					if (k === "rename") {
+						e.preventDefault();
+						startRename();
+						return;
+					}
+					if (k) {
+						e.preventDefault();
+						moveRowFocus(e.currentTarget, k);
+						return;
+					}
+				}
 				if (!pending && !editing && (e.key === "ContextMenu" || e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) && !isEditingTarget(e.target)) {
 					e.preventDefault();
 					e.stopPropagation();
@@ -41263,18 +42649,12 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 				onClick: (e) => {
 					if (editing || Date.now() - editEndedAt.current < 400) return;
 					if (!pending && (e.ctrlKey || e.metaKey || e.shiftKey || picking)) {
-						clearRenameTimer();
 						useUi.getState().pickRow(title, e.shiftKey);
 						return;
 					}
-					if (focused !== title) {
-						selectSession(title);
-						return;
-					}
-					if (!pending) armRename();
+					reselect();
 				},
 				onDoubleClick: () => {
-					clearRenameTimer();
 					if (picking) return;
 					if (!missing && !pending) ideSession(title, true);
 				},
@@ -41326,12 +42706,17 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 								}
 							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "title",
+								onDoubleClick: (e) => {
+									if (picking || pending) return;
+									e.stopPropagation();
+									startRename();
+								},
 								title: [
 									shown,
 									label.kind && !alias ? `session: ${displayTitle(inst)}` : "",
 									inst.branch ? `branch: ${inst.branch}` : "",
 									wline ? wline.title : lineage ? lineage.title : "",
-									focused === title && !picking ? "Click again to rename" : "",
+									!picking && !pending ? "Double-click to rename (F2)" : "",
 									picking ? "" : "Ctrl+click or Shift+click to select several"
 								].filter(Boolean).join("\n"),
 								children: /(-\d+|\(\d+\))$/.test(shown) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MidName, { text: shown }) : shown
@@ -41482,6 +42867,14 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 							"aria-hidden": "true",
 							children: "Wake"
 						})]
+					}) : needsAct && !pending && !paused && !missing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "stagechip chip-needs " + chip.cls,
+						title: chip.title + "\n" + needsAct.aria.replace(/^[^—]*— /, "Click to "),
+						"aria-label": needsAct.aria,
+						onClick: (e) => act(() => runNeedsAct(needsAct.act), e),
+						onDoubleClick: (e) => e.stopPropagation(),
+						children: chip.label
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "stagechip " + chip.cls,
 						title: chip.title,
@@ -41559,10 +42952,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 						className: "stagechip rzchip " + rz.cls,
 						title: rz.title,
 						"aria-label": rz.title,
-						onClick: (e) => act(() => {
-							selectSession(title);
-							useUi.getState().setLastTab(title, "map");
-						}, e),
+						onClick: (e) => act(() => useUi.getState().openMap(title, zoneChipFocus(inst.redzone, rz)), e),
 						children: rz.label
 					}),
 					!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -43870,94 +45260,6 @@ function OwnHeader() {
 	});
 }
 //#endregion
-//#region src/components/setup/AgentCard.tsx
-var SHARE_MS = 3e3;
-var shared = null;
-function loadAgentRows(refresh = false) {
-	const now = Date.now();
-	if (!refresh && shared && now - shared.at < SHARE_MS) return shared.rows;
-	const rows = api("/api/connections" + (refresh ? "?refresh=1" : "")).then((d) => (d?.connections || []).filter((c) => c.kind === "agent")).catch(() => []);
-	shared = {
-		at: now,
-		rows
-	};
-	return rows;
-}
-function agentRowFor(rows, provider) {
-	const want = (provider || "").toLowerCase();
-	const prov = (c) => c.provider;
-	return want && rows.find((c) => prov(c) === want) || (!want ? rows.find((c) => c.default) : null) || null;
-}
-function AgentCard({ provider, here, gotoScreen, onChanged, tourNext = false }) {
-	const [row, setRow] = (0, import_react.useState)(void 0);
-	const [result, setResult] = (0, import_react.useState)();
-	const [testing, setTesting] = (0, import_react.useState)(false);
-	const openDialogFor = useUi((st) => st.openDialogFor);
-	const closeDialog = useUi((st) => st.closeDialog);
-	const load = (0, import_react.useCallback)(async (refresh = false) => {
-		const rows = await loadAgentRows(refresh);
-		setRow(agentRowFor(rows, provider));
-	}, [provider]);
-	(0, import_react.useEffect)(() => {
-		setResult(void 0);
-		load();
-	}, [load]);
-	(0, import_react.useEffect)(() => {
-		const on = () => {
-			setResult(void 0);
-			load(true);
-		};
-		window.addEventListener(CONNECTIONS_CHANGED_EVENT, on);
-		return () => window.removeEventListener(CONNECTIONS_CHANGED_EVENT, on);
-	}, [load]);
-	if (row === void 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "agent-card agent-card-loading",
-		"aria-busy": "true",
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "set-hint",
-			children: [
-				"Checking ",
-				agentName(provider || "claude"),
-				"…"
-			]
-		})
-	});
-	if (row === null) return null;
-	const shown = !!here && row.action?.kind === "screen" && row.action.target === here ? {
-		...row,
-		action: null,
-		settings_screen: ""
-	} : row;
-	const go = gotoScreen || ((name) => openSettings(name));
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "agent-card",
-		"data-provider": row.provider || "",
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectionRowView, {
-			c: shown,
-			deps: {
-				gotoScreen: go,
-				openDialogFor,
-				closeDialog
-			},
-			result,
-			testing,
-			tourNext,
-			onTest: row.test ? async () => {
-				setTesting(true);
-				const out = await runTest(row.test);
-				setTesting(false);
-				setResult(out);
-				load(true);
-				onChanged?.();
-			} : void 0,
-			onChanged: () => {
-				load(true);
-				onChanged?.();
-			}
-		})
-	});
-}
-//#endregion
 //#region src/components/setup/accountsIntent.ts
 var pending = null;
 function requestApiKeyForm(provider) {
@@ -44634,9 +45936,15 @@ function SetupDialog() {
 		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "setup-panel-dlg",
+			role: "dialog",
+			"aria-modal": "true",
+			"aria-labelledby": "setup-title",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ws-head",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Setup" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+					id: "setup-title",
+					children: "Setup"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					id: "setup-close",
 					onClick: closeDialog,
@@ -45194,45 +46502,83 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 	});
 }
 function DeviceHeader(props) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+	const [armed, setArmed] = (0, import_react.useState)(false);
+	const disconnect = async () => {
+		setArmed(false);
+		try {
+			await api(`/api/devices/${encodeURIComponent(props.devKey)}/disconnect`, { method: "POST" });
+			toast("Disconnected " + props.label);
+			refreshInstances();
+		} catch (err) {
+			toast("Disconnect failed: " + err.message);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		className: "device-group",
 		title: props.title,
-		onClick: props.onToggle,
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "dev-caret",
-				children: props.collapsed ? "▸" : "▾"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "dev-name",
-				children: props.label
-			}),
-			props.member && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "dev-member",
-				"aria-label": "One of your devices",
-				children: "yours"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "dev-badge" + (props.badgeOff ? " off" : ""),
-				children: props.badge
-			}),
-			props.showForget && props.devKey && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				className: "dev-forget",
-				title: "Disconnect — forget this device's token",
-				onClick: async (e) => {
-					e.stopPropagation();
-					try {
-						await api(`/api/devices/${encodeURIComponent(props.devKey)}/disconnect`, { method: "POST" });
-						toast("Disconnected");
-						refreshInstances();
-					} catch (err) {
-						toast("Disconnect failed: " + err.message);
-					}
-				},
-				children: "✕"
-			})
-		]
-	});
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			type: "button",
+			className: "dev-toggle",
+			"aria-expanded": !props.collapsed,
+			onClick: props.onToggle,
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "dev-caret",
+					"aria-hidden": "true",
+					children: props.collapsed ? "▸" : "▾"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "dev-name",
+					children: props.label
+				}),
+				props.member && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "dev-member",
+					"aria-label": "One of your devices",
+					children: "yours"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "dev-badge" + (props.badgeOff ? " off" : ""),
+					children: props.badge
+				})
+			]
+		}), props.showForget && props.devKey && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "dev-forget",
+			title: "Disconnect — forget this device's token",
+			"aria-label": "Disconnect " + props.label,
+			"aria-expanded": armed,
+			onClick: (e) => {
+				e.stopPropagation();
+				setArmed(!armed);
+			},
+			children: "✕"
+		})]
+	}), armed && props.showForget && props.devKey && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		className: "device-forget-confirm",
+		role: "group",
+		"aria-label": `Disconnect ${props.label}?`,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "del-q",
+			children: [
+				"Disconnect ",
+				props.label,
+				"? This forgets its token — its sessions leave this list until you pair it again."
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "del-acts",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "danger",
+				onClick: () => void disconnect(),
+				children: "Disconnect"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				autoFocus: true,
+				onClick: () => setArmed(false),
+				children: "Cancel"
+			})]
+		})]
+	})] });
 }
 function DeviceSection(props) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -45287,6 +46633,102 @@ function copyPaneHistory(title, pane, loaded) {
 	}).catch((err) => {
 		toast("History copy failed: " + err.message);
 		return false;
+	});
+}
+//#endregion
+//#region src/lib/diffFit.ts
+var SPLIT_MIN_PX = 700;
+function pickedDiffMode() {
+	let m = null;
+	try {
+		m = localStorage.getItem("cs_diffmode");
+	} catch {}
+	return m === "split" || m === "unified" ? m : null;
+}
+function diffModeFor(picked, width) {
+	if (picked) return picked;
+	return width > 0 && width < SPLIT_MIN_PX ? "unified" : "split";
+}
+//#endregion
+//#region src/components/grid/TabIcon.tsx
+var TAB_ICONS = {
+	agent: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" }),
+	shell: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("polyline", { points: "4 17 10 11 4 5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+		x1: "12",
+		y1: "19",
+		x2: "20",
+		y2: "19"
+	})] }),
+	diff: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 3v12" }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M6 9h12" }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M6 20h12" })
+	] }),
+	map: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("polygon", { points: "2 6 9 3 15 6 22 3 22 18 15 21 9 18 2 21" }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+			x1: "9",
+			y1: "3",
+			x2: "9",
+			y2: "18"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+			x1: "15",
+			y1: "6",
+			x2: "15",
+			y2: "21"
+		})
+	] }),
+	queue: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+			x1: "9",
+			y1: "6",
+			x2: "20",
+			y2: "6"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+			x1: "9",
+			y1: "12",
+			x2: "20",
+			y2: "12"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+			x1: "9",
+			y1: "18",
+			x2: "20",
+			y2: "18"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+			cx: "4.5",
+			cy: "6",
+			r: "1"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+			cx: "4.5",
+			cy: "12",
+			r: "1"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+			cx: "4.5",
+			cy: "18",
+			r: "1"
+		})
+	] }),
+	thread: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1" })] })
+};
+function TabIcon({ name }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+		className: "tab-icon",
+		width: "13",
+		height: "13",
+		viewBox: "0 0 24 24",
+		fill: "none",
+		stroke: "currentColor",
+		strokeWidth: "2",
+		strokeLinecap: "round",
+		strokeLinejoin: "round",
+		"aria-hidden": "true",
+		children: TAB_ICONS[name]
 	});
 }
 //#endregion
@@ -45416,13 +46858,6 @@ function splitDiffByFile(content) {
 	});
 	return files;
 }
-function getDiffMode() {
-	let m = "split";
-	try {
-		m = localStorage.getItem("cs_diffmode") || "split";
-	} catch {}
-	return m === "unified" || m === "split" ? m : "split";
-}
 function setDiffMode(m) {
 	try {
 		localStorage.setItem("cs_diffmode", m);
@@ -45446,13 +46881,36 @@ function setDiffBase(b) {
 //#region src/components/grid/DiffTab.tsx
 var diffCache = /* @__PURE__ */ new Map();
 var DIFF_CACHE_MAX = 24;
-function DiffTab({ title, active }) {
-	const [mode, setMode] = (0, import_react.useState)(getDiffMode());
+var focusDone = /* @__PURE__ */ new Map();
+function DiffTab({ title, active, stamp = "" }) {
+	const [picked, setPicked] = (0, import_react.useState)(pickedDiffMode());
+	const [width, setWidth] = (0, import_react.useState)(0);
+	const mode = diffModeFor(picked, width);
 	const [base, setBase] = (0, import_react.useState)(getDiffBase());
 	const [file, setFile] = (0, import_react.useState)(null);
 	const [payload, setPayload] = (0, import_react.useState)(null);
 	const [error, setError] = (0, import_react.useState)("");
 	const [collapsed, setCollapsed] = (0, import_react.useState)(/* @__PURE__ */ new Set());
+	const [reloading, setReloading] = (0, import_react.useState)(false);
+	const [rootEl, setRootEl] = (0, import_react.useState)(null);
+	(0, import_react.useEffect)(() => {
+		const host = rootEl?.parentElement;
+		if (!host || typeof ResizeObserver === "undefined") return;
+		const measure = () => {
+			const w = host.clientWidth;
+			if (w > 0) setWidth(w);
+		};
+		measure();
+		const ro = new ResizeObserver(measure);
+		ro.observe(host);
+		return () => ro.disconnect();
+	}, [rootEl]);
+	const focus = useUi((s) => s.diffFocus?.title === title ? s.diffFocus : null);
+	(0, import_react.useEffect)(() => {
+		if (!focus || (focusDone.get(title) || 0) >= focus.seq) return;
+		focusDone.set(title, focus.seq);
+		setFile(focus.path || null);
+	}, [focus, title]);
 	const load = (0, import_react.useCallback)(async () => {
 		const key = title + "\0" + base + "\0" + (file || "");
 		const cached = diffCache.get(key);
@@ -45476,19 +46934,44 @@ function DiffTab({ title, active }) {
 	]);
 	(0, import_react.useEffect)(() => {
 		if (active) load();
-	}, [active, load]);
+	}, [
+		active,
+		load,
+		stamp
+	]);
+	const reload = () => {
+		setReloading(true);
+		load().finally(() => setReloading(false));
+	};
+	const pickMode = (m) => {
+		setDiffMode(m);
+		setPicked(m);
+	};
+	const showOnMap = (path) => useUi.getState().openMap(title, { path });
 	if (!active && !payload) return null;
 	if (error && !payload) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "pane-diff-inner",
+		ref: setRootEl,
 		children: ["Error: ", error]
 	});
 	if (!payload) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "diff-loading muted",
+		ref: setRootEl,
 		children: "Loading diff…"
 	});
 	if (payload.error) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "pane-diff-inner",
+		ref: setRootEl,
 		children: ["Error: ", payload.error]
+	});
+	const reloadButton = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		className: "diff-reload",
+		type: "button",
+		disabled: reloading,
+		title: "Reload the diff",
+		"aria-label": "Reload the diff",
+		onClick: reload,
+		children: "↻"
 	});
 	const modeButtons = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 		className: "diff-modes",
@@ -45516,23 +46999,20 @@ function DiffTab({ title, active }) {
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			"data-dm": "split",
 			className: mode === "split" ? "active" : "",
-			onClick: () => {
-				setDiffMode("split");
-				setMode("split");
-			},
+			title: "Old and new side by side",
+			onClick: () => pickMode("split"),
 			children: "Split"
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			"data-dm": "unified",
 			className: mode === "unified" ? "active" : "",
-			onClick: () => {
-				setDiffMode("unified");
-				setMode("unified");
-			},
+			title: "Old and new in one column",
+			onClick: () => pickMode("unified"),
 			children: "Unified"
 		})]
 	})] });
 	if (file) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "pane-diff-inner",
+		ref: setRootEl,
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "diff-toolbar",
 			children: [
@@ -45547,6 +47027,11 @@ function DiffTab({ title, active }) {
 					title: file,
 					children: file
 				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MapButton, {
+					path: file,
+					onClick: () => showOnMap(file)
+				}),
+				reloadButton,
 				modeButtons
 			]
 		}), payload.content ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OneDiff, {
@@ -45561,6 +47046,7 @@ function DiffTab({ title, active }) {
 	const anyOpen = segments.some((s) => !collapsed.has(s.file));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "pane-diff-inner",
+		ref: setRootEl,
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "diff-toolbar",
 			children: [
@@ -45578,6 +47064,7 @@ function DiffTab({ title, active }) {
 						})
 					]
 				}),
+				reloadButton,
 				segments.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					className: "diff-collapse-all",
 					type: "button",
@@ -45594,7 +47081,7 @@ function DiffTab({ title, active }) {
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "diff-file-head",
 				onClick: (ev) => {
-					if (ev.target.closest(".sd-file")) return;
+					if (ev.target.closest(".sd-file, .diff-file-map")) return;
 					setCollapsed((prev) => {
 						const next = new Set(prev);
 						if (next.has(seg.file)) next.delete(seg.file);
@@ -45602,17 +47089,24 @@ function DiffTab({ title, active }) {
 						return next;
 					});
 				},
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "sd-file clickable",
-					"data-file": seg.file,
-					title: "Click to view the whole file diffed",
-					onClick: () => setFile(seg.file),
-					children: seg.file
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "diff-file-caret",
-					title: "Collapse / expand this file",
-					children: "▾"
-				})]
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sd-file clickable",
+						"data-file": seg.file,
+						title: "Click to view the whole file diffed",
+						onClick: () => setFile(seg.file),
+						children: seg.file
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MapButton, {
+						path: seg.file,
+						onClick: () => showOnMap(seg.file)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "diff-file-caret",
+						title: "Collapse / expand this file",
+						children: "▾"
+					})
+				]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "diff-file-body",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OneDiff, {
@@ -45621,6 +47115,19 @@ function DiffTab({ title, active }) {
 				})
 			})]
 		}, seg.file))]
+	});
+}
+function MapButton({ path, onClick }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		type: "button",
+		className: "diff-file-map",
+		title: `Show ${path} on the map`,
+		"aria-label": `Show ${path} on the map`,
+		onClick: (ev) => {
+			ev.stopPropagation();
+			onClick();
+		},
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "map" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Map" })]
 	});
 }
 function OneDiff({ content, mode }) {
@@ -46858,6 +48365,12 @@ function promptsFromFile(name, text) {
 //#endregion
 //#region src/components/grid/QueueTab.tsx
 var queueCache = /* @__PURE__ */ new Map();
+function composerKey(e) {
+	if (e.key !== "Enter" || e.shiftKey) return null;
+	if ((e.ctrlKey || e.metaKey) && !e.altKey) return "send";
+	if (e.altKey && !e.ctrlKey && !e.metaKey) return "add";
+	return null;
+}
 function qApi(title, path, opts) {
 	return instApi(title, path, opts);
 }
@@ -46883,8 +48396,10 @@ function QueueTab$1({ title, active }) {
 			const st = await qApi(title, path, opts);
 			queueCache.set(title, st);
 			setState(st);
+			return true;
 		} catch (err) {
 			toast("Queue update failed: " + (err.message || ""));
+			return false;
 		}
 	}, [title]);
 	const flags = (f) => mutate("/queue/flags", { json: f });
@@ -46944,6 +48459,17 @@ function QueueTab$1({ title, active }) {
 		} catch (err) {
 			toast("Queue failed: " + (err.message || ""));
 		}
+	};
+	const remove = async (it, index) => {
+		if (!await mutate("/queue?item=" + encodeURIComponent(it.id), { method: "DELETE" })) return;
+		toast("Removed from the queue", { action: {
+			label: "Undo",
+			ariaLabel: "Undo removing the queued prompt",
+			onClick: () => void mutate("/queue", { json: {
+				text: it.text,
+				index
+			} })
+		} });
 	};
 	const saveEdit = () => {
 		if (!editing) return;
@@ -47034,7 +48560,7 @@ function QueueTab$1({ title, active }) {
 				className: "queue-pop-head",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "queue-pop-title",
-					children: title
+					children: displayName(title)
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "queue-pop-sub muted",
 					children: "Send a prompt now, or queue prompts to auto-run when the agent goes idle — the run keeps going unattended and resumes when usage limits reset. Drop a .csv or .txt file anywhere here to queue every row as its own prompt."
@@ -47043,20 +48569,30 @@ function QueueTab$1({ title, active }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
 				className: "queue-input",
 				rows: 3,
-				placeholder: "Type a prompt — Add to queue, or Send now",
+				placeholder: "Type a prompt — Add to queue (Alt+Enter), or Send now (Ctrl+Enter)",
+				"aria-label": "Prompt for " + displayName(title),
 				value: draft,
-				onChange: (e) => setDraft(e.target.value)
+				onChange: (e) => setDraft(e.target.value),
+				onKeyDown: (e) => {
+					const k = composerKey(e);
+					if (!k) return;
+					e.preventDefault();
+					e.stopPropagation();
+					k === "send" ? send() : add();
+				}
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "queue-actions",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					className: "queue-add primary",
 					type: "button",
+					title: "Add to queue (Alt+Enter)",
 					onClick: add,
 					children: "Add to queue"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					className: "queue-send",
 					type: "button",
+					title: "Send now (Ctrl+Enter)",
 					onClick: send,
 					children: "Send now"
 				})]
@@ -47216,7 +48752,9 @@ function QueueTab$1({ title, active }) {
 								className: "queue-item-ctrls",
 								children: [
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
 										className: "qi-send",
+										"aria-label": "Send prompt " + (i + 1) + " now",
 										title: "Send this prompt now — skips the idle wait, cooldowns and any usage-limit hold",
 										onClick: async () => {
 											try {
@@ -47231,7 +48769,9 @@ function QueueTab$1({ title, active }) {
 										children: "▶"
 									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
 										className: "qi-edit",
+										"aria-label": "Edit prompt " + (i + 1),
 										title: "Edit",
 										onClick: () => setEditing({
 											id: it.id,
@@ -47240,7 +48780,9 @@ function QueueTab$1({ title, active }) {
 										children: "✎"
 									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
 										className: "qi-add-above",
+										"aria-label": "Add a prompt above prompt " + (i + 1),
 										title: "Add a prompt above this one",
 										onClick: () => setInserting({
 											index: i,
@@ -47249,7 +48791,9 @@ function QueueTab$1({ title, active }) {
 										children: "+↑"
 									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
 										className: "qi-add-below",
+										"aria-label": "Add a prompt below prompt " + (i + 1),
 										title: "Add a prompt below this one",
 										onClick: () => setInserting({
 											index: i + 1,
@@ -47258,9 +48802,11 @@ function QueueTab$1({ title, active }) {
 										children: "+↓"
 									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
 										className: "qi-del",
-										title: "Remove",
-										onClick: () => mutate("/queue?item=" + encodeURIComponent(it.id), { method: "DELETE" }),
+										"aria-label": "Remove prompt " + (i + 1),
+										title: "Remove (Undo in the toast)",
+										onClick: () => void remove(it, i),
 										children: "✕"
 									})
 								]
@@ -47323,58 +48869,58 @@ function InsertComposer({ value, onChange, onSave, onCancel }) {
 }
 //#endregion
 //#region src/lib/order.ts
-var obj$2 = (v) => v && typeof v === "object" ? v : {};
-var str$2 = (v) => typeof v === "string" ? v : "";
+var obj$1 = (v) => v && typeof v === "object" ? v : {};
+var str$1 = (v) => typeof v === "string" ? v : "";
 var strs = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
-var num$3 = (v) => typeof v === "number" && Number.isFinite(v) ? v : null;
+var num$2 = (v) => typeof v === "number" && Number.isFinite(v) ? v : null;
 function normFence(v) {
 	if (!v || typeof v !== "object") return null;
-	const o = obj$2(v);
+	const o = obj$1(v);
 	const only = strs(o.only);
 	const keep_out = strs(o.keep_out);
 	if (!only.length && !keep_out.length) return null;
 	return {
 		only,
 		keep_out,
-		reason: str$2(o.reason),
-		by: str$2(o.by)
+		reason: str$1(o.reason),
+		by: str$1(o.by)
 	};
 }
 function normCard(v) {
-	const o = obj$2(v);
-	const title = str$2(o.title);
+	const o = obj$1(v);
+	const title = str$1(o.title);
 	if (!title) return null;
 	const why = {};
-	for (const [k, w] of Object.entries(obj$2(o.why))) if (typeof w === "string") why[k] = w;
+	for (const [k, w] of Object.entries(obj$1(o.why))) if (typeof w === "string") why[k] = w;
 	return {
 		title,
-		state: str$2(o.state) || "held",
-		word: str$2(o.word),
-		detail: str$2(o.detail),
+		state: str$1(o.state) || "held",
+		word: str$1(o.word),
+		detail: str$1(o.detail),
 		after: strs(o.after),
 		why,
 		fence: normFence(o.fence),
-		released_at: num$3(o.released_at),
-		ended_at: num$3(o.ended_at),
+		released_at: num$2(o.released_at),
+		ended_at: num$2(o.ended_at),
 		planned: o.planned === true
 	};
 }
 function normOrder(v) {
 	if (!v || typeof v !== "object") return null;
-	const o = obj$2(v);
+	const o = obj$1(v);
 	const steps = (Array.isArray(o.steps) ? o.steps : []).map((s, i) => {
-		const so = obj$2(s);
+		const so = obj$1(s);
 		const workers = (Array.isArray(so.workers) ? so.workers : []).map(normCard).filter((c) => !!c);
 		return {
-			n: num$3(so.n) ?? i + 1,
+			n: num$2(so.n) ?? i + 1,
 			workers
 		};
 	}).filter((s) => s.workers.length > 0);
 	if (!steps.length) return null;
 	return {
-		mode: str$2(o.mode) || "parallel",
-		max_parallel: num$3(o.max_parallel) ?? 0,
-		cap: num$3(o.cap) ?? 0,
+		mode: str$1(o.mode) || "parallel",
+		max_parallel: num$2(o.max_parallel) ?? 0,
+		cap: num$2(o.cap) ?? 0,
 		steps
 	};
 }
@@ -47489,9 +49035,9 @@ function runStages(run) {
 }
 //#endregion
 //#region src/lib/thread.ts
-var obj$1 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
-var str$1 = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
-var num$2 = (v) => {
+var obj = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
+var str = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
+var num$1 = (v) => {
 	const n = Number(v);
 	return Number.isFinite(n) ? n : 0;
 };
@@ -47500,13 +49046,13 @@ var strOrNull = (v) => {
 	return s ? s : null;
 };
 function normReport(v) {
-	const o = obj$1(v);
+	const o = obj(v);
 	if (!Object.keys(o).length) return null;
 	return {
-		id: str$1(o.id),
-		status: str$1(o.status),
-		summary: str$1(o.summary),
-		ts: num$2(o.ts)
+		id: str(o.id),
+		status: str(o.status),
+		summary: str(o.summary),
+		ts: num$1(o.ts)
 	};
 }
 function normDiffStat(v) {
@@ -47514,63 +49060,63 @@ function normDiffStat(v) {
 	return v;
 }
 function normMember(v) {
-	const o = obj$1(v);
-	const title = str$1(o.title).trim();
+	const o = obj(v);
+	const title = str(o.title).trim();
 	if (!title) return null;
 	return {
 		title,
-		role: str$1(o.role, "child"),
-		status: str$1(o.status),
-		activity: str$1(o.activity, "idle"),
-		activity_since: num$2(o.activity_since),
-		branch: str$1(o.branch),
+		role: str(o.role, "child"),
+		status: str(o.status),
+		activity: str(o.activity, "idle"),
+		activity_since: num$1(o.activity_since),
+		branch: str(o.branch),
 		diff_stat: normDiffStat(o.diff_stat),
-		created_at: num$2(o.created_at),
+		created_at: num$1(o.created_at),
 		last_report: normReport(o.last_report),
 		base_sha: strOrNull(o.base_sha)
 	};
 }
 function normFinished(v) {
-	const o = obj$1(v);
-	const title = str$1(o.title).trim();
+	const o = obj(v);
+	const title = str(o.title).trim();
 	if (!title) return null;
 	return {
 		title,
-		branch: str$1(o.branch),
-		created_at: num$2(o.created_at),
-		ended_at: num$2(o.ended_at),
-		how: str$1(o.how, "deleted"),
-		stage: str$1(o.stage),
-		pr_url: str$1(o.pr_url),
+		branch: str(o.branch),
+		created_at: num$1(o.created_at),
+		ended_at: num$1(o.ended_at),
+		how: str(o.how, "deleted"),
+		stage: str(o.stage),
+		pr_url: str(o.pr_url),
 		diff_stat: normDiffStat(o.diff_stat),
 		last_report: normReport(o.last_report)
 	};
 }
 function normItem(v) {
-	const o = obj$1(v);
-	const id = str$1(o.id);
-	const type = str$1(o.type);
+	const o = obj(v);
+	const id = str(o.id);
+	const type = str(o.type);
 	if (!id || !type) return null;
 	return {
 		type,
 		id,
-		ts: num$2(o.ts),
-		from: str$1(o.from),
-		to: str$1(o.to),
-		text: str$1(o.text),
+		ts: num$1(o.ts),
+		from: str(o.from),
+		to: str(o.to),
+		text: str(o.text),
 		status: strOrNull(o.status),
 		state: strOrNull(o.state),
 		base_sha: strOrNull(o.base_sha)
 	};
 }
 function normThread(v, title = "") {
-	const o = obj$1(v);
+	const o = obj(v);
 	const members = Array.isArray(o.members) ? o.members.map(normMember).filter((m) => !!m) : [];
 	const items = Array.isArray(o.items) ? o.items.map(normItem).filter((i) => !!i) : [];
 	const finished = Array.isArray(o.finished) ? o.finished.map(normFinished).filter((f) => !!f) : [];
 	return {
-		title: str$1(o.title, title) || title,
-		parent: str$1(o.parent),
+		title: str(o.title, title) || title,
+		parent: str(o.parent),
 		members,
 		finished,
 		items,
@@ -49212,23 +50758,30 @@ function WorkerItem({ row, parentName, busy, pasteBlocked, onDecide, onMerge, on
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Spans, { text: row.report.summary })
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "th-w-acts",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "th-btn",
-						title: `${name}'s Diff tab — its change since it forked`,
-						onClick: () => {
-							selectSession(row.title, { noKeyboard: true });
-							useUi.getState().setLastTab(row.title, "diff");
-						},
-						children: "Review diff"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-						type: "button",
-						className: "th-btn",
-						disabled: !!busy || !!pasteBlocked,
-						title: pasteBlocked || `Paste “Wrap up ${name}” into ${parentName}: merge its branch, run the tests — you press Enter`,
-						onClick: onMerge,
-						children: ["Merge into ", parentName]
-					})]
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "th-btn",
+							title: `${name}'s Diff tab — its change since it forked`,
+							onClick: () => useUi.getState().openDiff(row.title),
+							children: "Review diff"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "th-btn",
+							title: `${name}'s Map — the files it changed, on the tree`,
+							onClick: () => useUi.getState().openMap(row.title, { section: "changed" }),
+							children: "Map"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							type: "button",
+							className: "th-btn",
+							disabled: !!busy || !!pasteBlocked,
+							title: pasteBlocked || `Paste “Wrap up ${name}” into ${parentName}: merge its branch, run the tests — you press Enter`,
+							onClick: onMerge,
+							children: ["Merge into ", parentName]
+						})
+					]
 				})]
 			})
 		]
@@ -49632,14 +51185,20 @@ function nameList(names, max = 2) {
 	if (u.length <= max) return u.join(", ");
 	return u.slice(0, max).join(", ") + ` +${u.length - max}`;
 }
-function guardPill(guard, zonesEnforced, provider, green = []) {
-	const state = guard?.state || (zonesEnforced ? "guarded" : "none");
+function guardPill(guard, zonesEnforced, provider, green = [], breaches = 0) {
+	if (breaches > 0) return {
+		cls: "g-breach",
+		label: `${breaches} breach${breaches === 1 ? "" : "es"}`,
+		title: (breaches === 1 ? "A changed file breaks a rule" : `${breaches} changed files break a rule`) + " — pushing, PRs and merges are blocked until they're reverted or the rule is removed."
+	};
+	const stale = guard?.state === "none" && zonesEnforced > 0;
+	const state = stale ? "arming" : guard?.state || (zonesEnforced ? "guarded" : "none");
 	let cls, label, explain;
 	switch (state) {
 		case "guarded":
 			cls = "g-guarded";
 			label = "Guarded";
-			explain = "Edits to red zones are blocked before they happen (hook guard armed).";
+			explain = "Edits the rules forbid are blocked before they happen (hook guard armed).";
 			break;
 		case "arming":
 			cls = "g-arming";
@@ -49649,7 +51208,7 @@ function guardPill(guard, zonesEnforced, provider, green = []) {
 		case "detect":
 			cls = "g-detect";
 			label = `Detect-only${provider ? " (" + provider + ")" : ""}`;
-			explain = "This agent CLI has no hook guard MindFlock manages: red-zone edits are detected, flagged and block pushes, but not prevented.";
+			explain = "This agent CLI has no hook guard MindFlock manages: edits inside ⛔ Keep out are detected, flagged and block pushes, but not prevented.";
 			break;
 		case "off":
 			cls = "g-off";
@@ -49658,10 +51217,10 @@ function guardPill(guard, zonesEnforced, provider, green = []) {
 			break;
 		default:
 			cls = "g-none";
-			label = "No zones";
+			label = "No rules";
 			explain = "Nothing is off-limits in this repo yet.";
 	}
-	const d = String(guard?.detail || "").trim();
+	const d = stale ? "" : String(guard?.detail || "").trim();
 	if (green.length) {
 		const g = nameList(green);
 		const how = state === "detect" ? " Edits outside are detected, flagged and block pushes, but not prevented (" + (provider || "this agent") + " has no hook guard)." : state === "off" ? " The guard's hooks went missing; MindFlock is reinstalling them." : state === "arming" ? " The guard takes effect on the agent's next tool call." : " Edits outside are blocked before they happen.";
@@ -49983,140 +51542,42 @@ function effectiveTests(snap) {
 	for (const i of importedByCode) flagged.delete(i);
 	return flagged;
 }
-//#endregion
-//#region src/lib/codemapApi.ts
-var arr = (v) => Array.isArray(v) ? v : [];
-var num$1 = (v, d = 0) => typeof v === "number" && isFinite(v) ? v : d;
-var str = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
-var obj = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
-var enc = encodeURIComponent;
-function normSym(v) {
-	const o = obj(v);
-	return {
-		name: str(o.name),
-		kind: str(o.kind, "function"),
-		line: num$1(o.line),
-		end: num$1(o.end),
-		public: o.public !== false,
-		sig: str(o.sig),
-		parent: o.parent == null ? null : str(o.parent),
-		children: arr(o.children).map(normSym)
+function nextStep(o) {
+	if (o.breaches > 0) return {
+		kind: "breaches",
+		n: o.breaches
 	};
-}
-function normEntry(v) {
-	const o = obj(v);
-	return {
-		kind: str(o.kind, "http"),
-		method: str(o.method, "ANY"),
-		route: str(o.route),
-		line: num$1(o.line),
-		handler: str(o.handler),
-		path: o.path == null ? void 0 : str(o.path),
-		changed: o.changed === true ? true : void 0
+	if (o.clarify) return { kind: "question" };
+	if (o.planWaiting > 0) return {
+		kind: "review-plan",
+		files: o.planWaiting
 	};
-}
-var normDep = (v) => ({
-	path: str(obj(v).path),
-	names: arr(obj(v).names).map((x) => str(x))
-});
-function normFileView(v) {
-	const o = obj(v);
-	const imp = obj(o.imports);
-	const z = obj(o.zones);
-	return {
-		path: str(o.path),
-		lang: str(o.lang),
-		loc: num$1(o.loc),
-		symbols: arr(o.symbols).map(normSym),
-		imports: {
-			internal: arr(imp.internal).map(normDep).filter((d) => d.path),
-			external: arr(imp.external).map((x) => str(x))
-		},
-		entry: arr(o.entry).map(normEntry),
-		used_by: arr(o.used_by).map(normDep).filter((d) => d.path),
-		changed_lines: arr(o.changed_lines).filter((h) => Array.isArray(h) && h.length >= 2).map((h) => [num$1(h[0]), num$1(h[1])]),
-		changed_symbols: arr(o.changed_symbols).map((x) => str(x)),
-		zones: {
-			red: !!z.red,
-			green: z.green == null ? null : !!z.green
-		},
-		partial: !!o.partial,
-		tested_by: arr(o.tested_by).map((x) => str(x))
+	if (o.changed > 0) return {
+		kind: "review-changes",
+		changed: o.changed,
+		risky: o.risky
 	};
+	if (o.planSupported) return { kind: "ask-plan" };
+	return { kind: "none" };
 }
-async function fetchFileView(title, path) {
-	return normFileView(await instApi(title, "/code-map/file?path=" + enc(path)));
+function nextStepText(s) {
+	switch (s.kind) {
+		case "breaches": return `${s.n} breach${s.n === 1 ? "" : "es"} — review ${s.n === 1 ? "it" : "them"} first: pushing is blocked until they're reverted or the rule is removed.`;
+		case "question": return "The agent is asking you something — answer it in the terminal.";
+		case "review-plan": return `A plan of ${s.files} file${s.files === 1 ? "" : "s"} is waiting — review it, then Go.`;
+		case "review-changes": return `${s.changed} changed — ${s.risky ? "start with ⚠ Could break, then open the diff" : "open the diff to review them"}.`;
+		case "ask-plan": return "Nothing changed yet — ask for a plan to see every file it means to touch, before it touches them.";
+		default: return "Nothing changed yet.";
+	}
 }
-async function searchCode(title, q) {
-	return arr(obj(await instApi(title, "/code-map/search?q=" + enc(q))).items).map((v) => {
-		const o = obj(v);
-		return {
-			path: str(o.path),
-			name: str(o.name),
-			kind: str(o.kind, "file"),
-			line: num$1(o.line),
-			score: num$1(o.score)
-		};
-	});
+function changedUnder(changed, dir, ci = false) {
+	const d = ci ? dir.toLowerCase() : dir;
+	const out = [];
+	for (const p of changed) if (underPath(ci ? p.toLowerCase() : p, d)) out.push(p);
+	return out;
 }
-function fetchSnapshot(title, fp) {
-	return instApi(title, "/code-map" + (fp ? "?fp=" + enc(fp) : ""));
-}
-function fetchLive(title, since) {
-	return instApi(title, "/code-map/live?since=" + since);
-}
-function askPlan(title, mode) {
-	return instApi(title, "/code-map/ask-plan", { json: { mode } });
-}
-function goPlan(title, zoneIds, scopeToPlan) {
-	return instApi(title, "/code-map/go", { json: {
-		zone_ids: zoneIds,
-		scope_to_plan: scopeToPlan
-	} });
-}
-function addZone(title, body) {
-	return instApi(title, "/red-zones", { json: body });
-}
-function previewZone(title, pattern, kind) {
-	return instApi(title, "/red-zones/preview", { json: {
-		pattern,
-		kind
-	} });
-}
-function removeZone(title, id) {
-	return instApi(title, "/red-zones/" + enc(id), { method: "DELETE" });
-}
-function waiveZone(title, id, waived) {
-	return instApi(title, "/red-zones/" + enc(id) + "/waive", { json: { waived } });
-}
-function allowPath(title, path) {
-	return instApi(title, "/red-zones/allow", { json: { path } });
-}
-function setExempt(title, paths, exempt) {
-	return instApi(title, "/red-zones/exempt", { json: {
-		paths,
-		exempt
-	} });
-}
-function normCompanions(v) {
-	const d = obj(v);
-	return {
-		companions: arr(Array.isArray(d.patterns) ? d.patterns : d.companions).map((x) => str(x)),
-		defaults: arr(d.defaults).map((x) => str(x))
-	};
-}
-async function fetchCompanions(repoId) {
-	return normCompanions(await api("/api/red-zones/companions?repo_id=" + enc(repoId)));
-}
-async function saveCompanions(repoId, companions, label = "") {
-	return normCompanions(await api("/api/red-zones/companions", {
-		method: "PUT",
-		json: {
-			repo_id: repoId,
-			patterns: companions,
-			...label ? { label } : {}
-		}
-	}));
+function keepOutWarn(k) {
+	return `${k} changed file${k === 1 ? " is" : "s are"} inside — pushing will be blocked until ${k === 1 ? "it's" : "they're"} reverted or you remove the rule.`;
 }
 //#endregion
 //#region src/lib/codetree/cache.ts
@@ -57065,6 +58526,13 @@ function drawBreadcrumb(v, g, free, fits, reserve) {
 	});
 	reserve(bx, by, bx + tw, by + th);
 }
+function labelBack(g, P, x, y, w) {
+	const fs = g.fillStyle;
+	roundRect(g, x - 3, y + .5, w + 6, 13, 4);
+	g.fillStyle = P.halo;
+	g.fill();
+	g.fillStyle = fs;
+}
 function quietPill(g, P, x, y, w, h) {
 	roundRect(g, x, y, w, h, h / 2);
 	g.fillStyle = P.pill;
@@ -57765,6 +59233,7 @@ function drawPriorityLeafLabels(v, g, toS, fits, reserve, leafPx, birdS) {
 			g.stroke();
 			g.restore();
 		}
+		labelBack(g, P, placedAt[0], placedAt[1] - 7, tw);
 		g.strokeText(txt, placedAt[0], placedAt[1]);
 		g.fillStyle = col;
 		g.fillText(txt, placedAt[0], placedAt[1]);
@@ -58281,6 +59750,11 @@ function drawLabels(v, g, toS, fits, reserve, leafPx, inView, createdGhost, phas
 			}
 			const gold = /* @__PURE__ */ new Set();
 			for (const bd of v.badges || []) for (const id of bd.ids) gold.add(id);
+			const edited = /* @__PURE__ */ new Set();
+			for (const A of v.agents) {
+				for (const k of A.edits.keys()) edited.add(k);
+				for (const k of A.created) edited.add(k);
+			}
 			const pri = (l) => (touched.has(l.file.id) ? 2 : 0) + (gold.has(l.file.id) ? 1 : 0);
 			const sparse = leafPx < 64;
 			const selN = v.sel && v.sel.node && !v.sel.leaf ? v.sel.node : null;
@@ -58315,27 +59789,67 @@ function drawLabels(v, g, toS, fits, reserve, leafPx, inView, createdGhost, phas
 			g.lineWidth = 3;
 			const named = /* @__PURE__ */ new Set();
 			for (const h of v.labelHits || []) if (h.leaf) named.add(h.leaf);
+			const onLeaves = (x0, y0, w, self) => {
+				const wx = (x0 + w / 2 - W / 2) / z + v.cam.x, wy = (y0 + 7 - H / 2) / z + v.cam.y;
+				for (const it of M.grid.near(wx, wy, Math.hypot(w / 2, 7) / z + S0)) {
+					const o = it.leaf;
+					if (!o || o === self || o.term && o.term.node.fAnc || o.file.ghost && !createdGhost.has(o.file.id)) continue;
+					const [ox, oy] = toS(o.x, o.y), e = Math.max(2, (o.len || S0) * z * .3);
+					if (ox + e > x0 && ox - e < x0 + w && oy + e > y0 && oy - e < y0 + 14) return true;
+				}
+				return false;
+			};
 			let cnt = 0;
 			for (const l of L) {
-				if (cnt > (sparse ? 30 : 70)) break;
+				const must = edited.has(l.file.id);
+				if (cnt > (sparse ? 30 : 70) && !must) continue;
 				if (named.has(l)) continue;
 				const [sx, sy] = toS(l.x, l.y);
 				if (!onScreen(sx, sy, 0)) continue;
 				const txt = l.file.name, tw = g.measureText(txt).width;
 				const off = l.len * z * .5 + 3;
-				let x0 = sx + off, y0 = sy - 7, ok = false;
+				let x0 = sx + off, y0 = sy - 7, ok = false, far = false;
 				const own = l.term ? l.term.node : null;
-				for (const [ax, ay] of [
+				const near = [
 					[off, 0],
 					[-off - tw, 0],
 					[off, -13],
-					[off, 13]
-				]) {
-					x0 = sx + ax;
-					y0 = sy + ay - 7;
-					if (fits(x0 - 3, y0, x0 + tw + 3, y0 + 14) && !(own && fol && fol.hit(x0, y0 + 1, x0 + tw, y0 + 13, own, false))) {
-						ok = true;
-						break;
+					[off, 13],
+					[-off - tw, -13],
+					[-off - tw, 13]
+				];
+				const free = (clean) => fits(x0 - 3, y0, x0 + tw + 3, y0 + 14) && !(own && fol && fol.hit(x0, y0 + 1, x0 + tw, y0 + 13, own, false)) && !(clean && onLeaves(x0, y0, tw, l));
+				for (const [clean, cands] of [[true, near], [false, near.slice(0, 4)]]) {
+					for (const [ax, ay] of cands) {
+						x0 = sx + ax;
+						y0 = sy + ay - 7;
+						if (free(clean)) {
+							ok = true;
+							break;
+						}
+					}
+					if (ok) break;
+				}
+				if (!ok && must) {
+					for (const [ax, ay] of [
+						[off + 10, -18],
+						[off + 10, 18],
+						[-off - tw - 10, -18],
+						[-off - tw - 10, 18],
+						[-tw / 2, -off - 22],
+						[-tw / 2, off + 22]
+					]) {
+						x0 = sx + ax;
+						y0 = sy + ay - 7;
+						if (fits(x0 - 3, y0, x0 + tw + 3, y0 + 14)) {
+							ok = far = true;
+							break;
+						}
+					}
+					if (!ok) {
+						x0 = sx + off;
+						y0 = sy - 7;
+						ok = !(v.hudRects || []).some((r) => x0 + tw > r[0] && x0 < r[2] && y0 + 14 > r[1] && y0 < r[3]);
 					}
 				}
 				if (!ok) continue;
@@ -58349,7 +59863,20 @@ function drawLabels(v, g, toS, fits, reserve, leafPx, inView, createdGhost, phas
 					],
 					leaf: l
 				});
-				g.fillStyle = hasOnly && !(l.term ? l.term.node.lit : l.pile && l.pile.lit) ? P.duskLeafLabel : l.file.kind === "c" ? P.leafLabel : P.muted;
+				const col = hasOnly && !(l.term ? l.term.node.lit : l.pile && l.pile.lit) ? P.duskLeafLabel : l.file.kind === "c" ? P.leafLabel : P.muted;
+				if (far) {
+					g.save();
+					g.strokeStyle = col;
+					g.lineWidth = 1;
+					g.globalAlpha = .7;
+					g.beginPath();
+					g.moveTo(sx, sy);
+					g.lineTo(Math.max(x0, Math.min(x0 + tw, sx)), y0 + (y0 + 7 < sy ? 14 : 0));
+					g.stroke();
+					g.restore();
+				}
+				labelBack(g, P, x0, y0, tw);
+				g.fillStyle = col;
 				halo(txt, x0, y0 + 7);
 				cnt++;
 			}
@@ -58670,7 +60197,7 @@ function AddZoneRow(p) {
 			const d = add.done;
 			if (d.kind === "green") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: d.pattern }),
-				" is now a green zone — agents may only change files inside the green zones.",
+				" is now ✓ Only here — agents may only change files inside it.",
 				d.told ? " " + d.told : "",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExemptPrompt, {
 					paths: d.exempt,
@@ -58688,7 +60215,7 @@ function AddZoneRow(p) {
 			] });
 			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: d.pattern }),
-				" is now a keep-out zone.",
+				" is now ⛔ Keep out.",
 				d.told ? " " + d.told : "",
 				d.already.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 					" ",
@@ -58778,7 +60305,7 @@ function AddZoneRow(p) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "cm-seg cm-kind",
 				role: "radiogroup",
-				"aria-label": "Zone kind",
+				"aria-label": "Rule kind",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					role: "radio",
@@ -58797,7 +60324,7 @@ function AddZoneRow(p) {
 					role: "radio",
 					"aria-checked": green,
 					className: green ? "on green" : "",
-					title: "Only here: agents may change ONLY these paths (and other green zones); everything else is read-only",
+					title: "Only here: agents may change ONLY these paths (and other ✓ Only here rules); everything else is read-only",
 					onClick: () => setAdd({
 						...add,
 						kind: "green",
@@ -58830,7 +60357,7 @@ function AddZoneRow(p) {
 					}
 				}
 			}),
-			p.quick.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			p.quick && p.quick.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "cm-add-quick",
 				children: p.quick.map((q) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
@@ -58850,7 +60377,7 @@ function AddZoneRow(p) {
 				spellCheck: false,
 				autoComplete: "off",
 				placeholder: "name (optional)",
-				"aria-label": "Zone name",
+				"aria-label": "Rule name",
 				value: add.name,
 				onChange: (ev) => setAdd({
 					...add,
@@ -58859,7 +60386,7 @@ function AddZoneRow(p) {
 			}),
 			green ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "cm-add-scope-note",
-				title: "A green zone scopes a task, so it is set per worktree — and every session in the worktree shares it.",
+				title: "✓ Only here scopes a task, so it is set per worktree — and every session in the worktree shares it.",
 				children: p.sessionsHere <= 1 ? "This worktree (1 session)" : `This worktree — applies to all ${p.sessionsHere} sessions in it`
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
 				className: "cm-add-scope",
@@ -59156,7 +60683,20 @@ function activityRows(M, agents, feed, zones, primaryKey) {
 		text: `${isGreen(z) ? "✓ only here" : "⛔ keep out"} set on ${z.name || z.pattern}`
 	});
 	out.sort((a, b) => b.ts - a.ts);
-	return out.slice(0, 48);
+	let before = 0;
+	if (prim0) {
+		for (const ts of prim0.edits.values()) if (!ts) before++;
+	}
+	const rows = out.slice(0, before ? 47 : 48);
+	if (before) rows.push({
+		key: "before",
+		ts: 0,
+		A: prim0,
+		path: "",
+		bad: false,
+		text: `${before} file${before === 1 ? "" : "s"} changed before the map started watching`
+	});
+	return rows;
 }
 function ActivityCard(p) {
 	const tick = !!p.ticker && !p.open;
@@ -59294,6 +60834,8 @@ function FileCard(p) {
 	}
 	const zf = zoneOfFile(f, p.zones);
 	const hasOnly = p.zones.some((z) => z.type === "only" && !z.waived);
+	const keepZ = p.zones.find((z) => z.type === "keep" && !z.waived && z.file === f.id) || null;
+	const onlyZ = p.zones.find((z) => z.type === "only" && !z.waived && z.file === f.id) || null;
 	const { cls, fns, routes } = outline(p.fv);
 	const lines = p.fv && p.fv.loc ? `${p.fv.loc.toLocaleString()} lines` : linesTxt(f);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -59327,7 +60869,7 @@ function FileCard(p) {
 			className: "ct-who block",
 			children: [
 				"⛔ ",
-				zf.type === "keep" ? "inside keep out" : "outside the only-here zone",
+				zf.type === "keep" ? "inside keep out" : "outside ✓ only here",
 				" (",
 				zf.z.label,
 				") — ",
@@ -59335,7 +60877,7 @@ function FileCard(p) {
 			]
 		}) : hasOnly ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "ct-who only",
-			children: "✓ inside the only-here zone — edits allowed"
+			children: "✓ inside ✓ only here — edits allowed"
 		}) : null,
 		p.fvErr && !p.fv ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "ct-muted",
@@ -59395,14 +60937,26 @@ function FileCard(p) {
 					onClick: p.onDiff,
 					children: "Open diff"
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				keepZ ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "cm-btn red",
 					onClick: p.onKeep,
-					title: "Keep agents out of this file (reads stay allowed)",
+					title: "Agents may edit this file again",
+					children: "Remove ⛔ keep out"
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "cm-btn red",
+					onClick: p.onKeep,
+					title: "Agents may read this file; every edit is blocked",
 					children: "⛔ Keep out"
 				}),
-				p.outside ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				onlyZ ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "cm-btn green",
+					onClick: p.onOnly,
+					title: "Agents may edit outside this file again",
+					children: "Remove ✓ only here"
+				}) : p.outside ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "cm-btn green",
 					onClick: p.onAllow,
@@ -59465,10 +61019,10 @@ function NodeCard(p) {
 	const hasOnly = p.zones.some((z) => z.type === "only" && !z.waived);
 	if (!keepZ && !onlyZ && !inherited && hasOnly && !isTrunk) inherited = n.lit ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "ct-who only",
-		children: "✓ inside the only-here zone — edits allowed"
+		children: "✓ inside ✓ only here — edits allowed"
 	}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "ct-who block",
-		children: "⛔ outside the only-here zone — edits blocked here"
+		children: "⛔ outside ✓ only here — edits blocked here"
 	});
 	const kids = (n.kids || []).filter((k) => k.nFiles).slice().sort((a, b) => b.nFiles - a.nFiles);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -59604,7 +61158,7 @@ function NodeCard(p) {
 					className: "cm-btn red",
 					onClick: p.onKeep,
 					title: "Agents may read here; every edit is blocked",
-					children: "⛔ Keep agents out"
+					children: "⛔ Keep out"
 				})),
 				!isTrunk && (onlyZ ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
@@ -59798,14 +61352,14 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 			zf && zf.type === "only" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "keep",
 				children: [
-					"⛔ outside the only-here zone (",
+					"⛔ outside ✓ only here (",
 					zf.z.label,
 					") — edits here are blocked"
 				]
 			}),
 			!zf && zones.some((z) => z.type === "only" && !z.waived) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "only",
-				children: "✓ inside the only-here zone — edits allowed"
+				children: "✓ inside ✓ only here — edits allowed"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: tool !== "explore" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "act " + tool,
@@ -59938,10 +61492,18 @@ function sharedWhere(z) {
 	return "shared with the repo" + (who ? " · added by " + who : z.added ? " · added " + z.added : "");
 }
 //#endregion
+//#region src/components/grid/codemap/mapGuide.ts
+var MapGuideContext = (0, import_react.createContext)({
+	notes: [],
+	riskAsk: 0,
+	openPanel: () => {}
+});
+//#endregion
 //#region src/components/grid/codemap/BirdIndex.tsx
 var clip = (s, n = 22) => s.length > n ? s.slice(0, n - 1) + "…" : s;
 var plural$2 = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
 var EXPANDED = /* @__PURE__ */ new Map();
+var RISK_DONE = /* @__PURE__ */ new Map();
 var ALL_FOLDERS = "\0folders";
 var FOLDERS_SHOWN = 5;
 function shownFolders(folders, all, ruled, max = FOLDERS_SHOWN) {
@@ -59996,6 +61558,28 @@ function nBlocked(agents, z) {
 	for (const A of agents) for (const bk of A.blocked) if (bk.z && bk.z.z.id === z.id) n++;
 	return n;
 }
+function sessionWord(title) {
+	const inst = instances$2().find((i) => i.title === title);
+	return inst ? deriveSessionState(inst).label : "";
+}
+function birdWords(st, primary, activity, word, helpersOut) {
+	const w = word.toLowerCase();
+	const quiet = !!w && w !== "working" && w !== "starting";
+	const chip = w && (st === "done" || st === "waiting" || quiet && st === "thinking") ? w : STATUS_TXT[st];
+	const nest = helpersOut ? `in the nest — ${plural$2(helpersOut, "helper")} out working` : "in the nest, thinking";
+	let now;
+	if (st === "planning") now = "planning (buds on the files it will touch)";
+	else if (primary) {
+		if (activity === "clarify" || w === "question") now = "needs you · question — answer it in the terminal";
+		else if (st === "done" || st === "waiting") now = !w || w === "idle" ? "idle — waiting for your next message" : w;
+		else now = nest;
+	} else if (quiet) now = w + " · on its own branch";
+	else now = st === "thinking" ? nest : "working on its own branch";
+	return {
+		chip,
+		now
+	};
+}
 function helperWhere(M, S) {
 	const bk = S.blocked[S.blocked.length - 1];
 	const f = S.status === "blocked" && bk ? bk.f : S.file;
@@ -60007,6 +61591,7 @@ function helperWhere(M, S) {
 function BirdIndex(p) {
 	const [legend, setLegend] = (0, import_react.useState)(false);
 	const [railOpen, setRailOpen] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => setRailOpen(false), [p.closeSeq]);
 	const [, bump] = (0, import_react.useState)(0);
 	const tops = p.agents.filter((A) => !A.ag.parent);
 	const subsOf = (A) => p.agents.filter((S) => S.ag.parent === A.ag.key);
@@ -60023,6 +61608,17 @@ function BirdIndex(p) {
 	const riskOpen = !!p.riskOpen;
 	const setRisk = (b) => p.onRisk && p.onRisk(b);
 	const sum = changeSummary(p.M, p.agents);
+	const guide = (0, import_react.useContext)(MapGuideContext);
+	(0, import_react.useEffect)(() => {
+		if (!guide.riskAsk || (RISK_DONE.get(exKey) || 0) >= guide.riskAsk) return;
+		RISK_DONE.set(exKey, guide.riskAsk);
+		if (p.onRisk) p.onRisk(true);
+		if (p.size !== "wide") setRailOpen(true);
+	}, [
+		guide.riskAsk,
+		exKey,
+		p
+	]);
 	const legendCard = legend && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "ct-bix-legend",
 		"data-hud": "pop",
@@ -60070,6 +61666,7 @@ function BirdIndex(p) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Changes, {
 			p,
 			sum,
+			notes: guide.notes,
 			riskOpen,
 			onRisk: () => setRisk(!riskOpen),
 			allFolders: ex.has(ALL_FOLDERS),
@@ -60137,10 +61734,10 @@ function BirdIndex(p) {
 						title: sum.total ? `${plural$2(sum.total, "file")} changed, all sessions — ${sum.tops.map(([k, n]) => `${k} ${n}`).join(", ")}\nthis session ${sum.mine} · other sessions ${sum.others}` : "No changes yet.",
 						onClick: () => setRailOpen(true),
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", { children: ["✎", sum.total] }), " changed"]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					}), rules.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						type: "button",
 						className: "ct-rail-tile" + (nKeep ? " keep" : nOnly ? " only" : ""),
-						title: rules.length ? rules.map((z) => (isGreen(z) ? "✓ only here " : "⛔ keep out ") + (z.name || z.pattern) + (nBlocked(p.agents, z) ? " · " + blockedTxt(nBlocked(p.agents, z)) : "")).join("\n") : "No rules — ⛔ Keep out / ✓ Only here",
+						title: rules.map((z) => (isGreen(z) ? "✓ only here " : "⛔ keep out ") + (z.name || z.pattern) + (nBlocked(p.agents, z) ? " · " + blockedTxt(nBlocked(p.agents, z)) : "")).join("\n"),
 						onClick: () => setRailOpen(true),
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", { children: [nOnly ? "✓" : "⛔", rules.length] }),
@@ -60200,7 +61797,9 @@ function AgentRow({ p, A, subs, open, onToggle }) {
 	const following = p.followKey === A.ag.key;
 	const bk = A.blocked[A.blocked.length - 1];
 	const working = subs.filter((S) => !S.done).length;
-	const now = st === "blocked" && bk ? `⛔ tried ${bk.f ? dispName(M, bk.f) : bk.path}` : st === "done" ? "finished — back in the nest" : st === "planning" ? "planning (buds on the files it will touch)" : st === "thinking" ? working ? `in the nest — ${plural$2(working, "helper")} out working` : "in the nest, thinking" : A.ag.primary ? A.activity === "clarify" ? "needs you · question" : "waiting" : "editing on its own branch";
+	const words = birdWords(st, A.ag.primary, A.activity, A.ag.parent ? "" : sessionWord(A.ag.key), working);
+	const now = st === "blocked" && bk ? `⛔ tried ${bk.f ? dispName(M, bk.f) : bk.path}` : words.now;
+	const guide = (0, import_react.useContext)(MapGuideContext);
 	const binding = A.ag.primary ? p.tzones : p.tzones.filter((z) => z.type === "keep" && z.z.scope !== "worktree");
 	const zf = f && st !== "blocked" && st !== "done" ? zoneOfFile(f, binding) : null;
 	const changed = open ? [...A.edits.keys()].map((id) => M.files[id]).filter(Boolean).sort((a, b) => b.usedBy.length - a.usedBy.length || a.path.localeCompare(b.path)) : [];
@@ -60245,7 +61844,7 @@ function AgentRow({ p, A, subs, open, onToggle }) {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "ct-st " + st,
 							style: st === "editing" || st === "creating" ? { color: A.ag.color } : void 0,
-							children: following ? "following" : STATUS_TXT[st]
+							children: following ? "following" : words.chip
 						})
 					]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -60280,6 +61879,7 @@ function AgentRow({ p, A, subs, open, onToggle }) {
 					children: now
 				})
 			}),
+			A.ag.primary && p.primaryExtra,
 			allEdits.size > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ct-bix-chg",
 				title: area.map(([k, n]) => `${k}: ${n}`).join("\n") + (byHelpers ? `\n${A.edits.size} by ${A.ag.name}, ${byHelpers} by its helpers` : ""),
@@ -60340,7 +61940,6 @@ function AgentRow({ p, A, subs, open, onToggle }) {
 					]
 				}) }, S.ag.key))
 			}),
-			A.ag.primary && p.primaryExtra,
 			open && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ct-bix-detail",
 				children: [
@@ -60387,14 +61986,24 @@ function AgentRow({ p, A, subs, open, onToggle }) {
 								className: "dep",
 								children: ff.usedBy.length ? ff.usedBy.length + " depend" : "—"
 							})]
-						}) }, ff.id)), changed.length > 8 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+						}) }, ff.id)), changed.length > 8 && (A.ag.primary ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							type: "button",
+							className: "ct-link",
+							onClick: () => guide.openPanel("changed"),
+							title: "Open Plan & lists at Changed",
+							children: [
+								"+",
+								changed.length - 8,
+								" more — all changed files"
+							]
+						}) }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 							className: "ct-muted",
 							children: [
 								"+",
 								changed.length - 8,
-								" more in the Session panel"
+								" more"
 							]
-						})]
+						}))]
 					})] })
 				]
 			})
@@ -60404,10 +62013,7 @@ function AgentRow({ p, A, subs, open, onToggle }) {
 function Rules({ p }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "ct-bix-rules",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", { children: "Rules" }), !p.zones.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "ct-muted",
-			children: "none — ⛔ / ✓ on a changed folder below, or the toolbar's ⛔ Keep out / ✓ Only here"
-		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: p.zones.map((z) => {
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", { children: "Rules" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: p.zones.map((z) => {
 			const g = isGreen(z);
 			const drawn = p.tzones.some((t) => t.z.id === z.id);
 			const full = z.name || z.pattern.replace(/^\/+/, "").replace(/\/(\*\*)?$/, "");
@@ -60453,14 +62059,22 @@ function Rules({ p }) {
 		}) })]
 	});
 }
-function Changes({ p, sum, riskOpen, onRisk, allFolders = false, onAllFolders }) {
+function Changes({ p, sum, notes = [], riskOpen, onRisk, allFolders = false, onAllFolders }) {
 	const M = p.M;
+	const noteLines = notes.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "ct-muted ct-bix-note",
+		children: t
+	}, t));
 	if (!sum.total) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "ct-bix-changes",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", { children: "Changes" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "ct-muted",
-			children: "No changes yet."
-		})]
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", { children: "Changes" }),
+			noteLines,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ct-muted",
+				children: "No changes yet."
+			})
+		]
 	});
 	const risk = sum.ranked[0];
 	const maxDep = Math.max(1, risk ? risk.usedBy.length : 1);
@@ -60488,6 +62102,7 @@ function Changes({ p, sum, riskOpen, onRisk, allFolders = false, onAllFolders })
 					children: "⚠ Could break"
 				})]
 			}),
+			noteLines,
 			sum.others > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ct-bix-sum ct-bix-split",
 				title: "This session = the pane header's file count (its branch, helpers included)",
@@ -60655,6 +62270,42 @@ function Changes({ p, sum, riskOpen, onRisk, allFolders = false, onAllFolders })
 			})
 		]
 	});
+}
+//#endregion
+//#region src/lib/codetree/fit.ts
+var WHOLE_PAD = {
+	side: 36,
+	top: 40,
+	bot: 14,
+	piles: 34
+};
+function pictureBox(M) {
+	const B = M.bounds, m = M.leaves.length ? S0 * 6 : 0;
+	return {
+		x0: B.x0 + m,
+		y0: B.y0 + m,
+		x1: B.x1 - m,
+		y1: Math.max(B.y1 - m, M.groundY)
+	};
+}
+function fitWhole(B, groundY, piles, W, H, I) {
+	const padB = piles && B.y1 - groundY < S0 * 2 ? WHOLE_PAD.piles : WHOLE_PAD.bot;
+	const w = Math.max(40, W - I.left - I.right - 2 * WHOLE_PAD.side), h = Math.max(40, H - I.top - I.bot - WHOLE_PAD.top - padB);
+	const z = Math.min(w / Math.max(1, B.x1 - B.x0), h / Math.max(1, B.y1 - B.y0));
+	const sx = (I.left + W - I.right) / 2, sy = H - I.bot - padB;
+	return {
+		x: (B.x0 + B.x1) / 2 - (sx - W / 2) / z,
+		y: B.y1 - (sy - H / 2) / z,
+		z
+	};
+}
+function boxOnScreen(B, c, W, H) {
+	return {
+		x0: (B.x0 - c.x) * c.z + W / 2,
+		y0: (B.y0 - c.y) * c.z + H / 2,
+		x1: (B.x1 - c.x) * c.z + W / 2,
+		y1: (B.y1 - c.y) * c.z + H / 2
+	};
 }
 //#endregion
 //#region src/components/grid/codemap/treeCtl.ts
@@ -60891,6 +62542,7 @@ var TreeCtl = class {
 		this.kick();
 	}
 	setHud(rects, insets) {
+		const whole = this.atWhole();
 		this.insets = insets;
 		if (!this.v) return;
 		this.v.hudRects = rects;
@@ -60901,6 +62553,7 @@ var TreeCtl = class {
 			y1: this.v.H - insets.bot
 		};
 		this.v.fitZv = this.fitZ();
+		if (whole) this.setCam(this.wholeCam());
 		this.dirty = true;
 		this.kick();
 	}
@@ -60919,7 +62572,7 @@ var TreeCtl = class {
 			this.cv.height = Math.round(H * dpr);
 		}
 		if (v) {
-			const was = v.W;
+			const was = v.W, whole = this.atWhole();
 			v.W = W;
 			v.H = H;
 			v.dpr = dpr;
@@ -60931,6 +62584,7 @@ var TreeCtl = class {
 			};
 			v.fitZv = this.fitZ();
 			if (was <= 1 && this.M) this.fitAll(true);
+			else if (whole) this.setCam(this.wholeCam());
 			if (this.mini) buildMini(v, this.mini);
 		}
 		this.dirty = true;
@@ -60947,10 +62601,10 @@ var TreeCtl = class {
 		this.camT = { ...c };
 		this.fly = null;
 	}
-	fitBox(x0, y0, x1, y1, pad = .86, ignoreCard = false) {
+	fitBox(x0, y0, x1, y1, pad = .86) {
 		const v = this.v;
 		const I = { ...this.insets };
-		if (!ignoreCard) I.right += this.cardInset;
+		I.right += this.cardInset;
 		const w = Math.max(40, v.W - I.left - I.right), h = Math.max(40, v.H - I.top - I.bot);
 		const z = Math.min(w * pad / Math.max(1, x1 - x0), h * pad / Math.max(1, y1 - y0));
 		return {
@@ -60959,14 +62613,22 @@ var TreeCtl = class {
 			z
 		};
 	}
+	wholeCam() {
+		const M = this.M, v = this.v;
+		return fitWhole(pictureBox(M), M.groundY, M.piles.length > 0, v.W, v.H, this.insets);
+	}
+	atWhole() {
+		const v = this.v;
+		if (!v || !this.M || this.fly || v.follow != null || v.W <= 1) return false;
+		const c = this.wholeCam(), T = this.camT;
+		return Math.abs(Math.log(T.z / c.z)) < .01 && Math.hypot(T.x - c.x, T.y - c.y) * c.z < 2;
+	}
 	fitZ() {
-		const B = this.M.bounds;
-		return this.fitBox(B.x0, B.y0, B.x1, B.y1, .94, true).z;
+		return this.wholeCam().z;
 	}
 	fitAll(instant = false) {
 		if (!this.M || !this.v) return;
-		const B = this.M.bounds;
-		const c = this.fitBox(B.x0, B.y0, B.x1, B.y1, .94, true);
+		const c = this.wholeCam();
 		this.v.fitZv = c.z;
 		if (instant) this.setCam(c);
 		else this.flyTo(c);
@@ -61685,6 +63347,7 @@ var TreeCtl = class {
 				drawMini(v, this.mini, (x, y) => this.screenToWorld(x, y));
 			} catch {}
 			this.dirty = false;
+			this.markTree();
 		}
 		try {
 			this.updateHover();
@@ -61692,6 +63355,18 @@ var TreeCtl = class {
 			console.error(err);
 		}
 		if (!!this.fly || this.dirty || this.camMoving() || v.anim && !this.reducedMotion || !this.reducedMotion && v.agents.length > 0) this.kick();
+	}
+	markTree() {
+		const v = this.v;
+		if (!v || !this.M) return;
+		const b = boxOnScreen(pictureBox(this.M), v.cam, v.W, v.H);
+		const s = [
+			b.x0,
+			b.y0,
+			b.x1,
+			b.y1
+		].map(Math.round).join(" ");
+		if (this.host.dataset.tree !== s) this.host.dataset.tree = s;
 	}
 	camMoving() {
 		const v = this.v;
@@ -61722,6 +63397,7 @@ function CodeTree(p) {
 	const [size, setSize] = (0, import_react.useState)("wide");
 	const narrow = size !== "wide";
 	const [actNarrow, setActNarrow] = (0, import_react.useState)(false);
+	const [railShut, setRailShut] = (0, import_react.useState)(0);
 	const [fv, setFv] = (0, import_react.useState)(null);
 	const [fvErr, setFvErr] = (0, import_react.useState)("");
 	const blastCache = (0, import_react.useRef)(/* @__PURE__ */ new Map());
@@ -61805,12 +63481,28 @@ function CodeTree(p) {
 			if (kind === "info" && !isNarrow) card = Math.max(card, r.width + 16);
 			if (kind === "info" && isNarrow) bot = Math.max(bot, r0.height - y0 + 6);
 			if (kind === "activity" && isNarrow) bot = Math.max(bot, r0.height - y0 + 6);
+			if (kind === "activity" && !isNarrow) bot = Math.max(bot, 78);
 		}
+		let right = 8;
+		const dr = isNarrow ? null : st.parentElement?.querySelector(":scope > .ct-drawer");
+		if (dr) {
+			const r = dr.getBoundingClientRect();
+			if (r.width > 2 && r.left < r0.right - 2 && r.right > r0.left) {
+				right = r0.right - r.left + 8;
+				rects.push([
+					r.left - r0.left - 4,
+					0,
+					r0.width,
+					r0.height
+				]);
+			}
+		}
+		card = Math.max(0, card - (right - 8));
 		const insets = {
 			top,
 			bot,
 			left,
-			right: 8
+			right
 		};
 		c.cardInset = card;
 		c.setHud(rects, insets);
@@ -61863,9 +63555,34 @@ function CodeTree(p) {
 		p.zones,
 		p.title
 	]);
-	const onCanvasKey = (e) => {
-		if (ctl && ctl.key(e.nativeEvent)) e.preventDefault();
+	const shutRail = () => {
+		const st = stageRef.current, pop = st ? st.querySelector(".ct-bix-pop") : null;
+		if (!st || !pop) return false;
+		const back = pop.contains(document.activeElement) ? st.querySelector(".ct-bix-rail .ct-bix-q") : null;
+		setRailShut((x) => x + 1);
+		back?.focus();
+		return true;
 	};
+	const onCanvasKey = (e) => {
+		if (e.key === "Escape" && shutRail()) e.preventDefault();
+		else if (ctl && ctl.key(e.nativeEvent)) e.preventDefault();
+	};
+	(0, import_react.useEffect)(() => {
+		if (!p.active) return;
+		const onKey = (e) => {
+			if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
+			const root = stageRef.current?.closest(".cm-root");
+			const box = root?.querySelector(".cm-search input");
+			if (!root || !box || !box.offsetParent) return;
+			if (!slashFinds(document.activeElement, root.closest(".pane") || root)) return;
+			e.preventDefault();
+			e.stopPropagation();
+			box.focus();
+			box.select();
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
+	}, [p.active]);
 	const tip = ctl && ctl.tip && M && v ? ctl.tip : null;
 	const tool = v ? v.tool : "explore";
 	let card = null;
@@ -61892,7 +63609,7 @@ function CodeTree(p) {
 						ctl.flyToNode(f.node, .8);
 					}
 				},
-				onDiff: p.onOpenDiff,
+				onDiff: () => p.onOpenDiff(f.path),
 				onKeep: () => p.onPaint("keep", { file: f }),
 				onOnly: () => p.onPaint("only", { file: f }),
 				onAllow: () => p.onAllow(f.path),
@@ -61940,6 +63657,10 @@ function CodeTree(p) {
 		className: "ct-stage" + (narrow ? " narrow" : "") + (size === "tiny" ? " tiny" : "") + (showMini ? " mini-on" : ""),
 		ref: stageRef,
 		onKeyDown: (e) => {
+			if (e.key === "Escape" && !e.defaultPrevented && shutRail()) {
+				e.preventDefault();
+				return;
+			}
 			if (e.key === "Escape" && !e.defaultPrevented && ctl && ctl.v && ctl.v.follow != null) {
 				ctl.stopFollow(true, true);
 				e.preventDefault();
@@ -61953,7 +63674,8 @@ function CodeTree(p) {
 				role: "application",
 				"aria-label": M ? `Code tree of ${M.name}: ${M.files.length} files. Scroll to zoom, drag or arrow keys to move, click a folder, leaf or bird for details. The Session panel lists the same information.` : "Code tree",
 				"aria-describedby": "ct-sum-" + cssId(p.title),
-				onKeyDown: onCanvasKey
+				onKeyDown: onCanvasKey,
+				onPointerDown: () => shutRail()
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "cm-sr",
@@ -61984,10 +63706,19 @@ function CodeTree(p) {
 			p.growErr && !M && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "cm-note cm-note-err",
 				role: "alert",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Couldn't grow the tree." }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "muted",
-					children: p.growErr
-				})]
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Couldn't grow the tree." }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: p.growErr
+					}),
+					p.onRetry && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "cm-btn ct-retry",
+						onClick: p.onRetry,
+						children: "Retry"
+					})
+				]
 			}),
 			regrowing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "ct-regrow",
@@ -62022,6 +63753,7 @@ function CodeTree(p) {
 					zones: p.zones,
 					zoneBusy: p.zoneBusy,
 					size,
+					closeSeq: railShut,
 					followKey: v ? v.follow : null,
 					primaryTask: p.primaryTask,
 					primaryExtra: p.primaryExtra,
@@ -62141,6 +63873,13 @@ function tipPos(x, y, W, H) {
 	};
 }
 var cssId = (s) => s.replace(/[^A-Za-z0-9_-]/g, "_");
+function slashFinds(active, pane) {
+	const el = active, doc = pane.ownerDocument;
+	if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return false;
+	if (el && el !== doc.body && el !== doc.documentElement) return pane.contains(el);
+	if (pane.matches(":hover")) return true;
+	return pane.classList.contains("focused") && !doc.querySelector(".pane:hover");
+}
 function summary(M, agents, zones) {
 	const bits = [`${M.files.length} files: ${M.crown.nFiles} code files on ${M.crown.kids.length} top-level branches, ${M.roots.nFiles} tests as roots, ${M.piles.reduce((a, q) => a + q.nFiles, 0)} docs and config files on the ground.`];
 	for (const A of agents) bits.push(`${A.ag.name}: ${A.status}${A.file ? " " + A.file.path : ""}, edited ${A.edits.size}, read ${A.reads.size}.`);
@@ -62195,6 +63934,7 @@ function searchController(fetch, apply, delayMs = 160) {
 }
 //#endregion
 //#region src/components/grid/codemap/SearchBox.tsx
+var SHORT_BELOW = 170;
 function Glyph({ kind }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", {
 		className: "cm-g k-" + kind,
@@ -62208,6 +63948,15 @@ var SearchBox = (0, import_react.forwardRef)(function SearchBox({ title, onPick 
 	const [err, setErr] = (0, import_react.useState)("");
 	const [open, setOpen] = (0, import_react.useState)(false);
 	const [cur, setCur] = (0, import_react.useState)(0);
+	const wrap = (0, import_react.useRef)(null);
+	const [short, setShort] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		const el = wrap.current;
+		if (!el || typeof ResizeObserver === "undefined") return;
+		const ro = new ResizeObserver(() => setShort(el.clientWidth < SHORT_BELOW));
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, []);
 	const ctl = (0, import_react.useMemo)(() => searchController((t) => searchCode(title, t), (r) => {
 		setItems(r.items);
 		setErr(r.err);
@@ -62223,11 +63972,12 @@ var SearchBox = (0, import_react.forwardRef)(function SearchBox({ title, onPick 
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 		className: "cm-search",
+		ref: wrap,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 				ref,
 				type: "search",
-				placeholder: "Find file or symbol",
+				placeholder: short ? "Find…" : "Find file or symbol",
 				"aria-label": "Find file or symbol",
 				"aria-expanded": open && items.length > 0,
 				"aria-controls": "cm-search-list",
@@ -62325,7 +64075,7 @@ function AllowBtn({ path, busy, onAllow }) {
 		type: "button",
 		className: "cm-row-act cm-allow",
 		disabled: busy === "busy" || busy === "done",
-		title: `Add ${anchoredZonePath(path)} to the green zones (this worktree) and tell the agent`,
+		title: `Add ${anchoredZonePath(path)} to ✓ Only here (this worktree) and tell the agent`,
 		onClick: () => onAllow(path),
 		children: busy === "busy" ? "Allowing…" : busy === "done" ? "Allowed ✓" : "Allow this file"
 	});
@@ -62334,6 +64084,7 @@ function SessionPanel({ m, a }) {
 	const { plan } = m;
 	const breachSec = m.breaches.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "cm-sec cm-sec-breach",
+		"data-sec": "breaches",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", { children: ["Breaches ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "cm-count",
@@ -62342,7 +64093,7 @@ function SessionPanel({ m, a }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "cm-hint",
 				children: [
-					m.breaches.every((b) => b.kind === "green") ? "Changed outside the green zone(s)." : m.breaches.some((b) => b.kind === "green") ? "Changed inside a keep-out zone or outside the green zone(s)." : "Changed inside a red zone.",
+					m.breaches.every((b) => b.kind === "green") ? "Changed outside ✓ Only here." : m.breaches.some((b) => b.kind === "green") ? "Changed inside ⛔ Keep out or outside ✓ Only here." : "Changed inside ⛔ Keep out.",
 					" ",
 					"Pushing, PRs and merges are blocked until these are reverted",
 					m.green ? " or allowed" : "",
@@ -62364,7 +64115,7 @@ function SessionPanel({ m, a }) {
 							})
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "cm-row-sub",
-							children: [b.kind === "green" ? "outside scope" : b.pattern || "red zone", b.committed ? " · committed" : ""]
+							children: [b.kind === "green" ? "outside scope" : "⛔ keep out" + (b.pattern ? " · " + b.pattern : ""), b.committed ? " · committed" : ""]
 						})]
 					}),
 					b.kind === "green" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AllowBtn, {
@@ -62375,7 +64126,7 @@ function SessionPanel({ m, a }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "cm-row-act",
-						onClick: a.openDiff,
+						onClick: () => a.openDiff(b.path),
 						children: "Open diff"
 					})
 				] }, b.path))
@@ -62384,6 +64135,7 @@ function SessionPanel({ m, a }) {
 	}, "breach") : null;
 	const reqSec = m.requests.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "cm-sec cm-sec-req",
+		"data-sec": "scope",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", { children: ["Scope requests ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "cm-count",
@@ -62424,7 +64176,7 @@ function SessionPanel({ m, a }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", { children: "Activity" }),
 			m.recent.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "cm-empty-line",
-				children: m.guard.cls.includes("g-detect") ? `Detect-only for ${m.provider || "this agent"} — MindFlock sees its edits on disk, not its tool calls.` : "Agent hasn't used any tools since MindFlock armed the map."
+				children: m.guard.cls.includes("g-detect") ? `Detect-only for ${m.provider || "this agent"} — MindFlock sees its edits on disk, not its tool calls.` : m.changed.length ? `No tool calls since MindFlock armed the map — the ${m.changed.length} changed file${m.changed.length === 1 ? " was" : "s were"} changed before it started watching.` : "Agent hasn't used any tools since MindFlock armed the map."
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 				className: "cm-list",
 				children: m.recent.map((r) => {
@@ -62457,7 +64209,7 @@ function SessionPanel({ m, a }) {
 								}) : null,
 								peeks.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "cm-badge soft-warn",
-									title: "Read outside the green zone(s) (allowed): " + peeks.join(", "),
+									title: "Read outside ✓ Only here (allowed): " + peeks.join(", "),
 									children: "peeked outside scope"
 								}) : null,
 								r.ev === "fail" && !r.deny ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -62510,6 +64262,7 @@ function SessionPanel({ m, a }) {
 	}) : null;
 	const planSec = m.planSupported ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "cm-sec",
+		"data-sec": "plan",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", { children: [
 				"Plan",
@@ -62544,7 +64297,7 @@ function SessionPanel({ m, a }) {
 								}),
 								cls === "blocked" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "cm-badge bad",
-									children: "keep-out zone"
+									children: "⛔ keep out"
 								}),
 								(it.outside || cls === "outside") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "cm-badge soft-warn",
@@ -62596,15 +64349,15 @@ function SessionPanel({ m, a }) {
 						type: "button",
 						className: "cm-primary",
 						disabled: m.clarify || !!m.busy,
-						title: m.goZones.length ? "Tell the agent to go ahead, and which zones are new: " + m.goZones.map((z) => z.pattern).join(", ") : "Tell the agent to go ahead with its plan",
+						title: m.goZones.length ? "Tell the agent to go ahead, and which rules are new: " + m.goZones.map((z) => z.pattern).join(", ") : "Tell the agent to go ahead with its plan",
 						onClick: () => a.go(false),
-						children: m.busy === "go" ? "Sending…" : m.goZones.length ? `Go — with ${m.goZones.length} zone${m.goZones.length === 1 ? "" : "s"}` : "Go"
+						children: m.busy === "go" ? "Sending…" : m.goZones.length ? `Go — with ${m.goZones.length} rule${m.goZones.length === 1 ? "" : "s"}` : "Go"
 					}),
 					plan && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "cm-primary green",
 						disabled: m.clarify || !!m.busy || !scope.length,
-						title: "Go, and make the plan the scope: only these may change (green zones, this worktree) — " + scope.slice(0, 12).join(", ") + (scope.length > 12 ? ` +${scope.length - 12} more` : ""),
+						title: "Go, and make the plan the scope: only these may change (✓ Only here, this worktree) — " + scope.slice(0, 12).join(", ") + (scope.length > 12 ? ` +${scope.length - 12} more` : ""),
 						onClick: () => a.go(true),
 						children: m.busy === "go-scope" ? "Sending…" : "Go — only the planned files"
 					})
@@ -62622,6 +64375,7 @@ function SessionPanel({ m, a }) {
 		]
 	}, "plan") : m.actionMsg || goExemptRow ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "cm-sec",
+		"data-sec": "plan",
 		children: [m.actionMsg && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: m.actionMsg.bad ? "cm-err" : "cm-ok",
 			children: m.actionMsg.text
@@ -62629,30 +64383,15 @@ function SessionPanel({ m, a }) {
 	}, "plan") : null;
 	const blastSec = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "cm-sec",
+		"data-sec": "blast",
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", { children: [
-				"Blast radius",
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "cm-count",
-					title: "Import hops followed",
-					children: [
-						m.depth,
-						" hop",
-						m.depth === 1 ? "" : "s"
-					]
-				})
-			] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", { children: "Blast radius" }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "cm-hint",
 				children: [
 					"Code that imports ",
 					m.mode === "plan" ? "what the plan touches" : "what changed",
-					" (",
-					m.depth,
-					" hop",
-					m.depth === 1 ? "" : "s",
-					")."
+					"."
 				]
 			}),
 			!m.blast.some((b) => b.count > 0) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -62664,7 +64403,7 @@ function SessionPanel({ m, a }) {
 					type: "button",
 					className: "cm-row",
 					onClick: () => a.selectPath(b.path),
-					title: `${b.count} file${b.count === 1 ? "" : "s"}` + (b.tests ? ` + ${b.tests} test${b.tests === 1 ? "" : "s"}` : "") + ` import it (${b.hops} hop${b.hops === 1 ? "" : "s"} out)` + (b.paths.length ? "\n" + b.paths.slice(0, 12).join("\n") : ""),
+					title: `${b.count} file${b.count === 1 ? "" : "s"}` + (b.tests ? ` + ${b.tests} test${b.tests === 1 ? "" : "s"}` : "") + " import it" + (b.paths.length ? "\n" + b.paths.slice(0, 12).join("\n") : ""),
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "cm-row-main",
 						children: [
@@ -62691,7 +64430,7 @@ function SessionPanel({ m, a }) {
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "cm-row-act quiet",
-					title: `Keep agents out of ${b.path || "this"}`,
+					title: `⛔ Keep out: ${b.path || "this"}`,
 					onClick: () => a.openAdd("red", anchoredZonePath(b.path)),
 					children: "⛔"
 				})] }, b.path))
@@ -62710,22 +64449,19 @@ function SessionPanel({ m, a }) {
 	}, "blast");
 	const zonesSec = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "cm-sec",
+		"data-sec": "zones",
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", { children: ["Zones ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", { children: ["Rules ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "cm-count",
 				children: m.zones.length
 			})] }),
-			m.green && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			m.green && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "cm-hint",
-				children: [
-					"Edits outside the green zone",
-					m.greenZones.length === 1 ? "" : "s",
-					" are blocked and the agent is told why. Reads are allowed (shown as “peeked”)."
-				]
+				children: "Edits outside ✓ Only here are blocked and the agent is told why. Reads are allowed (shown as “peeked”)."
 			}),
 			!m.zones.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "cm-empty-line",
-				children: "None yet. Click a folder on the tree, then “⛔ Keep agents out” or “✓ Only here” — or use + Zone."
+				children: "None yet. Click a folder on the tree, then “⛔ Keep out” or “✓ Only here” — or use + Rule."
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 				className: "cm-list",
 				children: m.zones.map((z) => {
@@ -62772,15 +64508,15 @@ function SessionPanel({ m, a }) {
 								type: "button",
 								className: "cm-row-act quiet",
 								disabled: m.zoneBusy === z.id,
-								title: z.waived ? "Protect it here again" : "Allow edits in this worktree only (the zone stays for the repo)",
+								title: z.waived ? "Protect it here again" : "Allow edits in this worktree only (the rule stays for the repo)",
 								onClick: () => a.waiveZone(z, !z.waived),
 								children: z.waived ? "Re-protect" : "Allow here"
 							}),
 							!zoneLocked(z) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "cm-row-act cm-x quiet",
-								"aria-label": "Remove zone " + (z.name || z.pattern),
-								title: "Remove this zone",
+								"aria-label": "Remove rule " + (z.name || z.pattern),
+								title: "Remove this rule",
 								disabled: m.zoneBusy === z.id,
 								onClick: () => a.removeZone(z),
 								children: "×"
@@ -62793,6 +64529,7 @@ function SessionPanel({ m, a }) {
 	}, "zones");
 	const changedSec = m.changed.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "cm-sec",
+		"data-sec": "changed",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", { children: ["Changed ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "cm-count",
@@ -62823,12 +64560,12 @@ function SessionPanel({ m, a }) {
 								}),
 								cls === "companion" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "cm-badge soft-warn",
-									title: "Outside the green zone(s) but allowed: a companion (lockfile, snapshot, test, derived output)",
+									title: "Outside ✓ Only here but allowed: a companion (lockfile, snapshot, test, derived output)",
 									children: "companion"
 								}),
 								cls === "outside" && m.exempt.has(c.path) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "cm-badge",
-									title: "Changed before the green zone was added — exempt while unchanged",
+									title: "Changed before ✓ Only here was set — exempt while unchanged",
 									children: "exempt"
 								})
 							]
@@ -62853,7 +64590,7 @@ function SessionPanel({ m, a }) {
 				className: "cm-actions",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
-					onClick: a.openDiff,
+					onClick: () => a.openDiff(),
 					children: "Open diff"
 				})
 			})
@@ -62861,6 +64598,7 @@ function SessionPanel({ m, a }) {
 	}, "changed") : null;
 	const othersSec = m.others.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "cm-sec",
+		"data-sec": "others",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", { children: ["Other agents here ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "cm-count",
 			children: m.others.length
@@ -62988,13 +64726,13 @@ var WELCOME_TOUR = {
 		},
 		{
 			target: "[data-tour=\"setup-step-tools\"], .setup-step[data-step=\"tools\"]",
-			title: "① Install Claude Code",
-			body: "MindFlock drives Claude Code for you; one click installs it in about a minute."
+			title: "① Install your agent",
+			body: "MindFlock drives a coding agent for you; one click installs it in about a minute."
 		},
 		{
 			target: "[data-tour=\"setup-step-agent_login\"], .setup-step[data-step=\"agent_login\"]",
 			title: "② Sign in to your agent",
-			body: "Sign in once in the window that opens, with your Claude account."
+			body: "Sign in once in the window that opens, with that agent's own account."
 		},
 		{
 			target: "[data-tour=\"setup-step-repo\"], .setup-step[data-step=\"repo\"]",
@@ -63235,34 +64973,34 @@ var TOUR_IDS = [
 ];
 //#endregion
 //#region src/components/onboarding/CoachTour.tsx
-var CARD_W = 320;
-var GAP = 12;
+var CARD_W$1 = 320;
+var GAP$1 = 12;
 function placeCard(t, W, H, cardH) {
-	const cw = Math.min(CARD_W, W - 16);
+	const cw = Math.min(CARD_W$1, W - 16);
 	const clampX = (x) => Math.max(8, Math.min(x, W - cw - 8));
 	const clampY = (y) => Math.max(8, Math.min(y, H - cardH - 8));
 	if (!t) return {
 		left: clampX((W - cw) / 2),
 		top: clampY((H - cardH) / 2)
 	};
-	if (t.x + t.w + GAP + cw <= W - 8 && t.h > H * .4) return {
-		left: t.x + t.w + GAP,
+	if (t.x + t.w + GAP$1 + cw <= W - 8 && t.h > H * .4) return {
+		left: t.x + t.w + GAP$1,
 		top: clampY(t.y)
 	};
-	if (t.y + t.h + GAP + cardH <= H - 8) return {
+	if (t.y + t.h + GAP$1 + cardH <= H - 8) return {
 		left: clampX(t.x),
-		top: t.y + t.h + GAP
+		top: t.y + t.h + GAP$1
 	};
-	if (t.y - GAP - cardH >= 8) return {
+	if (t.y - GAP$1 - cardH >= 8) return {
 		left: clampX(t.x),
-		top: t.y - GAP - cardH
+		top: t.y - GAP$1 - cardH
 	};
-	if (t.x + t.w + GAP + cw <= W - 8) return {
-		left: t.x + t.w + GAP,
+	if (t.x + t.w + GAP$1 + cw <= W - 8) return {
+		left: t.x + t.w + GAP$1,
 		top: clampY(t.y)
 	};
-	if (t.x - GAP - cw >= 8) return {
-		left: t.x - GAP - cw,
+	if (t.x - GAP$1 - cw >= 8) return {
+		left: t.x - GAP$1 - cw,
 		top: clampY(t.y)
 	};
 	return {
@@ -63344,7 +65082,7 @@ function revealTarget(scope, selector) {
 		scrolled: true
 	};
 }
-function CoachTour({ steps, onClose, rootRef, step: controlled, onStep, prefix = "coach", buttonClass = "coach-btn", skipLabel = "Skip tour", labelId = prefix + "-title" }) {
+function CoachTour({ steps, onClose, rootRef, step: controlled, onStep, prefix = "coach", buttonClass = "coach-btn", skipLabel = "Skip tour", labelId = prefix + "-title", place = placeCard }) {
 	const [own, setOwn] = (0, import_react.useState)(0);
 	const i = Math.max(0, Math.min(controlled ?? own, steps.length - 1));
 	const go = (n) => onStep ? onStep(n) : setOwn(n);
@@ -63486,7 +65224,7 @@ function CoachTour({ steps, onClose, rootRef, step: controlled, onStep, prefix =
 			if (i > 0) go(i - 1);
 		}
 	};
-	const pos = placeCard(rect, box.W, box.H, cardH);
+	const pos = place(rect, box.W, box.H, cardH);
 	const c = (part) => prefix + "-" + part;
 	const layer = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: c("layer"),
@@ -63581,92 +65319,241 @@ function CoachTourHost() {
 	}, tour.id);
 }
 //#endregion
-//#region src/components/grid/codemap/MapTour.tsx
-var MAP_TOUR = [
-	{
-		target: "",
-		title: "Your code, drawn as a tree",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"The ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "trunk" }),
-			" is the repo, each ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "branch" }),
-			" a folder and each ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "leaf" }),
-			" a file. ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Roots" }),
-			" ",
-			"underground are the tests, and the piles on the ground are docs and config. Thicker branches hold more code."
-		] })
-	},
-	{
-		target: "",
-		title: "Bright leaves are what changed",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"Grey is untouched. A ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "glowing leaf" }),
-			" is a file an agent changed, and the ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "lit branches" }),
-			" lead you to it. Labels like ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "web/core ●4" }),
-			" count the changes in that folder. Click a leaf or folder for its card."
-		] })
-	},
-	{
-		target: "[data-hud=\"left\"]",
-		title: "Each agent is a bird",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"This column lists the agents working on this repo: what each is doing now and what it changed. A bird",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: " nests" }),
-			" where it mostly works. Click a row to follow its bird around the tree."
-		] })
-	},
-	{
-		target: ".ct-bix-risk-tog",
-		title: "What could break",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"Hover a bright leaf and the files that ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "import" }),
-			" it light up ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "gold" }),
-			". ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⚠ Could break" }),
-			" ",
-			"ranks the changed files by how much depends on them, so you know what to review first."
-		] })
-	},
-	{
-		target: ".ct-rules",
-		title: "Fence agents in or out",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⛔ Keep out" }),
-			": agents may read a folder but never edit it. ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "✓ Only here" }),
-			": they may edit only inside it. Pick one, then click a folder on the tree. Every changed folder in the column has the same two buttons."
-		] })
-	},
-	{
-		target: ".cm-search",
-		title: "Getting around",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"Press ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "/" }),
-			" to find a file or function. Scroll to zoom, drag to pan, double-click a folder to zoom into it, and ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⌂ Whole tree" }),
-			" brings you back. ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "?" }),
-			" beside Agents is the legend."
-		] })
+//#region src/components/grid/codemap/tourPlace.ts
+var CARD_W = 320;
+var GAP = 12;
+var EDGE = 8;
+var overlap = (a, b) => Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+var holds = (a, x, y) => x > a.x && x < a.x + a.w && y > a.y && y < a.y + a.h;
+var inside = (a, b) => a.x >= b.x - 1 && a.y >= b.y - 1 && a.x + a.w <= b.x + b.w + 1 && a.y + a.h <= b.y + b.h + 1;
+function placeMapCard(t, W, H, cardH, s) {
+	const cw = Math.min(CARD_W, W - 16);
+	const clamp = (x, y) => ({
+		x: Math.max(EDGE, Math.min(x, W - cw - EDGE)),
+		y: Math.max(EDGE, Math.min(y, H - cardH - EDGE)),
+		w: cw,
+		h: cardH
+	});
+	const area = s ? s.area : {
+		x: 0,
+		y: 0,
+		w: W,
+		h: H
+	};
+	const tree = s && s.tree ? s.tree : null;
+	const avoid = s ? s.avoid : [];
+	const focus = t || tree || area;
+	const fx = focus.x + focus.w / 2, fy = focus.y + focus.h / 2;
+	const cost = (c) => (tree ? overlap(c, tree) : 0) + avoid.reduce((a, r) => a + (t && inside(t, r) ? .5 : 1) * overlap(c, r), 0);
+	const pick = (cands) => {
+		let best = null, bc = Infinity;
+		for (const c of cands) {
+			if (holds(c, fx, fy) || t && overlap(c, t) > 0) continue;
+			const k = cost(c);
+			if (k < bc - .5) {
+				best = c;
+				bc = k;
+			}
+		}
+		return best;
+	};
+	const corners = [
+		clamp(area.x + area.w - cw - EDGE, area.y + EDGE),
+		clamp(area.x + area.w - cw - EDGE, area.y + area.h - cardH - EDGE),
+		clamp(area.x + EDGE, area.y + area.h - cardH - EDGE),
+		clamp(area.x + EDGE, area.y + EDGE)
+	];
+	if (!t) {
+		const c = pick(corners) || corners[0];
+		return {
+			left: c.x,
+			top: c.y
+		};
 	}
-];
-function MapTour({ rootRef, onClose, steps = MAP_TOUR }) {
+	const box = avoid.filter((r) => inside(t, r));
+	const rx = Math.max(t.x + t.w, ...box.map((r) => r.x + r.w)), lx = Math.min(t.x, ...box.map((r) => r.x));
+	const sides = [
+		[(W - rx) * H, clamp(rx + GAP, t.y)],
+		[lx * H, clamp(lx - GAP - cw, t.y)],
+		[(H - t.y - t.h) * W, clamp(t.x, t.y + t.h + GAP)],
+		[t.y * W, clamp(t.x, t.y - GAP - cardH)]
+	];
+	sides.sort((a, b) => b[0] - a[0]);
+	const c = pick(sides.map((x) => x[1])) || pick(corners) || sides[0][1];
+	return {
+		left: c.x,
+		top: c.y
+	};
+}
+function mapScene(root) {
+	const st = root ? root.querySelector(".ct-stage") : null;
+	if (!root || !st) return null;
+	const r0 = root.getBoundingClientRect();
+	const rel = (r) => ({
+		x: r.left - r0.left,
+		y: r.top - r0.top,
+		w: r.width,
+		h: r.height
+	});
+	const area = rel(st.getBoundingClientRect());
+	const b = (st.dataset.tree || "").split(" ").map(Number);
+	let tree = null;
+	if (b.length === 4 && b.every(Number.isFinite)) {
+		const x0 = Math.max(0, b[0]), y0 = Math.max(0, b[1]), x1 = Math.min(area.w, b[2]), y1 = Math.min(area.h, b[3]);
+		if (x1 > x0 && y1 > y0) tree = {
+			x: area.x + x0,
+			y: area.y + y0,
+			w: x1 - x0,
+			h: y1 - y0
+		};
+	}
+	const avoid = Array.from(st.querySelectorAll("[data-hud]")).map((el) => rel(el.getBoundingClientRect())).filter((r) => r.w > 2 && r.h > 2);
+	return {
+		area,
+		tree,
+		avoid
+	};
+}
+//#endregion
+//#region src/components/grid/codemap/MapTour.tsx
+var TREE = {
+	target: "",
+	title: "Your code, drawn as a tree",
+	body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		"The ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "trunk" }),
+		" is the repo, each ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "branch" }),
+		" a folder and each ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "leaf" }),
+		" a file. ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Roots" }),
+		" ",
+		"underground are the tests, and the piles on the ground are docs and config. Thicker branches hold more code."
+	] })
+};
+var CHANGED = {
+	target: "",
+	title: "Bright leaves are what changed",
+	body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		"Grey is untouched. A ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "glowing leaf" }),
+		" is a file an agent changed, and the ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "lit branches" }),
+		" lead you to it. Labels like ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "web/core ●4" }),
+		" count the changes in that folder. Click a leaf or folder for its card."
+	] })
+};
+var NOTHING_CHANGED = {
+	target: "",
+	title: "Nothing has changed yet",
+	body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		"Every leaf is grey for now. When an agent changes a file its leaf ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "glows" }),
+		" and the ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "lit branches" }),
+		" lead you to it. Click a leaf or folder for its card."
+	] })
+};
+var AGENTS = {
+	target: "[data-hud=\"left\"]",
+	title: "Each agent is a bird",
+	body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		"This column lists the agents working on this repo: what each is doing now and what it changed. A bird",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: " nests" }),
+		" where it mostly works. Click a row to follow its bird around the tree."
+	] })
+};
+var RISK = {
+	target: ".ct-bix-risk-tog",
+	title: "What could break",
+	body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		"Hover a bright leaf and the files that ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "import" }),
+		" it light up ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "gold" }),
+		". ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⚠ Could break" }),
+		" ",
+		"ranks the changed files by how much depends on them, so you know what to review first."
+	] })
+};
+var RULES = {
+	target: ".ct-rules",
+	title: "Rules: keep agents in or out",
+	body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⛔ Keep out" }),
+		": agents may read a folder but never edit it. ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "✓ Only here" }),
+		": they may edit only inside it. Pick one, then click a folder on the tree. Every changed folder in the column has the same two buttons."
+	] })
+};
+var PLAN = {
+	target: ".ct-plan-btn",
+	title: "Plan first",
+	body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Plan & lists" }),
+		" holds ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Ask for plan" }),
+		": the agent lists every file it means to touch, as buds on the tree, before it touches them. Review it, then ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Go" }),
+		" — or ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Go — only the planned files" }),
+		"."
+	] })
+};
+var FIND = {
+	target: ".cm-search",
+	title: "Getting around",
+	body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		"Press ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "/" }),
+		" to find a file or function. Scroll to zoom, drag to pan, double-click a folder to zoom into it, and ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⌂ Whole tree" }),
+		" brings you back. ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "?" }),
+		" beside Agents is the legend."
+	] })
+};
+function mapTourSteps(ctx) {
+	const shows = (s) => !s.target || !ctx.visible || ctx.visible(s.target);
+	const out = [TREE, ctx.changed > 0 ? CHANGED : NOTHING_CHANGED];
+	for (const s of [
+		AGENTS,
+		...ctx.changed > 0 ? [RISK] : [],
+		RULES,
+		...ctx.planSupported === false ? [] : [PLAN],
+		FIND
+	]) if (shows(s)) out.push(s);
+	if (ctx.next.kind !== "none") {
+		const nextStep = {
+			target: ".ct-next",
+			title: "Your next step",
+			body: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: nextStepText(ctx.next) })
+		};
+		out.push(shows(nextStep) ? nextStep : {
+			...nextStep,
+			target: ""
+		});
+	}
+	return out;
+}
+function MapTour({ rootRef, onClose, ctx, steps }) {
+	const [built] = (0, import_react.useState)(() => steps || mapTourSteps({
+		changed: 0,
+		next: { kind: "none" },
+		...ctx,
+		visible: (sel) => !rootRef.current || !!findTarget(rootRef.current, sel)
+	}));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CoachTour, {
-		steps,
+		steps: built,
 		onClose,
 		rootRef,
 		prefix: "mt",
 		buttonClass: "cm-btn",
-		labelId: "mt-title"
+		labelId: "mt-title",
+		place: (t, W, H, cardH) => placeMapCard(t, W, H, cardH, mapScene(rootRef.current))
 	});
 }
 //#endregion
@@ -63690,6 +65577,7 @@ function entryFor(title) {
 		since: 0,
 		skew: 0,
 		err: "",
+		snapErr: "",
 		snapAt: 0
 	};
 	ENTRIES.set(title, e);
@@ -63761,6 +65649,11 @@ function useThemeKey() {
 }
 var PREFETCHING = /* @__PURE__ */ new Set();
 var TOUR_ON = "";
+var FOCUS_DONE = 0;
+function focusDue(f, title, active, treeReady, done) {
+	if (!f || f.title !== title || !active || f.seq <= done) return false;
+	return treeReady || !f.path && f.section !== "risk";
+}
 function prefetchNeeded(hasSnap, hasModel, inflight) {
 	return !inflight && !(hasSnap && hasModel);
 }
@@ -63774,7 +65667,7 @@ async function prefetchCodeMap(title) {
 			if (!d || "unchanged" in d && d.unchanged) return;
 			en.snap = d;
 			en.snapAt = Date.now();
-			en.err = "";
+			en.snapErr = "";
 		}
 		if (MODEL_OF.has(title)) return;
 		const snap = en.snap;
@@ -63808,9 +65701,11 @@ function CodeMap({ title, active }) {
 	const [live, setLive] = (0, import_react.useState)(e0.live);
 	const [feed, setFeed] = (0, import_react.useState)(e0.feed);
 	const [err, setErr] = (0, import_react.useState)(e0.err);
+	const [snapErr, setSnapErr] = (0, import_react.useState)(e0.snapErr);
 	const [model, setModel] = (0, import_react.useState)(MODEL_OF.get(title) || null);
 	const [growing, setGrowing] = (0, import_react.useState)(null);
 	const [growErr, setGrowErr] = (0, import_react.useState)("");
+	const [growTry, setGrowTry] = (0, import_react.useState)(0);
 	const [drawer, setDrawer] = (0, import_react.useState)(false);
 	const [hiZone, setHiZone] = (0, import_react.useState)(null);
 	const [preview, setPreview] = (0, import_react.useState)(null);
@@ -63847,13 +65742,13 @@ function CodeMap({ title, active }) {
 				en.snap = d;
 				setSnap(en.snap);
 			}
-			en.err = "";
-			setErr("");
+			en.snapErr = "";
+			setSnapErr("");
 		} catch (x) {
 			en.snapAt = Date.now();
 			if (!en.snap) {
-				en.err = errMsg(x);
-				setErr(en.err);
+				en.snapErr = errMsg(x);
+				setSnapErr(en.snapErr);
 			}
 		} finally {
 			snapLoading.current = false;
@@ -63895,10 +65790,10 @@ function CodeMap({ title, active }) {
 						const deny = fresh.filter((r) => r.deny && !r.deny.push && !isGreenDeny(r));
 						const pushDeny = fresh.filter((r) => r.deny?.push);
 						const br = fresh.filter((r) => r.breach && r.breach.length);
-						if (br.length) setAnnounce("Zone breached: " + br.flatMap((r) => (r.breach || []).map((b) => b.path)).slice(0, 3).join(", "));
-						else if (green.length) setAnnounce("Scope guard stopped an edit outside the green zone: " + green.map((r) => r.deny.path).slice(0, 3).join(", "));
-						else if (deny.length) setAnnounce(`Red zone blocked ${deny.length === 1 ? "an edit" : deny.length + " edits"} to ` + deny.map((r) => r.deny.path).slice(0, 3).join(", "));
-						else if (pushDeny.length) setAnnounce("A zone blocked a push: this branch changes a protected file.");
+						if (br.length) setAnnounce("Rule breached: " + br.flatMap((r) => (r.breach || []).map((b) => b.path)).slice(0, 3).join(", "));
+						else if (green.length) setAnnounce("Only here stopped an edit outside it: " + green.map((r) => r.deny.path).slice(0, 3).join(", "));
+						else if (deny.length) setAnnounce(`Keep out blocked ${deny.length === 1 ? "an edit" : deny.length + " edits"} to ` + deny.map((r) => r.deny.path).slice(0, 3).join(", "));
+						else if (pushDeny.length) setAnnounce("A rule blocked a push: this branch changes a protected file.");
 					}
 					setFeed(en.feed);
 				}
@@ -63951,6 +65846,10 @@ function CodeMap({ title, active }) {
 		poll,
 		loadSnap
 	]);
+	const retry = () => {
+		poll();
+		loadSnap();
+	};
 	const repoLabel = live?.repo?.label || snap?.repo?.label || "";
 	const repoKey = snap?.repo?.id || live?.repo?.id || "title:" + title;
 	const raw = (0, import_react.useMemo)(() => {
@@ -63995,7 +65894,8 @@ function CodeMap({ title, active }) {
 		raw,
 		repoKey,
 		title,
-		active
+		active,
+		growTry
 	]);
 	const now = live?.now || Date.now() / 1e3;
 	const activity = live?.activity || "";
@@ -64198,7 +66098,15 @@ function CodeMap({ title, active }) {
 	const provider = inst?.program || inst?.provider || "";
 	const sessionsHere = sessionsOnWorktree(instances$2(), title);
 	const zonesEnforced = zones.filter((z) => !z.waived).length;
-	const guard = guardPill(live?.guard, zonesEnforced, provider.split(/\s+/)[0] || "", greenNames);
+	const guard = guardPill(live?.guard, zonesEnforced, provider.split(/\s+/)[0] || "", greenNames, breachList.length);
+	const next = nextStep({
+		breaches: breachList.length,
+		clarify,
+		planWaiting: plan && mode === "plan" ? plan.items.length : 0,
+		changed: changed.length,
+		risky: mode === "watch" ? dependents.size : 0,
+		planSupported
+	});
 	const showToast = (0, import_react.useCallback)((t) => setToast(t), []);
 	(0, import_react.useEffect)(() => {
 		if (!toast) return;
@@ -64222,7 +66130,7 @@ function CodeMap({ title, active }) {
 		setAdd(newAdd(kind, pattern, name));
 		setTimeout(() => addInputRef.current?.focus(), 0);
 	};
-	const submitAdd = async (tellOverride) => {
+	const submitAdd = async (tellOverride, confirmed) => {
 		if (!add) return;
 		const pattern = (add.done && tellOverride ? add.done.pattern : add.pattern).trim();
 		if (!pattern) {
@@ -64238,6 +66146,30 @@ function CodeMap({ title, active }) {
 			busy: true,
 			err: ""
 		});
+		if (kind === "red" && !(add.done && tellOverride) && confirmed !== pattern) {
+			let inside = [];
+			try {
+				inside = (await previewZone(title, pattern, "red")).changed || [];
+			} catch {}
+			if (inside.length) {
+				setAdd({
+					...add,
+					busy: false,
+					err: ""
+				});
+				showToast({
+					text: keepOutWarn(inside.length),
+					detail: `⛔ Keep out on ${pattern} — already changed: ${inside.slice(0, 6).join(", ")}${inside.length > 6 ? " …" : ""}`,
+					bad: true,
+					confirm: {
+						label: "Add anyway",
+						run: () => void submitRef.current(tellOverride, pattern)
+					},
+					ms: 3e4
+				});
+				return;
+			}
+		}
 		const tell = zoneAddTell(add.tell, tellOverride, clarify);
 		try {
 			const r = await addZone(title, {
@@ -64273,6 +66205,8 @@ function CodeMap({ title, active }) {
 			});
 		}
 	};
+	const submitRef = (0, import_react.useRef)(submitAdd);
+	submitRef.current = submitAdd;
 	const treatAsBreaches = async () => {
 		if (!add?.done) return;
 		const d = add.done;
@@ -64332,7 +66266,7 @@ function CodeMap({ title, active }) {
 				text: `That fence was set by ${z.by || "this session's orchestrator"} — only it can lift it`,
 				bad: true
 			});
-			return;
+			return false;
 		}
 		setZoneBusy(z.id);
 		try {
@@ -64342,11 +66276,13 @@ function CodeMap({ title, active }) {
 				text: `Removed ${isGreen(z) ? "✓ only here" : "⛔ keep out"} · ${z.name || z.pattern}`,
 				undo: () => void readd(z)
 			});
+			return true;
 		} catch (x) {
 			showToast({
-				text: "Couldn't remove that zone: " + errMsg(x),
+				text: "Couldn't remove that rule: " + errMsg(x),
 				bad: true
 			});
+			return false;
 		} finally {
 			setZoneBusy("");
 		}
@@ -64359,14 +66295,14 @@ function CodeMap({ title, active }) {
 			applyZones(r.zones);
 		} catch (x) {
 			setActionMsg({
-				text: "Couldn't change that zone: " + errMsg(x),
+				text: "Couldn't change that rule: " + errMsg(x),
 				bad: true
 			});
 		} finally {
 			setZoneBusy("");
 		}
 	};
-	const paint = async (tool, target) => {
+	const paint = async (tool, target, confirmed = false) => {
 		const M = model;
 		if (!M) return;
 		const node = target.file ? null : target.node || null;
@@ -64393,6 +66329,22 @@ function CodeMap({ title, active }) {
 				bad: true
 			});
 			return;
+		}
+		if (tool === "keep" && !confirmed) {
+			const inside = changedUnder(changedSet, pat.label, ci);
+			if (inside.length) {
+				showToast({
+					text: keepOutWarn(inside.length),
+					detail: `⛔ Keep out on ${pat.label} — already changed: ${inside.slice(0, 6).join(", ")}${inside.length > 6 ? " …" : ""}`,
+					bad: true,
+					confirm: {
+						label: "Add anyway",
+						run: () => void paint(tool, target, true)
+					},
+					ms: 3e4
+				});
+				return;
+			}
 		}
 		const kind = tool === "only" ? "green" : "red";
 		const tell = zoneAddTell(kind === "green", void 0, clarify);
@@ -64425,7 +66377,7 @@ function CodeMap({ title, active }) {
 			showToast({
 				text: short,
 				detail: `${tool === "keep" ? "⛔ Keep out" : "✓ Only here"} set on ${pat.label} (${what})${hit.length ? " · " + hit.slice(0, 2).join("; ") : ""}${ex}${told}`,
-				undo: zid ? () => void removeZone$1({ ...r.zone }, false).then(() => showToast({
+				undo: zid ? () => void removeZone$1({ ...r.zone }, false).then((ok) => ok && showToast({
 					text: "Undone",
 					ms: 1800
 				})) : void 0,
@@ -64490,17 +66442,20 @@ function CodeMap({ title, active }) {
 	const askPlan$1 = async () => {
 		setBusy("ask");
 		setActionMsg(null);
+		let m;
 		try {
 			const r = await askPlan(title, midFlight ? "remaining" : "plan");
-			setActionMsg(tellText(r.told, r.reason));
+			m = tellText(r.told, r.reason);
 		} catch (x) {
-			setActionMsg({
+			m = {
 				text: errMsg(x),
 				bad: true
-			});
+			};
 		} finally {
 			setBusy("");
 		}
+		setActionMsg(m);
+		return m;
 	};
 	const go = async (scopeToPlan) => {
 		setBusy(scopeToPlan ? "go-scope" : "go");
@@ -64526,7 +66481,7 @@ function CodeMap({ title, active }) {
 			setBusy("");
 		}
 	};
-	const openDiff = () => useUi.getState().setLastTab(title, "diff");
+	const openDiff = (path) => useUi.getState().openDiff(title, typeof path === "string" ? path : void 0);
 	const selectPath = (p) => {
 		if (!ctlRef.current?.revealPath(p)) showToast({ text: `${p} isn't on the tree (yet) — it appears once the map re-reads the worktree.` });
 	};
@@ -64560,6 +66515,57 @@ function CodeMap({ title, active }) {
 		});
 		else if (!c.v || !model?.byPath.has(it.path)) selectPath(it.path);
 	};
+	const [riskAsk, setRiskAsk] = (0, import_react.useState)(0);
+	const [secAsk, setSecAsk] = (0, import_react.useState)(null);
+	const openPanel = (0, import_react.useCallback)((sec) => {
+		if (sec === "risk") {
+			setRiskAsk((n) => n + 1);
+			return;
+		}
+		setDrawer(true);
+		setSecAsk((s) => ({
+			sec,
+			n: (s?.n || 0) + 1
+		}));
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (!secAsk || !drawer) return;
+		const t = setTimeout(() => {
+			const el = rootRef.current?.querySelector(`.ct-drawer [data-sec="${secAsk.sec}"]`);
+			if (!el) return;
+			try {
+				el.scrollIntoView({
+					block: "start",
+					behavior: reducedMotion ? "auto" : "smooth"
+				});
+			} catch {}
+			el.classList.remove("cm-sec-flash");
+			el.offsetWidth;
+			el.classList.add("cm-sec-flash");
+		}, 0);
+		return () => clearTimeout(t);
+	}, [
+		secAsk,
+		drawer,
+		reducedMotion
+	]);
+	const mapFocus = useUi((s) => s.mapFocus);
+	const applyFocus = (0, import_react.useCallback)(() => {
+		const f = useUi.getState().mapFocus;
+		const c = ctlRef.current;
+		if (!focusDue(f, title, active, !!(model && c && c.v && c.M === model), FOCUS_DONE)) return;
+		FOCUS_DONE = f.seq;
+		if (f.path && c && !c.revealPath(f.path)) showToast({ text: `${f.path} isn't on the tree (yet) — it appears once the map re-reads the worktree.` });
+		if (f.section === "search") setTimeout(() => searchRef.current?.focus(), 0);
+		else if (f.section) openPanel(f.section);
+	}, [
+		title,
+		active,
+		model,
+		openPanel,
+		showToast
+	]);
+	(0, import_react.useEffect)(applyFocus, [applyFocus, mapFocus]);
 	const onRootKey = (ev) => {
 		if (ev.defaultPrevented) return;
 		const t = ev.target;
@@ -64615,48 +66621,97 @@ function CodeMap({ title, active }) {
 	const tool = ctl?.v?.tool || "explore";
 	const histN = ctl ? ctl.hist.length : 0;
 	const sessionCount = requests.length + breachList.length;
-	const primaryExtra = plan || requests.length || breachList.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "ct-agent-extra",
+	const nextAction = next.kind === "breaches" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		type: "button",
+		className: "ct-link bad",
+		onClick: () => openPanel("breaches"),
+		title: "Pushing, PRs and merges are blocked until these are reverted or the rule is removed",
 		children: [
-			plan && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-				type: "button",
-				className: "ct-link",
-				onClick: () => setDrawer(true),
-				title: "Open the plan: Go, or Go — only the planned files",
-				children: [
-					"Plan · ",
-					plan.items.length,
-					" file",
-					plan.items.length === 1 ? "" : "s",
-					" — review"
-				]
-			}),
-			requests.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-				type: "button",
-				className: "ct-link warn",
-				onClick: () => setDrawer(true),
-				children: [
-					requests.length,
-					" ask",
-					requests.length === 1 ? "s" : "",
-					" to edit outside scope — review"
-				]
-			}),
-			breachList.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-				type: "button",
-				className: "ct-link bad",
-				onClick: () => setDrawer(true),
-				children: [
-					breachList.length,
-					" breach",
-					breachList.length === 1 ? "" : "es",
-					" — pushing is blocked"
-				]
-			})
+			next.n,
+			" breach",
+			next.n === 1 ? "" : "es",
+			" — review"
 		]
+	}) : next.kind === "question" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "warn",
+		children: "it's asking you something — answer in the terminal"
+	}) : next.kind === "review-plan" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "ct-link",
+		onClick: () => openPanel("plan"),
+		title: "Open the plan: Go, or Go — only the planned files",
+		children: "Review plan · Go"
+	}) : next.kind === "review-changes" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		next.risky > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			type: "button",
+			className: "ct-link",
+			onClick: () => openPanel("risk"),
+			title: "Show on the map which folders import the changed files, and rank the changed files",
+			children: [
+				"Review: ⚠ Could break (",
+				next.risky,
+				")"
+			]
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [next.changed, " changed"] }),
+		" · ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "ct-link",
+			onClick: openDiff,
+			children: "Open diff"
+		})
+	] }) : next.kind === "ask-plan" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "ct-link",
+		disabled: busy === "ask",
+		title: "Ask the agent which files it means to touch, before it touches them",
+		onClick: () => void askPlan$1().then((m) => m && showToast({
+			text: m.text,
+			bad: m.bad
+		})),
+		children: busy === "ask" ? "Asking…" : "Ask for plan"
 	}) : null;
-	const info = LAST_INFO.get(repoKey);
-	const growNote = model && info && info.how !== "memory" ? `${info.how === "replay" ? "cached" : info.how} layout · ${info.ms} ms` : "";
+	const primaryExtra = nextAction || requests.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ct-agent-extra",
+		children: [nextAction && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ct-next",
+			role: "group",
+			"aria-label": "Next step",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ct-next-k",
+					children: "Next:"
+				}),
+				" ",
+				nextAction
+			]
+		}), requests.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			type: "button",
+			className: "ct-link warn",
+			onClick: () => openPanel("scope"),
+			children: [
+				requests.length,
+				" ask",
+				requests.length === 1 ? "s" : "",
+				" to edit outside scope — review"
+			]
+		})]
+	}) : null;
+	const dataNotes = (0, import_react.useMemo)(() => {
+		const out = [];
+		if (snap?.truncated) out.push(`Showing the first ${(snap.files?.length || 0).toLocaleString()} files`);
+		if (snap?.graph_partial) out.push("Imports still indexing — counts may be low");
+		return out;
+	}, [snap]);
+	const guide = (0, import_react.useMemo)(() => ({
+		notes: dataNotes,
+		riskAsk,
+		openPanel
+	}), [
+		dataNotes,
+		riskAsk,
+		openPanel
+	]);
 	const toastNode = toast ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "ct-toast" + (toast.bad ? " bad" : ""),
 		role: "status",
@@ -64685,7 +66740,21 @@ function CodeMap({ title, active }) {
 				},
 				children: "Undo"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			toast.confirm ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "cm-btn on",
+				onClick: () => {
+					const c = toast.confirm;
+					setToast(null);
+					c.run();
+				},
+				children: toast.confirm.label
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "cm-btn",
+				onClick: () => setToast(null),
+				children: "Cancel"
+			})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "ct-x",
 				"aria-label": "Dismiss",
@@ -64743,7 +66812,7 @@ function CodeMap({ title, active }) {
 									className: "red" + (tool === "keep" ? " on" : ""),
 									"aria-pressed": tool === "keep",
 									disabled: !model,
-									title: "Keep out: fence a folder or file off — agents may read there, every edit is blocked",
+									title: "Keep out: agents may read a folder or file, every edit there is blocked",
 									onClick: () => {
 										ctl?.setTool("keep");
 										setTick((x) => x + 1);
@@ -64771,9 +66840,9 @@ function CodeMap({ title, active }) {
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "cm-btn",
-								title: "Keep agents out of a path — or scope them to only some paths — by typing a pattern",
+								title: "Type a rule instead of painting one: ⛔ Keep out or ✓ Only here on a path or pattern",
 								onClick: () => add ? setAdd(null) : openAdd("red", ""),
-								children: add ? "Close" : "+ Zone"
+								children: add ? "Close" : "+ Rule…"
 							})
 						]
 					}),
@@ -64783,7 +66852,7 @@ function CodeMap({ title, active }) {
 						title,
 						onPick
 					}),
-					zones.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					(zones.length > 0 || breachList.length > 0) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "cm-guard " + guard.cls,
 						title: guard.title,
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -64796,12 +66865,13 @@ function CodeMap({ title, active }) {
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						type: "button",
-						className: "cm-btn" + (drawer ? " on" : ""),
+						className: "cm-btn ct-plan-btn" + (drawer ? " on" : ""),
 						"aria-pressed": drawer,
 						"aria-controls": "ct-session-" + title,
-						title: "The session as lists: plan (Go), scope requests, breaches, blast radius, zones, changes",
+						"aria-label": "Plan & lists",
+						title: "Plan & lists: the plan (Ask for plan, Go), scope requests, breaches, blast radius, rules, changes",
 						onClick: () => setDrawer(!drawer),
-						children: ["Session", sessionCount ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						children: ["Plan & lists", sessionCount ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "cm-count bad",
 							children: sessionCount
 						}) : plan ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -64832,139 +66902,178 @@ function CodeMap({ title, active }) {
 				clarify,
 				repoLabel,
 				sessionsHere,
-				quick: [],
 				onSubmit: (t) => void submitAdd(t),
 				onTreatAsBreaches: () => void treatAsBreaches()
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "cm-body ct-body",
-				children: [failed ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "cm-note cm-note-err",
-					role: "alert",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Code map unavailable." }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "muted",
-						children: err
-					})]
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CodeTree, {
-					title,
-					active,
-					model,
-					growing: growing ?? (snap ? null : 0),
-					growErr,
-					files: raw ? raw.files.length : snap?.files?.length || 0,
-					agents,
-					tzones,
-					zones,
-					feed,
-					skew,
-					changed: changedSet,
-					classify,
-					reqBusy: shownReqBusy,
-					zoneBusy,
-					reducedMotion,
-					ctlRef,
-					primaryExtra,
-					primaryTask: inst?.branch ? "branch " + inst.branch : void 0,
-					toast: toastNode,
-					fileView: (p) => fetchFileView(title, p),
-					onPaint: (t, target) => void paint(t, target),
-					onRemoveZone: (z) => void removeZone$1(z),
-					onAllow: (p) => void allow(p),
-					onOpenDiff: openDiff,
-					onNote: (m) => showToast({ text: m }),
-					onChange: () => {
-						const c = ctlRef.current;
-						const sig = (c?.v?.tool || "") + "|" + (c ? c.hist.length > 0 : false);
-						if (sig !== toolbarSig.current) {
-							toolbarSig.current = sig;
-							setTick((x) => x + 1 & 65535);
-						}
-					}
-				}), drawer && !failed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
-					className: "cm-side ct-drawer",
-					id: "ct-session-" + title,
-					"aria-label": "Session details",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "ct-drawer-head",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: "Session" }),
-								growNote && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "ct-muted",
-									title: "How the tree's layout was obtained",
-									children: growNote
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				children: [
+					failed ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "cm-note cm-note-err",
+						role: "alert",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Code map unavailable." }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "muted",
+								children: err
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "cm-btn",
+								onClick: retry,
+								children: "Retry"
+							})
+						]
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MapGuideContext.Provider, {
+						value: guide,
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CodeTree, {
+							title,
+							active,
+							model,
+							growing: growing ?? (snap || snapErr ? null : 0),
+							growErr,
+							onRetry: () => setGrowTry((n) => n + 1),
+							files: raw ? raw.files.length : snap?.files?.length || 0,
+							agents,
+							tzones,
+							zones,
+							feed,
+							skew,
+							changed: changedSet,
+							classify,
+							reqBusy: shownReqBusy,
+							zoneBusy,
+							reducedMotion,
+							ctlRef,
+							primaryExtra,
+							primaryTask: inst?.branch ? "branch " + inst.branch : void 0,
+							toast: toastNode,
+							fileView: (p) => fetchFileView(title, p),
+							onPaint: (t, target) => void paint(t, target),
+							onRemoveZone: (z) => void removeZone$1(z),
+							onAllow: (p) => void allow(p),
+							onOpenDiff: openDiff,
+							onNote: (m) => showToast({ text: m }),
+							onChange: () => {
+								const c = ctlRef.current;
+								const sig = (c?.v?.tool || "") + "|" + (c ? c.hist.length > 0 : false);
+								if (sig !== toolbarSig.current) {
+									toolbarSig.current = sig;
+									setTick((x) => x + 1 & 65535);
+								}
+								if (c && c.M === model && focusDue(useUi.getState().mapFocus, title, active, true, FOCUS_DONE)) setTimeout(applyFocus, 0);
+							}
+						})
+					}),
+					!failed && !snap && snapErr && !model && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "cm-note cm-note-err",
+						role: "alert",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Couldn't read the worktree." }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "muted",
+								children: snapErr
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "cm-btn",
+								onClick: () => void loadSnap(),
+								children: "Retry"
+							})
+						]
+					}),
+					!failed && err && (snap || live || model) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "cm-note cm-note-bottom cm-note-stale",
+						role: "status",
+						title: err,
+						children: [
+							"map may be out of date ·",
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "ct-link",
+								onClick: retry,
+								children: "Retry"
+							})
+						]
+					}),
+					drawer && !failed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
+						className: "cm-side ct-drawer",
+						id: "ct-session-" + title,
+						"aria-label": "Plan & lists",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "ct-drawer-head",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: "Plan & lists" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									type: "button",
 									className: "ct-x",
-									"aria-label": "Close the Session panel",
+									"aria-label": "Close Plan & lists",
 									onClick: () => setDrawer(false),
 									children: "×"
-								})
-							]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionPanel, {
-							m: {
-								live,
-								mode,
-								green,
-								greenZones,
-								zones,
-								zoneCounts,
-								breaches: breachList,
-								requests,
-								recent,
-								fs,
-								guard,
-								provider,
-								skew,
-								plan,
-								planSupported,
-								progress,
-								offPlan,
-								goZones,
-								midFlight,
-								clarify,
-								busy,
-								actionMsg,
-								goExempt,
-								blast,
-								blastTests,
-								depth: 1,
-								seeds: seeds.length,
-								graphPartial: !!snap?.graph_partial,
-								changed,
-								exempt,
-								others: othersList,
-								fences: live?.fences || EMPTY_FENCES,
-								zoneBusy,
-								reqBusy: shownReqBusy,
-								levelName: (p) => p || repoLabel || "repo root",
-								classify
-							},
-							a: {
-								selectPath,
-								openDiff,
-								askPlan: () => void askPlan$1(),
-								go: (s) => void go(s),
-								removeZone: (z) => void removeZone$1(z),
-								waiveZone: (z, w) => void waiveZone$1(z, w),
-								previewZone: (z) => setHiZone(hiZone?.id === z.id ? null : z),
-								openAdd,
-								allow: (p) => void allow(p),
-								keepGoExempt: () => setGoExempt(goExempt ? {
-									...goExempt,
-									state: "kept"
-								} : null),
-								goExemptAsBreaches: () => void goExemptAsBreaches()
-							}
-						}),
-						breachS.size > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-							className: "cm-hint",
-							children: [breachS.size, " breached now."]
-						})
-					]
-				})]
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionPanel, {
+								m: {
+									live,
+									mode,
+									green,
+									greenZones,
+									zones,
+									zoneCounts,
+									breaches: breachList,
+									requests,
+									recent,
+									fs,
+									guard,
+									provider,
+									skew,
+									plan,
+									planSupported,
+									progress,
+									offPlan,
+									goZones,
+									midFlight,
+									clarify,
+									busy,
+									actionMsg,
+									goExempt,
+									blast,
+									blastTests,
+									seeds: seeds.length,
+									graphPartial: !!snap?.graph_partial,
+									changed,
+									exempt,
+									others: othersList,
+									fences: live?.fences || EMPTY_FENCES,
+									zoneBusy,
+									reqBusy: shownReqBusy,
+									levelName: (p) => p || repoLabel || "repo root",
+									classify
+								},
+								a: {
+									selectPath,
+									openDiff,
+									askPlan: () => void askPlan$1(),
+									go: (s) => void go(s),
+									removeZone: (z) => void removeZone$1(z),
+									waiveZone: (z, w) => void waiveZone$1(z, w),
+									previewZone: (z) => setHiZone(hiZone?.id === z.id ? null : z),
+									openAdd,
+									allow: (p) => void allow(p),
+									keepGoExempt: () => setGoExempt(goExempt ? {
+										...goExempt,
+										state: "kept"
+									} : null),
+									goExemptAsBreaches: () => void goExemptAsBreaches()
+								}
+							}),
+							breachS.size > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+								className: "cm-hint",
+								children: [breachS.size, " breached now."]
+							})
+						]
+					})
+				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "cm-sr",
@@ -64974,7 +67083,12 @@ function CodeMap({ title, active }) {
 			}),
 			tour && model && !failed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MapTour, {
 				rootRef,
-				onClose: closeTour
+				onClose: closeTour,
+				ctx: {
+					changed: agents.reduce((n, A) => n + A.edits.size, 0),
+					next,
+					planSupported
+				}
 			})
 		]
 	});
@@ -65487,88 +67601,6 @@ function PaneMoreMenu({ children, btnRef }) {
 	}), document.body)] });
 }
 //#endregion
-//#region src/components/grid/TabIcon.tsx
-var TAB_ICONS = {
-	agent: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" }),
-	shell: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("polyline", { points: "4 17 10 11 4 5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
-		x1: "12",
-		y1: "19",
-		x2: "20",
-		y2: "19"
-	})] }),
-	diff: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 3v12" }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M6 9h12" }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M6 20h12" })
-	] }),
-	map: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("polygon", { points: "2 6 9 3 15 6 22 3 22 18 15 21 9 18 2 21" }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
-			x1: "9",
-			y1: "3",
-			x2: "9",
-			y2: "18"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
-			x1: "15",
-			y1: "6",
-			x2: "15",
-			y2: "21"
-		})
-	] }),
-	queue: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
-			x1: "9",
-			y1: "6",
-			x2: "20",
-			y2: "6"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
-			x1: "9",
-			y1: "12",
-			x2: "20",
-			y2: "12"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
-			x1: "9",
-			y1: "18",
-			x2: "20",
-			y2: "18"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-			cx: "4.5",
-			cy: "6",
-			r: "1"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-			cx: "4.5",
-			cy: "12",
-			r: "1"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-			cx: "4.5",
-			cy: "18",
-			r: "1"
-		})
-	] }),
-	thread: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1" })] })
-};
-function TabIcon({ name }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
-		className: "tab-icon",
-		width: "13",
-		height: "13",
-		viewBox: "0 0 24 24",
-		fill: "none",
-		stroke: "currentColor",
-		strokeWidth: "2",
-		strokeLinecap: "round",
-		strokeLinejoin: "round",
-		"aria-hidden": "true",
-		children: TAB_ICONS[name]
-	});
-}
-//#endregion
 //#region src/components/grid/Pane.tsx
 var GIT_TABS = /* @__PURE__ */ new Set(["diff", "map"]);
 var MAP_PREFETCH_MS = 1500;
@@ -65607,6 +67639,19 @@ function Pane({ inst, drag, dragging }) {
 	const threadShown = threadTabShown(!!family.parent || family.children.length > 0 || inst.run?.role === "lead", threadOpened || lastTab === "thread");
 	const badge = threadBadge(family.children, threadSeen, effectiveActivity);
 	const newestReport = newestReportTs(family.children);
+	const mapSeen = (0, import_react.useSyncExternalStore)(subscribeCodemapSeen, (0, import_react.useCallback)(() => codemapSeenAt(title), [title]));
+	const rzChip = redZoneChip(inst.redzone, mapSeen);
+	const mapBadge = mapTabBadge(rzChip, inst.diff_stat?.files || 0);
+	const stat = inst.diff_stat;
+	const un = stat?.uncommitted;
+	const diffStamp = stat ? [
+		stat.files,
+		stat.additions,
+		stat.deletions,
+		un?.files ?? "",
+		un?.additions ?? "",
+		un?.deletions ?? ""
+	].join(",") : "";
 	const ftMenu = useUi((s) => s.fastTrackMenu?.title === title ? s.fastTrackMenu : null);
 	const [ftEl, setFtEl] = (0, import_react.useState)(null);
 	const caps = config?.caps ?? {
@@ -66042,7 +68087,7 @@ function Pane({ inst, drag, dragging }) {
 	});
 	const chip = chipState(inst);
 	const sharedFolder = !!inst.peer_share;
-	const ns = nextStep(inst);
+	const ns = nextStep$1(inst);
 	const ft = fastTrackStep(inst);
 	const rs = resetStep(inst);
 	const step = liveStep(inst);
@@ -66062,6 +68107,7 @@ function Pane({ inst, drag, dragging }) {
 		thread: threadShown,
 		calm,
 		queueBusy: pending > 0 || holding,
+		mapBusy: mapHasState(inst, rzChip),
 		ftBusy: !!ft && (ft.lane !== "leave" || ft.halted || ft.active || !!ftMenu)
 	});
 	const shows = (id) => items.buttons.includes(id);
@@ -66097,12 +68143,15 @@ function Pane({ inst, drag, dragging }) {
 		pending,
 		holding ? 1 : 0,
 		badge.count,
+		mapBadge?.label ?? "",
 		canResume ? 1 : 0,
 		deviceName
 	].join("|");
 	const tabEls = {
 		agent: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 			"data-tab": "agent",
+			role: "tab",
+			"aria-selected": tab === "agent",
 			className: tab === "agent" ? "active" : "",
 			title: "Agent — the session's agent CLI",
 			onClick: (e) => {
@@ -66116,6 +68165,8 @@ function Pane({ inst, drag, dragging }) {
 		}, "agent"),
 		shell: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 			"data-tab": "shell",
+			role: "tab",
+			"aria-selected": tab === "shell",
 			className: tab === "shell" ? "active" : "",
 			title: "Terminal — a shell in this session's folder",
 			onClick: (e) => {
@@ -66129,6 +68180,8 @@ function Pane({ inst, drag, dragging }) {
 		}, "shell"),
 		diff: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 			"data-tab": "diff",
+			role: "tab",
+			"aria-selected": tab === "diff",
 			className: tab === "diff" ? "active" : "",
 			title: "Diff — what this session changed",
 			onClick: (e) => {
@@ -66142,19 +68195,32 @@ function Pane({ inst, drag, dragging }) {
 		}, "diff"),
 		map: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 			"data-tab": "map",
-			className: tab === "map" ? "active" : "",
-			title: "Code map — the worktree as a tree: agents, zones, plan, blast radius",
+			role: "tab",
+			"aria-selected": tab === "map",
+			className: "map-tab" + (tab === "map" ? " active" : ""),
+			title: "Code map — the worktree as a tree: agents, zones, plan, blast radius" + (mapBadge ? "\n" + mapBadge.title : ""),
+			"aria-label": mapBadge ? "Map, " + mapBadge.title : void 0,
 			onClick: (e) => {
 				e.stopPropagation();
 				showTab("map");
 			},
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "map" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "tab-label",
-				children: "Map"
-			})]
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "map" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "tab-label",
+					children: "Map"
+				}),
+				mapBadge && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "queue-tab-badge map-badge " + mapBadge.cls,
+					"aria-hidden": "true",
+					children: mapBadge.label
+				})
+			]
 		}, "map"),
 		queue: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 			"data-tab": "queue",
+			role: "tab",
+			"aria-selected": tab === "queue",
 			className: "queue-tab" + (tab === "queue" ? " active" : "") + (pending > 0 && q?.enabled === false ? " q-paused" : "") + (q?.loop ? " q-loop" : "") + (holding ? " q-limited" : ""),
 			title: holding ? q?.wait_for_limit !== false ? `Usage limit reached · auto-resumes in ${queueRelTime(limitedMs)} (${pending} queued)` : `Usage limit reached · queue stopped (${pending} queued)` : "Send a message now or queue prompts to auto-run — keeps the session going across usage limits",
 			onClick: (e) => {
@@ -66175,6 +68241,8 @@ function Pane({ inst, drag, dragging }) {
 		}, "queue"),
 		thread: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 			"data-tab": "thread",
+			role: "tab",
+			"aria-selected": tab === "thread",
 			className: "thread-tab" + (tab === "thread" ? " active" : ""),
 			title: "Thread — this session's workers, what they reported and what passed between them; write to any of them as you (Ctrl+K T)" + (badge.needs ? `\n${badge.needs} need${badge.needs === 1 ? "s" : ""} you` : "") + (badge.fresh ? `\n${badge.fresh} new report${badge.fresh === 1 ? "" : "s"}` : ""),
 			onClick: (e) => {
@@ -66340,6 +68408,9 @@ function Pane({ inst, drag, dragging }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "tabs",
 						"data-tour": "pane-tabs",
+						role: "tablist",
+						"aria-label": "Session views",
+						onKeyDown: tabArrowKey,
 						children: items.tabs.map((id) => tabEls[id])
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -66495,7 +68566,8 @@ function Pane({ inst, drag, dragging }) {
 						className: "pane-diff" + (tab !== "diff" ? " hidden" : ""),
 						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DiffTab, {
 							title,
-							active: tab === "diff"
+							active: tab === "diff",
+							stamp: diffStamp
 						})
 					}),
 					caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -66629,6 +68701,21 @@ function RunningCover({ paneRef }) {
 			children: "Clicking, scrolling, or typing anywhere in the window will make the content appear"
 		})]
 	});
+}
+function tabArrowKey(e) {
+	if (![
+		"ArrowLeft",
+		"ArrowRight",
+		"Home",
+		"End"
+	].includes(e.key)) return;
+	const tabs = Array.from(e.currentTarget.querySelectorAll("[role=\"tab\"]"));
+	const i = tabs.indexOf(document.activeElement);
+	if (!tabs.length || i < 0) return;
+	e.preventDefault();
+	e.stopPropagation();
+	const n = tabs.length;
+	tabs[e.key === "Home" ? 0 : e.key === "End" ? n - 1 : (i + (e.key === "ArrowRight" ? 1 : -1) + n) % n].focus();
 }
 function ctxNum(n) {
 	if (n < 1e3) return String(n);
@@ -67267,7 +69354,7 @@ function TerminalGrid({ specialPanes }) {
 				"data-mode": "plain",
 				className: noneAtAll ? "clickable" : "",
 				onClick: noneAtAll ? () => useUi.getState().openDialogFor("new-session") : void 0,
-				children: noneAtAll ? "No sessions yet — click here to create one. (Ctrl+N)" : "All sessions hidden. Click a session's row in the sidebar to show it."
+				children: noneAtAll ? "No sessions yet — click here to create one. (" + usableShortcuts("new").join(" / ") + ")" : "All sessions hidden. Click a session's row in the sidebar to show it."
 			}))
 		]
 	});
@@ -67312,14 +69399,18 @@ function synonymsFor(label) {
 	return "";
 }
 var TOP_LIMIT = 9;
+var NEEDS_LIMIT = 5;
 function rankActions(actions, query, opts = {}) {
 	const q = String(query || "").trim();
 	if (!q) {
 		if (opts.showAll || !opts.allRow) return actions.slice();
-		return actions.map((a, i) => ({
+		const ranked = actions.map((a, i) => ({
 			a,
 			i
-		})).filter((x) => x.a.top !== void 0).sort((x, y) => x.a.top - y.a.top || x.i - y.i).slice(0, TOP_LIMIT).map((x) => x.a).concat(opts.allRow(actions.length));
+		})).filter((x) => x.a.top !== void 0).sort((x, y) => x.a.top - y.a.top || x.i - y.i).map((x) => x.a);
+		const urgent = ranked.filter((a) => a.top < 0).slice(0, NEEDS_LIMIT);
+		const top = ranked.filter((a) => a.top >= 0).slice(0, TOP_LIMIT);
+		return urgent.concat(top, opts.allRow(actions.length));
 	}
 	const scored = [];
 	actions.forEach((a, i) => {
@@ -67423,7 +69514,8 @@ var SETTINGS_SEARCH = [
 			"memory",
 			"scroll speed"
 		],
-		anchor: "#general-advanced"
+		anchor: "#general-advanced",
+		advanced: true
 	},
 	{
 		key: "connections",
@@ -67835,6 +69927,7 @@ function settingsActions(query) {
 		sub: e.sub,
 		hint: "settings",
 		run: () => {
+			if (e.advanced && !readAdvancedMode()) writeAdvancedMode(true);
 			openSettings(e.key);
 			if (e.anchor) revealInSettings(e.anchor);
 		}
@@ -67901,6 +69994,7 @@ var OUTWARD = /* @__PURE__ */ new Set([
 	"delete",
 	"pause"
 ]);
+var NEEDS_TOP = -1;
 var TOP = {
 	new: 0,
 	recent: 1,
@@ -68097,6 +70191,7 @@ function CommandPalette({ host }) {
 		const { rows } = orderedInstances(instances$2(), ui.order);
 		const t = ui.focused;
 		if (t) {
+			const name = windowName(t);
 			const c = actionCtx(t, {
 				inst: rows.find((r) => r.title === t),
 				caps,
@@ -68105,7 +70200,7 @@ function CommandPalette({ host }) {
 			for (const id of PALETTE_ACTIONS) {
 				if (sessionAction(id).enabled(c) ? "" : sessionAction(id).why?.(c) || "") {
 					acts.push({
-						label: `${actionLabel(id, c)} — ${t}`,
+						label: `${actionLabel(id, c)} — ${name}`,
 						hint: actionHint(id, c),
 						outward: true,
 						run: () => runChordAction(id, t)
@@ -68114,20 +70209,31 @@ function CommandPalette({ host }) {
 				}
 				if (!sessionAction(id).enabled(c)) continue;
 				acts.push({
-					label: `${actionLabel(id, c)} — ${t}`,
+					label: `${actionLabel(id, c)} — ${name}`,
 					hint: actionHint(id, c),
 					outward: OUTWARD.has(id),
 					run: () => sessionAction(id).run(t)
 				});
+				if (id === "map") acts.push({
+					label: `Find file on map… — ${name}`,
+					hint: "opens its Map's find box",
+					keywords: "search file path locate code map",
+					run: () => useUi.getState().openMap(t, { section: "search" })
+				});
 			}
 		}
+		const needs = needsYouNow();
 		for (const inst of rows) {
-			const own = inst.display_title || inst.title;
-			const name = ui.aliases[inst.title] || sessionLabel(own, inst.branch || "").text;
 			const recent = ui.mru.indexOf(inst.title);
+			const need = needs.indexOf(inst.title);
+			const ss = deriveSessionState(inst);
 			acts.push({
-				label: "Focus: " + name,
-				top: recent >= 0 && recent < 3 ? TOP.recent + recent / 10 : void 0,
+				label: "Focus: " + windowName(inst.title),
+				state: {
+					label: ss.label,
+					tone: ss.tone
+				},
+				top: need >= 0 ? NEEDS_TOP + need / 100 : recent >= 0 && recent < 3 ? TOP.recent + recent / 10 : void 0,
 				run: () => selectSession(inst.title)
 			});
 		}
@@ -68180,6 +70286,10 @@ function CommandPalette({ host }) {
 	(0, import_react.useEffect)(() => {
 		if (sel >= filtered.length) setSel(Math.max(0, filtered.length - 1));
 	}, [filtered.length, sel]);
+	const listRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		listRef.current?.querySelector("#palette-opt-" + sel)?.scrollIntoView?.({ block: "nearest" });
+	}, [sel]);
 	if (!open) return null;
 	const run = (a) => {
 		if (!a) return;
@@ -68200,6 +70310,12 @@ function CommandPalette({ host }) {
 				id: "palette-input",
 				ref: inputRef,
 				type: "text",
+				role: "combobox",
+				"aria-label": "Command or session",
+				"aria-expanded": "true",
+				"aria-controls": "palette-list",
+				"aria-autocomplete": "list",
+				"aria-activedescendant": filtered.length ? "palette-opt-" + sel : void 0,
 				placeholder: "Type a command or session name…",
 				autoComplete: "off",
 				spellCheck: false,
@@ -68222,28 +70338,44 @@ function CommandPalette({ host }) {
 				}
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
 				id: "palette-list",
+				role: "listbox",
+				"aria-label": "Commands",
+				ref: listRef,
 				children: [filtered.map((a, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					id: "palette-opt-" + i,
+					role: "option",
+					"aria-selected": i === sel,
 					className: "palette-item" + (i === sel ? " selected" : ""),
 					onMouseMove: () => setSel(i),
 					onClick: () => run(a),
-					children: [a.sub ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "palette-text",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					children: [
+						a.sub ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "palette-text",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "palette-label",
+								children: a.label
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "palette-sub",
+								children: a.sub
+							})]
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "palette-label",
 							children: a.label
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "palette-sub",
-							children: a.sub
-						})]
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "palette-label",
-						children: a.label
-					}), a.hint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "palette-hint" + (isKeyHint(a.hint) ? "" : " is-desc"),
-						children: a.hint
-					})]
+						}),
+						a.state && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "palette-state tone-" + a.state.tone,
+							children: a.state.label
+						}),
+						a.hint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "palette-hint" + (isKeyHint(a.hint) ? "" : " is-desc"),
+							children: a.hint
+						})
+					]
 				}, a.label + i)), !filtered.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
 					className: "palette-empty muted",
+					role: "option",
+					"aria-disabled": "true",
+					"aria-selected": false,
 					children: "No matching commands"
 				})]
 			})]
@@ -68419,7 +70551,7 @@ function describeBlockReason(where) {
 }
 function submitHoldReason(armAt, now) {
 	if (!armAt || now >= armAt) return "";
-	return "Just filled the form in — check the folder, then press Create.";
+	return "Just filled the form in — check the folder, then press Start.";
 }
 function planInPlace(a) {
 	return a.in_place !== false;
@@ -68591,6 +70723,12 @@ function preferInstalled(agent, names, installed) {
 	if (!installed || installed[agent] !== false) return agent;
 	return names.find((n) => installed[n] === true) || agent;
 }
+function templateNameTaken(name, existing, editing = null) {
+	const want = name.trim().toLowerCase();
+	if (!want || editing && editing.trim().toLowerCase() === want) return "";
+	const hit = existing.find((t) => t.name.trim().toLowerCase() === want);
+	return hit ? `A template named “${hit.name}” already exists — pick another name.` : "";
+}
 function templateFromForm(f, existing) {
 	const name = f.name.trim();
 	const prior = existing.find((t) => t.name.trim().toLowerCase() === name.toLowerCase());
@@ -68658,11 +70796,14 @@ function AgentFields({ scope = "new", defaultLabel, program, providers, installe
 	const hidden = (p) => foldMissing && !showAll && !!installed && installed[p.name] === false && p.name !== program;
 	const shown = providers.filter((p) => !hidden(p));
 	const folded = providers.length - shown.length;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "nf-agent",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			className: "nf-agent-head",
-			children: ["Agent", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+				htmlFor: scope + "-program",
+				children: "Agent"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				id: scope + "-agent-manage",
 				className: "linklike",
@@ -68707,11 +70848,14 @@ function AgentFields({ scope = "new", defaultLabel, program, providers, installe
 				})
 			]
 		})]
-	}), !device && setAccount && (authProfiles?.profiles || []).length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+	}), !device && setAccount && (authProfiles?.profiles || []).length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "nf-agent",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			className: "nf-agent-head",
-			children: ["Account", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+				htmlFor: "new-account",
+				children: "Account"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				id: "new-account-manage",
 				className: "linklike",
@@ -69131,10 +71275,13 @@ function FolderField({ scope = "new", placeholder = "/home/me/projects/foo — o
 		const el = inputRef.current;
 		if (el && document.activeElement !== el) el.scrollLeft = el.scrollWidth;
 	}, [repoPath]);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "nf-folder",
 		title: "Any folder works — git features (diff / commit / PR) turn on automatically when it's a git repo.",
-		children: ["Folder", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+			htmlFor: ids.input,
+			children: "Folder"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			className: "repo-path-row",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 				id: ids.input,
@@ -69337,8 +71484,23 @@ function MissingFolderRow({ label, onCreate, busy, error }) {
 //#endregion
 //#region src/components/dialogs/newSession/PromptFold.tsx
 var TASK_MAX_PX = 220;
+function insertSaved(text, insert, caret) {
+	if (!text.trim()) return insert;
+	if (!caret) return text.replace(/\s+$/, "") + "\n\n" + insert;
+	const start = Math.max(0, Math.min(caret.start, text.length));
+	const end = Math.max(start, Math.min(caret.end, text.length));
+	return text.slice(0, start) + insert + text.slice(end);
+}
 function TaskField({ scope = "new", hint = "what the agent starts on; blank starts it idle", placeholder = "e.g. add a section about setup to the README", prompt, setPrompt, presetValue = "", setPresetValue, savedPresets = [] }) {
 	const ref = (0, import_react.useRef)(null);
+	const caret = (0, import_react.useRef)(null);
+	const noteCaret = () => {
+		const ta = ref.current;
+		if (ta) caret.current = {
+			start: ta.selectionStart,
+			end: ta.selectionEnd
+		};
+	};
 	(0, import_react.useLayoutEffect)(() => {
 		const ta = ref.current;
 		if (!ta) return;
@@ -69362,12 +71524,14 @@ function TaskField({ scope = "new", hint = "what the agent starts on; blank star
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
 					id: "new-preset",
 					"aria-label": "Insert saved text",
-					title: "Put one of your saved prompts in the Task box (you can edit it after)",
+					title: "Put one of your saved prompts in the Task box, at the caret (you can edit it after)",
 					value: presetValue,
 					onChange: (e) => {
-						setPresetValue(e.target.value);
 						const p = findPreset(e.target.value);
-						if (p) setPrompt(p.prompt);
+						setPresetValue("");
+						if (!p) return;
+						setPrompt((cur) => insertSaved(cur, p.prompt, caret.current));
+						caret.current = null;
 					},
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
@@ -69408,7 +71572,9 @@ function TaskField({ scope = "new", hint = "what the agent starts on; blank star
 			spellCheck: false,
 			placeholder,
 			value: prompt,
-			onChange: (e) => setPrompt(e.target.value)
+			onChange: (e) => setPrompt(e.target.value),
+			onSelect: noteCaret,
+			onBlur: noteCaret
 		})]
 	});
 }
@@ -69941,10 +72107,12 @@ function formFromTemplate(t) {
 		seeded: t && hasSchedule(t) ? cadenceKey(t.schedule) : ""
 	};
 }
-function templateBody(f, installed = null) {
+function templateBody(f, installed = null, existing = [], editing = null) {
 	const name = f.name.trim();
 	if (!name) return { error: "A template needs a name." };
 	if (name.length > 100) return { error: "Names are at most 100 characters." };
+	const taken = templateNameTaken(name, existing, editing);
+	if (taken) return { error: taken };
 	const at = f.at.trim();
 	const cron = f.cron.trim().replace(/\s+/g, " ");
 	if (f.scheduled) {
@@ -70121,15 +72289,15 @@ function ScheduleEditor(p) {
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "tpl-row-actions",
 			children: [
-				p.error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "error",
 					"aria-live": "polite",
-					children: [p.error, p.onEdit && /folder|task/.test(p.error) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					children: p.error ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [p.error, p.onEdit && /folder|task/.test(p.error) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "linklike",
 						onClick: p.onEdit,
 						children: "Edit"
-					})] })]
+					})] })] }) : null
 				}),
 				p.onStop && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
@@ -70438,15 +72606,15 @@ function TemplateEditor(p) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "tpl-row-actions tpl-sticky",
 				children: [
-					p.error && !(missing && p.errorReason === "agent_missing") && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "error",
 						"aria-live": "polite",
-						children: [p.error, p.errorReason === "github_required" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						children: p.error && !(missing && p.errorReason === "agent_missing") ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [p.error, p.errorReason === "github_required" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							className: "linklike",
 							onClick: () => openConnectGitHub(),
 							children: "Connect GitHub"
-						})] })]
+						})] })] }) : null
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -70568,11 +72736,20 @@ function templatesReducer(s, a) {
 			error: ""
 		};
 		case "cancel":
+		case "dismiss":
 		case "saved":
 		case "deleted": return {
 			editing: null,
 			confirming: null,
 			error: ""
+		};
+		case "ask-discard": return {
+			...s,
+			discarding: { then: a.then }
+		};
+		case "keep-editing": return {
+			...s,
+			discarding: void 0
 		};
 		case "error": return {
 			...s,
@@ -70580,6 +72757,14 @@ function templatesReducer(s, a) {
 			reason: a.reason
 		};
 	}
+}
+function formDirty(form, seed) {
+	return !!seed && JSON.stringify(form) !== JSON.stringify(seed);
+}
+function needsDiscard(ui, a, dirty) {
+	if (ui.editing === null || !dirty) return false;
+	if (a.t === "edit" && a.name === ui.editing) return false;
+	return a.t === "edit" || a.t === "schedule" || a.t === "new" || a.t === "ask-delete" || a.t === "dismiss";
 }
 function renameLeaves(oldName, newName) {
 	const a = oldName.trim().toLowerCase();
@@ -70645,6 +72830,29 @@ function TemplatesDialogView(p) {
 	};
 	const loadError = p.loadError || "";
 	const escapeRef = (0, import_react.useRef)(null);
+	const discardRow = ui.discarding ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "tpl-confirm tpl-discard",
+		role: "alert",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+				"Discard changes",
+				ui.editing ? ` to “${ui.editing}”` : "",
+				"?"
+			] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "tpl-btn tpl-del",
+				onClick: p.onDiscard,
+				children: "Discard"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "tpl-btn",
+				onClick: () => p.dispatch({ t: "keep-editing" }),
+				children: "Keep editing"
+			})
+		]
+	}) : null;
 	const editor = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TemplateEditor, {
 		form,
 		onForm: p.onForm,
@@ -70851,10 +73059,10 @@ function TemplatesDialogView(p) {
 		})] });
 	};
 	const card = (t) => {
-		if (ui.editing === t.name && !ui.scheduleOnly) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		if (ui.editing === t.name && !ui.scheduleOnly) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "tpl-card tpl-card-editing",
 			"data-name": t.name,
-			children: editor
+			children: [discardRow, editor]
 		}, t.name);
 		const schedOpen = ui.editing === t.name && !!ui.scheduleOnly;
 		const info = infoFor(t);
@@ -70878,9 +73086,9 @@ function TemplatesDialogView(p) {
 						})]
 					}), actions(t)]
 				}),
-				schedOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				schedOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "tpl-sched-row",
-					children: scheduleEditor(t)
+					children: [discardRow, scheduleEditor(t)]
 				}) : scheduled && strip(t, info),
 				outcome(t, info),
 				t.prompt && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -70947,10 +73155,15 @@ function TemplatesDialogView(p) {
 		id: "templates-dialog",
 		className: "top-dialog",
 		onClose: p.onClose,
+		closeOnBackdrop: !p.dirty,
 		onEscape: () => {
+			if (ui.discarding) {
+				p.dispatch({ t: "keep-editing" });
+				return true;
+			}
 			if (ui.editing !== null && escapeRef.current?.()) return true;
 			if (ui.editing === null && !ui.confirming) return false;
-			p.dispatch({ t: "cancel" });
+			p.dispatch(ui.editing !== null ? { t: "dismiss" } : { t: "cancel" });
 			return true;
 		},
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -71001,9 +73214,9 @@ function TemplatesDialogView(p) {
 					className: "tpl-list",
 					id: "templates-list",
 					children: [
-						ui.editing === "" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						ui.editing === "" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "tpl-card tpl-card-editing tpl-card-new",
-							children: editor
+							children: [discardRow, editor]
 						}),
 						loadError && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 							className: "error tpl-load-error",
@@ -71123,6 +73336,7 @@ function TemplatesDialog() {
 	const [loadError, setLoadError] = (0, import_react.useState)("");
 	const [ui, dispatch] = (0, import_react.useReducer)(templatesReducer, TEMPLATES_UI_INIT);
 	const [form, setForm] = (0, import_react.useState)(() => formFromTemplate(null));
+	const [seed, setSeed] = (0, import_react.useState)(null);
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [runs, setRuns] = (0, import_react.useState)(() => templateRunsNow());
 	const [running, setRunning] = (0, import_react.useState)("");
@@ -71156,10 +73370,16 @@ function TemplatesDialog() {
 		if (folderSeeded.current || !folderSuggestions.length) return;
 		folderSeeded.current = true;
 		const path = defaultFolder(folderSuggestions);
-		if (path) setForm((f) => f.repo_path ? f : {
-			...f,
-			repo_path: path
-		});
+		if (path) {
+			setForm((f) => f.repo_path ? f : {
+				...f,
+				repo_path: path
+			});
+			setSeed((f) => f && !f.repo_path ? {
+				...f,
+				repo_path: path
+			} : f);
+		}
 	}, [ui.editing, folderSuggestions]);
 	(0, import_react.useEffect)(() => {
 		if (!open || !ui.confirming || fleetAsked.current) return;
@@ -71245,8 +73465,10 @@ function TemplatesDialog() {
 		}
 		if (scheduleFocus || ui.scheduleOnly) f.scheduled = true;
 		setForm(f);
+		setSeed(f);
 	}, [ui.editing, templates]);
 	if (!open) return null;
+	const dirty = ui.editing !== null && formDirty(form, seed);
 	const close = () => {
 		closeDialog();
 		if (readTemplatesTarget(target).fromNew) {
@@ -71254,8 +73476,19 @@ function TemplatesDialog() {
 			useUi.getState().openDialogFor("new-session");
 		}
 	};
-	const save = async (f = form) => {
-		const r = templateBody(f, installed);
+	const undoStop = async (before) => {
+		try {
+			await saveTemplate(before);
+			setList(templatesNow());
+			await ensureTemplates(true).catch(() => {});
+			setRuns(templateRunsNow());
+			toast(`“${before.name}” runs on its schedule again — ${templateScheduleLine(before, templateRunsNow())}`);
+		} catch (err) {
+			toast("Couldn't put the schedule back: " + errMsg(err));
+		}
+	};
+	const save = async (f = form, stopping = false) => {
+		const r = templateBody(f, installed, templates, ui.editing);
 		if ("error" in r) {
 			dispatch({
 				t: "error",
@@ -71264,15 +73497,25 @@ function TemplatesDialog() {
 			});
 			return;
 		}
+		const before = ui.editing ? templates.find((x) => x.name === ui.editing) || null : null;
 		setBusy(true);
 		try {
 			await saveTemplate(r.body);
 			const gone = ui.editing ? renameLeaves(ui.editing, r.body.name) : null;
 			if (gone) await deleteTemplate(gone);
-			ensureTemplates(true).then(() => setRuns(templateRunsNow())).catch(() => {});
+			const body = r.body;
+			ensureTemplates(true).catch(() => {}).then(() => {
+				const st = templateRunsNow();
+				setRuns(st);
+				if (body.schedule && !stopping) toast(`Saved “${body.name}” — ${templateScheduleLine(body, st)}`);
+			});
 			setList(templatesNow());
 			dispatch({ t: "saved" });
-			toast(runProblem(r.body) ? "Saved — add a folder to run it" : `Saved template “${r.body.name}”`);
+			if (stopping && before && hasSchedule(before)) toast(`Stopped the schedule of “${body.name}” — nothing starts on its own`, { action: {
+				label: "Undo",
+				onClick: () => void undoStop(before)
+			} });
+			else if (!body.schedule) toast(runProblem(body) ? "Saved — add a folder to run it" : `Saved template “${body.name}”`);
 		} catch (err) {
 			const why = templateRefusal(err);
 			dispatch({
@@ -71343,8 +73586,27 @@ function TemplatesDialog() {
 			...patch
 		})),
 		dispatch: (a) => {
-			setScheduleFocus(a.t === "schedule");
+			if (needsDiscard(ui, a, dirty)) {
+				dispatch({
+					t: "ask-discard",
+					then: a
+				});
+				return;
+			}
+			if (a.t !== "keep-editing") setScheduleFocus(a.t === "schedule");
 			dispatch(a);
+		},
+		dirty,
+		onDiscard: () => {
+			const then = ui.discarding?.then;
+			if (!then) return;
+			dispatch({ t: "cancel" });
+			if (then === "close") {
+				close();
+				return;
+			}
+			setScheduleFocus(then.t === "schedule");
+			dispatch(then);
 		},
 		agents,
 		folderSuggestions,
@@ -71355,9 +73617,12 @@ function TemplatesDialog() {
 		onStopSchedule: () => void save({
 			...form,
 			scheduled: false
-		}),
+		}, true),
 		onDelete: (name) => void del(name),
-		onClose: close,
+		onClose: () => dirty ? dispatch({
+			t: "ask-discard",
+			then: "close"
+		}) : close(),
 		installed,
 		githubConnected: github.data ?? null,
 		liveSessions,
@@ -72536,116 +74801,6 @@ function RunOptions({ draft, n, split, maxPieces, splitBox, repoPicker }) {
 	});
 }
 //#endregion
-//#region src/components/dialogs/FlagChips.tsx
-var SKIP = {
-	label: SKIP_PERMS_LABEL,
-	title: SKIP_PERMS_TITLE
-};
-var LAUNCH_FLAG_PRESETS = {
-	claude: [
-		{
-			...SKIP,
-			flag: "--dangerously-skip-permissions"
-		},
-		{
-			label: "Plan mode",
-			flag: "--permission-mode plan"
-		},
-		{
-			label: "Verbose",
-			flag: "--verbose"
-		}
-	],
-	codex: [{
-		...SKIP,
-		flag: "--dangerously-bypass-approvals-and-sandbox"
-	}, {
-		label: "Web search",
-		flag: "--search"
-	}],
-	antigravity: [{
-		...SKIP,
-		flag: "--dangerously-skip-permissions"
-	}, {
-		label: "Sandbox",
-		flag: "--sandbox"
-	}],
-	aider: [{
-		...SKIP,
-		flag: "--yes-always"
-	}, {
-		label: "No auto-commit",
-		flag: "--no-auto-commits"
-	}],
-	opencode: [{
-		...SKIP,
-		flag: "--auto"
-	}]
-};
-function tokenize(s) {
-	if (!s) return [];
-	const out = [];
-	const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
-	let m;
-	while ((m = re.exec(s)) !== null) out.push(m[1] || m[2] || m[3] || "");
-	return out.filter(Boolean);
-}
-var quote = (t) => /\s/.test(t) ? "\"" + t + "\"" : t;
-function joinTokens(tokens) {
-	return tokens.map(quote).join(" ");
-}
-function seqIndex(tokens, seq) {
-	if (!seq.length) return -1;
-	for (let i = 0; i + seq.length <= tokens.length; i++) {
-		let ok = true;
-		for (let j = 0; j < seq.length; j++) if (tokens[i + j] !== seq[j]) {
-			ok = false;
-			break;
-		}
-		if (ok) return i;
-	}
-	return -1;
-}
-function FlagChips({ provider, value, onChange }) {
-	const presets = LAUNCH_FLAG_PRESETS[(provider || "").trim().toLowerCase()] || [];
-	if (!presets.length) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "flag-chips" });
-	const tokens = tokenize(value);
-	const toggle = (p) => {
-		let next = tokenize(value);
-		const seq = tokenize(p.flag);
-		const at = seqIndex(next, seq);
-		if (at >= 0) next.splice(at, seq.length);
-		else {
-			if (p.group) for (const other of presets) {
-				if (other === p || other.group !== p.group) continue;
-				const osq = tokenize(other.flag);
-				let oi;
-				while ((oi = seqIndex(next, osq)) >= 0) next.splice(oi, osq.length);
-			}
-			next = next.concat(seq);
-		}
-		onChange(next.map(quote).join(" "));
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "flag-chips",
-		children: presets.map((p) => {
-			const on = seqIndex(tokens, tokenize(p.flag)) >= 0;
-			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "flag-chip" + (on ? " active" : ""),
-				"data-flag": p.flag,
-				title: p.title,
-				"aria-pressed": on,
-				onClick: (e) => {
-					e.preventDefault();
-					toggle(p);
-				},
-				children: p.label
-			}, p.flag);
-		})
-	});
-}
-//#endregion
 //#region src/lib/newSessionSubmit.ts
 function newSessionSubmit(ctx) {
 	const { title, repoPath, prompt, program, planFirst, planOk, launchArgs, profileId, profileModel, strategy, inPlace, initRepo, provision, baseBranch, baseIsRemote, continueOn, activeTemplate, maxPieces, splitLimit, runMode, splitOn, laneNeedsWorktree, newFolderBlocked, provisionBlocked, draft, laneAtPress, deviceRef, failedReopen, submitArmAt, setError, setPlanError, setPromptOpen, setPage, planFolderDo, closeDialog } = ctx;
@@ -72726,7 +74881,8 @@ function newSessionSubmit(ctx) {
 			});
 			clearStaleAlias(inst.title);
 			await refreshInstances();
-			selectSession(inst.title);
+			if (body.plan_first) useUi.getState().openMap(inst.title, { section: "plan" });
+			else selectSession(inst.title);
 			if (lane !== "leave") setLaneWhenReady(inst.title, lane, askFirst);
 		} catch (err) {
 			failPendingSession(guess);
@@ -72815,6 +74971,7 @@ function FooterActions({ error, page, setPage, runMode, describing, describeSlow
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			id: "new-error",
 			className: "error",
+			role: "alert",
 			children: error
 		}), page === 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -73132,13 +75289,17 @@ function DescribeSection({ batch, describe, setDescribe, describing, describeRef
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "nt-head",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: batch ? "Starting together — one session per line or ticket ID" : "What do you want to work on?" })
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					id: "new-describe-label",
+					children: batch ? "Starting together — one session per line or ticket ID" : "What do you want to work on?"
+				})
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "nf-describe-row",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
 						id: "new-describe-text",
+						"aria-labelledby": "new-describe-label",
 						ref: describeRef,
 						rows: Math.min(8, Math.max(3, describe.split("\n").length)),
 						value: describe,
@@ -73352,8 +75513,9 @@ function StartsInLine({ repoPath, suggestions, folderDo, onBrowse, startsIn, onC
 				type: "button",
 				className: "linklike",
 				id: "new-describe-change",
+				title: "The full form — folder, agent, task, name and Fast-track",
 				onClick: onChange,
-				children: "change"
+				children: "More options"
 			})
 		]
 	});
@@ -73422,7 +75584,7 @@ function TemplatesStrip({ templates, activeTemplate, onPick, onRun, onSchedule, 
 					fromNew: true,
 					schedule: null
 				})),
-				children: "All templates…"
+				children: "Open Schedule…"
 			})]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			id: "new-templates-list",
@@ -73447,7 +75609,7 @@ function TemplatesStrip({ templates, activeTemplate, onPick, onRun, onSchedule, 
 							type: "button",
 							className: "nt-act nt-run",
 							"aria-label": "Run “" + t.name + "” now",
-							title: problem ? problem + " (All templates… → Edit)" : "Run now — starts a new session from “" + t.name + "”",
+							title: problem ? problem + " (Open Schedule… → Edit)" : "Run now — starts a new session from “" + t.name + "”",
 							disabled: !!problem,
 							onClick: () => onRun(t),
 							children: "▶"
@@ -73477,7 +75639,7 @@ var SKIP_PERMS_FLAGS = [
 	"--yes-always",
 	"--auto"
 ];
-function skipsPermissions$1(args) {
+function skipsPermissions(args) {
 	return tokenize(args).some((t) => SKIP_PERMS_FLAGS.includes(t));
 }
 function LaunchFold({ launchOpen, setLaunchOpen, launchArgs, setLaunchArgs, program }) {
@@ -73521,7 +75683,7 @@ function LaunchFold({ launchOpen, setLaunchOpen, launchArgs, setLaunchArgs, prog
 					value: launchArgs,
 					onChange: setLaunchArgs
 				}),
-				skipsPermissions$1(launchArgs) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				skipsPermissions(launchArgs) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "nf-git-nudge nf-skip-perms",
 					id: "new-skip-perms-warn",
 					role: "status",
@@ -73637,6 +75799,22 @@ function NewSessionDialog() {
 	const deviceRef = (0, import_react.useRef)(device);
 	deviceRef.current = device;
 	const loadedDevice = (0, import_react.useRef)(null);
+	const refreshAgentState = () => {
+		if (deviceRef.current) return;
+		const here = () => !deviceRef.current;
+		deviceApi("")("/api/setup").then((st) => {
+			if (!here()) return;
+			const out = {};
+			for (const l of st.logins || []) if (l.logged_in === false) out[l.name] = true;
+			setSignedOut(out);
+		}).catch(() => {});
+		deviceApi("")("/api/providers/status").then((d) => {
+			if (!here()) return;
+			const have = {};
+			for (const x of d.providers || []) if (typeof x.installed === "boolean") have[x.name] = x.installed;
+			setInstalled(have);
+		}).catch(() => {});
+	};
 	const loadFor = (dev) => {
 		const dapi = deviceApi(dev);
 		let live = true;
@@ -73725,6 +75903,8 @@ function NewSessionDialog() {
 		setDescribe(prefill);
 		setBatch(!!prefill);
 		setBaseBranch("");
+		setContinueOn("");
+		setStrategy("worktree");
 		setBranches(null);
 		setDescribing(false);
 		setDescribeSlow(false);
@@ -73777,6 +75957,7 @@ function NewSessionDialog() {
 			openedPage.current = 2;
 			openedFocus.current = "title";
 			setAdvancedOpen(true);
+			refreshAgentState();
 			return;
 		}
 		const prefill = useUi.getState().takeNewPrefill();
@@ -73811,6 +75992,7 @@ function NewSessionDialog() {
 				return;
 			}
 			if (!deviceRef.current) ensureTemplates(true).then((list) => setTemplates(list)).catch(() => {});
+			refreshAgentState();
 			return;
 		}
 		resetForm(prefill);
@@ -74190,7 +76372,7 @@ function NewSessionDialog() {
 		}
 		await postCreateRaw(body);
 	};
-	const saveTplBlocked = !(saveTplName || "").trim() ? "Give it a name." : !folderPath && !prompt.trim() ? "Pick a folder or write a task first." : "";
+	const saveTplBlocked = !(saveTplName || "").trim() ? "Give it a name." : templateNameTaken(saveTplName || "", device ? templates : templatesNow()) || (!folderPath && !prompt.trim() ? "Pick a folder or write a task first." : "");
 	const saveAsTemplate = async () => {
 		if (saveTplBlocked || saveTplName === null) return;
 		const body = templateFromForm({
@@ -74213,7 +76395,7 @@ function NewSessionDialog() {
 			} else setTemplates(await saveTemplate(body));
 			setActiveTemplate(String(body.name));
 			setSaveTplName(null);
-			toast(`Saved template “${body.name}” — ▶ runs it and ⏰ schedules it, in Templates at the top of New. Click to open Schedule.`, { onClick: () => useUi.getState().openDialogFor("templates", templatesTarget({
+			toast(`Saved template “${body.name}” — ▶ on its chip at the top of New runs it, ⏰ schedules it. Click to open Schedule.`, { onClick: () => useUi.getState().openDialogFor("templates", templatesTarget({
 				fromNew: true,
 				schedule: null
 			})) });
@@ -74811,187 +76993,6 @@ function NewHead({ tab, tabs, onTab, onClose }) {
 	});
 }
 //#endregion
-//#region src/components/settings/savedCue.ts
-var ROW = ".set-row, .notif-channel, .ntfy-field-row, .set-switch-row";
-var SHOW_MS = 1600;
-var FRESH_MS = 5e3;
-var touched = null;
-var timers = /* @__PURE__ */ new WeakMap();
-function noteTouched(target) {
-	if (target && typeof target.closest === "function") touched = {
-		el: target,
-		at: Date.now()
-	};
-}
-function cueTarget(el) {
-	const row = el.closest(ROW);
-	if (!row) return null;
-	return row.querySelector(".set-label") || row;
-}
-function flashSaved(el) {
-	const source = el ?? (touched && Date.now() - touched.at < FRESH_MS ? touched.el : null);
-	if (!source || !source.isConnected) return false;
-	const target = cueTarget(source);
-	if (!target) return false;
-	target.setAttribute("data-saved", "");
-	const prev = timers.get(target);
-	if (prev) clearTimeout(prev);
-	timers.set(target, setTimeout(() => target.removeAttribute("data-saved"), SHOW_MS));
-	return true;
-}
-//#endregion
-//#region src/components/InlineConfirm.tsx
-function InlineConfirm(props) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "set-confirm",
-		role: "alertdialog",
-		"aria-label": props.title,
-		id: props.id,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "set-confirm-text",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: props.title }),
-				" ",
-				props.body
-			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "set-confirm-actions",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "test-btn set-confirm-yes",
-				disabled: props.busy,
-				onClick: props.onConfirm,
-				children: props.confirmLabel
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "test-btn",
-				autoFocus: true,
-				disabled: props.busy,
-				onClick: props.onCancel,
-				children: props.cancelLabel ?? "Cancel"
-			})]
-		})]
-	});
-}
-//#endregion
-//#region src/components/settings/useSettings.tsx
-var SECRET_MASK = "•••set";
-var EMPTY_SETTINGS = {};
-function useSettingsModel(open) {
-	const settings = useSettingsDoc(open).data ?? EMPTY_SETTINGS;
-	const reload = (0, import_react.useCallback)(async () => {
-		try {
-			await fetchSettingsDoc();
-		} catch {}
-	}, []);
-	const saveField = (0, import_react.useCallback)(async (group, field, value) => {
-		try {
-			putSettingsDoc((await api("/api/settings", { json: { [group]: { [field]: value } } }))?.settings || {});
-			refreshConfig();
-			if (!flashSaved()) toast("Saved");
-		} catch (err) {
-			toast("Save failed: " + (err.message || field));
-			reload();
-		}
-	}, [reload]);
-	const saveGroups = (0, import_react.useCallback)(async (patches, okMsg) => {
-		const groups = Object.keys(patches);
-		if (!groups.length) return;
-		try {
-			putSettingsDoc((await api("/api/settings", { json: patches }))?.settings || {});
-			refreshConfig();
-			if (okMsg) toast(okMsg);
-		} catch (err) {
-			toast("Save failed: " + (err.message || groups.join(", ")));
-			reload();
-		}
-	}, [reload]);
-	return {
-		settings,
-		reload,
-		saveField,
-		saveGroup: (0, import_react.useCallback)((group, patch, okMsg) => saveGroups({ [group]: patch }, okMsg), [saveGroups]),
-		saveGroups,
-		get: (0, import_react.useCallback)((group, field) => {
-			const g = settings[group];
-			return g && typeof g === "object" ? g[field] : void 0;
-		}, [settings])
-	};
-}
-var SettingsCtx = (0, import_react.createContext)(null);
-function useSettings() {
-	const ctx = (0, import_react.useContext)(SettingsCtx);
-	if (!ctx) throw new Error("useSettings outside SettingsDialog");
-	return ctx;
-}
-function numberFieldError(raw, min = 0, placeholder = "") {
-	const v = raw.trim();
-	if (!v) return "";
-	const n = Number(v);
-	if (Number.isFinite(n) && n >= min) return "";
-	const blank = placeholder && !/^[\d.]+$/.test(placeholder) ? ", or leave it blank for " + placeholder : "";
-	return "Enter a number, " + min + " or more" + blank + ".";
-}
-function SettingField(props) {
-	const s = useSettings();
-	const stored = s.get(props.group, props.field);
-	const isSecret = props.type === "password";
-	const display = isSecret ? "" : stored == null ? "" : String(stored);
-	const [value, setValue] = (0, import_react.useState)(display);
-	const [error, setError] = (0, import_react.useState)("");
-	(0, import_react.useEffect)(() => setValue(display), [display]);
-	const commit = () => {
-		if (isSecret && value === "") return;
-		if (props.type === "number") {
-			const why = numberFieldError(value, props.min ?? 0, props.placeholder || "");
-			setError(why);
-			if (why) return;
-		}
-		if (value === display && !isSecret) return;
-		s.saveField(props.group, props.field, value);
-		if (isSecret) setValue("");
-	};
-	if (props.options) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
-		"data-group": props.group,
-		"data-field": props.field,
-		className: props.className,
-		title: props.title,
-		value: display,
-		onChange: (e) => s.saveField(props.group, props.field, e.target.value),
-		children: props.options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-			value: o.value,
-			children: o.label
-		}, o.value))
-	});
-	const input = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-		"data-group": props.group,
-		"data-field": props.field,
-		type: props.type || "text",
-		min: props.type === "number" ? props.min ?? 0 : void 0,
-		"aria-invalid": error ? true : void 0,
-		className: props.className,
-		autoComplete: "off",
-		spellCheck: false,
-		placeholder: isSecret && stored === SECRET_MASK ? "•••set (saved)" : props.placeholder,
-		title: props.title,
-		value,
-		onChange: (e) => {
-			setValue(e.target.value);
-			if (error) setError("");
-		},
-		onBlur: commit,
-		onKeyDown: (e) => {
-			if (e.key === "Enter") e.target.blur();
-		}
-	});
-	if (!error) return input;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [input, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: "set-field-error",
-		role: "alert",
-		children: error
-	})] });
-}
-//#endregion
 //#region src/components/intake/buckets.ts
 var NO_STATE_BUCKET = "No state";
 var BUCKETS_LS_KEY = "mf_ticket_buckets";
@@ -75194,14 +77195,44 @@ function AutomationSwitch({ label, title, rowId, inputId, statusId, checked, onC
 			className: "ca-switch",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 				type: "checkbox",
+				role: "switch",
 				id: inputId,
 				checked,
+				"aria-checked": checked,
 				disabled,
 				"aria-labelledby": nameId,
 				"aria-describedby": note ? statusId : void 0,
 				onChange: (e) => onChange(e.target.checked)
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 		})]
+	});
+}
+function splitLogins(text) {
+	return text.split(",").map((x) => x.trim()).filter(Boolean);
+}
+function LoginListInput({ id, stored, placeholder, onSave }) {
+	const [draft, setDraft] = (0, import_react.useState)(stored);
+	const save = useAutosave((v) => {
+		const list = splitLogins(v);
+		if (list.join(",") !== splitLogins(stored).join(",")) onSave(list);
+	});
+	(0, import_react.useEffect)(() => {
+		if (!save.isPending()) setDraft(stored);
+	}, [stored, save]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+		type: "text",
+		id,
+		placeholder,
+		autoComplete: "off",
+		value: draft,
+		onChange: (e) => {
+			setDraft(e.target.value);
+			save.schedule(e.target.value);
+		},
+		onBlur: () => save.flush(),
+		onKeyDown: (e) => {
+			if (e.key === "Enter") save.flush();
+		}
 	});
 }
 function TestButton({ label = "Test connection", onTest, result }) {
@@ -75231,6 +77262,7 @@ function TestButton({ label = "Test connection", onTest, result }) {
 		children: label
 	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "test-result" + (state.msg ? state.ok ? " ok" : " bad" : ""),
+		role: "status",
 		children: state.testing ? "testing…" : state.msg ? (state.ok ? "✓ " : "✗ ") + state.msg : ""
 	})] });
 }
@@ -76181,39 +78213,69 @@ function filterSummary(opts) {
 	};
 }
 //#endregion
-//#region src/components/intake/autosave.ts
-var AUTOSAVE_MS = 700;
-function makeAutosave(commit, onPending, delay = AUTOSAVE_MS) {
-	let timer = null;
-	let pending = null;
-	const flush = () => {
-		if (timer) clearTimeout(timer);
-		timer = null;
-		const p = pending;
-		pending = null;
-		if (p) commit()(p.value);
+//#region src/components/intake/addDraft.ts
+function backStep(step) {
+	return step === 3 ? 2 : 1;
+}
+function continueWith(draft, draftProvider, key) {
+	if (key === "repo") return "repo";
+	if (draft && draftProvider === key) return "resume";
+	return "replace";
+}
+function stashOf(list, draft, stored) {
+	if (!draft || stored.has(draft.id)) return null;
+	const source = (list || []).find((s) => s.id === draft.id);
+	return source ? {
+		source: { ...source },
+		step: draft.step
+	} : null;
+}
+function restoreStash(list, stash) {
+	if (!stash || list.some((s) => s.id === stash.source.id)) return {
+		list,
+		draft: null
 	};
 	return {
-		schedule(value) {
-			pending = { value };
-			onPending()?.();
-			if (timer) clearTimeout(timer);
-			timer = setTimeout(flush, delay);
-		},
-		flush,
-		isPending: () => pending !== null
+		list: [...list, stash.source],
+		draft: {
+			id: stash.source.id,
+			step: stash.step
+		}
 	};
 }
-function useAutosave(commit, onPending, delay = AUTOSAVE_MS) {
-	const commitRef = (0, import_react.useRef)(commit);
-	commitRef.current = commit;
-	const pendingRef = (0, import_react.useRef)(onPending);
-	pendingRef.current = onPending;
-	const saver = (0, import_react.useRef)(null);
-	if (!saver.current) saver.current = makeAutosave(() => commitRef.current, () => pendingRef.current, delay);
-	const s = saver.current;
-	(0, import_react.useEffect)(() => () => s.flush(), [s]);
-	return s;
+function finishRefusal(r, draftId, fixFields) {
+	if (Object.keys(r.fieldErrors[draftId] || {}).length) return fixFields;
+	if (Object.keys(r.fieldErrors).length) return fixFields;
+	return "Not saved — " + (r.message || "the server didn't answer") + ". Try again.";
+}
+function beginSave(seqs, seq, ids) {
+	const card = { ...seqs.card };
+	for (const id of ids) card[id] = seq;
+	return {
+		card,
+		ok: seqs.ok
+	};
+}
+function settleSave(seqs, seq, ids, ok) {
+	const mine = ids.filter((id) => (seqs.card[id] ?? 0) <= seq);
+	if (ok) return {
+		seqs: {
+			card: seqs.card,
+			ok: Math.max(seqs.ok, seq)
+		},
+		saved: mine,
+		failed: []
+	};
+	if (seqs.ok > seq) return {
+		seqs,
+		saved: mine,
+		failed: []
+	};
+	return {
+		seqs,
+		saved: [],
+		failed: mine
+	};
 }
 //#endregion
 //#region src/components/intake/sourceForm.ts
@@ -76904,6 +78966,9 @@ function useDefaults(use, liveBranch) {
 	return repoDefaults(s.settings, use, agents?.fallback || "", liveBranch ?? cached);
 }
 function BlockInput({ label, field, value, placeholder, hint, type = "text", maxLength, narrow, onSave }) {
+	const autosave = useAutosave((v) => {
+		if (v.trim() !== value) onSave(field, v);
+	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 		className: "set-row",
 		children: [
@@ -76922,11 +78987,10 @@ function BlockInput({ label, field, value, placeholder, hint, type = "text", max
 				"data-repo-field": field,
 				placeholder,
 				defaultValue: value,
-				onBlur: (e) => {
-					if (e.target.value.trim() !== value) onSave(field, e.target.value);
-				},
+				onChange: (e) => autosave.schedule(e.target.value),
+				onBlur: () => autosave.flush(),
 				onKeyDown: (e) => {
-					if (e.key === "Enter") e.target.blur();
+					if (e.key === "Enter") autosave.flush();
 				}
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -76945,16 +79009,27 @@ function RepoFields({ use, repo, liveBranch }) {
 	const defaults = useDefaults(use, liveBranch);
 	const saved = blocksFor(s.settings, use);
 	const savedKey = JSON.stringify(saved);
-	const [blocks, setBlocks] = (0, import_react.useState)(saved);
+	const [blocks, setBlocksState] = (0, import_react.useState)(saved);
+	const blocksRef = (0, import_react.useRef)(blocks);
+	const setBlocks = (next) => {
+		blocksRef.current = next;
+		setBlocksState(next);
+	};
 	(0, import_react.useEffect)(() => {
-		setBlocks((prev) => JSON.stringify(prev) === savedKey ? prev : saved);
+		if (JSON.stringify(blocksRef.current) !== savedKey) setBlocks(saved);
 	}, [savedKey]);
 	const o = blocks[repo] || {};
 	const save = (field, value) => {
-		const { patch, blocks: next } = fieldPatch(blocks, use, repo, field, value);
+		const before = blocksRef.current;
+		const { patch, blocks: next } = fieldPatch(before, use, repo, field, value);
 		setBlocks(next);
-		s.saveGroups(patch, "Saved " + repo);
+		s.saveGroups(patch, "Saved " + repo).then((ok) => {
+			if (!ok && blocksRef.current === next) setBlocks(before);
+		});
 	};
+	const promptSave = useAutosave((v) => {
+		if (v.trim() !== (o.prompt || "")) save("prompt", v);
+	});
 	const text = (field) => listText(o[field]);
 	if (use === "verify") {
 		const live = o.live_branch || defaults.liveBranch;
@@ -77013,9 +79088,8 @@ function RepoFields({ use, repo, liveBranch }) {
 							maxLength: VERIFY_PROMPT_MAX,
 							placeholder: "e.g. The UI runs on :3000 — check there, not :8080.\nAlways confirm the migration ran.\nIgnore anything under vendor/.",
 							defaultValue: o.prompt || "",
-							onBlur: (e) => {
-								if (e.target.value.trim() !== (o.prompt || "")) save("prompt", e.target.value);
-							}
+							onChange: (e) => promptSave.schedule(e.target.value),
+							onBlur: () => promptSave.flush()
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-hint",
@@ -77184,7 +79258,7 @@ function RepoEditor({ use, repo, liveBranch }) {
 		const patch = usesPatch(s.settings, repo, next);
 		const added = next.filter((u) => !uses.includes(u));
 		const dropped = uses.filter((u) => !next.includes(u));
-		s.saveGroups(patch, added.length ? repo + " — now also " + usesText(added) : repo + " — no longer " + usesText(dropped)).then(() => resweep([...added, ...dropped]));
+		s.saveGroups(patch, added.length ? repo + " — now also " + usesText(added) : repo + " — no longer " + usesText(dropped)).then((ok) => ok && resweep([...added, ...dropped]));
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "ik-editor-body",
@@ -77216,7 +79290,7 @@ function RepoEditor({ use, repo, liveBranch }) {
 					armedLabel: "Confirm — stop watching " + repo + (use === "verify" ? "" : " for " + USE_LABEL[use]),
 					title: "Take " + repo + " off this list — its other uses stay",
 					onConfirm: () => {
-						s.saveGroups(usesPatch(s.settings, repo, uses.filter((u) => u !== use)), "Removed " + repo).then(() => resweep([use]));
+						s.saveGroups(usesPatch(s.settings, repo, uses.filter((u) => u !== use)), "Removed " + repo).then((ok) => ok && resweep([use]));
 					}
 				})]
 			})
@@ -77290,7 +79364,10 @@ function AddRepoFlow({ uses: initialUses, trackers = [], onPickTracker, onDone, 
 			const fresh = ticks.filter((u) => !already.includes(u));
 			const patch = usesPatch(s.settings, repo, want);
 			if (Object.keys(patch).length) {
-				await s.saveGroups(patch, "Added " + repo + (fresh.length ? " — " + usesText(fresh) : ""));
+				if (!await s.saveGroups(patch, "Added " + repo + (fresh.length ? " — " + usesText(fresh) : ""))) {
+					setError("Couldn't add " + repo + " — try again.");
+					return;
+				}
 				resweep(fresh);
 			}
 			const shown = ticks.length ? ticks : already;
@@ -77609,7 +79686,7 @@ function AutoStartSwitches({ gotoTab }) {
 			const patch = {};
 			if (m.prsOn) patch.enabled = false;
 			if (m.issuesOn) patch.issues_enabled = false;
-			if (Object.keys(patch).length) await settings.saveGroup("github", patch);
+			if (Object.keys(patch).length && !await settings.saveGroup("github", patch)) return;
 			if (ticketsChecked) await flipTickets(false);
 			toast("All auto-start is off — nothing starts on its own");
 		} catch (err) {
@@ -77758,7 +79835,7 @@ function sourceDisplayName(source, catalog) {
 }
 var FILL_FIELDS = "Fill in the marked fields first.";
 var FIX_FIELDS = "Fix the marked fields first.";
-function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
+function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd, draftStash }) {
 	const catalog = useTicketingCatalog(true).data || EMPTY_CATALOG;
 	const savedSources = useTicketingSources(true);
 	const agents = useAgentChoices$1().data || EMPTY_AGENTS;
@@ -77766,7 +79843,10 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	const seeded = (0, import_react.useRef)(savedSources.data !== void 0);
 	const storedIds = (0, import_react.useRef)(new Set((savedSources.data || []).map((s) => s.id)));
 	const seq = (0, import_react.useRef)(0);
-	const lastRefused = (0, import_react.useRef)({});
+	const saveSeqs = (0, import_react.useRef)({
+		card: {},
+		ok: 0
+	});
 	const pendingDraft = (0, import_react.useRef)("");
 	const [errors, setErrors] = (0, import_react.useState)({});
 	const [tests, setTests] = (0, import_react.useState)({});
@@ -77825,6 +79905,24 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 		storedIds.current = new Set(savedSources.data.map((s) => s.id));
 		setSources(savedSources.data);
 	}, [savedSources.data, savedSources.isError]);
+	const restored = (0, import_react.useRef)(false);
+	(0, import_react.useEffect)(() => {
+		if (restored.current || sources === null) return;
+		restored.current = true;
+		const r = restoreStash(sources, draftStash?.current ?? null);
+		if (!r.draft) return;
+		latest.current = r.list;
+		setSources(r.list);
+		setDraft(r.draft);
+		setChoice(r.list.find((x) => x.id === r.draft.id)?.provider || "");
+	}, [sources, draftStash]);
+	(0, import_react.useEffect)(() => {
+		if (draftStash && restored.current) draftStash.current = stashOf(sources, draft, storedIds.current);
+	}, [
+		sources,
+		draft,
+		draftStash
+	]);
 	const runTest = (0, import_react.useCallback)(async (src, meta) => {
 		const payload = {
 			id: src.id,
@@ -77937,22 +80035,37 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	}, []);
 	const persist = (0, import_react.useCallback)(async (list, opts = {}) => {
 		const mySeq = ++seq.current;
-		lastRefused.current = {};
 		const pending = opts.withDraft ? "" : pendingDraft.current;
 		const { send, held } = splitForSave(pending ? list.filter((s) => s.id !== pending) : list, catalog, storedIds.current);
 		const changed = opts.changed ? [opts.changed] : [];
 		if (!send.length && !storedIds.current.size) {
 			setErrors(held);
-			return;
+			return {
+				ok: false,
+				fieldErrors: held
+			};
 		}
 		const sending = changed.filter((id) => !held[id]);
+		saveSeqs.current = beginSave(saveSeqs.current, mySeq, sending);
 		markSave(sending, "saving");
+		const settle = (ok) => {
+			const r = settleSave(saveSeqs.current, mySeq, sending, ok);
+			saveSeqs.current = r.seqs;
+			markSave(r.saved, "saved");
+			markSave(r.failed, "failed");
+		};
 		try {
 			const r = await api("/api/settings/ticketing/sources", {
 				method: "PUT",
 				json: putBody(send, opts.nulls)
 			});
-			if (mySeq !== seq.current) return;
+			if (mySeq !== seq.current) {
+				settle(true);
+				return {
+					ok: true,
+					fieldErrors: {}
+				};
+			}
 			storedIds.current = new Set((r?.sources || send).map((s) => s.id));
 			setErrors(held);
 			const byId = new Map((r?.sources || []).map((s) => [s.id, s]));
@@ -77960,7 +80073,7 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 			const saved = list.map(stamp);
 			setSources((prev) => (prev || []).map(stamp));
 			putTicketingSources(r?.sources || send);
-			markSave(sending, "saved");
+			settle(true);
 			refreshConfig();
 			if (opts.autoTest) {
 				const src = saved.find((s) => s.id === opts.autoTest);
@@ -77969,19 +80082,30 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 					runTest(src, meta).catch(() => {});
 				}
 			}
+			return {
+				ok: true,
+				fieldErrors: {}
+			};
 		} catch (err) {
 			const fieldErrors = err instanceof ApiError && err.status === 400 ? fieldErrorsFrom(err.body) : {};
+			settle(false);
 			if (Object.keys(fieldErrors).length) {
-				lastRefused.current = fieldErrors;
 				if (mySeq === seq.current) setErrors({
 					...held,
 					...fieldErrors
 				});
-				markSave(sending, "failed");
-				return;
+				return {
+					ok: false,
+					fieldErrors
+				};
 			}
-			markSave(sending, "failed");
-			errorPop("Ticket sources not saved", err.message || "the server rejected the ticket sources");
+			const message = err.message || "the server rejected the ticket sources";
+			if (saveSeqs.current.ok < mySeq) errorPop("Ticket sources not saved", message);
+			return {
+				ok: false,
+				fieldErrors: {},
+				message
+			};
 		}
 	}, [catalog, runTest]);
 	if (sources === null) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -78011,6 +80135,7 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 		} : s);
 		latest.current = next;
 		setSources(next);
+		if (draftStash) draftStash.current = stashOf(next, draft, storedIds.current);
 		const merged = next.find((s) => s.id === id);
 		if (!merged) return;
 		const meta = catalog.find((p) => p.id === merged.provider) || null;
@@ -78200,18 +80325,18 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 				setFlowError("Add the repository its tickets are worked on (Repo URL).");
 				return;
 			}
-			await persist(latest.current || [], {
+			const saved = await persist(latest.current || [], {
 				changed: draft.id,
 				withDraft: true
 			});
-			if (!storedIds.current.has(draft.id)) {
-				const refused = Object.keys(lastRefused.current[draft.id] || {});
+			if (!saved.ok || !storedIds.current.has(draft.id)) {
+				const refused = Object.keys(saved.fieldErrors[draft.id] || {});
 				const credKeys = new Set(basicFields(draftMeta).filter((f) => f.type !== "state").map((f) => f.key));
 				if (refused.some((k) => credKeys.has(k))) setDraft({
 					id: draft.id,
 					step: 2
 				});
-				setFlowError(FIX_FIELDS);
+				setFlowError(finishRefusal(saved, draft.id, FIX_FIELDS));
 				return;
 			}
 			const stored = (latest.current || []).find((x) => x.id === draft.id) || src;
@@ -78298,9 +80423,16 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	};
 	const showAdd = !!adding || !!draft || !stored.length && !dismissed;
 	const trackers = trackerKinds(catalog);
-	const continueWith = (key) => {
+	const continueWith$1 = (key) => {
 		if (!key) return;
-		if (key === "repo") {
+		const how = continueWith(draft, draftSource?.provider, key);
+		if (how === "resume" && draft) {
+			setDraft({
+				id: draft.id,
+				step: 2
+			});
+			setFlowError("");
+		} else if (how === "repo") {
 			dropDraft();
 			setChoice("");
 			startAdd({
@@ -78309,7 +80441,8 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 			});
 		} else beginDraft(key);
 	};
-	const addTitle = draftMeta ? "Add " + draftMeta.label : "Add a source";
+	const pastPick = !!draft && draft.step > 1;
+	const addTitle = pastPick && draftMeta ? "Add " + draftMeta.label : "Add a source";
 	const addFlow = !showAdd ? null : adding?.kind === "repo" && !draft ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddRepoFlow, {
 		uses: adding.uses?.length ? adding.uses : ["pr"],
 		trackers,
@@ -78323,15 +80456,15 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 		title: addTitle,
 		step: draft ? draft.step : 1,
 		kinds: [...trackers, REPO_KIND],
-		picked: draftSource?.provider || (draft ? "" : choice),
+		picked: pastPick ? draftSource?.provider || "" : choice,
 		onPick: (key) => {
-			if (!draft) {
+			if (!pastPick) {
 				setChoice(key);
 				setFlowError("");
-			} else if (key !== draftSource?.provider) continueWith(key);
+			} else if (key !== draftSource?.provider) continueWith$1(key);
 		},
 		onCancel: closeAdd,
-		footer: !draft ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		footer: !draft || draft.step === 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "ik-add-hint",
 			id: "ik-add-pick-hint",
 			children: !choice ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -78346,7 +80479,7 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 			id: "ik-add-continue",
 			disabled: !choice,
 			title: choice ? void 0 : "Pick your tracker first",
-			onClick: () => continueWith(choice),
+			onClick: () => continueWith$1(choice),
 			children: "Continue ›"
 		})] }) : draft.step === 2 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
@@ -78362,7 +80495,13 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "ik-quiet-btn",
-				onClick: dropDraft,
+				onClick: () => {
+					setDraft({
+						id: draft.id,
+						step: backStep(draft.step)
+					});
+					setFlowError("");
+				},
 				children: "‹ Back"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -78401,7 +80540,7 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 				children: "Finish"
 			})
 		] }),
-		children: draftSource ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		children: draftSource && pastPick ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "ik-add-body",
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TicketSourceEditor, {
 				section: draft.step === 2 ? "connect" : "setup",
@@ -79644,8 +81783,6 @@ function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	const overrides = gh.repo_settings || {};
 	const skipAuthors = Array.isArray(gh.skip_authors) ? gh.skip_authors.join(", ") : gh.skip_authors || "";
 	const edit = useEditing(focus);
-	const [skipDraft, setSkipDraft] = (0, import_react.useState)(String(skipAuthors));
-	(0, import_react.useEffect)(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
 	const prsQuery = usePanelQuery("github-prs");
 	const loadOpenPrs = prsQuery.refresh;
 	const relistPrs = prsQuery.refetch;
@@ -79924,17 +82061,11 @@ function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 								className: "set-label",
 								children: "Ignore comments from"
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-								type: "text",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LoginListInput, {
 								id: "gh-skip-authors",
+								stored: String(skipAuthors),
 								placeholder: "dependabot, renovate",
-								autoComplete: "off",
-								value: skipDraft,
-								onChange: (e) => setSkipDraft(e.target.value),
-								onBlur: () => {
-									const list = skipDraft.split(",").map((x) => x.trim()).filter(Boolean);
-									saveGithub({ skip_authors: list }, "Saved");
-								}
+								onSave: (list) => void saveGithub({ skip_authors: list }, "Saved")
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "set-hint",
@@ -79962,8 +82093,6 @@ function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	const overrides = gh.issue_repo_settings || {};
 	const skipAuthors = Array.isArray(gh.issue_skip_authors) ? gh.issue_skip_authors.join(", ") : gh.issue_skip_authors || "";
 	const edit = useEditing(focus);
-	const [skipDraft, setSkipDraft] = (0, import_react.useState)(String(skipAuthors));
-	(0, import_react.useEffect)(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
 	const issuesQuery = usePanelQuery("github-issues");
 	const loadOpenIssues = issuesQuery.refresh;
 	const relistIssues = issuesQuery.refetch;
@@ -80220,17 +82349,11 @@ function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 								className: "set-label",
 								children: "Ignore issues from"
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-								type: "text",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LoginListInput, {
 								id: "gh-issue-skip-authors",
+								stored: String(skipAuthors),
 								placeholder: "dependabot, renovate",
-								autoComplete: "off",
-								value: skipDraft,
-								onChange: (e) => setSkipDraft(e.target.value),
-								onBlur: () => {
-									const list = skipDraft.split(",").map((x) => x.trim()).filter(Boolean);
-									saveGithub({ issue_skip_authors: list }, "Saved");
-								}
+								onSave: (list) => void saveGithub({ issue_skip_authors: list }, "Saved")
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "set-hint",
@@ -80251,11 +82374,7 @@ function skippedText(epochSec, now = /* @__PURE__ */ new Date()) {
 	return label.split(" ")[0] + "'s run skipped";
 }
 function scheduleLine(row) {
-	return [
-		row.when,
-		row.next,
-		row.skipped
-	].filter(Boolean).join(" · ");
+	return row.line;
 }
 function scheduledRows(templates, status, now = /* @__PURE__ */ new Date()) {
 	return templates.filter(hasSchedule).map((t) => {
@@ -80267,7 +82386,8 @@ function scheduledRows(templates, status, now = /* @__PURE__ */ new Date()) {
 			name: t.name,
 			when: (info.schedule_label || scheduleLabel(t.schedule)) + (tz && t.schedule?.at ? " " + tz : ""),
 			next,
-			problem: runProblem(t)
+			problem: runProblem(t),
+			line: templateScheduleLine(t, status, now)
 		};
 		if (skipping) row.skipped = skippedText(skipping, now);
 		return row;
@@ -80360,7 +82480,8 @@ function ScheduledTemplates() {
 						onClick: async () => {
 							setRunning(r.name);
 							try {
-								await runTemplateNow(r.name);
+								const title = await runTemplateNow(r.name);
+								if (title) openSessionFromIntake(title);
 							} finally {
 								setRunning("");
 							}
@@ -80932,10 +83053,12 @@ function IntakeDialog() {
 	const model = useSettingsModel(open);
 	const savedSources = useTicketingSources(open).data || [];
 	const tabRefs = (0, import_react.useRef)({});
+	const draftStash = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		if (!open) {
 			setAdding(null);
 			setFocus("");
+			draftStash.current = null;
 			return;
 		}
 		const t = target ? parseIntakeTarget(target) : {
@@ -80970,7 +83093,8 @@ function IntakeDialog() {
 		focus,
 		adding,
 		startAdd,
-		endAdd: () => setAdding(null)
+		endAdd: () => setAdding(null),
+		draftStash
 	};
 	const addFrom = () => tab === "prs" ? [{
 		kind: "repo",
@@ -81114,7 +83238,7 @@ function SettingsSearch({ onPick }) {
 	const pick = (e) => {
 		setQ("");
 		setCursor(0);
-		onPick(e.key);
+		onPick(e.key, !!e.advanced);
 		if (e.anchor) {
 			revealInSettings(e.anchor);
 			highlight(e.anchor);
@@ -83077,7 +85201,7 @@ function JointActive(props) {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "set-hint",
-							children: [mine.repo_path ? baseName(mine.repo_path) + (mine.branch ? " · " + mine.branch : "") : "No folder from your side", mine.program ? " · " + mine.program : ""]
+							children: [mine.repo_path ? baseName$1(mine.repo_path) + (mine.branch ? " · " + mine.branch : "") : "No folder from your side", mine.program ? " · " + mine.program : ""]
 						}),
 						mine.error ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 							className: "error peer-half-error",
@@ -84986,460 +87110,6 @@ function RuleRow({ rule }) {
 	});
 }
 //#endregion
-//#region src/lib/providerRows.ts
-function signInState(p) {
-	if (!p.installed) return "not-installed";
-	if (p.authenticated) return "signed-in";
-	if (p.has_login === false) return "none";
-	if (p.auth_probe) return "not-signed-in";
-	return "unknown";
-}
-var SIGN_IN_LABEL = {
-	"signed-in": "signed in",
-	"not-signed-in": "not signed in",
-	unknown: "sign-in unknown",
-	none: "no sign-in needed",
-	"not-installed": ""
-};
-function signInDetail(p, state) {
-	if (state === "signed-in") return p.auth_detail || "login found";
-	if (state === "none") return "reads API keys or has no login step — nothing to sign in to";
-	if (state === "not-signed-in") return "CLI is installed but no sign of a login was found";
-	if (state === "unknown") return "this CLI keeps its login where MindFlock doesn't look — check inside the CLI";
-	return "";
-}
-function providerRow(p) {
-	const state = signInState(p);
-	return {
-		kind: "provider",
-		name: p.name,
-		isDefault: !!p.is_default,
-		installed: !!p.installed,
-		installLabel: p.installed ? "installed" : "not installed",
-		installTitle: p.installed ? p.path || "on PATH" : p.binary_override ? `${p.binary_override} is not an executable file` : "not found on PATH",
-		installHint: !p.installed ? p.install_hint || "" : "",
-		launchHint: !p.installed ? p.launch_hint || "" : "",
-		signIn: state,
-		signInLabel: SIGN_IN_LABEL[state],
-		signInDetail: signInDetail(p, state),
-		canSignIn: !!p.installed && !!p.has_login && !p.authenticated,
-		binaryPath: p.binary_override || "",
-		binaryPinnedBy: p.binary_override_env || ""
-	};
-}
-function errorRow(e) {
-	return {
-		kind: "error",
-		file: e.file,
-		error: e.error
-	};
-}
-function providerRows(statuses, errors) {
-	return [...statuses.map(providerRow), ...(errors || []).map(errorRow)];
-}
-function pickerOptions(statuses) {
-	return statuses.map((p) => ({
-		name: p.name,
-		disabled: !p.installed,
-		label: p.installed ? agentName(p.name) : `${agentName(p.name)} — not installed`
-	}));
-}
-//#endregion
-//#region src/components/settings/screens/CodingCli.tsx
-var FLAG_EXAMPLES = {
-	claude: "e.g. --model opus",
-	codex: "e.g. --search",
-	antigravity: "e.g. --sandbox",
-	aider: "e.g. --no-auto-commits"
-};
-var SKIP_PERMISSION_FLAGS = [
-	"--dangerously-skip-permissions",
-	"--dangerously-bypass-approvals-and-sandbox",
-	"--yes-always",
-	"--auto"
-];
-var SKIP_PERMISSIONS_LABEL = SKIP_PERMS_LABEL;
-var SKIP_PERMISSIONS_TIP = SKIP_PERMS_TITLE;
-function skipsPermissions(flags) {
-	const tokens = (flags || "").split(/\s+/);
-	return SKIP_PERMISSION_FLAGS.some((f) => tokens.includes(f));
-}
-function flagsPlaceholder(provider) {
-	return FLAG_EXAMPLES[(provider || "").trim().toLowerCase()] || "";
-}
-function CodingCli({ gotoScreen }) {
-	const s = useSettings();
-	const [providers, setProviders] = (0, import_react.useState)([]);
-	const [selected, setSelected] = (0, import_react.useState)("");
-	const [flags, setFlags] = (0, import_react.useState)("");
-	const flagsMap = (0, import_react.useRef)({});
-	const [otherProvider, setOtherProvider] = (0, import_react.useState)("");
-	(0, import_react.useEffect)(() => {
-		(async () => {
-			let provs = [];
-			let saved = "";
-			try {
-				const [d, st] = await Promise.all([api("/api/providers/status"), api("/api/settings")]);
-				provs = d?.providers || [];
-				const cc = st?.settings?.coding_cli;
-				if (cc?.default_provider != null) saved = String(cc.default_provider).trim();
-				flagsMap.current = cc?.default_launch_args && typeof cc.default_launch_args === "object" ? { ...cc.default_launch_args } : {};
-			} catch {}
-			setProviders(provs);
-			const installed = provs.filter((p) => p.installed);
-			const lower = saved.toLowerCase();
-			const match = installed.find((p) => (p.name || "").toLowerCase() === lower || (p.aliases || []).some((a) => String(a).toLowerCase() === lower) || String(p.command || "").toLowerCase() === lower);
-			const value = match ? match.name : saved ? installed[0]?.name || "" : "";
-			setSelected(value);
-			setFlags(flagsMap.current[value] || "");
-			if (saved && !match && value) s.saveField("coding_cli", "default_provider", value);
-		})();
-	}, []);
-	const [defaultSaved, setDefaultSaved] = (0, import_react.useState)(0);
-	const pickProvider = (name) => {
-		setSelected(name);
-		setFlags(flagsMap.current[name] || "");
-		s.saveField("coding_cli", "default_provider", name).then(() => setDefaultSaved((n) => n + 1));
-	};
-	const saveFlags = (0, import_react.useCallback)(async (value) => {
-		const prov = selected.trim();
-		if (!prov) return;
-		const val = value.trim();
-		if (val) flagsMap.current[prov] = val;
-		else delete flagsMap.current[prov];
-		try {
-			await api("/api/settings", { json: { coding_cli: { default_launch_args: flagsMap.current } } });
-			toast("Saved launch flags");
-		} catch {
-			toast("Save failed: launch flags");
-		}
-	}, [selected]);
-	const others = providers.filter((p) => p.name !== selected);
-	const missing = others.filter((p) => !p.installed);
-	const other = others.find((p) => p.name === otherProvider)?.name || missing[0]?.name || others[0]?.name || "";
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-			className: "set-section-title",
-			children: "Agents"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			"data-tour": "settings-default-agent",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Default agent"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
-					id: "default-provider-select",
-					value: selected,
-					onChange: (e) => pickProvider(e.target.value),
-					children: pickerOptions(providers).map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-						value: o.name,
-						disabled: o.disabled,
-						children: o.label
-					}, o.name))
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "hidden",
-					id: "default-provider-input",
-					"data-group": "coding_cli",
-					"data-field": "default_provider",
-					value: selected,
-					readOnly: true
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint",
-					children: "New sessions start with this agent."
-				})
-			]
-		}),
-		others.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-			className: "pr-advanced set-adv-fold coding-other-fold",
-			id: "coding-other-agent-fold",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: missing.length ? "Not installed — how to install" : "Set up another agent" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "set-row",
-				id: "coding-other-agent",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: "Set up another agent"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
-						id: "agent-test-provider",
-						"aria-label": "Another agent",
-						value: other,
-						onChange: (e) => setOtherProvider(e.target.value),
-						children: others.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: p.name,
-							children: agentName(p.name) + (p.installed ? "" : " — not installed")
-						}, p.name))
-					}),
-					other && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentCard, {
-						provider: other,
-						here: "coding",
-						gotoScreen
-					}, other)
-				]
-			})]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "set-row coding-agent-status",
-			id: "coding-agent-status",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Status"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentCard, {
-				provider: selected,
-				here: "coding",
-				gotoScreen
-			}, selected + ":" + defaultSaved)]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Extra flags for new sessions"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "text",
-					id: "default-launch-args-input",
-					autoComplete: "off",
-					placeholder: flagsPlaceholder(selected),
-					value: flags,
-					onChange: (e) => setFlags(e.target.value),
-					onBlur: () => saveFlags(flags),
-					onKeyDown: (e) => {
-						if (e.key === "Enter") e.target.blur();
-					}
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlagChips, {
-					provider: selected,
-					value: flags,
-					onChange: (v) => {
-						setFlags(v);
-						saveFlags(v);
-					}
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint",
-					children: "Added every time the default agent starts."
-				}),
-				skipsPermissions(flags) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "set-hint flags-danger",
-					id: "default-launch-args-warning",
-					role: "note",
-					children: [
-						SKIP_PERMISSIONS_LABEL,
-						": ",
-						SKIP_PERMISSIONS_TIP.charAt(0).toLowerCase() + SKIP_PERMISSIONS_TIP.slice(1),
-						"."
-					]
-				})
-			]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionsAtOnce, { gotoScreen }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdvancedFold, {
-			id: "coding-advanced",
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WindowRefresh, {})
-		})
-	] });
-}
-function SessionsAtOnce({ gotoScreen }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-			className: "set-section-title",
-			id: "coding-sessions-at-once",
-			children: "Sessions running at once"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			children: "Sessions you start yourself have no limit. Start as many as you like."
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Ticket sessions at once"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-					group: "engine",
-					field: "max_sessions",
-					type: "number",
-					placeholder: "no limit"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint",
-					children: "The most auto-started ticket sessions running together. Extra tickets wait their turn."
-				})
-			]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "set-hint",
-			children: [
-				"Sessions an agent starts for you have their own limits, under",
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "linklike",
-					"data-goto-screen": "orchestration",
-					onClick: () => gotoScreen("orchestration"),
-					children: "Agent orchestration"
-				}),
-				"."
-			]
-		})
-	] });
-}
-function WindowRefresh() {
-	const [cfg, setCfg] = (0, import_react.useState)({});
-	const load = (0, import_react.useCallback)(async () => {
-		try {
-			setCfg(await api("/api/window-refresh"));
-		} catch {}
-	}, []);
-	(0, import_react.useEffect)(() => {
-		load();
-	}, [load]);
-	const save = async (patch) => {
-		try {
-			await api("/api/window-refresh", { json: patch });
-			await load();
-		} catch {
-			toast("Couldn't update window refresh");
-		}
-	};
-	const selected = new Set(cfg.providers || []);
-	const opts = cfg.options || [];
-	const fmtWhen = (epoch) => {
-		try {
-			return (/* @__PURE__ */ new Date(epoch * 1e3)).toLocaleString();
-		} catch {
-			return "soon";
-		}
-	};
-	const statusLines = opts.filter((o) => selected.has(o.name) && o.next_fire).map((o) => o.name + ": next ~" + fmtWhen(o.next_fire));
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-			className: "set-section-title",
-			children: "Keep usage windows warm"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "set-row set-switch-row",
-			title: "Send a tiny, connection-free ping on a schedule so a provider's rolling usage window anchors when you want it to.",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Scheduled refresh"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "ca-switch",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "checkbox",
-					id: "wr-enabled",
-					checked: !!cfg.enabled,
-					onChange: (e) => save({ enabled: e.target.checked })
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
-			})]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			children: "Sends a tiny message on a schedule so a fresh usage window starts when you want it, such as the start of your work day."
-		}),
-		cfg.enabled && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			id: "wr-opts",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "set-row",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-label",
-							children: "Fresh window at"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: "time",
-							id: "wr-anchor",
-							className: "num-sm",
-							defaultValue: cfg.anchor_time || "",
-							onChange: (e) => save({ anchor_time: e.target.value || "" })
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							children: "Daily, at this local time. Leave empty to use a fixed interval."
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "set-row" + ((cfg.anchor_time || "").trim() ? " feature-off" : ""),
-					id: "wr-interval-row",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-label",
-							children: "Or every"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: "number",
-							id: "wr-interval",
-							className: "num-sm",
-							min: .25,
-							max: 168,
-							step: .25,
-							defaultValue: typeof cfg.interval_hours === "number" ? cfg.interval_hours : void 0,
-							onChange: (e) => {
-								const v = parseFloat(e.target.value);
-								if (!isNaN(v)) save({ interval_hours: v });
-							}
-						}),
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "muted",
-							children: "hours"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							children: "Used when no time is set (Claude and Codex: 5 hours)."
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "set-row",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-label",
-							children: "Agents"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							id: "wr-providers",
-							className: "wr-providers",
-							children: opts.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-								className: "wr-prov",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-									type: "checkbox",
-									checked: selected.has(o.name),
-									onChange: (e) => {
-										const next = new Set(selected);
-										if (e.target.checked) next.add(o.name);
-										else next.delete(o.name);
-										save({ providers: [...next] });
-									}
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									title: o.window?.note || "",
-									children: o.name + (o.window?.hours ? " · " + o.window.hours + "h window" : o.window?.kind ? " · " + o.window.kind : "")
-								})]
-							}, o.name))
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							id: "wr-status",
-							children: cfg.enabled && statusLines.length ? statusLines.join(" · ") : ""
-						})
-					]
-				})
-			]
-		})
-	] });
-}
-//#endregion
 //#region src/components/settings/screens/Accounts.tsx
 var KINDS = [
 	{
@@ -86122,7 +87792,7 @@ function SharedMcpServers() {
 	const toggle = async (name, on) => {
 		const next = shared.filter((n) => n !== name);
 		if (on) next.push(name);
-		await s.saveField("general", "mcp_shared_servers", next);
+		if (!await s.saveField("general", "mcp_shared_servers", next)) return;
 		toast(on ? `${name} shared — from each session's next launch` : `${name} back to one copy per window — from each session's next launch`);
 		load();
 	};
@@ -91759,10 +93429,16 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 				onClose: closeDialog,
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					id: "settings-panel",
+					role: "dialog",
+					"aria-modal": "true",
+					"aria-labelledby": "settings-title",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "ws-head",
 						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Settings" }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+								id: "settings-title",
+								children: "Settings"
+							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "settings" }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
@@ -91778,7 +93454,10 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 							"aria-label": "Settings sections",
 							"data-mode": advanced ? "advanced" : "basic",
 							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsSearch, { onPick: gotoScreen }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsSearch, { onPick: (key, adv) => {
+									if (adv && !advanced) changeMode(true);
+									gotoScreen(key);
+								} }),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
 									id: "settings-nav-select",
 									className: "set-nav-select",
@@ -92746,8 +94425,10 @@ async function editPlanStep(plan, step, fields) {
 		});
 		if (r?.plan) patchPlan(plan.id, () => r.plan);
 		refreshTestPlans();
+		return true;
 	} catch (err) {
 		errorPop("Couldn't change that step", errMsg(err));
+		return false;
 	}
 }
 async function removePlanStep(plan, step) {
@@ -92787,8 +94468,10 @@ async function writePlanFor(target) {
 		const r = await api("/api/instances/" + encodeURIComponent(target) + "/test-plan", { method: "POST" });
 		toast(r.existing ? (r.plan && r.plan !== target ? target + "'s branch already has a checklist — it's under " + r.plan : target + " already has a checklist") + " — it's in Verify" : "Asked the agent for a checklist for " + target + " — it'll appear in Verify (up to three minutes)");
 		refreshTestPlans();
+		return true;
 	} catch (err) {
 		errorPop("Couldn't write a checklist", errMsg(err));
+		return false;
 	}
 }
 //#endregion
@@ -93160,8 +94843,7 @@ function StepRow({ step, index, plan, onRecord, onRunStep, running, onRemove, on
 						step,
 						onCancel: () => setEditing(false),
 						onSave: async (fields) => {
-							await onEdit(step, fields);
-							setEditing(false);
+							if (await onEdit(step, fields) !== false) setEditing(false);
 						}
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "vf-step-head",
@@ -93688,10 +95370,9 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand, re
 	};
 	const menu = [];
 	if (session) {
-		const go = (tab) => {
+		const go = () => {
 			closeDialog();
 			selectSession(session.title);
-			if (tab) useUi.getState().setLastTab(session.title, tab);
 		};
 		menu.push({
 			key: "open-session",
@@ -93703,7 +95384,19 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand, re
 			key: "view-diff",
 			label: "View diff",
 			title: "Show what changed on " + (plan.branch || "this branch"),
-			onSelect: () => go("diff")
+			onSelect: () => {
+				closeDialog();
+				useUi.getState().openDiff(session.title);
+			}
+		});
+		menu.push({
+			key: "could-break",
+			label: "What could break",
+			title: "Open the map on what imports the changes on " + (plan.branch || "this branch"),
+			onSelect: () => {
+				closeDialog();
+				useUi.getState().openMap(session.title, { section: "risk" });
+			}
 		});
 		if (session.pr_url) menu.push({
 			key: "open-pr",
@@ -94737,8 +96430,7 @@ function VerifyDialog() {
 					onClick: async () => {
 						setAsking(true);
 						try {
-							await writePlanFor(missingTarget.title);
-							setMissingBranch("");
+							if (await writePlanFor(missingTarget.title)) setMissingBranch("");
 						} finally {
 							setAsking(false);
 						}
@@ -95110,10 +96802,7 @@ function warnZones(title, breaches, proceed) {
 	const shown = breaches.slice(0, 5).map((b) => b.path + (b.pattern && b.pattern !== b.path && !green ? " (" + b.pattern + ")" : "")).join(" · ");
 	errorPop(green ? "Commit — changes outside the green zone" : "Commit — red zone changed", `${n} file${n === 1 ? "" : "s"} ${green ? "outside the scope" : "in a keep-out zone"}: ${shown}` + (n > 5 ? ` · and ${n - 5} more` : "") + ". The zone is your team's rule for this repo; agents are stopped there. Commit anyway, or leave these out first.", [{
 		label: "Open map",
-		run: () => {
-			selectSession(title);
-			useUi.getState().setLastTab(title, "map");
-		}
+		run: () => useUi.getState().openMap(title, breachFocus(breaches))
 	}, {
 		label: "Commit anyway",
 		primary: true,
@@ -95532,6 +97221,70 @@ function ChangesTab({ base }) {
 	});
 }
 //#endregion
+//#region src/lib/mapDigest.ts
+var EMPTY_DIGEST = {
+	changed: 0,
+	dependents: 0,
+	folders: 0,
+	tests: 0,
+	rows: [],
+	ready: false
+};
+function digestOf(snap, live) {
+	if (!snap || !live) return EMPTY_DIGEST;
+	const files = snap.files || [];
+	const index = /* @__PURE__ */ new Map();
+	files.forEach((f, i) => index.set(String(f[0] || ""), i));
+	const rev = reverseIndex(snap.edges || [], files.length);
+	const tests = effectiveTests(snap);
+	const isTest = (p) => {
+		const i = index.get(p);
+		return i !== void 0 ? tests.has(i) : isTestPath(p);
+	};
+	const fs = feedState(live.feed || [], live.now || 0, live.activity || "");
+	const plan = live.plan && live.plan.items && live.plan.items.length ? live.plan : null;
+	const seeds = /* @__PURE__ */ new Set();
+	if (plan && autoMode(plan, fs.lastEditTs) === "plan") for (const it of plan.items) seeds.add(it.path);
+	else {
+		for (const c of live.changed || []) seeds.add(c.path);
+		for (const [p, f] of fs.files) if (f.kind === "edit" && f.lastTs) seeds.add(p);
+	}
+	const idx = [...seeds].filter((p) => index.has(p)).map((p) => index.get(p));
+	const dependents = /* @__PURE__ */ new Map();
+	for (const [i, hops] of blastFrom(idx, rev, 1)) {
+		const f = files[i];
+		if (f) dependents.set(f[0], hops);
+	}
+	const rows = blastRows(dependents, null, isTest);
+	return {
+		changed: seeds.size,
+		dependents: rows.reduce((s, r) => s + r.count, 0),
+		folders: rows.filter((r) => r.count > 0).length,
+		tests: rows.reduce((s, r) => s + r.tests, 0),
+		rows,
+		ready: true
+	};
+}
+function digestLine(d) {
+	if (!d.dependents && !d.tests) return "";
+	const n = (k, one) => k + " " + one + (k === 1 ? "" : "s");
+	const files = d.dependents ? n(d.dependents, "file") + " in " + n(d.folders, "folder") : "";
+	const tests = d.tests ? n(d.tests, "test") : "";
+	return files && tests ? files + " (" + tests + ")" : files || tests;
+}
+function useMapDigest(title, enabled = true) {
+	return useQuery({
+		queryKey: ["map-digest", title],
+		queryFn: async () => {
+			const [snap, live] = await Promise.all([fetchSnapshot(title), fetchLive(title, 0)]);
+			return digestOf("files" in snap ? snap : null, live);
+		},
+		enabled: enabled && !!title,
+		staleTime: 3e4,
+		retry: false
+	}).data || EMPTY_DIGEST;
+}
+//#endregion
 //#region src/components/dialogs/MakePrDialog.tsx
 function MakePrDialog() {
 	const open = useUi((s) => s.openDialog === "make-pr");
@@ -95584,6 +97337,7 @@ function MakePrDialog() {
 	(0, import_react.useEffect)(() => {
 		setActive((a) => Math.min(a, Math.max(0, filtered.length - 1)));
 	}, [filtered.length]);
+	const risk = digestLine(useMapDigest(target || "", open && !!target));
 	if (!open || !target) return null;
 	const base = value.trim();
 	const onBase = !!info && base === info.current && !!base;
@@ -95677,6 +97431,25 @@ function MakePrDialog() {
 						})]
 					})
 				] }),
+				risk && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "set-hint",
+					id: "make-pr-risk",
+					children: [
+						"⚠ Could break: ",
+						risk,
+						" —",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike",
+							onClick: () => {
+								closeDialog();
+								useUi.getState().openMap(target, { section: "risk" });
+							},
+							children: "See on map"
+						})
+					]
+				}),
 				onBase ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "error",
 					id: "make-pr-error",
