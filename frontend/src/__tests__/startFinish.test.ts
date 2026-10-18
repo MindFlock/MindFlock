@@ -3,8 +3,10 @@
  * tested by behaviour where they live. */
 
 import { describe, expect, it } from "vitest";
-import { code, fn, squash } from "./sourceText";
+import { code, filesWith, fn, squash } from "./sourceText";
 import { splitLogins } from "../components/intake/kit";
+import { installTarget } from "../components/setup/AgentBlocked";
+import { SETTINGS_SEARCH } from "../components/palette/settingsSearch";
 import { insertSaved } from "../components/dialogs/newSession/PromptFold";
 
 const SETTINGS = code("components/settings/useSettings.tsx");
@@ -66,5 +68,45 @@ describe("typed fields save as you type, not on blur alone", () => {
   it("splitLogins trims and drops blanks", () => {
     expect(splitLogins(" dependabot, ,renovate ,")).toEqual(["dependabot", "renovate"]);
     expect(splitLogins("")).toEqual([]);
+  });
+});
+
+describe("a fixed agent problem doesn't stay on screen", () => {
+  it("New asks again which agents are installed and signed in on a keeping reopen", () => {
+    const nsd = code("components/dialogs/NewSessionDialog.tsx");
+    const body = squash(nsd);
+    expect(body).toContain("const refreshAgentState = () => {");
+    // The resume path (a typed draft, a hand-back) and the failed-create reopen.
+    expect(body).toMatch(/\.then\(\(list\) => setTemplates\(list\)\) \.catch\(\(\) => \{\}\); refreshAgentState\(\); return; \}/);
+    expect(body).toContain("setAdvancedOpen(true); refreshAgentState(); return;");
+  });
+
+  it("Install for an agent other than the default opens Settings → Agents on it", () => {
+    expect(installTarget("codex", "claude")).toBe("agents");
+    expect(installTarget("claude", "claude")).toBe("setup");
+    expect(installTarget("codex", "")).toBe("agents");
+    const blocked = code("components/setup/AgentBlocked.tsx");
+    expect(blocked).toContain("Install {agentName(block.name)}…");
+    expect(blocked).not.toContain('openDialogFor("setup");\n          }}');
+    expect(code("components/settings/screens/CodingCli.tsx")).toContain("const [otherProvider, setOtherProvider] = useState(focusAgent);");
+  });
+});
+
+describe("settings search reaches advanced-only controls", () => {
+  // Every AdvancedFold a basic screen hides entirely (no `basic`).
+  const hidden = new Set<string>();
+  for (const f of filesWith("<AdvancedFold", /screens\/.*\.tsx$/))
+    for (const m of code(f).matchAll(/<AdvancedFold\s+id="([^"]+)"([^>]*)>/g)) if (!/\bbasic\b/.test(m[2])) hidden.add(m[1]);
+
+  it("an entry whose anchor is an advanced-only fold turns advanced on first", () => {
+    expect(hidden.has("general-advanced")).toBe(true);
+    for (const e of SETTINGS_SEARCH) {
+      const id = e.anchor?.startsWith("#") ? e.anchor.slice(1) : "";
+      expect(!!e.advanced, e.label).toBe(hidden.has(id));
+    }
+    expect(squash(code("components/palette/settingsSearch.ts"))).toContain(
+      "if (e.advanced && !readAdvancedMode()) writeAdvancedMode(true); openSettings(e.key);"
+    );
+    expect(squash(code("components/settings/SettingsDialog.tsx"))).toContain("if (adv && !advanced) changeMode(true);");
   });
 });

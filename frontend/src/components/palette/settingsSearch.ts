@@ -14,6 +14,7 @@
  * is its menu). */
 
 import { openSettings, type SettingsScreen } from "../../lib/openSettings";
+import { readAdvancedMode, writeAdvancedMode } from "../settings/settingsMode";
 
 export interface SettingsSearchEntry {
   key: SettingsScreen;
@@ -28,6 +29,10 @@ export interface SettingsSearchEntry {
   /** A CSS selector inside the screen to scroll to (a folded <details>
    * around it is opened). */
   anchor?: string;
+  /** The anchor only exists in advanced mode (an AdvancedFold, which basic
+   * mode doesn't render at all): the result turns advanced settings on
+   * first, or it would land on a screen without the thing it named. */
+  advanced?: boolean;
 }
 
 export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
@@ -50,6 +55,7 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
     sub: "Cost alerts, carrying on after a usage reset, idle agents",
     terms: ["budget", "cost", "spend", "usage resets", "resume", "revive", "restart sessions", "sleep", "idle", "memory", "scroll speed"],
     anchor: "#general-advanced",
+    advanced: true,
   },
   {
     key: "connections",
@@ -261,6 +267,7 @@ export function settingsActions(query: string): Array<{ label: string; sub: stri
     sub: e.sub,
     hint: "settings",
     run: () => {
+      if (e.advanced && !readAdvancedMode()) writeAdvancedMode(true);
       openSettings(e.key);
       if (e.anchor) revealInSettings(e.anchor);
     },

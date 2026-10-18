@@ -227,7 +227,13 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
               aria-label="Settings sections"
               data-mode={advanced ? "advanced" : "basic"}
             >
-              <SettingsSearch onPick={gotoScreen} />
+              <SettingsSearch
+                onPick={(key, adv) => {
+                  // An advanced-only control renders nothing in basic mode.
+                  if (adv && !advanced) changeMode(true);
+                  gotoScreen(key);
+                }}
+              />
               {/* Phone width: one select instead of a wrap of tabs. Same list
                   as the buttons (CSS shows one or the other). */}
               <select

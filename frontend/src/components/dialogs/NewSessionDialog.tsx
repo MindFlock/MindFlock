@@ -422,6 +422,32 @@ export function NewSessionDialog() {
   deviceRef.current = device;
   const loadedDevice = useRef<string | null>(null);
 
+  /** Which agents this device has installed and signed in to, asked again.
+   * An opening that keeps the form (a typed draft, a hand-back) skips the
+   * full load — and so kept saying "not installed" / "isn't signed in" after
+   * the person fixed it in Settings → Agents and came back. This device
+   * only, like the load's own copies of these two. */
+  const refreshAgentState = () => {
+    if (deviceRef.current) return;
+    const here = () => !deviceRef.current;
+    deviceApi("")<{ logins?: Array<{ name: string; logged_in: boolean | null }> }>("/api/setup")
+      .then((st) => {
+        if (!here()) return;
+        const out: Record<string, boolean> = {};
+        for (const l of st.logins || []) if (l.logged_in === false) out[l.name] = true;
+        setSignedOut(out);
+      })
+      .catch(() => {});
+    deviceApi("")<{ providers?: Array<{ name: string; installed?: boolean }> }>("/api/providers/status")
+      .then((d) => {
+        if (!here()) return;
+        const have: InstalledMap = {};
+        for (const x of d.providers || []) if (typeof x.installed === "boolean") have[x.name] = x.installed;
+        setInstalled(have);
+      })
+      .catch(() => {});
+  };
+
   /** Load what the form offers from the device the session will live on:
    * folder suggestions, config (home, default agent), launch-flag defaults,
    * templates and the agent list. Returns the cleanup that silences answers
@@ -683,6 +709,7 @@ export function NewSessionDialog() {
       openedPage.current = 2;
       openedFocus.current = "title";
       setAdvancedOpen(true);
+      refreshAgentState();
       return;
     }
     const prefill = useUi.getState().takeNewPrefill();
@@ -722,6 +749,7 @@ export function NewSessionDialog() {
         void ensureTemplates(true)
           .then((list) => setTemplates(list))
           .catch(() => {});
+      refreshAgentState();
       return;
     }
     resetForm(prefill);

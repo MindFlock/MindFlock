@@ -14,6 +14,7 @@ import { toast } from "../../../lib/toast";
 import { flashSaved } from "../savedCue";
 import { useAutosave } from "../../intake/autosave";
 import { agentName } from "../../../lib/agentNames";
+import { openSettings } from "../../../lib/openSettings";
 import { pickerOptions } from "../../../lib/providerRows";
 import { FlagChips } from "../../dialogs/FlagChips";
 import { SettingField, useSettings } from "../useSettings";
@@ -65,14 +66,39 @@ interface Provider {
   path?: string;
 }
 
+/** The agent a link asked Agents to show ("" = none) — read once, when the
+ * screen next mounts. */
+const agentsFocus = { provider: "" };
+
+/** Settings → Agents with `provider`'s card showing — its install and sign-in
+ * steps. A session whose agent isn't installed goes here: the Setup checklist
+ * only checks the DEFAULT agent. */
+export function openAgentSettings(provider: string): void {
+  agentsFocus.provider = provider;
+  openSettings("coding");
+}
+
 export function CodingCli({ gotoScreen }: ScreenProps) {
   const s = useSettings();
   const [providers, setProviders] = useState<Provider[]>([]);
   const [selected, setSelected] = useState("");
   const [flags, setFlags] = useState("");
   const flagsMap = useRef<Record<string, string>>({});
+  // A link that named an agent (openAgentSettings): its card, unfolded.
+  const [focusAgent] = useState(() => {
+    const p = agentsFocus.provider;
+    agentsFocus.provider = "";
+    return p;
+  });
   /** Which other agent's card the fold shows; "" = the first one that isn't the default. */
-  const [otherProvider, setOtherProvider] = useState("");
+  const [otherProvider, setOtherProvider] = useState(focusAgent);
+  useEffect(() => {
+    if (!focusAgent) return;
+    const t = setTimeout(() => {
+      document.getElementById("coding-other-agent-fold")?.scrollIntoView?.({ block: "start" });
+    }, 0);
+    return () => clearTimeout(t);
+  }, [focusAgent, providers.length]);
 
   useEffect(() => {
     (async () => {
@@ -183,7 +209,11 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
       {/* Next to the picker, not under Advanced: the greyed-out agents above
           are the question this answers ("where's Codex?"). */}
       {others.length > 0 && (
-        <details className="pr-advanced set-adv-fold coding-other-fold" id="coding-other-agent-fold">
+        <details
+          className="pr-advanced set-adv-fold coding-other-fold"
+          id="coding-other-agent-fold"
+          open={focusAgent && focusAgent !== selected ? true : undefined}
+        >
           <summary>{missing.length ? "Not installed — how to install" : "Set up another agent"}</summary>
           <div className="set-row" id="coding-other-agent">
             <span className="set-label">Set up another agent</span>
