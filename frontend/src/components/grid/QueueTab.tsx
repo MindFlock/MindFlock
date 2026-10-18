@@ -27,6 +27,21 @@ interface QueueStatePayload {
 
 const queueCache = new Map<string, QueueStatePayload>();
 
+/** The composer's keys: Ctrl/⌘+Enter sends now, Alt+Enter adds to the queue;
+ * a plain Enter is a newline (prompts are often several lines). */
+export function composerKey(e: {
+  key: string;
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  altKey?: boolean;
+  shiftKey?: boolean;
+}): "send" | "add" | null {
+  if (e.key !== "Enter" || e.shiftKey) return null;
+  if ((e.ctrlKey || e.metaKey) && !e.altKey) return "send";
+  if (e.altKey && !e.ctrlKey && !e.metaKey) return "add";
+  return null;
+}
+
 function qApi<T = QueueStatePayload>(title: string, path: string, opts?: RequestInit & { json?: unknown }) {
   return instApi<T>(title, path, opts);
 }
@@ -58,13 +73,15 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
   }, [title]);
 
   const mutate = useCallback(
-    async (path: string, opts?: RequestInit & { json?: unknown }) => {
+    async (path: string, opts?: RequestInit & { json?: unknown }): Promise<boolean> => {
       try {
         const st = await qApi(title, path, opts);
         queueCache.set(title, st);
         setState(st);
+        return true;
       } catch (err) {
         toast("Queue update failed: " + ((err as Error).message || ""));
+        return false;
       }
     },
     [title]
@@ -141,6 +158,19 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
     } catch (err) {
       toast("Queue failed: " + ((err as Error).message || ""));
     }
+  };
+
+  /** ✕ on a queued prompt: gone at once, with an Undo that puts the same
+   * words back in the same place. */
+  const remove = async (it: QueueItem, index: number) => {
+    if (!(await mutate("/queue?item=" + encodeURIComponent(it.id), { method: "DELETE" }))) return;
+    toast("Removed from the queue", {
+      action: {
+        label: "Undo",
+        ariaLabel: "Undo removing the queued prompt",
+        onClick: () => void mutate("/queue", { json: { text: it.text, index } }),
+      },
+    });
   };
 
   const saveEdit = () => {
@@ -239,7 +269,7 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
       }}
     >
       <div className="queue-pop-head">
-        <span className="queue-pop-title">{title}</span>
+        <span className="queue-pop-title">{displayName(title)}</span>
         <span className="queue-pop-sub muted">
           Send a prompt now, or queue prompts to auto-run when the agent goes idle — the run keeps
           going unattended and resumes when usage limits reset. Drop a .csv or .txt file anywhere
@@ -249,15 +279,23 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
       <textarea
         className="queue-input"
         rows={3}
-        placeholder="Type a prompt — Add to queue, or Send now"
+        placeholder="Type a prompt — Add to queue (Alt+Enter), or Send now (Ctrl+Enter)"
+        aria-label={"Prompt for " + displayName(title)}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          const k = composerKey(e);
+          if (!k) return;
+          e.preventDefault();
+          e.stopPropagation();
+          void (k === "send" ? send() : add());
+        }}
       />
       <div className="queue-actions">
-        <button className="queue-add primary" type="button" onClick={add}>
+        <button className="queue-add primary" type="button" title="Add to queue (Alt+Enter)" onClick={add}>
           Add to queue
         </button>
-        <button className="queue-send" type="button" onClick={send}>
+        <button className="queue-send" type="button" title="Send now (Ctrl+Enter)" onClick={send}>
           Send now
         </button>
       </div>
@@ -393,7 +431,9 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
                 </span>
                 <span className="queue-item-ctrls">
                   <button
+                    type="button"
                     className="qi-send"
+                    aria-label={"Send prompt " + (i + 1) + " now"}
                     title="Send this prompt now — skips the idle wait, cooldowns and any usage-limit hold"
                     onClick={async () => {
                       try {
@@ -408,27 +448,39 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
                   >
                     ▶
                   </button>
-                  <button className="qi-edit" title="Edit" onClick={() => setEditing({ id: it.id, value: it.text })}>
+                  <button
+                    type="button"
+                    className="qi-edit"
+                    aria-label={"Edit prompt " + (i + 1)}
+                    title="Edit"
+                    onClick={() => setEditing({ id: it.id, value: it.text })}
+                  >
                     ✎
                   </button>
                   <button
+                    type="button"
                     className="qi-add-above"
+                    aria-label={"Add a prompt above prompt " + (i + 1)}
                     title="Add a prompt above this one"
                     onClick={() => setInserting({ index: i, value: "" })}
                   >
                     +↑
                   </button>
                   <button
+                    type="button"
                     className="qi-add-below"
+                    aria-label={"Add a prompt below prompt " + (i + 1)}
                     title="Add a prompt below this one"
                     onClick={() => setInserting({ index: i + 1, value: "" })}
                   >
                     +↓
                   </button>
                   <button
+                    type="button"
                     className="qi-del"
-                    title="Remove"
-                    onClick={() => mutate("/queue?item=" + encodeURIComponent(it.id), { method: "DELETE" })}
+                    aria-label={"Remove prompt " + (i + 1)}
+                    title="Remove (Undo in the toast)"
+                    onClick={() => void remove(it, i)}
                   >
                     ✕
                   </button>

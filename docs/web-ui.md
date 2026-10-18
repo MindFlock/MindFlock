@@ -961,7 +961,9 @@ count). It opens a popover with two ways to drive the agent:
   self-improving prompt ("keep improving the repo") cycles forever; **Auto-run**
   toggles draining. Items reorder by dragging the **⋮⋮** handle, edit (✎),
   insert a new prompt above/below any item (**+↑** / **+↓** open an inline
-  composer at that slot), delete, or **send now (▶)**. Dropping a `.csv` file
+  composer at that slot), delete (✕ — the toast's **Undo** puts it back in
+  its place), or **send now (▶)**. In the box, `Ctrl+Enter` (`⌘+Enter`) is
+  Send now and `Alt+Enter` Add to queue; a plain `Enter` is a new line. Dropping a `.csv` file
   anywhere on the tab appends one prompt per row to the end of the queue
   (quoted fields respected, an obvious header row skipped; any other text
   file queues one prompt per line) —

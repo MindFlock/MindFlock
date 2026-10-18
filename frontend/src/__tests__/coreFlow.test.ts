@@ -160,3 +160,25 @@ describe("shortcut hints say keys that work here", () => {
     expect(grid).toContain('usableShortcuts("new").join(" / ")');
   });
 });
+
+describe("the Queue tab", () => {
+  it("Ctrl/⌘+Enter sends now, Alt+Enter queues, Enter is a newline", async () => {
+    const { composerKey } = await import("../components/grid/QueueTab");
+    expect(composerKey({ key: "Enter", ctrlKey: true })).toBe("send");
+    expect(composerKey({ key: "Enter", metaKey: true })).toBe("send");
+    expect(composerKey({ key: "Enter", altKey: true })).toBe("add");
+    expect(composerKey({ key: "Enter" })).toBeNull();
+    expect(composerKey({ key: "Enter", shiftKey: true, ctrlKey: true })).toBeNull();
+    expect(composerKey({ key: "Enter", ctrlKey: true, altKey: true })).toBeNull();
+  });
+
+  it("names the session as the rail does, labels its icon buttons, and undoes a delete", () => {
+    const q = code("components/grid/QueueTab.tsx");
+    expect(q).toContain('<span className="queue-pop-title">{displayName(title)}</span>');
+    for (const l of ['"Send prompt "', '"Edit prompt "', '"Add a prompt above prompt "', '"Add a prompt below prompt "', '"Remove prompt "'])
+      expect(q, l).toContain("aria-label={" + l);
+    const rm = fn("components/grid/QueueTab.tsx", "QueueTab");
+    expect(has(rm, 'onClick: () => void mutate("/queue", { json: { text: it.text, index } })')).toBe(true);
+    expect(has(rm, 'toast("Removed from the queue", {')).toBe(true);
+  });
+});
