@@ -472,7 +472,6 @@ export const SidebarRow = memo(function SidebarRow({
    * keyboard, and a narrow window's drawer closes the way it does when the
    * pick changes (App closes it on a selection CHANGE only). */
   const reselect = () => {
-    if (pending) return;
     selectSession(title);
     const ui = useUi.getState();
     if (ui.narrow && !ui.sidebarHidden) ui.toggleSidebar();
