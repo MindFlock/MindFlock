@@ -26,8 +26,8 @@ import { setTheme } from "../lib/theme";
 import { hasNativeWindowControls, isFullScreen, onFullScreenChanged } from "../lib/shell";
 import { openSettings } from "../lib/openSettings";
 import { inShell } from "../lib/shell";
-import { keymapVersion, shortcutLabels, subscribeKeymap } from "../lib/keymap";
-import { browserReserved } from "./palette/ShortcutsSheet";
+import { keymapVersion, subscribeKeymap } from "../lib/keymap";
+import { usableShortcuts } from "./palette/ShortcutsSheet";
 import { VERIFY_BLURB } from "../lib/vocab";
 import { useScheduleStatus } from "../lib/useScheduleStatus";
 import { failingSchedules } from "../lib/templates";
@@ -152,7 +152,7 @@ export function TopBar() {
   useEffect(() => subscribeKeymap(() => setKeysVer(keymapVersion())), []);
   const tab = !inShell();
   const keys = (id: string) => {
-    const k = shortcutLabels(id, (l) => !tab || !browserReserved(l));
+    const k = usableShortcuts(id, tab);
     return k.length ? " (" + k.join(" / ") + ")" : "";
   };
 

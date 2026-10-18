@@ -118,7 +118,7 @@ describe("O2/O3: chips, menu actions, gate override", () => {
 
   it("the check chip and its actions", () => {
     expect(checkChip(inst("a"))).toBeNull();
-    expect(checkChip(inst("a", { check: { state: "failed", rc: 2 } } as Partial<Instance>))?.label).toBe("✗ checks");
+    expect(checkChip(inst("a", { check: { state: "failed", rc: 2 } } as Partial<Instance>))?.label).toBe("Checks ✗");
     const row = fn(ROW, "SidebarRow");
     expect(has(row, "const check = checkChip(inst);")).toBe(true);
     // The two actions live in the session menu's model (row ⋯ and pane ⋯).

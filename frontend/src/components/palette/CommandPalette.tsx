@@ -18,7 +18,9 @@ import {
   type SessionActionId,
 } from "../../lib/sessionActionTable";
 import { orderedInstances } from "../sidebar/ordering";
-import { sessionLabel } from "../../lib/sessionLabel";
+import { windowName } from "../../lib/windowName";
+import { deriveSessionState } from "../../lib/sessionState";
+import { needsYouNow } from "../../lib/needsYou";
 import { openDevicesFor, routePastedCode } from "../../lib/deviceActions";
 import { fuzzyScore, isKeyHint, paletteCode, rankActions, type PaletteAction } from "./paletteRank";
 
@@ -61,7 +63,9 @@ const PALETTE_ACTIONS: SessionActionId[] = [
  * listed, but never the Enter default (palette/paletteRank.ts). */
 const OUTWARD = new Set<SessionActionId>(["commit", "push", "pr", "merge", "close", "delete", "pause"]);
 
-/** The empty-query menu's order (`top`): what a person reaches for. */
+/** The empty-query menu's order (`top`): what a person reaches for — after
+ * the sessions that need you (NEEDS_TOP, below zero: always listed first). */
+const NEEDS_TOP = -1;
 const TOP = {
   new: 0,
   recent: 1, // + 0.1 per place in the MRU (the last three looked at)
@@ -239,12 +243,15 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     const { rows } = orderedInstances(instances(), ui.order);
     const t = ui.focused;
     if (t) {
+      // Every session is named the way its rail row reads (the rename, else
+      // the ticket/PR label) — never its raw title.
+      const name = windowName(t);
       const c = actionCtx(t, { inst: rows.find((r) => r.title === t), caps, ideName });
       for (const id of PALETTE_ACTIONS) {
         const why = sessionAction(id).enabled(c) ? "" : sessionAction(id).why?.(c) || "";
         if (why) {
           acts.push({
-            label: `${actionLabel(id, c)} — ${t}`,
+            label: `${actionLabel(id, c)} — ${name}`,
             hint: actionHint(id, c),
             outward: true,
             run: () => runChordAction(id, t),
@@ -253,23 +260,35 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         }
         if (!sessionAction(id).enabled(c)) continue;
         acts.push({
-          label: `${actionLabel(id, c)} — ${t}`,
+          label: `${actionLabel(id, c)} — ${name}`,
           hint: actionHint(id, c),
           outward: OUTWARD.has(id),
           run: () => sessionAction(id).run(t),
         });
+        // The Map's own way in to one file: open it on the focused session.
+        // (Its find box takes "/" once the Map has the keyboard.)
+        if (id === "map")
+          acts.push({
+            label: `Find file on map… — ${name}`,
+            hint: "opens its Map",
+            keywords: "search file path locate code map",
+            run: () => useUi.getState().openMap(t),
+          });
       }
     }
 
-    // --- Focus rows: every session under the name its rail row shows -------
+    // --- Focus rows: every session under the name its rail row shows, with
+    // its state's own word. What needs you leads the empty-query menu, in the
+    // bell's order (lib/needsYou).
+    const needs = needsYouNow();
     for (const inst of rows) {
-      // `display_title` is a proxied row's own name (its title carries the device).
-      const own = (inst as unknown as { display_title?: string }).display_title || inst.title;
-      const name = ui.aliases[inst.title] || sessionLabel(own, inst.branch || "").text;
       const recent = ui.mru.indexOf(inst.title);
+      const need = needs.indexOf(inst.title);
+      const ss = deriveSessionState(inst);
       acts.push({
-        label: "Focus: " + name,
-        top: recent >= 0 && recent < 3 ? TOP.recent + recent / 10 : undefined,
+        label: "Focus: " + windowName(inst.title),
+        state: { label: ss.label, tone: ss.tone },
+        top: need >= 0 ? NEEDS_TOP + need / 100 : recent >= 0 && recent < 3 ? TOP.recent + recent / 10 : undefined,
         run: () => selectSession(inst.title),
       });
     }
@@ -329,6 +348,12 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     if (sel >= filtered.length) setSel(Math.max(0, filtered.length - 1));
   }, [filtered.length, sel]);
 
+  // ↑/↓ past the list's edge: keep the highlighted row in view.
+  const listRef = useRef<HTMLUListElement | null>(null);
+  useEffect(() => {
+    listRef.current?.querySelector<HTMLElement>("#palette-opt-" + sel)?.scrollIntoView?.({ block: "nearest" });
+  }, [sel]);
+
   if (!open) return null;
 
   const run = (a: PaletteAction | undefined) => {
@@ -349,6 +374,12 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
           id="palette-input"
           ref={inputRef}
           type="text"
+          role="combobox"
+          aria-label="Command or session"
+          aria-expanded="true"
+          aria-controls="palette-list"
+          aria-autocomplete="list"
+          aria-activedescendant={filtered.length ? "palette-opt-" + sel : undefined}
           placeholder="Type a command or session name…"
           autoComplete="off"
           spellCheck={false}
@@ -370,10 +401,13 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
             }
           }}
         />
-        <ul id="palette-list">
+        <ul id="palette-list" role="listbox" aria-label="Commands" ref={listRef}>
           {filtered.map((a, i) => (
             <li
               key={a.label + i}
+              id={"palette-opt-" + i}
+              role="option"
+              aria-selected={i === sel}
               className={"palette-item" + (i === sel ? " selected" : "")}
               onMouseMove={() => setSel(i)}
               onClick={() => run(a)}
@@ -386,10 +420,15 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
               ) : (
                 <span className="palette-label">{a.label}</span>
               )}
+              {a.state && <span className={"palette-state tone-" + a.state.tone}>{a.state.label}</span>}
               {a.hint && <span className={"palette-hint" + (isKeyHint(a.hint) ? "" : " is-desc")}>{a.hint}</span>}
             </li>
           ))}
-          {!filtered.length && <li className="palette-empty muted">No matching commands</li>}
+          {!filtered.length && (
+            <li className="palette-empty muted" role="option" aria-disabled="true" aria-selected={false}>
+              No matching commands
+            </li>
+          )}
         </ul>
       </div>
     </Modal>

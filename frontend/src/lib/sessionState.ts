@@ -15,8 +15,10 @@
  *   working    working    the agent  no        Working
  *   needs_you  attention  you        yes       the reason: Question · Pre-commit
  *                                              failed · Checks failing · Setup failed
- *   idle       neutral    nobody     20 min    Idle (the ship-stage chip shows
- *                                    + dirty   beside it; reason "stuck")
+ *   idle       neutral    nobody     no        Idle (the ship-stage chip shows
+ *                                              beside it)
+ *   idle       attention  you        yes       Idle 25m — 20 min on uncommitted
+ *   (stuck)                                    work (reason "stuck")
  *   limit      waiting    nobody     no        Waiting on limit[, resumes HH:MM]
  *   offline    broken     you        yes       Offline (the chip's Restart action)
  *
@@ -277,17 +279,46 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
   // committed branch is not unfinished work — git considers it done.
   const since = Number(inst.activity_since) || 0;
   const idleFor = since > 0 ? now / 1000 - since : 0;
+  // Its chip says how long ("Idle 25m") in the attention tone: the bell counts
+  // it, so the row must not read like any other idle one.
   if (idleFor > STUCK_IDLE_S && uncommittedWork(inst))
     return {
       state: "idle",
       reason: "stuck",
-      label: STATE_LABEL.idle,
-      tone: "neutral",
+      label: STATE_LABEL.idle + " " + spanWord(idleFor),
+      tone: "attention",
       inBell: true,
       restartable: false,
       hint: "Idle " + spanWord(idleFor) + " with unfinished work — possibly stuck",
     };
   return { state: "idle", label: STATE_LABEL.idle, tone: "neutral", inBell: false, restartable: false, hint: bgHint || "Agent is idle — waiting for input" };
+}
+
+/** What a "needs you" chip does when clicked — it is a door to where you act,
+ * never a label: a Question opens the bell at its row (the answer strip is
+ * there), a failed pre-commit hook the session's Terminal, a failed setup
+ * re-runs it, failing checks open the PR (its checks) or, with no PR yet, the
+ * Terminal. Null for every other state. `aria` says it for a screen reader. */
+export type NeedsYouAct = "bell" | "terminal" | "setup" | "pr";
+export function needsYouAction(
+  ss: SessionState,
+  prUrl?: string | null
+): { act: NeedsYouAct; aria: string } | null {
+  if (ss.state !== "needs_you") return null;
+  switch (ss.reason) {
+    case "question":
+      return { act: "bell", aria: "Question — answer it in the bell" };
+    case "precommit_failed":
+      return { act: "terminal", aria: "Pre-commit failed — open its Terminal" };
+    case "setup_failed":
+      return { act: "setup", aria: "Setup failed — re-run worktree setup" };
+    case "checks_failing":
+      return prUrl
+        ? { act: "pr", aria: "Checks failing — open the PR" }
+        : { act: "terminal", aria: "Checks failing — open its Terminal (output in .mindflock_check.log)" };
+    default:
+      return null;
+  }
 }
 
 /** The bell row's words for a state that is in the bell: the label, or for a

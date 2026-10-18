@@ -76,7 +76,7 @@ function render(inst: Instance): string {
       createElement(SidebarRow, {
         inst,
         idx: 0,
-        onScreen: false,
+        onScreen: true, // an off-screen asking row would mount its answer strip
         dropCue: null,
         onDragState: () => {},
         onDropCue: () => {},
@@ -126,7 +126,33 @@ describe("SidebarRow — dot and chip from the same state", () => {
   it("an idle finished branch shows the ship stage beside a neutral dot", () => {
     const html = render(row({ title: "done", activity: "idle", stage: "committed" }));
     expect(dotClass(html)).toContain("tone-neutral");
-    expect(chip(html)![3]).toBe("committed");
+    expect(chip(html)![3]).toBe("Committed");
+  });
+
+  it("a needs-you chip is a door: a button that says where it goes", () => {
+    const pc = chip(render(row({ title: "pc", activity: "idle", stage: "interrupt" })))!;
+    expect(pc[1]).toBe("button");
+    expect(pc[2]).toContain("chip-needs");
+    expect(pc[3]).toBe("Pre-commit failed");
+    const html = render(row({ title: "q", activity: "clarify" }));
+    expect(html).toContain('aria-label="Question — answer it in the bell"');
+    // An idle row's chip is still just a word.
+    expect(chip(render(row({ title: "calm", activity: "idle" })))![1]).toBe("span");
+  });
+
+  it("a stuck row says how long, in the attention tone", () => {
+    const now = Date.now() / 1000;
+    const html = render(
+      row({
+        title: "stuck",
+        activity: "idle",
+        activity_since: now - 25 * 60,
+        diff_stat: { files: 1, additions: 3, deletions: 0, uncommitted: { files: 1, additions: 3, deletions: 0 } } as never,
+      })
+    );
+    const c = chip(html)!;
+    expect(c[3]).toBe("Idle 25m");
+    expect(c[2]).toContain("tone-attention");
   });
 
   it("a starting row pulses grey", () => {

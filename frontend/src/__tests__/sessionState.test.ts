@@ -131,7 +131,11 @@ describe("idle → stuck", () => {
     expect(stuck.state).toBe("idle");
     expect(stuck.reason).toBe("stuck");
     expect(stuck.inBell).toBe(true);
-    expect(stuck.label).toBe("Idle");
+    // Not the plain idle word: how long, in the tone the bell's rows wear.
+    expect(stuck.label).toBe("Idle 21m");
+    expect(stuck.tone).toBe("attention");
+    expect(fresh.label).toBe("Idle");
+    expect(fresh.tone).toBe("neutral");
     expect(attentionReason(stuck)).toMatch(/^Idle 21m with unfinished work/);
   });
 

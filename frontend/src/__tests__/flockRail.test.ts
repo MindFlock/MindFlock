@@ -421,8 +421,9 @@ describe("Sidebar: families stay together and numbering follows the rendered ord
     const r = renderRail(list);
     const by = (t: string) => r.find((x) => x.title === t)!.html;
     expect(by("w2")).toContain('tabindex="0"');
-    // A session outside any family keeps today's row: no strip, no focus stop.
-    expect(by("loner")).not.toContain("tabindex");
+    // A session outside any family whose pane is on screen: no strip, so no
+    // Tab stop of its own (↑/↓ still reach it — tabindex -1).
+    expect(by("loner")).toContain('tabindex="-1"');
     expect(by("w2")).toContain("? needs you · question");
     expect(by("w1")).toContain("✓ reported");
     // api idle with a worker out → the dashed "waiting" chip, and the roll-up.
@@ -445,7 +446,18 @@ describe("Sidebar: families stay together and numbering follows the rendered ord
     const r = renderRail(list);
     const by = (t: string) => r.find((x) => x.title === t)!.html;
     expect(by("orch")).toContain('tabindex="0"');
-    expect(by("plain")).not.toContain("tabindex");
+    expect(by("plain")).toContain('tabindex="-1"');
+  });
+
+  it("gives any asking session whose pane is off screen its answer strip", () => {
+    // View "1": only the most recent pane is drawn — the other's question is
+    // nowhere on screen, so its row carries the buttons.
+    useUi.setState({ order: [], viewMode: "1" as never, mru: ["shown"] });
+    const list = [inst("shown", { activity: "clarify" }), inst("offscreen", { activity: "clarify" })];
+    const r = renderRail(list);
+    const by = (t: string) => r.find((x) => x.title === t)!.html;
+    expect(by("offscreen")).toContain('tabindex="0"');
+    useUi.setState({ viewMode: "auto" as never, mru: [] });
   });
 
   // Regression: the Mac showed the WSL box's workers as top-level rows. Its

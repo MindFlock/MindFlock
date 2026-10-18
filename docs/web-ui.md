@@ -297,14 +297,20 @@ keeps it in the sidebar to resume* — the one place in the desktop UI that
 pauses; the menus and the pane header only resume) / **Resume session**
 (whichever applies),
 **Close session** (*Ctrl+W · stops the agent and moves it to Recently closed*) and
-**Delete session…** (*removes the worktree and branch*, asked on a card)), then one
-**Focus:** row per session, named exactly as its rail row, then extension
-commands. Type to filter (subsequence match), `↑`/`↓` to select, `Enter` to
-run, `Esc` to close. Both bindings work from anywhere, including while a
+**Delete session…** (*removes the worktree and branch*, asked on a card),
+**Find file on map…** (opens its Map; `/` there is the Map's find box)) — each
+named `<verb> — <session>` with the session's rail name, never its raw title —
+then one **Focus:** row per session, named exactly as its rail row and wearing
+its state's word (*Working*, *Question*, *Idle 25m*) in its tone, then extension
+commands. Type to filter (subsequence match), `↑`/`↓` to select (the list
+scrolls with you; it is a listbox the input points into, for screen readers),
+`Enter` to run, `Esc` to close. Both bindings work from anywhere, including while a
 terminal has keyboard focus — the same VSCode trade-off as its quick-open/palette
 keys.
 
-The palette opens on a **short menu**, not the whole index: New session, the
+The palette opens on a **short menu**, not the whole index: first the sessions
+that need you (up to five, in the bell's Needs-you order — the list `Ctrl+K N`
+walks, `lib/needsYou.ts`), then New session, the
 sessions you last looked at, Intake, Verify, Schedule, Setup, Settings, Replay welcome tour,
 Keyboard shortcuts (the first nine), and **All commands…** (`palette/paletteRank.ts`). Typing matches
 labels and a few plain synonyms (*help* finds the shortcuts and the tours,
@@ -400,9 +406,14 @@ Each session shows a stage badge (sidebar + pane) computed from git, plus a
 GitHub lookup (`gh` or a token) for the two PR stages:
 
 ```
-provisioning → agent → pre-commit → committed → pushed → PR open → merged
-                          └─ pre-commit ✗ (hooks blocked the commit)
+Provisioning → Agent → Pre-commit → Committed → Pushed → PR open → Complete ✓
+                          └─ Pre-commit ✗ (hooks blocked the commit)
 ```
+
+The chip words are sentence case, like the state words they share the chip
+with (*Working*, *Question*), and a verdict mark trails the word: *Pre-commit
+✗*, and the checks chip's *Checks…* / *Checks ✗* / *Checks ✓* / *Checks
+stale* (`lib/stage.ts`).
 
 The pane shows a single **guided next-step button**:
 
@@ -440,8 +451,9 @@ painted red.
 |---|---|---|---|---|
 | Starting | grey, pulsing | nobody | no | **Starting** (provisioning, or the worktree setup running) |
 | Working | green | the agent | no | **Working** |
-| Needs you | gold | you | yes | the reason: **Question**, **Pre-commit failed**, **Checks failing**, **Setup failed** |
-| Idle | neutral | nobody | after 20 min idle on uncommitted work ("stuck") | **Idle** — the ship-stage chip (`committed`, `pushed`, `PR open`) shows beside it |
+| Needs you | gold | you | yes | the reason: **Question**, **Pre-commit failed**, **Checks failing**, **Setup failed** — on the rail the chip is a button to where you act: the bell at its row (Question), its **Terminal** tab (Pre-commit failed; Checks failing with no PR yet), a worktree-setup re-run (Setup failed), the PR (Checks failing) |
+| Idle | neutral | nobody | no | **Idle** — the ship-stage chip (`Committed`, `Pushed`, `PR open`) shows beside it |
+| Idle, stuck | gold | you | yes — 20 min idle on uncommitted work | **Idle 25m** — how long, in the gold the bell's rows wear |
 | Waiting on limit | blue | nobody | no | **Waiting on limit, resumes HH:MM** when the window is known |
 | Offline | red | you | yes | **Offline** — the chip is a **↻ Restart** button |
 
@@ -848,7 +860,8 @@ window closes it. The items, in groups:
   run}** for a team run member · **Duplicate session** (`Ctrl+K D`; a second
   in-place session on the same worktree) · **Branch session** (`Ctrl+K B`;
   see [Branch session](#branch-session)) · **Open in <IDE>** *your code editor*
-  (`Ctrl+K O`; row double-click does the same; left out once `GET /api/ides`
+  (`Ctrl+K O`; a double-click on the row — not its name, which renames — does
+  the same; left out once `GET /api/ides`
   says the configured editor isn't installed here) · **Open preview ↗** `:port`
   when the session serves one · **Select** (`Ctrl+click`) · **Hide/Show
   window** (`Ctrl+K H`; the session keeps running) · **Re-run worktree setup**
@@ -920,7 +933,16 @@ pressing it reopens exactly that session, and **Recently closed (n)** refreshes
 on the close and on the undo. Only the button reopens; a click on the rest of
 the toast does nothing, and the toast stays up while the pointer is on it or
 the button has focus. (The toast helper takes an optional
-`action: { label, onClick }` for a button like this; `lib/toast.ts`.)
+`action: { label, onClick }` for a button like this; `lib/toast.ts`.) A plain
+message that arrives meanwhile (*Copied*, *Renamed*) never takes the Undo
+away: the Undo steps up one slot and keeps its own timer — two toasts at most,
+and a newer Undo replaces an older one. A toast stays up as long as its text
+takes to read (at least 1.4 s, 2.5 s for a failure, 6 s with a button) and is a
+polite live region; a failure (*… failed*, *Couldn't …*) is an alert.
+
+**Open PR** and **Merge** say what they did: *Opened PR for <name>* (the PR
+opens in a new tab — or, if the browser blocked that, the toast is the link),
+and *Merged <name> into <base>*.
 After a ✕ the next row slides up under the pointer, so the row's ✕ ignores a
 second click within 400 ms. **Delete…** removes the worktree and its branch; the
 first click turns the item into an inline strip — *Deletes the folder and
@@ -975,7 +997,9 @@ count). It opens a popover with two ways to drive the agent:
   self-improving prompt ("keep improving the repo") cycles forever; **Auto-run**
   toggles draining. Items reorder by dragging the **⋮⋮** handle, edit (✎),
   insert a new prompt above/below any item (**+↑** / **+↓** open an inline
-  composer at that slot), delete, or **send now (▶)**. Dropping a `.csv` file
+  composer at that slot), delete (✕ — the toast's **Undo** puts it back in
+  its place), or **send now (▶)**. In the box, `Ctrl+Enter` (`⌘+Enter`) is
+  Send now and `Alt+Enter` Add to queue; a plain `Enter` is a new line. Dropping a `.csv` file
   anywhere on the tab appends one prompt per row to the end of the queue
   (quoted fields respected, an obvious header row skipped; any other text
   file queues one prompt per line) —
@@ -2022,8 +2046,10 @@ Authentication section. If the token leaks, regenerate it from Settings →
   sidebar — the grid is untouched. Customize → *Session list* → **Filter box**
   shows or hides it (shown by default); hidden, `/` still opens it for one
   search.
-- **Rename** — row menu → *Rename…*, the palette, or click the selected row's
-  name. The new name is the session's name everywhere: the rail, the phone page
+- **Rename** — row menu → *Rename…*, the palette, double-click the row's
+  name, or `F2` on a focused row. (A click on the row that is already
+  selected selects it again — back to its terminal, and a narrow window's
+  drawer closes — it never starts a rename.) The new name is the session's name everywhere: the rail, the phone page
   (`/m`, via the `name` field on `GET /api/instances`), and notifications — the
   old one is not kept around in tooltips. Names are unique: a rename to a name
   another session already has (its title, its rename, or its rail label) is
@@ -2106,6 +2132,8 @@ built-in alias.
 | `Ctrl+K S` | Message… — the Thread composer, addressed to the focused session |
 | `Ctrl+K F` | Fast-track — the focused pane's ⏩ picker |
 | `Ctrl+K T` | Thread — the focused session's workers and messages |
+| `Ctrl+K N` | Next session that needs you — in the bell's Needs-you order (an answer first), wrapping; needs no focused session |
+| `↑` / `↓` / `Enter` / `F2` (on a sidebar row) | Move between rows / select / rename. The list is one `Tab` stop (the selected row), plus any row carrying answer buttons |
 | `Ctrl+W` / `Delete` | Close the focused session — moves it to Recently closed (reopen with `Ctrl+Shift+T`). Neither fires while **any** dialog or overlay is open (detected generically: the store's dialog slot, or any visible `[role="dialog"]`, `.modal`, `.dialog`, `.palette` or `[data-modal]` element, plus the bell, ⏩ picker, Prompts menu and break screen), nor while the keyboard is in an input, textarea, select, contenteditable or a terminal — `Ctrl+W` at a shell is delete-word, not "close this session". Never fires for a selected non-session window — those close from their ✕ |
 | `Ctrl+V` (in a terminal) | Paste into the PTY: an image or file on the clipboard uploads and pastes its path, plain text pastes with a "Pasted N chars" toast, and an empty clipboard event falls back to reading `navigator.clipboard`. Same in session panes and the Assistant |
 | `Ctrl+F` (in a terminal) | Find across the pane's **whole** scrollback, prefilled with a one-line terminal selection — **in the live pane**: a find bar floats top-right with an `n / total` count, the pane itself jumps to each hit, every visible hit yellow, the current one orange. It searches whatever scrollback the pane's mouse wheel moves, decided per pane, so it holds for every agent CLI. Where the app leaves the mouse to tmux (shells, codex, aider, gemini, cursor-agent, goose) it's tmux's copy-mode search. Where the app scrolls itself (Claude Code, opencode, cline) the server **indexes** everything the app would show the moment the bar opens — the window is briefly made tall at the same width, read top to bottom (PageUp/PageDown where the app pages with keys, measured wheel bursts where it doesn't), and put back — while the pane shows a frozen snapshot, so none of it is seen; the count is then instant, each step is one jump, and reopening find on an unchanged pane reuses the index. The server also keeps indexes current as the agent writes (one screen read every 1.5 s, nothing moves), and builds a missing one ahead of time for a pane nobody is using — agent idle (never while it waits on a question), no input from you for 30 s, screen still for 20 s, at most one screen attached — with that pane frozen meanwhile; any input into it cancels and snaps back. Claude Code's own pinned `❯ prompt` row is hidden the frame it's drawn (the prompt bar above mirrors it), so jumping never flashes it. Only rows that move with the content are indexed — never the input box, a status bar, a pinned prompt row or a floating hint. Only a pane that scrolls from neither (a pager on the alternate screen) opens the full-history view's find instead. Options, as in an editor: **Aa** match case (`Alt+C`), **ab** whole word (`Alt+W`), **.\*** regular expression (`Alt+R`), and **near** — a second term that must be on the same line or within N lines (1–50) of the first; both terms are highlighted and the options apply to both (matching is server-side, `core/find_query`, and painted with the same rules in the browser; the tmux path reads tmux's history rather than using tmux's own search, which can't do these). You start at the newest hit at or above what you were looking at: `Enter` / `F3` / `Ctrl+G` step **up** to older hits, add `Shift` to step back down, wrapping at the ends; `Esc` returns to live. Literal and case-insensitive unless the options say otherwise |
@@ -3997,7 +4025,8 @@ narrow rail cuts the detail and never the target: `→ PR · working 12m`, `⇡ 
 `! hooks failed twice — open the bell`,
 `→ commit, asks first · ready — approve in the bell`. A team run member (or any
 session with fast-track on) on a prompt gets the answer strip under its row,
-like a family worker. A line that ends **open the bell** or **approve in the
+like a family worker — and so does any asking session whose pane is not on
+screen, since nothing else there shows its question. A line that ends **open the bell** or **approve in the
 bell** is clickable and opens the bell on that session's row.
 
 **Notifications.** The bell's history lists a team run's escalations, its finish,

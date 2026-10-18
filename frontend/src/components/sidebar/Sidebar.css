@@ -239,3 +239,65 @@ body.narrow .sidebar-resizer {
   color: var(--text) !important;
   background: var(--panel-2) !important;
 }
+
+/* A device group's header is a real button (its fold toggle, aria-expanded)
+   that reads exactly like the header text did; the ✕ beside it stays its
+   own button. */
+.device-group .dev-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.device-group .dev-toggle:focus-visible {
+  outline: 1px dashed var(--accent);
+  outline-offset: 2px;
+}
+
+/* Disconnect asks first, on the row ✕'s calm strip, under the header. */
+.device-forget-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  list-style: none;
+  margin: 2px 8px 4px 22px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.device-forget-confirm .del-q {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.device-forget-confirm .del-acts {
+  display: flex;
+  gap: 6px;
+}
+
+.device-forget-confirm .del-acts button {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.device-forget-confirm .del-acts button.danger {
+  border-color: var(--red);
+}
