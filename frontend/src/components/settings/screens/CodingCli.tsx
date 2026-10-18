@@ -11,6 +11,8 @@ import { SKIP_PERMS_LABEL, SKIP_PERMS_TITLE } from "../../../lib/vocab";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../api/client";
 import { toast } from "../../../lib/toast";
+import { flashSaved } from "../savedCue";
+import { useAutosave } from "../../intake/autosave";
 import { agentName } from "../../../lib/agentNames";
 import { pickerOptions } from "../../../lib/providerRows";
 import { FlagChips } from "../../dialogs/FlagChips";
@@ -123,7 +125,7 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
   const pickProvider = (name: string) => {
     setSelected(name);
     setFlags(flagsMap.current[name] || "");
-    void s.saveField("coding_cli", "default_provider", name).then(() => setDefaultSaved((n) => n + 1));
+    void s.saveField("coding_cli", "default_provider", name).then((ok) => ok && setDefaultSaved((n) => n + 1));
   };
 
   const saveFlags = useCallback(
@@ -304,14 +306,26 @@ function WindowRefresh() {
     load();
   }, [load]);
 
-  const save = async (patch: Record<string, unknown>) => {
+  /** `el` is the control the change came from: "✓ Saved" lands beside it. */
+  const save = async (patch: Record<string, unknown>, el?: Element | null) => {
     try {
       await api("/api/window-refresh", { json: patch });
       await load();
+      if (!flashSaved(el)) toast("Saved");
     } catch {
       toast("Couldn't update window refresh");
     }
   };
+  // The time and the interval are typed: sent once typing pauses (or on
+  // blur / the dialog closing), not one POST per keystroke.
+  const anchorEl = useRef<HTMLInputElement>(null);
+  const intervalEl = useRef<HTMLInputElement>(null);
+  const anchorSave = useAutosave<string>((v) => {
+    if (v !== (cfg.anchor_time || "")) void save({ anchor_time: v }, anchorEl.current);
+  });
+  const intervalSave = useAutosave<number>((v) => {
+    if (v !== cfg.interval_hours) void save({ interval_hours: v }, intervalEl.current);
+  });
 
   const selected = new Set(cfg.providers || []);
   const opts = cfg.options || [];
@@ -340,7 +354,7 @@ function WindowRefresh() {
             type="checkbox"
             id="wr-enabled"
             checked={!!cfg.enabled}
-            onChange={(e) => save({ enabled: e.target.checked })}
+            onChange={(e) => save({ enabled: e.target.checked }, e.currentTarget)}
           />
           <span className="ca-slider" />
         </label>
@@ -356,9 +370,11 @@ function WindowRefresh() {
             <input
               type="time"
               id="wr-anchor"
+              ref={anchorEl}
               className="num-sm"
               defaultValue={cfg.anchor_time || ""}
-              onChange={(e) => save({ anchor_time: e.target.value || "" })}
+              onChange={(e) => anchorSave.schedule(e.target.value || "")}
+              onBlur={() => anchorSave.flush()}
             />
             <span className="set-hint">Daily, at this local time. Leave empty to use a fixed interval.</span>
           </label>
@@ -370,6 +386,7 @@ function WindowRefresh() {
             <input
               type="number"
               id="wr-interval"
+              ref={intervalEl}
               className="num-sm"
               min={0.25}
               max={168}
@@ -377,8 +394,9 @@ function WindowRefresh() {
               defaultValue={typeof cfg.interval_hours === "number" ? cfg.interval_hours : undefined}
               onChange={(e) => {
                 const v = parseFloat(e.target.value);
-                if (!isNaN(v)) save({ interval_hours: v });
+                if (!isNaN(v)) intervalSave.schedule(v);
               }}
+              onBlur={() => intervalSave.flush()}
             />{" "}
             <span className="muted">hours</span>
             <span className="set-hint">Used when no time is set (Claude and Codex: 5 hours).</span>
@@ -395,7 +413,7 @@ function WindowRefresh() {
                       const next = new Set(selected);
                       if (e.target.checked) next.add(o.name);
                       else next.delete(o.name);
-                      save({ providers: [...next] });
+                      save({ providers: [...next] }, e.currentTarget);
                     }}
                   />
                   <span title={o.window?.note || ""}>

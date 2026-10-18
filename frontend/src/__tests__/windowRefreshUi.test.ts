@@ -20,8 +20,15 @@ describe("the window-refresh settings block", () => {
     expect(tagsWithId(CODING, id)).toHaveLength(1);
   });
 
-  it("saves the anchor time as anchor_time", () => {
+  it("saves the anchor time as anchor_time, once typing pauses", () => {
     const anchor = tagsWithId(CODING, "wr-anchor")[0];
-    expect(anchor.text).toContain('save({ anchor_time: e.target.value || "" })');
+    expect(anchor.text).toContain('anchorSave.schedule(e.target.value || "")');
+    expect(anchor.text).toContain("anchorSave.flush()");
+    expect(CODING).toContain("save({ anchor_time: v }, anchorEl.current)");
+  });
+
+  it("debounces the interval too, and marks the control saved", () => {
+    expect(tagsWithId(CODING, "wr-interval")[0].text).toContain("intervalSave.schedule(v)");
+    expect(CODING).toContain('if (!flashSaved(el)) toast("Saved")');
   });
 });

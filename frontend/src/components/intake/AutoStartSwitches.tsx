@@ -191,7 +191,9 @@ export function AutoStartSwitches({ gotoTab }: { gotoTab(key: IntakeTabKey): voi
       const patch: Record<string, boolean> = {};
       if (m.prsOn) patch.enabled = false;
       if (m.issuesOn) patch.issues_enabled = false;
-      if (Object.keys(patch).length) await settings.saveGroup("github", patch);
+      // A failed save already toasted "Save failed"; stop there rather than
+      // claim everything is off.
+      if (Object.keys(patch).length && !(await settings.saveGroup("github", patch))) return;
       if (ticketsChecked) await flipTickets(false);
       toast("All auto-start is off — nothing starts on its own");
     } catch (err) {
