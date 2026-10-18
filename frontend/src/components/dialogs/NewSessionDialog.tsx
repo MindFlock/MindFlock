@@ -122,6 +122,7 @@ import {
   remoteBranchName,
   sessionsInFolder,
   templateFromForm,
+  templateNameTaken,
   type InstalledMap,
   type NewTab,
   type PlanRun,
@@ -1315,11 +1316,12 @@ export function NewSessionDialog() {
   };
 
   /** Save as template…: the whole form, under the typed name. */
+  // Another template's name is refused, not saved over: the server upserts
+  // by name, so it would silently replace that one.
   const saveTplBlocked = !(saveTplName || "").trim()
     ? "Give it a name."
-    : !folderPath && !prompt.trim()
-    ? "Pick a folder or write a task first."
-    : "";
+    : templateNameTaken(saveTplName || "", device ? templates : templatesNow()) ||
+      (!folderPath && !prompt.trim() ? "Pick a folder or write a task first." : "");
   const saveAsTemplate = async () => {
     if (saveTplBlocked || saveTplName === null) return;
     const body = templateFromForm(

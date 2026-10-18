@@ -48,6 +48,7 @@ import { openSettings } from "../../lib/openSettings";
 import { useUi } from "../../state/store";
 import {
   folderReducer,
+  templateNameTaken,
   type FolderAction,
   type FolderState,
   type InstalledMap,
@@ -136,14 +137,19 @@ export function formFromTemplate(t: Template | null): TemplateForm {
 
 /** The POST body for a form, or the reason it cannot be saved. `installed`
  * (this device's agents) refuses a schedule whose agent is missing — it
- * would fail every night with nobody watching. */
+ * would fail every night with nobody watching. `existing` / `editing`
+ * refuse another template's name (the server would overwrite it). */
 export function templateBody(
   f: TemplateForm,
-  installed: InstalledMap | null = null
+  installed: InstalledMap | null = null,
+  existing: Array<{ name: string }> = [],
+  editing: string | null = null
 ): { body: Template } | { error: string } {
   const name = f.name.trim();
   if (!name) return { error: "A template needs a name." };
   if (name.length > 100) return { error: "Names are at most 100 characters." };
+  const taken = templateNameTaken(name, existing, editing);
+  if (taken) return { error: taken };
   const at = f.at.trim();
   const cron = f.cron.trim().replace(/\s+/g, " ");
   if (f.scheduled) {

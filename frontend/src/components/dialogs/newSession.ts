@@ -965,6 +965,21 @@ export function preferInstalled(agent: string, names: string[], installed: Insta
   return names.find((n) => installed[n] === true) || agent;
 }
 
+/** Why `name` can't be saved as a NEW template: one of `existing` already has
+ * it, ignoring case — the server upserts by name, so saving would replace
+ * that one, schedule and all. `editing` is the template being edited, whose
+ * own name is of course fine. "" = free. */
+export function templateNameTaken(
+  name: string,
+  existing: Array<{ name: string }>,
+  editing: string | null = null
+): string {
+  const want = name.trim().toLowerCase();
+  if (!want || (editing && editing.trim().toLowerCase() === want)) return "";
+  const hit = existing.find((t) => t.name.trim().toLowerCase() === want);
+  return hit ? `A template named “${hit.name}” already exists — pick another name.` : "";
+}
+
 /** The fields a template carries, from the form — the WHOLE setup, so Run now
  * and a schedule start the same session the form would have. A template of
  * the same name keeps its schedule (saving over it must not silently stop a
