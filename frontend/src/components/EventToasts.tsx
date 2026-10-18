@@ -36,6 +36,9 @@ import { clearAttention, updateTitleBadge, useTitleBadge } from "../lib/titleBad
 export { redrawFavicon } from "../lib/titleBadge";
 import { openSettings } from "../lib/openSettings";
 import { jobPastExpectedNote } from "../lib/jobExpectation";
+import { allowPath } from "../lib/codemapApi";
+import { allowableBlock, baseName, redZoneEventFocus, type RedZoneEventData } from "../lib/mapEntry";
+import { errMsg } from "../lib/format";
 
 function instances(): Instance[] {
   return queryClient.getQueryData<Instance[]>(["instances"]) || [];
@@ -75,15 +78,33 @@ function instByTitle(title: string): Instance | null {
   return instances().find((i) => i.title === title) || null;
 }
 
-/** Jump to a session's Map — where every red-zone event is explained. A
- * store-level event (no session) opens the repo-wide Red zones dialog. */
-function openMap(session: string) {
+/** Jump to a session's Map — where every red-zone event is explained — on
+ * the file and the part the event is about (lib/mapEntry redZoneEventFocus).
+ * A store-level event (no session) opens the repo-wide Red zones dialog. */
+function openMap(env: EventEnvelope) {
+  const session = env.session;
   if (!session || !instByTitle(session)) {
     useUi.getState().openDialogFor("red-zones");
     return;
   }
-  selectSession(session);
-  useUi.getState().setLastTab(session, "map");
+  useUi.getState().openMap(session, redZoneEventFocus(env.event, env.data as RedZoneEventData));
+}
+
+/** Allow the one file an "only here" zone blocked, from its toast — the
+ * Map's Allow — and say how it went. */
+async function allowFromToast(session: string, path: string) {
+  try {
+    await allowPath(session, path);
+    refreshInstances();
+    toast("Allowed " + path + " for " + displayName(session), {
+      onClick: () => useUi.getState().openMap(session, { path, section: "scope" }),
+    });
+  } catch (x) {
+    toast("Couldn't allow " + path + ": " + errMsg(x), {
+      onClick: () => useUi.getState().openMap(session, { path, section: "scope" }),
+      duration: 8000,
+    });
+  }
 }
 
 /** The toast line for a red-zone event, or null for an unknown event. */
@@ -311,9 +332,19 @@ export function EventToasts() {
           if (isReplay(env)) return;
           const msg = redZoneToast(env, env.session ? namedSlot(env.session) : "");
           if (!msg) return;
+          // One file refused outside an "only here" zone: Allow it right
+          // here; the rest of the toast still opens the Map on it.
+          const allow = env.session && instByTitle(env.session) ? allowableBlock(env.event, env.data as RedZoneEventData) : null;
           notifyOnce(env.session || "*", name, msg, {
-            onClick: () => openMap(env.session),
-            duration: name === "session.red_zone_blocked" ? 6000 : 9000,
+            onClick: () => openMap(env),
+            action: allow
+              ? {
+                  label: "Allow " + baseName(allow),
+                  ariaLabel: "Allow " + allow + " for " + displayName(env.session) + " (outside its only-here zone)",
+                  onClick: () => void allowFromToast(env.session, allow),
+                }
+              : undefined,
+            duration: allow ? 10000 : name === "session.red_zone_blocked" ? 6000 : 9000,
           });
         })
       );

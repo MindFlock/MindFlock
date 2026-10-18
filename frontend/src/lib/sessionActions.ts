@@ -638,10 +638,7 @@ export function offerRedZoneOverride(
     [
       {
         label: "Open map",
-        run: () => {
-          selectSession(title);
-          useUi.getState().setLastTab(title, "map");
-        },
+        run: () => useUi.getState().openMap(title, { section: "breaches", path: breaches[0]?.path }),
       },
       {
         label: verb + " anyway",

@@ -42,7 +42,6 @@ import {
   pauseSession,
   pushSession,
   resumeSession,
-  selectSession,
 } from "./sessionActions";
 import { LANE_LABEL, laneChoice, openFastTrackMenu, splitBlockReason, splitSession } from "./laneActions";
 import { fastTrackStep } from "./stage";
@@ -238,17 +237,14 @@ export const SESSION_ACTIONS = {
     enabled: () => true,
     run: (t) => hideSession(t),
   },
-  // The Map tab: red zones, the plan, the blast radius. Switching tabs from
-  // outside the pane goes through lastTab, which the pane follows.
+  // The Map tab: red zones, the plan, the blast radius. A plain open (no
+  // file, no section) through store.openMap, which every "Open map" shares.
   map: {
     label: "Code map",
     keys: "Ctrl+K M",
     chord: "m",
     enabled: git,
-    run: (t) => {
-      selectSession(t, { noKeyboard: true });
-      useUi.getState().setLastTab(t, "map");
-    },
+    run: (t) => useUi.getState().openMap(t),
   },
   // Pause and Close both stop the agent; WHERE the session goes is the
   // difference, so that is what each one says. A shared folder can't be

@@ -648,12 +648,17 @@ function WorkerItem({
               type="button"
               className="th-btn"
               title={`${name}'s Diff tab — its change since it forked`}
-              onClick={() => {
-                selectSession(row.title, { noKeyboard: true });
-                useUi.getState().setLastTab(row.title, "diff");
-              }}
+              onClick={() => useUi.getState().openDiff(row.title)}
             >
               Review diff
+            </button>
+            <button
+              type="button"
+              className="th-btn"
+              title={`${name}'s Map — the files it changed, on the tree`}
+              onClick={() => useUi.getState().openMap(row.title, { section: "changed" })}
+            >
+              Map
             </button>
             <button
               type="button"

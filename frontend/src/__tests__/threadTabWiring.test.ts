@@ -120,8 +120,9 @@ describe("worker rows", () => {
     expect(TAB).not.toContain("decidePrompt(nameOf(");
     // A "No…" answer re-addresses the composer to that worker.
     expect(TAB).toContain("onRedirect={() => address(w.title)}");
-    // Review diff = the worker's own Diff tab.
-    expect(TAB).toContain('useUi.getState().setLastTab(row.title, "diff")');
+    // Review diff = the worker's own Diff tab; Map = its Map, on what it changed.
+    expect(TAB).toContain("useUi.getState().openDiff(row.title)");
+    expect(TAB).toContain('useUi.getState().openMap(row.title, { section: "changed" })');
     // Merge into <t> pastes the wrapup playbook scoped to that worker.
     expect(TAB).toContain('paste("merge:" + w.title, "wrapup", { only: w.title }');
     // Header buttons are paste actions too.
