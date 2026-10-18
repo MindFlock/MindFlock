@@ -222,7 +222,9 @@
   gap: 8px;
   padding: 5px 12px;
   cursor: pointer;
-  background: var(--panel);
+  /* Raised off the code and ruled under, so each file starts visibly. */
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
   z-index: 1;
@@ -232,12 +234,12 @@
 }
 
 .diff-file-head:hover {
-  background: var(--panel-2);
+  background: color-mix(in srgb, var(--panel-2) 92%, var(--text));
 }
 
 .diff-file-head .diff-file-caret {
   cursor: pointer;
-  color: #fff;
+  color: var(--text);
   font-size: 15px;
   width: 16px;
   flex: none;
@@ -264,7 +266,8 @@
   border: none;
   background: none;
   cursor: pointer;
-  color: #c4b3ff;
+  /* Body text, not the faint light purple: the file name is what you read. */
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -274,6 +277,76 @@
 
 .diff-file-head .sd-file:hover {
   text-decoration: underline;
+}
+
+/* A file's way to the Map (and the whole-file view's): small, quiet until
+   hovered, never the click that collapses the file. */
+.diff-file-map {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.diff-file-map:hover,
+.diff-file-map:focus-visible {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.diff-toolbar .diff-reload {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 8px;
+  border-radius: 6px;
+  flex: none;
+}
+
+.diff-toolbar .diff-reload:hover {
+  border-color: var(--accent);
+}
+
+.diff-toolbar .diff-reload:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The Map tab's badge (Pane.tsx, lib/mapEntry mapTabBadge) on the shared
+   .queue-tab-badge: the zone chip's colours when it needs you, the plain
+   count of changed files otherwise. */
+.pane-head .tabs button.map-tab:not(.active) .map-badge.rz-breach {
+  background: rgba(222, 97, 62, 0.2);
+  color: var(--red);
+  border-color: transparent;
+}
+
+.pane-head .tabs button.map-tab:not(.active) .map-badge.rz-warn {
+  background: var(--gold-fill);
+  color: var(--gold-ink);
+  border-color: transparent;
+}
+
+.pane-head .tabs button.map-tab:not(.active) .map-badge.rz-ok {
+  color: var(--green);
+}
+
+.pane-head .tabs button.map-tab.active .queue-tab-badge {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  border-color: transparent;
 }
 
 .diff-toolbar .diff-collapse-all {
@@ -333,7 +406,7 @@
   flex: 1;
   min-width: 0;
   font-weight: 600;
-  color: #c4b3ff;
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
