@@ -25,6 +25,7 @@ import {
   setChordKey,
   setKeyCombos,
   setRebindCapturing,
+  shortcutLabels,
   subscribeKeymap,
   type Combo,
 } from "../../lib/keymap";
@@ -45,6 +46,14 @@ const SHORTCUT_EXTRAS: Array<[string, string, string]> = [
 export function browserReserved(combo: string): boolean {
   const c = combo.trim().replace(/^⌘/, "Ctrl+").replace(/\s+/g, " ");
   return /^Ctrl\+(N|W|T|Shift\+N|Shift\+W|Shift\+T|Tab|Shift\+Tab|PgDn|PgUp|1 … 9|[1-9])$/i.test(c);
+}
+
+/** An action's combos that work HERE (rebinds included): in a browser tab
+ * the ones the browser keeps for itself are left out — Ctrl+N opens a browser
+ * window there, so the tab says Alt+N. The top bar's tooltips and the empty
+ * grid's hint both read this. `inBrowser` defaults to "not the desktop app". */
+export function usableShortcuts(id: string, inBrowser: boolean = !inShell()): string[] {
+  return shortcutLabels(id, (l) => !inBrowser || !browserReserved(l));
 }
 
 /** A sheet row's combos, browser-usable ones first in a tab, and whether the
@@ -98,7 +107,7 @@ function buildSheet(): Array<[string, SheetRow[]]> {
     // A newer chord whose default letter an older rebinding already took:
     // say so, and the row's click gives it a free key.
     const by = chordShadowedBy(k);
-    rows["Focused session"].push([
+    rows[CHORDS[k].group || "Focused session"].push([
       by ? "Ctrl+K " + suf.toUpperCase() + " (taken)" : "Ctrl+K " + suf.toUpperCase(),
       by
         ? CHORDS[k].desc + " — your Ctrl+K " + suf.toUpperCase() + " runs “" + CHORDS[by].desc + "”; click to pick a key"

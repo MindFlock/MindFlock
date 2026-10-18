@@ -22,6 +22,7 @@ import { SetupChecklist } from "../setup/SetupChecklist";
 import { showSetupCard } from "../setup/setupModel";
 import { useSetup } from "../setup/useSetup";
 import { isVerifySession } from "../dialogs/verifySession";
+import { usableShortcuts } from "../palette/ShortcutsSheet";
 
 export interface SpecialPaneDesc {
   key: string;
@@ -233,7 +234,9 @@ export function TerminalGrid({ specialPanes }: { specialPanes: SpecialPaneDesc[]
             onClick={noneAtAll ? () => useUi.getState().openDialogFor("new-session") : undefined}
           >
             {noneAtAll
-              ? "No sessions yet — click here to create one. (Ctrl+N)"
+              ? // The keys that work HERE: a browser tab keeps Ctrl+N (and ⌘N on a
+                // Mac) for a new browser window, so it says Alt+N there.
+                "No sessions yet — click here to create one. (" + usableShortcuts("new").join(" / ") + ")"
               : "All sessions hidden. Click a session's row in the sidebar to show it."}
           </div>
         ))}

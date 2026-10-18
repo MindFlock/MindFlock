@@ -343,7 +343,7 @@ describe("the row menu ends a session in exactly two ways", () => {
     const pal = read("components/palette/CommandPalette.tsx");
     const list = pal.slice(pal.indexOf("const PALETTE_ACTIONS"), pal.indexOf("];", pal.indexOf("const PALETTE_ACTIONS")));
     for (const id of ['"close"', '"delete"', '"pause"', '"resume"']) expect(list).toContain(id);
-    expect(pal).toContain("label: `${actionLabel(id, c)} — ${t}`");
+    expect(pal).toContain("label: `${actionLabel(id, c)} — ${name}`");
     expect(pal).toContain("if (!sessionAction(id).enabled(c)) continue;");
     expect(SESSION_ACTIONS.close.label).toBe("Close session");
     expect(SESSION_ACTIONS.delete.label).toBe("Delete session…");

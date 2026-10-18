@@ -297,14 +297,20 @@ keeps it in the sidebar to resume* — the one place in the desktop UI that
 pauses; the menus and the pane header only resume) / **Resume session**
 (whichever applies),
 **Close session** (*Ctrl+W · stops the agent and moves it to Recently closed*) and
-**Delete session…** (*removes the worktree and branch*, asked on a card)), then one
-**Focus:** row per session, named exactly as its rail row, then extension
-commands. Type to filter (subsequence match), `↑`/`↓` to select, `Enter` to
-run, `Esc` to close. Both bindings work from anywhere, including while a
+**Delete session…** (*removes the worktree and branch*, asked on a card),
+**Find file on map…** (opens its Map; `/` there is the Map's find box)) — each
+named `<verb> — <session>` with the session's rail name, never its raw title —
+then one **Focus:** row per session, named exactly as its rail row and wearing
+its state's word (*Working*, *Question*, *Idle 25m*) in its tone, then extension
+commands. Type to filter (subsequence match), `↑`/`↓` to select (the list
+scrolls with you; it is a listbox the input points into, for screen readers),
+`Enter` to run, `Esc` to close. Both bindings work from anywhere, including while a
 terminal has keyboard focus — the same VSCode trade-off as its quick-open/palette
 keys.
 
-The palette opens on a **short menu**, not the whole index: New session, the
+The palette opens on a **short menu**, not the whole index: first the sessions
+that need you (up to five, in the bell's Needs-you order — the list `Ctrl+K N`
+walks, `lib/needsYou.ts`), then New session, the
 sessions you last looked at, Intake, Verify, Schedule, Setup, Settings, Replay welcome tour,
 Keyboard shortcuts (the first nine), and **All commands…** (`palette/paletteRank.ts`). Typing matches
 labels and a few plain synonyms (*help* finds the shortcuts and the tours,
@@ -2020,6 +2026,8 @@ built-in alias.
 | `Ctrl+K S` | Message… — the Thread composer, addressed to the focused session |
 | `Ctrl+K F` | Fast-track — the focused pane's ⏩ picker |
 | `Ctrl+K T` | Thread — the focused session's workers and messages |
+| `Ctrl+K N` | Next session that needs you — in the bell's Needs-you order (an answer first), wrapping; needs no focused session |
+| `↑` / `↓` / `Enter` / `F2` (on a sidebar row) | Move between rows / select / rename. The list is one `Tab` stop (the selected row), plus any row carrying answer buttons |
 | `Ctrl+W` / `Delete` | Close the focused session — moves it to Recently closed (reopen with `Ctrl+Shift+T`). Neither fires while **any** dialog or overlay is open (detected generically: the store's dialog slot, or any visible `[role="dialog"]`, `.modal`, `.dialog`, `.palette` or `[data-modal]` element, plus the bell, ⏩ picker, Prompts menu and break screen), nor while the keyboard is in an input, textarea, select, contenteditable or a terminal — `Ctrl+W` at a shell is delete-word, not "close this session". Never fires for a selected non-session window — those close from their ✕ |
 | `Ctrl+V` (in a terminal) | Paste into the PTY: an image or file on the clipboard uploads and pastes its path, plain text pastes with a "Pasted N chars" toast, and an empty clipboard event falls back to reading `navigator.clipboard`. Same in session panes and the Assistant |
 | `Ctrl+F` (in a terminal) | Find across the pane's **whole** scrollback, prefilled with a one-line terminal selection — **in the live pane**: a find bar floats top-right with an `n / total` count, the pane itself jumps to each hit, every visible hit yellow, the current one orange. It searches whatever scrollback the pane's mouse wheel moves, decided per pane, so it holds for every agent CLI. Where the app leaves the mouse to tmux (shells, codex, aider, gemini, cursor-agent, goose) it's tmux's copy-mode search. Where the app scrolls itself (Claude Code, opencode, cline) the server **indexes** everything the app would show the moment the bar opens — the window is briefly made tall at the same width, read top to bottom (PageUp/PageDown where the app pages with keys, measured wheel bursts where it doesn't), and put back — while the pane shows a frozen snapshot, so none of it is seen; the count is then instant, each step is one jump, and reopening find on an unchanged pane reuses the index. The server also keeps indexes current as the agent writes (one screen read every 1.5 s, nothing moves), and builds a missing one ahead of time for a pane nobody is using — agent idle (never while it waits on a question), no input from you for 30 s, screen still for 20 s, at most one screen attached — with that pane frozen meanwhile; any input into it cancels and snaps back. Claude Code's own pinned `❯ prompt` row is hidden the frame it's drawn (the prompt bar above mirrors it), so jumping never flashes it. Only rows that move with the content are indexed — never the input box, a status bar, a pinned prompt row or a floating hint. Only a pane that scrolls from neither (a pager on the alternate screen) opens the full-history view's find instead. Options, as in an editor: **Aa** match case (`Alt+C`), **ab** whole word (`Alt+W`), **.\*** regular expression (`Alt+R`), and **near** — a second term that must be on the same line or within N lines (1–50) of the first; both terms are highlighted and the options apply to both (matching is server-side, `core/find_query`, and painted with the same rules in the browser; the tmux path reads tmux's history rather than using tmux's own search, which can't do these). You start at the newest hit at or above what you were looking at: `Enter` / `F3` / `Ctrl+G` step **up** to older hits, add `Shift` to step back down, wrapping at the ends; `Esc` returns to live. Literal and case-insensitive unless the options say otherwise |
