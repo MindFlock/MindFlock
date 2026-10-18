@@ -1221,7 +1221,7 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
   const guide = useMemo<MapGuide>(() => ({ notes: dataNotes, riskAsk, openPanel }), [dataNotes, riskAsk, openPanel]);
 
   const toastNode = toast ? (
-    <div className={"ct-toast" + (toast.bad ? " bad" : "")} role="status" aria-live="polite" title={toast.detail || toast.text} onPointerEnter={() => setToast({ ...toast, ms: 60000 })}>
+    <div className={"ct-toast" + (toast.bad ? " bad" : "") + (toast.confirm ? " ask" : "")} role="status" aria-live="polite" title={toast.detail || toast.text} onPointerEnter={() => setToast({ ...toast, ms: 60000 })}>
       <span className="tx">{toast.text}</span>
       {toast.detail && <span className="cm-sr">{toast.detail}</span>}
       {toast.undo && (
@@ -1320,6 +1320,11 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
             <span className={"cm-guard " + guard.cls} title={guard.title}>
               <span className="cm-guard-dot" aria-hidden="true" />
               <span className="lbl">{guard.label}</span>
+              {breachList.length > 0 && (
+                <span className="cm-guard-short" aria-hidden="true">
+                  ⛔{breachList.length}
+                </span>
+              )}
             </span>
           )}
           <button

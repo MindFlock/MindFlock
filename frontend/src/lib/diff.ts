@@ -27,6 +27,25 @@ export function parseUnifiedDiff(text: string): UnifiedLine[] {
   });
 }
 
+/** The unified view without git's per-file header (`diff --git`, `index`,
+ * `---`/`+++`, mode and rename lines): the pane already titles each file.
+ * Only lines before a file's first hunk are dropped, so a removed line that
+ * reads `--- x` inside a hunk stays; `Binary files … differ` stays too. */
+export function unifiedBody(lines: UnifiedLine[]): UnifiedLine[] {
+  const out: UnifiedLine[] = [];
+  let inHeader = false;
+  for (const l of lines) {
+    if (l.text.startsWith("diff --git")) {
+      inHeader = true;
+      continue;
+    }
+    if (l.kind === "hunk") inHeader = false;
+    if (inHeader && /^(index |--- |\+\+\+ |new file|deleted file|similarity |dissimilarity |rename |copy |old mode|new mode)/.test(l.text)) continue;
+    out.push(l);
+  }
+  return out;
+}
+
 export type SplitRow =
   | { type: "file"; file: string }
   | { type: "note"; note: string }

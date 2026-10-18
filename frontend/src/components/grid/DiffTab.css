@@ -343,6 +343,11 @@
   color: var(--green);
 }
 
+/* the changed-files count: the text colour, not the muted grey, so "5" reads */
+.pane-head .tabs button.map-tab:not(.active) .map-badge.map-changed {
+  color: var(--text);
+}
+
 .pane-head .tabs button.map-tab.active .queue-tab-badge {
   background: rgba(255, 255, 255, 0.2);
   color: #fff;
