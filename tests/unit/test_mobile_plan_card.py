@@ -22,6 +22,7 @@ def _js() -> str:
 def test_zone_chip_and_rank_follow_the_rail():
     js = _js()
     src = js[js.index("  var SESSION_STATES = {") : js.index("  function poll() {")]
+
     def row(title="", **rz):
         base = {"zones": 1, "breaches": 0, "last_block_ts": None, "guard": "guarded"}
         return {"title": title, "activity": "idle", "redzone": dict(base, **rz)}
@@ -47,7 +48,9 @@ def test_zone_chip_and_rank_follow_the_rail():
         "markRzSeen(rows.blocked); var c2 = rzChip(rows.blocked); out.seen = c2 && c2.label;\n"
         "console.log(JSON.stringify(out));\n"
     )
-    res = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=30)
+    res = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=30
+    )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
     assert out["plan"] == ["plan · 3", "rz-warn rz-plan", 1]
@@ -63,9 +66,16 @@ def test_zone_chip_and_rank_follow_the_rail():
 
 def test_plan_card_uses_the_maps_routes():
     js = _js()
-    card = js[js.index("  function updatePlanCard() {") : js.index("  // --- touch scrollback")]
+    card = js[
+        js.index("  function updatePlanCard() {") : js.index(
+            "  // --- touch scrollback"
+        )
+    ]
     assert '"/code-map/live?since=' in card
-    assert 'postFor(title, "code-map/go", { zone_ids: zoneIds, scope_to_plan: scopeToPlan })' in card
+    assert (
+        'postFor(title, "code-map/go", { zone_ids: zoneIds, scope_to_plan: scopeToPlan })'
+        in card
+    )
     assert '"Go — only the planned files"' in card
     assert "Plan ready — review & Go" in card
     # Built without HTML strings: the plan's paths and intents are the agent's.
