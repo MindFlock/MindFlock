@@ -141,13 +141,22 @@ interface MakePrResult {
   url?: string;
   compare_url?: string;
   message?: string;
+  /** "PR already open": the branch had one; `url` is it. */
+  note?: string;
 }
 
-/** POST /merge-pr — 200 either way; `pr_url` is where to merge by hand. */
+/** POST /merge-pr — 200 either way; `pr_url` is where to merge by hand.
+ * `base` is the branch it merged into (an older server doesn't send it). */
 interface MergePrResult {
   ok?: boolean;
   pr_url?: string;
   message?: string;
+  base?: string;
+}
+
+/** The merge's success toast: "Merged fix-typo into main". */
+export function mergedText(name: string, base?: string | null): string {
+  return "Merged " + name + (base ? " into " + base : "");
 }
 
 /** True when the server can open/merge PRs itself (gh authenticated OR a
@@ -844,7 +853,11 @@ export async function submitMakePr(title: string, base: string, overrideRedZones
       if (r.compare_url) offerUrl(r.compare_url, "Opened GitHub’s compare page — " + msg);
       else toast(msg, { duration: 9000 });
     } else {
-      if (r?.url) window.open(r.url, "_blank");
+      // We are past an await, so a bare window.open is popup-blocked and the
+      // PR opened in silence: offerUrl says so, and falls back to a click.
+      const said = (r?.note ? "PR already open for " : "Opened PR for ") + displayName(title);
+      if (r?.url) offerUrl(r.url, said);
+      else toast(said);
       // PR is open — restart the guided cycle: put the pill back to idle so the
       // button reads "Commit…" again and the commit→push→PR loop can repeat in
       // this session. Server-side (the same route the ↺ button uses), so it also
@@ -887,6 +900,8 @@ export async function mergeSession(title: string, overrideRedZones = false, conf
       const msg = r.message || PR_REMEDY;
       if (r.pr_url) offerUrl(r.pr_url, "Opened the PR on GitHub to merge there — " + msg);
       else toast(msg, { duration: 9000 });
+    } else {
+      toast(mergedText(displayName(title), r?.base));
     }
   } catch (err) {
     clearStep(title);
@@ -895,6 +910,19 @@ export async function mergeSession(title: string, overrideRedZones = false, conf
     else errorPop("Merge failed", errMsg(err));
   }
   await freshStage(title);
+}
+
+/** Re-run a session's worktree setup (deps / env files) after it failed —
+ * the row's "Setup failed" chip; its prompts are held until setup passes. */
+export async function rerunSetup(title: string) {
+  if (!title) return;
+  try {
+    await instApi(title, "/setup/rerun", { method: "POST" });
+    toast("Worktree setup re-running — watch the setup chip");
+  } catch (err) {
+    errorPop("Setup re-run failed", errMsg(err));
+  }
+  await refreshInstances();
 }
 
 /** Hide/show a session's pane (client-side only; the session keeps running). */
