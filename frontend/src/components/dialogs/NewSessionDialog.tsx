@@ -602,7 +602,7 @@ export function NewSessionDialog() {
     setLaunchArgs("");
     // The Describe box and everything it leaves behind. Each of these is here
     // because a useState without a reset line leaks from one opening to the
-    // next — `strategy` is the standing counter-example — and a leaked note is
+    // next (`strategy` and `continueOn` did, until they got theirs) — and a leaked note is
     // worse than a leaked field: it is a sentence about a folder the form is no
     // longer showing.
     // Intake's "Start together…" hands its ticked tickets over as the box's
@@ -610,6 +610,10 @@ export function NewSessionDialog() {
     setDescribe(prefill);
     setBatch(!!prefill);
     setBaseBranch("");
+    // ...and what goes with the base branch: "continue on it" and how the
+    // workspace is copied were the two that still leaked.
+    setContinueOn("");
+    setStrategy("worktree");
     setBranches(null);
     setDescribing(false);
     setDescribeSlow(false);

@@ -92,6 +92,25 @@ describe("a fixed agent problem doesn't stay on screen", () => {
   });
 });
 
+describe("Verify keeps an edit or a retry when the server refused", () => {
+  it("editPlanStep and writePlanFor resolve whether they took", () => {
+    const va = squash(code("lib/verifyActions.ts"));
+    expect(va).toContain("fields: Partial<TestStep> ): Promise<boolean> {");
+    expect(va).toContain("export async function writePlanFor(target: string): Promise<boolean> {");
+    expect(va).toMatch(/errorPop\("Couldn't change that step", errMsg\(err\)\); return false;/);
+    expect(fn("lib/verifyActions.ts", "writePlanFor")).toMatch(/errorPop\("Couldn't write a checklist", errMsg\(err\)\);\s*return false;/);
+  });
+
+  it("the step editor closes, and the banner clears, only on success", () => {
+    expect(code("components/dialogs/VerifyStep.tsx")).toContain(
+      "if ((await onEdit(step, fields)) !== false) setEditing(false);"
+    );
+    expect(code("components/dialogs/VerifyDialog.tsx")).toContain(
+      'if (await writePlanFor(missingTarget.title)) setMissingBranch("");'
+    );
+  });
+});
+
 describe("settings search reaches advanced-only controls", () => {
   // Every AdvancedFold a basic screen hides entirely (no `basic`).
   const hidden = new Set<string>();

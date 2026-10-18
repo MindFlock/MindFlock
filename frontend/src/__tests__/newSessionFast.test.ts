@@ -55,6 +55,10 @@ describe("fast path — Name → Enter creates, no model turn", () => {
     expect(reset).toContain("openedPage.current = 1;");
     expect(reset).toContain("setPage(1);");
     expect(reset).toContain('openedFocus.current = "describe";');
+    // A fresh opening forgets last time's base-branch choices with the branch.
+    expect(reset).toContain('setBaseBranch("");');
+    expect(reset).toContain('setContinueOn("");');
+    expect(reset).toContain('setStrategy("worktree");');
     expect(DIALOG).not.toContain("useState(2)");
     // The caret goes to the sentence box; Name only after a failed create,
     // whose reopen is about fixing the form failCreate put back on screen.
