@@ -1095,7 +1095,8 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
     FOCUS_DONE = f!.seq;
     if (f!.path && c && !c.revealPath(f!.path))
       showToast({ text: `${f!.path} isn't on the tree (yet) — it appears once the map re-reads the worktree.` });
-    if (f!.section) openPanel(f!.section);
+    if (f!.section === "search") setTimeout(() => searchRef.current?.focus(), 0);
+    else if (f!.section) openPanel(f!.section);
   }, [title, active, model, openPanel, showToast]);
   // a focus that arrives before the tree is laid out waits: this runs again when the model lands, and the
   // controller's own change callback (onChange below) retries once it has the model

@@ -270,9 +270,9 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         if (id === "map")
           acts.push({
             label: `Find file on map… — ${name}`,
-            hint: "opens its Map",
+            hint: "opens its Map's find box",
             keywords: "search file path locate code map",
-            run: () => useUi.getState().openMap(t),
+            run: () => useUi.getState().openMap(t, { section: "search" }),
           });
       }
     }

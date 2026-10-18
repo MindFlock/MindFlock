@@ -146,8 +146,8 @@ describe("the palette", () => {
     expect(p).toContain('role="option"');
     expect(p).toContain("aria-selected={i === sel}");
     expect(has(p, '?.scrollIntoView?.({ block: "nearest" });')).toBe(true);
-    // Find file on map… opens the focused session's Map through the store.
-    expect(has(p, "run: () => useUi.getState().openMap(t)")).toBe(true);
+    // Find file on map… opens the focused session's Map on its find box, through the store.
+    expect(has(p, 'run: () => useUi.getState().openMap(t, { section: "search" })')).toBe(true);
   });
 });
 

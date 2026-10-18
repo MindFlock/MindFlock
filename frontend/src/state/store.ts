@@ -421,9 +421,9 @@ export interface ThreadComposeTarget {
   seq: number;
 }
 
-/** A part of the Map `openMap` can open: a Session-panel section, or the
- * bird index's ⚠ Could break layer ("risk"). */
-export type MapSection = "breaches" | "scope" | "plan" | "blast" | "zones" | "changed" | "others" | "risk";
+/** A part of the Map `openMap` can open: a Plan & lists section, the bird
+ * index's ⚠ Could break layer ("risk"), or the find box ("search"). */
+export type MapSection = "breaches" | "scope" | "plan" | "blast" | "zones" | "changed" | "others" | "risk" | "search";
 
 export interface MapFocus {
   title: string;
