@@ -265,6 +265,45 @@ html, body {
 .approve-card .approve-btns { display: flex; gap: 6px; }
 .approve-card .approve-btns .act { flex: 1 1 0; }
 
+/* --- a plan waiting for Go (built by mobile.js under the approve cards) --- */
+#plan-card {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+#plan-card.hidden { display: none; }
+.plan-card { border-color: var(--tone-attention); }
+.plan-card .plan-head { font-weight: 600; }
+.plan-card .plan-items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 30vh;
+  overflow-y: auto;
+  font-size: 12px;
+}
+.plan-card .plan-items li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan-card .plan-path { font-family: ui-monospace, Menlo, Consolas, monospace; }
+.plan-card .plan-intent { color: var(--muted); }
+.plan-card .plan-flag .plan-path { color: var(--tone-broken); }
+
+/* The rail's zone chip on a session row (redZoneChip's tones). */
+.rz-chip {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 15px;
+}
+.rz-chip.rz-ok { background: rgba(81, 189, 115, 0.14); color: var(--tone-working); }
+.rz-chip.rz-warn { background: rgba(255, 215, 0, 0.16); color: var(--tone-attention); font-weight: 700; }
+.rz-chip.rz-breach { background: rgba(222, 97, 62, 0.2); color: var(--tone-broken); font-weight: 700; }
+
 /* --- commit-message sheet (bottom sheet over the whole app) --- */
 .sheet {
   position: absolute;

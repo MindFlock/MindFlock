@@ -595,6 +595,9 @@ export interface RedZoneSummary {
   guard: "guarded" | "arming" | "detect" | "off" | "none" | string;
   /** v3: "green" while the worktree has an enforced green zone. */
   mode?: "green" | "red" | null | string;
+  /** Files in the agent's declared plan while it waits for Go (the Map's
+   * plan loop); absent/0 when none, once work started or after Go. */
+  plan_pending?: number;
 }
 
 export interface RepoRef {

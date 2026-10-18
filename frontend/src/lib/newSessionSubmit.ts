@@ -255,7 +255,10 @@ export function newSessionSubmit(ctx: NewSessionSubmitCtx) {
       // must not arrive wearing a closed session's rename.
       clearStaleAlias(inst.title);
       await refreshInstances();
-      selectSession(inst.title);
+      // Plan first lands on the Map's Plan section, to watch the plan arrive
+      // and press Go there; anything else on the Agent tab.
+      if (body.plan_first) useUi.getState().openMap(inst.title, { section: "plan" });
+      else selectSession(inst.title);
       // Arming waits for the worktree; it never holds the dialog.
       if (lane !== "leave") void setLaneWhenReady(inst.title, lane, askFirst);
     } catch (err) {

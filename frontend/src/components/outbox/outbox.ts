@@ -220,6 +220,9 @@ export interface NeedsRow {
   rank: number;
   attn?: AttentionItem;
   waiting?: OutboxWaiting;
+  /** A plan waiting for Go: how many files it names (the row's
+   * `redzone.plan_pending`). The row opens the Map's Plan section. */
+  plan?: number;
 }
 
 /** The bell's ONE list of what waits on you: the sidebar's attention items
@@ -252,4 +255,32 @@ export function needsAttention(
     rows.set(key, { key, title: "", rank: 1, waiting: w });
   }
   return [...rows.values()].sort((a, b) => a.rank - b.rank);
+}
+
+/** `rows` plus "Plan ready — review & Go" for every session whose agent waits
+ * on Go for its plan (`redzone.plan_pending`, from the server's red-zone loop —
+ * so it shows with the Map closed). Ranked like an approval: it outranks the
+ * session's other attention reasons, never its question or a waiting item. */
+export function withPlanReady(
+  rows: readonly NeedsRow[],
+  instances: readonly {
+    title: string;
+    status?: string;
+    workspace_missing?: boolean;
+    redzone?: { plan_pending?: number } | null;
+  }[]
+): NeedsRow[] {
+  const out = [...rows];
+  let added = false;
+  for (const inst of instances || []) {
+    const n = inst.redzone?.plan_pending || 0;
+    if (n <= 0 || inst.workspace_missing || inst.status === "paused") continue;
+    const at = out.findIndex((r) => r.title === inst.title);
+    const plan: NeedsRow = { key: inst.title, title: inst.title, rank: 1, plan: n };
+    if (at < 0) out.push(plan);
+    else if (out[at].rank > 1) out[at] = plan;
+    else continue;
+    added = true;
+  }
+  return added ? out.sort((a, b) => a.rank - b.rank) : out;
 }

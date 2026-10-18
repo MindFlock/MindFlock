@@ -204,6 +204,7 @@
       connect();
     }
     updateActions();
+    updatePlanCard();
     if (view === "diff") loadDiff();
   }
 
@@ -385,6 +386,16 @@
     word.className = "sess-state tone-" + ss.tone;
     word.textContent = ss.label;
     sub.appendChild(word);
+    var rz = rzChip(inst);
+    if (rz) {
+      var chip = document.createElement("span");
+      chip.className = "rz-chip " + rz.cls;
+      chip.textContent = rz.label;
+      chip.title = rz.title;
+      chip.setAttribute("aria-label", rz.title);
+      sub.appendChild(document.createTextNode(" "));
+      sub.appendChild(chip);
+    }
     if (inst.repo) sub.appendChild(document.createTextNode("  ·  " + inst.repo));
     text.appendChild(name);
     text.appendChild(sub);
@@ -911,16 +922,69 @@
   // O1: attention rank (lower = more urgent). The bell's order
   // (sessionState.ts attentionPriority): a question, then whatever is broken,
   // then failing checks; a pushed branch waiting for its PR comes after those,
-  // and everything else last.
+  // and everything else last. A plan waiting for Go ranks with the broken ones
+  // (the bell ranks it like an approval).
   function attnRank(inst) {
     var ss = sessionState(inst);
     if (ss.inBell) return ss.reason === "question" ? 0 : ss.reason === "checks_failing" ? 2 : 1;
+    if (planPending(inst) && inst.status !== "paused" && !inst.workspace_missing) return 1;
     if (inst.status !== "paused" && inst.stage === "pushed") return 3;
     return 9;
   }
   // The row's marker: its tone class — the same colour the rail's dot wears.
   function attnMark(inst) {
     return "tone-" + sessionState(inst).tone;
+  }
+
+  // --- the rail's zone chip (lib/codemapSeen.ts redZoneChip), ported --------
+  // Loudest first: breaches, a block since you last looked, a guard that isn't
+  // holding, a plan waiting for Go, then the quiet shield / green check.
+  // "Last looked" is the desktop's Map (mf_codemap_seen, when this browser has
+  // one) or opening the session here (cs_mobile_rz_seen, stamped with the
+  // block's own server time, so no clock skew). Tones match the rail's.
+  function planPending(inst) {
+    return Number(inst && inst.redzone && inst.redzone.plan_pending) || 0;
+  }
+  function rzSeenMap(key) {
+    try {
+      var v = JSON.parse(localStorage.getItem(key) || "{}");
+      return v && typeof v === "object" ? v : {};
+    } catch (e) { return {}; }
+  }
+  function rzSeenAt(title) {
+    return Math.max(Number(rzSeenMap("mf_codemap_seen")[title]) || 0,
+                    Number(rzSeenMap("cs_mobile_rz_seen")[title]) || 0);
+  }
+  function markRzSeen(inst) {
+    var ts = Number(inst && inst.redzone && inst.redzone.last_block_ts) || 0;
+    if (!ts || rzSeenAt(inst.title) >= ts) return;
+    var seen = rzSeenMap("cs_mobile_rz_seen");
+    seen[inst.title] = ts;
+    try { localStorage.setItem("cs_mobile_rz_seen", JSON.stringify(seen)); } catch (e) {}
+  }
+  function rzChip(inst) {
+    var rz = inst && inst.redzone;
+    if (!rz || inst.pending) return null;
+    var zones = rz.zones || 0, breaches = rz.breaches || 0, planned = planPending(inst);
+    if (breaches > 0)
+      return { cls: "rz-breach", label: "⛔" + breaches,
+               title: breaches + " red-zone file" + (breaches === 1 ? "" : "s") +
+                      " changed on this branch — pushing is blocked until reverted." };
+    if ((rz.last_block_ts || 0) > rzSeenAt(inst.title))
+      return { cls: "rz-breach", label: "⛔", title: "A red zone blocked an edit since you last looked." };
+    if (zones > 0 && (rz.guard === "off" || rz.guard === "arming"))
+      return { cls: "rz-warn", label: "!",
+               title: rz.guard === "off"
+                 ? "Red-zone guard is off — MindFlock is re-arming it. Edits are detected, not blocked, until then."
+                 : "Red-zone guard is arming — it takes effect on the agent's next tool call." };
+    if (planned > 0)
+      return { cls: "rz-warn rz-plan", label: "plan · " + planned, title: "Plan ready — review & Go" };
+    if (zones > 0 && rz.guard === "guarded" && rz.mode === "green")
+      return { cls: "rz-ok", label: "✓", title: "Scoped to its green zones — edits outside them are blocked." };
+    if (zones > 0 && rz.guard === "guarded")
+      return { cls: "rz-ok", label: "🛡",
+               title: zones + " red zone" + (zones === 1 ? "" : "s") + " guarded — edits there are blocked." };
+    return null;
   }
 
   function poll() {
@@ -931,7 +995,9 @@
         // Re-render when the title set OR any attention state changes, so
         // markers move without a session being added/removed.
         var sig = instances.map(function (i) {
-          return attnRank(i) + i.title + "\u0000" + (i.name || "") + "\u0000" + sessionState(i).label;
+          var rz = rzChip(i);
+          return attnRank(i) + i.title + "\u0000" + (i.name || "") + "\u0000" + sessionState(i).label +
+            "\u0000" + (rz ? rz.label : "");
         }).join("|");
         if (sig !== poll._sig) { poll._sig = sig; renderPicker(); }
         // After renderPicker, before the dot: a session created from the "+"
@@ -944,6 +1010,7 @@
         attachWhenReady();
         updateDot();
         updateActions();
+        updatePlanCard();
       })
       .catch(function () { /* transient; next tick retries */ });
   }
@@ -1048,6 +1115,142 @@
     approveSig = "";
     pollApprovals();
   });
+
+  // --- a plan waiting for Go (the Map's plan loop, from the phone) ----------
+  // The row's `redzone.plan_pending` says the current session's agent wrote
+  // its plan and waits; the card lists the plan (GET …/code-map/live, the
+  // Map's own read) and gives the Map's two buttons: Go (naming the zones
+  // added since the plan, as the Map's Go does) and Go — only the planned
+  // files (POST …/code-map/go {scope_to_plan: true}). Built here, not in
+  // mobile.html: it sits right under the approve cards.
+  var PLAN_SHOWN = 8;
+  var planEl = document.createElement("div");
+  planEl.id = "plan-card";
+  planEl.className = "hidden";
+  planEl.setAttribute("aria-live", "polite");
+  if (approveEl && approveEl.parentNode) approveEl.parentNode.insertBefore(planEl, approveEl.nextSibling);
+  var planKey = "";
+  var planBusy = false;
+  // The plan a Go just answered: kept hidden while a poll still carries it.
+  var planGone = { key: "", at: 0 };
+  function hidePlanCard() {
+    if (planEl.classList.contains("hidden")) return;
+    planEl.classList.add("hidden");
+    planEl.innerHTML = "";
+    fitSoon();
+  }
+  function updatePlanCard() {
+    if (!planEl) return;
+    var inst = currentInst();
+    if (inst) markRzSeen(inst);
+    var n = inst && inst.status !== "paused" ? planPending(inst) : 0;
+    if (!n) { planKey = ""; hidePlanCard(); return; }
+    var key = inst.title + "|" + n;
+    if (key === planGone.key && Date.now() - planGone.at < 15000) { hidePlanCard(); return; }
+    if (key === planKey) { planButtons(); return; }
+    planKey = key;
+    var title = inst.title;
+    // A `since` past any record keeps the feed out of the answer.
+    fetch("/api/instances/" + encodeURIComponent(title) + "/code-map/live?since=1e12")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (planKey !== key) return;
+        var plan = (j && j.plan) || {};
+        var items = Array.isArray(plan.items) ? plan.items.filter(function (it) { return it && it.path; }) : [];
+        var planTs = Number(plan.ts) || 0;
+        var zones = (j && Array.isArray(j.zones)) ? j.zones : [];
+        var goZones = zones.filter(function (z) {
+          return z && z.id && !z.waived && (Number(z.created) || 0) > planTs;
+        });
+        renderPlanCard(title, n, items, goZones);
+      })
+      .catch(function () { if (planKey === key) planKey = ""; /* the next tick retries */ });
+  }
+  function renderPlanCard(title, n, items, goZones) {
+    planEl.innerHTML = "";
+    var card = document.createElement("div");
+    card.className = "approve-card plan-card";
+    var head = document.createElement("div");
+    head.className = "plan-head";
+    head.textContent = "Plan ready — review & Go";
+    card.appendChild(head);
+    var list = document.createElement("ul");
+    list.className = "plan-items";
+    items.slice(0, PLAN_SHOWN).forEach(function (it) {
+      var li = document.createElement("li");
+      var p = document.createElement("span");
+      p.className = "plan-path";
+      p.textContent = it.path + (it.new ? " (new)" : "");
+      li.appendChild(p);
+      if (it.intent) {
+        var why = document.createElement("span");
+        why.className = "plan-intent";
+        why.textContent = " — " + it.intent;
+        li.appendChild(why);
+      }
+      if (it.blocked || it.outside) {
+        li.className = "plan-flag";
+        li.title = it.blocked ? "In a red zone" : "Outside the green zones";
+      }
+      list.appendChild(li);
+    });
+    card.appendChild(list);
+    var more = items.length - PLAN_SHOWN;
+    var note = document.createElement("div");
+    note.className = "approve-note";
+    note.textContent = (items.length ? (more > 0 ? "+" + more + " more. " : "") : n + " planned file" + (n === 1 ? "" : "s") + ". ") +
+      "Only the planned files also keeps the agent to them (green zones).";
+    card.appendChild(note);
+    var btns = document.createElement("div");
+    btns.className = "approve-btns";
+    var nz = goZones.length;
+    var ids = goZones.map(function (z) { return z.id; });
+    [[false, nz ? "Go — with " + nz + " zone" + (nz === 1 ? "" : "s") : "Go"],
+     [true, "Go — only the planned files"]].forEach(function (b) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "act plan-go" + (b[0] ? "" : " is-next");
+      btn.textContent = b[1];
+      btn.addEventListener("click", function () { goPlan(title, ids, b[0]); });
+      btns.appendChild(btn);
+    });
+    card.appendChild(btns);
+    planEl.appendChild(card);
+    planEl.classList.remove("hidden");
+    planButtons();
+    fitSoon();
+  }
+  // Like the Map's: no Go while the agent waits on a question in the terminal.
+  function planButtons() {
+    var inst = currentInst();
+    var asking = !!inst && inst.activity === "clarify";
+    planEl.querySelectorAll(".plan-go").forEach(function (btn) {
+      btn.disabled = planBusy || asking;
+      btn.title = asking ? "The agent is asking something in the terminal — answer it first" : "";
+    });
+  }
+  function goPlan(title, zoneIds, scopeToPlan) {
+    planBusy = true;
+    planButtons();
+    postFor(title, "code-map/go", { zone_ids: zoneIds, scope_to_plan: scopeToPlan })
+      .then(function (j) {
+        var told = j && j.told;
+        flashStatus(told === "sent" ? "Sent to the agent."
+          : told === "queued" ? "Queued — it goes to the agent when this turn ends."
+          : "Couldn't reach the agent" + (j && j.reason ? ": " + j.reason : "."));
+        if (told) {
+          planGone = { key: planKey, at: Date.now() };
+          hidePlanCard();
+        }
+      })
+      .catch(function (err) { flashStatus((err && err.message) || "Couldn't reach MindFlock"); })
+      .then(function () {
+        planBusy = false;
+        planKey = "";
+        planButtons();
+        setTimeout(poll, 800);
+      });
+  }
 
   // --- touch scrollback ------------------------------------------------------
   // The agent TUI runs on tmux's alt screen, so xterm's local scrollback is

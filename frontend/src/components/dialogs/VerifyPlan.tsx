@@ -419,10 +419,9 @@ export function PlanRow({
   // THE WAY BACK to the work this checklist is about — the session, its diff,
   // its PR. Only while that session is open; a closed one has no pane to show.
   if (session) {
-    const go = (tab?: string) => {
+    const go = () => {
       closeDialog();
       selectSession(session.title);
-      if (tab) useUi.getState().setLastTab(session.title, tab);
     };
     menu.push({
       key: "open-session",
@@ -434,7 +433,19 @@ export function PlanRow({
       key: "view-diff",
       label: "View diff",
       title: "Show what changed on " + (plan.branch || "this branch"),
-      onSelect: () => go("diff"),
+      onSelect: () => {
+        closeDialog();
+        useUi.getState().openDiff(session.title);
+      },
+    });
+    menu.push({
+      key: "could-break",
+      label: "What could break",
+      title: "Open the map on what imports the changes on " + (plan.branch || "this branch"),
+      onSelect: () => {
+        closeDialog();
+        useUi.getState().openMap(session.title, { section: "risk" });
+      },
     });
     if (session.pr_url)
       menu.push({

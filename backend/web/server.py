@@ -4893,6 +4893,8 @@ async def instance_code_map_go(
             _red_zone_monitor.resync([(os.path.realpath(wt), wt)], repo_id)
         msg = _red_zones.go_message(chosen, scope=created or None, hard=_rz_hard(inst))
         told, reason = _deliver_to_agent(inst, title, msg)
+        if told is not False:
+            _red_zone_monitor.note_go(title)  # the row's "plan · n" goes out
         return told, reason, created, exempt
 
     res = await asyncio.to_thread(_go)
