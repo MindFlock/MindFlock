@@ -402,9 +402,14 @@ Each session shows a stage badge (sidebar + pane) computed from git, plus a
 GitHub lookup (`gh` or a token) for the two PR stages:
 
 ```
-provisioning → agent → pre-commit → committed → pushed → PR open → merged
-                          └─ pre-commit ✗ (hooks blocked the commit)
+Provisioning → Agent → Pre-commit → Committed → Pushed → PR open → Complete ✓
+                          └─ Pre-commit ✗ (hooks blocked the commit)
 ```
+
+The chip words are sentence case, like the state words they share the chip
+with (*Working*, *Question*), and a verdict mark trails the word: *Pre-commit
+✗*, and the checks chip's *Checks…* / *Checks ✗* / *Checks ✓* / *Checks
+stale* (`lib/stage.ts`).
 
 The pane shows a single **guided next-step button**:
 
@@ -442,8 +447,9 @@ painted red.
 |---|---|---|---|---|
 | Starting | grey, pulsing | nobody | no | **Starting** (provisioning, or the worktree setup running) |
 | Working | green | the agent | no | **Working** |
-| Needs you | gold | you | yes | the reason: **Question**, **Pre-commit failed**, **Checks failing**, **Setup failed** |
-| Idle | neutral | nobody | after 20 min idle on uncommitted work ("stuck") | **Idle** — the ship-stage chip (`committed`, `pushed`, `PR open`) shows beside it |
+| Needs you | gold | you | yes | the reason: **Question**, **Pre-commit failed**, **Checks failing**, **Setup failed** — on the rail the chip is a button to where you act: the bell at its row (Question), its **Terminal** tab (Pre-commit failed; Checks failing with no PR yet), a worktree-setup re-run (Setup failed), the PR (Checks failing) |
+| Idle | neutral | nobody | no | **Idle** — the ship-stage chip (`Committed`, `Pushed`, `PR open`) shows beside it |
+| Idle, stuck | gold | you | yes — 20 min idle on uncommitted work | **Idle 25m** — how long, in the gold the bell's rows wear |
 | Waiting on limit | blue | nobody | no | **Waiting on limit, resumes HH:MM** when the window is known |
 | Offline | red | you | yes | **Offline** — the chip is a **↻ Restart** button |
 
@@ -834,7 +840,8 @@ window closes it. The items, in groups:
   run}** for a team run member · **Duplicate session** (`Ctrl+K D`; a second
   in-place session on the same worktree) · **Branch session** (`Ctrl+K B`;
   see [Branch session](#branch-session)) · **Open in <IDE>** *your code editor*
-  (`Ctrl+K O`; row double-click does the same; left out once `GET /api/ides`
+  (`Ctrl+K O`; a double-click on the row — not its name, which renames — does
+  the same; left out once `GET /api/ides`
   says the configured editor isn't installed here) · **Open preview ↗** `:port`
   when the session serves one · **Select** (`Ctrl+click`) · **Hide/Show
   window** (`Ctrl+K H`; the session keeps running) · **Re-run worktree setup**
@@ -906,7 +913,16 @@ pressing it reopens exactly that session, and **Recently closed (n)** refreshes
 on the close and on the undo. Only the button reopens; a click on the rest of
 the toast does nothing, and the toast stays up while the pointer is on it or
 the button has focus. (The toast helper takes an optional
-`action: { label, onClick }` for a button like this; `lib/toast.ts`.)
+`action: { label, onClick }` for a button like this; `lib/toast.ts`.) A plain
+message that arrives meanwhile (*Copied*, *Renamed*) never takes the Undo
+away: the Undo steps up one slot and keeps its own timer — two toasts at most,
+and a newer Undo replaces an older one. A toast stays up as long as its text
+takes to read (at least 1.4 s, 2.5 s for a failure, 6 s with a button) and is a
+polite live region; a failure (*… failed*, *Couldn't …*) is an alert.
+
+**Open PR** and **Merge** say what they did: *Opened PR for <name>* (the PR
+opens in a new tab — or, if the browser blocked that, the toast is the link),
+and *Merged <name> into <base>*.
 After a ✕ the next row slides up under the pointer, so the row's ✕ ignores a
 second click within 400 ms. **Delete…** removes the worktree and its branch; the
 first click turns the item into an inline strip — *Deletes the folder and
@@ -1944,8 +1960,10 @@ Authentication section. If the token leaks, regenerate it from Settings →
   sidebar — the grid is untouched. Customize → *Session list* → **Filter box**
   shows or hides it (shown by default); hidden, `/` still opens it for one
   search.
-- **Rename** — row menu → *Rename…*, the palette, or click the selected row's
-  name. The new name is the session's name everywhere: the rail, the phone page
+- **Rename** — row menu → *Rename…*, the palette, double-click the row's
+  name, or `F2` on a focused row. (A click on the row that is already
+  selected selects it again — back to its terminal, and a narrow window's
+  drawer closes — it never starts a rename.) The new name is the session's name everywhere: the rail, the phone page
   (`/m`, via the `name` field on `GET /api/instances`), and notifications — the
   old one is not kept around in tooltips. Names are unique: a rename to a name
   another session already has (its title, its rename, or its rail label) is
@@ -3901,7 +3919,8 @@ narrow rail cuts the detail and never the target: `→ PR · working 12m`, `⇡ 
 `! hooks failed twice — open the bell`,
 `→ commit, asks first · ready — approve in the bell`. A team run member (or any
 session with fast-track on) on a prompt gets the answer strip under its row,
-like a family worker. A line that ends **open the bell** or **approve in the
+like a family worker — and so does any asking session whose pane is not on
+screen, since nothing else there shows its question. A line that ends **open the bell** or **approve in the
 bell** is clickable and opens the bell on that session's row.
 
 **Notifications.** The bell's history lists a team run's escalations, its finish,
