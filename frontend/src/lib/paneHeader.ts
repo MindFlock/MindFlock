@@ -8,8 +8,10 @@
  * always the far-right element, and everything hidden here stays reachable
  * from it, so hiding never loses a feature.
  *
- * The default (the owner's list): Agent · Terminal · Diff · Queue, then ⏩ and
- * Copy entire history. Everything else starts off and can be switched on.
+ * The default (the owner's list): Agent · Terminal · Diff · Queue · Map,
+ * then ⏩ and Copy entire history. Everything else starts off and can be
+ * switched on. (Map joined the default in 0.10: one switch away, nobody
+ * found it. A saved choice that hid it keeps it hidden.)
  * Agent can't be hidden. A hidden tab you are ON still shows while you are on
  * it (opened from ⋯, a shortcut or a link), so the active tab always has a
  * place in its own header.
@@ -20,10 +22,12 @@
  * save: it takes its default visibility and its default place, so a new item
  * neither vanishes for nor ambushes someone with an older choice.
  *
- * The calm first hour (lib/calm.ts) folds Queue and ⏩ while the header is
- * still the default — a newcomer's header is name · Agent · Terminal · Diff
- * · Copy. Once the person has customized it, calm leaves their choice alone:
- * what they switched on is what they see.
+ * The calm first hour (lib/calm.ts) folds Queue, Map and ⏩ while the header
+ * is still the default — a newcomer's header is name · Agent · Terminal ·
+ * Diff · Copy — until each has state worth seeing: Map comes back as soon as
+ * the session changed a file or has any zone state. Once the person has
+ * customized it, calm leaves their choice alone: what they switched on is
+ * what they see.
  *
  * Also here: `fitDecision`, the text → icons switch (see there). Pure. */
 
@@ -48,7 +52,7 @@ export const PANE_TABS: PaneItemDef[] = [
   { id: "shell", kind: "tab", label: "Terminal", note: "A shell in the session's folder (not for a shared folder)", on: true },
   { id: "diff", kind: "tab", label: "Diff", note: "What the session changed (git sessions)", on: true },
   { id: "queue", kind: "tab", label: "Queue", note: "Send a message now or queue prompts to run when idle", on: true },
-  { id: "map", kind: "tab", label: "Map", note: "The worktree as a tree: agents, zones, blast radius (git sessions)", on: false },
+  { id: "map", kind: "tab", label: "Map", note: "The worktree as a tree: agents, zones, blast radius (git sessions)", on: true },
   { id: "thread", kind: "tab", label: "Thread", note: "Workers and what passed between them — only once a session has some", on: false },
 ];
 
@@ -184,6 +188,9 @@ export interface PaneHeaderCtx {
   queueBusy: boolean;
   /** Fast-track state worth seeing: a target set, running, halted, or its picker open. */
   ftBusy: boolean;
+  /** Map state worth seeing: changed files or any zone state (lib/mapEntry
+   * mapHasState). Absent = none. */
+  mapBusy?: boolean;
 }
 
 /** The items this pane's header draws, in order: the person's choice, less
@@ -192,10 +199,12 @@ export function headerItems(pref: PaneHeaderPref | null, ctx: PaneHeaderCtx): { 
   const r = resolvePaneHeader(pref);
   const possible = (id: PaneItemId) =>
     !(id === "shell" && ctx.sharedFolder) && !((id === "diff" || id === "map") && !ctx.git) && !(id === "thread" && !ctx.thread);
-  // Calm folds Queue and ⏩ — only while the header is the default, and
-  // never what is state rather than an option.
+  // Calm folds Queue, Map and ⏩ — only while the header is the default,
+  // and never what is state rather than an option.
   const calmFolds = (id: PaneItemId) =>
-    ctx.calm && pref === null && ((id === "queue" && !ctx.queueBusy) || (id === "fasttrack" && !ctx.ftBusy));
+    ctx.calm &&
+    pref === null &&
+    ((id === "queue" && !ctx.queueBusy) || (id === "map" && !ctx.mapBusy) || (id === "fasttrack" && !ctx.ftBusy));
   const tabs = r.tabs.filter(
     (id) => possible(id) && (id === ctx.active || (r.shown.has(id) && !calmFolds(id)))
   ) as PaneTabId[];

@@ -359,7 +359,11 @@ the API (including the friendly 400 in this case) surface as toasts.
   persisted): **All changes** (default) diffs against the fork point from the
   base branch — committed + uncommitted, the same total as the header badge —
   and **Uncommitted** shows only working-tree changes since the last commit.
-  Split/unified view toggle is persisted too.
+  Split/unified view toggle is persisted too; until you press one, a pane
+  under 700px reads Unified (Split's four columns crush the code there). The
+  open tab reloads when the session's diff stats move, and on **↻**. Each
+  file header has a **Map** button (*Show <file> on the map*); the Map's file
+  card **Open diff** opens this tab on that file.
 
 Terminals keep tmux mouse scrolling (speed configurable in settings);
 **Shift+drag** (Alt+drag on macOS) selects text and auto-copies it.
@@ -575,11 +579,12 @@ Left to right: the ⠿ grip, the session's name, the tabs, then the buttons,
 then **▶ Resume** (only on a paused session) and **⋯**, always the last thing
 in the row. Which tabs and buttons show, and in what order, is yours to
 choose in [Customize → Pane header](#customize) (`lib/paneHeader.ts`). Out of
-the box: **Agent · Terminal · Diff · Queue**, then ⏩
+the box: **Agent · Terminal · Diff · Queue · Map**, then ⏩
 [Fast-track](#fast-track-) and **Copy all** (copy entire history). Switched
-off until you want them: the **Map** and **Thread** tabs, the guided
+off until you want them: the **Thread** tab, the guided
 **Commit…** / next-step button, **History**, the cost chip, the diff stats and
-**−** (hide). Agent can't be switched off. There is no Pause button:
+**−** (hide). (Map joined the default in 0.10 — tucked under ⋯ nobody found
+it; a saved header that hid it keeps it hidden.) Agent can't be switched off. There is no Pause button:
 pausing is the palette's *Pause session*, `mindflock pause` or
 `POST …/pause` (see *Pause keeps your work* under
 [Session row actions](#session-row-actions-the-rows--or-a-right-click)).
@@ -617,6 +622,18 @@ newest thing you actually asked.
   and the diff stats (*+19 −4 · 2 files*) — head the popover. It opens over
   the whole window — a 2×2 grid's lower pane used to paint over its lower
   half.
+- **The Map tab's badge** is the rail row's zone chip when it needs you —
+  **⛔n** red-zone files changed, **⛔** a block you haven't seen, **!** the
+  guard off — else a quiet count of changed files (`mapTabBadge`,
+  `lib/mapEntry.ts`); its screen-reader name says which.
+- **Every Open map lands on the spot.** The push / PR / merge refusal card,
+  the commit warning, a red-zone toast, the rail's zone chip, a Thread worker's
+  **Map** and a Diff file's **Map** all go through `openMap` (state/store):
+  a breach opens the Map's Breaches on the first breached file, a block
+  outside an *only here* zone opens Scope on that file, a worker's Map opens
+  its changed files. A toast for one file blocked outside an *only here*
+  zone has **Allow <file>** right on it (then *Allowed …*); the rest of the
+  toast opens the Map. The tabs are a `tablist` (←/→ move between them).
 - **What a session can't have never shows**, whatever the setting: Terminal
   for a peer-shared folder (its shell would run outside the sandbox), Diff
   and Map outside a git repository, Thread until the session has workers or
@@ -630,10 +647,11 @@ newest thing you actually asked.
   *No history to copy* or *Copy failed*. On Diff, Map, Queue and Thread it is
   greyed (not hidden, so the controls don't shift as you change tabs).
 - **Calm header.** In the [calm first hour](#layout) an *untouched* header
-  also leaves **Queue** and ⏩ to **⋯** (Queue prompt… and Fast-track… are in
-  it always) — a newcomer's header is name · Agent · Terminal · Diff · Copy
-  all. A tab you are on, a Queue with something in it and a fast-track
-  someone set stay in the row. Once you change anything in Customize → Pane
+  also leaves **Queue**, **Map** and ⏩ to **⋯** (Queue prompt…, Code map and
+  Fast-track… are in it always) — a newcomer's header is name · Agent ·
+  Terminal · Diff · Copy all. A tab you are on, a Queue with something in it,
+  a Map with something to show (a changed file, or any zone state) and a
+  fast-track someone set stay in the row. Once you change anything in Customize → Pane
   header, calm leaves the header alone: what you switched on is what you
   see. A pane's width no longer folds anything — words turn to icons
   instead (below).
