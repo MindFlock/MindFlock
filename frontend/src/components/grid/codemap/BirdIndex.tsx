@@ -13,16 +13,19 @@
  * where you read about it — then the Rules (below, so a rule added from a
  * Changes row never moves that row under the pointer). The legend is behind "?". */
 
-import { useState, type ReactNode } from "react";
+import { useContext, useEffect, useState, type ReactNode } from "react";
 import type { RedZone } from "../../../api/types";
 import { isGreen } from "../../../lib/codemap";
+import { instances } from "../../../lib/sessionActions";
+import { deriveSessionState } from "../../../lib/sessionState";
 import { blockedTxt, folderPath, tailPath } from "../../../lib/codetree/draw";
 import { STATUS_TXT } from "../../../lib/codetree/live";
 import { isUnder, type Model, type TFile, type TNode } from "../../../lib/codetree/model";
 import { zoneOfFile } from "../../../lib/codetree/zones";
-import type { AgentState, TZone } from "../../../lib/codetree/types";
+import type { AgentState, AgentStatus, TZone } from "../../../lib/codetree/types";
 import { BirdIcon, LegendCard, dispName, nodeName, subLine } from "./TreeCards";
 import { isShared, sharedWhere } from "./sharedZone";
+import { MapGuideContext } from "./mapGuide";
 
 const clip = (s: string, n = 22) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 const plural = (n: number, one: string, many = one + "s") => `${n} ${n === 1 ? one : many}`;
@@ -55,6 +58,8 @@ export interface BirdIndexProps {
 
 /** Which rows are expanded, per session (the primary bird's key) — survives remounts. */
 const EXPANDED = new Map<string, Set<string>>();
+/** The last "⚠ Could break" ask applied, per session (asks are counted up by the Map tab). */
+const RISK_DONE = new Map<string, number>();
 /** The EXPANDED key for "show every changed folder" (never a bird key: those are session titles). */
 const ALL_FOLDERS = "\u0000folders";
 /** Changed folders listed before "Show all N folders" (a folder carrying a rule is always listed). */
@@ -134,6 +139,31 @@ function nBlocked(agents: AgentState[], z: RedZone): number {
   return n;
 }
 
+/** The sidebar's word for a session (Working / Idle / Question …), "" when it isn't listed. */
+function sessionWord(title: string): string {
+  const inst = instances().find((i) => i.title === title);
+  return inst ? deriveSessionState(inst).label : "";
+}
+
+/** A session bird's status chip and "now" line (blocked and perched birds say what they touch instead). Once the
+ * session itself isn't working, both use the sidebar's word for it (`word`: Idle, Question …) — never "done", and
+ * another session that sits idle never reads as editing. (Pure, for the tests.) */
+export function birdWords(st: AgentStatus, primary: boolean, activity: string, word: string, helpersOut: number): { chip: string; now: string } {
+  const w = word.toLowerCase();
+  const quiet = !!w && w !== "working" && w !== "starting";
+  const chip = w && (st === "done" || st === "waiting" || (quiet && st === "thinking")) ? w : STATUS_TXT[st];
+  const nest = helpersOut ? `in the nest — ${plural(helpersOut, "helper")} out working` : "in the nest, thinking";
+  let now: string;
+  if (st === "planning") now = "planning (buds on the files it will touch)";
+  else if (primary) {
+    if (activity === "clarify" || w === "question") now = "needs you · question — answer it in the terminal";
+    else if (st === "done" || st === "waiting") now = !w || w === "idle" ? "idle — waiting for your next message" : w;
+    else now = nest;
+  } else if (quiet) now = w + " · on its own branch";
+  else now = st === "thinking" ? nest : "working on its own branch";
+  return { chip, now };
+}
+
 /** Where a helper is: the folder of the file it is on (or was blocked at), else its nest — "backend/config". */
 function helperWhere(M: Model, S: AgentState): string {
   const bk = S.blocked[S.blocked.length - 1];
@@ -163,6 +193,15 @@ export function BirdIndex(p: BirdIndexProps) {
   const riskOpen = !!p.riskOpen;
   const setRisk = (b: boolean) => p.onRisk && p.onRisk(b);
   const sum = changeSummary(p.M, p.agents);
+  // "⚠ Could break" asked for from outside (a next-step button, an "Open map" that lands on it): switch it on once
+  // per ask, and open the column in a small pane so the ranked list shows
+  const guide = useContext(MapGuideContext);
+  useEffect(() => {
+    if (!guide.riskAsk || (RISK_DONE.get(exKey) || 0) >= guide.riskAsk) return;
+    RISK_DONE.set(exKey, guide.riskAsk);
+    if (p.onRisk) p.onRisk(true);
+    if (p.size !== "wide") setRailOpen(true);
+  }, [guide.riskAsk, exKey, p]);
 
   const legendCard = legend && (
     <div className="ct-bix-legend" data-hud="pop">
@@ -189,7 +228,7 @@ export function BirdIndex(p: BirdIndexProps) {
         ))}
       </ul>
       {/* Changes before Rules: a rule added from a Changes row lands below it, so nothing moves under the pointer */}
-      <Changes p={p} sum={sum} riskOpen={riskOpen} onRisk={() => setRisk(!riskOpen)} allFolders={ex.has(ALL_FOLDERS)} onAllFolders={() => toggle(ALL_FOLDERS)} />
+      <Changes p={p} sum={sum} notes={guide.notes} riskOpen={riskOpen} onRisk={() => setRisk(!riskOpen)} allFolders={ex.has(ALL_FOLDERS)} onAllFolders={() => toggle(ALL_FOLDERS)} />
       {/* no rules yet: nothing to list (the toolbar and each folder row make one) */}
       {p.zones.length > 0 && <Rules p={p} />}
     </>
@@ -239,18 +278,21 @@ export function BirdIndex(p: BirdIndexProps) {
           >
             <b>✎{sum.total}</b> changed
           </button>
-          <button
-            type="button"
-            className={"ct-rail-tile" + (nKeep ? " keep" : nOnly ? " only" : "")}
-            title={rules.length ? rules.map((z) => (isGreen(z) ? "✓ only here " : "⛔ keep out ") + (z.name || z.pattern) + (nBlocked(p.agents, z) ? " · " + blockedTxt(nBlocked(p.agents, z)) : "")).join("\n") : "No rules — ⛔ Keep out / ✓ Only here"}
-            onClick={() => setRailOpen(true)}
-          >
-            <b>
-              {nOnly ? "✓" : "⛔"}
-              {rules.length}
-            </b>{" "}
-            {rules.length === 1 ? "rule" : "rules"}
-          </button>
+          {/* no rules: no "⛔0 rules" tile (the toolbar's ⛔ / ✓ make one) */}
+          {rules.length > 0 && (
+            <button
+              type="button"
+              className={"ct-rail-tile" + (nKeep ? " keep" : nOnly ? " only" : "")}
+              title={rules.map((z) => (isGreen(z) ? "✓ only here " : "⛔ keep out ") + (z.name || z.pattern) + (nBlocked(p.agents, z) ? " · " + blockedTxt(nBlocked(p.agents, z)) : "")).join("\n")}
+              onClick={() => setRailOpen(true)}
+            >
+              <b>
+                {nOnly ? "✓" : "⛔"}
+                {rules.length}
+              </b>{" "}
+              {rules.length === 1 ? "rule" : "rules"}
+            </button>
+          )}
         </div>
       </div>
       {railOpen && (
@@ -296,22 +338,9 @@ function AgentRow({ p, A, subs, open, onToggle }: { p: BirdIndexProps; A: AgentS
   const following = p.followKey === A.ag.key;
   const bk = A.blocked[A.blocked.length - 1];
   const working = subs.filter((S) => !S.done).length;
-  const now =
-    st === "blocked" && bk
-      ? `⛔ tried ${bk.f ? dispName(M, bk.f) : bk.path}`
-      : st === "done"
-        ? "finished — back in the nest"
-        : st === "planning"
-          ? "planning (buds on the files it will touch)"
-          : st === "thinking"
-            ? working
-              ? `in the nest — ${plural(working, "helper")} out working`
-              : "in the nest, thinking"
-            : A.ag.primary
-              ? A.activity === "clarify"
-                ? "needs you · question"
-                : "waiting"
-              : "editing on its own branch";
+  const words = birdWords(st, A.ag.primary, A.activity, A.ag.parent ? "" : sessionWord(A.ag.key), working);
+  const now = st === "blocked" && bk ? `⛔ tried ${bk.f ? dispName(M, bk.f) : bk.path}` : words.now;
+  const guide = useContext(MapGuideContext);
   // another session works in its own worktree: only repo-wide keep-outs bind it
   const binding = A.ag.primary ? p.tzones : p.tzones.filter((z) => z.type === "keep" && z.z.scope !== "worktree");
   const zf = f && st !== "blocked" && st !== "done" ? zoneOfFile(f, binding) : null;
@@ -355,7 +384,7 @@ function AgentRow({ p, A, subs, open, onToggle }: { p: BirdIndexProps; A: AgentS
             {A.ag.glyph} {clip(A.ag.name, 18)}
           </span>
           <span className={"ct-st " + st} style={st === "editing" || st === "creating" ? { color: A.ag.color } : undefined}>
-            {following ? "following" : STATUS_TXT[st]}
+            {following ? "following" : words.chip}
           </span>
         </button>
         <button
@@ -385,6 +414,8 @@ function AgentRow({ p, A, subs, open, onToggle }: { p: BirdIndexProps; A: AgentS
           <span className={st === "blocked" ? "bad" : ""}>{now}</span>
         )}
       </div>
+      {/* this session's next step, right under what it is doing: always one line, always visible */}
+      {A.ag.primary && p.primaryExtra}
       {allEdits.size > 0 && (
         <div className="ct-bix-chg" title={area.map(([k, n]) => `${k}: ${n}`).join("\n") + (byHelpers ? `\n${A.edits.size} by ${A.ag.name}, ${byHelpers} by its helpers` : "")}>
           <b style={{ color: A.ag.color }}>{allEdits.size} changed</b>
@@ -429,7 +460,6 @@ function AgentRow({ p, A, subs, open, onToggle }: { p: BirdIndexProps; A: AgentS
           ))}
         </ul>
       )}
-      {A.ag.primary && p.primaryExtra}
       {open && (
         <div className="ct-bix-detail">
           {task && <div className="ct-agent-task">{task}</div>}
@@ -464,7 +494,16 @@ function AgentRow({ p, A, subs, open, onToggle }: { p: BirdIndexProps; A: AgentS
                     </button>
                   </li>
                 ))}
-                {changed.length > 8 && <li className="ct-muted">+{changed.length - 8} more in the Session panel</li>}
+                {changed.length > 8 &&
+                  (A.ag.primary ? (
+                    <li>
+                      <button type="button" className="ct-link" onClick={() => guide.openPanel("changed")} title="Open Plan & lists at Changed">
+                        +{changed.length - 8} more — all changed files
+                      </button>
+                    </li>
+                  ) : (
+                    <li className="ct-muted">+{changed.length - 8} more</li>
+                  ))}
               </ul>
             </>
           )}
@@ -478,9 +517,7 @@ function Rules({ p }: { p: BirdIndexProps }) {
   return (
     <div className="ct-bix-rules">
       <h4>Rules</h4>
-      {!p.zones.length ? (
-        <p className="ct-muted">none — ⛔ / ✓ on a changed folder below, or the toolbar's ⛔ Keep out / ✓ Only here</p>
-      ) : (
+      {/* listed only once there is one (BirdIndex), so never an empty state here */}
         <ul>
           {p.zones.map((z) => {
             const g = isGreen(z);
@@ -517,7 +554,6 @@ function Rules({ p }: { p: BirdIndexProps }) {
             );
           })}
         </ul>
-      )}
     </div>
   );
 }
@@ -526,6 +562,7 @@ function Rules({ p }: { p: BirdIndexProps }) {
 function Changes({
   p,
   sum,
+  notes = [],
   riskOpen,
   onRisk,
   allFolders = false,
@@ -533,16 +570,24 @@ function Changes({
 }: {
   p: BirdIndexProps;
   sum: ChangeSummary;
+  /** quiet notes about the data itself (a truncated listing, imports still indexing) */
+  notes?: string[];
   riskOpen: boolean;
   onRisk: () => void;
   allFolders?: boolean;
   onAllFolders?: () => void;
 }) {
   const M = p.M;
+  const noteLines = notes.map((t) => (
+    <p key={t} className="ct-muted ct-bix-note">
+      {t}
+    </p>
+  ));
   if (!sum.total)
     return (
       <div className="ct-bix-changes">
         <h4>Changes</h4>
+        {noteLines}
         <p className="ct-muted">No changes yet.</p>
       </div>
     );
@@ -573,6 +618,7 @@ function Changes({
           ⚠ Could break
         </button>
       </div>
+      {noteLines}
       {/* 9 in all = this session's 7 (the pane header's "7 files") + the other sessions' 2;
           with no other session changing anything the split only repeats the total */}
       {sum.others > 0 && (
