@@ -1288,12 +1288,17 @@ of the worktree, the **Code Tree**.
 ### The Map tour
 
 The first time a Map is shown (on any of your devices: it is the synced
-`prefs.map_tour`), a six-step tour opens over the live map once the tree is laid out (never while
+`prefs.map_tour`), a short tour opens over the live map once the tree is laid out (never while
 "Growing the tree…" shows).
 Each step is a small card that rings the part it explains: the tree itself
 (trunk, branches, leaves, roots), what the bright leaves and lit branches mean,
-the agents column, **⚠ Could break**, the toolbar's **Rules** group, and getting
-around (`/`, scroll, drag, ⌂ Whole tree). It is non-modal, so the map keeps
+the agents column, **⚠ Could break**, the toolbar's **Rules** group, **Plan
+first** (the **Plan & lists** button), and getting around (`/`, scroll, drag,
+⌂ Whole tree) — then it ends on this session's next step ("5 changed — start
+with ⚠ Could break, then open the diff"). The steps are picked from what is on
+screen when it opens: with nothing changed the changes step says so and
+**⚠ Could break** is left out, and a step whose target isn't visible (the agents
+column folded to a rail) is skipped. It is non-modal, so the map keeps
 moving underneath. `→` / `Enter` steps forward, `←` back, and `Esc`, **Skip
 tour** or **Done** end it and mark it seen. **? Guide** at the right of the
 toolbar replays it. Only one pane runs it at a time. Switching tabs mid-tour hides it
@@ -1431,13 +1436,22 @@ lib 2` — the session's count includes its helpers', so it agrees with the
 pane header and with Changes' `this session 7`), its
 helpers nested under it ("editing x.py" / "reading …" / "done"); a click
 follows the bird, `▸` expands the row (task, nest, read / planned / could
-break, its changed files most-depended-on first); this session's row links its
-**Plan** and any **scope requests** or **breaches** to the Session panel.
+break, its changed files most-depended-on first, and past eight **+N more —
+all changed files** opens **Plan & lists** at Changed). A session that isn't
+working says so in the sidebar's words (`idle`, `question`), never "done" — this
+session's row reads `idle — waiting for your next message`, another session's
+`idle · on its own branch`. This session's row always carries one **Next:**
+line, by state: **N breaches — review** (Plan & lists at Breaches), a question
+waiting in the terminal, **Review plan · Go** (at Plan), **Review: ⚠ Could
+break (N)** + **Open diff** once files changed, or **Ask for plan** before
+anything did; any **scope requests** get a line of their own.
 **Changes:** where
 the changes are (`Changes 9 in all`, then `this session 7 + other sessions 2`
 — this session's 7 is the pane header's `7 files`; the split is left out while
 no other session has changed anything, since it would only repeat the total —
-and `backend 5 · frontend 4`), **Most at risk · 73 import it — config/settings.py** (click to show its
+and `backend 5 · frontend 4`; a quiet note says when the counts can't see
+everything: *Showing the first 40,000 files* on a truncated listing, *Imports
+still indexing — counts may be low* while the import graph is partial), **Most at risk · 73 import it — config/settings.py** (click to show its
 importers on the map), **⚠ Could break** (the ranked list + the map layer), a
 caption saying what the row buttons do (`⛔ keep out ✓ only here`), and a
 row per changed folder (the five with the most changes, plus any a rule covers,
@@ -1452,7 +1466,7 @@ never dimmed as if restricted; the row height never
 changes, so nothing reflows under the pointer). The row buttons stay quiet
 (half opacity) until the row is pointed at or focused, or the rule is on; on a
 touch screen they are always full. **Rules** come last, once there is one (a rule
-added from a Changes row lands below it): every zone, a click zooms there, ×
+added from a Changes row lands below it): every rule, a click zooms there, ×
 removes it; a rule goes by its short name (`providers`, `web/core`, the full
 path on hover) and says what it stopped in one wording everywhere
 (`1 edit blocked`). Helper rows say where the helper is on their own line (`in
@@ -1461,32 +1475,49 @@ on its own "now" line (`⚠ editing Sidebar.tsx · in ⛔ keep out`), never on a
 new one. The **Legend** is behind `?`.
 **Activity** (each bird's reads, edits and refusals and each rule, newest
 first; a row flies to its file) starts folded to its latest line — in a small
-pane a one-line ticker, never a block over the roots. Labels and
+pane a one-line ticker, never a block over the roots; changes the feed never saw
+(made before the map started watching) are one honest line, `3 files changed
+before the map started watching`, never "Nothing yet". Labels and
 badges keep off the HUD. Below 760 × 560 px the column becomes a slim left
 **rail** (glyph + short name + changed count per bird, then `✎9 changed` /
-`⛔1 rule` tiles); `»` (or a tile) expands the full column over the canvas and
+`⛔1 rule` tiles — the rule tile only once there is one); `»` (or a tile) expands the full column over the canvas and
 cards open as a bottom sheet; the paint-tool hint sits at the bottom, so arming
 a tool never moves what you aim at.
 
 **Painting rules:** the toolbar's **Rules** group holds **⛔ Keep out**,
-**✓ Only here** and **+ Zone**. The first two arm a
+**✓ Only here** and **+ Rule…**. The first two arm a
 tool; click a folder name, a branch or a leaf (a leaf paints its folder unless
 you are zoomed in on single files) and it disarms — `Shift`-click to paint
 several, `Esc` cancels. Each paint is one `POST …/red-zones` (keep-out: repo
 scope; only-here: worktree scope); the tree draws what the server answers, and
-a toast offers **Undo**. Clicking a branch that already carries the rule takes
-it off. **+ Zone** types a pattern instead.
+a toast offers **Undo** (it says "Undone" only once the rule is really gone).
+Clicking a branch that already carries the rule takes it off — a folder or
+file card with the rule on offers **Remove ⛔ keep out** / **Remove ✓ only
+here**. **+ Rule…** types a pattern instead. A **⛔ Keep out** over files this
+session already changed asks first, wherever it is added from (the tree, a
+card, a Changes row, + Rule…): "4 changed files are inside — pushing will be
+blocked until they're reverted or you remove the rule" with **Add anyway** /
+**Cancel** (only-here has its own exemption flow, below).
 
-**The Session panel** (toolbar) is the same session as lists — the accessible
+**Plan & lists** (toolbar) is the same session as lists — the accessible
 twin of the picture: **Breaches**, **Scope requests** (green mode, each with
 **Allow this file**), **Activity**, **Plan** (Ask for plan / Go / Go — only the
 planned files), **Blast radius** (direct importers of what changed, per
-folder), **Zones**, **Changed**, **Workers' fences** and **Other agents
+folder), **Rules**, **Changed**, **Workers' fences** and **Other agents
 here**. Blocks and breaches are also announced through a polite live region.
+`openMap(title, {path, section})` (every "Open map" in the app) lands on the
+Map at a file (flown to, its card open — once the tree is laid out, if it
+arrives earlier) and/or a part of it: a Plan & lists section (the panel opens,
+scrolled to it) or the ⚠ Could break layer.
+
+**When a read fails** the Map says so instead of waiting forever: no snapshot
+→ *Couldn't read the worktree* with **Retry** (even while the live poll
+works); nothing at all → *Code map unavailable* with **Retry**; a later error
+with data already on screen → a quiet *map may be out of date · Retry*.
 
 **Fences an orchestrator set.** A worker its orchestrator fenced
 (`fence_session`, `spawn_session(only=…, keep_out=…)`) sees the fence on its
-own Map like zones — painted on the tree, listed under **Zones** as *this
+own Map like rules — painted on the tree, listed under **Rules** as *this
 session · set by orch* — but without **×** or **Allow here**: only the
 orchestrator lifts it. The orchestrator's Map lists **Workers' fences**: each
 worker with its **✓ only** and **⛔ keep-out** paths (click one to find it on
@@ -1546,7 +1577,7 @@ use.
 
 Make one from wherever you are looking: paint it on the tree (the toolbar's
 **⛔ Keep out** / **✓ Only here** tools, or a folder or file card's buttons),
-click **⛔** on a blast-radius row, or **+ Zone**. The inline **+ Zone** row
+click **⛔** on a blast-radius row, or **+ Rule…**. The inline **+ Rule…** row
 starts with the kind — **⛔ Keep out | ✓ Only here** — then the pattern (a
 map-picked root-level path is entered as `/name`, so it means that one path),
 an optional name, the scope and **Tell the agent**. A keep-out zone's scope is
@@ -1578,15 +1609,17 @@ Every edit the guard refuses for being outside the scope is a **scope
 request** with **Allow this file**, which adds an anchored green zone for
 exactly that path and tells the agent.
 
-The **guard pill** (in the toolbar once a zone exists; before that it could only
-say "No zones") says how much the zones hold right now: **Guarded**
+The **guard pill** (in the toolbar once a rule or a breach exists; before that it
+could only say "No rules") says how much the rules hold right now: **Guarded**
 (Claude Code: the edit is refused before it happens, subagents included),
-**Arming…** (installed, proven on the next tool call), **Detect-only
-(codex)** (no hook guard for this CLI: breaches are detected, flagged and
-block pushes, but not prevented), **Guard off — re-arming** (the hooks went
-missing; MindFlock is reinstalling them), **No zones**, or in green mode
-**✓ Only here: …** (tinted amber/red by the same states). Hovering it gives the
-server's one-line explanation.
+**Arming…** (installed, proven on the next tool call — also what a rule just
+added reads until the guard's next check, never a flash of "No rules"),
+**Detect-only (codex)** (no hook guard for this CLI: breaches are detected,
+flagged and block pushes, but not prevented), **Guard off — re-arming** (the
+hooks went missing; MindFlock is reinstalling them), **No rules**, or in green
+mode **✓ Only here: …** (tinted amber/red by the same states). While any breach
+exists it reads red **N breaches** instead, whatever the guard state. Hovering
+it gives the server's one-line explanation.
 
 A branch carrying a breach can't leave: **Push**, **Open PR** and **Merge**
 refuse with the offending paths. The refusal is an error card (bottom right)
