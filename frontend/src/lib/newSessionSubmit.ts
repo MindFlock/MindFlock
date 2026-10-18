@@ -257,7 +257,7 @@ export function newSessionSubmit(ctx: NewSessionSubmitCtx) {
       await refreshInstances();
       // Plan first lands on the Map's Plan section, to watch the plan arrive
       // and press Go there; anything else on the Agent tab.
-      if (body.plan_first && !target) useUi.getState().openMap(inst.title, { section: "plan" });
+      if (body.plan_first) useUi.getState().openMap(inst.title, { section: "plan" });
       else selectSession(inst.title);
       // Arming waits for the worktree; it never holds the dialog.
       if (lane !== "leave") void setLaneWhenReady(inst.title, lane, askFirst);

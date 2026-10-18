@@ -70,15 +70,8 @@ describe("bell: Plan ready — review & Go", () => {
     ]);
   });
 
-  it("leaves out paused, missing and other-device sessions", () => {
-    const rows = withPlanReady(
-      [],
-      [
-        row("p", 1, { status: "paused" }),
-        row("m", 1, { workspace_missing: true }),
-        row("box::d", 1, { device: "box" }),
-      ]
-    );
+  it("leaves out paused and missing sessions", () => {
+    const rows = withPlanReady([], [row("p", 1, { status: "paused" }), row("m", 1, { workspace_missing: true })]);
     expect(rows).toEqual([]);
   });
 
@@ -146,6 +139,6 @@ describe("what could break: digestOf", () => {
 describe("Plan first lands on the Map", () => {
   it("opens the Plan section after a Plan-first create", () => {
     const s = src("lib/newSessionSubmit.ts");
-    expect(s).toContain('if (body.plan_first && !target) useUi.getState().openMap(inst.title, { section: "plan" });');
+    expect(s).toContain('if (body.plan_first) useUi.getState().openMap(inst.title, { section: "plan" });');
   });
 });

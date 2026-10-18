@@ -260,13 +260,11 @@ export function needsAttention(
 /** `rows` plus "Plan ready — review & Go" for every session whose agent waits
  * on Go for its plan (`redzone.plan_pending`, from the server's red-zone loop —
  * so it shows with the Map closed). Ranked like an approval: it outranks the
- * session's other attention reasons, never its question or a waiting item.
- * Rows from another device are left out (their Map can't be opened here). */
+ * session's other attention reasons, never its question or a waiting item. */
 export function withPlanReady(
   rows: readonly NeedsRow[],
   instances: readonly {
     title: string;
-    device?: string;
     status?: string;
     workspace_missing?: boolean;
     redzone?: { plan_pending?: number } | null;
@@ -276,7 +274,7 @@ export function withPlanReady(
   let added = false;
   for (const inst of instances || []) {
     const n = inst.redzone?.plan_pending || 0;
-    if (n <= 0 || inst.device || inst.workspace_missing || inst.status === "paused") continue;
+    if (n <= 0 || inst.workspace_missing || inst.status === "paused") continue;
     const at = out.findIndex((r) => r.title === inst.title);
     const plan: NeedsRow = { key: inst.title, title: inst.title, rank: 1, plan: n };
     if (at < 0) out.push(plan);
