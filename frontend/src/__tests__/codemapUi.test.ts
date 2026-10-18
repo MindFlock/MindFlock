@@ -399,6 +399,8 @@ describe("the Map's stylesheet", () => {
     expect(light).toContain("--ct-fol-a");
     expect(map).toContain("@container (max-width: 760px)");
     const narrow = map.slice(map.indexOf("@container (max-width: 760px)"));
-    expect(narrow).toMatch(/\.ct-toolbar \.lbl\s*\{\s*display: none/);
+    // icon-only buttons keep their words as accessible names: visually hidden, never display: none
+    expect(narrow).toMatch(/\.ct-toolbar \.lbl\s*\{\s*position: absolute;[^}]*clip-path: inset\(50%\)/);
+    expect(narrow).not.toMatch(/\.ct-toolbar \.lbl\s*\{\s*display: none/);
   });
 });

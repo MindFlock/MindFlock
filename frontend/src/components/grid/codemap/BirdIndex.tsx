@@ -13,7 +13,7 @@
  * where you read about it — then the Rules (below, so a rule added from a
  * Changes row never moves that row under the pointer). The legend is behind "?". */
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { RedZone } from "../../../api/types";
 import { isGreen } from "../../../lib/codemap";
 import { blockedTxt, folderPath, tailPath } from "../../../lib/codetree/draw";
@@ -34,6 +34,8 @@ export interface BirdIndexProps {
   zones: RedZone[];
   zoneBusy: string;
   size: "wide" | "narrow" | "tiny";
+  /** bumped by the tree (Esc, a click on the canvas): close the expanded column */
+  closeSeq?: number;
   followKey: string | null;
   primaryTask?: string;
   primaryExtra?: ReactNode;
@@ -147,6 +149,7 @@ function helperWhere(M: Model, S: AgentState): string {
 export function BirdIndex(p: BirdIndexProps) {
   const [legend, setLegend] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
+  useEffect(() => setRailOpen(false), [p.closeSeq]);
   const [, bump] = useState(0);
   const tops = p.agents.filter((A) => !A.ag.parent);
   const subsOf = (A: AgentState) => p.agents.filter((S) => S.ag.parent === A.ag.key);
