@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parseUnifiedDiff,
+  unifiedBody,
   buildSplitDiff,
   splitDiffByFile,
   type SplitRow,
@@ -108,5 +109,25 @@ describe("splitDiffByFile", () => {
   it("buckets leading lines with no diff header under an empty filename", () => {
     const segs = splitDiffByFile(["warning: noise", "more noise"].join("\n"));
     expect(segs).toEqual([{ file: "", lines: ["warning: noise", "more noise"] }]);
+  });
+});
+
+describe("unifiedBody", () => {
+  it("drops git's per-file header but keeps hunks, a '--- ' removal and Binary notes", () => {
+    const text = [
+      "diff --git a/x.py b/x.py",
+      "new file mode 100644",
+      "index 0000000..e69de29",
+      "--- /dev/null",
+      "+++ b/x.py",
+      "@@ -0,0 +1,2 @@",
+      "+a",
+      "--- not a header",
+      "diff --git a/img.png b/img.png",
+      "index 1..2",
+      "Binary files a/img.png and b/img.png differ",
+    ].join("\n");
+    const got = unifiedBody(parseUnifiedDiff(text)).map((l) => l.text);
+    expect(got).toEqual(["@@ -0,0 +1,2 @@", "+a", "--- not a header", "Binary files a/img.png and b/img.png differ"]);
   });
 });

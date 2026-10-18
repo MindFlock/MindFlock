@@ -29,7 +29,7 @@ import { openThread } from "../lib/flockActions";
 import { AnswerStrip } from "./AnswerStrip";
 import { runNote } from "../lib/runs";
 import { ruleOn, runLookups, useNotifyConfig, useOutbox, useRuns } from "../state/runs";
-import { needsAttention } from "./outbox/outbox";
+import { needsAttention, withPlanReady } from "./outbox/outbox";
 import { REASON_LABEL, STATE_LABEL } from "../lib/sessionState";
 import { WaitingRow } from "./outbox/WaitingRow";
 import { showGroup } from "../lib/showGroup";
@@ -309,6 +309,22 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
   }
 }
 
+/** The bell button's spoken name: the count the amber badge shows, said —
+ * "Notifications, 3 need you" — else how many rows are new. */
+export function bellLabel(needs: number, unread: number): string {
+  if (needs > 0) return "Notifications, " + needs + (needs === 1 ? " needs you" : " need you");
+  if (unread > 0) return "Notifications, " + unread + " new";
+  return "Notifications";
+}
+
+/** Enter / Space on a row that is a click target (role="button") clicks it —
+ * only when the row itself has focus, never a button inside it. */
+function rowKey(e: React.KeyboardEvent<HTMLElement>) {
+  if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+  e.preventDefault();
+  e.currentTarget.click();
+}
+
 export function NotificationsBell() {
   const { data: instances = [] } = useInstances();
   // The server's waiting rows (`GET /api/outbox`) are half of "Needs
@@ -386,7 +402,9 @@ export function NotificationsBell() {
   const byTitle = useMemo(() => new Map(instances.map((i) => [i.title, i])), [instances]);
   // ONE list: the sessions' own attention items and the server's waiting rows,
   // one row per session (outbox.ts `needsAttention` says how they merge).
-  const attn = needsAttention(attentionItems(instances), outbox?.groups?.waiting);
+  // A plan waiting for Go joins it (withPlanReady), so Plan first is seen
+  // with the Map closed.
+  const attn = withPlanReady(needsAttention(attentionItems(instances), outbox?.groups?.waiting), instances);
   // MindFlock MCP families: a worker's (or an orchestrator's) "needs your
   // answer" item names whose worker it is, and its strip can redirect the
   // question to the lead's Thread — answerable from any screen, two clicks.
@@ -484,7 +502,8 @@ export function NotificationsBell() {
         }
         type="button"
         title="Notifications — what needs you, and what happened while you were away"
-        aria-label="Notifications"
+        aria-label={bellLabel(attn.length, unread)}
+        aria-expanded={open}
         onClick={(e) => {
           e.stopPropagation();
           open ? setOpen(false) : openPanel();
@@ -545,6 +564,28 @@ export function NotificationsBell() {
                       </div>
                     );
                   }
+                  if (it.plan) {
+                    // A plan waiting for Go: straight to the Map's Plan section.
+                    return (
+                      <div
+                        key={"plan:" + it.key}
+                        className={"attn-item p1" + (flashing ? " flash" : "")}
+                        data-attn={it.title}
+                        data-needs={it.key}
+                        onClick={() => {
+                          setOpen(false);
+                          useUi.getState().openMap(it.title, { section: "plan" });
+                        }}
+                      >
+                        <span className="attn-dot" />
+                        <span className="attn-title">{windowName(it.title)}</span>
+                        <span className="attn-reason">Plan ready — review &amp; Go</span>
+                        <div className="attn-snippet">
+                          {it.plan} planned file{it.plan === 1 ? "" : "s"}
+                        </div>
+                      </div>
+                    );
+                  }
                   const a = it.attn!;
                   // A prompt (p0) is answerable: every one carries the answer
                   // strip, which stands in for the snippet with the dialog's own
@@ -556,6 +597,12 @@ export function NotificationsBell() {
                       className={"attn-item p" + a.p + (flashing ? " flash" : "")}
                       data-attn={it.title}
                       data-needs={it.key}
+                      // A keyboard stop that opens the session — except a
+                      // question's row, which holds the answer strip's own
+                      // buttons (its ↗ opens it).
+                      role={a.p === 0 ? undefined : "button"}
+                      tabIndex={a.p === 0 ? undefined : 0}
+                      onKeyDown={a.p === 0 ? undefined : rowKey}
                       onClick={() => jump(it.title)}
                     >
                       <span className="attn-dot" />
@@ -603,6 +650,9 @@ export function NotificationsBell() {
                     key={n.seq || n.ts + ":" + i}
                     className={"notif-item " + n.cls + (n.ts > seenTs ? " unread" : "")}
                     data-session={n.session}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={rowKey}
                     onClick={() => {
                       if (n.lead) {
                         // The plan to approve / the one PR to open live on

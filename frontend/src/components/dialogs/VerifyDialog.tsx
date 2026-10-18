@@ -441,8 +441,8 @@ export function VerifyDialog() {
                   onClick={async () => {
                     setAsking(true);
                     try {
-                      await writePlanFor(missingTarget.title);
-                      setMissingBranch("");
+                      // Failed: the banner stays, so Ask can be pressed again.
+                      if (await writePlanFor(missingTarget.title)) setMissingBranch("");
                     } finally {
                       setAsking(false);
                     }

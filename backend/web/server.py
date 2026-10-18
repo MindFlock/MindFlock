@@ -4893,6 +4893,8 @@ async def instance_code_map_go(
             _red_zone_monitor.resync([(os.path.realpath(wt), wt)], repo_id)
         msg = _red_zones.go_message(chosen, scope=created or None, hard=_rz_hard(inst))
         told, reason = _deliver_to_agent(inst, title, msg)
+        if told is not False:
+            _red_zone_monitor.note_go(title)  # the row's "plan · n" goes out
         return told, reason, created, exempt
 
     res = await asyncio.to_thread(_go)
@@ -8175,13 +8177,15 @@ async def instance_merge_pr(title: str, payload: Optional[dict] = None) -> JSONR
             stderr=subprocess.DEVNULL,
             timeout=120,
         )
+        return base
 
-    await asyncio.to_thread(_post_merge)
+    base = await asyncio.to_thread(_post_merge)
     _forget_probes(title)
     # Shipped: the ticket's claim label comes off (tracker_claims; the
     # assignment stays). A no-op for a session that mirrored nothing.
     _release_tracker_claim(title)
-    return JSONResponse({"ok": True})
+    # `base` names where it landed, for the UI's "Merged x into main".
+    return JSONResponse({"ok": True, "base": base or ""})
 
 
 @app.post("/api/instances/{title}/fast-track")

@@ -60,7 +60,8 @@ export function SharedMcpServers() {
   const toggle = async (name: string, on: boolean) => {
     const next = shared.filter((n) => n !== name);
     if (on) next.push(name);
-    await s.saveField("general", "mcp_shared_servers", next);
+    // A failed save is already toasted; don't follow it with "shared".
+    if (!(await s.saveField("general", "mcp_shared_servers", next))) return;
     toast(
       on
         ? `${name} shared — from each session's next launch`

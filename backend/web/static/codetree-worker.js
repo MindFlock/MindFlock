@@ -2030,7 +2030,12 @@ function buildModel(raw, opts = {}) {
 	}
 	M.piles = [];
 	const gg = [...groundGroups.entries()].sort((a, b) => b[1].length - a[1].length || cmpStr(a[0], b[0]));
-	let xl = -90 - M.trunkW, xr = 90 + M.trunkW;
+	let rx0 = 0, rx1 = 0;
+	for (const t of LR.terms) for (const l of t.leaves || []) {
+		rx0 = Math.min(rx0, l.x);
+		rx1 = Math.max(rx1, l.x);
+	}
+	let xl = Math.min(-40, rx0 - 25) - M.trunkW, xr = Math.max(40, rx1 + 25) + M.trunkW;
 	gg.forEach(([k, fs], i) => {
 		fs.sort((a, b) => b.lines - a.lines || cmpStr(a.name, b.name));
 		const n = fs.length, s = 9.5;

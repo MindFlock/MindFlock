@@ -4,7 +4,7 @@
  *  - Terminal and Map no longer fold into ⋯ whenever the header was
  *    "compact" (`calm || paneNarrow`), which hid them even in a 1500px-wide
  *    pane during the calm first hour. Since Customize → Pane header, the
- *    person's choice decides (Terminal on by default, Map one switch away);
+ *    person's choice decides (Terminal on by default, and Map too since 0.10);
  *    a header too narrow for the words draws the tabs as icons instead.
  *  - No ❚❚ Pause button and no Pause in the ⋯ menus; ▶ Resume only on a
  *    paused session. The palette, `mindflock pause` and the API still pause.
@@ -50,7 +50,10 @@ describe("Terminal and Map hang off the person's choice, never `compact`", () =>
     expect(pane).not.toMatch(/\bcompact\b/);
     expect(pane).not.toContain("paneNarrow");
     expect(pane).toContain("const items = headerItems(paneHeader, {");
-    expect(pane).toContain('<div className="tabs" data-tour="pane-tabs">{items.tabs.map((id) => tabEls[id])}</div>');
+    expect(pane).toContain(
+      '<div className="tabs" data-tour="pane-tabs" role="tablist" aria-label="Session views" onKeyDown={tabArrowKey}>'
+    );
+    expect(pane).toContain("{items.tabs.map((id) => tabEls[id])}");
     // The pane hands its drawn tabs to its ⋯ as visible, so the menu doesn't repeat them.
     expect(pane).toContain("const visibleTabs: string[] = items.tabs;");
   });

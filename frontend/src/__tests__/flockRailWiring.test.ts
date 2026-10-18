@@ -172,7 +172,9 @@ describe("the answer strip", () => {
   });
 
   it("takes rail keys only while the row is focused", () => {
-    expect(has(ROW, "tabIndex={answering ? 0 : undefined}")).toBe(true);
+    expect(
+      has(ROW, "tabIndex={pending ? undefined : answering || focused === title || (idx === 0 && !focused) ? 0 : -1}")
+    ).toBe(true);
     expect(
       has(ROW, "if (!answering || e.ctrlKey || e.metaKey || e.altKey || !/^[1-9]$/.test(e.key)) return;")
     ).toBe(true);
@@ -224,7 +226,7 @@ describe("a split orchestrator answers in place before its first worker (defect 
     expect(
       has(
         ROW,
-        "const answering = (inFamily(inst, isWorker, kids.length) || shipLane) " +
+        "const answering = (inFamily(inst, isWorker, kids.length) || shipLane || !onScreen) " +
           '&& activity === "clarify" && !missing && !paused;'
       )
     ).toBe(true);

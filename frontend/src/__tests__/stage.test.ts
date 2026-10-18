@@ -85,10 +85,10 @@ describe("chipState (persistent status chip)", () => {
 describe("checkChip (verification gate)", () => {
   it("maps the check state to its chip, or null", () => {
     expect(checkChip(inst({ check: null }))).toBeNull();
-    expect(checkChip(inst({ check: { state: "running" } }))!.label).toBe("checks…");
-    expect(checkChip(inst({ check: { state: "failed" } }))!.label).toBe("✗ checks");
-    expect(checkChip(inst({ check: { state: "ok" } }))!.label).toBe("✓ checks");
-    expect(checkChip(inst({ check: { state: "ok", stale: true } as never }))!.label).toBe("✓ stale");
+    expect(checkChip(inst({ check: { state: "running" } }))!.label).toBe("Checks…");
+    expect(checkChip(inst({ check: { state: "failed" } }))!.label).toBe("Checks ✗");
+    expect(checkChip(inst({ check: { state: "ok" } }))!.label).toBe("Checks ✓");
+    expect(checkChip(inst({ check: { state: "ok", stale: true } as never }))!.label).toBe("Checks stale");
   });
 });
 
@@ -257,7 +257,24 @@ describe("activity debounce", () => {
 
 describe("stageMeta", () => {
   it("falls back to the agent descriptor for unknown stages", () => {
-    expect(stageMeta("committed").label).toBe("committed");
+    expect(stageMeta("committed").label).toBe("Committed");
     expect(stageMeta("nonsense").label).toBe(stageMeta("agent").label);
+  });
+
+  it("speaks like the state chips: sentence case, the verdict mark after the word", () => {
+    // The stage chip sits in the state chip's slot ("Working", "Question"):
+    // one capitalisation for both, and ✗ / ✓ always trail ("Checks ✗").
+    for (const s of ["provisioning", "agent", "precommit", "interrupt", "committed", "pushed", "pr", "merged"]) {
+      const l = stageMeta(s).label;
+      expect(l[0], s).toBe(l[0].toUpperCase());
+      expect(l, s).not.toMatch(/^[✓✗]/);
+    }
+    expect(stageMeta("interrupt").label).toBe("Pre-commit ✗");
+    expect(stageMeta("pushed").label).toBe("Pushed");
+    for (const c of [{ state: "running" }, { state: "failed" }, { state: "ok" }, { state: "ok", stale: true }]) {
+      const l = checkChip(inst({ check: c as never }))!.label;
+      expect(l).toMatch(/^Checks/);
+      expect(l).not.toMatch(/^[✓✗]/);
+    }
   });
 });

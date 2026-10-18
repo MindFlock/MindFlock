@@ -17,7 +17,6 @@
  * The GitHub credential has one home, the Connect GitHub dialog; this tab
  * shows its real state on one line ("connected as @you · Manage…"). */
 
-import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import {
   refreshInstances,
@@ -30,6 +29,7 @@ import {
   GithubSetupCard,
   GithubStatusLine,
   HeadAction,
+  LoginListInput,
   repoGroupOrder,
   useEditing,
   useListFilter,
@@ -99,8 +99,6 @@ export function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }: Ta
     : gh.skip_authors || "";
   const edit = useEditing(focus);
 
-  const [skipDraft, setSkipDraft] = useState(String(skipAuthors));
-  useEffect(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
 
   // Cached in the query client, not in this component: the tab unmounts
   // whenever the dialog closes or you switch tabs.
@@ -380,17 +378,11 @@ export function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }: Ta
           </label>
           <label className="set-row">
             <span className="set-label">Ignore comments from</span>
-            <input
-              type="text"
+            <LoginListInput
               id="gh-skip-authors"
+              stored={String(skipAuthors)}
               placeholder="dependabot, renovate"
-              autoComplete="off"
-              value={skipDraft}
-              onChange={(e) => setSkipDraft(e.target.value)}
-              onBlur={() => {
-                const list = skipDraft.split(",").map((x) => x.trim()).filter(Boolean);
-                saveGithub({ skip_authors: list }, "Saved");
-              }}
+              onSave={(list) => void saveGithub({ skip_authors: list }, "Saved")}
             />
             <span className="set-hint">
               GitHub logins, comma-separated — e.g. bots whose comments you don't want acted on.

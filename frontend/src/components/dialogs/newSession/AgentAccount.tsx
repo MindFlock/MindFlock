@@ -118,9 +118,11 @@ export function AgentFields({
   const folded = providers.length - shown.length;
   return (
     <>
-      <label className="nf-agent">
+      {/* Divs with a <label> for the words only: Manage is a button, and
+          inside the label it became part of the picker's name. */}
+      <div className="nf-agent">
         <span className="nf-agent-head">
-          Agent
+          <label htmlFor={scope + "-program"}>Agent</label>
           <button
             type="button"
             id={scope + "-agent-manage"}
@@ -158,13 +160,13 @@ export function AgentFields({
           ))}
           {folded > 0 && <option value={MORE_AGENTS}>More agents… ({folded} not installed)</option>}
         </select>
-      </label>
+      </div>
       {/* Accounts are THIS device's logins; a session on another
           device signs in with that device's own. */}
       {!device && setAccount && (authProfiles?.profiles || []).length > 0 && (
-        <label className="nf-agent">
+        <div className="nf-agent">
           <span className="nf-agent-head">
-            Account
+            <label htmlFor="new-account">Account</label>
             <button
               type="button"
               id="new-account-manage"
@@ -199,7 +201,7 @@ export function AgentFields({
               </option>
             ))}
           </select>
-        </label>
+        </div>
       )}
     </>
   );

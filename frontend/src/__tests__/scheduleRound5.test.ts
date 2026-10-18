@@ -202,7 +202,7 @@ describe("findings 6, 7, 12, 13, 14 — runnable by default", () => {
   });
 
   it("saving without a folder says how to make it run", () => {
-    expect(DIALOG).toContain('toast(runProblem(r.body) ? "Saved — add a folder to run it" : `Saved template “${r.body.name}”`);');
+    expect(DIALOG).toContain('toast(runProblem(body) ? "Saved — add a folder to run it" : `Saved template “${body.name}”`);');
   });
 
   it("Add one opens the form on Folder, ringed", () => {

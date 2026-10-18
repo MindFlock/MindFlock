@@ -297,14 +297,20 @@ keeps it in the sidebar to resume* — the one place in the desktop UI that
 pauses; the menus and the pane header only resume) / **Resume session**
 (whichever applies),
 **Close session** (*Ctrl+W · stops the agent and moves it to Recently closed*) and
-**Delete session…** (*removes the worktree and branch*, asked on a card)), then one
-**Focus:** row per session, named exactly as its rail row, then extension
-commands. Type to filter (subsequence match), `↑`/`↓` to select, `Enter` to
-run, `Esc` to close. Both bindings work from anywhere, including while a
+**Delete session…** (*removes the worktree and branch*, asked on a card),
+**Find file on map…** (opens its Map; `/` there is the Map's find box)) — each
+named `<verb> — <session>` with the session's rail name, never its raw title —
+then one **Focus:** row per session, named exactly as its rail row and wearing
+its state's word (*Working*, *Question*, *Idle 25m*) in its tone, then extension
+commands. Type to filter (subsequence match), `↑`/`↓` to select (the list
+scrolls with you; it is a listbox the input points into, for screen readers),
+`Enter` to run, `Esc` to close. Both bindings work from anywhere, including while a
 terminal has keyboard focus — the same VSCode trade-off as its quick-open/palette
 keys.
 
-The palette opens on a **short menu**, not the whole index: New session, the
+The palette opens on a **short menu**, not the whole index: first the sessions
+that need you (up to five, in the bell's Needs-you order — the list `Ctrl+K N`
+walks, `lib/needsYou.ts`), then New session, the
 sessions you last looked at, Intake, Verify, Schedule, Setup, Settings, Replay welcome tour,
 Keyboard shortcuts (the first nine), and **All commands…** (`palette/paletteRank.ts`). Typing matches
 labels and a few plain synonyms (*help* finds the shortcuts and the tours,
@@ -359,7 +365,11 @@ the API (including the friendly 400 in this case) surface as toasts.
   persisted): **All changes** (default) diffs against the fork point from the
   base branch — committed + uncommitted, the same total as the header badge —
   and **Uncommitted** shows only working-tree changes since the last commit.
-  Split/unified view toggle is persisted too.
+  Split/unified view toggle is persisted too; until you press one, a pane
+  under 700px reads Unified (Split's four columns crush the code there). The
+  open tab reloads when the session's diff stats move, and on **↻**. Each
+  file header has a **Map** button (*Show <file> on the map*); the Map's file
+  card **Open diff** opens this tab on that file.
 
 Terminals keep tmux mouse scrolling (speed configurable in settings);
 **Shift+drag** (Alt+drag on macOS) selects text and auto-copies it.
@@ -396,9 +406,14 @@ Each session shows a stage badge (sidebar + pane) computed from git, plus a
 GitHub lookup (`gh` or a token) for the two PR stages:
 
 ```
-provisioning → agent → pre-commit → committed → pushed → PR open → merged
-                          └─ pre-commit ✗ (hooks blocked the commit)
+Provisioning → Agent → Pre-commit → Committed → Pushed → PR open → Complete ✓
+                          └─ Pre-commit ✗ (hooks blocked the commit)
 ```
+
+The chip words are sentence case, like the state words they share the chip
+with (*Working*, *Question*), and a verdict mark trails the word: *Pre-commit
+✗*, and the checks chip's *Checks…* / *Checks ✗* / *Checks ✓* / *Checks
+stale* (`lib/stage.ts`).
 
 The pane shows a single **guided next-step button**:
 
@@ -436,8 +451,9 @@ painted red.
 |---|---|---|---|---|
 | Starting | grey, pulsing | nobody | no | **Starting** (provisioning, or the worktree setup running) |
 | Working | green | the agent | no | **Working** |
-| Needs you | gold | you | yes | the reason: **Question**, **Pre-commit failed**, **Checks failing**, **Setup failed** |
-| Idle | neutral | nobody | after 20 min idle on uncommitted work ("stuck") | **Idle** — the ship-stage chip (`committed`, `pushed`, `PR open`) shows beside it |
+| Needs you | gold | you | yes | the reason: **Question**, **Pre-commit failed**, **Checks failing**, **Setup failed** — on the rail the chip is a button to where you act: the bell at its row (Question), its **Terminal** tab (Pre-commit failed; Checks failing with no PR yet), a worktree-setup re-run (Setup failed), the PR (Checks failing) |
+| Idle | neutral | nobody | no | **Idle** — the ship-stage chip (`Committed`, `Pushed`, `PR open`) shows beside it |
+| Idle, stuck | gold | you | yes — 20 min idle on uncommitted work | **Idle 25m** — how long, in the gold the bell's rows wear |
 | Waiting on limit | blue | nobody | no | **Waiting on limit, resumes HH:MM** when the window is known |
 | Offline | red | you | yes | **Offline** — the chip is a **↻ Restart** button |
 
@@ -575,11 +591,12 @@ Left to right: the ⠿ grip, the session's name, the tabs, then the buttons,
 then **▶ Resume** (only on a paused session) and **⋯**, always the last thing
 in the row. Which tabs and buttons show, and in what order, is yours to
 choose in [Customize → Pane header](#customize) (`lib/paneHeader.ts`). Out of
-the box: **Agent · Terminal · Diff · Queue**, then ⏩
+the box: **Agent · Terminal · Diff · Queue · Map**, then ⏩
 [Fast-track](#fast-track-) and **Copy all** (copy entire history). Switched
-off until you want them: the **Map** and **Thread** tabs, the guided
+off until you want them: the **Thread** tab, the guided
 **Commit…** / next-step button, **History**, the cost chip, the diff stats and
-**−** (hide). Agent can't be switched off. There is no Pause button:
+**−** (hide). (Map joined the default in 0.10 — tucked under ⋯ nobody found
+it; a saved header that hid it keeps it hidden.) Agent can't be switched off. There is no Pause button:
 pausing is the palette's *Pause session*, `mindflock pause` or
 `POST …/pause` (see *Pause keeps your work* under
 [Session row actions](#session-row-actions-the-rows--or-a-right-click)).
@@ -617,6 +634,18 @@ newest thing you actually asked.
   and the diff stats (*+19 −4 · 2 files*) — head the popover. It opens over
   the whole window — a 2×2 grid's lower pane used to paint over its lower
   half.
+- **The Map tab's badge** is the rail row's zone chip when it needs you —
+  **⛔n** red-zone files changed, **⛔** a block you haven't seen, **!** the
+  guard off — else a quiet count of changed files (`mapTabBadge`,
+  `lib/mapEntry.ts`); its screen-reader name says which.
+- **Every Open map lands on the spot.** The push / PR / merge refusal card,
+  the commit warning, a red-zone toast, the rail's zone chip, a Thread worker's
+  **Map** and a Diff file's **Map** all go through `openMap` (state/store):
+  a breach opens the Map's Breaches on the first breached file, a block
+  outside an *only here* zone opens Scope on that file, a worker's Map opens
+  its changed files. A toast for one file blocked outside an *only here*
+  zone has **Allow <file>** right on it (then *Allowed …*); the rest of the
+  toast opens the Map. The tabs are a `tablist` (←/→ move between them).
 - **What a session can't have never shows**, whatever the setting: Terminal
   for a peer-shared folder (its shell would run outside the sandbox), Diff
   and Map outside a git repository, Thread until the session has workers or
@@ -630,10 +659,11 @@ newest thing you actually asked.
   *No history to copy* or *Copy failed*. On Diff, Map, Queue and Thread it is
   greyed (not hidden, so the controls don't shift as you change tabs).
 - **Calm header.** In the [calm first hour](#layout) an *untouched* header
-  also leaves **Queue** and ⏩ to **⋯** (Queue prompt… and Fast-track… are in
-  it always) — a newcomer's header is name · Agent · Terminal · Diff · Copy
-  all. A tab you are on, a Queue with something in it and a fast-track
-  someone set stay in the row. Once you change anything in Customize → Pane
+  also leaves **Queue**, **Map** and ⏩ to **⋯** (Queue prompt…, Code map and
+  Fast-track… are in it always) — a newcomer's header is name · Agent ·
+  Terminal · Diff · Copy all. A tab you are on, a Queue with something in it,
+  a Map with something to show (a changed file, or any zone state) and a
+  fast-track someone set stay in the row. Once you change anything in Customize → Pane
   header, calm leaves the header alone: what you switched on is what you
   see. A pane's width no longer folds anything — words turn to icons
   instead (below).
@@ -651,7 +681,9 @@ newest thing you actually asked.
   the PR chip and opens it in one click.
 - **An agent that isn't installed, or isn't signed in.** When the session's
   agent CLI is missing on this computer (`/api/setup`'s `logins`), a line over
-  the terminal says so with **Install <agent>…** (the Setup checklist), and the
+  the terminal says so with **Install <agent>…** (the Setup checklist for the
+  default agent; Settings → Agents on that agent's card for any other, since
+  Setup only checks the default), and the
   rail row reads *Failed: claude isn't installed* with an **Install** chip —
   never Idle or Offline/Restart. Once it is installed, the row's usual Restart
   takes over. When the CLI is installed but its login probe found nothing
@@ -828,7 +860,8 @@ window closes it. The items, in groups:
   run}** for a team run member · **Duplicate session** (`Ctrl+K D`; a second
   in-place session on the same worktree) · **Branch session** (`Ctrl+K B`;
   see [Branch session](#branch-session)) · **Open in <IDE>** *your code editor*
-  (`Ctrl+K O`; row double-click does the same; left out once `GET /api/ides`
+  (`Ctrl+K O`; a double-click on the row — not its name, which renames — does
+  the same; left out once `GET /api/ides`
   says the configured editor isn't installed here) · **Open preview ↗** `:port`
   when the session serves one · **Select** (`Ctrl+click`) · **Hide/Show
   window** (`Ctrl+K H`; the session keeps running) · **Re-run worktree setup**
@@ -900,7 +933,16 @@ pressing it reopens exactly that session, and **Recently closed (n)** refreshes
 on the close and on the undo. Only the button reopens; a click on the rest of
 the toast does nothing, and the toast stays up while the pointer is on it or
 the button has focus. (The toast helper takes an optional
-`action: { label, onClick }` for a button like this; `lib/toast.ts`.)
+`action: { label, onClick }` for a button like this; `lib/toast.ts`.) A plain
+message that arrives meanwhile (*Copied*, *Renamed*) never takes the Undo
+away: the Undo steps up one slot and keeps its own timer — two toasts at most,
+and a newer Undo replaces an older one. A toast stays up as long as its text
+takes to read (at least 1.4 s, 2.5 s for a failure, 6 s with a button) and is a
+polite live region; a failure (*… failed*, *Couldn't …*) is an alert.
+
+**Open PR** and **Merge** say what they did: *Opened PR for <name>* (the PR
+opens in a new tab — or, if the browser blocked that, the toast is the link),
+and *Merged <name> into <base>*.
 After a ✕ the next row slides up under the pointer, so the row's ✕ ignores a
 second click within 400 ms. **Delete…** removes the worktree and its branch; the
 first click turns the item into an inline strip — *Deletes the folder and
@@ -955,7 +997,9 @@ count). It opens a popover with two ways to drive the agent:
   self-improving prompt ("keep improving the repo") cycles forever; **Auto-run**
   toggles draining. Items reorder by dragging the **⋮⋮** handle, edit (✎),
   insert a new prompt above/below any item (**+↑** / **+↓** open an inline
-  composer at that slot), delete, or **send now (▶)**. Dropping a `.csv` file
+  composer at that slot), delete (✕ — the toast's **Undo** puts it back in
+  its place), or **send now (▶)**. In the box, `Ctrl+Enter` (`⌘+Enter`) is
+  Send now and `Alt+Enter` Add to queue; a plain `Enter` is a new line. Dropping a `.csv` file
   anywhere on the tab appends one prompt per row to the end of the queue
   (quoted fields respected, an obvious header row skipped; any other text
   file queues one prompt per line) —
@@ -1288,12 +1332,20 @@ of the worktree, the **Code Tree**.
 ### The Map tour
 
 The first time a Map is shown (on any of your devices: it is the synced
-`prefs.map_tour`), a six-step tour opens over the live map once the tree is laid out (never while
+`prefs.map_tour`), a short tour opens over the live map once the tree is laid out (never while
 "Growing the tree…" shows).
 Each step is a small card that rings the part it explains: the tree itself
 (trunk, branches, leaves, roots), what the bright leaves and lit branches mean,
-the agents column, **⚠ Could break**, the toolbar's **Rules** group, and getting
-around (`/`, scroll, drag, ⌂ Whole tree). It is non-modal, so the map keeps
+the agents column, **⚠ Could break**, the toolbar's **Rules** group, **Plan
+first** (the **Plan & lists** button), and getting around (`/`, scroll, drag,
+⌂ Whole tree) — then it ends on this session's next step ("5 changed — start
+with ⚠ Could break, then open the diff"). The steps are picked from what is on
+screen when it opens: with nothing changed the changes step says so and
+**⚠ Could break** is left out, and a step whose target isn't visible (the agents
+column folded to a rail) is skipped. The card sits beside the ring, on the
+side with the most free canvas and off the tree and the HUD panels; a step
+about the tree as a whole docks it in a corner of the canvas. It never covers
+the middle of what it explains. It is non-modal, so the map keeps
 moving underneath. `→` / `Enter` steps forward, `←` back, and `Esc`, **Skip
 tour** or **Done** end it and mark it seen. **? Guide** at the right of the
 toolbar replays it. Only one pane runs it at a time. Switching tabs mid-tour hides it
@@ -1360,7 +1412,12 @@ device that has never pulled the synced value may show it once more.
   opens its folder card (Keep out / Only here are there). Labels appear only on
   top-level folders and folders that hold changes, a nest, a rule or the
   selection; file names wait until you zoom close, and even then only the
-  files a bird touched, the hovered one and the folder you are looking at.
+  files a bird touched, the hovered one and the folder you are looking at. A
+  changed file is always named, even at the whole-tree zoom where the grey
+  names wait (a handful at most there; on a short leader line if it has to sit
+  off to one side). A file name sits on a soft backing, so no leaf,
+  twig or zone hatching runs through it, and it moves off neighbouring leaves
+  when there is room beside its own.
 - **What could break is on demand, never the default layer.** Hover or select
   a changed leaf and the files that import it light up **gold** (no per-folder
   pills — the file card carries the count); **Show the N that depend on it**
@@ -1403,10 +1460,17 @@ web`) says where you are once zoomed in.
 
 **Moving around:** scroll to zoom (gently — one notch ≈ ×1.15, a flick never
 jumps from a leaf to the whole tree), drag or arrow keys to pan, double-click a
-folder to zoom to it, `0` / **⌂ Whole tree**, **← Back** (`Backspace`) undoes
+folder to zoom to it, `0` / **⌂ Whole tree** (it fits the whole picture —
+canopy, roots and the ground piles with their names — into the canvas left of
+any panel and right of the agents column, centred, as large as fits up to a
+cap, so a small tree is drawn large; the soil under it stays a band. The
+ground piles sit just past the roots rather than a fixed stride out. A panel or
+card that opens, docks or grows keeps a whole-tree view whole), **← Back** (`Backspace`) undoes
 the last move, the minimap (bottom-left, shown only once you zoom in past the
-whole-tree view — there it would only repeat the canvas) jumps. **Find file or symbol** (`/`)
-flies to a file — or to the file holding a symbol — and opens its card.
+whole-tree view — there it would only repeat the canvas) jumps. **Find file or symbol** (`/`
+from anywhere in the pane, or with nothing focused while the pointer is over
+it; never from a text field) flies to a file — or to the file holding a symbol
+— and opens its card.
 
 **Cards:** click a leaf for its **file card** (lines, kind, used by N, imports,
 what each bird did to it, its zone, then Classes / Functions — public first —
@@ -1431,13 +1495,22 @@ lib 2` — the session's count includes its helpers', so it agrees with the
 pane header and with Changes' `this session 7`), its
 helpers nested under it ("editing x.py" / "reading …" / "done"); a click
 follows the bird, `▸` expands the row (task, nest, read / planned / could
-break, its changed files most-depended-on first); this session's row links its
-**Plan** and any **scope requests** or **breaches** to the Session panel.
+break, its changed files most-depended-on first, and past eight **+N more —
+all changed files** opens **Plan & lists** at Changed). A session that isn't
+working says so in the sidebar's words (`idle`, `question`), never "done" — this
+session's row reads `idle — waiting for your next message`, another session's
+`idle · on its own branch`. This session's row always carries one **Next:**
+line, by state: **N breaches — review** (Plan & lists at Breaches), a question
+waiting in the terminal, **Review plan · Go** (at Plan), **Review: ⚠ Could
+break (N)** + **Open diff** once files changed, or **Ask for plan** before
+anything did; any **scope requests** get a line of their own.
 **Changes:** where
 the changes are (`Changes 9 in all`, then `this session 7 + other sessions 2`
 — this session's 7 is the pane header's `7 files`; the split is left out while
 no other session has changed anything, since it would only repeat the total —
-and `backend 5 · frontend 4`), **Most at risk · 73 import it — config/settings.py** (click to show its
+and `backend 5 · frontend 4`; a quiet note says when the counts can't see
+everything: *Showing the first 40,000 files* on a truncated listing, *Imports
+still indexing — counts may be low* while the import graph is partial), **Most at risk · 73 import it — config/settings.py** (click to show its
 importers on the map), **⚠ Could break** (the ranked list + the map layer), a
 caption saying what the row buttons do (`⛔ keep out ✓ only here`), and a
 row per changed folder (the five with the most changes, plus any a rule covers,
@@ -1452,7 +1525,7 @@ never dimmed as if restricted; the row height never
 changes, so nothing reflows under the pointer). The row buttons stay quiet
 (half opacity) until the row is pointed at or focused, or the rule is on; on a
 touch screen they are always full. **Rules** come last, once there is one (a rule
-added from a Changes row lands below it): every zone, a click zooms there, ×
+added from a Changes row lands below it): every rule, a click zooms there, ×
 removes it; a rule goes by its short name (`providers`, `web/core`, the full
 path on hover) and says what it stopped in one wording everywhere
 (`1 edit blocked`). Helper rows say where the helper is on their own line (`in
@@ -1461,32 +1534,57 @@ on its own "now" line (`⚠ editing Sidebar.tsx · in ⛔ keep out`), never on a
 new one. The **Legend** is behind `?`.
 **Activity** (each bird's reads, edits and refusals and each rule, newest
 first; a row flies to its file) starts folded to its latest line — in a small
-pane a one-line ticker, never a block over the roots. Labels and
+pane a one-line ticker, never a block over the roots; changes the feed never saw
+(made before the map started watching) are one honest line, `3 files changed
+before the map started watching`, never "Nothing yet". Labels and
 badges keep off the HUD. Below 760 × 560 px the column becomes a slim left
 **rail** (glyph + short name + changed count per bird, then `✎9 changed` /
-`⛔1 rule` tiles); `»` (or a tile) expands the full column over the canvas and
-cards open as a bottom sheet; the paint-tool hint sits at the bottom, so arming
-a tool never moves what you aim at.
+`⛔1 rule` tiles — the rule tile only once there is one); `»` (or a tile) expands the full column over the canvas
+(`Esc` or a click on the canvas folds it back) and cards open as a bottom
+sheet that scrolls on its own, its actions pinned at its top; the paint-tool
+hint sits at the bottom, so arming a tool never moves what you aim at. Toasts
+keep right of the column, and the toolbar's buttons shrink to their icons (the
+words stay their accessible names).
 
 **Painting rules:** the toolbar's **Rules** group holds **⛔ Keep out**,
-**✓ Only here** and **+ Zone**. The first two arm a
+**✓ Only here** and **+ Rule…**. The first two arm a
 tool; click a folder name, a branch or a leaf (a leaf paints its folder unless
 you are zoomed in on single files) and it disarms — `Shift`-click to paint
 several, `Esc` cancels. Each paint is one `POST …/red-zones` (keep-out: repo
 scope; only-here: worktree scope); the tree draws what the server answers, and
-a toast offers **Undo**. Clicking a branch that already carries the rule takes
-it off. **+ Zone** types a pattern instead.
+a toast offers **Undo** (it says "Undone" only once the rule is really gone).
+Clicking a branch that already carries the rule takes it off — a folder or
+file card with the rule on offers **Remove ⛔ keep out** / **Remove ✓ only
+here**. **+ Rule…** types a pattern instead. A **⛔ Keep out** over files this
+session already changed asks first, wherever it is added from (the tree, a
+card, a Changes row, + Rule…): "4 changed files are inside — pushing will be
+blocked until they're reverted or you remove the rule" with **Add anyway** /
+**Cancel** (only-here has its own exemption flow, below).
 
-**The Session panel** (toolbar) is the same session as lists — the accessible
+**Plan & lists** (toolbar) is the same session as lists — the accessible
 twin of the picture: **Breaches**, **Scope requests** (green mode, each with
 **Allow this file**), **Activity**, **Plan** (Ask for plan / Go / Go — only the
 planned files), **Blast radius** (direct importers of what changed, per
-folder), **Zones**, **Changed**, **Workers' fences** and **Other agents
+folder), **Rules**, **Changed**, **Workers' fences** and **Other agents
 here**. Blocks and breaches are also announced through a polite live region.
+In a pane at least 1100 px wide it docks as a column beside the tree (the
+canvas shrinks and a whole-tree view re-centres in what is left); in a smaller
+one it lies over the tree's right side, and a card its rows open stacks above
+it.
+
+`openMap(title, {path, section})` (every "Open map" in the app) lands on the
+Map at a file (flown to, its card open — once the tree is laid out, if it
+arrives earlier) and/or a part of it: a Plan & lists section (the panel opens,
+scrolled to it) or the ⚠ Could break layer.
+
+**When a read fails** the Map says so instead of waiting forever: no snapshot
+→ *Couldn't read the worktree* with **Retry** (even while the live poll
+works); nothing at all → *Code map unavailable* with **Retry**; a later error
+with data already on screen → a quiet *map may be out of date · Retry*.
 
 **Fences an orchestrator set.** A worker its orchestrator fenced
 (`fence_session`, `spawn_session(only=…, keep_out=…)`) sees the fence on its
-own Map like zones — painted on the tree, listed under **Zones** as *this
+own Map like rules — painted on the tree, listed under **Rules** as *this
 session · set by orch* — but without **×** or **Allow here**: only the
 orchestrator lifts it. The orchestrator's Map lists **Workers' fences**: each
 worker with its **✓ only** and **⛔ keep-out** paths (click one to find it on
@@ -1516,7 +1614,8 @@ things happen ahead of the click, so the first open is a cache hit:
 
 Measured with a server made to take 3 s for the snapshot: the Map became usable
 3.2 s after the click without the prefetch and 0.4 s after it with the prefetch. The layout search runs in a Web Worker (`/codetree-worker.js`)
-behind a "Growing the tree…" state with progress; its placements are cached
+behind a "Growing the tree…" state with progress (a failed layout says
+"Couldn't grow the tree" with **Retry**); its placements are cached
 per repo and data in IndexedDB, so the next open replays them in milliseconds,
 and a changed worktree warm-starts from the previous layout — unchanged
 subtrees keep their place, a changed folder is pushed clear of its neighbours —
@@ -1546,7 +1645,7 @@ use.
 
 Make one from wherever you are looking: paint it on the tree (the toolbar's
 **⛔ Keep out** / **✓ Only here** tools, or a folder or file card's buttons),
-click **⛔** on a blast-radius row, or **+ Zone**. The inline **+ Zone** row
+click **⛔** on a blast-radius row, or **+ Rule…**. The inline **+ Rule…** row
 starts with the kind — **⛔ Keep out | ✓ Only here** — then the pattern (a
 map-picked root-level path is entered as `/name`, so it means that one path),
 an optional name, the scope and **Tell the agent**. A keep-out zone's scope is
@@ -1578,15 +1677,17 @@ Every edit the guard refuses for being outside the scope is a **scope
 request** with **Allow this file**, which adds an anchored green zone for
 exactly that path and tells the agent.
 
-The **guard pill** (in the toolbar once a zone exists; before that it could only
-say "No zones") says how much the zones hold right now: **Guarded**
+The **guard pill** (in the toolbar once a rule or a breach exists; before that it
+could only say "No rules") says how much the rules hold right now: **Guarded**
 (Claude Code: the edit is refused before it happens, subagents included),
-**Arming…** (installed, proven on the next tool call), **Detect-only
-(codex)** (no hook guard for this CLI: breaches are detected, flagged and
-block pushes, but not prevented), **Guard off — re-arming** (the hooks went
-missing; MindFlock is reinstalling them), **No zones**, or in green mode
-**✓ Only here: …** (tinted amber/red by the same states). Hovering it gives the
-server's one-line explanation.
+**Arming…** (installed, proven on the next tool call — also what a rule just
+added reads until the guard's next check, never a flash of "No rules"),
+**Detect-only (codex)** (no hook guard for this CLI: breaches are detected,
+flagged and block pushes, but not prevented), **Guard off — re-arming** (the
+hooks went missing; MindFlock is reinstalling them), **No rules**, or in green
+mode **✓ Only here: …** (tinted amber/red by the same states). While any breach
+exists it reads red **N breaches** instead, whatever the guard state. Hovering
+it gives the server's one-line explanation.
 
 A branch carrying a breach can't leave: **Push**, **Open PR** and **Merge**
 refuse with the offending paths. The refusal is an error card (bottom right)
@@ -1619,19 +1720,28 @@ wasn't in the plan is marked off-plan, and planned files outside the green
 zones are flagged. Ask/Go/Tell are disabled while the agent is waiting on a
 question in the terminal. Plan-first can be set at launch (the New-session
 dialog's **Plan first** checkbox) or per repo (Zones…) for sessions started
-from Intake.
+from Intake. A Plan-first start opens on the Map's Plan section, to watch the
+plan arrive.
+
+A plan waiting for Go doesn't need the Map open to be seen: the server's
+red-zone loop counts it (`redzone.plan_pending`, see web-api.md), so the rail
+chip reads **plan · n**, the 🔔 lists **Plan ready — review & Go** (both open
+the Map's Plan section), and the phone shows a plan card with **Go** and **Go —
+only the planned files**. It clears once Go is delivered or the agent starts a
+tool call.
 
 ### The rail chip
 
 A session's sidebar row carries a zone chip when there is something to
 say: red **⛔n** for breached files on the branch (or **⛔** for a block you
 haven't looked at since you last opened its Map), amber **!** while the guard is
-arming or off, and a quiet **🛡** while it is guarded (**✓** when the
-worktree is scoped by green zones). "Since you last
+arming or off, amber **plan · n** while a plan waits for Go, and a quiet **🛡**
+while it is guarded (**✓** when the worktree is scoped by green zones). "Since you last
 looked" is kept on the server's clock (the block time is the server's), so a
 browser on another machine, or a WSL2 clock that drifted after sleep, neither
 hides a block nor keeps a seen one red. Clicking it selects the
-session and opens its Map. Blocks, breaches and tampering also arrive as toasts
+session and opens its Map on the part the chip is about (`redZoneChip`'s
+`section`: Breaches for ⛔, Plan for **plan · n**, Zones otherwise). Blocks, breaches and tampering also arrive as toasts
 (clickable, straight to the Map) and in the 🔔 feed; the "Red zone blocked an
 edit" notification rule is off by default, the other two are on.
 
@@ -1646,7 +1756,9 @@ sessions whose [one state](#one-session-state) is "in the bell" — **Question**
 **Pre-commit failed** (with the hook), **Setup failed**, **Offline**, **Checks
 failing**, and an **Idle** session 20 minutes into uncommitted work — plus a
 branch ready for its PR, and the `waiting` group of `GET /api/outbox`
-(ask-first approvals, stuck team run lines, budget pauses, a lead's plan or PR).
+(ask-first approvals, stuck team run lines, budget pauses, a lead's plan or PR),
+and a session whose agent waits on Go for its plan (**Plan ready — review &
+Go**, ranked like an approval; it opens the Map's Plan section).
 The words are the state's own labels, the same ones the row's chip and the
 toast use. It is sorted by urgency: answers first, then approvals and team run
 escalations, then broken (pre-commit, setup, offline, stuck), failing and
@@ -1936,8 +2048,10 @@ Authentication section. If the token leaks, regenerate it from Settings →
   sidebar — the grid is untouched. Customize → *Session list* → **Filter box**
   shows or hides it (shown by default); hidden, `/` still opens it for one
   search.
-- **Rename** — row menu → *Rename…*, the palette, or click the selected row's
-  name. The new name is the session's name everywhere: the rail, the phone page
+- **Rename** — row menu → *Rename…*, the palette, double-click the row's
+  name, or `F2` on a focused row. (A click on the row that is already
+  selected selects it again — back to its terminal, and a narrow window's
+  drawer closes — it never starts a rename.) The new name is the session's name everywhere: the rail, the phone page
   (`/m`, via the `name` field on `GET /api/instances`), and notifications — the
   old one is not kept around in tooltips. Names are unique: a rename to a name
   another session already has (its title, its rename, or its rail label) is
@@ -2020,6 +2134,8 @@ built-in alias.
 | `Ctrl+K S` | Message… — the Thread composer, addressed to the focused session |
 | `Ctrl+K F` | Fast-track — the focused pane's ⏩ picker |
 | `Ctrl+K T` | Thread — the focused session's workers and messages |
+| `Ctrl+K N` | Next session that needs you — in the bell's Needs-you order (an answer first), wrapping; needs no focused session |
+| `↑` / `↓` / `Enter` / `F2` (on a sidebar row) | Move between rows / select / rename. The list is one `Tab` stop (the selected row), plus any row carrying answer buttons |
 | `Ctrl+W` / `Delete` | Close the focused session — moves it to Recently closed (reopen with `Ctrl+Shift+T`). Neither fires while **any** dialog or overlay is open (detected generically: the store's dialog slot, or any visible `[role="dialog"]`, `.modal`, `.dialog`, `.palette` or `[data-modal]` element, plus the bell, ⏩ picker, Prompts menu and break screen), nor while the keyboard is in an input, textarea, select, contenteditable or a terminal — `Ctrl+W` at a shell is delete-word, not "close this session". Never fires for a selected non-session window — those close from their ✕ |
 | `Ctrl+V` (in a terminal) | Paste into the PTY: an image or file on the clipboard uploads and pastes its path, plain text pastes with a "Pasted N chars" toast, and an empty clipboard event falls back to reading `navigator.clipboard`. Same in session panes and the Assistant |
 | `Ctrl+F` (in a terminal) | Find across the pane's **whole** scrollback, prefilled with a one-line terminal selection — **in the live pane**: a find bar floats top-right with an `n / total` count, the pane itself jumps to each hit, every visible hit yellow, the current one orange. It searches whatever scrollback the pane's mouse wheel moves, decided per pane, so it holds for every agent CLI. Where the app leaves the mouse to tmux (shells, codex, aider, gemini, cursor-agent, goose) it's tmux's copy-mode search. Where the app scrolls itself (Claude Code, opencode, cline) the server **indexes** everything the app would show the moment the bar opens — the window is briefly made tall at the same width, read top to bottom (PageUp/PageDown where the app pages with keys, measured wheel bursts where it doesn't), and put back — while the pane shows a frozen snapshot, so none of it is seen; the count is then instant, each step is one jump, and reopening find on an unchanged pane reuses the index. The server also keeps indexes current as the agent writes (one screen read every 1.5 s, nothing moves), and builds a missing one ahead of time for a pane nobody is using — agent idle (never while it waits on a question), no input from you for 30 s, screen still for 20 s, at most one screen attached — with that pane frozen meanwhile; any input into it cancels and snaps back. Claude Code's own pinned `❯ prompt` row is hidden the frame it's drawn (the prompt bar above mirrors it), so jumping never flashes it. Only rows that move with the content are indexed — never the input box, a status bar, a pinned prompt row or a floating hint. Only a pane that scrolls from neither (a pager on the alternate screen) opens the full-history view's find instead. Options, as in an editor: **Aa** match case (`Alt+C`), **ab** whole word (`Alt+W`), **.\*** regular expression (`Alt+R`), and **near** — a second term that must be on the same line or within N lines (1–50) of the first; both terms are highlighted and the options apply to both (matching is server-side, `core/find_query`, and painted with the same rules in the browser; the tmux path reads tmux's history rather than using tmux's own search, which can't do these). You start at the newest hit at or above what you were looking at: `Enter` / `F3` / `Ctrl+G` step **up** to older hits, add `Shift` to step back down, wrapping at the ends; `Esc` returns to live. Literal and case-insensitive unless the options say otherwise |
@@ -2114,7 +2230,9 @@ task, fast-track) to run again or schedule.* — then **Folder** and **Agent**,
   (Settings → Agents) — under the field and on page 1. A note, not a block.
 - **Task** — what the agent starts on (blank starts it idle), always on the
   form — two rows to start, growing with its text up to 220 px, then
-  scrolling — with **Insert saved text…** (built-ins first, then yours) and
+  scrolling — with **Insert saved text…** (built-ins first, then yours; it
+  goes in at the caret, or after what is there with a blank line between —
+  never over the Task) and
   **Manage…**, which opens the Prompts dialog and comes back to this form as
   it was — there, clicking a prompt puts it in this Task box (no *Paste
   into*: you are making a new session, not talking to a running one).
@@ -2199,10 +2317,11 @@ Esc cancels without closing the dialog; never a `prompt()`) and saves the
 fast-track — stored as the template's autopilot (*Commit*, *Commit + push* or
 *Open a PR*; a template never merges unattended, so *Merge when green* saves as
 *Open a PR*) — not Plan first or Auto-split.
-Saving over a template that has a schedule keeps the schedule. The strip
-appears (or updates) at once — no reopen — and the toast (6 s, clickable)
-says where: *▶ runs it and ⏰ schedules it, in Templates at the top of New.
-Click to open Schedule.*
+A name another template already has (ignoring case) is refused on the row —
+*A template named “nightly” already exists — pick another name.* — since the
+server upserts by name and would replace it. The strip appears (or updates)
+at once — no reopen — and the toast (6 s, clickable) says where: *▶ on its
+chip at the top of New runs it, ⏰ schedules it. Click to open Schedule.*
 
 **One Templates list.** The **Templates** strip (*Templates — ▶ runs one now ·
 ⏰ schedules it · its name fills the form*) is on **both pages**: under the
@@ -2218,7 +2337,7 @@ when it has no folder) and New steps aside, keeping your draft; **⏰** opens
 scheduled template's ⏰ says its time on its face (*⏰ 07:30*, *⏰ paused*) and
 its tooltip is the same one schedule line the Schedule card shows (*Weekdays
 at 07:30 EDT · next tomorrow 07:30 — change or stop it*).
-**All templates…** opens **Schedule** (also the top bar's **Schedule**, `Alt+S`,
+**Open Schedule…** opens **Schedule** (also the top bar's **Schedule**, `Alt+S`,
 and the palette's **Schedule…** / **Templates…**). ▶ and ⏰ are this device's: they are not drawn when the
 session would run on another device.
 Closing Schedule brings New back **as it was left**, with the list
@@ -2259,7 +2378,13 @@ and *To send text to a session that's already running, use Prompts.*, with
 Every card has **▶ Run now**, **Edit** and **Delete** at its top right.
 With no templates at all the surface is one dashed panel: *Save a session as
 a template once, then start it with one click — or every night by itself.* and a
-**Create a template** button (the new-template editor). **Edit** opens the
+**Create a template** button (the new-template editor). An editor with unsaved
+changes is never dropped by the next click: another card's **Edit** /
+**Schedule…** / **Delete**, **+ New template**, `Esc` or **Close** first show an
+inline *Discard changes to “name”?* row (**Discard** / **Keep editing**; `Esc`
+keeps editing), and a press on the backdrop doesn't close it. Saving under
+another template's name is refused (*A template named “x” already exists —
+pick another name.*). **Edit** opens the
 editor inline in the card — the New form's own parts, laid out the way New
 lays them out (`TemplateEditor.tsx`; `scope="tpl"` ids): **Name**; then the
 New form's Folder row — **Folder** (placeholder *The repo it works in*; a
@@ -2314,7 +2439,9 @@ is visibly disabled and the card says *Run now and schedules need a folder.*
 palette leaves it out. **Schedule…** (or a scheduled card's **Change
 schedule**) opens a compact row inside the card — just the schedule, **Save**
 and **Cancel** (and **Stop schedule** on a scheduled one, which saves it
-unscheduled); **Edit** keeps the whole form. Either way the schedule is
+unscheduled and offers **Undo** in its toast); **Edit** keeps the whole form.
+Saving a schedule toasts its schedule line (*Saved “nightly” — Weekdays at
+07:30 EDT · next tomorrow 07:30*). Either way the schedule is
 **Every day** / **Weekdays** **at** a 24-hour time (a text field, *07:30* —
 one format everywhere; *7:30* and *730* are read as 07:30), or **Custom
 (cron)**: a 5-field cron expression (`*/30 * * * *`, `0 21 * * 1-5`,
@@ -2339,8 +2466,9 @@ row (a failure is a default-on push, *A scheduled template run can't
 start*). A schedule fires once per slot, starts counting from when it was
 saved, and after the server was down fires only the most recent missed slot —
 see [web-api.md](web-api.md) (Templates → Schedules). Scheduled templates are
-also listed last on **Intake → Auto-start** (*Scheduled templates*: name ·
-schedule · next run or *paused*, with **Run now**, and **Open Schedule ›**), since they answer the same "what
+also listed last on **Intake → Auto-start** (*Scheduled templates*: name and
+the same schedule line the card says, with **Run now** — which closes Intake on
+the new session — and **Open Schedule ›**), since they answer the same "what
 starts on its own?" question as the ticket, PR and issue queues there. From a
 shell, `mindflock run <template>` is Run now and `mindflock templates` lists
 schedules and last runs.
@@ -2843,8 +2971,8 @@ a `screen` of its surface to switch to first (`TourStep.screen`); Settings is
 the one surface that reads it.
 
 There are seven (`lib/tours/`, one file per tour, `TOURS` in `index.ts`):
-**Welcome** (over the Get set up checklist: the *next:* line, ① Install
-Claude Code, ② Sign in to your agent, ③ Start your first session, then the
+**Welcome** (over the Get set up checklist: the *next:* line, ① Install your
+agent (the checklist names which), ② Sign in to your agent, ③ Start your first session, then the
 first sidebar row), **New** (the task box, the *Runs in* folder picker,
 **Start**, then a session pane's Agent / Diff tabs and its ⋯ — hooks
 `new-task`, `new-folder`, `new-start`, `pane-tabs`, `pane-menu`; the last
@@ -2936,6 +3064,11 @@ also just type a name. The session's own branch is flagged and can't be the
 target. The **last base chosen per repo is remembered** (`prBaseByRepo`,
 persisted) and pre-selected next time (falling back to the server-computed
 default); submitting calls `submitMakePr` → `POST /api/instances/{title}/make-pr`.
+Under the base field one line says what the PR could break — **⚠ Could break:
+9 files in 3 folders (2 tests) — See on map** (the Map's blast radius:
+direct importers of the changes, from `lib/mapDigest`; See on map opens the
+⚠ Could break layer). It stays hidden while loading and when nothing imports
+the changes.
 
 ## Recently closed
 
@@ -3272,7 +3405,9 @@ tab on its own until you Cancel it (then an empty line offers **+ Add a ticket
 source** / **+ Add a repository**). The tracker and repository halves:
 
 - **A tracker** — picking its tile and pressing **Continue** (‹ Back keeps the
-  tile picked; past step 1 another tile switches the draft straight over)
+  tile picked AND the draft as typed, a pasted token included — **Continue** on
+  the same tile resumes it; past step 1 another tile switches the draft
+  straight over; switching Intake tabs keeps it too — only **Cancel** drops it)
   starts a draft (`needs_filter: "on"`: it
   auto-starts nothing until a state or label is picked). **Connect** is the
   credentials, each tracker's **API token** with a **Create a token ↗** link to
@@ -3291,8 +3426,9 @@ source** / **+ Add a repository**). The tracker and repository halves:
   **Finish is the one save**: it PUTs the source, then tests it again with
   `record: true` so the stored verdict is honest (a source that still can't
   connect is added with *can't connect yet: …* in the toast; the server, not the
-  page, decides whether *Connect your tracker* is done). Cancel or ‹ Back to the
-  tiles leaves nothing behind — nothing was stored. Picking **GitHub Issues** offers *Add it
+  page, decides whether *Connect your tracker* is done; a save that fails with
+  nothing to mark says so — *Not saved — …. Try again.*). Cancel leaves nothing
+  behind — nothing was stored. Picking **GitHub Issues** offers *Add it
   as a Repository instead* for "every new issue in a repo".
 - **A repository** — the slug once (`owner/name`; the hint names repositories
   already known — on any list, or a ticket source's GitHub repo), **Test
@@ -3415,7 +3551,7 @@ buckets inside a source, and only the two GitHub tabs share one credential.
   with `github.enabled: false`; saved settings from before keep their meaning
   (unset with repos = on). **Your open pull requests** with **Start**, one
   heading per watched repository; **Skip authors** is now **Ignore comments
-  from**. Under the switch, the **GitHub line** says the credential's real state
+  from** (saved as you type, like a repository's own fields). Under the switch, the **GitHub line** says the credential's real state
   — *GitHub — connected as @you — one sign-in for PRs, issues, Verify and Open
   PR · Manage…*, or, amber, *GitHub — not connected — your PRs can't be listed
   or started · Connect GitHub* (`#gh-connect-btn`, from `GET /api/github/status`,
@@ -3891,7 +4027,8 @@ narrow rail cuts the detail and never the target: `→ PR · working 12m`, `⇡ 
 `! hooks failed twice — open the bell`,
 `→ commit, asks first · ready — approve in the bell`. A team run member (or any
 session with fast-track on) on a prompt gets the answer strip under its row,
-like a family worker. A line that ends **open the bell** or **approve in the
+like a family worker — and so does any asking session whose pane is not on
+screen, since nothing else there shows its question. A line that ends **open the bell** or **approve in the
 bell** is clickable and opens the bell on that session's row.
 
 **Notifications.** The bell's history lists a team run's escalations, its finish,
@@ -4171,8 +4308,8 @@ has answered shows **Check now** as a visible secondary button. A partly
 checked row carries one counter (the tally), not a pill as well. The landing
 chip reads **not merged** or **merged → main · 4m ago** (never "local" — the
 branch was pushed). Everything rare is in the row's ⋯ menu, which starts with
-**Open the work session**, **View diff** and **Open PR ↗** while the session is
-open; the verify run is **Open the checking run** / **Show the checking run
+**Open the work session**, **View diff**, **What could break** (the session's
+Map on its ⚠ Could break layer) and **Open PR ↗** while the session is open; the verify run is **Open the checking run** / **Show the checking run
 here**. A finished row says *Every step passed.* (never "it works").
 
 **"Check now" means one thing** — start the agent's steps — on the row, in the ⋯
@@ -4536,7 +4673,9 @@ A few screens got quieter:
   welcome tour and the menu tours*, "dark" → **Appearance → Mode** *Light or
   dark*); ↑/↓ and Enter (or a click) open the
   screen, scroll to the control (opening a fold around it) and outline it for
-  a moment; Escape clears the box before it closes Settings.
+  a moment — a control that only exists in advanced mode (General's *Budgets,
+  resume and sleep*) turns **Show advanced settings** on first; Escape clears
+  the box before it closes Settings.
 - **Notifications** opens on **Where alerts go**: In MindFlock (the bell,
   always on), **Desktop notifications** (the only desktop on/off toggle; the
   bell carries no copy) and **Phone alerts** (**Set up** opens the ntfy fold),
@@ -5237,7 +5376,7 @@ labels above the inputs.
   and refill it later (templates addon, `/api/templates`, synced between
   devices). A template only ever *starts* a session — CLI, repo, workspace
   and an opening prompt; New's **Templates** strip lists them on both pages
-  (▶ runs one, ⏰ schedules it) and its **All templates…** (or the top bar's
+  (▶ runs one, ⏰ schedules it) and its **Open Schedule…** (or the top bar's
   **Schedule**, `Alt+S`) opens [Schedule](#schedule).
   A template's **Run now** (its card, its ▶ in New, or the palette's **Run template: …**)
   starts a fresh session from it with the prompt already sent, and an
@@ -5335,7 +5474,11 @@ QR; the full banner appears only on the operator's console.
 
 **Sessions and their actions** — the picker is a button that opens a
 **Sessions** sheet, attention first; each row reads like the rail's: a tone dot,
-the name, the state word and the repo. The words and tones are the rail's one
+the name, the state word, the rail's zone chip (⛔ / ! / **plan · n** / 🛡 / ✓,
+the same rules; a block counts as seen once the session is opened on the
+phone) and the repo. When the current session's agent waits on Go for its
+plan, a card under the header lists the plan and offers **Go** and **Go — only
+the planned files** (the Map's own `code-map/live` and `code-map/go`). The words and tones are the rail's one
 state table ([One session state](#one-session-state)) copied into
 `mobile.js` `SESSION_STATES`: *Starting*, *Working*, *Question* / *Pre-commit
 failed* / *Checks failing* / *Setup failed*, *Idle*, *Waiting on limit*

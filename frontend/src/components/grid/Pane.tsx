@@ -7,7 +7,7 @@
  * session. Terminals are adopted from lib/terminals' registry so they never
  * remount with the pane. */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { Instance } from "../../api/types";
 import { instApi } from "../../api/client";
 import { refreshInstances, useConfig, useInstances } from "../../state/queries";
@@ -65,6 +65,8 @@ import {
   type PaneTabId,
 } from "../../lib/paneHeader";
 import { usageHeadline } from "../usage/usageModel";
+import { codemapSeenAt, redZoneChip, subscribeCodemapSeen } from "../../lib/codemapSeen";
+import { mapHasState, mapTabBadge } from "../../lib/mapEntry";
 import { TabIcon } from "./TabIcon";
 
 /** "thread" is the Thread tab (the session's workers and what was said
@@ -131,6 +133,20 @@ export function Pane({
   );
   const badge = threadBadge(family.children, threadSeen, effectiveActivity);
   const newestReport = newestReportTs(family.children);
+  // The Map tab's badge: the rail row's zone chip (a breach, an unseen block,
+  // the guard off…), else a quiet count of changed files (lib/mapEntry).
+  const mapSeen = useSyncExternalStore(
+    subscribeCodemapSeen,
+    useCallback(() => codemapSeenAt(title), [title])
+  );
+  const rzChip = redZoneChip(inst.redzone, mapSeen);
+  const mapBadge = mapTabBadge(rzChip, inst.diff_stat?.files || 0);
+  // What the Diff tab reloads on: the session's diff stats moving.
+  const stat = inst.diff_stat;
+  const un = stat?.uncommitted;
+  const diffStamp = stat
+    ? [stat.files, stat.additions, stat.deletions, un?.files ?? "", un?.additions ?? "", un?.deletions ?? ""].join(",")
+    : "";
   // This pane's ⏩ fast-track picker, when it is the one open (Ctrl+K F, the
   // row › menu and the palette open it from anywhere, so it lives in the
   // store rather than here).
@@ -699,9 +715,9 @@ export function Pane({
   // header, lib/paneHeader), less what this session can't have — Terminal
   // for a shared folder (its shell would run outside the sandbox), Diff and
   // Map without git, Thread without workers — plus the tab you are ON, shown
-  // or not. The calm first hour folds Queue and ⏩ from a default header,
-  // except a Queue with something in it or a fast-track someone set: those
-  // are state, not options.
+  // or not. The calm first hour folds Queue, Map and ⏩ from a default
+  // header, except a Queue with something in it, a Map with changes or zone
+  // state, or a fast-track someone set: those are state, not options.
   const items = headerItems(paneHeader, {
     active: tab,
     sharedFolder,
@@ -709,6 +725,7 @@ export function Pane({
     thread: threadShown,
     calm,
     queueBusy: pending > 0 || holding,
+    mapBusy: mapHasState(inst, rzChip),
     ftBusy: !!ft && (ft.lane !== "leave" || ft.halted || ft.active || !!ftMenu),
   });
   const shows = (id: PaneButtonId) => items.buttons.includes(id);
@@ -762,6 +779,7 @@ export function Pane({
     pending,
     holding ? 1 : 0,
     badge.count,
+    mapBadge?.label ?? "",
     canResume ? 1 : 0,
     deviceName,
   ].join("|");
@@ -771,6 +789,8 @@ export function Pane({
       <button
         key="agent"
         data-tab="agent"
+        role="tab"
+        aria-selected={tab === "agent"}
         className={tab === "agent" ? "active" : ""}
         title="Agent — the session's agent CLI"
         onClick={(e) => { e.stopPropagation(); showTab("agent"); }}
@@ -783,6 +803,8 @@ export function Pane({
       <button
         key="shell"
         data-tab="shell"
+        role="tab"
+        aria-selected={tab === "shell"}
         className={tab === "shell" ? "active" : ""}
         title="Terminal — a shell in this session's folder"
         onClick={(e) => { e.stopPropagation(); showTab("shell"); }}
@@ -795,6 +817,8 @@ export function Pane({
       <button
         key="diff"
         data-tab="diff"
+        role="tab"
+        aria-selected={tab === "diff"}
         className={tab === "diff" ? "active" : ""}
         title="Diff — what this session changed"
         onClick={(e) => { e.stopPropagation(); showTab("diff"); }}
@@ -807,18 +831,28 @@ export function Pane({
       <button
         key="map"
         data-tab="map"
-        className={tab === "map" ? "active" : ""}
-        title="Code map — the worktree as a tree: agents, zones, plan, blast radius"
+        role="tab"
+        aria-selected={tab === "map"}
+        className={"map-tab" + (tab === "map" ? " active" : "")}
+        title={"Code map — the worktree as a tree: agents, zones, plan, blast radius" + (mapBadge ? "\n" + mapBadge.title : "")}
+        aria-label={mapBadge ? "Map, " + mapBadge.title : undefined}
         onClick={(e) => { e.stopPropagation(); showTab("map"); }}
       >
         <TabIcon name="map" />
         <span className="tab-label">Map</span>
+        {mapBadge && (
+          <span className={"queue-tab-badge map-badge " + mapBadge.cls} aria-hidden="true">
+            {mapBadge.label}
+          </span>
+        )}
       </button>
     ),
     queue: (
       <button
         key="queue"
         data-tab="queue"
+        role="tab"
+        aria-selected={tab === "queue"}
         className={
           "queue-tab" +
           (tab === "queue" ? " active" : "") +
@@ -848,6 +882,8 @@ export function Pane({
       <button
         key="thread"
         data-tab="thread"
+        role="tab"
+        aria-selected={tab === "thread"}
         className={"thread-tab" + (tab === "thread" ? " active" : "")}
         title={
           "Thread — this session's workers, what they reported and what passed between them; write to any of them as you (Ctrl+K T)" +
@@ -1042,7 +1078,9 @@ export function Pane({
             ↓{inst.behind} behind
           </span>
         )}
-        <div className="tabs" data-tour="pane-tabs">{items.tabs.map((id) => tabEls[id])}</div>
+        <div className="tabs" data-tour="pane-tabs" role="tablist" aria-label="Session views" onKeyDown={tabArrowKey}>
+          {items.tabs.map((id) => tabEls[id])}
+        </div>
         {/* Free room sits here, so the buttons and ⋯ hold the right edge. */}
         <span className="head-spacer" aria-hidden="true" />
         <div className="actions">
@@ -1211,7 +1249,7 @@ export function Pane({
         )}
         {caps.git && (
           <div className={"pane-diff" + (tab !== "diff" ? " hidden" : "")}>
-            <DiffTab title={title} active={tab === "diff"} />
+            <DiffTab title={title} active={tab === "diff"} stamp={diffStamp} />
           </div>
         )}
         {caps.git && (
@@ -1359,6 +1397,20 @@ function RunningCover({ paneRef }: { paneRef: React.RefObject<HTMLElement | null
       </span>
     </div>
   );
+}
+
+/** ←/→ (and Home/End) move between the header's tabs, as a tablist should;
+ * Enter/Space on the focused tab opens it (it is a button). */
+function tabArrowKey(e: React.KeyboardEvent<HTMLDivElement>) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+  const tabs = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]'));
+  const i = tabs.indexOf(document.activeElement as HTMLElement);
+  if (!tabs.length || i < 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const n = tabs.length;
+  const j = e.key === "Home" ? 0 : e.key === "End" ? n - 1 : (i + (e.key === "ArrowRight" ? 1 : -1) + n) % n;
+  tabs[j].focus();
 }
 
 function ctxNum(n: number): string {

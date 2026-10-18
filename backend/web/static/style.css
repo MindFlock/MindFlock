@@ -1256,6 +1256,117 @@
     transition: none;
   }
 }
+/* The Map's guidance (CodeMapTab.tsx, BirdIndex.tsx): the next-step line,
+   the breach pill, the data notes, the stale-map note and the section flash
+   when "Open map" lands on a Plan & lists section. Layout and the tree's
+   own styles live in CodeMapTab.css. */
+
+/* This session's next step, under what it is doing now. */
+.ct-next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 4px;
+}
+
+.ct-next-k {
+  color: var(--muted);
+}
+
+.ct-next .warn {
+  color: var(--gold);
+}
+
+.ct-next .ct-link:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Breaches outrank every guard state: red, whatever the guard says. */
+.cm-guard.g-breach {
+  color: var(--red);
+  border-color: rgba(var(--cm-red-rgb), 0.55);
+  background: rgba(var(--cm-red-rgb), 0.08);
+}
+
+.cm-guard.g-breach .cm-guard-dot {
+  display: block;
+  background: var(--red);
+}
+
+/* "Showing the first 40,000 files" / "Imports still indexing" under Changes. */
+.ct-bix-note {
+  margin: 2px 0;
+  font-size: 10.5px;
+  font-style: italic;
+}
+
+/* The error notes sit over the canvas, above the tree's own HUD. */
+.cm-body > .cm-note {
+  z-index: 6;
+}
+
+.cm-note.cm-note-err .cm-btn {
+  align-self: center;
+  margin-top: 6px;
+}
+
+.cm-note.cm-note-stale {
+  font-size: 11px;
+  color: var(--muted);
+  pointer-events: auto;
+}
+
+/* A section "Open map" landed on: a brief outline, then calm. */
+.cm-sec.cm-sec-flash {
+  animation: cm-sec-flash 1.6s ease-out 1;
+  border-radius: 6px;
+}
+
+@keyframes cm-sec-flash {
+  0%,
+  30% {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  100% {
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cm-sec.cm-sec-flash {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+}
+
+/* The confirm toast's two buttons stay on its line. */
+.ct-toast .cm-btn + .cm-btn {
+  margin-left: 4px;
+}
+
+/* A toast that asks (keep-out over your own changes: "Add anyway") says the
+   whole sentence — it wraps instead of cutting off "…or you remove the rule". */
+.ct-toast.ask .tx {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* A small pane hides the toolbar's words; breaches still need a number, not a
+   bare red dot: "⛔4", like the tab's badge (the full label stays its name). */
+.cm-guard-short {
+  display: none;
+  font-weight: 600;
+}
+@container (max-width: 760px) {
+  .cm-guard.g-breach .cm-guard-short {
+    display: inline;
+  }
+  .cm-guard.g-breach .cm-guard-dot {
+    display: none;
+  }
+}
 /* A ticketing source's repo list (RepoListField.tsx): one row per repo — the
    URL, then (with two or more) its optional hint and a Remove. */
 .tk-repo-row {
@@ -3824,6 +3935,68 @@ body.narrow .sidebar-resizer {
 .setup-chip-slot.req-done .setup-chip:hover {
   color: var(--text) !important;
   background: var(--panel-2) !important;
+}
+
+/* A device group's header is a real button (its fold toggle, aria-expanded)
+   that reads exactly like the header text did; the ✕ beside it stays its
+   own button. */
+.device-group .dev-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.device-group .dev-toggle:focus-visible {
+  outline: 1px dashed var(--accent);
+  outline-offset: 2px;
+}
+
+/* Disconnect asks first, on the row ✕'s calm strip, under the header. */
+.device-forget-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  list-style: none;
+  margin: 2px 8px 4px 22px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.device-forget-confirm .del-q {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.device-forget-confirm .del-acts {
+  display: flex;
+  gap: 6px;
+}
+
+.device-forget-confirm .del-acts button {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.device-forget-confirm .del-acts button.danger {
+  border-color: var(--red);
 }
 }
 
@@ -6525,6 +6698,27 @@ p.set-hint {
   outline-offset: 1px;
 }
 
+/* A "needs you" chip is a door to where you act (the bell's answer row, the
+   Terminal, a setup re-run, the PR): a button that still reads as the chip. */
+.inst .stagechip.chip-needs {
+  cursor: pointer;
+  border: 0;
+  font: inherit;
+  font-size: 10px;
+  line-height: inherit;
+}
+
+.inst .stagechip.chip-needs:hover {
+  filter: brightness(1.12);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.inst .stagechip.chip-needs:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* Sleeping (backend core/sleep.py) is calm: the Wake remedy appears only
    on hover / keyboard focus, never as a standing call to action. */
 .inst .stagechip.chip-wake .chip-act {
@@ -6817,8 +7011,9 @@ p.set-hint {
   margin-left: 82px;
 }
 
-/* A row carrying an answer strip is focusable (Tab, then 1–9). A mouse click
-   focuses it too; only keyboard focus draws the ring. */
+/* Every row is focusable (Tab to the list, ↑/↓ between rows; a row carrying
+   an answer strip, then 1–9). A mouse click focuses it too; only keyboard
+   focus draws the ring. */
 .inst:focus {
   outline: none;
 }
@@ -10869,7 +11064,9 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   gap: 8px;
   padding: 5px 12px;
   cursor: pointer;
-  background: var(--panel);
+  /* Raised off the code and ruled under, so each file starts visibly. */
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
   z-index: 1;
@@ -10879,12 +11076,12 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 }
 
 .diff-file-head:hover {
-  background: var(--panel-2);
+  background: color-mix(in srgb, var(--panel-2) 92%, var(--text));
 }
 
 .diff-file-head .diff-file-caret {
   cursor: pointer;
-  color: #fff;
+  color: var(--text);
   font-size: 15px;
   width: 16px;
   flex: none;
@@ -10911,7 +11108,8 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   border: none;
   background: none;
   cursor: pointer;
-  color: #c4b3ff;
+  /* Body text, not the faint light purple: the file name is what you read. */
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -10921,6 +11119,81 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 
 .diff-file-head .sd-file:hover {
   text-decoration: underline;
+}
+
+/* A file's way to the Map (and the whole-file view's): small, quiet until
+   hovered, never the click that collapses the file. */
+.diff-file-map {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.diff-file-map:hover,
+.diff-file-map:focus-visible {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.diff-toolbar .diff-reload {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 8px;
+  border-radius: 6px;
+  flex: none;
+}
+
+.diff-toolbar .diff-reload:hover {
+  border-color: var(--accent);
+}
+
+.diff-toolbar .diff-reload:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The Map tab's badge (Pane.tsx, lib/mapEntry mapTabBadge) on the shared
+   .queue-tab-badge: the zone chip's colours when it needs you, the plain
+   count of changed files otherwise. */
+.pane-head .tabs button.map-tab:not(.active) .map-badge.rz-breach {
+  background: rgba(222, 97, 62, 0.2);
+  color: var(--red);
+  border-color: transparent;
+}
+
+.pane-head .tabs button.map-tab:not(.active) .map-badge.rz-warn {
+  background: var(--gold-fill);
+  color: var(--gold-ink);
+  border-color: transparent;
+}
+
+.pane-head .tabs button.map-tab:not(.active) .map-badge.rz-ok {
+  color: var(--green);
+}
+
+/* the changed-files count: the text colour, not the muted grey, so "5" reads */
+.pane-head .tabs button.map-tab:not(.active) .map-badge.map-changed {
+  color: var(--text);
+}
+
+.pane-head .tabs button.map-tab.active .queue-tab-badge {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  border-color: transparent;
 }
 
 .diff-toolbar .diff-collapse-all {
@@ -10980,7 +11253,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   flex: 1;
   min-width: 0;
   font-weight: 600;
-  color: #c4b3ff;
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -11697,6 +11970,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 
 .ct-body {
   overflow: hidden;
+  container: ct-body / inline-size;
 }
 
 .ct-stage {
@@ -12339,17 +12613,19 @@ button.ct-chip:hover {
 }
 
 /* toast with Undo: ONE line at the top of the canvas — never over the Activity card or the Rules list at the
-   bottom (the whole story is its tooltip) */
+   bottom (the whole story is its tooltip); centred right of the agents column, so its ? and « stay clickable */
 .ct-toast {
   position: absolute;
-  left: 50%;
+  left: 244px;
+  right: 8px;
+  width: max-content;
+  margin: 0 auto;
   top: 10px;
-  transform: translateX(-50%);
   z-index: 9;
   display: flex;
   align-items: center;
   gap: 8px;
-  max-width: min(640px, calc(100% - 24px));
+  max-width: min(640px, calc(100% - 252px));
   padding: 6px 6px 6px 12px;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -12436,7 +12712,8 @@ button.ct-chip:hover {
   line-height: 18px;
 }
 
-/* the Session drawer: the lists over the right of the tree */
+/* the Session drawer: the lists beside the tree (a wide pane docks it as a column — the canvas shrinks and the
+   whole tree re-centres in what is left), or over the tree's right side in a smaller pane */
 .cm-side {
   overflow-y: auto;
   border-left: 1px solid var(--border);
@@ -12453,6 +12730,20 @@ button.ct-chip:hover {
   max-width: 100%;
   z-index: 10;
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
+}
+
+@container ct-body (min-width: 1100px) {
+  .ct-drawer {
+    position: relative;
+    flex: none;
+    box-shadow: none;
+  }
+}
+
+/* over the tree, the panel never hides the card its own rows open: the card stacks above it */
+.ct-body:has(> .ct-drawer) .ct-info {
+  z-index: 11;
+  background: var(--panel);
 }
 
 .ct-drawer-head {
@@ -12499,6 +12790,41 @@ button.ct-chip:hover {
   bottom: 8px;
   width: auto;
   max-height: 46%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* the sheet scrolls on its own, with its name and its actions (Centre, Open diff, Keep out…) at its top: the
+   actions stay pinned there while the outline scrolls under them */
+.ct-stage.narrow .ct-info > * {
+  flex: none;
+}
+
+.ct-stage.narrow .ct-info > .ct-close {
+  order: -3;
+  align-self: flex-end;
+  position: sticky;
+  top: -8px;
+  z-index: 2;
+  margin: -2px -4px -20px 0;
+  float: none;
+}
+
+.ct-stage.narrow .ct-info > h3,
+.ct-stage.narrow .ct-info > .ct-path {
+  order: -2;
+  padding-right: 22px;
+}
+
+.ct-stage.narrow .ct-info > .ct-actions {
+  order: -1;
+  position: sticky;
+  top: -10px;
+  z-index: 1;
+  margin: 0 -12px 6px;
+  padding: 6px 34px 6px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
 }
 
 .ct-stage.narrow .ct-activity-wrap {
@@ -12539,8 +12865,15 @@ button.ct-chip:hover {
 }
 
 @container (max-width: 760px) {
+  /* icon-only buttons: the words stay their accessible names (visually hidden, never display: none) */
   .ct-toolbar .lbl {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .cm-search {
@@ -12643,6 +12976,11 @@ button.ct-chip:hover {
 .cm-note.cm-note-err .muted {
   color: var(--muted);
   overflow-wrap: anywhere;
+}
+
+.cm-note-err .ct-retry {
+  align-self: center;
+  margin-top: 6px;
 }
 
 /* --- session lists (inspector with nothing selected) --- */
@@ -13582,6 +13920,22 @@ button.ct-chip:hover {
 
 .ct-stage.tiny .ct-info {
   left: 104px;
+}
+
+/* the toast keeps right of the rail, and of the expanded column while it is open */
+.ct-stage.narrow .ct-toast {
+  left: 128px;
+  max-width: calc(100% - 136px);
+}
+
+.ct-stage.tiny .ct-toast {
+  left: 104px;
+  max-width: calc(100% - 112px);
+}
+
+.ct-stage.narrow:has(.ct-bix-pop) .ct-toast {
+  left: 256px;
+  max-width: calc(100% - 264px);
 }
 
 .ct-stage.narrow .ct-activity-wrap {
@@ -16625,14 +16979,21 @@ button.ct-chip:hover {
 }
 
 .nf-advanced>summary::before {
-  content: "▸";
-  font-size: 10px;
-  line-height: 1;
+  content: "";
+  /* A drawn chevron, not the "▸" glyph: at 10px, in the fonts the app falls
+     back to, the glyph rendered as a dot nobody read as a disclosure. */
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin: 0 2px 0 1px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
   transition: transform 0.12s ease;
 }
 
 .nf-advanced[open]>summary::before {
-  transform: rotate(90deg);
+  transform: rotate(45deg);
 }
 
 .nf-advanced>summary:hover {
@@ -16673,7 +17034,10 @@ button.ct-chip:hover {
   font-size: 16px;
 }
 
-:is(#new-form, .tpl-editor) label {
+:is(#new-form, .tpl-editor) label,
+/* Folder and Agent are divs (a button inside a <label> joins the field's
+   name) that read exactly as the labels around them did. */
+:is(#new-form, .tpl-editor) :is(.nf-folder, .nf-agent) {
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -16960,46 +17324,6 @@ button.ct-chip:hover {
   margin: -2px 0 0;
   font-size: 11.5px;
   line-height: 1.4;
-}
-
-/* The new-folder question. Deliberately NOT styled like the two checkbox rows
-   in the Git & workspace fold, which it would otherwise be mistaken for: those
-   are options, and skimming past one costs a setting. This one is the gate in
-   front of the only thing this dialog does that outlives the session — a
-   directory on disk that closing the session never removes — so it is boxed,
-   tinted and given its own question line, which is the treatment this card
-   reserves for something that has to be READ.
-
-   Accent rather than red: nothing has gone wrong and nothing is being refused
-   yet. Red is what .nf-provision-warn uses for a create the server will reject,
-   and spending it here would leave that line nothing louder to be. The tint is
-   an rgba() off --accent-rgb so it works in both themes off the one token — the
-   light theme redefines --accent-rgb, and a hard-coded panel colour would go
-   invisible in one of them. */
-.nf-newfolder {
-  margin: 2px 0 0;
-  padding: 8px 10px;
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  background: rgba(var(--accent-rgb), 0.08);
-}
-
-/* The question itself, at the card's ordinary label size rather than the 11.5px
-   of the asides above it: this is the sentence the row exists to have read, and
-   an aside-sized one reads as more small print under a note. */
-.nf-newfolder-q {
-  margin: 0 0 6px;
-  font-size: 13px;
-  line-height: 1.4;
-  color: var(--text);
-}
-
-.nf-newfolder-q b {
-  font-weight: 600;
-  /* The folder is a path, and a path in running text is hard to see the ends of
-     — which matters here, because the ends are where ~/code/foo differs from
-     ~/code/foo-2. */
-  word-break: break-all;
 }
 
 /* Same stack as .nf-quick's: below this width the input and its button cannot
@@ -17785,14 +18109,20 @@ button.ct-chip:hover {
 }
 
 .rt-fold>summary::before {
-  content: "▸";
-  font-size: 10px;
-  line-height: 1;
+  content: "";
+  /* The same drawn chevron as .nf-advanced's. */
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin: 0 2px 0 1px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
   transition: transform 0.12s ease;
 }
 
 .rt-fold[open]>summary::before {
-  transform: rotate(90deg);
+  transform: rotate(45deg);
 }
 
 .rt-fold>summary:hover {
@@ -20551,7 +20881,8 @@ body.conn-lost #cs-errors {
 /* The toast's action button (lib/toast.ts `action`): the one thing to press,
    instead of the whole toast being the click target. The toast itself is
    styled in NewSessionDialog.css (#cs-toast) and ConnBanner.css (.clickable). */
-#cs-toast.has-action {
+#cs-toast.has-action,
+#cs-toast-held.has-action {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -20562,7 +20893,29 @@ body.conn-lost #cs-errors {
   max-width: calc(100vw - 32px);
 }
 
-#cs-toast .cs-toast-act {
+/* The held slot (lib/toast.ts): an action toast that a plain message arrived
+   over keeps its button one slot up, on the same card as #cs-toast. */
+#cs-toast-held {
+  position: fixed;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  z-index: 1000;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+#cs-toast-held.show {
+  opacity: 1;
+}
+
+#cs-toast .cs-toast-act,
+#cs-toast-held .cs-toast-act {
   flex: none;
   padding: 3px 10px;
   border: 1px solid rgba(var(--accent-rgb), 0.55);
@@ -20574,17 +20927,20 @@ body.conn-lost #cs-errors {
   cursor: pointer;
 }
 
-#cs-toast .cs-toast-act:hover {
+#cs-toast .cs-toast-act:hover,
+#cs-toast-held .cs-toast-act:hover {
   background: rgba(var(--accent-rgb), 0.26);
 }
 
-#cs-toast .cs-toast-act:focus-visible {
+#cs-toast .cs-toast-act:focus-visible,
+#cs-toast-held .cs-toast-act:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
 /* Faded out = gone: no tab stop on an invisible button. */
-#cs-toast:not(.show) .cs-toast-act {
+#cs-toast:not(.show) .cs-toast-act,
+#cs-toast-held:not(.show) .cs-toast-act {
   visibility: hidden;
 }
 }
@@ -21580,6 +21936,42 @@ button.linklike {
 
 .palette-item.selected .palette-hint.is-desc {
   color: rgba(255, 255, 255, 0.85);
+}
+
+/* A Focus row's state word ("Working", "Question") in its tone — the same
+   word and colour as the session's rail chip, quieter. */
+.palette-item .palette-state {
+  flex: none;
+  font-size: 10px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--tone-neutral);
+  background: color-mix(in srgb, var(--tone-neutral) 16%, transparent);
+}
+
+.palette-item .palette-state.tone-working {
+  color: var(--tone-working-ink);
+  background: var(--tone-working);
+}
+
+.palette-item .palette-state.tone-attention {
+  color: var(--tone-attention-ink);
+  background: var(--tone-attention);
+}
+
+.palette-item .palette-state.tone-waiting {
+  color: var(--tone-waiting-ink);
+  background: var(--tone-waiting);
+}
+
+.palette-item .palette-state.tone-broken {
+  color: var(--tone-broken-ink);
+  background: var(--tone-broken);
+}
+
+.palette-item .palette-state.tone-muted {
+  color: var(--tone-muted);
+  background: color-mix(in srgb, var(--tone-muted) 16%, transparent);
 }
 
 .palette-empty {

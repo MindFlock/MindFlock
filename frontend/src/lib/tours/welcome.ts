@@ -3,7 +3,11 @@
  * where that session shows up. Seeded from the r5-firsthour judge's tutorial
  * draft. The setup hooks are r5w-setup's (`data-tour="setup-…"`); until they
  * land, each step falls back to the checklist's own `data-step` sections. The
- * last step centres until a session exists. */
+ * last step centres until a session exists.
+ *
+ * The steps name no agent: the checklist installs and signs in to whichever
+ * one is the default (its own rows say which), and "Install Claude Code" over
+ * a checklist set up for Codex read as the wrong app. */
 import type { TourDef } from ".";
 
 export const WELCOME_TOUR: TourDef = {
@@ -17,13 +21,13 @@ export const WELCOME_TOUR: TourDef = {
     },
     {
       target: '[data-tour="setup-step-tools"], .setup-step[data-step="tools"]',
-      title: "① Install Claude Code",
-      body: "MindFlock drives Claude Code for you; one click installs it in about a minute.",
+      title: "① Install your agent",
+      body: "MindFlock drives a coding agent for you; one click installs it in about a minute.",
     },
     {
       target: '[data-tour="setup-step-agent_login"], .setup-step[data-step="agent_login"]',
       title: "② Sign in to your agent",
-      body: "Sign in once in the window that opens, with your Claude account.",
+      body: "Sign in once in the window that opens, with that agent's own account.",
     },
     {
       target: '[data-tour="setup-step-repo"], .setup-step[data-step="repo"]',

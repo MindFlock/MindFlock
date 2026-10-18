@@ -28,8 +28,12 @@ export interface PaletteAction {
   /** Acts outside this screen (git, a remote, ending a session): never the
    * Enter default for a query that also matches something harmless. */
   outward?: boolean;
-  /** On the empty-query menu, at this rank (lower first). */
+  /** On the empty-query menu, at this rank (lower first). Below zero: always
+   * on it (a session that needs you), ahead of the TOP_LIMIT commands. */
   top?: number;
+  /** A session row's state word ("Working", "Question"), drawn as a chip in
+   * the state's tone. Not searched. */
+  state?: { label: string; tone: string };
   /** Running it keeps the palette open (the "All commands…" row). */
   keepOpen?: boolean;
 }
@@ -79,6 +83,8 @@ function synonymsFor(label: string): string {
 /** The menu an empty query shows: the `top` entries, best first, at most
  * this many, then "All commands…". */
 export const TOP_LIMIT = 9;
+/** At most this many sessions that need you lead the empty-query menu. */
+export const NEEDS_LIMIT = 5;
 
 /** The palette's rows for a query. `showAll` lists every command for an
  * empty query (after "All commands…"). `allRow` builds that row. */
@@ -90,13 +96,14 @@ export function rankActions(
   const q = String(query || "").trim();
   if (!q) {
     if (opts.showAll || !opts.allRow) return actions.slice();
-    const top = actions
+    const ranked = actions
       .map((a, i) => ({ a, i }))
       .filter((x) => x.a.top !== undefined)
       .sort((x, y) => (x.a.top as number) - (y.a.top as number) || x.i - y.i)
-      .slice(0, TOP_LIMIT)
       .map((x) => x.a);
-    return top.concat(opts.allRow(actions.length));
+    const urgent = ranked.filter((a) => (a.top as number) < 0).slice(0, NEEDS_LIMIT);
+    const top = ranked.filter((a) => (a.top as number) >= 0).slice(0, TOP_LIMIT);
+    return urgent.concat(top, opts.allRow(actions.length));
   }
   const scored: Array<{ a: PaletteAction; i: number; s: number }> = [];
   actions.forEach((a, i) => {

@@ -79,7 +79,7 @@ export interface AddRowProps {
   clarify: boolean;
   repoLabel: string;
   sessionsHere: number;
-  quick: Array<{ label: string; pattern: string; title: string }>;
+  quick?: Array<{ label: string; pattern: string; title: string }>;
   onSubmit: (tellOverride?: boolean) => void;
   onTreatAsBreaches: () => void;
 }
@@ -99,7 +99,7 @@ export function AddZoneRow(p: AddRowProps) {
       if (d.kind === "green") {
         return (
           <span>
-            <b>{d.pattern}</b> is now a green zone — agents may only change files inside the green zones.
+            <b>{d.pattern}</b> is now ✓ Only here — agents may only change files inside it.
             {d.told ? " " + d.told : ""}
             <ExemptPrompt
               paths={d.exempt}
@@ -113,7 +113,7 @@ export function AddZoneRow(p: AddRowProps) {
       }
       return (
         <span>
-          <b>{d.pattern}</b> is now a keep-out zone.
+          <b>{d.pattern}</b> is now ⛔ Keep out.
           {d.told ? " " + d.told : ""}
           {d.already.length > 0 && (
             <>
@@ -186,7 +186,7 @@ export function AddZoneRow(p: AddRowProps) {
         p.onSubmit();
       }}
     >
-      <span className="cm-seg cm-kind" role="radiogroup" aria-label="Zone kind">
+      <span className="cm-seg cm-kind" role="radiogroup" aria-label="Rule kind">
         <button
           type="button"
           role="radio"
@@ -202,7 +202,7 @@ export function AddZoneRow(p: AddRowProps) {
           role="radio"
           aria-checked={green}
           className={green ? "on green" : ""}
-          title="Only here: agents may change ONLY these paths (and other green zones); everything else is read-only"
+          title="Only here: agents may change ONLY these paths (and other ✓ Only here rules); everything else is read-only"
           onClick={() => setAdd({ ...add, kind: "green", scope: "worktree", tell: true, done: null })}
         >
           ✓ Only here
@@ -225,7 +225,7 @@ export function AddZoneRow(p: AddRowProps) {
           }
         }}
       />
-      {p.quick.length > 0 && (
+      {p.quick && p.quick.length > 0 && (
         <span className="cm-add-quick">
           {p.quick.map((q) => (
             <button
@@ -246,14 +246,14 @@ export function AddZoneRow(p: AddRowProps) {
         spellCheck={false}
         autoComplete="off"
         placeholder="name (optional)"
-        aria-label="Zone name"
+        aria-label="Rule name"
         value={add.name}
         onChange={(ev) => setAdd({ ...add, name: ev.target.value })}
       />
       {green ? (
         <span
           className="cm-add-scope-note"
-          title="A green zone scopes a task, so it is set per worktree — and every session in the worktree shares it."
+          title="✓ Only here scopes a task, so it is set per worktree — and every session in the worktree shares it."
         >
           {p.sessionsHere <= 1
             ? "This worktree (1 session)"

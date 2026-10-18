@@ -436,7 +436,7 @@ export function describeBlockReason(where: { text: string; busy: boolean }): str
  * ignores you is worse than one that explains itself. */
 export function submitHoldReason(armAt: number, now: number): string {
   if (!armAt || now >= armAt) return "";
-  return "Just filled the form in \u2014 check the folder, then press Create.";
+  return "Just filled the form in \u2014 check the folder, then press Start.";
 }
 
 /** The plan's in-place flag, defaulting TRUE when the key is missing.
@@ -963,6 +963,21 @@ export function agentMissingReason(agent: string, installed: InstalledMap | null
 export function preferInstalled(agent: string, names: string[], installed: InstalledMap | null): string {
   if (!installed || installed[agent] !== false) return agent;
   return names.find((n) => installed[n] === true) || agent;
+}
+
+/** Why `name` can't be saved as a NEW template: one of `existing` already has
+ * it, ignoring case — the server upserts by name, so saving would replace
+ * that one, schedule and all. `editing` is the template being edited, whose
+ * own name is of course fine. "" = free. */
+export function templateNameTaken(
+  name: string,
+  existing: Array<{ name: string }>,
+  editing: string | null = null
+): string {
+  const want = name.trim().toLowerCase();
+  if (!want || (editing && editing.trim().toLowerCase() === want)) return "";
+  const hit = existing.find((t) => t.name.trim().toLowerCase() === want);
+  return hit ? `A template named “${hit.name}” already exists — pick another name.` : "";
 }
 
 /** The fields a template carries, from the form — the WHOLE setup, so Run now

@@ -271,7 +271,7 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
   const more = keep([
     !peer && !tabs.has("shell") && { key: "terminal", label: "Terminal", title: "A shell in this session's folder", run: () => openTab(title, "shell") },
     ctx.caps.git !== false &&
-      !tabs.has("diff") && { key: "diff", label: "Diff", title: "What this session changed", run: () => openTab(title, "diff") },
+      !tabs.has("diff") && { key: "diff", label: "Diff", title: "What this session changed", run: () => useUi.getState().openDiff(title) },
     ctx.caps.git !== false && !tabs.has("map") && fromTable("map"),
     fromTable("thread", { note: actionNote("thread", ctx) }),
     opts.onHistory && {

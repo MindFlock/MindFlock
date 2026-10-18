@@ -39,7 +39,8 @@ afterEach(() => {
 
 describe("the chords are table rows", () => {
   it("every chord letter comes from the table, with the sheet's words", () => {
-    expect(Object.keys(CHORDS)).toEqual(CHORD_ACTIONS.map((id) => sessionAction(id).chord));
+    // …plus N, the one chord that is not a session verb (lib/needsYou).
+    expect(Object.keys(CHORDS)).toEqual([...CHORD_ACTIONS.map((id) => sessionAction(id).chord), "n"]);
     expect(Object.fromEntries(Object.entries(CHORDS).map(([k, c]) => [k, c.desc]))).toEqual({
       c: "Commit…",
       p: "Push",
@@ -52,6 +53,7 @@ describe("the chords are table rows", () => {
       s: "Message…",
       f: "Fast-track…",
       t: "Thread — workers and messages",
+      n: "Next session that needs you — in the bell's order",
     });
   });
 

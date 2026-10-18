@@ -405,8 +405,10 @@ describe("the other doors: row › menu, palette, chords", () => {
   it("palette entries", () => {
     const palette = mod(PALETTE);
     const table = mod(TABLE);
-    // The palette lists the table's rows as "<label> — <session>".
-    expect(has(palette, "label: `${actionLabel(id, c)} — ${t}`")).toBe(true);
+    // The palette lists the table's rows as "<label> — <session>", the
+    // session named the way its rail row reads.
+    expect(has(palette, "label: `${actionLabel(id, c)} — ${name}`")).toBe(true);
+    expect(has(palette, "const name = windowName(t);")).toBe(true);
     for (const [id, label] of [
       ["fastTrack", 'label: "Fast-track…"'],
       ["split", 'label: "Split into parallel pieces…"'],
@@ -432,7 +434,7 @@ describe("the other doors: row › menu, palette, chords", () => {
     const keymap = mod(KEYMAP);
     const table = mod(TABLE);
     // The chords are the action table's rows that name a letter.
-    expect(keymap).toMatch(/export const CHORDS: Record<string, ChordEntry> = Object\.fromEntries\(\s*CHORD_ACTIONS\.map\(/);
+    expect(keymap).toMatch(/export const CHORDS: Record<string, ChordEntry> = \{\s*\.\.\.Object\.fromEntries\(\s*CHORD_ACTIONS\.map\(/);
     expect(
       has(
         table,

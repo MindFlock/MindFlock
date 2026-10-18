@@ -23,6 +23,8 @@ export interface CodeTreeProps {
   /** layout progress 0..1 while the tree grows (null = not growing) */
   growing: number | null;
   growErr: string;
+  /** "Couldn't grow the tree": run the layout again */
+  onRetry?: () => void;
   files: number;
   agents: AgentState[];
   tzones: TZone[];
@@ -43,7 +45,7 @@ export interface CodeTreeProps {
   onPaint: (tool: "keep" | "only", target: { node?: TNode | null; file?: TFile | null }) => void;
   onRemoveZone: (z: RedZone) => void;
   onAllow: (path: string) => void;
-  onOpenDiff: () => void;
+  onOpenDiff: (path?: string) => void;
   onNote: (msg: string) => void;
   /** the controller's HUD state moved (tool, history, selection) */
   onChange?: () => void;
@@ -68,6 +70,8 @@ export function CodeTree(p: CodeTreeProps) {
   const [size, setSize] = useState<"wide" | "narrow" | "tiny">("wide");
   const narrow = size !== "wide";
   const [actNarrow, setActNarrow] = useState(false);
+  // a bump closes the bird index's expanded column (narrow panes): Esc, or a click on the canvas
+  const [railShut, setRailShut] = useState(0);
   const [fv, setFv] = useState<FileView | null>(null);
   const [fvErr, setFvErr] = useState("");
   const blastCache = useRef(new Map<number, { h1: Set<number> }>());
@@ -132,7 +136,8 @@ export function CodeTree(p: CodeTreeProps) {
     let left = 8,
       top = 8,
       bot = 8,
-      card = 0;
+      card = 0,
+      sheet = 0;
     for (const el of Array.from(st.querySelectorAll<HTMLElement>("[data-hud]"))) {
       const r = el.getBoundingClientRect();
       if (r.width < 2 || r.height < 2) continue;
@@ -146,11 +151,30 @@ export function CodeTree(p: CodeTreeProps) {
       if (kind === "left") left = Math.max(left, x1 + 8);
       // (the paint-tool hint sits at the bottom and insets nothing: arming a tool never moves what you aim at)
       if (kind === "info" && !isNarrow) card = Math.max(card, r.width + 16);
-      if (kind === "info" && isNarrow) bot = Math.max(bot, r0.height - y0 + 6);
+      // (a small pane's card is a bottom sheet: like the wide card it is kept apart, so the whole tree frames the
+      // same with or without it)
+      if (kind === "info" && isNarrow) sheet = Math.max(sheet, r0.height - y0 + 6);
       if (kind === "activity" && isNarrow) bot = Math.max(bot, r0.height - y0 + 6);
+      // a wide pane's folded Activity sits on the ground at the bottom right: the whole tree stands clear of it
+      // (a fixed allowance, so unfolding it never moves the picture)
+      if (kind === "activity" && !isNarrow) bot = Math.max(bot, 78);
     }
-    const insets: Insets = { top, bot, left, right: 8 };
+    // the Session panel docks beside the canvas in a wide pane (the canvas shrinks: nothing to keep off); in a
+    // smaller one it lies over the canvas's right side, so fits and names keep left of it — and the card, which
+    // stacks over the panel there, insets only what the panel does not already (a narrow pane's card is a sheet)
+    let right = 8;
+    const dr = isNarrow ? null : st.parentElement?.querySelector<HTMLElement>(":scope > .ct-drawer");
+    if (dr) {
+      const r = dr.getBoundingClientRect();
+      if (r.width > 2 && r.left < r0.right - 2 && r.right > r0.left) {
+        right = r0.right - r.left + 8;
+        rects.push([r.left - r0.left - 4, 0, r0.width, r0.height]);
+      }
+    }
+    card = Math.max(0, card - (right - 8));
+    const insets: Insets = { top, bot, left, right };
     c.cardInset = card;
+    c.cardBot = Math.max(0, sheet - bot);
     c.setHud(rects, insets);
   };
   useLayoutEffect(measure);
@@ -194,9 +218,40 @@ export function CodeTree(p: CodeTreeProps) {
   const v = ctl ? ctl.v : null;
   const rows = useMemo(() => (M ? activityRows(M, p.agents, p.feed, p.zones, p.title) : []), [M, p.agents, p.feed, p.zones, p.title]);
 
-  const onCanvasKey = (e: React.KeyboardEvent) => {
-    if (ctl && ctl.key(e.nativeEvent)) e.preventDefault();
+  /** Close the expanded agents column if it is open (focus inside it goes back to its » button). */
+  const shutRail = (): boolean => {
+    const st = stageRef.current,
+      pop = st ? st.querySelector(".ct-bix-pop") : null;
+    if (!st || !pop) return false;
+    const back = pop.contains(document.activeElement) ? st.querySelector<HTMLElement>(".ct-bix-rail .ct-bix-q") : null;
+    setRailShut((x) => x + 1);
+    back?.focus();
+    return true;
   };
+  const onCanvasKey = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape" && shutRail()) e.preventDefault();
+    else if (ctl && ctl.key(e.nativeEvent)) e.preventDefault();
+  };
+
+  // "/" finds a file from anywhere in this Map's pane (the canvas, a card, the pane's header), and with nothing
+  // focused (after the tour, say) while the pointer is over the pane or it is the focused one — never from a
+  // field you type in. Window capture: ahead of the app keymap's "/" (the sessions filter).
+  useEffect(() => {
+    if (!p.active) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
+      const root = stageRef.current?.closest<HTMLElement>(".cm-root");
+      const box = root?.querySelector<HTMLInputElement>(".cm-search input");
+      if (!root || !box || !box.offsetParent) return;
+      if (!slashFinds(document.activeElement, root.closest<HTMLElement>(".pane") || root)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      box.focus();
+      box.select();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [p.active]);
 
   const tip = ctl && ctl.tip && M && v ? ctl.tip : null;
   const tool = v ? v.tool : "explore";
@@ -226,7 +281,7 @@ export function CodeTree(p: CodeTreeProps) {
               ctl.flyToNode(f.node, 0.8);
             }
           }}
-          onDiff={p.onOpenDiff}
+          onDiff={() => p.onOpenDiff(f.path)}
           onKeep={() => p.onPaint("keep", { file: f })}
           onOnly={() => p.onPaint("only", { file: f })}
           onAllow={() => p.onAllow(f.path)}
@@ -281,6 +336,10 @@ export function CodeTree(p: CodeTreeProps) {
       className={"ct-stage" + (narrow ? " narrow" : "") + (size === "tiny" ? " tiny" : "") + (showMini ? " mini-on" : "")}
       ref={stageRef}
       onKeyDown={(e) => {
+        if (e.key === "Escape" && !e.defaultPrevented && shutRail()) {
+          e.preventDefault();
+          return;
+        }
         // Esc anywhere on the tree (a card you just clicked has focus) stops following
         if (e.key === "Escape" && !e.defaultPrevented && ctl && ctl.v && ctl.v.follow != null) {
           ctl.stopFollow(true, true);
@@ -300,6 +359,7 @@ export function CodeTree(p: CodeTreeProps) {
         }
         aria-describedby={"ct-sum-" + cssId(p.title)}
         onKeyDown={onCanvasKey}
+        onPointerDown={() => shutRail()}
       />
       <p className="cm-sr" id={"ct-sum-" + cssId(p.title)}>
         {M ? summary(M, p.agents, p.zones) : ""}
@@ -321,6 +381,11 @@ export function CodeTree(p: CodeTreeProps) {
         <div className="cm-note cm-note-err" role="alert">
           <b>Couldn't grow the tree.</b>
           <span className="muted">{p.growErr}</span>
+          {p.onRetry && (
+            <button type="button" className="cm-btn ct-retry" onClick={p.onRetry}>
+              Retry
+            </button>
+          )}
         </div>
       )}
       {regrowing && (
@@ -350,6 +415,7 @@ export function CodeTree(p: CodeTreeProps) {
             zones={p.zones}
             zoneBusy={p.zoneBusy}
             size={size}
+            closeSeq={railShut}
             followKey={v ? v.follow : null}
             primaryTask={p.primaryTask}
             primaryExtra={p.primaryExtra}
@@ -462,6 +528,18 @@ function tipPos(x: number, y: number, W: number, H: number): React.CSSProperties
 }
 
 const cssId = (s: string) => s.replace(/[^A-Za-z0-9_-]/g, "_");
+
+/** Whether "/" (pressed with `active` focused) belongs to the Map in `pane`: focus anywhere in the pane except a
+ * field you type in; or nothing focused while the pointer is over the pane — or over no pane and this is the
+ * focused one. */
+export function slashFinds(active: Element | null, pane: Element): boolean {
+  const el = active as HTMLElement | null,
+    doc = pane.ownerDocument;
+  if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return false;
+  if (el && el !== doc.body && el !== doc.documentElement) return pane.contains(el);
+  if (pane.matches(":hover")) return true;
+  return pane.classList.contains("focused") && !doc.querySelector(".pane:hover");
+}
 
 /** One sentence for screen readers: what the picture shows. */
 function summary(M: Model, agents: AgentState[], zones: RedZone[]): string {

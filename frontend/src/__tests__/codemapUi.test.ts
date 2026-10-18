@@ -77,7 +77,7 @@ describe("the Map pane tab", () => {
     const pane = src("components/grid/Pane.tsx");
     expect(pane).toContain('data-tab="map"');
     expect(pane).toContain('<div className={"pane-map" + (tab !== "map" ? " hidden" : "")}>');
-    expect(pane).toContain('title="Code map — the worktree as a tree: agents, zones, plan, blast radius"');
+    expect(pane).toContain('title={"Code map — the worktree as a tree: agents, zones, plan, blast radius"');
     // Mounted like DiffTab: {title, active}, active only while the tab shows.
     expect(pane).toContain('<CodeMapTab title={title} active={tab === "map"} />');
     // One function (paneTab) over one set drives BOTH the saved-tab and the
@@ -283,7 +283,7 @@ describe("entry points", () => {
     expect(row.chord).toBe("m");
     const table = src("lib/sessionActionTable.ts");
     const block = table.slice(table.indexOf("  map: {"));
-    expect(block.slice(0, block.indexOf("\n  },"))).toContain('useUi.getState().setLastTab(t, "map")');
+    expect(block.slice(0, block.indexOf("\n  },"))).toContain("useUi.getState().openMap(t)");
     const palette = src("components/palette/CommandPalette.tsx");
     expect(palette).toContain('  "map",');
     expect(palette).toContain('label: "Zones…"');
@@ -301,8 +301,8 @@ describe("entry points", () => {
     expect(row).toContain('className={"stagechip rzchip " + rz.cls}');
     // Row field from the server snapshot.
     expect(row).toContain("redZoneChip(inst.redzone, mapSeen)");
-    // Clicking the chip opens the Map.
-    expect(row).toContain('setLastTab(title, "map")');
+    // Clicking the chip opens the Map, on the part the chip is about.
+    expect(row).toContain("useUi.getState().openMap(title, zoneChipFocus(inst.redzone, rz))");
   });
 
   it("routes zone events to both the bell and a toast", () => {
@@ -399,6 +399,8 @@ describe("the Map's stylesheet", () => {
     expect(light).toContain("--ct-fol-a");
     expect(map).toContain("@container (max-width: 760px)");
     const narrow = map.slice(map.indexOf("@container (max-width: 760px)"));
-    expect(narrow).toMatch(/\.ct-toolbar \.lbl\s*\{\s*display: none/);
+    // icon-only buttons keep their words as accessible names: visually hidden, never display: none
+    expect(narrow).toMatch(/\.ct-toolbar \.lbl\s*\{\s*position: absolute;[^}]*clip-path: inset\(50%\)/);
+    expect(narrow).not.toMatch(/\.ct-toolbar \.lbl\s*\{\s*display: none/);
   });
 });

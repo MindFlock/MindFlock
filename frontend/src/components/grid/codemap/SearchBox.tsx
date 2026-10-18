@@ -4,11 +4,14 @@
  * Escape clears. `/` anywhere in the tab focuses it (CodeMapTab). With a paint
  * tool armed, a pick paints the rule on it instead. */
 
-import { forwardRef, useEffect, useMemo, useState } from "react";
+import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
 import type { SearchItem } from "../../../api/types";
 import { searchCode } from "../../../lib/codemapApi";
 import { searchController } from "../../../lib/codemapSearch";
 import { KIND_GLYPH } from "../../../lib/codemap";
+
+/** Below this width (px) the box's placeholder is the short "Find…". */
+export const SHORT_BELOW = 170;
 
 /** A symbol's kind as a one-letter glyph (C class, ƒ function, …). */
 function Glyph({ kind }: { kind: string }) {
@@ -26,6 +29,16 @@ export const SearchBox = forwardRef<HTMLInputElement, { title: string; onPick: (
     const [err, setErr] = useState("");
     const [open, setOpen] = useState(false);
     const [cur, setCur] = useState(0);
+    // a narrow toolbar's box shows "Find…", never a clipped "Find file or symbo"
+    const wrap = useRef<HTMLSpanElement | null>(null);
+    const [short, setShort] = useState(false);
+    useEffect(() => {
+      const el = wrap.current;
+      if (!el || typeof ResizeObserver === "undefined") return;
+      const ro = new ResizeObserver(() => setShort(el.clientWidth < SHORT_BELOW));
+      ro.observe(el);
+      return () => ro.disconnect();
+    }, []);
 
     // One controller per session: it debounces, and drops any answer that a
     // newer query — clearing the box included — has made stale.
@@ -52,11 +65,11 @@ export const SearchBox = forwardRef<HTMLInputElement, { title: string; onPick: (
     };
 
     return (
-      <span className="cm-search">
+      <span className="cm-search" ref={wrap}>
         <input
           ref={ref}
           type="search"
-          placeholder="Find file or symbol"
+          placeholder={short ? "Find…" : "Find file or symbol"}
           aria-label="Find file or symbol"
           aria-expanded={open && items.length > 0}
           aria-controls="cm-search-list"

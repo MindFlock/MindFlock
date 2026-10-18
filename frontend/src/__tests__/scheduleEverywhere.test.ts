@@ -26,7 +26,9 @@ describe("scheduledRows", () => {
       { runs: { "nightly deps": { next_at: at(21) }, "standup notes": { next_at: at(8, 30, 1) } }, runs_here: true, runs_on: "" },
       NOW
     );
-    expect(rows).toEqual([
+    // Each row also carries THE schedule line (templateScheduleLine).
+    expect(rows.map((r) => r.line)).toEqual(["Every day at 21:00 · next today 21:00", "Weekdays at 08:30 · next tomorrow 08:30"]);
+    expect(rows.map(({ line: _line, ...r }) => r)).toEqual([
       { name: "Nightly deps", when: "Every day at 21:00", next: "next today 21:00", problem: "" },
       {
         name: "Standup notes",

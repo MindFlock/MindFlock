@@ -11,6 +11,7 @@ import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
 import { commitNow, redZoneBreaches, selectSession, type RedZoneBreachHit } from "../../lib/sessionActions";
 import { errorPop } from "../../lib/errorPop";
+import { breachFocus } from "../../lib/mapEntry";
 import { pickFastTrack, type Lane } from "../../lib/laneActions";
 import { toast } from "../../lib/toast";
 import { FastTrackChoice } from "./FastTrackChoice";
@@ -301,10 +302,7 @@ export function warnZones(title: string, breaches: RedZoneBreachHit[], proceed: 
     [
       {
         label: "Open map",
-        run: () => {
-          selectSession(title);
-          useUi.getState().setLastTab(title, "map");
-        },
+        run: () => useUi.getState().openMap(title, breachFocus(breaches)),
       },
       { label: "Commit anyway", primary: true, title: "Commit these changes despite the zone", run: proceed },
     ]

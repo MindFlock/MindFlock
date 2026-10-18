@@ -617,6 +617,7 @@
 
 .ct-body {
   overflow: hidden;
+  container: ct-body / inline-size;
 }
 
 .ct-stage {
@@ -1259,17 +1260,19 @@ button.ct-chip:hover {
 }
 
 /* toast with Undo: ONE line at the top of the canvas — never over the Activity card or the Rules list at the
-   bottom (the whole story is its tooltip) */
+   bottom (the whole story is its tooltip); centred right of the agents column, so its ? and « stay clickable */
 .ct-toast {
   position: absolute;
-  left: 50%;
+  left: 244px;
+  right: 8px;
+  width: max-content;
+  margin: 0 auto;
   top: 10px;
-  transform: translateX(-50%);
   z-index: 9;
   display: flex;
   align-items: center;
   gap: 8px;
-  max-width: min(640px, calc(100% - 24px));
+  max-width: min(640px, calc(100% - 252px));
   padding: 6px 6px 6px 12px;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -1356,7 +1359,8 @@ button.ct-chip:hover {
   line-height: 18px;
 }
 
-/* the Session drawer: the lists over the right of the tree */
+/* the Session drawer: the lists beside the tree (a wide pane docks it as a column — the canvas shrinks and the
+   whole tree re-centres in what is left), or over the tree's right side in a smaller pane */
 .cm-side {
   overflow-y: auto;
   border-left: 1px solid var(--border);
@@ -1373,6 +1377,20 @@ button.ct-chip:hover {
   max-width: 100%;
   z-index: 10;
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
+}
+
+@container ct-body (min-width: 1100px) {
+  .ct-drawer {
+    position: relative;
+    flex: none;
+    box-shadow: none;
+  }
+}
+
+/* over the tree, the panel never hides the card its own rows open: the card stacks above it */
+.ct-body:has(> .ct-drawer) .ct-info {
+  z-index: 11;
+  background: var(--panel);
 }
 
 .ct-drawer-head {
@@ -1419,6 +1437,41 @@ button.ct-chip:hover {
   bottom: 8px;
   width: auto;
   max-height: 46%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* the sheet scrolls on its own, with its name and its actions (Centre, Open diff, Keep out…) at its top: the
+   actions stay pinned there while the outline scrolls under them */
+.ct-stage.narrow .ct-info > * {
+  flex: none;
+}
+
+.ct-stage.narrow .ct-info > .ct-close {
+  order: -3;
+  align-self: flex-end;
+  position: sticky;
+  top: -8px;
+  z-index: 2;
+  margin: -2px -4px -20px 0;
+  float: none;
+}
+
+.ct-stage.narrow .ct-info > h3,
+.ct-stage.narrow .ct-info > .ct-path {
+  order: -2;
+  padding-right: 22px;
+}
+
+.ct-stage.narrow .ct-info > .ct-actions {
+  order: -1;
+  position: sticky;
+  top: -10px;
+  z-index: 1;
+  margin: 0 -12px 6px;
+  padding: 6px 34px 6px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
 }
 
 .ct-stage.narrow .ct-activity-wrap {
@@ -1459,8 +1512,15 @@ button.ct-chip:hover {
 }
 
 @container (max-width: 760px) {
+  /* icon-only buttons: the words stay their accessible names (visually hidden, never display: none) */
   .ct-toolbar .lbl {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .cm-search {
@@ -1563,6 +1623,11 @@ button.ct-chip:hover {
 .cm-note.cm-note-err .muted {
   color: var(--muted);
   overflow-wrap: anywhere;
+}
+
+.cm-note-err .ct-retry {
+  align-self: center;
+  margin-top: 6px;
 }
 
 /* --- session lists (inspector with nothing selected) --- */
@@ -2502,6 +2567,22 @@ button.ct-chip:hover {
 
 .ct-stage.tiny .ct-info {
   left: 104px;
+}
+
+/* the toast keeps right of the rail, and of the expanded column while it is open */
+.ct-stage.narrow .ct-toast {
+  left: 128px;
+  max-width: calc(100% - 136px);
+}
+
+.ct-stage.tiny .ct-toast {
+  left: 104px;
+  max-width: calc(100% - 112px);
+}
+
+.ct-stage.narrow:has(.ct-bix-pop) .ct-toast {
+  left: 256px;
+  max-width: calc(100% - 264px);
 }
 
 .ct-stage.narrow .ct-activity-wrap {

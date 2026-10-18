@@ -6,6 +6,9 @@
  * per-agent `logins`); SidebarRow and Pane only place these two pieces.
  *
  *   not installed        chip "Install" → the Setup checklist (step ① installs it)
+ *                        for the default agent; Settings → Agents on that
+ *                        agent's card for any other (Setup checks only the
+ *                        default)
  *   not signed in, live  chip "Sign in" → focuses the session: its own terminal
  *                        is already showing the agent's sign-in questions
  *   not signed in, gone  chip "Sign in" → the sign-in window, then Restart
@@ -21,7 +24,8 @@ import { selectSession } from "../../lib/sessionActions";
 import type { AgentBlock } from "../../lib/sessionState";
 import { SignInWindow } from "../dialogs/AgentSignIn";
 import { notifyConnectionsChanged } from "../settings/screens/Connections";
-import { refreshSetup } from "./useSetup";
+import { openAgentSettings } from "../settings/screens/CodingCli";
+import { refreshSetup, useSetup } from "./useSetup";
 
 /** How often a signed-out session's banner re-checks the login. */
 export const BLOCKED_POLL_MS = 8000;
@@ -37,6 +41,21 @@ export function blockedSentence(b: AgentBlock): string {
       " isn't signed in yet. Answer its questions in the terminal below — a text style, then how to log in — and open the link it shows."
     );
   return who + " isn't signed in yet. Answer its sign-in prompts in the terminal below.";
+}
+
+/** Where "Install" goes for agent `name`: Setup installs the default agent
+ * (its step ①) and checks nothing else, so another agent opens Settings →
+ * Agents on its own card. */
+export function installTarget(name: string, defaultAgent: string): "setup" | "agents" {
+  return !!name && name === defaultAgent ? "setup" : "agents";
+}
+
+function useOpenInstall(name: string): () => void {
+  const defaultAgent = useSetup().data?.default_provider || "";
+  return () => {
+    if (installTarget(name, defaultAgent) === "setup") useUi.getState().openDialogFor("setup");
+    else openAgentSettings(name);
+  };
 }
 
 /** The chip's action word. */
@@ -83,10 +102,11 @@ export function AgentBlockedChip({
   hint?: string;
 }) {
   const signIn = useSignInThenRestart(title, block);
+  const install = useOpenInstall(block.name);
   const act = blockedAction(block);
   const onClick = (e: MouseEvent) => {
     e.stopPropagation();
-    if (block.why === "missing") useUi.getState().openDialogFor("setup");
+    if (block.why === "missing") install();
     else if (block.exited) signIn.start();
     else selectSession(title);
   };
@@ -118,6 +138,7 @@ export function AgentBlockedBanner({ block, title }: { block: AgentBlock | null;
 
 function Banner({ block, title }: { block: AgentBlock; title: string }) {
   const signIn = useSignInThenRestart(title, block);
+  const install = useOpenInstall(block.name);
   return (
     <div className="pane-noagent" role="alert" data-why={block.why}>
       <span>{blockedSentence(block)}</span>
@@ -126,10 +147,10 @@ function Banner({ block, title }: { block: AgentBlock; title: string }) {
           type="button"
           onClick={(e) => {
             e.stopPropagation();
-            useUi.getState().openDialogFor("setup");
+            install();
           }}
         >
-          Install {block.name}…
+          Install {agentName(block.name)}…
         </button>
       ) : block.exited ? (
         <button

@@ -1227,3 +1227,81 @@ def test_a_removed_hook_is_still_tampering(repo, monkeypatch):
     _settings(repo).write_text("{}")
     mon._hooks_pass(rs, [it], True, 1002.0)
     assert tampers == ["hooks"] and am.hooks_armed(_settings(repo))
+
+
+# --------------------------------------------------------------------------- #
+# plan_pending: a declared plan waiting for Go reaches the row
+# --------------------------------------------------------------------------- #
+def _declared(ts: float, *paths: str) -> dict:
+    return {
+        "source": "declared",
+        "ts": ts,
+        "items": [{"path": p, "intent": "", "new": False} for p in paths],
+        "thread": "",
+    }
+
+
+def test_plan_waiting_is_a_declared_plan_nothing_acted_on():
+    plan = _declared(100.0, "app.py", "config/settings.toml")
+    assert mon.plan_waiting(plan, []) == 2
+    # Reads before the plan, and a post closing a call started before it.
+    before = [
+        {"ts": 90.0, "ev": "pre", "kind": "read"},
+        {"ts": 101.0, "ev": "post", "kind": "read"},
+    ]
+    assert mon.plan_waiting(plan, before) == 2
+    # Any call STARTED after it: the agent moved on (Go, or the user typed).
+    assert mon.plan_waiting(plan, [{"ts": 101.0, "ev": "pre", "kind": "read"}]) == 0
+    assert mon.plan_waiting(plan, [], go_at=100.0) == 0
+    assert mon.plan_waiting(plan, [], go_at=99.0) == 2
+    # ExitPlanMode is approved in the terminal, not with Go.
+    assert mon.plan_waiting(dict(plan, source="exitplan"), []) == 0
+    assert mon.plan_waiting(_declared(100.0), []) == 0
+    assert mon.plan_waiting({"source": None, "ts": None, "items": []}, []) == 0
+    assert mon.plan_waiting(None, []) == 0
+
+
+def test_plan_pending_reaches_the_summary_without_zones(repo, monkeypatch):
+    plans = {"rz-plan": _declared(time.time() - 5, "app.py", "lib/new.py")}
+    monkeypatch.setattr(
+        code_map,
+        "current_plan",
+        lambda inst, tmux, wt, records, files=None: plans.get(inst.Title)
+        or {"source": None, "ts": None, "items": [], "thread": ""},
+    )
+    inst = _Inst("rz-plan", repo, "claude")
+    mon.tick({"rz-plan": inst}, {"rz-plan": "idle"})
+    s = mon.summary("rz-plan")
+    assert s is not None and s["plan_pending"] == 2 and s["zones"] == 0
+    # While the agent works it is not waiting for anything.
+    mon.tick({"rz-plan": inst}, {"rz-plan": "working"})
+    assert mon.summary("rz-plan") is None
+    mon.tick({"rz-plan": inst}, {"rz-plan": "idle"})
+    assert mon.summary("rz-plan")["plan_pending"] == 2
+    # A Go clears it at once and keeps it clear for this plan.
+    mon.note_go("rz-plan")
+    assert mon.summary("rz-plan") is None
+    mon.tick({"rz-plan": inst}, {"rz-plan": "waiting"})
+    assert mon.summary("rz-plan") is None
+    # A newer plan (Ask what's left) waits again — until a tool call starts.
+    plans["rz-plan"] = _declared(time.time() + 1, "app.py")
+    mon.tick({"rz-plan": inst}, {"rz-plan": "idle"})
+    assert mon.summary("rz-plan")["plan_pending"] == 1
+    _feed(
+        "rz-plan",
+        {"v": 1, "ts": time.time() + 2, "ev": "pre", "tool": "Read", "kind": "read"},
+    )
+    mon.tick({"rz-plan": inst}, {"rz-plan": "idle"})
+    assert mon.summary("rz-plan") is None
+
+
+def test_plan_pending_needs_the_plan_loop(repo, monkeypatch):
+    monkeypatch.setattr(
+        code_map,
+        "current_plan",
+        lambda *a, **k: _declared(time.time() - 5, "app.py"),
+    )
+    red_zones.add_zone("repo", _repo_id(repo), "config/")
+    inst = _Inst("rz-noplan", repo, "codex")
+    mon.tick({"rz-noplan": inst}, {})
+    assert "plan_pending" not in mon.summary("rz-noplan")

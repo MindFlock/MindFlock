@@ -323,14 +323,21 @@
 }
 
 .nf-advanced>summary::before {
-  content: "▸";
-  font-size: 10px;
-  line-height: 1;
+  content: "";
+  /* A drawn chevron, not the "▸" glyph: at 10px, in the fonts the app falls
+     back to, the glyph rendered as a dot nobody read as a disclosure. */
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin: 0 2px 0 1px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
   transition: transform 0.12s ease;
 }
 
 .nf-advanced[open]>summary::before {
-  transform: rotate(90deg);
+  transform: rotate(45deg);
 }
 
 .nf-advanced>summary:hover {
@@ -371,7 +378,10 @@
   font-size: 16px;
 }
 
-:is(#new-form, .tpl-editor) label {
+:is(#new-form, .tpl-editor) label,
+/* Folder and Agent are divs (a button inside a <label> joins the field's
+   name) that read exactly as the labels around them did. */
+:is(#new-form, .tpl-editor) :is(.nf-folder, .nf-agent) {
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -658,46 +668,6 @@
   margin: -2px 0 0;
   font-size: 11.5px;
   line-height: 1.4;
-}
-
-/* The new-folder question. Deliberately NOT styled like the two checkbox rows
-   in the Git & workspace fold, which it would otherwise be mistaken for: those
-   are options, and skimming past one costs a setting. This one is the gate in
-   front of the only thing this dialog does that outlives the session — a
-   directory on disk that closing the session never removes — so it is boxed,
-   tinted and given its own question line, which is the treatment this card
-   reserves for something that has to be READ.
-
-   Accent rather than red: nothing has gone wrong and nothing is being refused
-   yet. Red is what .nf-provision-warn uses for a create the server will reject,
-   and spending it here would leave that line nothing louder to be. The tint is
-   an rgba() off --accent-rgb so it works in both themes off the one token — the
-   light theme redefines --accent-rgb, and a hard-coded panel colour would go
-   invisible in one of them. */
-.nf-newfolder {
-  margin: 2px 0 0;
-  padding: 8px 10px;
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  background: rgba(var(--accent-rgb), 0.08);
-}
-
-/* The question itself, at the card's ordinary label size rather than the 11.5px
-   of the asides above it: this is the sentence the row exists to have read, and
-   an aside-sized one reads as more small print under a note. */
-.nf-newfolder-q {
-  margin: 0 0 6px;
-  font-size: 13px;
-  line-height: 1.4;
-  color: var(--text);
-}
-
-.nf-newfolder-q b {
-  font-weight: 600;
-  /* The folder is a path, and a path in running text is hard to see the ends of
-     — which matters here, because the ends are where ~/code/foo differs from
-     ~/code/foo-2. */
-  word-break: break-all;
 }
 
 /* Same stack as .nf-quick's: below this width the input and its button cannot
@@ -1483,14 +1453,20 @@
 }
 
 .rt-fold>summary::before {
-  content: "▸";
-  font-size: 10px;
-  line-height: 1;
+  content: "";
+  /* The same drawn chevron as .nf-advanced's. */
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin: 0 2px 0 1px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
   transition: transform 0.12s ease;
 }
 
 .rt-fold[open]>summary::before {
-  transform: rotate(90deg);
+  transform: rotate(45deg);
 }
 
 .rt-fold>summary:hover {

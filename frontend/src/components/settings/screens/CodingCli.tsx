@@ -11,7 +11,10 @@ import { SKIP_PERMS_LABEL, SKIP_PERMS_TITLE } from "../../../lib/vocab";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../api/client";
 import { toast } from "../../../lib/toast";
+import { flashSaved } from "../savedCue";
+import { useAutosave } from "../../intake/autosave";
 import { agentName } from "../../../lib/agentNames";
+import { openSettings } from "../../../lib/openSettings";
 import { pickerOptions } from "../../../lib/providerRows";
 import { FlagChips } from "../../dialogs/FlagChips";
 import { SettingField, useSettings } from "../useSettings";
@@ -63,14 +66,39 @@ interface Provider {
   path?: string;
 }
 
+/** The agent a link asked Agents to show ("" = none) — read once, when the
+ * screen next mounts. */
+const agentsFocus = { provider: "" };
+
+/** Settings → Agents with `provider`'s card showing — its install and sign-in
+ * steps. A session whose agent isn't installed goes here: the Setup checklist
+ * only checks the DEFAULT agent. */
+export function openAgentSettings(provider: string): void {
+  agentsFocus.provider = provider;
+  openSettings("coding");
+}
+
 export function CodingCli({ gotoScreen }: ScreenProps) {
   const s = useSettings();
   const [providers, setProviders] = useState<Provider[]>([]);
   const [selected, setSelected] = useState("");
   const [flags, setFlags] = useState("");
   const flagsMap = useRef<Record<string, string>>({});
+  // A link that named an agent (openAgentSettings): its card, unfolded.
+  const [focusAgent] = useState(() => {
+    const p = agentsFocus.provider;
+    agentsFocus.provider = "";
+    return p;
+  });
   /** Which other agent's card the fold shows; "" = the first one that isn't the default. */
-  const [otherProvider, setOtherProvider] = useState("");
+  const [otherProvider, setOtherProvider] = useState(focusAgent);
+  useEffect(() => {
+    if (!focusAgent) return;
+    const t = setTimeout(() => {
+      document.getElementById("coding-other-agent-fold")?.scrollIntoView?.({ block: "start" });
+    }, 0);
+    return () => clearTimeout(t);
+  }, [focusAgent, providers.length]);
 
   useEffect(() => {
     (async () => {
@@ -123,7 +151,7 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
   const pickProvider = (name: string) => {
     setSelected(name);
     setFlags(flagsMap.current[name] || "");
-    void s.saveField("coding_cli", "default_provider", name).then(() => setDefaultSaved((n) => n + 1));
+    void s.saveField("coding_cli", "default_provider", name).then((ok) => ok && setDefaultSaved((n) => n + 1));
   };
 
   const saveFlags = useCallback(
@@ -181,7 +209,11 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
       {/* Next to the picker, not under Advanced: the greyed-out agents above
           are the question this answers ("where's Codex?"). */}
       {others.length > 0 && (
-        <details className="pr-advanced set-adv-fold coding-other-fold" id="coding-other-agent-fold">
+        <details
+          className="pr-advanced set-adv-fold coding-other-fold"
+          id="coding-other-agent-fold"
+          open={focusAgent && focusAgent !== selected ? true : undefined}
+        >
           <summary>{missing.length ? "Not installed — how to install" : "Set up another agent"}</summary>
           <div className="set-row" id="coding-other-agent">
             <span className="set-label">Set up another agent</span>
@@ -304,14 +336,26 @@ function WindowRefresh() {
     load();
   }, [load]);
 
-  const save = async (patch: Record<string, unknown>) => {
+  /** `el` is the control the change came from: "✓ Saved" lands beside it. */
+  const save = async (patch: Record<string, unknown>, el?: Element | null) => {
     try {
       await api("/api/window-refresh", { json: patch });
       await load();
+      if (!flashSaved(el)) toast("Saved");
     } catch {
       toast("Couldn't update window refresh");
     }
   };
+  // The time and the interval are typed: sent once typing pauses (or on
+  // blur / the dialog closing), not one POST per keystroke.
+  const anchorEl = useRef<HTMLInputElement>(null);
+  const intervalEl = useRef<HTMLInputElement>(null);
+  const anchorSave = useAutosave<string>((v) => {
+    if (v !== (cfg.anchor_time || "")) void save({ anchor_time: v }, anchorEl.current);
+  });
+  const intervalSave = useAutosave<number>((v) => {
+    if (v !== cfg.interval_hours) void save({ interval_hours: v }, intervalEl.current);
+  });
 
   const selected = new Set(cfg.providers || []);
   const opts = cfg.options || [];
@@ -340,7 +384,7 @@ function WindowRefresh() {
             type="checkbox"
             id="wr-enabled"
             checked={!!cfg.enabled}
-            onChange={(e) => save({ enabled: e.target.checked })}
+            onChange={(e) => save({ enabled: e.target.checked }, e.currentTarget)}
           />
           <span className="ca-slider" />
         </label>
@@ -356,9 +400,11 @@ function WindowRefresh() {
             <input
               type="time"
               id="wr-anchor"
+              ref={anchorEl}
               className="num-sm"
               defaultValue={cfg.anchor_time || ""}
-              onChange={(e) => save({ anchor_time: e.target.value || "" })}
+              onChange={(e) => anchorSave.schedule(e.target.value || "")}
+              onBlur={() => anchorSave.flush()}
             />
             <span className="set-hint">Daily, at this local time. Leave empty to use a fixed interval.</span>
           </label>
@@ -370,6 +416,7 @@ function WindowRefresh() {
             <input
               type="number"
               id="wr-interval"
+              ref={intervalEl}
               className="num-sm"
               min={0.25}
               max={168}
@@ -377,8 +424,9 @@ function WindowRefresh() {
               defaultValue={typeof cfg.interval_hours === "number" ? cfg.interval_hours : undefined}
               onChange={(e) => {
                 const v = parseFloat(e.target.value);
-                if (!isNaN(v)) save({ interval_hours: v });
+                if (!isNaN(v)) intervalSave.schedule(v);
               }}
+              onBlur={() => intervalSave.flush()}
             />{" "}
             <span className="muted">hours</span>
             <span className="set-hint">Used when no time is set (Claude and Codex: 5 hours).</span>
@@ -395,7 +443,7 @@ function WindowRefresh() {
                       const next = new Set(selected);
                       if (e.target.checked) next.add(o.name);
                       else next.delete(o.name);
-                      save({ providers: [...next] });
+                      save({ providers: [...next] }, e.currentTarget);
                     }}
                   />
                   <span title={o.window?.note || ""}>

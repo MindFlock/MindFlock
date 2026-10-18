@@ -179,6 +179,42 @@
   color: rgba(255, 255, 255, 0.85);
 }
 
+/* A Focus row's state word ("Working", "Question") in its tone — the same
+   word and colour as the session's rail chip, quieter. */
+.palette-item .palette-state {
+  flex: none;
+  font-size: 10px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--tone-neutral);
+  background: color-mix(in srgb, var(--tone-neutral) 16%, transparent);
+}
+
+.palette-item .palette-state.tone-working {
+  color: var(--tone-working-ink);
+  background: var(--tone-working);
+}
+
+.palette-item .palette-state.tone-attention {
+  color: var(--tone-attention-ink);
+  background: var(--tone-attention);
+}
+
+.palette-item .palette-state.tone-waiting {
+  color: var(--tone-waiting-ink);
+  background: var(--tone-waiting);
+}
+
+.palette-item .palette-state.tone-broken {
+  color: var(--tone-broken-ink);
+  background: var(--tone-broken);
+}
+
+.palette-item .palette-state.tone-muted {
+  color: var(--tone-muted);
+  background: color-mix(in srgb, var(--tone-muted) 16%, transparent);
+}
+
 .palette-empty {
   padding: 10px 12px;
   font-size: 12px;

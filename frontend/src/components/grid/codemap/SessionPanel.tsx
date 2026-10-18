@@ -1,9 +1,10 @@
-/** The session lists — what the inspector shows with no card selected:
+/** The session lists — the toolbar's "Plan & lists" panel:
  * Breaches, Scope requests (green denies, each with [Allow this file]),
  * Activity (with "blocked", "peeked outside scope" and "outside scope" rows),
- * Plan (Go / "Go — only the planned files"), Blast radius as a LIST, Zones
+ * Plan (Go / "Go — only the planned files"), Blast radius as a LIST, Rules
  * (with kind), Changed, Other agents. Plan mode leads with the plan; watch
- * mode with what is happening now; green mode with the zones. */
+ * mode with what is happening now; green mode with the rules. Each section
+ * carries `data-sec` (the store's MapSection) so "Open map" can land on it. */
 
 import type { ReactNode } from "react";
 import type { CodeMapLive, CodeMapPlan, FeedRecord, RedZone } from "../../../api/types";
@@ -52,7 +53,6 @@ export interface PanelModel {
   goExempt: { paths: string[]; state: string } | null;
   blast: BlastRow[];
   blastTests: number;
-  depth: number;
   seeds: number;
   graphPartial: boolean;
   changed: CodeMapLive["changed"];
@@ -68,7 +68,7 @@ export interface PanelModel {
 
 export interface PanelActions {
   selectPath: (p: string) => void;
-  openDiff: () => void;
+  openDiff: (path?: string) => void;
   askPlan: () => void;
   go: (scopeToPlan: boolean) => void;
   removeZone: (z: RedZone) => void;
@@ -102,7 +102,7 @@ function AllowBtn({ path, busy, onAllow }: { path: string; busy: string; onAllow
       type="button"
       className="cm-row-act cm-allow"
       disabled={busy === "busy" || busy === "done"}
-      title={`Add ${anchoredZonePath(path)} to the green zones (this worktree) and tell the agent`}
+      title={`Add ${anchoredZonePath(path)} to ✓ Only here (this worktree) and tell the agent`}
       onClick={() => onAllow(path)}
     >
       {busy === "busy" ? "Allowing…" : busy === "done" ? "Allowed ✓" : "Allow this file"}
@@ -114,16 +114,16 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
   const { plan } = m;
   const breachSec =
     m.breaches.length > 0 ? (
-      <section className="cm-sec cm-sec-breach" key="breach">
+      <section className="cm-sec cm-sec-breach" key="breach" data-sec="breaches">
         <h4>
           Breaches <span className="cm-count">{m.breaches.length}</span>
         </h4>
         <p className="cm-hint">
           {m.breaches.every((b) => b.kind === "green")
-            ? "Changed outside the green zone(s)."
+            ? "Changed outside ✓ Only here."
             : m.breaches.some((b) => b.kind === "green")
-              ? "Changed inside a keep-out zone or outside the green zone(s)."
-              : "Changed inside a red zone."}{" "}
+              ? "Changed inside ⛔ Keep out or outside ✓ Only here."
+              : "Changed inside ⛔ Keep out."}{" "}
           Pushing, PRs and merges are blocked until these are reverted{m.green ? " or allowed" : ""}.
         </p>
         <ul className="cm-list">
@@ -134,12 +134,12 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
                   <span className="cm-target">{b.path}</span>
                 </span>
                 <span className="cm-row-sub">
-                  {b.kind === "green" ? "outside scope" : b.pattern || "red zone"}
+                  {b.kind === "green" ? "outside scope" : "⛔ keep out" + (b.pattern ? " · " + b.pattern : "")}
                   {b.committed ? " · committed" : ""}
                 </span>
               </button>
               {b.kind === "green" && <AllowBtn path={b.path} busy={m.reqBusy[b.path] || ""} onAllow={a.allow} />}
-              <button type="button" className="cm-row-act" onClick={a.openDiff}>
+              <button type="button" className="cm-row-act" onClick={() => a.openDiff(b.path)}>
                 Open diff
               </button>
             </li>
@@ -150,7 +150,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
 
   const reqSec =
     m.requests.length > 0 ? (
-      <section className="cm-sec cm-sec-req" key="req">
+      <section className="cm-sec cm-sec-req" key="req" data-sec="scope">
         <h4>
           Scope requests <span className="cm-count">{m.requests.length}</span>
         </h4>
@@ -178,7 +178,9 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
         <p className="cm-empty-line">
           {m.guard.cls.includes("g-detect")
             ? `Detect-only for ${m.provider || "this agent"} — MindFlock sees its edits on disk, not its tool calls.`
-            : "Agent hasn't used any tools since MindFlock armed the map."}
+            : m.changed.length
+              ? `No tool calls since MindFlock armed the map — the ${m.changed.length} changed file${m.changed.length === 1 ? " was" : "s were"} changed before it started watching.`
+              : "Agent hasn't used any tools since MindFlock armed the map."}
         </p>
       ) : (
         <ul className="cm-list">
@@ -207,7 +209,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
                     ) : null}
                     {r.breach && r.breach.length ? <span className="cm-badge bad">breach</span> : null}
                     {peeks.length ? (
-                      <span className="cm-badge soft-warn" title={"Read outside the green zone(s) (allowed): " + peeks.join(", ")}>
+                      <span className="cm-badge soft-warn" title={"Read outside ✓ Only here (allowed): " + peeks.join(", ")}>
                         peeked outside scope
                       </span>
                     ) : null}
@@ -249,7 +251,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
       </p>
     ) : null;
   const planSec = m.planSupported ? (
-    <section className="cm-sec" key="plan">
+    <section className="cm-sec" key="plan" data-sec="plan">
       <h4>
         Plan{" "}
         {plan && (
@@ -271,7 +273,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
                       {st === "done" ? "✓" : it.new ? "+" : "○"}
                     </span>
                     <span className="cm-target">{it.path}</span>
-                    {cls === "blocked" && <span className="cm-badge bad">keep-out zone</span>}
+                    {cls === "blocked" && <span className="cm-badge bad">⛔ keep out</span>}
                     {(it.outside || cls === "outside") && <span className="cm-badge soft-warn">outside scope</span>}
                   </span>
                   <span className="cm-row-sub">{it.intent}</span>
@@ -311,7 +313,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
             disabled={m.clarify || !!m.busy}
             title={
               m.goZones.length
-                ? "Tell the agent to go ahead, and which zones are new: " + m.goZones.map((z) => z.pattern).join(", ")
+                ? "Tell the agent to go ahead, and which rules are new: " + m.goZones.map((z) => z.pattern).join(", ")
                 : "Tell the agent to go ahead with its plan"
             }
             onClick={() => a.go(false)}
@@ -319,7 +321,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
             {m.busy === "go"
               ? "Sending…"
               : m.goZones.length
-                ? `Go — with ${m.goZones.length} zone${m.goZones.length === 1 ? "" : "s"}`
+                ? `Go — with ${m.goZones.length} rule${m.goZones.length === 1 ? "" : "s"}`
                 : "Go"}
           </button>
         )}
@@ -329,7 +331,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
             className="cm-primary green"
             disabled={m.clarify || !!m.busy || !scope.length}
             title={
-              "Go, and make the plan the scope: only these may change (green zones, this worktree) — " +
+              "Go, and make the plan the scope: only these may change (✓ Only here, this worktree) — " +
               scope.slice(0, 12).join(", ") +
               (scope.length > 12 ? ` +${scope.length - 12} more` : "")
             }
@@ -344,23 +346,16 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
       {goExemptRow}
     </section>
   ) : m.actionMsg || goExemptRow ? (
-    <div key="plan" className="cm-sec">
+    <div key="plan" className="cm-sec" data-sec="plan">
       {m.actionMsg && <p className={m.actionMsg.bad ? "cm-err" : "cm-ok"}>{m.actionMsg.text}</p>}
       {goExemptRow}
     </div>
   ) : null;
 
   const blastSec = (
-    <section className="cm-sec" key="blast">
-      <h4>
-        Blast radius{" "}
-        <span className="cm-count" title="Import hops followed">
-          {m.depth} hop{m.depth === 1 ? "" : "s"}
-        </span>
-      </h4>
-      <p className="cm-hint">
-        Code that imports {m.mode === "plan" ? "what the plan touches" : "what changed"} ({m.depth} hop{m.depth === 1 ? "" : "s"}).
-      </p>
+    <section className="cm-sec" key="blast" data-sec="blast">
+      <h4>Blast radius</h4>
+      <p className="cm-hint">Code that imports {m.mode === "plan" ? "what the plan touches" : "what changed"}.</p>
       {!m.blast.some((b) => b.count > 0) ? (
         <p className="cm-empty-line">
           {!m.seeds
@@ -382,7 +377,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
                 title={
                   `${b.count} file${b.count === 1 ? "" : "s"}` +
                   (b.tests ? ` + ${b.tests} test${b.tests === 1 ? "" : "s"}` : "") +
-                  ` import it (${b.hops} hop${b.hops === 1 ? "" : "s"} out)` +
+                  " import it" +
                   (b.paths.length ? "\n" + b.paths.slice(0, 12).join("\n") : "")
                 }
               >
@@ -399,7 +394,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
               <button
                 type="button"
                 className="cm-row-act quiet"
-                title={`Keep agents out of ${b.path || "this"}`}
+                title={`⛔ Keep out: ${b.path || "this"}`}
                 onClick={() => a.openAdd("red", anchoredZonePath(b.path))}
               >
                 ⛔
@@ -417,19 +412,18 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
   );
 
   const zonesSec = (
-    <section className="cm-sec" key="zones">
+    <section className="cm-sec" key="zones" data-sec="zones">
       <h4>
-        Zones <span className="cm-count">{m.zones.length}</span>
+        Rules <span className="cm-count">{m.zones.length}</span>
       </h4>
       {m.green && (
         <p className="cm-hint">
-          Edits outside the green zone{m.greenZones.length === 1 ? "" : "s"} are blocked and the agent is told why. Reads are
-          allowed (shown as “peeked”).
+          Edits outside ✓ Only here are blocked and the agent is told why. Reads are allowed (shown as “peeked”).
         </p>
       )}
       {!m.zones.length ? (
         <p className="cm-empty-line">
-          None yet. Click a folder on the tree, then “⛔ Keep agents out” or “✓ Only here” — or use + Zone.
+          None yet. Click a folder on the tree, then “⛔ Keep out” or “✓ Only here” — or use + Rule.
         </p>
       ) : (
         <ul className="cm-list">
@@ -462,7 +456,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
                     type="button"
                     className="cm-row-act quiet"
                     disabled={m.zoneBusy === z.id}
-                    title={z.waived ? "Protect it here again" : "Allow edits in this worktree only (the zone stays for the repo)"}
+                    title={z.waived ? "Protect it here again" : "Allow edits in this worktree only (the rule stays for the repo)"}
                     onClick={() => a.waiveZone(z, !z.waived)}
                   >
                     {z.waived ? "Re-protect" : "Allow here"}
@@ -472,8 +466,8 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
                   <button
                     type="button"
                     className="cm-row-act cm-x quiet"
-                    aria-label={"Remove zone " + (z.name || z.pattern)}
-                    title="Remove this zone"
+                    aria-label={"Remove rule " + (z.name || z.pattern)}
+                    title="Remove this rule"
                     disabled={m.zoneBusy === z.id}
                     onClick={() => a.removeZone(z)}
                   >
@@ -490,7 +484,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
 
   const changedSec =
     m.changed.length > 0 ? (
-      <section className="cm-sec" key="changed">
+      <section className="cm-sec" key="changed" data-sec="changed">
         <h4>
           Changed <span className="cm-count">{m.changed.length}</span>
         </h4>
@@ -505,12 +499,12 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
                     <span className="cm-target">{c.path}</span>
                     {m.offPlan.includes(c.path) && <span className="cm-badge warn">off-plan</span>}
                     {cls === "companion" && (
-                      <span className="cm-badge soft-warn" title="Outside the green zone(s) but allowed: a companion (lockfile, snapshot, test, derived output)">
+                      <span className="cm-badge soft-warn" title="Outside ✓ Only here but allowed: a companion (lockfile, snapshot, test, derived output)">
                         companion
                       </span>
                     )}
                     {cls === "outside" && m.exempt.has(c.path) && (
-                      <span className="cm-badge" title="Changed before the green zone was added — exempt while unchanged">
+                      <span className="cm-badge" title="Changed before ✓ Only here was set — exempt while unchanged">
                         exempt
                       </span>
                     )}
@@ -524,7 +518,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
           })}
         </ul>
         <div className="cm-actions">
-          <button type="button" onClick={a.openDiff}>
+          <button type="button" onClick={() => a.openDiff()}>
             Open diff
           </button>
         </div>
@@ -533,7 +527,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
 
   const othersSec =
     m.others.length > 0 ? (
-      <section className="cm-sec" key="others">
+      <section className="cm-sec" key="others" data-sec="others">
         <h4>
           Other agents here <span className="cm-count">{m.others.length}</span>
         </h4>

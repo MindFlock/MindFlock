@@ -611,6 +611,20 @@ def test_go_names_the_staged_zones(sess, repo, monkeypatch):
     server._HUMAN_INPUT_AT.pop("rzt", None)
 
 
+def test_a_delivered_go_clears_the_waiting_plan(sess, repo, monkeypatch):
+    """The row's plan_pending goes out the moment Go reaches the agent, not
+    on the monitor's next tick; an undelivered Go leaves it standing."""
+    gone: list = []
+    monkeypatch.setattr(mon, "note_go", gone.append)
+    _delivery(monkeypatch, activity="idle")
+    assert client.post("/api/instances/rzt/code-map/go", json={}).json()["told"]
+    assert gone == ["rzt"]
+    server._HUMAN_INPUT_AT.pop("rzt", None)
+    _delivery(monkeypatch, locked=True)
+    client.post("/api/instances/rzt/code-map/go", json={})
+    assert gone == ["rzt"]
+
+
 def test_send_route_keeps_its_contract(sess, monkeypatch):
     """/send still boots the agent and types unconditionally (no queueing)."""
     rec = _delivery(monkeypatch, activity="working")

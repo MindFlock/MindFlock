@@ -213,9 +213,9 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
     <SettingsCtx.Provider value={model}>
       <SettingsModeCtx.Provider value={advanced}>
       <Modal id="settings-dialog" onClose={closeDialog}>
-        <div id="settings-panel">
+        <div id="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
           <div className="ws-head">
-            <h2>Settings</h2>
+            <h2 id="settings-title">Settings</h2>
             <TourButton tour="settings" />
             <button type="button" id="settings-close" onClick={closeDialog}>
               Close
@@ -227,7 +227,13 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
               aria-label="Settings sections"
               data-mode={advanced ? "advanced" : "basic"}
             >
-              <SettingsSearch onPick={gotoScreen} />
+              <SettingsSearch
+                onPick={(key, adv) => {
+                  // An advanced-only control renders nothing in basic mode.
+                  if (adv && !advanced) changeMode(true);
+                  gotoScreen(key);
+                }}
+              />
               {/* Phone width: one select instead of a wrap of tabs. Same list
                   as the buttons (CSS shows one or the other). */}
               <select

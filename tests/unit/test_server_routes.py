@@ -1058,6 +1058,17 @@ def test_merge_pr_failure_surfaces_the_refusal(
     assert "required reviews missing" in r.json()["error"]
 
 
+def test_merge_pr_success_names_the_base(registered, monkeypatch, tmp_path):
+    # The UI's success toast says where it landed ("Merged x into develop").
+    _prime(registered, monkeypatch, tmp_path, "gt-14b", base="develop")
+    _use_gh(monkeypatch, True)
+    calls = _stub_gh(monkeypatch, 0, b"merged")
+    r = client.post("/api/instances/gt-14b/merge-pr")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "base": "develop"}
+    assert ["gh", "pr", "merge", "feat/x", "--merge"] in calls
+
+
 def test_merge_pr_links_out_without_gh_or_token(registered, monkeypatch, tmp_path):
     # No gh and no token: 200 + a link the user can merge from, not a 400.
     _prime(registered, monkeypatch, tmp_path, "gt-14c")

@@ -176,6 +176,8 @@ export interface CoachTourProps {
   skipLabel?: string;
   /** Accessible name source id. */
   labelId?: string;
+  /** A surface's own card placement (the Map's keeps off its tree); `placeCard` by default. */
+  place?: typeof placeCard;
 }
 
 export function CoachTour({
@@ -188,6 +190,7 @@ export function CoachTour({
   buttonClass = "coach-btn",
   skipLabel = "Skip tour",
   labelId = prefix + "-title",
+  place = placeCard,
 }: CoachTourProps) {
   const [own, setOwn] = useState(0);
   const i = Math.max(0, Math.min(controlled ?? own, steps.length - 1));
@@ -328,7 +331,7 @@ export function CoachTour({
     }
   };
 
-  const pos = placeCard(rect, box.W, box.H, cardH);
+  const pos = place(rect, box.W, box.H, cardH);
   const c = (part: string) => prefix + "-" + part;
   const layer = (
     <div className={c("layer")} aria-live="polite">

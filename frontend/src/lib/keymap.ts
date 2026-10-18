@@ -27,6 +27,7 @@ import { toast } from "./toast";
 import { notePrefWrite } from "./prefs";
 import { useUi } from "../state/store";
 import { VERIFY_BLURB } from "./vocab";
+import { jumpToNeedsYou } from "./needsYou";
 
 /** One key combination as matched by the dispatcher and stored in the
  * "mf_keymap" overrides ({key, mod, shift, alt}). `mod` true = Ctrl/⌘;
@@ -347,24 +348,41 @@ export function setRebindCapturing(on: boolean) {
 
 export interface ChordEntry {
   desc: string;
-  run: (title: string) => void;
+  /** Runs on the focused session — or, for a `global` chord, with the focused
+   * session (or null) as where to start from. */
+  run: (title: string | null) => void;
+  /** Needs no focused session (Ctrl+K N). */
+  global?: boolean;
+  /** The "?" sheet's group; default "Focused session". */
+  group?: string;
 }
 
 /** Built from the session action table (lib/sessionActionTable), which names
  * each action's chord letter, label and enable rule — the row menu, the
  * palette and these chords read the same row. `desc` is a getter so the
- * table is read when the "?" sheet draws, not at import. */
-export const CHORDS: Record<string, ChordEntry> = Object.fromEntries(
-  CHORD_ACTIONS.map((id: SessionActionId) => [
-    sessionAction(id).chord!,
-    {
-      get desc() {
-        return chordDesc(id);
+ * table is read when the "?" sheet draws, not at import. Then the one chord
+ * that is not a session verb: N, the next session that needs you. */
+export const CHORDS: Record<string, ChordEntry> = {
+  ...Object.fromEntries(
+    CHORD_ACTIONS.map((id: SessionActionId) => [
+      sessionAction(id).chord!,
+      {
+        get desc() {
+          return chordDesc(id);
+        },
+        run: (t: string | null) => {
+          if (t) runChordAction(id, t);
+        },
       },
-      run: (t: string) => runChordAction(id, t),
-    },
-  ])
-);
+    ])
+  ),
+  n: {
+    desc: "Next session that needs you — in the bell's order",
+    global: true,
+    group: "Navigation",
+    run: (t) => jumpToNeedsYou(t),
+  },
+};
 
 /** Effective second key for a chord action: the user's override or the
  * action's default letter (which doubles as its stable id). */
@@ -426,6 +444,10 @@ function _handleChordKey(e: KeyboardEvent) {
     return;
   }
   const focused = useUi.getState().focused;
+  if (chord.global) {
+    chord.run(focused);
+    return;
+  }
   if (!focused) {
     toast("No focused session");
     return;

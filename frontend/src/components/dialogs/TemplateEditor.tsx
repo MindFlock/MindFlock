@@ -48,6 +48,7 @@ import { openSettings } from "../../lib/openSettings";
 import { useUi } from "../../state/store";
 import {
   folderReducer,
+  templateNameTaken,
   type FolderAction,
   type FolderState,
   type InstalledMap,
@@ -136,14 +137,19 @@ export function formFromTemplate(t: Template | null): TemplateForm {
 
 /** The POST body for a form, or the reason it cannot be saved. `installed`
  * (this device's agents) refuses a schedule whose agent is missing — it
- * would fail every night with nobody watching. */
+ * would fail every night with nobody watching. `existing` / `editing`
+ * refuse another template's name (the server would overwrite it). */
 export function templateBody(
   f: TemplateForm,
-  installed: InstalledMap | null = null
+  installed: InstalledMap | null = null,
+  existing: Array<{ name: string }> = [],
+  editing: string | null = null
 ): { body: Template } | { error: string } {
   const name = f.name.trim();
   if (!name) return { error: "A template needs a name." };
   if (name.length > 100) return { error: "Names are at most 100 characters." };
+  const taken = templateNameTaken(name, existing, editing);
+  if (taken) return { error: taken };
   const at = f.at.trim();
   const cron = f.cron.trim().replace(/\s+/g, " ");
   if (f.scheduled) {
@@ -396,19 +402,23 @@ export function ScheduleEditor(p: {
         />
       </div>
       <div className="tpl-row-actions">
-        {p.error && (
-          <p className="error" aria-live="polite">
-            {p.error}
-            {p.onEdit && /folder|task/.test(p.error) && (
-              <>
-                {" "}
-                <button type="button" className="linklike" onClick={p.onEdit}>
-                  Edit
-                </button>
-              </>
-            )}
-          </p>
-        )}
+        {/* Always mounted: a live region that appears WITH its message is
+            often not read out at all. */}
+        <p className="error" aria-live="polite">
+          {p.error ? (
+            <>
+              {p.error}
+              {p.onEdit && /folder|task/.test(p.error) && (
+                <>
+                  {" "}
+                  <button type="button" className="linklike" onClick={p.onEdit}>
+                    Edit
+                  </button>
+                </>
+              )}
+            </>
+          ) : null}
+        </p>
         {p.onStop && (
           <button type="button" className="tpl-stop" disabled={p.busy} onClick={p.onStop}>
             Stop schedule
@@ -714,19 +724,22 @@ export function TemplateEditor(p: TemplateEditorProps) {
       <div className="tpl-row-actions tpl-sticky">
         {/* A missing agent is already said, with its Install link, under
             Agent: the footer doesn't repeat it. */}
-        {p.error && !(missing && p.errorReason === "agent_missing") && (
-          <p className="error" aria-live="polite">
-            {p.error}
-            {p.errorReason === "github_required" && (
-              <>
-                {" "}
-                <button type="button" className="linklike" onClick={() => openConnectGitHub()}>
-                  Connect GitHub
-                </button>
-              </>
-            )}
-          </p>
-        )}
+        {/* Always mounted, so the message is announced when it lands. */}
+        <p className="error" aria-live="polite">
+          {p.error && !(missing && p.errorReason === "agent_missing") ? (
+            <>
+              {p.error}
+              {p.errorReason === "github_required" && (
+                <>
+                  {" "}
+                  <button type="button" className="linklike" onClick={() => openConnectGitHub()}>
+                    Connect GitHub
+                  </button>
+                </>
+              )}
+            </>
+          ) : null}
+        </p>
         <button type="button" className="tpl-cancel" onClick={p.onCancel}>
           Cancel
         </button>

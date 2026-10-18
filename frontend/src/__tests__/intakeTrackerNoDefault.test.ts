@@ -108,10 +108,10 @@ describe("once a tracker is chosen", () => {
   });
 
   it("the title is the chosen tracker's — drafted from a pick, never a default", () => {
-    expect(TICKETS).toContain('const addTitle = draftMeta ? "Add " + draftMeta.label : "Add a source";');
+    expect(TICKETS).toContain('const addTitle = pastPick && draftMeta ? "Add " + draftMeta.label : "Add a source";');
     // Step 1's tiles only mark a choice; Continue (or a tile pressed past
     // step 1) is what drafts a source.
-    expect(has(TICKETS, 'if (!draft) { setChoice(key); setFlowError(""); } else if')).toBe(true);
+    expect(has(TICKETS, 'if (!pastPick) { setChoice(key); setFlowError(""); } else if')).toBe(true);
     expect(has(TICKETS, "disabled={!choice}")).toBe(true);
     expect(has(TICKETS, "onClick={() => continueWith(choice)}")).toBe(true);
   });
