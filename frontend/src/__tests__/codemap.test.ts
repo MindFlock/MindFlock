@@ -7,8 +7,12 @@ import {
   autoMode,
   blastFrom,
   blastRows,
+  changedUnder,
   classifyPath,
   currentBreaches,
+  keepOutWarn,
+  nextStep,
+  nextStepText,
   exemptSet,
   feedState,
   findPattern,
@@ -331,7 +335,60 @@ describe("guardPill", () => {
 
   it("before the first poll: enforced zones read as guarded", () => {
     expect(guardPill(null, 2, "").label).toBe("Guarded");
-    expect(guardPill(null, 0, "").label).toBe("No zones");
+    expect(guardPill(null, 0, "").label).toBe("No rules");
+  });
+
+  it("reads red 'N breaches' whenever breaches exist, over every guard state and green mode", () => {
+    for (const state of ["guarded", "arming", "detect", "off", "none"]) {
+      const p = guardPill({ state, detail: "x" }, 1, "codex", ["providers"], 4);
+      expect([state, p.label, p.cls]).toEqual([state, "4 breaches", "g-breach"]);
+      expect(p.title).toMatch(/pushing, PRs and merges are blocked/);
+    }
+    expect(guardPill(null, 1, "", [], 1).label).toBe("1 breach");
+  });
+
+  it("never flashes 'No rules' right after a rule was added (the server's 'none' predates it)", () => {
+    const p = guardPill({ state: "none", detail: "No red zones apply to this worktree — add one to protect files" }, 1, "claude");
+    expect(p.label).toBe("Arming…");
+    expect(p.title).not.toMatch(/No red zones/);
+    // a green rule just added: the green label, not "No rules"
+    expect(guardPill({ state: "none" }, 1, "claude", ["web/core"]).label).toBe("✓ Only here: web/core");
+  });
+});
+
+describe("the next step on this session's row", () => {
+  const base = { breaches: 0, clarify: false, planWaiting: 0, changed: 0, risky: 0, planSupported: true };
+  it("picks one action by state: breaches, a question, a waiting plan, changes, else ask for a plan", () => {
+    expect(nextStep(base)).toEqual({ kind: "ask-plan" });
+    expect(nextStep({ ...base, planSupported: false })).toEqual({ kind: "none" });
+    expect(nextStep({ ...base, changed: 5, risky: 12 })).toEqual({ kind: "review-changes", changed: 5, risky: 12 });
+    expect(nextStep({ ...base, changed: 5, planWaiting: 3 })).toEqual({ kind: "review-plan", files: 3 });
+    expect(nextStep({ ...base, changed: 5, planWaiting: 3, clarify: true })).toEqual({ kind: "question" });
+    expect(nextStep({ ...base, changed: 5, planWaiting: 3, clarify: true, breaches: 2 })).toEqual({ kind: "breaches", n: 2 });
+  });
+
+  it("says it as one sentence for the tour's last card", () => {
+    expect(nextStepText({ kind: "review-changes", changed: 5, risky: 3 })).toBe("5 changed — start with ⚠ Could break, then open the diff.");
+    expect(nextStepText({ kind: "review-changes", changed: 1, risky: 0 })).toBe("1 changed — open the diff to review them.");
+    expect(nextStepText({ kind: "breaches", n: 1 })).toMatch(/^1 breach — review it first/);
+    expect(nextStepText({ kind: "review-plan", files: 4 })).toBe("A plan of 4 files is waiting — review it, then Go.");
+  });
+});
+
+describe("a keep-out over your own changes asks first", () => {
+  const changed = ["backend/a.py", "backend/web/b.py", "frontend/c.ts", "backend.md"];
+  it("counts this session's changed files at or under the painted folder or file", () => {
+    expect(changedUnder(changed, "backend")).toEqual(["backend/a.py", "backend/web/b.py"]);
+    expect(changedUnder(changed, "backend/web/b.py")).toEqual(["backend/web/b.py"]);
+    expect(changedUnder(changed, "docs")).toEqual([]);
+    // a case-insensitive filesystem matches the way the guard does
+    expect(changedUnder(changed, "Backend/Web", true)).toEqual(["backend/web/b.py"]);
+    expect(changedUnder(changed, "Backend/Web")).toEqual([]);
+  });
+
+  it("says what adding it anyway will do", () => {
+    expect(keepOutWarn(4)).toBe("4 changed files are inside — pushing will be blocked until they're reverted or you remove the rule.");
+    expect(keepOutWarn(1)).toBe("1 changed file is inside — pushing will be blocked until it's reverted or you remove the rule.");
   });
 });
 
