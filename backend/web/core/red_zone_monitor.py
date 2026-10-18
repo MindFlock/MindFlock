@@ -348,6 +348,12 @@ def _sess(title: str) -> dict:
                 "summary": None,
                 # What the guard pill's sentence needs beyond the state.
                 "guard_ctx": {},
+                # The plan waiting for Go: (activity, feed stat) it was last
+                # computed for, when, the planned-file count, and the last Go.
+                "plan_key": None,
+                "plan_at": 0.0,
+                "plan_pending": 0,
+                "go_at": 0.0,
             }
             _SESS[title] = ss
         return ss
@@ -542,6 +548,10 @@ def _tick_root(root: str, items: List[dict], activity: Dict[str, str], now: floa
         return
     _hooks_pass(rs, items, _enforcing(doc), now)
     for it in items:
+        try:
+            _plan_pass(it, activity, now)
+        except Exception:  # noqa: BLE001
+            pass
         _summarize(it, rs, doc, now)
 
 
@@ -1147,7 +1157,87 @@ def _hooks_pass(rs: dict, items: List[dict], rules: Any, now: float) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 5. Row summary
+# 5. Plan waiting for Go
+# --------------------------------------------------------------------------- #
+#: Recompute a session's pending plan at least this often even when neither
+#: its activity nor its feed moved (the plan block lives in the transcript).
+PLAN_REFRESH_S = 20.0
+
+
+def _plan_pass(it: dict, activity: Dict[str, str], now: float) -> None:
+    """``ss["plan_pending"]``: how many files the agent's declared plan names
+    while it waits for Go — the same plan the Map's live poll shows
+    (:func:`code_map.current_plan`, latched there), so a Plan-first session
+    is visible from the sidebar, the bell and the phone, not only from an
+    open Map. Zero while the agent works, once any tool call started after
+    the plan was written (it moved on: Go, or the user typed), after a Go
+    newer than the plan, and for CLIs without the plan loop.
+
+    Only a ``declared`` plan counts: Claude's ExitPlanMode is approved in the
+    terminal (an approval prompt the bell already shows), not with Go.
+    Recomputed only when the session's activity or feed file changed, or
+    every :data:`PLAN_REFRESH_S` — the transcript read behind
+    ``current_plan`` is cached on its (path, mtime, size), so a quiet session
+    costs a stat."""
+    ss = _sess(it["title"])
+    act = activity.get(it["title"]) or ""
+    if act == "working" or not _flag(it["prov"], "plan_supported"):
+        ss["plan_pending"] = 0
+        ss["plan_key"] = None
+        return
+    key = (act, _stat_key(_rz().feed_path(it["tmux"])))
+    if key == ss["plan_key"] and now - ss["plan_at"] < PLAN_REFRESH_S:
+        return
+    ss["plan_key"], ss["plan_at"] = key, now
+    records = code_map.read_feed(it["tmux"], 0.0, 500)
+    plan = code_map.current_plan(it["inst"], it["tmux"], it["wt"], records)
+    ss["plan_pending"] = plan_waiting(plan, records, ss["go_at"])
+
+
+def plan_waiting(plan: Any, records: Iterable[dict], go_at: float = 0.0) -> int:
+    """The planned-file count of a declared ``plan`` nothing has acted on yet
+    (no tool call started after it, no Go since), else 0. Pure."""
+    if not isinstance(plan, dict) or plan.get("source") != "declared":
+        return 0
+    items = [
+        i for i in plan.get("items") or [] if isinstance(i, dict) and i.get("path")
+    ]
+    ts = plan.get("ts")
+    if not items or isinstance(ts, bool) or not isinstance(ts, (int, float)):
+        return 0
+    if go_at >= ts:
+        return 0
+    for r in records or ():
+        if not isinstance(r, dict) or r.get("ev") != "pre":
+            continue
+        rts = r.get("ts")
+        if isinstance(rts, (int, float)) and not isinstance(rts, bool) and rts > ts:
+            return 0
+    return len(items)
+
+
+def note_go(title: str) -> None:
+    """The plan loop's Go reached the agent: the plan is no longer waiting —
+    cleared at once, so the row's chip goes out on the next poll rather than
+    on the next tick. Never raises."""
+    try:
+        with _LOCK:
+            ss = _SESS.get(title)
+            if ss is None:
+                return
+            ss["go_at"] = time.time()
+            ss["plan_pending"] = 0
+            ss["plan_key"] = None
+            if ss.get("summary"):
+                ss["summary"] = {
+                    k: v for k, v in ss["summary"].items() if k != "plan_pending"
+                }
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# --------------------------------------------------------------------------- #
+# 6. Row summary
 # --------------------------------------------------------------------------- #
 def _guard_state(it: dict, rs: dict, zones_n: int, now: float) -> str:
     prov = it["prov"]
@@ -1191,6 +1281,8 @@ def _summarize(it: dict, rs: dict, doc: Any, now: float) -> None:
         "guard": _guard_state(it, rs, zones_n, now),
         "mode": mode,
     }
+    if ss.get("plan_pending"):
+        ss["summary"]["plan_pending"] = int(ss["plan_pending"])
     ss["guard_ctx"] = {
         "off_reason": rs.get("off_reason") or "",
         "armed_at": float(rs.get("armed_at") or 0.0),
@@ -1212,15 +1304,22 @@ def _hooks_file_rel(it: dict) -> str:
 def summary(title: str) -> Optional[dict]:
     """The row's ``redzone`` field: ``{"zones", "breaches", "last_block_ts",
     "guard", "mode"}`` (``mode`` = "green" while a green scope is in force,
-    "red" with red zones only, None) or None when there is nothing to say (no zones, no breaches,
-    never blocked — or the loop hasn't seen the session yet). A pure
+    "red" with red zones only, None) plus ``plan_pending`` (the planned-file
+    count of a plan waiting for Go, :func:`_plan_pass`; absent when none), or
+    None when there is nothing to say (no zones, no breaches, never blocked,
+    no plan waiting — or the loop hasn't seen the session yet). A pure
     in-memory read: safe on the snapshot path."""
     with _LOCK:
         ss = _SESS.get(title)
         s = dict(ss["summary"]) if ss and ss.get("summary") else None
     if s is None:
         return None
-    if not s["zones"] and not s["breaches"] and s["last_block_ts"] is None:
+    if (
+        not s["zones"]
+        and not s["breaches"]
+        and s["last_block_ts"] is None
+        and not s.get("plan_pending")
+    ):
         return None
     return s
 

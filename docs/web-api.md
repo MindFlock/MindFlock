@@ -975,7 +975,14 @@ is in force, `"red"` with red zones only, `null`) with `guard` one of `guarded` 
 record seen since arming, or no tool call yet), `arming` (a hook fired since
 arming but no feed record yet), `detect` (the provider has no hard guard),
 `off` (not armed and re-arming failed, or the hooks file isn't valid JSON),
-`none` (no zones) — or `null` when there is nothing to say. Committed
+`none` (no zones) — or `null` when there is nothing to say. `plan_pending`
+(present only when non-zero) is the file count of a declared `mindflock-plan`
+the agent is waiting on Go for — the plan `…/code-map/live` shows, computed by
+the loop (never on this read) while the agent isn't working, for providers
+with the plan loop; it goes to 0 once any tool call starts after the plan or a
+Go is delivered (`…/code-map/go`), so the rail chip, the 🔔 and the phone can
+say "Plan ready" without the Map open. ExitPlanMode plans don't count (they
+are approved in the terminal). Committed
 breaches also go into the guard's `breaches`, which makes the hook refuse
 `git push` / `gh pr create|merge` / GitHub MCP writes; the push/make-pr/merge
 routes compute their own at request time (see the guided-workflow table) —
