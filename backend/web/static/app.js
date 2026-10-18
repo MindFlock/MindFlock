@@ -46757,6 +46757,20 @@ function parseUnifiedDiff(text) {
 		};
 	});
 }
+function unifiedBody(lines) {
+	const out = [];
+	let inHeader = false;
+	for (const l of lines) {
+		if (l.text.startsWith("diff --git")) {
+			inHeader = true;
+			continue;
+		}
+		if (l.kind === "hunk") inHeader = false;
+		if (inHeader && /^(index |--- |\+\+\+ |new file|deleted file|similarity |dissimilarity |rename |copy |old mode|new mode)/.test(l.text)) continue;
+		out.push(l);
+	}
+	return out;
+}
 function buildSplitDiff(content) {
 	const rows = [];
 	let oldNo = 0, newNo = 0;
@@ -47134,7 +47148,7 @@ function OneDiff({ content, mode }) {
 	return mode === "split" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SplitDiff, { content }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UnifiedDiff, { content });
 }
 function UnifiedDiff({ content }) {
-	const lines = parseUnifiedDiff(content);
+	const lines = unifiedBody(parseUnifiedDiff(content));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
 		className: "diff-unified",
 		children: lines.map((l, i) => l.kind === "hunk" || l.kind === "add" || l.kind === "del" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -53683,7 +53697,12 @@ function buildModel(raw, opts = {}) {
 	}
 	M.piles = [];
 	const gg = [...groundGroups.entries()].sort((a, b) => b[1].length - a[1].length || cmpStr(a[0], b[0]));
-	let xl = -S0 * 9 - M.trunkW, xr = S0 * 9 + M.trunkW;
+	let rx0 = 0, rx1 = 0;
+	for (const t of LR.terms) for (const l of t.leaves || []) {
+		rx0 = Math.min(rx0, l.x);
+		rx1 = Math.max(rx1, l.x);
+	}
+	let xl = Math.min(-S0 * 4, rx0 - S0 * 2.5) - M.trunkW, xr = Math.max(S0 * 4, rx1 + S0 * 2.5) + M.trunkW;
 	gg.forEach(([k, fs], i) => {
 		fs.sort((a, b) => b.lines - a.lines || cmpStr(a.name, b.name));
 		const n = fs.length, s = S0 * .95;
@@ -59730,17 +59749,24 @@ function drawLabels(v, g, toS, fits, reserve, leafPx, inView, createdGhost, phas
 		v.labelBudget = (v.labelBudget || 0) - 1;
 	}
 	g.globalAlpha = 1;
-	if (phase === "rest" && leafPx >= 20) {
+	const edited = /* @__PURE__ */ new Set();
+	if (phase === "rest") for (const A of v.agents) {
+		for (const k of A.edits.keys()) edited.add(k);
+		for (const k of A.created) edited.add(k);
+	}
+	const few = leafPx < 20;
+	if (phase === "rest" && (!few || edited.size > 0 && leafPx >= 3)) {
 		const L = [];
 		for (const t of M.terms) {
 			if (t.node.fAnc) continue;
 			if (!inView(t.cx - t.rad, t.cy - t.rad, t.cx + t.rad, t.cy + t.rad)) continue;
 			for (const l of t.leaves) {
 				if (l.file.ghost && !createdGhost.has(l.file.id)) continue;
+				if (few && !edited.has(l.file.id)) continue;
 				L.push(l);
 			}
 		}
-		for (const p of M.piles) for (const l of p.leaves || []) if (inView(l.x - 5, l.y - 5, l.x + 5, l.y + 5)) L.push(l);
+		for (const p of M.piles) for (const l of p.leaves || []) if ((!few || edited.has(l.file.id)) && inView(l.x - 5, l.y - 5, l.x + 5, l.y + 5)) L.push(l);
 		if (L.length < 1400) {
 			const touched = /* @__PURE__ */ new Set();
 			for (const A of v.agents) {
@@ -59750,11 +59776,6 @@ function drawLabels(v, g, toS, fits, reserve, leafPx, inView, createdGhost, phas
 			}
 			const gold = /* @__PURE__ */ new Set();
 			for (const bd of v.badges || []) for (const id of bd.ids) gold.add(id);
-			const edited = /* @__PURE__ */ new Set();
-			for (const A of v.agents) {
-				for (const k of A.edits.keys()) edited.add(k);
-				for (const k of A.created) edited.add(k);
-			}
 			const pri = (l) => (touched.has(l.file.id) ? 2 : 0) + (gold.has(l.file.id) ? 1 : 0);
 			const sparse = leafPx < 64;
 			const selN = v.sel && v.sel.node && !v.sel.leaf ? v.sel.node : null;
@@ -59802,7 +59823,7 @@ function drawLabels(v, g, toS, fits, reserve, leafPx, inView, createdGhost, phas
 			let cnt = 0;
 			for (const l of L) {
 				const must = edited.has(l.file.id);
-				if (cnt > (sparse ? 30 : 70) && !must) continue;
+				if (few ? cnt >= 8 : cnt > (sparse ? 30 : 70) && !must) continue;
 				if (named.has(l)) continue;
 				const [sx, sy] = toS(l.x, l.y);
 				if (!onScreen(sx, sy, 0)) continue;
@@ -62274,11 +62295,12 @@ function Changes({ p, sum, notes = [], riskOpen, onRisk, allFolders = false, onA
 //#endregion
 //#region src/lib/codetree/fit.ts
 var WHOLE_PAD = {
-	side: 36,
+	side: 52,
 	top: 40,
 	bot: 14,
 	piles: 34
 };
+var WHOLE_MAX_Z = 6;
 function pictureBox(M) {
 	const B = M.bounds, m = M.leaves.length ? S0 * 6 : 0;
 	return {
@@ -62291,8 +62313,8 @@ function pictureBox(M) {
 function fitWhole(B, groundY, piles, W, H, I) {
 	const padB = piles && B.y1 - groundY < S0 * 2 ? WHOLE_PAD.piles : WHOLE_PAD.bot;
 	const w = Math.max(40, W - I.left - I.right - 2 * WHOLE_PAD.side), h = Math.max(40, H - I.top - I.bot - WHOLE_PAD.top - padB);
-	const z = Math.min(w / Math.max(1, B.x1 - B.x0), h / Math.max(1, B.y1 - B.y0));
-	const sx = (I.left + W - I.right) / 2, sy = H - I.bot - padB;
+	const z = Math.min(WHOLE_MAX_Z, w / Math.max(1, B.x1 - B.x0), h / Math.max(1, B.y1 - B.y0));
+	const sx = (I.left + W - I.right) / 2, slack = Math.max(0, h - (B.y1 - B.y0) * z), sy = H - I.bot - padB - (z >= WHOLE_MAX_Z ? slack / 2 : Math.min(slack / 2, h * .12));
 	return {
 		x: (B.x0 + B.x1) / 2 - (sx - W / 2) / z,
 		y: B.y1 - (sy - H / 2) / z,
@@ -62335,6 +62357,7 @@ var TreeCtl = class {
 		right: 8
 	};
 	cardInset = 0;
+	cardBot = 0;
 	zoomedIn = false;
 	active = false;
 	dirty = true;
@@ -62550,7 +62573,7 @@ var TreeCtl = class {
 			x0: insets.left,
 			y0: insets.top,
 			x1: this.v.W - insets.right,
-			y1: this.v.H - insets.bot
+			y1: this.v.H - insets.bot - this.cardBot
 		};
 		this.v.fitZv = this.fitZ();
 		if (whole) this.setCam(this.wholeCam());
@@ -62580,10 +62603,10 @@ var TreeCtl = class {
 				x0: this.insets.left,
 				y0: this.insets.top,
 				x1: W - this.insets.right,
-				y1: H - this.insets.bot
+				y1: H - this.insets.bot - this.cardBot
 			};
 			v.fitZv = this.fitZ();
-			if (was <= 1 && this.M) this.fitAll(true);
+			if (was <= 1 && this.M && !this.fly && !this.info) this.fitAll(true);
 			else if (whole) this.setCam(this.wholeCam());
 			if (this.mini) buildMini(v, this.mini);
 		}
@@ -62605,6 +62628,7 @@ var TreeCtl = class {
 		const v = this.v;
 		const I = { ...this.insets };
 		I.right += this.cardInset;
+		I.bot += this.cardBot;
 		const w = Math.max(40, v.W - I.left - I.right), h = Math.max(40, v.H - I.top - I.bot);
 		const z = Math.min(w * pad / Math.max(1, x1 - x0), h * pad / Math.max(1, y1 - y0));
 		return {
@@ -62721,7 +62745,8 @@ var TreeCtl = class {
 		const zz = z || Math.max(v.cam.z, 2.6);
 		const I = {
 			...this.insets,
-			right: this.insets.right + this.cardInset
+			right: this.insets.right + this.cardInset,
+			bot: this.insets.bot + this.cardBot
 		};
 		this.navTo({
 			x: l.x - (I.left - I.right) / 2 / zz,
@@ -63202,7 +63227,8 @@ var TreeCtl = class {
 	followCam(p, z) {
 		const I = {
 			...this.insets,
-			right: this.insets.right + (this.info ? this.cardInset : 0)
+			right: this.insets.right + (this.info ? this.cardInset : 0),
+			bot: this.insets.bot + (this.info ? this.cardBot : 0)
 		};
 		return {
 			x: p[0] - (I.left - I.right) / 2 / z,
@@ -63357,15 +63383,36 @@ var TreeCtl = class {
 		if (!!this.fly || this.dirty || this.camMoving() || v.anim && !this.reducedMotion || !this.reducedMotion && v.agents.length > 0) this.kick();
 	}
 	markTree() {
-		const v = this.v;
-		if (!v || !this.M) return;
-		const b = boxOnScreen(pictureBox(this.M), v.cam, v.W, v.H);
-		const s = [
-			b.x0,
-			b.y0,
-			b.x1,
-			b.y1
-		].map(Math.round).join(" ");
+		const v = this.v, M = this.M;
+		if (!v || !M) return;
+		const S = (B, padPx = 0, under = 0) => {
+			const b = boxOnScreen(B, v.cam, v.W, v.H);
+			return [
+				b.x0 - padPx,
+				b.y0 - padPx,
+				b.x1 + padPx,
+				b.y1 + padPx + under
+			].map(Math.round).join(" ");
+		};
+		const C = M.crownBounds, parts = [S(pictureBox(M)), S({
+			x0: C.x0,
+			y0: C.y0,
+			x1: C.x1,
+			y1: M.groundY
+		}, 12)];
+		if (M.roots.cnt) parts.push(S({
+			x0: M.roots.bx0,
+			y0: M.groundY,
+			x1: M.roots.bx1,
+			y1: M.roots.by1
+		}, 12));
+		for (const p of M.piles) parts.push(S({
+			x0: p.cx - (p.pw || 0) * .6,
+			y0: M.groundY - (p.h || 0) * 2,
+			x1: p.cx + (p.pw || 0) * .6,
+			y1: M.groundY
+		}, 10, 30));
+		const s = parts.join(";");
 		if (this.host.dataset.tree !== s) this.host.dataset.tree = s;
 	}
 	camMoving() {
@@ -63465,7 +63512,7 @@ function CodeTree(p) {
 		if (sz !== size) setSize(sz);
 		const isNarrow = sz !== "wide";
 		const rects = [];
-		let left = 8, top = 8, bot = 8, card = 0;
+		let left = 8, top = 8, bot = 8, card = 0, sheet = 0;
 		for (const el of Array.from(st.querySelectorAll("[data-hud]"))) {
 			const r = el.getBoundingClientRect();
 			if (r.width < 2 || r.height < 2) continue;
@@ -63479,7 +63526,7 @@ function CodeTree(p) {
 			const kind = el.dataset.hud;
 			if (kind === "left") left = Math.max(left, x1 + 8);
 			if (kind === "info" && !isNarrow) card = Math.max(card, r.width + 16);
-			if (kind === "info" && isNarrow) bot = Math.max(bot, r0.height - y0 + 6);
+			if (kind === "info" && isNarrow) sheet = Math.max(sheet, r0.height - y0 + 6);
 			if (kind === "activity" && isNarrow) bot = Math.max(bot, r0.height - y0 + 6);
 			if (kind === "activity" && !isNarrow) bot = Math.max(bot, 78);
 		}
@@ -63505,6 +63552,7 @@ function CodeTree(p) {
 			right
 		};
 		c.cardInset = card;
+		c.cardBot = Math.max(0, sheet - bot);
 		c.setHud(rects, insets);
 	};
 	(0, import_react.useLayoutEffect)(measure);
@@ -65342,9 +65390,10 @@ function placeMapCard(t, W, H, cardH, s) {
 	};
 	const tree = s && s.tree ? s.tree : null;
 	const avoid = s ? s.avoid : [];
+	const parts = s && s.parts || [];
 	const focus = t || tree || area;
 	const fx = focus.x + focus.w / 2, fy = focus.y + focus.h / 2;
-	const cost = (c) => (tree ? overlap(c, tree) : 0) + avoid.reduce((a, r) => a + (t && inside(t, r) ? .5 : 1) * overlap(c, r), 0);
+	const cost = (c) => (tree ? overlap(c, tree) * (parts.length ? .25 : 1) : 0) + parts.reduce((a, r) => a + 2 * overlap(c, r), 0) + avoid.reduce((a, r) => a + (t && inside(t, r) ? .5 : 1) * overlap(c, r), 0);
 	const pick = (cands) => {
 		let best = null, bc = Infinity;
 		for (const c of cands) {
@@ -65361,7 +65410,11 @@ function placeMapCard(t, W, H, cardH, s) {
 		clamp(area.x + area.w - cw - EDGE, area.y + EDGE),
 		clamp(area.x + area.w - cw - EDGE, area.y + area.h - cardH - EDGE),
 		clamp(area.x + EDGE, area.y + area.h - cardH - EDGE),
-		clamp(area.x + EDGE, area.y + EDGE)
+		clamp(area.x + EDGE, area.y + EDGE),
+		clamp(area.x + (area.w - cw) / 2, area.y + EDGE),
+		clamp(area.x + area.w - cw - EDGE, area.y + (area.h - cardH) / 2),
+		clamp(area.x + (area.w - cw) / 2, area.y + area.h - cardH - EDGE),
+		clamp(area.x + EDGE, area.y + (area.h - cardH) / 2)
 	];
 	if (!t) {
 		const c = pick(corners) || corners[0];
@@ -65396,21 +65449,23 @@ function mapScene(root) {
 		h: r.height
 	});
 	const area = rel(st.getBoundingClientRect());
-	const b = (st.dataset.tree || "").split(" ").map(Number);
-	let tree = null;
-	if (b.length === 4 && b.every(Number.isFinite)) {
+	const boxes = [];
+	for (const one of (st.dataset.tree || "").split(";")) {
+		const b = one.split(" ").map(Number);
+		if (b.length !== 4 || !b.every(Number.isFinite)) continue;
 		const x0 = Math.max(0, b[0]), y0 = Math.max(0, b[1]), x1 = Math.min(area.w, b[2]), y1 = Math.min(area.h, b[3]);
-		if (x1 > x0 && y1 > y0) tree = {
+		if (x1 > x0 && y1 > y0) boxes.push({
 			x: area.x + x0,
 			y: area.y + y0,
 			w: x1 - x0,
 			h: y1 - y0
-		};
+		});
 	}
 	const avoid = Array.from(st.querySelectorAll("[data-hud]")).map((el) => rel(el.getBoundingClientRect())).filter((r) => r.w > 2 && r.h > 2);
 	return {
 		area,
-		tree,
+		tree: boxes[0] || null,
+		parts: boxes.slice(1),
 		avoid
 	};
 }
@@ -66713,7 +66768,7 @@ function CodeMap({ title, active }) {
 		openPanel
 	]);
 	const toastNode = toast ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "ct-toast" + (toast.bad ? " bad" : ""),
+		className: "ct-toast" + (toast.bad ? " bad" : "") + (toast.confirm ? " ask" : ""),
 		role: "status",
 		"aria-live": "polite",
 		title: toast.detail || toast.text,
@@ -66855,13 +66910,21 @@ function CodeMap({ title, active }) {
 					(zones.length > 0 || breachList.length > 0) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "cm-guard " + guard.cls,
 						title: guard.title,
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "cm-guard-dot",
-							"aria-hidden": "true"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "lbl",
-							children: guard.label
-						})]
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "cm-guard-dot",
+								"aria-hidden": "true"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "lbl",
+								children: guard.label
+							}),
+							breachList.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "cm-guard-short",
+								"aria-hidden": "true",
+								children: ["⛔", breachList.length]
+							})
+						]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						type: "button",

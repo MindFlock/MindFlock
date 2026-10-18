@@ -1344,6 +1344,29 @@
 .ct-toast .cm-btn + .cm-btn {
   margin-left: 4px;
 }
+
+/* A toast that asks (keep-out over your own changes: "Add anyway") says the
+   whole sentence — it wraps instead of cutting off "…or you remove the rule". */
+.ct-toast.ask .tx {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* A small pane hides the toolbar's words; breaches still need a number, not a
+   bare red dot: "⛔4", like the tab's badge (the full label stays its name). */
+.cm-guard-short {
+  display: none;
+  font-weight: 600;
+}
+@container (max-width: 760px) {
+  .cm-guard.g-breach .cm-guard-short {
+    display: inline;
+  }
+  .cm-guard.g-breach .cm-guard-dot {
+    display: none;
+  }
+}
 /* A ticketing source's repo list (RepoListField.tsx): one row per repo — the
    URL, then (with two or more) its optional hint and a Remove. */
 .tk-repo-row {
@@ -11160,6 +11183,11 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 
 .pane-head .tabs button.map-tab:not(.active) .map-badge.rz-ok {
   color: var(--green);
+}
+
+/* the changed-files count: the text colour, not the muted grey, so "5" reads */
+.pane-head .tabs button.map-tab:not(.active) .map-badge.map-changed {
+  color: var(--text);
 }
 
 .pane-head .tabs button.map-tab.active .queue-tab-badge {
