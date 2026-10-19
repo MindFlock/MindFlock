@@ -405,16 +405,23 @@ class TicketIngestionController:
         return self._own_running() or (self._external_lock_pid() is not None)
 
     def _python(self) -> str:
-        """Python that can import ``backend.ticket_ingestion``.
+        """The SERVER'S own interpreter: the pipeline is part of the same
+        ``backend`` package, so it runs the code this server runs.
 
-        The web server often runs from the mindflock venv (which has the CS
-        engine + backend.web but NOT the MindFlock package), so ``sys.executable`` can't
-        run the pipeline. Prefer the MindFlock repo's own ``.venv`` when present.
+        It used to prefer ``<repo root>/.venv/bin/python`` (from when the
+        server's venv lacked the pipeline package). With the repo root a dev
+        checkout on some old branch, that ran THAT checkout's code: a server
+        on 0.9.4 kept provisioning ticket sessions with a pipeline reporting
+        0.8.7, so no provisioning fix ever reached a ticket.
         """
-        cand = self._repo_root / ".venv" / "bin" / "python"
-        if cand.exists():
-            return str(cand)
         return sys.executable
+
+    @staticmethod
+    def _server_package_root() -> str:
+        """The directory holding the ``backend`` package this server imported."""
+        import backend
+
+        return str(Path(backend.__file__).resolve().parent.parent)
 
     def _env(self) -> dict:
         """Env for the pipeline child: put the CS engine (``mindflock``) and
@@ -431,7 +438,7 @@ class TicketIngestionController:
         # This child is the server's: restarted after an engine update when
         # its recorded build is older (see stale_build).
         env[PIPELINE_OWNER_ENV] = "server"
-        extra = [str(self._repo_root / "src")]
+        extra = [self._server_package_root(), str(self._repo_root / "src")]
         if env.get("PYTHONPATH"):
             extra.append(env["PYTHONPATH"])
         env["PYTHONPATH"] = os.pathsep.join(extra)
@@ -501,7 +508,10 @@ class TicketIngestionController:
                 ).encode()
             )
             self._proc = subprocess.Popen(
-                [self._python(), "-m", "backend.ticket_ingestion"],
+                # -P: the cwd (the repo root, maybe a checkout of other code) is
+                # never put on sys.path; _env() puts the server's own package
+                # root there instead.
+                [self._python(), "-P", "-m", "backend.ticket_ingestion"],
                 cwd=str(self._repo_root),
                 env=self._env(),
                 stdout=logf,
