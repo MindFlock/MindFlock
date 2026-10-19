@@ -923,9 +923,12 @@ a gating check before the push, waits for CI before a merge, and halts with a re
 needs a human (a failing test hook, a red zone, a merge blocker). Arming works
 while the agent is still working; that is the point. The state shows on the
 session's row as `autopilot`, in `get_session` and in `list_sessions`' compact
-rows. A `halted` record's `note` reads `MindFlock told the agent what failed
-and asked it to fix it.` when a failure note went into the session's inbox
-(else `""`); its `reason` is unchanged. See [web-ui.md](web-ui.md) for
+rows. A failure the agent can fix is handed back rather than halting: the
+run stays `running`, its `note` says it is waiting for the fix, and it carries
+on (push, PR) once the fix turn ends (see [team-runs.md](team-runs.md)). A
+`halted` record's `note` reads `MindFlock told the agent what failed and asked
+it to fix it.` when a failure note went into the session's inbox and the run
+was out of hand-offs (else `""`); its `reason` is unchanged. See [web-ui.md](web-ui.md) for
 Fast-track itself.
 
 Use `ship_session` for a worker that has reported and is idle, and
