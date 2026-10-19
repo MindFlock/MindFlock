@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-10-19
+
+Fast-track no longer falls off the path after a failure it hands to the agent:
+once the agent fixes it, the run carries on to the push and the PR.
+
 ### Fixed
 
 - **Fast-track carries on after the agent fixes a failure.** A failed
@@ -4151,7 +4156,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.9.3...HEAD
+[0.9.3]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.3
 [0.9.2]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.2
 [0.9.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.1
 [0.9.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.0
