@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The ticket pipeline runs the server's code.** It was started with the
+  repo root's own `.venv` and imported `backend` from that folder, so with
+  `MINDFLOCK_REPO_ROOT` on a dev checkout it ran whatever branch that
+  checkout had (a 0.9.4 server's pipeline reported 0.8.7), and fixes to how
+  ticket sessions are provisioned never reached them. It now runs the
+  server's interpreter with `-P` and the server's own package first on
+  `PYTHONPATH`.
+
 ## [0.9.4] - 2026-10-19
 
 Ticket sessions on your own checkout push to GitHub and start from GitHub's

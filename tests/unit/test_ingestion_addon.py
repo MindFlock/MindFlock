@@ -15,6 +15,7 @@ import datetime as _dt
 import fcntl
 import json
 import os
+import pathlib
 
 import pytest
 from fastapi import FastAPI
@@ -440,23 +441,46 @@ class TestExternalLockPid:
 # Controller env / python resolution / start-guard
 # --------------------------------------------------------------------------- #
 class TestControllerHelpers:
-    def test_python_prefers_repo_venv(self, ctrl):
+    def test_python_is_the_servers_even_with_a_repo_venv(self, ctrl):
+        """A repo-root .venv belongs to whatever that checkout has on disk; the
+        pipeline must run the server's code (it reported 0.8.7 under 0.9.4)."""
+        import sys
+
         venv_py = ctrl._repo_root / ".venv" / "bin" / "python"
         venv_py.parent.mkdir(parents=True)
         venv_py.write_text("#!/bin/sh\n")
-        assert ctrl._python() == str(venv_py)
+        assert ctrl._python() == sys.executable
 
-    def test_python_falls_back_to_sys_executable(self, ctrl):
-        import sys
+    def test_env_puts_the_servers_package_first(self, ctrl, monkeypatch):
+        import backend
 
-        assert ctrl._python() == sys.executable  # no repo .venv present
-
-    def test_env_prepends_src_to_pythonpath(self, ctrl, monkeypatch):
         monkeypatch.setenv("PYTHONPATH", "/existing")
         env = ctrl._env()
         parts = env["PYTHONPATH"].split(os.pathsep)
-        assert parts[0] == str(ctrl._repo_root / "src")
+        assert parts[0] == str(pathlib.Path(backend.__file__).resolve().parent.parent)
+        assert str(ctrl._repo_root / "src") in parts
         assert "/existing" in parts
+
+    def test_the_child_never_imports_from_its_cwd(self, ctrl, monkeypatch):
+        """Started with -P from a repo root holding ANOTHER backend package,
+        the child still imports the server's (run for real, not mocked)."""
+        import subprocess
+        import sys
+
+        import backend
+
+        decoy = ctrl._repo_root / "backend"
+        decoy.mkdir(parents=True, exist_ok=True)
+        (decoy / "__init__.py").write_text("DECOY = True\n")
+        out = subprocess.run(
+            [ctrl._python(), "-P", "-c", "import backend; print(backend.__file__)"],
+            cwd=str(ctrl._repo_root),
+            env=ctrl._env(),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        ).stdout.strip()
+        assert out == str(pathlib.Path(backend.__file__).resolve())
 
     def test_start_noops_when_already_running(self, ctrl, monkeypatch):
         monkeypatch.setattr(ctrl, "is_running", lambda: True)
