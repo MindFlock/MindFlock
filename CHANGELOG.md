@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-19
+
 The map in the flow: the Map is where you already are — a tab on every git
 pane, a chip on the row, a line in Make PR, a row in the bell — and every way
 into it lands on the file or section you came for. Plus a sweep of the
@@ -4108,7 +4110,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.1
 [0.9.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.0
 [0.8.7]: https://github.com/MindFlock/MindFlock/releases/tag/v0.8.7
 [0.8.6]: https://github.com/MindFlock/MindFlock/releases/tag/v0.8.6
