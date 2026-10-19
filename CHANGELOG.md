@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-10-19
+
+Ticket sessions on your own checkout push to GitHub and start from GitHub's
+base branch, and fast-track no longer pushes while the agent is mid-turn.
+
 ### Fixed
 
 - **Ticket sessions on a local checkout push to GitHub.** A ticket routed to
@@ -4172,7 +4177,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.9.4...HEAD
+[0.9.4]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.4
 [0.9.3]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.3
 [0.9.2]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.2
 [0.9.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.1
