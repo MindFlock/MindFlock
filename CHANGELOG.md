@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Fast-track carries on after the agent fixes a failure.** A failed
+  pre-commit hook (or check, red CI, a conflict) told the agent what failed
+  and then stopped the run, so the agent's fix, even its own commit, never
+  reached the push and PR. The run now waits for the fix and continues from
+  it: the agent's commit is pushed and its PR opened, an uncommitted fix is
+  re-committed. Twice per run at most; a fix turn that changes nothing stops
+  with the original reason.
+- A failed check result from an older commit no longer stops fast-track; the
+  check is run again on the new commit.
+
 ## [0.9.2] - 2026-10-19
 
 Per-repo base branches, so a repo that only has `main` can fork from and PR

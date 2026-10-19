@@ -310,6 +310,8 @@ def _autopilot_snapshot(inst, title: str, wt: str, stage: dict) -> dict:
         "failed_step": stage.get("failed_step") or "",
         "failed_hook": stage.get("failed_hook") or "",
         "dirty": srv._is_dirty(wt),
+        # A handed-back failure records it, and its fix turn is judged by it.
+        "head": srv._git_head_sha(wt),
         "beyond_base": beyond,
         "activity": activity,
         "limited": limited,
@@ -464,6 +466,10 @@ async def _autopilot_step(title: str) -> None:
         return
     now = snap["now"]
     action, detail = _autopilot.next_action(rec, snap)
+    if detail.get("fixed"):
+        # The agent's fix turn is over: the ladder is back in charge, and a
+        # failure from here on is a new stop (a new hand-off, while any are left).
+        rec = await asyncio.to_thread(_autopilot.update, title, fixing="") or rec
 
     if action == "wait":
         await asyncio.to_thread(_autopilot_wait, title, rec, snap, detail, now)
@@ -473,7 +479,25 @@ async def _autopilot_step(title: str) -> None:
         await asyncio.to_thread(_autopilot_finish, title)
         return
     if action == "stop":
-        told = await asyncio.to_thread(_autopilot_tell_agent, title, wt, rec, detail)
+        if detail.get("unfixed"):
+            await asyncio.to_thread(
+                _autopilot_halt,
+                title,
+                detail.get("reason") or "stopped",
+                _UNFIXED,
+            )
+            return
+        hand_off = bool(detail.get("fix")) and _autopilot.can_hand_off(rec)
+        told = await asyncio.to_thread(
+            _autopilot_tell_agent, title, wt, rec, detail, hand_off
+        )
+        if told and hand_off:
+            # Not a halt: the run waits for the fix and carries on from it.
+            await asyncio.to_thread(
+                _autopilot.hand_to_agent, title, detail, snap.get("head") or "", now
+            )
+            await asyncio.to_thread(_emit_autopilot, title)
+            return
         await asyncio.to_thread(
             _autopilot_halt,
             title,
@@ -565,9 +589,13 @@ def _autopilot_halt(title: str, reason: str, note: str = "") -> None:
 
 #: What the halted chip's tooltip adds once the agent has been sent its note.
 _TOLD_AGENT = "MindFlock told the agent what failed and asked it to fix it."
+#: ...and when a handed-back failure came back with nothing changed.
+_UNFIXED = "The agent was told what failed but changed nothing."
 
 
-def _autopilot_tell_agent(title: str, wt: str, rec: dict, detail: dict) -> bool:
+def _autopilot_tell_agent(
+    title: str, wt: str, rec: dict, detail: dict, resumes: bool = False
+) -> bool:
     """A run that stopped on something the AGENT can fix (``detail["fix"]``: a
     failed pre-commit step or verification check, red CI, a conflicting PR)
     leaves that agent a short note saying what failed and to fix it — or to
@@ -580,7 +608,8 @@ def _autopilot_tell_agent(title: str, wt: str, rec: dict, detail: dict) -> bool:
     exactly as it was (team runs parse it) and carries :data:`_TOLD_AGENT` as
     its ``note`` when this returns True — one event, one toast. Off with
     ``repository.fasttrack_failure_notes``. A team run's member is skipped —
-    its run already sends its own fix prompt."""
+    its run already sends its own fix prompt. ``resumes``: the run will wait
+    for the fix and carry on (a hand-off), and the note says so."""
     if not (detail or {}).get("fix"):
         return False
     try:
@@ -596,7 +625,7 @@ def _autopilot_tell_agent(title: str, wt: str, rec: dict, detail: dict) -> bool:
                 cmd = _wt_setup.load_config(wt).check_command or ""
             except Exception:  # noqa: BLE001 — the note just omits the command
                 cmd = ""
-        text = _autopilot.failure_note(detail, cmd)
+        text = _autopilot.failure_note(detail, cmd, resumes=resumes)
         if not text:
             return False
         _mailbox.post(title, text, kind=_mailbox.NOTE_KIND)

@@ -100,6 +100,8 @@ SOURCE_DEPTHS = tuple(d for d in DEPTHS if d != "merge")
 #: Where an armed run came from: the ⏩ button / a lane ("session"), an
 #: intake ticket / PR / issue, or a server-driven team run ("run").
 SOURCES = ("session", "tix", "pr", "iss", "run")
+#: The stops an agent can fix itself (``detail["fix"]`` on a stop).
+FIX_KINDS = ("precommit", "check", "ci", "conflict")
 #: Lane names (core.lanes) a record may carry; "leave" is the agent rung.
 LANE_NAMES = ("leave", "commit", "push", "pr", "merge")
 
@@ -146,6 +148,12 @@ MAX_COMMIT_ATTEMPTS = 4
 #: keeps refusing must stop being re-typed; the stage never moves, so nothing else
 #: would ever end that loop.
 MAX_ACTIONS_PER_VERB = 3
+#: How many times one run hands a failure back to its agent (a failed hook,
+#: check, red CI, a conflict) and waits for the fix before it halts instead.
+#: Each hand-off is a note plus a wait for the fix turn to end; after that the
+#: ladder carries on from wherever git now is (the agent's own commit goes
+#: straight to push / PR, an uncommitted fix is re-committed).
+MAX_FIX_ROUNDS = 2
 #: Consecutive-idle dwell before the FIRST commit of a chain. Longer than the
 #: prompt queue's 12s settle on purpose: feeding a prompt to an agent that turns
 #: out to be mid-thought is recoverable, committing and opening a PR for it is
@@ -197,6 +205,8 @@ def autopilot_path() -> str:
 #                "base": "", "branch": "", "retryable": ["gitnexus-index"],
 #                "attempts": {"<hook>": 1}, "commits": 0, "skipped": [],
 #                "idle_since": null, "step_since": 0.0, "acted_at": 0.0,
+#                "fixing": "", "fix_reason": "", "fix_rounds": 0,
+#                "fix_since": 0.0, "fix_head": "",
 #                "boot": "", "started": 0.0, "updated": 0.0}}
 def _load() -> dict:
     return read_json(autopilot_path(), {}, expect=dict)
@@ -274,6 +284,17 @@ def _blank() -> dict:
         # halts hours into a wait it is meant to survive, and the work is still
         # sitting there uncommitted when the window reopens.
         "limited_at": 0.0,
+        # A failure HANDED BACK to the agent (see :func:`hand_to_agent`): which
+        # kind ("precommit" / "check" / "ci" / "conflict", "" = none), the stop
+        # reason it replaced, how many hand-offs this run has made, when the
+        # latest one began and the HEAD it began at. While ``fixing`` is set the
+        # run stays armed and waits for the fix turn to end instead of halting,
+        # which is what lets a fixed commit carry on to the push and the PR.
+        "fixing": "",
+        "fix_reason": "",
+        "fix_rounds": 0,
+        "fix_since": 0.0,
+        "fix_head": "",
         "step_since": 0.0,
         "acted_at": 0.0,
         "boot": "",
@@ -339,6 +360,10 @@ def _normalize(entry) -> dict:
     e["pr_body"] = str(entry.get("pr_body", "") or "")[:60000]
     e["base"] = str(entry.get("base", "") or "")
     e["branch"] = str(entry.get("branch", "") or "")
+    fixing = str(entry.get("fixing", "") or "")
+    e["fixing"] = fixing if fixing in FIX_KINDS else ""
+    e["fix_reason"] = str(entry.get("fix_reason", "") or "")
+    e["fix_head"] = str(entry.get("fix_head", "") or "")
     raw = entry.get("retryable")
     e["retryable"] = [str(h) for h in raw][:16] if isinstance(raw, list) else []
     att = entry.get("attempts")
@@ -361,7 +386,7 @@ def _normalize(entry) -> dict:
         e["issues"] = out2
     sk = entry.get("skipped")
     e["skipped"] = [str(h) for h in sk][:16] if isinstance(sk, list) else []
-    for key in ("commits",):
+    for key in ("commits", "fix_rounds"):
         try:
             e[key] = max(0, int(entry.get(key, 0) or 0))
         except (TypeError, ValueError):
@@ -376,6 +401,7 @@ def _normalize(entry) -> dict:
         "worked_at",
         "limited_at",
         "owner_at",
+        "fix_since",
     ):
         try:
             e[key] = float(entry.get(key, 0.0) or 0.0)
@@ -443,6 +469,67 @@ def next_action(rec: dict, snap: dict) -> Tuple[str, dict]:
     if stage == "precommit":
         return "wait", {"reason": "pre-commit hooks are running"}
 
+    if not rec.get("fixing"):
+        return _ladder(rec, snap, depth, stage)
+
+    # A FAILURE WAS HANDED BACK TO THE AGENT. Wait out its fix turn — it must be
+    # seen working after the note, then settle idle like any finished turn —
+    # and then pick the ladder up from wherever git is now. ``fixed`` tells the
+    # driver the hand-off is over, whatever this pass decides.
+    held = _fix_gate(rec, snap)
+    if held is not None:
+        return held
+    if stage == "interrupt":
+        # The hook failed and the tree is still dirty: the agent fixed the files
+        # but did not commit (or its own commit failed again). Re-commit, as the
+        # manual "Re-commit" button would; a fresh failure is a fresh stop.
+        return "commit", {"skip": list(rec.get("skipped") or []), "fixed": True}
+    head = str(snap.get("head") or "")
+    if (
+        rec.get("fixing") != "precommit"
+        and head
+        and head == rec.get("fix_head")
+        and not snap.get("dirty")
+    ):
+        # Nothing moved: no commit, no edits. The agent decided it was not its
+        # to fix (the note says to tell the user then), so the run stops with
+        # the reason it originally stopped for rather than telling it again.
+        return "stop", {
+            "reason": rec.get("fix_reason") or "stopped",
+            "fixed": True,
+            "unfixed": True,
+        }
+    action, detail = _ladder(rec, snap, depth, stage)
+    return action, {**detail, "fixed": True}
+
+
+def _fix_gate(rec: dict, snap: dict) -> Optional[Tuple[str, dict]]:
+    """While a failure is handed back: a wait until the agent's fix turn is
+    over, or None once it is. The same corroboration as :func:`_agent_action`,
+    plus "it was SEEN working after the hand-off" — the note is typed only once
+    the agent is idle, so without it the run would carry on before the agent
+    had even read what failed."""
+    what = str(rec.get("fix_reason") or "the last failure")
+    if snap.get("limited"):
+        return "wait", {"reason": "usage limit — waiting for the window to reopen"}
+    if float(rec.get("worked_at") or 0.0) <= float(rec.get("fix_since") or 0.0):
+        return "wait", {"reason": "waiting for the agent to pick up the fix: " + what}
+    if str(snap.get("activity") or "") != "idle":
+        return "wait", {"reason": "the agent is fixing it: " + what}
+    if snap.get("queue_pending"):
+        return "wait", {"reason": "prompt queue still has work"}
+    if snap.get("background_waiting"):
+        return "wait", {"reason": "a background job the agent started is still waiting"}
+    idle_since = rec.get("idle_since")
+    if idle_since is None:
+        return "wait", {"reason": "the agent is fixing it: " + what, "mark_idle": True}
+    if float(snap.get("now") or 0.0) - float(idle_since) < IDLE_SETTLE_S:
+        return "wait", {"reason": "confirming the agent is done fixing it"}
+    return None
+
+
+def _ladder(rec: dict, snap: dict, depth: str, stage: str) -> Tuple[str, dict]:
+    """The rung-by-rung half of :func:`next_action`."""
     # Target already met — but FINISH only if this run actually did the work.
     #
     # A branch that already has an open PR satisfies a "pr" target the instant you
@@ -493,7 +580,10 @@ def next_action(rec: dict, snap: dict) -> Tuple[str, dict]:
             return "stop", {"reason": "no origin remote — add one to push"}
         check = snap.get("check")
         state = str((check or {}).get("state") or "")
-        if state == "failed":
+        # A failure recorded for an OLDER commit says nothing about this one —
+        # which is exactly the state after the agent commits a fix. Re-run it
+        # (below) rather than stopping on the old verdict.
+        if state == "failed" and not (check or {}).get("stale"):
             return "stop", {
                 "reason": "checks failed — fix them and re-run",
                 "fix": "check",
@@ -615,6 +705,10 @@ _NOTE_ESCALATE = (
     "If it is not yours to fix (it conflicts with a change someone else made, "
     "or needs a decision), stop and tell the user what conflicts instead."
 )
+#: What a hand-off note adds: the run is waiting, not over.
+_NOTE_RESUMES = (
+    "When you finish, Fast-track carries on from your commit (push, PR) by itself."
+)
 #: Stripped from every value a note interpolates (hook names and step names
 #: read off the pane, GitHub's blocker text, the repo's check command). The
 #: mailbox lane never types into a bare shell, but like its own framing the
@@ -622,10 +716,12 @@ _NOTE_ESCALATE = (
 _NOTE_UNSAFE = re.compile(r"[`$;\\']")
 
 
-def failure_note(detail: dict, check_command: str = "") -> str:
+def failure_note(detail: dict, check_command: str = "", resumes: bool = False) -> str:
     """The short note typed into the agent when its Fast-track run stops on
     something the agent can fix — or ``""`` when the stop carries no ``fix``.
-    Pure, one line: what failed, where to look, what to do."""
+    Pure, one line: what failed, where to look, what to do. ``resumes`` is a
+    hand-off (:func:`hand_to_agent`): the run waits for the fix and carries on,
+    so the note says so instead of "stopped"."""
 
     def plain(value) -> str:
         # split/join also folds a newline (a multi-line check_command) into
@@ -666,6 +762,11 @@ def failure_note(detail: dict, check_command: str = "") -> str:
         todo = "Bring the base branch in, resolve the conflicts and commit."
     else:
         return ""
+    if resumes:
+        return plain(
+            "Fast-track paused: %s %s %s %s"
+            % (what, todo, _NOTE_RESUMES, _NOTE_ESCALATE)
+        )
     return plain("Fast-track stopped: %s %s %s" % (what, todo, _NOTE_ESCALATE))
 
 
@@ -935,14 +1036,61 @@ def halt(title: str, reason: str, note: str = "") -> Optional[dict]:
     ``note`` says what was done about it (the agent was told what failed).
     """
     return update(
-        title, state="halted", reason=str(reason or "stopped"), note=str(note or "")
+        title,
+        state="halted",
+        reason=str(reason or "stopped"),
+        note=str(note or ""),
+        fixing="",
+    )
+
+
+def can_hand_off(rec: dict) -> bool:
+    """Whether this run may hand one more failure back to its agent."""
+    return int((rec or {}).get("fix_rounds") or 0) < MAX_FIX_ROUNDS
+
+
+def hand_to_agent(
+    title: str, detail: dict, head: str = "", now: Optional[float] = None
+) -> Optional[dict]:
+    """Hand a fixable stop back to the agent INSTEAD of halting.
+
+    The run stays ``running`` and :func:`next_action` waits for the agent's fix
+    turn (see :func:`_fix_gate`), then carries on from wherever git is. Before
+    this a fixable stop halted right after the note was sent, so a fix the
+    agent committed went nowhere: the driver skips a halted run, and the push
+    and PR that were the point of the run never happened. The per-verb and
+    per-hook counters restart (a new commit is a new attempt); ``commits`` and
+    ``skipped`` carry over.
+    """
+    ts = float(now if now is not None else time.time())
+    fix = str((detail or {}).get("fix") or "")
+    if fix not in FIX_KINDS:
+        return None
+    rec = get(title)
+    if rec is None:
+        return None
+    reason = str((detail or {}).get("reason") or "stopped")
+    return update(
+        title,
+        state="running",
+        step="agent",
+        fixing=fix,
+        fix_reason=reason,
+        fix_rounds=int(rec.get("fix_rounds") or 0) + 1,
+        fix_since=ts,
+        fix_head=str(head or ""),
+        idle_since=None,
+        step_since=ts,
+        issues={},
+        attempts={},
+        note="waiting for the agent to pick up the fix: " + reason,
     )
 
 
 def finish(title: str) -> Optional[dict]:
     """Mark a run complete (its target rung was reached). Clears the wait note —
     see :func:`halt`."""
-    return update(title, state="done", reason="", note="")
+    return update(title, state="done", reason="", note="", fixing="")
 
 
 def disarm(title: str) -> bool:

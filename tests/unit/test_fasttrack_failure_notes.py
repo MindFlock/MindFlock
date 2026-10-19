@@ -218,9 +218,11 @@ def test_the_driver_tells_the_agent_and_keeps_the_reason(tmp_path):
 def test_a_stop_step_halts_with_the_reason_untouched_and_the_note_set(
     tmp_path, monkeypatch
 ):
+    """Once a run is out of hand-offs (see test_fasttrack_fix_handoff) a
+    fixable stop still tells the agent and halts, reason untouched."""
     import asyncio
 
-    _arm()
+    _arm(fix_rounds=ap.MAX_FIX_ROUNDS)
     detail = {"fix": "precommit", "hook": "mypy", "step": "mypy"}
     detail["reason"] = "pre-commit failed at mypy"
     seen = (ap.get("s1"), object(), str(tmp_path), {"now": 1.0})
@@ -464,7 +466,7 @@ def test_one_stop_is_one_note_and_one_event_carrying_it(tmp_path, monkeypatch):
     )
     real_observe = driver._autopilot_observe
     try:
-        _arm(commits=1)
+        _arm(commits=1, fix_rounds=ap.MAX_FIX_ROUNDS)
         _step_once(monkeypatch, tmp_path, _snap(stage="interrupt", failed_hook="mypy"))
         # The next pass sees a halted record and leaves it alone: the real
         # observe skips anything not running, so no second note, no new turn.

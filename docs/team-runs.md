@@ -51,11 +51,19 @@ someone chose); every row carries `lane: {target, ask_first, owner, by}` —
 `set_autopilot`).
 
 When a run stops on something the agent can fix, the stop's detail carries
-`fix` (`precommit`, `check`, `ci` or `conflict`), and before halting the
-driver posts the agent a one-line mailbox note (`kind: "note"`) saying what
-failed and where to look (`repository.fasttrack_failure_notes`, on by
-default). A team run's members never get one: their run sends its own fix
-prompt (below), so they are not told twice.
+`fix` (`precommit`, `check`, `ci` or `conflict`), and the driver posts the
+agent a one-line mailbox note (`kind: "note"`) saying what failed and where
+to look (`repository.fasttrack_failure_notes`, on by default). The run does
+**not** halt: it hands the failure back (`fixing` on the record, the `note`
+says what it waits on), waits until the agent has worked the fix and settled
+idle for 30 s, and then picks the ladder up from wherever git is — the
+agent's own commit goes on to the push and PR, an uncommitted fix is
+re-committed, a stale check is re-run. A fix turn that moved nothing (same
+HEAD, clean tree) halts with the original reason and the note `The agent was
+told what failed but changed nothing.`; after `MAX_FIX_ROUNDS` (2) hand-offs
+the next fixable stop is told and halts as before. A team run's members never
+get a note: their run sends its own fix prompt (below), so they are not told
+twice, and they halt.
 
 **Nothing ships beyond what you chose for that session or team run:**
 
