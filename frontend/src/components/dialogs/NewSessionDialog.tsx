@@ -1122,13 +1122,6 @@ export function NewSessionDialog() {
     taken: device ? new Set<string>() : takenNames(liveRows || [], aliases),
   });
   const branchKnown = isGit && folderCheck?.branchPrefix !== undefined;
-  /** Page 1's branch: named from the sentence, as Start would name it. */
-  const planned1 = plannedName({
-    prefix: (folderCheck?.asked === folderPath && folderCheck?.branchPrefix) || "",
-    title: "",
-    prompt: describe,
-    taken: device ? new Set<string>() : takenNames(liveRows || [], aliases),
-  });
   /** Sessions on this device already working in this repo, any way. */
   const others = device
     ? []
@@ -1494,16 +1487,23 @@ export function NewSessionDialog() {
     </p>
   );
 
-  /** What page 1's "Runs in [folder]" line says after the folder: the branch
-   * a worktree session gets, or that it runs in the folder itself. */
+  /** What page 1's "Runs in [folder]" line says after the folder: that a
+   * worktree session gets a branch of its own, or that it runs in the folder
+   * itself. Deliberately NOT the branch's name: that is named from the
+   * sentence, so it rewrote itself on every keystroke and made the whole line
+   * look like it was reacting to the prompt. The name is in the tooltip. */
   const startsIn = !folderPath ? null : plainFolder ? (
     <span className="nf-starts-sub"> · in the folder itself (no git, so no diff or PR)</span>
   ) : branchKnown ? (
-    <span className="nf-starts-sub">
-      {" · own branch "}
-      <code title={planned1.branch}>
-        {planned1.from === "none" ? (folderCheck?.branchPrefix || "") + "…" : planned1.branch}
-      </code>
+    <span
+      className="nf-starts-sub"
+      title={
+        "The agent works in its own copy on a new branch (" +
+        (folderCheck?.branchPrefix || "") +
+        "…, named from your task), so your checkout is never touched. You review the diff and open a PR from it."
+      }
+    >
+      {" · on a new branch"}
     </span>
   ) : null;
 

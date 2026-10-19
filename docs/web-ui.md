@@ -2165,9 +2165,9 @@ because it is the hot path. Ticket is described further down.
 The Session tab is two pages, as in v0.7: a compact **Describe** card it opens
 on (*What do you want to work on?* — see
 [describe it in a sentence](#new-session-dialog-describe-it-in-a-sentence)),
-and the full form behind it (**More options** or the line's **change**, which
-carry what you typed into the Task, or **Let the agent set it up…** to have the
-model fill it in). The dialog is a `role="dialog"` with `aria-modal`. The form has **← Back** to the sentence. The caret starts in the sentence
+and the full form behind it (**More options**, which carries what you typed
+into the Task, or **Let the agent pick the folder…** to have the model fill it
+in). The dialog is a `role="dialog"` with `aria-modal`. The form has **← Back** to the sentence. The caret starts in the sentence
 box; after a refused create the dialog reopens on the form with the caret in
 **Name**, since the form is what needs fixing.
 
@@ -2216,7 +2216,7 @@ task, fast-track) to run again or schedule.* — then **Folder** and **Agent**,
   **Create this folder**, and both Starts stay off until it exists — the
   button makes exactly that folder (`POST /api/mkdir`, the parent must exist)
   and the form then reads it as an empty folder with no repo. A plan from
-  **Let the agent set it up…** that proposes a new folder asks the same way.
+  **Let the agent pick the folder…** that proposes a new folder asks the same way.
 - **Agent** — the agents this device has; the ones that aren't installed fold
   behind a last row, *More agents… (6 not installed)*, which lists them as
   *codex (not installed)* (`GET /api/providers/status`, this device only — an
@@ -2612,14 +2612,17 @@ text box — and the full form is page 2. The box is the widest of the three way
 to fill the form in (a sentence, a template chip, or by hand), and **nothing in
 it is submitted**: it wears the same card as the Templates and folder-suggestion
 strips rather than looking like a second form stacked on the first. Under it,
-ONE line says where **Start** runs it: *Runs in [📦 repo ▾] · own branch
-`me/add-readme-section…` · change*. The folder is a real picker (`#new-describe-folder`,
+ONE line says where **Start** runs it: *Runs in [📦 repo ▾] · on a new
+branch*. Nothing on it follows what you type: the branch's name (made from the
+task) is only in the tooltip, because shown live it rewrote itself on every
+keystroke and the line read as reacting to the prompt. Once you start typing,
+the folder is yours: a folder suggestion that lands late no longer replaces
+it. The folder is a real picker (`#new-describe-folder`,
 the New tour's `new-folder` hook): **Recent folders** (only ones a session was
 started in), the other suggestions, then **Browse…**, which opens the folder
 picker window. A folder with no repo reads *· in the folder
 itself (no git, so no diff or PR)*; a path that doesn't exist reads *No folder
-at …* with **Create this folder**, and Start stays off. **change** opens the
-form. Then *Starting from a ticket, pull request or issue? **Open Intake***. A
+at …* with **Create this folder**, and Start stays off. Then *Starting from a ticket, pull request or issue? **Open Intake***. A
 path typed into the sentence is not read as the folder — the line is the
 folder.
 
@@ -2629,7 +2632,8 @@ Three actions sit under it — ONE primary:
   as the Task (a Task you edited since an earlier trip is kept). Nothing is
   read and no model runs; it is the only route to the form for someone with no
   coding CLI installed.
-- **Let the agent set it up…** — secondary (hidden for an Intake batch). Sends
+- **Let the agent pick the folder…** — secondary (hidden for an Intake batch),
+  and the other way to choose the line's folder. Sends
   the sentence to [`POST /api/session-plan`](web-api.md#post-apisession-plan--200),
   which walks the filesystem, asks one headless model turn, and fills in page 2
   for you to change before anything starts — Folder, Name (when the plan has
@@ -2642,7 +2646,7 @@ Three actions sit under it — ONE primary:
   other choices as they stand, and the name made from the task — no model
   turn (pressed during a read, it drops the read). A refusal (no folder, a
   missing agent) opens the form with the sentence already in Task. After
-  **Let the agent set it up…** and **← Back**, it acts on that plan instead of
+  **Let the agent pick the folder…** and **← Back**, it acts on that plan instead of
   reading again. Shift+Enter starts another line.
 
 While a turn is in flight the button shows a ring and **Asking…** (**Still

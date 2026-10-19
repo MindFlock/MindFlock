@@ -233,6 +233,9 @@ export type FolderAction =
   /** The user named a folder outside the browser: typed it, clicked a
    * suggestion chip, or applied a template carrying one. */
   | { t: "user-set"; path: string }
+  /** The user started typing what to work on with this folder on screen:
+   * from now on it is theirs, and a late pre-fill leaves it alone. */
+  | { t: "keep" }
   | { t: "browse-open" }
   /** A row was clicked or arrowed into — the selection shows in the field. */
   | { t: "browse-select"; path: string }
@@ -287,6 +290,10 @@ export function folderReducer(s: FolderState, a: FolderAction): FolderState {
       // field that is otherwise empty.
       if (!a.path || s.path) return s;
       return { ...s, path: a.path, undo: prefillUndo(s, a.path) };
+    case "keep":
+      // Nothing to keep yet (the pre-fill hasn't landed): let it fill.
+      if (s.touched || !s.path) return s;
+      return { ...s, touched: true };
     case "user-set":
       // Typing while the browser is open moves the undo point with it: Escape
       // is there to cancel the browsing, and has no business also swallowing a
@@ -738,7 +745,7 @@ export function rememberedProfileVerdict(
  * Start — the primary, which starts it now in the folder the line under the
  * box names (the folder is on screen there as a picker, so nothing starts
  * unseen); Shift+Enter (and any Enter in a batch's list) is a new line.
- * "Let the agent set it up…" — the model turn — is a click, never a key. */
+ * "Let the agent pick the folder…" — the model turn — is a click, never a key. */
 export function enterAction(where: {
   field: "name" | "describe" | "other";
   shift: boolean;

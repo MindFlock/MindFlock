@@ -84,10 +84,10 @@ describe("the fill button", () => {
   it("is labelled, and says it is still working on a slow start", () => {
     // A button with no label is not an affordance, and both busy labels ship:
     // the ring alone reads as a hang long before the server's 75s budget.
-    // Round 5: the secondary "Let the agent set it up…"; the line under the
+    // Round 5: the secondary "Let the agent pick the folder…"; the line under the
     // box says who is asked and the cap ("Asking Claude Code to fill in the
     // details… 0:01 (up to 30 s)").
-    expect(FOOTER).toContain("Let the agent set it up…");
+    expect(FOOTER).toContain("Let the agent pick the folder…");
     expect(FOOTER).toContain('"Asking…"');
     expect(FOOTER).toContain('"Still asking…"');
   });

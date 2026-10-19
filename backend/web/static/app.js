@@ -70552,6 +70552,12 @@ function folderReducer(s, a) {
 				path: a.path,
 				undo: prefillUndo(s, a.path)
 			};
+		case "keep":
+			if (s.touched || !s.path) return s;
+			return {
+				...s,
+				touched: true
+			};
 		case "user-set": return {
 			...s,
 			path: a.path,
@@ -75051,9 +75057,9 @@ function FooterActions({ error, page, setPage, runMode, describing, describeSlow
 				id: "new-describe-go",
 				disabled: describing,
 				"aria-busy": describing && describeMode === "fill" || void 0,
-				title: "Your agent picks the folder, name and options from what you typed; you check them before anything starts.",
+				title: "Instead of the Runs in folder: your agent reads what you typed and picks the folder, name and options; you check them before anything starts.",
 				onClick: () => void runDescribe("fill"),
-				children: describing && describeMode === "fill" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Reading, { slow: describeSlow }) : "Let the agent set it up…"
+				children: describing && describeMode === "fill" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Reading, { slow: describeSlow }) : "Let the agent pick the folder…"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
@@ -75374,6 +75380,7 @@ function DescribeSection({ batch, describe, setDescribe, describing, describeRef
 						placeholder: "e.g. fix the login bug in acme-api",
 						onChange: (e) => {
 							setDescribe(e.target.value);
+							folderDo({ t: "keep" });
 							setPlanError("");
 						},
 						onKeyDown: (e) => {
@@ -75413,8 +75420,7 @@ function DescribeSection({ batch, describe, setDescribe, describing, describeRef
 				suggestions,
 				folderDo,
 				onBrowse: () => setRunBrowse(true),
-				startsIn,
-				onChange: fillFormInstead
+				startsIn
 			}), !batch && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "nf-describe-eg",
 				id: "new-intake-door",
@@ -75517,7 +75523,7 @@ function DescribeSection({ batch, describe, setDescribe, describing, describeRef
 		]
 	});
 }
-function StartsInLine({ repoPath, suggestions, folderDo, onBrowse, startsIn, onChange }) {
+function StartsInLine({ repoPath, suggestions, folderDo, onBrowse, startsIn }) {
 	const path = repoPath.trim();
 	const groups = SUGGEST_SOURCES.map((g) => ({
 		label: g.key === "recent" ? "Recent folders" : g.label,
@@ -75570,16 +75576,7 @@ function StartsInLine({ repoPath, suggestions, folderDo, onBrowse, startsIn, onC
 					})
 				]
 			}),
-			startsIn,
-			" · ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "linklike",
-				id: "new-describe-change",
-				title: "The full form — folder, agent, task, name and Fast-track",
-				onClick: onChange,
-				children: "More options"
-			})
+			startsIn
 		]
 	});
 }
@@ -76277,12 +76274,6 @@ function NewSessionDialog() {
 		taken: device ? /* @__PURE__ */ new Set() : takenNames(liveRows || [], aliases)
 	});
 	const branchKnown = isGit && folderCheck?.branchPrefix !== void 0;
-	const planned1 = plannedName({
-		prefix: folderCheck?.asked === folderPath && folderCheck?.branchPrefix || "",
-		title: "",
-		prompt: describe,
-		taken: device ? /* @__PURE__ */ new Set() : takenNames(liveRows || [], aliases)
-	});
 	const others = device ? [] : sessionsInRepo(liveRows || [], [folderPath, folderCheck?.asked === folderPath ? folderCheck.resolved || "" : ""]);
 	const baseLabel = baseBranch || branches?.current || "";
 	const agentMissing = device ? "" : agentMissingReason(canonAgent(program), installed);
@@ -76565,12 +76556,10 @@ function NewSessionDialog() {
 	const startsIn = !folderPath ? null : plainFolder ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "nf-starts-sub",
 		children: " · in the folder itself (no git, so no diff or PR)"
-	}) : branchKnown ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+	}) : branchKnown ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "nf-starts-sub",
-		children: [" · own branch ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
-			title: planned1.branch,
-			children: planned1.from === "none" ? (folderCheck?.branchPrefix || "") + "…" : planned1.branch
-		})]
+		title: "The agent works in its own copy on a new branch (" + (folderCheck?.branchPrefix || "") + "…, named from your task), so your checkout is never touched. You review the diff and open a PR from it.",
+		children: " · on a new branch"
 	}) : null;
 	const describeProps = {
 		batch,

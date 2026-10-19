@@ -574,6 +574,9 @@ export function DescribeSection({
           placeholder="e.g. fix the login bug in acme-api"
           onChange={(e) => {
             setDescribe(e.target.value);
+            // Typing means the folder on the "Runs in" line is the one being
+            // used: a folder suggestion that lands late must not swap it.
+            folderDo({ t: "keep" });
             // Typing is what clears the refusal: whatever it objected to
             // has just changed, and a stale red line under a box the user
             // is actively fixing is noise.
@@ -621,9 +624,9 @@ export function DescribeSection({
         )}
       </div>
       {/* Where Start runs, as ONE line under the box: the folder is a real
-          picker (recent folders + Browse…), the branch is shown, and
-          "More options" opens the full form. Nothing about the quick path is
-          hidden in a paragraph any more. */}
+          picker (recent folders + Browse…), then whether it gets a branch of
+          its own. Nothing on it moves while you type, and the way to the full
+          form is the footer's More options alone (one name, one place). */}
       {!runMode && (
       <>
       <StartsInLine
@@ -632,7 +635,6 @@ export function DescribeSection({
         folderDo={folderDo}
         onBrowse={() => setRunBrowse(true)}
         startsIn={startsIn}
-        onChange={fillFormInstead}
       />
       {!batch && (
         /* Work that starts from somewhere else — a ticket, a PR, an issue —
@@ -750,24 +752,22 @@ export function DescribeSection({
   );
 }
 
-/** Page 1's "Runs in [folder ▾] · own branch `me/…` · change" — the whole of
- * where Start goes, on one line. The folder is a real picker: the server's
- * recent folders (only ones a session was started in) and the rest of its
- * suggestions, then Browse…, which opens the inline folder browser. */
+/** Page 1's "Runs in [folder ▾] · on a new branch" — the whole of where Start
+ * goes, on one line. The folder is a real picker: the server's recent folders
+ * (only ones a session was started in) and the rest of its suggestions, then
+ * Browse…, which opens the inline folder browser. */
 function StartsInLine({
   repoPath,
   suggestions,
   folderDo,
   onBrowse,
   startsIn,
-  onChange,
 }: {
   repoPath: string;
   suggestions: RepoSuggestion[];
   folderDo: Dispatch<FolderAction>;
   onBrowse(): void;
   startsIn: ReactNode;
-  onChange(): void;
 }) {
   const path = repoPath.trim();
   const groups = SUGGEST_SOURCES.map((g) => ({
@@ -807,17 +807,6 @@ function StartsInLine({
         <option value={BROWSE_VALUE}>Browse…</option>
       </select>
       {startsIn}
-      {" · "}
-      {/* The footer's "More options" is the same move: one name for it. */}
-      <button
-        type="button"
-        className="linklike"
-        id="new-describe-change"
-        title="The full form — folder, agent, task, name and Fast-track"
-        onClick={onChange}
-      >
-        More options
-      </button>
     </p>
   );
 }
