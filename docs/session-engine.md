@@ -287,7 +287,12 @@ without: `mindflock/<slug-of-title>`.
   `<workspace_dir>/_base_<repo-slug>`.
   The base is created once with a fast blobless single-branch clone and
   refreshed (fetch + hard reset) on later use, tolerating offline. Disk-cheap,
-  fast, and native to pause/resume.
+  fast, and native to pause/resume. When the clone source is your own checkout
+  (the universal flow, or a ticket routed to a local repo), `origin` is
+  re-pointed at that checkout's own origin (the forge) and the checkout is kept
+  as the `mindflock-source` remote, so pushes and PRs go to GitHub. The base
+  then fast-forwards to the forge's `<base_branch>` whenever your checkout's
+  copy is merely behind it; a checkout with commits of its own keeps them.
 - `clone` — a full standalone `git clone --depth=1` per session. Strongest
   isolation; the clone survives pause.
 

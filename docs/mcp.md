@@ -917,7 +917,9 @@ doesn't count.
 `{title, autopilot: null, stopped}` for `off`. Arms MindFlock's own Fast-track
 (`POST /api/instances/{title}/fast-track`, the alias of the `/lane` route the ⏩ picker calls; `DELETE` for
 `off`). Fast-track waits until the agent's turn has ended and stayed idle
-for 30 s with nothing queued, then ships it up to `depth` through the same
+for 30 s with nothing queued (also before its first push or PR when git
+already reads committed, since an agent merging its base mid-turn looks
+exactly like that), then ships it up to `depth` through the same
 buttons, retries (then skips) a pre-commit hook Settings allow-lists, runs
 a gating check before the push, waits for CI before a merge, and halts with a reason on anything that
 needs a human (a failing test hook, a red zone, a merge blocker). Arming works
