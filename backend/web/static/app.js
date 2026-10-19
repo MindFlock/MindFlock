@@ -70552,6 +70552,12 @@ function folderReducer(s, a) {
 				path: a.path,
 				undo: prefillUndo(s, a.path)
 			};
+		case "keep":
+			if (s.touched || !s.path) return s;
+			return {
+				...s,
+				touched: true
+			};
 		case "user-set": return {
 			...s,
 			path: a.path,
@@ -75051,9 +75057,9 @@ function FooterActions({ error, page, setPage, runMode, describing, describeSlow
 				id: "new-describe-go",
 				disabled: describing,
 				"aria-busy": describing && describeMode === "fill" || void 0,
-				title: "Your agent picks the folder, name and options from what you typed; you check them before anything starts.",
+				title: "Instead of the Runs in folder: your agent reads what you typed and picks the folder, name and options; you check them before anything starts.",
 				onClick: () => void runDescribe("fill"),
-				children: describing && describeMode === "fill" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Reading, { slow: describeSlow }) : "Let the agent set it up…"
+				children: describing && describeMode === "fill" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Reading, { slow: describeSlow }) : "Let the agent pick the folder…"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
@@ -75374,6 +75380,7 @@ function DescribeSection({ batch, describe, setDescribe, describing, describeRef
 						placeholder: "e.g. fix the login bug in acme-api",
 						onChange: (e) => {
 							setDescribe(e.target.value);
+							folderDo({ t: "keep" });
 							setPlanError("");
 						},
 						onKeyDown: (e) => {
@@ -75413,8 +75420,7 @@ function DescribeSection({ batch, describe, setDescribe, describing, describeRef
 				suggestions,
 				folderDo,
 				onBrowse: () => setRunBrowse(true),
-				startsIn,
-				onChange: fillFormInstead
+				startsIn
 			}), !batch && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "nf-describe-eg",
 				id: "new-intake-door",
@@ -75517,7 +75523,7 @@ function DescribeSection({ batch, describe, setDescribe, describing, describeRef
 		]
 	});
 }
-function StartsInLine({ repoPath, suggestions, folderDo, onBrowse, startsIn, onChange }) {
+function StartsInLine({ repoPath, suggestions, folderDo, onBrowse, startsIn }) {
 	const path = repoPath.trim();
 	const groups = SUGGEST_SOURCES.map((g) => ({
 		label: g.key === "recent" ? "Recent folders" : g.label,
@@ -75570,16 +75576,7 @@ function StartsInLine({ repoPath, suggestions, folderDo, onBrowse, startsIn, onC
 					})
 				]
 			}),
-			startsIn,
-			" · ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "linklike",
-				id: "new-describe-change",
-				title: "The full form — folder, agent, task, name and Fast-track",
-				onClick: onChange,
-				children: "More options"
-			})
+			startsIn
 		]
 	});
 }
@@ -76277,12 +76274,6 @@ function NewSessionDialog() {
 		taken: device ? /* @__PURE__ */ new Set() : takenNames(liveRows || [], aliases)
 	});
 	const branchKnown = isGit && folderCheck?.branchPrefix !== void 0;
-	const planned1 = plannedName({
-		prefix: folderCheck?.asked === folderPath && folderCheck?.branchPrefix || "",
-		title: "",
-		prompt: describe,
-		taken: device ? /* @__PURE__ */ new Set() : takenNames(liveRows || [], aliases)
-	});
 	const others = device ? [] : sessionsInRepo(liveRows || [], [folderPath, folderCheck?.asked === folderPath ? folderCheck.resolved || "" : ""]);
 	const baseLabel = baseBranch || branches?.current || "";
 	const agentMissing = device ? "" : agentMissingReason(canonAgent(program), installed);
@@ -76565,12 +76556,10 @@ function NewSessionDialog() {
 	const startsIn = !folderPath ? null : plainFolder ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "nf-starts-sub",
 		children: " · in the folder itself (no git, so no diff or PR)"
-	}) : branchKnown ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+	}) : branchKnown ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "nf-starts-sub",
-		children: [" · own branch ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
-			title: planned1.branch,
-			children: planned1.from === "none" ? (folderCheck?.branchPrefix || "") + "…" : planned1.branch
-		})]
+		title: "The agent works in its own copy on a new branch (" + (folderCheck?.branchPrefix || "") + "…, named from your task), so your checkout is never touched. You review the diff and open a PR from it.",
+		children: " · on a new branch"
 	}) : null;
 	const describeProps = {
 		batch,
@@ -88132,6 +88121,165 @@ function AgentMcpRows() {
 	})] });
 }
 //#endregion
+//#region src/lib/repoBranches.ts
+function normalizeRepo(raw) {
+	let v = raw.trim().replace(/\/+$/, "").replace(/\.git$/, "");
+	const scp = /^[^\s/@]+@[^\s/:]+:(.+)$/.exec(v);
+	if (scp) v = scp[1];
+	else v = v.replace(/^[a-z+]+:\/\/[^/]+\//i, "");
+	const parts = v.split("/").filter(Boolean);
+	if (parts.length < 2) return "";
+	const slug = parts.slice(-2).join("/");
+	return /^[^\s/]+\/[^\s/]+$/.test(slug) ? slug : "";
+}
+function rowsFrom(stored) {
+	if (!stored || typeof stored !== "object" || Array.isArray(stored)) return [];
+	return Object.entries(stored).map(([repo, block]) => {
+		const b = block && typeof block === "object" ? block : {};
+		return {
+			repo,
+			base: String(b.base_branch || ""),
+			pr: String(b.pr_base_branch || "")
+		};
+	});
+}
+function mapFrom(rows) {
+	const out = {};
+	for (const r of rows) {
+		const slug = normalizeRepo(r.repo);
+		const block = {};
+		if (r.base.trim()) block.base_branch = r.base.trim();
+		if (r.pr.trim()) block.pr_base_branch = r.pr.trim();
+		if (slug && Object.keys(block).length) out[slug] = block;
+	}
+	return out;
+}
+//#endregion
+//#region src/components/settings/screens/RepoBranches.tsx
+function RepoBranches() {
+	const s = useSettings();
+	const stored = s.get("repository", "repo_branches");
+	const storedKey = JSON.stringify(stored || {});
+	const defaultBase = String(s.get("repository", "base_branch") || "") || "main";
+	const [rows, setRows] = (0, import_react.useState)(() => rowsFrom(stored));
+	(0, import_react.useEffect)(() => {
+		setRows((prev) => JSON.stringify(mapFrom(prev)) === storedKey ? prev : rowsFrom(stored));
+	}, [storedKey]);
+	const save = (next) => {
+		const map = mapFrom(next);
+		if (JSON.stringify(map) === storedKey) return;
+		s.saveGroups({ repository: { repo_branches: map } }, "Saved per-repo branches");
+	};
+	const edit = (i, patch) => setRows((prev) => prev.map((r, j) => j === i ? {
+		...r,
+		...patch
+	} : r));
+	const remove = (i) => {
+		const next = rows.filter((_, j) => j !== i);
+		setRows(next);
+		save(next);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row",
+		id: "workspace-repo-branches",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Per-repo branches"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint",
+				children: [
+					"For a repo whose branches differ from the defaults above, e.g. one that only has",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "main" }),
+					". Blank PR base = that repo's base branch."
+				]
+			}),
+			rows.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ws-repo-branches",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Repository"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Base branch"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "PR base branch"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {}),
+					rows.map((r, i) => {
+						const bad = r.repo.trim() !== "" && !normalizeRepo(r.repo);
+						return [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								"data-field": "repo",
+								"aria-label": "Repository",
+								"aria-invalid": bad || void 0,
+								title: bad ? "owner/name, or the repo's GitHub URL" : void 0,
+								placeholder: "owner/name",
+								autoComplete: "off",
+								spellCheck: false,
+								value: r.repo,
+								onChange: (e) => edit(i, { repo: e.target.value }),
+								onBlur: () => {
+									const slug = normalizeRepo(r.repo);
+									const next = rows.map((x, j) => j === i && slug ? {
+										...x,
+										repo: slug
+									} : x);
+									setRows(next);
+									save(next);
+								}
+							}, "repo" + i),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								"data-field": "base_branch",
+								"aria-label": "Base branch",
+								placeholder: defaultBase,
+								autoComplete: "off",
+								spellCheck: false,
+								value: r.base,
+								onChange: (e) => edit(i, { base: e.target.value }),
+								onBlur: () => save(rows)
+							}, "base" + i),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								"data-field": "pr_base_branch",
+								"aria-label": "PR base branch",
+								placeholder: r.base.trim() || "same as base",
+								autoComplete: "off",
+								spellCheck: false,
+								value: r.pr,
+								onChange: (e) => edit(i, { pr: e.target.value }),
+								onBlur: () => save(rows)
+							}, "pr" + i),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn",
+								"aria-label": "Remove " + (r.repo || "row"),
+								onClick: () => remove(i),
+								children: "Remove"
+							}, "rm" + i)
+						];
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				onClick: () => setRows((prev) => [...prev, {
+					repo: "",
+					base: "",
+					pr: ""
+				}]),
+				children: "+ Add repo"
+			}) })
+		]
+	});
+}
+//#endregion
 //#region src/components/settings/screens/Workspace.tsx
 function pathsUrl(typed) {
 	return "/api/settings/workspace-paths" + (typed === void 0 ? "" : "?dir=" + encodeURIComponent(typed));
@@ -88338,6 +88486,7 @@ function Workspace({ gotoScreen }) {
 				})
 			]
 		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoBranches, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(AdvancedFold, {
 			id: "workspace-advanced",
 			children: [

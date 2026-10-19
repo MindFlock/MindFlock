@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Per-repo base branches.** Settings → Workspace → **Per-repo branches**
+  gives a repo its own base branch (where its sessions fork from) and PR base
+  branch (where its PRs point), overriding the Workspace defaults — for a repo
+  that only has `main` while the rest fork from `staging`. A row's blank PR
+  base means that repo's own base branch. Ticket sessions, Open PR,
+  fast-track and the multi-repo ticket instructions all honour it.
+
+### Changed
+
+- **New is easier to read.** The line under the box says *Runs in [folder ▾]
+  · on a new branch* and no longer rewrites a branch name as you type, which
+  made it look like the folder followed your sentence. Its duplicate **More
+  options** link is gone (the footer's button is the one way to the form), and
+  **Let the agent set it up…** is now **Let the agent pick the folder…**, the
+  other way to choose that same folder (on the phone too).
+
+### Fixed
+
+- New could swap the *Runs in* folder a few seconds after opening, while you
+  were already typing, when the folder suggestions finished loading late.
+
 ## [0.9.1] - 2026-10-19
 
 The map in the flow: the Map is where you already are — a tab on every git

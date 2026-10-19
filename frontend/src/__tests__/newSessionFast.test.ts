@@ -118,16 +118,21 @@ describe("page 1 — the sentence card, as in v0.7", () => {
   it("draws the box and ONE line saying where Start runs, and nothing of the form", () => {
     expect(DESCRIBE).toContain('"What do you want to work on?"');
     expect(DESCRIBE).toContain('placeholder="e.g. fix the login bug in acme-api"');
-    // Round 5: "Runs in [folder ▾] · own branch … · change" — the folder is
-    // a real picker (recent folders + Browse…) and "change" opens the form.
+    // "Runs in [folder ▾] · on a new branch" — the folder is a real picker
+    // (recent folders + Browse…). Nothing on the line follows the sentence:
+    // the branch NAME is named from it, and showing it live made the whole
+    // line look like it reacted to the prompt (owner, 2026-10-19). The form
+    // is the footer's More options alone.
     expect(DESCRIBE).toContain("<StartsInLine");
     expect(DESCRIBE).toContain("Runs in");
     expect(DESCRIBE).toContain('id="new-describe-folder"');
     expect(DESCRIBE).toContain('data-tour="new-folder"');
     expect(DESCRIBE).toContain('"Recent folders"');
     expect(DESCRIBE).toContain('<option value={BROWSE_VALUE}>Browse…</option>');
-    expect(DESCRIBE).toContain('id="new-describe-change"');
-    expect(DIALOG).toContain('" · own branch "');
+    expect(DESCRIBE).not.toContain('id="new-describe-change"');
+    expect(DIALOG).toContain('" · on a new branch"');
+    expect(DIALOG).not.toContain('" · own branch "');
+    expect(DIALOG).not.toContain("planned1");
     // The paragraph that explained three buttons is gone with them.
     expect(DESCRIBE).not.toContain("<b>Review details first</b>");
     expect(DESCRIBE).not.toContain("<b>Create session</b>");
@@ -142,7 +147,7 @@ describe("page 1 — the sentence card, as in v0.7", () => {
     expect(SRC).not.toContain("Describe it instead…");
   });
 
-  it("has ONE primary, Start ↵, with More options and Let the agent set it up… beside it", () => {
+  it("has ONE primary, Start ↵, with More options and Let the agent pick the folder… beside it", () => {
     const skip = FOOTER.indexOf('id="new-describe-skip"');
     const go = FOOTER.indexOf('id="new-describe-go"');
     const start = FOOTER.indexOf('id="new-describe-start"');
@@ -155,10 +160,10 @@ describe("page 1 — the sentence card, as in v0.7", () => {
     expect(skipBtn).toContain("onClick={setUpMyself}");
     expect(skipBtn).toContain("More options");
     expect(FOOTER).not.toContain("Set it up myself instead");
-    // Let the agent set it up… → the model fills the form in; a click, not Enter.
+    // Let the agent pick the folder… → the model fills the form in; a click, not Enter.
     const goBtn = FOOTER.slice(go, start);
     expect(goBtn).toContain('onClick={() => void runDescribe("fill")}');
-    expect(goBtn).toContain("Let the agent set it up…");
+    expect(goBtn).toContain("Let the agent pick the folder…");
     expect(goBtn).not.toContain("↵");
     expect(FOOTER).not.toContain("Review details first");
     // Start ↵ → create now, without the form and without waiting on the agent

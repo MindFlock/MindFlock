@@ -17,6 +17,7 @@ import type { ScreenProps } from "../SettingsDialog";
 import { InfoTip } from "../../InfoTip";
 import { AdvancedFold } from "../settingsMode";
 import { PathField } from "../../PathField";
+import { RepoBranches } from "./RepoBranches";
 
 /** GET /api/settings/workspace-paths. */
 export interface WorkspacePaths {
@@ -184,6 +185,7 @@ export function Workspace({ gotoScreen }: ScreenProps) {
           Where <strong>Open PR</strong> points. Blank = the branch the session started from.
         </span>
       </label>
+      <RepoBranches />
       {/* What "shipped" means, fast-track's default reach and its hook
           retries: tuning for a flow that already works — advanced mode only. */}
       <AdvancedFold id="workspace-advanced">

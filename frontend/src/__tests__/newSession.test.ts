@@ -207,6 +207,19 @@ describe("folderReducer — the pre-fill racing the user", () => {
       "/home/me/code/myrepo"
     );
   });
+
+  it("stops a late suggestion from swapping the folder once the user starts typing", () => {
+    // Reopened on last time's folder, the user types the task with it on the
+    // "Runs in" line; the slow suggestion walk lands afterwards.
+    const s = run(FOLDER_INIT, { t: "user-set", path: "/srv/work/project" }, { t: "reopen" }, { t: "keep" });
+    expect(run(s, { t: "suggested", path: "/home/me/code/myrepo" }).path).toBe("/srv/work/project");
+    // Typing before ANY folder is there keeps nothing: the pre-fill still lands.
+    const empty = run(FOLDER_INIT, { t: "reopen" }, { t: "keep" });
+    expect(empty).toEqual(run(FOLDER_INIT, { t: "reopen" }));
+    expect(run(empty, { t: "suggested", path: "/home/me/code/myrepo" }).path).toBe("/home/me/code/myrepo");
+    // Every keystroke dispatches it: after the first, the state is unchanged.
+    expect(run(s, { t: "keep" })).toBe(s);
+  });
 });
 
 describe("looksLikePath — the one predicate that keeps a combobox a path field", () => {

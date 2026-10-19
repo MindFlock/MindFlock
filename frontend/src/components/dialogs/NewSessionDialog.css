@@ -1149,7 +1149,7 @@
 
 /* Page 1's ONE primary is Start: it is what Enter does, so the accent and the
    ↵ sit on one control, and it wears what the form's Start wears because it
-   is the same POST reached without the form. "Let the agent set it up…" (a
+   is the same POST reached without the form. "Let the agent pick the folder…" (a
    model turn) is the secondary beside it. */
 #new-describe-start {
   border-radius: 7px;
@@ -2408,7 +2408,7 @@
   font-weight: 600;
 }
 
-/* Page 1's "Runs in [folder ▾] · own branch me/… · change": where Start goes,
+/* Page 1's "Runs in [folder ▾] · on a new branch": where Start goes,
    on one line under the box. The folder is a real picker, sized like a chip
    so it reads as part of the sentence. */
 .nf-starts-line {
@@ -2470,7 +2470,7 @@
   color: var(--red);
 }
 
-/* Who is doing what while "Let the agent set it up…" waits, and for how long
+/* Who is doing what while "Let the agent pick the folder…" waits, and for how long
    at most. */
 .nf-describe-wait {
   margin: 6px 0 0;

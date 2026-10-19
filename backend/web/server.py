@@ -6518,18 +6518,25 @@ def _session_base_branch(inst) -> str:
     return branch
 
 
-def _configured_pr_base() -> str:
-    """The user-configured default PR base branch (``repository.pr_base_branch``),
-    or ``""`` when unset.
+def _configured_pr_base(wt: str = "") -> str:
+    """The user-configured PR base branch for the repo at ``wt``, or ``""``.
 
-    Read fresh from settings on each call so a change takes effect without a
-    restart. When set it overrides the per-session fork-point as the "Make PR"
-    target (see :func:`instance_make_pr`); blank leaves the K1 behaviour intact.
+    The repo's own ``repository.repo_branches`` block first (its
+    ``pr_base_branch``, else its ``base_branch``), then the flock-wide
+    ``repository.pr_base_branch``. Read fresh from settings on each call so a
+    change takes effect without a restart. When set it overrides the
+    per-session fork-point as the "Make PR" target (see
+    :func:`instance_make_pr`); blank leaves the K1 behaviour intact.
     """
     try:
-        from backend.config.settings import load_settings
+        from backend.config.settings import load_settings, repo_branches_for
 
-        return (load_settings().repository.pr_base_branch or "").strip()
+        st = load_settings()
+        if wt:
+            pr = repo_branches_for(provisioning.repo_slug_for(wt), st)[1]
+            if pr:
+                return pr
+        return (st.repository.pr_base_branch or "").strip()
     except Exception:  # noqa: BLE001 — settings optional; never break a PR
         return ""
 
@@ -7896,7 +7903,7 @@ async def instance_branches(title: str) -> JSONResponse:
 
     branches = await asyncio.to_thread(_list_branches)
     current = await asyncio.to_thread(_current_branch, wt) or inst.Branch or ""
-    default = _configured_pr_base() or _session_base_branch(inst)
+    default = _configured_pr_base(wt) or _session_base_branch(inst)
     return JSONResponse({"branches": branches, "current": current, "default": default})
 
 
@@ -7974,7 +7981,9 @@ async def instance_make_pr(title: str, payload: Optional[dict] = None) -> JSONRe
     # into a fixed branch (e.g. staging) instead of whatever they were cut from;
     # blank falls through to the per-session base (K1) — the prior behaviour.
     chosen = (payload or {}).get("base")
-    base = (chosen or "").strip() or _configured_pr_base() or _session_base_branch(inst)
+    base = (
+        (chosen or "").strip() or _configured_pr_base(wt) or _session_base_branch(inst)
+    )
     # PR the branch the worktree is *actually* on — the stored inst.Branch can
     # drift when the worktree is switched, which would PR the wrong branch.
     branch = _current_branch(wt) or inst.Branch or ""
@@ -8170,7 +8179,7 @@ async def instance_merge_pr(title: str, payload: Optional[dict] = None) -> JSONR
         except OSError:
             pass
         _ORIGIN_SHA_CACHE.pop((wt, branch), None)
-        base = _configured_pr_base() or _session_base_branch(inst)
+        base = _configured_pr_base(wt) or _session_base_branch(inst)
         _run_capped(  # best-effort; a failure just leaves the old lag
             ["git", "-C", wt, "fetch", "origin", base],
             stdout=subprocess.DEVNULL,

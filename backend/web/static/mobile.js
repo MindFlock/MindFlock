@@ -1454,8 +1454,8 @@
   // never changes reads as a page that has hung.
   var NEW_SLOW_MS = 8000;
   // The desktop New dialog's own words (NewSessionDialog.tsx, round 5): "Start"
-  // starts it now; "Let the agent set it up…" reads the sentence and shows the review.
-  var NEW_GO_LABEL = "Let the agent set it up…";
+  // starts it now; "Let the agent pick the folder…" reads the sentence and shows the review.
+  var NEW_GO_LABEL = "Let the agent pick the folder…";
   // How long a 202 has to turn into a row in the session list before we stop
   // claiming it is starting. A create answers 202 immediately and does the
   // worktree/provisioning/tmux work in a background task, so the row is usually

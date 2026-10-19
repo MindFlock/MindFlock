@@ -209,7 +209,7 @@ def _cp(rc, out=""):
 def mkpr(reg, tmp_path, monkeypatch):
     reg["s"] = _Inst("s", wt=str(tmp_path))
     monkeypatch.setattr(server, "git_available", lambda: True)
-    monkeypatch.setattr(server, "_configured_pr_base", lambda: "main")
+    monkeypatch.setattr(server, "_configured_pr_base", lambda *_a: "main")
     monkeypatch.setattr(server, "_current_branch", lambda wt: "feat/x")
 
     async def _no_gate(*a, **k):

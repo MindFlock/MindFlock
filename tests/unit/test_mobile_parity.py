@@ -306,11 +306,14 @@ def test_new_sheet_buttons_are_the_desktops():
     run_start = (ROOT / "frontend" / "src" / "lib" / "runStart.ts").read_text()
     # Round 5: Start is the one primary; the agent-assisted path and the
     # full form are secondary (r5-new #2).
-    assert "Let the agent set it up…" in dialog
+    assert "Let the agent pick the folder…" in dialog
     assert "More options" in dialog
     assert 'return "Create session";' in run_start
-    assert '<button type="button" id="new-go">Let the agent set it up…</button>' in html
+    assert (
+        '<button type="button" id="new-go">Let the agent pick the folder…</button>'
+        in html
+    )
     assert '<button type="button" id="new-start">Start</button>' in html
     assert ">More options</button>" in html
-    assert 'var NEW_GO_LABEL = "Let the agent set it up…";' in js
+    assert 'var NEW_GO_LABEL = "Let the agent pick the folder…";' in js
     assert '"Continue"' not in js and '"Start session"' not in js

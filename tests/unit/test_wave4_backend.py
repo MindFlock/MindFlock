@@ -766,7 +766,7 @@ def _prime_make_pr(monkeypatch, tmp_path, *, branch, base, title, with_gh=True):
     server.ENGINE.instances[title] = inst
     monkeypatch.setattr(server, "git_available", lambda: True)
     monkeypatch.setattr(server, "gh_available", lambda: with_gh)
-    monkeypatch.setattr(server, "_configured_pr_base", lambda: base)
+    monkeypatch.setattr(server, "_configured_pr_base", lambda *_a: base)
     monkeypatch.setattr(server, "_current_branch", lambda wt: branch)
     return title
 

@@ -111,7 +111,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "_session_limited_until", lambda t: 0.0)
     monkeypatch.setattr(server, "_in_boot_quiet", lambda: False)
     monkeypatch.setattr(server, "_mcp_unattachable", lambda program: None)
-    monkeypatch.setattr(server, "_configured_pr_base", lambda: "")
+    monkeypatch.setattr(server, "_configured_pr_base", lambda *_a: "")
     monkeypatch.setattr(drv, "_DELETED", {})
     monkeypatch.setattr(drv, "_TURN_ENDED", {})
     monkeypatch.setattr(drv, "_UNSUB", None)

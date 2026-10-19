@@ -119,9 +119,12 @@ describe("one name per thing", () => {
     expect(code("components/dialogs/NewSessionDialog.tsx")).not.toContain("in Templates at the top of New");
   });
 
-  it("page 1's link to the form is 'More options', like the footer's", () => {
+  it("page 1's only way to the form is the footer's 'More options'", () => {
     const d = code("components/dialogs/newSession/DescribeSection.tsx");
-    expect(squash(d)).toMatch(/id="new-describe-change"[^>]*>\s*More options\s*<\/button>/);
+    // The "Runs in" line's own More options link duplicated the footer's
+    // button word for word: one move, one place.
+    expect(d).not.toContain('id="new-describe-change"');
+    expect(squash(d)).not.toMatch(/>\s*More options\s*<\/button>/);
     expect(d).not.toContain("function NewFolderRow");
     expect(code("components/dialogs/newSession.ts")).not.toContain("then press Create.");
   });

@@ -1,5 +1,5 @@
 /** The New dialog's action row: page 1's ONE primary (Start ↵) with "More
- * options" and "Let the agent set it up…" beside it (or an Intake batch's
+ * options" and "Let the agent pick the folder…" beside it (or an Intake batch's
  * Start N), or the form's ← Back / Start, with the error line beside them.
  * "Save as template…" lives in the form's More options. */
 
@@ -81,10 +81,11 @@ export function FooterActions({
         {page === 1 ? (
           <>
             {/* ONE primary. "More options" (the full form, nothing read) is
-                quiet and far left; "Let the agent set it up…" — a model
-                turn that fills the form in for review — is secondary; Start
-                (accent, ↵ — what Enter does) starts it now where the "Runs
-                in" line says. */}
+                quiet and far left; "Let the agent pick the folder…" — a model
+                turn that reads the sentence and fills the form in for review —
+                is secondary, and named for the one choice it makes instead of
+                you (the "Runs in" folder); Start (accent, ↵ — what Enter does)
+                starts it now where the "Runs in" line says. */}
             <button
               type="button"
               id="new-describe-skip"
@@ -105,10 +106,10 @@ export function FooterActions({
                 id="new-describe-go"
                 disabled={describing}
                 aria-busy={(describing && describeMode === "fill") || undefined}
-                title="Your agent picks the folder, name and options from what you typed; you check them before anything starts."
+                title="Instead of the Runs in folder: your agent reads what you typed and picks the folder, name and options; you check them before anything starts."
                 onClick={() => void runDescribe("fill")}
               >
-                {describing && describeMode === "fill" ? <Reading slow={describeSlow} /> : "Let the agent set it up…"}
+                {describing && describeMode === "fill" ? <Reading slow={describeSlow} /> : "Let the agent pick the folder…"}
               </button>
             )}
             {/* Never waits on the agent: pressed during a read, it drops the
