@@ -23,7 +23,10 @@ def _isolated_store(monkeypatch):
 
 def _rec(**over):
     r = ap._blank()
-    r.update({"depth": "pr", "state": "running"})
+    # The agent's turn is settled over by default (idle well past the dwell at
+    # _snap's now): the rungs after a commit wait for that until the run has
+    # acted, and these tests are about the rungs, not the wait.
+    r.update({"depth": "pr", "state": "running", "idle_since": 10_000.0 - 60})
     r.update(over)
     return r
 
@@ -100,7 +103,7 @@ def test_normalize_depth_rejects_junk():
 
 # --- The happy ladder --------------------------------------------------------
 def test_idle_dwell_is_required_before_the_first_commit():
-    rec = _rec()
+    rec = _rec(idle_since=None)
     # First idle sighting only marks the clock.
     action, detail = ap.next_action(rec, _snap())
     assert action == "wait"
@@ -694,3 +697,21 @@ def test_a_finished_run_is_left_alone_rather_than_woken():
     # Inert: next_action refuses to do anything further with it.
     assert ap.next_action(got, _snap(stage="agent", dirty=True))[0] == "done"
     assert not hasattr(ap, "rearm"), "a finished run is not woken any more"
+
+
+def test_a_branch_that_reads_committed_mid_turn_is_not_pushed():
+    """A ticket session's agent fast-forwarded to the forge's base, so git read
+    a clean tree with commits beyond the stale base ("committed") one second
+    later, and the run pushed with nothing of the agent's in it. Until the run
+    has acted, the rungs past a commit wait for the agent's settled turn."""
+    for stage in ("committed", "pushed"):
+        working = ap.next_action(_rec(), _snap(stage=stage, activity="working"))
+        assert working == ("wait", {"reason": "agent is working"})
+        fresh = ap.next_action(_rec(idle_since=None), _snap(stage=stage))
+        assert fresh[0] == "wait" and fresh[1]["mark_idle"] is True
+    assert ap.next_action(_rec(), _snap(stage="committed"))[0] == "push"
+    # A run that has already carried a rung is not held for the agent.
+    acted = _rec(commits=1, step="commit", idle_since=None)
+    assert (
+        ap.next_action(acted, _snap(stage="committed", activity="working"))[0] == "push"
+    )

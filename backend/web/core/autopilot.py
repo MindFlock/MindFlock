@@ -560,6 +560,18 @@ def _ladder(rec: dict, snap: dict, depth: str, stage: str) -> Tuple[str, dict]:
     if stage == "agent":
         return _agent_action(rec, snap, depth)
 
+    # GIT CAN SAY "FINISHED" WHILE THE AGENT IS MID-TURN. A clean tree with
+    # commits beyond the base reads "committed" the moment the agent merges its
+    # base in (or commits its first step), and this run used to push one second
+    # later: a ticket session's agent fast-forwarded to the forge's staging,
+    # the branch looked like 339 commits of finished work, and it was pushed 22s
+    # into the task — with nothing of the agent's in it. Until this run has
+    # acted, the outward rungs wait for the same settled-idle turn a commit does.
+    if not (int(rec.get("commits") or 0) > 0 or rec.get("step")):
+        held = _agent_settled(rec, snap)
+        if held is not None:
+            return held
+
     if stage == "committed":
         if depth == "commit":  # defensive: reaches() already covered this
             return "done", {}
@@ -782,6 +794,31 @@ def _blocker_fix(blockers) -> str:
     return ""
 
 
+def _agent_settled(rec: dict, snap: dict) -> Optional[Tuple[str, dict]]:
+    """A wait while the agent's turn is not settled over, else None: idle (never
+    merely "not working") for :data:`IDLE_SETTLE_S`, not usage-limited, nothing
+    queued, no backgrounded job it is waiting on."""
+    activity = str(snap.get("activity") or "")
+    if snap.get("limited"):
+        return "wait", {"reason": "usage limit — waiting for the window to reopen"}
+    if activity != "idle":
+        return "wait", {"reason": "agent is %s" % (activity or "busy")}
+    if snap.get("queue_pending"):
+        return "wait", {"reason": "prompt queue still has work"}
+    if snap.get("background_waiting"):
+        # The turn ended, but a job the agent backgrounded is still waiting and
+        # will wake it when it finishes. Bounded: a waiting job turns stuck
+        # (and stops holding) after the job's own stuck threshold (claude_background: 15 min, raised by its learned rhythm or a declared expected duration).
+        return "wait", {"reason": "a background job the agent started is still waiting"}
+    idle_since = rec.get("idle_since")
+    now = float(snap.get("now") or 0.0)
+    if idle_since is None:
+        return "wait", {"reason": "agent just went idle", "mark_idle": True}
+    if now - float(idle_since) < IDLE_SETTLE_S:
+        return "wait", {"reason": "confirming the agent is done"}
+    return None
+
+
 def _agent_action(rec: dict, snap: dict, depth: str) -> Tuple[str, dict]:
     """The "is the agent done?" gate.
 
@@ -808,24 +845,9 @@ def _agent_action(rec: dict, snap: dict, depth: str) -> Tuple[str, dict]:
     roughly 35 seconds after every press. That was the single worst bug in the
     feature. Now it waits, bounded by the arm deadline.
     """
-    activity = str(snap.get("activity") or "")
-    if snap.get("limited"):
-        return "wait", {"reason": "usage limit — waiting for the window to reopen"}
-    if activity != "idle":
-        return "wait", {"reason": "agent is %s" % (activity or "busy")}
-    if snap.get("queue_pending"):
-        return "wait", {"reason": "prompt queue still has work"}
-    if snap.get("background_waiting"):
-        # The turn ended, but a job the agent backgrounded is still waiting and
-        # will wake it when it finishes. Bounded: a waiting job turns stuck
-        # (and stops holding) after the job's own stuck threshold (claude_background: 15 min, raised by its learned rhythm or a declared expected duration).
-        return "wait", {"reason": "a background job the agent started is still waiting"}
-    idle_since = rec.get("idle_since")
-    now = float(snap.get("now") or 0.0)
-    if idle_since is None:
-        return "wait", {"reason": "agent just went idle", "mark_idle": True}
-    if now - float(idle_since) < IDLE_SETTLE_S:
-        return "wait", {"reason": "confirming the agent is done"}
+    held = _agent_settled(rec, snap)
+    if held is not None:
+        return held
     if depth == "agent":
         return "done", {}
     if not snap.get("dirty"):

@@ -308,8 +308,18 @@ def load_provision_settings(
         default=True,
     )
 
+    # A LOCAL clone source (a ticket routed to the user's own checkout) still
+    # pushes to that checkout's forge: without its origin here, forge_origin()
+    # found nothing and the workspace's origin stayed the checkout's path, so
+    # pushes landed on the laptop and Open PR found no GitHub remote.
+    origin_url = ""
+    local = os.path.expanduser(str(repo_url))
+    if remote_url.is_local_path(str(repo_url)) and os.path.isdir(local):
+        origin_url = _git_origin_url(local)
+
     return ProvisionSettings(
         repo_url=str(repo_url),
+        origin_url=origin_url,
         workspace_dir=ws,
         base_branch=str(base_branch),
         open_cursor=bool(open_cursor),
@@ -984,7 +994,59 @@ def ensure_base_repo(settings: ProvisionSettings) -> str:
         _refresh_base_repo(base, settings)
     else:
         _clone_base_repo(base, settings)
+    _advance_base_to_forge(base, settings)
     return str(base)
+
+
+def _advance_base_to_forge(base: Path, settings: ProvisionSettings) -> None:
+    """Move the base branch up to the FORGE's tip when the user's checkout is
+    merely behind it. Best-effort; never raises, never discards work.
+
+    A base cloned from the user's own checkout tracks that checkout's
+    ``<base_branch>``, which is only as fresh as their last pull — 339 commits
+    behind GitHub in the case that motivated this. Every session then forked
+    from history the agent first had to catch up on, and the catch-up merge
+    made the new branch look like hundreds of commits of finished work against
+    the stale ``origin/<base>``. So once origin is the forge, fetch its base
+    branch and fast-forward to it — but only when the checkout's base is an
+    ANCESTOR of it: a checkout with commits of its own (ahead or diverged)
+    keeps them, which is why the base follows the checkout in the first place.
+    """
+    try:
+        if _refresh_remote_for(base) != SOURCE_REMOTE_NAME or not forge_origin(
+            settings
+        ):
+            return
+        branch = settings.base_branch
+        forge_ref = "refs/remotes/origin/" + branch
+        fetched = _run(
+            "git",
+            "-C",
+            str(base),
+            "fetch",
+            "--no-tags",
+            "origin",
+            "+refs/heads/{0}:{1}".format(branch, forge_ref),
+            timeout=_NET_TIMEOUT,
+        )
+        if fetched.returncode != 0:
+            return  # offline, or no such branch on the forge: keep the checkout's
+        head = _run("git", "-C", str(base), "rev-parse", "HEAD")
+        tip = _run("git", "-C", str(base), "rev-parse", forge_ref)
+        if head.returncode != 0 or tip.returncode != 0:
+            return
+        if head.stdout.strip() == tip.stdout.strip():
+            return
+        behind = _run(
+            "git", "-C", str(base), "merge-base", "--is-ancestor", "HEAD", forge_ref
+        )
+        if behind.returncode != 0:
+            return  # the checkout has commits of its own: leave them be
+        co = _run("git", "-C", str(base), "checkout", "-B", branch, forge_ref)
+        if co.returncode == 0:
+            _run("git", "-C", str(base), "reset", "--hard", forge_ref)
+    except Exception as err:  # noqa: BLE001 — a stale base is no worse than before
+        _logger.info("provision: could not advance %s to the forge: %s", base, err)
 
 
 def _refresh_base_repo(base: Path, settings: ProvisionSettings) -> None:

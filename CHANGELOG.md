@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ticket sessions on a local checkout push to GitHub.** A ticket routed to
+  your own clone (e.g. `~/code/app`) got `origin` = that folder, so fast-track
+  and Push sent the branch into your laptop and Open PR failed with "none of
+  the git remotes … point to a known GitHub host". `origin` is now the
+  checkout's own GitHub remote; the checkout stays the fast clone source.
+- **Ticket sessions fork from GitHub's base branch, not your checkout's stale
+  copy.** When your local `staging` is only behind GitHub's, the base
+  fast-forwards to GitHub's before the session starts; local commits of your
+  own are kept.
+- **Fast-track never pushes mid-turn.** An agent merging its base branch made
+  the branch read "committed" with a clean tree, and fast-track pushed it a
+  second later with none of the agent's work. Until a run has done something
+  itself, the push / PR rungs wait for the agent's turn to end, like a commit.
+
 ## [0.9.3] - 2026-10-19
 
 Fast-track no longer falls off the path after a failure it hands to the agent:
