@@ -47,12 +47,17 @@ export interface Palette {
   DUSK: Pal & { bark: string };
   KEEP: Pal;
   ROOTPAL: Pal;
-  PILEPAL: { leafA: string; leafB: string; doc: string };
   BARK: { crown: string; crownHi: string; root: string; rootHi: string; rootDusk: string };
   duskLabel: string;
   duskLeafLabel: string;
   rootLabel: string;
-  pileLabel: string;
+  /** a test's root tip (the nodule a strand ends in): pale on the dark soil, dark on the light soil */
+  rootTip: string;
+  /** a test's fine root strands (the thick ones near the limb are BARK.root): paler than the soil in the dark */
+  rootFine: string;
+  /** a support root (docs, CI, config, test data): the same strands and tips as a test's, in a cooler, greyer soil
+   * tone — its limb wood, its fine strands, its tips */
+  supRoot: { strand: string; fine: string; tip: string };
   keepText: string;
   onlyText: string;
   leafLabel: string;
@@ -229,7 +234,6 @@ export function readPalette(el: Element | null): Palette {
     cvHi: rh(34, 20, 33),
     cvSh: rh(28, 20, 8),
   };
-  const PILEPAL = { leafA: rh(30, 30, 40), leafB: rh(22, 25, 33), doc: rh(30, 30, 40) };
   const red = v("--red", "#de613e"),
     green = v("--green", "#51bd73"),
     gold = v("--gold", "#ffd700");
@@ -260,7 +264,6 @@ export function readPalette(el: Element | null): Palette {
     DUSK,
     KEEP,
     ROOTPAL,
-    PILEPAL,
     BARK: {
       crown: v("--ct-calm-bark", v("--ct-bark", "hsl(28,14%,37%)")),
       crownHi: v("--ct-bark-hi", "hsl(30,14%,46%)"),
@@ -271,7 +274,13 @@ export function readPalette(el: Element | null): Palette {
     duskLabel: DUSK.label,
     duskLeafLabel: v("--ct-dusk-leaf-label", "#7c8291"),
     rootLabel: ROOTPAL.label,
-    pileLabel: v("--ct-pile-label", "hsl(32,32%,66%)"),
+    rootTip: v("--ct-root-tip", light ? "hsl(28,34%,30%)" : "hsl(36,30%,64%)"),
+    rootFine: v("--ct-root-fine", light ? "hsl(27,24%,42%)" : "hsl(31,20%,42%)"),
+    supRoot: {
+      strand: v("--ct-sup-root", light ? "hsl(212,9%,37%)" : "hsl(212,9%,33%)"),
+      fine: v("--ct-sup-root-fine", light ? "hsl(212,8%,47%)" : "hsl(212,8%,43%)"),
+      tip: v("--ct-sup-root-tip", light ? "hsl(212,13%,31%)" : "hsl(210,12%,66%)"),
+    },
     keepText: v("--ct-keep-text", "#ffb7a3"),
     onlyText: v("--ct-only-text", "#a8f0c0"),
     leafLabel: v("--ct-leaf-label", "#c9cdd6"),

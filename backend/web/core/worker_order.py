@@ -667,15 +667,22 @@ def fence_text(fence: Optional[Mapping], by: str = "") -> str:
     if not only and not out:
         return ""
     who = ("set by %s" % by) if by else "set by your orchestrator"
-    lines = ["MindFlock fence (%s) — enforced on every edit:" % who]
+    lines = [
+        "MindFlock fence (%s) — your task's contract, enforced on every edit:" % who
+    ]
     if only:
-        lines.append("- you may change ONLY: " + ", ".join(only))
+        lines.append(
+            "- work in ONLY: %s — read outside only to understand callers; never "
+            "edit outside" % ", ".join(only)
+        )
     if out:
-        lines.append("- keep OUT of (read-only for you): " + ", ".join(out))
+        lines.append("- keep OUT of (never edit): " + ", ".join(out))
     if fence.get("reason"):
         lines.append("- why: " + str(fence["reason"])[:300])
     lines.append(
-        "If the task needs a change outside the fence, finish what is inside it "
-        "and say what else is needed in your report instead of working around it."
+        "Need a change outside the fence? Finish what is inside it, then call "
+        'report_result with status "blocked" naming the file and why. Don\'t '
+        "work around the fence or ask for a wider one: whoever set it decides "
+        "who changes it."
     )
     return "\n".join(lines)

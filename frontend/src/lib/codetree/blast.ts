@@ -56,10 +56,8 @@ export function addBadgeSets(
     if (!ff || !ff.leaf || !shown(id)) continue;
     let n: TNode | null = ff.node;
     if (!n) continue;
-    if (n.kind !== "pile") {
-      while (n && n.depth > deep) n = n.parent;
-      while (n && n.vHidden) n = n.parent;
-    }
+    while (n && n.depth > deep) n = n.parent;
+    while (n && n.vHidden) n = n.parent;
     if (!n) continue;
     const key = n.id + "|" + who;
     let e = sets.get(key);
@@ -101,10 +99,10 @@ export function collectBadges(v: Pick<TreeView, "M" | "cam" | "badgeSets" | "bad
   for (const [, arr] of byWho) {
     let list = arr;
     // zoomed out, a count of one or two on a sub-folder is a pill fighting for pixels: fold it into its limb
-    if (lp < 14) for (const e of list.slice()) if (e.ids.size < 3 && e.n.depth > 1 && e.n.kind !== "pile" && list.includes(e)) list = mergeUp(list, e);
+    if (lp < 14) for (const e of list.slice()) if (e.ids.size < 3 && e.n.depth > 1 && list.includes(e)) list = mergeUp(list, e);
     while (list.length > CAP) {
       list.sort((a, b) => a.ids.size - b.ids.size);
-      const victim = list.find((e) => e.n.depth > 1 && e.n.kind !== "pile");
+      const victim = list.find((e) => e.n.depth > 1);
       if (!victim) break;
       list = mergeUp(list, victim);
     }
@@ -118,8 +116,7 @@ export function collectBadges(v: Pick<TreeView, "M" | "cam" | "badgeSets" | "bad
     const n = e.n,
       c = e.ids.size;
     let P: [number, number];
-    if (n.kind === "pile") P = [n.cx, M.groundY - (n.h || 0) * 0.8];
-    else if (n.depth === 0) P = n === M.roots ? [0, M.groundY + S0 * 2] : [0, -S0 * 1.5];
+    if (n.depth === 0) P = n === M.roots ? [0, M.groundY + S0 * 2] : [0, -S0 * 1.5];
     else if (n.depth === 1) P = n.F || [n.cx, n.cy]; // a limb's badge sits where the limb forks, next to its name
     else P = n.branch ? [n.branch.pts[7][0], n.branch.pts[7][1]] : n.F || [n.cx, n.cy];
     const one = e.files.size === 1 ? M.files[[...e.files][0]] : null;
@@ -127,9 +124,12 @@ export function collectBadges(v: Pick<TreeView, "M" | "cam" | "badgeSets" | "bad
     const what = one ? one.name : e.ag ? `${e.ag.short || e.ag.name}'s edits` : "it";
     // the badge names the folder it sits on, so "what might break" reads without a branch label in view
     const where =
-      n.kind === "pile" ? n.label! : n.depth === 0 ? (n === M.roots ? "tests" : "root files") : n.kind === "root" ? n.label! : n.disp || shortName(n.name);
+      n.depth === 0 ? (n === M.roots ? "roots" : "repo root") : n.kind === "root" ? n.label! : n.disp || shortName(n.name);
+    // a test root's dependents are tests; a support root's (docs, config) are just files
+    let q: TNode | null = n;
+    while (q && q.depth > 1) q = q.parent;
     const text =
-      n.kind === "root" || n === M.roots
+      n.kind === "root" && n !== M.roots && !(q && q.support)
         ? `${where} · ${c} ${c === 1 ? "test depends" : "tests depend"} on ${what}`
         : `${where} · ${c} ${c === 1 ? "depends" : "depend"} on ${what}`;
     badges.push({ x: P[0], y: P[1], text, short: `${where} · ${c}`, alpha: e.alpha, n: c, ag: e.ag, pin: e.pin, node: n, files: e.files, ids: e.ids, what });

@@ -2,8 +2,9 @@
  * as birds on it (docs/web-ui.md "Map tab"; the approved prototype in
  * mindflock-prototypes/code-tree).
  *
- * Trunk = repo, branch = folder, leaf = file, roots underground = tests
- * (under the code they test), ground piles = docs / CI / root config. This
+ * Trunk = repo, branch = folder, leaf = code file, root tip = a test (under
+ * the branch it tests) or a non-code file: docs, CI, config (under its branch
+ * or the trunk) — the roots hold what keeps the tree standing. This
  * session is the bird in the accent colour; other live sessions on the repo
  * fly too. A bird nests in the folder it mostly works in and perches on the
  * leaf it touches (dot = read, its colour = edited, bud = planned); gold
@@ -663,7 +664,8 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
   }, [snap, zones, ci]);
 
   const requests = useMemo(
-    () => (green ? scopeRequests(feed, (p) => classify(p) === "outside") : []),
+    // A fence deny is no request to widen it: the worker reports blocked.
+    () => (green ? scopeRequests(feed.filter((r) => !r.deny?.fence), (p) => classify(p) === "outside") : []),
     [green, feed, classify]
   );
   // "Allowed ✓" only while the path IS allowed: once its zone is removed, a
@@ -1504,7 +1506,7 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
       <div className="cm-sr" aria-live="polite" role="status">
         {announce}
       </div>
-      {tour && model && !failed && <MapTour rootRef={rootRef} onClose={closeTour} ctx={{ changed: agents.reduce((n, A) => n + A.edits.size, 0), next, planSupported }} />}
+      {tour && model && !failed && <MapTour rootRef={rootRef} onClose={closeTour} ctx={{ changed: agents.reduce((n, A) => n + A.edits.size, 0), next, roots: model.roots.cnt > 0 }} />}
     </div>
   );
 }

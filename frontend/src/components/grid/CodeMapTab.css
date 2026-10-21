@@ -579,7 +579,6 @@
   --ct-pill-text: color-mix(in srgb, var(--text) 80%, #fff);
   --ct-leaf-label: color-mix(in srgb, var(--text) 90%, var(--muted));
   --ct-root-label: hsl(34, 30%, 70%);
-  --ct-pile-label: hsl(32, 32%, 66%);
   --ct-keep-text: color-mix(in srgb, var(--red) 45%, #fff);
   --ct-only-text: color-mix(in srgb, var(--green) 45%, #fff);
   --ct-keep-bg: color-mix(in srgb, var(--red) 22%, var(--bg));

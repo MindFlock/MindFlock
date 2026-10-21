@@ -1071,7 +1071,7 @@ def _unfence(run_id: str, task_id: str) -> None:
         return
     _inst, wt = _lead_wt(run)
     if wt and t["title"]:
-        srv._red_zones.drop_session_fence(wt, _tmux_of(t["title"]))
+        srv._red_zones.drop_session_fence(wt, _tmux_of(t["title"]), cause="done")
         try:
             srv._red_zones.sync_guard(os.path.realpath(wt), lroot=wt)
         except Exception:  # noqa: BLE001 — the monitor's tick re-syncs it

@@ -16,11 +16,12 @@
 import { useContext, useEffect, useState, type ReactNode } from "react";
 import type { RedZone } from "../../../api/types";
 import { isGreen } from "../../../lib/codemap";
+import { relTime } from "../../../lib/format";
 import { instances } from "../../../lib/sessionActions";
 import { deriveSessionState } from "../../../lib/sessionState";
 import { blockedTxt, folderPath, tailPath } from "../../../lib/codetree/draw";
 import { STATUS_TXT } from "../../../lib/codetree/live";
-import { isUnder, type Model, type TFile, type TNode } from "../../../lib/codetree/model";
+import { isUnder, nameTop, type Model, type TFile, type TNode } from "../../../lib/codetree/model";
 import { zoneOfFile } from "../../../lib/codetree/zones";
 import type { AgentState, AgentStatus, TZone } from "../../../lib/codetree/types";
 import { BirdIcon, LegendCard, dispName, nodeName, subLine } from "./TreeCards";
@@ -110,9 +111,8 @@ export function changeSummary(M: Model, agents: AgentState[]): ChangeSummary {
     const f = M.files[id];
     if (mineA(A)) mine++;
     const n = f.node;
-    let top: TNode | null = n;
-    while (top && top.depth > 1) top = top.parent;
-    const tk = !top || top.depth < 1 ? (n && n.kind === "pile" ? nodeName(M, n) : "root files") : nodeName(M, top);
+    const top: TNode | null = n && nameTop(n);
+    const tk = !top || top.depth < 1 ? "repo root" : nodeName(M, top);
     tops.set(tk, (tops.get(tk) || 0) + 1);
     if (!n) continue;
     let e = byNode.get(n);
@@ -147,23 +147,52 @@ function sessionWord(title: string): string {
   return inst ? deriveSessionState(inst).label : "";
 }
 
+/** A bird that has touched nothing for longer than this, in a session that isn't working, is idle — not "thinking". */
+export const IDLE_SAY_S = 180;
+
 /** A session bird's status chip and "now" line (blocked and perched birds say what they touch instead). Once the
  * session itself isn't working, both use the sidebar's word for it (`word`: Idle, Question …) — never "done", and
- * another session that sits idle never reads as editing. (Pure, for the tests.) */
-export function birdWords(st: AgentStatus, primary: boolean, activity: string, word: string, helpersOut: number): { chip: string; now: string } {
+ * another session that sits idle never reads as editing. An idle session's line says for how long and where it last
+ * was ("idle 3h · last in backend/web") — `idle`: seconds since its last touch, and that touch's folder — never
+ * "thinking". (Pure, for the tests.) */
+export function birdWords(
+  st: AgentStatus,
+  primary: boolean,
+  activity: string,
+  word: string,
+  helpersOut: number,
+  idle?: { secs: number; where: string } | null
+): { chip: string; now: string } {
   const w = word.toLowerCase();
   const quiet = !!w && w !== "working" && w !== "starting";
   const chip = w && (st === "done" || st === "waiting" || (quiet && st === "thinking")) ? w : STATUS_TXT[st];
   const nest = helpersOut ? `in the nest — ${plural(helpersOut, "helper")} out working` : "in the nest, thinking";
+  // idle for a while: the sidebar's own "Idle 481d", else how long since the bird last touched the tree
+  const idleWord = (() => {
+    const sidebarIdle = w.startsWith("idle");
+    const long = !!idle && idle.secs > IDLE_SAY_S;
+    if (!(sidebarIdle || (long && activity !== "working" && !helpersOut))) return "";
+    const head = w.startsWith("idle ") ? w : long ? "idle " + relTime(0, { now: idle!.secs, suffix: "" }) : "";
+    return head && idle && idle.where ? `${head} · last in ${idle.where}` : head;
+  })();
   let now: string;
   if (st === "planning") now = "planning (buds on the files it will touch)";
   else if (primary) {
     if (activity === "clarify" || w === "question") now = "needs you · question — answer it in the terminal";
+    else if (idleWord && (st === "done" || st === "waiting" || st === "thinking")) now = idleWord;
     else if (st === "done" || st === "waiting") now = !w || w === "idle" ? "idle — waiting for your next message" : w;
     else now = nest;
   } else if (quiet) now = w + " · on its own branch";
-  else now = st === "thinking" ? nest : "working on its own branch";
+  else now = st === "thinking" ? (idleWord ? idleWord + " · on its own branch" : nest) : "working on its own branch";
   return { chip, now };
+}
+
+/** The folder of a path the bird last touched — "backend/web" (a root by its label, "docs"; a repo-root file "repo root"). */
+function lastWhere(M: Model, path: string): string {
+  const n = M.byPath.get(path)?.node;
+  if (!n) return "";
+  if (n.depth < 1) return "repo root";
+  return folderPath(n).replace(" › ", "/");
 }
 
 /** Where a helper is: the folder of the file it is on (or was blocked at), else its nest — "backend/config". */
@@ -172,7 +201,7 @@ function helperWhere(M: Model, S: AgentState): string {
   const f = S.status === "blocked" && bk ? bk.f : S.file;
   const n = f ? f.node : S.nest;
   if (!n) return "";
-  if (n.depth < 1) return n.kind === "pile" ? nodeName(M, n) : "repo root";
+  if (n.depth < 1) return "repo root";
   return folderPath(n).replace(" › ", "/");
 }
 
@@ -341,7 +370,10 @@ function AgentRow({ p, A, subs, open, onToggle }: { p: BirdIndexProps; A: AgentS
   const following = p.followKey === A.ag.key;
   const bk = A.blocked[A.blocked.length - 1];
   const working = subs.filter((S) => !S.done).length;
-  const words = birdWords(st, A.ag.primary, A.activity, A.ag.parent ? "" : sessionWord(A.ag.key), working);
+  // how long since it last touched the tree (on the server's clock), and that touch's folder
+  const idleFor =
+    A.lastAt && A.clock && A.lastAt.ts > 0 ? { secs: A.clock.server + (performance.now() / 1000 - A.clock.view) - A.lastAt.ts, where: lastWhere(M, A.lastAt.path) } : null;
+  const words = birdWords(st, A.ag.primary, A.activity, A.ag.parent ? "" : sessionWord(A.ag.key), working, idleFor);
   const now = st === "blocked" && bk ? `⛔ tried ${bk.f ? dispName(M, bk.f) : bk.path}` : words.now;
   const guide = useContext(MapGuideContext);
   // another session works in its own worktree: only repo-wide keep-outs bind it

@@ -1,6 +1,6 @@
 /** Code tree — the model: folder tree → trunk, branches, clumps, leaves,
- * roots (tests, matched to the code they test) and ground piles (docs, CI,
- * root config). Pure (no DOM): the worker builds it to run the layout search,
+ * roots: tests (matched to the code they test) and every non-code file (docs,
+ * CI, config, test data — the tree's support roots). Pure (no DOM): the worker builds it to run the layout search,
  * the main thread rebuilds it by REPLAYING the recorded placements (fast), and
  * then adds canvas geometry (geom.ts).
  *
@@ -34,6 +34,8 @@ import {
   unionRecs,
   finalRecs,
 } from "./layout";
+import { leafAng, leafLen } from "./leafgeom";
+import { growRoots } from "./roots";
 
 export { S0, TAU };
 
@@ -66,7 +68,7 @@ export interface RawRepo {
   files: RawFile[];
 }
 
-export type Place = "crown" | "root" | "ground";
+export type Place = "crown" | "root";
 
 export interface TFile {
   id: number;
@@ -92,7 +94,7 @@ export interface TNode extends LNode {
   kids: TNode[];
   files: TFile[];
   depth: number;
-  kind: "crown" | "root" | "pile";
+  kind: "crown" | "root";
   nFiles: number;
   nGhost: number;
   lines: number;
@@ -120,10 +122,12 @@ export interface TNode extends LNode {
   label?: string;
   unmatched?: boolean;
   crownTwin?: TNode | null;
-  // piles
-  h?: number;
-  pw?: number;
-  leaves?: Leaf[];
+  /** a support root: non-code files (docs, CI, config, test data), not tests */
+  support?: boolean;
+  /** a support root of test data (fixtures, golden files) */
+  data?: boolean;
+  /** a root's repo folder ("frontend", "docs", "(repo root)"; "" = the tap root) */
+  folder?: string;
   // per-frame flags (draw.ts)
   vHidden?: boolean;
   vFold?: boolean;
@@ -139,12 +143,10 @@ export interface Leaf {
   file: TFile;
   len: number;
   ang: number;
-  region: "crown" | "root" | "ground";
+  region: "crown" | "root";
   shade: number;
   id: number;
   term?: TTerm;
-  pile?: TNode;
-  flat?: boolean;
   rot?: number;
   /** leaf outline [bx,by, c1x,c1y, tx,ty, c2x,c2y] (geom.ts) */
   g?: number[];
@@ -194,7 +196,6 @@ export interface Model {
   branches: Branch[];
   leaves: Leaf[];
   terms: TTerm[];
-  piles: TNode[];
   nodes: TNode[];
   kW: number;
   trunkW: number;
@@ -232,7 +233,7 @@ export interface LayoutRecord {
   /** the data signature this record was made for */
   sig: string;
 }
-export const LAYOUT_VERSION = 1;
+export const LAYOUT_VERSION = 3;
 
 export interface BuildOpts {
   /** an exact replay of a record made for this very data */
@@ -275,16 +276,35 @@ export function parseFiles(raw: RawRepo): TFile[] {
     s.n += f.lines + 1;
     if (f.kind === "c") s.c += f.lines + 1;
   }
+  // the crown is code; tests and everything that is not code (docs, CI, config, test data, a mostly-non-code
+  // folder) are roots
   for (const f of F) {
-    if (f.test && f.kind === "c") f.place = "root";
-    else if (f.test) f.place = "ground";
-    else if (!f.path.includes("/")) f.place = f.kind === "c" ? "crown" : "ground";
+    if (f.test || f.kind !== "c") f.place = "root";
+    else if (!f.path.includes("/")) f.place = "crown";
     else {
       const s = top[f.path.split("/")[0]];
-      f.place = s.c / s.n < 0.3 ? "ground" : "crown";
+      f.place = s.c / s.n < 0.3 ? "root" : "crown";
     }
   }
   return F;
+}
+
+/** A root file that is not a test: docs, CI, config, test data (a support root). */
+export const isSupport = (f: TFile) => f.place === "root" && !(f.test && f.kind === "c");
+
+/** A support limb with more files than this splits into clumps by its second path segment. */
+export const SUPPORT_SPLIT = 24;
+/** The tap root: the one limb under the trunk that holds every support group with no branch of its own (docs/,
+ * .github/, the repo root's files, a tests folder's data) — a clump each. */
+export const TAP_ROOT = "~";
+export const TAP_LABEL = "docs, CI and config";
+
+/** The folder a name leads with: n's top-level limb — or, on the tap root, its own clump ("docs", never "docs, CI
+ * and config › docs"). */
+export function nameTop(n: TNode): TNode {
+  let top = n;
+  while (top.parent && top.depth > 1 && !(top.depth === 2 && top.parent.folder === "")) top = top.parent;
+  return top;
 }
 
 /** A generic folder tree; single-child chains are compacted (never the root). */
@@ -384,15 +404,7 @@ export function buildModel(raw: RawRepo, opts: BuildOpts = {}): Model {
   const warm = !replay && opts.warm && opts.warm.v === LAYOUT_VERSION ? opts.warm : null;
   const F = parseFiles(raw);
   const crownEntries: Array<{ segs: string[]; file: TFile }> = [];
-  const groundGroups = new Map<string, TFile[]>();
-  for (const f of F) {
-    if (f.place === "crown") crownEntries.push({ segs: dirOf(f.path) ? dirOf(f.path).split("/") : [], file: f });
-    else if (f.place === "ground") {
-      const k = f.path.includes("/") ? f.path.split("/")[0] : "(repo root)";
-      if (!groundGroups.has(k)) groundGroups.set(k, []);
-      groundGroups.get(k)!.push(f);
-    }
-  }
+  for (const f of F) if (f.place === "crown") crownEntries.push({ segs: dirOf(f.path) ? dirOf(f.path).split("/") : [], file: f });
   const crown = buildTree(raw.name, crownEntries, "crown");
   const M = {
     name: raw.name,
@@ -467,7 +479,7 @@ export function buildModel(raw: RawRepo, opts: BuildOpts = {}): Model {
     pkEmitTop(emitted, LC.top, M.crown, (x, y) => [x, y], "crown");
   }
 
-  // ---- roots: tests grouped by WHAT they test (mirrored under that branch) ----
+  // ---- roots: tests grouped by WHAT they test (mirrored under that branch); support roots (non-code) beside them ----
   const limbOfPath = (p: string | number | null | undefined): TNode | null => {
     // crown node at depth<=2 containing path p
     if (p == null) return null;
@@ -479,8 +491,22 @@ export function buildModel(raw: RawRepo, opts: BuildOpts = {}): Model {
     return n && n.depth >= 1 ? n : null;
   };
   const rootEntriesArr: Array<{ segs: string[]; file: TFile }> = [];
+  // a support file hangs on its folder's support limb: "S:frontend" (frontend's non-code files) beside "tests for
+  // frontend", "D:frontend" (frontend's test data), or — with no branch of its own — as a clump of the tap root
+  // under the trunk ("~/S:docs", "~/S:(repo root)", "~/D:tests"); a big group splits by its second path segment
+  const supKey = (f: TFile) => (f.test ? "D:" : "S:") + (f.path.includes("/") ? f.path.split("/")[0] : "(repo root)");
+  const supCount = new Map<string, number>();
+  for (const f of F) if (isSupport(f)) supCount.set(supKey(f), (supCount.get(supKey(f)) || 0) + 1);
   for (const f of F) {
     if (f.place !== "root") continue;
+    if (isSupport(f)) {
+      const d = dirOf(f.path) ? dirOf(f.path).split("/") : [];
+      const k = supKey(f);
+      const twin = d.length ? M.nodeOf.get(d[0]) : undefined;
+      const segs = [k].concat(supCount.get(k)! > SUPPORT_SPLIT && d.length > 1 ? [d[1]] : []);
+      rootEntriesArr.push({ segs: twin && twin.depth === 1 ? segs : [TAP_ROOT].concat(segs), file: f });
+      continue;
+    }
     const n = limbOfPath(f.target);
     f.tests = n;
     let segs: string[];
@@ -507,18 +533,44 @@ export function buildModel(raw: RawRepo, opts: BuildOpts = {}): Model {
   M.rootNodeOf = roots.nodeOf;
   for (const n of allNodes(M.roots)) {
     if (n.depth === 0) continue;
-    const raw0 = n.path.split("/")[0];
-    n.unmatched = raw0.startsWith("U:");
-    const crownPath = n.path
-      .split("/")
-      .map((s) => s.replace(/^[TU]:/, ""))
-      .join("/");
-    n.crownTwin = n.unmatched ? null : M.nodeOf.get(crownPath) || null;
-    n.name = n.name.replace(/^[TU]:/, "");
-    n.label = n.unmatched
-      ? "tests: " + shortName(crownPath)
-      : "tests for " + shortName(n.crownTwin ? n.crownTwin.path : n.name);
     for (const f of n.files) f.node = n;
+    const parts = n.path.split("/");
+    const own = parts[0] === TAP_ROOT ? parts.slice(1) : parts;
+    if (n.name.startsWith(TAP_ROOT + "/")) n.name = n.name.slice(TAP_ROOT.length + 1); // a tap root of one clump
+    if (!own.length) {
+      // the tap root itself
+      n.support = true;
+      n.crownTwin = null;
+      n.folder = "";
+      n.name = n.label = TAP_LABEL;
+      continue;
+    }
+    const tag = own[0].slice(0, 2);
+    n.unmatched = tag === "U:";
+    n.support = tag === "S:" || tag === "D:";
+    n.data = tag === "D:";
+    const crownPath = own.map((s) => s.replace(/^[TUSD]:/, "")).join("/");
+    n.folder = crownPath;
+    const twin = n.unmatched ? null : M.nodeOf.get(crownPath) || null;
+    // a support clump with no crown folder of its own (frontend/public) keeps its limb's twin
+    n.crownTwin = n.support && !twin && n.depth > 1 ? n.parent!.crownTwin || null : twin;
+    n.name = n.name.replace(/^[TUSD]:/, "");
+    const at = shortName(crownPath);
+    n.label = !n.support
+      ? n.unmatched
+        ? n.depth === 1
+          ? "other tests · " + at + "/"
+          : "tests · " + at
+        : "tests for " + shortName(n.crownTwin ? n.crownTwin.path : n.name)
+      : n.data
+        ? n.crownTwin && n.depth === 1
+          ? "test data"
+          : "test data · " + at + "/"
+        : n.crownTwin
+          ? at + " · non-code"
+          : crownPath === "(repo root)"
+            ? "repo root files"
+            : at;
   }
   const crownX = new Map<TNode, [number, number]>();
   for (const t of LC.terms)
@@ -546,7 +598,7 @@ export function buildModel(raw: RawRepo, opts: BuildOpts = {}): Model {
           const e = q ? crownX.get(q) : undefined;
           return e ? e[0] / e[1] : 0;
         };
-        return x(A2) - x(B2) || cmpStr(A2.node!.name, B2.node!.name);
+        return x(A2) - x(B2) || cmpStr(A2.node!.name, B2.node!.name) || cmpStr(A2.node!.path, B2.node!.path);
       }),
     M.trunkW * 0.62
   );
@@ -587,58 +639,6 @@ export function buildModel(raw: RawRepo, opts: BuildOpts = {}): Model {
     }
   }
 
-  // ---- ground piles (docs / CI / config) ----
-  M.piles = [];
-  const gg = [...groundGroups.entries()].sort((a, b) => b[1].length - a[1].length || cmpStr(a[0], b[0]));
-  // the piles start just past the roots (their names sit under the ground line, clear of the root clumps) — not
-  // a fixed stride out, which left a small tree a sliver between far-flung piles
-  let rx0 = 0,
-    rx1 = 0;
-  for (const t of LR.terms)
-    for (const l of t.leaves || []) {
-      rx0 = Math.min(rx0, l.x);
-      rx1 = Math.max(rx1, l.x);
-    }
-  let xl = Math.min(-S0 * 4, rx0 - S0 * 2.5) - M.trunkW,
-    xr = Math.max(S0 * 4, rx1 + S0 * 2.5) + M.trunkW;
-  gg.forEach(([k, fs], i) => {
-    fs.sort((a, b) => b.lines - a.lines || cmpStr(a.name, b.name));
-    const n = fs.length,
-      s = S0 * 0.95;
-    const W = Math.max(S0 * 3, Math.sqrt(n) * s * 2.1),
-      H = Math.max(S0 * 1.2, W * 0.28);
-    const left = i % 2 === 0;
-    const cx = left ? xl - W / 2 : xr + W / 2;
-    if (left) xl -= W + S0 * 5;
-    else xr += W + S0 * 5;
-    const pts: Array<[number, number, number]> = [];
-    const rnd = rng(hashStr(k));
-    for (let y = 0; pts.length < n * 3 && y < H * 3; y += s * 0.62) {
-      for (let x = -W; x <= W; x += s * 0.95) {
-        const xx = x + ((y / (s * 0.62)) % 2 ? s * 0.45 : 0);
-        const e = (xx * xx) / ((W * W) / 4) + (y * y) / (H * H);
-        pts.push([xx + (rnd() - 0.5) * s * 0.3, y, e]);
-      }
-    }
-    pts.sort((a, b) => a[2] - b[2]);
-    const node = mkNode(k, "~" + k, null, "pile");
-    node.label = k === "(repo root)" ? "repo root files" : k;
-    node.files = fs;
-    node.nFiles = n;
-    node.lines = fs.reduce((a, f) => a + f.lines, 0);
-    node.depth = 1;
-    const leaves = pts.slice(0, n).map(
-      (p, j) =>
-        ({ x: cx + p[0], y: groundY - p[1] - S0 * 0.35, file: fs[j], flat: true, rot: (rnd() - 0.5) * 1.2 }) as unknown as Leaf
-    );
-    for (const f of fs) f.node = node;
-    node.cx = cx;
-    node.pw = W;
-    node.h = H;
-    node.leaves = leaves;
-    M.piles.push(node);
-  });
-
   const finishTerms = (terms: Term[], region: "crown" | "root") => {
     for (const t0 of terms) {
       const t = t0 as TTerm;
@@ -671,10 +671,16 @@ export function buildModel(raw: RawRepo, opts: BuildOpts = {}): Model {
     for (const l of t.leaves) {
       const f = l.file;
       const fz = Math.min(1, Math.log10(Math.max(1, f.lines) + 1) / 3.6);
-      l.len = Math.min(t.s * 1.12, S0 * (0.5 + 0.62 * fz)) * (t.region === "root" ? 0.55 : 1);
-      const radial = Math.atan2(l.y - by, l.x - bx);
-      const ang = Math.hypot(l.y - by, l.x - bx) < t.s * 0.6 ? hb : mixAng(radial, hb, 0.4);
-      l.ang = ang + (r2() - 0.5) * 0.7;
+      if (t.region === "crown") {
+        // crown leaves: sized to their clump's pitch and fanned out from the twig tip (leafgeom.ts)
+        l.len = leafLen(f.lines, t.s);
+        l.ang = leafAng(l.x, l.y, bx, by, hb, t.s, r2());
+      } else {
+        l.len = Math.min(t.s * 1.12, S0 * (0.5 + 0.62 * fz)) * 0.55;
+        const radial = Math.atan2(l.y - by, l.x - bx);
+        const ang = Math.hypot(l.y - by, l.x - bx) < t.s * 0.6 ? hb : mixAng(radial, hb, 0.4);
+        l.ang = ang + (r2() - 0.5) * 0.7;
+      }
       l.term = t;
       l.region = t.region as Leaf["region"];
       l.shade = r2() < 0.5 ? 0 : 1;
@@ -682,20 +688,9 @@ export function buildModel(raw: RawRepo, opts: BuildOpts = {}): Model {
       l.id = M.leaves.length;
       M.leaves.push(l);
     }
+    // a test (or a doc, a config file) is a root tip, not a leaf: roots.ts sets its nodule (len) and strand end direction (ang)
+    if (t.region === "root") growRoots(t, bx, by, hb);
   }
-  for (const p of M.piles)
-    for (const l of p.leaves!) {
-      const f = l.file;
-      const fz = Math.min(1, Math.log10(Math.max(1, f.lines) + 1) / 3.6);
-      l.len = S0 * (0.55 + 0.5 * fz);
-      l.ang = l.rot!;
-      l.region = "ground";
-      l.pile = p;
-      l.shade = 0;
-      f.leaf = l;
-      l.id = M.leaves.length;
-      M.leaves.push(l);
-    }
 
   // ---- node ids, limb index, bounds ----
   M.nodes = [];
@@ -704,11 +699,6 @@ export function buildModel(raw: RawRepo, opts: BuildOpts = {}): Model {
       n.id = M.nodes.length;
       M.nodes.push(n);
     }
-  for (const p of M.piles) {
-    p.id = M.nodes.length;
-    M.nodes.push(p);
-    p.F = [p.cx, groundY - p.h! * 0.5];
-  }
   let limbI = 0;
   for (const n of M.crown.kids.slice().sort((a, b) => (a.F ? a.F[0] : 0) - (b.F ? b.F[0] : 0))) n.limb = limbI++;
   M.limbCount = limbI;
@@ -749,7 +739,6 @@ export function buildModel(raw: RawRepo, opts: BuildOpts = {}): Model {
     n.cy = n.sy / Math.max(1, n.cnt);
     n.rad = Math.max(S0, Math.hypot(n.bx1 - n.bx0, n.by1 - n.by0) / 2);
   }
-  // a pile keeps its own centre (drawn on the ground)
   M.crown.F = [0, 0];
   // world bounds
   let wx0 = 1e9,

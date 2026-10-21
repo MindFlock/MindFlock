@@ -56,6 +56,10 @@ interface Fly {
  * names around it show (leaf labels need S0 * z >= 20). */
 export const FOLLOW_Z = 2.6;
 
+/** The closest the camera goes. A leaf stops growing at ~44 px (leafgeom.ts), so past ~z 7 zooming in only opens
+ * the gaps: z 12 is where the densest clump's pitch (1.15·S0·z ≈ 138 px) has room for every leaf's name at its tip. */
+export const MAX_Z = 12;
+
 /** Per-title view memory (camera, folds, history) — survives remounts. */
 const MEMORY = new Map<string, { cam: Cam; hist: Cam[]; folded: string[]; model: Model }>();
 
@@ -120,6 +124,7 @@ export class TreeCtl {
       if (this.v) {
         this.v.hover = null;
         this.v.hoverBlast = null;
+        this.v.ptr = null;
       }
       this.setTip(null);
       this.dirty = true;
@@ -195,7 +200,7 @@ export class TreeCtl {
         const f = M.byPath.get(i.f.path);
         this.info = f ? { kind: "file", f } : null;
       } else if (i.kind === "node") {
-        const n = i.n.kind === "pile" ? M.piles.find((p) => p.path === i.n.path) : (i.n.kind === "root" ? M.rootNodeOf : M.nodeOf).get(i.n.path);
+        const n = (i.n.kind === "root" ? M.rootNodeOf : M.nodeOf).get(i.n.path);
         this.info = n ? { kind: "node", n } : null;
       } else this.info = null;
       this.syncSel();
@@ -323,7 +328,7 @@ export class TreeCtl {
   wholeCam(): Cam {
     const M = this.M!,
       v = this.v!;
-    return fitWhole(pictureBox(M), M.groundY, M.piles.length > 0, v.W, v.H, this.insets);
+    return fitWhole(pictureBox(M), v.W, v.H, this.insets);
   }
   /** The camera rests at the whole-tree view (nothing is moving it). */
   private atWhole(): boolean {
@@ -396,12 +401,6 @@ export class TreeCtl {
     const v = this.v,
       M = this.M;
     if (!v || !M) return;
-    if (n.kind === "pile") {
-      const c = this.fitBox(n.cx - (n.pw || 30), M.groundY - (n.h || 10) * 3, n.cx + (n.pw || 30), M.groundY + (n.h || 10), 0.7);
-      this.navTo(c);
-      v.pulse = { x: n.cx, y: M.groundY - (n.h || 10) * 0.5, r: (n.pw || 30) * 0.6, t0: performance.now() };
-      return;
-    }
     if (n.depth === 0) {
       this.pushHist();
       this.stopFollow(true);
@@ -422,7 +421,7 @@ export class TreeCtl {
     v.pulse = { x: l.x, y: l.y, r: l.len, t0: performance.now() + 600 };
   }
   private clampZ(z: number) {
-    return Math.max(this.fitZ() * 0.85, Math.min(7, z));
+    return Math.max(this.fitZ() * 0.85, Math.min(MAX_Z, z));
   }
   zoomAt(sx: number, sy: number, factor: number) {
     const v = this.v;
@@ -594,7 +593,7 @@ export class TreeCtl {
       return;
     }
     if (hit && hit.leaf) {
-      this.flyToLeaf(hit.leaf, Math.min(7, Math.max(v.cam.z * 2, 3.2)));
+      this.flyToLeaf(hit.leaf, Math.min(MAX_Z, Math.max(v.cam.z * 2, 3.2)));
       return;
     }
     this.pushHist();
@@ -722,11 +721,6 @@ export class TreeCtl {
         this.toggleFold(n);
         return;
       }
-      this.selectNode(n);
-      this.flyToNode(n);
-      return;
-    }
-    if (hit.pile) {
       this.selectNode(n);
       this.flyToNode(n);
       return;
@@ -915,7 +909,7 @@ export class TreeCtl {
     if (v.follow == null) this.followFrom = { ...(this.fly ? v.cam : this.camT) };
     v.follow = key;
     const from = this.fly ? v.cam : this.camT;
-    const z = Math.min(7, Math.max(from.z, FOLLOW_Z));
+    const z = Math.min(MAX_Z, Math.max(from.z, FOLLOW_Z));
     const p = this.birdAt(key);
     const c = p ? this.followCam(p, z) : { x: from.x, y: from.y, z };
     // a longer hop glides a little longer, so an off-screen bird is reached, not jumped to
@@ -953,10 +947,7 @@ export class TreeCtl {
     if (!node || !node.cnt) return;
     if (this.nodeInView(node)) v.pulse = { x: node.cx, y: node.cy, r: node.rad + S0, t0: performance.now() };
     else if (node.depth >= 1) {
-      const c =
-        node.kind === "pile"
-          ? this.fitBox(node.cx - (node.pw || 30) * 2, M.groundY - (node.h || 10) * 4, node.cx + (node.pw || 30) * 2, M.groundY + (node.h || 10), 0.7)
-          : this.fitBox(node.bx0 - S0 * 4, node.by0 - S0 * 4, node.bx1 + S0 * 4, node.by1 + S0 * 4, 0.55);
+      const c = this.fitBox(node.bx0 - S0 * 4, node.by0 - S0 * 4, node.bx1 + S0 * 4, node.by1 + S0 * 4, 0.55);
       c.z = Math.min(c.z, 3.5);
       this.navTo(c);
       v.pulse = { x: node.cx, y: node.cy, r: node.rad + S0, t0: performance.now() + 500 };
@@ -978,6 +969,7 @@ export class TreeCtl {
     const v = this.v;
     if (!v || !this.needPick || !this.mouse || this.drag) return;
     this.needPick = false;
+    v.ptr = [this.mouse[0], this.mouse[1]]; // (a hovered clump's name column stays up while the pointer crosses to it)
     if (this.clickAt) {
       if (v.hover) {
         v.hover = null;
@@ -1053,7 +1045,7 @@ export class TreeCtl {
     if (moving) this.kick();
   }
   /** Where the picture sits on the canvas, as `data-tree="x0 y0 x1 y1;…"` on the stage (canvas px): the whole
-   * picture, then its parts — the canopy, the roots and each ground pile with its name. The Map tour keeps its
+   * picture, then its parts — the canopy and the roots. The Map tour keeps its
    * card off them. */
   private markTree() {
     const v = this.v,
@@ -1066,8 +1058,6 @@ export class TreeCtl {
     const C = M.crownBounds,
       parts = [S(pictureBox(M)), S({ x0: C.x0, y0: C.y0, x1: C.x1, y1: M.groundY }, 12)];
     if (M.roots.cnt) parts.push(S({ x0: M.roots.bx0, y0: M.groundY, x1: M.roots.bx1, y1: M.roots.by1 }, 12));
-    // a pile and the name under it (~30 px below the ground line)
-    for (const p of M.piles) parts.push(S({ x0: p.cx! - (p.pw || 0) * 0.6, y0: M.groundY - (p.h || 0) * 2, x1: p.cx! + (p.pw || 0) * 0.6, y1: M.groundY }, 10, 30));
     const s = parts.join(";");
     if (this.host.dataset.tree !== s) this.host.dataset.tree = s;
   }
@@ -1087,5 +1077,5 @@ export class TreeCtl {
 
 function sameHit(a: Hit | null, b: Hit | null): boolean {
   if (!a || !b) return a === b;
-  return a.leaf === b.leaf && a.node === b.node && a.branch === b.branch && a.clump === b.clump && a.pile === b.pile && a.tag === b.tag && a.bird === b.bird && a.badge === b.badge && a.trunk === b.trunk && a.nest === b.nest;
+  return a.leaf === b.leaf && a.node === b.node && a.branch === b.branch && a.clump === b.clump && a.tag === b.tag && a.bird === b.bird && a.badge === b.badge && a.trunk === b.trunk && a.nest === b.nest;
 }

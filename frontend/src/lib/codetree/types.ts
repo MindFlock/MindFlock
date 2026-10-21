@@ -68,6 +68,11 @@ export interface AgentState {
   task: string;
   /** a subagent's bird: what the feed says about it */
   subInfo?: import("./subagents").SubInfo | null;
+  /** the server clock (epoch s) and view clock (s, performance.now) when this state was built: server now at view
+   * time t is `server + (t - view)` */
+  clock?: { server: number; view: number };
+  /** its last touch on the tree (server epoch s, repo path): "idle 3h · last in backend/web" */
+  lastAt?: { ts: number; path: string } | null;
 }
 
 /** A rule as the tree draws it: on a folder (node) or a single file. */
@@ -90,7 +95,6 @@ export interface Hit {
   trunk?: boolean;
   clump?: TNode;
   open?: boolean;
-  pile?: TNode;
   tag?: TZone;
   bird?: AgentState;
   pointer?: boolean;
@@ -221,11 +225,17 @@ export interface TreeView {
   /** LIT PATHS: folders on a path to a change, with their counts */
   litInfo?: Map<TNode, import("./draw").LitInfo>;
   labelHits?: Array<{ r: number[]; n?: TNode; leaf?: Leaf; crumb?: boolean }>;
+  /** the leaves drawn on screen this frame (labels.ts): a name touching another leaf's outline is not drawn */
+  leafField?: import("./labels").LeafField | null;
   tagHits?: Array<{ r: number[]; z: TZone }>;
   birdHits?: Array<{ r: number[]; A: AgentState; pointer?: boolean }>;
   nestHits?: Array<{ r: number[]; A: AgentState }>;
   badgeHits?: Array<{ r: number[]; bd: Badge }>;
   budHits?: Array<{ r: number[]; A: AgentState; path: string }>;
+  /** the pointer on the canvas (null when it is off): keeps a hovered clump's name column up while crossing to it */
+  ptr?: [number, number] | null;
+  /** last frame's name column (rule 6): its clump and the screen area (clump + gap + column) that keeps it up */
+  nameCol?: { node: TNode; R: [number, number, number, number] } | null;
   /** strings the canvas shows (for the text alternative / tests) */
   emptyHint?: string;
 }
