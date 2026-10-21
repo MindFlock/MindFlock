@@ -1,8 +1,8 @@
 /** The Code Tree: the session's worktree as a tree — trunk = repo, branch =
- * folder (thickness ~ √ of the code beneath), leaf = file, root tip = test
- * file (under the code it tests), the scaffold beside the trunk = docs / CI /
- * root config (a lift per group, a plank per file) — with the agents as birds
- * on it (docs/web-ui.md "Map tab").
+ * folder (thickness ~ √ of the code beneath), leaf = code file, root tip = a
+ * test (under the branch it tests) or a non-code file: docs, CI, config (under
+ * its branch or the trunk) — with the agents as birds on it (docs/web-ui.md
+ * "Map tab").
  *
  * This component hosts the canvas (TreeCtl draws and handles input) and the
  * HUD around it in the app's own card / button styles. It holds no zones of
@@ -11,7 +11,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode, type RefObject } from "react";
 import type { FeedRecord, FileView, RedZone } from "../../../api/types";
 import type { ZoneClass } from "../../../lib/codemap";
-import type { Model, TFile, TNode } from "../../../lib/codetree/model";
+import { isSupport, type Model, type TFile, type TNode } from "../../../lib/codetree/model";
 import type { AgentState, TZone } from "../../../lib/codetree/types";
 import { ActivityCard, BlastCard, FileCard, NodeCard, TipBody, activityRows, affectsOf } from "./TreeCards";
 import { BirdIndex } from "./BirdIndex";
@@ -300,7 +300,7 @@ export function CodeTree(p: CodeTreeProps) {
           serverZones={p.zones}
           folded={!!v && v.folded.has(n)}
           onClose={() => ctl.closeInfo()}
-          onZoom={() => (n.depth === 0 && n.kind !== "pile" ? ctl.wholeTree() : ctl.flyToNode(n, 0.8))}
+          onZoom={() => (n.depth === 0 ? ctl.wholeTree() : ctl.flyToNode(n, 0.8))}
           onFold={() => ctl.toggleFold(n)}
           onKeep={() => p.onPaint("keep", { node: n })}
           onOnly={() => p.onPaint("only", { node: n })}
@@ -504,10 +504,10 @@ export function CodeTree(p: CodeTreeProps) {
 
 type Px = [number, number, number, number];
 
-/** The picture's parts as boxes on the stage, for the Map tour to ring: the canopy, the roots and the scaffold
- * tower with the most lifts. Read from the stage's `data-tree` (treeCtl's markTree: the whole picture; the canopy;
- * the roots when there are tests; then each lift), clipped a little inside the stage; null = not on screen. */
-export function tourParts(tree: string, hasRoots: boolean, W: number, H: number): { canopy: Px | null; roots: Px | null; scaffold: Px | null } {
+/** The picture's parts as boxes on the stage, for the Map tour to ring: the canopy and the roots. Read from the
+ * stage's `data-tree` (treeCtl's markTree: the whole picture; the canopy; the roots when it has any), clipped a
+ * little inside the stage; null = not on screen. */
+export function tourParts(tree: string, hasRoots: boolean, W: number, H: number): { canopy: Px | null; roots: Px | null } {
   const B = tree
     .split(";")
     .map((one) => one.split(" ").map(Number))
@@ -518,24 +518,11 @@ export function tourParts(tree: string, hasRoots: boolean, W: number, H: number)
     const c: Px = [Math.max(IN, b[0]), Math.max(IN, b[1]), Math.min(W - IN, b[2]), Math.min(H - IN, b[3])];
     return c[2] > c[0] && c[3] > c[1] ? c : null;
   };
-  // the lifts of one tower stack in one column: group them by overlapping x, keep the tower with the most (then the tallest)
-  const lifts = B.slice(hasRoots ? 3 : 2)
-    .filter((b): b is Px => !!b)
-    .sort((a, b) => a[0] - b[0]);
-  const towers: Px[][] = [];
-  for (const b of lifts) {
-    const t = towers[towers.length - 1];
-    if (t && b[0] <= Math.max(...t.map((q) => q[2]))) t.push(b);
-    else towers.push([b]);
-  }
-  const span = (t: Px[]): Px => [Math.min(...t.map((q) => q[0])), Math.min(...t.map((q) => q[1])), Math.max(...t.map((q) => q[2])), Math.max(...t.map((q) => q[3]))];
-  const tall = (t: Px[]) => span(t)[3] - span(t)[1];
-  const best = towers.sort((a, b) => b.length - a.length || tall(b) - tall(a))[0];
-  return { canopy: clip(B[1] || null), roots: hasRoots ? clip(B[2] || null) : null, scaffold: best ? clip(span(best)) : null };
+  return { canopy: clip(B[1] || null), roots: hasRoots ? clip(B[2] || null) : null };
 }
 
-/** Invisible boxes over the canopy, the roots and the scaffold (`tourParts`), kept on the picture as it moves, so a
- * Map tour step can ring the part it explains (`.ct-part-canopy`, `.ct-part-roots`, `.ct-part-scaffold`). */
+/** Invisible boxes over the canopy and the roots (`tourParts`), kept on the picture as it moves, so a Map tour step
+ * can ring the part it explains (`.ct-part-canopy`, `.ct-part-roots`). */
 function TourParts({ stageRef, M }: { stageRef: RefObject<HTMLDivElement | null>; M: Model }) {
   const box = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -561,7 +548,6 @@ function TourParts({ stageRef, M }: { stageRef: RefObject<HTMLDivElement | null>
     <div ref={box} aria-hidden="true">
       <div className="ct-part-canopy" style={hide} />
       <div className="ct-part-roots" style={hide} />
-      <div className="ct-part-scaffold" style={hide} />
     </div>
   );
 }
@@ -609,7 +595,8 @@ export function slashFinds(active: Element | null, pane: Element): boolean {
 
 /** One sentence for screen readers: what the picture shows. */
 function summary(M: Model, agents: AgentState[], zones: RedZone[]): string {
-  const bits = [`${M.files.length} files: ${M.crown.nFiles} code files on ${M.crown.kids.length} top-level branches, ${M.roots.nFiles} tests as root tips under the code they test, ${M.piles.reduce((a, q) => a + q.nFiles, 0)} docs and config files as planks on the scaffold beside the trunk.`];
+  const nSup = M.files.filter((f) => !f.ghost && isSupport(f)).length;
+  const bits = [`${M.files.length} files: ${M.crown.nFiles} code files on ${M.crown.kids.length} top-level branches, ${M.roots.nFiles - nSup} tests as root tips under the code they test, ${nSup} docs, CI and config files as root tips under their branch or the trunk.`];
   for (const A of agents) bits.push(`${A.ag.name}: ${A.status}${A.file ? " " + A.file.path : ""}, edited ${A.edits.size}, read ${A.reads.size}.`);
   if (zones.length) bits.push(`${zones.length} rule${zones.length === 1 ? "" : "s"}: ` + zones.map((z) => (z.kind === "green" ? "only here " : "keep out ") + (z.name || z.pattern)).join("; ") + ".");
   return bits.join(" ");

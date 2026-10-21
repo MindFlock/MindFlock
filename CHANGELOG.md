@@ -27,12 +27,17 @@ contract it cannot talk its way out of.
 - **Tests are root strands with tips, never leaves.** Each test file is the
   tip of a strand in a fan under the code it tests; a changed test lights its
   strand (`lib/codetree/roots.ts`).
-- **Docs, CI and config are scaffolding beside the trunk.** Up to two towers,
-  one lift per folder named on its top ledger ("docs · 21 files"), one plank
-  per file with its name at the plank's outer end; cards, zones, could-break
-  and the minimap follow (`lib/codetree/scaffold.ts`).
+- **Non-code files are roots.** The roots hold what keeps the tree standing:
+  tests under the branch they test, docs, CI and config under the trunk. Every
+  file that is not code is a root tip like a test, in a cooler soil tone: a
+  code folder's README and config on its own limb beside its tests
+  (`frontend · non-code`), test data beside the tests it serves, and docs/,
+  .github/ and the repo root's files as clumps of one tap root
+  (`docs, CI and config`). Leaves are code files only. The leaf piles and the
+  scaffold are gone; a root limb never says `tests: tests` (`other tests ·
+  tests/`).
 - **The Map tour teaches the tree in a newcomer's order:** the tree, roots,
-  scaffolding, birds and changes, rules, then your next step. The legend,
+  birds and changes, rules, then your next step. The legend,
   cards, screen-reader summary and `docs/web-ui.md` say the same words.
 - **Fences hold.** Widening, retargeting or lifting a started worker's fence
   needs a reason and is logged per worktree and shown in the session's

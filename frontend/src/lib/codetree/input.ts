@@ -41,7 +41,7 @@ export function kindOf(p: string): RawFile["k"] {
 /** Docs and data run longer lines (and a minified JSON is one): ~40 bytes a
  * line, and no single file may weigh more than this many "lines" — a data
  * dump or a generated bundle must not outweigh the code around it (it would
- * tip its whole top-level folder onto the ground pile). */
+ * tip its whole top-level folder into the roots as a mostly-non-code folder). */
 export const MAX_DOC_LINES = 2000;
 export const MAX_CODE_LINES = 20000;
 export function linesOf(size: number, kind: RawFile["k"]): number {

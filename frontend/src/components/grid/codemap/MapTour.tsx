@@ -1,17 +1,17 @@
 /** The Map tab's tour: short coach marks over the real map, each ringing the
  * part it explains, in the order a newcomer needs them — the tree (trunk,
- * branch, leaf), the roots (tests), the scaffold (docs, CI, config), the
- * birds and what they changed, the rule tools — ending on this session's next
+ * branch, leaf), the roots (tests, docs, CI, config), the birds and what
+ * they changed, the rule tools — ending on this session's next
  * step (or, with none, on finding your way around). Six cards at most. It
  * opens by itself the first time a Map is shown on any of your devices (the
  * synced `map_tour` pref) and is replayable from the toolbar's "? Guide". The
  * coach-mark itself is the shared one (onboarding/CoachTour.tsx), contained
- * in the Map's root; the canopy, roots and scaffold it rings are invisible
+ * in the Map's root; the canopy and roots it rings are invisible
  * boxes CodeTree keeps over the picture (`.ct-part-*`).
  *
  * The steps are built from what is on screen when it opens (mapTourSteps):
- * with nothing changed the birds step is reworded, a repo with no tests or no
- * scaffold skips that step, and a toolbar step whose target is not visible (a
+ * with nothing changed the birds step is reworded, a repo with no roots skips
+ * that step, and a toolbar step whose target is not visible (a
  * narrow toolbar) is skipped rather than pointing at nothing; a step about a
  * part of the tree, or the agents column folded to a rail, keeps its card
  * and docks it in a corner instead.
@@ -42,22 +42,12 @@ const TREE: TourStep = {
 
 const ROOTS: TourStep = {
   target: ".ct-part-roots",
-  title: "Roots are the tests",
+  title: "Roots hold the tree up",
   body: (
     <>
-      Each <b>root tip</b> is one test file. A test grows under the code it tests, so its root is named for it,
-      like <b>tests for backend/web</b>.
-    </>
-  ),
-};
-
-const SCAFFOLD: TourStep = {
-  target: ".ct-part-scaffold",
-  title: "Scaffolding holds docs and config",
-  body: (
-    <>
-      Docs, CI and config stand beside the trunk as <b>scaffolding</b>. Each <b>lift</b> is one folder, named on
-      its top ledger (<b>docs · 21 files</b>). Each <b>plank</b> is one file; a longer plank is a bigger file.
+      The roots hold what keeps the tree standing: <b>tests</b> under the branch they test (<b>tests for
+      backend/web</b>), <b>docs, CI and config</b> under the trunk (<b>docs</b>, <b>repo root files</b>). Each{" "}
+      <b>root tip</b> is one file.
     </>
   ),
 };
@@ -111,7 +101,7 @@ const FIND: TourStep = {
 
 /** Every step the tour can show, in order (the last, the next step, is built per session; with none, it is
  * Getting around). */
-export const MAP_TOUR: TourStep[] = [TREE, ROOTS, SCAFFOLD, BIRDS, RULES, FIND];
+export const MAP_TOUR: TourStep[] = [TREE, ROOTS, BIRDS, RULES, FIND];
 
 /** The most cards the tour shows. */
 export const MAP_TOUR_MAX = 6;
@@ -121,14 +111,13 @@ export interface MapTourCtx {
   changed: number;
   /** this session's next step (the bird index's next-step line) */
   next: NextStep;
-  /** whether the tree has roots (tests) and a scaffold (docs, CI, config) to show (default: both) */
+  /** whether the tree has roots (tests, docs, CI, config) to show (default: it has) */
   roots?: boolean;
-  scaffold?: boolean;
   /** whether a selector's target is on screen now (default: everything is) */
   visible?: (selector: string) => boolean;
 }
 
-/** The tour for what is on screen: the tree, its roots and scaffold when it has them, the birds (reworded when
+/** The tour for what is on screen: the tree, its roots when it has them, the birds (reworded when
  * nothing changed), the rules when the toolbar shows them, and a last card on the concrete next step — or
  * Getting around when there is none. A card about a part of the tree, or the agents column folded to a rail,
  * is kept and docked; a toolbar step that is not visible is skipped. At most MAP_TOUR_MAX cards. (Pure.) */
@@ -137,7 +126,6 @@ export function mapTourSteps(ctx: MapTourCtx): TourStep[] {
   const docked = (s: TourStep) => (shows(s) ? s : { ...s, target: "" });
   const out: TourStep[] = [TREE];
   if (ctx.roots !== false) out.push(ROOTS);
-  if (ctx.scaffold !== false) out.push(SCAFFOLD);
   out.push(docked(ctx.changed > 0 ? BIRDS : BIRDS_CALM));
   if (shows(RULES)) out.push(RULES);
   if (ctx.next.kind !== "none") out.push(docked({ target: ".ct-next", title: "Your next step", body: <>{nextStepText(ctx.next)}</> }));

@@ -47,9 +47,6 @@ export interface Palette {
   DUSK: Pal & { bark: string };
   KEEP: Pal;
   ROOTPAL: Pal;
-  PILEPAL: { leafA: string; leafB: string; doc: string };
-  /** the scaffold (scaffold.ts): standards + ledgers, braces + ties, planks, a lift's fill before its planks show */
-  SCAF: { pole: string; brace: string; plankA: string; plankB: string; fill: string };
   BARK: { crown: string; crownHi: string; root: string; rootHi: string; rootDusk: string };
   duskLabel: string;
   duskLeafLabel: string;
@@ -58,7 +55,9 @@ export interface Palette {
   rootTip: string;
   /** a test's fine root strands (the thick ones near the limb are BARK.root): paler than the soil in the dark */
   rootFine: string;
-  pileLabel: string;
+  /** a support root (docs, CI, config, test data): the same strands and tips as a test's, in a cooler, greyer soil
+   * tone — its limb wood, its fine strands, its tips */
+  supRoot: { strand: string; fine: string; tip: string };
   keepText: string;
   onlyText: string;
   leafLabel: string;
@@ -235,9 +234,6 @@ export function readPalette(el: Element | null): Palette {
     cvHi: rh(34, 20, 33),
     cvSh: rh(28, 20, 8),
   };
-  const PILEPAL = { leafA: rh(30, 30, 40), leafB: rh(22, 25, 33), doc: rh(30, 30, 40) };
-  // the scaffold: weathered, flat, low-saturation wood — quieter than the bark, so it reads as built support
-  const SCAF = { pole: rh(30, 10, 38), brace: rh(30, 8, 34), plankA: rh(33, 22, 44), plankB: rh(29, 18, 38), fill: rh(31, 14, 30) };
   const red = v("--red", "#de613e"),
     green = v("--green", "#51bd73"),
     gold = v("--gold", "#ffd700");
@@ -268,8 +264,6 @@ export function readPalette(el: Element | null): Palette {
     DUSK,
     KEEP,
     ROOTPAL,
-    PILEPAL,
-    SCAF,
     BARK: {
       crown: v("--ct-calm-bark", v("--ct-bark", "hsl(28,14%,37%)")),
       crownHi: v("--ct-bark-hi", "hsl(30,14%,46%)"),
@@ -282,7 +276,11 @@ export function readPalette(el: Element | null): Palette {
     rootLabel: ROOTPAL.label,
     rootTip: v("--ct-root-tip", light ? "hsl(28,34%,30%)" : "hsl(36,30%,64%)"),
     rootFine: v("--ct-root-fine", light ? "hsl(27,24%,42%)" : "hsl(31,20%,42%)"),
-    pileLabel: v("--ct-pile-label", "hsl(32,32%,66%)"),
+    supRoot: {
+      strand: v("--ct-sup-root", light ? "hsl(212,9%,37%)" : "hsl(212,9%,33%)"),
+      fine: v("--ct-sup-root-fine", light ? "hsl(212,8%,47%)" : "hsl(212,8%,43%)"),
+      tip: v("--ct-sup-root-tip", light ? "hsl(212,13%,31%)" : "hsl(210,12%,66%)"),
+    },
     keepText: v("--ct-keep-text", "#ffb7a3"),
     onlyText: v("--ct-only-text", "#a8f0c0"),
     leafLabel: v("--ct-leaf-label", "#c9cdd6"),

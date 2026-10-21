@@ -14,7 +14,7 @@
 import { tinted } from "../flock";
 import { agentBlast, addBadgeSets, blastOf, collectBadges } from "./blast";
 import { dPS, hashStr, rng, taperHW } from "./layout";
-import { S0, TAU, baseOf, isUnder, shortName, type Branch, type Leaf, type Model, type TNode, type TTerm } from "./model";
+import { S0, TAU, baseOf, isUnder, nameTop, shortName, type Branch, type Leaf, type Model, type TNode, type TTerm } from "./model";
 import {
   FOLDER_CAP,
   LEAF_CAP,
@@ -44,7 +44,6 @@ import {
 import { leafOutline, leafScreen } from "./leafgeom";
 import { glyphShape, type Pal, type Palette } from "./palette";
 import { drawRoots, prepRoots, rootStrandPath, rootTipG, rootTipPath } from "./roots";
-import { PLANK_MARK, SCAF, drawScaffold, drawScaffoldMini, liftAnchor, liftAt, liftBox, liftCaption, liftRing, plankAt, plankPath, plankRing } from "./scaffold";
 import type { AgentDef, AgentState, Badge, BirdEv, Blocked, Hit, RiskGroup, TreeView, TZone } from "./types";
 
 /** What an empty view (zoomed into air) says instead of showing nothing. */
@@ -167,10 +166,9 @@ export function prepGeometry(M: Model): void {
   for (const l of M.leaves) {
     const ca = Math.cos(l.ang),
       sa = Math.sin(l.ang);
-    const flat = l.region === "ground",
-      root = l.region === "root";
+    const root = l.region === "root";
     const len = l.len,
-      w = len * (root ? 0.5 : flat ? 0.3 : 0.37);
+      w = len * (root ? 0.5 : 0.37);
     const bx = l.x - ca * len * 0.5,
       by = l.y - sa * len * 0.5,
       tx = l.x + ca * len * 0.5,
@@ -535,7 +533,6 @@ export function computeFlags(v: TreeView): void {
     if (zz.type === "only" && zz.file != null) {
       const l = M.files[zz.file] && M.files[zz.file].leaf;
       if (l && l.term) onlyN.add(l.term.node);
-      else if (l && l.pile) onlyN.add(l.pile);
     }
   v.hasOnly = zones.some((zz) => zz.type === "only");
   const litAnc = new Set<TNode>();
@@ -551,7 +548,7 @@ export function computeFlags(v: TreeView): void {
     const p = n.parent;
     n.vHidden = p ? !!(p.vHidden || p.vColl) : false;
     n.vFold = v.folded.has(n);
-    n.vColl = n.vFold || (n.depth >= 2 && n.rad * z < 26) || (n.depth === 1 && n.kind !== "pile" && n.rad * z < 12);
+    n.vColl = n.vFold || (n.depth >= 2 && n.rad * z < 26) || (n.depth === 1 && n.rad * z < 12);
     n.fAnc = n.vFold ? n : p ? p.fAnc || null : null;
     n.keep = keepN.has(n) || (p ? !!p.keep : false);
     n.lit = !v.hasOnly || onlyN.has(n) || !!(p && p.lit);
@@ -564,7 +561,6 @@ export function computeFlags(v: TreeView): void {
 
 function palFor(P: Palette, node: TNode, region: string): Pal | { leafA: string; leafB: string; doc: string } {
   if (region === "root") return P.ROOTPAL;
-  if (region === "ground") return P.PILEPAL;
   return P.PAL[node.limb % P.PAL.length];
 }
 
@@ -833,7 +829,7 @@ function renderStatic(v: TreeView, g: G2, W: number, H: number, cam: { x: number
     const n = b.node || b.owner;
     const lit = !hasOnly || !!(n && (n.lit || (b.node && litAnc.has(b.node)) || (b.virtual && n.lit)));
     const litPath = hasOnly && !!b.node && litAnc.has(b.node);
-    if (b.region === "root") col = lit || litPath ? P.BARK.root : P.BARK.rootDusk;
+    if (b.region === "root") col = lit || litPath ? (n && n.support ? P.supRoot.strand : P.BARK.root) : P.BARK.rootDusk;
     else col = hasOnly && n && n.lit ? P.BARK.crownHi : lit || litPath ? P.BARK.crown : P.DUSK.bark;
     v.visBranches.push(b);
     if (b.wb * z < 1.3) push(thin, col, b);
@@ -918,7 +914,9 @@ function renderStatic(v: TreeView, g: G2, W: number, H: number, cam: { x: number
     const st = termStyle(t);
     if (!st) return null;
     if (st === P.DUSK) return { strand: P.BARK.rootDusk, fine: P.BARK.rootDusk, tip: P.DUSK.leafA };
-    return { strand: P.BARK.root, fine: P.rootFine, tip: st === P.KEEP ? P.KEEP.leafA : P.rootTip };
+    // a support root (docs, CI, config) is the same strands and tips in a cooler, greyer soil tone
+    const R = t.node.support ? P.supRoot : { strand: P.BARK.root, fine: P.rootFine, tip: P.rootTip };
+    return { strand: R.strand, fine: R.fine, tip: st === P.KEEP ? P.KEEP.leafA : R.tip };
   };
   const keepTips = v.keepFiles || new Set<number>();
   drawRoots(g, M.terms.filter((t) => t.region === "root" && !t.node.fAnc && inView(t.cx - t.rad, t.cy - t.rad, t.cx + t.rad, t.cy + t.rad)), z, 0.8 + 0.2 * twigA, fade(5, 10, leafPx), rootStyle, (l) => (keepTips.has(l.file.id) ? P.KEEP.leafA : null), createdGhost);
@@ -966,8 +964,6 @@ function renderStatic(v: TreeView, g: G2, W: number, H: number, cam: { x: number
     }
     drawGroups(leafAlpha);
   }
-  // the scaffold (docs / CI / config): towers of lifts beside the trunk, a plank per file (scaffold.ts)
-  v.termsInView += drawScaffold(g, M, P, { z, leafPx, hasOnly, keepFiles, createdGhost, inView });
 
   // ---------- keep-out hatching: a shape cue that survives colour blindness and every zoom ----------
   const hatch = (clip: Path2D, x0: number, y0: number, x1: number, y1: number, dim?: boolean) => {
@@ -985,27 +981,17 @@ function renderStatic(v: TreeView, g: G2, W: number, H: number, cam: { x: number
     g.restore();
   };
   for (const t of keepTerms) hatch(t.blobFold, t.cx - t.rad - S0, t.cy - t.rad - S0, t.cx + t.rad + S0, t.cy + t.rad + S0, hasOnly && !t.node.lit);
-  for (const p of M.piles) {
-    const B = liftBox(p);
-    if (p.keep && inView(B.x0, B.y0, B.x1, B.y1)) {
-      const clipP = new Path2D();
-      clipP.rect(B.x0, B.y0, B.x1 - B.x0, B.y1 - B.y0);
-      hatch(clipP, B.x0, B.y0, B.x1, B.y1);
-    }
-  }
   for (const id of keepFiles) {
     const l = M.files[id] && M.files[id].leaf;
     if (!l || !inView(l.x - 10, l.y - 10, l.x + 10, l.y + 10)) continue;
     const clipL = new Path2D();
     const r = Math.max(l.len * 0.8, 6 / z);
-    if (l.plank) plankPath(clipL, l);
-    else clipL.arc(l.x, l.y, r, 0, TAU);
+    clipL.arc(l.x, l.y, r, 0, TAU);
     hatch(clipL, l.x - r, l.y - r, l.x + r, l.y + r);
   }
 }
 
 function leafPath(g: G2, l: Leaf, z = 0) {
-  if (l.plank) return plankPath(g, l); // a ground file is a plank, never a leaf
   if (l.region === "root") return rootTipPath(g, l);
   const q = z ? leafOutline(l, z) : l.g!;
   g.moveTo(q[0], q[1]);
@@ -1076,8 +1062,7 @@ function renderOverlay(v: TreeView, now: number) {
     g.lineWidth = 1.5 / z;
     g.setLineDash([6 / z, 4 / z]);
     g.beginPath();
-    if (hoverNode.lift) liftRing(g, hoverNode, S0 * 0.6);
-    else g.arc(hoverNode.cx, hoverNode.cy, hoverNode.rad + S0 * 0.6, 0, TAU);
+    g.arc(hoverNode.cx, hoverNode.cy, hoverNode.rad + S0 * 0.6, 0, TAU);
     g.stroke();
     g.setLineDash([]);
   }
@@ -1085,21 +1070,13 @@ function renderOverlay(v: TreeView, now: number) {
   // zones as TERRITORIES: a translucent fill over the whole branch hull with a bold outline (screen space)
   drawTerritories(v, ox, oy);
   g.setTransform(dpr * z, 0, 0, dpr * z, dpr * ox, dpr * oy);
-  // zone marks for what has no hull: a scaffold lift, a single file
+  // zone marks for what has no hull: a single file
   for (const zz of v.zones) {
     const col = zz.type === "keep" ? P.red : P.green;
     g.globalAlpha = zz.waived ? 0.45 : 1; // a waived zone is drawn, not enforced
     if (zz.node && zz.node.branch) {
       g.globalAlpha = 1;
       continue;
-    } else if (zz.node && zz.node.kind === "pile") {
-      g.strokeStyle = col;
-      g.lineWidth = 2 * px;
-      g.setLineDash([5 * px, 4 * px]);
-      g.beginPath();
-      liftRing(g, zz.node, S0 * 0.4);
-      g.stroke();
-      g.setLineDash([]);
     } else if (zz.file !== undefined && zz.file !== null) {
       const l = M.files[zz.file] && M.files[zz.file].leaf;
       if (!l) {
@@ -1110,8 +1087,7 @@ function renderOverlay(v: TreeView, now: number) {
       g.lineWidth = 2 * px;
       const ls = leafScreen(l, z);
       g.beginPath();
-      if (l.plank) plankRing(g, l, 3 * px);
-      else g.arc(ls.cx, ls.cy, Math.max(ls.halfPx * 1.5 * px, 6 * px), 0, TAU);
+      g.arc(ls.cx, ls.cy, Math.max(ls.halfPx * 1.5 * px, 6 * px), 0, TAU);
       g.stroke();
     }
     g.globalAlpha = 1;
@@ -1130,18 +1106,10 @@ function renderOverlay(v: TreeView, now: number) {
     for (const [id] of A.reads) {
       const l = M.files[id] && M.files[id].leaf;
       if (!l || !inView(l.x - 5, l.y - 5, l.x + 5, l.y + 5)) continue;
-      let r: number, dx: number, dy: number;
-      if (l.plank) {
-        const ll = PLANK_MARK; // a mark on a plank is sized for a leaf, not the board
-        r = Math.max(3 * px, ll * 0.17);
-        dx = l.x - Math.cos(l.ang) * ll * 0.18;
-        dy = l.y - Math.sin(l.ang) * ll * 0.18;
-      } else {
-        const ls = leafScreen(l, z);
-        r = Math.max(3 * px, ls.halfPx * 0.34 * px);
-        dx = ls.cx - Math.cos(l.ang) * ls.halfPx * 0.36 * px;
-        dy = ls.cy - Math.sin(l.ang) * ls.halfPx * 0.36 * px;
-      }
+      const ls = leafScreen(l, z);
+      const r = Math.max(3 * px, ls.halfPx * 0.34 * px);
+      const dx = ls.cx - Math.cos(l.ang) * ls.halfPx * 0.36 * px;
+      const dy = ls.cy - Math.sin(l.ang) * ls.halfPx * 0.36 * px;
       g.moveTo(dx + r, dy);
       g.arc(dx, dy, r, 0, TAU);
     }
@@ -1150,7 +1118,7 @@ function renderOverlay(v: TreeView, now: number) {
     for (const id of A.plan) {
       const l = M.files[id] && M.files[id].leaf;
       if (!l || A.edits.has(id)) continue;
-      drawBud(g, P, l.x, l.y, l.plank ? PLANK_MARK : l.len, col, px, !!M.files[id].ghost);
+      drawBud(g, P, l.x, l.y, l.len, col, px, !!M.files[id].ghost);
     }
     // ghost buds where a planned new file will grow
     A.planNew.forEach((pn, i) => {
@@ -1169,7 +1137,7 @@ function renderOverlay(v: TreeView, now: number) {
     for (const [id] of A.edits) {
       const l = M.files[id] && M.files[id].leaf;
       if (!l || !(fresh.get(id)! > 0)) continue;
-      const own = l.term ? l.term.node : l.pile;
+      const own = l.term ? l.term.node : null;
       if (hasOnly && own && !own.lit && onlyBinds(v, A)) continue;
       const R = Math.max(l.len * 1.6, 26 * px);
       if (!inView(l.x - R, l.y - R, l.x + R, l.y + R)) continue;
@@ -1211,7 +1179,7 @@ function renderOverlay(v: TreeView, now: number) {
     const l = selLeaf;
     // in only-here dusk the chosen leaf is spotlit so the destination is never grey-on-grey — unless a bird
     // already painted it (the legend promises the bird's colour on an edited leaf, so keep that)
-    const own = l.term ? l.term.node : l.pile;
+    const own = l.term ? l.term.node : null;
     const painted = v.agents.some((A) => A.edits.has(l.file.id));
     if (hasOnly && own && !own.lit && !painted) {
       const st = palFor(P, own, l.region);
@@ -1222,7 +1190,7 @@ function renderOverlay(v: TreeView, now: number) {
     }
     const ls = leafScreen(l, z);
     const r = Math.max(ls.halfPx * 1.6 * px, 8 * px);
-    const ring = () => (l.plank ? plankRing(g, l, 3.5 * px) : g.arc(ls.cx, ls.cy, r, 0, TAU));
+    const ring = () => g.arc(ls.cx, ls.cy, r, 0, TAU);
     g.strokeStyle = P.selHalo;
     g.lineWidth = 5 * px;
     g.beginPath();
@@ -1243,8 +1211,7 @@ function renderOverlay(v: TreeView, now: number) {
     g.lineWidth = 1.4 * px;
     g.setLineDash([2.5 * px, 2.5 * px]);
     g.beginPath();
-    if (markLeaf.plank) plankRing(g, markLeaf, 3.5 * px);
-    else g.arc(ls.cx, ls.cy, r, 0, TAU);
+    g.arc(ls.cx, ls.cy, r, 0, TAU);
     g.stroke();
     g.setLineDash([]);
   }
@@ -1256,8 +1223,7 @@ function renderOverlay(v: TreeView, now: number) {
     g.strokeStyle = P.sel;
     g.lineWidth = 1.4 * px;
     g.beginPath();
-    if (n.lift) liftRing(g, n, S0 * 0.6);
-    else g.arc(n.cx, n.cy, n.rad + S0 * 0.6, 0, TAU);
+    g.arc(n.cx, n.cy, n.rad + S0 * 0.6, 0, TAU);
     g.stroke();
   }
   // hover: a thin dashed ring in the muted colour, so it never reads as the (solid) selection
@@ -1267,8 +1233,7 @@ function renderOverlay(v: TreeView, now: number) {
     g.lineWidth = 1.1 * px;
     g.setLineDash([2 * px, 2 * px]);
     g.beginPath();
-    if (hv.leaf.plank) plankRing(g, hv.leaf, 2.5 * px);
-    else g.arc(ls.cx, ls.cy, Math.max(ls.halfPx * 1.44 * px, 6 * px), 0, TAU);
+    g.arc(ls.cx, ls.cy, Math.max(ls.halfPx * 1.44 * px, 6 * px), 0, TAU);
     g.stroke();
     g.setLineDash([]);
   }
@@ -1282,19 +1247,6 @@ function renderOverlay(v: TreeView, now: number) {
   const fits = occ.fits,
     reserve = occ.add;
   for (const r of v.hudRects || []) reserve(r[0], r[1], r[2], r[3]); // HUD panels are occupied space
-  // the scaffold towers are built things, not sky: no folder's name is laid across a lift (a lift's own name hangs
-  // from its ledger, with the lift's box as its own room)
-  const liftRect = new Map<TNode, R4>();
-  for (const n of M.piles) {
-    const b = liftBox(n);
-    const [x0, y0] = toS(b.x0, b.y0),
-      [x1, y1] = toS(b.x1, b.y1);
-    if (x1 < -4 || y1 < -4 || x0 > W + 4 || y0 > H + 4) continue;
-    const r: R4 = [x0 - 2, y0 - 2, x1 + 2, y1 + 2];
-    liftRect.set(n, r);
-    reserve(r[0], r[1], r[2], r[3]);
-  }
-  v.liftRect = liftRect;
   const hud = v.hudRects || [];
   const underHud = (x: number, y: number) => {
     for (const r of hud) if (x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3]) return true;
@@ -1523,7 +1475,6 @@ function renderOverlay(v: TreeView, now: number) {
     // a territory's sign stands at its top edge, where it reads as the name of the whole area
     if (zz.node && zz.node.branch && zz.node.cnt) Pt = [zz.node.cx, zz.node.cy - zz.node.rad - S0 * 0.6];
     else if (zz.node && zz.node.branch) Pt = [zz.node.branch.pts[4][0], zz.node.branch.pts[4][1]];
-    else if (zz.node && zz.node.kind === "pile") Pt = [zz.node.cx, liftBox(zz.node).y0 - S0 * 0.6]; // over its lift
     else if (zz.node && zz.node.cnt) Pt = [zz.node.cx, zz.node.cy];
     else if (zz.file != null && M.files[zz.file] && M.files[zz.file].leaf) {
       const l = M.files[zz.file].leaf!;
@@ -1779,7 +1730,7 @@ function renderOverlay(v: TreeView, now: number) {
     // (a nested folder carries its top-level folder, "backend/config/program.py", so a bird perched beside another
     // limb's name is never read as working in that limb)
     const fname = A.file
-      ? leafPx < 14 && A.file.node && A.file.node.depth >= 1 && A.file.node.kind !== "pile" && !namedN.has(A.file.node)
+      ? leafPx < 14 && A.file.node && A.file.node.depth >= 1 && !namedN.has(A.file.node)
         ? folderPath(A.file.node).replace(" › ", "/") + "/" + A.file.name
         : A.file.name
       : "";
@@ -1999,14 +1950,16 @@ export interface LitInfo {
 /** A folder's name as the map says it: a nested folder carries its top-level folder ("backend › config"), so a
  * name drawn beside another limb is never read as that limb's. */
 export function folderPath(n: TNode): string {
-  const nm = (x: TNode) => (x.kind === "root" || x.kind === "pile" ? x.label || x.name : x.disp || shortName(x.name));
-  if (n.depth < 2) return nm(n);
-  let top = n;
-  while (top.parent && top.depth > 1) top = top.parent;
+  const nm = (x: TNode) => (x.kind === "root" ? x.label || x.name : x.disp || shortName(x.name));
+  const top = nameTop(n);
+  if (n.depth < 2 || top === n) return nm(n);
   const t = nm(top);
   let s = nm(n);
   // a name already disambiguated with its parent ("backend/providers") does not say "backend" twice
   if (s.startsWith(t + "/")) s = s.slice(t.length + 1);
+  // a clump of other tests or of a support root says where it is under its limb's folder: "docs › api",
+  // "other tests · tests/ › unit" (never "… › tests · tests/unit")
+  else if ((n.unmatched || n.support) && top.folder && n.folder && n.folder.startsWith(top.folder + "/")) s = n.folder.slice(top.folder.length + 1);
   return `${t} › ${s}`;
 }
 
@@ -2117,7 +2070,7 @@ function drawEdits(v: TreeView, now: number, ox: number, oy: number, reserve?: R
       const created = A.created.has(id) && A.lastEdit && A.lastEdit.f.id === id;
       const age = created ? t - A.lastEdit!.t : 99,
         grow = M.files[id].ghost || created ? (v.playing ? Math.min(1, Math.max(0.05, age / 1.2)) : 1) : 1;
-      const own = l.term ? l.term.node : l.pile;
+      const own = l.term ? l.term.node : null;
       // in an only-here dusk an earlier change outside the territory stays visible, but unlit (exempt, no glow)
       const outside = hasOnly && !!own && !own.lit && onlyBinds(v, A);
       // drawn at the leaf's on-screen size, never under 10.5 px half-length (leafgeom.ts); a root's round tip
@@ -2309,7 +2262,7 @@ function drawVeins(v: TreeView, px: number, inView: (x0: number, y0: number, x1:
       for (const [id] of A.edits) {
         const f = M.files[id];
         const l = f && f.leaf;
-        const own = l ? (l.term ? l.term.node : l.pile) : null;
+        const own = l && l.term ? l.term.node : null;
         if (!l || !own || !own.lit) continue;
         let b: Branch | null = (l.term && (l.term as TTerm & { branch?: Branch }).branch) || (f.node && f.node.branch) || null;
         let guard = 0;
@@ -2571,7 +2524,7 @@ const TERR = new WeakMap<object, HTMLCanvasElement>();
  * Drawn into an offscreen layer; the territory's screen polygons are kept for the label placers. */
 function drawTerritories(v: TreeView, ox: number, oy: number) {
   v.terrPolys = [];
-  const zs = v.zones.filter((zz) => !zz.waived && zz.node && zz.node.kind !== "pile" && zz.node.depth >= 1);
+  const zs = v.zones.filter((zz) => !zz.waived && zz.node && zz.node.depth >= 1);
   if (!zs.length) return;
   const { g, M } = v;
   const P = v.P,
@@ -2805,7 +2758,7 @@ export function buildFoliageField(v: TreeView, toS: (x: number, y: number) => [n
      * `range` px) belongs to n's top-level folder, never to a neighbour's. A name drawn beside another limb is read
      * as that limb's ("backend › config" under the "frontend" label), so every placer asks this first. */
     sideOk(x0: number, y0: number, x1: number, y1: number, n: TNode | null, range = 150): boolean {
-      if (!n || n.depth < 1 || n.kind === "pile") return true;
+      if (!n || n.depth < 1) return true;
       const T = topOf(n);
       let dOwn = Infinity,
         dFor = Infinity;
@@ -2914,7 +2867,7 @@ export function buildFoliageField(v: TreeView, toS: (x: number, y: number) => [n
      * foliage than to its own. A name that cannot sit like that is shortened or dropped, never parked beside a
      * neighbour (where it would name the neighbour). */
     belongs(x0: number, y0: number, x1: number, y1: number, n: TNode | null, anchors?: Array<[number, number, number]>, range = 220, clear = 4): boolean {
-      if (!n || n.depth < 1 || n.kind === "pile") return true;
+      if (!n || n.depth < 1) return true;
       const q = api.near(x0, y0, x1, y1, n, anchors, range);
       if (q.loud !== Infinity && !(q.loud >= clear && q.own <= q.loud)) return false;
       // a name touching its own cluster (within 10 px of its clump, nest, sign or stem) is read as that; otherwise
@@ -2976,7 +2929,7 @@ function drawBreadcrumb(v: TreeView, g: G2, free: TreeView["free"], fits: Fits, 
   let best: TNode | null = null,
     bestArea = 1e18;
   for (const n of M.nodes) {
-    if (n.kind === "pile" || n.depth < 1 || !n.cnt) continue;
+    if (n.depth < 1 || !n.cnt) continue;
     if (cx < n.bx0 - m || cx > n.bx1 + m || cy < n.by0 - m || cy > n.by1 + m) continue;
     const area = (n.bx1 - n.bx0 + 1) * (n.by1 - n.by0 + 1);
     if (!best || n.depth > best.depth || (n.depth === best.depth && area < bestArea)) {
@@ -2988,7 +2941,7 @@ function drawBreadcrumb(v: TreeView, g: G2, free: TreeView["free"], fits: Fits, 
     // between clusters: the folder whose centre is nearest, if it is large on screen
     let bd = 1e18;
     for (const n of M.nodes) {
-      if (n.kind === "pile" || n.depth < 1 || !n.cnt || n.quiet) continue;
+      if (n.depth < 1 || !n.cnt || n.quiet) continue;
       const d = Math.hypot(n.cx - cx, n.cy - cy);
       if (d < n.rad + S0 * 6 && d < bd) {
         bd = d;
@@ -3010,7 +2963,7 @@ function drawBreadcrumb(v: TreeView, g: G2, free: TreeView["free"], fits: Fits, 
       h = Math.min(vy1, n.by1) - Math.max(vy0, n.by0);
     return w > 0 && h > 0 ? (w * h) / vArea : 0;
   };
-  const rival = (q: TNode) => M.nodes.some((o) => o !== q && o.depth === q.depth && o.kind === q.kind && o.kind !== "pile" && o.cnt && !isUnder(o, q) && !isUnder(q, o) && share(o) > 0.15);
+  const rival = (q: TNode) => M.nodes.some((o) => o !== q && o.depth === q.depth && o.kind === q.kind && o.cnt && !isUnder(o, q) && !isUnder(q, o) && share(o) > 0.15);
   let at: TNode | null = best;
   while (at && at.depth >= 1 && rival(at)) at = at.parent;
   if (!at || at.depth < 1) return;
@@ -3018,7 +2971,7 @@ function drawBreadcrumb(v: TreeView, g: G2, free: TreeView["free"], fits: Fits, 
   const chain: TNode[] = [];
   for (let q: TNode | null = best; q && q.depth >= 1; q = q.parent) if (!q.quiet || q === best) chain.unshift(q);
   const repo = M.name.split("/").filter(Boolean).pop() || M.name; // "owner/repo" says the repo
-  const segs: Array<{ txt: string; n: TNode }> = [{ txt: best.kind === "root" ? "tests" : repo, n: best.kind === "root" ? M.roots : M.crown }];
+  const segs: Array<{ txt: string; n: TNode }> = [{ txt: best.kind === "root" ? (best.support ? "roots" : "tests") : repo, n: best.kind === "root" ? M.roots : M.crown }];
   for (const q of chain)
     segs.push({ txt: q.kind === "root" ? (q.label || q.name).replace(/^tests for /, "") : q.depth === 1 ? q.name : q.core || baseOf(q.name), n: q });
   g.font = `600 11.5px ${P.font}`;
@@ -3149,7 +3102,7 @@ export function riskGroups(v: TreeView): RiskGroup[] {
     const f = M.files[id];
     if (!f || !f.node || !f.leaf) continue;
     let n: TNode = f.node;
-    if (n.kind !== "pile") while (n.parent && n.depth > D) n = n.parent;
+    while (n.parent && n.depth > D) n = n.parent;
     let e = groups.get(n);
     if (!e) groups.set(n, (e = { n, x: 0, y: 0, r: 0, ids: new Set(), files: new Set() }));
     e.ids.add(id);
@@ -3184,7 +3137,7 @@ export function riskGroups(v: TreeView): RiskGroup[] {
       x1 = -1e18;
     for (const id of e.ids) {
       const l = M.files[id].leaf!;
-      const c = l.term ? [l.term.cx, l.term.cy, l.term.rad] : l.pile ? [l.pile.cx, l.pile.cy, l.pile.pw || 20] : [l.x, l.y, S0];
+      const c = l.term ? [l.term.cx, l.term.cy, l.term.rad] : [l.x, l.y, S0];
       x0 = Math.min(x0, c[0] - c[2]);
       x1 = Math.max(x1, c[0] + c[2]);
       y0 = Math.min(y0, c[1] - c[2]);
@@ -3215,14 +3168,12 @@ function drawRisk(v: TreeView, px: number) {
     for (const id of e.ids) {
       const l = M.files[id].leaf;
       if (!l) continue;
-      const key: object = l.term || l.pile || l;
+      const key: object = l.term || l;
       let c = clumps.get(key);
       if (!c) {
         c = l.term
           ? { x: l.term.cx, y: l.term.cy, r: l.term.rad, n: 0, of: Math.max(1, l.term.files.length) }
-          : l.pile
-            ? { x: l.pile.cx, y: l.pile.cy, r: l.pile.pw || 20, n: 0, of: Math.max(1, l.pile.files.length) }
-            : { x: l.x, y: l.y, r: S0, n: 0, of: 1 };
+          : { x: l.x, y: l.y, r: S0, n: 0, of: 1 };
         clumps.set(key, c);
       }
       c.n++;
@@ -3267,7 +3218,7 @@ function drawRiskChips(v: TreeView, g: G2, toS: (x: number, y: number) => [numbe
     const c = e.ids.size;
     const n = e.n;
     const name =
-      n.kind === "pile" ? n.label || n.name : n.kind === "root" ? (n.label || n.name).replace(/^tests for /, "tests/") : n.depth >= 1 ? n.disp || shortName(n.name) : "repo root";
+      n.kind === "root" ? (n.label || n.name).replace(/^tests for /, "tests/") : n.depth >= 1 ? n.disp || shortName(n.name) : "repo root";
     const txt = `⚠ ${e.rest ? name + " · other" : name} ${c}`;
     const tw = g.measureText(txt).width + 14,
       th = 18;
@@ -3316,7 +3267,7 @@ function drawRiskChips(v: TreeView, g: G2, toS: (x: number, y: number) => [numbe
     g.fillStyle = P.gold;
     g.fillText(txt, bx + 7, by + th / 2 + 0.5);
     reserve(bx, by, bx + tw, by + th);
-    const where = (n.kind === "pile" || n.kind === "root" ? n.label || n.name : n.depth >= 1 ? folderPath(n) : "repo root") + (e.rest ? " (smaller folders)" : "");
+    const where = (n.kind === "root" ? n.label || n.name : n.depth >= 1 ? folderPath(n) : "repo root") + (e.rest ? " (smaller folders)" : "");
     const one = e.files.size === 1 ? M.files[[...e.files][0]] : null;
     const what = f ? f.name : one ? one.name : `${e.files.size} changed files`;
     const bd: Badge = {
@@ -3405,7 +3356,7 @@ function drawBlast(v: TreeView, B: BlastSpec, px: number, inView: (x0: number, y
   // gold in the only-here dusk is half-dimmed with everything else out there, so "the rest dims" stays true
   const dimmed = (l: Leaf) => {
     if (!v.hasOnly) return false;
-    const own = l.term ? l.term.node : l.pile;
+    const own = l.term ? l.term.node : null;
     return !!(own && !own.lit);
   };
   const draw = (pred: (id: number) => boolean, a: number, rDot: number, dimPass: boolean) => {
@@ -3520,7 +3471,6 @@ function bonkPoint(v: TreeView, bk: Pick<Blocked, "f" | "z" | "kind">): [number,
     const p = zn.branch.pts[4];
     return [p[0], p[1]];
   }
-  if (bk.kind === "keep" && zn && zn.kind === "pile") return [zn.cx, liftBox(zn).y0];
   const l = bk.f && bk.f.leaf;
   return l ? [l.x, l.y] : null;
 }
@@ -3733,7 +3683,6 @@ function buildLeafField(v: TreeView, toS: (x: number, y: number) => [number, num
       if (all || edited.has(l.file.id)) add(l);
     }
   }
-  for (const p of M.piles) for (const l of p.leaves || []) if ((all || edited.has(l.file.id)) && inView(l.x - S0, l.y - S0, l.x + S0, l.y + S0)) add(l);
   return f;
 }
 
@@ -3757,12 +3706,11 @@ function drawLeafName(
   g.font = `${weight} 10.5px ${P.font}`;
   const txt = l.file.name,
     tw = g.measureText(txt).width;
-  const own = l.term ? l.term.node : l.pile || null;
+  const own = l.term ? l.term.node : null;
   const groundS = v.M.groundY * v.cam.z + (v.H / 2 - v.cam.y * v.cam.z);
   // (the grid's fits takes the selection ring's square as the name's own room)
   const fitsOwn = fits as (x0: number, y0: number, x1: number, y1: number, own?: R4) => boolean;
   const cands = candidatesForLeaf(a, tw);
-  if (l.plank) cands.splice(1); // a plank's name sits at its outer end only (the inner end is inside the tower)
   const c = placeLabel(
     cands,
     { fits: (x0, y0, x1, y1) => fitsOwn(x0, y0, x1, y1, ownRing) },
@@ -4002,7 +3950,7 @@ function drawPriorityLeafLabels(
 }
 
 interface LabelCand {
-  type: "pile" | "clump" | "branch";
+  type: "clump" | "branch";
   n: TNode;
   sx?: number;
   sy?: number;
@@ -4097,12 +4045,6 @@ function drawLabels(
     if (rule && tagged.has(n) && !nest && !sel && !lit && hovN !== n) continue; // its sign already names it
     if (n.quiet && !must && hovN !== n) continue; // pass-through scaffolding (src/main, java/com/…) is not a place
     if (crumbAnc && crumbAnc.has(n) && !must && hovN !== n) continue; // the breadcrumb already says it
-    if (n.kind === "pile") {
-      const la = liftAnchor(n); // on the lift's floor ledger, at the end of its arm
-      const [sx, sy] = toS(la.x, la.y);
-      if (onScreen(sx, sy, 60)) cand.push({ type: "pile", n, sx, sy, pri: 1e6 + 10 * n.nFiles }); // a lift is a top-level group
-      continue;
-    }
     const big = n.depth === 1;
     const srad = n.rad * z;
     if (quietZoom && !lit && !must && !big && hovN !== n && !n.vFold) continue;
@@ -4127,7 +4069,7 @@ function drawLabels(
   // the open card, the hovered folder) may also lie over other folders' foliage discs; else it is not drawn
   const place = (cands: LabelSpot[], n: TNode, okY: (y: number) => boolean, anchors: Array<[number, number, number]>): LabelSpot | null => {
     const field = v.leafField;
-    const leaves = field ? { field, skip: (o: Leaf) => !!(o.term ? o.term.node : o.pile) && isUnder((o.term ? o.term.node : o.pile)!, n) } : null;
+    const leaves = field ? { field, skip: (o: Leaf) => !!o.term && isUnder(o.term.node, n) } : null;
     const vp = { W, H };
     for (const clr of [14, 4]) {
       const pinned = (c: LabelSpot) => okY(c.R[1]) && (!fol || fol.belongs(c.R[0], c.R[1], c.R[2], c.R[3], n, anchors, 220, clr));
@@ -4224,33 +4166,6 @@ function drawLabels(
             : P.calmLabel;
     const underground = n.kind === "root"; // a root's name stays below the ground line
     const okY = (y: number) => !underground || y > groundS + 9;
-    if (c.type === "pile") {
-      // a lift's name hangs UNDER its top ledger, at the end of the ledger's arm, running away from the trunk:
-      // "docs · 21 files" — a heading over its planks (the ledger line runs into it, the planks are right below)
-      const dir = liftAnchor(n).dir;
-      g.font = `600 11px ${P.font}`;
-      const [t1, t2] = liftCaption(M, n); // "frontend · 3 non-code", "test data · 42", "docs · 21 files"
-      const w1 = g.measureText(t1).width;
-      g.font = `10px ${P.font}`;
-      const w = w1 + g.measureText(t2).width + 4;
-      const x0 = dir > 0 ? c.sx! + 2 : c.sx! - 2 - w,
-        y0 = c.sy! + 1,
-        y1 = y0 + 15;
-      const fitsOwn = fits as (x0: number, y0: number, x1: number, y1: number, own?: R4) => boolean;
-      if (!fitsOwn(x0, y0, x0 + w, y1, v.liftRect?.get(n))) continue;
-      reserve(x0, y0, x0 + w, y1);
-      v.labelHits!.push({ r: [x0, y0, x0 + w, y1], n });
-      g.strokeStyle = P.halo;
-      g.lineWidth = 3.5;
-      g.font = `600 11px ${P.font}`;
-      g.fillStyle = dusk ? P.duskLabel : P.pileLabel;
-      halo(t1, x0 + 2, y1 - 7.5);
-      g.font = `10px ${P.font}`;
-      g.fillStyle = P.muted;
-      halo(t2, x0 + 2 + w1, y1 - 7.5);
-      v.labelBudget = (v.labelBudget || 0) - 1;
-      continue;
-    }
     // the stem a folder hangs from, on screen, with its wood's half-width at each point
     const stemOf = (b: Branch): Array<[number, number, number]> =>
       b.pts.map((p, k) => {
@@ -4350,7 +4265,6 @@ function drawLabels(
         L.push(l);
       }
     }
-    for (const p of M.piles) for (const l of p.leaves || []) if ((!few || edited.has(l.file.id)) && inView(l.x - 5, l.y - 5, l.x + 5, l.y + 5)) L.push(l);
     if (L.length < 1400) {
       const planned = new Set<number>(),
         read = new Set<number>(),
@@ -4402,7 +4316,7 @@ function drawLabels(
         if (named.has(l)) continue;
         const a = leafScreenGeom(l, z, toS, edited.has(l.file.id) ? 10.5 : 0);
         if (!onScreen(a.tip[0], a.tip[1], 0)) continue;
-        const dusk = hasOnly && !(l.term ? l.term.node.lit : l.pile && l.pile.lit);
+        const dusk = hasOnly && !(l.term && l.term.node.lit);
         const col = dusk ? P.duskLeafLabel : l.file.kind === "c" ? P.leafLabel : P.muted;
         if (drawLeafName(v, g, l, a, col, 400, fits, reserve, leafSkip(l, rank.get(l)! >= LOUD_RANK, loudLeaf))) cnt++;
       }
@@ -4419,7 +4333,7 @@ export function branchNode(b: Branch): TNode | null {
 }
 export function hitNode(hit: Hit | null | undefined): TNode | null {
   if (!hit) return null;
-  return hit.node || (hit.branch && branchNode(hit.branch)) || hit.clump || hit.pile || null;
+  return hit.node || (hit.branch && branchNode(hit.branch)) || hit.clump || null;
 }
 
 const inRect = (r: number[], x: number, y: number) => x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
@@ -4451,23 +4365,13 @@ export function pick(v: TreeView, sx: number, sy: number): Hit | null {
     for (const id of A.edits.keys()) hot.add(id);
     if (A.file) hot.add(A.file.id);
   }
-  // zoomed out, a scaffold lift is one thing: a click on it opens the lift, not whichever plank happens to be under the cursor
-  const pileWhole = leafPx < 12 || v.tool !== "explore";
-  // a plank is hit on its board (scaffold.ts), not by distance to its centre — it is long and the rows are close
-  const plank = plankAt(M, wx, wy, Math.max(3 / z, SCAF.pitch * 0.3));
-  if (plank && pileWhole && plank.pile) return { pile: plank.pile };
-  if (plank && !(plank.file.ghost && !created.has(plank.file.id) && !planned.has(plank.file.id))) {
-    best = { leaf: plank };
-    bd = 0;
-  }
   for (const it of near) {
     if (!it.leaf) continue;
     const l = it.leaf,
       f = l.file;
     if (f.ghost && !created.has(f.id) && !planned.has(f.id)) continue;
-    const own = l.term ? l.term.node : l.pile;
+    const own = l.term ? l.term.node : null;
     if (own && own.fAnc) continue;
-    if (l.region === "ground") continue; // planks: above
     if (leafPx < 4.2 && !planned.has(f.id) && !hot.has(f.id)) continue;
     const ls = leafScreen(l, z);
     let d = Math.hypot(ls.cx - wx, ls.cy - wy);
@@ -4485,7 +4389,7 @@ export function pick(v: TreeView, sx: number, sy: number): Hit | null {
     if (v.tool !== "explore" && leafPx < 24 && best.leaf) {
       // paint tools act on folders unless the user has zoomed in on single files
       const l = best.leaf;
-      const own = l.term ? l.term.node : l.pile;
+      const own = l.term ? l.term.node : null;
       if (own && own.depth >= 1) return { node: own, viaLeaf: l };
     }
     return best;
@@ -4530,8 +4434,6 @@ export function pick(v: TreeView, sx: number, sy: number): Hit | null {
     }
     return { clump: top || n, open: !top };
   }
-  const lift = liftAt(M, wx, wy, 4 / z);
-  if (lift) return { pile: lift };
   return null;
 }
 
@@ -4550,8 +4452,8 @@ interface MiniState {
 }
 const MINI = new WeakMap<HTMLCanvasElement, MiniState>();
 
-/** The minimap's static base (one filled silhouette per clump, the wood, the
- * scaffold) for the canvas's current CSS size. Returns false while hidden. */
+/** The minimap's static base (one filled silhouette per clump, the wood) for
+ * the canvas's current CSS size. Returns false while hidden. */
 export function buildMini(v: TreeView, canvas: HTMLCanvasElement): boolean {
   const M = v.M,
     P = v.P;
@@ -4613,7 +4515,6 @@ export function buildMini(v: TreeView, canvas: HTMLCanvasElement): boolean {
       g.stroke();
     }
   }
-  drawScaffoldMini(g, M, P, z);
   MINI.set(canvas, st);
   return true;
 }

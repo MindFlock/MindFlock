@@ -25,7 +25,7 @@ function compile(z: RedZone, ci: boolean): RegExp | null {
 /** Tree rules for the server zones. Waived zones are kept (drawn faint). */
 export function treeZones(M: Model, zones: RedZone[], ci = false): TZone[] {
   const out: TZone[] = [];
-  const regions = [M.crown, M.roots, ...M.piles];
+  const regions = [M.crown, M.roots];
   for (const z of zones) {
     const rx = compile(z, ci);
     if (!rx) continue;
@@ -65,15 +65,8 @@ export function treeZones(M: Model, zones: RedZone[], ci = false): TZone[] {
       for (const k of n.kids) top(k);
     };
     for (const r of regions) {
-      if (r.kind === "pile") {
-        if (r.files.length && r.files.every((f) => hit.has(f.id))) {
-          out.push({ type, node: r, file: null, z, waived: !!z.waived, label });
-          for (const f of r.files) covered.add(f.id);
-        }
-      } else {
-        calc(r);
-        top(r);
-      }
+      calc(r);
+      top(r);
     }
     let n = 0;
     for (const id of hit) {
@@ -101,14 +94,14 @@ export function zoneOfFile(f: TFile, zones: TZone[]): { type: "keep" | "only"; z
 
 /** The pattern that fences a folder or a file of the tree, or null with the
  * reason when one pattern cannot say it (tests grouped from several folders,
- * the repo-root pile). */
+ * the repo-root files). */
 export function patternFor(M: Model, target: { node?: TNode | null; file?: TFile | null }): { pattern: string; label: string } | { error: string } {
   if (target.file) return { pattern: anchoredZonePath(target.file.path), label: target.file.path };
   const n = target.node;
   if (!n) return { error: "Click a folder name, a branch or a leaf." };
-  if (n.depth === 0 && n.kind !== "pile") return { error: "Paint a branch, not the trunk — the whole repo cannot be fenced." };
+  if (n.depth === 0) return { error: "Paint a branch, not the trunk — the whole repo cannot be fenced." };
   if (n.kind === "crown") return { pattern: anchoredZonePath(n.path), label: n.path };
-  // roots and piles group files by what they test / where they lie: one
+  // roots group files by what they test / where they lie: one
   // folder must hold exactly those files
   const files = allNodes(n).flatMap((m) => m.files);
   if (!files.length) return { error: "Nothing to fence here." };

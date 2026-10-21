@@ -13,7 +13,6 @@ import { birdWorldAt, buildMini, drawMini, invalidateStatic, pick, prepGeometry,
 import { boxOnScreen, fitWhole, pictureBox } from "../../../lib/codetree/fit";
 import { S0, isUnder, type Leaf, type Model, type TFile, type TNode } from "../../../lib/codetree/model";
 import { readPalette, type Palette } from "../../../lib/codetree/palette";
-import { liftBox } from "../../../lib/codetree/scaffold";
 import type { AgentState, Badge, Cam, Hit, Tool, TreeView, TZone } from "../../../lib/codetree/types";
 
 export type Info =
@@ -201,7 +200,7 @@ export class TreeCtl {
         const f = M.byPath.get(i.f.path);
         this.info = f ? { kind: "file", f } : null;
       } else if (i.kind === "node") {
-        const n = i.n.kind === "pile" ? M.piles.find((p) => p.path === i.n.path) : (i.n.kind === "root" ? M.rootNodeOf : M.nodeOf).get(i.n.path);
+        const n = (i.n.kind === "root" ? M.rootNodeOf : M.nodeOf).get(i.n.path);
         this.info = n ? { kind: "node", n } : null;
       } else this.info = null;
       this.syncSel();
@@ -329,7 +328,7 @@ export class TreeCtl {
   wholeCam(): Cam {
     const M = this.M!,
       v = this.v!;
-    return fitWhole(pictureBox(M), M.groundY, M.piles.length > 0, v.W, v.H, this.insets);
+    return fitWhole(pictureBox(M), v.W, v.H, this.insets);
   }
   /** The camera rests at the whole-tree view (nothing is moving it). */
   private atWhole(): boolean {
@@ -402,13 +401,6 @@ export class TreeCtl {
     const v = this.v,
       M = this.M;
     if (!v || !M) return;
-    if (n.kind === "pile") {
-      const B = liftBox(n); // its lift on the scaffold, with room for the names beside it
-      const c = this.fitBox(B.x0 - (n.pw || 30) * 1.5, B.y0 - S0 * 2, B.x1 + (n.pw || 30) * 1.5, B.y1 + S0 * 2, 0.7);
-      this.navTo(c);
-      v.pulse = { x: n.cx, y: n.cy, r: Math.max(n.pw || 30, n.h || 10) * 0.6, t0: performance.now() };
-      return;
-    }
     if (n.depth === 0) {
       this.pushHist();
       this.stopFollow(true);
@@ -733,11 +725,6 @@ export class TreeCtl {
       this.flyToNode(n);
       return;
     }
-    if (hit.pile) {
-      this.selectNode(n);
-      this.flyToNode(n);
-      return;
-    }
     this.selectNode(n);
   }
 
@@ -960,10 +947,7 @@ export class TreeCtl {
     if (!node || !node.cnt) return;
     if (this.nodeInView(node)) v.pulse = { x: node.cx, y: node.cy, r: node.rad + S0, t0: performance.now() };
     else if (node.depth >= 1) {
-      const c =
-        node.kind === "pile"
-          ? ((B) => this.fitBox(B.x0 - (node.pw || 30) * 2, B.y0 - S0 * 3, B.x1 + (node.pw || 30) * 2, B.y1 + S0 * 2, 0.7))(liftBox(node))
-          : this.fitBox(node.bx0 - S0 * 4, node.by0 - S0 * 4, node.bx1 + S0 * 4, node.by1 + S0 * 4, 0.55);
+      const c = this.fitBox(node.bx0 - S0 * 4, node.by0 - S0 * 4, node.bx1 + S0 * 4, node.by1 + S0 * 4, 0.55);
       c.z = Math.min(c.z, 3.5);
       this.navTo(c);
       v.pulse = { x: node.cx, y: node.cy, r: node.rad + S0, t0: performance.now() + 500 };
@@ -1061,7 +1045,7 @@ export class TreeCtl {
     if (moving) this.kick();
   }
   /** Where the picture sits on the canvas, as `data-tree="x0 y0 x1 y1;…"` on the stage (canvas px): the whole
-   * picture, then its parts — the canopy, the roots and each lift of the scaffold. The Map tour keeps its
+   * picture, then its parts — the canopy and the roots. The Map tour keeps its
    * card off them. */
   private markTree() {
     const v = this.v,
@@ -1074,8 +1058,6 @@ export class TreeCtl {
     const C = M.crownBounds,
       parts = [S(pictureBox(M)), S({ x0: C.x0, y0: C.y0, x1: C.x1, y1: M.groundY }, 12)];
     if (M.roots.cnt) parts.push(S({ x0: M.roots.bx0, y0: M.groundY, x1: M.roots.bx1, y1: M.roots.by1 }, 12));
-    // each lift of the scaffold (its name stands on its ledger, beside it)
-    for (const p of M.piles) parts.push(S(liftBox(p), 10));
     const s = parts.join(";");
     if (this.host.dataset.tree !== s) this.host.dataset.tree = s;
   }
@@ -1095,5 +1077,5 @@ export class TreeCtl {
 
 function sameHit(a: Hit | null, b: Hit | null): boolean {
   if (!a || !b) return a === b;
-  return a.leaf === b.leaf && a.node === b.node && a.branch === b.branch && a.clump === b.clump && a.pile === b.pile && a.tag === b.tag && a.bird === b.bird && a.badge === b.badge && a.trunk === b.trunk && a.nest === b.nest;
+  return a.leaf === b.leaf && a.node === b.node && a.branch === b.branch && a.clump === b.clump && a.tag === b.tag && a.bird === b.bird && a.badge === b.badge && a.trunk === b.trunk && a.nest === b.nest;
 }

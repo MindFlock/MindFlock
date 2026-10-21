@@ -10,7 +10,7 @@ import { blockedTxt, buildFoliageField, folderPath, foreignLit, onlyBinds, riskG
 import { rawFromSnapshot, testStem, testTargets, kindOf, linesOf } from "../lib/codetree/input";
 import { S0 } from "../lib/codetree/layout";
 import { LiveBirds, deepestMajority, nestFor, touchesOf } from "../lib/codetree/live";
-import { buildModel, dataSig, type Model, type RawRepo } from "../lib/codetree/model";
+import { buildModel, dataSig, isSupport, type Model, type RawRepo } from "../lib/codetree/model";
 import { birdColours } from "../lib/codetree/palette";
 import { patternFor, treeZones, zoneOfFile } from "../lib/codetree/zones";
 import type { AgentState } from "../lib/codetree/types";
@@ -42,7 +42,7 @@ function segsCross(a: number[], b: number[], c: number[], d: number[]) {
   return o1 !== o2 && o3 !== o4 && o1 !== 0 && o2 !== 0 && o3 !== 0 && o4 !== 0;
 }
 function measure(M: Model) {
-  const leaves = M.leaves.filter((l) => l.region !== "ground");
+  const leaves = M.leaves;
   let leafBranch = 0,
     leafTrunk = 0;
   const T = M.trunkW,
@@ -80,7 +80,7 @@ function measure(M: Model) {
   for (const l of leaves)
     for (const it of M.grid.near(l.x, l.y, S0 * 2.5)) {
       const o = it.leaf;
-      if (!o || o === l || o.id < l.id || o.region === "ground" || o.term === l.term) continue;
+      if (!o || o === l || o.id < l.id || o.term === l.term) continue;
       const d = Math.hypot(o.x - l.x, o.y - l.y);
       if (d < (0.75 * (l.len + o.len)) / 2) leafLeafX++;
       if (d < 0.66 * (l.term!.s + o.term!.s)) blobX++;
@@ -145,33 +145,35 @@ describe("layout", () => {
   it("is the approved prototype's layout (same data → the same leaf positions)", () => {
     let mx = 0,
       n = 0,
-      pile = 0,
+      support = 0,
       crown = 0;
     for (const l of COLD.leaves) {
       const g = FX.golden[l.file.path];
       expect(g, l.file.path).toBeDefined();
       n++;
-      // the roots are the prototype's; ground files are planks on the scaffold (codetreeScaffold.test.ts); the crown's
-      // clumps are packed wider since Code Tree v2 (leafgeom.ts: no two leaves overlap) — codetreeLeaves.test.ts
-      if (l.region === "ground") {
-        // within a pile, each leaf keeps its place relative to the pile's own centre
-        pile++;
+      // the test roots are the prototype's; docs / CI / config are support roots since Code Tree v2 (no golden
+      // place: codetreeSupportRoots.test.ts); the crown's clumps are packed wider since Code Tree v2 (leafgeom.ts:
+      // no two leaves overlap) — codetreeLeaves.test.ts
+      if (isSupport(l.file)) {
+        support++;
         continue;
       }
       if (l.region === "crown") {
         crown++;
         continue;
       }
-      // a root clump keeps its shape; the root system mirrors the (wider) crown, so it may sit elsewhere
-      const l0 = l.term!.leaves[0],
-        g0 = FX.golden[l0.file.path];
-      mx = Math.max(mx, Math.hypot(g[0] - g0[0] - (l.x - l0.x), g[1] - g0[1] - (l.y - l0.y)));
+      // a test clump keeps its shape; the root system mirrors the (wider) crown and holds the support roots
+      // beside the tests, so a clump may sit elsewhere and hang at another angle: the distances between its tips
+      // are the prototype's
+      for (const l0 of l.term!.leaves.slice(0, 2)) {
+        const g0 = FX.golden[l0.file.path];
+        mx = Math.max(mx, Math.abs(Math.hypot(g[0] - g0[0], g[1] - g0[1]) - Math.hypot(l.x - l0.x, l.y - l0.y)));
+      }
     }
-    expect(n).toBe(FX.files.length);
-    expect(pile).toBeGreaterThan(0);
-    expect(crown).toBeGreaterThan(0);
     expect(mx).toBeLessThan(1e-4);
-    // (ground files are planks on the scaffold now: their geometry is pinned in codetreeScaffold.test.ts)
+    expect(n).toBe(FX.files.length);
+    expect(support).toBeGreaterThan(0);
+    expect(crown).toBeGreaterThan(0);
   });
 
   it("is deterministic", () => {
@@ -186,12 +188,14 @@ describe("layout", () => {
     expect(measure(buildModel(synthRepo(420), { quantise: true }))).toEqual(ZERO);
   });
 
-  it("puts tests underground under the code they test, docs on the scaffold", () => {
+  it("puts tests underground under the code they test, docs are roots", () => {
     const t = COLD.files.find((f) => f.test && f.kind === "c")!;
     expect(t.place).toBe("root");
     expect(t.leaf!.y).toBeGreaterThan(COLD.groundY);
     const doc = COLD.files.find((f) => f.path.startsWith("docs/"))!;
-    expect(doc.place).toBe("ground");
+    expect(doc.place).toBe("root");
+    expect(doc.leaf!.region).toBe("root");
+    expect(doc.leaf!.y).toBeGreaterThan(COLD.groundY);
     const code = COLD.files.find((f) => f.path.startsWith("backend/session/"))!;
     expect(code.leaf!.y).toBeLessThan(COLD.groundY);
     // roots are labelled by what they test
@@ -520,7 +524,7 @@ describe("folder names on the map", () => {
     const top = COLD.nodeOf.get("backend")!;
     expect(folderPath(top)).toBe("backend");
     // deeper folders still name their top-level folder first
-    const deep = [...COLD.nodeOf.values()].find((n) => n.depth >= 3 && n.kind !== "root" && n.kind !== "pile");
+    const deep = [...COLD.nodeOf.values()].find((n) => n.depth >= 3 && n.kind !== "root");
     if (deep) expect(folderPath(deep).startsWith(deep.path.split("/")[0] + " › ")).toBe(true);
   });
 });
@@ -552,7 +556,7 @@ describe("readability: changes, sides and territories", () => {
       while (q.parent && q.depth > 1) q = q.parent;
       return q;
     };
-    const crownTops = COLD.crown.kids.filter((k) => k.kind !== "pile" && k.nFiles > 0);
+    const crownTops = COLD.crown.kids.filter((k) => k.nFiles > 0);
     expect(crownTops.length).toBeGreaterThan(1);
     // a clump of each of two different limbs
     const tA = COLD.terms.find((t) => t.leaves.length && t.region === "crown" && topOf(t.node) === crownTops[0])!;
@@ -566,7 +570,7 @@ describe("readability: changes, sides and territories", () => {
     expect(fol.sideOk(...box(tA), tA.node)).toBe(true);
     expect(fol.sideOk(...box(tB), tA.node)).toBe(false);
     expect(fol.sideOk(...box(tB), tB.node)).toBe(true);
-    // the trunk and the ground piles carry no side
+    // the trunk carries no side
     expect(fol.sideOk(...box(tB), COLD.crown)).toBe(true);
   });
 

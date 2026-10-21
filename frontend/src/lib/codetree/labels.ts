@@ -5,8 +5,8 @@
  *
  * Pure functions over screen-space geometry: draw.ts gathers anchors, this module proposes candidate boxes in
  * rule order and picks the first that is whole on screen, free (a uniform-grid occupancy) and touches no other
- * leaf's outline. Anchors come through ONE function per thing (leafScreenGeom; liftAnchor in scaffold.ts) so the leaves /
- * scaffold / roots work can re-point them without touching the placer. */
+ * leaf's outline. Anchors come through ONE function per thing (leafScreenGeom; rootAnchor in roots.ts) so the leaves /
+ * roots work can re-point them without touching the placer. */
 
 import { leafScreen } from "./leafgeom";
 import type { Leaf, TNode } from "./model";
@@ -58,18 +58,15 @@ export function leafScreenGeom(l: Leaf, z: number, toS: (x: number, y: number) =
   const half = Math.max(g.halfPx, minHalf);
   const tip: [number, number] = [cx + ca * half, cy + sa * half],
     base: [number, number] = [cx - ca * half, cy - sa * half];
-  // the outline's widest point: half the quadratic control's offset (leafgeom.ts lensAt: w = len * 0.37 / 0.5 / 0.3,
+  // the outline's widest point: half the quadratic control's offset (leafgeom.ts lensAt: w = len * 0.37 / 0.5,
   // 0.54 of the way from base to tip)
-  const wk = l.region === "root" ? 0.5 : l.region === "ground" ? 0.3 : 0.37;
+  const wk = l.region === "root" ? 0.5 : 0.37;
   const bw = half * wk;
   const mx = cx + ca * half * 0.08,
     my = cy + sa * half * 0.08;
   const quad = [base[0], base[1], mx - sa * bw, my + ca * bw, tip[0], tip[1], mx + sa * bw, my - ca * bw];
   return { tip, base, dir: g.dir, half, quad };
 }
-
-/** A scaffold lift's name hangs from its top ledger: see `liftAnchor` in scaffold.ts (draw.ts uses it directly);
- * a plank's name sits at its outer end: `leafScreenGeom` (the plank's tip) with only the tip candidate. */
 
 // ---------- candidates ----------
 

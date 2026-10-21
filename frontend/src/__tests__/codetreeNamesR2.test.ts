@@ -11,7 +11,6 @@ import { chainTop1, folderNameVariants, loneSrc, sameAsParent } from "../lib/cod
 import { LiveBirds } from "../lib/codetree/live";
 import { buildModel, isUnder, type Model, type TNode } from "../lib/codetree/model";
 import { readPalette } from "../lib/codetree/palette";
-import { liftCaption, liftKind } from "../lib/codetree/scaffold";
 import type { AgentState, TreeView } from "../lib/codetree/types";
 import scenarioRaw from "./fixtures/codetree_scenario.json?raw";
 
@@ -177,22 +176,18 @@ describe("F5: one pill per chain, no lone src", () => {
   });
 });
 
-describe("F7: a code folder's non-code lift says so", () => {
-  const files = [{ place: "root", path: "tests/unit/test_x.py" }, { place: "crown", path: "frontend/src/a.ts" }];
-  const Mx = { nodeOf: new Map([["frontend", { kind: "crown", depth: 1 }]]), files } as unknown as Model;
-  const pile = (name: string, nFiles: number, label = name) => ({ name, label, nFiles, kind: "pile" }) as unknown as TNode;
-  it("frontend's lift holds its non-code files; tests' holds test data; docs and the root's files are plain", () => {
-    expect(liftCaption(Mx, pile("frontend", 3))).toEqual(["frontend", " · 3 non-code"]);
-    expect(liftKind(Mx, pile("tests", 42))).toBe("tests");
-    expect(liftCaption(Mx, pile("tests", 42))).toEqual(["test data", " · 42"]);
-    expect(liftCaption(Mx, pile("docs", 21))).toEqual(["docs", " · 21 files"]);
-    // two test folders never read the same: any other than "tests" says whose data it is
-    const My = { nodeOf: new Map(), files: [{ place: "root", path: "testsv2/unit/test_y.py" }] } as unknown as Model;
-    expect(liftCaption(My, pile("testsv2", 15))).toEqual(["testsv2 test data", " · 15"]);
-    expect(liftCaption(Mx, pile("(repo root)", 1, "repo root files"))).toEqual(["repo root files", " · 1 file"]);
-  });
-  it("on the rig, every lift is plain or one of those", () => {
-    for (const p of M.piles) expect(["code", "tests", "plain"]).toContain(liftKind(M, p));
+describe("F7: a code folder's non-code files are its own root, and say so", () => {
+  // (the scaffold is gone: what stood on its lifts are support roots — codetreeSupportRoots.test.ts)
+  it("on the rig, every root limb is tests for a branch, other tests, test data, a folder's non-code, or the tap root", () => {
+    expect(M.roots.kids.length).toBeGreaterThan(0);
+    for (const k of M.roots.kids) {
+      const lb = k.label || "";
+      expect(lb, k.path).toMatch(/^(tests for .+|other tests · .+\/|test data( · .+\/)?|.+ · non-code|docs, CI and config)$/);
+      expect(lb).not.toMatch(/^tests: |^tests · tests|for tests for/);
+      // a support limb names its folder; a test limb the code it tests
+      if (k.support) expect(lb.startsWith("tests")).toBe(false);
+      else expect(lb.startsWith("tests") || lb.startsWith("other tests")).toBe(true);
+    }
   });
 });
 

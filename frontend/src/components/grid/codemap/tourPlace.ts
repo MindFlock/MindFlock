@@ -2,8 +2,8 @@
  * CoachTour): beside the ring of the part it explains, on the side with the
  * most room, off the tree and the HUD panels; docked in a corner of the canvas
  * (or an edge's middle) when the step is about the tree as a whole — never
- * over the centre of what it explains, and off the canopy, the roots and the
- * ground piles with their names wherever there is room. Pure, for the tests, except `mapScene` (reads the tab's DOM). */
+ * over the centre of what it explains, and off the canopy and the roots
+ * wherever there is room. Pure, for the tests, except `mapScene` (reads the tab's DOM). */
 
 export interface Rect {
   x: number;
@@ -14,7 +14,7 @@ export interface Rect {
 
 /** What the card should keep off, in the Map root's px: the canvas (`area`),
  * the picture on it (`tree`, from the stage's data-tree) and its parts — the
- * canopy, the roots, each ground pile and its name — and the HUD panels. */
+ * canopy and the roots — and the HUD panels. */
 export interface MapScene {
   area: Rect;
   tree: Rect | null;
@@ -71,7 +71,7 @@ export function placeMapCard(t: Rect | null, W: number, H: number, cardH: number
     clamp(area.x + area.w - cw - EDGE, area.y + area.h - cardH - EDGE),
     clamp(area.x + EDGE, area.y + area.h - cardH - EDGE),
     clamp(area.x + EDGE, area.y + EDGE),
-    // the middles of the edges, when every corner is taken (a card, the agents column, a pile)
+    // the middles of the edges, when every corner is taken (a card, the agents column)
     clamp(area.x + (area.w - cw) / 2, area.y + EDGE),
     clamp(area.x + area.w - cw - EDGE, area.y + (area.h - cardH) / 2),
     clamp(area.x + (area.w - cw) / 2, area.y + area.h - cardH - EDGE),

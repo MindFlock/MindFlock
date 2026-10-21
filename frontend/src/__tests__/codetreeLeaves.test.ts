@@ -147,8 +147,8 @@ describe("leafScreen", () => {
       prev = d;
     }
   });
-  it("leaves ground (pile) leaves at true size", () => {
-    const g = { ...l, region: "ground" } as Leaf;
+  it("leaves root tips (tests, docs, config) at true size", () => {
+    const g = { ...l, region: "root" } as Leaf;
     expect(leafScreen(g, 8).halfPx).toBeCloseTo(32, 6);
   });
 });

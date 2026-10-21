@@ -194,7 +194,7 @@ describe("folder names stay pinned to their own cluster (the rig's scenario)", (
       it(`${scen} · ${sz.name}`, () => {
         const v = view(sz, scen);
         render(v, 1000);
-        const named = (v.labelHits || []).filter((h) => h.n && !h.crumb && h.n.depth >= 1 && h.n.kind !== "pile");
+        const named = (v.labelHits || []).filter((h) => h.n && !h.crumb && h.n.depth >= 1);
         expect(named.length).toBeGreaterThan(0);
         const bad: string[] = [];
         for (const h of named) {

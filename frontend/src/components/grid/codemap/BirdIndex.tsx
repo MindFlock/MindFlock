@@ -21,7 +21,7 @@ import { instances } from "../../../lib/sessionActions";
 import { deriveSessionState } from "../../../lib/sessionState";
 import { blockedTxt, folderPath, tailPath } from "../../../lib/codetree/draw";
 import { STATUS_TXT } from "../../../lib/codetree/live";
-import { isUnder, type Model, type TFile, type TNode } from "../../../lib/codetree/model";
+import { isUnder, nameTop, type Model, type TFile, type TNode } from "../../../lib/codetree/model";
 import { zoneOfFile } from "../../../lib/codetree/zones";
 import type { AgentState, AgentStatus, TZone } from "../../../lib/codetree/types";
 import { BirdIcon, LegendCard, dispName, nodeName, subLine } from "./TreeCards";
@@ -111,9 +111,8 @@ export function changeSummary(M: Model, agents: AgentState[]): ChangeSummary {
     const f = M.files[id];
     if (mineA(A)) mine++;
     const n = f.node;
-    let top: TNode | null = n;
-    while (top && top.depth > 1) top = top.parent;
-    const tk = !top || top.depth < 1 ? (n && n.kind === "pile" ? nodeName(M, n) : "repo root") : nodeName(M, top);
+    const top: TNode | null = n && nameTop(n);
+    const tk = !top || top.depth < 1 ? "repo root" : nodeName(M, top);
     tops.set(tk, (tops.get(tk) || 0) + 1);
     if (!n) continue;
     let e = byNode.get(n);
@@ -188,11 +187,11 @@ export function birdWords(
   return { chip, now };
 }
 
-/** The folder of a path the bird last touched — "backend/web" (a scaffold lift by its caption, a root file "repo root"). */
+/** The folder of a path the bird last touched — "backend/web" (a root by its label, "docs"; a repo-root file "repo root"). */
 function lastWhere(M: Model, path: string): string {
   const n = M.byPath.get(path)?.node;
   if (!n) return "";
-  if (n.depth < 1) return n.kind === "pile" ? nodeName(M, n) : "repo root";
+  if (n.depth < 1) return "repo root";
   return folderPath(n).replace(" › ", "/");
 }
 
@@ -202,7 +201,7 @@ function helperWhere(M: Model, S: AgentState): string {
   const f = S.status === "blocked" && bk ? bk.f : S.file;
   const n = f ? f.node : S.nest;
   if (!n) return "";
-  if (n.depth < 1) return n.kind === "pile" ? nodeName(M, n) : "repo root";
+  if (n.depth < 1) return "repo root";
   return folderPath(n).replace(" › ", "/");
 }
 

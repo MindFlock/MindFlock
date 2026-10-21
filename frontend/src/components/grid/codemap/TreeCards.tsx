@@ -12,9 +12,8 @@ import { relTime } from "../../../lib/format";
 import { isGreen } from "../../../lib/codemap";
 import { agentBlast } from "../../../lib/codetree/blast";
 import { birdSprite, tinted } from "../../../lib/flock";
-import { baseOf, dirOf, isUnder, shortName, type Model, type TFile, type TNode } from "../../../lib/codetree/model";
+import { baseOf, dirOf, isSupport, isUnder, shortName, type Model, type TFile, type TNode } from "../../../lib/codetree/model";
 import { STATUS_TXT } from "../../../lib/codetree/live";
-import { liftCaption, liftKind } from "../../../lib/codetree/scaffold";
 import { helperLine } from "../../../lib/codetree/subagents";
 import { zoneOfFile, zoneWhere } from "../../../lib/codetree/zones";
 import type { AgentState, Badge, Hit, TZone } from "../../../lib/codetree/types";
@@ -22,17 +21,18 @@ import type { AgentState, Badge, Hit, TZone } from "../../../lib/codetree/types"
 const plural = (n: number, one: string, many = one + "s") => `${n} ${n === 1 ? one : many}`;
 const linesTxt = (f: TFile) => (f.kind === "a" ? "asset" : `~${(f.lines || 1).toLocaleString()} lines`);
 export const nodeName = (M: Model, n: TNode) =>
-  n.kind === "pile" ? liftCaption(M, n)[0] : n.kind === "root" ? n.label || n.name : n.depth === 0 ? M.name : n.disp || shortName(n.name);
-/** What a scaffold lift holds, in words (its caption says the same: scaffold.ts liftCaption). */
-const liftWhat = (M: Model, n: TNode) => {
-  const k = liftKind(M, n),
-    nm = n.label || n.name;
-  return k === "code"
-    ? `the non-code files of ${nm} (README, config) · its code is the ${nm} branch`
-    : k === "tests"
-      ? `test data in ${nm}/ (fixtures, golden files) · the tests are the roots`
-      : "on the scaffold (docs, CI, config)";
+  n === M.roots ? "roots" : n.kind === "root" ? n.label || n.name : n.depth === 0 ? M.name : n.disp || shortName(n.name);
+/** What a root holds, in words (its label says the same: model.ts): tests, or a support root's non-code files. */
+const rootWhat = (n: TNode) => {
+  if (!n.support) return "tests · " + (n.crownTwin ? n.crownTwin.path : n.name);
+  const at = n.folder || "";
+  if (!at) return "the repo's non-code files with no branch of their own · the tap root, under the trunk";
+  if (n.data) return `test data in ${at}/ (fixtures, golden files) · the tests are the roots beside it`;
+  if (n.crownTwin) return `the non-code files of ${at}/ (README, config) · its code is the ${n.crownTwin.path} branch`;
+  return at === "(repo root)" ? "the repo root's non-code files (README, licence, config) · roots under the trunk" : `${at}/ (docs, CI, config) · roots under the trunk`;
 };
+/** A root's kind, in one word or two: "tests", "test data", "non-code". */
+const rootKind = (n: TNode) => (!n.support ? "tests" : n.data ? "test data" : "non-code");
 /** A file's display name: parent folder + name when the basename is not unique. */
 export function dispName(M: Model, f: TFile | null | undefined): string {
   if (!f) return "";
@@ -101,14 +101,7 @@ export function LegendCard({ open, onToggle, primary }: { open: boolean; onToggl
               <circle cx="2.6" cy="9" r="1.6" fill="currentColor" opacity=".7" />
               <circle cx="9.3" cy="10" r="1.6" fill="currentColor" opacity=".7" />
             </svg>
-            root tip = a test file, under the code it tests
-          </li>
-          <li>
-            <svg className="sw" viewBox="0 0 12 12">
-              <path d="M2 0 V12 M6 0 V12 M1 4 H7 M1 9 H7" stroke="currentColor" strokeWidth="1" fill="none" opacity=".55" />
-              <path d="M6 2 H11 M6 6 H10 M6 11 H11" stroke="currentColor" strokeWidth="1.4" fill="none" opacity=".75" />
-            </svg>
-            scaffold = docs, CI and config: a lift per folder, a plank per file
+            root tip = a test, under the branch it tests · or a doc, CI or config file, under its branch or the trunk
           </li>
           <li>
             <svg className="sw" viewBox="0 0 12 12">
@@ -507,10 +500,10 @@ export interface NodeCardProps {
 export function NodeCard(p: NodeCardProps) {
   const { M, n } = p;
   const isRoot = n.kind === "root",
-    isPile = n.kind === "pile",
-    isTrunk = n.depth === 0 && !isPile;
+    isTrunk = n.depth === 0;
   const title = nodeName(M, n);
-  const path = isTrunk ? (n === M.roots ? "all tests" : "repo root") : isRoot ? "tests · " + (n.crownTwin ? n.crownTwin.path : n.name) : isPile ? liftWhat(M, n) : n.path;
+  const path = isTrunk ? (n === M.roots ? "tests, docs, CI and config" : "repo root") : isRoot ? rootWhat(n) : n.path;
+  const nSupport = M.files.filter((f) => !f.ghost && isSupport(f)).length;
   const who: ReactNode[] = [];
   if (!isTrunk)
     for (const A of p.agents) {
@@ -555,7 +548,7 @@ export function NodeCard(p: NodeCardProps) {
       <h3>{title}</h3>
       <div className="ct-path">{path}</div>
       <div className="ct-facts">
-        <span>{isRoot ? "tests" : isPile ? "scaffold lift" : isTrunk ? (n === M.roots ? "all tests" : "repo (the trunk)") : "folder"}</span>
+        <span>{isTrunk ? (n === M.roots ? "all roots" : "repo (the trunk)") : isRoot ? rootKind(n) : "folder"}</span>
         <span>
           {plural(n.nFiles, isTrunk && n === M.crown ? "code file" : "file")}
         </span>
@@ -565,8 +558,8 @@ export function NodeCard(p: NodeCardProps) {
       {isTrunk && n === M.crown && (
         <>
           <div className="ct-facts">
-            <span>{plural(M.roots.nFiles, "test")} (root tips)</span>
-            <span>{M.piles.reduce((a, q) => a + q.nFiles, 0)} docs / config (on the scaffold)</span>
+            <span>{plural(M.roots.nFiles - nSupport, "test")} (root tips)</span>
+            <span>{nSupport} docs / config (root tips under the trunk)</span>
             <span>{plural(M.crown.kids.length, "top-level folder")}</span>
           </div>
           <h5>Agents</h5>
@@ -646,12 +639,12 @@ export function NodeCard(p: NodeCardProps) {
 export function BlastCard(p: { M: Model; bd: Badge; onClose: () => void; onFrame: () => void; onFolder: () => void; onFile: (f: TFile) => void }) {
   const { M, bd } = p;
   const n = bd.node;
-  const where = n.kind === "pile" ? n.label : n.depth === 0 ? (n === M.roots ? "tests" : "repo root files") : n.kind === "root" ? n.label : n.disp || n.name;
+  const where = n.depth === 0 ? (n === M.roots ? "roots" : "repo root files") : n.kind === "root" ? n.label : n.disp || n.name;
   const srcs = [...bd.files].map((id) => M.files[id]).filter(Boolean);
   const groups = new Map<string, TFile[]>();
   for (const id of bd.ids) {
     const f = M.files[id];
-    const k = f.node ? (f.node.kind === "pile" || f.node.kind === "root" ? f.node.label || f.node.name : f.node.path || M.name) : "?";
+    const k = f.node ? (f.node.kind === "root" ? f.node.label || f.node.name : f.node.path || M.name) : "?";
     const g = groups.get(k);
     if (g) g.push(f);
     else groups.set(k, [f]);
@@ -761,11 +754,11 @@ export function TipBody({ M, hit, agents, zones, tool, folded }: { M: Model; hit
       </>
     );
   }
-  const n = hit.node || (hit.branch ? hit.branch.node || (hit.branch.owner && hit.branch.owner.depth >= 1 ? hit.branch.owner : null) : null) || hit.clump || hit.pile || null;
+  const n = hit.node || (hit.branch ? hit.branch.node || (hit.branch.owner && hit.branch.owner.depth >= 1 ? hit.branch.owner : null) : null) || hit.clump || null;
   if (n && hit.viaLeaf)
     return (
       <>
-        <b>{nodeName(M, n)}</b> <i>{n.kind === "pile" ? "scaffold lift" + liftCaption(M, n)[1] : (n.kind === "root" ? "tests" : "folder") + " · " + plural(n.nFiles, "file")}</i>
+        <b>{nodeName(M, n)}</b> <i>{(n.kind === "root" ? rootKind(n) : "folder") + " · " + plural(n.nFiles, "file")}</i>
         <div>{act(n)}</div>
         <div>
           <i>zoom in to pick a single file</i>
@@ -777,7 +770,7 @@ export function TipBody({ M, hit, agents, zones, tool, folded }: { M: Model; hit
       <>
         <b>{nodeName(M, n)}</b>{" "}
         <i>
-          {n.kind === "root" ? "tests" : n.kind === "pile" ? liftWhat(M, n) : "folder"} · {plural(n.nFiles, "file")}
+          {n.kind === "root" ? (n.support ? rootWhat(n) : "tests") : "folder"} · {plural(n.nFiles, "file")}
           {n.lines ? ` · ~${n.lines.toLocaleString()} lines` : ""}
         </i>
         {n.kind === "crown" && n.depth > 1 && (

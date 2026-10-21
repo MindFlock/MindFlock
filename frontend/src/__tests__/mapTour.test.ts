@@ -13,35 +13,36 @@ import type { AgentState } from "../lib/codetree/types";
 import { src } from "./sourceText";
 
 describe("the Map tour", () => {
-  it("teaches the metaphor in a newcomer's order: tree, roots, scaffold, birds and changes, rules — then getting around", () => {
+  it("teaches the metaphor in a newcomer's order: tree, roots, birds and changes, rules — then getting around", () => {
     expect(MAP_TOUR.map((s) => s.title)).toEqual([
       "Your code, drawn as a tree",
-      "Roots are the tests",
-      "Scaffolding holds docs and config",
+      "Roots hold the tree up",
       "Birds are agents, bright leaves are changes",
       "Rules: keep agents in or out",
       "Getting around",
     ]);
-    // each card rings what it explains: the canopy, the roots and the scaffold are boxes CodeTree keeps over the picture
-    expect(MAP_TOUR.map((s) => s.target)).toEqual([".ct-part-canopy", ".ct-part-roots", ".ct-part-scaffold", '[data-hud="left"]', ".ct-rules", ".cm-search"]);
+    // each card rings what it explains: the canopy and the roots are boxes CodeTree keeps over the picture
+    expect(MAP_TOUR.map((s) => s.target)).toEqual([".ct-part-canopy", ".ct-part-roots", '[data-hud="left"]', ".ct-rules", ".cm-search"]);
     const tab = src("components/grid/CodeMapTab.tsx");
     for (const cls of ["ct-rules", "ct-next"]) expect(tab, cls).toContain(cls);
     const tree = src("components/grid/codemap/CodeTree.tsx");
-    for (const cls of ["ct-part-canopy", "ct-part-roots", "ct-part-scaffold"]) expect(tree, cls).toContain(cls);
+    for (const cls of ["ct-part-canopy", "ct-part-roots"]) expect(tree, cls).toContain(cls);
+    // the scaffold is gone: docs, CI and config are roots (the roots step says so; no step rings a tower)
+    expect(tree).not.toContain("ct-part-scaffold");
     // the owner's words, not the old picture's
     const words = MAP_TOUR.map((s) => renderToStaticMarkup(createElement("p", null, s.body))).join(" ");
-    for (const w of ["root tip", "lift", "plank", "lit wood", "gold", "⛔ Keep out", "✓ Only here"]) expect(words, w).toContain(w);
-    expect(words).not.toMatch(/pile|on the ground|underground/);
+    for (const w of ["root tip", "tests", "docs, CI and config", "under the trunk", "lit wood", "gold", "⛔ Keep out", "✓ Only here"]) expect(words, w).toContain(w);
+    expect(words).not.toMatch(/pile|on the ground|underground|scaffold|lift|plank/);
     // nor anywhere else the tree is put into words (the legend, the cards, the screen-reader summary)
     for (const f of ["components/grid/codemap/CodeTree.tsx", "components/grid/codemap/TreeCards.tsx", "components/grid/codemap/BirdIndex.tsx", "components/grid/CodeMapTab.tsx"])
-      expect(src(f), f).not.toMatch(/ground piles|on the ground\.|roots = tests|tests as roots/);
+      expect(src(f), f).not.toMatch(/ground piles|on the ground\.|roots = tests|tests as roots|scaffold|plank/);
   });
 
   it("adapts to what is on screen, never passes six cards, and ends on the next step", () => {
     const titles = (s: ReturnType<typeof mapTourSteps>) => s.map((x) => x.title);
-    // changes on the tree: the five metaphor cards, then the concrete next step in place of Getting around
+    // changes on the tree: the four metaphor cards, then the concrete next step in place of Getting around
     const busy = mapTourSteps({ changed: 5, next: { kind: "review-changes", changed: 5, risky: 9 } });
-    expect(titles(busy)).toEqual([...MAP_TOUR.slice(0, 5).map((s) => s.title), "Your next step"]);
+    expect(titles(busy)).toEqual([...MAP_TOUR.slice(0, 4).map((s) => s.title), "Your next step"]);
     expect(busy.length).toBeLessThanOrEqual(MAP_TOUR_MAX);
     expect(MAP_TOUR_MAX).toBe(6);
     const last = busy[busy.length - 1];
@@ -51,40 +52,39 @@ describe("the Map tour", () => {
     const calm = mapTourSteps({ changed: 0, next: { kind: "ask-plan" } });
     expect(titles(calm)).toEqual([
       "Your code, drawn as a tree",
-      "Roots are the tests",
-      "Scaffolding holds docs and config",
+      "Roots hold the tree up",
       "Birds are agents",
       "Rules: keep agents in or out",
       "Your next step",
     ]);
-    expect(renderToStaticMarkup(createElement("p", null, calm[3].body))).toContain("Every leaf is grey for now");
+    expect(renderToStaticMarkup(createElement("p", null, calm[2].body))).toContain("Every leaf is grey for now");
     // no next step: Getting around closes it
     expect(titles(mapTourSteps({ changed: 0, next: { kind: "none" } })).slice(-1)[0]).toBe("Getting around");
-    // a repo with no tests or no docs/config skips that card
-    const bare = mapTourSteps({ changed: 1, next: { kind: "none" }, roots: false, scaffold: false });
+    // a repo with no roots (no tests, docs or config) skips that card
+    const bare = mapTourSteps({ changed: 1, next: { kind: "none" }, roots: false });
     expect(titles(bare)).toEqual(["Your code, drawn as a tree", "Birds are agents, bright leaves are changes", "Rules: keep agents in or out", "Getting around"]);
     // a toolbar target not on screen (a narrow toolbar) is skipped; the agents column folded to a rail and the
     // tree's own parts keep their card, docked
     const narrow = mapTourSteps({ changed: 5, next: { kind: "none" }, visible: (sel) => sel === ".ct-next" });
-    expect(titles(narrow)).toEqual(["Your code, drawn as a tree", "Roots are the tests", "Scaffolding holds docs and config", "Birds are agents, bright leaves are changes"]);
-    expect(narrow[3].target).toBe("");
+    expect(titles(narrow)).toEqual(["Your code, drawn as a tree", "Roots hold the tree up", "Birds are agents, bright leaves are changes"]);
+    expect(narrow[2].target).toBe("");
     expect(narrow[1].target).toBe(".ct-part-roots");
     // a hidden next-step line still gets its card, docked
     const hidden = mapTourSteps({ changed: 1, next: { kind: "breaches", n: 2 }, visible: (sel) => sel !== ".ct-next" });
     expect(hidden[hidden.length - 1]).toMatchObject({ title: "Your next step", target: "" });
   });
 
-  it("finds the canopy, the roots and the scaffold tower with the most lifts on the stage", () => {
-    // whole picture; canopy; roots; then the lifts: two on the right tower, one on the left
-    const tree = "100 50 900 700;300 50 800 400;350 400 750 700;820 300 880 380;820 200 880 300;150 340 200 390";
+  it("finds the canopy and the roots on the stage", () => {
+    // whole picture; canopy; roots
+    const tree = "100 50 900 700;300 50 800 400;350 400 750 700";
     const p = tourParts(tree, true, 1000, 600);
     expect(p.canopy).toEqual([300, 50, 800, 400]);
     expect(p.roots).toEqual([350, 400, 750, 594]); // clipped inside the stage
-    expect(p.scaffold).toEqual([820, 200, 880, 380]);
-    // no tests: the third box is already a lift
-    expect(tourParts("0 0 100 100;10 10 50 50;60 60 90 90", false, 100, 100)).toEqual({ canopy: [10, 10, 50, 50], roots: null, scaffold: [60, 60, 90, 90] });
+    expect(Object.keys(p).sort()).toEqual(["canopy", "roots"]);
+    // no roots: none ringed
+    expect(tourParts("0 0 100 100;10 10 50 50", false, 100, 100)).toEqual({ canopy: [10, 10, 50, 50], roots: null });
     // off screen, or nothing yet: null
-    expect(tourParts("", true, 1000, 600)).toEqual({ canopy: null, roots: null, scaffold: null });
+    expect(tourParts("", true, 1000, 600)).toEqual({ canopy: null, roots: null });
     expect(tourParts("0 0 10 10;-500 -500 -400 -400", true, 1000, 600).canopy).toBeNull();
   });
 
@@ -92,7 +92,7 @@ describe("the Map tour", () => {
     const html = renderToStaticMarkup(createElement(MapTour, { rootRef: { current: null }, onClose: () => {} }));
     expect(html).toContain('role="dialog"');
     expect(html).toContain('aria-modal="false"');
-    expect(html).toContain("1 of 6");
+    expect(html).toContain("1 of 5");
     expect(html).toContain("Skip tour");
     expect(html).toContain(">Next<");
     expect(html).toContain("Your code, drawn as a tree");

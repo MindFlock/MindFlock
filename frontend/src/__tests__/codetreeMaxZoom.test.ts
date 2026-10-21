@@ -170,10 +170,13 @@ beforeAll(() => {
 });
 
 describe("max zoom names every leaf you are looking at (F2)", () => {
-  it.runIf(HAVE_SC)("sc: observability/dashboards (19 changed leaves) — every leaf at its own tip, no hover needed", () => {
+  it.runIf(HAVE_SC)("sc: observability/dashboards (12 changed code leaves) — every leaf at its own tip, no hover needed", () => {
     const c = caseOf("sc_snap.json", "sc_live.json", "sitecheck-bot");
     const t = c.M.terms.find((q) => q.node.path === "observability/dashboards")!;
-    expect(t.leaves.length).toBeGreaterThanOrEqual(19);
+    // (its 7 dashboard .json files are support roots now, under "observability · non-code")
+    expect(t.leaves.length).toBeGreaterThanOrEqual(12);
+    expect(t.leaves.every((l) => l.file.kind === "c")).toBe(true);
+    expect(c.M.files.some((f) => f.path.startsWith("observability/dashboards/") && f.kind !== "c" && f.leaf!.region === "root")).toBe(true);
     const r = namesAt(c, t);
     expect(r.shown).toBeGreaterThanOrEqual(12);
     expect(r.unnamed).toEqual([]);

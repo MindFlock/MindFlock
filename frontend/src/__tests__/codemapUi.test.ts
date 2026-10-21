@@ -115,8 +115,7 @@ describe("the Map pane tab", () => {
       // the tree's own words (the prototype's legend and cards)
       "Growing the tree…",
       "leaf = file · branch = folder",
-      "root tip = a test file, under the code it tests",
-      "scaffold = docs, CI and config: a lift per folder, a plank per file",
+      "root tip = a test, under the branch it tests · or a doc, CI or config file, under its branch or the trunk",
       "bird = an agent · small bird = its helper · nest = where it mostly works",
       // subagents are birds of their own; a card click follows its bird
       "sent out a helper",

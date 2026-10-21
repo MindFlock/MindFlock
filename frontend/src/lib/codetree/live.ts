@@ -38,9 +38,8 @@ export function deepestMajority(M: Model, ids: number[]): TNode {
   const cnt = new Map<TNode, number>();
   for (const id of ids) {
     let n: TNode | null = M.files[id]?.node || null;
-    // a test's nest is the code it tests, a doc's the trunk
+    // a test's nest is the code it tests, a doc's (any support root's) the trunk
     if (n && n.kind === "root") n = M.files[id].tests || null;
-    if (n && n.kind === "pile") n = null;
     while (n) {
       cnt.set(n, (cnt.get(n) || 0) + 1);
       n = n.parent;

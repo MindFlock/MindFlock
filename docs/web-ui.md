@@ -1334,18 +1334,18 @@ of the worktree, the **Code Tree**.
 The first time a Map is shown (on any of your devices: it is the synced
 `prefs.map_tour`), a short tour opens over the live map once the tree is laid out (never while
 "Growing the tree…" shows).
-It is six small cards at most, each ringing the part it explains, in the order
+It is five small cards at most, each ringing the part it explains, in the order
 a newcomer needs them: the canopy (trunk = repo, branch = folder, leaf = file;
-zoom all the way in and every leaf is named at its tip), the roots (each root tip is one
-test file, under the code it tests), the scaffold beside the trunk (docs, CI
-and config: a lift per folder, a plank per file), the agents column (birds =
+zoom all the way in and every leaf is named at its tip), the roots (they hold
+what keeps the tree standing: tests under the branch they test, docs, CI and
+config under the trunk; each root tip is one file), the agents column (birds =
 agents, nests, leaves in a bird's colour and lit wood = changes, gold = could
 break), the toolbar's **Rules** group (⛔ Keep out / ✓ Only here) — then it ends on this
 session's next step ("5 changed — start with ⚠ Could break, then open the
 diff"), or, with none, on getting around (`/`, drag, double-click, ⌂ Whole
 tree, **?** for the legend). The steps are picked from what is on screen when
 it opens: with nothing changed the birds card says every leaf is grey for now,
-a repo with no tests or no docs/config skips the roots or scaffold card, and a
+a repo with no roots (no tests, docs or config) skips the roots card, and a
 toolbar card whose target isn't visible (a narrow toolbar) is skipped. The
 card sits beside the ring, on the side with the most free canvas and off the
 tree and the HUD panels; a card whose part isn't on screen (the agents column
@@ -1359,32 +1359,33 @@ shows; a device that has never pulled the synced value may show it once more.
 
 ### Reading the tree
 
-- **Trunk = the repo, branch = a folder, leaf = a file.** A branch is as thick
+- **Trunk = the repo, branch = a folder, leaf = a code file.** A branch is as thick
   as the square root of the code beneath it (sizes are the files' bytes, ~32
   bytes a line). A folder with no sub-folders is a round clump of leaves on its
   own twig; chains of single-child folders are one branch; boilerplate source
   roots (`src/main/java/com/acme/…`) are not labelled, the first telling folder
   below them is.
-- **Roots = tests.** Underground, each test file is the **tip of a root
-  strand** (a small round bead, bigger for a longer file), never a leaf; a test
-  folder is a fan of strands growing from the root limb under the code it
-  tests. A test named after a code file (`test_foo.py`, `foo.test.ts`,
-  `FooTest.java`) roots under that file's folder, preferring a candidate it
-  imports; otherwise under the deepest folder holding most of what it imports
-  (`tests for backend/web`). Tests that say nothing are `tests: tests/unit`. A
-  changed test lights its strand from the limb down to its tip, the way lit
-  wood leads to a changed leaf.
-- **Scaffolding = docs, CI and root config** (`.github`, `docs`, `repo root
-  files`, and any top-level folder that is mostly non-code), standing beside
-  the trunk to help the tree grow — at most two towers, one each side. Each
-  top-level folder of them (and the repo's root files) is one **lift** of a
-  tower, named on its top ledger (`docs · 21 files`; a lift named after a
-  code folder holds that folder's non-code files, `frontend · 3 non-code`, and
-  one whose code is in the roots holds its data, `test data · 42`), and each
-  file is a
-  **plank** laid across it — longer for a bigger file, its name at the plank's
-  outer end, so a lift's names line up in one column outside the tower.
-  Zoomed out a click picks the lift; zoomed in, the plank.
+- **The roots hold what keeps the tree standing: tests under the branch they
+  test, docs, CI and config under the trunk.** Underground, every file that is
+  not code is the **tip of a root strand** (a small round bead, bigger for a
+  longer file), never a leaf; a folder of them is a fan of strands growing from
+  its root limb.
+  - **Tests.** A test named after a code file (`test_foo.py`, `foo.test.ts`,
+    `FooTest.java`) roots under that file's folder, preferring a candidate it
+    imports; otherwise under the deepest folder holding most of what it imports
+    (`tests for backend/web`). Tests that say nothing are `other tests ·
+    tests/`. A changed test lights its strand from the limb down to its tip,
+    the way lit wood leads to a changed leaf.
+  - **Docs, CI and config** (and any other non-code file: data, images, a
+    folder that is mostly non-code) are the same tips and fans in a cooler,
+    greyer soil tone. A code folder's non-code files (its README, its
+    `package.json`) hang on their own limb beside that folder's tests,
+    `frontend · non-code`; a folder's test data (fixtures, golden files) on
+    `test data` beside the tests it serves. Everything with no branch of its
+    own hangs as a clump of the **tap root** under the trunk, `docs, CI and
+    config`: `docs`, `.github`, `repo root files`, `test data · tests/`. A
+    group of more than 24 files splits into clumps by its next folder
+    (`docs › api`). A changed doc is a lit tip, as a changed test is.
 - **Birds = agents.** This session is the bird in the accent colour (●); other
   live sessions on the same repo fly too, in colour-blind-safe secondary
   colours with their own glyph (▲ ■ ◆). A bird **nests** in the deepest folder
@@ -1432,8 +1433,8 @@ shows; a device that has never pulled the synced value may show it once more.
   1 px hairline in the leaf's colour, and reads outward (to the right of a leaf
   pointing right, to the left of one pointing left, above or below an upright
   one; or hung off the tip by its corner when that clears a neighbour), or
-  else on its base side, tied to the base the same way; a test's name sits
-  past its root tip, a plank's at its outer end. A name with no attached spot
+  else on its base side, tied to the base the same way; a root tip's name (a
+  test's, a doc's) sits past its tip. A name with no attached spot
   is shortened — `backend › web/core ●4`, then `web/core ●4` (only a nest's, a
   rule's or the open card's folder goes on to its bare `●4`) — or not drawn
   at all; it is never parked in
@@ -1482,8 +1483,8 @@ shows; a device that has never pulled the synced value may show it once more.
   it too; changed leaves outside stay visible but unlit.
 
 **Semantic zoom:** at the whole-tree zoom folders are leafy clumps with ~25
-names on a big repo (more on a small one), root fans read as fibrous root
-balls and the scaffold as slatted towers. Zoom in and the leaves open: every
+names on a big repo (more on a small one) and root fans read as fibrous root
+balls (brown for tests, grey-blue for docs, CI and config). Zoom in and the leaves open: every
 leaf is its own shape on its own stalk, fanned out along its twig with its tip
 facing out, and no two leaves of a folder overlap at any zoom. A leaf grows
 with the zoom until it is ~24 px long; past that it barely grows (never past
@@ -1492,16 +1493,16 @@ the densest clump has room for every leaf's name at its tip. Then file names
 appear; hovering a clump when zoomed in names ALL of its leaves — at their
 tips where they fit, the rest in a column beside the clump (in tip order, each
 tied to its tip by a hairline ending on a dot; a clump wider than the view
-gets a column at each edge, on a light plate). Each root tip, and each plank,
-likewise becomes its own mark. A breadcrumb (`repo › backend › web`) says where you are
+gets a column at each edge, on a light plate). Each root tip likewise becomes
+its own mark. A breadcrumb (`repo › backend › web`) says where you are
 once zoomed in.
 
 **Moving around:** scroll to zoom (gently — one notch ≈ ×1.15, a flick never
 jumps from a leaf to the whole tree), drag or arrow keys to pan, double-click a
 folder to zoom to it, `0` / **⌂ Whole tree** (it fits the whole picture —
-canopy, roots and the scaffold with its names — into the canvas left of
+canopy and roots — into the canvas left of
 any panel and right of the agents column, centred, as large as fits up to a
-cap, so a small tree is drawn large; the soil under it stays a band. A panel or
+cap, so a small tree is drawn large; the soil is as deep as the roots need. A panel or
 card that opens, docks or grows keeps a whole-tree view whole), **← Back** (`Backspace`) undoes
 the last move, the minimap (bottom-left, shown only once you zoom in past the
 whole-tree view — there it would only repeat the canvas) jumps. **Find file or symbol** (`/`
@@ -1509,15 +1510,16 @@ from anywhere in the pane, or with nothing focused while the pointer is over
 it; never from a text field) flies to a file — or to the file holding a symbol
 — and opens its card.
 
-**Cards:** click a leaf (or a root tip, or a plank) for its **file card** (lines, kind, used by N, imports,
+**Cards:** click a leaf (or a root tip) for its **file card** (lines, kind, used by N, imports,
 what each bird did to it, its zone, then Classes / Functions — public first —
 / Routes / Tested by, from `GET …/code-map/file`) with **Show the N that depend
 on it**, Centre, Folder, Open diff, **⛔ Keep out** and **✓ Only here** (or
 **Allow this file** when it is outside the green scope). Click a branch, a
 clump or a folder name for its **folder card** (files, lines, sub-folders,
 which birds work there) with **Zoom to it / Fold / ⛔ Keep agents out / ✓ Only
-here** (or Remove); a root fan opens its tests' card and a lift its scaffold
-card the same way. The trunk is the repo card. Click a bird to follow it.
+here** (or Remove); a root fan opens its root card the same way (`tests ·
+backend/web`, or what a support root holds: `the non-code files of frontend/
+(README, config)`). The trunk is the repo card. Click a bird to follow it.
 
 **Following a bird:** click a bird, its row in the bird index (or a helper's
 row, or a rail row in a small pane). The camera glides to it (a jump under reduced motion) at a zoom

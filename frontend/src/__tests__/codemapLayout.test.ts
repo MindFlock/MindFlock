@@ -20,28 +20,32 @@ describe("the whole-tree view", () => {
     const B = { x0: -600, y0: -200, x1: 600, y1: 0 };
     const W = 1320,
       H = 860;
-    const c = fitWhole(B, 0, true, W, H, I);
+    const c = fitWhole(B, W, H, I);
     const s = boxOnScreen(B, c, W, H);
     // as wide as the free canvas allows
     expect(s.x0).toBeCloseTo(I.left + WHOLE_PAD.side, 3);
     expect(s.x1).toBeCloseTo(W - I.right - WHOLE_PAD.side, 3);
     // the spare height lifts the picture off the bottom, but the soil under it stays a band
-    const h = H - I.top - I.bot - WHOLE_PAD.top - WHOLE_PAD.piles;
-    expect(H - s.y1).toBeCloseTo(I.bot + WHOLE_PAD.piles + h * 0.12, 3);
+    const h = H - I.top - I.bot - WHOLE_PAD.top - WHOLE_PAD.bot;
+    expect(H - s.y1).toBeCloseTo(I.bot + WHOLE_PAD.bot + h * 0.12, 3);
     expect((H - s.y1) / H).toBeLessThan(0.16);
     expect(s.y0).toBeGreaterThan(H * 0.4);
   });
 
-  it("no piles and no roots: the soil is thinner still", () => {
-    const B = { x0: -600, y0: -200, x1: 600, y1: 0 };
-    const c = fitWhole(B, 0, false, 1320, 860, I);
-    const h = 860 - I.top - I.bot - WHOLE_PAD.top - WHOLE_PAD.bot;
-    expect(860 - boxOnScreen(B, c, 1320, 860).y1).toBeCloseTo(I.bot + WHOLE_PAD.bot + h * 0.12, 3);
+  it("the soil is as deep as the roots need: the same thin band under the deepest root tip as under a rootless trunk", () => {
+    // (no scaffold band any more: docs, CI and config are roots, so the picture's box already holds them)
+    const W = 1320,
+      H = 860;
+    const h = H - I.top - I.bot - WHOLE_PAD.top - WHOLE_PAD.bot;
+    const bare = { x0: -600, y0: -200, x1: 600, y1: 0 },
+      rooted = { x0: -600, y0: -200, x1: 600, y1: 60 };
+    for (const B of [bare, rooted]) expect(H - boxOnScreen(B, fitWhole(B, W, H, I), W, H).y1).toBeCloseTo(I.bot + WHOLE_PAD.bot + h * 0.12, 3);
+    expect(Object.keys(WHOLE_PAD).sort()).toEqual(["bot", "side", "top"]);
   });
 
   it("a tiny tree is drawn large but not past the zoom cap, in the middle of the free canvas", () => {
     const B = { x0: -20, y0: -30, x1: 20, y1: 0 };
-    const c = fitWhole(B, 0, false, 1320, 860, I);
+    const c = fitWhole(B, 1320, 860, I);
     expect(c.z).toBe(WHOLE_MAX_Z);
     const s = boxOnScreen(B, c, 1320, 860);
     expect((s.x0 + s.x1) / 2).toBeCloseTo((I.left + 1320 - I.right) / 2, 3);
@@ -53,7 +57,7 @@ describe("the whole-tree view", () => {
     const W = 1000,
       H = 700;
     const J = { top: 8, bot: 8, left: 240, right: 348 };
-    const c = fitWhole(B, 0, false, W, H, J);
+    const c = fitWhole(B, W, H, J);
     const s = boxOnScreen(B, c, W, H);
     expect(s.y0).toBeCloseTo(J.top + WHOLE_PAD.top, 3);
     expect(s.y1).toBeCloseTo(H - J.bot - WHOLE_PAD.bot, 3);
@@ -103,8 +107,8 @@ describe("the Map tour's card", () => {
     expect(r3.x).toBeGreaterThanOrEqual(column.x + column.w);
   });
 
-  it("keeps off the ground piles and their names, even when the zoomed tree fills the canvas", () => {
-    // zoomed onto a file: its card top right, the agents column top left, Activity bottom right, the docs pile
+  it("keeps off the picture's parts, even when the zoomed tree fills the canvas", () => {
+    // zoomed onto a file: its card top right, the agents column top left, Activity bottom right, a root fan
     // bottom left — the tree's box covers everything
     const docs = { x: 280, y: 790, w: 340, h: 120 };
     const zoomed: MapScene = {
