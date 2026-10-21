@@ -68,12 +68,13 @@ export interface LeafScreen {
 }
 
 /** base, tip, centre and pointing direction (world units; dir = radians), plus the drawn half-length
- *  and half-width in SCREEN px at zoom z (after any on-screen cap). Ground (pile) leaves are never capped. */
+ *  and half-width in SCREEN px at zoom z (after any on-screen cap). Ground planks and root tips are never capped. */
 export function leafScreen(l: Leaf, z: number): LeafScreen {
   const ca = Math.cos(l.ang),
     sa = Math.sin(l.ang);
   const full = l.len * z;
-  const px = l.region === "ground" ? full : capPx(full);
+  // ground planks and root tips are drawn at true scale (scaffold.ts / roots.ts); only crown leaves are capped
+  const px = l.region === "ground" || l.region === "root" ? full : capPx(full);
   const len = z > 0 ? px / z : l.len;
   const bx = l.x - ca * l.len * 0.5,
     by = l.y - sa * l.len * 0.5;
@@ -107,6 +108,6 @@ export function lensAt(l: Leaf, len: number): number[] {
 /** The outline as drawn at zoom z: `l.g` (true size) until the on-screen cap bites, then a shorter lens on the
  * same base. */
 export function leafOutline(l: Leaf, z: number): number[] {
-  if (l.region === "ground" || l.len * z <= LEAF.capFrom) return l.g || lensAt(l, l.len);
+  if (l.region === "ground" || l.region === "root" || l.len * z <= LEAF.capFrom) return l.g || lensAt(l, l.len);
   return lensAt(l, capPx(l.len * z) / z);
 }

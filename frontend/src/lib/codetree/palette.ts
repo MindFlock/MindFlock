@@ -52,6 +52,10 @@ export interface Palette {
   duskLabel: string;
   duskLeafLabel: string;
   rootLabel: string;
+  /** a test's root tip (the nodule a strand ends in): pale on the dark soil, dark on the light soil */
+  rootTip: string;
+  /** a test's fine root strands (the thick ones near the limb are BARK.root): paler than the soil in the dark */
+  rootFine: string;
   pileLabel: string;
   keepText: string;
   onlyText: string;
@@ -271,6 +275,8 @@ export function readPalette(el: Element | null): Palette {
     duskLabel: DUSK.label,
     duskLeafLabel: v("--ct-dusk-leaf-label", "#7c8291"),
     rootLabel: ROOTPAL.label,
+    rootTip: v("--ct-root-tip", light ? "hsl(28,34%,30%)" : "hsl(36,30%,64%)"),
+    rootFine: v("--ct-root-fine", light ? "hsl(27,24%,42%)" : "hsl(31,20%,42%)"),
     pileLabel: v("--ct-pile-label", "hsl(32,32%,66%)"),
     keepText: v("--ct-keep-text", "#ffb7a3"),
     onlyText: v("--ct-only-text", "#a8f0c0"),
