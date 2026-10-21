@@ -92,6 +92,23 @@ function recordTarget(r: FeedRecord): string {
   return "";
 }
 
+const FENCE_WORD: Record<string, string> = {
+  set: "fenced",
+  narrowed: "fence narrowed",
+  widened: "fence widened",
+  replaced: "fence changed",
+  lifted: "fence lifted",
+  ended: "fence ended — session closed",
+  done: "fence done — its piece finished",
+  removed: "fence removed",
+};
+
+/** "fence widened by orch: follow-up needs b" — a fence event's Activity line. */
+export function fenceEventText(f: NonNullable<FeedRecord["fence"]>): string {
+  const word = FENCE_WORD[f.event] || "fence " + f.event;
+  return word + (f.by ? " by " + f.by : "") + (f.reason ? ": " + f.reason : "");
+}
+
 export function recKey(r: FeedRecord): string {
   return (r.id || "") + "|" + r.ev + "|" + r.ts;
 }
@@ -185,12 +202,27 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
       ) : (
         <ul className="cm-list">
           {m.recent.map((r) => {
+            if (r.kind === "fence" && r.fence) {
+              const loud = ["widened", "replaced", "lifted", "removed"].includes(r.fence.event);
+              const paths = [...(r.fence.only || []).map((p) => "✓ " + p), ...(r.fence.keep_out || []).map((p) => "⛔ " + p)];
+              return (
+                <li key={recKey(r)}>
+                  <div className="cm-row" title={paths.join("  ") || undefined}>
+                    <span className="cm-row-main">
+                      <span className="cm-tool">MindFlock</span>
+                      <span className={"cm-badge" + (loud ? " soft-bad" : "")}>{fenceEventText(r.fence)}</span>
+                    </span>
+                    <span className="cm-row-time">{relTime((r.ts || 0) - m.skew)}</span>
+                  </div>
+                </li>
+              );
+            }
             const target = recordTarget(r);
             const path = r.deny?.path || r.writes?.[0] || r.reads?.[0] || "";
             const greenDeny = isGreenDeny(r);
             const peeks = m.green ? peeksOf(r, (p) => m.classify(p) === "outside") : [];
             const bad = !!(r.deny || (r.breach && r.breach.length));
-            const stillOut = greenDeny && m.classify(r.deny!.path) === "outside";
+            const stillOut = greenDeny && !r.deny!.fence && m.classify(r.deny!.path) === "outside";
             return (
               <li key={recKey(r)}>
                 <button
@@ -204,7 +236,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
                     <span className="cm-tool">{r.tool}</span>
                     {r.deny ? (
                       <span className={"cm-badge " + (greenDeny ? "soft-bad" : "bad")}>
-                        {r.deny.push ? "blocked push" : greenDeny ? "outside scope" : "blocked"}
+                        {r.deny.push ? "blocked push" : r.deny.fence ? "outside fence" : greenDeny ? "outside scope" : "blocked"}
                       </span>
                     ) : null}
                     {r.breach && r.breach.length ? <span className="cm-badge bad">breach</span> : null}
@@ -579,6 +611,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
                     </button>
                   ))}
                   {f.reason ? <span className="cm-fence-why">{f.reason}</span> : null}
+                  {f.last ? <span className={"cm-badge" + (f.last.event === "narrowed" ? "" : " soft-bad")}>{fenceEventText(f.last)}</span> : null}
                 </span>
               </div>
             </li>

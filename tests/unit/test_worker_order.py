@@ -620,7 +620,11 @@ def test_hook_enforces_a_session_keep_out_for_that_session_only(tmp_path):
     env.pop("TMUX_PANE", None)
     out = _hook(_write(repo, "b/y.py"), env, "mindflock_w1")
     assert _denied(out)
-    assert "kept out by orch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    # The fence's own wording: whose fence, and report blocked — not the
+    # user's red zone.
+    assert out["hookSpecificOutput"]["permissionDecisionReason"].startswith(
+        "MindFlock fence: b/y.py is in your fence's keep-out (`b/`), set by orch."
+    )
     assert not _denied(_hook(_write(repo, "a/x.py"), env, "mindflock_w1"))
     # The orchestrator sharing the folder is not fenced.
     assert not _denied(_hook(_write(repo, "b/y.py"), env, "mindflock_orch"))

@@ -105,6 +105,12 @@ __all__ = [
     "session_fence",
     "session_fence_zones",
     "fences_by_owner_prefix",
+    "fence_change",
+    "pattern_covers",
+    "fence_log",
+    "fence_by",
+    "fence_deny_reason",
+    "FENCE_LOG_MAX",
 ]
 
 STORE_VERSION = 1
@@ -186,6 +192,21 @@ _GREEN_DENY_TMPL = (
 )
 # At most this many zones are named in a green reason (then "+N more").
 _LABEL_CAP = 5
+
+# The deny reason for a per-session FENCE (an orchestrator's only= / keep_out=
+# on one worker). Byte-identical to ``_tool_hook_src._MF_FENCE_TMPL`` (asserted
+# by ``test_tool_hook``). A fence is the worker's task contract, so the reason
+# points at report_result(blocked) — never at asking for a wider fence.
+_FENCE_DENY_TMPL = (
+    "MindFlock fence: {rel} is {where}, set by {by}. The fence is your task's "
+    "contract and is not widened mid-task: read anything, but edit only inside "
+    "it and don't route around it. If the task truly needs this file, finish "
+    'the in-scope work, then call report_result with status "blocked" naming '
+    "the file and why; whoever set the fence decides who changes it."
+)
+
+#: How many fence events a worktree keeps (oldest dropped first).
+FENCE_LOG_MAX = 50
 
 
 # --------------------------------------------------------------------------- #
@@ -1470,17 +1491,164 @@ def set_session_fence(
             fence["reason"] = str(reason)[:300]
         if companions:
             fence["companions"] = True
+        prev = sessions.get(key)
         sessions[key] = fence
+        event = fence_change(prev if isinstance(prev, dict) else None, fence)
+        note = None
+        if event != "same":
+            note = _log_fence(entry, key, event, fence, by=by, reason=reason)
         _save(data)
+    if note is not None and event != "set":
+        # "set" is already in front of the worker's task; a change mid-task is
+        # news on its Map's Activity.
+        _feed_fence(key, note)
     return added, problems
 
 
-def drop_session_fence(wt: str, tmux_name: str = "", owner: str = "") -> int:
+def _fence_pats(fence: Optional[dict], kind: str) -> List[str]:
+    out: List[str] = []
+    for z in (fence or {}).get(kind) or []:
+        p = z.get("pattern") if isinstance(z, dict) else z
+        if isinstance(p, str) and p and p not in out:
+            out.append(p)
+    return out
+
+
+def pattern_covers(pats: List[str], pat: str) -> bool:
+    """Whether one of ``pats`` already covers what ``pat`` matches: the same
+    pattern, or one matching a sample path of ``pat`` (its globs filled in)
+    and that path's descendants — ``src/**`` covers ``src/api/**``,
+    ``src/api/x.py`` covers nothing but itself. A heuristic that errs on
+    "not covered", the reading that asks for a reason."""
+    if pat in pats:
+        return True
+    # A filler no real name uses, so `src/ax.py` never "covers" `src/a*.py`.
+    sample = re.sub(r"\[[^\]]*\]|\*\*|[*?]", "_mf0_", pat).strip("/")
+    if not sample:
+        return False
+    probes = (sample, sample + "/_mf0_")
+    for p in pats:
+        try:
+            rx = compile_pattern(p)
+        except (ValueError, TypeError):
+            continue
+        if all(matches(rx, s) for s in probes):
+            return True
+    return False
+
+
+def fence_change(old: Optional[dict], new: Optional[dict]) -> str:
+    """What replacing fence ``old`` with ``new`` does to the worker — ``set``
+    (it had none), ``same``, ``narrowed`` (less it may change), ``widened``
+    (anything it may now change that it could not before), ``replaced``
+    (both: a retarget) or ``lifted`` (``new`` is None). Either side may be a
+    stored fence (``green``/``red`` zone lists) or a request (``only`` /
+    ``keep_out`` pattern lists). Pure."""
+
+    def _pats(f: Optional[dict], store_key: str, req_key: str) -> List[str]:
+        if not f:
+            return []
+        if store_key in f:
+            return _fence_pats(f, store_key)
+        return [p for p in f.get(req_key) or [] if isinstance(p, str) and p]
+
+    o_g, o_r = _pats(old, "green", "only"), _pats(old, "red", "keep_out")
+    n_g, n_r = _pats(new, "green", "only"), _pats(new, "red", "keep_out")
+    if not (o_g or o_r):
+        return "set" if (n_g or n_r) else "same"
+    if not (n_g or n_r):
+        return "lifted"
+    if sorted(o_g) == sorted(n_g) and sorted(o_r) == sorted(n_r):
+        return "same"
+    wider = bool(o_g) and (not n_g or any(not pattern_covers(o_g, p) for p in n_g))
+    wider = wider or any(not pattern_covers(n_r, p) for p in o_r)
+    narrower = (not o_g and bool(n_g)) or any(not pattern_covers(n_g, p) for p in o_g)
+    narrower = narrower or any(not pattern_covers(o_r, p) for p in n_r)
+    if wider and narrower:
+        return "replaced"
+    return "widened" if wider else "narrowed"
+
+
+def _log_fence(
+    entry: dict,
+    key: str,
+    event: str,
+    fence: Optional[dict],
+    *,
+    by: str = "",
+    reason: str = "",
+) -> dict:
+    """Append one fence event to a worktree entry's ``fence_log`` (caller
+    holds ``_LOCK`` and saves). → the record."""
+    rec = {
+        "at": int(time.time()),
+        "session": key,
+        "event": event,
+        "only": _fence_pats(fence, "green"),
+        "keep_out": _fence_pats(fence, "red"),
+    }
+    who = by or (fence or {}).get("by") or ""
+    if who:
+        rec["by"] = str(who)
+    if reason:
+        rec["reason"] = str(reason)[:300]
+    if (fence or {}).get("owner"):
+        rec["owner"] = str(fence["owner"])
+    log = entry.get("fence_log")
+    if not isinstance(log, list):
+        log = []
+    log.append(rec)
+    entry["fence_log"] = log[-FENCE_LOG_MAX:]
+    return rec
+
+
+def _feed_fence(key: str, rec: dict) -> None:
+    """Put a fence event on the session's tool feed (``ev: "mindflock"``), so
+    its Map's Activity reads "fence widened by X: why" / "fence ended" where
+    the edits are. The feed dir is in the guard's protect set: an agent can't
+    forge one. Best-effort."""
+    line = {
+        "v": 1,
+        "ts": time.time(),
+        "ev": "mindflock",
+        "tool": "MindFlock",
+        "kind": "fence",
+        "fence": {k: v for k, v in rec.items() if k not in ("at", "session")},
+    }
+    try:
+        path = feed_path(key)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        data = (json.dumps(line, ensure_ascii=True) + "\n").encode("utf-8")
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            os.write(fd, data)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+def drop_session_fence(
+    wt: str,
+    tmux_name: str = "",
+    owner: str = "",
+    *,
+    cause: str = "",
+    by: str = "",
+    reason: str = "",
+) -> int:
     """Remove one session's fence in ``wt`` (``tmux_name``), or every fence
-    ``owner`` set there. Returns how many went."""
+    ``owner`` set there. Returns how many went.
+
+    Every removal is logged (:func:`fence_log`) and put on the session's
+    feed, with ``cause`` saying WHY, so an ending never reads as an unblock:
+    ``lifted`` (whoever set it took it off a live worker — ``by``/``reason``
+    say who and why), ``ended`` (the session is gone), ``done`` (its piece of
+    a team run finished). Without a cause: a team run's fence (owner
+    ``run:…``) ``ended``, anything else ``removed``."""
     real = os.path.realpath(wt)
     key = _session_key(tmux_name) if tmux_name else ""
-    gone = 0
+    gone: List[Tuple[str, dict]] = []
     with _LOCK:
         data = _load()
         entry = data["worktrees"].get(real) or data["worktrees"].get(wt)
@@ -1491,12 +1659,68 @@ def drop_session_fence(wt: str, tmux_name: str = "", owner: str = "") -> int:
             v = sessions.get(k) or {}
             if (key and k == key) or (owner and v.get("owner") == owner):
                 sessions.pop(k, None)
-                gone += 1
+                why = cause or (
+                    "ended"
+                    if str(v.get("owner") or "").startswith("run:")
+                    else "removed"
+                )
+                gone.append((k, _log_fence(entry, k, why, v, by=by, reason=reason)))
         if gone:
             if not sessions:
                 entry.pop("sessions", None)
             _save(data)
-    return gone
+    for k, rec in gone:
+        _feed_fence(k, rec)
+    return len(gone)
+
+
+def fence_log(wt: str, tmux_name: str = "", limit: int = 20) -> List[dict]:
+    """The fence events in ``wt`` (one session's with ``tmux_name``), oldest
+    first, at most ``limit``: ``{at, session, event, only, keep_out, by?,
+    reason?, owner?}`` — ``event`` is ``set`` / ``narrowed`` / ``widened`` /
+    ``replaced`` / ``lifted`` / ``ended`` / ``done`` / ``removed``."""
+    key = _session_key(tmux_name) if tmux_name else ""
+    with _LOCK:
+        data = _load()
+        log = _wt_entry(data, wt).get("fence_log")
+    out = [
+        dict(r)
+        for r in (log if isinstance(log, list) else [])
+        if isinstance(r, dict) and (not key or r.get("session") == key)
+    ]
+    return out[-limit:] if limit > 0 else out
+
+
+def fence_by(fence: Optional[dict]) -> str:
+    """Who a fence's deny reason names as its setter."""
+    f = fence or {}
+    owner = str(f.get("owner") or "")
+    if f.get("by"):
+        return str(f["by"])
+    if owner.startswith("orch:") and owner[5:]:
+        return owner[5:]  # worker_order_driver's owner: "orch:<its title>"
+    if owner.startswith("run:"):
+        return "your team run's plan"
+    return "your orchestrator"
+
+
+def fence_deny_reason(
+    rel: str, only: Iterable[str], kept: str = "", by: str = ""
+) -> str:
+    """The reason the guard shows a FENCED worker for an edit outside its
+    fence (``kept``: the keep-out pattern it hit instead) — the hook's
+    ``_mf_fence_reason`` renders the same string."""
+    if kept:
+        where = "in your fence's keep-out (`%s`)" % kept
+    else:
+        pats = [p for p in only if p]
+        shown = ", ".join("`%s`" % p for p in pats[:_LABEL_CAP])
+        if len(pats) > _LABEL_CAP:
+            shown += " (+%d more)" % (len(pats) - _LABEL_CAP)
+        where = "outside your fence (only: %s)" % (shown or "nothing")
+    return _FENCE_DENY_TMPL.format(
+        rel=rel or "this path", where=where, by=by or "your orchestrator"
+    )
 
 
 def session_fences(wt: str) -> Dict[str, dict]:
@@ -1573,7 +1797,13 @@ def _guard_sessions(
                     continue
         if not rules and not reds:
             continue
-        entry: dict = {"green_rules": rules, "no_commit": bool(v.get("no_commit"))}
+        entry: dict = {
+            "green_rules": rules,
+            "no_commit": bool(v.get("no_commit")),
+            # Who the deny reason names: the fence is the worker's contract
+            # with whoever set it, not "the user's".
+            "by": fence_by(v),
+        }
         if reds:
             # Keep-out for this session only. The hook's Bash checks read the
             # pre-listed files/dirs/symlinks, so list them like a red zone's —

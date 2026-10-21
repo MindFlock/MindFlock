@@ -1588,7 +1588,13 @@ own Map like rules — painted on the tree, listed under **Rules** as *this
 session · set by orch* — but without **×** or **Allow here**: only the
 orchestrator lifts it. The orchestrator's Map lists **Workers' fences**: each
 worker with its **✓ only** and **⛔ keep-out** paths (click one to find it on
-the tree) and the reason it gave.
+the tree) and the reason it gave. An edit the fence refused shows in
+**Activity** as *outside fence* — never as a scope request with **Allow this
+file**: the worker reports blocked and its orchestrator decides. A change to
+the fence after it was set is an **Activity** line of its own — *fence
+widened by orch: follow-up needs b*, *fence lifted by …*, or *fence ended —
+session closed* / *fence done — its piece finished* when it simply ran its
+course (hover for the paths that were in force).
 
 **Cost:** nothing mounts until the tab is first opened, and nothing polls or
 draws unless it is showing and the window is visible (`GET …/code-map/live`

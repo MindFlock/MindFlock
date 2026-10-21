@@ -73,6 +73,17 @@ _MF_GREEN_TMPL = (
     "files you need in your reply instead of editing them."
 )
 
+# The deny reason for a per-session FENCE (an orchestrator's only= / keep_out=
+# on one worker). MUST stay byte-identical to
+# ``backend.config.red_zones._FENCE_DENY_TMPL`` (asserted by test_tool_hook).
+_MF_FENCE_TMPL = (
+    "MindFlock fence: {rel} is {where}, set by {by}. The fence is your task's "
+    "contract and is not widened mid-task: read anything, but edit only inside "
+    "it and don't route around it. If the task truly needs this file, finish "
+    'the in-scope work, then call report_result with status "blocked" naming '
+    "the file and why; whoever set the fence decides who changes it."
+)
+
 # At most this many zones named in a green reason (then "(+N more)").
 _MF_LABEL_CAP = 5
 
@@ -321,6 +332,12 @@ def _mf_session_view(g):
             sib.extend(x.get("green_rules") or [])
     v["siblings"] = sib
     v["no_commit"] = bool(mine.get("no_commit"))
+    # A fence, not the user's zones: its denies say who set it and point at
+    # report_result(blocked) (_mf_fence_reason).
+    v["fence"] = {
+        "by": mine.get("by") or "your orchestrator",
+        "only": [r.get("pattern") for r in mine.get("green_rules") or []],
+    }
     return v
 
 
@@ -866,6 +883,29 @@ def _mf_is_redir(tok):
     )
 
 
+def _mf_into_dir(words, cwd):
+    """The paths ``cp/mv/ln/install SRC… DEST`` writes: ``DEST`` itself, or —
+    when ``DEST`` is a directory (on disk, or written with a trailing ``/``)
+    — ``DEST/<name of each SRC>``. Copying into ``.`` writes one file there,
+    not "the whole worktree"."""
+    import os
+
+    dest = words[-1]
+    try:
+        is_dir = dest.endswith("/") or os.path.isdir(_mf_abs(dest, cwd))
+    except Exception:
+        is_dir = False
+    if not is_dir:
+        return [dest]
+    out = []
+    for src in words[:-1]:
+        name = os.path.basename(src.rstrip("/"))
+        if not name or name in (".", ".."):
+            return [dest]
+        out.append(os.path.join(dest, name))
+    return out or [dest]
+
+
 def _bash_targets(cmd, cwd, depth=0, tags=None):
     """``(writes, reads, parse_ok)`` — abs write/read paths from a shell command.
 
@@ -910,9 +950,24 @@ def _bash_targets(cmd, cwd, depth=0, tags=None):
         i = 0
         while i < len(c):
             t = c[i]
-            if _mf_is_redir(t):
-                if i + 1 < len(c):
-                    _w(_abs(c[i + 1], eff_cwd))
+            if t in (">&", "<&", ">>&") or _mf_is_redir(t):
+                # `2>/dev/null`, `2>&1`: shlex splits the fd number off the
+                # operator — it is no argument (`git checkout -- f 2>x` does
+                # not write a file named `2`).
+                if argv and argv[-1].isdigit() and (argv[-1] + t) in cmd:
+                    argv.pop()
+                nxt = c[i + 1] if i + 1 < len(c) else None
+                if t in (">&", "<&", ">>&") and (
+                    nxt is None or nxt.isdigit() or nxt == "-"
+                ):
+                    i += 2  # an fd duplication / close writes no file
+                    continue
+                if t == "<&":
+                    argv.append(t)
+                    i += 1
+                    continue
+                if nxt is not None:
+                    _w(_abs(nxt, eff_cwd))
                     i += 2
                     continue
             argv.append(t)
@@ -942,13 +997,24 @@ def _bash_targets(cmd, cwd, depth=0, tags=None):
                 if prog in ("rm", "unlink")
                 else "mkdir" if prog == "mkdir" else "w"
             )
-            for a in nonflag:
+            files = nonflag
+            if prog in ("chmod", "chown") and not any(
+                a.startswith("--reference") for a in args
+            ):
+                files = nonflag[1:]  # the mode / owner (`+x`, `755`, `me:me`)
+            if prog == "mv" and len(files) >= 2:
+                files = files[:-1] + _mf_into_dir(files, eff_cwd)
+            for a in files:
                 _w(_abs(a, eff_cwd), why)
         if prog == "tee":
             for a in nonflag:
                 _w(_abs(a, eff_cwd))
         if prog in _MF_WRITE_LAST and nonflag:
-            _w(_abs(nonflag[-1], eff_cwd))
+            dest = [nonflag[-1]]
+            if prog != "rsync" and len(nonflag) >= 2:
+                dest = _mf_into_dir(nonflag, eff_cwd)
+            for a in dest:
+                _w(_abs(a, eff_cwd))
         if prog == "sed" and any(
             a.startswith("-i")
             or a.startswith("--in-place")
@@ -1793,10 +1859,42 @@ def _mf_print_block(reason):
     sys.stdout.write("\n")
 
 
+def _mf_fence_hit(hit, guard):
+    """Whether ``hit`` is the firing session's FENCE refusing it: outside its
+    only-here, or inside its own keep-out (a ``session``-scope rule)."""
+    f = (guard or {}).get("fence")
+    if not f or hit.get("protect"):
+        return False
+    if hit.get("green"):
+        return bool(f.get("only"))  # else the folder's own green zones
+    return (hit.get("rule") or {}).get("scope") == "session"
+
+
+def _mf_fence_reason(hit, guard):
+    """The fence deny reason — the same string as
+    ``red_zones.fence_deny_reason``."""
+    f = guard.get("fence") or {}
+    rel = hit.get("rel") or "this path"
+    if hit.get("green"):
+        pats = [p for p in f.get("only") or [] if p]
+        shown = ", ".join("`%s`" % p for p in pats[:_MF_LABEL_CAP])
+        if len(pats) > _MF_LABEL_CAP:
+            shown += " (+%d more)" % (len(pats) - _MF_LABEL_CAP)
+        where = "outside your fence (only: %s)" % (shown or "nothing")
+    else:
+        kept = (hit.get("rule") or {}).get("pattern") or rel
+        where = "in your fence's keep-out (`%s`)" % kept
+    return _MF_FENCE_TMPL.format(
+        rel=rel, where=where, by=f.get("by") or "your orchestrator"
+    )
+
+
 def _mf_deny_reason_for(hit, guard=None):
     rule = hit.get("rule") or {}
     if hit.get("protect"):
         return _MF_PROTECT_REASON.format(rel=hit.get("rel") or "this path")
+    if _mf_fence_hit(hit, guard):
+        return _mf_fence_reason(hit, guard)
     if hit.get("green"):
         return _MF_GREEN_TMPL.format(
             rel=hit.get("rel") or "this path", label=_mf_green_label(guard or {})
@@ -1810,25 +1908,33 @@ def _mf_deny_record(hit, guard=None):
     ``request: true`` — the UI shows it as a scope request with [Allow this
     file] (the agent was told to list what it needs, so this IS the ask)."""
     rule = hit.get("rule") or {}
+    fence = _mf_fence_hit(hit, guard)
     if hit.get("green"):
-        return {
+        rec = {
             "path": hit.get("rel"),
             "pattern": _MF_GREEN_OUTSIDE,
             "name": "",
             "zone_id": None,
             "reason": _mf_deny_reason_for(hit, guard),
             "kind": "green",
-            "request": True,
+            # A fence deny is no request for a person to widen it: the worker
+            # reports blocked and its orchestrator decides.
+            "request": not fence,
         }
+        if fence:
+            rec["fence"] = True
+        return rec
     rec = {
         "path": hit.get("rel"),
         "pattern": rule.get("pattern"),
         "name": rule.get("name") or "",
         "zone_id": rule.get("id"),
-        "reason": _mf_deny_reason_for(hit),
+        "reason": _mf_deny_reason_for(hit, guard),
     }
     if not hit.get("protect"):
         rec["kind"] = "red"
+    if fence:
+        rec["fence"] = True
     return rec
 
 
@@ -1997,7 +2103,7 @@ def _mf_pre_deny(kind, writes, tool, cwd, proj, extra, cache, s=""):
                     continue
                 hit = _mf_zone_hit(w, cwd, gx)
                 if hit:
-                    return _mf_deny_reason_for(hit), _mf_deny_record(hit)
+                    return _mf_deny_reason_for(hit, gx), _mf_deny_record(hit, gx)
                 if green_ok:
                     gh = _mf_green_hit(w, cwd, gx)
                     if gh:
@@ -2068,7 +2174,7 @@ def _mf_pre_deny(kind, writes, tool, cwd, proj, extra, cache, s=""):
                         continue
                     hit = _mf_zone_hit(wt, cwd, g, ancestor=True)
                     if hit:
-                        return _mf_deny_reason_for(hit), _mf_deny_record(hit)
+                        return _mf_deny_reason_for(hit, g), _mf_deny_record(hit, g)
                 if g.get("green_rules"):
                     for wt in sorted(w):
                         why = tags.get(wt) or set()
