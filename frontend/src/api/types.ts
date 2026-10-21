@@ -658,6 +658,19 @@ export interface FeedRecord {
     /** v3: "green" = refused because the path is outside the green zone(s)
      * (pattern is then "outside green"); absent/"red" = a keep-out zone. */
     kind?: "red" | "green" | string;
+    /** The session's own fence refused it (an orchestrator's only= /
+     * keep_out=): no scope request — the worker reports blocked. */
+    fence?: boolean;
+  } | null;
+  /** A fence event MindFlock put on the feed (`ev: "mindflock"`, `kind:
+   * "fence"`): what changed the session's fence, who and why. An ending
+   * (`ended`, `done`) is the fence finishing, never an unblock. */
+  fence?: {
+    event: "set" | "narrowed" | "widened" | "replaced" | "lifted" | "ended" | "done" | "removed" | string;
+    by?: string;
+    reason?: string;
+    only?: string[];
+    keep_out?: string[];
   } | null;
   /** v3: reads outside the green zone(s) — advisory, never denied ("peeked
    * outside scope" in Activity). */
@@ -744,7 +757,9 @@ export interface CodeMapLive {
   companion_files?: string[] | null;
   /** The fences on this session's workers (an orchestrator's Map lists them
    * as "Workers' fences"). Absent on older servers. */
-  fences?: Array<WorkerFence & { session: string }>;
+  /** `last`: the newest change after the fence was set (a fence that was
+   * lifted leaves the worker listed with empty paths and this). */
+  fences?: Array<WorkerFence & { session: string; last?: FeedRecord["fence"] }>;
 }
 
 /** POST /api/instances/{title}/red-zones/preview. The green-only fields are

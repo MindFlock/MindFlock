@@ -410,7 +410,11 @@ first result per 10 minutes skips the rate limit (see
 ### `whoami`
 
 No arguments. → `{session, external, scope, parent, children, unread, server,
-person, you_drive, note?}`. `session` is self's compact row (see `list_sessions`), or `null` for
+person, you_drive, fence?, note?}`. `fence` (a fenced worker only) is `{only,
+keep_out, by?, reason?, rule}`; `rule` is the contract in one sentence — *Work
+in `<only>`; read outside only to understand callers; never edit outside.
+Never edit: `<keep_out>`. Need a file outside? Finish the in-scope work, then
+report_result(status="blocked") naming it — never ask for a wider fence.* `session` is self's compact row (see `list_sessions`), or `null` for
 an external client. `person` is `{id, name}` of the person this MindFlock
 belongs to — the same on all of their devices ([people.md](people.md)) — or
 `null` from a server that predates people. `you_drive` says whether that
@@ -707,9 +711,15 @@ Cycles and self-parenting are refused. → `{ok, title, parent, session}`.
 
 `title` (one of your workers), `only`, `keep_out` (path globs, the red-zone
 syntax), `reason`, `clear`. Replaces the worker's fence; `clear: true` lifts
-it. Managed sessions only. `POST /api/instances/{title}/fence` with `by:
-<you>` → `{ok, fence, applied, held, told?, shared_folder?, problems?,
-note?}`. See [Fences and order](#fences-and-order-workers-that-dont-collide).
+it. Managed sessions only, never your own. Once the worker has started
+(anything but `held`), a change that **widens**, **retargets** or **lifts**
+its fence is refused without a `reason` of at least 10 characters (narrowing
+never needs one): the refusal says to make that change yourself or spawn a
+worker fenced to it. `POST /api/instances/{title}/fence` with `by: <you>`,
+`reason` and `change` → `{ok, fence, applied, held, told?, shared_folder?,
+problems?, note?, change}` (`change`: `set` | `same` | `narrowed` |
+`widened` | `replaced` | `lifted`, judged against the fence on the worker's
+row). See [Fences and order](#fences-and-order-workers-that-dont-collide).
 
 ### `set_order`
 
@@ -1263,14 +1273,35 @@ fence is in place, so it is never unfenced for a moment) or later
   agents share, only its paths are. `keep_out` adds to the folder's red
   zones (Bash commands that name a kept-out path are checked too). Red
   always wins.
-- The deny names who fenced it; the worker's task starts with its
-  fence; a running worker whose fence changes is told (queued mid-turn).
+- **The fence is the task's contract.** Size it to the task at spawn. When a
+  worker reports blocked on a file outside, the orchestrator decides: make
+  that change itself, or spawn another worker fenced to it. Widening or
+  lifting a started worker's fence needs a `reason` (see `fence_session`),
+  and is logged and shown on the worker's Map. A fenced worker can't hand a
+  child more than it has: `spawn_session` from a fenced session gives the
+  child its fence (`only` may narrow it, never leave it; `keep_out` adds).
+- The deny names the fence and who set it — *MindFlock fence: `<path>` is
+  outside your fence (only: …), set by `<orchestrator>`* — and points at
+  `report_result` with status `blocked`, never at asking for more. The
+  worker's task starts with its fence, `whoami` returns it (`fence: {only,
+  keep_out, by, reason, rule}`), and a running worker whose fence changes is
+  told (queued mid-turn). A fence deny is not a Map scope request: it has no
+  **Allow this file**.
 - It shows on the **Code Map**: the worker's own Map draws it like zones
   (scope `session`, locked: only the orchestrator lifts it), and the
   orchestrator's Map lists **Workers' fences**.
 - A fence goes when its session goes (the sweep drops every `orch:` fence
   whose session is gone, so a reused name never inherits one). A CLI without
   the guard hook gets the fence in its task text only.
+- **Every change is logged** in the zone store
+  (`worktrees[<folder>].fence_log`, the last 50: `{at, session, event, only,
+  keep_out, by?, reason?, owner?}`, read with `red_zones.fence_log`), and
+  every change after the first is put on the session's tool feed (`ev:
+  "mindflock"`, `kind: "fence"`) so its Map's **Activity** shows *fence
+  widened by orch: why*. `event` says what happened: `set`, `narrowed`,
+  `widened`, `replaced`, `lifted` (taken off a live worker), `ended` (its
+  session went), `done` (its team-run piece finished) or `removed` (a caller
+  that did not say why). An ending never reads as an unblock.
 
 ### Order
 

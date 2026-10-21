@@ -574,7 +574,8 @@ def _feed_pass(
         newest = recs[-1].get("ts") if recs else None
         ok = isinstance(newest, (int, float)) and not isinstance(newest, bool)
         ss["cursor"] = float(newest) if ok else now
-        ss["last_feed_ts"] = float(newest) if ok else 0.0
+        hook = ok and recs[-1].get("ev") != "mindflock"
+        ss["last_feed_ts"] = float(newest) if hook else 0.0
         return {}
     recs = code_map.read_feed(tmux, ss["cursor"], 500)
     tss = [
@@ -584,7 +585,17 @@ def _feed_pass(
     ]
     if tss:
         ss["cursor"] = max(ss["cursor"], max(tss))
-        ss["last_feed_ts"] = max(ss["last_feed_ts"], max(tss))
+    # MindFlock's own notes on the feed (a fence event, ``ev: "mindflock"``)
+    # prove nothing about the hook firing.
+    hook_tss = [
+        float(r["ts"])
+        for r in recs
+        if r.get("ev") != "mindflock"
+        and isinstance(r.get("ts"), (int, float))
+        and not isinstance(r.get("ts"), bool)
+    ]
+    if hook_tss:
+        ss["last_feed_ts"] = max(ss["last_feed_ts"], max(hook_tss))
 
     fresh: Dict[str, dict] = {}
     for r in recs:

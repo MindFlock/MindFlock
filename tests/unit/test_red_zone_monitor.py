@@ -169,6 +169,25 @@ def test_feed_is_seeded_silently_then_new_denies_emit(repo, got):
     assert d["detail"] == "blocked 2 edits to config/"
 
 
+def test_mindflocks_own_fence_notes_never_verify_the_hook(repo, got):
+    """A fence event the server puts on the feed (``ev: "mindflock"``) is no
+    proof the hook fires: only the hook's own records move last_feed_ts."""
+    red_zones.add_zone("repo", _repo_id(repo), "config/")
+    inst = _Inst("rz-f", repo, program="bash")
+    _feed("rz-f", {"v": 1, "ts": time.time() - 30, "ev": "mindflock", "kind": "fence"})
+    mon.tick({"rz-f": inst}, {"rz-f": "working"})  # seed
+    assert mon._sess("rz-f")["last_feed_ts"] == 0.0
+    note = time.time()
+    _feed("rz-f", {"v": 1, "ts": note, "ev": "mindflock", "kind": "fence"})
+    mon.tick({"rz-f": inst}, {"rz-f": "working"})
+    assert mon._sess("rz-f")["last_feed_ts"] == 0.0
+    assert mon._sess("rz-f")["cursor"] >= note  # read, just not counted
+    hook = time.time()
+    _feed("rz-f", _deny(hook, "rz_1", "config/", "config/settings.toml"))
+    mon.tick({"rz-f": inst}, {"rz-f": "working"})
+    assert mon._sess("rz-f")["last_feed_ts"] == pytest.approx(hook)
+
+
 def test_blocked_is_once_per_zone_per_work_cycle(repo, got):
     inst = _Inst("rz-b", repo, program="bash")
     mon.tick({"rz-b": inst}, {"rz-b": "working"})  # seed (empty feed)

@@ -663,7 +663,8 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
   }, [snap, zones, ci]);
 
   const requests = useMemo(
-    () => (green ? scopeRequests(feed, (p) => classify(p) === "outside") : []),
+    // A fence deny is no request to widen it: the worker reports blocked.
+    () => (green ? scopeRequests(feed.filter((r) => !r.deny?.fence), (p) => classify(p) === "outside") : []),
     [green, feed, classify]
   );
   // "Allowed ✓" only while the path IS allowed: once its zone is removed, a
