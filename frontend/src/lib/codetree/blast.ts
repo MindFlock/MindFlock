@@ -128,7 +128,7 @@ export function collectBadges(v: Pick<TreeView, "M" | "cam" | "badgeSets" | "bad
     const what = one ? one.name : e.ag ? `${e.ag.short || e.ag.name}'s edits` : "it";
     // the badge names the folder it sits on, so "what might break" reads without a branch label in view
     const where =
-      n.kind === "pile" ? n.label! : n.depth === 0 ? (n === M.roots ? "tests" : "root files") : n.kind === "root" ? n.label! : n.disp || shortName(n.name);
+      n.kind === "pile" ? n.label! : n.depth === 0 ? (n === M.roots ? "tests" : "repo root") : n.kind === "root" ? n.label! : n.disp || shortName(n.name);
     const text =
       n.kind === "root" || n === M.roots
         ? `${where} · ${c} ${c === 1 ? "test depends" : "tests depend"} on ${what}`

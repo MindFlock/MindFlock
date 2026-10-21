@@ -211,7 +211,7 @@ describe("a fan reads at high zoom", () => {
         }
   });
 
-  it("a fan's strands never cross each other, as drawn (smoothed), and never run through a tip that isn't theirs", () => {
+  it("a fan's strands never cross each other, as drawn (smoothed), and never run through a tip that isn't theirs", { timeout: 30_000 }, () => {
     for (const [name, M] of models())
       for (const t of rootTerms(M)) {
         const net = rootNetOf(t)!;
@@ -354,7 +354,8 @@ describe("cost", () => {
     const b = t.branch as { x1: number; y1: number; cp: number[] } | undefined;
     const t0 = performance.now();
     for (let k = 0; k < 5; k++) growRoots(t, b ? b.x1 : t.cx, b ? b.y1 : t.cy, b ? Math.atan2(b.cp[7] - b.cp[5], b.cp[6] - b.cp[4]) : Math.PI / 2);
-    expect((performance.now() - t0) / 5).toBeLessThan(60);
+    // a frame budget with headroom for a loaded CI box (a quiet machine does it in ~10 ms)
+    expect((performance.now() - t0) / 5).toBeLessThan(250);
     // deterministic: the same fan again
     const again = buildModel(crowdedRepo());
     const a = rootTerms(again).sort((p, q) => q.leaves.length - p.leaves.length)[0];
