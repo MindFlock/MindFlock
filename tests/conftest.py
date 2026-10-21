@@ -246,6 +246,17 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_ambient_github_token(monkeypatch):
+    """A developer's own ``$GH_TOKEN``/``$GITHUB_TOKEN`` must not reach the
+    suite: with one, every session would launch "connected to GitHub" (the
+    git sign-in overlay on its tmux env, backend/git_auth_hints.py) and the
+    tests that pin a session's exact env would fail on that machine alone.
+    A test that wants one sets it itself."""
+    for var in ("GH_TOKEN", "GITHUB_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _no_tailnet_side_effects(monkeypatch):
     """No test machine has a tailnet, and no test fires a phone-URL push.
 

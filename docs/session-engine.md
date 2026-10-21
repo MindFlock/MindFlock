@@ -93,6 +93,28 @@ The tmux `launch_command` is set separately from `program` so the human-readable
 program name still drives trust-prompt and idle detection. On any failure the
 partial worktree/tmux is torn down before the error propagates.
 
+**Launch environment.** The tmux session's env is the server's plus
+`ExtraEnv`: an auth profile's env, split by name — credentials into a 0600
+`~/.mindflock/run/<tmux name>.env` file the launch string sources, settings
+on the env itself (`backend/session/secret_env.py`, so no key ever shows in
+`ps`) — and, while a GitHub sign-in is connected (a Settings token or
+`$GH_TOKEN`/`$GITHUB_TOKEN`; see *GitHub credential* in
+[configuration.md](configuration.md)), git's per-process config
+(`GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`) that makes
+`mindflock git-credential` the one credential helper for https://github.com,
+so the agent's own `git push` uses the sign-in with no keychain prompt and no
+global git config. `GIT_CONFIG_KEY_<n>` is explicitly **not** a secret despite
+its name: count, key and value must travel together, and a key routed to the
+file while the others stayed on the env would break every later pane's git
+(*missing config key*). Without a sign-in nothing is added and the launch is
+byte-identical. The same overlay goes on provisioning's clone and fetch
+(`provisioned._noninteractive_env`, beside `GIT_TERMINAL_PROMPT=0` and SSH
+`BatchMode=yes`) and is exported by the wrapper of a session's shell tab
+(`agent_sessions._ensure_shell_session`), so the push the Push button types
+there uses it too. The helper command embeds the interpreter that launched
+the session, so after moving or reinstalling MindFlock a running session
+should be relaunched before its next push.
+
 **`Pause()`** — stops the agent (kills its tmux session and PTY) and keeps the
 worktree and branch **exactly as they are**: no commit, no removal. The status
 becomes `Paused` (set before the kill, so a terminal socket reconnecting the

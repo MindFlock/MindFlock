@@ -27,7 +27,7 @@ import os
 import re
 from typing import Dict, List, Optional
 
-from backend import gitutil
+from backend import git_auth_hints, gitutil
 
 __all__ = [
     "merge_into",
@@ -73,8 +73,11 @@ def _identity() -> List[str]:
 
 def _git(path: str, *args: str, timeout: int = _GIT_TIMEOUT_S):
     """``git -C path args`` → CompletedProcess (bytes), or None when git could
-    not run (missing, or killed at ``timeout``)."""
-    cp = gitutil.git(args, path, timeout=timeout, env=_ENV, text=False)
+    not run (missing, or killed at ``timeout``). The connected GitHub sign-in
+    is git's helper for github.com (a fetch, a push of the integration)."""
+    cp = gitutil.git(
+        args, path, timeout=timeout, env=git_auth_hints.github_signin(_ENV), text=False
+    )
     return None if cp.timed_out or cp.not_run else cp
 
 

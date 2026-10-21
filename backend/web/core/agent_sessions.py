@@ -22,7 +22,7 @@ import time
 import uuid
 from typing import Dict
 
-from backend import providers
+from backend import git_auth_hints, providers
 from backend import session
 from backend.session import provisioned as provisioning
 from backend.session import tmux
@@ -126,6 +126,15 @@ def _ensure_shell_session(title: str, wt: str):
     # (launch_script.OOM_SCORE_ADJ): what a person runs here — a test suite, a
     # build — is the OOM killer's pick before the server, like the agent's.
     oom = providers.launch_script.oom_score_prefix()
+    # The connected GitHub sign-in as git's helper for github.com, so the
+    # Push button's push (typed in here) and anything run in this shell
+    # against GitHub over HTTPS ask no keychain and need no gh. Exported in
+    # the wrapper, nothing without a sign-in.
+    signin = "".join(
+        "export %s=%s; " % (k, shlex.quote(str(v)))
+        for k, v in sorted(git_auth_hints.github_signin({}).items())
+    )
+    wrapper = oom + signin
     created = _proc.run_capped(
         [
             "tmux",
@@ -135,7 +144,7 @@ def _ensure_shell_session(title: str, wt: str):
             name,
             "-c",
             wt,
-            (oom + "exec " + shlex.quote(shell)) if oom else shell,
+            (wrapper + "exec " + shlex.quote(shell)) if wrapper else shell,
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,

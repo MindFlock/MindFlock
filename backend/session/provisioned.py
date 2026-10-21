@@ -51,7 +51,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-from backend import gitutil, workspace_setup
+from backend import git_auth_hints, gitutil, workspace_setup
 from backend.providers import launch_script
 from backend.providers.base import LauncherSpec
 from backend.session.git import remote_url
@@ -739,12 +739,16 @@ def _noninteractive_env(env: Optional[dict] = None) -> dict:
         Only DEFAULTED: a user who set ``GIT_SSH_COMMAND`` (or the older
         ``GIT_SSH``) for a custom key or jump host keeps their own command
         verbatim.
+      * the connected GitHub sign-in as git's credential helper for
+        github.com (:func:`backend.git_auth_hints.github_signin`; nothing
+        without one) — so the clone/fetch of a GitHub repo over HTTPS asks no
+        OS keychain, needs no gh and writes no global git config.
     """
     out = dict(os.environ if env is None else env)
     out["GIT_TERMINAL_PROMPT"] = "0"
     if not out.get("GIT_SSH_COMMAND") and not out.get("GIT_SSH"):
         out["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
-    return out
+    return git_auth_hints.github_signin(out)
 
 
 def _run(

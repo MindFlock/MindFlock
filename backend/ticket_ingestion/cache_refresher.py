@@ -20,6 +20,7 @@ import sqlite3
 from pathlib import Path
 
 from backend.ticket_ingestion._subprocess import run_capture
+from backend.ticket_ingestion.clone_transport import headless_git_env
 from backend.ticket_ingestion.config import PipelineConfig
 from backend.workspace_setup import (
     CacheSeed,
@@ -221,6 +222,7 @@ class CacheRefresher:
             self.config.repo_url,
             str(self.directory),
             cwd=None,
+            env=headless_git_env(),
             err="git clone (refresher)",
             timeout=_NETWORK_GIT_TIMEOUT,
         )
@@ -240,6 +242,7 @@ class CacheRefresher:
             "origin",
             branch,
             cwd=cwd,
+            env=headless_git_env(),
             err="git fetch",
             timeout=_NETWORK_GIT_TIMEOUT,
         )
@@ -415,9 +418,12 @@ class CacheRefresher:
         *args: str,
         cwd: str | None,
         err: str,
+        env: dict[str, str] | None = None,
         timeout: float = _LOCAL_GIT_TIMEOUT,
     ) -> None:
-        rc, _, stderr = await self._run(*args, cwd=cwd, timeout=timeout)
+        # env only when given: a local git command keeps the plain call.
+        extra = {"env": env} if env is not None else {}
+        rc, _, stderr = await self._run(*args, cwd=cwd, timeout=timeout, **extra)
         if rc != 0:
             msg = stderr.decode(errors="replace").strip()[-500:]
             raise RuntimeError(f"{err} failed (rc={rc}): {msg}")

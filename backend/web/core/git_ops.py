@@ -9,6 +9,8 @@ from __future__ import annotations
 import shutil
 import subprocess
 import time
+
+from backend import git_auth_hints
 from typing import Dict
 
 
@@ -180,7 +182,10 @@ def _origin_branch_sha(wt: str, branch: str, force: bool = False):
             ["git", "-C", wt, "ls-remote", "--heads", "origin", branch],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
             timeout=12,
+            # Prompts off; the connected GitHub sign-in answers for github.com.
+            env=git_auth_hints.github_env(git_auth_hints.NO_PROMPT_ENV),
         )
         if cp.returncode == 0:
             out = cp.stdout.decode("utf-8", "replace").strip()

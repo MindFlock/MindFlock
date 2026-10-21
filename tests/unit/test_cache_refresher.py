@@ -391,13 +391,19 @@ class TestSyncToBranch:
         r = _cmd_refresher(tmp_path)
         calls = []
 
-        async def fake_check_run(*args, cwd=None, err="", timeout=None):
+        envs = []
+
+        async def fake_check_run(*args, cwd=None, err="", env=None, timeout=None):
             calls.append(args)
+            envs.append(env)
 
         monkeypatch.setattr(r, "_check_run", fake_check_run)
         await r._sync_to_branch()
         verbs = [a[1] for a in calls]
         assert verbs == ["fetch", "checkout", "reset", "clean"]
+        # The fetch is headless (prompts off, the GitHub sign-in as git's
+        # helper when connected); the local steps keep the plain env.
+        assert envs[0]["GIT_TERMINAL_PROMPT"] == "0" and envs[1:] == [None] * 3
         # checkout / reset target the fetched remote branch.
         assert ("git", "checkout", "-f", "-B", "main", "origin/main") == calls[1]
         assert ("git", "reset", "--hard", "origin/main") == calls[2]

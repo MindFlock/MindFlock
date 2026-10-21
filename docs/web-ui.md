@@ -2900,12 +2900,13 @@ go** starts the Welcome [tour](#tours) over the checklist. It counts as seen
 - **Connect GitHub** — the dialog; see [Connect GitHub](#connect-github)
   below.
 - **Push failed** — the Push button types `GIT_TERMINAL_PROMPT=0 git push …`
-  into the session's shell, so a missing credential fails at once instead of
-  waiting on a Username prompt. When the push's output (kept in the
-  worktree's private git dir) shows a missing sign-in, SSH key or git identity,
-  a toast says so — *Push failed on [1] api: git has no GitHub sign-in on this
-  computer for an HTTPS remote — Connect GitHub in Setup* — and clicking it
-  opens Setup (`session.push_failed`).
+  into the session's shell (whose wrapper exports the connected GitHub
+  sign-in as git's helper for github.com), so a missing credential fails at
+  once instead of waiting on a Username prompt. When the push's output (kept
+  in the worktree's private git dir) shows a missing sign-in, SSH key or git
+  identity, a toast says so — *Push failed on [1] api: git has no GitHub
+  sign-in on this computer for an HTTPS remote — Connect GitHub in Setup* —
+  and clicking it opens Setup (`session.push_failed`).
 - **Install …** — above the dependency checklist (the card, the Setup modal and
   Settings → Doctor) whenever something this machine needs is missing. The
   button names what it installs, an agent by its product name, when that's
@@ -3024,7 +3025,11 @@ contained in the Map's pane.
 
 `dialogs/ConnectGitHub.tsx`, `/api/github/*`. One sign-in for opening and
 merging PRs, stored as `github.token` (which settings sync shares with your
-other devices). Pushing does not need it — it is plain git over your own
+other devices) — and, once connected, git's credential for github.com too:
+every clone, fetch and push MindFlock runs, and git inside every session,
+carry it as a per-process credential helper (no keychain prompt, no gh, no
+global git config written; see *GitHub credential* in
+[configuration.md](configuration.md)). Pushing stays plain git over your own
 remote. The dialog has ONE primary path (`connectLayout`):
 
 - **Device flow configured** (an OAuth App client id: the build's constant,
@@ -3055,7 +3060,14 @@ origin yet, so there's nowhere to push* → `git remote add origin <url>`), or a
 sentence for anything else. When it fails for want of an HTTPS credential,
 **Let git push with this sign-in** runs `gh auth setup-git`, or — only when
 git has no credential helper for GitHub — registers `mindflock
-git-credential` for https://github.com. Every one of these routes is for the
+git-credential` for https://github.com in the global git config (a 409 when
+git already has one). That button is for git run **outside** MindFlock, in a
+terminal of your own. Inside it nothing needs clicking: once connected,
+every clone and push MindFlock runs, and git in every session, already use
+the sign-in as a per-process helper — so macOS's *git-credential-osxkeychain
+wants to use your confidential information* prompt no longer appears for
+github.com at each clone or push, and **Check I can push** exercises the
+same helper a session's push will. Every one of these routes is for the
 person at this computer (`privileged()`), never a relayed or anonymous caller.
 Settings → Connections' GitHub card links its **Docs** here.
 

@@ -177,6 +177,10 @@ _ENV_DENY_PREFIX = (
     "MINDFLOCK_WEB",
     "CS_WEB",
     "LD_",
+    # git's per-process config: the host's GitHub sign-in rides on it as a
+    # credential helper (backend/git_auth_hints.py), and a shared folder's
+    # agent must not be able to ask it for the token.
+    "GIT_CONFIG_",
 )
 # Set by build_argv itself; the explicit env may not override them.
 _ENV_RESERVED = {

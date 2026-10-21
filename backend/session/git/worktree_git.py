@@ -44,7 +44,8 @@ def fetch_branches(repo_path: str) -> None:
     """Fetch and prune remote-tracking branches (best-effort).
 
     Runs ``git -C <repoPath> fetch --prune`` and ignores any failure so the
-    caller never breaks when offline (Go: ``_ = cmd.Run()``).
+    caller never breaks when offline (Go: ``_ = cmd.Run()``). Prompts off,
+    and the connected GitHub sign-in as git's helper for github.com.
     """
     try:
         subprocess.run(
@@ -52,6 +53,7 @@ def fetch_branches(repo_path: str) -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=_NET_TIMEOUT,
+            env=git_auth_hints.github_env(git_auth_hints.NO_PROMPT_ENV),
         )
     except subprocess.TimeoutExpired:
         # Best-effort fetch: a hung network is treated like being offline.
@@ -254,6 +256,7 @@ class GitWorktreeGitMixin:
         # NOTE: bare `git push` (no -C); cwd is the worktree path.
         # GIT_TERMINAL_PROMPT=0: no credential = fail now, never a prompt that
         # hangs until the timeout (there is no terminal behind this call).
+        # github_env: the connected GitHub sign-in answers for github.com.
         try:
             git_push_cmd = subprocess.run(
                 ["git", "push", "-u", "origin", self.branchName],
@@ -261,7 +264,7 @@ class GitWorktreeGitMixin:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,  # CombinedOutput()
                 timeout=_NET_TIMEOUT,
-                env={**os.environ, **git_auth_hints.NO_PROMPT_ENV},
+                env=git_auth_hints.github_env(git_auth_hints.NO_PROMPT_ENV),
             )
         except subprocess.TimeoutExpired as err:
             push_err = "timed out after {:g}s".format(_NET_TIMEOUT)

@@ -932,6 +932,38 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
      another token. It is last now, logged about once at startup, and ignored
      from the next release.
 
+  **git uses it too.** While a sign-in is connected (rungs 1–2: Settings or
+  the env — a gh-only sign-in already made gh git's helper), every git call
+  MindFlock makes that may reach GitHub — the clone/fetch behind a new
+  session, the ticket pipeline's clones, Check I can push, pushes, the
+  divergence fetch — and git inside every session (the agent's own push, the
+  Push button's, typed into the session's shell) run with git's per-process
+  config (`GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`, git ≥
+  2.31) that makes `mindflock git-credential` the **one** credential helper
+  for `https://github.com`: an empty value first, which resets the helper list
+  git built from the system, global and repo config (macOS's `osxkeychain`,
+  Git Credential Manager, `store`), then MindFlock's. The same thing `gh auth
+  setup-git` writes to the global git config, done per process instead: no
+  git config file is written, every other host keeps your own helpers, and
+  the OS keychain is never consulted for github.com — so a Mac whose keychain
+  item was made by a different git no longer gets "git-credential-osxkeychain
+  wants to use your confidential information" at every clone and push. The
+  helper resolves the token afresh each time it is asked (`backend/
+  git_auth_hints.py`; implementation detail: it is run as this install's
+  interpreter in isolated mode, `python -I -m backend.cli git-credential`, so
+  a worktree with a `backend/` of its own cannot shadow it). Without a
+  sign-in nothing is added and git's own helpers answer exactly as before.
+  SSH remotes are untouched either way.
+
+  Two things to know. The helper list for github.com is **replaced**, not
+  extended, while connected: a Settings token without push (`repo`) scope
+  fails a push that gh or Git Credential Manager would have made — reconnect
+  with a wider token, or disconnect and git's own helpers are back. And it
+  needs git ≥ 2.31: an older git ignores `GIT_CONFIG_*` and silently keeps
+  the old behaviour. A running session keeps the interpreter path it was
+  launched with in that helper command, so after moving or reinstalling
+  MindFlock relaunch the session before its next push.
+
   The dialog's **Test** is real: `POST /api/settings/test/github` does a
   `GET /user` with the resolved token and one repo-access check against the
   first configured repository (`github.repos`, else `github.issue_repos`).

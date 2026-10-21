@@ -636,6 +636,16 @@ class Instance:
             )
         if _prof_env:
             self.ExtraEnv = {**(self.ExtraEnv or {}), **_prof_env}
+        # GitHub sign-in overlay: with one connected, git in this session —
+        # the agent's own push, the Push button's — uses it for github.com
+        # (git's per-process config on the tmux env: no keychain prompt, no
+        # global git config). {} without one, so a session with no sign-in
+        # launches byte-identically to before.
+        from backend import git_auth_hints as _git_auth_hints
+
+        _gh_env = _git_auth_hints.github_signin({})
+        if _gh_env:
+            self.ExtraEnv = {**(self.ExtraEnv or {}), **_gh_env}
         # MindFlock MCP auto-attach: the provider's flags for this launch (a
         # per-session --mcp-config run file for Claude, one -c inline table for
         # Codex) ride in front of the launch args, for the provisioned launcher

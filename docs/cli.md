@@ -12,7 +12,13 @@ created from either shows up in both.
 `serve`, `doctor`), **Sessions**, **This computer** (`update`, `restart`,
 `devices`, `join`, `token`, `uninstall`) and **Advanced** — and ends with
 "New here? Run mindflock init". `git-credential` (git's credential helper, not
-a human command) works but is never listed.
+a human command) works but is never listed: while a GitHub sign-in is
+connected, every git call MindFlock makes against GitHub, and git inside its
+sessions, run it per process as `<the server's python> -I -m backend.cli
+git-credential` through git's per-process config, so it needs no `PATH` entry
+and writes no git config file. Setup → Connect GitHub can also register it in
+the global git config, for git run outside MindFlock (see *GitHub credential*
+in [configuration.md](configuration.md)).
 
 ## Host commands
 
