@@ -221,6 +221,8 @@ export interface TreeView {
   /** LIT PATHS: folders on a path to a change, with their counts */
   litInfo?: Map<TNode, import("./draw").LitInfo>;
   labelHits?: Array<{ r: number[]; n?: TNode; leaf?: Leaf; crumb?: boolean }>;
+  /** the leaves drawn on screen this frame (labels.ts): a name touching another leaf's outline is not drawn */
+  leafField?: import("./labels").LeafField | null;
   tagHits?: Array<{ r: number[]; z: TZone }>;
   birdHits?: Array<{ r: number[]; A: AgentState; pointer?: boolean }>;
   nestHits?: Array<{ r: number[]; A: AgentState }>;

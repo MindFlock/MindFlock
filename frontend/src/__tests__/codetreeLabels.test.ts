@@ -14,6 +14,7 @@ import { LiveBirds } from "../lib/codetree/live";
 import { S0, buildModel, isUnder, type Model, type TNode } from "../lib/codetree/model";
 import { readPalette } from "../lib/codetree/palette";
 import type { AgentState, TreeView, TZone } from "../lib/codetree/types";
+import { BASE_GAP, GAP, candidatesForLeaf, insideView, leafScreenGeom } from "../lib/codetree/labels";
 import { treeZones } from "../lib/codetree/zones";
 import scenarioRaw from "./fixtures/codetree_scenario.json?raw";
 
@@ -244,9 +245,10 @@ describe("changed files are named even at the whole-tree zoom", () => {
 });
 
 describe("file names once the view is close enough to show them", () => {
-  // zoomed onto each changed file in turn (leaves ~30 px: names show, sparsely), at a full pane and a small one
+  // zoomed onto each changed file in turn (leaves ~30 px: names show, sparsely), at a full pane and a small one; a
+  // changed leaf's name may lie over calm grey neighbours (its own leaf is coloured), never over another change
   for (const sz of [SIZES[0], SIZES[3]])
-    it(`every changed file on screen is named · ${sz.name}`, () => {
+    it(`every changed file on screen is named, at its own leaf · ${sz.name}`, () => {
       const v0 = view(sz, "main");
       const edited = new Set<number>();
       for (const A of v0.agents) for (const k of A.edits.keys()) edited.add(k);
@@ -263,13 +265,41 @@ describe("file names once the view is close enough to show them", () => {
         render(v, 1000);
         const toS = v.toS!;
         const named = new Set((v.labelHits || []).filter((h) => h.leaf).map((h) => h.leaf!.file.id));
-        // each changed leaf in the free canvas has its name (a far one may carry a leader line)
+        // ... or by the tag of the bird perched on it (its body covers the leaf's tip: one name per leaf, in the tag)
+        for (const b of v.birdScreen || []) if (b.A.file) named.add(b.A.file.id);
+        // each changed leaf in the free canvas has its name
         for (const e of edited) {
           const f = M.files[e];
           if (!f.leaf || f.leaf.term?.node.fAnc) continue;
           const [sx, sy] = toS(f.leaf.x, f.leaf.y);
           if (sx < sz.left + 40 || sx > sz.W - 120 || sy < 30 || sy > sz.H - sz.bot - 30) continue;
-          if (!named.has(e)) missing.push(`${f.path} @ ${M.files[id].path}`);
+          if (named.has(e)) continue;
+          // unnamed only when BOTH its spots (tip, base) are taken: by a name, tag, badge, bird, nest, another
+          // change, or the canvas edge — a free spot is never passed over
+          const a = leafScreenGeom(f.leaf, z, toS, 10.5);
+          const taken: number[][] = [...(v.labelHits || []), ...(v.birdHits || []), ...(v.nestHits || []), ...(v.badgeHits || []), ...(v.tagHits || [])].map((h) => h.r);
+          for (const o of edited) {
+            const ol = M.files[o].leaf;
+            if (!ol || o === e) continue;
+            const [ox, oy] = toS(ol.x, ol.y);
+            taken.push([ox - 7, oy - 7, ox + 7, oy + 7]);
+          }
+          for (const b of v.birdScreen || []) taken.push([b.sx - 40, b.sy - 50, b.sx + 40, b.sy + 10]); // a bird's body (generous)
+          const free = candidatesForLeaf(a, f.name.length * 10.5 * 0.56).filter(
+            (c) => insideView(c.R, { W: v.W, H: v.H }) && !taken.some((r) => c.R[2] + 2 > r[0] && c.R[0] - 2 < r[2] && c.R[3] + 2 > r[1] && c.R[1] - 2 < r[3])
+          );
+          if (free.length) missing.push(`${f.path} @ ${M.files[id].path}`);
+        }
+        // and every file name is ATTACHED: its box starts at its own leaf's tip (GAP) or base (BASE_GAP), or at the
+        // selection ring around it — never parked beside a neighbour
+        for (const h of v.labelHits || []) {
+          if (!h.leaf) continue;
+          const l = h.leaf,
+            a = leafScreenGeom(l, z, toS, edited.has(l.file.id) ? 10.5 : 0);
+          const d = (p: [number, number]) => Math.hypot(Math.max(h.r[0] - p[0], 0, p[0] - h.r[2]), Math.max(h.r[1] - p[1], 0, p[1] - h.r[3]));
+          const ring = l === v.sel?.leaf ? Math.max(l.len * 0.8 * z, 8) + 2.5 : 0;
+          const ok = d(a.tip) <= GAP + 0.5 || d(a.base) <= BASE_GAP + 0.5 || (ring > 0 && Math.hypot(...toS(l.x, l.y).map((c, i) => Math.max(h.r[i] - c, 0, c - h.r[i + 2])) as [number, number]) <= ring + GAP + 0.5);
+          if (!ok) missing.push(`unattached ${l.file.path} [${h.r.map(Math.round)}]`);
         }
       }
       expect(missing).toEqual([]);
