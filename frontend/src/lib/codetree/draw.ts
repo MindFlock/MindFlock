@@ -15,6 +15,7 @@ import { tinted } from "../flock";
 import { agentBlast, addBadgeSets, blastOf, collectBadges } from "./blast";
 import { dPS, hashStr, rng, taperHW } from "./layout";
 import { S0, TAU, baseOf, isUnder, shortName, type Branch, type Leaf, type Model, type TNode, type TTerm } from "./model";
+import { leafOutline, leafScreen } from "./leafgeom";
 import { glyphShape, type Pal, type Palette } from "./palette";
 import type { AgentDef, AgentState, Badge, BirdEv, Blocked, Hit, RiskGroup, TreeView, TZone } from "./types";
 
@@ -864,7 +865,7 @@ function renderStatic(v: TreeView, g: G2, W: number, H: number, cam: { x: number
       g.fillStyle = col;
       g.beginPath();
       for (const l of arr) {
-        const q = l.g!;
+        const q = leafOutline(l, z);
         g.moveTo(q[0], q[1]);
         g.quadraticCurveTo(q[2], q[3], q[4], q[5]);
         g.quadraticCurveTo(q[6], q[7], q[0], q[1]);
@@ -940,8 +941,8 @@ function renderStatic(v: TreeView, g: G2, W: number, H: number, cam: { x: number
   }
 }
 
-function leafPath(g: G2, l: Leaf) {
-  const q = l.g!;
+function leafPath(g: G2, l: Leaf, z = 0) {
+  const q = z ? leafOutline(l, z) : l.g!;
   g.moveTo(q[0], q[1]);
   g.quadraticCurveTo(q[2], q[3], q[4], q[5]);
   g.quadraticCurveTo(q[6], q[7], q[0], q[1]);
@@ -1041,8 +1042,9 @@ function renderOverlay(v: TreeView, now: number) {
       }
       g.strokeStyle = col;
       g.lineWidth = 2 * px;
+      const ls = leafScreen(l, z);
       g.beginPath();
-      g.arc(l.x, l.y, Math.max(l.len * 0.75, 6 * px), 0, TAU);
+      g.arc(ls.cx, ls.cy, Math.max(ls.halfPx * 1.5 * px, 6 * px), 0, TAU);
       g.stroke();
     }
     g.globalAlpha = 1;
@@ -1061,9 +1063,10 @@ function renderOverlay(v: TreeView, now: number) {
     for (const [id] of A.reads) {
       const l = M.files[id] && M.files[id].leaf;
       if (!l || !inView(l.x - 5, l.y - 5, l.x + 5, l.y + 5)) continue;
-      const r = Math.max(3 * px, l.len * 0.17);
-      const dx = l.x - Math.cos(l.ang) * l.len * 0.18,
-        dy = l.y - Math.sin(l.ang) * l.len * 0.18;
+      const ls = leafScreen(l, z);
+      const r = Math.max(3 * px, ls.halfPx * 0.34 * px);
+      const dx = ls.cx - Math.cos(l.ang) * ls.halfPx * 0.36 * px,
+        dy = ls.cy - Math.sin(l.ang) * ls.halfPx * 0.36 * px;
       g.moveTo(dx + r, dy);
       g.arc(dx, dy, r, 0, TAU);
     }
@@ -1139,31 +1142,32 @@ function renderOverlay(v: TreeView, now: number) {
       const st = palFor(P, own, l.region);
       g.fillStyle = l.file.kind === "c" ? st.leafA : st.doc;
       g.beginPath();
-      leafPath(g, l);
+      leafPath(g, l, z);
       g.fill();
     }
-    const r = Math.max(l.len * 0.8, 8 * px);
+    const ls = leafScreen(l, z);
+    const r = Math.max(ls.halfPx * 1.6 * px, 8 * px);
     g.strokeStyle = P.selHalo;
     g.lineWidth = 5 * px;
     g.beginPath();
-    g.arc(l.x, l.y, r, 0, TAU);
+    g.arc(ls.cx, ls.cy, r, 0, TAU);
     g.stroke();
     g.strokeStyle = P.sel;
     g.lineWidth = 2 * px;
     g.beginPath();
-    g.arc(l.x, l.y, r, 0, TAU);
+    g.arc(ls.cx, ls.cy, r, 0, TAU);
     g.stroke();
   }
   // breadcrumb marker: the last leaf you visited keeps a quiet dotted ring (and its name) after the card closes
   const markLeaf = v.markLeaf && v.markLeaf !== selLeaf ? v.markLeaf : null;
   if (markLeaf) {
-    const l = markLeaf;
-    const r = Math.max(l.len * 0.8, 8 * px);
+    const ls = leafScreen(markLeaf, z);
+    const r = Math.max(ls.halfPx * 1.6 * px, 8 * px);
     g.strokeStyle = P.mark;
     g.lineWidth = 1.4 * px;
     g.setLineDash([2.5 * px, 2.5 * px]);
     g.beginPath();
-    g.arc(l.x, l.y, r, 0, TAU);
+    g.arc(ls.cx, ls.cy, r, 0, TAU);
     g.stroke();
     g.setLineDash([]);
   }
@@ -1180,12 +1184,12 @@ function renderOverlay(v: TreeView, now: number) {
   }
   // hover: a thin dashed ring in the muted colour, so it never reads as the (solid) selection
   if (hv && hv.leaf && hv.leaf !== selLeaf) {
-    const l = hv.leaf;
+    const ls = leafScreen(hv.leaf, z);
     g.strokeStyle = P.hover;
     g.lineWidth = 1.1 * px;
     g.setLineDash([2 * px, 2 * px]);
     g.beginPath();
-    g.arc(l.x, l.y, Math.max(l.len * 0.72, 6 * px), 0, TAU);
+    g.arc(ls.cx, ls.cy, Math.max(ls.halfPx * 1.44 * px, 6 * px), 0, TAU);
     g.stroke();
     g.setLineDash([]);
   }
@@ -1254,7 +1258,12 @@ function renderOverlay(v: TreeView, now: number) {
       return;
     }
     let [sx, sy] = toS(pose.x, pose.y);
-    if (pose.leaf) sy -= Math.max(4, pose.leaf.len * z * 0.45);
+    if (pose.leaf) {
+      // perched on the leaf as drawn: above its (on-screen) centre
+      const ls = leafScreen(pose.leaf, z);
+      sx += (ls.cx - pose.leaf.x) * z;
+      sy += (ls.cy - pose.leaf.y) * z - Math.max(4, ls.halfPx * 0.9);
+    }
     const bp = pxOf(A);
     if (A.ag.parent && !pose.fly) {
       // a helper sitting where its parent sits (the nest, the same leaf) perches beside it, not on it
@@ -1278,9 +1287,9 @@ function renderOverlay(v: TreeView, now: number) {
     if (A.nest.depth >= 1) fol.addNest(sx - nestPx * 0.7, sy - nestPx * 0.3, sx + nestPx * 0.7, sy + nestPx * 0.5, A.nest);
   }
   if (v.sel && v.sel.leaf) {
-    const l = v.sel.leaf;
-    const [lx, ly] = toS(l.x, l.y);
-    const r = Math.max(l.len * 0.8 * z, 8) + 8;
+    const ls = leafScreen(v.sel.leaf, z);
+    const [lx, ly] = toS(ls.cx, ls.cy);
+    const r = Math.max(ls.halfPx * 1.6, 8) + 8;
     reserve(lx - r, ly - r, lx + r, ly + r);
   } else if (v.sel && v.sel.node && v.sel.node.cnt && v.sel.node.depth >= 1 && v.sel.node.rad * z < 140) {
     const n = v.sel.node;
@@ -2004,8 +2013,10 @@ function drawEdits(v: TreeView, now: number, ox: number, oy: number, reserve?: R
       const own = l.term ? l.term.node : l.pile;
       // in an only-here dusk an earlier change outside the territory stays visible, but unlit (exempt, no glow)
       const outside = hasOnly && !!own && !own.lit && onlyBinds(v, A);
-      const sc = Math.max(1, (10.5 * px) / (l.len * 0.5)) * grow;
-      const rr = l.len * 0.5 * sc;
+      // drawn at the leaf's on-screen size, never under 10.5 px half-length (leafgeom.ts)
+      const ls = leafScreen(l, z);
+      const sc = Math.max(1, 10.5 / ls.halfPx) * grow;
+      const rr = ls.halfPx * px * sc;
       if (id === nowF) {
         // being edited right now: a soft ring breathes out of the leaf
         const k = v.playing ? (now / 1600) % 1 : 0.35;
@@ -2013,14 +2024,14 @@ function drawEdits(v: TreeView, now: number, ox: number, oy: number, reserve?: R
         g.lineWidth = 2 * px;
         g.globalAlpha = 0.75 * (1 - k);
         g.beginPath();
-        g.arc(l.x, l.y, rr + (4 + k * 16) * px, 0, TAU);
+        g.arc(ls.cx, ls.cy, rr + (4 + k * 16) * px, 0, TAU);
         g.stroke();
         g.globalAlpha = 1;
       }
       g.save();
-      g.translate(l.x, l.y);
+      g.translate(ls.cx, ls.cy);
       g.scale(sc, sc);
-      g.translate(-l.x, -l.y);
+      g.translate(-ls.cx, -ls.cy);
       if (!outside) {
         g.shadowColor = col;
         g.shadowBlur = (4 + 10 * (fresh.get(id) ?? 1)) * dpr;
@@ -2028,7 +2039,7 @@ function drawEdits(v: TreeView, now: number, ox: number, oy: number, reserve?: R
       g.fillStyle = col;
       g.globalAlpha = outside ? 0.75 : 1;
       g.beginPath();
-      leafPath(g, l);
+      leafPath(g, l, z);
       g.fill();
       g.shadowBlur = 0;
       g.shadowColor = "transparent";
@@ -3288,7 +3299,7 @@ function drawBlast(v: TreeView, B: BlastSpec, px: number, inView: (x0: number, y
       if (outside(id)) continue;
       if (!inView(l.x - 20, l.y - 20, l.x + 20, l.y + 20)) continue;
       any = true;
-      if (leafShown) leafPath(g, l);
+      if (leafShown) leafPath(g, l, 1 / px);
       else {
         const r = rDot * px;
         g.moveTo(l.x + r, l.y);
@@ -4352,9 +4363,10 @@ export function pick(v: TreeView, sx: number, sy: number): Hit | null {
     if (own && own.fAnc) continue;
     if (l.region === "ground" && pileWhole && l.pile) return { pile: l.pile };
     if (l.region !== "ground" && leafPx < 4.2 && !planned.has(f.id) && !hot.has(f.id)) continue;
-    let d = Math.hypot(l.x - wx, l.y - wy);
+    const ls = leafScreen(l, z);
+    let d = Math.hypot(ls.cx - wx, ls.cy - wy);
     // a changed leaf is drawn big and bright at every zoom: it is pickable at every zoom too
-    const lim = hot.has(f.id) ? Math.max(l.len * 0.9, 11 / z) : Math.max(l.len * 0.65, 7 / z);
+    const lim = hot.has(f.id) ? Math.max((ls.halfPx * 1.8) / z, 11 / z) : Math.max((ls.halfPx * 1.3) / z, 7 / z);
     if (d >= lim) continue;
     if (hot.has(f.id)) d *= 0.5;
     else if (planned.has(f.id)) d *= 1.3; // an edited / perched leaf wins over a bud sitting on it

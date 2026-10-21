@@ -39,6 +39,8 @@
  * Pure: no DOM. Runs in the layout worker and (for replays) on the main
  * thread. Module-level state (PK_*) is per build; a build is synchronous. */
 
+import { LEAF } from "./leafgeom";
+
 export const S0 = 10; // nominal leaf spacing (world units)
 export const TAU = Math.PI * 2;
 
@@ -1045,7 +1047,7 @@ function pkSweep(
  * (biggest files in the middle). */
 export function pkTerm(node: LNode, own: boolean, files: LFile[], region: string): Term {
   const n = files.length;
-  const s = S0 * (region === "root" ? 0.84 : 0.92);
+  const s = S0 * (region === "root" ? 0.84 : LEAF.pitch);
   const rnd = rng(hashStr(node.path + (own ? "#" : "") + region));
   const K = Math.ceil(Math.sqrt(Math.max(1, n))) + 2;
   const pts: Array<[number, number, number]> = [];
@@ -1065,7 +1067,8 @@ export function pkTerm(node: LNode, own: boolean, files: LFile[], region: string
   }
   cx /= Math.max(1, n);
   cy /= Math.max(1, n);
-  const loc = P.map((p) => [p[0] - cx + (rnd() - 0.5) * s * 0.3, p[1] - cy + (rnd() - 0.5) * s * 0.3] as [number, number]);
+  const jit = s * (region === "root" ? 0.3 : LEAF.jitPos); // crown: small, so no two leaf discs meet (leafgeom.ts)
+  const loc = P.map((p) => [p[0] - cx + (rnd() - 0.5) * jit, p[1] - cy + (rnd() - 0.5) * jit] as [number, number]);
   let R = 0;
   for (const p of loc) R = Math.max(R, Math.hypot(p[0], p[1]));
   // the foliage disc: leaf centres plus the blob radius every renderer draws around them
