@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The Map tab's Code Tree reads at every zoom, and a worker's fence is a
+contract it cannot talk its way out of.
+
+### Changed
+
+- **Leaves open as you zoom in.** A folder's leaves are packed so no two
+  outlines ever cross, each leaf points away from its twig, and past ~24 px a
+  leaf stops growing on screen so the gaps open instead (`lib/codetree/leafgeom.ts`).
+  Every file is its own shape with free air at its tip.
+- **Every name is attached to the thing it names.** A file's name sits at its
+  leaf's tip reading outward (or on the base side with a hairline), a folder's
+  name sits on its own clump rim where the twig enters or runs along its branch
+  (else beside its fork on a dot), and nothing is placed by "nearest free spot":
+  a name that would float, cross the canvas edge or touch another leaf is not
+  drawn. Hovering a clump when zoomed in shows that clump's names. A perched
+  bird's tag names its file when the bird's body covers the tip
+  (`lib/codetree/labels.ts`).
+- **Tests are root strands with tips, never leaves.** Each test file is the
+  tip of a strand in a fan under the code it tests; a changed test lights its
+  strand (`lib/codetree/roots.ts`).
+- **Docs, CI and config are scaffolding beside the trunk.** Up to two towers,
+  one lift per folder named on its top ledger ("docs · 21 files"), one plank
+  per file with its name at the plank's outer end; cards, zones, could-break
+  and the minimap follow (`lib/codetree/scaffold.ts`).
+- **The Map tour teaches the tree in a newcomer's order:** the tree, roots,
+  scaffolding, birds and changes, rules, then your next step. The legend,
+  cards, screen-reader summary and `docs/web-ui.md` say the same words.
+- **Fences hold.** Widening, retargeting or lifting a started worker's fence
+  needs a reason and is logged per worktree and shown in the session's
+  Activity ("fence widened by <orchestrator>: why"); narrowing is free; a
+  worker can never change its own fence and its children inherit it;
+  `whoami` returns the fence; the orchestrator guidance says to fence at
+  spawn and, when a worker is blocked outside, do it yourself or spawn
+  another rather than widen by reflex.
+
+### Fixed
+
+- **The tool hook no longer invents targets.** `2>/dev/null` is not a file
+  named `2`, a `chmod` mode is not a path, and `cp X dir/` writes `dir/X`,
+  not the directory, so a fenced worker is denied only for a real landing
+  outside its fence (about 50 of 129 October denies were phantoms). The
+  fence deny names the fence, who set it and the allowed paths, and points at
+  `report_result(blocked)` instead of "ask the user" (hook rev 5).
+
 ## [0.9.5] - 2026-10-19
 
 The ticket pipeline runs the same code as the server, so 0.9.4's provisioning
