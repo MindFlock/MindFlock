@@ -1,3 +1,21 @@
+//#region src/lib/codetree/leafgeom.ts
+const LEAF = {
+	pitch: 1.15,
+	room: 1.22,
+	minFrac: .55,
+	jitPos: .08,
+	jitAng: .12,
+	capFrom: 24,
+	capTo: 44,
+	halfW: .185
+};
+function leafLen(lines, s) {
+	const fz = Math.min(1, Math.log10(Math.max(1, lines) + 1) / 3.6);
+	return s / LEAF.room * (LEAF.minFrac + (1 - LEAF.minFrac) * fz);
+}
+function leafAng(x, y, bx, by, hb, s, jit) {
+	return (Math.hypot(x - bx, y - by) < s * .6 ? hb : Math.atan2(y - by, x - bx)) + (jit - .5) * LEAF.jitAng;
+}
 const TAU = Math.PI * 2;
 function rng(seed) {
 	let s = seed >>> 0 || 1;
@@ -727,7 +745,7 @@ function pkSweep(S, psi, rho, f, Phi, l0, fid, maxL, costCap, costBase, h) {
 }
 function pkTerm(node, own, files, region) {
 	const n = files.length;
-	const s = 10 * (region === "root" ? .84 : .92);
+	const s = 10 * (region === "root" ? .84 : LEAF.pitch);
 	const rnd = rng(hashStr(node.path + (own ? "#" : "") + region));
 	const K = Math.ceil(Math.sqrt(Math.max(1, n))) + 2;
 	const pts = [];
@@ -748,7 +766,8 @@ function pkTerm(node, own, files, region) {
 	}
 	cx /= Math.max(1, n);
 	cy /= Math.max(1, n);
-	const loc = P.map((p) => [p[0] - cx + (rnd() - .5) * s * .3, p[1] - cy + (rnd() - .5) * s * .3]);
+	const jit = s * (region === "root" ? .3 : LEAF.jitPos);
+	const loc = P.map((p) => [p[0] - cx + (rnd() - .5) * jit, p[1] - cy + (rnd() - .5) * jit]);
 	let R = 0;
 	for (const p of loc) R = Math.max(R, Math.hypot(p[0], p[1]));
 	return {
@@ -1686,6 +1705,369 @@ function pkEmitTop(out, S, owner, map, region) {
 	pkEmit(out, wrap, T, map, region);
 }
 //#endregion
+//#region src/lib/codetree/roots.ts
+const TIP = {
+	len0: .26,
+	lenK: .2,
+	w: .8
+};
+const CLEAR = .8;
+const tnet = (t) => t;
+function segDist(px, py, ax, ay, bx, by) {
+	const dx = bx - ax, dy = by - ay;
+	const L2 = dx * dx + dy * dy;
+	let k = L2 ? ((px - ax) * dx + (py - ay) * dy) / L2 : 0;
+	k = Math.max(0, Math.min(1, k));
+	return Math.hypot(px - (ax + dx * k), py - (ay + dy * k));
+}
+function segsCross(ax, ay, bx, by, cx, cy, dx, dy) {
+	const o = (px, py, qx, qy, rx, ry) => Math.sign((qx - px) * (ry - py) - (qy - py) * (rx - px));
+	const o1 = o(ax, ay, bx, by, cx, cy), o2 = o(ax, ay, bx, by, dx, dy), o3 = o(cx, cy, dx, dy, ax, ay), o4 = o(cx, cy, dx, dy, bx, by);
+	return o1 !== o2 && o3 !== o4 && o1 !== 0 && o2 !== 0 && o3 !== 0 && o4 !== 0;
+}
+function growRoots(t, ex, ey, hb) {
+	const L = t.leaves;
+	for (const l of L) {
+		const fz = Math.min(1, Math.log10(Math.max(1, l.file.lines) + 1) / 3.6);
+		l.len = 10 * (TIP.len0 + TIP.lenK * fz);
+	}
+	const b = t.branch;
+	let hx = Math.cos(hb), hy = Math.sin(hb);
+	let bx = ex, by = ey;
+	const c = b && b.cp && b.cp.length >= 8 ? b.cp : null;
+	const at = (u) => {
+		if (!c) return [
+			ex - hx * 10 * (1 - u) * 2,
+			ey - hy * 10 * (1 - u) * 2,
+			hx,
+			hy
+		];
+		const m = 1 - u, x = m * m * m * c[0] + 3 * m * m * u * c[2] + 3 * m * u * u * c[4] + u * u * u * c[6], y = m * m * m * c[1] + 3 * m * m * u * c[3] + 3 * m * u * u * c[5] + u * u * u * c[7];
+		const dx = 3 * m * m * (c[2] - c[0]) + 6 * m * u * (c[4] - c[2]) + 3 * u * u * (c[6] - c[4]), dy = 3 * m * m * (c[3] - c[1]) + 6 * m * u * (c[5] - c[3]) + 3 * u * u * (c[7] - c[5]);
+		const dl = Math.hypot(dx, dy) || 1;
+		return [
+			x,
+			y,
+			dx / dl,
+			dy / dl
+		];
+	};
+	let room = -1e9;
+	const chord = c ? Math.hypot(c[6] - c[0], c[7] - c[1]) : 20;
+	const u0 = 1 - Math.min(.5, 6 / Math.max(1e-6, chord));
+	for (let k = 0; k <= 10; k++) {
+		const [x, y, tx, ty] = at(u0 - (u0 - .4) * k / 10);
+		let r = 1e9;
+		for (const l of L) r = Math.min(r, Math.hypot(l.x - x, l.y - y) - l.len * .5);
+		if (r > room) {
+			room = r;
+			bx = x;
+			by = y;
+			hx = tx;
+			hy = ty;
+		}
+		if (r >= CLEAR * 3) break;
+	}
+	const w0 = Math.max(.3, (b ? b.we : .6) * .5), wt = Math.min(w0, 10 * .035);
+	const nodes = [{
+		x: bx,
+		y: by,
+		p: -1,
+		n: 0
+	}];
+	const net = {
+		nodes,
+		hx,
+		hy,
+		w0,
+		wt,
+		crossings: 0,
+		tightest: 10
+	};
+	tnet(t).rootNet = net;
+	if (!L.length) return;
+	const order = L.map((l, i) => [Math.hypot(l.x - bx, l.y - by), i]).sort((a, c) => a[0] - c[0] || a[1] - c[1]);
+	const rad = (l) => l.len * .5;
+	let blocker = null;
+	const judge = (ax, ay, ex, ey, own, skip) => {
+		const pad = 15;
+		const x0 = Math.min(ax, ex) - pad, x1 = Math.max(ax, ex) + pad, y0 = Math.min(ay, ey) - pad, y1 = Math.max(ay, ey) + pad;
+		let m = pad;
+		blocker = null;
+		for (const o of L) {
+			if (o === own || o.x < x0 || o.x > x1 || o.y < y0 || o.y > y1) continue;
+			const mo = segDist(o.x, o.y, ax, ay, ex, ey) - rad(o);
+			if (mo < m) {
+				m = mo;
+				blocker = o;
+			}
+		}
+		for (let i = 1; i < nodes.length; i++) {
+			if (i === skip) continue;
+			const c = nodes[i], p = nodes[c.p];
+			if (Math.max(c.x, p.x) < x0 || Math.min(c.x, p.x) > x1 || Math.max(c.y, p.y) < y0 || Math.min(c.y, p.y) > y1) continue;
+			if (segsCross(ax, ay, ex, ey, p.x, p.y, c.x, c.y)) return [true, m];
+		}
+		return [false, m];
+	};
+	for (const [, li] of order) {
+		const l = L[li];
+		const cand = [];
+		const d0 = Math.hypot(l.x - bx, l.y - by);
+		const back = Math.max(0, -((l.x - bx) * hx + (l.y - by) * hy) / Math.max(1e-6, d0));
+		cand.push([
+			d0 * (1 + .5 * back),
+			bx,
+			by,
+			0,
+			0
+		]);
+		let dmin = d0;
+		const sd = [];
+		for (let i = 1; i < nodes.length; i++) {
+			const c = nodes[i], p = nodes[c.p];
+			sd[i] = segDist(l.x, l.y, p.x, p.y, c.x, c.y);
+			dmin = Math.min(dmin, sd[i]);
+		}
+		for (let i = 1; i < nodes.length; i++) {
+			if (sd[i] > dmin + 25) continue;
+			const c = nodes[i], p = nodes[c.p];
+			if (!c.leaf) cand.push([
+				Math.hypot(l.x - c.x, l.y - c.y) + .5,
+				c.x,
+				c.y,
+				i,
+				0
+			]);
+			const dx = c.x - p.x, dy = c.y - p.y;
+			const L2 = dx * dx + dy * dy || 1;
+			const kmax = c.leaf ? .5 : .88;
+			const sl = Math.sqrt(L2);
+			const kn = Math.max(.12, Math.min(kmax, ((l.x - p.x) * dx + (l.y - p.y) * dy) / L2));
+			for (const k of [
+				kn,
+				.15,
+				.35,
+				.5,
+				.7,
+				.88
+			]) {
+				if (k > kmax || k !== kn && Math.abs(k - kn) < .08) continue;
+				const x = p.x + dx * k, y = p.y + dy * k;
+				const d = Math.hypot(l.x - x, l.y - y);
+				const cosA = d > 1e-6 ? ((l.x - x) * dx + (l.y - y) * dy) / (d * sl) : 1;
+				cand.push([
+					d * (1 + .35 * Math.max(0, -cosA)) + .5,
+					x,
+					y,
+					-1 - i,
+					k
+				]);
+			}
+		}
+		cand.sort((a, c) => a[0] - c[0]);
+		const ux = (ax, ay) => {
+			const d = Math.hypot(l.x - ax, l.y - ay) || 1;
+			return [(l.x - ax) / d, (l.y - ay) / d];
+		};
+		let pick = cand[0], best = -1e9, crosses = true, via = null;
+		const blocked = [];
+		for (let ci = 0; ci < Math.min(cand.length, 96); ci++) {
+			const c = cand[ci];
+			const [vx, vy] = ux(c[1], c[2]);
+			const [x, m] = judge(c[1], c[2], l.x - vx * rad(l), l.y - vy * rad(l), l, c[3] < 0 ? -1 - c[3] : -1);
+			if (x) continue;
+			if (m >= CLEAR) {
+				pick = c;
+				crosses = false;
+				best = m;
+				break;
+			}
+			if (blocker && blocked.length < 12) blocked.push([c, blocker]);
+			if (m > best) {
+				best = m;
+				pick = c;
+				crosses = false;
+			}
+		}
+		if (best < CLEAR) for (const [c, o] of blocked) {
+			const sx = l.x - c[1], sy = l.y - c[2], sd = Math.hypot(sx, sy) || 1;
+			let done = false;
+			for (const sg of [1, -1]) {
+				const off = rad(o) + CLEAR * 1.5;
+				const wx = o.x - sy / sd * off * sg, wy = o.y + sx / sd * off * sg;
+				const [x1, m1] = judge(c[1], c[2], wx, wy, l, c[3] < 0 ? -1 - c[3] : -1);
+				if (x1 || m1 < CLEAR) continue;
+				const [vx, vy] = ux(wx, wy);
+				const [x2, m2] = judge(wx, wy, l.x - vx * rad(l), l.y - vy * rad(l), l, -1);
+				if (x2 || Math.min(m1, m2) <= best) continue;
+				best = Math.min(m1, m2);
+				pick = c;
+				via = [wx, wy];
+				crosses = false;
+				if (best >= CLEAR) {
+					done = true;
+					break;
+				}
+			}
+			if (done) break;
+		}
+		if (crosses) net.crossings++;
+		net.tightest = Math.min(net.tightest, best);
+		let pi = pick[3];
+		if (pi < 0) {
+			const c = nodes[-1 - pi];
+			nodes.push({
+				x: pick[1],
+				y: pick[2],
+				p: c.p,
+				n: 0
+			});
+			pi = nodes.length - 1;
+			c.p = pi;
+		}
+		if (via) {
+			nodes.push({
+				x: via[0],
+				y: via[1],
+				p: pi,
+				n: 0
+			});
+			pi = nodes.length - 1;
+		}
+		const [vx, vy] = via ? ux(via[0], via[1]) : ux(pick[1], pick[2]);
+		l.ang = Math.atan2(vy, vx);
+		nodes.push({
+			x: l.x - vx * rad(l),
+			y: l.y - vy * rad(l),
+			p: pi,
+			n: 0,
+			leaf: l
+		});
+	}
+	for (let i = nodes.length - 1; i >= 0; i--) if (nodes[i].leaf) for (let q = i; q >= 0; q = nodes[q].p) nodes[q].n++;
+}
+//#endregion
+//#region src/lib/codetree/scaffold.ts
+const SCAF = {
+	pitch: 6.2,
+	plankT: 10 * .34,
+	bayW: 42,
+	over: 3.5,
+	floor: 3.5,
+	ceil: 11.5,
+	base: 6,
+	gap: 16,
+	clear: 12,
+	arm: 9
+};
+const fzOf = (lines) => Math.min(1, Math.log10(Math.max(1, lines) + 1) / 3.6);
+const liftH = (n) => SCAF.floor + n * SCAF.pitch + SCAF.ceil;
+const plankLen = (lines) => SCAF.bayW * (.28 + .72 * fzOf(lines)) + SCAF.over;
+function layoutScaffold(groups, groundY, trunkW, obs) {
+	const sides = [{
+		dir: -1,
+		H: 0,
+		gs: []
+	}, {
+		dir: 1,
+		H: 0,
+		gs: []
+	}];
+	for (const gr of groups) {
+		const s = sides[0].H <= sides[1].H ? sides[0] : sides[1];
+		s.gs.push(gr);
+		s.H += liftH(gr.files.length);
+	}
+	const towers = [];
+	const x0 = trunkW * 1 + SCAF.gap;
+	for (const s of sides) {
+		if (!s.gs.length) continue;
+		const H = SCAF.base + s.H;
+		const yTop = groundY - H - SCAF.clear;
+		const w = SCAF.bayW + SCAF.arm;
+		const clearAt = (xi) => {
+			const a = s.dir > 0 ? xi - SCAF.clear : xi - w - SCAF.clear, b = s.dir > 0 ? xi + w + SCAF.clear : xi + SCAF.clear;
+			for (const [px, py, r] of obs.pts) if (px + r > a && px - r < b && py + r > yTop) return false;
+			for (const [bx0, by0, bx1, by1] of obs.boxes) if (bx1 > a && bx0 < b && by1 > yTop && by0 < groundY) return false;
+			return true;
+		};
+		let off = x0;
+		for (let i = 0; i < 4e3 && !clearAt(s.dir * off); i++) off += 5;
+		const xi = s.dir * off, xo = xi + s.dir * SCAF.bayW;
+		const T = {
+			dir: s.dir,
+			xi,
+			xo,
+			y1: groundY,
+			y0: groundY - H - 5,
+			lifts: [],
+			tied: off - x0 < 30
+		};
+		let floor = groundY - SCAF.base;
+		for (const gr of s.gs) {
+			const top = floor - liftH(gr.files.length);
+			const L = {
+				key: gr.key,
+				files: gr.files,
+				planks: [],
+				tower: T,
+				floor,
+				top,
+				x0: 0,
+				x1: 0
+			};
+			const xoEnd = xo + s.dir * SCAF.over;
+			gr.files.forEach((f, r) => {
+				const len = plankLen(f.lines);
+				L.planks.push({
+					xo: xoEnd,
+					xi: xoEnd - s.dir * len,
+					y: top + SCAF.ceil + (r + .5) * SCAF.pitch,
+					len,
+					dir: s.dir,
+					lift: L
+				});
+			});
+			L.x0 = Math.min(xi, xoEnd);
+			L.x1 = Math.max(xi, xoEnd);
+			T.lifts.push(L);
+			floor = top;
+		}
+		towers.push(T);
+	}
+	return { towers };
+}
+function crownObstacles(leaves, branches) {
+	const pts = leaves.map((l) => [
+		l.x,
+		l.y,
+		6
+	]);
+	const boxes = [];
+	for (const b of branches) {
+		if (b.region === "root") continue;
+		let x0 = Math.min(b.x0, b.x1), x1 = Math.max(b.x0, b.x1), y0 = Math.min(b.y0, b.y1), y1 = Math.max(b.y0, b.y1);
+		for (let i = 0; i + 1 < b.cp.length; i += 2) {
+			x0 = Math.min(x0, b.cp[i]);
+			x1 = Math.max(x1, b.cp[i]);
+			y0 = Math.min(y0, b.cp[i + 1]);
+			y1 = Math.max(y1, b.cp[i + 1]);
+		}
+		const r = (b.w || 0) * .5;
+		boxes.push([
+			x0 - r,
+			y0 - r,
+			x1 + r,
+			y1 + r
+		]);
+	}
+	return {
+		pts,
+		boxes
+	};
+}
+//#endregion
 //#region src/lib/codetree/model.ts
 const dirOf = (p) => {
 	const i = p.lastIndexOf("/");
@@ -1851,9 +2233,9 @@ function mixAng(a, b, t) {
 	return a + d * t;
 }
 function buildModel(raw, opts = {}) {
-	let replay = opts.replay && opts.replay.v === 1 ? opts.replay : null;
+	let replay = opts.replay && opts.replay.v === 2 ? opts.replay : null;
 	if (replay && replay.files !== raw.files.length) replay = null;
-	const warm = !replay && opts.warm && opts.warm.v === 1 ? opts.warm : null;
+	const warm = !replay && opts.warm && opts.warm.v === 2 ? opts.warm : null;
 	const F = parseFiles(raw);
 	const crownEntries = [];
 	const groundGroups = /* @__PURE__ */ new Map();
@@ -2030,52 +2412,39 @@ function buildModel(raw, opts = {}) {
 	}
 	M.piles = [];
 	const gg = [...groundGroups.entries()].sort((a, b) => b[1].length - a[1].length || cmpStr(a[0], b[0]));
-	let rx0 = 0, rx1 = 0;
-	for (const t of LR.terms) for (const l of t.leaves || []) {
-		rx0 = Math.min(rx0, l.x);
-		rx1 = Math.max(rx1, l.x);
-	}
-	let xl = Math.min(-40, rx0 - 25) - M.trunkW, xr = Math.max(40, rx1 + 25) + M.trunkW;
-	gg.forEach(([k, fs], i) => {
-		fs.sort((a, b) => b.lines - a.lines || cmpStr(a.name, b.name));
-		const n = fs.length, s = 9.5;
-		const W = Math.max(30, Math.sqrt(n) * s * 2.1), H = Math.max(12, W * .28);
-		const left = i % 2 === 0;
-		const cx = left ? xl - W / 2 : xr + W / 2;
-		if (left) xl -= W + 50;
-		else xr += W + 50;
-		const pts = [];
-		const rnd = rng(hashStr(k));
-		for (let y = 0; pts.length < n * 3 && y < H * 3; y += s * .62) for (let x = -W; x <= W; x += s * .95) {
-			const xx = x + (y / (s * .62) % 2 ? s * .45 : 0);
-			const e = xx * xx / (W * W / 4) + y * y / (H * H);
-			pts.push([
-				xx + (rnd() - .5) * s * .3,
-				y,
-				e
-			]);
-		}
-		pts.sort((a, b) => a[2] - b[2]);
+	for (const [, fs] of gg) fs.sort((a, b) => b.lines - a.lines || cmpStr(a.name, b.name));
+	const crownLeaves = [];
+	for (const t of LC.terms) for (const l of t.leaves || []) crownLeaves.push(l);
+	M.scaffold = layoutScaffold(gg.map(([key, files]) => ({
+		key,
+		files
+	})), groundY, M.trunkW, crownObstacles(crownLeaves, M.branches));
+	for (const T of M.scaffold.towers) for (const L of T.lifts) {
+		const k = L.key, fs = L.files;
 		const node = mkNode(k, "~" + k, null, "pile");
 		node.label = k === "(repo root)" ? "repo root files" : k;
 		node.files = fs;
-		node.nFiles = n;
+		node.nFiles = fs.length;
 		node.lines = fs.reduce((a, f) => a + f.lines, 0);
 		node.depth = 1;
-		const leaves = pts.slice(0, n).map((p, j) => ({
-			x: cx + p[0],
-			y: groundY - p[1] - 3.5,
+		const leaves = L.planks.map((p, j) => ({
+			x: (p.xo + p.xi) / 2,
+			y: p.y,
 			file: fs[j],
 			flat: true,
-			rot: (rnd() - .5) * 1.2
+			plank: p
 		}));
 		for (const f of fs) f.node = node;
-		node.cx = cx;
-		node.pw = W;
-		node.h = H;
+		node.cx = (L.x0 + L.x1) / 2;
+		node.cy = (L.floor + L.top) / 2;
+		node.pw = L.x1 - L.x0;
+		node.h = L.floor - L.top;
 		node.leaves = leaves;
+		node.lift = L;
+		L.pile = node;
 		M.piles.push(node);
-	});
+	}
+	M.piles.sort((a, b) => b.nFiles - a.nFiles || cmpStr(a.name, b.name));
 	const finishTerms = (terms, region) => {
 		for (const t0 of terms) {
 			const t = t0;
@@ -2103,9 +2472,14 @@ function buildModel(raw, opts = {}) {
 		for (const l of t.leaves) {
 			const f = l.file;
 			const fz = Math.min(1, Math.log10(Math.max(1, f.lines) + 1) / 3.6);
-			l.len = Math.min(t.s * 1.12, 10 * (.5 + .62 * fz)) * (t.region === "root" ? .55 : 1);
-			const radial = Math.atan2(l.y - by, l.x - bx);
-			l.ang = (Math.hypot(l.y - by, l.x - bx) < t.s * .6 ? hb : mixAng(radial, hb, .4)) + (r2() - .5) * .7;
+			if (t.region === "crown") {
+				l.len = leafLen(f.lines, t.s);
+				l.ang = leafAng(l.x, l.y, bx, by, hb, t.s, r2());
+			} else {
+				l.len = Math.min(t.s * 1.12, 10 * (.5 + .62 * fz)) * .55;
+				const radial = Math.atan2(l.y - by, l.x - bx);
+				l.ang = (Math.hypot(l.y - by, l.x - bx) < t.s * .6 ? hb : mixAng(radial, hb, .4)) + (r2() - .5) * .7;
+			}
 			l.term = t;
 			l.region = t.region;
 			l.shade = r2() < .5 ? 0 : 1;
@@ -2113,11 +2487,12 @@ function buildModel(raw, opts = {}) {
 			l.id = M.leaves.length;
 			M.leaves.push(l);
 		}
+		if (t.region === "root") growRoots(t, bx, by, hb);
 	}
 	for (const p of M.piles) for (const l of p.leaves) {
 		const f = l.file;
-		l.len = 10 * (.55 + .5 * Math.min(1, Math.log10(Math.max(1, f.lines) + 1) / 3.6));
-		l.ang = l.rot;
+		l.len = l.plank.len;
+		l.ang = l.plank.dir > 0 ? 0 : Math.PI;
 		l.region = "ground";
 		l.pile = p;
 		l.shade = 0;
@@ -2133,7 +2508,7 @@ function buildModel(raw, opts = {}) {
 	for (const p of M.piles) {
 		p.id = M.nodes.length;
 		M.nodes.push(p);
-		p.F = [p.cx, groundY - p.h * .5];
+		p.F = [p.cx, p.cy];
 	}
 	let limbI = 0;
 	for (const n of M.crown.kids.slice().sort((a, b) => (a.F ? a.F[0] : 0) - (b.F ? b.F[0] : 0))) n.limb = limbI++;
@@ -2172,6 +2547,11 @@ function buildModel(raw, opts = {}) {
 		n.cy = n.sy / Math.max(1, n.cnt);
 		n.rad = Math.max(10, Math.hypot(n.bx1 - n.bx0, n.by1 - n.by0) / 2);
 	}
+	for (const p of M.piles) {
+		p.cx = p.F[0];
+		p.cy = p.F[1];
+		p.rad = Math.hypot(p.pw, p.h) / 2;
+	}
 	M.crown.F = [0, 0];
 	let wx0 = 1e9, wy0 = 1e9, wx1 = -1e9, wy1 = -1e9;
 	for (const l of M.leaves) {
@@ -2206,7 +2586,7 @@ function buildModel(raw, opts = {}) {
 	for (const f of F) M.nameCount.set(f.name, (M.nameCount.get(f.name) || 0) + 1);
 	M.byPath = new Map(F.map((f) => [f.path, f]));
 	M.layoutRec = {
-		v: 1,
+		v: 2,
 		files: raw.files.length,
 		u: unionRecs(ctx),
 		memo: [...ctx.memo],
