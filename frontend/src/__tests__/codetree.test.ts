@@ -145,30 +145,41 @@ describe("layout", () => {
   it("is the approved prototype's layout (same data → the same leaf positions)", () => {
     let mx = 0,
       n = 0,
-      pile = 0;
+      pile = 0,
+      crown = 0;
     for (const l of COLD.leaves) {
       const g = FX.golden[l.file.path];
       expect(g, l.file.path).toBeDefined();
       n++;
-      // the crown and the roots are the prototype's; the ground piles moved in to just past the roots (below)
+      // the roots are the prototype's; the ground piles moved in to just past the roots (below); the crown's
+      // clumps are packed wider since Code Tree v2 (leafgeom.ts: no two leaves overlap) — codetreeLeaves.test.ts
       if (l.region === "ground") {
         // within a pile, each leaf keeps its place relative to the pile's own centre
         pile++;
         continue;
       }
-      mx = Math.max(mx, Math.hypot(g[0] - l.x, g[1] - l.y));
+      if (l.region === "crown") {
+        crown++;
+        continue;
+      }
+      // a root clump keeps its shape; the root system mirrors the (wider) crown, so it may sit elsewhere
+      const l0 = l.term!.leaves[0],
+        g0 = FX.golden[l0.file.path];
+      mx = Math.max(mx, Math.hypot(g[0] - g0[0] - (l.x - l0.x), g[1] - g0[1] - (l.y - l0.y)));
     }
     expect(n).toBe(FX.files.length);
     expect(pile).toBeGreaterThan(0);
+    expect(crown).toBeGreaterThan(0);
     expect(mx).toBeLessThan(1e-4);
-    // a pile is the prototype's pile, shifted sideways as a whole
+    // a pile is the prototype's pile, shifted as a whole (sideways; and down with the ground under a wider crown)
     for (const p of COLD.piles) {
       const ls = p.leaves || [];
-      const dx = FX.golden[ls[0].file.path][0] - ls[0].x;
+      const dx = FX.golden[ls[0].file.path][0] - ls[0].x,
+        dy = FX.golden[ls[0].file.path][1] - ls[0].y;
       for (const l of ls) {
         const g = FX.golden[l.file.path];
         expect(Math.abs(g[0] - l.x - dx), l.file.path).toBeLessThan(1e-4);
-        expect(Math.abs(g[1] - l.y), l.file.path).toBeLessThan(1e-4);
+        expect(Math.abs(g[1] - l.y - dy), l.file.path).toBeLessThan(1e-4);
       }
     }
   });

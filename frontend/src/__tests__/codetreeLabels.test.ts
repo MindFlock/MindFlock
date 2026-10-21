@@ -237,8 +237,11 @@ describe("changed files are named even at the whole-tree zoom", () => {
       const edited = new Set<number>();
       for (const A of v.agents) for (const k of A.edits.keys()) edited.add(k);
       const named = (v.labelHits || []).filter((h) => h.leaf);
-      // only changed files (and a bird's current file, named in its colour) out here, a handful at most
-      expect(named.filter((h) => edited.has(h.leaf!.file.id)).length).toBeGreaterThan(0);
+      // only changed files (and a bird's current file, named in its colour) out here, a handful at most. A perched
+      // bird's tag names its file when the bird's own body covers the leaf's tip (one name per leaf, rule 2)
+      const namedIds = new Set(named.map((h) => h.leaf!.file.id));
+      for (const b of v.birdScreen || []) if (b.A.file) namedIds.add(b.A.file.id);
+      expect([...namedIds].filter((id) => edited.has(id)).length).toBeGreaterThan(0);
       expect(named.length).toBeLessThanOrEqual(8 + v.agents.length);
       for (const h of named) if (!edited.has(h.leaf!.file.id)) expect(v.agents.some((A) => A.file === h.leaf!.file)).toBe(true);
     });
@@ -278,6 +281,7 @@ describe("file names once the view is close enough to show them", () => {
           // change, or the canvas edge — a free spot is never passed over
           const a = leafScreenGeom(f.leaf, z, toS, 10.5);
           const taken: number[][] = [...(v.labelHits || []), ...(v.birdHits || []), ...(v.nestHits || []), ...(v.badgeHits || []), ...(v.tagHits || [])].map((h) => h.r);
+          for (const r of v.hudRects || []) taken.push(r); // a HUD panel (the agents column, the activity card) is taken too
           for (const o of edited) {
             const ol = M.files[o].leaf;
             if (!ol || o === e) continue;

@@ -34,6 +34,7 @@ import {
   unionRecs,
   finalRecs,
 } from "./layout";
+import { leafAng, leafLen } from "./leafgeom";
 
 export { S0, TAU };
 
@@ -232,7 +233,7 @@ export interface LayoutRecord {
   /** the data signature this record was made for */
   sig: string;
 }
-export const LAYOUT_VERSION = 1;
+export const LAYOUT_VERSION = 2;
 
 export interface BuildOpts {
   /** an exact replay of a record made for this very data */
@@ -671,10 +672,16 @@ export function buildModel(raw: RawRepo, opts: BuildOpts = {}): Model {
     for (const l of t.leaves) {
       const f = l.file;
       const fz = Math.min(1, Math.log10(Math.max(1, f.lines) + 1) / 3.6);
-      l.len = Math.min(t.s * 1.12, S0 * (0.5 + 0.62 * fz)) * (t.region === "root" ? 0.55 : 1);
-      const radial = Math.atan2(l.y - by, l.x - bx);
-      const ang = Math.hypot(l.y - by, l.x - bx) < t.s * 0.6 ? hb : mixAng(radial, hb, 0.4);
-      l.ang = ang + (r2() - 0.5) * 0.7;
+      if (t.region === "crown") {
+        // crown leaves: sized to their clump's pitch and fanned out from the twig tip (leafgeom.ts)
+        l.len = leafLen(f.lines, t.s);
+        l.ang = leafAng(l.x, l.y, bx, by, hb, t.s, r2());
+      } else {
+        l.len = Math.min(t.s * 1.12, S0 * (0.5 + 0.62 * fz)) * 0.55;
+        const radial = Math.atan2(l.y - by, l.x - bx);
+        const ang = Math.hypot(l.y - by, l.x - bx) < t.s * 0.6 ? hb : mixAng(radial, hb, 0.4);
+        l.ang = ang + (r2() - 0.5) * 0.7;
+      }
       l.term = t;
       l.region = t.region as Leaf["region"];
       l.shade = r2() < 0.5 ? 0 : 1;

@@ -8,6 +8,7 @@
  * leaf's outline. Anchors come through ONE function per thing (leafScreenGeom, pileAnchor) so the leaves /
  * scaffold / roots work can re-point them without touching the placer. */
 
+import { leafScreen } from "./leafgeom";
 import { S0, type Leaf, type TNode } from "./model";
 
 export type R4 = [number, number, number, number];
@@ -43,24 +44,25 @@ export interface LeafGeom {
   quad: Quad;
 }
 
-/** A leaf as it is drawn on screen: its tip, base, direction and outline. `minHalf` is the drawn half-length floor
- * (a changed leaf is drawn at >= 10.5 px half-length at every zoom). THE anchor contract: the leaves worker's
- * `leafScreen(l, z)` (leafgeom.ts) computes the same numbers plus an on-screen size cap — point this at it. */
+/** A leaf as it is drawn on screen: its tip, base, direction and outline — from `leafScreen` (leafgeom.ts), the one
+ * geometry every drawn size goes through (the on-screen cap included). `minHalf` is the drawn half-length floor
+ * (a changed leaf is drawn at >= 10.5 px half-length at every zoom; drawEdits scales it about its centre). */
 export function leafScreenGeom(l: Leaf, z: number, toS: (x: number, y: number) => [number, number], minHalf = 0): LeafGeom {
-  const ca = Math.cos(l.ang),
-    sa = Math.sin(l.ang);
-  const [cx, cy] = toS(l.x, l.y);
-  const half = Math.max((l.len * z) / 2, minHalf),
-    k = half / Math.max(1e-6, (l.len * z) / 2);
+  const g = leafScreen(l, z);
+  const ca = Math.cos(g.dir),
+    sa = Math.sin(g.dir);
+  const [cx, cy] = toS(g.cx, g.cy);
+  const half = Math.max(g.halfPx, minHalf);
   const tip: [number, number] = [cx + ca * half, cy + sa * half],
     base: [number, number] = [cx - ca * half, cy - sa * half];
-  // the outline's widest point: half the quadratic control's offset (draw.ts prepGeometry: w = len * 0.37 / 0.5 / 0.3)
+  // the outline's widest point: half the quadratic control's offset (leafgeom.ts lensAt: w = len * 0.37 / 0.5 / 0.3,
+  // 0.54 of the way from base to tip)
   const wk = l.region === "root" ? 0.5 : l.region === "ground" ? 0.3 : 0.37;
-  const bw = ((l.len * z * wk) / 2) * k;
-  const mx = cx + ca * half * 0.04,
-    my = cy + sa * half * 0.04;
+  const bw = half * wk;
+  const mx = cx + ca * half * 0.08,
+    my = cy + sa * half * 0.08;
   const quad = [base[0], base[1], mx - sa * bw, my + ca * bw, tip[0], tip[1], mx + sa * bw, my - ca * bw];
-  return { tip, base, dir: l.ang, half, quad };
+  return { tip, base, dir: g.dir, half, quad };
 }
 
 /** Where a ground pile's name hangs (world). The scaffold work replaces piles with planks / lifts: point this at its
