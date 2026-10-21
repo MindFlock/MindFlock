@@ -173,7 +173,6 @@
   --ct-pill-text: var(--text);
   --ct-leaf-label: #2a3040;
   --ct-root-label: hsl(30, 35%, 26%);
-  --ct-pile-label: hsl(30, 35%, 28%);
   --ct-keep-text: color-mix(in srgb, var(--red) 75%, #000);
   --ct-only-text: color-mix(in srgb, var(--green) 70%, #000);
   --ct-keep-bg: color-mix(in srgb, var(--red) 12%, #fff);

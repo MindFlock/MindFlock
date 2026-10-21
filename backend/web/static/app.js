@@ -51687,7 +51687,7 @@ function capPx(lenPx) {
 function leafScreen(l, z) {
 	const ca = Math.cos(l.ang), sa = Math.sin(l.ang);
 	const full = l.len * z;
-	const px = l.region === "ground" || l.region === "root" ? full : capPx(full);
+	const px = l.region === "root" ? full : capPx(full);
 	const len = z > 0 ? px / z : l.len;
 	const bx = l.x - ca * l.len * .5, by = l.y - sa * l.len * .5;
 	return {
@@ -51704,7 +51704,7 @@ function leafScreen(l, z) {
 }
 function lensAt(l, len) {
 	const ca = Math.cos(l.ang), sa = Math.sin(l.ang);
-	const w = len * (l.region === "root" ? .5 : l.region === "ground" ? .3 : .37);
+	const w = len * (l.region === "root" ? .5 : .37);
 	const bx = l.x - ca * l.len * .5, by = l.y - sa * l.len * .5, tx = bx + ca * len, ty = by + sa * len;
 	const mx = bx + ca * len * .54, my = by + sa * len * .54;
 	return [
@@ -51719,7 +51719,7 @@ function lensAt(l, len) {
 	];
 }
 function leafOutline(l, z) {
-	if (l.region === "ground" || l.region === "root" || l.len * z <= LEAF.capFrom) return l.g || lensAt(l, l.len);
+	if (l.region === "root" || l.len * z <= LEAF.capFrom) return l.g || lensAt(l, l.len);
 	return lensAt(l, capPx(l.len * z) / z);
 }
 //#endregion
@@ -53807,325 +53807,6 @@ function drawRoots(g, terms, z, alpha, tipAlpha, style, tipCol, created) {
 	g.lineJoin = "miter";
 }
 //#endregion
-//#region src/lib/codetree/scaffold.ts
-var SCAF = {
-	pitch: S0 * .62,
-	plankT: S0 * .34,
-	bayW: S0 * 4.2,
-	over: S0 * .35,
-	floor: S0 * .35,
-	ceil: S0 * 1.15,
-	base: S0 * .6,
-	gap: S0 * 1.6,
-	clear: S0 * 1.2,
-	arm: S0 * .9
-};
-var fzOf = (lines) => Math.min(1, Math.log10(Math.max(1, lines) + 1) / 3.6);
-var liftH = (n) => SCAF.floor + n * SCAF.pitch + SCAF.ceil;
-var plankLen = (lines) => SCAF.bayW * (.28 + .72 * fzOf(lines)) + SCAF.over;
-function layoutScaffold(groups, groundY, trunkW, obs) {
-	const sides = [{
-		dir: -1,
-		H: 0,
-		gs: []
-	}, {
-		dir: 1,
-		H: 0,
-		gs: []
-	}];
-	for (const gr of groups) {
-		const s = sides[0].H <= sides[1].H ? sides[0] : sides[1];
-		s.gs.push(gr);
-		s.H += liftH(gr.files.length);
-	}
-	const towers = [];
-	const x0 = trunkW * 1 + SCAF.gap;
-	for (const s of sides) {
-		if (!s.gs.length) continue;
-		const H = SCAF.base + s.H;
-		const yTop = groundY - H - SCAF.clear;
-		const w = SCAF.bayW + SCAF.arm;
-		const clearAt = (xi) => {
-			const a = s.dir > 0 ? xi - SCAF.clear : xi - w - SCAF.clear, b = s.dir > 0 ? xi + w + SCAF.clear : xi + SCAF.clear;
-			for (const [px, py, r] of obs.pts) if (px + r > a && px - r < b && py + r > yTop) return false;
-			for (const [bx0, by0, bx1, by1] of obs.boxes) if (bx1 > a && bx0 < b && by1 > yTop && by0 < groundY) return false;
-			return true;
-		};
-		let off = x0;
-		for (let i = 0; i < 4e3 && !clearAt(s.dir * off); i++) off += S0 * .5;
-		const xi = s.dir * off, xo = xi + s.dir * SCAF.bayW;
-		const T = {
-			dir: s.dir,
-			xi,
-			xo,
-			y1: groundY,
-			y0: groundY - H - S0 * .5,
-			lifts: [],
-			tied: off - x0 < S0 * 3
-		};
-		let floor = groundY - SCAF.base;
-		for (const gr of s.gs) {
-			const top = floor - liftH(gr.files.length);
-			const L = {
-				key: gr.key,
-				files: gr.files,
-				planks: [],
-				tower: T,
-				floor,
-				top,
-				x0: 0,
-				x1: 0
-			};
-			const xoEnd = xo + s.dir * SCAF.over;
-			gr.files.forEach((f, r) => {
-				const len = plankLen(f.lines);
-				L.planks.push({
-					xo: xoEnd,
-					xi: xoEnd - s.dir * len,
-					y: top + SCAF.ceil + (r + .5) * SCAF.pitch,
-					len,
-					dir: s.dir,
-					lift: L
-				});
-			});
-			L.x0 = Math.min(xi, xoEnd);
-			L.x1 = Math.max(xi, xoEnd);
-			T.lifts.push(L);
-			floor = top;
-		}
-		towers.push(T);
-	}
-	return { towers };
-}
-function crownObstacles(leaves, branches) {
-	const pts = leaves.map((l) => [
-		l.x,
-		l.y,
-		S0 * .6
-	]);
-	const boxes = [];
-	for (const b of branches) {
-		if (b.region === "root") continue;
-		let x0 = Math.min(b.x0, b.x1), x1 = Math.max(b.x0, b.x1), y0 = Math.min(b.y0, b.y1), y1 = Math.max(b.y0, b.y1);
-		for (let i = 0; i + 1 < b.cp.length; i += 2) {
-			x0 = Math.min(x0, b.cp[i]);
-			x1 = Math.max(x1, b.cp[i]);
-			y0 = Math.min(y0, b.cp[i + 1]);
-			y1 = Math.max(y1, b.cp[i + 1]);
-		}
-		const r = (b.w || 0) * .5;
-		boxes.push([
-			x0 - r,
-			y0 - r,
-			x1 + r,
-			y1 + r
-		]);
-	}
-	return {
-		pts,
-		boxes
-	};
-}
-function liftBox(n) {
-	const L = n.lift;
-	if (L) return {
-		x0: L.x0,
-		y0: L.top,
-		x1: L.x1,
-		y1: L.floor
-	};
-	const pw = n.pw || 0, h = n.h || 0;
-	return {
-		x0: n.cx - pw / 2,
-		y0: n.cy - h / 2,
-		x1: n.cx + pw / 2,
-		y1: n.cy + h / 2
-	};
-}
-var LIFT_KIND = /* @__PURE__ */ new WeakMap();
-function liftKind(M, n) {
-	const hit = LIFT_KIND.get(n);
-	if (hit) return hit;
-	const k = n.name;
-	let kind = "plain";
-	if (k !== "(repo root)") {
-		const crown = M.nodeOf.get(k);
-		if (crown && crown.kind === "crown" && crown.depth === 1) kind = "code";
-		else if (M.files.some((f) => f.place === "root" && f.path.startsWith(k + "/"))) kind = "tests";
-	}
-	LIFT_KIND.set(n, kind);
-	return kind;
-}
-function liftCaption(M, n) {
-	const kind = liftKind(M, n), N = n.nFiles;
-	if (kind === "code") return [n.label || n.name, ` · ${N} non-code`];
-	if (kind === "tests") return [/^(tests?|__tests__|specs?)$/.test(n.name) ? "test data" : `${n.label || n.name} test data`, ` · ${N}`];
-	return [n.label || n.name, ` · ${N} file${N === 1 ? "" : "s"}`];
-}
-function liftAnchor(n) {
-	const L = n.lift;
-	if (!L) return {
-		x: n.cx,
-		y: n.cy,
-		dir: 1
-	};
-	const T = L.tower;
-	return {
-		x: T.xo + T.dir * SCAF.arm,
-		y: L.top,
-		dir: T.dir
-	};
-}
-function plankDist(l, x, y) {
-	const p = l.plank;
-	if (!p) return Math.hypot(l.x - x, l.y - y);
-	const a = Math.min(p.xo, p.xi), b = Math.max(p.xo, p.xi);
-	const dx = x < a ? a - x : x > b ? x - b : 0, dy = Math.max(0, Math.abs(y - p.y) - SCAF.plankT / 2);
-	return Math.hypot(dx, dy);
-}
-function plankAt(M, x, y, tol) {
-	let best = null, bd = tol;
-	for (const p of M.piles) {
-		const B = liftBox(p);
-		if (x < B.x0 - tol || x > B.x1 + tol || y < B.y0 - tol || y > B.y1 + tol) continue;
-		for (const l of p.leaves || []) {
-			const d = plankDist(l, x, y);
-			if (d <= bd) {
-				bd = d;
-				best = l;
-			}
-		}
-	}
-	return best;
-}
-function liftAt(M, x, y, tol = 0) {
-	for (const p of M.piles) {
-		const B = liftBox(p), L = p.lift, arm = L ? SCAF.arm : 0;
-		const x0 = B.x0 - (L && L.tower.dir < 0 ? arm : 0), x1 = B.x1 + (L && L.tower.dir > 0 ? arm : 0);
-		if (x >= x0 - tol && x <= x1 + tol && y >= B.y0 - tol && y <= B.y1 + tol) return p;
-	}
-	return null;
-}
-function plankPath(g, l) {
-	const p = l.plank;
-	if (!p) return;
-	const a = Math.min(p.xo, p.xi), t = SCAF.plankT;
-	g.rect(a, p.y - t / 2, p.len, t);
-}
-function plankRing(g, l, pad) {
-	const p = l.plank;
-	if (!p) return;
-	const a = Math.min(p.xo, p.xi) - pad, t = SCAF.plankT + pad * 2;
-	g.rect(a, p.y - t / 2, p.len + pad * 2, t);
-}
-var PLANK_MARK = S0 * .62;
-var fade = (a, b, x) => Math.max(0, Math.min(1, (x - a) / (b - a)));
-function drawScaffold(g, M, P, o) {
-	const SC = M.scaffold;
-	if (!SC) return 0;
-	const z = o.z;
-	const C = P.SCAF;
-	let shown = 0;
-	const lw = Math.max(1 / z, Math.min(S0 * .24, 2.6 / z));
-	const slats = SCAF.pitch * z >= 2.2;
-	const plankA = slats ? .7 + .3 * fade(10, 16, o.leafPx) : 0;
-	for (const T of SC.towers) {
-		const bx0 = Math.min(T.xi, T.xo) - SCAF.arm - SCAF.over, bx1 = Math.max(T.xi, T.xo) + SCAF.arm + SCAF.over;
-		if (!o.inView(bx0, T.y0, bx1, T.y1)) continue;
-		shown++;
-		const dim = (L) => o.hasOnly && !(L.pile && L.pile.lit);
-		if (!slats) for (const L of T.lifts) {
-			const keep = L.pile && L.pile.keep;
-			g.fillStyle = dim(L) ? P.DUSK.leafA : keep ? P.KEEP.leafA : C.fill;
-			g.globalAlpha = keep ? .5 : 1;
-			g.fillRect(Math.min(T.xi, T.xo), L.top + SCAF.ceil * .6, SCAF.bayW, L.floor - L.top - SCAF.ceil * .6 - SCAF.floor * .5);
-		}
-		g.globalAlpha = 1;
-		g.strokeStyle = C.brace;
-		g.lineWidth = lw * .7;
-		g.beginPath();
-		T.lifts.forEach((L, i) => {
-			const [xa, xb] = i % 2 ? [T.xo, T.xi] : [T.xi, T.xo];
-			g.moveTo(xa, L.floor);
-			g.lineTo(xb, L.top);
-		});
-		g.stroke();
-		if (T.tied) {
-			g.strokeStyle = C.brace;
-			g.lineWidth = lw * .8;
-			g.beginPath();
-			for (const L of T.lifts) {
-				g.moveTo(T.xi, L.top);
-				g.lineTo(T.dir * M.trunkW * .5, L.top);
-			}
-			g.stroke();
-		}
-		if (plankA > 0) {
-			const groups = /* @__PURE__ */ new Map();
-			for (const L of T.lifts) {
-				if (!L.pile) continue;
-				const keep = L.pile.keep, d = dim(L);
-				for (const l of L.pile.leaves || []) {
-					if (l.file.ghost && !o.createdGhost.has(l.file.id)) continue;
-					const col = d ? P.DUSK.leafA : keep || o.keepFiles.has(l.file.id) ? P.KEEP.leafA : l.file.id % 3 ? C.plankA : C.plankB;
-					let a = groups.get(col);
-					if (!a) groups.set(col, a = []);
-					a.push(l);
-				}
-			}
-			g.globalAlpha = plankA;
-			for (const [col, arr] of groups) {
-				g.fillStyle = col;
-				g.beginPath();
-				for (const l of arr) plankPath(g, l);
-				g.fill();
-			}
-			g.globalAlpha = 1;
-		}
-		g.strokeStyle = C.pole;
-		g.lineWidth = lw;
-		g.lineCap = "round";
-		g.beginPath();
-		g.moveTo(T.xi, T.y1);
-		g.lineTo(T.xi, T.y0);
-		g.moveTo(T.xo, T.y1);
-		g.lineTo(T.xo, T.y0);
-		for (const L of T.lifts) {
-			g.moveTo(T.xi, L.floor);
-			g.lineTo(T.xo, L.floor);
-			g.moveTo(T.xi, L.top);
-			g.lineTo(T.xo + T.dir * SCAF.arm, L.top);
-		}
-		g.stroke();
-		g.fillStyle = C.pole;
-		const bp = SCAF.bayW * .12;
-		g.fillRect(T.xi - bp, T.y1 - lw, bp * 2, lw * 1.6);
-		g.fillRect(T.xo - bp, T.y1 - lw, bp * 2, lw * 1.6);
-		g.lineCap = "butt";
-	}
-	return shown;
-}
-function drawScaffoldMini(g, M, P, z) {
-	const SC = M.scaffold;
-	if (!SC) return;
-	for (const T of SC.towers) {
-		g.fillStyle = P.SCAF.fill;
-		for (const L of T.lifts) g.fillRect(Math.min(T.xi, T.xo), L.top + Math.max(1 / z, SCAF.ceil * .5), SCAF.bayW, L.floor - L.top - Math.max(1 / z, SCAF.ceil * .5));
-		g.strokeStyle = P.SCAF.pole;
-		g.lineWidth = Math.max(1 / z, 1);
-		g.beginPath();
-		g.moveTo(T.xi, T.y1);
-		g.lineTo(T.xi, T.y0);
-		g.moveTo(T.xo, T.y1);
-		g.lineTo(T.xo, T.y0);
-		g.stroke();
-	}
-}
-function liftRing(g, n, pad) {
-	const B = liftBox(n);
-	g.rect(B.x0 - pad, B.y0 - pad, B.x1 - B.x0 + pad * 2, B.y1 - B.y0 + pad * 2);
-}
-//#endregion
 //#region src/lib/codetree/model.ts
 var dirOf = (p) => {
 	const i = p.lastIndexOf("/");
@@ -54137,7 +53818,7 @@ function shortName(name) {
 	const s = name.split("/");
 	return s[0] + "/…/" + s[s.length - 1];
 }
-var LAYOUT_VERSION = 2;
+var LAYOUT_VERSION = 3;
 function mkNode(name, path, parent, kind) {
 	return {
 		name,
@@ -54200,14 +53881,22 @@ function parseFiles(raw) {
 		s.n += f.lines + 1;
 		if (f.kind === "c") s.c += f.lines + 1;
 	}
-	for (const f of F) if (f.test && f.kind === "c") f.place = "root";
-	else if (f.test) f.place = "ground";
-	else if (!f.path.includes("/")) f.place = f.kind === "c" ? "crown" : "ground";
+	for (const f of F) if (f.test || f.kind !== "c") f.place = "root";
+	else if (!f.path.includes("/")) f.place = "crown";
 	else {
 		const s = top[f.path.split("/")[0]];
-		f.place = s.c / s.n < .3 ? "ground" : "crown";
+		f.place = s.c / s.n < .3 ? "root" : "crown";
 	}
 	return F;
+}
+var isSupport = (f) => f.place === "root" && !(f.test && f.kind === "c");
+var SUPPORT_SPLIT = 24;
+var TAP_ROOT = "~";
+var TAP_LABEL = "docs, CI and config";
+function nameTop(n) {
+	let top = n;
+	while (top.parent && top.depth > 1 && !(top.depth === 2 && top.parent.folder === "")) top = top.parent;
+	return top;
 }
 function buildTree(rootName, entries, kind) {
 	const root = mkNode(rootName, "", null, kind);
@@ -54297,16 +53986,10 @@ function buildModel(raw, opts = {}) {
 	const warm = !replay && opts.warm && opts.warm.v === LAYOUT_VERSION ? opts.warm : null;
 	const F = parseFiles(raw);
 	const crownEntries = [];
-	const groundGroups = /* @__PURE__ */ new Map();
 	for (const f of F) if (f.place === "crown") crownEntries.push({
 		segs: dirOf(f.path) ? dirOf(f.path).split("/") : [],
 		file: f
 	});
-	else if (f.place === "ground") {
-		const k = f.path.includes("/") ? f.path.split("/")[0] : "(repo root)";
-		if (!groundGroups.has(k)) groundGroups.set(k, []);
-		groundGroups.get(k).push(f);
-	}
 	const crown = buildTree(raw.name, crownEntries, "crown");
 	const M = {
 		name: raw.name,
@@ -54376,8 +54059,22 @@ function buildModel(raw, opts = {}) {
 		return n && n.depth >= 1 ? n : null;
 	};
 	const rootEntriesArr = [];
+	const supKey = (f) => (f.test ? "D:" : "S:") + (f.path.includes("/") ? f.path.split("/")[0] : "(repo root)");
+	const supCount = /* @__PURE__ */ new Map();
+	for (const f of F) if (isSupport(f)) supCount.set(supKey(f), (supCount.get(supKey(f)) || 0) + 1);
 	for (const f of F) {
 		if (f.place !== "root") continue;
+		if (isSupport(f)) {
+			const d = dirOf(f.path) ? dirOf(f.path).split("/") : [];
+			const k = supKey(f);
+			const twin = d.length ? M.nodeOf.get(d[0]) : void 0;
+			const segs = [k].concat(supCount.get(k) > SUPPORT_SPLIT && d.length > 1 ? [d[1]] : []);
+			rootEntriesArr.push({
+				segs: twin && twin.depth === 1 ? segs : [TAP_ROOT].concat(segs),
+				file: f
+			});
+			continue;
+		}
 		const n = limbOfPath(f.target);
 		f.tests = n;
 		let segs;
@@ -54407,12 +54104,28 @@ function buildModel(raw, opts = {}) {
 	M.rootNodeOf = roots.nodeOf;
 	for (const n of allNodes(M.roots)) {
 		if (n.depth === 0) continue;
-		n.unmatched = n.path.split("/")[0].startsWith("U:");
-		const crownPath = n.path.split("/").map((s) => s.replace(/^[TU]:/, "")).join("/");
-		n.crownTwin = n.unmatched ? null : M.nodeOf.get(crownPath) || null;
-		n.name = n.name.replace(/^[TU]:/, "");
-		n.label = n.unmatched ? "tests: " + shortName(crownPath) : "tests for " + shortName(n.crownTwin ? n.crownTwin.path : n.name);
 		for (const f of n.files) f.node = n;
+		const parts = n.path.split("/");
+		const own = parts[0] === TAP_ROOT ? parts.slice(1) : parts;
+		if (n.name.startsWith("~/")) n.name = n.name.slice(2);
+		if (!own.length) {
+			n.support = true;
+			n.crownTwin = null;
+			n.folder = "";
+			n.name = n.label = TAP_LABEL;
+			continue;
+		}
+		const tag = own[0].slice(0, 2);
+		n.unmatched = tag === "U:";
+		n.support = tag === "S:" || tag === "D:";
+		n.data = tag === "D:";
+		const crownPath = own.map((s) => s.replace(/^[TUSD]:/, "")).join("/");
+		n.folder = crownPath;
+		const twin = n.unmatched ? null : M.nodeOf.get(crownPath) || null;
+		n.crownTwin = n.support && !twin && n.depth > 1 ? n.parent.crownTwin || null : twin;
+		n.name = n.name.replace(/^[TUSD]:/, "");
+		const at = shortName(crownPath);
+		n.label = !n.support ? n.unmatched ? n.depth === 1 ? "other tests · " + at + "/" : "tests · " + at : "tests for " + shortName(n.crownTwin ? n.crownTwin.path : n.name) : n.data ? n.crownTwin && n.depth === 1 ? "test data" : "test data · " + at + "/" : n.crownTwin ? at + " · non-code" : crownPath === "(repo root)" ? "repo root files" : at;
 	}
 	const crownX = /* @__PURE__ */ new Map();
 	for (const t of LC.terms) for (const l of t.leaves || []) {
@@ -54434,7 +54147,7 @@ function buildModel(raw, opts = {}) {
 			const e = q ? crownX.get(q) : void 0;
 			return e ? e[0] / e[1] : 0;
 		};
-		return x(A2) - x(B2) || cmpStr(A2.node.name, B2.node.name);
+		return x(A2) - x(B2) || cmpStr(A2.node.name, B2.node.name) || cmpStr(A2.node.path, B2.node.path);
 	}), M.trunkW * .62);
 	if (LR.top && LR.top.base && !ctx.cache) pkCompact(LR.top, LR.top.base, [0, -PK.heart * Math.sqrt(LR.top.area / Math.PI) / .72], warm ? 0 : 1, "r");
 	if (ctx.warmFailed) {
@@ -54469,41 +54182,6 @@ function buildModel(raw, opts = {}) {
 			b.we *= .9;
 		}
 	}
-	M.piles = [];
-	const gg = [...groundGroups.entries()].sort((a, b) => b[1].length - a[1].length || cmpStr(a[0], b[0]));
-	for (const [, fs] of gg) fs.sort((a, b) => b.lines - a.lines || cmpStr(a.name, b.name));
-	const crownLeaves = [];
-	for (const t of LC.terms) for (const l of t.leaves || []) crownLeaves.push(l);
-	M.scaffold = layoutScaffold(gg.map(([key, files]) => ({
-		key,
-		files
-	})), groundY, M.trunkW, crownObstacles(crownLeaves, M.branches));
-	for (const T of M.scaffold.towers) for (const L of T.lifts) {
-		const k = L.key, fs = L.files;
-		const node = mkNode(k, "~" + k, null, "pile");
-		node.label = k === "(repo root)" ? "repo root files" : k;
-		node.files = fs;
-		node.nFiles = fs.length;
-		node.lines = fs.reduce((a, f) => a + f.lines, 0);
-		node.depth = 1;
-		const leaves = L.planks.map((p, j) => ({
-			x: (p.xo + p.xi) / 2,
-			y: p.y,
-			file: fs[j],
-			flat: true,
-			plank: p
-		}));
-		for (const f of fs) f.node = node;
-		node.cx = (L.x0 + L.x1) / 2;
-		node.cy = (L.floor + L.top) / 2;
-		node.pw = L.x1 - L.x0;
-		node.h = L.floor - L.top;
-		node.leaves = leaves;
-		node.lift = L;
-		L.pile = node;
-		M.piles.push(node);
-	}
-	M.piles.sort((a, b) => b.nFiles - a.nFiles || cmpStr(a.name, b.name));
 	const finishTerms = (terms, region) => {
 		for (const t0 of terms) {
 			const t = t0;
@@ -54548,26 +54226,10 @@ function buildModel(raw, opts = {}) {
 		}
 		if (t.region === "root") growRoots(t, bx, by, hb);
 	}
-	for (const p of M.piles) for (const l of p.leaves) {
-		const f = l.file;
-		l.len = l.plank.len;
-		l.ang = l.plank.dir > 0 ? 0 : Math.PI;
-		l.region = "ground";
-		l.pile = p;
-		l.shade = 0;
-		f.leaf = l;
-		l.id = M.leaves.length;
-		M.leaves.push(l);
-	}
 	M.nodes = [];
 	for (const R of [M.crown, M.roots]) for (const n of allNodes(R)) {
 		n.id = M.nodes.length;
 		M.nodes.push(n);
-	}
-	for (const p of M.piles) {
-		p.id = M.nodes.length;
-		M.nodes.push(p);
-		p.F = [p.cx, p.cy];
 	}
 	let limbI = 0;
 	for (const n of M.crown.kids.slice().sort((a, b) => (a.F ? a.F[0] : 0) - (b.F ? b.F[0] : 0))) n.limb = limbI++;
@@ -54605,11 +54267,6 @@ function buildModel(raw, opts = {}) {
 		n.cx = n.sx / Math.max(1, n.cnt);
 		n.cy = n.sy / Math.max(1, n.cnt);
 		n.rad = Math.max(S0, Math.hypot(n.bx1 - n.bx0, n.by1 - n.by0) / 2);
-	}
-	for (const p of M.piles) {
-		p.cx = p.F[0];
-		p.cy = p.F[1];
-		p.rad = Math.hypot(p.pw, p.h) / 2;
 	}
 	M.crown.F = [0, 0];
 	let wx0 = 1e9, wy0 = 1e9, wx1 = -1e9, wy1 = -1e9;
@@ -55249,18 +54906,6 @@ function readPalette(el) {
 		cvHi: rh(34, 20, 33),
 		cvSh: rh(28, 20, 8)
 	};
-	const PILEPAL = {
-		leafA: rh(30, 30, 40),
-		leafB: rh(22, 25, 33),
-		doc: rh(30, 30, 40)
-	};
-	const SCAF = {
-		pole: rh(30, 10, 38),
-		brace: rh(30, 8, 34),
-		plankA: rh(33, 22, 44),
-		plankB: rh(29, 18, 38),
-		fill: rh(31, 14, 30)
-	};
 	const red = v("--red", "#de613e"), green = v("--green", "#51bd73"), gold = v("--gold", "#ffd700");
 	const raw = (n, d) => cs ? cs.getPropertyValue(n).trim() || d : d;
 	const glowRgb = raw("--ct-glow", "90, 150, 110");
@@ -55289,8 +54934,6 @@ function readPalette(el) {
 		DUSK,
 		KEEP,
 		ROOTPAL,
-		PILEPAL,
-		SCAF,
 		BARK: {
 			crown: v("--ct-calm-bark", v("--ct-bark", "hsl(28,14%,37%)")),
 			crownHi: v("--ct-bark-hi", "hsl(30,14%,46%)"),
@@ -55303,7 +54946,11 @@ function readPalette(el) {
 		rootLabel: ROOTPAL.label,
 		rootTip: v("--ct-root-tip", light ? "hsl(28,34%,30%)" : "hsl(36,30%,64%)"),
 		rootFine: v("--ct-root-fine", light ? "hsl(27,24%,42%)" : "hsl(31,20%,42%)"),
-		pileLabel: v("--ct-pile-label", "hsl(32,32%,66%)"),
+		supRoot: {
+			strand: v("--ct-sup-root", light ? "hsl(212,9%,37%)" : "hsl(212,9%,33%)"),
+			fine: v("--ct-sup-root-fine", light ? "hsl(212,8%,47%)" : "hsl(212,8%,43%)"),
+			tip: v("--ct-sup-root-tip", light ? "hsl(212,13%,31%)" : "hsl(210,12%,66%)")
+		},
 		keepText: v("--ct-keep-text", "#ffb7a3"),
 		onlyText: v("--ct-only-text", "#a8f0c0"),
 		leafLabel: v("--ct-leaf-label", "#c9cdd6"),
@@ -55582,7 +55229,6 @@ function deepestMajority(M, ids) {
 	for (const id of ids) {
 		let n = M.files[id]?.node || null;
 		if (n && n.kind === "root") n = M.files[id].tests || null;
-		if (n && n.kind === "pile") n = null;
 		while (n) {
 			cnt.set(n, (cnt.get(n) || 0) + 1);
 			n = n.parent;
@@ -55989,11 +55635,7 @@ function compile(z, ci) {
 }
 function treeZones(M, zones, ci = false) {
 	const out = [];
-	const regions = [
-		M.crown,
-		M.roots,
-		...M.piles
-	];
+	const regions = [M.crown, M.roots];
 	for (const z of zones) {
 		const rx = compile(z, ci);
 		if (!rx) continue;
@@ -56037,19 +55679,7 @@ function treeZones(M, zones, ci = false) {
 			}
 			for (const k of n.kids) top(k);
 		};
-		for (const r of regions) if (r.kind === "pile") {
-			if (r.files.length && r.files.every((f) => hit.has(f.id))) {
-				out.push({
-					type,
-					node: r,
-					file: null,
-					z,
-					waived: !!z.waived,
-					label
-				});
-				for (const f of r.files) covered.add(f.id);
-			}
-		} else {
+		for (const r of regions) {
 			calc(r);
 			top(r);
 		}
@@ -56093,7 +55723,7 @@ function patternFor(M, target) {
 	};
 	const n = target.node;
 	if (!n) return { error: "Click a folder name, a branch or a leaf." };
-	if (n.depth === 0 && n.kind !== "pile") return { error: "Paint a branch, not the trunk — the whole repo cannot be fenced." };
+	if (n.depth === 0) return { error: "Paint a branch, not the trunk — the whole repo cannot be fenced." };
 	if (n.kind === "crown") return {
 		pattern: anchoredZonePath(n.path),
 		label: n.path
@@ -56599,10 +56229,8 @@ function addBadgeSets(v, ids, by, owner, alpha, shown = () => true) {
 		if (!ff || !ff.leaf || !shown(id)) continue;
 		let n = ff.node;
 		if (!n) continue;
-		if (n.kind !== "pile") {
-			while (n && n.depth > deep) n = n.parent;
-			while (n && n.vHidden) n = n.parent;
-		}
+		while (n && n.depth > deep) n = n.parent;
+		while (n && n.vHidden) n = n.parent;
 		if (!n) continue;
 		const key = n.id + "|" + who;
 		let e = sets.get(key);
@@ -56659,11 +56287,11 @@ function collectBadges(v) {
 	for (const [, arr] of byWho) {
 		let list = arr;
 		if (lp < 14) {
-			for (const e of list.slice()) if (e.ids.size < 3 && e.n.depth > 1 && e.n.kind !== "pile" && list.includes(e)) list = mergeUp(list, e);
+			for (const e of list.slice()) if (e.ids.size < 3 && e.n.depth > 1 && list.includes(e)) list = mergeUp(list, e);
 		}
 		while (list.length > CAP) {
 			list.sort((a, b) => a.ids.size - b.ids.size);
-			const victim = list.find((e) => e.n.depth > 1 && e.n.kind !== "pile");
+			const victim = list.find((e) => e.n.depth > 1);
 			if (!victim) break;
 			list = mergeUp(list, victim);
 		}
@@ -56675,14 +56303,15 @@ function collectBadges(v) {
 	for (const e of dedup) {
 		const n = e.n, c = e.ids.size;
 		let P;
-		if (n.kind === "pile") P = [n.cx, liftBox(n).y0];
-		else if (n.depth === 0) P = n === M.roots ? [0, M.groundY + S0 * 2] : [0, -S0 * 1.5];
+		if (n.depth === 0) P = n === M.roots ? [0, M.groundY + S0 * 2] : [0, -S0 * 1.5];
 		else if (n.depth === 1) P = n.F || [n.cx, n.cy];
 		else P = n.branch ? [n.branch.pts[7][0], n.branch.pts[7][1]] : n.F || [n.cx, n.cy];
 		const one = e.files.size === 1 ? M.files[[...e.files][0]] : null;
 		const what = one ? one.name : e.ag ? `${e.ag.short || e.ag.name}'s edits` : "it";
-		const where = n.kind === "pile" ? n.label : n.depth === 0 ? n === M.roots ? "tests" : "repo root" : n.kind === "root" ? n.label : n.disp || shortName(n.name);
-		const text = n.kind === "root" || n === M.roots ? `${where} · ${c} ${c === 1 ? "test depends" : "tests depend"} on ${what}` : `${where} · ${c} ${c === 1 ? "depends" : "depend"} on ${what}`;
+		const where = n.depth === 0 ? n === M.roots ? "roots" : "repo root" : n.kind === "root" ? n.label : n.disp || shortName(n.name);
+		let q = n;
+		while (q && q.depth > 1) q = q.parent;
+		const text = n.kind === "root" && n !== M.roots && !(q && q.support) ? `${where} · ${c} ${c === 1 ? "test depends" : "tests depend"} on ${what}` : `${where} · ${c} ${c === 1 ? "depends" : "depend"} on ${what}`;
 		badges.push({
 			x: P[0],
 			y: P[1],
@@ -56720,7 +56349,7 @@ function leafScreenGeom(l, z, toS, minHalf = 0) {
 	const [cx, cy] = toS(g.cx, g.cy);
 	const half = Math.max(g.halfPx, minHalf);
 	const tip = [cx + ca * half, cy + sa * half], base = [cx - ca * half, cy - sa * half];
-	const bw = half * (l.region === "root" ? .5 : l.region === "ground" ? .3 : .37);
+	const bw = half * (l.region === "root" ? .5 : .37);
 	const mx = cx + ca * half * .08, my = cy + sa * half * .08;
 	const quad = [
 		base[0],
@@ -57291,8 +56920,8 @@ function prepGeometry(M) {
 	if (MG.geomReady) return;
 	for (const l of M.leaves) {
 		const ca = Math.cos(l.ang), sa = Math.sin(l.ang);
-		const flat = l.region === "ground", root = l.region === "root";
-		const len = l.len, w = len * (root ? .5 : flat ? .3 : .37);
+		const root = l.region === "root";
+		const len = l.len, w = len * (root ? .5 : .37);
 		const bx = l.x - ca * len * .5, by = l.y - sa * len * .5, tx = l.x + ca * len * .5, ty = l.y + sa * len * .5;
 		const mx = l.x + ca * len * .04, my = l.y + sa * len * .04;
 		l.g = [
@@ -57608,7 +57237,6 @@ function computeFlags(v) {
 	for (const zz of zones) if (zz.type === "only" && zz.file != null) {
 		const l = M.files[zz.file] && M.files[zz.file].leaf;
 		if (l && l.term) onlyN.add(l.term.node);
-		else if (l && l.pile) onlyN.add(l.pile);
 	}
 	v.hasOnly = zones.some((zz) => zz.type === "only");
 	const litAnc = /* @__PURE__ */ new Set();
@@ -57624,7 +57252,7 @@ function computeFlags(v) {
 		const p = n.parent;
 		n.vHidden = p ? !!(p.vHidden || p.vColl) : false;
 		n.vFold = v.folded.has(n);
-		n.vColl = n.vFold || n.depth >= 2 && n.rad * z < 26 || n.depth === 1 && n.kind !== "pile" && n.rad * z < 12;
+		n.vColl = n.vFold || n.depth >= 2 && n.rad * z < 26 || n.depth === 1 && n.rad * z < 12;
 		n.fAnc = n.vFold ? n : p ? p.fAnc || null : null;
 		n.keep = keepN.has(n) || (p ? !!p.keep : false);
 		n.lit = !v.hasOnly || onlyN.has(n) || !!(p && p.lit);
@@ -57635,7 +57263,6 @@ function computeFlags(v) {
 }
 function palFor(P, node, region) {
 	if (region === "root") return P.ROOTPAL;
-	if (region === "ground") return P.PILEPAL;
 	return P.PAL[node.limb % P.PAL.length];
 }
 function staticKey(v) {
@@ -57873,7 +57500,7 @@ function renderStatic(v, g, W, H, cam, dpr, fast) {
 		const n = b.node || b.owner;
 		const lit = !hasOnly || !!(n && (n.lit || b.node && litAnc.has(b.node) || b.virtual && n.lit));
 		const litPath = hasOnly && !!b.node && litAnc.has(b.node);
-		if (b.region === "root") col = lit || litPath ? P.BARK.root : P.BARK.rootDusk;
+		if (b.region === "root") col = lit || litPath ? n && n.support ? P.supRoot.strand : P.BARK.root : P.BARK.rootDusk;
 		else col = hasOnly && n && n.lit ? P.BARK.crownHi : lit || litPath ? P.BARK.crown : P.DUSK.bark;
 		v.visBranches.push(b);
 		if (b.wb * z < 1.3) push(thin, col, b);
@@ -57957,10 +57584,15 @@ function renderStatic(v, g, W, H, cam, dpr, fast) {
 			fine: P.BARK.rootDusk,
 			tip: P.DUSK.leafA
 		};
-		return {
+		const R = t.node.support ? P.supRoot : {
 			strand: P.BARK.root,
 			fine: P.rootFine,
-			tip: st === P.KEEP ? P.KEEP.leafA : P.rootTip
+			tip: P.rootTip
+		};
+		return {
+			strand: R.strand,
+			fine: R.fine,
+			tip: st === P.KEEP ? P.KEEP.leafA : R.tip
 		};
 	};
 	const keepTips = v.keepFiles || /* @__PURE__ */ new Set();
@@ -58007,14 +57639,6 @@ function renderStatic(v, g, W, H, cam, dpr, fast) {
 		}
 		drawGroups(leafAlpha);
 	}
-	v.termsInView += drawScaffold(g, M, P, {
-		z,
-		leafPx,
-		hasOnly,
-		keepFiles,
-		createdGhost,
-		inView
-	});
 	const hatch = (clip, x0, y0, x1, y1, dim) => {
 		g.save();
 		g.clip(clip);
@@ -58030,26 +57654,16 @@ function renderStatic(v, g, W, H, cam, dpr, fast) {
 		g.restore();
 	};
 	for (const t of keepTerms) hatch(t.blobFold, t.cx - t.rad - S0, t.cy - t.rad - S0, t.cx + t.rad + S0, t.cy + t.rad + S0, hasOnly && !t.node.lit);
-	for (const p of M.piles) {
-		const B = liftBox(p);
-		if (p.keep && inView(B.x0, B.y0, B.x1, B.y1)) {
-			const clipP = new Path2D();
-			clipP.rect(B.x0, B.y0, B.x1 - B.x0, B.y1 - B.y0);
-			hatch(clipP, B.x0, B.y0, B.x1, B.y1);
-		}
-	}
 	for (const id of keepFiles) {
 		const l = M.files[id] && M.files[id].leaf;
 		if (!l || !inView(l.x - 10, l.y - 10, l.x + 10, l.y + 10)) continue;
 		const clipL = new Path2D();
 		const r = Math.max(l.len * .8, 6 / z);
-		if (l.plank) plankPath(clipL, l);
-		else clipL.arc(l.x, l.y, r, 0, TAU);
+		clipL.arc(l.x, l.y, r, 0, TAU);
 		hatch(clipL, l.x - r, l.y - r, l.x + r, l.y + r);
 	}
 }
 function leafPath(g, l, z = 0) {
-	if (l.plank) return plankPath(g, l);
 	if (l.region === "root") return rootTipPath(g, l);
 	const q = z ? leafOutline(l, z) : l.g;
 	g.moveTo(q[0], q[1]);
@@ -58108,8 +57722,7 @@ function renderOverlay(v, now) {
 		g.lineWidth = 1.5 / z;
 		g.setLineDash([6 / z, 4 / z]);
 		g.beginPath();
-		if (hoverNode.lift) liftRing(g, hoverNode, S0 * .6);
-		else g.arc(hoverNode.cx, hoverNode.cy, hoverNode.rad + S0 * .6, 0, TAU);
+		g.arc(hoverNode.cx, hoverNode.cy, hoverNode.rad + S0 * .6, 0, TAU);
 		g.stroke();
 		g.setLineDash([]);
 	}
@@ -58122,14 +57735,6 @@ function renderOverlay(v, now) {
 		if (zz.node && zz.node.branch) {
 			g.globalAlpha = 1;
 			continue;
-		} else if (zz.node && zz.node.kind === "pile") {
-			g.strokeStyle = col;
-			g.lineWidth = 2 * px;
-			g.setLineDash([5 * px, 4 * px]);
-			g.beginPath();
-			liftRing(g, zz.node, S0 * .4);
-			g.stroke();
-			g.setLineDash([]);
 		} else if (zz.file !== void 0 && zz.file !== null) {
 			const l = M.files[zz.file] && M.files[zz.file].leaf;
 			if (!l) {
@@ -58140,8 +57745,7 @@ function renderOverlay(v, now) {
 			g.lineWidth = 2 * px;
 			const ls = leafScreen(l, z);
 			g.beginPath();
-			if (l.plank) plankRing(g, l, 3 * px);
-			else g.arc(ls.cx, ls.cy, Math.max(ls.halfPx * 1.5 * px, 6 * px), 0, TAU);
+			g.arc(ls.cx, ls.cy, Math.max(ls.halfPx * 1.5 * px, 6 * px), 0, TAU);
 			g.stroke();
 		}
 		g.globalAlpha = 1;
@@ -58156,18 +57760,10 @@ function renderOverlay(v, now) {
 		for (const [id] of A.reads) {
 			const l = M.files[id] && M.files[id].leaf;
 			if (!l || !inView(l.x - 5, l.y - 5, l.x + 5, l.y + 5)) continue;
-			let r, dx, dy;
-			if (l.plank) {
-				const ll = PLANK_MARK;
-				r = Math.max(3 * px, ll * .17);
-				dx = l.x - Math.cos(l.ang) * ll * .18;
-				dy = l.y - Math.sin(l.ang) * ll * .18;
-			} else {
-				const ls = leafScreen(l, z);
-				r = Math.max(3 * px, ls.halfPx * .34 * px);
-				dx = ls.cx - Math.cos(l.ang) * ls.halfPx * .36 * px;
-				dy = ls.cy - Math.sin(l.ang) * ls.halfPx * .36 * px;
-			}
+			const ls = leafScreen(l, z);
+			const r = Math.max(3 * px, ls.halfPx * .34 * px);
+			const dx = ls.cx - Math.cos(l.ang) * ls.halfPx * .36 * px;
+			const dy = ls.cy - Math.sin(l.ang) * ls.halfPx * .36 * px;
 			g.moveTo(dx + r, dy);
 			g.arc(dx, dy, r, 0, TAU);
 		}
@@ -58175,7 +57771,7 @@ function renderOverlay(v, now) {
 		for (const id of A.plan) {
 			const l = M.files[id] && M.files[id].leaf;
 			if (!l || A.edits.has(id)) continue;
-			drawBud(g, P, l.x, l.y, l.plank ? PLANK_MARK : l.len, col, px, !!M.files[id].ghost);
+			drawBud(g, P, l.x, l.y, l.len, col, px, !!M.files[id].ghost);
 		}
 		A.planNew.forEach((pn, i) => {
 			const [bx, by] = ghostBudPoint(M, pn.node, i);
@@ -58199,7 +57795,7 @@ function renderOverlay(v, now) {
 	for (const A of v.agents) for (const [id] of A.edits) {
 		const l = M.files[id] && M.files[id].leaf;
 		if (!l || !(fresh.get(id) > 0)) continue;
-		const own = l.term ? l.term.node : l.pile;
+		const own = l.term ? l.term.node : null;
 		if (hasOnly && own && !own.lit && onlyBinds(v, A)) continue;
 		const R = Math.max(l.len * 1.6, 26 * px);
 		if (!inView(l.x - R, l.y - R, l.x + R, l.y + R)) continue;
@@ -58253,7 +57849,7 @@ function renderOverlay(v, now) {
 	const selLeaf = v.sel && v.sel.leaf ? v.sel.leaf : null;
 	if (selLeaf) {
 		const l = selLeaf;
-		const own = l.term ? l.term.node : l.pile;
+		const own = l.term ? l.term.node : null;
 		const painted = v.agents.some((A) => A.edits.has(l.file.id));
 		if (hasOnly && own && !own.lit && !painted) {
 			const st = palFor(P, own, l.region);
@@ -58264,7 +57860,7 @@ function renderOverlay(v, now) {
 		}
 		const ls = leafScreen(l, z);
 		const r = Math.max(ls.halfPx * 1.6 * px, 8 * px);
-		const ring = () => l.plank ? plankRing(g, l, 3.5 * px) : g.arc(ls.cx, ls.cy, r, 0, TAU);
+		const ring = () => g.arc(ls.cx, ls.cy, r, 0, TAU);
 		g.strokeStyle = P.selHalo;
 		g.lineWidth = 5 * px;
 		g.beginPath();
@@ -58284,8 +57880,7 @@ function renderOverlay(v, now) {
 		g.lineWidth = 1.4 * px;
 		g.setLineDash([2.5 * px, 2.5 * px]);
 		g.beginPath();
-		if (markLeaf.plank) plankRing(g, markLeaf, 3.5 * px);
-		else g.arc(ls.cx, ls.cy, r, 0, TAU);
+		g.arc(ls.cx, ls.cy, r, 0, TAU);
 		g.stroke();
 		g.setLineDash([]);
 	}
@@ -58294,8 +57889,7 @@ function renderOverlay(v, now) {
 		g.strokeStyle = P.sel;
 		g.lineWidth = 1.4 * px;
 		g.beginPath();
-		if (n.lift) liftRing(g, n, S0 * .6);
-		else g.arc(n.cx, n.cy, n.rad + S0 * .6, 0, TAU);
+		g.arc(n.cx, n.cy, n.rad + S0 * .6, 0, TAU);
 		g.stroke();
 	}
 	if (hv && hv.leaf && hv.leaf !== selLeaf) {
@@ -58304,8 +57898,7 @@ function renderOverlay(v, now) {
 		g.lineWidth = 1.1 * px;
 		g.setLineDash([2 * px, 2 * px]);
 		g.beginPath();
-		if (hv.leaf.plank) plankRing(g, hv.leaf, 2.5 * px);
-		else g.arc(ls.cx, ls.cy, Math.max(ls.halfPx * 1.44 * px, 6 * px), 0, TAU);
+		g.arc(ls.cx, ls.cy, Math.max(ls.halfPx * 1.44 * px, 6 * px), 0, TAU);
 		g.stroke();
 		g.setLineDash([]);
 	}
@@ -58315,21 +57908,6 @@ function renderOverlay(v, now) {
 	const occ = new Occupancy(W, H);
 	const fits = occ.fits, reserve = occ.add;
 	for (const r of v.hudRects || []) reserve(r[0], r[1], r[2], r[3]);
-	const liftRect = /* @__PURE__ */ new Map();
-	for (const n of M.piles) {
-		const b = liftBox(n);
-		const [x0, y0] = toS(b.x0, b.y0), [x1, y1] = toS(b.x1, b.y1);
-		if (x1 < -4 || y1 < -4 || x0 > W + 4 || y0 > H + 4) continue;
-		const r = [
-			x0 - 2,
-			y0 - 2,
-			x1 + 2,
-			y1 + 2
-		];
-		liftRect.set(n, r);
-		reserve(r[0], r[1], r[2], r[3]);
-	}
-	v.liftRect = liftRect;
 	const hud = v.hudRects || [];
 	const underHud = (x, y) => {
 		for (const r of hud) if (x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3]) return true;
@@ -58555,7 +58133,6 @@ function renderOverlay(v, now) {
 		let Pt = null;
 		if (zz.node && zz.node.branch && zz.node.cnt) Pt = [zz.node.cx, zz.node.cy - zz.node.rad - S0 * .6];
 		else if (zz.node && zz.node.branch) Pt = [zz.node.branch.pts[4][0], zz.node.branch.pts[4][1]];
-		else if (zz.node && zz.node.kind === "pile") Pt = [zz.node.cx, liftBox(zz.node).y0 - S0 * .6];
 		else if (zz.node && zz.node.cnt) Pt = [zz.node.cx, zz.node.cy];
 		else if (zz.file != null && M.files[zz.file] && M.files[zz.file].leaf) {
 			const l = M.files[zz.file].leaf;
@@ -58789,7 +58366,7 @@ function renderOverlay(v, now) {
 			sy,
 			pose
 		});
-		const fname = A.file ? leafPx < 14 && A.file.node && A.file.node.depth >= 1 && A.file.node.kind !== "pile" && !namedN.has(A.file.node) ? folderPath(A.file.node).replace(" › ", "/") + "/" + A.file.name : A.file.name : "";
+		const fname = A.file ? leafPx < 14 && A.file.node && A.file.node.depth >= 1 && !namedN.has(A.file.node) ? folderPath(A.file.node).replace(" › ", "/") + "/" + A.file.name : A.file.name : "";
 		const leafNamed = !!A.file && (v.labelHits || []).some((h) => h.leaf && h.leaf.file === A.file);
 		const doing = tagDoing(fname, pose, !!A.file, leafNamed);
 		if (!B.visible) {
@@ -59021,13 +58598,13 @@ function renderOverlay(v, now) {
 	})) || v.agents.some((A) => !!A.lastEdit && t - A.lastEdit.t < 1.6);
 }
 function folderPath(n) {
-	const nm = (x) => x.kind === "root" || x.kind === "pile" ? x.label || x.name : x.disp || shortName(x.name);
-	if (n.depth < 2) return nm(n);
-	let top = n;
-	while (top.parent && top.depth > 1) top = top.parent;
+	const nm = (x) => x.kind === "root" ? x.label || x.name : x.disp || shortName(x.name);
+	const top = nameTop(n);
+	if (n.depth < 2 || top === n) return nm(n);
 	const t = nm(top);
 	let s = nm(n);
 	if (s.startsWith(t + "/")) s = s.slice(t.length + 1);
+	else if ((n.unmatched || n.support) && top.folder && n.folder && n.folder.startsWith(top.folder + "/")) s = n.folder.slice(top.folder.length + 1);
 	return `${t} › ${s}`;
 }
 var FRESH_S = 300;
@@ -59126,7 +58703,7 @@ function drawEdits(v, now, ox, oy, reserve) {
 			const l = l0;
 			const created = A.created.has(id) && A.lastEdit && A.lastEdit.f.id === id;
 			const age = created ? t - A.lastEdit.t : 99, grow = M.files[id].ghost || created ? v.playing ? Math.min(1, Math.max(.05, age / 1.2)) : 1 : 1;
-			const own = l.term ? l.term.node : l.pile;
+			const own = l.term ? l.term.node : null;
 			const outside = hasOnly && !!own && !own.lit && onlyBinds(v, A);
 			const ls = leafScreen(l, z);
 			const sc = Math.max(1, (l.region === "root" ? 5.5 : 10.5) / ls.halfPx) * grow;
@@ -59286,7 +58863,7 @@ function drawVeins(v, px, inView) {
 	if (v.hasOnly) for (const A of v.agents) for (const [id] of A.edits) {
 		const f = M.files[id];
 		const l = f && f.leaf;
-		const own = l ? l.term ? l.term.node : l.pile : null;
+		const own = l && l.term ? l.term.node : null;
 		if (!l || !own || !own.lit) continue;
 		let b = l.term && l.term.branch || f.node && f.node.branch || null;
 		let guard = 0;
@@ -59506,7 +59083,7 @@ var terrPad = (z) => S0 * .22 + 16 / z;
 var TERR = /* @__PURE__ */ new WeakMap();
 function drawTerritories(v, ox, oy) {
 	v.terrPolys = [];
-	const zs = v.zones.filter((zz) => !zz.waived && zz.node && zz.node.kind !== "pile" && zz.node.depth >= 1);
+	const zs = v.zones.filter((zz) => !zz.waived && zz.node && zz.node.depth >= 1);
 	if (!zs.length) return;
 	const { g, M } = v;
 	const P = v.P, z = v.cam.z, dpr = v.dpr;
@@ -59718,7 +59295,7 @@ function buildFoliageField(v, toS, hoverNode) {
 	const api = {
 		discs,
 		sideOk(x0, y0, x1, y1, n, range = 150) {
-			if (!n || n.depth < 1 || n.kind === "pile") return true;
+			if (!n || n.depth < 1) return true;
 			const T = topOf(n);
 			let dOwn = Infinity, dFor = Infinity;
 			for (let i = Math.floor((x0 - range) / CELL); i <= Math.floor((x1 + range) / CELL); i++) for (let j = Math.floor((y0 - range) / CELL); j <= Math.floor((y1 + range) / CELL); j++) {
@@ -59836,7 +59413,7 @@ function buildFoliageField(v, toS, hoverNode) {
 			};
 		},
 		belongs(x0, y0, x1, y1, n, anchors, range = 220, clear = 4) {
-			if (!n || n.depth < 1 || n.kind === "pile") return true;
+			if (!n || n.depth < 1) return true;
 			const q = api.near(x0, y0, x1, y1, n, anchors, range);
 			if (q.loud !== Infinity && !(q.loud >= clear && q.own <= q.loud)) return false;
 			return q.calmC === Infinity || q.own <= 10 || q.ownC <= q.calmC;
@@ -59878,7 +59455,7 @@ function drawBreadcrumb(v, g, free, fits, reserve) {
 	const m = S0 * 2, minPx = 60;
 	let best = null, bestArea = 0xde0b6b3a7640000;
 	for (const n of M.nodes) {
-		if (n.kind === "pile" || n.depth < 1 || !n.cnt) continue;
+		if (n.depth < 1 || !n.cnt) continue;
 		if (cx < n.bx0 - m || cx > n.bx1 + m || cy < n.by0 - m || cy > n.by1 + m) continue;
 		const area = (n.bx1 - n.bx0 + 1) * (n.by1 - n.by0 + 1);
 		if (!best || n.depth > best.depth || n.depth === best.depth && area < bestArea) {
@@ -59889,7 +59466,7 @@ function drawBreadcrumb(v, g, free, fits, reserve) {
 	if (!best) {
 		let bd = 0xde0b6b3a7640000;
 		for (const n of M.nodes) {
-			if (n.kind === "pile" || n.depth < 1 || !n.cnt || n.quiet) continue;
+			if (n.depth < 1 || !n.cnt || n.quiet) continue;
 			const d = Math.hypot(n.cx - cx, n.cy - cy);
 			if (d < n.rad + S0 * 6 && d < bd) {
 				bd = d;
@@ -59905,7 +59482,7 @@ function drawBreadcrumb(v, g, free, fits, reserve) {
 		const w = Math.min(vx1, n.bx1) - Math.max(vx0, n.bx0), h = Math.min(vy1, n.by1) - Math.max(vy0, n.by0);
 		return w > 0 && h > 0 ? w * h / vArea : 0;
 	};
-	const rival = (q) => M.nodes.some((o) => o !== q && o.depth === q.depth && o.kind === q.kind && o.kind !== "pile" && o.cnt && !isUnder(o, q) && !isUnder(q, o) && share(o) > .15);
+	const rival = (q) => M.nodes.some((o) => o !== q && o.depth === q.depth && o.kind === q.kind && o.cnt && !isUnder(o, q) && !isUnder(q, o) && share(o) > .15);
 	let at = best;
 	while (at && at.depth >= 1 && rival(at)) at = at.parent;
 	if (!at || at.depth < 1) return;
@@ -59914,7 +59491,7 @@ function drawBreadcrumb(v, g, free, fits, reserve) {
 	for (let q = best; q && q.depth >= 1; q = q.parent) if (!q.quiet || q === best) chain.unshift(q);
 	const repo = M.name.split("/").filter(Boolean).pop() || M.name;
 	const segs = [{
-		txt: best.kind === "root" ? "tests" : repo,
+		txt: best.kind === "root" ? best.support ? "roots" : "tests" : repo,
 		n: best.kind === "root" ? M.roots : M.crown
 	}];
 	for (const q of chain) segs.push({
@@ -60039,7 +59616,7 @@ function riskGroups(v) {
 		const f = M.files[id];
 		if (!f || !f.node || !f.leaf) continue;
 		let n = f.node;
-		if (n.kind !== "pile") while (n.parent && n.depth > D) n = n.parent;
+		while (n.parent && n.depth > D) n = n.parent;
 		let e = groups.get(n);
 		if (!e) groups.set(n, e = {
 			n,
@@ -60085,10 +59662,6 @@ function riskGroups(v) {
 				l.term.cx,
 				l.term.cy,
 				l.term.rad
-			] : l.pile ? [
-				l.pile.cx,
-				l.pile.cy,
-				l.pile.pw || 20
 			] : [
 				l.x,
 				l.y,
@@ -60118,7 +59691,7 @@ function drawRisk(v, px) {
 	for (const e of groups) for (const id of e.ids) {
 		const l = M.files[id].leaf;
 		if (!l) continue;
-		const key = l.term || l.pile || l;
+		const key = l.term || l;
 		let c = clumps.get(key);
 		if (!c) {
 			c = l.term ? {
@@ -60127,12 +59700,6 @@ function drawRisk(v, px) {
 				r: l.term.rad,
 				n: 0,
 				of: Math.max(1, l.term.files.length)
-			} : l.pile ? {
-				x: l.pile.cx,
-				y: l.pile.cy,
-				r: l.pile.pw || 20,
-				n: 0,
-				of: Math.max(1, l.pile.files.length)
 			} : {
 				x: l.x,
 				y: l.y,
@@ -60180,7 +59747,7 @@ function drawRiskChips(v, g, toS, fits, reserve) {
 		if (sx + hw < 0 || sx - hw > v.W || sy < -40 || sy > v.H + 40) continue;
 		const c = e.ids.size;
 		const n = e.n;
-		const name = n.kind === "pile" ? n.label || n.name : n.kind === "root" ? (n.label || n.name).replace(/^tests for /, "tests/") : n.depth >= 1 ? n.disp || shortName(n.name) : "repo root";
+		const name = n.kind === "root" ? (n.label || n.name).replace(/^tests for /, "tests/") : n.depth >= 1 ? n.disp || shortName(n.name) : "repo root";
 		const txt = `⚠ ${e.rest ? name + " · other" : name} ${c}`;
 		const tw = g.measureText(txt).width + 14, th = 18;
 		let bx = 0, by = 0, ok = false;
@@ -60221,7 +59788,7 @@ function drawRiskChips(v, g, toS, fits, reserve) {
 		g.fillStyle = P.gold;
 		g.fillText(txt, bx + 7, by + th / 2 + .5);
 		reserve(bx, by, bx + tw, by + th);
-		const where = (n.kind === "pile" || n.kind === "root" ? n.label || n.name : n.depth >= 1 ? folderPath(n) : "repo root") + (e.rest ? " (smaller folders)" : "");
+		const where = (n.kind === "root" ? n.label || n.name : n.depth >= 1 ? folderPath(n) : "repo root") + (e.rest ? " (smaller folders)" : "");
 		const one = e.files.size === 1 ? M.files[[...e.files][0]] : null;
 		const what = f ? f.name : one ? one.name : `${e.files.size} changed files`;
 		const bd = {
@@ -60298,7 +59865,7 @@ function drawBlast(v, B, px, inView) {
 	const outline = B.live && B.ag ? B.ag.color : P.mark;
 	const dimmed = (l) => {
 		if (!v.hasOnly) return false;
-		const own = l.term ? l.term.node : l.pile;
+		const own = l.term ? l.term.node : null;
 		return !!(own && !own.lit);
 	};
 	const draw = (pred, a, rDot, dimPass) => {
@@ -60407,7 +59974,6 @@ function bonkPoint(v, bk) {
 		const p = zn.branch.pts[4];
 		return [p[0], p[1]];
 	}
-	if (bk.kind === "keep" && zn && zn.kind === "pile") return [zn.cx, liftBox(zn).y0];
 	const l = bk.f && bk.f.leaf;
 	return l ? [l.x, l.y] : null;
 }
@@ -60596,19 +60162,16 @@ function buildLeafField(v, toS, leafPx, inView, createdGhost, edited) {
 			if (all || edited.has(l.file.id)) add(l);
 		}
 	}
-	for (const p of M.piles) for (const l of p.leaves || []) if ((all || edited.has(l.file.id)) && inView(l.x - S0, l.y - S0, l.x + S0, l.y + S0)) add(l);
 	return f;
 }
 function drawLeafName(v, g, l, a, col, weight, fits, reserve, skip, ownRing) {
 	const P = v.P, fol = v.fol, field = v.leafField;
 	g.font = `${weight} 10.5px ${P.font}`;
 	const txt = l.file.name, tw = g.measureText(txt).width;
-	const own = l.term ? l.term.node : l.pile || null;
+	const own = l.term ? l.term.node : null;
 	const groundS = v.M.groundY * v.cam.z + (v.H / 2 - v.cam.y * v.cam.z);
 	const fitsOwn = fits;
-	const cands = candidatesForLeaf(a, tw);
-	if (l.plank) cands.splice(1);
-	const c = placeLabel(cands, { fits: (x0, y0, x1, y1) => fitsOwn(x0, y0, x1, y1, ownRing) }, {
+	const c = placeLabel(candidatesForLeaf(a, tw), { fits: (x0, y0, x1, y1) => fitsOwn(x0, y0, x1, y1, ownRing) }, {
 		W: v.W,
 		H: v.H
 	}, field ? {
@@ -60937,18 +60500,6 @@ function drawLabels(v, g, toS, fits, reserve, leafPx, inView, createdGhost, phas
 		if (rule && tagged.has(n) && !nest && !sel && !lit && hovN !== n) continue;
 		if (n.quiet && !must && hovN !== n) continue;
 		if (crumbAnc && crumbAnc.has(n) && !must && hovN !== n) continue;
-		if (n.kind === "pile") {
-			const la = liftAnchor(n);
-			const [sx, sy] = toS(la.x, la.y);
-			if (onScreen(sx, sy, 60)) cand.push({
-				type: "pile",
-				n,
-				sx,
-				sy,
-				pri: 1e6 + 10 * n.nFiles
-			});
-			continue;
-		}
 		const big = n.depth === 1;
 		const srad = n.rad * z;
 		if (quietZoom && !lit && !must && !big && hovN !== n && !n.vFold) continue;
@@ -60979,7 +60530,7 @@ function drawLabels(v, g, toS, fits, reserve, leafPx, inView, createdGhost, phas
 		const field = v.leafField;
 		const leaves = field ? {
 			field,
-			skip: (o) => !!(o.term ? o.term.node : o.pile) && isUnder(o.term ? o.term.node : o.pile, n)
+			skip: (o) => !!o.term && isUnder(o.term.node, n)
 		} : null;
 		const vp = {
 			W,
@@ -61058,36 +60609,6 @@ function drawLabels(v, g, toS, fits, reserve, leafPx, inView, createdGhost, phas
 		const col = pill ? P.pillText : n.keep ? P.keepText : dusk ? P.duskLabel : info || nestSet.has(n) || n === selNode || hovN === n ? P.text : hasOnly && n.lit ? P.onlyText : P.calmLabel;
 		const underground = n.kind === "root";
 		const okY = (y) => !underground || y > groundS + 9;
-		if (c.type === "pile") {
-			const dir = liftAnchor(n).dir;
-			g.font = `600 11px ${P.font}`;
-			const [t1, t2] = liftCaption(M, n);
-			const w1 = g.measureText(t1).width;
-			g.font = `10px ${P.font}`;
-			const w = w1 + g.measureText(t2).width + 4;
-			const x0 = dir > 0 ? c.sx + 2 : c.sx - 2 - w, y0 = c.sy + 1, y1 = y0 + 15;
-			if (!fits(x0, y0, x0 + w, y1, v.liftRect?.get(n))) continue;
-			reserve(x0, y0, x0 + w, y1);
-			v.labelHits.push({
-				r: [
-					x0,
-					y0,
-					x0 + w,
-					y1
-				],
-				n
-			});
-			g.strokeStyle = P.halo;
-			g.lineWidth = 3.5;
-			g.font = `600 11px ${P.font}`;
-			g.fillStyle = dusk ? P.duskLabel : P.pileLabel;
-			halo(t1, x0 + 2, y1 - 7.5);
-			g.font = `10px ${P.font}`;
-			g.fillStyle = P.muted;
-			halo(t2, x0 + 2 + w1, y1 - 7.5);
-			v.labelBudget = (v.labelBudget || 0) - 1;
-			continue;
-		}
 		const stemOf = (b) => b.pts.map((p, k) => {
 			const [px, py] = toS(p[0], p[1]);
 			return [
@@ -61186,7 +60707,6 @@ function drawLabels(v, g, toS, fits, reserve, leafPx, inView, createdGhost, phas
 				L.push(l);
 			}
 		}
-		for (const p of M.piles) for (const l of p.leaves || []) if ((!few || edited.has(l.file.id)) && inView(l.x - 5, l.y - 5, l.x + 5, l.y + 5)) L.push(l);
 		if (L.length < 1400) {
 			const planned = /* @__PURE__ */ new Set(), read = /* @__PURE__ */ new Set(), bird = /* @__PURE__ */ new Set();
 			for (const A of v.agents) {
@@ -61242,7 +60762,7 @@ function drawLabels(v, g, toS, fits, reserve, leafPx, inView, createdGhost, phas
 				if (named.has(l)) continue;
 				const a = leafScreenGeom(l, z, toS, edited.has(l.file.id) ? 10.5 : 0);
 				if (!onScreen(a.tip[0], a.tip[1], 0)) continue;
-				if (drawLeafName(v, g, l, a, hasOnly && !(l.term ? l.term.node.lit : l.pile && l.pile.lit) ? P.duskLeafLabel : l.file.kind === "c" ? P.leafLabel : P.muted, 400, fits, reserve, leafSkip(l, rank.get(l) >= LOUD_RANK, loudLeaf))) cnt++;
+				if (drawLeafName(v, g, l, a, hasOnly && !(l.term && l.term.node.lit) ? P.duskLeafLabel : l.file.kind === "c" ? P.leafLabel : P.muted, 400, fits, reserve, leafSkip(l, rank.get(l) >= LOUD_RANK, loudLeaf))) cnt++;
 			}
 		}
 	}
@@ -61253,7 +60773,7 @@ function branchNode(b) {
 }
 function hitNode(hit) {
 	if (!hit) return null;
-	return hit.node || hit.branch && branchNode(hit.branch) || hit.clump || hit.pile || null;
+	return hit.node || hit.branch && branchNode(hit.branch) || hit.clump || null;
 }
 var inRect = (r, x, y) => x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
 function pick(v, sx, sy) {
@@ -61288,20 +60808,12 @@ function pick(v, sx, sy) {
 		for (const id of A.edits.keys()) hot.add(id);
 		if (A.file) hot.add(A.file.id);
 	}
-	const pileWhole = leafPx < 12 || v.tool !== "explore";
-	const plank = plankAt(M, wx, wy, Math.max(3 / z, SCAF.pitch * .3));
-	if (plank && pileWhole && plank.pile) return { pile: plank.pile };
-	if (plank && !(plank.file.ghost && !created.has(plank.file.id) && !planned.has(plank.file.id))) {
-		best = { leaf: plank };
-		bd = 0;
-	}
 	for (const it of near) {
 		if (!it.leaf) continue;
 		const l = it.leaf, f = l.file;
 		if (f.ghost && !created.has(f.id) && !planned.has(f.id)) continue;
-		const own = l.term ? l.term.node : l.pile;
+		const own = l.term ? l.term.node : null;
 		if (own && own.fAnc) continue;
-		if (l.region === "ground") continue;
 		if (leafPx < 4.2 && !planned.has(f.id) && !hot.has(f.id)) continue;
 		const ls = leafScreen(l, z);
 		let d = Math.hypot(ls.cx - wx, ls.cy - wy);
@@ -61317,7 +60829,7 @@ function pick(v, sx, sy) {
 	if (best) {
 		if (v.tool !== "explore" && leafPx < 24 && best.leaf) {
 			const l = best.leaf;
-			const own = l.term ? l.term.node : l.pile;
+			const own = l.term ? l.term.node : null;
 			if (own && own.depth >= 1) return {
 				node: own,
 				viaLeaf: l
@@ -61362,8 +60874,6 @@ function pick(v, sx, sy) {
 			open: !top
 		};
 	}
-	const lift = liftAt(M, wx, wy, 4 / z);
-	if (lift) return { pile: lift };
 	return null;
 }
 var MINI = /* @__PURE__ */ new WeakMap();
@@ -61432,7 +60942,6 @@ function buildMini(v, canvas) {
 		g.lineTo(b.x1, b.y1);
 		g.stroke();
 	}
-	drawScaffoldMini(g, M, P, z);
 	MINI.set(canvas, st);
 	return true;
 }
@@ -61803,11 +61312,16 @@ function AddZoneRow(p) {
 //#region src/components/grid/codemap/TreeCards.tsx
 var plural$3 = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
 var linesTxt = (f) => f.kind === "a" ? "asset" : `~${(f.lines || 1).toLocaleString()} lines`;
-var nodeName = (M, n) => n.kind === "pile" ? liftCaption(M, n)[0] : n.kind === "root" ? n.label || n.name : n.depth === 0 ? M.name : n.disp || shortName(n.name);
-var liftWhat = (M, n) => {
-	const k = liftKind(M, n), nm = n.label || n.name;
-	return k === "code" ? `the non-code files of ${nm} (README, config) · its code is the ${nm} branch` : k === "tests" ? `test data in ${nm}/ (fixtures, golden files) · the tests are the roots` : "on the scaffold (docs, CI, config)";
+var nodeName = (M, n) => n === M.roots ? "roots" : n.kind === "root" ? n.label || n.name : n.depth === 0 ? M.name : n.disp || shortName(n.name);
+var rootWhat = (n) => {
+	if (!n.support) return "tests · " + (n.crownTwin ? n.crownTwin.path : n.name);
+	const at = n.folder || "";
+	if (!at) return "the repo's non-code files with no branch of their own · the tap root, under the trunk";
+	if (n.data) return `test data in ${at}/ (fixtures, golden files) · the tests are the roots beside it`;
+	if (n.crownTwin) return `the non-code files of ${at}/ (README, config) · its code is the ${n.crownTwin.path} branch`;
+	return at === "(repo root)" ? "the repo root's non-code files (README, licence, config) · roots under the trunk" : `${at}/ (docs, CI, config) · roots under the trunk`;
 };
+var rootKind = (n) => !n.support ? "tests" : n.data ? "test data" : "non-code";
 function dispName(M, f) {
 	if (!f) return "";
 	if ((M.nameCount.get(f.name) || 0) > 1 && f.path.includes("/")) return baseOf(dirOf(f.path)) + "/" + f.name;
@@ -61900,24 +61414,7 @@ function LegendCard({ open, onToggle, primary }) {
 						opacity: ".7"
 					})
 				]
-			}), "root tip = a test file, under the code it tests"] }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-				className: "sw",
-				viewBox: "0 0 12 12",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
-					d: "M2 0 V12 M6 0 V12 M1 4 H7 M1 9 H7",
-					stroke: "currentColor",
-					strokeWidth: "1",
-					fill: "none",
-					opacity: ".55"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
-					d: "M6 2 H11 M6 6 H10 M6 11 H11",
-					stroke: "currentColor",
-					strokeWidth: "1.4",
-					fill: "none",
-					opacity: ".75"
-				})]
-			}), "scaffold = docs, CI and config: a lift per folder, a plank per file"] }),
+			}), "root tip = a test, under the branch it tests · or a doc, CI or config file, under its branch or the trunk"] }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 				className: "sw",
 				viewBox: "0 0 12 12",
@@ -62393,9 +61890,10 @@ function FileCard(p) {
 }
 function NodeCard(p) {
 	const { M, n } = p;
-	const isRoot = n.kind === "root", isPile = n.kind === "pile", isTrunk = n.depth === 0 && !isPile;
+	const isRoot = n.kind === "root", isTrunk = n.depth === 0;
 	const title = nodeName(M, n);
-	const path = isTrunk ? n === M.roots ? "all tests" : "repo root" : isRoot ? "tests · " + (n.crownTwin ? n.crownTwin.path : n.name) : isPile ? liftWhat(M, n) : n.path;
+	const path = isTrunk ? n === M.roots ? "tests, docs, CI and config" : "repo root" : isRoot ? rootWhat(n) : n.path;
+	const nSupport = M.files.filter((f) => !f.ghost && isSupport(f)).length;
 	const who = [];
 	if (!isTrunk) for (const A of p.agents) {
 		const bits = [];
@@ -62459,7 +61957,7 @@ function NodeCard(p) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "ct-facts",
 			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: isRoot ? "tests" : isPile ? "scaffold lift" : isTrunk ? n === M.roots ? "all tests" : "repo (the trunk)" : "folder" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: isTrunk ? n === M.roots ? "all roots" : "repo (the trunk)" : isRoot ? rootKind(n) : "folder" }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: plural$3(n.nFiles, isTrunk && n === M.crown ? "code file" : "file") }),
 				n.lines > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
 					"~",
@@ -62473,8 +61971,8 @@ function NodeCard(p) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ct-facts",
 				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [plural$3(M.roots.nFiles, "test"), " (root tips)"] }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [M.piles.reduce((a, q) => a + q.nFiles, 0), " docs / config (on the scaffold)"] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [plural$3(M.roots.nFiles - nSupport, "test"), " (root tips)"] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [nSupport, " docs / config (root tips under the trunk)"] }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: plural$3(M.crown.kids.length, "top-level folder") })
 				]
 			}),
@@ -62596,12 +62094,12 @@ function NodeCard(p) {
 function BlastCard(p) {
 	const { M, bd } = p;
 	const n = bd.node;
-	const where = n.kind === "pile" ? n.label : n.depth === 0 ? n === M.roots ? "tests" : "repo root files" : n.kind === "root" ? n.label : n.disp || n.name;
+	const where = n.depth === 0 ? n === M.roots ? "roots" : "repo root files" : n.kind === "root" ? n.label : n.disp || n.name;
 	const srcs = [...bd.files].map((id) => M.files[id]).filter(Boolean);
 	const groups = /* @__PURE__ */ new Map();
 	for (const id of bd.ids) {
 		const f = M.files[id];
-		const k = f.node ? f.node.kind === "pile" || f.node.kind === "root" ? f.node.label || f.node.name : f.node.path || M.name : "?";
+		const k = f.node ? f.node.kind === "root" ? f.node.label || f.node.name : f.node.path || M.name : "?";
 		const g = groups.get(k);
 		if (g) g.push(f);
 		else groups.set(k, [f]);
@@ -62788,11 +62286,11 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "click for details" }) })
 		] });
 	}
-	const n = hit.node || (hit.branch ? hit.branch.node || (hit.branch.owner && hit.branch.owner.depth >= 1 ? hit.branch.owner : null) : null) || hit.clump || hit.pile || null;
+	const n = hit.node || (hit.branch ? hit.branch.node || (hit.branch.owner && hit.branch.owner.depth >= 1 ? hit.branch.owner : null) : null) || hit.clump || null;
 	if (n && hit.viaLeaf) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: nodeName(M, n) }),
 		" ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: n.kind === "pile" ? "scaffold lift" + liftCaption(M, n)[1] : (n.kind === "root" ? "tests" : "folder") + " · " + plural$3(n.nFiles, "file") }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: (n.kind === "root" ? rootKind(n) : "folder") + " · " + plural$3(n.nFiles, "file") }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: act(n) }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "zoom in to pick a single file" }) })
 	] });
@@ -62800,7 +62298,7 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: nodeName(M, n) }),
 		" ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("i", { children: [
-			n.kind === "root" ? "tests" : n.kind === "pile" ? liftWhat(M, n) : "folder",
+			n.kind === "root" ? n.support ? rootWhat(n) : "tests" : "folder",
 			" · ",
 			plural$3(n.nFiles, "file"),
 			n.lines ? ` · ~${n.lines.toLocaleString()} lines` : ""
@@ -62940,9 +62438,8 @@ function changeSummary(M, agents) {
 		const f = M.files[id];
 		if (mineA(A)) mine++;
 		const n = f.node;
-		let top = n;
-		while (top && top.depth > 1) top = top.parent;
-		const tk = !top || top.depth < 1 ? n && n.kind === "pile" ? nodeName(M, n) : "repo root" : nodeName(M, top);
+		const top = n && nameTop(n);
+		const tk = !top || top.depth < 1 ? "repo root" : nodeName(M, top);
 		tops.set(tk, (tops.get(tk) || 0) + 1);
 		if (!n) continue;
 		let e = byNode.get(n);
@@ -63012,7 +62509,7 @@ function birdWords(st, primary, activity, word, helpersOut, idle) {
 function lastWhere(M, path) {
 	const n = M.byPath.get(path)?.node;
 	if (!n) return "";
-	if (n.depth < 1) return n.kind === "pile" ? nodeName(M, n) : "repo root";
+	if (n.depth < 1) return "repo root";
 	return folderPath(n).replace(" › ", "/");
 }
 function helperWhere(M, S) {
@@ -63020,7 +62517,7 @@ function helperWhere(M, S) {
 	const f = S.status === "blocked" && bk ? bk.f : S.file;
 	const n = f ? f.node : S.nest;
 	if (!n) return "";
-	if (n.depth < 1) return n.kind === "pile" ? nodeName(M, n) : "repo root";
+	if (n.depth < 1) return "repo root";
 	return folderPath(n).replace(" › ", "/");
 }
 function BirdIndex(p) {
@@ -63715,8 +63212,7 @@ function Changes({ p, sum, notes = [], riskOpen, onRisk, allFolders = false, onA
 var WHOLE_PAD = {
 	side: 52,
 	top: 40,
-	bot: 14,
-	piles: 34
+	bot: 14
 };
 var WHOLE_MAX_Z = 6;
 function pictureBox(M) {
@@ -63728,8 +63224,8 @@ function pictureBox(M) {
 		y1: Math.max(B.y1 - m, M.groundY)
 	};
 }
-function fitWhole(B, groundY, piles, W, H, I) {
-	const padB = piles && B.y1 - groundY < S0 * 2 ? WHOLE_PAD.piles : WHOLE_PAD.bot;
+function fitWhole(B, W, H, I) {
+	const padB = WHOLE_PAD.bot;
 	const w = Math.max(40, W - I.left - I.right - 2 * WHOLE_PAD.side), h = Math.max(40, H - I.top - I.bot - WHOLE_PAD.top - padB);
 	const z = Math.min(WHOLE_MAX_Z, w / Math.max(1, B.x1 - B.x0), h / Math.max(1, B.y1 - B.y0));
 	const sx = (I.left + W - I.right) / 2, slack = Math.max(0, h - (B.y1 - B.y0) * z), sy = H - I.bot - padB - (z >= WHOLE_MAX_Z ? slack / 2 : Math.min(slack / 2, h * .12));
@@ -63934,7 +63430,7 @@ var TreeCtl = class {
 					f
 				} : null;
 			} else if (i.kind === "node") {
-				const n = i.n.kind === "pile" ? M.piles.find((p) => p.path === i.n.path) : (i.n.kind === "root" ? M.rootNodeOf : M.nodeOf).get(i.n.path);
+				const n = (i.n.kind === "root" ? M.rootNodeOf : M.nodeOf).get(i.n.path);
 				this.info = n ? {
 					kind: "node",
 					n
@@ -64059,7 +63555,7 @@ var TreeCtl = class {
 	}
 	wholeCam() {
 		const M = this.M, v = this.v;
-		return fitWhole(pictureBox(M), M.groundY, M.piles.length > 0, v.W, v.H, this.insets);
+		return fitWhole(pictureBox(M), v.W, v.H, this.insets);
 	}
 	atWhole() {
 		const v = this.v;
@@ -64132,18 +63628,6 @@ var TreeCtl = class {
 	flyToNode(n, pad) {
 		const v = this.v, M = this.M;
 		if (!v || !M) return;
-		if (n.kind === "pile") {
-			const B = liftBox(n);
-			const c = this.fitBox(B.x0 - (n.pw || 30) * 1.5, B.y0 - S0 * 2, B.x1 + (n.pw || 30) * 1.5, B.y1 + S0 * 2, .7);
-			this.navTo(c);
-			v.pulse = {
-				x: n.cx,
-				y: n.cy,
-				r: Math.max(n.pw || 30, n.h || 10) * .6,
-				t0: performance.now()
-			};
-			return;
-		}
 		if (n.depth === 0) {
 			this.pushHist();
 			this.stopFollow(true);
@@ -64483,11 +63967,6 @@ var TreeCtl = class {
 			this.flyToNode(n);
 			return;
 		}
-		if (hit.pile) {
-			this.selectNode(n);
-			this.flyToNode(n);
-			return;
-		}
 		this.selectNode(n);
 	}
 	syncSel() {
@@ -64710,7 +64189,7 @@ var TreeCtl = class {
 			t0: performance.now()
 		};
 		else if (node.depth >= 1) {
-			const c = node.kind === "pile" ? ((B) => this.fitBox(B.x0 - (node.pw || 30) * 2, B.y0 - S0 * 3, B.x1 + (node.pw || 30) * 2, B.y1 + S0 * 2, .7))(liftBox(node)) : this.fitBox(node.bx0 - S0 * 4, node.by0 - S0 * 4, node.bx1 + S0 * 4, node.by1 + S0 * 4, .55);
+			const c = this.fitBox(node.bx0 - S0 * 4, node.by0 - S0 * 4, node.bx1 + S0 * 4, node.by1 + S0 * 4, .55);
 			c.z = Math.min(c.z, 3.5);
 			this.navTo(c);
 			v.pulse = {
@@ -64828,7 +64307,6 @@ var TreeCtl = class {
 			x1: M.roots.bx1,
 			y1: M.roots.by1
 		}, 12));
-		for (const p of M.piles) parts.push(S(liftBox(p), 10));
 		const s = parts.join(";");
 		if (this.host.dataset.tree !== s) this.host.dataset.tree = s;
 	}
@@ -64844,7 +64322,7 @@ var TreeCtl = class {
 };
 function sameHit(a, b) {
 	if (!a || !b) return a === b;
-	return a.leaf === b.leaf && a.node === b.node && a.branch === b.branch && a.clump === b.clump && a.pile === b.pile && a.tag === b.tag && a.bird === b.bird && a.badge === b.badge && a.trunk === b.trunk && a.nest === b.nest;
+	return a.leaf === b.leaf && a.node === b.node && a.branch === b.branch && a.clump === b.clump && a.tag === b.tag && a.bird === b.bird && a.badge === b.badge && a.trunk === b.trunk && a.nest === b.nest;
 }
 //#endregion
 //#region src/components/grid/codemap/CodeTree.tsx
@@ -65090,7 +64568,7 @@ function CodeTree(p) {
 				serverZones: p.zones,
 				folded: !!v && v.folded.has(n),
 				onClose: () => ctl.closeInfo(),
-				onZoom: () => n.depth === 0 && n.kind !== "pile" ? ctl.wholeTree() : ctl.flyToNode(n, .8),
+				onZoom: () => n.depth === 0 ? ctl.wholeTree() : ctl.flyToNode(n, .8),
 				onFold: () => ctl.toggleFold(n),
 				onKeep: () => p.onPaint("keep", { node: n }),
 				onOnly: () => p.onPaint("only", { node: n }),
@@ -65327,25 +64805,9 @@ function tourParts(tree, hasRoots, W, H) {
 		];
 		return c[2] > c[0] && c[3] > c[1] ? c : null;
 	};
-	const lifts = B.slice(hasRoots ? 3 : 2).filter((b) => !!b).sort((a, b) => a[0] - b[0]);
-	const towers = [];
-	for (const b of lifts) {
-		const t = towers[towers.length - 1];
-		if (t && b[0] <= Math.max(...t.map((q) => q[2]))) t.push(b);
-		else towers.push([b]);
-	}
-	const span = (t) => [
-		Math.min(...t.map((q) => q[0])),
-		Math.min(...t.map((q) => q[1])),
-		Math.max(...t.map((q) => q[2])),
-		Math.max(...t.map((q) => q[3]))
-	];
-	const tall = (t) => span(t)[3] - span(t)[1];
-	const best = towers.sort((a, b) => b.length - a.length || tall(b) - tall(a))[0];
 	return {
 		canopy: clip(B[1] || null),
-		roots: hasRoots ? clip(B[2] || null) : null,
-		scaffold: best ? clip(span(best)) : null
+		roots: hasRoots ? clip(B[2] || null) : null
 	};
 }
 function TourParts({ stageRef, M }) {
@@ -65384,20 +64846,13 @@ function TourParts({ stageRef, M }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		ref: box,
 		"aria-hidden": "true",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "ct-part-canopy",
-				style: hide
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "ct-part-roots",
-				style: hide
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "ct-part-scaffold",
-				style: hide
-			})
-		]
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "ct-part-canopy",
+			style: hide
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "ct-part-roots",
+			style: hide
+		})]
 	});
 }
 function miniJump(ctl, e) {
@@ -65436,7 +64891,8 @@ function slashFinds(active, pane) {
 	return pane.classList.contains("focused") && !doc.querySelector(".pane:hover");
 }
 function summary(M, agents, zones) {
-	const bits = [`${M.files.length} files: ${M.crown.nFiles} code files on ${M.crown.kids.length} top-level branches, ${M.roots.nFiles} tests as root tips under the code they test, ${M.piles.reduce((a, q) => a + q.nFiles, 0)} docs and config files as planks on the scaffold beside the trunk.`];
+	const nSup = M.files.filter((f) => !f.ghost && isSupport(f)).length;
+	const bits = [`${M.files.length} files: ${M.crown.nFiles} code files on ${M.crown.kids.length} top-level branches, ${M.roots.nFiles - nSup} tests as root tips under the code they test, ${nSup} docs, CI and config files as root tips under their branch or the trunk.`];
 	for (const A of agents) bits.push(`${A.ag.name}: ${A.status}${A.file ? " " + A.file.path : ""}, edited ${A.edits.size}, read ${A.reads.size}.`);
 	if (zones.length) bits.push(`${zones.length} rule${zones.length === 1 ? "" : "s"}: ` + zones.map((z) => (z.kind === "green" ? "only here " : "keep out ") + (z.name || z.pattern)).join("; ") + ".");
 	return bits.join(" ");
@@ -67036,28 +66492,22 @@ var TREE = {
 };
 var ROOTS = {
 	target: ".ct-part-roots",
-	title: "Roots are the tests",
+	title: "Roots hold the tree up",
 	body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		"Each ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "root tip" }),
-		" is one test file. A test grows under the code it tests, so its root is named for it, like ",
+		"The roots hold what keeps the tree standing: ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "tests" }),
+		" under the branch they test (",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "tests for backend/web" }),
-		"."
-	] })
-};
-var SCAFFOLD = {
-	target: ".ct-part-scaffold",
-	title: "Scaffolding holds docs and config",
-	body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		"Docs, CI and config stand beside the trunk as ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "scaffolding" }),
-		". Each ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "lift" }),
-		" is one folder, named on its top ledger (",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "docs · 21 files" }),
-		"). Each ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "plank" }),
-		" is one file; a longer plank is a bigger file."
+		"), ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "docs, CI and config" }),
+		" under the trunk (",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "docs" }),
+		", ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "repo root files" }),
+		"). Each",
+		" ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "root tip" }),
+		" is one file."
 	] })
 };
 var BIRDS$1 = {
@@ -67125,7 +66575,6 @@ function mapTourSteps(ctx) {
 	};
 	const out = [TREE];
 	if (ctx.roots !== false) out.push(ROOTS);
-	if (ctx.scaffold !== false) out.push(SCAFFOLD);
 	out.push(docked(ctx.changed > 0 ? BIRDS$1 : BIRDS_CALM));
 	if (shows(RULES)) out.push(RULES);
 	if (ctx.next.kind !== "none") out.push(docked({
@@ -68692,8 +68141,7 @@ function CodeMap({ title, active }) {
 				ctx: {
 					changed: agents.reduce((n, A) => n + A.edits.size, 0),
 					next,
-					roots: model.roots.cnt > 0,
-					scaffold: model.piles.length > 0
+					roots: model.roots.cnt > 0
 				}
 			})
 		]

@@ -11954,7 +11954,6 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   --ct-pill-text: color-mix(in srgb, var(--text) 80%, #fff);
   --ct-leaf-label: color-mix(in srgb, var(--text) 90%, var(--muted));
   --ct-root-label: hsl(34, 30%, 70%);
-  --ct-pile-label: hsl(32, 32%, 66%);
   --ct-keep-text: color-mix(in srgb, var(--red) 45%, #fff);
   --ct-only-text: color-mix(in srgb, var(--green) 45%, #fff);
   --ct-keep-bg: color-mix(in srgb, var(--red) 22%, var(--bg));
@@ -29558,7 +29557,6 @@ button.infotip-btn:focus-visible {
   --ct-pill-text: var(--text);
   --ct-leaf-label: #2a3040;
   --ct-root-label: hsl(30, 35%, 26%);
-  --ct-pile-label: hsl(30, 35%, 28%);
   --ct-keep-text: color-mix(in srgb, var(--red) 75%, #000);
   --ct-only-text: color-mix(in srgb, var(--green) 70%, #000);
   --ct-keep-bg: color-mix(in srgb, var(--red) 12%, #fff);

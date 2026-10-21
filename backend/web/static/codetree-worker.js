@@ -1948,126 +1948,6 @@ function growRoots(t, ex, ey, hb) {
 	for (let i = nodes.length - 1; i >= 0; i--) if (nodes[i].leaf) for (let q = i; q >= 0; q = nodes[q].p) nodes[q].n++;
 }
 //#endregion
-//#region src/lib/codetree/scaffold.ts
-const SCAF = {
-	pitch: 6.2,
-	plankT: 10 * .34,
-	bayW: 42,
-	over: 3.5,
-	floor: 3.5,
-	ceil: 11.5,
-	base: 6,
-	gap: 16,
-	clear: 12,
-	arm: 9
-};
-const fzOf = (lines) => Math.min(1, Math.log10(Math.max(1, lines) + 1) / 3.6);
-const liftH = (n) => SCAF.floor + n * SCAF.pitch + SCAF.ceil;
-const plankLen = (lines) => SCAF.bayW * (.28 + .72 * fzOf(lines)) + SCAF.over;
-function layoutScaffold(groups, groundY, trunkW, obs) {
-	const sides = [{
-		dir: -1,
-		H: 0,
-		gs: []
-	}, {
-		dir: 1,
-		H: 0,
-		gs: []
-	}];
-	for (const gr of groups) {
-		const s = sides[0].H <= sides[1].H ? sides[0] : sides[1];
-		s.gs.push(gr);
-		s.H += liftH(gr.files.length);
-	}
-	const towers = [];
-	const x0 = trunkW * 1 + SCAF.gap;
-	for (const s of sides) {
-		if (!s.gs.length) continue;
-		const H = SCAF.base + s.H;
-		const yTop = groundY - H - SCAF.clear;
-		const w = SCAF.bayW + SCAF.arm;
-		const clearAt = (xi) => {
-			const a = s.dir > 0 ? xi - SCAF.clear : xi - w - SCAF.clear, b = s.dir > 0 ? xi + w + SCAF.clear : xi + SCAF.clear;
-			for (const [px, py, r] of obs.pts) if (px + r > a && px - r < b && py + r > yTop) return false;
-			for (const [bx0, by0, bx1, by1] of obs.boxes) if (bx1 > a && bx0 < b && by1 > yTop && by0 < groundY) return false;
-			return true;
-		};
-		let off = x0;
-		for (let i = 0; i < 4e3 && !clearAt(s.dir * off); i++) off += 5;
-		const xi = s.dir * off, xo = xi + s.dir * SCAF.bayW;
-		const T = {
-			dir: s.dir,
-			xi,
-			xo,
-			y1: groundY,
-			y0: groundY - H - 5,
-			lifts: [],
-			tied: off - x0 < 30
-		};
-		let floor = groundY - SCAF.base;
-		for (const gr of s.gs) {
-			const top = floor - liftH(gr.files.length);
-			const L = {
-				key: gr.key,
-				files: gr.files,
-				planks: [],
-				tower: T,
-				floor,
-				top,
-				x0: 0,
-				x1: 0
-			};
-			const xoEnd = xo + s.dir * SCAF.over;
-			gr.files.forEach((f, r) => {
-				const len = plankLen(f.lines);
-				L.planks.push({
-					xo: xoEnd,
-					xi: xoEnd - s.dir * len,
-					y: top + SCAF.ceil + (r + .5) * SCAF.pitch,
-					len,
-					dir: s.dir,
-					lift: L
-				});
-			});
-			L.x0 = Math.min(xi, xoEnd);
-			L.x1 = Math.max(xi, xoEnd);
-			T.lifts.push(L);
-			floor = top;
-		}
-		towers.push(T);
-	}
-	return { towers };
-}
-function crownObstacles(leaves, branches) {
-	const pts = leaves.map((l) => [
-		l.x,
-		l.y,
-		6
-	]);
-	const boxes = [];
-	for (const b of branches) {
-		if (b.region === "root") continue;
-		let x0 = Math.min(b.x0, b.x1), x1 = Math.max(b.x0, b.x1), y0 = Math.min(b.y0, b.y1), y1 = Math.max(b.y0, b.y1);
-		for (let i = 0; i + 1 < b.cp.length; i += 2) {
-			x0 = Math.min(x0, b.cp[i]);
-			x1 = Math.max(x1, b.cp[i]);
-			y0 = Math.min(y0, b.cp[i + 1]);
-			y1 = Math.max(y1, b.cp[i + 1]);
-		}
-		const r = (b.w || 0) * .5;
-		boxes.push([
-			x0 - r,
-			y0 - r,
-			x1 + r,
-			y1 + r
-		]);
-	}
-	return {
-		pts,
-		boxes
-	};
-}
-//#endregion
 //#region src/lib/codetree/model.ts
 const dirOf = (p) => {
 	const i = p.lastIndexOf("/");
@@ -2141,15 +2021,16 @@ function parseFiles(raw) {
 		s.n += f.lines + 1;
 		if (f.kind === "c") s.c += f.lines + 1;
 	}
-	for (const f of F) if (f.test && f.kind === "c") f.place = "root";
-	else if (f.test) f.place = "ground";
-	else if (!f.path.includes("/")) f.place = f.kind === "c" ? "crown" : "ground";
+	for (const f of F) if (f.test || f.kind !== "c") f.place = "root";
+	else if (!f.path.includes("/")) f.place = "crown";
 	else {
 		const s = top[f.path.split("/")[0]];
-		f.place = s.c / s.n < .3 ? "ground" : "crown";
+		f.place = s.c / s.n < .3 ? "root" : "crown";
 	}
 	return F;
 }
+const isSupport = (f) => f.place === "root" && !(f.test && f.kind === "c");
+const TAP_LABEL = "docs, CI and config";
 function buildTree(rootName, entries, kind) {
 	const root = mkNode(rootName, "", null, kind);
 	const byPath = /* @__PURE__ */ new Map([["", root]]);
@@ -2233,21 +2114,15 @@ function mixAng(a, b, t) {
 	return a + d * t;
 }
 function buildModel(raw, opts = {}) {
-	let replay = opts.replay && opts.replay.v === 2 ? opts.replay : null;
+	let replay = opts.replay && opts.replay.v === 3 ? opts.replay : null;
 	if (replay && replay.files !== raw.files.length) replay = null;
-	const warm = !replay && opts.warm && opts.warm.v === 2 ? opts.warm : null;
+	const warm = !replay && opts.warm && opts.warm.v === 3 ? opts.warm : null;
 	const F = parseFiles(raw);
 	const crownEntries = [];
-	const groundGroups = /* @__PURE__ */ new Map();
 	for (const f of F) if (f.place === "crown") crownEntries.push({
 		segs: dirOf(f.path) ? dirOf(f.path).split("/") : [],
 		file: f
 	});
-	else if (f.place === "ground") {
-		const k = f.path.includes("/") ? f.path.split("/")[0] : "(repo root)";
-		if (!groundGroups.has(k)) groundGroups.set(k, []);
-		groundGroups.get(k).push(f);
-	}
 	const crown = buildTree(raw.name, crownEntries, "crown");
 	const M = {
 		name: raw.name,
@@ -2317,8 +2192,22 @@ function buildModel(raw, opts = {}) {
 		return n && n.depth >= 1 ? n : null;
 	};
 	const rootEntriesArr = [];
+	const supKey = (f) => (f.test ? "D:" : "S:") + (f.path.includes("/") ? f.path.split("/")[0] : "(repo root)");
+	const supCount = /* @__PURE__ */ new Map();
+	for (const f of F) if (isSupport(f)) supCount.set(supKey(f), (supCount.get(supKey(f)) || 0) + 1);
 	for (const f of F) {
 		if (f.place !== "root") continue;
+		if (isSupport(f)) {
+			const d = dirOf(f.path) ? dirOf(f.path).split("/") : [];
+			const k = supKey(f);
+			const twin = d.length ? M.nodeOf.get(d[0]) : void 0;
+			const segs = [k].concat(supCount.get(k) > 24 && d.length > 1 ? [d[1]] : []);
+			rootEntriesArr.push({
+				segs: twin && twin.depth === 1 ? segs : ["~"].concat(segs),
+				file: f
+			});
+			continue;
+		}
 		const n = limbOfPath(f.target);
 		f.tests = n;
 		let segs;
@@ -2348,12 +2237,28 @@ function buildModel(raw, opts = {}) {
 	M.rootNodeOf = roots.nodeOf;
 	for (const n of allNodes(M.roots)) {
 		if (n.depth === 0) continue;
-		n.unmatched = n.path.split("/")[0].startsWith("U:");
-		const crownPath = n.path.split("/").map((s) => s.replace(/^[TU]:/, "")).join("/");
-		n.crownTwin = n.unmatched ? null : M.nodeOf.get(crownPath) || null;
-		n.name = n.name.replace(/^[TU]:/, "");
-		n.label = n.unmatched ? "tests: " + shortName(crownPath) : "tests for " + shortName(n.crownTwin ? n.crownTwin.path : n.name);
 		for (const f of n.files) f.node = n;
+		const parts = n.path.split("/");
+		const own = parts[0] === "~" ? parts.slice(1) : parts;
+		if (n.name.startsWith("~/")) n.name = n.name.slice(2);
+		if (!own.length) {
+			n.support = true;
+			n.crownTwin = null;
+			n.folder = "";
+			n.name = n.label = TAP_LABEL;
+			continue;
+		}
+		const tag = own[0].slice(0, 2);
+		n.unmatched = tag === "U:";
+		n.support = tag === "S:" || tag === "D:";
+		n.data = tag === "D:";
+		const crownPath = own.map((s) => s.replace(/^[TUSD]:/, "")).join("/");
+		n.folder = crownPath;
+		const twin = n.unmatched ? null : M.nodeOf.get(crownPath) || null;
+		n.crownTwin = n.support && !twin && n.depth > 1 ? n.parent.crownTwin || null : twin;
+		n.name = n.name.replace(/^[TUSD]:/, "");
+		const at = shortName(crownPath);
+		n.label = !n.support ? n.unmatched ? n.depth === 1 ? "other tests · " + at + "/" : "tests · " + at : "tests for " + shortName(n.crownTwin ? n.crownTwin.path : n.name) : n.data ? n.crownTwin && n.depth === 1 ? "test data" : "test data · " + at + "/" : n.crownTwin ? at + " · non-code" : crownPath === "(repo root)" ? "repo root files" : at;
 	}
 	const crownX = /* @__PURE__ */ new Map();
 	for (const t of LC.terms) for (const l of t.leaves || []) {
@@ -2375,7 +2280,7 @@ function buildModel(raw, opts = {}) {
 			const e = q ? crownX.get(q) : void 0;
 			return e ? e[0] / e[1] : 0;
 		};
-		return x(A2) - x(B2) || cmpStr(A2.node.name, B2.node.name);
+		return x(A2) - x(B2) || cmpStr(A2.node.name, B2.node.name) || cmpStr(A2.node.path, B2.node.path);
 	}), M.trunkW * .62);
 	if (LR.top && LR.top.base && !ctx.cache) pkCompact(LR.top, LR.top.base, [0, -PK.heart * Math.sqrt(LR.top.area / Math.PI) / .72], warm ? 0 : 1, "r");
 	if (ctx.warmFailed) {
@@ -2410,41 +2315,6 @@ function buildModel(raw, opts = {}) {
 			b.we *= .9;
 		}
 	}
-	M.piles = [];
-	const gg = [...groundGroups.entries()].sort((a, b) => b[1].length - a[1].length || cmpStr(a[0], b[0]));
-	for (const [, fs] of gg) fs.sort((a, b) => b.lines - a.lines || cmpStr(a.name, b.name));
-	const crownLeaves = [];
-	for (const t of LC.terms) for (const l of t.leaves || []) crownLeaves.push(l);
-	M.scaffold = layoutScaffold(gg.map(([key, files]) => ({
-		key,
-		files
-	})), groundY, M.trunkW, crownObstacles(crownLeaves, M.branches));
-	for (const T of M.scaffold.towers) for (const L of T.lifts) {
-		const k = L.key, fs = L.files;
-		const node = mkNode(k, "~" + k, null, "pile");
-		node.label = k === "(repo root)" ? "repo root files" : k;
-		node.files = fs;
-		node.nFiles = fs.length;
-		node.lines = fs.reduce((a, f) => a + f.lines, 0);
-		node.depth = 1;
-		const leaves = L.planks.map((p, j) => ({
-			x: (p.xo + p.xi) / 2,
-			y: p.y,
-			file: fs[j],
-			flat: true,
-			plank: p
-		}));
-		for (const f of fs) f.node = node;
-		node.cx = (L.x0 + L.x1) / 2;
-		node.cy = (L.floor + L.top) / 2;
-		node.pw = L.x1 - L.x0;
-		node.h = L.floor - L.top;
-		node.leaves = leaves;
-		node.lift = L;
-		L.pile = node;
-		M.piles.push(node);
-	}
-	M.piles.sort((a, b) => b.nFiles - a.nFiles || cmpStr(a.name, b.name));
 	const finishTerms = (terms, region) => {
 		for (const t0 of terms) {
 			const t = t0;
@@ -2489,26 +2359,10 @@ function buildModel(raw, opts = {}) {
 		}
 		if (t.region === "root") growRoots(t, bx, by, hb);
 	}
-	for (const p of M.piles) for (const l of p.leaves) {
-		const f = l.file;
-		l.len = l.plank.len;
-		l.ang = l.plank.dir > 0 ? 0 : Math.PI;
-		l.region = "ground";
-		l.pile = p;
-		l.shade = 0;
-		f.leaf = l;
-		l.id = M.leaves.length;
-		M.leaves.push(l);
-	}
 	M.nodes = [];
 	for (const R of [M.crown, M.roots]) for (const n of allNodes(R)) {
 		n.id = M.nodes.length;
 		M.nodes.push(n);
-	}
-	for (const p of M.piles) {
-		p.id = M.nodes.length;
-		M.nodes.push(p);
-		p.F = [p.cx, p.cy];
 	}
 	let limbI = 0;
 	for (const n of M.crown.kids.slice().sort((a, b) => (a.F ? a.F[0] : 0) - (b.F ? b.F[0] : 0))) n.limb = limbI++;
@@ -2547,11 +2401,6 @@ function buildModel(raw, opts = {}) {
 		n.cy = n.sy / Math.max(1, n.cnt);
 		n.rad = Math.max(10, Math.hypot(n.bx1 - n.bx0, n.by1 - n.by0) / 2);
 	}
-	for (const p of M.piles) {
-		p.cx = p.F[0];
-		p.cy = p.F[1];
-		p.rad = Math.hypot(p.pw, p.h) / 2;
-	}
 	M.crown.F = [0, 0];
 	let wx0 = 1e9, wy0 = 1e9, wx1 = -1e9, wy1 = -1e9;
 	for (const l of M.leaves) {
@@ -2586,7 +2435,7 @@ function buildModel(raw, opts = {}) {
 	for (const f of F) M.nameCount.set(f.name, (M.nameCount.get(f.name) || 0) + 1);
 	M.byPath = new Map(F.map((f) => [f.path, f]));
 	M.layoutRec = {
-		v: 2,
+		v: 3,
 		files: raw.files.length,
 		u: unionRecs(ctx),
 		memo: [...ctx.memo],
