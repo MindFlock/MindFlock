@@ -82,7 +82,22 @@ export function LegendCard({ open, onToggle, primary }: { open: boolean; onToggl
             <svg className="sw" viewBox="0 0 12 12">
               <path d="M1 11 Q2 2 11 1 Q10 10 1 11Z" fill="var(--ct-legend-leaf)" opacity=".55" />
             </svg>
-            grey tree = the repo, unchanged · leaf = file · branch = folder · roots = tests
+            grey tree = the repo, unchanged · leaf = file · branch = folder
+          </li>
+          <li>
+            <svg className="sw" viewBox="0 0 12 12">
+              <path d="M6 0 Q6 5 3 8 M6 4 Q8 7 9 9" stroke="currentColor" strokeWidth="1.1" fill="none" opacity=".55" />
+              <circle cx="2.6" cy="9" r="1.6" fill="currentColor" opacity=".7" />
+              <circle cx="9.3" cy="10" r="1.6" fill="currentColor" opacity=".7" />
+            </svg>
+            root tip = a test file, under the code it tests
+          </li>
+          <li>
+            <svg className="sw" viewBox="0 0 12 12">
+              <path d="M2 0 V12 M6 0 V12 M1 4 H7 M1 9 H7" stroke="currentColor" strokeWidth="1" fill="none" opacity=".55" />
+              <path d="M6 2 H11 M6 6 H10 M6 11 H11" stroke="currentColor" strokeWidth="1.4" fill="none" opacity=".75" />
+            </svg>
+            scaffold = docs, CI and config: a lift per folder, a plank per file
           </li>
           <li>
             <svg className="sw" viewBox="0 0 12 12">
@@ -539,7 +554,7 @@ export function NodeCard(p: NodeCardProps) {
       {isTrunk && n === M.crown && (
         <>
           <div className="ct-facts">
-            <span>{plural(M.roots.nFiles, "test")} (roots)</span>
+            <span>{plural(M.roots.nFiles, "test")} (root tips)</span>
             <span>{M.piles.reduce((a, q) => a + q.nFiles, 0)} docs / config (on the scaffold)</span>
             <span>{plural(M.crown.kids.length, "top-level folder")}</span>
           </div>
@@ -739,7 +754,7 @@ export function TipBody({ M, hit, agents, zones, tool, folded }: { M: Model; hit
   if (n && hit.viaLeaf)
     return (
       <>
-        <b>{nodeName(M, n)}</b> <i>folder · {plural(n.nFiles, "file")}</i>
+        <b>{nodeName(M, n)}</b> <i>{n.kind === "pile" ? "scaffold lift" : n.kind === "root" ? "tests" : "folder"} · {plural(n.nFiles, "file")}</i>
         <div>{act(n)}</div>
         <div>
           <i>zoom in to pick a single file</i>

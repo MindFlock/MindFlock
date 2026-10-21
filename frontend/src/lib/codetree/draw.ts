@@ -1045,7 +1045,7 @@ function renderOverlay(v: TreeView, now: number) {
   // zones as TERRITORIES: a translucent fill over the whole branch hull with a bold outline (screen space)
   drawTerritories(v, ox, oy);
   g.setTransform(dpr * z, 0, 0, dpr * z, dpr * ox, dpr * oy);
-  // zone marks for what has no hull: a ground pile, a single file
+  // zone marks for what has no hull: a scaffold lift, a single file
   for (const zz of v.zones) {
     const col = zz.type === "keep" ? P.red : P.green;
     g.globalAlpha = zz.waived ? 0.45 : 1; // a waived zone is drawn, not enforced
@@ -3208,7 +3208,7 @@ function drawRiskChips(v: TreeView, g: G2, toS: (x: number, y: number) => [numbe
     const c = e.ids.size;
     const n = e.n;
     const name =
-      n.kind === "pile" ? n.label || n.name : n.kind === "root" ? (n.label || n.name).replace(/^tests for /, "tests/") : n.depth >= 1 ? n.disp || shortName(n.name) : "root files";
+      n.kind === "pile" ? n.label || n.name : n.kind === "root" ? (n.label || n.name).replace(/^tests for /, "tests/") : n.depth >= 1 ? n.disp || shortName(n.name) : "repo root";
     const txt = `⚠ ${e.rest ? name + " · other" : name} ${c}`;
     const tw = g.measureText(txt).width + 14,
       th = 18;
@@ -3257,7 +3257,7 @@ function drawRiskChips(v: TreeView, g: G2, toS: (x: number, y: number) => [numbe
     g.fillStyle = P.gold;
     g.fillText(txt, bx + 7, by + th / 2 + 0.5);
     reserve(bx, by, bx + tw, by + th);
-    const where = (n.kind === "pile" || n.kind === "root" ? n.label || n.name : n.depth >= 1 ? folderPath(n) : "root files") + (e.rest ? " (smaller folders)" : "");
+    const where = (n.kind === "pile" || n.kind === "root" ? n.label || n.name : n.depth >= 1 ? folderPath(n) : "repo root") + (e.rest ? " (smaller folders)" : "");
     const one = e.files.size === 1 ? M.files[[...e.files][0]] : null;
     const what = f ? f.name : one ? one.name : `${e.files.size} changed files`;
     const bd: Badge = {
@@ -4236,7 +4236,7 @@ export function pick(v: TreeView, sx: number, sy: number): Hit | null {
     for (const id of A.edits.keys()) hot.add(id);
     if (A.file) hot.add(A.file.id);
   }
-  // zoomed out, a ground pile is one thing: a click on it opens the pile, not whichever doc happens to be under the cursor
+  // zoomed out, a scaffold lift is one thing: a click on it opens the lift, not whichever plank happens to be under the cursor
   const pileWhole = leafPx < 12 || v.tool !== "explore";
   // a plank is hit on its board (scaffold.ts), not by distance to its centre — it is long and the rows are close
   const plank = plankAt(M, wx, wy, Math.max(3 / z, SCAF.pitch * 0.3));
@@ -4336,7 +4336,7 @@ interface MiniState {
 const MINI = new WeakMap<HTMLCanvasElement, MiniState>();
 
 /** The minimap's static base (one filled silhouette per clump, the wood, the
- * piles) for the canvas's current CSS size. Returns false while hidden. */
+ * scaffold) for the canvas's current CSS size. Returns false while hidden. */
 export function buildMini(v: TreeView, canvas: HTMLCanvasElement): boolean {
   const M = v.M,
     P = v.P;
