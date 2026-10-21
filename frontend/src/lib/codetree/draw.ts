@@ -16,6 +16,7 @@ import { agentBlast, addBadgeSets, blastOf, collectBadges } from "./blast";
 import { dPS, hashStr, rng, taperHW } from "./layout";
 import { S0, TAU, baseOf, isUnder, shortName, type Branch, type Leaf, type Model, type TNode, type TTerm } from "./model";
 import { glyphShape, type Pal, type Palette } from "./palette";
+import { drawRoots, prepRoots, rootStrandPath, rootTipG, rootTipPath } from "./roots";
 import type { AgentDef, AgentState, Badge, BirdEv, Blocked, Hit, RiskGroup, TreeView, TZone } from "./types";
 
 /** What an empty view (zoomed into air) says instead of showing nothing. */
@@ -115,6 +116,7 @@ export function prepGeometry(M: Model): void {
     const mx = l.x + ca * len * 0.04,
       my = l.y + sa * len * 0.04;
     l.g = [bx, by, mx - sa * w, my + ca * w, tx, ty, mx + sa * w, my - ca * w];
+    if (root) l.g = rootTipG(l); // a test is a root tip's nodule, not a leaf
   }
   for (const t0 of M.terms) {
     const t = tg(t0);
@@ -147,7 +149,7 @@ export function prepGeometry(M: Model): void {
   MG.canopy = new Map();
   for (const t0 of M.terms) {
     const t = tg(t0);
-    if (!t.leaves.length) continue;
+    if (!t.leaves.length || t.region === "root") continue; // roots have no foliage: their strands show at every zoom
     const s = t.s,
       rnd = rng(hashStr(t.node.path + (t.own ? "#" : "") + "~cv"));
     t.tone = hashStr(t.node.path + (t.own ? "#" : "")) % 3;
@@ -239,6 +241,7 @@ export function prepGeometry(M: Model): void {
   rt.quadraticCurveTo(0, G + T * 0.7, T * 1.25, G + S0 * 0.4);
   rt.closePath();
   MG.rootFlare = rt;
+  prepRoots(M);
   MG.geomReady = true;
 }
 
@@ -347,7 +350,7 @@ function drawMass(g: G2, M: Model, col: string) {
 // it is the folder's own twig: it never reaches another folder's leaves or wood.
 function buildClumpTwig(t: TTerm & TermGeom) {
   const L = t.leaves;
-  if (!L.length) return;
+  if (!L.length || t.region === "root") return; // a root clump's strands are roots.ts's
   const b = t.branch as Branch | undefined,
     R = Math.max(t.R, t.s * 0.5),
     cx = t.cx,
@@ -698,7 +701,7 @@ function renderStatic(v: TreeView, g: G2, W: number, H: number, cam: { x: number
   }
   // ---------- blobs (foliage mass under the leaves once they show) ----------
   const blobA = (t: TTerm) =>
-    (1 - canopyA) * (t.region === "root" ? 1 - 0.6 * fade(8, 30, leafPx) : 1 - 0.6 * fade(6, 16, leafPx) - 0.4 * fade(18, 40, leafPx));
+    t.region === "root" ? 0.35 * (1 - fade(8, 16, leafPx)) : (1 - canopyA) * (1 - 0.6 * fade(6, 16, leafPx) - 0.4 * fade(18, 40, leafPx));
   const keepTerms: Array<TTerm & TermGeom> = [];
   v.termsInView = 0;
   for (const t0 of M.terms) {
@@ -848,6 +851,15 @@ function renderStatic(v: TreeView, g: G2, W: number, H: number, cam: { x: number
     g.globalAlpha = 1;
     g.lineCap = "butt";
   }
+  // ---------- root fans: a test is a strand's tip (fading in with the twigs) ----------
+  const rootStyle = (t: TTerm) => {
+    const st = termStyle(t);
+    if (!st) return null;
+    if (st === P.DUSK) return { strand: P.BARK.rootDusk, fine: P.BARK.rootDusk, tip: P.DUSK.leafA };
+    return { strand: P.BARK.root, fine: P.rootFine, tip: st === P.KEEP ? P.KEEP.leafA : P.rootTip };
+  };
+  const keepTips = v.keepFiles || new Set<number>();
+  drawRoots(g, M.terms.filter((t) => t.region === "root" && !t.node.fAnc && inView(t.cx - t.rad, t.cy - t.rad, t.cx + t.rad, t.cy + t.rad)), z, 0.8 + 0.2 * twigA, fade(5, 10, leafPx), rootStyle, (l) => (keepTips.has(l.file.id) ? P.KEEP.leafA : null), createdGhost);
 
   // ---------- leaves ----------
   const leafAlpha = fade(10, 16, leafPx);
@@ -877,7 +889,7 @@ function renderStatic(v: TreeView, g: G2, W: number, H: number, cam: { x: number
   const keepFiles = v.keepFiles || new Set<number>();
   if (leafAlpha > 0) {
     for (const t of M.terms) {
-      if (!t.leaves.length || t.node.fAnc) continue;
+      if (!t.leaves.length || t.node.fAnc || t.region === "root") continue;
       if (!inView(t.cx - t.rad, t.cy - t.rad, t.cx + t.rad, t.cy + t.rad)) continue;
       const st = termStyle(t);
       if (!st) continue;
@@ -941,6 +953,7 @@ function renderStatic(v: TreeView, g: G2, W: number, H: number, cam: { x: number
 }
 
 function leafPath(g: G2, l: Leaf) {
+  if (l.region === "root") return rootTipPath(g, l);
   const q = l.g!;
   g.moveTo(q[0], q[1]);
   g.quadraticCurveTo(q[2], q[3], q[4], q[5]);
@@ -2004,7 +2017,7 @@ function drawEdits(v: TreeView, now: number, ox: number, oy: number, reserve?: R
       const own = l.term ? l.term.node : l.pile;
       // in an only-here dusk an earlier change outside the territory stays visible, but unlit (exempt, no glow)
       const outside = hasOnly && !!own && !own.lit && onlyBinds(v, A);
-      const sc = Math.max(1, (10.5 * px) / (l.len * 0.5)) * grow;
+      const sc = Math.max(1, ((l.region === "root" ? 5.5 : 10.5) * px) / (l.len * 0.5)) * grow; // a round tip reads smaller
       const rr = l.len * 0.5 * sc;
       if (id === nowF) {
         // being edited right now: a soft ring breathes out of the leaf
@@ -2016,6 +2029,17 @@ function drawEdits(v: TreeView, now: number, ox: number, oy: number, reserve?: R
         g.arc(l.x, l.y, rr + (4 + k * 16) * px, 0, TAU);
         g.stroke();
         g.globalAlpha = 1;
+      }
+      // a changed test: its strand is lit in the bird's colour down to the tip (lit wood → coloured leaf)
+      const strand = l.region === "root" ? rootStrandPath(l) : null;
+      if (strand) {
+        g.strokeStyle = col;
+        g.lineWidth = 1.6 * px;
+        g.lineCap = "round";
+        g.globalAlpha = outside ? 0.45 : 0.9;
+        g.stroke(strand);
+        g.globalAlpha = 1;
+        g.lineCap = "butt";
       }
       g.save();
       g.translate(l.x, l.y);
@@ -4239,7 +4263,11 @@ function drawLabels(
           [-off - tw, -13],
           [-off - tw, 13],
         ];
-        const free = (clean: boolean) => fits(x0 - 3, y0, x0 + tw + 3, y0 + 14) && !(own && fol && fol.hit(x0, y0 + 1, x0 + tw, y0 + 13, own, false)) && !(clean && onLeaves(x0, y0, tw, l));
+        const free = (clean: boolean) =>
+          fits(x0 - 3, y0, x0 + tw + 3, y0 + 14) &&
+          !(own && fol && fol.hit(x0, y0 + 1, x0 + tw, y0 + 13, own, false)) &&
+          !(clean && onLeaves(x0, y0, tw, l)) &&
+          !(l.region === "root" && y0 <= groundS); // a test's name stays underground with its root tip
         for (const [clean, cands] of [
           [true, near],
           [false, near.slice(0, 4)],

@@ -34,6 +34,7 @@ import {
   unionRecs,
   finalRecs,
 } from "./layout";
+import { growRoots } from "./roots";
 
 export { S0, TAU };
 
@@ -682,6 +683,8 @@ export function buildModel(raw: RawRepo, opts: BuildOpts = {}): Model {
       l.id = M.leaves.length;
       M.leaves.push(l);
     }
+    // a test is a root tip, not a leaf: roots.ts sets its nodule (len) and strand end direction (ang)
+    if (t.region === "root") growRoots(t, bx, by, hb);
   }
   for (const p of M.piles)
     for (const l of p.leaves!) {
