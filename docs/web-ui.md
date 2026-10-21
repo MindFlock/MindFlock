@@ -1334,23 +1334,28 @@ of the worktree, the **Code Tree**.
 The first time a Map is shown (on any of your devices: it is the synced
 `prefs.map_tour`), a short tour opens over the live map once the tree is laid out (never while
 "Growing the tree…" shows).
-Each step is a small card that rings the part it explains: the tree itself
-(trunk, branches, leaves, roots), what the bright leaves and lit branches mean,
-the agents column, **⚠ Could break**, the toolbar's **Rules** group, **Plan
-first** (the **Plan & lists** button), and getting around (`/`, scroll, drag,
-⌂ Whole tree) — then it ends on this session's next step ("5 changed — start
-with ⚠ Could break, then open the diff"). The steps are picked from what is on
-screen when it opens: with nothing changed the changes step says so and
-**⚠ Could break** is left out, and a step whose target isn't visible (the agents
-column folded to a rail) is skipped. The card sits beside the ring, on the
-side with the most free canvas and off the tree and the HUD panels; a step
-about the tree as a whole docks it in a corner of the canvas. It never covers
-the middle of what it explains. It is non-modal, so the map keeps
+It is six small cards at most, each ringing the part it explains, in the order
+a newcomer needs them: the canopy (trunk = repo, branch = folder, leaf = file;
+zoom in and every leaf is named at its tip), the roots (each root tip is one
+test file, under the code it tests), the scaffold beside the trunk (docs, CI
+and config: a lift per folder, a plank per file), the agents column (birds =
+agents, nests, glowing leaves and lit wood = changes, gold = could break), the
+toolbar's **Rules** group (⛔ Keep out / ✓ Only here) — then it ends on this
+session's next step ("5 changed — start with ⚠ Could break, then open the
+diff"), or, with none, on getting around (`/`, drag, double-click, ⌂ Whole
+tree, **?** for the legend). The steps are picked from what is on screen when
+it opens: with nothing changed the birds card says every leaf is grey for now,
+a repo with no tests or no docs/config skips the roots or scaffold card, and a
+toolbar card whose target isn't visible (a narrow toolbar) is skipped. The
+card sits beside the ring, on the side with the most free canvas and off the
+tree and the HUD panels; a card whose part isn't on screen (the agents column
+folded to a rail, the roots scrolled away) docks in a corner of the canvas. It
+never covers the middle of what it explains. It is non-modal, so the map keeps
 moving underneath. `→` / `Enter` steps forward, `←` back, and `Esc`, **Skip
 tour** or **Done** end it and mark it seen. **? Guide** at the right of the
-toolbar replays it. Only one pane runs it at a time. Switching tabs mid-tour hides it
-*without* marking it seen, so it comes back the next time that Map shows; a
-device that has never pulled the synced value may show it once more.
+toolbar replays it. Only one pane runs it at a time. Switching tabs mid-tour
+hides it *without* marking it seen, so it comes back the next time that Map
+shows; a device that has never pulled the synced value may show it once more.
 
 ### Reading the tree
 
@@ -1360,13 +1365,23 @@ device that has never pulled the synced value may show it once more.
   own twig; chains of single-child folders are one branch; boilerplate source
   roots (`src/main/java/com/acme/…`) are not labelled, the first telling folder
   below them is.
-- **Roots = tests**, underground, under the code they test: a test named after
-  a code file (`test_foo.py`, `foo.test.ts`, `FooTest.java`) roots under that
-  file's folder, preferring a candidate it imports; otherwise under the deepest
-  folder holding most of what it imports (`tests for backend/web`). Tests that
-  say nothing are `tests: tests/unit`.
-- **Ground piles** = docs, CI and root config (`.github`, `docs`, `repo root
-  files`), and any top-level folder that is mostly non-code.
+- **Roots = tests.** Underground, each test file is the **tip of a root
+  strand** (a small round bead, bigger for a longer file), never a leaf; a test
+  folder is a fan of strands growing from the root limb under the code it
+  tests. A test named after a code file (`test_foo.py`, `foo.test.ts`,
+  `FooTest.java`) roots under that file's folder, preferring a candidate it
+  imports; otherwise under the deepest folder holding most of what it imports
+  (`tests for backend/web`). Tests that say nothing are `tests: tests/unit`. A
+  changed test lights its strand from the limb down to its tip, the way lit
+  wood leads to a changed leaf.
+- **Scaffolding = docs, CI and root config** (`.github`, `docs`, `repo root
+  files`, and any top-level folder that is mostly non-code), standing beside
+  the trunk to help the tree grow — at most two towers, one each side. Each
+  top-level folder of them (and the repo's root files) is one **lift** of a
+  tower, named on its top ledger (`docs · 21 files`), and each file is a
+  **plank** laid across it — longer for a bigger file, its name at the plank's
+  outer end, so a lift's names line up in one column outside the tower.
+  Zoomed out a click picks the lift; zoomed in, the plank.
 - **Birds = agents.** This session is the bird in the accent colour (●); other
   live sessions on the same repo fly too, in colour-blind-safe secondary
   colours with their own glyph (▲ ■ ◆). A bird **nests** in the deepest folder
@@ -1400,24 +1415,28 @@ device that has never pulled the synced value may show it once more.
   never compete with the leaves. Each changed folder — the nest's folder too —
   is one clickable pill that names its limb —
   `backend › web/core ●4`, `frontend › lib ●2` (a nested folder always carries
-  its top-level folder) — every name is PINNED to its own cluster: it never
-  touches another folder's loud things (a glowing clump, a nest, a zone sign or
-  territory), none of them is nearer to it than its own clump / nest / stem,
-  and the quiet canopy nearest its centre is its own. A name with no such room
-  is shortened instead of moved — `backend › web/core ●4`, then `web/core ●4`,
-  then just `●4` — or not drawn, never parked on a long leader beside a
-  neighbour — with
-  a count per bird in the bird's colour and glyph; a bird's tag says just the
-  file when its folder is already named; a click
-  opens its folder card (Keep out / Only here are there). Labels appear only on
-  top-level folders and folders that hold changes, a nest, a rule or the
-  selection; file names wait until you zoom close, and even then only the
-  files a bird touched, the hovered one and the folder you are looking at. A
-  changed file is always named, even at the whole-tree zoom where the grey
-  names wait (a handful at most there; on a short leader line if it has to sit
-  off to one side). A file name sits on a soft backing, so no leaf,
-  twig or zone hatching runs through it, and it moves off neighbouring leaves
-  when there is room beside its own.
+  its top-level folder), with a count per bird in the bird's colour and glyph;
+  a click opens its folder card (Keep out / Only here are there).
+- **Every name is attached to the one thing it names — never placed by
+  nearness.** A folder's name sits on its own wood: just outside its clump's
+  rim where its twig comes in (or flat across the twig), else along its branch
+  like a river's name, else beside its fork, touching a small dot drawn on the
+  fork. A leaf's name starts just past the leaf's tip and reads outward (to
+  the right of a leaf pointing right, to the left of one pointing left, above
+  or below an upright one), or else on its base side, tied to the base by a
+  hairline; a test's name sits past its root tip, a plank's at its outer end.
+  A name with no attached spot is shortened — `backend › web/core ●4`, then
+  `web/core ●4`, then just `●4` — or not drawn at all; it is never parked in
+  the sky, on a leader or across the canvas edge, and a grey name never covers
+  another leaf. So two `README.md` are fine: each sits at its own tip. Labels
+  appear only on top-level folders and folders that hold changes, a nest, a
+  rule or the selection; file names wait until you zoom close, and then the
+  hovered file, the selected one, each bird's current file and the changed
+  files come first (a changed name may lie over grey leaves, never over
+  another loud one). A changed file is named even at the whole-tree zoom when
+  its tip has room. A bird's tag names its file only when the leaf itself
+  couldn't be named (usually the bird's body covers the tip): one name per
+  leaf.
 - **What could break is on demand, never the default layer.** Hover or select
   a changed leaf and the files that import it light up **gold** (no per-folder
   pills — the file card carries the count); **Show the N that depend on it**
@@ -1453,18 +1472,23 @@ device that has never pulled the synced value may show it once more.
   it too; changed leaves outside stay visible but unlit.
 
 **Semantic zoom:** at the whole-tree zoom folders are leafy clumps with ~25
-names on a big repo (more on a small one); zoom in and single leaves appear on
-stalks, then file names (only around the middle of the view at mid zoom). No
-name ever sits on another folder's foliage. A breadcrumb (`repo › backend ›
-web`) says where you are once zoomed in.
+names on a big repo (more on a small one), root fans read as fibrous root
+balls and the scaffold as slatted towers. Zoom in and the leaves open: every
+leaf is its own shape on its own stalk, fanned out along its twig with its tip
+facing out, and no two leaves of a folder overlap at any zoom. A leaf grows
+with the zoom until it is ~24 px long; past that it barely grows (never past
+~44 px) and the gaps between leaves open instead, so a name always has room at
+the tip. Then file names appear; hovering a clump when zoomed in shows that
+clump's names wherever they fit. Each root tip, and each plank, likewise
+becomes its own mark. A breadcrumb (`repo › backend › web`) says where you are
+once zoomed in.
 
 **Moving around:** scroll to zoom (gently — one notch ≈ ×1.15, a flick never
 jumps from a leaf to the whole tree), drag or arrow keys to pan, double-click a
 folder to zoom to it, `0` / **⌂ Whole tree** (it fits the whole picture —
-canopy, roots and the ground piles with their names — into the canvas left of
+canopy, roots and the scaffold with its names — into the canvas left of
 any panel and right of the agents column, centred, as large as fits up to a
-cap, so a small tree is drawn large; the soil under it stays a band. The
-ground piles sit just past the roots rather than a fixed stride out. A panel or
+cap, so a small tree is drawn large; the soil under it stays a band. A panel or
 card that opens, docks or grows keeps a whole-tree view whole), **← Back** (`Backspace`) undoes
 the last move, the minimap (bottom-left, shown only once you zoom in past the
 whole-tree view — there it would only repeat the canvas) jumps. **Find file or symbol** (`/`
@@ -1472,14 +1496,15 @@ from anywhere in the pane, or with nothing focused while the pointer is over
 it; never from a text field) flies to a file — or to the file holding a symbol
 — and opens its card.
 
-**Cards:** click a leaf for its **file card** (lines, kind, used by N, imports,
+**Cards:** click a leaf (or a root tip, or a plank) for its **file card** (lines, kind, used by N, imports,
 what each bird did to it, its zone, then Classes / Functions — public first —
 / Routes / Tested by, from `GET …/code-map/file`) with **Show the N that depend
 on it**, Centre, Folder, Open diff, **⛔ Keep out** and **✓ Only here** (or
 **Allow this file** when it is outside the green scope). Click a branch, a
 clump or a folder name for its **folder card** (files, lines, sub-folders,
 which birds work there) with **Zoom to it / Fold / ⛔ Keep agents out / ✓ Only
-here** (or Remove). The trunk is the repo card. Click a bird to follow it.
+here** (or Remove); a root fan opens its tests' card and a lift its scaffold
+card the same way. The trunk is the repo card. Click a bird to follow it.
 
 **Following a bird:** click a bird, its row in the bird index (or a helper's
 row, or a rail row in a small pane). The camera glides to it (a jump under reduced motion) at a zoom

@@ -112,7 +112,7 @@ export function changeSummary(M: Model, agents: AgentState[]): ChangeSummary {
     const n = f.node;
     let top: TNode | null = n;
     while (top && top.depth > 1) top = top.parent;
-    const tk = !top || top.depth < 1 ? (n && n.kind === "pile" ? nodeName(M, n) : "root files") : nodeName(M, top);
+    const tk = !top || top.depth < 1 ? (n && n.kind === "pile" ? nodeName(M, n) : "repo root") : nodeName(M, top);
     tops.set(tk, (tops.get(tk) || 0) + 1);
     if (!n) continue;
     let e = byNode.get(n);

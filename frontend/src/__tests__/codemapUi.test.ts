@@ -114,7 +114,9 @@ describe("the Map pane tab", () => {
       "answer the prompt in the terminal first",
       // the tree's own words (the prototype's legend and cards)
       "Growing the tree…",
-      "leaf = file · branch = folder · roots = tests",
+      "leaf = file · branch = folder",
+      "root tip = a test file, under the code it tests",
+      "scaffold = docs, CI and config: a lift per folder, a plank per file",
       "bird = an agent · small bird = its helper · nest = where it mostly works",
       // subagents are birds of their own; a card click follows its bird
       "sent out a helper",

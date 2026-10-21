@@ -1,16 +1,20 @@
-/** The Map tab's tour: short coach marks over the real map, each pointing at
- * the part it explains (the tree, the agents column, ⚠ Could break, the rule
- * tools, Plan & lists, find), ending on this session's next step. It opens by
- * itself the first time a Map is shown on any of your devices (the synced
- * `map_tour` pref) and is replayable from the toolbar's "? Guide". The
+/** The Map tab's tour: short coach marks over the real map, each ringing the
+ * part it explains, in the order a newcomer needs them — the tree (trunk,
+ * branch, leaf), the roots (tests), the scaffold (docs, CI, config), the
+ * birds and what they changed, the rule tools — ending on this session's next
+ * step (or, with none, on finding your way around). Six cards at most. It
+ * opens by itself the first time a Map is shown on any of your devices (the
+ * synced `map_tour` pref) and is replayable from the toolbar's "? Guide". The
  * coach-mark itself is the shared one (onboarding/CoachTour.tsx), contained
- * in the Map's root.
+ * in the Map's root; the canopy, roots and scaffold it rings are invisible
+ * boxes CodeTree keeps over the picture (`.ct-part-*`).
  *
  * The steps are built from what is on screen when it opens (mapTourSteps):
- * with nothing changed the changes step is reworded and ⚠ Could break is
- * left out (its button only exists with changes), and a step whose target
- * is not visible (the agents column folded to a rail, a narrow toolbar) is
- * skipped rather than pointing at nothing.
+ * with nothing changed the birds step is reworded, a repo with no tests or no
+ * scaffold skips that step, and a toolbar step whose target is not visible (a
+ * narrow toolbar) is skipped rather than pointing at nothing; a step about a
+ * part of the tree, or the agents column folded to a rail, keeps its card
+ * and docks it in a corner instead.
  *
  * Non-modal on purpose: the map stays live underneath (the birds keep
  * flying), and a click anywhere outside the card is allowed. Esc or Skip ends
@@ -26,58 +30,58 @@ import { mapScene, placeMapCard } from "./tourPlace";
 export type TourStep = CoachStep;
 
 const TREE: TourStep = {
-  target: "",
+  target: ".ct-part-canopy",
   title: "Your code, drawn as a tree",
   body: (
     <>
-      The <b>trunk</b> is the repo, each <b>branch</b> a folder and each <b>leaf</b> a file. <b>Roots</b>{" "}
-      underground are the tests, and the piles on the ground are docs and config. Thicker branches hold
-      more code.
+      The <b>trunk</b> is the repo, each <b>branch</b> a folder and each <b>leaf</b> a file. Thicker branches hold
+      more code. Scroll to zoom in: the leaves open up and each one is named at its tip.
     </>
   ),
 };
 
-const CHANGED: TourStep = {
-  target: "",
-  title: "Bright leaves are what changed",
+const ROOTS: TourStep = {
+  target: ".ct-part-roots",
+  title: "Roots are the tests",
   body: (
     <>
-      Grey is untouched. A <b>glowing leaf</b> is a file an agent changed, and the <b>lit branches</b> lead
-      you to it. Labels like <b>web/core ●4</b> count the changes in that folder. Click a leaf or folder for
-      its card.
+      Each <b>root tip</b> is one test file. A test grows under the code it tests, so its root is named for it,
+      like <b>tests for backend/web</b>.
     </>
   ),
 };
 
-const NOTHING_CHANGED: TourStep = {
-  target: "",
-  title: "Nothing has changed yet",
+const SCAFFOLD: TourStep = {
+  target: ".ct-part-scaffold",
+  title: "Scaffolding holds docs and config",
   body: (
     <>
-      Every leaf is grey for now. When an agent changes a file its leaf <b>glows</b> and the <b>lit
-      branches</b> lead you to it. Click a leaf or folder for its card.
+      Docs, CI and config stand beside the trunk as <b>scaffolding</b>. Each <b>lift</b> is one folder, named on
+      its top ledger (<b>docs · 21 files</b>). Each <b>plank</b> is one file; a longer plank is a bigger file.
     </>
   ),
 };
 
-const AGENTS: TourStep = {
+const BIRDS: TourStep = {
   target: '[data-hud="left"]',
-  title: "Each agent is a bird",
+  title: "Birds are agents, bright leaves are changes",
   body: (
     <>
-      This column lists the agents working on this repo: what each is doing now and what it changed. A bird
-      <b> nests</b> where it mostly works. Click a row to follow its bird around the tree.
+      Each agent is a <b>bird</b>; it <b>nests</b> where it mostly works. A <b>glowing leaf</b> is a file it
+      changed, and the <b>lit wood</b> leads you to it. Hover one: the files that import it turn <b>gold</b> —
+      they could break. Click a row here to follow its bird.
     </>
   ),
 };
 
-const RISK: TourStep = {
-  target: ".ct-bix-risk-tog",
-  title: "What could break",
+const BIRDS_CALM: TourStep = {
+  target: '[data-hud="left"]',
+  title: "Birds are agents",
   body: (
     <>
-      Hover a bright leaf and the files that <b>import</b> it light up <b>gold</b>. <b>⚠ Could break</b>{" "}
-      ranks the changed files by how much depends on them, so you know what to review first.
+      Each agent is a <b>bird</b>; it <b>nests</b> where it mostly works. Every leaf is grey for now. When an agent
+      changes a file, its leaf <b>glows</b> and the <b>lit wood</b> leads you to it. Click a row here to follow its
+      bird.
     </>
   ),
 };
@@ -88,19 +92,7 @@ const RULES: TourStep = {
   body: (
     <>
       <b>⛔ Keep out</b>: agents may read a folder but never edit it. <b>✓ Only here</b>: they may edit only
-      inside it. Pick one, then click a folder on the tree. Every changed folder in the column has the same
-      two buttons.
-    </>
-  ),
-};
-
-const PLAN: TourStep = {
-  target: ".ct-plan-btn",
-  title: "Plan first",
-  body: (
-    <>
-      <b>Plan &amp; lists</b> holds <b>Ask for plan</b>: the agent lists every file it means to touch, as buds on
-      the tree, before it touches them. Review it, then <b>Go</b> — or <b>Go — only the planned files</b>.
+      inside it. Pick one, then click a folder on the tree.
     </>
   ),
 };
@@ -110,38 +102,46 @@ const FIND: TourStep = {
   title: "Getting around",
   body: (
     <>
-      Press <kbd>/</kbd> to find a file or function. Scroll to zoom, drag to pan, double-click a folder to
-      zoom into it, and <b>⌂ Whole tree</b> brings you back. <b>?</b> beside Agents is the legend.
+      Press <kbd>/</kbd> to find a file or function. Drag to pan, double-click a folder to zoom into it, and{" "}
+      <b>⌂ Whole tree</b> brings you back. <b>?</b> beside Agents is the legend.
     </>
   ),
 };
 
-/** Every step the tour can show, in order (the last, the next step, is built per session). */
-export const MAP_TOUR: TourStep[] = [TREE, CHANGED, AGENTS, RISK, RULES, PLAN, FIND];
+/** Every step the tour can show, in order (the last, the next step, is built per session; with none, it is
+ * Getting around). */
+export const MAP_TOUR: TourStep[] = [TREE, ROOTS, SCAFFOLD, BIRDS, RULES, FIND];
+
+/** The most cards the tour shows. */
+export const MAP_TOUR_MAX = 6;
 
 export interface MapTourCtx {
   /** changed files on the tree (any session) */
   changed: number;
   /** this session's next step (the bird index's next-step line) */
   next: NextStep;
-  /** whether the Plan & lists control offers a plan (the CLI can declare one) */
-  planSupported?: boolean;
+  /** whether the tree has roots (tests) and a scaffold (docs, CI, config) to show (default: both) */
+  roots?: boolean;
+  scaffold?: boolean;
   /** whether a selector's target is on screen now (default: everything is) */
   visible?: (selector: string) => boolean;
 }
 
-/** The tour for what is on screen: the changes step reworded when nothing
- * changed, ⚠ Could break only with changes, a step whose target is not
- * visible skipped, and a last card on the concrete next step. (Pure.) */
+/** The tour for what is on screen: the tree, its roots and scaffold when it has them, the birds (reworded when
+ * nothing changed), the rules when the toolbar shows them, and a last card on the concrete next step — or
+ * Getting around when there is none. A card about a part of the tree, or the agents column folded to a rail,
+ * is kept and docked; a toolbar step that is not visible is skipped. At most MAP_TOUR_MAX cards. (Pure.) */
 export function mapTourSteps(ctx: MapTourCtx): TourStep[] {
   const shows = (s: TourStep) => !s.target || !ctx.visible || ctx.visible(s.target);
-  const out: TourStep[] = [TREE, ctx.changed > 0 ? CHANGED : NOTHING_CHANGED];
-  for (const s of [AGENTS, ...(ctx.changed > 0 ? [RISK] : []), RULES, ...(ctx.planSupported === false ? [] : [PLAN]), FIND]) if (shows(s)) out.push(s);
-  if (ctx.next.kind !== "none") {
-    const nextStep: TourStep = { target: ".ct-next", title: "Your next step", body: <>{nextStepText(ctx.next)}</> };
-    out.push(shows(nextStep) ? nextStep : { ...nextStep, target: "" });
-  }
-  return out;
+  const docked = (s: TourStep) => (shows(s) ? s : { ...s, target: "" });
+  const out: TourStep[] = [TREE];
+  if (ctx.roots !== false) out.push(ROOTS);
+  if (ctx.scaffold !== false) out.push(SCAFFOLD);
+  out.push(docked(ctx.changed > 0 ? BIRDS : BIRDS_CALM));
+  if (shows(RULES)) out.push(RULES);
+  if (ctx.next.kind !== "none") out.push(docked({ target: ".ct-next", title: "Your next step", body: <>{nextStepText(ctx.next)}</> }));
+  else if (shows(FIND)) out.push(FIND);
+  return out.slice(0, MAP_TOUR_MAX);
 }
 
 /** Where the card goes (the generic rule, re-exported for the Map's tests). */

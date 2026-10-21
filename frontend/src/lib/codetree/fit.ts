@@ -20,16 +20,18 @@ export interface Edges {
 }
 
 /** Screen px the picture needs past its outermost leaves: names beside the
- * outer leaves and a pile's name centred on a one-file pile ("repo root
- * files"), bird tags over the crown, the pile names under the ground. */
+ * outer leaves and the scaffold's plank names at their outer ends, bird tags
+ * over the crown, and (`piles`) a band of soil under a repo with a scaffold
+ * but shallow roots. */
 export const WHOLE_PAD = { side: 52, top: 40, bot: 14, piles: 34 };
 
 /** The whole-tree zoom never passes this: a three-file repo is a small tree
  * drawn large, not one leaf filling the pane. */
 export const WHOLE_MAX_Z = 6;
 
-/** The world box the whole-tree view shows: every leaf (crown, roots, ground
- * piles) and the ground line under the trunk — not the model's padded bounds. */
+/** The world box the whole-tree view shows: every leaf, root tip and plank
+ * (crown, roots, scaffold) and the ground line under the trunk — not the
+ * model's padded bounds. */
 export function pictureBox(M: Pick<Model, "bounds" | "groundY" | "leaves">): Box {
   const B = M.bounds,
     m = M.leaves.length ? S0 * 6 : 0;
@@ -39,9 +41,9 @@ export function pictureBox(M: Pick<Model, "bounds" | "groundY" | "leaves">): Box
 /** The camera that fits box B into a W×H canvas inside insets I: as large as
  * fits (up to WHOLE_MAX_Z), centred across the free canvas and, within a
  * bound, down it — the soil below the ground line stays a band as deep as the
- * roots and the pile names need, never a third of the pane. */
+ * roots need, never a third of the pane. */
 export function fitWhole(B: Box, groundY: number, piles: boolean, W: number, H: number, I: Edges): Cam {
-  // pile names hang ~30 px under the ground line; roots deeper than that carry their own room
+  // a scaffold over shallow roots keeps a band of soil under it; roots deeper than that carry their own room
   const padB = piles && B.y1 - groundY < S0 * 2 ? WHOLE_PAD.piles : WHOLE_PAD.bot;
   const w = Math.max(40, W - I.left - I.right - 2 * WHOLE_PAD.side),
     h = Math.max(40, H - I.top - I.bot - WHOLE_PAD.top - padB);
