@@ -201,6 +201,8 @@ export class LiveBirds {
         this.byKey.delete(k);
         this.lastKey.delete(k);
       }
+    // each bird carries the clocks it was read at: the drawing ages its edits on the server's clock (draw.ts freshness)
+    for (const A of out) A.clock = { server: inp.serverNow, view: inp.viewNow };
     this.agents = out;
     this.primed = true;
     return out;
@@ -260,6 +262,7 @@ export class LiveBirds {
     A.status = status;
     A.done = status === "done";
     A.activity = activity;
+    A.lastAt = last && last.type !== "plan" ? { ts: last.ts, path: last.path } : null;
     A.file = perched && last ? M.byPath.get(last.path) || null : null;
     const evKey = perched && last ? last.type + "|" + last.path + "|" + last.ts : "nest|" + (A.nest ? A.nest.path : "");
     const prevKey = this.lastKey.get(A.ag.key);

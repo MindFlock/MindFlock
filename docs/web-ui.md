@@ -1336,11 +1336,11 @@ The first time a Map is shown (on any of your devices: it is the synced
 "Growing the tree…" shows).
 It is six small cards at most, each ringing the part it explains, in the order
 a newcomer needs them: the canopy (trunk = repo, branch = folder, leaf = file;
-zoom in and every leaf is named at its tip), the roots (each root tip is one
+zoom all the way in and every leaf is named at its tip), the roots (each root tip is one
 test file, under the code it tests), the scaffold beside the trunk (docs, CI
 and config: a lift per folder, a plank per file), the agents column (birds =
-agents, nests, glowing leaves and lit wood = changes, gold = could break), the
-toolbar's **Rules** group (⛔ Keep out / ✓ Only here) — then it ends on this
+agents, nests, leaves in a bird's colour and lit wood = changes, gold = could
+break), the toolbar's **Rules** group (⛔ Keep out / ✓ Only here) — then it ends on this
 session's next step ("5 changed — start with ⚠ Could break, then open the
 diff"), or, with none, on getting around (`/`, drag, double-click, ⌂ Whole
 tree, **?** for the legend). The steps are picked from what is on screen when
@@ -1378,7 +1378,10 @@ shows; a device that has never pulled the synced value may show it once more.
   files`, and any top-level folder that is mostly non-code), standing beside
   the trunk to help the tree grow — at most two towers, one each side. Each
   top-level folder of them (and the repo's root files) is one **lift** of a
-  tower, named on its top ledger (`docs · 21 files`), and each file is a
+  tower, named on its top ledger (`docs · 21 files`; a lift named after a
+  code folder holds that folder's non-code files, `frontend · 3 non-code`, and
+  one whose code is in the roots holds its data, `test data · 42`), and each
+  file is a
   **plank** laid across it — longer for a bigger file, its name at the plank's
   outer end, so a lift's names line up in one column outside the tower.
   Zoomed out a click picks the lift; zoomed in, the plank.
@@ -1406,9 +1409,10 @@ shows; a device that has never pulled the synced value may show it once more.
 - **Changes are the loudest thing; the rest of the tree is a calm silhouette.**
   The unchanged canopy is a muted, low-contrast grey-green; the wood from the
   trunk to every change is **lit** in the changing bird's colour, so the eye
-  follows lit branches to the edited leaves (the newest changes glow
-  brightest). A changed leaf is drawn large and glowing in its bird's colour
-  at every zoom; seen from far out, a folder's changed leaves are nudged a few
+  follows lit branches to the edited leaves. A changed leaf is drawn large and
+  flat in its bird's colour at every zoom; only one changed in the last few
+  minutes glows, the glow fading as the edit ages (so a glow always means
+  "now"); seen from far out, a folder's changed leaves are nudged a few
   pixels apart so each change stays a separate, countable mark, and no label,
   tag or badge is ever placed over one. Labels are quiet lozenges with a
   neutral hairline (only the counts inside carry the birds' colours), so they
@@ -1416,27 +1420,33 @@ shows; a device that has never pulled the synced value may show it once more.
   is one clickable pill that names its limb —
   `backend › web/core ●4`, `frontend › lib ●2` (a nested folder always carries
   its top-level folder), with a count per bird in the bird's colour and glyph;
-  a click opens its folder card (Keep out / Only here are there).
+  a click opens its folder card (Keep out / Only here are there), and the
+  folder gets a thin solid ring in the selection colour. One pill per chain:
+  `frontend ●121`, never also `frontend › src ●121`, and a `src` that is its
+  folder's only sub-folder is never named on its own.
 - **Every name is attached to the one thing it names — never placed by
   nearness.** A folder's name sits on its own wood: just outside its clump's
   rim where its twig comes in (or flat across the twig), else along its branch
   like a river's name, else beside its fork, touching a small dot drawn on the
-  fork. A leaf's name starts just past the leaf's tip and reads outward (to
-  the right of a leaf pointing right, to the left of one pointing left, above
-  or below an upright one), or else on its base side, tied to the base by a
-  hairline; a test's name sits past its root tip, a plank's at its outer end.
-  A name with no attached spot is shortened — `backend › web/core ●4`, then
-  `web/core ●4`, then just `●4` — or not drawn at all; it is never parked in
+  fork. A leaf's name starts a few px past the leaf's tip, tied to the tip by a
+  1 px hairline in the leaf's colour, and reads outward (to the right of a leaf
+  pointing right, to the left of one pointing left, above or below an upright
+  one; or hung off the tip by its corner when that clears a neighbour), or
+  else on its base side, tied to the base the same way; a test's name sits
+  past its root tip, a plank's at its outer end. A name with no attached spot
+  is shortened — `backend › web/core ●4`, then `web/core ●4` (only a nest's, a
+  rule's or the open card's folder goes on to its bare `●4`) — or not drawn
+  at all; it is never parked in
   the sky, on a leader or across the canvas edge, and a grey name never covers
   another leaf. So two `README.md` are fine: each sits at its own tip. Labels
   appear only on top-level folders and folders that hold changes, a nest, a
   rule or the selection; file names wait until you zoom close, and then the
   hovered file, the selected one, each bird's current file and the changed
   files come first (a changed name may lie over grey leaves, never over
-  another loud one). A changed file is named even at the whole-tree zoom when
-  its tip has room. A bird's tag names its file only when the leaf itself
-  couldn't be named (usually the bird's body covers the tip): one name per
-  leaf.
+  another loud one). No file is named at the whole-tree zoom (a leaf there is a
+  few px, too small for a name to point at): the perched bird's tag names its
+  file. A bird's tag names its file only when the leaf itself couldn't be
+  named (usually the bird's body covers the tip): one name per leaf.
 - **What could break is on demand, never the default layer.** Hover or select
   a changed leaf and the files that import it light up **gold** (no per-folder
   pills — the file card carries the count); **Show the N that depend on it**
@@ -1477,10 +1487,13 @@ balls and the scaffold as slatted towers. Zoom in and the leaves open: every
 leaf is its own shape on its own stalk, fanned out along its twig with its tip
 facing out, and no two leaves of a folder overlap at any zoom. A leaf grows
 with the zoom until it is ~24 px long; past that it barely grows (never past
-~44 px) and the gaps between leaves open instead, so a name always has room at
-the tip. Then file names appear; hovering a clump when zoomed in shows that
-clump's names wherever they fit. Each root tip, and each plank, likewise
-becomes its own mark. A breadcrumb (`repo › backend › web`) says where you are
+~44 px) and the gaps between leaves open instead, so at the closest zoom even
+the densest clump has room for every leaf's name at its tip. Then file names
+appear; hovering a clump when zoomed in names ALL of its leaves — at their
+tips where they fit, the rest in a column beside the clump (in tip order, each
+tied to its tip by a hairline ending on a dot; a clump wider than the view
+gets a column at each edge, on a light plate). Each root tip, and each plank,
+likewise becomes its own mark. A breadcrumb (`repo › backend › web`) says where you are
 once zoomed in.
 
 **Moving around:** scroll to zoom (gently — one notch ≈ ×1.15, a flick never

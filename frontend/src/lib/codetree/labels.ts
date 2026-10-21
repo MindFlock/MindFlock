@@ -9,15 +9,18 @@
  * scaffold / roots work can re-point them without touching the placer. */
 
 import { leafScreen } from "./leafgeom";
-import type { Leaf } from "./model";
+import type { Leaf, TNode } from "./model";
 
 export type R4 = [number, number, number, number];
 /** a convex quad, screen space: x0,y0, x1,y1, x2,y2, x3,y3 */
 export type Quad = number[];
 
-/** the gap (px) between an anchor and the box it carries; a gap wider than HAIR_MIN gets a hairline */
+/** the gap (px) between a folder's anchor (rim, wood, fork dot) and its name */
 export const GAP = 3;
-export const HAIR_MIN = 6;
+/** a file name stands this far past its leaf's tip, so the 1 px hairline that ties it to the tip shows */
+export const TIP_GAP = 6;
+/** a gap wider than this gets a hairline (every leaf spot: TIP_GAP and BASE_GAP are both wider) */
+export const HAIR_MIN = 4;
 /** the base-side alternative stands this far off the leaf's base (clear of its stalk), so it always has a hairline */
 export const BASE_GAP = 8;
 /** a leaf name's box: text height + the halo plate's padding */
@@ -124,13 +127,36 @@ export function boxOutward(px: number, py: number, a: number, w: number, h: numb
   return s < 0 ? [xc - w / 2, qy - h, xc + w / 2, qy] : [xc - w / 2, qy, xc + w / 2, qy + h];
 }
 
-/** Rule 1: a leaf's name at its TIP, reading outward; the one alternative is the BASE side (reading away from the
- * tip), which stands BASE_GAP off the base and so carries a hairline. Box = text width + LEAF_PAD each side. */
-export function candidatesForLeaf(a: LeafGeom, tw: number, h = LEAF_H, gap = GAP, baseGap = BASE_GAP): LabelCand[] {
+/** The same box slid along the tip so that one of its corners (not its middle) is the point nearest the tip: raised
+ * / lowered for a sideways tip, shifted right / left for an upright one. Still `gap` from the tip, still reading
+ * outward — the name hangs off the tip by its corner, clearing a neighbour whose tip is level with this one. */
+export function boxOutwardSlid(px: number, py: number, a: number, w: number, h: number, gap: number): R4[] {
+  const c = Math.cos(a),
+    s = Math.sin(a);
+  const qx = px + c * gap,
+    qy = py + s * gap;
+  if (Math.abs(c) >= 0.5) {
+    const x0 = c > 0 ? qx : qx - w;
+    // the side the leaf leans to first (a tip pointing up-right hangs its name above the tip line first)
+    const up: R4 = [x0, qy - h, x0 + w, qy],
+      dn: R4 = [x0, qy, x0 + w, qy + h];
+    return s <= 0 ? [up, dn] : [dn, up];
+  }
+  const y0 = s < 0 ? qy - h : qy;
+  const rt: R4 = [qx, y0, qx + w, y0 + h],
+    lf: R4 = [qx - w, y0, qx, y0 + h];
+  return c >= 0 ? [rt, lf] : [lf, rt];
+}
+
+/** Rule 1: a leaf's name at its TIP, reading outward — centred on the tip, then slid to hang off it by a corner;
+ * the one alternative is the BASE side (reading away from the tip), BASE_GAP off the base. Every spot stands
+ * clear of its anchor and is tied back to it by a hairline. Box = text width + LEAF_PAD each side. */
+export function candidatesForLeaf(a: LeafGeom, tw: number, h = LEAF_H, gap = TIP_GAP, baseGap = BASE_GAP): LabelCand[] {
   const w = tw + 2 * LEAF_PAD;
   const out: LabelCand[] = [];
   const t = boxOutward(a.tip[0], a.tip[1], a.dir, w, h, gap);
   out.push(cand((t[0] + t[2]) / 2, (t[1] + t[3]) / 2, w, h, 0, "tip", gap > HAIR_MIN ? hairTo(a.tip, t) : null));
+  for (const r of boxOutwardSlid(a.tip[0], a.tip[1], a.dir, w, h, gap)) out.push(cand((r[0] + r[2]) / 2, (r[1] + r[3]) / 2, w, h, 0, "tip", gap > HAIR_MIN ? hairTo(a.tip, r) : null));
   const b = boxOutward(a.base[0], a.base[1], a.dir + Math.PI, w, h, baseGap);
   out.push(cand((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, w, h, 0, "base", baseGap > HAIR_MIN ? hairTo(a.base, b) : null));
   return out;
@@ -470,6 +496,151 @@ export function placeLabels<K>(items: Array<LabelItem<K>>, occ: Occupancy, vp: V
     out.push({ key: it.key, c });
   }
   return out;
+}
+
+// ---------- the name column: a hovered clump's names that found no room at their tips (rule 6) ----------
+
+/** a column row's height and the gap between the clump's leaves and the column */
+export const COL_ROW = 16;
+export const COL_GAP = 14;
+
+/** Where a hovered clump's name column stands: a strip `w` wide beside the clump (`box` = its leaves on screen),
+ * right of it when the free canvas has room there, else left, else — a clump wider than the view — at the edge of
+ * the canvas on the roomier side, over the clump's own leaves (`force` picks the side: a clump wider than the view
+ * gets a strip at each edge, see `columnStrips`). Vertically the tallest run of free canvas the strip
+ * has between HUD panels (and below `minY`: a root's names stay underground). Null when it has no height. */
+export interface ColumnStrip {
+  side: 1 | -1;
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+  /** the strip stands over the clump (it was too wide for the view): the column gets a plate */
+  over: boolean;
+}
+export function columnStrip(box: R4, w: number, free: R4, hud: R4[] = [], minY = -Infinity, gap = COL_GAP, force?: 1 | -1): ColumnStrip | null {
+  const roomR = free[2] - 4 - (box[2] + gap),
+    roomL = box[0] - gap - (free[0] + 4);
+  const side: 1 | -1 = force || (roomR >= w ? 1 : roomL >= w ? -1 : roomR >= roomL ? 1 : -1);
+  const over = roomR < w && roomL < w;
+  const x0 = side > 0 ? Math.min(box[2] + gap, free[2] - 4 - w) : Math.max(box[0] - gap - w, free[0] + 4);
+  const x1 = x0 + w;
+  const lo = Math.max(free[1] + 4, minY),
+    hi = free[3] - 4;
+  const cuts = hud.filter((r) => r[2] > x0 && r[0] < x1 && r[3] > lo && r[1] < hi).sort((a, b) => a[1] - b[1]);
+  let y0 = lo,
+    y1 = lo,
+    at = lo;
+  for (const r of [...cuts, [x0, hi, x1, hi] as R4]) {
+    if (r[1] - at > y1 - y0) {
+      y0 = at;
+      y1 = r[1];
+    }
+    at = Math.max(at, r[3]);
+  }
+  return y1 - y0 >= COL_ROW ? { side, x0, x1, y0, y1, over } : null;
+}
+
+/** The strips for a hovered clump: one beside it — or, when it is wider than the view, one at EACH edge of the
+ * canvas (each tip goes to the nearer one: twice the rows, half the hairline). */
+export function columnStrips(box: R4, w: number, free: R4, hud: R4[] = [], minY = -Infinity): ColumnStrip[] {
+  const one = columnStrip(box, w, free, hud, minY);
+  if (!one || !one.over) return one ? [one] : [];
+  const other = columnStrip(box, w, free, hud, minY, COL_GAP, one.side > 0 ? -1 : 1);
+  return other && (other.x1 <= one.x0 - 40 || other.x0 >= one.x1 + 40) ? [one, other] : [one];
+}
+
+export interface NameColumn {
+  side: 1 | -1;
+  /** one row per shown item: its index in the input, its box and its text's middle */
+  rows: Array<{ i: number; R: R4; y: number }>;
+  /** items left out for lack of height (the column's last row says "+N more") */
+  more: number;
+  /** the "+N more" row's box, when there is one */
+  moreR: R4 | null;
+}
+
+/** Rule 6's column rows, in the strip: one per item (in priority order, the first ones keep their rows when the
+ * strip is too short), stacked in TIP order — so the hairlines from tips to rows never cross — each as near its
+ * tip's height as the rows above it allow and sliding down past anything `fits` says is taken. */
+export function nameColumn(items: Array<{ tx: number; ty: number; w: number }>, S: ColumnStrip, fits: (R: R4) => boolean = () => true, row = COL_ROW): NameColumn | null {
+  if (!items.length) return null;
+  const rowAt = (w: number, y: number): R4 => (S.side > 0 ? [S.x0, y - row / 2 + 1, S.x0 + w, y + row / 2 - 1] : [S.x1 - w, y - row / 2 + 1, S.x1, y + row / 2 - 1]);
+  // how many rows the strip holds (a "+N more" row takes the last one when they can't all have one)
+  const cap = Math.floor((S.y1 - S.y0) / row);
+  const keep = Math.min(items.length, items.length > cap ? cap - 1 : cap);
+  if (keep < 1) return null;
+  const order = items
+    .slice(0, keep)
+    .map((it, i) => ({ i, ty: it.ty }))
+    .sort((a, b) => a.ty - b.ty);
+  const top = S.y0 + row / 2,
+    bot = S.y1 - row / 2 - (items.length > keep ? row : 0);
+  // pack upward from the bottom first (no row lower than its tip, the run inside the strip), then lay the rows
+  // downward from there, each sliding past anything taken; a row with no room left is counted in "+N more"
+  const ideal: number[] = order.map((o) => Math.max(top, Math.min(bot, o.ty)));
+  for (let k = ideal.length - 2; k >= 0; k--) ideal[k] = Math.min(ideal[k], ideal[k + 1] - row);
+  const lay = (want: number[]) => {
+    const out: NameColumn["rows"] = [];
+    let yy0 = -Infinity;
+    for (let k = 0; k < order.length; k++) {
+      const w = Math.min(items[order[k].i].w, S.x1 - S.x0);
+      let yy = Math.max(want[k], top, yy0 + row);
+      while (yy <= bot && !fits(rowAt(w, yy))) yy += 2;
+      if (yy > bot) break;
+      out.push({ i: order[k].i, R: rowAt(w, yy), y: yy });
+      yy0 = yy;
+    }
+    return out;
+  };
+  let rows = lay(ideal);
+  // taken spots pushed the last rows out: pack them from the top instead (the rows still in tip order)
+  if (rows.length < order.length) {
+    const packed = lay(ideal.map(() => top));
+    if (packed.length > rows.length) rows = packed;
+  }
+  const y = rows.length ? rows[rows.length - 1].y : -Infinity;
+  if (!rows.length) return null;
+  const more = items.length - rows.length;
+  let moreR: R4 | null = null;
+  if (more) {
+    if (y + row > S.y1 - row / 2) rows.pop(); // (no room under the last row: it gives its place to the count)
+    moreR = rowAt(70, rows.length ? rows[rows.length - 1].y + row : top);
+  }
+  return { side: S.side, rows, more: items.length - rows.length, moreR };
+}
+
+// ---------- which folders get a name, and how short it may get (F4, F5) ----------
+
+/** A folder name with no room by its own cluster is SHORTENED, never moved: the full path, then the folder's own
+ * name. Only a folder that MUST show (a nest, the open card, a rule) may shrink further, to its bare count chip ("")
+ * — a "●86" alone names nothing (the bird index lists the folder anyway). */
+export function folderNameVariants(name: string, plain: string, hasCount: boolean, must: boolean): string[] {
+  const out = [name];
+  if (plain !== name) out.push(plain);
+  if (hasCount && must) out.push("");
+  return out;
+}
+
+/** n carries exactly its parent's changes, as the parent's one lit sub-folder (`lit`: changes under each folder) */
+export function sameAsParent(n: TNode, lit: Map<TNode, { n: number }>): boolean {
+  const p = n.parent,
+    ln = lit.get(n),
+    lp = p && lit.get(p);
+  return !!(p && p.depth >= 1 && ln && lp && ln.n === lp.n && p.kids && p.kids.filter((k) => lit.has(k)).length === 1);
+}
+
+/** One pill per chain: the top-level folder a chain of equal counts runs down from ("frontend" for frontend › src
+ * ●121), which names the whole chain — null when the chain starts deeper (that one is named by its lit sub-folder). */
+export function chainTop1(n: TNode, lit: Map<TNode, { n: number }>): TNode | null {
+  let m = n;
+  while (sameAsParent(m, lit)) m = m.parent!;
+  return m !== n && m.depth === 1 ? m : null;
+}
+
+/** A boilerplate source root: a "src" that is its parent folder's only sub-folder is not a place, never named alone. */
+export function loneSrc(n: TNode): boolean {
+  return n.name === "src" && !!n.parent && n.parent.depth >= 1 && !!n.parent.kids && n.parent.kids.length === 1;
 }
 
 // ---------- which leaves get names, in which order (rule 2, rule 6) ----------

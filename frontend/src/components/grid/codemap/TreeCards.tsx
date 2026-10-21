@@ -14,6 +14,7 @@ import { agentBlast } from "../../../lib/codetree/blast";
 import { birdSprite, tinted } from "../../../lib/flock";
 import { baseOf, dirOf, isUnder, shortName, type Model, type TFile, type TNode } from "../../../lib/codetree/model";
 import { STATUS_TXT } from "../../../lib/codetree/live";
+import { liftCaption, liftKind } from "../../../lib/codetree/scaffold";
 import { helperLine } from "../../../lib/codetree/subagents";
 import { zoneOfFile, zoneWhere } from "../../../lib/codetree/zones";
 import type { AgentState, Badge, Hit, TZone } from "../../../lib/codetree/types";
@@ -21,7 +22,17 @@ import type { AgentState, Badge, Hit, TZone } from "../../../lib/codetree/types"
 const plural = (n: number, one: string, many = one + "s") => `${n} ${n === 1 ? one : many}`;
 const linesTxt = (f: TFile) => (f.kind === "a" ? "asset" : `~${(f.lines || 1).toLocaleString()} lines`);
 export const nodeName = (M: Model, n: TNode) =>
-  n.kind === "root" || n.kind === "pile" ? n.label || n.name : n.depth === 0 ? M.name : n.disp || shortName(n.name);
+  n.kind === "pile" ? liftCaption(M, n)[0] : n.kind === "root" ? n.label || n.name : n.depth === 0 ? M.name : n.disp || shortName(n.name);
+/** What a scaffold lift holds, in words (its caption says the same: scaffold.ts liftCaption). */
+const liftWhat = (M: Model, n: TNode) => {
+  const k = liftKind(M, n),
+    nm = n.label || n.name;
+  return k === "code"
+    ? `the non-code files of ${nm} (README, config) · its code is the ${nm} branch`
+    : k === "tests"
+      ? `test data in ${nm}/ (fixtures, golden files) · the tests are the roots`
+      : "on the scaffold (docs, CI, config)";
+};
 /** A file's display name: parent folder + name when the basename is not unique. */
 export function dispName(M: Model, f: TFile | null | undefined): string {
   if (!f) return "";
@@ -499,7 +510,7 @@ export function NodeCard(p: NodeCardProps) {
     isPile = n.kind === "pile",
     isTrunk = n.depth === 0 && !isPile;
   const title = nodeName(M, n);
-  const path = isTrunk ? (n === M.roots ? "all tests" : "repo root") : isRoot ? "tests · " + (n.crownTwin ? n.crownTwin.path : n.name) : isPile ? "on the scaffold (docs, CI, config)" : n.path;
+  const path = isTrunk ? (n === M.roots ? "all tests" : "repo root") : isRoot ? "tests · " + (n.crownTwin ? n.crownTwin.path : n.name) : isPile ? liftWhat(M, n) : n.path;
   const who: ReactNode[] = [];
   if (!isTrunk)
     for (const A of p.agents) {
@@ -754,7 +765,7 @@ export function TipBody({ M, hit, agents, zones, tool, folded }: { M: Model; hit
   if (n && hit.viaLeaf)
     return (
       <>
-        <b>{nodeName(M, n)}</b> <i>{n.kind === "pile" ? "scaffold lift" : n.kind === "root" ? "tests" : "folder"} · {plural(n.nFiles, "file")}</i>
+        <b>{nodeName(M, n)}</b> <i>{n.kind === "pile" ? "scaffold lift" + liftCaption(M, n)[1] : (n.kind === "root" ? "tests" : "folder") + " · " + plural(n.nFiles, "file")}</i>
         <div>{act(n)}</div>
         <div>
           <i>zoom in to pick a single file</i>
@@ -766,7 +777,7 @@ export function TipBody({ M, hit, agents, zones, tool, folded }: { M: Model; hit
       <>
         <b>{nodeName(M, n)}</b>{" "}
         <i>
-          {n.kind === "root" ? "tests" : n.kind === "pile" ? "on the scaffold (docs, CI, config)" : "folder"} · {plural(n.nFiles, "file")}
+          {n.kind === "root" ? "tests" : n.kind === "pile" ? liftWhat(M, n) : "folder"} · {plural(n.nFiles, "file")}
           {n.lines ? ` · ~${n.lines.toLocaleString()} lines` : ""}
         </i>
         {n.kind === "crown" && n.depth > 1 && (

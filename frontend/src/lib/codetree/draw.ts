@@ -25,20 +25,26 @@ import {
   candidatesForBranch,
   candidatesForClump,
   candidatesForLeaf,
+  chainTop1,
+  folderNameVariants,
+  loneSrc,
   LOUD_RANK,
   leafRank,
   leafSkip,
   leafScreenGeom,
   leafShown,
+  columnStrips,
+  nameColumn,
   placeLabel,
   tagDoing,
+  type ColumnStrip,
   type LabelCand as LabelSpot,
   type LeafGeom,
 } from "./labels";
 import { leafOutline, leafScreen } from "./leafgeom";
 import { glyphShape, type Pal, type Palette } from "./palette";
 import { drawRoots, prepRoots, rootStrandPath, rootTipG, rootTipPath } from "./roots";
-import { PLANK_MARK, SCAF, drawScaffold, drawScaffoldMini, liftAnchor, liftAt, liftBox, liftRing, plankAt, plankPath, plankRing } from "./scaffold";
+import { PLANK_MARK, SCAF, drawScaffold, drawScaffoldMini, liftAnchor, liftAt, liftBox, liftCaption, liftRing, plankAt, plankPath, plankRing } from "./scaffold";
 import type { AgentDef, AgentState, Badge, BirdEv, Blocked, Hit, RiskGroup, TreeView, TZone } from "./types";
 
 /** What an empty view (zoomed into air) says instead of showing nothing. */
@@ -92,6 +98,40 @@ const mg = (M: Model) => M as unknown as Model & ModelGeom;
 
 /** Clip a session title for canvas text. */
 /** "1 edit blocked" / "3 edits blocked": the one wording for a rule's refusals, everywhere. */
+/** A zone sign's icon (⛔ / ✓), drawn as a mark this many px wide, and the gap before its text. */
+export const SIGN_ICON = 11;
+export const SIGN_PAD = 4;
+/** a zone sign's width for its text ("⛔ web core"): 8 px padding, the drawn icon, its gap, the rest of the text, 8 px */
+export function signW(g: Pick<G2, "measureText">, t: string): number {
+  const rest = t.replace(/^[⛔✓]\s?/u, "");
+  return 8 + SIGN_ICON + (rest ? SIGN_PAD + g.measureText(rest).width : 0) + 8;
+}
+/** the sign's icon at (x, cy) (its left edge, its middle): a disc with a bar for keep out, a tick for only here */
+function drawSignIcon(g: G2, type: "keep" | "only", x: number, cy: number, ink: string, bg: string) {
+  const r = SIGN_ICON / 2,
+    cx = x + r;
+  g.save();
+  if (type === "keep") {
+    g.fillStyle = ink;
+    g.beginPath();
+    g.arc(cx, cy, r, 0, TAU);
+    g.fill();
+    g.fillStyle = bg;
+    g.fillRect(cx - r * 0.62, cy - 1.2, r * 1.24, 2.4);
+  } else {
+    g.strokeStyle = ink;
+    g.lineWidth = 2;
+    g.lineCap = "round";
+    g.lineJoin = "round";
+    g.beginPath();
+    g.moveTo(cx - r * 0.75, cy + 0.2);
+    g.lineTo(cx - r * 0.2, cy + r * 0.65);
+    g.lineTo(cx + r * 0.8, cy - r * 0.6);
+    g.stroke();
+  }
+  g.restore();
+}
+
 export function blockedTxt(n: number): string {
   return `${n} edit${n === 1 ? "" : "s"} blocked`;
 }
@@ -1122,19 +1162,19 @@ function renderOverlay(v: TreeView, now: number) {
       v.budHits!.push({ r: [sx - r, sy - r, sx + r, sy + r], A, path: pn.path });
     });
   }
-  // a soft light around every change, wide enough to show past a nest or a perched bird at any zoom; the newest
-  // changes shine brightest (freshness), the ones made before the map armed the least
+  // a soft light around a change made in the last few minutes (freshness), wide enough to show past a nest or a
+  // perched bird at any zoom, fading out as the edit ages: an older change is a flat leaf in the bird's colour
   const fresh = freshness(v);
   for (const A of v.agents) {
     for (const [id] of A.edits) {
       const l = M.files[id] && M.files[id].leaf;
-      if (!l) continue;
+      if (!l || !(fresh.get(id)! > 0)) continue;
       const own = l.term ? l.term.node : l.pile;
       if (hasOnly && own && !own.lit && onlyBinds(v, A)) continue;
       const R = Math.max(l.len * 1.6, 26 * px);
       if (!inView(l.x - R, l.y - R, l.x + R, l.y + R)) continue;
       const gr = g.createRadialGradient(l.x, l.y, 0, l.x, l.y, R);
-      gr.addColorStop(0, withAlpha(A.ag.color, (P.light ? 0.42 : 0.5) * (0.3 + 0.7 * (fresh.get(id) ?? 1))));
+      gr.addColorStop(0, withAlpha(A.ag.color, (P.light ? 0.42 : 0.5) * fresh.get(id)!));
       gr.addColorStop(1, withAlpha(A.ag.color, 0));
       g.fillStyle = gr;
       g.fillRect(l.x - R, l.y - R, 2 * R, 2 * R);
@@ -1208,17 +1248,17 @@ function renderOverlay(v: TreeView, now: number) {
     g.stroke();
     g.setLineDash([]);
   }
-  // the dashed folder ring lives exactly as long as that folder's card (the trunk's ring would be the whole tree: none)
+  // the selected folder's ring lives exactly as long as that folder's card (the trunk's ring would be the whole tree:
+  // none). Solid and thin in the selection colour, like a selected leaf's: dashes mean one thing only, "outside
+  // Only here"
   if (v.sel && v.sel.node && v.sel.node.cnt && v.sel.node.depth >= 1 && v.infoNode === v.sel.node) {
     const n = v.sel.node;
-    g.strokeStyle = P.mark;
-    g.lineWidth = 1.6 * px;
-    g.setLineDash([5 * px, 4 * px]);
+    g.strokeStyle = P.sel;
+    g.lineWidth = 1.4 * px;
     g.beginPath();
     if (n.lift) liftRing(g, n, S0 * 0.6);
     else g.arc(n.cx, n.cy, n.rad + S0 * 0.6, 0, TAU);
     g.stroke();
-    g.setLineDash([]);
   }
   // hover: a thin dashed ring in the muted colour, so it never reads as the (solid) selection
   if (hv && hv.leaf && hv.leaf !== selLeaf) {
@@ -1477,6 +1517,7 @@ function renderOverlay(v: TreeView, now: number) {
   // lives), before folder names and badges (they make room for it). A sign stays AT its own territory: when the
   // full "⛔ Keep out · backend/providers" has no room there it shortens to the folder's name, then to the bare
   // sign — it never wanders off to sit beside another limb.
+  const signDraws: Array<() => void> = [];
   for (const zz of v.zones) {
     let Pt: [number, number] | null = null;
     // a territory's sign stands at its top edge, where it reads as the name of the whole area
@@ -1540,7 +1581,7 @@ function renderOverlay(v: TreeView, now: number) {
     // makes THAT folder read as the blocked one); only then merely not touching them
     search: for (const clear of [24, 4])
       for (const t0 of textsHere) {
-        const w = g.measureText(t0).width + 16;
+        const w = signW(g, t0);
         const spots: Array<[number, number]> = [
           [sx - w / 2, sy - th - 2],
           [sx - w / 2, sy + 2],
@@ -1572,35 +1613,43 @@ function renderOverlay(v: TreeView, now: number) {
     if (!found) {
       // no free room at all: the bare sign on its own territory (over its own leaves is fine — they are the zone)
       txt = sign;
-      tw = g.measureText(sign).width + 16;
+      tw = signW(g, sign);
       bx = sx - tw / 2;
       by = sy - th / 2;
     }
     if (sx >= 0 && sx <= v.W) bx = Math.max(2, Math.min(v.W - tw - 2, bx)); // never half off the canvas
-    g.globalAlpha = zz.waived ? 0.6 : 1;
-    // a solid sign in the zone's colour (a waived one stays an outline): unmistakable at any zoom
-    const zc = zz.type === "keep" ? P.red : P.green;
-    const near = (Math.abs(by + th / 2 - sy) < th + 4 && sx >= bx - 4 && sx <= bx + tw + 4) || (!!terr && terr.polys.some((poly) => rectPolyDist(bx, by, bx + tw, by + th, poly) === 0));
-    if (!near) {
+    // placed (and its room claimed) now, painted after the changed leaves: a change drawn over the sign hid its letters
+    signDraws.push(() => {
+      g.font = `700 11px ${P.font}`;
+      g.globalAlpha = zz.waived ? 0.6 : 1;
+      // a solid sign in the zone's colour (a waived one stays an outline): unmistakable at any zoom
+      const zc = zz.type === "keep" ? P.red : P.green;
+      const near = (Math.abs(by + th / 2 - sy) < th + 4 && sx >= bx - 4 && sx <= bx + tw + 4) || (!!terr && terr.polys.some((poly) => rectPolyDist(bx, by, bx + tw, by + th, poly) === 0));
+      if (!near) {
+        g.strokeStyle = zc;
+        g.lineWidth = 1.5;
+        g.beginPath();
+        g.moveTo(sx, sy);
+        g.lineTo(Math.max(bx + 4, Math.min(bx + tw - 4, sx)), by < sy ? by + th : by);
+        g.stroke();
+      }
+      roundRect(g, bx, by, tw, th, 6);
+      g.fillStyle = zz.waived ? (zz.type === "keep" ? P.keepBg : P.onlyBg) : zc;
+      g.fill();
       g.strokeStyle = zc;
-      g.lineWidth = 1.5;
-      g.beginPath();
-      g.moveTo(sx, sy);
-      g.lineTo(Math.max(bx + 4, Math.min(bx + tw - 4, sx)), by < sy ? by + th : by);
+      g.lineWidth = 1;
+      if (zz.waived) g.setLineDash([4, 3]);
       g.stroke();
-    }
-    roundRect(g, bx, by, tw, th, 6);
-    g.fillStyle = zz.waived ? (zz.type === "keep" ? P.keepBg : P.onlyBg) : zc;
-    g.fill();
-    g.strokeStyle = zc;
-    g.lineWidth = 1;
-    if (zz.waived) g.setLineDash([4, 3]);
-    g.stroke();
-    g.setLineDash([]);
-    g.fillStyle = zz.waived ? (zz.type === "keep" ? P.keepText : P.onlyText) : zz.type === "keep" ? P.signKeepText : P.signOnlyText;
-    g.textBaseline = "middle";
-    g.fillText(txt, bx + 8, by + th / 2 + 0.5);
-    g.globalAlpha = 1;
+      g.setLineDash([]);
+      const ink = zz.waived ? (zz.type === "keep" ? P.keepText : P.onlyText) : zz.type === "keep" ? P.signKeepText : P.signOnlyText;
+      // the icon is drawn, not typed: an emoji's painted width is not its measured advance (it covered the first letter)
+      drawSignIcon(g, zz.type, bx + 8, by + th / 2, ink, zz.waived ? (zz.type === "keep" ? P.keepBg : P.onlyBg) : zc);
+      g.fillStyle = ink;
+      g.textBaseline = "middle";
+      const rest = txt.replace(/^[⛔✓]\s?/u, "");
+      if (rest) g.fillText(rest, bx + 8 + SIGN_ICON + SIGN_PAD, by + th / 2 + 0.5);
+      g.globalAlpha = 1;
+    });
     reserve(bx, by, bx + tw, by + th);
     v.tagHits.push({ r: [bx, by, bx + tw, by + th], z: zz });
     if (own) fol.addTag(bx, by, bx + tw, by + th, own);
@@ -1608,6 +1657,7 @@ function renderOverlay(v: TreeView, now: number) {
   // the changes go over the nests: a nest bowl never hides a changed leaf
   // (each changed leaf's spot is reserved: no name, tag or badge is ever laid over a change)
   drawEdits(v, now, ox, oy, reserve);
+  for (const d of signDraws) d(); // the zone signs, over the changes
   // the biggest folders are named next: nothing may evict a top-level folder's name
   drawLabels(v, g, toS, fits, reserve, leafPx, inView, createdGhost, "limbs");
   // the selected / marked leaf and each bird's current file are always named
@@ -1960,15 +2010,18 @@ export function folderPath(n: TNode): string {
   return `${t} › ${s}`;
 }
 
-/** How fresh each change is, 0.35 (made before the map armed) .. 1 (the latest edit): the newest changes glow
- * brightest, so "what just happened" reads without relying on colour. */
-function freshness(v: TreeView): Map<number, number> {
-  const ts = new Map<number, number>();
-  for (const A of v.agents) for (const [id, t] of A.edits) ts.set(id, Math.max(ts.get(id) || 0, t || 0));
-  const timed = [...ts.entries()].filter((e) => e[1] > 0).sort((a, b) => a[1] - b[1]);
+/** How fresh each change is: 1 for an edit made just now, fading to 0 over FRESH_S (a few minutes), 0 for anything
+ * older or with no known time. Only a fresh change glows — "the glow" means NOW, never just "changed". */
+export const FRESH_S = 300;
+export function freshness(v: Pick<TreeView, "agents" | "t">): Map<number, number> {
   const out = new Map<number, number>();
-  for (const [id, t] of ts) if (!(t > 0)) out.set(id, 0.35);
-  timed.forEach(([id], i) => out.set(id, timed.length < 2 ? 1 : 0.45 + (0.55 * i) / (timed.length - 1)));
+  for (const A of v.agents) {
+    const now = A.clock ? A.clock.server + (v.t - A.clock.view) : null;
+    for (const [id, ts] of A.edits) {
+      const f = now !== null && ts > 0 ? Math.max(0, Math.min(1, 1 - (now - ts) / FRESH_S)) : 0;
+      out.set(id, Math.max(out.get(id) || 0, f));
+    }
+  }
   return out;
 }
 
@@ -2009,8 +2062,9 @@ function litMap(v: TreeView): Map<TNode, LitInfo> {
   return out;
 }
 
-/** The changed leaves: big, bright, in the bird's colour, with a glow; the one being edited now breathes. Drawn
- * after the nests (in world coordinates) so a nest bowl or a perched bird never hides a change. */
+/** The changed leaves: big, flat, in the bird's colour; one changed in the last few minutes glows; the one being
+ * edited now breathes. Drawn after the nests (in world coordinates) so a nest bowl or a perched bird never hides a
+ * change. */
 function drawEdits(v: TreeView, now: number, ox: number, oy: number, reserve?: Reserve) {
   const { g, M } = v;
   const P = v.P,
@@ -2038,8 +2092,11 @@ function drawEdits(v: TreeView, now: number, ox: number, oy: number, reserve?: R
         if (!l || seen.has(id)) continue;
         seen.add(id);
         if (!inView(l.x - 40 * px, l.y - 40 * px, l.x + 40 * px, l.y + 40 * px)) continue;
-        const x = l.x * z + ox,
-          y = l.y * z + oy;
+        // the leaf as drawn: past the on-screen cap its centre slides toward the base, and a box round the TRUE
+        // centre would sit just past the drawn tip, where its own name starts
+        const ls = leafScreen(l, z);
+        const x = ls.cx * z + ox,
+          y = ls.cy * z + oy;
         pts.push({ k: String(id), x, y, x0: x, y0: y });
       }
     spreadApart(pts, 15); // min screen distance between two changed leaves' centres
@@ -2094,9 +2151,11 @@ function drawEdits(v: TreeView, now: number, ox: number, oy: number, reserve?: R
       g.translate(ls.cx, ls.cy);
       g.scale(sc, sc);
       g.translate(-ls.cx, -ls.cy);
-      if (!outside) {
+      const fr = fresh.get(id) || 0;
+      if (!outside && fr > 0) {
+        // only a change made in the last few minutes glows, fading with its age
         g.shadowColor = col;
-        g.shadowBlur = (4 + 10 * (fresh.get(id) ?? 1)) * dpr;
+        g.shadowBlur = (4 + 10 * fr) * dpr * fr;
       }
       g.fillStyle = col;
       g.globalAlpha = outside ? 0.75 : 1;
@@ -3715,7 +3774,10 @@ function drawLeafName(
   );
   if (!c) return false;
   reserve(c.R[0], c.R[1], c.R[2], c.R[3]);
-  drawSpotMarks(g, c, col);
+  // the hairline that ties the name to its tip is in the LEAF's colour (the changing bird's, else its foliage)
+  const changer = v.agents.find((A) => A.edits.has(l.file.id) || A.created.has(l.file.id));
+  const st = own ? palFor(P, own, l.region) : null;
+  drawSpotMarks(g, c, changer ? changer.ag.color : st ? (l.file.kind === "c" ? st.leafA : st.doc) : col);
   const x0 = c.R[0] + LEAF_PAD;
   labelBack(g, P, x0, c.cy - LEAF_H / 2, tw);
   g.strokeStyle = P.halo;
@@ -3728,6 +3790,144 @@ function drawLeafName(
   g.fillText(txt, x0, c.cy);
   v.labelHits!.push({ r: c.R, leaf: l });
   return true;
+}
+
+/** Rule 6's column, planned before any file name of the frame is placed: zoomed in on file names, the hovered clump
+ * (else the selected folder's) names EVERY leaf, and the ones with no room at their tips go in a column beside it.
+ * The column's strip is claimed now, so the names at the tips keep out of it. It stays up while the pointer is over
+ * the clump, the gap or the column (the strip is remembered as `v.nameCol`). */
+interface ColumnPlan {
+  node: TNode;
+  t: TTerm;
+  box: R4;
+  strips: ColumnStrip[];
+}
+function planNameColumn(v: TreeView, g: G2, toS: (x: number, y: number) => [number, number], leafPx: number, reserve: Reserve): ColumnPlan | null {
+  const prev = v.nameCol;
+  v.nameCol = null;
+  if (leafPx < 20) return null;
+  const hv = v.hover;
+  const termNode = (n: TNode | null | undefined) => (n && n.term && (n.term as TTerm).leaves && (n.term as TTerm).leaves.length && !n.fAnc ? n : null);
+  const ptrIn = (R: R4) => !!v.ptr && v.ptr[0] >= R[0] && v.ptr[0] <= R[2] && v.ptr[1] >= R[1] && v.ptr[1] <= R[3];
+  const node =
+    termNode(hv && hv.leaf && hv.leaf.term ? hv.leaf.term.node : null) ||
+    termNode(hv && hv.clump) ||
+    (prev && !hv && ptrIn(prev.R) ? termNode(prev.node) : null) ||
+    termNode(v.sel && v.sel.node && !v.sel.leaf ? v.sel.node : null);
+  if (!node) return null;
+  const t = node.term as TTerm;
+  const z = v.cam.z;
+  const free = v.free || { x0: 0, y0: 0, x1: v.W, y1: v.H };
+  g.font = `600 10.5px ${v.P.font}`;
+  let box: R4 = [Infinity, Infinity, -Infinity, -Infinity],
+    w = 0;
+  for (const l of t.leaves) {
+    const a = leafScreenGeom(l, z, toS);
+    if (a.tip[0] < free.x0 || a.tip[0] > free.x1 || a.tip[1] < free.y0 || a.tip[1] > free.y1) continue;
+    box = [Math.min(box[0], a.tip[0], a.base[0]), Math.min(box[1], a.tip[1], a.base[1]), Math.max(box[2], a.tip[0], a.base[0]), Math.max(box[3], a.tip[1], a.base[1])];
+    w = Math.max(w, g.measureText(l.file.name).width + 2 * LEAF_PAD);
+  }
+  if (!(box[0] <= box[2])) return null;
+  const groundS = v.M.groundY * z + (v.H / 2 - v.cam.y * z);
+  const strips = columnStrips(box, Math.min(w, 260), [free.x0, free.y0, free.x1, free.y1], (v.hudRects || []) as R4[], node.kind === "root" ? groundS + 9 : -Infinity);
+  if (!strips.length) return null;
+  const R: R4 = [...box];
+  for (const S of strips) {
+    reserve(S.x0 - 2, S.y0, S.x1 + 2, S.y1);
+    R[0] = Math.min(R[0], S.x0);
+    R[1] = Math.min(R[1], S.y0);
+    R[2] = Math.max(R[2], S.x1);
+    R[3] = Math.max(R[3], S.y1);
+  }
+  v.nameCol = { node, R };
+  return { node, t, box, strips };
+}
+
+/** The planned column: every leaf of the clump with its tip in view that carries no name yet gets a row, tied to its
+ * tip by a hairline ending on a dot (in the changing bird's colour, else the label colour: it may cross the clump). */
+function drawNameColumn(v: TreeView, g: G2, C: ColumnPlan, toS: (x: number, y: number) => [number, number], edited: Set<number>, createdGhost: Set<number>, fits: Fits) {
+  const P = v.P,
+    z = v.cam.z;
+  const free = v.free || { x0: 0, y0: 0, x1: v.W, y1: v.H };
+  const named = new Set<Leaf>();
+  for (const h of v.labelHits || []) if (h.leaf) named.add(h.leaf);
+  const want: Array<{ l: Leaf; a: LeafGeom; tx: number; ty: number; w: number; rank: number }> = [];
+  for (const l of C.t.leaves) {
+    if (named.has(l) || (l.file.ghost && !createdGhost.has(l.file.id))) continue;
+    const a = leafScreenGeom(l, z, toS, edited.has(l.file.id) ? 10.5 : 0);
+    const [tx, ty] = a.tip;
+    if (tx < free.x0 || tx > free.x1 || ty < free.y0 || ty > free.y1) continue;
+    g.font = `${edited.has(l.file.id) ? 600 : 400} 10.5px ${P.font}`;
+    want.push({ l, a, tx, ty, w: g.measureText(l.file.name).width + 2 * LEAF_PAD, rank: (edited.has(l.file.id) ? 1e9 : 0) + (l.file.lines || 0) });
+  }
+  if (!want.length) return;
+  want.sort((a, b) => b.rank - a.rank);
+  // two strips (a clump wider than the view): each tip goes to the nearer one
+  const mid = C.strips.length > 1 ? (C.strips[0].x0 + C.strips[0].x1 + C.strips[1].x0 + C.strips[1].x1) / 4 : 0;
+  for (const S of C.strips) {
+    const mine = C.strips.length > 1 ? want.filter((q) => (q.tx >= mid) === (S.side > 0)) : want;
+    if (mine.length) drawColumnRows(v, g, S, mine, fits);
+  }
+}
+
+function drawColumnRows(v: TreeView, g: G2, S: ColumnStrip, want: Array<{ l: Leaf; a: LeafGeom; tx: number; ty: number; w: number }>, fits: Fits) {
+  const P = v.P;
+  const own: R4 = [S.x0 - 2, S.y0, S.x1 + 2, S.y1];
+  const fitsOwn = fits as (x0: number, y0: number, x1: number, y1: number, own?: R4) => boolean;
+  const col = nameColumn(want, S, (R) => fitsOwn(R[0] - 1, R[1] - 1, R[2] + 1, R[3] + 1, own));
+  if (!col) return;
+  if (S.over && col.rows.length) {
+    // over the clump's own leaves: a light plate, so the column reads as a list laid on the tree
+    const y0 = col.rows[0].R[1] - 3,
+      y1 = (col.moreR || col.rows[col.rows.length - 1].R)[3] + 3;
+    g.save();
+    g.globalAlpha = 0.72;
+    g.fillStyle = P.halo;
+    roundRect(g, S.x0 - 4, y0, S.x1 - S.x0 + 8, y1 - y0, 5);
+    g.fill();
+    g.restore();
+  }
+  for (const r of col.rows) {
+    const { l, a } = want[r.i];
+    const changer = v.agents.find((A) => A.edits.has(l.file.id));
+    const hair = changer ? changer.ag.color : P.leafLabel;
+    const ex = col.side > 0 ? r.R[0] : r.R[2];
+    g.save();
+    g.strokeStyle = hair;
+    g.fillStyle = hair;
+    g.lineWidth = 1;
+    g.globalAlpha = 0.6;
+    g.beginPath();
+    g.moveTo(a.tip[0], a.tip[1]);
+    g.lineTo(ex, r.y);
+    g.stroke();
+    g.globalAlpha = 1;
+    g.beginPath();
+    g.arc(a.tip[0], a.tip[1], 1.8, 0, TAU);
+    g.fill();
+    g.restore();
+    const x0 = r.R[0] + LEAF_PAD;
+    g.font = `${changer ? 600 : 400} 10.5px ${P.font}`;
+    const txt = r.R[2] - r.R[0] < want[r.i].w ? clip(l.file.name, Math.max(6, Math.floor((r.R[2] - r.R[0]) / 6))) : l.file.name;
+    labelBack(g, P, x0, r.y - LEAF_H / 2, r.R[2] - r.R[0] - 2 * LEAF_PAD);
+    g.strokeStyle = P.halo;
+    g.lineWidth = 3;
+    g.lineJoin = "round";
+    g.textAlign = "left";
+    g.textBaseline = "middle";
+    g.strokeText(txt, x0, r.y);
+    g.fillStyle = changer ? changer.ag.color : l.file.kind === "c" ? P.leafLabel : P.muted;
+    g.fillText(txt, x0, r.y);
+    v.labelHits!.push({ r: r.R, leaf: l });
+  }
+  if (col.moreR) {
+    g.font = `10px ${P.font}`;
+    g.textAlign = col.side > 0 ? "left" : "right";
+    g.textBaseline = "middle";
+    g.fillStyle = P.muted;
+    g.fillText(`+${col.more} more`, col.side > 0 ? col.moreR[0] + LEAF_PAD : col.moreR[2] - LEAF_PAD, (col.moreR[1] + col.moreR[3]) / 2);
+    g.textAlign = "left";
+  }
 }
 
 /** a placed name's tether: the hairline back to its anchor, the dot on a fork */
@@ -3762,9 +3962,9 @@ function drawPriorityLeafLabels(
   leafPx: number,
   birdS: Array<{ A: AgentState; visible: boolean; pose: Pose } | null>
 ) {
-  // the leaves named here (hovered, selected, a bird's) are drawn at >= 10.5 px half-length at every zoom
-  // (drawEdits), so their names attach at the whole-tree view too: no leaf-size gate beyond "visible at all"
-  if (leafPx < 3) return;
+  // zoomed out a leaf is a few px: a name can't be seen to point at it, so no file is named out there (a perched
+  // bird's tag names its file instead: tagDoing)
+  if (leafPx < 9) return;
   const P = v.P;
   const z = v.cam.z;
   const selLeaf = v.sel && v.sel.leaf ? v.sel.leaf : null;
@@ -3859,11 +4059,19 @@ function drawLabels(
   }
   const minFiles = zr < 1.6 ? 8 : zr < 3 ? 4 : 1;
   const groundS = M.groundY * z + (H / 2 - v.cam.y * z);
+  // the hovered clump's name column claims its strip before any name of this pass is placed (rule 6)
+  const colPlan = phase === "rest" ? planNameColumn(v, g, toS, leafPx, reserve) : null;
   const crumbAnc = v.crumbAnc;
   // LIT PATHS: a folder is named when there is something to see there (a change below it, a nest, a rule, the
   // open card) or it is top-level; the rest of the tree stays unlabelled until you zoom in (or arm a paint tool)
   const litI = v.litInfo || new Map<TNode, LitInfo>();
   const quietZoom = zr < 2.4 && !armed;
+  // the top-level folders whose equal-count chain holds a folder that must be named (F5: one pill per chain)
+  const chainMust = new Set<TNode>();
+  for (const m of [...nestSet, ...ruleSet, ...(selNode ? [selNode] : [])]) {
+    const top = chainTop1(m, litI);
+    if (top) chainMust.add(top);
+  }
   for (const n of M.nodes) {
     if (n.depth < 1 || n.vHidden) continue;
     const nest = nestSet.has(n),
@@ -3871,11 +4079,18 @@ function drawLabels(
       rule = ruleSet.has(n),
       lit = litI.has(n);
     const must = nest || sel || rule;
-    // a pass-through folder (one lit sub-folder holding all its changes) is named by that sub-folder instead
+    // a pass-through folder (one lit sub-folder holding all its changes) is named by that sub-folder instead —
+    // except under a top-level folder: a chain of equal counts from one ("frontend › src ●121") is named ONCE, by
+    // the top-level folder ("frontend ●121"), so the same changes are never counted twice
+    if (lit && !must && hovN !== n && n.depth >= 2 && chainTop1(n, litI)) continue;
+    // ... unless a folder down that chain must be named itself (the nest, the open card, a rule): then IT names the chain
+    if (lit && !must && hovN !== n && n.depth === 1 && chainMust.has(n)) continue;
     if (lit && !must && n.depth >= 2 && n.kids) {
       const lk = n.kids.filter((k) => litI.has(k));
       if (lk.length === 1 && litI.get(lk[0])!.n === litI.get(n)!.n && hovN !== n) continue;
     }
+    // a boilerplate source root ("src" as its parent's only sub-folder) is not a place: never named on its own
+    if (!must && hovN !== n && loneSrc(n)) continue;
     const early = n.depth === 1 || must || lit;
     if ((phase === "limbs") !== early) continue;
     if (nest && v.nestLabelled && v.nestLabelled.has(n)) continue; // the nest pill already names it
@@ -3989,10 +4204,9 @@ function drawLabels(
     const plain = n.kind === "root" ? n.label || n.name : n.disp || shortName(n.name);
     const name = (pill || info) && n.depth >= 2 ? folderPath(n) : plain;
     // a name with no room by its own cluster is SHORTENED, never moved off beside a neighbour: the full path, then
-    // the folder's own name, then (a changed folder) just its count chip — else it is not drawn this frame
-    const names = [name];
-    if (plain !== name) names.push(plain);
-    if (pill && info && info.segs.length) names.push("");
+    // the folder's own name — else it is not drawn this frame (the bird index lists it). Only a folder that must
+    // show (a nest, the open card, a rule) may shrink to its bare count chip: a "●86" alone names nothing
+    const names = folderNameVariants(name, plain, !!(pill && info && info.segs.length), nestSet.has(n) || n === selNode || ruleSet.has(n));
     // in an only-here dusk everything outside the territory recedes — its names and pills too (not a folder
     // whose changes are all another session's: that session works in its own worktree, unrestricted)
     const dusk = hasOnly && !n.lit && !(info && info.n > 0 && info.bound === 0);
@@ -4015,8 +4229,7 @@ function drawLabels(
       // "docs · 21 files" — a heading over its planks (the ledger line runs into it, the planks are right below)
       const dir = liftAnchor(n).dir;
       g.font = `600 11px ${P.font}`;
-      const t1 = n.label || n.name,
-        t2 = ` · ${n.nFiles} file${n.nFiles === 1 ? "" : "s"}`;
+      const [t1, t2] = liftCaption(M, n); // "frontend · 3 non-code", "test data · 42", "docs · 21 files"
       const w1 = g.measureText(t1).width;
       g.font = `10px ${P.font}`;
       const w = w1 + g.measureText(t2).width + 4;
@@ -4126,7 +4339,7 @@ function drawLabels(
       for (const k of A.created) edited.add(k);
     }
   const few = leafPx < 20;
-  if (phase === "rest" && (!few || (edited.size > 0 && leafPx >= 3))) {
+  if (phase === "rest" && (!few || (edited.size > 0 && leafPx >= 9))) {
     const L: Leaf[] = [];
     for (const t of M.terms) {
       if (t.node.fAnc) continue;
@@ -4195,6 +4408,8 @@ function drawLabels(
       }
     }
   }
+  // the hovered clump's names that found no room at their tips, in the column beside it (rule 6)
+  if (colPlan) drawNameColumn(v, g, colPlan, toS, edited, createdGhost, fits);
 }
 
 // ---------- picking (from ui.js) ----------
