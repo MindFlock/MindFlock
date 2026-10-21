@@ -24,7 +24,7 @@ mid-flight takes effect on the very next tool call.
 # a build heals a hook of an OLDER revision and leaves a NEWER one alone, so
 # two MindFlock builds on one worktree (the uv-tool copy + a dev server)
 # converge instead of rewriting settings.local.json every tick.
-_MF_HOOK_REV = 4
+_MF_HOOK_REV = 5
 
 # The firing session's tmux name, set by ``_mf_tool_hook`` for this one fire
 # (the hook process handles exactly one tool call). Per-session fences in a

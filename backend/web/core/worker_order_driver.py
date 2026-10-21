@@ -184,10 +184,12 @@ def _apply_fence(
     return True, problems, {"wt": os.path.realpath(wt), "shared": shared}
 
 
-def _drop_fence(srv, title: str, wt: str) -> None:
+def _drop_fence(srv, title: str, wt: str, **why: str) -> None:
+    """Drop ``title``'s fence in ``wt``; ``why`` (``cause``, ``by``,
+    ``reason``) goes in the fence log so the Map says why it went."""
     if not wt:
         return
-    if srv._red_zones.drop_session_fence(wt, _tmux_of(title)):
+    if srv._red_zones.drop_session_fence(wt, _tmux_of(title), **why):
         try:
             srv._red_zones.sync_guard(wt, lroot=wt)
         except Exception:  # noqa: BLE001
@@ -213,6 +215,7 @@ def set_fence(title: str, payload: Mapping) -> Tuple[int, dict]:
             "paths) — change the plan, not the session" % title
         }
     by = str(payload.get("by") or "").strip()
+    why = str(payload.get("reason") or "").strip()[:300]
     if payload.get("clear"):
         fence, problems = None, []
     else:
@@ -245,7 +248,7 @@ def set_fence(title: str, payload: Mapping) -> Tuple[int, dict]:
     if fence is None:
         cur = _wt_of(inst)
         for wt in {old_wt, os.path.realpath(cur) if cur else ""} - {""}:
-            _drop_fence(srv, title, wt)
+            _drop_fence(srv, title, wt, cause="lifted", by=by, reason=why)
     problems: List[str] = []
     if fence is not None:
         applied, problems, where = _apply_fence(srv, title, inst, fence, by)
@@ -260,8 +263,9 @@ def set_fence(title: str, payload: Mapping) -> Tuple[int, dict]:
         msg = (
             _order.fence_text(fence, by)
             if fence
-            else "MindFlock: your fence was lifted%s — the folder's own zones still apply."
-            % ((" by %s" % by) if by else "")
+            else "MindFlock: your fence was lifted%s%s — the folder's own zones "
+            "still apply."
+            % ((" by %s" % by) if by else "", (": %s" % why) if why else "")
         )
         try:
             told, _reason = srv._deliver_to_agent(inst, title, msg)
@@ -660,7 +664,7 @@ def _pass_sync() -> None:
                 if not isinstance(lf, dict):
                     # Cleared while this pass landed the old one: lift it.
                     if upd.get("wt"):
-                        _drop_fence(srv, t, upd["wt"])
+                        _drop_fence(srv, t, upd["wt"], cause="lifted")
                 elif _fence_key(lf) == key:
                     lf.update(upd)
                 # else: replaced meanwhile — left unapplied, next pass lands it
@@ -703,7 +707,7 @@ def _sweep_fences(srv, instances: Mapping) -> None:
         live = {srv._red_zones._session_key(_tmux_of(t)) for t in instances}
         for wt, key in srv._red_zones.fences_by_owner_prefix(FENCE_OWNER):
             if key not in live:
-                if srv._red_zones.drop_session_fence(wt, key):
+                if srv._red_zones.drop_session_fence(wt, key, cause="ended"):
                     try:
                         srv._red_zones.sync_guard(wt, lroot=wt)
                     except Exception:  # noqa: BLE001

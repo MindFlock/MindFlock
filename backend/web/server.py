@@ -4610,7 +4610,10 @@ async def _code_map_warm_on_start() -> None:
 def _child_fences(title: str) -> list:
     """The fences on ``title``'s workers — what the orchestrator's Map lists
     as "Workers' fences": ``[{"session", "only", "keep_out", "reason",
-    "by"}]``. Never raises."""
+    "by", "last"?}]``; ``last`` = the newest change after the fence was set
+    (``red_zones.fence_log``), and a live worker whose fence went is listed
+    with empty paths and that ``last`` (*fence lifted by …: why*). Never
+    raises."""
     out = []
     try:
         for c in _lineage.children_of(ENGINE.instances, title):
@@ -4618,18 +4621,26 @@ def _child_fences(title: str) -> list:
             cwt = child.GetWorktreePath() if child is not None else ""
             if not cwt:
                 continue
-            f = _red_zones.session_fence(cwt, tmux.to_mindflock_tmux_name(c))
-            if not f:
+            tname = tmux.to_mindflock_tmux_name(c)
+            f = _red_zones.session_fence(cwt, tname)
+            log = [
+                r
+                for r in _red_zones.fence_log(cwt, tname, 5)
+                # "ended" belongs to an earlier session that had this name
+                if r.get("event") not in ("set", "ended")
+            ]
+            if not f and not log:
                 continue
-            out.append(
-                {
-                    "session": c,
-                    "only": [z.get("pattern") for z in f.get("green") or []],
-                    "keep_out": [z.get("pattern") for z in f.get("red") or []],
-                    "reason": f.get("reason") or "",
-                    "by": f.get("by") or "",
-                }
-            )
+            row = {
+                "session": c,
+                "only": [z.get("pattern") for z in (f or {}).get("green") or []],
+                "keep_out": [z.get("pattern") for z in (f or {}).get("red") or []],
+                "reason": (f or {}).get("reason") or "",
+                "by": (f or {}).get("by") or "",
+            }
+            if log:
+                row["last"] = log[-1]
+            out.append(row)
     except Exception:  # noqa: BLE001
         return out
     return out
