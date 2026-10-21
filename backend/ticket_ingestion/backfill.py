@@ -12,6 +12,7 @@ from pathlib import Path
 
 import aiohttp
 
+from backend.ticket_ingestion.clone_transport import headless_git_env
 from backend.ticket_ingestion.config import (
     PipelineConfig,
     TicketProviderConfig,
@@ -61,13 +62,17 @@ def sort_stories_chronologically(
 
 
 async def _get_existing_branches(repo_url: str) -> set[str]:
+    # Headless like every other network git call of the pipeline: prompts
+    # off, stdin closed, the connected GitHub sign-in as git's helper.
     proc = await asyncio.create_subprocess_exec(
         "git",
         "ls-remote",
         "--heads",
         repo_url,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=headless_git_env(),
     )
     branches: set[str] = set()
     try:

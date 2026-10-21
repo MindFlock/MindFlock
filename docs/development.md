@@ -304,7 +304,9 @@ uv run pytest tests/property -q     # hypothesis property tests
 
 Run with the web auth gate **off**: `CS_WEB_MODE` unset and `MINDFLOCK_AUTH=0`
 in your shell, or the API-contract tests 401. `tests/conftest.py` isolates the
-settings store per test; a test that needs the gate on sets
+settings store per test and clears `GH_TOKEN`/`GITHUB_TOKEN` for each one (an
+ambient token would make every session launch "connected" and carry the git
+credential-helper overlay); a test that needs the gate on sets
 `MINDFLOCK_AUTH_TOKEN`/`CS_WEB_MODE` itself.
 
 Pytest config lives in `pyproject.toml` (`testpaths=["tests"]`,

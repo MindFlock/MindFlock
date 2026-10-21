@@ -825,8 +825,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,  # a git credential helper, not a human command
         description=(
             "git credential helper: answers `get` for https://github.com with "
-            "the GitHub token MindFlock has (Setup → Connect GitHub registers it, "
-            "only when you click for it and git has no helper of its own)."
+            "the GitHub token MindFlock has. While a sign-in is connected, every "
+            "git call MindFlock makes against GitHub and git inside its sessions "
+            "use it through git's per-process config; Setup → Connect GitHub can "
+            "also register it in the global git config (only when you click for "
+            "it and git has no helper of its own)."
         ),
     )
     git_cred.add_argument("operation", nargs="?", default="get")

@@ -37,6 +37,7 @@ import logging
 import os
 from typing import Any, Optional
 
+from backend import git_auth_hints
 from backend.session.git.remote_url import (
     is_local_path,
     parse_remote,
@@ -213,13 +214,16 @@ def headless_git_env(base: Optional[dict] = None) -> dict:
     username/password prompt into an immediate error, and ``BatchMode=yes``
     does the same for SSH's host-key / passphrase prompts — but only when the
     user has not set ``GIT_SSH_COMMAND`` themselves, since that variable is how
-    people point git at a specific key or a jump host.
+    people point git at a specific key or a jump host. And the connected
+    GitHub sign-in as git's credential helper for github.com
+    (:func:`backend.git_auth_hints.github_signin`; nothing without one), so a
+    clone of a GitHub repo over HTTPS asks no OS keychain and needs no gh.
     """
     env = dict(os.environ if base is None else base)
     env["GIT_TERMINAL_PROMPT"] = "0"
     if not env.get("GIT_SSH_COMMAND"):
         env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
-    return env
+    return git_auth_hints.github_signin(env)
 
 
 def clone_failure_hint(url: str) -> str:

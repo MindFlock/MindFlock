@@ -35,13 +35,20 @@ handling and Make PR already read, and the one settings sync shares with the
 user's other devices. :func:`test_connection` is the dialog's **Test**: a real
 ``GET /user`` plus one repo-access check against the first configured repo.
 
-**Pushing** is plain git over the user's own remote. :func:`push_check` asks
-the remote for real (a ``push --dry-run`` with ``GIT_TERMINAL_PROMPT=0``, so a
-missing credential fails at once), :func:`setup_git_credential` lets git push
-over HTTPS with the connected sign-in (``gh auth setup-git``, or MindFlock's
-own credential helper for github.com when no helper is set), and
-:func:`set_git_identity` writes ``user.name``/``user.email`` to the GLOBAL git
-config — each only when the person clicks for it.
+**Pushing** is plain git over the user's own remote — and while a sign-in is
+connected, git uses it: :func:`git_env` lays git's per-process config over
+every git call MindFlock makes against GitHub (clone, fetch, push, push
+check) and over every session's shell, making ``mindflock git-credential``
+the one credential helper for https://github.com
+(:func:`backend.git_auth_hints.with_credential_helper`). No OS keychain
+prompt, no ``gh``, no global git config written, every other host untouched.
+:func:`push_check` asks the remote for real (a ``push --dry-run`` with
+``GIT_TERMINAL_PROMPT=0``, so a missing credential fails at once),
+:func:`setup_git_credential` registers the same helper in the GLOBAL git
+config for git run outside MindFlock (``gh auth setup-git``, or MindFlock's
+own helper when no helper is set), and :func:`set_git_identity` writes
+``user.name``/``user.email`` to the GLOBAL git config — each only when the
+person clicks for it.
 
 Every HTTP call goes through :func:`_http` (stdlib ``urllib``; tests replace
 it). Nothing here ever returns a token to a client.
@@ -61,7 +68,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 
 from backend import git_auth_hints, gitutil
 
@@ -504,7 +511,9 @@ def import_gh_token() -> dict:
 def _git(
     *args: str, cwd: Optional[str] = None, timeout: float = 10.0
 ) -> Tuple[int, str, str]:
-    cp = gitutil.git(args, cwd, timeout=timeout, env=git_auth_hints.NO_PROMPT_ENV)
+    cp = gitutil.git(
+        args, cwd, timeout=timeout, env=git_env(git_auth_hints.NO_PROMPT_ENV)
+    )
     if cp.timed_out:
         return 124, "", "timed out"
     if cp.not_run:
@@ -553,6 +562,41 @@ def set_git_identity(name: str, email: str) -> dict:
     return {"ok": True, "error": "", **git_identity()}
 
 
+def connected_for_git() -> bool:
+    """Whether git should use MindFlock's sign-in for github.com: a token in
+    Settings (what Connect GitHub writes, by device flow or paste) or in
+    ``$GH_TOKEN``/``$GITHUB_TOKEN``. Not the ``gh auth token`` rung — a
+    subprocess per git call, and a gh sign-in already made gh git's helper
+    (``gh auth setup-git``, which Setup's gh route runs) — and not the
+    deprecated config.toml rung, which stays with the PR buttons.
+
+    Reads the store afresh: the ticket pipeline is its own process, whose
+    settings cache would otherwise hold whatever it booted with — and a token
+    connected a minute ago is exactly what its next clone needs."""
+    try:
+        _settings().invalidate()
+    except Exception:  # noqa: BLE001
+        pass
+    return bool(resolve_token(gh=False)[1])
+
+
+def git_env(env: Optional[Mapping[str, str]] = None) -> dict:
+    """A copy of ``env`` plus, when :func:`connected_for_git`, git's
+    per-process config making this install's ``mindflock git-credential``
+    the one credential helper for https://github.com
+    (:func:`backend.git_auth_hints.with_credential_helper`). The env for
+    every git call MindFlock makes that may reach GitHub, and — of ``{}`` —
+    the overlay a session's tmux env carries, so the agent's own push and
+    the Push button's use the sign-in too. ``env`` as is without one, so
+    git's own helpers answer exactly as before. ``env`` is an OVERLAY where
+    the caller lays it over the process environment (:func:`gitutil.git`)
+    and a full environment where it is passed to a subprocess whole."""
+    out = dict(env or {})
+    if not connected_for_git():
+        return out
+    return git_auth_hints.with_credential_helper(out)
+
+
 def credential_helper() -> str:
     """git's effective credential helper for https://github.com, or ``""``."""
     rc, out, _ = _git(
@@ -566,7 +610,9 @@ def _mindflock_bin() -> str:
 
 
 def setup_git_credential() -> dict:
-    """Let git push to github.com over HTTPS with the connected sign-in.
+    """Let git push to github.com over HTTPS with the connected sign-in from
+    OUTSIDE MindFlock too (a terminal of the person's own): git run by
+    MindFlock and inside its sessions already does, by :func:`git_env`.
 
     ``gh auth setup-git`` when gh is signed in (gh is then git's helper);
     otherwise MindFlock's own helper (``mindflock git-credential``, which
@@ -619,7 +665,9 @@ def setup_git_credential() -> dict:
 def credential_answer(stdin_text: str) -> str:
     """The ``get`` reply of ``mindflock git-credential`` for git's request
     ``stdin_text`` (``key=value`` lines): the token for https://github.com,
-    nothing for any other host (git then asks its next helper)."""
+    nothing for any other host (git then asks its next helper). Resolved
+    afresh in the helper's own process, so a token connected after a session
+    started still reaches that session's next push."""
     req: Dict[str, str] = {}
     for line in (stdin_text or "").splitlines():
         if "=" in line:

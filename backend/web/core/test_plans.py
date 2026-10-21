@@ -110,7 +110,7 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional
 
-from backend import gitutil
+from backend import git_auth_hints, gitutil
 from backend.fsutil import atomic_write_json
 from backend.config.config import GetConfigDir
 from backend.config.home_guard import guard
@@ -2896,6 +2896,7 @@ def probe_live(repo_root: str, sha: str, live_branch: str) -> str:
         ],
         repo_root,
         stdin=subprocess.DEVNULL,
+        env=git_auth_hints.github_signin(git_auth_hints.NO_PROMPT_ENV),
         timeout=TIMEOUT_FETCH,
     )
     if cp.returncode != 0:
@@ -3036,6 +3037,7 @@ def fetch_all_heads(repo_root: str, ttl: float = HEADS_FETCH_TTL) -> bool:
         root,
         stdin=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=git_auth_hints.github_signin(git_auth_hints.NO_PROMPT_ENV),
         timeout=TIMEOUT_FETCH,
     )
     return cp.returncode == 0

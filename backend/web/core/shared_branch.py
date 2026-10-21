@@ -35,7 +35,7 @@ import threading
 import time
 from typing import Dict, List, Optional, Tuple
 
-from backend import config, gitutil, log
+from backend import config, git_auth_hints, gitutil, log
 from backend.web.core import title_store
 
 #: Bound on every fetch this module runs (the push check, create, background).
@@ -72,12 +72,13 @@ def _git(path: str, *args: str, timeout: float = 15.0) -> Tuple[int, str, str]:
     if "GIT_SSH_COMMAND" not in os.environ:
         env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
     # A new session: a timeout kills git AND its children (pull's rebase,
-    # ssh), not just the parent.
+    # ssh), not just the parent. github_signin: the connected GitHub
+    # sign-in answers for github.com (the fetch behind the divergence check).
     cp = gitutil.git(
         args,
         path,
         timeout=timeout,
-        env=env,
+        env=git_auth_hints.github_signin(env),
         stdin=subprocess.DEVNULL,
         new_session=True,
     )

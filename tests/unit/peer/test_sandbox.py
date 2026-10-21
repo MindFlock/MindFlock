@@ -367,6 +367,7 @@ def test_codex_env(share, env, monkeypatch, tmp_path):
         "MINDFLOCK_AUTH_TOKEN",
         "GH_TOKEN",
         "GITHUB_TOKEN",
+        "GIT_CONFIG_COUNT",  # the host's GitHub sign-in rides on git's per-process config
         "AWS_SECRET_ACCESS_KEY",
         "AWS_PROFILE",
         "LD_PRELOAD",

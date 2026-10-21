@@ -123,7 +123,12 @@ Everything MindFlock itself talks to over the network, in full:
 No analytics, no telemetry, no crash reporting, no license check, no phone-home
 of any kind — the tree is public, so grep it. Tracker tokens live in
 `~/.mindflock/settings.json` at mode `0600` and are sent to the tracker they
-belong to and nowhere else. `mindflock serve` refuses the network until you
+belong to and nowhere else. Your GitHub sign-in reaches git the same way:
+each git process MindFlock runs against github.com, and git inside your
+sessions, gets `mindflock git-credential` as its credential helper for that
+one host through git's per-process config — never written to disk or to a
+git config file — and shared-folder sandboxes strip it. `mindflock serve`
+refuses the network until you
 explicitly ask for `tailscale` mode, and even then it's your tailnet behind an
 auth token, never the public internet.
 
@@ -356,7 +361,9 @@ a feature race; those two change what your day looks like:
   (provisioning → agent → pre-commit → committed → pushed → PR open). The
   commit runs in the session's own terminal, so you watch the hooks. Pushing is
   plain `git push` over whatever remote you already have — SSH or HTTPS, never
-  rewritten by MindFlock. **Open PR** / **Merge** use the `gh` CLI when it's
+  rewritten by MindFlock, with your GitHub sign-in as git's credential for
+  HTTPS once you've connected one (no keychain prompt, no `gh auth setup-git`).
+  **Open PR** / **Merge** use the `gh` CLI when it's
   installed and authenticated, a GitHub token (Intake → Pull requests) when it
   isn't, and a prefilled compare URL in your browser when you have neither.
 - 🔌 **Provider-agnostic** — every coding-agent CLI is just a TOML file (Claude

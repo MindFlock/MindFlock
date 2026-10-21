@@ -98953,7 +98953,7 @@ function ConnectGitHub({ onChange, onDone }) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "muted setup-hint",
-					children: "Needed to open and merge pull requests. Pushing works without it."
+					children: "Needed to open and merge pull requests. Once connected, git uses it too: cloning and pushing GitHub repos asks for nothing else."
 				})
 			] }),
 			needsIdentity(st) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {

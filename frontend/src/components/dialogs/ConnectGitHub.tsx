@@ -498,7 +498,7 @@ export function ConnectGitHub({
             </details>
           )}
           <p className="muted setup-hint">
-            Needed to open and merge pull requests. Pushing works without it.
+            Needed to open and merge pull requests. Once connected, git uses it too: cloning and pushing GitHub repos asks for nothing else.
           </p>
         </>
       )}

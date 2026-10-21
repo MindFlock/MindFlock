@@ -503,10 +503,11 @@ independent cadences, so each side has to tolerate the other being older. See
    ~4 seconds with a stage badge. You watch/steer it from the browser or phone.
 6. The guided flow walks it forward: **Commit…** (runs pre-commit in the visible
    Terminal tab) → **Push** (plain `git push` over the repo's own remote, SSH or
-   HTTPS) → **Open PR** → **Merge** (`gh` when available, else the GitHub REST
-   API with a token, else a prefilled browser URL). Stage detection is inferred
-   from git plus whichever GitHub credential exists, so commits made in Cursor
-   also move the badge.
+   HTTPS — with the connected GitHub sign-in as git's per-process credential
+   helper for github.com) → **Open PR** → **Merge** (`gh` when available, else
+   the GitHub REST API with a token, else a prefilled browser URL). Stage
+   detection is inferred from git plus whichever GitHub credential exists, so
+   commits made in Cursor also move the badge.
 
 ## On-disk state map
 

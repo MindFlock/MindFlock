@@ -44,12 +44,19 @@ _NOT_SECRET = frozenset(
         "LM_STUDIO_API_KEY",
     }
 )
+#: git's per-process config KEYS (``GIT_CONFIG_KEY_<n>`` holds a config key
+#: name such as ``credential.helper``; the value is in ``GIT_CONFIG_VALUE_<n>``
+#: and judged on its own). The GitHub sign-in overlay rides on these
+#: (backend/git_auth_hints.py), and a key routed to the file while its count
+#: and value stay on the session env would break every later pane's git
+#: ("missing config key").
+_NOT_SECRET_RE = re.compile(r"^GIT_CONFIG_KEY_\d+$")
 
 
 def is_secret(name: str) -> bool:
     """Whether ``name`` names a credential rather than a setting."""
     n = (name or "").upper()
-    if n in _NOT_SECRET:
+    if n in _NOT_SECRET or _NOT_SECRET_RE.match(n):
         return False
     return any(h in n for h in _SECRET_HINTS)
 

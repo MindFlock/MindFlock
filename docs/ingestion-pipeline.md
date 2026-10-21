@@ -776,6 +776,21 @@ The canonical example is a `testmon` cache (`workspaces/_testmon_refresher`,
 artifact `.testmondata`, refresh command `pytest --testmon` with
 `TESTMON_ENV=shared`) — workspaces seeded from it only run diff-impacted tests.
 
+**Network git runs headless, with the GitHub sign-in.** Every git call the
+pipeline makes that may reach a remote — the refresher's clone and fetch, the
+workspace clones (`clone_transport.run_network_git`, and provisioning's
+`_noninteractive_env` on the engine path), backfill's dedup `git ls-remote`
+(stdin closed, like the rest) — runs with `clone_transport.headless_git_env`:
+`GIT_TERMINAL_PROMPT=0`, SSH `BatchMode=yes` unless `GIT_SSH_COMMAND` is set,
+and, while a GitHub sign-in is connected, git's per-process config making
+`mindflock git-credential` the credential helper for https://github.com (no
+OS keychain, no gh, no global git config; see *GitHub credential* in
+[configuration.md](configuration.md)). Local git steps keep the plain
+environment. The pipeline is its own process with its own settings cache, so
+`github_auth.connected_for_git` re-reads `settings.json` on each of these
+calls (the same reason the token chain re-resolves every poll): a token
+connected in the UI a minute ago is exactly what the next clone needs.
+
 ## State and files
 
 | File | Contents |

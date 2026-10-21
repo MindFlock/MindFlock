@@ -912,9 +912,12 @@ over `MIRROR_MAX_BYTES` (64 MB) it is refused with `err:"too big to mirror"`.
   `env`, and the attach templates `mcp_args` / `mcp_env` / `mcp_file` /
   `mcp_home_file`). `sandbox.profile_for(provider)` validates every field
   before use and refuses the profile otherwise: `bin` a bare name, every env
-  name through the deny lists (no `HOME`/`PATH`/proxy/`LD_*`/cloud creds),
-  config and seed paths relative with no `..`. A CLI with no valid profile is
-  refused (`SandboxError("provider X has no sandbox profile")`).
+  name through the deny lists (no `HOME`/`PATH`/proxy/`LD_*`/cloud creds, and
+  no `GIT_CONFIG_*`: the host's GitHub sign-in rides on git's per-process
+  config as a credential helper, and a shared folder's agent must not be able
+  to ask it for the token), config and seed paths relative with no `..`. A CLI
+  with no valid profile is refused (`SandboxError("provider X has no sandbox
+  profile")`).
 - **Provider credentials.** `sandbox.prepare_home(share, provider)` copies only
   the profile's `seed_files` from the CLI's host config dir (`$config_env`,
   else `~/config_dir`) to the same place under `<home>` (0600, size-capped,
