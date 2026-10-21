@@ -34,6 +34,7 @@ import {
   unionRecs,
   finalRecs,
 } from "./layout";
+import { crownObstacles, layoutScaffold, type Lift, type Plank, type Scaffold } from "./scaffold";
 
 export { S0, TAU };
 
@@ -124,6 +125,8 @@ export interface TNode extends LNode {
   h?: number;
   pw?: number;
   leaves?: Leaf[];
+  /** a pile is one lift of the scaffold (scaffold.ts) */
+  lift?: Lift;
   // per-frame flags (draw.ts)
   vHidden?: boolean;
   vFold?: boolean;
@@ -146,6 +149,8 @@ export interface Leaf {
   pile?: TNode;
   flat?: boolean;
   rot?: number;
+  /** a ground file is a plank on the scaffold (scaffold.ts) */
+  plank?: Plank;
   /** leaf outline [bx,by, c1x,c1y, tx,ty, c2x,c2y] (geom.ts) */
   g?: number[];
 }
@@ -195,6 +200,8 @@ export interface Model {
   leaves: Leaf[];
   terms: TTerm[];
   piles: TNode[];
+  /** the towers the piles are lifts of */
+  scaffold?: Scaffold;
   nodes: TNode[];
   kW: number;
   trunkW: number;
@@ -587,57 +594,42 @@ export function buildModel(raw: RawRepo, opts: BuildOpts = {}): Model {
     }
   }
 
-  // ---- ground piles (docs / CI / config) ----
+  // ---- the scaffold (docs / CI / config): each group is a lift on a tower beside the trunk, each file a plank ----
   M.piles = [];
   const gg = [...groundGroups.entries()].sort((a, b) => b[1].length - a[1].length || cmpStr(a[0], b[0]));
-  // the piles start just past the roots (their names sit under the ground line, clear of the root clumps) — not
-  // a fixed stride out, which left a small tree a sliver between far-flung piles
-  let rx0 = 0,
-    rx1 = 0;
-  for (const t of LR.terms)
-    for (const l of t.leaves || []) {
-      rx0 = Math.min(rx0, l.x);
-      rx1 = Math.max(rx1, l.x);
+  for (const [, fs] of gg) fs.sort((a, b) => b.lines - a.lines || cmpStr(a.name, b.name));
+  const crownLeaves: Array<{ x: number; y: number }> = [];
+  for (const t of LC.terms) for (const l of t.leaves || []) crownLeaves.push(l);
+  M.scaffold = layoutScaffold(
+    gg.map(([key, files]) => ({ key, files })),
+    groundY,
+    M.trunkW,
+    crownObstacles(crownLeaves, M.branches)
+  );
+  for (const T of M.scaffold.towers)
+    for (const L of T.lifts) {
+      const k = L.key,
+        fs = L.files;
+      const node = mkNode(k, "~" + k, null, "pile");
+      node.label = k === "(repo root)" ? "repo root files" : k;
+      node.files = fs;
+      node.nFiles = fs.length;
+      node.lines = fs.reduce((a, f) => a + f.lines, 0);
+      node.depth = 1;
+      const leaves = L.planks.map((p, j) => ({ x: (p.xo + p.xi) / 2, y: p.y, file: fs[j], flat: true, plank: p }) as unknown as Leaf);
+      for (const f of fs) f.node = node;
+      // the node's box is the lift's: cx / pw across the standards and the overhang, h from floor ledger to ceiling
+      node.cx = (L.x0 + L.x1) / 2;
+      node.cy = (L.floor + L.top) / 2;
+      node.pw = L.x1 - L.x0;
+      node.h = L.floor - L.top;
+      node.leaves = leaves;
+      node.lift = L;
+      L.pile = node;
+      M.piles.push(node);
     }
-  let xl = Math.min(-S0 * 4, rx0 - S0 * 2.5) - M.trunkW,
-    xr = Math.max(S0 * 4, rx1 + S0 * 2.5) + M.trunkW;
-  gg.forEach(([k, fs], i) => {
-    fs.sort((a, b) => b.lines - a.lines || cmpStr(a.name, b.name));
-    const n = fs.length,
-      s = S0 * 0.95;
-    const W = Math.max(S0 * 3, Math.sqrt(n) * s * 2.1),
-      H = Math.max(S0 * 1.2, W * 0.28);
-    const left = i % 2 === 0;
-    const cx = left ? xl - W / 2 : xr + W / 2;
-    if (left) xl -= W + S0 * 5;
-    else xr += W + S0 * 5;
-    const pts: Array<[number, number, number]> = [];
-    const rnd = rng(hashStr(k));
-    for (let y = 0; pts.length < n * 3 && y < H * 3; y += s * 0.62) {
-      for (let x = -W; x <= W; x += s * 0.95) {
-        const xx = x + ((y / (s * 0.62)) % 2 ? s * 0.45 : 0);
-        const e = (xx * xx) / ((W * W) / 4) + (y * y) / (H * H);
-        pts.push([xx + (rnd() - 0.5) * s * 0.3, y, e]);
-      }
-    }
-    pts.sort((a, b) => a[2] - b[2]);
-    const node = mkNode(k, "~" + k, null, "pile");
-    node.label = k === "(repo root)" ? "repo root files" : k;
-    node.files = fs;
-    node.nFiles = n;
-    node.lines = fs.reduce((a, f) => a + f.lines, 0);
-    node.depth = 1;
-    const leaves = pts.slice(0, n).map(
-      (p, j) =>
-        ({ x: cx + p[0], y: groundY - p[1] - S0 * 0.35, file: fs[j], flat: true, rot: (rnd() - 0.5) * 1.2 }) as unknown as Leaf
-    );
-    for (const f of fs) f.node = node;
-    node.cx = cx;
-    node.pw = W;
-    node.h = H;
-    node.leaves = leaves;
-    M.piles.push(node);
-  });
+  // piles in their old order (largest group first), whatever tower they stand on
+  M.piles.sort((a, b) => b.nFiles - a.nFiles || cmpStr(a.name, b.name));
 
   const finishTerms = (terms: Term[], region: "crown" | "root") => {
     for (const t0 of terms) {
@@ -686,9 +678,9 @@ export function buildModel(raw: RawRepo, opts: BuildOpts = {}): Model {
   for (const p of M.piles)
     for (const l of p.leaves!) {
       const f = l.file;
-      const fz = Math.min(1, Math.log10(Math.max(1, f.lines) + 1) / 3.6);
-      l.len = S0 * (0.55 + 0.5 * fz);
-      l.ang = l.rot!;
+      // a plank lies flat; its tip is the outer end (where the name goes)
+      l.len = l.plank!.len;
+      l.ang = l.plank!.dir > 0 ? 0 : Math.PI;
       l.region = "ground";
       l.pile = p;
       l.shade = 0;
@@ -707,7 +699,7 @@ export function buildModel(raw: RawRepo, opts: BuildOpts = {}): Model {
   for (const p of M.piles) {
     p.id = M.nodes.length;
     M.nodes.push(p);
-    p.F = [p.cx, groundY - p.h! * 0.5];
+    p.F = [p.cx, p.cy];
   }
   let limbI = 0;
   for (const n of M.crown.kids.slice().sort((a, b) => (a.F ? a.F[0] : 0) - (b.F ? b.F[0] : 0))) n.limb = limbI++;
@@ -749,7 +741,12 @@ export function buildModel(raw: RawRepo, opts: BuildOpts = {}): Model {
     n.cy = n.sy / Math.max(1, n.cnt);
     n.rad = Math.max(S0, Math.hypot(n.bx1 - n.bx0, n.by1 - n.by0) / 2);
   }
-  // a pile keeps its own centre (drawn on the ground)
+  // a pile keeps its lift's centre and size (scaffold.ts), not its planks' centroid
+  for (const p of M.piles) {
+    p.cx = p.F![0];
+    p.cy = p.F![1];
+    p.rad = Math.hypot(p.pw!, p.h!) / 2;
+  }
   M.crown.F = [0, 0];
   // world bounds
   let wx0 = 1e9,

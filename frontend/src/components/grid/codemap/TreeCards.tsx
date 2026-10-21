@@ -484,7 +484,7 @@ export function NodeCard(p: NodeCardProps) {
     isPile = n.kind === "pile",
     isTrunk = n.depth === 0 && !isPile;
   const title = nodeName(M, n);
-  const path = isTrunk ? (n === M.roots ? "all tests" : "repo root") : isRoot ? "tests · " + (n.crownTwin ? n.crownTwin.path : n.name) : isPile ? "on the ground (docs, CI, config)" : n.path;
+  const path = isTrunk ? (n === M.roots ? "all tests" : "repo root") : isRoot ? "tests · " + (n.crownTwin ? n.crownTwin.path : n.name) : isPile ? "on the scaffold (docs, CI, config)" : n.path;
   const who: ReactNode[] = [];
   if (!isTrunk)
     for (const A of p.agents) {
@@ -529,7 +529,7 @@ export function NodeCard(p: NodeCardProps) {
       <h3>{title}</h3>
       <div className="ct-path">{path}</div>
       <div className="ct-facts">
-        <span>{isRoot ? "tests" : isPile ? "ground pile" : isTrunk ? (n === M.roots ? "all tests" : "repo (the trunk)") : "folder"}</span>
+        <span>{isRoot ? "tests" : isPile ? "scaffold lift" : isTrunk ? (n === M.roots ? "all tests" : "repo (the trunk)") : "folder"}</span>
         <span>
           {plural(n.nFiles, isTrunk && n === M.crown ? "code file" : "file")}
         </span>
@@ -540,7 +540,7 @@ export function NodeCard(p: NodeCardProps) {
         <>
           <div className="ct-facts">
             <span>{plural(M.roots.nFiles, "test")} (roots)</span>
-            <span>{M.piles.reduce((a, q) => a + q.nFiles, 0)} docs / config (ground)</span>
+            <span>{M.piles.reduce((a, q) => a + q.nFiles, 0)} docs / config (on the scaffold)</span>
             <span>{plural(M.crown.kids.length, "top-level folder")}</span>
           </div>
           <h5>Agents</h5>
@@ -751,7 +751,7 @@ export function TipBody({ M, hit, agents, zones, tool, folded }: { M: Model; hit
       <>
         <b>{nodeName(M, n)}</b>{" "}
         <i>
-          {n.kind === "root" ? "tests" : n.kind === "pile" ? "on the ground (docs, CI, config)" : "folder"} · {plural(n.nFiles, "file")}
+          {n.kind === "root" ? "tests" : n.kind === "pile" ? "on the scaffold (docs, CI, config)" : "folder"} · {plural(n.nFiles, "file")}
           {n.lines ? ` · ~${n.lines.toLocaleString()} lines` : ""}
         </i>
         {n.kind === "crown" && n.depth > 1 && (

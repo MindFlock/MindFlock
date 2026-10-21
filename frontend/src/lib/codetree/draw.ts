@@ -16,6 +16,7 @@ import { agentBlast, addBadgeSets, blastOf, collectBadges } from "./blast";
 import { dPS, hashStr, rng, taperHW } from "./layout";
 import { S0, TAU, baseOf, isUnder, shortName, type Branch, type Leaf, type Model, type TNode, type TTerm } from "./model";
 import { glyphShape, type Pal, type Palette } from "./palette";
+import { PLANK_MARK, SCAF, drawScaffold, drawScaffoldMini, liftAnchor, liftAt, liftBox, liftRing, plankAt, plankPath, plankRing } from "./scaffold";
 import type { AgentDef, AgentState, Badge, BirdEv, Blocked, Hit, RiskGroup, TreeView, TZone } from "./types";
 
 /** What an empty view (zoomed into air) says instead of showing nothing. */
@@ -892,18 +893,8 @@ function renderStatic(v: TreeView, g: G2, W: number, H: number, cam: { x: number
     }
     drawGroups(leafAlpha);
   }
-  // ground piles: always drawn as leaves (they are small)
-  for (const p of M.piles) {
-    const pw = p.pw || 0,
-      ph = p.h || 0;
-    if (!inView(p.cx - pw, M.groundY - ph * 2, p.cx + pw, M.groundY + 1)) continue;
-    v.termsInView++;
-    const lit = !hasOnly || p.lit;
-    const keep = p.keep;
-    for (const l of p.leaves || [])
-      addL(!lit ? P.DUSK.leafA : keep ? P.KEEP.leafA : l.shade ? P.PILEPAL.leafB : l.id % 3 ? P.PILEPAL.leafA : P.PILEPAL.leafB, l);
-  }
-  drawGroups(1);
+  // the scaffold (docs / CI / config): towers of lifts beside the trunk, a plank per file (scaffold.ts)
+  v.termsInView += drawScaffold(g, M, P, { z, leafPx, hasOnly, keepFiles, createdGhost, inView });
 
   // ---------- keep-out hatching: a shape cue that survives colour blindness and every zoom ----------
   const hatch = (clip: Path2D, x0: number, y0: number, x1: number, y1: number, dim?: boolean) => {
@@ -922,12 +913,11 @@ function renderStatic(v: TreeView, g: G2, W: number, H: number, cam: { x: number
   };
   for (const t of keepTerms) hatch(t.blobFold, t.cx - t.rad - S0, t.cy - t.rad - S0, t.cx + t.rad + S0, t.cy + t.rad + S0, hasOnly && !t.node.lit);
   for (const p of M.piles) {
-    const pw = p.pw || 0,
-      ph = p.h || 0;
-    if (p.keep && inView(p.cx - pw, M.groundY - ph * 2, p.cx + pw, M.groundY + 1)) {
+    const B = liftBox(p);
+    if (p.keep && inView(B.x0, B.y0, B.x1, B.y1)) {
       const clipP = new Path2D();
-      clipP.ellipse(p.cx, M.groundY - ph * 0.45, pw * 0.62, ph * 0.9, 0, 0, TAU);
-      hatch(clipP, p.cx - pw, M.groundY - ph * 2, p.cx + pw, M.groundY);
+      clipP.rect(B.x0, B.y0, B.x1 - B.x0, B.y1 - B.y0);
+      hatch(clipP, B.x0, B.y0, B.x1, B.y1);
     }
   }
   for (const id of keepFiles) {
@@ -935,12 +925,14 @@ function renderStatic(v: TreeView, g: G2, W: number, H: number, cam: { x: number
     if (!l || !inView(l.x - 10, l.y - 10, l.x + 10, l.y + 10)) continue;
     const clipL = new Path2D();
     const r = Math.max(l.len * 0.8, 6 / z);
-    clipL.arc(l.x, l.y, r, 0, TAU);
+    if (l.plank) plankPath(clipL, l);
+    else clipL.arc(l.x, l.y, r, 0, TAU);
     hatch(clipL, l.x - r, l.y - r, l.x + r, l.y + r);
   }
 }
 
 function leafPath(g: G2, l: Leaf) {
+  if (l.plank) return plankPath(g, l); // a ground file is a plank, never a leaf
   const q = l.g!;
   g.moveTo(q[0], q[1]);
   g.quadraticCurveTo(q[2], q[3], q[4], q[5]);
@@ -1010,7 +1002,8 @@ function renderOverlay(v: TreeView, now: number) {
     g.lineWidth = 1.5 / z;
     g.setLineDash([6 / z, 4 / z]);
     g.beginPath();
-    g.arc(hoverNode.cx, hoverNode.cy, hoverNode.rad + S0 * 0.6, 0, TAU);
+    if (hoverNode.lift) liftRing(g, hoverNode, S0 * 0.6);
+    else g.arc(hoverNode.cx, hoverNode.cy, hoverNode.rad + S0 * 0.6, 0, TAU);
     g.stroke();
     g.setLineDash([]);
   }
@@ -1030,7 +1023,7 @@ function renderOverlay(v: TreeView, now: number) {
       g.lineWidth = 2 * px;
       g.setLineDash([5 * px, 4 * px]);
       g.beginPath();
-      g.ellipse(zz.node.cx, M.groundY - (zz.node.h || 0) * 0.45, (zz.node.pw || 0) * 0.62, (zz.node.h || 0) * 0.9, 0, Math.PI, TAU);
+      liftRing(g, zz.node, S0 * 0.4);
       g.stroke();
       g.setLineDash([]);
     } else if (zz.file !== undefined && zz.file !== null) {
@@ -1042,7 +1035,8 @@ function renderOverlay(v: TreeView, now: number) {
       g.strokeStyle = col;
       g.lineWidth = 2 * px;
       g.beginPath();
-      g.arc(l.x, l.y, Math.max(l.len * 0.75, 6 * px), 0, TAU);
+      if (l.plank) plankRing(g, l, 3 * px);
+      else g.arc(l.x, l.y, Math.max(l.len * 0.75, 6 * px), 0, TAU);
       g.stroke();
     }
     g.globalAlpha = 1;
@@ -1061,9 +1055,10 @@ function renderOverlay(v: TreeView, now: number) {
     for (const [id] of A.reads) {
       const l = M.files[id] && M.files[id].leaf;
       if (!l || !inView(l.x - 5, l.y - 5, l.x + 5, l.y + 5)) continue;
-      const r = Math.max(3 * px, l.len * 0.17);
-      const dx = l.x - Math.cos(l.ang) * l.len * 0.18,
-        dy = l.y - Math.sin(l.ang) * l.len * 0.18;
+      const ll = l.plank ? PLANK_MARK : l.len; // a mark on a plank is sized for a leaf, not the board
+      const r = Math.max(3 * px, ll * 0.17);
+      const dx = l.x - Math.cos(l.ang) * ll * 0.18,
+        dy = l.y - Math.sin(l.ang) * ll * 0.18;
       g.moveTo(dx + r, dy);
       g.arc(dx, dy, r, 0, TAU);
     }
@@ -1072,7 +1067,7 @@ function renderOverlay(v: TreeView, now: number) {
     for (const id of A.plan) {
       const l = M.files[id] && M.files[id].leaf;
       if (!l || A.edits.has(id)) continue;
-      drawBud(g, P, l.x, l.y, l.len, col, px, !!M.files[id].ghost);
+      drawBud(g, P, l.x, l.y, l.plank ? PLANK_MARK : l.len, col, px, !!M.files[id].ghost);
     }
     // ghost buds where a planned new file will grow
     A.planNew.forEach((pn, i) => {
@@ -1143,15 +1138,16 @@ function renderOverlay(v: TreeView, now: number) {
       g.fill();
     }
     const r = Math.max(l.len * 0.8, 8 * px);
+    const ring = () => (l.plank ? plankRing(g, l, 3.5 * px) : g.arc(l.x, l.y, r, 0, TAU));
     g.strokeStyle = P.selHalo;
     g.lineWidth = 5 * px;
     g.beginPath();
-    g.arc(l.x, l.y, r, 0, TAU);
+    ring();
     g.stroke();
     g.strokeStyle = P.sel;
     g.lineWidth = 2 * px;
     g.beginPath();
-    g.arc(l.x, l.y, r, 0, TAU);
+    ring();
     g.stroke();
   }
   // breadcrumb marker: the last leaf you visited keeps a quiet dotted ring (and its name) after the card closes
@@ -1163,7 +1159,8 @@ function renderOverlay(v: TreeView, now: number) {
     g.lineWidth = 1.4 * px;
     g.setLineDash([2.5 * px, 2.5 * px]);
     g.beginPath();
-    g.arc(l.x, l.y, r, 0, TAU);
+    if (l.plank) plankRing(g, l, 3.5 * px);
+    else g.arc(l.x, l.y, r, 0, TAU);
     g.stroke();
     g.setLineDash([]);
   }
@@ -1174,7 +1171,8 @@ function renderOverlay(v: TreeView, now: number) {
     g.lineWidth = 1.6 * px;
     g.setLineDash([5 * px, 4 * px]);
     g.beginPath();
-    g.arc(n.cx, n.cy, n.rad + S0 * 0.6, 0, TAU);
+    if (n.lift) liftRing(g, n, S0 * 0.6);
+    else g.arc(n.cx, n.cy, n.rad + S0 * 0.6, 0, TAU);
     g.stroke();
     g.setLineDash([]);
   }
@@ -1185,7 +1183,8 @@ function renderOverlay(v: TreeView, now: number) {
     g.lineWidth = 1.1 * px;
     g.setLineDash([2 * px, 2 * px]);
     g.beginPath();
-    g.arc(l.x, l.y, Math.max(l.len * 0.72, 6 * px), 0, TAU);
+    if (l.plank) plankRing(g, l, 2.5 * px);
+    else g.arc(l.x, l.y, Math.max(l.len * 0.72, 6 * px), 0, TAU);
     g.stroke();
     g.setLineDash([]);
   }
@@ -1425,7 +1424,7 @@ function renderOverlay(v: TreeView, now: number) {
     // a territory's sign stands at its top edge, where it reads as the name of the whole area
     if (zz.node && zz.node.branch && zz.node.cnt) Pt = [zz.node.cx, zz.node.cy - zz.node.rad - S0 * 0.6];
     else if (zz.node && zz.node.branch) Pt = [zz.node.branch.pts[4][0], zz.node.branch.pts[4][1]];
-    else if (zz.node && zz.node.kind === "pile") Pt = [zz.node.cx, M.groundY - (zz.node.h || 0) * 1.3];
+    else if (zz.node && zz.node.kind === "pile") Pt = [zz.node.cx, liftBox(zz.node).y0 - S0 * 0.6]; // over its lift
     else if (zz.node && zz.node.cnt) Pt = [zz.node.cx, zz.node.cy];
     else if (zz.file != null && M.files[zz.file] && M.files[zz.file].leaf) {
       const l = M.files[zz.file].leaf!;
@@ -3052,7 +3051,7 @@ export function riskGroups(v: TreeView): RiskGroup[] {
       x1 = -1e18;
     for (const id of e.ids) {
       const l = M.files[id].leaf!;
-      const c = l.term ? [l.term.cx, l.term.cy, l.term.rad] : l.pile ? [l.pile.cx, M.groundY - (l.pile.h || 10) * 0.5, l.pile.pw || 20] : [l.x, l.y, S0];
+      const c = l.term ? [l.term.cx, l.term.cy, l.term.rad] : l.pile ? [l.pile.cx, l.pile.cy, l.pile.pw || 20] : [l.x, l.y, S0];
       x0 = Math.min(x0, c[0] - c[2]);
       x1 = Math.max(x1, c[0] + c[2]);
       y0 = Math.min(y0, c[1] - c[2]);
@@ -3089,7 +3088,7 @@ function drawRisk(v: TreeView, px: number) {
         c = l.term
           ? { x: l.term.cx, y: l.term.cy, r: l.term.rad, n: 0, of: Math.max(1, l.term.files.length) }
           : l.pile
-            ? { x: l.pile.cx, y: M.groundY - (l.pile.h || 10) * 0.5, r: l.pile.pw || 20, n: 0, of: Math.max(1, l.pile.files.length) }
+            ? { x: l.pile.cx, y: l.pile.cy, r: l.pile.pw || 20, n: 0, of: Math.max(1, l.pile.files.length) }
             : { x: l.x, y: l.y, r: S0, n: 0, of: 1 };
         clumps.set(key, c);
       }
@@ -3383,13 +3382,12 @@ export function nestPoint(M: Model, n: TNode | null | undefined): [number, numbe
 }
 
 function bonkPoint(v: TreeView, bk: Pick<Blocked, "f" | "z" | "kind">): [number, number] | null {
-  const M = v.M;
   const zn = bk.z && bk.z.node;
   if (bk.kind === "keep" && zn && zn.branch) {
     const p = zn.branch.pts[4];
     return [p[0], p[1]];
   }
-  if (bk.kind === "keep" && zn && zn.kind === "pile") return [zn.cx, M.groundY - (zn.h || 0)];
+  if (bk.kind === "keep" && zn && zn.kind === "pile") return [zn.cx, liftBox(zn).y0];
   const l = bk.f && bk.f.leaf;
   return l ? [l.x, l.y] : null;
 }
@@ -3765,8 +3763,9 @@ function drawLabels(
     if (n.quiet && !must && hovN !== n) continue; // pass-through scaffolding (src/main, java/com/…) is not a place
     if (crumbAnc && crumbAnc.has(n) && !must && hovN !== n) continue; // the breadcrumb already says it
     if (n.kind === "pile") {
-      const [sx, sy] = toS(n.cx, M.groundY + S0 * 0.2);
-      if (onScreen(sx, sy, 60)) cand.push({ type: "pile", n, sx, sy, pri: 5e5 + n.nFiles });
+      const la = liftAnchor(n); // on the lift's floor ledger, at the end of its arm
+      const [sx, sy] = toS(la.x, la.y);
+      if (onScreen(sx, sy, 60)) cand.push({ type: "pile", n, sx, sy, pri: 1e6 + 10 * n.nFiles }); // a lift is a top-level group
       continue;
     }
     const big = n.depth === 1;
@@ -3969,24 +3968,29 @@ function drawLabels(
     const underground = n.kind === "root"; // a root's name stays below the ground line
     const okY = (y: number) => !underground || y > groundS + 9;
     if (c.type === "pile") {
+      // a lift's name hangs UNDER its top ledger, at the end of the ledger's arm, running away from the trunk:
+      // "docs · 21 files" — a heading over its planks (the ledger line runs into it, the planks are right below)
+      const dir = liftAnchor(n).dir;
       g.font = `600 11px ${P.font}`;
       const t1 = n.label || n.name,
-        t2 = `${n.nFiles} file${n.nFiles === 1 ? "" : "s"}`;
-      const w = Math.max(g.measureText(t1).width, 40) + 8;
-      const x0 = c.sx! - w / 2,
-        y0 = c.sy! + 4;
-      if (!fits(x0, y0, x0 + w, y0 + 28)) continue;
-      reserve(x0, y0, x0 + w, y0 + 28);
-      v.labelHits!.push({ r: [x0, y0, x0 + w, y0 + 28], n });
-      g.textAlign = "center";
+        t2 = ` · ${n.nFiles} file${n.nFiles === 1 ? "" : "s"}`;
+      const w1 = g.measureText(t1).width;
+      g.font = `10px ${P.font}`;
+      const w = w1 + g.measureText(t2).width + 4;
+      const x0 = dir > 0 ? c.sx! + 2 : c.sx! - 2 - w,
+        y0 = c.sy! + 1,
+        y1 = y0 + 15;
+      if (!fits(x0, y0, x0 + w, y1)) continue;
+      reserve(x0, y0, x0 + w, y1);
+      v.labelHits!.push({ r: [x0, y0, x0 + w, y1], n });
       g.strokeStyle = P.halo;
       g.lineWidth = 3.5;
+      g.font = `600 11px ${P.font}`;
       g.fillStyle = dusk ? P.duskLabel : P.pileLabel;
-      halo(t1, c.sx!, y0 + 7);
+      halo(t1, x0 + 2, y1 - 7.5);
       g.font = `10px ${P.font}`;
       g.fillStyle = P.muted;
-      halo(t2, c.sx!, y0 + 20);
-      g.textAlign = "left";
+      halo(t2, x0 + 2 + w1, y1 - 7.5);
       v.labelBudget = (v.labelBudget || 0) - 1;
       continue;
     }
@@ -4239,6 +4243,7 @@ function drawLabels(
           [-off - tw, -13],
           [-off - tw, 13],
         ];
+        if (l.plank) near.splice(0, near.length, [l.plank.dir > 0 ? off : -off - tw, 0]); // a plank: its outer end only
         const free = (clean: boolean) => fits(x0 - 3, y0, x0 + tw + 3, y0 + 14) && !(own && fol && fol.hit(x0, y0 + 1, x0 + tw, y0 + 13, own, false)) && !(clean && onLeaves(x0, y0, tw, l));
         for (const [clean, cands] of [
           [true, near],
@@ -4343,6 +4348,13 @@ export function pick(v: TreeView, sx: number, sy: number): Hit | null {
   }
   // zoomed out, a ground pile is one thing: a click on it opens the pile, not whichever doc happens to be under the cursor
   const pileWhole = leafPx < 12 || v.tool !== "explore";
+  // a plank is hit on its board (scaffold.ts), not by distance to its centre — it is long and the rows are close
+  const plank = plankAt(M, wx, wy, Math.max(3 / z, SCAF.pitch * 0.3));
+  if (plank && pileWhole && plank.pile) return { pile: plank.pile };
+  if (plank && !(plank.file.ghost && !created.has(plank.file.id) && !planned.has(plank.file.id))) {
+    best = { leaf: plank };
+    bd = 0;
+  }
   for (const it of near) {
     if (!it.leaf) continue;
     const l = it.leaf,
@@ -4350,8 +4362,8 @@ export function pick(v: TreeView, sx: number, sy: number): Hit | null {
     if (f.ghost && !created.has(f.id) && !planned.has(f.id)) continue;
     const own = l.term ? l.term.node : l.pile;
     if (own && own.fAnc) continue;
-    if (l.region === "ground" && pileWhole && l.pile) return { pile: l.pile };
-    if (l.region !== "ground" && leafPx < 4.2 && !planned.has(f.id) && !hot.has(f.id)) continue;
+    if (l.region === "ground") continue; // planks: above
+    if (leafPx < 4.2 && !planned.has(f.id) && !hot.has(f.id)) continue;
     let d = Math.hypot(l.x - wx, l.y - wy);
     // a changed leaf is drawn big and bright at every zoom: it is pickable at every zoom too
     const lim = hot.has(f.id) ? Math.max(l.len * 0.9, 11 / z) : Math.max(l.len * 0.65, 7 / z);
@@ -4412,7 +4424,8 @@ export function pick(v: TreeView, sx: number, sy: number): Hit | null {
     }
     return { clump: top || n, open: !top };
   }
-  for (const p of M.piles) if (Math.abs(wx - p.cx) < (p.pw || 0) * 0.6 && wy < M.groundY + S0 && wy > M.groundY - (p.h || 0) * 2) return { pile: p };
+  const lift = liftAt(M, wx, wy, 4 / z);
+  if (lift) return { pile: lift };
   return null;
 }
 
@@ -4494,12 +4507,7 @@ export function buildMini(v: TreeView, canvas: HTMLCanvasElement): boolean {
       g.stroke();
     }
   }
-  for (const p of M.piles)
-    for (const l of p.leaves || []) {
-      g.fillStyle = P.PILEPAL.leafA;
-      const s = Math.max(4, 2.5 / z);
-      g.fillRect(l.x - s, l.y - s * 0.6, s * 2, s * 1.2);
-    }
+  drawScaffoldMini(g, M, P, z);
   MINI.set(canvas, st);
   return true;
 }

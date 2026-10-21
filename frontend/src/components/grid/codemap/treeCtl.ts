@@ -13,6 +13,7 @@ import { birdWorldAt, buildMini, drawMini, invalidateStatic, pick, prepGeometry,
 import { boxOnScreen, fitWhole, pictureBox } from "../../../lib/codetree/fit";
 import { S0, isUnder, type Leaf, type Model, type TFile, type TNode } from "../../../lib/codetree/model";
 import { readPalette, type Palette } from "../../../lib/codetree/palette";
+import { liftBox } from "../../../lib/codetree/scaffold";
 import type { AgentState, Badge, Cam, Hit, Tool, TreeView, TZone } from "../../../lib/codetree/types";
 
 export type Info =
@@ -397,9 +398,10 @@ export class TreeCtl {
       M = this.M;
     if (!v || !M) return;
     if (n.kind === "pile") {
-      const c = this.fitBox(n.cx - (n.pw || 30), M.groundY - (n.h || 10) * 3, n.cx + (n.pw || 30), M.groundY + (n.h || 10), 0.7);
+      const B = liftBox(n); // its lift on the scaffold, with room for the names beside it
+      const c = this.fitBox(B.x0 - (n.pw || 30) * 1.5, B.y0 - S0 * 2, B.x1 + (n.pw || 30) * 1.5, B.y1 + S0 * 2, 0.7);
       this.navTo(c);
-      v.pulse = { x: n.cx, y: M.groundY - (n.h || 10) * 0.5, r: (n.pw || 30) * 0.6, t0: performance.now() };
+      v.pulse = { x: n.cx, y: n.cy, r: Math.max(n.pw || 30, n.h || 10) * 0.6, t0: performance.now() };
       return;
     }
     if (n.depth === 0) {
@@ -955,7 +957,7 @@ export class TreeCtl {
     else if (node.depth >= 1) {
       const c =
         node.kind === "pile"
-          ? this.fitBox(node.cx - (node.pw || 30) * 2, M.groundY - (node.h || 10) * 4, node.cx + (node.pw || 30) * 2, M.groundY + (node.h || 10), 0.7)
+          ? ((B) => this.fitBox(B.x0 - (node.pw || 30) * 2, B.y0 - S0 * 3, B.x1 + (node.pw || 30) * 2, B.y1 + S0 * 2, 0.7))(liftBox(node))
           : this.fitBox(node.bx0 - S0 * 4, node.by0 - S0 * 4, node.bx1 + S0 * 4, node.by1 + S0 * 4, 0.55);
       c.z = Math.min(c.z, 3.5);
       this.navTo(c);
@@ -1053,7 +1055,7 @@ export class TreeCtl {
     if (moving) this.kick();
   }
   /** Where the picture sits on the canvas, as `data-tree="x0 y0 x1 y1;…"` on the stage (canvas px): the whole
-   * picture, then its parts — the canopy, the roots and each ground pile with its name. The Map tour keeps its
+   * picture, then its parts — the canopy, the roots and each lift of the scaffold. The Map tour keeps its
    * card off them. */
   private markTree() {
     const v = this.v,
@@ -1066,8 +1068,8 @@ export class TreeCtl {
     const C = M.crownBounds,
       parts = [S(pictureBox(M)), S({ x0: C.x0, y0: C.y0, x1: C.x1, y1: M.groundY }, 12)];
     if (M.roots.cnt) parts.push(S({ x0: M.roots.bx0, y0: M.groundY, x1: M.roots.bx1, y1: M.roots.by1 }, 12));
-    // a pile and the name under it (~30 px below the ground line)
-    for (const p of M.piles) parts.push(S({ x0: p.cx! - (p.pw || 0) * 0.6, y0: M.groundY - (p.h || 0) * 2, x1: p.cx! + (p.pw || 0) * 0.6, y1: M.groundY }, 10, 30));
+    // each lift of the scaffold (its name stands on its ledger, beside it)
+    for (const p of M.piles) parts.push(S(liftBox(p), 10));
     const s = parts.join(";");
     if (this.host.dataset.tree !== s) this.host.dataset.tree = s;
   }

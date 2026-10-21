@@ -48,6 +48,8 @@ export interface Palette {
   KEEP: Pal;
   ROOTPAL: Pal;
   PILEPAL: { leafA: string; leafB: string; doc: string };
+  /** the scaffold (scaffold.ts): standards + ledgers, braces + ties, planks, a lift's fill before its planks show */
+  SCAF: { pole: string; brace: string; plankA: string; plankB: string; fill: string };
   BARK: { crown: string; crownHi: string; root: string; rootHi: string; rootDusk: string };
   duskLabel: string;
   duskLeafLabel: string;
@@ -230,6 +232,8 @@ export function readPalette(el: Element | null): Palette {
     cvSh: rh(28, 20, 8),
   };
   const PILEPAL = { leafA: rh(30, 30, 40), leafB: rh(22, 25, 33), doc: rh(30, 30, 40) };
+  // the scaffold: weathered, flat, low-saturation wood — quieter than the bark, so it reads as built support
+  const SCAF = { pole: rh(30, 10, 38), brace: rh(30, 8, 34), plankA: rh(33, 22, 44), plankB: rh(29, 18, 38), fill: rh(31, 14, 30) };
   const red = v("--red", "#de613e"),
     green = v("--green", "#51bd73"),
     gold = v("--gold", "#ffd700");
@@ -261,6 +265,7 @@ export function readPalette(el: Element | null): Palette {
     KEEP,
     ROOTPAL,
     PILEPAL,
+    SCAF,
     BARK: {
       crown: v("--ct-calm-bark", v("--ct-bark", "hsl(28,14%,37%)")),
       crownHi: v("--ct-bark-hi", "hsl(30,14%,46%)"),
