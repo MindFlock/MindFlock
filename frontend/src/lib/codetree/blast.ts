@@ -7,6 +7,7 @@
  * dropped. */
 
 import { S0, shortName, type Model, type TNode } from "./model";
+import { liftBox } from "./scaffold";
 import type { AgentDef, AgentState, Badge, BadgeSet, TreeView } from "./types";
 
 /** Direct importers only: the same set the activity row, the leaf card and the
@@ -118,7 +119,7 @@ export function collectBadges(v: Pick<TreeView, "M" | "cam" | "badgeSets" | "bad
     const n = e.n,
       c = e.ids.size;
     let P: [number, number];
-    if (n.kind === "pile") P = [n.cx, M.groundY - (n.h || 0) * 0.8];
+    if (n.kind === "pile") P = [n.cx, liftBox(n).y0]; // over its lift on the scaffold
     else if (n.depth === 0) P = n === M.roots ? [0, M.groundY + S0 * 2] : [0, -S0 * 1.5];
     else if (n.depth === 1) P = n.F || [n.cx, n.cy]; // a limb's badge sits where the limb forks, next to its name
     else P = n.branch ? [n.branch.pts[7][0], n.branch.pts[7][1]] : n.F || [n.cx, n.cy];

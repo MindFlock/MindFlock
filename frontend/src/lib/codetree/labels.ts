@@ -5,11 +5,11 @@
  *
  * Pure functions over screen-space geometry: draw.ts gathers anchors, this module proposes candidate boxes in
  * rule order and picks the first that is whole on screen, free (a uniform-grid occupancy) and touches no other
- * leaf's outline. Anchors come through ONE function per thing (leafScreenGeom, pileAnchor) so the leaves /
+ * leaf's outline. Anchors come through ONE function per thing (leafScreenGeom; liftAnchor in scaffold.ts) so the leaves /
  * scaffold / roots work can re-point them without touching the placer. */
 
 import { leafScreen } from "./leafgeom";
-import { S0, type Leaf, type TNode } from "./model";
+import type { Leaf } from "./model";
 
 export type R4 = [number, number, number, number];
 /** a convex quad, screen space: x0,y0, x1,y1, x2,y2, x3,y3 */
@@ -65,11 +65,8 @@ export function leafScreenGeom(l: Leaf, z: number, toS: (x: number, y: number) =
   return { tip, base, dir: g.dir, half, quad };
 }
 
-/** Where a ground pile's name hangs (world). The scaffold work replaces piles with planks / lifts: point this at its
- * `plankAnchor` / `liftAnchor`. */
-export function pileAnchor(n: TNode, groundY: number): [number, number] {
-  return [n.cx, groundY + S0 * 0.2];
-}
+/** A scaffold lift's name hangs from its top ledger: see `liftAnchor` in scaffold.ts (draw.ts uses it directly);
+ * a plank's name sits at its outer end: `leafScreenGeom` (the plank's tip) with only the tip candidate. */
 
 // ---------- candidates ----------
 
@@ -254,7 +251,8 @@ export function candidatesForBranch(pts: Array<[number, number, number]>, fork: 
         out.push(cand(m[0] + nx * off, m[1] + ny * off, w, h, ang, "along"), cand(m[0] - nx * off, m[1] - ny * off, w, h, ang, "along"));
       }
   }
-  // beside the fork, touching its dot: right, left, above, below
+  // beside the fork, touching its dot: right, left, above, below, then the four diagonals (a tower or a nest
+  // beside the fork takes the straight spots)
   const [fx, fy] = fork,
     d = 2 + gap;
   const dot: [number, number] = [fx, fy];
@@ -264,6 +262,14 @@ export function candidatesForBranch(pts: Array<[number, number, number]>, fork: 
     cand(fx, fy - d - h / 2, w, h, 0, "fork", null, dot),
     cand(fx, fy + d + h / 2, w, h, 0, "fork", null, dot)
   );
+  const dd = d * Math.SQRT1_2; // the box corner touches the dot at the same distance as the straight spots
+  for (const [sx, sy] of [
+    [1, -1],
+    [-1, -1],
+    [1, 1],
+    [-1, 1],
+  ])
+    out.push(cand(fx + sx * (dd + w / 2), fy + sy * (dd + h / 2), w, h, 0, "fork", null, dot));
   return out;
 }
 

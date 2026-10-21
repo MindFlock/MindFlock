@@ -151,7 +151,7 @@ describe("layout", () => {
       const g = FX.golden[l.file.path];
       expect(g, l.file.path).toBeDefined();
       n++;
-      // the roots are the prototype's; the ground piles moved in to just past the roots (below); the crown's
+      // the roots are the prototype's; ground files are planks on the scaffold (codetreeScaffold.test.ts); the crown's
       // clumps are packed wider since Code Tree v2 (leafgeom.ts: no two leaves overlap) — codetreeLeaves.test.ts
       if (l.region === "ground") {
         // within a pile, each leaf keeps its place relative to the pile's own centre
@@ -171,35 +171,7 @@ describe("layout", () => {
     expect(pile).toBeGreaterThan(0);
     expect(crown).toBeGreaterThan(0);
     expect(mx).toBeLessThan(1e-4);
-    // a pile is the prototype's pile, shifted as a whole (sideways; and down with the ground under a wider crown)
-    for (const p of COLD.piles) {
-      const ls = p.leaves || [];
-      const dx = FX.golden[ls[0].file.path][0] - ls[0].x,
-        dy = FX.golden[ls[0].file.path][1] - ls[0].y;
-      for (const l of ls) {
-        const g = FX.golden[l.file.path];
-        expect(Math.abs(g[0] - l.x - dx), l.file.path).toBeLessThan(1e-4);
-        expect(Math.abs(g[1] - l.y - dy), l.file.path).toBeLessThan(1e-4);
-      }
-    }
-  });
-
-  it("puts the ground piles just past the roots, not a fixed stride out", () => {
-    let rx0 = 0,
-      rx1 = 0;
-    for (const l of COLD.leaves)
-      if (l.region === "root") {
-        rx0 = Math.min(rx0, l.x);
-        rx1 = Math.max(rx1, l.x);
-      }
-    const near = Math.min(...COLD.piles.map((p) => Math.abs(p.cx!) - (p.pw || 0) / 2));
-    // clear of the roots…
-    for (const p of COLD.piles) {
-      const inner = p.cx! < 0 ? p.cx! + (p.pw || 0) / 2 : p.cx! - (p.pw || 0) / 2;
-      expect(inner < 0 ? inner <= rx0 : inner >= rx1).toBe(true);
-    }
-    // …and no further out than it takes
-    expect(near).toBeLessThan(Math.max(Math.abs(rx0), rx1) + S0 * 4 + COLD.trunkW);
+    // (ground files are planks on the scaffold now: their geometry is pinned in codetreeScaffold.test.ts)
   });
 
   it("is deterministic", () => {
@@ -214,7 +186,7 @@ describe("layout", () => {
     expect(measure(buildModel(synthRepo(420), { quantise: true }))).toEqual(ZERO);
   });
 
-  it("puts tests underground under the code they test, docs on the ground", () => {
+  it("puts tests underground under the code they test, docs on the scaffold", () => {
     const t = COLD.files.find((f) => f.test && f.kind === "c")!;
     expect(t.place).toBe("root");
     expect(t.leaf!.y).toBeGreaterThan(COLD.groundY);

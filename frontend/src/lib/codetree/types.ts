@@ -223,6 +223,8 @@ export interface TreeView {
   labelHits?: Array<{ r: number[]; n?: TNode; leaf?: Leaf; crumb?: boolean }>;
   /** the leaves drawn on screen this frame (labels.ts): a name touching another leaf's outline is not drawn */
   leafField?: import("./labels").LeafField | null;
+  /** the scaffold lifts on screen (each a reserved rect; a lift's own name may sit inside its own) */
+  liftRect?: Map<TNode, [number, number, number, number]>;
   tagHits?: Array<{ r: number[]; z: TZone }>;
   birdHits?: Array<{ r: number[]; A: AgentState; pointer?: boolean }>;
   nestHits?: Array<{ r: number[]; A: AgentState }>;
