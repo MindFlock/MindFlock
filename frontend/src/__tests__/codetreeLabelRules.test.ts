@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BASE_GAP,
+  TIP_GAP,
   GAP,
   GUTTER,
   HAIR_MIN,
@@ -44,39 +45,56 @@ const vp = { W, H };
 const free = { fits: () => true };
 
 describe("rule 1: a leaf's name is at its TIP, reading outward", () => {
-  it("pointing right: left-aligned text starting GAP px past the tip, centred on it", () => {
+  it("pointing right: left-aligned text starting TIP_GAP px past the tip, centred on it, tied back by a hairline", () => {
     const a = leafScreenGeom(leaf(100, 100, 0), 1, toS);
     expect(a.tip).toEqual([110, 100]);
     const [tip] = candidatesForLeaf(a, TW);
     expect(tip.side).toBe("tip");
-    expect(tip.R[0]).toBeCloseTo(110 + GAP);
+    expect(tip.R[0]).toBeCloseTo(110 + TIP_GAP);
     expect((tip.R[1] + tip.R[3]) / 2).toBeCloseTo(100);
     expect(tip.R[2] - tip.R[0]).toBeCloseTo(TW + 2 * LEAF_PAD);
     expect(tip.R[3] - tip.R[1]).toBeCloseTo(LEAF_H);
-    expect(tip.hair).toBeNull();
+    // F3: the name stands clear of its tip and a 1 px hairline runs from the tip to the box
+    expect(TIP_GAP).toBeGreaterThan(HAIR_MIN);
+    expect(tip.hair).not.toBeNull();
+    expect(tip.hair!.slice(0, 2)).toEqual([110, 100]);
+    expect(tip.hair![2]).toBeCloseTo(110 + TIP_GAP);
   });
-  it("pointing left: right-aligned text ending GAP px before the tip", () => {
+  it("pointing left: right-aligned text ending TIP_GAP px before the tip", () => {
     const [tip] = candidatesForLeaf(leafScreenGeom(leaf(100, 100, Math.PI), 1, toS), TW);
-    expect(tip.R[2]).toBeCloseTo(90 - GAP);
+    expect(tip.R[2]).toBeCloseTo(90 - TIP_GAP);
     expect((tip.R[1] + tip.R[3]) / 2).toBeCloseTo(100);
   });
   it("pointing up / down: horizontal text centred on the tip, above / below it", () => {
     const [up] = candidatesForLeaf(leafScreenGeom(leaf(100, 100, -Math.PI / 2), 1, toS), TW);
-    expect(up.R[3]).toBeCloseTo(90 - GAP);
+    expect(up.R[3]).toBeCloseTo(90 - TIP_GAP);
     expect((up.R[0] + up.R[2]) / 2).toBeCloseTo(100);
     const [down] = candidatesForLeaf(leafScreenGeom(leaf(100, 100, Math.PI / 2), 1, toS), TW);
-    expect(down.R[1]).toBeCloseTo(110 + GAP);
+    expect(down.R[1]).toBeCloseTo(110 + TIP_GAP);
     expect((down.R[0] + down.R[2]) / 2).toBeCloseTo(100);
   });
-  it("whatever the slant, the box never covers its own leaf and starts within GAP of the tip", () => {
+  it("then slid to hang off the tip by a corner: raised / lowered for a sideways tip, shifted for an upright one", () => {
+    const cs = candidatesForLeaf(leafScreenGeom(leaf(100, 100, -0.5), 1, toS), TW).filter((c) => c.side === "tip");
+    expect(cs.length).toBe(3);
+    const [, up, dn] = cs;
+    // a tip pointing up-right hangs its name above the tip line first
+    expect(up.R[3]).toBeLessThan(dn.R[1] + 1e-6);
+    expect(up.R[0]).toBeCloseTo(dn.R[0]);
+    const us = candidatesForLeaf(leafScreenGeom(leaf(100, 100, -Math.PI / 2), 1, toS), TW).filter((c) => c.side === "tip");
+    expect(us[1].R[0]).toBeCloseTo(100); // right of the tip, its left edge on the tip's line
+    expect(us[2].R[2]).toBeCloseTo(100);
+  });
+  it("whatever the slant, no tip spot covers its own leaf, each is TIP_GAP from the tip and carries a hairline", () => {
     for (let k = 0; k < 24; k++) {
       const l = leaf(300, 300, (k / 24) * Math.PI * 2, 30);
       const a = leafScreenGeom(l, 1, toS);
-      const [tip] = candidatesForLeaf(a, TW);
-      expect(convexOverlap(tip.q, a.quad)).toBe(false);
-      const dx = Math.max(tip.R[0] - a.tip[0], 0, a.tip[0] - tip.R[2]),
-        dy = Math.max(tip.R[1] - a.tip[1], 0, a.tip[1] - tip.R[3]);
-      expect(Math.hypot(dx, dy)).toBeLessThanOrEqual(GAP + 1e-6);
+      for (const tip of candidatesForLeaf(a, TW).filter((c) => c.side === "tip")) {
+        expect(convexOverlap(tip.q, a.quad)).toBe(false);
+        const dx = Math.max(tip.R[0] - a.tip[0], 0, a.tip[0] - tip.R[2]),
+          dy = Math.max(tip.R[1] - a.tip[1], 0, a.tip[1] - tip.R[3]);
+        expect(Math.hypot(dx, dy)).toBeLessThanOrEqual(TIP_GAP + 1e-6);
+        expect(tip.hair).not.toBeNull();
+      }
     }
   });
   it("a changed leaf is drawn at least 10.5 px long each way: its tip moves out with it", () => {
@@ -89,8 +107,8 @@ describe("rule 1: the one alternative is the BASE side, with a hairline", () => 
   it("reads away from the tip, BASE_GAP off the base, tethered by a hairline", () => {
     const a = leafScreenGeom(leaf(100, 100, 0), 1, toS);
     const cs = candidatesForLeaf(a, TW);
-    expect(cs.map((c) => c.side)).toEqual(["tip", "base"]);
-    const base = cs[1];
+    expect(cs.map((c) => c.side)).toEqual(["tip", "tip", "tip", "base"]);
+    const base = cs[3];
     expect(base.R[2]).toBeCloseTo(90 - BASE_GAP);
     expect(base.hair).not.toBeNull();
     expect(base.hair!.slice(0, 2)).toEqual([90, 100]);
@@ -100,7 +118,7 @@ describe("rule 1: the one alternative is the BASE side, with a hairline", () => 
     const a = leafScreenGeom(leaf(100, 100, 0), 1, toS);
     expect(candidatesForLeaf(a, TW, LEAF_H, HAIR_MIN)[0].hair).toBeNull();
     expect(candidatesForLeaf(a, TW, LEAF_H, HAIR_MIN + 1)[0].hair).not.toBeNull();
-    expect(candidatesForLeaf(a, TW, LEAF_H, GAP, HAIR_MIN)[1].hair).toBeNull();
+    expect(candidatesForLeaf(a, TW, LEAF_H, TIP_GAP, HAIR_MIN).find((c) => c.side === "base")!.hair).toBeNull();
   });
 });
 
@@ -169,6 +187,7 @@ describe("rule 2: priority and one name per leaf", () => {
     const a = leafScreenGeom(leaf(100, 100, 0), 1, toS),
       b = leafScreenGeom(leaf(100, 100, 0), 1, toS); // a second name wanting the very same spots
     const out = placeLabels([{ key: "first", cands: candidatesForLeaf(a, TW) }, { key: "second", cands: candidatesForLeaf(b, TW) }], new Occupancy(W, H), vp);
+    // (a level tip's slid spots overlap its centred one, so the second goes to the base)
     expect(out.map((o) => [o.key, o.c.side])).toEqual([
       ["first", "tip"],
       ["second", "base"],

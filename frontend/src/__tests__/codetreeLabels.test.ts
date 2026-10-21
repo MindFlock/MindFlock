@@ -14,7 +14,7 @@ import { LiveBirds } from "../lib/codetree/live";
 import { S0, buildModel, isUnder, type Model, type TNode } from "../lib/codetree/model";
 import { readPalette } from "../lib/codetree/palette";
 import type { AgentState, TreeView, TZone } from "../lib/codetree/types";
-import { BASE_GAP, GAP, candidatesForLeaf, insideView, leafScreenGeom } from "../lib/codetree/labels";
+import { BASE_GAP, TIP_GAP, candidatesForLeaf, insideView, leafScreenGeom } from "../lib/codetree/labels";
 import { treeZones } from "../lib/codetree/zones";
 import scenarioRaw from "./fixtures/codetree_scenario.json?raw";
 
@@ -294,7 +294,7 @@ describe("file names once the view is close enough to show them", () => {
           );
           if (free.length) missing.push(`${f.path} @ ${M.files[id].path}`);
         }
-        // and every file name is ATTACHED: its box starts at its own leaf's tip (GAP) or base (BASE_GAP), or at the
+        // and every file name is ATTACHED: its box starts at its own leaf's tip (TIP_GAP) or base (BASE_GAP), or at the
         // selection ring around it — never parked beside a neighbour
         for (const h of v.labelHits || []) {
           if (!h.leaf) continue;
@@ -302,7 +302,7 @@ describe("file names once the view is close enough to show them", () => {
             a = leafScreenGeom(l, z, toS, edited.has(l.file.id) ? 10.5 : 0);
           const d = (p: [number, number]) => Math.hypot(Math.max(h.r[0] - p[0], 0, p[0] - h.r[2]), Math.max(h.r[1] - p[1], 0, p[1] - h.r[3]));
           const ring = l === v.sel?.leaf ? Math.max(l.len * 0.8 * z, 8) + 2.5 : 0;
-          const ok = d(a.tip) <= GAP + 0.5 || d(a.base) <= BASE_GAP + 0.5 || (ring > 0 && Math.hypot(...toS(l.x, l.y).map((c, i) => Math.max(h.r[i] - c, 0, c - h.r[i + 2])) as [number, number]) <= ring + GAP + 0.5);
+          const ok = d(a.tip) <= TIP_GAP + 0.5 || d(a.base) <= BASE_GAP + 0.5 || (ring > 0 && Math.hypot(...toS(l.x, l.y).map((c, i) => Math.max(h.r[i] - c, 0, c - h.r[i + 2])) as [number, number]) <= ring + TIP_GAP + 0.5);
           if (!ok) missing.push(`unattached ${l.file.path} [${h.r.map(Math.round)}]`);
         }
       }

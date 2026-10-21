@@ -35,7 +35,7 @@ const TREE: TourStep = {
   body: (
     <>
       The <b>trunk</b> is the repo, each <b>branch</b> a folder and each <b>leaf</b> a file. Thicker branches hold
-      more code. Scroll to zoom in: the leaves open up and each one is named at its tip.
+      more code. Scroll all the way in: the leaves open up and each one is named at its tip.
     </>
   ),
 };
@@ -67,8 +67,8 @@ const BIRDS: TourStep = {
   title: "Birds are agents, bright leaves are changes",
   body: (
     <>
-      Each agent is a <b>bird</b>; it <b>nests</b> where it mostly works. A <b>glowing leaf</b> is a file it
-      changed, and the <b>lit wood</b> leads you to it. Hover one: the files that import it turn <b>gold</b> —
+      Each agent is a <b>bird</b>; it <b>nests</b> where it mostly works. A <b>leaf in its colour</b> is a file
+      it changed (it glows for a few minutes after the edit), and the <b>lit wood</b> leads you to it. Hover one: the files that import it turn <b>gold</b> —
       they could break. Click a row here to follow its bird.
     </>
   ),
@@ -80,7 +80,8 @@ const BIRDS_CALM: TourStep = {
   body: (
     <>
       Each agent is a <b>bird</b>; it <b>nests</b> where it mostly works. Every leaf is grey for now. When an agent
-      changes a file, its leaf <b>glows</b> and the <b>lit wood</b> leads you to it. Click a row here to follow its
+      changes a file, its leaf takes the <b>bird's colour</b> (glowing while the edit is fresh) and the <b>lit
+      wood</b> leads you to it. Click a row here to follow its
       bird.
     </>
   ),

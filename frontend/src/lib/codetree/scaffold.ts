@@ -201,6 +201,35 @@ export function plankAnchor(l: Leaf, z: number): { x: number; y: number; dir: -1
   return { x: p.xo + (p.dir * 3) / z, y: p.y, dir: p.dir };
 }
 
+/** What a lift holds, for its caption: the NON-CODE files of a code folder that is also on the tree ("frontend · 3
+ * non-code": its README / package.json / index.html — the code is the frontend branch), the data of a folder whose
+ * code is underground ("test data · 42": fixtures, golden files — the tests are the roots), or a folder that is all
+ * non-code ("docs · 21 files"). */
+export type LiftKind = "code" | "tests" | "plain";
+const LIFT_KIND = new WeakMap<TNode, LiftKind>();
+export function liftKind(M: Pick<Model, "nodeOf" | "files">, n: TNode): LiftKind {
+  const hit = LIFT_KIND.get(n);
+  if (hit) return hit;
+  const k = n.name;
+  let kind: LiftKind = "plain";
+  if (k !== "(repo root)") {
+    const crown = M.nodeOf.get(k);
+    if (crown && crown.kind === "crown" && crown.depth === 1) kind = "code";
+    else if (M.files.some((f) => f.place === "root" && f.path.startsWith(k + "/"))) kind = "tests";
+  }
+  LIFT_KIND.set(n, kind);
+  return kind;
+}
+/** A lift's caption as [name, count]: "frontend" + " · 3 non-code", "test data" + " · 42" (a folder named like
+ * tests; any other says whose: "testsv2 test data"), "docs" + " · 21 files". */
+export function liftCaption(M: Pick<Model, "nodeOf" | "files">, n: TNode): [string, string] {
+  const kind = liftKind(M, n),
+    N = n.nFiles;
+  if (kind === "code") return [n.label || n.name, ` · ${N} non-code`];
+  if (kind === "tests") return [/^(tests?|__tests__|specs?)$/.test(n.name) ? "test data" : `${n.label || n.name} test data`, ` · ${N}`];
+  return [n.label || n.name, ` · ${N} file${N === 1 ? "" : "s"}`];
+}
+
 /** Where a lift's name hangs (world): at the outer end of its top ledger's arm, on the ledger line — the text
  * hangs UNDER it (top-aligned, a px or two below), over the lift's planks, and runs outward (`dir`). */
 export function liftAnchor(n: TNode): { x: number; y: number; dir: -1 | 1 } {

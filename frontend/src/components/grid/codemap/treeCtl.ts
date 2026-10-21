@@ -57,6 +57,10 @@ interface Fly {
  * names around it show (leaf labels need S0 * z >= 20). */
 export const FOLLOW_Z = 2.6;
 
+/** The closest the camera goes. A leaf stops growing at ~44 px (leafgeom.ts), so past ~z 7 zooming in only opens
+ * the gaps: z 12 is where the densest clump's pitch (1.15·S0·z ≈ 138 px) has room for every leaf's name at its tip. */
+export const MAX_Z = 12;
+
 /** Per-title view memory (camera, folds, history) — survives remounts. */
 const MEMORY = new Map<string, { cam: Cam; hist: Cam[]; folded: string[]; model: Model }>();
 
@@ -121,6 +125,7 @@ export class TreeCtl {
       if (this.v) {
         this.v.hover = null;
         this.v.hoverBlast = null;
+        this.v.ptr = null;
       }
       this.setTip(null);
       this.dirty = true;
@@ -424,7 +429,7 @@ export class TreeCtl {
     v.pulse = { x: l.x, y: l.y, r: l.len, t0: performance.now() + 600 };
   }
   private clampZ(z: number) {
-    return Math.max(this.fitZ() * 0.85, Math.min(7, z));
+    return Math.max(this.fitZ() * 0.85, Math.min(MAX_Z, z));
   }
   zoomAt(sx: number, sy: number, factor: number) {
     const v = this.v;
@@ -596,7 +601,7 @@ export class TreeCtl {
       return;
     }
     if (hit && hit.leaf) {
-      this.flyToLeaf(hit.leaf, Math.min(7, Math.max(v.cam.z * 2, 3.2)));
+      this.flyToLeaf(hit.leaf, Math.min(MAX_Z, Math.max(v.cam.z * 2, 3.2)));
       return;
     }
     this.pushHist();
@@ -917,7 +922,7 @@ export class TreeCtl {
     if (v.follow == null) this.followFrom = { ...(this.fly ? v.cam : this.camT) };
     v.follow = key;
     const from = this.fly ? v.cam : this.camT;
-    const z = Math.min(7, Math.max(from.z, FOLLOW_Z));
+    const z = Math.min(MAX_Z, Math.max(from.z, FOLLOW_Z));
     const p = this.birdAt(key);
     const c = p ? this.followCam(p, z) : { x: from.x, y: from.y, z };
     // a longer hop glides a little longer, so an off-screen bird is reached, not jumped to
@@ -980,6 +985,7 @@ export class TreeCtl {
     const v = this.v;
     if (!v || !this.needPick || !this.mouse || this.drag) return;
     this.needPick = false;
+    v.ptr = [this.mouse[0], this.mouse[1]]; // (a hovered clump's name column stays up while the pointer crosses to it)
     if (this.clickAt) {
       if (v.hover) {
         v.hover = null;
