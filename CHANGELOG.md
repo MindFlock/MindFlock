@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-The Map tab's Code Tree reads at every zoom, and a worker's fence is a
-contract it cannot talk its way out of.
+## [0.9.6] - 2026-10-22
+
+Connect GitHub once and git uses the sign-in too, the Map tab's Code Tree
+reads at every zoom, and a worker's fence is a contract it cannot talk its
+way out of.
 
 ### Changed
 
@@ -49,6 +52,18 @@ contract it cannot talk its way out of.
 
 ### Fixed
 
+- **Connect GitHub once and git uses the sign-in too.** The token from
+  Connect GitHub (device flow or paste) served only the REST API; every clone,
+  fetch and push went through git's own credential helpers, which on a Mac
+  meant the `osxkeychain` prompt ("enter the login keychain password") at
+  every provision, and Setup's "Let git push with this sign-in" refused
+  whenever any helper existed. While a sign-in is connected (Settings token or
+  `$GH_TOKEN`/`$GITHUB_TOKEN`), MindFlock's own git calls, every session's
+  environment and the Push shell run with per-process git config that makes
+  `mindflock git-credential` the one helper for `https://github.com`: no git
+  config file is written, other hosts keep your helpers and SSH remotes are
+  untouched. Covers provisioning, the pipeline's clones, merge and divergence
+  fetches, Check I can push, and the agent's own push.
 - **The tool hook no longer invents targets.** `2>/dev/null` is not a file
   named `2`, a `chmod` mode is not a path, and `cp X dir/` writes `dir/X`,
   not the directory, so a fenced worker is denied only for a real landing
@@ -4241,7 +4256,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.9.5...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.9.6...HEAD
+[0.9.6]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.6
 [0.9.5]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.5
 [0.9.4]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.4
 [0.9.3]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.3
