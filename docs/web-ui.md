@@ -2001,6 +2001,23 @@ notification fires either way.
   strips an `?token=` from whatever you paste, since that URL is stored on the
   ntfy server. (The automatic URL is bare for the same reason.)
 
+  **Include the agent's words in pushes** (`notifications.ntfy_agent_words`,
+  on by default; hint *The spoken summary of a finished turn and the question
+  of a dialog travel through your ntfy server*, plus *Yours is the public
+  ntfy.sh, so a public server stores them* while that is the server) is
+  pocket mode: the *has finished* push's body is the session's own spoken
+  `Say:` line and the *needs you: Question* push's body is the dialog's
+  question and the command it asks about, so a phone that reads notifications
+  aloud says something useful while it stays in a pocket. Off keeps every
+  body generic. Those two pushes open the phone page on the session with
+  `&voice=1` (one tap speaks the line and listens), and a dialog push also
+  carries one-tap **Yes** / **No** / **Open** buttons — single-use links
+  good for ten minutes, never "always"; from the lock screen on Android,
+  after unlock on iOS. The line under the toggle says the one thing that
+  makes it work on an iPhone: *turn on ntfy under Settings → Notifications →
+  Announce Notifications to hear pushes through AirPods.* See
+  [Voice](#voice-talking-to-a-session) on the mobile page.
+
   Priority is per rule: "needs you (Question)", "budget exceeded", "pre-commit
   failed" and "PR approved" go out at ntfy priority 4 (buzzes through most
   do-not-disturb setups), PR merged/closed, changes requested, the two usage
@@ -5308,6 +5325,29 @@ labels above the inputs.
   lands on the login prompt, which is the intended trade: one extra tap on a new
   device instead of this machine's token sitting on a third party's server.
 
+  Below the four rows, **Voice** (`voice.*`,
+  [configuration.md](configuration.md#web-exposed-settings)) — *Talk to a
+  session from the phone page: tap the mic on /m. Speech runs on the phone by
+  default.* Two blocks, **Recognition** and **Voice**, each a **phone | server**
+  choice; on *server* the block grows a **Backend** picker (*Whichever is
+  ready* · *OpenAI-compatible host* · *Local models on this computer*),
+  **URL** and **API key** for a host (the key follows the secret-field
+  pattern: masked once saved, blank keeps it, **Clear** forgets it through
+  `POST /api/voice/clear-key`), **Model** (the host's model, or a whisper size
+  for the local backend) and, for the voice, **Voice name**; under each block
+  a readiness line from `GET /api/voice` (*Server recognition ready (local):
+  …* / *Server voice not ready: …*), re-read after every save. Then
+  **Approve dialogs by voice** (*A spoken yes or no answers a permission
+  dialog after its command is read aloud. 'Always' is only accepted when you
+  say the word.*) and two notes: *Phone recognition sends audio to Google on
+  Android and to Apple on iOS when no on-device model exists* and *On iPhone,
+  voice needs a Safari tab: the home-screen icon cannot hear you. Server
+  recognition fixes that.* The server routes and backends are described in
+  [web-api.md](web-api.md#voice-talking-to-a-session-from-the-phone); the
+  phone page itself still uses the phone's engines in this build, whatever
+  the two choices say (its Diagnostics says so). See
+  [Voice: talking to a session](#voice-talking-to-a-session).
+
 - **Your devices → One link for all devices** (`general.shared_link`; moved
   here from Mobile) gives the phone a URL
   that names no machine: `https://<name>.<tailnet>.ts.net/m`, answered by
@@ -5516,7 +5556,11 @@ its toolbar counts it again. See
 ## Voice input
 
 The mic button (🎙, Chromium's `webkitSpeechRecognition`) dictates into the
-focused terminal or text box, with a live caption bar.
+focused terminal or text box, with a live caption bar. It types and never
+submits, and nothing is spoken back. The phone page's mic is a different
+thing — a spoken conversation with a session, with the session's own reply
+read aloud — see [Voice: talking to a session](#voice-talking-to-a-session)
+under the Mobile UI.
 
 ## Mobile UI (`/m`)
 
@@ -5676,6 +5720,175 @@ menu the server built by walking the filesystem — it never writes a path) or a
 row of `/api/repos/suggest`, and Start refuses anything that isn't absolute
 anyway. The create answers **202**, so the new session is selected from the next
 poll tick, when its row actually appears in the list.
+
+### Voice: talking to a session
+
+The phone page can hold a spoken conversation with a session: you dictate a
+prompt, hear what the session is doing, and when it finishes or asks a
+question you hear that too and answer by voice. Speech runs on the phone's
+own engines (Web Speech recognition and `speechSynthesis` — no key, no
+subscription, no server compute); the *words* come from the session you
+already pay for, which writes its own spoken line (below). Nothing here
+spends a model call unless you ask for a summary.
+
+**Starting.** Tap the mic (🎙, right of **Send**). The tap primes speech
+output (iOS and Android speak nothing until the first `speak()` runs inside
+a tap; the same tap sets `navigator.audioSession.type = "playback"` so the
+silent switch does not mute the page), takes a screen wake lock, turns voice
+mode on for the selected session (`POST /api/instances/<title>/voice
+{on: true}`), opens the events socket and listens for 15 s (Android buzzes
+30 ms). A **voice strip** appears above the composer with the state word
+(*Your turn* · *Listening…* · *Sending…* · *Working…* · *Speaking…* ·
+*Waiting on you*), a caption (what it hears, the line being spoken, the
+dialog question), a countdown bar, **Cancel** and **⚙**. Voice follows the
+**selected** session: picking another session in the Sessions sheet (or
+saying "switch to <name>") moves the conversation there; the flag of the
+session you left stays on — it only asks that session to end its replies
+with a `Say:` line. **On iPhone, open `/m` in a Safari tab.** iOS has speech
+recognition only there (WebKit bug 225298): the home-screen icon, and every
+other iOS browser, can speak but cannot hear you, and the page says so on the
+first mic tap — a **Voice needs Safari: open this page in a Safari tab**
+banner with this page's URL and **Copy**. Without a recognizer the mic still
+turns voice on as a read-aloud mode (*No speech recognition here — replies
+are still read aloud*): replies and dialogs are spoken, nothing listens.
+Server recognition (Settings → Your phone → Voice) is what would let the
+home-screen icon hear you, but this build's page uses the phone's engines
+only and its Diagnostics says so (below).
+
+**The loop.** Say the prompt; interim words show in the compose box. When
+the phrase is final it sits in the box behind a **2.5 s countdown** — tap the
+strip, **Cancel**, or edit the text to stop the clock and keep the words; say
+"cancel" to drop them; **Send** sends at once. Then *Sent to <name>.* (or
+*Queued for <name> — it is on a prompt.*: while voice is on, Send and the
+countdown go through `POST /send {dialog_safe: true}`, so a prompt is queued
+rather than typed into a dialog; a waking session says *<name> is waking up,
+try again in a moment.*, a paused one *<name> is paused. Resume it first.*,
+anything else *Couldn't send.* with the text kept). While the agent works the
+page polls its newest reply every 3 s and speaks the **first sentence** of
+the first assistant text once — the "what it is doing" confirmation (Claude
+opens with "I'll …"); nothing else is narrated unless you ask. A Codex
+session gets no such sentence (its screen fallback is skipped), only the line
+at the end. When the turn ends — `session.activity_changed` → `idle` over
+`WS /api/events`, with the page's 4 s session poll as the fallback — the
+page speaks the session's **`Say:` line**. If that line asks a question the
+mic reopens for 12 s (one *Still there? <line>* re-prompt, then idle);
+otherwise it goes quiet — or, with **Hands-free** on, listens 8 s after every
+reply. A turn that ends with no line at all says *<name> finished.* A line
+that arrives mid-dictation waits until the page is idle and is dropped once a
+new prompt is sent; a line you have already heard is never repeated (the
+events compare by text, `GET /voice` by its stamp, and the line on screen
+when voice was turned on counts as heard).
+
+**Where the line comes from.** While voice mode is on, every prompt the
+session gets carries one instruction asking it to end its reply with one
+final line starting `Say:` — at most two short plain sentences a person can
+hear, saying what it did or will do and any question it has. Claude Code
+receives it invisibly from the hook MindFlock installs in the worktree
+(nothing shows in the terminal; turning voice on re-pins the hook on a
+running session and Claude Code hot-reloads it); Codex and the other CLIs
+get the same sentence typed after the prompt. When the turn ends the Stop
+hook files the reply and the server lifts the `Say:` line out; with no
+`Say:` line it speaks a short digest of the reply instead (code, paths and
+URLs dropped, the first sentence and any question kept). The line is written
+by the model that did the work and costs no extra call. See
+[web-api.md](web-api.md#voice-talking-to-a-session-from-the-phone) for the
+routes, the row fields and the event data.
+
+**Voice commands** — the whole phrase, case and punctuation ignored, with an
+optional "ok", "okay", "hey" or "please" in front:
+
+| Say | Does |
+|---|---|
+| *cancel* · *never mind* · *scratch that* · *forget it* | drops the dictated text |
+| *switch to <name>* · *go to <name>* · *change to* · *jump (over) to* | moves voice to that session — by name or title: a prefix, then word overlap, then loose containment. A tie asks *Which one: a, b?*; a miss says *No session called X. Sessions: …*; a hit says *Now on <name>.* plus its last line, and reads its dialog when it is on one |
+| *what needs me* · *who needs me* · *what needs (my) attention* | the sessions in the bell, attention first, at most three: *<name> is asking: <its line>.* or *<name> is <state word>.* — else *Nothing needs you.* |
+| *what's it doing* · *what is it doing* · *status* · *what's happening* · *what's going on* | the state word (*for N minutes* while working) and the session's latest turn snippet |
+| *summarize that* · *summarize it* · *summarise* · *what did it say* · *summary* | one model call on the server (`POST /voice/condense`, 10–45 s): the newest reply in two sentences — *That took too long.* on a timeout, the route's own sentence on any other refusal |
+| *say that again* · *repeat (that)* | the last line again |
+| *voice off* · *turn voice off* · *turn off voice* | voice mode off (`POST /voice {on: false}`) |
+| *stop listening* · *stop* | back to idle |
+
+Anything else is a prompt.
+
+**Dialogs by voice.** When the session lands on a permission dialog
+(`clarify`), the page fetches it (`GET /dialog?quiet=1`) and reads it out:
+*<name>: <question> It wants to run: <command>. Say yes, no, or always.*
+(*Say yes or no.* when the dialog offers no always; a dialog of other choices
+lists them — *one: main. two: develop. three: release. Say one, two, or
+three.*). It then listens for 12 s. Only option words are accepted, and free
+text is **never** typed into a dialog:
+
+| Means | Words |
+|---|---|
+| yes | yes · yeah · yep · yup · allow · approve · okay · ok · go ahead · do it · sure |
+| no | no · nope · deny · reject · don't · cancel · skip · stop |
+| always | **only when you say the word** — "always", "don't ask again" or "do not ask again"; never inferred from an enthusiastic yes, and a dialog without an always option takes it as yes |
+| a numbered choice | one … nine, first … ninth, the digit, "option two" |
+
+Checked in the order always → number → no → yes. The answer is pinned to the
+dialog's id (`POST /answer {keys, dialog_id, by: "user"}`) — *Answered yes.*
+— so a prompt that changed underneath is read again rather than mis-answered,
+and one that was just answered says *Already answered.* Not understood, or
+silence: *I didn't catch that: say yes, no, or always.* — twice, then
+*<name> is waiting on you.* A dialog the provider can't parse (a free-text
+question) is announced as *<name> is waiting on you: open the screen.*
+**Approve dialogs by voice** (Settings → Your phone → Voice,
+`voice.approve_dialogs`, on by default) turns the answering off: the dialog
+is still read out, followed by *Answer it on the screen.*, and nothing
+listens. The ⚙ sheet shows that setting read-only.
+
+**The ⚙ sheet** — *Voice mode for <session>* on/off, **Hands-free** (listen
+after every reply, not only after questions; off by default), **Speech rate**
+0.7–1.6×, a **Voice** picker (the phone's `speechSynthesis` voices, this
+language first — iOS exposes only its compact built-in voices), the read-only
+approval line, and **Diagnostics**: what this phone can do, stated plainly,
+so a silent failure has a name — *Recognition* (available, or *NOT available
+— iOS has it only in a Safari tab*), *Speech* and how many voices loaded,
+*Mode* (browser tab or home-screen app; iOS / Android), *Wake lock*, *Audio
+session*, the *Events socket* state and sequence number, *Backends*
+(recognition and voice: phone or server — with *server adapters are not on
+this page yet; using the phone's* when a server backend is set), *Primed*
+(whether a tap has unlocked speech output yet), *State*, and the last error.
+Refreshed every second while the sheet is open.
+
+**Pocket mode.** Nothing on the web can speak while the phone is locked or
+the page is in the background (iOS suspends the page within seconds and the
+events socket dies in about 30 s), so the push carries the words. With
+**Include the agent's words in pushes** on (Settings → Notifications → Phone
+alerts; the default) the *has finished* push's body is the session's `Say:`
+line and the *needs you: Question* push's body is the dialog's question and
+command, so a phone that reads notifications aloud says something useful.
+On iPhone: Settings → Notifications → **Announce Notifications**, turn it on
+for **ntfy**, and Siri reads the push through AirPods; Android has read-aloud
+apps that do the same. Both pushes open the page on the session with
+`/m?s=<title>&voice=1`, which offers **Tap to hear <name>** — one tap speaks
+the line (or reads the dialog it is on) and listens. A dialog push also
+carries one-tap **Yes** / **No** buttons (and **Open**): on Android they fire
+from the lock screen, on iOS after unlock; each is a single-use link good for
+ten minutes that answers that one dialog and nothing else, and "always" is
+never a button. There is **no voice reply from an announcement** — the OS
+reserves that for native messaging apps; pocket mode is "Siri reads, you
+tap to reply". See [Notifications](#notifications-).
+
+**What is not promised.** A conversation lives while the screen is on: when
+the page is hidden it stops listening and speaking, closes its socket and
+releases the wake lock; on return it re-locks, reconnects and asks for a
+line that arrived meanwhile. Nothing speaks while the phone is locked except
+the OS reading a push. Dictation is for intent, not code — the countdown and
+the editable box are the mitigation for misheard identifiers. iOS speaks
+only through its compact voices and cuts long utterances, so lines are
+chunked by sentence with a timeout behind each chunk. Phone recognition
+sends audio to Google on Android and to Apple on iOS when no on-device model
+exists (the Settings screen says so). The server speech routes exist
+(`POST /api/voice/transcribe`, `POST /api/voice/speak`) and Settings → Your
+phone → Voice configures them, but this build's phone page does not call
+them yet.
+
+The page remembers, per browser (`localStorage`): the voice session and
+whether voice was on (the next visit offers **Tap to resume voice**), the
+speech rate, the chosen voice and Hands-free. The events socket is open only
+while voice is on (`?since=<seq>` on reconnect, 1→30 s backoff; a fresh
+connect ignores the replayed backlog).
 
 ## Addons in the frontend
 

@@ -79,6 +79,11 @@ The Claude provider launches plain `claude` (Claude Code). It:
   hook says the turn ended, the busy comes from background jobs, and those are
   classified instead ([Background jobs](#background-jobs))
 - reads token usage from Claude Code transcripts (below)
+- answers `voice_prompt_hook()` **True**: the `UserPromptSubmit` hook it
+  installs prints the phone's voice instruction itself while the session's
+  voice flag exists, and Claude Code injects a prompt hook's stdout as
+  context — so the `/send` route never appends the sentence for a Claude
+  session (it would be read twice). See [Activity signal](#activity-signal-activity_markerspy)
 
 ## Background jobs
 
@@ -235,6 +240,50 @@ best-effort and can never break a launch. (The Claude provider re-exports these
 primitives — they historically lived in `claude.py` — so existing call-sites and
 tests keep working.)
 
+**Voice mode rides the same hook script.** One script serves every event, and
+two branches of it are keyed on the payload's `hook_event_name` for the
+phone's voice mode ([web-ui.md](web-ui.md#voice-talking-to-a-session)),
+both after the marker write and both wrapped so they can never raise past
+it:
+
+- `Stop` files the payload's `last_assistant_message` beside the marker as
+  `<marker dir>/<session>.reply.json` = `{"ts": <epoch>, "text": …}` (text
+  cut at 8000 chars, `activity_markers.REPLY_TEXT_MAX`), written to a temp
+  file and `os.replace`d. That is the exact text the session just said, so
+  the spoken line (`core/spoken.py`: the reply's `Say:` line, else a digest)
+  costs no transcript scan. Every CLI that installs the hook gets this
+  branch; where the payload lacks the field it files an empty text (best
+  effort — Codex may not send it).
+- `UserPromptSubmit` prints `activity_markers.VOICE_INSTRUCTION` (re-exported
+  as `core.spoken.INSTRUCTION`) to stdout while
+  `<voice dir>/<session>.on` exists — the voice flag `core/voice.py` keeps
+  and `POST /api/instances/{title}/voice` sets. Claude Code injects a prompt
+  hook's stdout as additional context, invisibly and with no relaunch, so the
+  session is asked to end its reply with a `Say:` line only for the prompts
+  typed while the phone is listening. The flag dir is resolved **at fire
+  time** exactly like the marker dir — `MINDFLOCK_VOICE_FLAG_DIR`, else
+  `~/.mindflock-assistant/.voice` — never baked in. This branch is written
+  only when `hook_command(..., prompt_context=True)`, which defaults to
+  `record_thread`: the Claude install. A CLI whose hooks cannot inject
+  context (Codex installs with `record_thread=False`, so does every TOML
+  provider) never prints it; it gets the same sentence typed after the
+  prompt by the `/send` route instead, and a hook that *also* printed it
+  would say it twice.
+
+`BaseProvider.voice_prompt_hook()` is the capability question for that
+split — "does this CLI's prompt hook inject the instruction itself?" —
+default **False**; only Claude answers True. The `/send` route appends the
+instruction exactly when the session's flag is on and this is False, and
+`POST …/voice {on: true}` re-runs `install_activity_hooks` only when it is
+True (so a Claude session launched by an older build picks up the two
+branches; Claude Code hot-reloads the file). A provider must answer True
+only when its hook really does the printing. Neither branch changes the
+tool-hook tag or source hash, so the red-zone re-pin does not fire for it; a
+running session gets the new text when voice is turned on or at its next
+launch. Hook payloads, flags and reply files are all keyed by the sanitised
+tmux session name, never by title, and session removal drops the flag, the
+reply file and the "already announced" memory together.
+
 **A marker has to be both fresh and current.** Age is the first gate: markers
 older than 6 h are ignored outright, and a `working`/`clarify` one older than
 45 s is re-verified against the live pane, while an `idle` one is trusted at any
@@ -278,7 +327,11 @@ Two built-in wirings:
   `UserPromptSubmit`/`PreToolUse`/`PostToolUse → working`, and
   `PermissionRequest → clarify`. On hook-capable codex builds this
   authoritative signal supersedes the version-fragile pane regexes, which are
-  kept only as a fallback for older builds.
+  kept only as a fallback for older builds. The same script's `Stop` branch
+  files the reply best-effort (Codex may not send
+  `last_assistant_message`); its `UserPromptSubmit` never prints the voice
+  instruction (`record_thread=False`), so a Codex session in voice mode
+  reads the sentence typed after its prompt by `/send`.
 
 User TOML providers opt in with the `[activity]` table (below).
 
