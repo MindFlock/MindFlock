@@ -22,7 +22,7 @@ from __future__ import annotations
 import subprocess
 import threading
 import time
-from typing import Dict
+from typing import Dict, Optional
 
 from backend.session import tmux
 from backend.web.core import agent_state as _agent_state
@@ -33,6 +33,7 @@ from backend.web.core import pane_scroll_find as _pane_scroll_find
 from backend.web.core import prompt_queue as _prompt_queue
 from backend.web.core import revive as _revive
 from backend.web.core import sleep as _sleep
+from backend.web.core import spoken as _spoken
 
 
 def _server():
@@ -99,6 +100,146 @@ def _in_boot_quiet() -> bool:
     """Whether the process is still inside its post-launch quiet window."""
     srv = _server()
     return time.monotonic() - srv._BOOT_MONO < srv._BOOT_QUIET_SECONDS
+
+
+# ---- the spoken line on an idle announcement ------------------------------ #
+# Voice mode: when a session settles idle, the phone speaks the ``Say:`` line
+# the session wrote (core.spoken.spoken_for). The words ride the two "it
+# finished" events — ``session.activity_changed new="idle"`` (the chip, the
+# page's instant cue) and ``session.turn_ended`` (notification-grade; the push
+# body) — as ``data = {say, has_question, source}``. Each channel remembers
+# the reply it last announced per session, and ``say`` is null when nothing
+# newer exists: a session that goes idle again without a new reply (a /clear,
+# a boot to a bare prompt, a wake, a non-Claude CLI that files no reply) must
+# not re-speak its last words. Memory is per CHANNEL because the two events
+# fire for the same turn, seconds to a minute apart, and both must carry it
+# once. Dropped with the session (session_removal → ``_forget_spoken``).
+_SPOKEN_ANNOUNCED: Dict[str, Dict[str, tuple]] = {}
+_SPOKEN_ANNOUNCED_LOCK = threading.Lock()
+_SPOKEN_NONE = {"say": None, "has_question": False, "source": "none"}
+
+
+def _spoken_payload(title: str, channel: str) -> dict:
+    """``{say, has_question, source}`` for ``title``'s idle announcement on
+    ``channel`` (``"idle"`` for activity_changed, ``"turn"`` for turn_ended):
+    the spoken line when a reply this channel has not announced exists, else
+    ``say: null``. One small cached file read; never raises."""
+    try:
+        inst = _server().ENGINE.instances.get(title)
+        if inst is None:
+            return dict(_SPOKEN_NONE)
+        sp = _spoken.spoken_for(title, inst)
+    except Exception:  # noqa: BLE001 — the words are enrichment, never a gate
+        return dict(_SPOKEN_NONE)
+    say = sp.get("say") if isinstance(sp, dict) else None
+    if not say:
+        return dict(_SPOKEN_NONE)
+    key = (sp.get("ts"), say)
+    with _SPOKEN_ANNOUNCED_LOCK:
+        seen = _SPOKEN_ANNOUNCED.setdefault(title, {})
+        if seen.get(channel) == key:
+            return dict(_SPOKEN_NONE)
+        seen[channel] = key
+    return {
+        "say": say,
+        "has_question": bool(sp.get("has_question")),
+        "source": str(sp.get("source") or "none"),
+    }
+
+
+def _forget_spoken(title: str) -> None:
+    """Drop ``title``'s announced-reply memory (session removal)."""
+    with _SPOKEN_ANNOUNCED_LOCK:
+        _SPOKEN_ANNOUNCED.pop(title, None)
+        _REPLY_SEEN.pop(title, None)
+        _REPLY_WORK.pop(title, None)
+
+
+# ---- the turn the poll never saw ------------------------------------------ #
+# The emitter diffs ACTIVITY readings taken every few seconds (a 4s tick over
+# a 2.5s probe memo). A one-line answer — "yes", "blue or green?", a count to
+# five — is a 2-3s turn: the hook marker and Claude's live registry both pass
+# through "working" and are back to "idle" before the next reading, so the
+# snapshot says idle, then idle again, and NOTHING fires: no idle announcement
+# with the spoken line, no work evidence, no ``session.turn_ended``, no push.
+# In voice mode short answers are the norm, not the exception (QA 2026-10-23:
+# four consecutive 2-3s turns produced zero events while the reply file
+# changed every time).
+#
+# The reply file (``<marker dir>/<session>.reply.json``) is the Stop hook's
+# own word that a turn ended — written once per turn, stamped by the CLI. A
+# reply newer than the last one this emitter saw, on a session whose snapshot
+# has read idle the whole time, is a turn the poll missed. It is announced as
+# the working→idle it was (``data`` = the spoken line) and counts as work
+# evidence for the turn-end announcement, in the marker lane: a hook, not a
+# frame, is the source.
+#
+# Provenance: ``_REPLY_SEEN`` is seeded (never announced) the first time a
+# session is sighted, so a restart does not re-announce the reply a dead
+# server already spoke; a session with no reply yet seeds at 0.0 so its very
+# first short turn counts. A reply the REAL transition already covered is
+# told apart by its clock: the Stop hook stamps the file when the turn ends,
+# and a reply stamped before (or within ``_REPLY_AFTER_IDLE_SLACK_S`` of) the
+# moment the snapshot adopted idle belongs to the working→idle that was just
+# announced — with ``say: null`` when the file landed a beat late, and the
+# phone's GET /voice behind it — so it must not fire twice. A reply stamped
+# AFTER the adoption is a turn that started and ended while we kept saying
+# idle: the missed one. (The hook truncates its stamp to whole seconds and
+# the probe lags the hook by a tick or two, hence the slack and the sign.)
+_REPLY_SEEN: Dict[str, float] = {}
+_REPLY_WORK: Dict[str, float] = {}
+_REPLY_AFTER_IDLE_SLACK_S = 1.5
+
+
+def _reply_stamp(title: str) -> Optional[float]:
+    """The reply file's ``ts`` for ``title`` (epoch), or None without one."""
+    try:
+        reply = _spoken.read_reply(tmux.to_mindflock_tmux_name(title))
+    except Exception:  # noqa: BLE001 — no reply reads as no reply
+        return None
+    if not reply:
+        return None
+    ts = reply[0]
+    return float(ts) if ts else None
+
+
+def _seed_reply_seen(title: str) -> None:
+    with _SPOKEN_ANNOUNCED_LOCK:
+        if title not in _REPLY_SEEN:
+            _REPLY_SEEN[title] = _reply_stamp(title) or 0.0
+
+
+def _announce_missed_turn(title: str, prev: dict, snap: dict, now: float) -> None:
+    """Announce a turn whose working phase fell between two idle readings
+    (see the block comment above). Never raises."""
+    try:
+        if snap.get("activity") != "idle" or prev.get("activity") != "idle":
+            return
+        ts = _reply_stamp(title)
+        with _SPOKEN_ANNOUNCED_LOCK:
+            seen = _REPLY_SEEN.get(title)
+            if seen is None:
+                _REPLY_SEEN[title] = ts or 0.0
+                return
+            if ts is None or ts <= seen:
+                return
+            _REPLY_SEEN[title] = ts
+            adopted = float(snap.get("activity_epoch") or 0.0)
+            if ts <= adopted + _REPLY_AFTER_IDLE_SLACK_S:
+                return  # the transition that adopted this idle announced it
+        payload = _spoken_payload(title, "idle")
+        if not payload.get("say"):
+            return  # announced already (or the reply has nothing to say)
+        _REPLY_WORK[title] = ts
+        _events.BUS.emit(
+            "session.activity_changed",
+            session=title,
+            old="working",
+            new="idle",
+            data=payload,
+        )
+    except Exception:  # noqa: BLE001 — the words are enrichment, never a gate
+        pass
 
 
 def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> None:
@@ -196,12 +337,25 @@ def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> N
         # actually doing. Neither may gate the other.
         if prev is None or snap["activity"] != prev.get("activity"):
             snap["activity_at"] = now
+            # Epoch twin of activity_at, for comparison with the reply file's
+            # stamp (_announce_missed_turn); monotonic above for the dwell.
+            snap["activity_epoch"] = time.time()
         else:
             snap["activity_at"] = prev.get("activity_at", now)
+            snap["activity_epoch"] = prev.get("activity_epoch", time.time())
         srv._EVENT_SNAPSHOT[title] = snap
     if prev is None:
+        _seed_reply_seen(title)
         return
+    # Baseline the reply file on the first pass for THIS session too (a
+    # created session is pre-seeded by _seed_event_snapshot, so it never takes
+    # the branch above), and do it inside the boot-quiet window as well: the
+    # baseline is what tells a reply that lands later apart from one that was
+    # already there, and a session created during the quiet window would
+    # otherwise have its first short turn baselined away.
+    _seed_reply_seen(title)
     if not srv._in_boot_quiet():
+        _announce_missed_turn(title, prev, snap, now)
         for field, event, new in (
             ("status", "session.status_changed", status),
             ("activity", "session.activity_changed", snap["activity"]),
@@ -214,6 +368,16 @@ def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> N
                 new == _SLEEPING or (old == _SLEEPING and new == "idle")
             ):
                 continue  # a sleep, or a wake back to its prompt: not news
+            if field == "activity" and new == "idle":
+                # The turn's spoken line rides the idle announcement (voice).
+                _events.BUS.emit(
+                    event,
+                    session=title,
+                    old=old,
+                    new=new,
+                    data=_spoken_payload(title, "idle"),
+                )
+                continue
             _events.BUS.emit(event, session=title, old=old, new=new)
     # Verify — the SECOND of two triggers that write a test plan for freshly
     # pushed work. The first is the ``session.pushed`` subscriber below, fed by
@@ -460,8 +624,15 @@ def _note_turn_boundary(title: str, snap: dict, now: float) -> None:
         # label (a fresh stamp always fails the dwell; see _verdict).
         evidence = _agent_state.work_evidence(title)
         worked = _agent_state.worked_at(title)
+        from_reply = False
         if worked is None:
-            return
+            # A turn the poll missed (see _announce_missed_turn): the Stop
+            # hook's reply file is the work evidence, in the marker lane —
+            # the CLI's own word for both the work and its end.
+            worked = _REPLY_WORK.get(title)
+            if worked is None:
+                return
+            evidence, from_reply = "marker", True
         # The tier is keyed on how the WORK was corroborated, but the fast
         # lane also needs the END to be the CLI's own word: marker-armed work
         # whose idle reading came from the PANE (the marker went stale mid-
@@ -469,8 +640,10 @@ def _note_turn_boundary(title: str, snap: dict, now: float) -> None:
         # end wearing marker-armed evidence, and 12s of that can announce —
         # and SPEND — a turn that is still running. Mismatch takes the slow
         # lane outright.
-        if evidence == "marker" and not _agent_state.reading_is_authoritative(
-            title, "idle"
+        if (
+            evidence == "marker"
+            and not from_reply
+            and not _agent_state.reading_is_authoritative(title, "idle")
         ):
             evidence = ""
         dwell = _TURN_END_DWELLS.get(evidence, srv._TURN_END_DWELL_S)
@@ -520,13 +693,15 @@ def _note_turn_boundary(title: str, snap: dict, now: float) -> None:
         # Claiming the evidence is what grants permission to speak: two
         # unsynchronised tickers can reach this line in the same instant, and
         # only one of them can win the clear.
-        if _agent_state.claim_work(title) is None:
+        claimed = _agent_state.claim_work(title)
+        # Spend the reply evidence with the claim (or instead of it): one
+        # announcement per turn, whichever layer saw the work.
+        reply_claimed = _REPLY_WORK.pop(title, None)
+        if claimed is None and reply_claimed is None:
             return
-        _events.BUS.emit(
-            "session.turn_ended",
-            session=title,
-            data={"idle_for": round(idle_for, 1)},
-        )
+        data = {"idle_for": round(idle_for, 1)}
+        data.update(_spoken_payload(title, "turn"))
+        _events.BUS.emit("session.turn_ended", session=title, data=data)
     except Exception:  # noqa: BLE001 — a notification never breaks the tick
         pass
 

@@ -18,6 +18,7 @@ overrides the pieces that are specific to Claude Code.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Mapping, Optional, Sequence
 
@@ -52,10 +53,73 @@ class TrustSpec:
     """How a provider's CLI asks for trust/confirmation and how to dismiss it.
 
     ``patterns`` are substrings to look for in the pane; ``keystroke`` is the raw
-    bytes to send to accept (Claude: Enter)."""
+    bytes to send to accept (Claude: Enter).
+
+    ``accept_words`` names the menu option that ACCEPTS the gate (lower-case
+    words; ``"yes"`` for Claude). A gate is a select menu, and which option its
+    cursor rests on is the CLI's choice, not ours: Claude Code ≤ 2.1.1xx drew
+    the folder gate as ``❯ 1. Yes, I trust this folder / 2. No, exit`` and
+    2.1.3xx draws ``❯ No, exit / Yes, I trust this folder`` — the same
+    ``patterns`` match both, and a bare Enter on the second EXITS the agent
+    (a live incident: every sandboxed session died at its trust gate). With
+    ``accept_words`` set, :meth:`nav_keys_for` reads the screen and says which
+    arrow keys move the cursor onto the accepting option first; empty means
+    "press ``keystroke`` as is" (the pre-existing behaviour)."""
 
     patterns: Sequence[str] = ()
     keystroke: bytes = b"\r"
+    accept_words: Sequence[str] = ()
+
+    def nav_keys_for(self, content: str) -> Sequence[str]:
+        """The tmux key names (``"Down"`` / ``"Up"``, repeated) that move the
+        gate's cursor onto the first option naming one of ``accept_words``,
+        given the pane text ``content``; ``()`` when the cursor is already
+        there, when no option or cursor is visible, or when ``accept_words``
+        is empty. Send these BEFORE ``keystroke`` (named keys, so tmux emits
+        the pane's own arrow sequences — raw ``ESC [ B`` bytes would read as
+        a lone Escape, which cancels the gate, on a split write)."""
+        words = tuple(w.lower() for w in self.accept_words if w)
+        if not words or not content:
+            return ()
+        lines = str(content).replace("\r\n", "\n").split("\n")
+        cursor_idx = None
+        for i, raw in enumerate(lines):
+            if _TRUST_CURSOR_RE.match(raw):
+                cursor_idx = i
+                break
+        if cursor_idx is None:
+            return ()
+        # The option block: the run of non-blank lines around the cursor line
+        # (the gate's hint/footer sits below a blank line).
+        lo = cursor_idx
+        while lo > 0 and lines[lo - 1].strip(" │"):
+            lo -= 1
+        hi = cursor_idx
+        while hi + 1 < len(lines) and lines[hi + 1].strip(" │"):
+            hi += 1
+        options = lines[lo : hi + 1]
+        accept_idx = None
+        for j, raw in enumerate(options):
+            label = _TRUST_OPTION_LABEL_RE.sub("", raw.strip(" │")).lower()
+            if any(re.search(r"\b%s\b" % re.escape(w), label) for w in words):
+                accept_idx = j
+                break
+        if accept_idx is None:
+            return ()
+        delta = accept_idx - (cursor_idx - lo)
+        if delta > 0:
+            return ("Down",) * delta
+        if delta < 0:
+            return ("Up",) * (-delta)
+        return ()
+
+
+#: A select-menu cursor line: optional box border, the cursor glyph (``❯`` as
+#: Claude Code draws it, ``>`` as plain terminals and test fixtures do), then
+#: the option text.
+_TRUST_CURSOR_RE = re.compile(r"^\s*(?:│\s*)?[❯>]\s+\S")
+#: What precedes an option's words: the cursor glyph and/or a ``1.`` number.
+_TRUST_OPTION_LABEL_RE = re.compile(r"^(?:[❯>]\s*)?(?:\d+[.)]\s*)?")
 
 
 _NATURAL_EXIT_CODES = (0, 130)
@@ -571,6 +635,17 @@ class BaseProvider:
         """Whether the plan loop (declared ``mindflock-plan`` block or ExitPlanMode
         capture) works for this CLI. Requires a readable transcript, so only
         Claude returns True. The Map hides the plan UI when this is False.
+        Default: False."""
+        return False
+
+    def voice_prompt_hook(self) -> bool:
+        """Whether this CLI's prompt-submit hook injects MindFlock's voice
+        instruction itself (``activity_markers.VOICE_INSTRUCTION``, printed by
+        the installed ``UserPromptSubmit`` hook while the session's voice flag
+        is on). Only Claude Code documents a prompt hook's stdout as injected
+        context. For every other CLI the /send route types the instruction
+        after the prompt instead — so a provider must answer True only when
+        the hook really does it, or the agent reads the sentence twice.
         Default: False."""
         return False
 

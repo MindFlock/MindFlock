@@ -805,9 +805,13 @@ def parse_claude(screen: str) -> Optional[dict]:
 CODEX_CURSORS = "›>"
 #: The lines that open a Codex dialog (codex-cli 0.146 approval overlay,
 #: permission request, user-input request and folder-trust screen).
+# "Update available · 0.146.0 → 0.164.0" is Codex's self-update picker
+# (Update now / Skip / Skip until next version): no question mark, so it
+# needs its own opener. Unparsed, it read as idle, and a dialog-safe send
+# pressed Enter on "Update now" — which updated the user's Codex (2026-10-23).
 _CODEX_OPENERS = re.compile(
     r"^(?:Would you like to .*\?|Do you trust the contents of this directory\?"
-    r"|Do you want to .*\?|.* needs your approval\.?)"
+    r"|Do you want to .*\?|.* needs your approval\.?|Update available\b.*)"
 )
 
 

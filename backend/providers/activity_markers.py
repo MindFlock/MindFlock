@@ -54,6 +54,33 @@ _HOOK_TAG = "# mindflock-activity"
 # overwriting each other every tick.
 TOOL_HOOK_TAG_PREFIX = "# mindflock-activity tool-hook"
 
+# --------------------------------------------------------------------------- #
+# Voice mode (talking to a session from the phone). The hook script below
+# carries two event-keyed branches for it: ``Stop`` files the payload's
+# ``last_assistant_message`` beside the marker as ``<session>.reply.json`` (the
+# exact text the session just said, so the spoken line costs no transcript
+# scan), and ``UserPromptSubmit`` prints :data:`VOICE_INSTRUCTION` while
+# ``<voice dir>/<session>.on`` exists — Claude Code injects a prompt hook's
+# stdout as additional context, invisibly and with no relaunch. The flag dir
+# is resolved at fire time exactly like the marker dir (never baked in).
+# ``backend.web.core.voice`` owns the flag, ``backend.web.core.spoken`` the
+# reader; both read these constants so the three agree on the paths.
+# --------------------------------------------------------------------------- #
+#: The instruction, byte for byte from the build contract (the phone page
+#: parses the ``Say:`` line it asks for). Re-exported as
+#: ``backend.web.core.spoken.INSTRUCTION``; the /send route types the same
+#: sentence after a prompt for a CLI whose hooks cannot inject it.
+VOICE_INSTRUCTION = (
+    "Voice mode is on: the person is listening, not reading. End your reply "
+    "with one final line that starts with `Say:` followed by at most two short "
+    "plain sentences a person can hear — no code, paths or markdown — saying "
+    "what you did or will do and, if you need something from them, the question."
+)
+VOICE_FLAG_DIR_ENV = "MINDFLOCK_VOICE_FLAG_DIR"
+VOICE_FLAG_SUBDIR = (".mindflock-assistant", ".voice")
+#: Cap on the reply text the Stop hook files (characters).
+REPLY_TEXT_MAX = 8000
+
 
 def _source_hash8() -> str:
     try:
@@ -90,12 +117,24 @@ def marker_dir():
     )
 
 
-def marker_path(session_name: str):
-    """Path to ``session_name``'s marker file (name sanitised for the FS)."""
+def safe_session_name(session_name: str) -> str:
+    """``session_name`` sanitised for a file name — the same substitution the
+    hook script applies at fire time, so the writer and every reader (marker,
+    reply file, voice flag) name one file."""
     import re
 
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_name)
-    return marker_dir() / (safe + ".json")
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", session_name or "")
+
+
+def marker_path(session_name: str):
+    """Path to ``session_name``'s marker file (name sanitised for the FS)."""
+    return marker_dir() / (safe_session_name(session_name) + ".json")
+
+
+def reply_path(session_name: str):
+    """Path to ``session_name``'s last-reply file, ``<marker dir>/<session>
+    .reply.json`` = ``{"ts", "text"}``, written by the Stop hook."""
+    return marker_dir() / (safe_session_name(session_name) + ".reply.json")
 
 
 def _read_entry(session_name: str):
@@ -202,7 +241,11 @@ def tool_hook_tag_rank(command: str) -> Optional[int]:
 
 
 def hook_command(
-    state: str, marker_dir=None, record_thread: bool = True, tool_hook=None
+    state: str,
+    marker_dir=None,
+    record_thread: bool = True,
+    tool_hook=None,
+    prompt_context: Optional[bool] = None,
 ) -> str:
     """The command a CLI hook runs to record ``state``.
 
@@ -248,8 +291,21 @@ def hook_command(
     resume-thread id from its on-disk rollout files (the id its ``resume {id}``
     flag wants), so it installs the hook with ``record_thread=False`` to avoid
     clobbering that with a differently-shaped id.
+
+    Voice mode rides the same script (see :data:`VOICE_INSTRUCTION`): on a
+    ``Stop`` payload the hook files ``last_assistant_message`` as the
+    session's reply file (every CLI; best effort where the payload lacks the
+    field), and on ``UserPromptSubmit`` it prints the instruction while the
+    session's voice flag exists — only when ``prompt_context`` is true, which
+    defaults to ``record_thread``: the Claude install. Claude Code documents a
+    prompt hook's stdout as injected context; a CLI without that channel gets
+    the same sentence typed after its prompt by the /send route, and a hook
+    that ALSO printed it would say it twice.
     """
     import json
+
+    if prompt_context is None:
+        prompt_context = record_thread
 
     lines = [
         "import json,sys,subprocess,os,time,re",
@@ -309,6 +365,36 @@ def hook_command(
             % json.dumps(auth_profiles.PROFILE_ID_ENV),
             "    if a:",
             "        open(os.path.join(td,s+'@'+a+'.thread'),'w').write(sid)",
+        ]
+    # Voice: the reply file (tmp + os.replace, so a reader never sees a torn
+    # file) and the prompt-context instruction. Both keyed on the payload's
+    # event name at FIRE time (one script serves every event), both wrapped so
+    # they can never raise past the marker write above.
+    lines += [
+        "e=str(p.get('hook_event_name') or '')",
+        "if e=='Stop':",
+        "    try:",
+        "        rp=os.path.join(d,s+'.reply.json')",
+        "        rt=rp+'.%d.tmp'%os.getpid()",
+        "        open(rt,'w').write(json.dumps({'ts':int(time.time()),"
+        "'text':str(p.get('last_assistant_message') or '')[:%d]}))" % REPLY_TEXT_MAX,
+        "        os.replace(rt,rp)",
+        "    except Exception:",
+        "        pass",
+    ]
+    if prompt_context:
+        lines += [
+            "if e=='UserPromptSubmit':",
+            "    try:",
+            "        vd=os.environ.get(%s) or os.path.join(os.path.expanduser('~'),%s)"
+            % (
+                json.dumps(VOICE_FLAG_DIR_ENV),
+                ",".join(json.dumps(x) for x in VOICE_FLAG_SUBDIR),
+            ),
+            "        if os.path.exists(os.path.join(vd,s+'.on')):",
+            "            print(%s)" % json.dumps(VOICE_INSTRUCTION),
+            "    except Exception:",
+            "        pass",
         ]
     tag = _HOOK_TAG
     if tool_hook in ("pre", "post", "fail"):
@@ -613,6 +699,7 @@ def merge_activity_hooks(
     record_thread: bool = True,
     tool_hook_events: Optional[dict] = None,
     resist_disable_all: bool = False,
+    prompt_context: Optional[bool] = None,
 ) -> bool:
     """Merge MindFlock's activity-reporting hooks into ``settings_path``.
 
@@ -678,7 +765,10 @@ def merge_activity_hooks(
             cmd = notification_hook_command()
         else:
             cmd = hook_command(
-                state, record_thread=record_thread, tool_hook=th_map.get(event)
+                state,
+                record_thread=record_thread,
+                tool_hook=th_map.get(event),
+                prompt_context=prompt_context,
             )
         entries.append({"hooks": [{"type": "command", "command": cmd}]})
         hooks[event] = entries

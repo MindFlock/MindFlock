@@ -43,6 +43,8 @@ _SECRET_FIELDS = {
     ("github", "token"),
     ("general", "auth_token"),
     ("notifications", "ntfy_token"),
+    ("voice", "stt_api_key"),
+    ("voice", "tts_api_key"),
 }
 _MASK = SECRET_MASK  # the one sentinel, defined in addons/base.py
 

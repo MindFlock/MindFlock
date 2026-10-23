@@ -958,6 +958,17 @@ def _dismiss_trust_prompt(inst, title: str, name: str, text: str) -> bool:
         now = time.time()
         if now - _TRUST_DISMISS_AT.get(title, 0.0) >= _TRUST_DISMISS_COOLDOWN:
             _TRUST_DISMISS_AT[title] = now
+            # The gate is a select menu and the CLI decides where its cursor
+            # rests: Claude Code 2.1.3xx rests it on "No, exit", so a bare
+            # Enter EXITED the agent. Move it onto the accepting option first
+            # (named keys, so tmux emits the pane's own arrow sequences).
+            for key in spec.nav_keys_for(text):
+                subprocess.run(
+                    ["tmux", "send-keys", "-t", name, key],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                )
             subprocess.run(
                 [
                     "tmux",

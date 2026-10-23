@@ -96,6 +96,43 @@
       <div id="diff-body"></div>
     </div>
 
+    <!-- Voice strip (mobile.js VOICE section): hidden until voice mode is on.
+         The state word, the live caption (what the phone heard, the line
+         being spoken, the dialog's question), the 2.5 s send countdown, a
+         Cancel, the ⚙ that opens the voice sheet, and the one big button a
+         deep link (/m?s=…&voice=1) or a resume needs: a page cannot speak
+         until it has been tapped once. -->
+    <div id="voice-strip" class="hidden" role="status" aria-live="polite">
+      <div id="voice-strip-row">
+        <span id="voice-state"></span>
+        <span id="voice-caption"></span>
+        <button type="button" id="voice-cancel" class="hidden">Cancel</button>
+        <button type="button" id="voice-gear" aria-label="Voice settings">⚙</button>
+      </div>
+      <div id="voice-countdown" class="hidden"><div id="voice-countdown-bar"></div></div>
+      <!-- The level meter while the server adapter records a clip (it has no
+           interim words to show); mobile.js voiceLevel. -->
+      <div id="voice-level" class="hidden" aria-hidden="true"><div id="voice-level-bar"></div></div>
+      <button type="button" id="voice-hear" class="hidden"></button>
+      <div id="voice-error" class="hidden" aria-live="polite"></div>
+    </div>
+    <!-- iOS has speech recognition only in a Safari TAB (WebKit 225298): not
+         in a home-screen web app, not in Chrome or Firefox on iOS. Shown when
+         voice is wanted on an iPhone with no recognizer, with this page's
+         address to carry over (clipboard, or select the field and copy) and,
+         unless Settings already say so, the other way out: server
+         recognition (Settings → Your phone → Voice) works in the home-screen
+         app — the page records a clip and the server transcribes it. -->
+    <div id="voice-safari-banner" class="hidden" role="status">
+      <div id="voice-safari-text">Voice needs Safari: open this page in a Safari tab</div>
+      <div id="voice-safari-alt" class="new-muted hidden">or turn on server recognition in Settings → Your phone → Voice</div>
+      <div id="voice-safari-row">
+        <input id="voice-safari-url" type="text" readonly aria-label="This page's address" />
+        <button type="button" id="voice-safari-copy">Copy</button>
+        <button type="button" id="voice-safari-close" aria-label="Dismiss">×</button>
+      </div>
+    </div>
+
     <!-- Native compose box: type/paste/autocorrect like any phone text field,
          then send the whole line to the PTY at once. The terminal itself stays
          tappable for raw keystroke mode. Text box above the key bar (user
@@ -106,6 +143,11 @@
                 autocomplete="on" autocapitalize="none" spellcheck="false"
                 aria-label="Compose input"></textarea>
       <button type="button" id="send" aria-label="Send">Send</button>
+      <!-- The mic: voice mode for the selected session (mobile.js VOICE
+           section). A click handler, never touchstart — the first speak() of
+           the page has to run inside a real activation. data-state paints it
+           off / idle / listening / speaking / working. -->
+      <button type="button" id="voice-btn" aria-label="Talk to this session" data-state="off">🎙</button>
     </div>
 
     <!-- Keys that are awkward or impossible on a phone soft-keyboard. -->
@@ -190,6 +232,39 @@
         <div class="sheet-actions">
           <button type="button" id="ask-cancel">Cancel</button>
           <button type="button" id="ask-ok"></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Voice sheet (the strip's ⚙): voice mode for the selected session,
+         hands-free, speech rate, the voice, the read-only approve-dialogs
+         line (that setting lives in Settings → Your phone), and Diagnostics —
+         what THIS phone can and cannot do, stated plainly, so a silent
+         failure has a name. -->
+    <div id="voice-sheet" class="sheet hidden" role="dialog" aria-label="Voice">
+      <div class="sheet-box">
+        <div class="sheet-title">Voice</div>
+        <label class="voice-opt">
+          <input type="checkbox" id="voice-on-toggle" />
+          <span>Voice mode for <span id="voice-sheet-session">this session</span></span>
+        </label>
+        <label class="voice-opt">
+          <input type="checkbox" id="voice-handsfree" />
+          <span>Hands-free <span class="new-muted">— listen after every reply, not only after questions</span></span>
+        </label>
+        <label class="voice-opt voice-opt-col" for="voice-rate">
+          <span>Speech rate <span id="voice-rate-val">1.0×</span></span>
+          <input type="range" id="voice-rate" min="0.7" max="1.6" step="0.1" value="1" />
+        </label>
+        <label class="voice-opt voice-opt-col" for="voice-voice">
+          <span>Voice</span>
+          <select id="voice-voice" aria-label="Voice"></select>
+        </label>
+        <div id="voice-approve-line" class="new-muted">Approve dialogs by voice: on (Settings → Your phone)</div>
+        <div class="new-label">Diagnostics</div>
+        <div id="voice-diag" class="voice-diag"></div>
+        <div class="sheet-actions">
+          <button type="button" id="voice-done">Done</button>
         </div>
       </div>
     </div>

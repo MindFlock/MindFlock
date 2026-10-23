@@ -437,6 +437,9 @@ class ClaudeProvider(BaseProvider):
         # Claude's per-folder trust gate + MCP-server confirmation. Newer Claude
         # Code phrases the folder gate as "Is this a project you created or one
         # you trust?" — match both wordings so sessions never hang at trust.
+        # accept_words: 2.1.3xx rests the cursor on "No, exit" (older builds
+        # on "1. Yes, I trust this folder"), so the dismisser steers onto the
+        # "Yes…" option before Enter — a bare Enter would exit the agent.
         return TrustSpec(
             patterns=(
                 "Do you trust the files in this folder?",
@@ -444,6 +447,7 @@ class ClaudeProvider(BaseProvider):
                 "new MCP server",
             ),
             keystroke=b"\r",
+            accept_words=("yes",),
         )
 
     def idle_prompt_pattern(self) -> Optional[str]:
@@ -587,6 +591,13 @@ class ClaudeProvider(BaseProvider):
         return True
 
     def plan_supported(self) -> bool:
+        return True
+
+    def voice_prompt_hook(self) -> bool:
+        # The UserPromptSubmit hook that install_activity_hooks writes prints
+        # the voice instruction while the session's flag file exists, and
+        # Claude Code injects that stdout as context (verified in the hooks
+        # docs 2026-10-22). The /send route therefore never appends it here.
         return True
 
     def last_assistant_text(

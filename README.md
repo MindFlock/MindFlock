@@ -387,6 +387,17 @@ a feature race; those two change what your day looks like:
   UI at `/m` carries the same guided git action bar **and a Diff tab**, so you
   can read the work before approving it and drive the full flow from a phone.
   Auth-token protected — never open to the LAN unauthenticated.
+- 🎙 **Talk to a session from your phone** — tap the mic on `/m`, say what
+  you want, and hear the session confirm what it is doing; when it finishes
+  or has a question it says so in a sentence or two and listens for your
+  answer. The words are the session's own (it ends each reply with a spoken
+  line while you are listening), speech runs on the phone's built-in
+  engines, and a permission dialog can be answered with a spoken yes or no
+  after its command is read out — "always" only when you say the word.
+  Pocket mode puts the same line in the ntfy push, so Siri's Announce
+  Notifications reads it through your earbuds and a dialog push carries
+  one-tap Yes / No. On iPhone, voice needs `/m` open in a Safari tab. See
+  [docs/web-ui.md](docs/web-ui.md#voice-talking-to-a-session).
 - 🔔 **Notifications where you actually are** — desktop popups while a tab is
   open, and optional **[ntfy](https://ntfy.sh) push to your phone** sent by the
   server, so "session needs you: Question" or "pre-commit blocked the commit"
