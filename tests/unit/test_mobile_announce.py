@@ -395,6 +395,72 @@ def test_a_stale_cache_refreshes_in_the_background(monkeypatch, tailnet):
     assert mobile_announce.click_for("alpha") == ("http://box.tail.net:8765/m?s=alpha")
 
 
+def test_click_for_voice_appends_the_voice_flag():
+    """The pushes that carry the agent's words open the page's voice mode."""
+    mobile_announce.remember_url("http://box.tail.net:8765/m")
+    assert mobile_announce.click_for("alpha", voice=True) == (
+        "http://box.tail.net:8765/m?s=alpha&voice=1"
+    )
+    # Off by default: every other push is unchanged.
+    assert mobile_announce.click_for("alpha") == "http://box.tail.net:8765/m?s=alpha"
+    assert mobile_announce.click_for("fix a&b", voice=True) == (
+        "http://box.tail.net:8765/m?s=fix%20a%26b&voice=1"
+    )
+
+
+def test_click_for_voice_keeps_the_shared_link_device_prefix(monkeypatch):
+    """On the shared link the session is named `<device>::<title>` for
+    whichever device answers; the voice flag rides after it."""
+    mobile_announce.remember_url("https://flock.tail.net/m")
+    monkeypatch.setattr(
+        mobile_access._shared_link, "advertised_url", lambda: "https://flock.tail.net/m"
+    )
+    from backend.web.core import remote as _remote
+
+    monkeypatch.setattr(_remote, "self_identity", lambda: {"key": "box"})
+    assert mobile_announce.click_for("alpha", voice=True) == (
+        "https://flock.tail.net/m?s=box%3A%3Aalpha&voice=1"
+    )
+    assert mobile_announce.click_for("box::alpha") == (
+        "https://flock.tail.net/m?s=box%3A%3Aalpha"
+    )
+
+
+def test_click_for_voice_without_a_tailnet_is_still_empty():
+    mobile_announce.remember_url(None)
+    assert mobile_announce.click_for("alpha", voice=True) == ""
+
+
+# --------------------------------------------------------------------------- #
+# act_base: where a push's one-tap button posts back to
+# --------------------------------------------------------------------------- #
+def test_act_base_is_this_devices_url_without_the_page():
+    mobile_announce.remember_url("http://box.tail.net:8765/m")
+    assert mobile_announce.act_base() == "http://box.tail.net:8765"
+    mobile_announce.remember_url("https://box.tail.net/m")
+    assert mobile_announce.act_base() == "https://box.tail.net"
+
+
+def test_act_base_is_empty_without_a_tailnet():
+    mobile_announce.remember_url(None)
+    assert mobile_announce.act_base() == ""
+
+
+def test_act_base_is_empty_on_the_shared_link(monkeypatch):
+    """The shared link is answered by whichever device is up; a button token
+    minted here would 404 there. No base, no http buttons."""
+    mobile_announce.remember_url("https://flock.tail.net/m")
+    monkeypatch.setattr(
+        mobile_access._shared_link, "advertised_url", lambda: "https://flock.tail.net/m"
+    )
+    assert mobile_announce.act_base() == ""
+
+
+def test_act_base_never_carries_a_query():
+    mobile_announce.remember_url("http://box.tail.net:8765/m?token=SECRET")
+    assert mobile_announce.act_base() == "http://box.tail.net:8765"
+
+
 def test_session_pushes_carry_the_url(monkeypatch, tailnet):
     """Every rule push taps through to the session it is about — both as the
     click action and as a line in the message."""
@@ -411,8 +477,9 @@ def test_session_pushes_carry_the_url(monkeypatch, tailnet):
         }
     )
     (push,) = sent
-    assert push["click"] == "http://box.tail.net:8765/m?s=alpha"
-    assert push["message"].endswith("http://box.tail.net:8765/m?s=alpha")
+    # A dialog push taps through to the phone page's VOICE deep link.
+    assert push["click"] == "http://box.tail.net:8765/m?s=alpha&voice=1"
+    assert push["message"].endswith("http://box.tail.net:8765/m?s=alpha&voice=1")
     # The rule's own text is still the first thing you read.
     assert push["message"].startswith("The agent is waiting on a clarification.")
 

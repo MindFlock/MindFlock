@@ -328,9 +328,17 @@ async def publish(
     priority: Optional[int] = None,
     tags: Optional[List[str]] = None,
     click: Optional[str] = None,
+    actions: Optional[List[dict]] = None,
     budgeted: bool = True,
 ) -> Tuple[bool, str]:
     """POST one notification. Returns ``(ok, error)`` and never raises.
+
+    ``actions`` are ntfy's notification buttons, passed through as the JSON
+    publish format's ``actions`` list (``[{"action": "http", "label": "Yes",
+    "url": …, "method": "POST", "clear": true}, {"action": "view", "label":
+    "Open", "url": …}]``; ntfy shows at most three). The caller composes them
+    — see the notify addon's dialog push — and, as with ``click``, must never
+    put an access token in a URL: it is stored on the ntfy server.
 
     ``budgeted=False`` skips the rate cap — for the user-initiated "Send a test"
     button, which cannot run away and whose whole job is to report a verdict.
@@ -349,6 +357,8 @@ async def publish(
     target = (click or cfg.click_url or "").strip()
     if target:
         body["click"] = target
+    if actions:
+        body["actions"] = [dict(a) for a in actions if isinstance(a, dict)][:3]
     headers = {"Content-Type": "application/json"}
     if cfg.token:
         headers["Authorization"] = "Bearer " + cfg.token
@@ -407,6 +417,7 @@ def publish_soon(
     priority: Optional[int] = None,
     tags: Optional[List[str]] = None,
     click: Optional[str] = None,
+    actions: Optional[List[dict]] = None,
 ) -> None:
     """Fire-and-forget :func:`publish` from any thread.
 
@@ -423,6 +434,7 @@ def publish_soon(
             priority=priority,
             tags=tags,
             click=click,
+            actions=actions,
         )
     )
 

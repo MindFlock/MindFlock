@@ -98,6 +98,60 @@ def test_bearer_header_passes(authed):
     assert r.status_code == 200
 
 
+# --------------------------------------------------------------------------- #
+# The dialog push's Yes / No button: public for POST on exactly its shape
+# --------------------------------------------------------------------------- #
+_ACT = "/api/notify/act/" + "ab" * 16  # 32 lower-case hex, as token_hex(16)
+
+
+def test_dialog_button_post_skips_the_gate(authed):
+    """The ntfy app on the phone holds no token of ours; the single-use
+    capability in the path is the credential. The route answers for itself
+    (404 for a token it never issued) — never the gate's 401."""
+    r = authed.post(_ACT, headers={"accept": "application/json"})
+    assert r.status_code == 404
+    assert "expired" in r.json()["error"]
+
+
+@pytest.mark.parametrize(
+    "method, path",
+    [
+        ("GET", _ACT),  # reading the path is not pressing the button
+        ("DELETE", _ACT),
+        ("POST", "/api/notify/act/" + "ab" * 15 + "a"),  # 31 chars
+        ("POST", "/api/notify/act/" + "ab" * 16 + "a"),  # 33 chars
+        ("POST", "/api/notify/act/" + "AB" * 16),  # upper-case hex
+        ("POST", "/api/notify/act/" + "zz" * 16),  # not hex
+        ("POST", _ACT + "/"),
+        ("POST", "/api/notify/act/"),
+        ("POST", "/api/notify/ntfy"),  # the neighbours stay gated
+        ("GET", "/api/notify/config"),
+        ("POST", "/api/notify/ntfy/test"),
+    ],
+)
+def test_everything_else_under_notify_stays_gated(authed, method, path):
+    r = authed.request(method, path, headers={"accept": "application/json"})
+    assert r.status_code == 401, (method, path)
+
+
+@pytest.mark.parametrize(
+    "scope, public",
+    [
+        ({"type": "http", "method": "POST", "path": _ACT}, True),
+        ({"type": "http", "method": "post", "path": _ACT}, True),
+        ({"type": "http", "method": "GET", "path": _ACT}, False),
+        ({"type": "websocket", "method": "POST", "path": _ACT}, False),
+        ({"type": "http", "method": "POST", "path": _ACT + "\n"}, False),
+        (
+            {"type": "http", "method": "POST", "path": "/api/notify/act/" + "0" * 31},
+            False,
+        ),
+    ],
+)
+def test_public_voice_act_route_matching(scope, public):
+    assert auth._public_voice_act_route(scope) is public
+
+
 def test_query_token_redirects_and_sets_cookie(authed):
     r = authed.get(
         "/?token=" + TOKEN, headers={"accept": "text/html"}, follow_redirects=False
