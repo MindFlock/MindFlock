@@ -370,6 +370,15 @@ def spoken_for(title: str, inst) -> dict:
     from_reply = bool(text)
     if not text:
         text = _last_assistant_text(inst, name) or ""
+        say = extract_say(text) if text else None
+        if say:
+            # The model wrote its line; only the stamp is unknown.
+            return {
+                "say": say,
+                "source": "transcript",
+                "has_question": has_question(say),
+                "ts": None,
+            }
     if not text.strip():
         return _none(ts)
     said = digest(text)

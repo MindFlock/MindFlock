@@ -3297,8 +3297,20 @@
     var s = String(text || "").replace(/\s+/g, " ").trim();
     if (!s) return [];
     var out = [];
-    (s.match(/[^.!?]+(?:[.!?]+["')\]]*|$)/g) || [s]).forEach(function (sent) {
+    // A sentence ends at . ! or ? (plus closing quotes) followed by a space
+    // or the end — never inside a token: "note.txt", "v2.1" and "e.g." are
+    // said whole, not as "note." "txt.".
+    var pieces = [], start = 0;
+    for (var i = 0; i < s.length; i++) {
+      if (".!?".indexOf(s.charAt(i)) < 0) continue;
+      var j = i + 1;
+      while (j < s.length && ".!?\"')]".indexOf(s.charAt(j)) >= 0) j++;
+      if (j >= s.length || s.charAt(j) === " ") { pieces.push(s.slice(start, j)); start = j; i = j - 1; }
+    }
+    if (start < s.length) pieces.push(s.slice(start));
+    pieces.forEach(function (sent) {
       sent = sent.trim();
+      if (!sent) return;
       while (sent.length > 180) {
         var cut = Math.max(sent.lastIndexOf(", ", 180), sent.lastIndexOf("; ", 180));
         if (cut < 40) cut = sent.lastIndexOf(" ", 180);
@@ -3921,6 +3933,7 @@
 
   // --- permission dialogs ---------------------------------------------------------
   var VOICE_ORD = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
+  var VOICE_ANSWERED_GRACE_MS = 8000;   // a stale clarify reading after a voice answer is not a new dialog
   var VOICE_YES = /\b(?:yes|yeah|yep|yup|allow|approve|okay|ok|go ahead|do it|sure)\b/;
   var VOICE_NO = /\b(?:no|nope|deny|reject|don'?t|cancel|skip|stop)\b/;
   // "always" must be SAID, and said as the whole answer: "always", "yes,
@@ -3987,6 +4000,9 @@
         if (voice.session !== title || voice.state === "off") return;
         if (voiceIsListening() || voice.state === "confirming" || voice.state === "sending") return;
         var key = d && d.parsed && (d.options || []).length ? String(d.id) : "none";
+        // The row reads clarify for a poll or two after a voice answer; the
+        // dialog is gone (204) and "waiting on you" would be wrong.
+        if (key === "none" && Date.now() - (voice.answeredAt || 0) < VOICE_ANSWERED_GRACE_MS) return;
         if (key === voice.dialogKey) return;
         voice.dialogKey = key;
         voiceAckStop();
@@ -4051,6 +4067,7 @@
         if (r.ok) {
           voice.dialog = null;
           voice.lastSay = { text: "", ts: 0 };   // the agent carries on: a new turn
+          voice.answeredAt = Date.now();         // the row reads clarify for a poll or two yet
           speakLine("Answered " + voiceKindWord(opt) + ".").then(function (ok) {
             if (ok) voiceSetState("working", "");
           });
@@ -4389,7 +4406,11 @@
         voice.lastSay = { text: "", ts: 0 };   // the deep link's whole point is hearing it
         voiceReply({ say: j.say, has_question: j.has_question, ts: j.ts, at: j.ts });
       } else {
-        voiceIdle();
+        // Nothing to hear (no turn yet, or no words came out of it): say so
+        // rather than go quiet, and listen — the tap was for a conversation.
+        var line = inst.activity === "working" ? nameOf(title) + " is still working."
+                 : nameOf(title) + " has nothing new to say.";
+        speakLine(line).then(function (ok) { if (ok) voiceListen("prompt", VOICE_TAP_MS); });
       }
     });
   }

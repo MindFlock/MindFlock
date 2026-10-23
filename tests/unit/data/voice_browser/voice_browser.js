@@ -253,8 +253,16 @@ const posts = (p) => state.posts.filter((x) => x.path.endsWith(p));
     await waitFor(page, () => window.mfVoice.state === "working", 3000, "answered 5");
     ans = posts("/answer");
     check("'option two' → key 2", ans.length === 6 && ans[5].body.keys[0] === "2", JSON.stringify(ans[5] && ans[5].body));
-    // 204 → "waiting on you: open the screen"
+    // a stale clarify right after that answer (the row lags a poll or two): silent
     state.dialog = null;
+    const nSpoken = (await spoken(page)).length;
+    await page.evaluate(() => window.mfVoice.onEvent({ seq: 111, event: "session.activity_changed", session: "login-fix", old: "working", new: "clarify", ts: Date.now() / 1000, data: {} }));
+    await sleep(400);
+    check("a 204 right after a voice answer is not 'waiting on you'", (await spoken(page)).length === nSpoken && (await vstate(page)) === "working");
+    // 204 → "waiting on you: open the screen" — outside the grace after an
+    // answer (a stale clarify reading right after a voice answer is silent).
+    state.dialog = null;
+    await page.evaluate(() => { window.mfVoice.answeredAt = 0; });
     await page.evaluate(() => window.mfVoice.onEvent({ seq: 12, event: "session.activity_changed", session: "login-fix", old: "working", new: "clarify", ts: Date.now() / 1000, data: {} }));
     await waitFor(page, () => window.__spoken.includes("Login fix is waiting on you: open the screen."), 3000, "204 line");
     check("dialog 204 → 'is waiting on you: open the screen.'", (await spoken(page)).includes("Login fix is waiting on you: open the screen."));

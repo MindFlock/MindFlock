@@ -128,3 +128,29 @@ def test_word_match_is_whole_word(spec):
     # "eyes" must not read as "yes".
     pane = " ❯ No, exit\n   Close your eyes\n   Yes\n"
     assert spec.nav_keys_for(pane) == ("Down", "Down")
+
+
+def test_the_dismisser_steers_onto_yes_before_pressing_enter(monkeypatch):
+    """The web poll's dismisser sends the arrow keys first (named keys, one
+    send-keys each), then the provider's keystroke literally — on the new gate
+    that is Down, then Enter; a bare Enter would have exited the agent."""
+    from types import SimpleNamespace
+
+    from backend.web.core import agent_state
+
+    sent: list = []
+    monkeypatch.setattr(
+        agent_state.subprocess, "run", lambda argv, **kw: sent.append(list(argv))
+    )
+    monkeypatch.setattr(agent_state, "_TRUST_DISMISS_AT", {})
+    inst = SimpleNamespace(Program="claude")
+    assert agent_state._dismiss_trust_prompt(inst, "t", "mindflock_t", NEW_GATE) is True
+    assert sent == [
+        ["tmux", "send-keys", "-t", "mindflock_t", "Down"],
+        ["tmux", "send-keys", "-t", "mindflock_t", "-l", "\r"],
+    ]
+    # The old gate rests on "Yes" already: Enter alone, as before.
+    sent.clear()
+    monkeypatch.setattr(agent_state, "_TRUST_DISMISS_AT", {})
+    assert agent_state._dismiss_trust_prompt(inst, "t", "mindflock_t", OLD_GATE) is True
+    assert sent == [["tmux", "send-keys", "-t", "mindflock_t", "-l", "\r"]]

@@ -435,3 +435,19 @@ def test_read_reply_misses_the_cache_for_a_replaced_file_of_equal_size(marker_di
     _os.replace(tmp, path)  # a new inode
     _os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))  # same mtime, same size
     assert spoken.read_reply("s1") == (1.0, "BBBB")
+
+
+def test_spoken_for_lifts_a_say_line_out_of_the_transcript_without_a_reply_file(
+    marker_dir, provider
+):
+    """No reply file (a hook-less CLI, or a turn before the hook existed) but
+    the provider's transcript ends with the model's own Say line: that line is
+    spoken, not a digest of the whole reply."""
+    provider.reply = "Long reply with `code` and /paths.\n\nSay: Pushed it. Merge now?"
+    got = spoken.spoken_for("s9", _Inst("s9"))
+    assert got == {
+        "say": "Pushed it. Merge now?",
+        "source": "transcript",
+        "has_question": True,
+        "ts": None,
+    }
