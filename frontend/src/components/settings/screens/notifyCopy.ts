@@ -77,3 +77,31 @@ export function groupRules<T extends RuleLike>(
  * on — the reason the switches below seem to do nothing. */
 export const ONLY_BELL_HINT =
   "Right now alerts only show in the bell. Turn on desktop or phone alerts to hear about them when you're away.";
+
+/* --------------------------------------------------------------------------
+ * Pocket mode: the agent's words in phone pushes (notifications.ntfy_agent_words,
+ * saved through the ntfy view as `agent_words`). While the phone is locked
+ * nothing on the web can speak, so the push body itself carries the spoken
+ * line of a finished turn and the question of a dialog — what a read-aloud
+ * app (iOS Announce Notifications) says through the earbuds.
+ * ------------------------------------------------------------------------ */
+
+/** The switch's label. */
+export const AGENT_WORDS_LABEL = "Include the agent's words in pushes";
+
+/** What the words are and where they go. */
+export const AGENT_WORDS_HINT =
+  "The spoken summary of a finished turn and the question of a dialog travel through your ntfy server.";
+
+/** The consequence on the public default server — shown only there: on a
+ * self-hosted ntfy the exposure is the user's own server. */
+export const AGENT_WORDS_PUBLIC_HINT = "Yours is the public ntfy.sh, so a public server stores them.";
+
+/** The hint under the agent-words switch for the configured server. */
+export function agentWordsHint(publicServer: boolean): string {
+  return publicServer ? AGENT_WORDS_HINT + " " + AGENT_WORDS_PUBLIC_HINT : AGENT_WORDS_HINT;
+}
+
+/** The one plain line that makes pocket mode work on an iPhone. */
+export const ANNOUNCE_TIP =
+  "iPhone: turn on ntfy under Settings → Notifications → Announce Notifications to hear pushes through AirPods.";

@@ -35,10 +35,11 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from backend.config import settings as settings_store
+from backend.web.core import agent_io as _agent_io
 from backend.web.core import aliases as _aliases
 from backend.web.core import auth as _web_auth
 from backend.web.core import events as _events
-from backend.web.core import mobile_access, mobile_announce, ntfy
+from backend.web.core import mobile_access, mobile_announce, ntfy, voice_actions
 
 from .base import SECRET_MASK, Addon, AppContext, FrontendDescriptor
 
@@ -695,6 +696,140 @@ def _fill(template: str, envelope: dict) -> str:
     return out.replace("{detail}", str(data.get("detail") or ""))
 
 
+# --------------------------------------------------------------------------- #
+# Pocket mode: the agent's words in the push, and one-tap dialog buttons
+# --------------------------------------------------------------------------- #
+#: The two pushes that carry the agent's own words when
+#: ``notifications.ntfy_agent_words`` is on, and whose click URL is the phone
+#: page's VOICE deep link (``/m?s=<title>&voice=1``): a finished turn (its
+#: spoken ``Say:`` line rides in the event) and a dialog (its question is read
+#: off the screen at fire time). While the phone is locked nothing on the web
+#: can speak, so the push body itself is what iOS Announce Notifications (or
+#: any read-aloud app) says through the earbuds.
+_SPOKEN_RULES = frozenset({"session_idle", "needs_input"})
+
+#: Ceiling on a dialog push's body: the question plus the command it asks
+#: about. ntfy truncates the iOS push itself at 100 characters and its app
+#: restores the full text, so long is fine; unbounded is not.
+MAX_DIALOG_BODY = 300
+
+#: ntfy shows at most this many buttons.
+MAX_ACTIONS = 3
+
+
+def _agent_words_on() -> bool:
+    """``notifications.ntfy_agent_words`` — off keeps every body generic
+    (the words would travel through the ntfy server)."""
+    try:
+        return bool(settings_store.load_settings().notifications.ntfy_agent_words)
+    except Exception:  # noqa: BLE001 — an unreadable store says nothing
+        return False
+
+
+def _read_dialog(title: str) -> Optional[dict]:
+    """The dialog on ``title``'s visible screen, as ``GET /dialog`` serves it
+    (``{id, parsed, question, command, options: [{key, label, kind}]}``) —
+    only when its provider PARSED one; ``None`` for no session, no live
+    pane, a capture failure, or an unparsed screen. Never raises: this runs
+    inside the event dispatch, where a push is never worth an exception."""
+    try:
+        from backend.web import server as _server  # lazy: the addon loads first
+
+        inst = _server.ENGINE.instances.get(title)
+        if inst is None:
+            return None
+        name = _server._live_session_name(_server.tmux.to_mindflock_tmux_name(title))
+        if name is None:
+            return None
+        body, err = _agent_io.current_dialog(name, getattr(inst, "Program", "") or "")
+        if err is not None or not isinstance(body, dict) or not body.get("parsed"):
+            return None
+        return body
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def dialog_body(dialog: Optional[dict]) -> str:
+    """The spoken body of a dialog push: the parsed question, then `` — `` and
+    the command it asks about when there is one, capped at
+    :data:`MAX_DIALOG_BODY`. ``""`` when there is nothing to say."""
+    if not isinstance(dialog, dict):
+        return ""
+    question = " ".join(str(dialog.get("question") or "").split())
+    command = " ".join(str(dialog.get("command") or "").split())
+    if not question:
+        return ""
+    text = question + (" — " + command if command else "")
+    if len(text) > MAX_DIALOG_BODY:
+        text = text[: MAX_DIALOG_BODY - 1].rstrip() + "…"
+    return text
+
+
+def push_body(rule: dict, envelope: dict, dialog: Optional[dict]) -> "tuple[str, bool]":
+    """``(body, spoken)`` for one push. ``spoken`` means the body IS the
+    agent's words — a finished turn's ``data.say``, a dialog's question — so
+    the caller leaves the click URL out of the text (a read-aloud app would
+    spell it out letter by letter). Anything else gets the rule's own
+    template, exactly as before."""
+    generic = _fill(rule.get("body", ""), envelope)
+    if rule.get("id") not in _SPOKEN_RULES or not _agent_words_on():
+        return generic, False
+    if rule["id"] == "session_idle":
+        data = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
+        say = " ".join(str(data.get("say") or "").split())
+        return (say, True) if say else (generic, False)
+    text = dialog_body(dialog)
+    return (text, True) if text else (generic, False)
+
+
+def dialog_actions(
+    base: str, click: str, title: str, dialog: Optional[dict]
+) -> List[dict]:
+    """The buttons of a dialog push, ntfy's action shape, at most
+    :data:`MAX_ACTIONS`: **Yes** and (when the dialog offers one) **No** as
+    ``http`` POSTs to ``<base>/api/notify/act/<token>``, then **Open** as a
+    ``view`` of the click URL. ``[]`` unless the dialog parsed with a ``yes``
+    option — a free-text question has no one-tap answer.
+
+    Each button is a single-use token bound to this dialog's id and key
+    (:mod:`backend.web.core.voice_actions`) — nothing standing travels to the
+    ntfy server or sits on a lock screen, and ``always`` is never offered: a
+    standing permission must not be one tap away. No ``base`` (no tailnet,
+    or the shared link — see ``mobile_announce.act_base``) means no http
+    buttons at all; Open alone still helps."""
+    if not isinstance(dialog, dict) or not dialog.get("parsed"):
+        return []
+    options = [o for o in (dialog.get("options") or []) if isinstance(o, dict)]
+    yes = next((o for o in options if o.get("kind") == "yes"), None)
+    if yes is None:
+        return []
+    no = next((o for o in options if o.get("kind") == "no"), None)
+    actions: List[dict] = []
+    dialog_id = str(dialog.get("id") or "")
+    if base and dialog_id:
+        for option, label in ((yes, "Yes"), (no, "No")):
+            if option is None:
+                continue
+            key = str(option.get("key") or "")
+            if key not in _agent_io.ANSWER_KEYS:
+                continue
+            token = voice_actions.issue(title, dialog_id, key)
+            url, _ = ntfy.strip_token_param("%s/api/notify/act/%s" % (base, token))
+            actions.append(
+                {
+                    "action": "http",
+                    "label": label,
+                    "url": url,
+                    "method": "POST",
+                    "clear": True,
+                }
+            )
+    if click:
+        url, _ = ntfy.strip_token_param(click)
+        actions.append({"action": "view", "label": "Open", "url": url})
+    return actions[:MAX_ACTIONS]
+
+
 class NotifyAddon(Addon):
     id = "notify"
     label = "Notifications"
@@ -759,20 +894,41 @@ class NotifyAddon(Addon):
                     if now - self._last_push.get(key, 0.0) < _DEDUPE_SECONDS:
                         continue
                     self._last_push[key] = now
+                session = str(envelope.get("session") or "")
                 # Tap the notification -> the mobile view, already on the
-                # session it is about. Cached, never probed here: this runs on
+                # session it is about (the voice deep link for the two pushes
+                # that carry words). Cached, never probed here: this runs on
                 # the emitting thread. Empty when there's no tailnet — and then
                 # publish() falls back to the user's own configured click URL.
-                click = mobile_announce.click_for(str(envelope.get("session") or ""))
+                # (Two call shapes on purpose: every other push keeps the
+                # one-argument call it always made.)
+                click = (
+                    mobile_announce.click_for(session, voice=True)
+                    if rule["id"] in _SPOKEN_RULES
+                    else mobile_announce.click_for(session)
+                )
                 if click and rule["id"] == "device_join" and data.get("id"):
                     # Straight to the phone's Approve card for this request.
                     click += "#approve=" + str(data["id"])
-                message = _fill(rule.get("body", ""), envelope)
-                if click:
+                # A dialog push reads the dialog off the screen now (the same
+                # parse GET /dialog serves): its question is the body, its
+                # yes/no options become one-tap buttons. The emitter already
+                # captured this screen to decide "clarify"; one more capture
+                # per push is what the route costs too.
+                dialog = _read_dialog(session) if rule["id"] == "needs_input" else None
+                message, spoken = push_body(rule, envelope, dialog)
+                actions = (
+                    dialog_actions(mobile_announce.act_base(), click, session, dialog)
+                    if dialog is not None
+                    else []
+                )
+                if click and not spoken:
                     # Also in the text: a notification you have to go find the
                     # server for is a notification that made you get up. The
                     # click action covers most clients; the line covers the rest
                     # (and a phone that shows the push without acting on it).
+                    # Not under the agent's words: that body is read aloud, and
+                    # the click action (plus Open) carries the URL anyway.
                     message += "\n" + click
                 ntfy.publish_soon(
                     cfg,
@@ -781,6 +937,7 @@ class NotifyAddon(Addon):
                     priority=rule.get("priority"),
                     tags=rule.get("tags"),
                     click=click or None,
+                    actions=actions or None,
                 )
         except Exception as err:  # noqa: BLE001 — a push never breaks an emit
             ntfy.log_error(
@@ -907,6 +1064,10 @@ class NotifyAddon(Addon):
                     )
             if "enabled" in payload:
                 patch["ntfy_enabled"] = bool(payload.get("enabled"))
+            if "agent_words" in payload:
+                # The agent's words in push bodies (pocket mode). Synced like
+                # the rest of the channel; the toggle sits in the same fold.
+                patch["ntfy_agent_words"] = bool(payload.get("agent_words"))
 
             # Validate whenever the channel is (or is becoming) on, and whenever
             # a topic is present at all — but not "pick a topic" for someone who
@@ -1003,6 +1164,61 @@ class NotifyAddon(Addon):
             )
             return JSONResponse({"ok": ok, "error": error})
 
+        @router.post("/act/{token}")
+        async def act(token: str) -> JSONResponse:
+            """A dialog push's Yes / No button, pressed on the phone.
+
+            ``token`` is the single-use capability the push carried
+            (:mod:`backend.web.core.voice_actions`): it stands for one
+            ``(session, dialog_id, key)`` and nothing else. Consuming it, this
+            does exactly what ``POST /api/instances/{title}/answer`` does with
+            ``{"keys": [key], "dialog_id": …, "by": "user"}`` — the same
+            helper, so the dialog-id pin, the per-session answer lock, the
+            budget lock and the "just answered" guard all apply — and answers
+            the same way: 200 ``{"ok": true, "activity_before"}``, the answer
+            route's own 409s passed through (``dialog_changed`` when the
+            prompt on screen is no longer the one the button was made for,
+            ``dialog_answered``, not waiting, over budget), 502 when tmux
+            refused the key. 404 ``{error}`` for a token that is unknown,
+            already used or older than ten minutes — the same answer for all
+            three, on purpose.
+
+            Public (no bearer token — the ntfy app on the phone holds none):
+            ``auth._PUBLIC_VOICE_ACT`` opens POST on exactly this path shape.
+            """
+            grant = voice_actions.consume(token)
+            if grant is None:
+                return JSONResponse(
+                    {"error": "that button has expired — open MindFlock to answer"},
+                    status_code=404,
+                )
+            from backend.web import server as _server  # lazy: the addon loads first
+
+            title = grant["title"]
+            inst, err = _server._inst_or_404(title)
+            if err is not None:
+                return err
+            text, keys, perr = _agent_io.parse_answer({"keys": [grant["key"]]})
+            if perr:
+                return JSONResponse({"error": perr}, status_code=400)
+            dialog_id, by, perr = _agent_io.parse_answer_meta(
+                {"dialog_id": grant["dialog_id"], "by": "user"}
+            )
+            if perr:
+                return JSONResponse({"error": perr}, status_code=400)
+            if await asyncio.to_thread(_server._budget_locked, title):
+                return JSONResponse(
+                    {
+                        "error": "session is over budget — raise the budget to send",
+                        "budget_locked": True,
+                    },
+                    status_code=409,
+                )
+            body, status = await asyncio.to_thread(
+                _server._answer_dialog, inst, title, text, keys, dialog_id, by
+            )
+            return JSONResponse(body, status_code=status)
+
         return router
 
     @property
@@ -1043,6 +1259,9 @@ def _ntfy_view() -> dict:
         "topic": cfg.topic,
         "has_token": bool(cfg.token),
         "click_url": cfg.click_url,
+        # Pocket mode: the agent's words (a finished turn's spoken line, a
+        # dialog's question) in push bodies.
+        "agent_words": _agent_words_on(),
         "configured": cfg.configured,
         "active": cfg.active,
         "public_server": cfg.is_public_server,
