@@ -37024,7 +37024,7 @@ function flowFinished(f) {
 function pollDelay(f) {
 	return Math.max(2, Number(f?.interval || 5));
 }
-function readinessLine(r) {
+function readinessLine$1(r) {
 	if (!r) return null;
 	if (r.error) return {
 		text: "readiness unknown — " + r.error,
@@ -85060,7 +85060,8 @@ function Mobile(p) {
 					})
 				})
 			]
-		})
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceSection, { active: p.active })
 	] });
 }
 function PhoneAppRow({ app }) {
@@ -85109,6 +85110,320 @@ function UrlList({ urls }) {
 				children: u.url
 			}) })]
 		}, u.url))
+	});
+}
+var KIND_WORD = {
+	stt: "recognition",
+	tts: "voice"
+};
+var VOICE_BACKENDS = [
+	{
+		value: "",
+		label: "Whichever is ready"
+	},
+	{
+		value: "openai",
+		label: "OpenAI-compatible host"
+	},
+	{
+		value: "local",
+		label: "Local models on this computer"
+	}
+];
+function voiceFields(kind, where, backend) {
+	if (where !== "server") return {
+		backend: false,
+		url: false,
+		key: false,
+		model: false,
+		voice: false
+	};
+	const host = backend !== "local";
+	return {
+		backend: true,
+		url: host,
+		key: host,
+		model: kind === "stt" || host,
+		voice: kind === "tts"
+	};
+}
+function readinessLine(kind, view, where) {
+	if (where !== "server") return {
+		ok: false,
+		text: ""
+	};
+	const word = KIND_WORD[kind];
+	if (!view) return {
+		ok: false,
+		text: "Checking the server…"
+	};
+	const sr = view.server_ready || {};
+	const ok = !!(kind === "stt" ? sr.stt : sr.tts);
+	const id = (kind === "stt" ? sr.stt_backend : sr.tts_backend) || "";
+	const detail = (kind === "stt" ? sr.stt_detail : sr.tts_detail) || "";
+	if (ok) return {
+		ok,
+		text: `Server ${word} ready (${id || "server"})${detail ? ": " + detail : ""}.`
+	};
+	return {
+		ok,
+		text: `Server ${word} not ready${detail ? ": " + detail : ""}.`
+	};
+}
+function VoiceSection({ active }) {
+	const model = useSettings();
+	const [view, setView] = (0, import_react.useState)(null);
+	const stt = String(model.get("voice", "stt") || "phone");
+	const tts = String(model.get("voice", "tts") || "phone");
+	const wantServer = stt === "server" || tts === "server";
+	const doc = model.settings;
+	(0, import_react.useEffect)(() => {
+		if (!active || !wantServer) return;
+		let live = true;
+		api("/api/voice").then((v) => live && setView(v)).catch((err) => {
+			if (!live) return;
+			const why = "could not ask the server: " + (err.message || "no answer");
+			setView({ server_ready: {
+				stt: false,
+				tts: false,
+				stt_detail: why,
+				tts_detail: why
+			} });
+		});
+		return () => {
+			live = false;
+		};
+	}, [
+		active,
+		wantServer,
+		doc
+	]);
+	const clearKey = async (kind) => {
+		try {
+			await api("/api/voice/clear-key", { json: { kind } });
+			toast("Key removed");
+			await model.reload();
+		} catch (err) {
+			toast(err.message || "Couldn't remove the key");
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceSectionView, {
+		model,
+		view,
+		onClearKey: clearKey
+	});
+}
+function VoiceSectionView({ model, view, onClearKey }) {
+	const approve = model.get("voice", "approve_dialogs") !== false;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "voice-section",
+		id: "mobile-voice",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+				className: "set-section-title",
+				children: "Voice"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint set-block-hint",
+				id: "voice-intro",
+				children: "Talk to a session from the phone page: tap the mic on /m. Speech runs on the phone by default."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceKindBlock, {
+				kind: "stt",
+				title: "Recognition",
+				model,
+				view,
+				onClearKey
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceKindBlock, {
+				kind: "tts",
+				title: "Voice",
+				model,
+				view,
+				onClearKey
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row set-switch-row",
+				id: "voice-approve-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "notif-rule-text",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						id: "voice-approve-label",
+						children: "Approve dialogs by voice"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint notif-rule-desc",
+						children: "A spoken yes or no answers a permission dialog after its command is read aloud. 'Always' is only accepted when you say the word."
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "ca-switch",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						id: "voice-approve",
+						"aria-labelledby": "voice-approve-label",
+						checked: approve,
+						onChange: (e) => {
+							model.saveField("voice", "approve_dialogs", e.target.checked);
+						}
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "voice-notes",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "set-hint",
+					id: "voice-privacy",
+					children: "Phone recognition sends audio to Google on Android and to Apple on iOS when no on-device model exists."
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "set-hint",
+					id: "voice-iphone",
+					children: "On iPhone, voice needs a Safari tab: the home-screen icon cannot hear you. Server recognition fixes that."
+				})]
+			})
+		]
+	});
+}
+function VoiceKindBlock({ kind, title, model, view, onClearKey }) {
+	const where = String(model.get("voice", kind) || "phone");
+	const backend = String(model.get("voice", kind + "_backend") || "");
+	const f = voiceFields(kind, where, backend);
+	const line = readinessLine(kind, view, where);
+	const keySaved = model.get("voice", kind + "_api_key") === SECRET_MASK;
+	const local = backend === "local";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "voice-kind",
+		"data-kind": kind,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "voice-field-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: title
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+						group: "voice",
+						field: kind,
+						options: [{
+							value: "phone",
+							label: "Phone"
+						}, {
+							value: "server",
+							label: "Server"
+						}]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: kind === "stt" ? "Where your words become text." : "Where the agent's words become speech."
+					})
+				]
+			}),
+			f.backend && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "voice-field-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Backend"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+						group: "voice",
+						field: kind + "_backend",
+						options: VOICE_BACKENDS
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {})
+				]
+			}),
+			f.url && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "voice-field-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "URL"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+						group: "voice",
+						field: kind + "_url",
+						placeholder: "https://api.openai.com/v1"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "The host's base URL; blank means OpenAI. Groq: https://api.groq.com/openai/v1."
+					})
+				]
+			}),
+			f.key && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "voice-field-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "API key"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+						group: "voice",
+						field: kind + "_api_key",
+						type: "password",
+						placeholder: "paste the host's key"
+					}),
+					keySaved ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						id: "voice-clear-" + kind,
+						title: "Forget the saved key",
+						onClick: () => onClearKey(kind),
+						children: "Clear"
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Leave blank to keep the saved one."
+					})
+				]
+			}),
+			f.model && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "voice-field-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Model"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+						group: "voice",
+						field: kind + "_model",
+						placeholder: local ? "small" : kind === "stt" ? "gpt-transcribe" : "gpt-4o-mini-tts"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: local ? "A faster-whisper size: tiny, base, small or medium." : "The host's model name (Groq: whisper-large-v3-turbo)."
+					})
+				]
+			}),
+			f.voice && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "voice-field-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Voice name"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+						group: "voice",
+						field: "tts_voice",
+						placeholder: local ? "en_US-lessac-medium" : "alloy"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {})
+				]
+			}),
+			line.text && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint voice-ready st-" + (line.ok ? "ok" : "fail"),
+				id: "voice-ready-" + kind,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "mobile-row-glyph st-" + (line.ok ? "ok" : "fail"),
+					"aria-hidden": "true",
+					children: line.ok ? "✓" : "✗"
+				}), line.text]
+			})
+		]
 	});
 }
 //#endregion
@@ -87613,6 +87928,13 @@ function groupRules(rules) {
 	};
 }
 var ONLY_BELL_HINT = "Right now alerts only show in the bell. Turn on desktop or phone alerts to hear about them when you're away.";
+var AGENT_WORDS_LABEL = "Include the agent's words in pushes";
+var AGENT_WORDS_HINT = "The spoken summary of a finished turn and the question of a dialog travel through your ntfy server.";
+var AGENT_WORDS_PUBLIC_HINT = "Yours is the public ntfy.sh, so a public server stores them.";
+function agentWordsHint(publicServer) {
+	return publicServer ? AGENT_WORDS_HINT + " " + AGENT_WORDS_PUBLIC_HINT : AGENT_WORDS_HINT;
+}
+var ANNOUNCE_TIP = "iPhone: turn on ntfy under Settings → Notifications → Announce Notifications to hear pushes through AirPods.";
 //#endregion
 //#region src/components/settings/screens/Notifications.tsx
 var NOTIFY_KEY = "mindflock.notify.enabled";
@@ -88027,6 +88349,37 @@ function Ntfy({ onChange, setup = 0 } = {}) {
 					children: "Opened when you tap an alert. Don't put an access token in it."
 				})
 			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row set-switch-row notif-rule",
+			id: "ntfy-agent-words-row",
+			title: "Put the agent's spoken line and a dialog's question in the push itself, so a phone that reads notifications aloud says something useful",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "notif-rule-text",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					id: "ntfy-agent-words-label",
+					children: AGENT_WORDS_LABEL
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint notif-rule-desc",
+					id: "ntfy-agent-words-hint",
+					children: agentWordsHint(!!view.public_server)
+				})]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "ca-switch",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					id: "ntfy-agent-words",
+					"aria-labelledby": "ntfy-agent-words-label",
+					checked: view.agent_words !== false,
+					onChange: (e) => save({ agent_words: e.target.checked }, e.currentTarget)
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			id: "ntfy-announce-tip",
+			children: ANNOUNCE_TIP
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "ntfy-test-row",
@@ -91292,7 +91645,7 @@ function useFleetReadiness(active, members) {
 	return byKey;
 }
 function ReadinessLine({ r, self }) {
-	const line = readinessLine(r);
+	const line = readinessLine$1(r);
 	if (!line) return null;
 	const fixes = r?.fixes || [];
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
