@@ -387,7 +387,9 @@ from backend.web.core import restart as _restart
 from backend.web.core import revive as _revive
 from backend.web.core import sleep as _sleep
 from backend.web.core import self_update as _self_update
+from backend.web.core import spoken as _spoken
 from backend.web.core import update_watch as _update_watch
+from backend.web.core import voice as _voice
 from backend.web.core.mobile_access import (
     _local_only_mode,
     _mobile_banner,
@@ -643,6 +645,7 @@ from backend.web.core.red_zone_driver import (
 from backend.web.addons import AppContext as _AddonContext, register_addons
 from backend.web.routes import peer as _peer_routes
 from backend.web.routes import team_runs as _team_runs_routes
+from backend.web.routes import voice as _voice_routes
 from backend.web.routes.peer import (
     _peer_body,
     _peer_call,
@@ -1307,6 +1310,30 @@ def _session_last_turn_cached(inst) -> Optional[str]:
     return _probe_cached("last_turn", inst, lambda: _session_last_turn(inst))
 
 
+def _session_last_say(inst) -> Optional[str]:
+    """The session's spoken line (``core.spoken.spoken_for``: the reply's
+    ``Say:`` line, else a digest), ≤ 320 chars, or None. One stat on the
+    reply file; the provider's transcript reader behind the digest fallback
+    is mtime-cached. Never raises."""
+    try:
+        return _spoken.spoken_for(getattr(inst, "Title", "") or "", inst).get("say")
+    except Exception:  # noqa: BLE001 — the words are enrichment only
+        return None
+
+
+def _session_last_say_cached(inst) -> Optional[str]:
+    """``_session_last_say(inst)`` memoized per session."""
+    return _probe_cached("last_say", inst, lambda: _session_last_say(inst))
+
+
+def _voice_on(title: str) -> bool:
+    """Whether voice mode is on for ``title`` (``core.voice``; one stat)."""
+    try:
+        return _voice.is_on(tmux.to_mindflock_tmux_name(title))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _session_last_prompt_cached(inst) -> Optional[str]:
     """``_session_last_prompt(inst)`` memoized per session."""
     return _probe_cached("last_prompt", inst, lambda: _session_last_prompt(inst))
@@ -1622,6 +1649,11 @@ def _session_snapshot(i, queues: dict) -> dict:
     d["background"] = _background_jobs(i, i.Title)
     # L3: latest-turn snippet (≤120 chars) for N-session triage, or null.
     d["last_turn"] = _session_last_turn_cached(i)
+    # Voice: the line the phone speaks when this session's turn ends (the
+    # reply's ``Say:`` line, else a digest; ≤320 chars, or null) and whether
+    # the session is being talked to (its prompts carry the instruction).
+    d["last_say"] = _session_last_say_cached(i)
+    d["voice"] = _voice_on(i.Title)
     # The newest USER prompt (first line) — the panes pin it above the
     # terminal — and its whole body for the pin's hover/click expansion.
     d["last_prompt"] = _session_last_prompt_cached(i)
@@ -1674,6 +1706,7 @@ _SNAPSHOT_PROBE_KEYS = (
     "activity_since",
     "background",
     "last_turn",
+    "last_say",
     "last_prompt",
     "last_prompt_full",
     "task_headline",
@@ -1715,6 +1748,8 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["activity_since"] = _agent_state.state_since(i.Title)
     d["background"] = None
     d["last_turn"] = None
+    d["last_say"] = None
+    d["voice"] = _voice_on(i.Title)  # one stat: fresh on both paths
     d["last_prompt"] = None
     d["last_prompt_full"] = None
     d["task"] = getattr(i, "Task", "") or None
@@ -5769,6 +5804,24 @@ async def instance_owner(title: str, request: Request, payload: dict = None):
     return JSONResponse(_ownership.row_fields(title))
 
 
+def _voice_suffix(inst, title: str, text: str) -> str:
+    """``text`` with the voice instruction appended when voice mode is on for
+    ``title`` and its CLI has no prompt hook to inject it (``providers.*.
+    voice_prompt_hook``). Claude's UserPromptSubmit hook carries the sentence
+    itself, so Claude never gets it twice; a CLI without that channel (Codex,
+    the config-driven ones) reads it typed after the prompt. Only for a
+    SUBMITTED text — a paste left for review is the user's to finish."""
+    try:
+        if not _voice_on(title):
+            return text
+        prov = providers.resolve(getattr(inst, "Program", "") or "")
+        if prov.voice_prompt_hook():
+            return text
+        return text.rstrip("\n") + "\n\n" + _spoken.INSTRUCTION
+    except Exception:  # noqa: BLE001 — never lose the prompt over the suffix
+        return text
+
+
 @app.post("/api/instances/{title}/send")
 async def instance_send(
     title: str, payload: dict, request: Request = None
@@ -5796,6 +5849,8 @@ async def instance_send(
         return JSONResponse({"error": "empty message"}, status_code=400)
     submit = bool((payload or {}).get("submit", True))
     dialog_safe = bool((payload or {}).get("dialog_safe", False))
+    if submit:
+        text = _voice_suffix(inst, title, text)
     busy = _driven_elsewhere(request, title, payload)
     if busy is not None:
         return busy
@@ -8485,6 +8540,9 @@ async def instance_fast_track_cancel(title: str) -> JSONResponse:
 
 # --- Team runs + the outbox: routes/team_runs.py ------------------------------
 app.include_router(_team_runs_routes.router)
+
+# --- Voice mode (talking to a session from the phone): routes/voice.py --------
+app.include_router(_voice_routes.router)
 
 
 # --- Forced PR review (Intake → Pull requests) ----------------------------------
@@ -11451,6 +11509,25 @@ async def instance_output(
     limit_chars, perr = _agent_io.parse_max_chars(max_chars)
     if perr:
         return JSONResponse({"error": perr}, status_code=400)
+    if view == "say":
+        # The spoken line (core.spoken): ≤320 chars by construction, so never
+        # truncated; ``source`` says where it came from ("hook" = the reply's
+        # own Say: line, "digest" = made from the reply, "none" = nothing).
+        sp = await asyncio.to_thread(_spoken.spoken_for, title, inst)
+        try:
+            activity = await asyncio.to_thread(_agent_activity_cached, inst, title)
+        except Exception:  # noqa: BLE001 — enrichment only
+            activity = ""
+        return JSONResponse(
+            {
+                "view": "say",
+                "text": sp.get("say") or "",
+                "source": sp.get("source") or "none",
+                "has_question": bool(sp.get("has_question")),
+                "truncated": False,
+                "activity": activity,
+            }
+        )
     got_view, text, fallback, oerr, status = await asyncio.to_thread(
         _agent_output, inst, title, view
     )

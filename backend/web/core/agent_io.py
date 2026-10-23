@@ -4,12 +4,14 @@ The control surface an orchestrator (the MindFlock MCP) drives a worker
 session through, behind two routes:
 
 * ``GET /api/instances/{title}/output`` — what the agent produced, in one of
-  three views: ``last_reply`` (the provider's newest assistant message),
-  ``transcript`` (the same text ``/history?pane=agent`` serves) or ``screen``
+  four views: ``last_reply`` (the provider's newest assistant message),
+  ``transcript`` (the same text ``/history?pane=agent`` serves), ``screen``
   (the pane's VISIBLE screen only — what a dialog the agent is blocked on
-  looks like). Always tail-truncated: the caller is a model with a context
-  budget, and the end of a conversation is the part that answers "what
-  happened".
+  looks like) or ``say`` (the spoken line for a listener —
+  :func:`backend.web.core.spoken.spoken_for`; never truncated, it is ≤ 320
+  characters by construction). The text views are always tail-truncated: the
+  caller is a model with a context budget, and the end of a conversation is
+  the part that answers "what happened".
 * ``POST /api/instances/{title}/answer`` — type into a dialog the agent is
   blocked on (permission prompt, usage-limit menu) with a strict key
   allow-list and literal text, never an implicit Enter. A ``dialog_id`` pins
@@ -35,8 +37,10 @@ from typing import Dict, List, Optional, Tuple
 from backend.web.core import agent_sessions as _agent_sessions
 from backend.web.core import proc as _proc
 
-#: The output views and their default/maximum sizes (characters).
-OUTPUT_VIEWS = ("last_reply", "transcript", "screen")
+#: The output views and their default/maximum sizes (characters). ``say`` is
+#: the voice view (the MCP tool's own enum deliberately stays at the three
+#: text views: an orchestrator reads replies, a phone listens to them).
+OUTPUT_VIEWS = ("last_reply", "transcript", "screen", "say")
 DEFAULT_MAX_CHARS = 6000
 MAX_MAX_CHARS = 50000
 
