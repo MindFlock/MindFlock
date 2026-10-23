@@ -645,6 +645,7 @@ from backend.web.core.red_zone_driver import (
 from backend.web.addons import AppContext as _AddonContext, register_addons
 from backend.web.routes import peer as _peer_routes
 from backend.web.routes import team_runs as _team_runs_routes
+from backend.web.routes import speech as _speech_routes
 from backend.web.routes import voice as _voice_routes
 from backend.web.routes.peer import (
     _peer_body,
@@ -8540,6 +8541,7 @@ async def instance_fast_track_cancel(title: str) -> JSONResponse:
 
 # --- Team runs + the outbox: routes/team_runs.py ------------------------------
 app.include_router(_team_runs_routes.router)
+app.include_router(_speech_routes.router)
 
 # --- Voice mode (talking to a session from the phone): routes/voice.py --------
 app.include_router(_voice_routes.router)
