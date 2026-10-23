@@ -331,3 +331,22 @@ class TestClearKey:
         S.invalidate()
         kept = S.load_settings().voice.tts_api_key
         assert kept == "sk-tts"  # pragma: allowlist secret
+
+
+def test_413_holds_for_a_chunked_upload_without_content_length(fakes, monkeypatch):
+    """A body sent in chunks carries no Content-Length: the cap must still stop
+    the read, not hold the whole clip in memory first."""
+    _voice(stt="server")
+    monkeypatch.setattr(routes, "MAX_AUDIO_BYTES", 16)
+
+    def chunks():
+        for _ in range(4):
+            yield b"x" * 8
+
+    r = client.post(
+        "/api/voice/transcribe",
+        content=chunks(),
+        headers={"Content-Type": "audio/webm", "Transfer-Encoding": "chunked"},
+    )
+    assert r.status_code == 413
+    assert fakes.stt.calls == []

@@ -126,9 +126,16 @@ async def voice_transcribe(request: Request, lang: str = "") -> JSONResponse:
     length = request.headers.get("content-length", "")
     if length.isdigit() and int(length) > MAX_AUDIO_BYTES:
         return too_big
-    audio = await request.body()
-    if len(audio) > MAX_AUDIO_BYTES:
-        return too_big
+    # Read the body in chunks and stop at the cap: a chunked upload carries
+    # no Content-Length, and ``request.body()`` would hold all of it first.
+    chunks: list = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_AUDIO_BYTES:
+            return too_big
+        chunks.append(chunk)
+    audio = b"".join(chunks)
     if not audio:
         return JSONResponse({"error": "the clip is empty"}, status_code=400)
     backend, refused = _refusal("stt")

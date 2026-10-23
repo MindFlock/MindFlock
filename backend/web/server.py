@@ -645,6 +645,7 @@ from backend.web.core.red_zone_driver import (
 from backend.web.addons import AppContext as _AddonContext, register_addons
 from backend.web.routes import peer as _peer_routes
 from backend.web.routes import team_runs as _team_runs_routes
+from backend.web.core import voice_actions as _voice_actions
 from backend.web.routes import speech as _speech_routes
 from backend.web.routes import voice as _voice_routes
 from backend.web.routes.peer import (
@@ -5690,6 +5691,11 @@ def _deliver_to_agent(
     """
     if getattr(inst, "Status", None) == Paused:
         return False, PAUSED_REFUSED
+    if submit:
+        # Every submitted prompt — /send, /queue, the Code Map's notices, the
+        # autopilot — carries the voice instruction for a hook-less CLI
+        # (idempotent: /send has usually added it already).
+        text = _voice_suffix(inst, title, text)
     if _sleep.is_sleeping(title):
         if not boot and _budget_locked(title):
             return False, "over budget"
@@ -5815,6 +5821,8 @@ def _voice_suffix(inst, title: str, text: str) -> str:
     try:
         if not _voice_on(title):
             return text
+        if text.rstrip().endswith(_spoken.INSTRUCTION):
+            return text  # already carried (the route, then the drain)
         prov = providers.resolve(getattr(inst, "Program", "") or "")
         if prov.voice_prompt_hook():
             return text
@@ -11675,6 +11683,8 @@ def _answer_dialog(inst, title: str, text: str, keys, dialog_id, by: str):
             return {"error": _SEND_FAILED}, 502
         if settles:
             _agent_io.note_answered(title, dialog_id)
+            # The push's Yes/No buttons were for THIS dialog: spent with it.
+            _voice_actions.forget(title, dialog_id)
         return {"ok": True, "activity_before": activity}, 200
 
 

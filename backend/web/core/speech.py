@@ -135,8 +135,10 @@ def _voice():
 
 def voice_dir() -> Path:
     """Where the local backend keeps its model files (see the module doc)."""
+    from backend.config.home_guard import guard
+
     raw = os.environ.get("MINDFLOCK_VOICE_DIR") or "~/.mindflock/voice"
-    return Path(raw).expanduser()
+    return Path(guard(os.path.expanduser(raw), "voice model dir"))
 
 
 def _now() -> float:

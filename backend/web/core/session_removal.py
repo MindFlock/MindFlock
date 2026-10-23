@@ -40,6 +40,7 @@ from backend.web.core import state_events as _state_events
 from backend.web.core import task_headlines as _task_headlines
 from backend.web.core import thread as _thread
 from backend.web.core import voice as _voice
+from backend.web.core import voice_actions as _voice_actions
 
 
 def _server():
@@ -189,6 +190,7 @@ def _forget_voice(title: str) -> None:
     _voice.forget(name)
     _spoken.forget(name)
     _state_events._forget_spoken(title)
+    _voice_actions.forget(title)
 
 
 _SESSION_REMOVED_HOOKS.append(_forget_voice)

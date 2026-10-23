@@ -197,8 +197,12 @@ def phone():
     mobile_announce.remember_url(None)
 
 
-def _ntfy_on():
-    S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
+def _ntfy_on(server="https://ntfy.example.test"):
+    """Pushes on, to a self-hosted server by default: the public ntfy.sh gets
+    no one-tap buttons (``one_tap_allowed``), which its own test covers."""
+    S.update_settings(
+        notifications={"ntfy_enabled": True, "ntfy_topic": "t1", "ntfy_server": server}
+    )
 
 
 def _turn_ended(session="alpha", **data) -> dict:
@@ -544,3 +548,35 @@ def test_agent_words_save_leaves_the_rest_of_the_channel_alone():
     )
     v = client.post("/api/notify/ntfy", json={"agent_words": False}).json()
     assert v["enabled"] is True and v["topic"] == "keep-me" and v["has_token"] is True
+
+
+# --- the buttons are a permission channel: the owner's switch, no public server
+def test_no_one_tap_buttons_when_voice_approval_is_off(pushes, phone, monkeypatch):
+    _ntfy_on()
+    S.update_settings(voice={"approve_dialogs": False})
+    monkeypatch.setattr(notify_addon, "_read_dialog", lambda title: _dialog())
+    notify_addon.NotifyAddon()._on_event(_clarify())
+    (push,) = pushes
+    # The words still travel; only Open remains.
+    assert "git push" in push["message"]
+    assert [a["label"] for a in push["actions"]] == ["Open"]
+
+
+def test_no_one_tap_buttons_on_the_public_ntfy_server(pushes, phone, monkeypatch):
+    _ntfy_on(server="")  # "" = the public ntfy.sh
+    monkeypatch.setattr(notify_addon, "_read_dialog", lambda title: _dialog())
+    notify_addon.NotifyAddon()._on_event(_clarify())
+    (push,) = pushes
+    assert [a["label"] for a in push["actions"]] == ["Open"]
+
+
+def test_one_tap_allowed_fails_closed(monkeypatch):
+    class Boom:
+        is_public_server = False
+
+    monkeypatch.setattr(
+        notify_addon.settings_store,
+        "load_settings",
+        lambda: (_ for _ in ()).throw(RuntimeError("x")),
+    )
+    assert notify_addon.one_tap_allowed(Boom()) is False

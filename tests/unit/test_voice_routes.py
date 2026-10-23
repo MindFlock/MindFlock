@@ -334,9 +334,9 @@ def test_run_oneshot_uses_the_session_plan_pattern(monkeypatch):
     assert seen["pick"] == ("P", "codex", "", "a spoken summary")
     argv, cwd, timeout = seen["run"]
     assert argv == ["cli", "-p", "P"] and timeout == voice_routes.CONDENSE_TIMEOUT_S
-    import os
-
-    assert cwd == os.path.expanduser("~")
+    # commit_message's neutral dir, never $HOME (claude -p would file its
+    # transcript under ~/.claude/projects and read ~/CLAUDE.md there).
+    assert cwd == commit_message.neutral_cwd()
 
 
 # --------------------------------------------------------------------------- #

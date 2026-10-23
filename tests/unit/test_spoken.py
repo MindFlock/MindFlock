@@ -390,3 +390,48 @@ def test_spoken_for_never_raises(marker_dir, monkeypatch):
     monkeypatch.setattr(providers, "resolve", boom)
     assert spoken.spoken_for("s5", _Inst("s5"))["source"] == "none"
     assert spoken.spoken_for("s5", None)["source"] == "none"
+
+
+# --- review follow-ups ------------------------------------------------------- #
+def test_extract_say_takes_the_last_line_even_inside_an_unclosed_fence():
+    text = "Here is the patch:\n```python\nprint(1)\n\nSay: Patched it. Run the tests?"
+    assert spoken.extract_say(text) == "Patched it. Run the tests?"
+
+
+def test_extract_say_accepts_an_unspaced_em_dash():
+    assert spoken.extract_say("Done.\nSay—Ready.") == "Ready."
+    assert spoken.extract_say("Done.\nSay–Ready.") == "Ready."
+    # The ASCII dash still needs a space: "say-so" is a word.
+    assert spoken.extract_say("the say-so of the team") is None
+
+
+@pytest.mark.parametrize(
+    "line,expected",
+    [
+        ("Got it, done.", False),
+        ("Ok so I pushed it.", False),
+        ("Any objections?", True),
+        ("Should I push?", True),
+        ("Which branch do you want", True),
+    ],
+)
+def test_has_question_is_not_fooled_by_ok_got_any(line, expected):
+    assert spoken.has_question(line) is expected
+
+
+def test_read_reply_misses_the_cache_for_a_replaced_file_of_equal_size(marker_dir):
+    import json as _json
+    import os as _os
+
+    from backend.providers import activity_markers as _am
+
+    path = _am.reply_path("s1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_json.dumps({"ts": 1, "text": "AAAA"}))
+    st = _os.stat(path)
+    assert spoken.read_reply("s1") == (1.0, "AAAA")
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(_json.dumps({"ts": 1, "text": "BBBB"}))  # same length
+    _os.replace(tmp, path)  # a new inode
+    _os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))  # same mtime, same size
+    assert spoken.read_reply("s1") == (1.0, "BBBB")

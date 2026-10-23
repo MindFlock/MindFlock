@@ -163,10 +163,11 @@ def _run_oneshot(prompt: str, program: str) -> str:
     and return its stdout. Raises ``CommitMessageError`` with a reason.
     Module-level so tests replace it."""
     argv = _commit_message.pick_argv(prompt, program, "", purpose="a spoken summary")
-    # cwd is $HOME, like the session plan's one-shot: the question needs no
-    # repo context, and running inside the worktree would feed its AGENTS.md
-    # into a prompt whose answer is read aloud.
-    return _commit_message._run(argv, os.path.expanduser("~"), CONDENSE_TIMEOUT_S)
+    # cwd is commit_message's neutral dir, for its reasons: the question needs
+    # no repo context (the worktree's AGENTS.md would land in a prompt whose
+    # answer is read aloud), and $HOME would make `claude -p` file its
+    # transcript under ~/.claude/projects and read ~/CLAUDE.md.
+    return _commit_message._run(argv, _commit_message.neutral_cwd(), CONDENSE_TIMEOUT_S)
 
 
 def _condense(inst, title: str):

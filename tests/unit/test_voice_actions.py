@@ -206,3 +206,51 @@ def test_act_only_presses_a_key_the_answer_route_allows(rig):
 def test_act_route_is_post_only():
     paths = server.app.openapi()["paths"]
     assert set(paths["/api/notify/act/{token}"]) == {"post"}
+
+
+# --- forget: a button dies with its dialog -------------------------------- #
+def test_forget_drops_the_dialogs_buttons_and_leaves_the_rest():
+    a_yes = voice_actions.issue("alpha", "d1", "1")
+    a_no = voice_actions.issue("alpha", "d1", "3")
+    a_later = voice_actions.issue("alpha", "d2", "1")
+    b_yes = voice_actions.issue("beta", "d1", "1")
+    assert voice_actions.forget("alpha", "d1") == 2
+    assert voice_actions.consume(a_yes) is None
+    assert voice_actions.consume(a_no) is None
+    # Another dialog of the same session, and the same id on another session, live on.
+    assert voice_actions.consume(a_later)["dialog_id"] == "d2"
+    assert voice_actions.consume(b_yes)["title"] == "beta"
+
+
+def test_forget_without_a_dialog_drops_every_button_of_the_session():
+    voice_actions.issue("alpha", "d1", "1")
+    voice_actions.issue("alpha", "d2", "1")
+    keep = voice_actions.issue("beta", "d1", "1")
+    assert voice_actions.forget("alpha") == 2
+    assert voice_actions.live_count() == 1
+    assert voice_actions.consume(keep) is not None
+    assert voice_actions.forget("nobody") == 0
+
+
+def test_answering_the_dialog_on_the_desktop_spends_its_buttons(monkeypatch):
+    """A settling answer for the pinned dialog (the desktop strip, the phone
+    page) forgets the push's buttons: the Yes on the lock screen must not
+    answer a later prompt that hashes to the same id."""
+    from backend.web.core import agent_io
+
+    inst = SimpleNamespace(Title="w", Program="claude")
+    monkeypatch.setattr(server, "_agent_activity", lambda inst, title: "clarify")
+    monkeypatch.setattr(server, "_live_session_name", lambda name: "w")
+    monkeypatch.setattr(
+        agent_io,
+        "current_dialog",
+        lambda live, program: ({"id": "d1", "parsed": True}, None),
+    )
+    monkeypatch.setattr(agent_io, "send_answer", lambda name, text, keys: True)
+    monkeypatch.setattr(server, "_note_human_input", lambda title: None)
+    tok = voice_actions.issue("w", "d1", "1")
+    other = voice_actions.issue("w", "d2", "1")
+    body, status = server._answer_dialog(inst, "w", "", ["1"], "d1", "user")
+    assert status == 200, body
+    assert voice_actions.consume(tok) is None
+    assert voice_actions.consume(other) is not None  # another dialog's button lives on

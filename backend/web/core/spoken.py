@@ -59,12 +59,13 @@ DIGEST_MAX_SENTENCES = 2
 # --- the Say: line ----------------------------------------------------------- #
 # Leading list / quote markers a model wraps the line in ("- Say: …", "> Say:
 # …", "1. Say: …"), then optional emphasis, then the word, then the marker: a
-# colon (optionally itself inside the emphasis, "**Say:**") or a dash. The
-# dash form needs whitespace before it so "say-so" never matches.
+# colon (optionally itself inside the emphasis, "**Say:**") or a dash. An em
+# or en dash may touch the word ("Say—Ready."); the ASCII dash needs
+# whitespace before it so "say-so" never matches.
 _SAY_LINE_RE = re.compile(
     r"^(?:(?:[-*+•]|>|\d+[.)])\s*)*"
     r"(?:\*\*|__|\*|_)?\s*say\s*(?:\*\*|__|\*|_)?\s*"
-    r"(?:[:：]|\s[—–-]+)\s*(?P<rest>.*)$",
+    r"(?:[:：]|\s*[—–]|\s-+)\s*(?P<rest>.*)$",
     re.IGNORECASE,
 )
 _FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
@@ -103,7 +104,7 @@ _PATH_TOKEN_RE = re.compile(
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])[\"'”’)]*\s+")
 _QUESTION_START_RE = re.compile(
     r"^(?:should|shall|do|does|did|which|what|when|where|who|whom|whose|why|how|"
-    r"can|could|would|will|is|are|am|may|might|ok|okay|want|need|got|any|"
+    r"can|could|would|will|is|are|am|may|might|"
     r"wanna|shouldn't|can't|couldn't|wouldn't|won't|isn't|aren't|don't|doesn't|"
     r"didn't)\b",
     re.I,
@@ -157,9 +158,22 @@ def extract_say(text: str) -> Optional[str]:
     (a reply that quotes the instruction is not following it)."""
     if not text:
         return None
+    lines = str(text).replace("\r\n", "\n").split("\n")
+    # The instruction asks for the reply's LAST line, so that line counts
+    # whatever a fence earlier in the reply did — models leave fences open,
+    # and an unclosed fence must not swallow the one line the phone needs.
+    for raw in reversed(lines):
+        if not raw.strip():
+            continue
+        m = _SAY_LINE_RE.match(raw.strip())
+        if m:
+            rest = strip_markdown(m.group("rest")).strip(" *_").strip()
+            if rest:
+                return _cap(rest)
+        break
     found: Optional[str] = None
     in_fence = False
-    for raw in str(text).replace("\r\n", "\n").split("\n"):
+    for raw in lines:
         if _FENCE_RE.match(raw):
             in_fence = not in_fence
             continue
@@ -287,7 +301,9 @@ def read_reply(session_name: str) -> Optional[Tuple[float, str]]:
         st = os.stat(path)
     except Exception:  # noqa: BLE001 — absent (or guarded) = no reply
         return None
-    key = (st.st_mtime_ns, st.st_size)
+    # os.replace gives every reply a new inode: two equal-length replies in
+    # one mtime tick (a coarse-mtime mount) still miss the cache.
+    key = (st.st_mtime_ns, st.st_size, st.st_ino)
     with _REPLY_CACHE_LOCK:
         hit = _REPLY_CACHE.get(session_name)
         if hit is not None and hit[0] == key:

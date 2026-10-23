@@ -782,6 +782,21 @@ def push_body(rule: dict, envelope: dict, dialog: Optional[dict]) -> "tuple[str,
     return (text, True) if text else (generic, False)
 
 
+def one_tap_allowed(cfg) -> bool:
+    """Whether a dialog push may carry Yes/No buttons at all. They are a
+    permission channel, so the owner's "approve dialogs by voice" setting
+    governs them too (off = the push still says what is asked, Open is the
+    only button), and they never ride the public ntfy.sh: a URL that approves
+    a permission prompt is not something a public server should store, even
+    single-use and ten minutes long. Never raises (fails closed)."""
+    try:
+        if cfg is not None and getattr(cfg, "is_public_server", False):
+            return False
+        return bool(settings_store.load_settings().voice.approve_dialogs)
+    except Exception:  # noqa: BLE001 — unreadable settings = no buttons
+        return False
+
+
 def dialog_actions(
     base: str, click: str, title: str, dialog: Optional[dict]
 ) -> List[dict]:
@@ -918,7 +933,12 @@ class NotifyAddon(Addon):
                 dialog = _read_dialog(session) if rule["id"] == "needs_input" else None
                 message, spoken = push_body(rule, envelope, dialog)
                 actions = (
-                    dialog_actions(mobile_announce.act_base(), click, session, dialog)
+                    dialog_actions(
+                        mobile_announce.act_base() if one_tap_allowed(cfg) else "",
+                        click,
+                        session,
+                        dialog,
+                    )
                     if dialog is not None
                     else []
                 )

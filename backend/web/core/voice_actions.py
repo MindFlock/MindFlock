@@ -95,6 +95,25 @@ def consume(token: str) -> Optional[Dict[str, str]]:
     }
 
 
+def forget(title: str, dialog_id: Optional[str] = None) -> int:
+    """Drop every outstanding button for ``title`` — only those of
+    ``dialog_id`` when given. Called when the dialog was answered some other
+    way (the desktop, the phone page) and when the session is removed, so a
+    button on the lock screen never answers a LATER prompt that happens to
+    hash to the same id (an agent re-asking the same ``git push``). Returns
+    how many were dropped."""
+    with _LOCK:
+        gone = [
+            tok
+            for tok, e in _LIVE.items()
+            if e["title"] == str(title)
+            and (dialog_id is None or e["dialog_id"] == str(dialog_id))
+        ]
+        for tok in gone:
+            _LIVE.pop(tok, None)
+    return len(gone)
+
+
 def live_count() -> int:
     """How many buttons are outstanding (expired ones included until swept)."""
     with _LOCK:
