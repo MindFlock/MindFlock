@@ -908,6 +908,15 @@ html, body {
   overflow: hidden;
 }
 #voice-countdown-bar { height: 100%; width: 100%; background: var(--accent); }
+/* The level meter while the server adapter records (no interim words). */
+#voice-level {
+  height: 4px;
+  margin-top: 6px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+#voice-level-bar { height: 100%; width: 0; background: var(--tone-working); transition: width 80ms linear; }
 #voice-hear {
   display: block;
   width: 100%;
@@ -935,6 +944,7 @@ html, body {
   border-top: 1px solid var(--tone-attention);
   font-size: 13px;
 }
+#voice-safari-alt { margin-top: 4px; font-size: 12px; }
 #voice-safari-row { display: flex; gap: 6px; margin-top: 6px; }
 #voice-safari-url {
   flex: 1 1 auto;

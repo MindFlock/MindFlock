@@ -5846,8 +5846,9 @@ so a silent failure has a name — *Recognition* (available, or *NOT available
 — iOS has it only in a Safari tab*), *Speech* and how many voices loaded,
 *Mode* (browser tab or home-screen app; iOS / Android), *Wake lock*, *Audio
 session*, the *Events socket* state and sequence number, *Backends*
-(recognition and voice: phone or server — with *server adapters are not on
-this page yet; using the phone's* when a server backend is set), *Primed*
+(recognition and voice: which adapter is active — the phone's, or the
+server's when Settings say server and `GET /api/voice` reports it ready),
+*Primed*
 (whether a tap has unlocked speech output yet), *State*, and the last error.
 Refreshed every second while the sheet is open.
 

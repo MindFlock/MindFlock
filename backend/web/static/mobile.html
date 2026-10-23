@@ -110,15 +110,22 @@
         <button type="button" id="voice-gear" aria-label="Voice settings">⚙</button>
       </div>
       <div id="voice-countdown" class="hidden"><div id="voice-countdown-bar"></div></div>
+      <!-- The level meter while the server adapter records a clip (it has no
+           interim words to show); mobile.js voiceLevel. -->
+      <div id="voice-level" class="hidden" aria-hidden="true"><div id="voice-level-bar"></div></div>
       <button type="button" id="voice-hear" class="hidden"></button>
       <div id="voice-error" class="hidden" aria-live="polite"></div>
     </div>
     <!-- iOS has speech recognition only in a Safari TAB (WebKit 225298): not
          in a home-screen web app, not in Chrome or Firefox on iOS. Shown when
          voice is wanted on an iPhone with no recognizer, with this page's
-         address to carry over (clipboard, or select the field and copy). -->
+         address to carry over (clipboard, or select the field and copy) and,
+         unless Settings already say so, the other way out: server
+         recognition (Settings → Your phone → Voice) works in the home-screen
+         app — the page records a clip and the server transcribes it. -->
     <div id="voice-safari-banner" class="hidden" role="status">
       <div id="voice-safari-text">Voice needs Safari: open this page in a Safari tab</div>
+      <div id="voice-safari-alt" class="new-muted hidden">or turn on server recognition in Settings → Your phone → Voice</div>
       <div id="voice-safari-row">
         <input id="voice-safari-url" type="text" readonly aria-label="This page's address" />
         <button type="button" id="voice-safari-copy">Copy</button>

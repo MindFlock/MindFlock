@@ -330,13 +330,23 @@ def test_mobile_js_dialog_word_tables():
         assert w in yes, w
     for w in ("no", "nope", "deny", "reject", "don'?t", "cancel", "skip", "stop"):
         assert w in no, w
-    # "always" is accepted only when SAID: the matcher tests for the literal
-    # word, and nothing in the yes table can reach it.
-    assert r"\balways\b" in always
+    # "always" is accepted only when SAID as the whole answer: the matcher is
+    # anchored at both ends, and nothing in the yes table can reach it.
+    assert always.startswith("/^") and always.rstrip(";").endswith("$/")
+    assert "always" in always
     assert "always" not in yes
     parse = _fn(js, "voiceParseAnswer")
     assert "VOICE_ALWAYS.test(t)" in parse
-    assert parse.index("VOICE_ALWAYS.test(t)") < parse.index("VOICE_YES.test(t)")
+    # A no anywhere is a no: it is tested before yes, and only the anchored
+    # always form (which cannot contain a refusal) comes before it.
+    assert (
+        parse.index("VOICE_ALWAYS.test(t)")
+        < parse.index("VOICE_NO.test(t)")
+        < parse.index("VOICE_YES.test(t)")
+    )
+    # Numbers never pick a permission option.
+    assert "if (permission) {" in parse
+    assert parse.index("if (permission) {") < parse.index("VOICE_NUM.exec(t)")
     # Numbers one..nine, first/second/third, "option N".
     num = v.split("var VOICE_NUM = ")[1].split("\n")[0]
     for w in ("one", "two", "three", "nine", "first", "second", "third", "1", "9"):
@@ -492,8 +502,11 @@ def test_voice_matchers_under_node():
             "don't ask again",
             "yes and do not ask again",
         ],
-        "none": ["banana", "", "maybe later"],
-        "two": ["option two", "two", "the second one", "2"],
+        "none": ["banana", "", "maybe later", "I always forget which"],
+        # A refusal that contains the word is a NO, never the standing permission.
+        "refusals": ["no, not always", "No! don't always allow that", "no, option 2"],
+        # Numbers never pick a permission option (recognisers turn "to" into "2").
+        "two": ["option two", "two", "the second one", "2", "number two"],
     }
     script = (
         'var voice = { session: "s" }; function nameOf(t) { return t; }\n'
@@ -528,8 +541,9 @@ def test_voice_matchers_under_node():
     assert out["answers"]["no"] == ["3", "3", "3", "3"]
     # "always" only when said — and said in any of its forms.
     assert out["answers"]["always"] == ["2", "2", "2", "2", "2"]
-    assert out["answers"]["none"] == [None, None, None]
-    assert out["answers"]["two"] == ["2", "2", "2", "2"]
+    assert out["answers"]["none"] == [None, None, None, None]
+    assert out["answers"]["refusals"] == ["3", "3", "3"]
+    assert out["answers"]["two"] == [None, None, None, None, None]
     # With no always option, "always" is still a yes; "yeah sure" never widens.
     assert out["yesOnly"] == {"always": "1", "yeah": "1"}
     assert out["other"] == ["2", "3", "1", None]
