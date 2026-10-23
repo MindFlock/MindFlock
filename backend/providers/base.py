@@ -574,6 +574,17 @@ class BaseProvider:
         Default: False."""
         return False
 
+    def voice_prompt_hook(self) -> bool:
+        """Whether this CLI's prompt-submit hook injects MindFlock's voice
+        instruction itself (``activity_markers.VOICE_INSTRUCTION``, printed by
+        the installed ``UserPromptSubmit`` hook while the session's voice flag
+        is on). Only Claude Code documents a prompt hook's stdout as injected
+        context. For every other CLI the /send route types the instruction
+        after the prompt instead — so a provider must answer True only when
+        the hook really does it, or the agent reads the sentence twice.
+        Default: False."""
+        return False
+
     def last_assistant_text(
         self,
         session_name: str,

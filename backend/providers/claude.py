@@ -589,6 +589,13 @@ class ClaudeProvider(BaseProvider):
     def plan_supported(self) -> bool:
         return True
 
+    def voice_prompt_hook(self) -> bool:
+        # The UserPromptSubmit hook that install_activity_hooks writes prints
+        # the voice instruction while the session's flag file exists, and
+        # Claude Code injects that stdout as context (verified in the hooks
+        # docs 2026-10-22). The /send route therefore never appends it here.
+        return True
+
     def last_assistant_text(
         self,
         session_name: str,
