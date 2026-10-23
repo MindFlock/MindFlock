@@ -1262,10 +1262,12 @@ text the session just said, no transcript scan. The **spoken record** every
 reader serves is `{say, source, has_question, ts}`: `say` the text after the
 marker (the LAST `Say:` line of the reply; `**Say:**`, `SAY:` and `Say —`
 count, a `Say:` inside a code fence does not), markdown stripped, ≤ 320
-chars, or `null`; `source` is `hook` (a `Say:` line), `digest` (no `Say:`
-line: a deterministic digest of the reply — fenced and inline code, URLs,
-paths, tables and headings dropped, the first sentence plus every sentence
-ending in `?` kept, at most two sentences and ~45 words) or `none`;
+chars, or `null`; `source` is `hook` (a `Say:` line from the reply the
+Stop hook filed), `transcript` (no reply file, but the provider's newest
+assistant text ends with a `Say:` line — `ts` is then `null`), `digest` (no
+`Say:` line: a deterministic digest of the reply — fenced and inline code,
+URLs, paths, tables and headings dropped, the first sentence plus every
+sentence ending in `?` kept, at most two sentences and ~45 words) or `none`;
 `has_question` whether the line asks the listener something (a `?`, or a
 question word up front); `ts` the reply file's stamp when the words came
 from it, else `null`. The digest is made from the reply file's text, and
