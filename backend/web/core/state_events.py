@@ -33,6 +33,7 @@ from backend.web.core import pane_scroll_find as _pane_scroll_find
 from backend.web.core import prompt_queue as _prompt_queue
 from backend.web.core import revive as _revive
 from backend.web.core import sleep as _sleep
+from backend.web.core import spoken as _spoken
 
 
 def _server():
@@ -99,6 +100,57 @@ def _in_boot_quiet() -> bool:
     """Whether the process is still inside its post-launch quiet window."""
     srv = _server()
     return time.monotonic() - srv._BOOT_MONO < srv._BOOT_QUIET_SECONDS
+
+
+# ---- the spoken line on an idle announcement ------------------------------ #
+# Voice mode: when a session settles idle, the phone speaks the ``Say:`` line
+# the session wrote (core.spoken.spoken_for). The words ride the two "it
+# finished" events — ``session.activity_changed new="idle"`` (the chip, the
+# page's instant cue) and ``session.turn_ended`` (notification-grade; the push
+# body) — as ``data = {say, has_question, source}``. Each channel remembers
+# the reply it last announced per session, and ``say`` is null when nothing
+# newer exists: a session that goes idle again without a new reply (a /clear,
+# a boot to a bare prompt, a wake, a non-Claude CLI that files no reply) must
+# not re-speak its last words. Memory is per CHANNEL because the two events
+# fire for the same turn, seconds to a minute apart, and both must carry it
+# once. Dropped with the session (session_removal → ``_forget_spoken``).
+_SPOKEN_ANNOUNCED: Dict[str, Dict[str, tuple]] = {}
+_SPOKEN_ANNOUNCED_LOCK = threading.Lock()
+_SPOKEN_NONE = {"say": None, "has_question": False, "source": "none"}
+
+
+def _spoken_payload(title: str, channel: str) -> dict:
+    """``{say, has_question, source}`` for ``title``'s idle announcement on
+    ``channel`` (``"idle"`` for activity_changed, ``"turn"`` for turn_ended):
+    the spoken line when a reply this channel has not announced exists, else
+    ``say: null``. One small cached file read; never raises."""
+    try:
+        inst = _server().ENGINE.instances.get(title)
+        if inst is None:
+            return dict(_SPOKEN_NONE)
+        sp = _spoken.spoken_for(title, inst)
+    except Exception:  # noqa: BLE001 — the words are enrichment, never a gate
+        return dict(_SPOKEN_NONE)
+    say = sp.get("say") if isinstance(sp, dict) else None
+    if not say:
+        return dict(_SPOKEN_NONE)
+    key = (sp.get("ts"), say)
+    with _SPOKEN_ANNOUNCED_LOCK:
+        seen = _SPOKEN_ANNOUNCED.setdefault(title, {})
+        if seen.get(channel) == key:
+            return dict(_SPOKEN_NONE)
+        seen[channel] = key
+    return {
+        "say": say,
+        "has_question": bool(sp.get("has_question")),
+        "source": str(sp.get("source") or "none"),
+    }
+
+
+def _forget_spoken(title: str) -> None:
+    """Drop ``title``'s announced-reply memory (session removal)."""
+    with _SPOKEN_ANNOUNCED_LOCK:
+        _SPOKEN_ANNOUNCED.pop(title, None)
 
 
 def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> None:
@@ -214,6 +266,16 @@ def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> N
                 new == _SLEEPING or (old == _SLEEPING and new == "idle")
             ):
                 continue  # a sleep, or a wake back to its prompt: not news
+            if field == "activity" and new == "idle":
+                # The turn's spoken line rides the idle announcement (voice).
+                _events.BUS.emit(
+                    event,
+                    session=title,
+                    old=old,
+                    new=new,
+                    data=_spoken_payload(title, "idle"),
+                )
+                continue
             _events.BUS.emit(event, session=title, old=old, new=new)
     # Verify — the SECOND of two triggers that write a test plan for freshly
     # pushed work. The first is the ``session.pushed`` subscriber below, fed by
@@ -522,11 +584,9 @@ def _note_turn_boundary(title: str, snap: dict, now: float) -> None:
         # only one of them can win the clear.
         if _agent_state.claim_work(title) is None:
             return
-        _events.BUS.emit(
-            "session.turn_ended",
-            session=title,
-            data={"idle_for": round(idle_for, 1)},
-        )
+        data = {"idle_for": round(idle_for, 1)}
+        data.update(_spoken_payload(title, "turn"))
+        _events.BUS.emit("session.turn_ended", session=title, data=data)
     except Exception:  # noqa: BLE001 — a notification never breaks the tick
         pass
 

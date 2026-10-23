@@ -35,8 +35,11 @@ from backend.web.core import ownership as _ownership
 from backend.web.core import person_sessions as _person_sessions
 from backend.web.core import shared_branch as _shared_branch
 from backend.web.core import sleep as _sleep
+from backend.web.core import spoken as _spoken
+from backend.web.core import state_events as _state_events
 from backend.web.core import task_headlines as _task_headlines
 from backend.web.core import thread as _thread
+from backend.web.core import voice as _voice
 
 
 def _server():
@@ -175,6 +178,20 @@ def _forget_mcp_run_file(title: str) -> None:
 
 
 _SESSION_REMOVED_HOOKS.append(_forget_mcp_run_file)
+
+
+def _forget_voice(title: str) -> None:
+    """A removed session's voice flag, reply file and announced-reply memory
+    go with it: a closed session leaves no flag behind (its hook would keep
+    injecting the instruction into a namesake), and a re-opened or namesake
+    session must not speak the dead one's last words."""
+    name = tmux.to_mindflock_tmux_name(title)
+    _voice.forget(name)
+    _spoken.forget(name)
+    _state_events._forget_spoken(title)
+
+
+_SESSION_REMOVED_HOOKS.append(_forget_voice)
 
 
 def _disarm_removed_session(title: str) -> None:
