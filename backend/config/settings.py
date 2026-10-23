@@ -1397,6 +1397,10 @@ class NotificationSettings:
     ``ntfy_click_url``: optional URL a tapped notification opens (your phone
     MindFlock URL); never store an access token in it — it would be handed to
     the ntfy server.
+    ``ntfy_agent_words``: whether push bodies carry the agent's own words (the
+    spoken ``Say:`` line of a finished turn, the question of a dialog) so a
+    phone that reads notifications aloud says something useful. On by default;
+    off keeps bodies generic (the words would travel through the ntfy server).
     """
 
     muted_rules: List[str] = field(default_factory=list)
@@ -1406,6 +1410,7 @@ class NotificationSettings:
     ntfy_topic: str = ""
     ntfy_token: str = ""  # SECRET
     ntfy_click_url: str = ""
+    ntfy_agent_words: bool = True
 
     def to_dict(self) -> dict:
         out: dict = {}
@@ -1423,6 +1428,8 @@ class NotificationSettings:
             out["ntfy_token"] = self.ntfy_token
         if self.ntfy_click_url:
             out["ntfy_click_url"] = self.ntfy_click_url
+        if not self.ntfy_agent_words:
+            out["ntfy_agent_words"] = False
         return out
 
     @classmethod
@@ -1435,6 +1442,7 @@ class NotificationSettings:
             ntfy_topic=str(d.get("ntfy_topic", "") or "").strip(),
             ntfy_token=str(d.get("ntfy_token", "") or "").strip(),
             ntfy_click_url=str(d.get("ntfy_click_url", "") or "").strip(),
+            ntfy_agent_words=bool(d.get("ntfy_agent_words", True)),
         )
 
 
@@ -1808,6 +1816,85 @@ class PersonSettings:
 
 
 @dataclass
+class VoiceSettings:
+    """Talking to sessions from the phone (docs/web-ui.md, "Voice").
+
+    Speech itself comes from the phone's own engines (Web Speech recognition
+    and synthesis) unless a field here points at a server backend:
+
+    * ``approve_dialogs`` — whether a spoken "yes"/"no" may answer a permission
+      dialog after its command was read aloud ("always" only when said
+      literally). Off: dialogs are read out, never answered by voice.
+    * ``stt`` / ``tts`` — ``"phone"`` (default) or ``"server"``: where
+      recognition / the voice run. Server recognition is what makes an iOS
+      home-screen icon hands-free (Web Speech works only in a Safari tab).
+    * ``stt_backend`` / ``tts_backend`` — which server backend
+      (:mod:`backend.web.core.speech`): ``""`` = the first ready one,
+      ``"openai"`` = any OpenAI-compatible host (OpenAI, Groq, ...),
+      ``"local"`` = faster-whisper / piper on this machine.
+    * ``stt_url`` / ``tts_url`` — base URL of a compatible host; ``stt_model``
+      / ``tts_model`` / ``tts_voice`` — the model and voice names it wants.
+    * ``stt_api_key`` / ``tts_api_key`` — SECRETS (masked on read, keep-on-empty
+      on write by the settings addon).
+
+    ``approve_dialogs`` is a personal policy and syncs across the person's
+    devices; everything else names THIS machine's backends and stays local.
+    """
+
+    approve_dialogs: bool = True
+    stt: str = "phone"
+    tts: str = "phone"
+    stt_backend: str = ""
+    stt_url: str = ""
+    stt_api_key: str = ""  # SECRET
+    stt_model: str = ""
+    tts_backend: str = ""
+    tts_url: str = ""
+    tts_api_key: str = ""  # SECRET
+    tts_model: str = ""
+    tts_voice: str = ""
+
+    _STR_FIELDS = (
+        "stt_backend",
+        "stt_url",
+        "stt_api_key",
+        "stt_model",
+        "tts_backend",
+        "tts_url",
+        "tts_api_key",
+        "tts_model",
+        "tts_voice",
+    )
+
+    def to_dict(self) -> dict:
+        out: dict = {}
+        if not self.approve_dialogs:
+            out["approve_dialogs"] = False
+        if self.stt != "phone":
+            out["stt"] = self.stt
+        if self.tts != "phone":
+            out["tts"] = self.tts
+        for k in self._STR_FIELDS:
+            v = getattr(self, k)
+            if v:
+                out[k] = v
+        return out
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "VoiceSettings":
+        def _where(v: Any) -> str:
+            v = str(v or "").strip().lower()
+            return v if v in ("phone", "server") else "phone"
+
+        return cls(
+            approve_dialogs=bool(d.get("approve_dialogs", True)),
+            stt=_where(d.get("stt")),
+            tts=_where(d.get("tts")),
+            **{k: str(d.get(k, "") or "").strip() for k in cls._STR_FIELDS},
+        )
+
+
+@dataclass
 class Settings:
     """The whole user settings document. All groups default to empty.
 
@@ -1834,6 +1921,7 @@ class Settings:
     peer: PeerSettings = field(default_factory=PeerSettings)
     prefs: PrefsSettings = field(default_factory=PrefsSettings)
     person: PersonSettings = field(default_factory=PersonSettings)
+    voice: VoiceSettings = field(default_factory=VoiceSettings)
     schema_version: int = 1
 
     def to_dict(self) -> dict:
@@ -1865,6 +1953,7 @@ class Settings:
             "peer": self.peer,
             "prefs": self.prefs,
             "person": self.person,
+            "voice": self.voice,
         }
 
     @classmethod
@@ -1908,6 +1997,7 @@ class Settings:
             peer=PeerSettings.from_dict(_group(d, "peer")),
             prefs=PrefsSettings.from_dict(_group(d, "prefs")),
             person=PersonSettings.from_dict(_group(d, "person")),
+            voice=VoiceSettings.from_dict(_group(d, "voice")),
             schema_version=version,
         )
         _derive_setup_from_store(obj)
