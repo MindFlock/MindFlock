@@ -1,0 +1,67 @@
+/* Settings → Your phone → Voice (screens/Mobile.tsx, VoiceSection): where
+   speech runs (phone | server) for recognition and the voice, and the
+   server-backend fields that unfold under a "server" choice. Same grid as
+   the ntfy form: label | control | side button, hint under the control. */
+
+.voice-section {
+  margin-top: 28px;
+}
+
+.voice-kind {
+  display: grid;
+  gap: 8px 16px;
+  margin: 0 0 18px;
+}
+
+.voice-field-row {
+  display: grid;
+  grid-template-columns: 140px 1fr auto;
+  align-items: center;
+  gap: 6px 16px;
+  margin: 0;
+}
+
+.voice-field-row .set-label {
+  min-width: 0;
+}
+
+.voice-field-row input,
+.voice-field-row select {
+  min-width: 0; /* shrink inside the grid track instead of overflowing */
+  width: 100%;
+}
+
+/* The hint under a field spans the whole row, aligned under the control. */
+.voice-field-row .set-hint {
+  grid-column: 2 / -1;
+  margin: 0;
+}
+
+/* The server's verdict on the saved fields: ✓ ready (backend) / ✗ why not. */
+.voice-ready {
+  margin: 0;
+}
+
+.voice-ready .mobile-row-glyph {
+  margin-right: 6px;
+}
+
+.voice-notes {
+  margin-top: 14px;
+}
+
+.voice-notes p {
+  margin: 6px 0 0;
+}
+
+@media (max-width: 560px) {
+  .voice-field-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .voice-field-row .set-label,
+  .voice-field-row .set-hint,
+  .voice-field-row > :is(input, select):not(:has(+ button)) {
+    grid-column: 1 / -1;
+  }
+}
