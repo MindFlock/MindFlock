@@ -5751,9 +5751,10 @@ first mic tap — a **Voice needs Safari: open this page in a Safari tab**
 banner with this page's URL and **Copy**. Without a recognizer the mic still
 turns voice on as a read-aloud mode (*No speech recognition here — replies
 are still read aloud*): replies and dialogs are spoken, nothing listens.
-Server recognition (Settings → Your phone → Voice) is what would let the
-home-screen icon hear you, but this build's page uses the phone's engines
-only and its Diagnostics says so (below).
+Server recognition (Settings → Your phone → Voice, `voice.stt = "server"`)
+is what lets the home-screen icon hear you: the page then records a clip
+(`MediaRecorder`) and sends it to the server's recognizer instead, and the
+Safari banner goes away. Diagnostics (below) names the adapter in use.
 
 **The loop.** Say the prompt; interim words show in the compose box. When
 the phrase is final it sits in the box behind a **2.5 s countdown** — tap the
@@ -5880,10 +5881,12 @@ the editable box are the mitigation for misheard identifiers. iOS speaks
 only through its compact voices and cuts long utterances, so lines are
 chunked by sentence with a timeout behind each chunk. Phone recognition
 sends audio to Google on Android and to Apple on iOS when no on-device model
-exists (the Settings screen says so). The server speech routes exist
-(`POST /api/voice/transcribe`, `POST /api/voice/speak`) and Settings → Your
-phone → Voice configures them, but this build's phone page does not call
-them yet.
+exists (the Settings screen says so). With Settings → Your phone → Voice
+set to the server for recognition or speech, the page uses the server's
+engines (`POST /api/voice/transcribe`, `POST /api/voice/speak`, audio played
+through one `AudioContext`) whenever `GET /api/voice` reports that backend
+ready, and the phone's own otherwise; a server that is asked for but not
+ready is said once in the strip.
 
 The page remembers, per browser (`localStorage`): the voice session and
 whether voice was on (the next visit offers **Tap to resume voice**), the
