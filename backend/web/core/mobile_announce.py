@@ -142,7 +142,27 @@ def _refresh_cache_soon() -> None:
     threading.Thread(target=_run, daemon=True).start()
 
 
-def click_for(session: str = "") -> str:
+def _cached_url() -> str:
+    """The cached phone URL (``""`` when unknown), kicking off a background
+    refresh when the cache is stale — never a probe on the caller's thread,
+    which is whatever thread emitted the event."""
+    with _CACHE_LOCK:
+        url, at = _CACHED_URL, _CACHED_AT
+    if at == 0.0 or time.monotonic() - at > _CACHE_TTL:
+        _refresh_cache_soon()
+    return url or ""
+
+
+def _is_shared_link(url: str) -> bool:
+    """Whether ``url`` is the shared link — one URL answered by whichever of
+    the user's devices is up, not necessarily this one."""
+    try:
+        return bool(url) and url == mobile_access._shared_link.advertised_url()
+    except Exception:  # noqa: BLE001 — unknown reads as "this device's URL"
+        return False
+
+
+def click_for(session: str = "", voice: bool = False) -> str:
     """The tap-target for a push: this machine's phone URL, deep-linked to
     ``session`` — or ``""`` when we don't know it.
 
@@ -152,20 +172,22 @@ def click_for(session: str = "") -> str:
     the mobile view already showing alpha (``/m?s=…`` — the same query param
     mobile.js honours when picking the session).
 
+    ``voice=True`` appends ``&voice=1``: the phone page's voice deep link, for
+    the pushes that carry the agent's words (a finished turn, a dialog) — the
+    page opens on the session, shows the line, and one tap speaks it and
+    starts listening.
+
     Reads the cache only — never probes on the caller's thread, which is
     whatever thread emitted the event. A stale (or missing) answer starts a
     background refresh and returns what it has, so at worst the *first* push
     after Tailscale comes up has no link and the next one does.
     """
-    with _CACHE_LOCK:
-        url, at = _CACHED_URL, _CACHED_AT
-    if at == 0.0 or time.monotonic() - at > _CACHE_TTL:
-        _refresh_cache_soon()
+    url = _cached_url()
     if not url:
         return ""
     if not session:
         return url
-    if url == mobile_access._shared_link.advertised_url():
+    if _is_shared_link(url):
         # The shared link may be answered by ANOTHER device, which lists this
         # one's sessions as `<device>::<title>` — so name it that way; the
         # mobile page strips the prefix again when it lands back here.
@@ -174,7 +196,32 @@ def click_for(session: str = "") -> str:
         if not _remote.is_remote_title(session):
             session = _remote.join_title(_remote.self_identity()["key"], session)
     sep = "&" if "?" in url else "?"
-    return "%s%ss=%s" % (url, sep, urllib.parse.quote(session, safe=""))
+    out = "%s%ss=%s" % (url, sep, urllib.parse.quote(session, safe=""))
+    if voice:
+        out += "&voice=1"
+    return out
+
+
+def act_base() -> str:
+    """The URL root a push's one-tap button posts back to — THIS device's
+    phone URL with the ``/m`` page stripped (``http://box:8765``), or ``""``
+    when unknown.
+
+    Unknown covers two cases, and both mean "attach no button": no tailnet
+    (the same answer :func:`click_for` gives), and the shared link. A button
+    is a capability token minted *here* (:mod:`backend.web.core.voice_actions`),
+    and the shared link is answered by whichever device is up — a POST that
+    lands on another device finds no such token and the tap does nothing. A
+    device-addressed URL in shared-link mode needs a probe this module does
+    not own; until then the dialog push carries only Open.
+    """
+    url = _cached_url()
+    if not url or _is_shared_link(url):
+        return ""
+    base = url.split("?", 1)[0].rstrip("/")
+    if base.endswith("/m"):
+        base = base[:-2]
+    return base.rstrip("/")
 
 
 def _auth_on() -> bool:

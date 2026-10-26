@@ -53,6 +53,13 @@ dev = [
     # tests point it at /usr/bin/google-chrome, so no `playwright install`.
     "playwright",
 ]
+# Optional server-side speech for the phone's voice mode (backend/web/core/
+# speech.py, backend id "local"): `uv sync --group voice`. Never imported at
+# server start — the backend loads them lazily on the first call.
+voice = [
+    "faster-whisper",
+    "piper-tts",
+]
 # Engine deps — needed to run sessions (the session manager / provisioned mode).
 #   uv sync --group engine
 engine = [

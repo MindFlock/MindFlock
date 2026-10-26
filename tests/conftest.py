@@ -201,6 +201,12 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     monkeypatch.setenv(
         "MINDFLOCK_THREAD_MARKER_DIR", str(tmp_path / "assistant" / "threads")
     )
+    # Voice: the per-session flag files the prompt hook reads, and the local
+    # speech models' dir — both home-guarded stores, both start empty.
+    monkeypatch.setenv(
+        "MINDFLOCK_VOICE_FLAG_DIR", str(tmp_path / "assistant" / "voice")
+    )
+    monkeypatch.setenv("MINDFLOCK_VOICE_DIR", str(tmp_path / "mindflock" / "voice"))
     # ...and each launch records whether it attached (the row's
     # ``mcp_attached``), in process memory: start every test with none seen.
     try:

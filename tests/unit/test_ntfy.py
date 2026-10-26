@@ -319,6 +319,71 @@ async def test_publish_omits_empty_optional_fields(http):
     assert "Authorization" not in http[0]["headers"]
 
 
+def _buttons(n: int = 2) -> list:
+    """ntfy's action shape, as the notify addon composes it for a dialog push."""
+    acts = [
+        {
+            "action": "http",
+            "label": label,
+            "url": "http://box.tail.net:8765/api/notify/act/" + ch * 32,
+            "method": "POST",
+            "clear": True,
+        }
+        for label, ch in (("Yes", "a"), ("No", "b"), ("Maybe", "c"), ("Later", "d"))
+    ][:n]
+    acts.append(
+        {
+            "action": "view",
+            "label": "Open",
+            "url": "http://box.tail.net:8765/m?s=a&voice=1",
+        }
+    )
+    return acts
+
+
+async def test_publish_carries_actions_in_the_json_body(http):
+    """ntfy's notification buttons ride in the JSON publish format's
+    ``actions`` list, verbatim."""
+    cfg = ntfy.NtfyConfig(enabled=True, topic="t")
+    await ntfy.publish(cfg, title="T", message="M", actions=_buttons(2))
+    assert http[0]["json"]["actions"] == _buttons(2)
+    assert http[0]["json"]["actions"][0]["method"] == "POST"
+
+
+async def test_publish_omits_actions_when_there_are_none(http):
+    cfg = ntfy.NtfyConfig(enabled=True, topic="t")
+    await ntfy.publish(cfg, title="T", message="M", actions=[])
+    await ntfy.publish(cfg, title="T", message="M", actions=None)
+    assert all("actions" not in call["json"] for call in http)
+
+
+async def test_publish_caps_actions_at_ntfys_three(http):
+    cfg = ntfy.NtfyConfig(enabled=True, topic="t")
+    await ntfy.publish(cfg, title="T", message="M", actions=_buttons(4))
+    assert len(http[0]["json"]["actions"]) == 3
+
+
+async def test_publish_soon_forwards_actions(monkeypatch):
+    """The passthrough the notify addon relies on, checked at the seam."""
+    seen: list = []
+
+    async def _publish(cfg, **kw):
+        seen.append(kw)
+        return True, ""
+
+    monkeypatch.setattr(ntfy, "publish", _publish)
+    ntfy.set_loop(asyncio.get_running_loop())
+    ntfy.publish_soon(
+        ntfy.NtfyConfig(enabled=True, topic="t"),
+        title="T",
+        message="M",
+        click="http://box/m",
+        actions=_buttons(1),
+    )
+    assert await _settle(lambda: seen)
+    assert seen[0]["actions"] == _buttons(1) and seen[0]["click"] == "http://box/m"
+
+
 async def test_publish_surfaces_server_error_sentence(http):
     http.state["response"] = _FakeResponse(
         403, payload={"code": 40301, "error": "topic is reserved"}

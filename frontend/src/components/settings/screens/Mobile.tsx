@@ -11,7 +11,14 @@
  * The QR never shows while it would open a URL that hangs, so there is never
  * a "scan the QR below" pointing at the wrong QR. Nothing here is a knob: the
  * Tailscale-mode switch ("Make reachable"), the shared phone link and the
- * access token live on Settings → Your devices / Security. */
+ * access token live on Settings → Your devices / Security.
+ *
+ * Below the rows, "Voice" (VoiceSection): talking to a session from the phone
+ * page. Speech runs on the phone by default; each of recognition and the
+ * voice can move to this server (core/speech.py's backends: an
+ * OpenAI-compatible host, or local models). The fields save through the
+ * regular settings model (POST /api/settings {voice}); the readiness line is
+ * the server's offline verdict from GET /api/voice, re-read after a save. */
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api } from "../../../api/client";
@@ -19,7 +26,9 @@ import { copyText } from "../../../lib/clipboard";
 import { toast } from "../../../lib/toast";
 import { useConfig } from "../../../state/queries";
 import type { ScreenProps } from "../SettingsDialog";
+import { SECRET_MASK, SettingField, useSettings, type SettingsModel } from "../useSettings";
 import { TailscaleCard, type TailscaleHealth } from "./TailscaleCard";
+import "./mobileVoice.css";
 
 interface MobilePayload {
   serve_mode?: string;
@@ -218,6 +227,7 @@ export function Mobile(p: ScreenProps) {
           </div>
         </Row>
       </ol>
+      <VoiceSection active={p.active} />
     </>
   );
 }
@@ -270,5 +280,284 @@ export function UrlList({ urls }: { urls: Array<{ label: string; url: string }> 
         </div>
       ))}
     </dl>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Voice: talking to a session from the phone page
+// --------------------------------------------------------------------------- //
+
+/** GET /api/voice: where speech runs, and the server's offline verdict on the
+ * saved backend fields (core/speech.py describe()). */
+export interface VoiceView {
+  stt?: string;
+  tts?: string;
+  approve_dialogs?: boolean;
+  agent_words?: boolean;
+  backends?: { stt?: string[]; tts?: string[] };
+  server_ready?: {
+    stt?: boolean;
+    tts?: boolean;
+    detail?: string;
+    stt_backend?: string;
+    stt_detail?: string;
+    tts_backend?: string;
+    tts_detail?: string;
+  };
+}
+
+export type VoiceKind = "stt" | "tts";
+
+const KIND_WORD: Record<VoiceKind, string> = { stt: "recognition", tts: "voice" };
+
+/** The backend picker. "" = whichever backend is ready first (a keyed host,
+ * else the local models). */
+export const VOICE_BACKENDS = [
+  { value: "", label: "Whichever is ready" },
+  { value: "openai", label: "OpenAI-compatible host" },
+  { value: "local", label: "Local models on this computer" },
+];
+
+/** Which fields a kind's block shows. Nothing while that kind runs on the
+ * phone. On the server: the picker always; URL and key only for a host (and
+ * for "whichever", which may pick one); the model name for recognition on
+ * either backend (the host's model / a whisper size) and for a host's voice;
+ * the voice name only for the voice. */
+export function voiceFields(
+  kind: VoiceKind,
+  where: string,
+  backend: string
+): { backend: boolean; url: boolean; key: boolean; model: boolean; voice: boolean } {
+  if (where !== "server") return { backend: false, url: false, key: false, model: false, voice: false };
+  const host = backend !== "local";
+  return { backend: true, url: host, key: host, model: kind === "stt" || host, voice: kind === "tts" };
+}
+
+/** The line under a kind's fields: the server's verdict from GET /api/voice
+ * (text "" while that kind runs on the phone — nothing to report). */
+export function readinessLine(
+  kind: VoiceKind,
+  view: VoiceView | null | undefined,
+  where: string
+): { ok: boolean; text: string } {
+  if (where !== "server") return { ok: false, text: "" };
+  const word = KIND_WORD[kind];
+  if (!view) return { ok: false, text: "Checking the server…" };
+  const sr = view.server_ready || {};
+  const ok = !!(kind === "stt" ? sr.stt : sr.tts);
+  const id = (kind === "stt" ? sr.stt_backend : sr.tts_backend) || "";
+  const detail = (kind === "stt" ? sr.stt_detail : sr.tts_detail) || "";
+  if (ok) return { ok, text: `Server ${word} ready (${id || "server"})${detail ? ": " + detail : ""}.` };
+  return { ok, text: `Server ${word} not ready${detail ? ": " + detail : ""}.` };
+}
+
+/** Settings → Your phone → Voice. Live state: the settings document (every
+ * field saves on its own, like the rest of Settings) and the server's
+ * readiness verdict, re-read after each save because it is about the saved
+ * fields. */
+export function VoiceSection({ active }: { active: boolean }) {
+  const model = useSettings();
+  const [view, setView] = useState<VoiceView | null>(null);
+  const stt = String(model.get("voice", "stt") || "phone");
+  const tts = String(model.get("voice", "tts") || "phone");
+  const wantServer = stt === "server" || tts === "server";
+  const doc = model.settings;
+  useEffect(() => {
+    if (!active || !wantServer) return;
+    let live = true;
+    api<VoiceView>("/api/voice")
+      .then((v) => live && setView(v))
+      .catch((err: Error) => {
+        if (!live) return;
+        const why = "could not ask the server: " + (err.message || "no answer");
+        setView({ server_ready: { stt: false, tts: false, stt_detail: why, tts_detail: why } });
+      });
+    return () => {
+      live = false;
+    };
+    // `doc` changes identity on every save, which is exactly when the verdict
+    // may change.
+  }, [active, wantServer, doc]);
+
+  const clearKey = async (kind: VoiceKind) => {
+    // POST /api/settings keeps a secret sent blank (the app-wide convention),
+    // so forgetting one is its own owner-only call.
+    try {
+      await api("/api/voice/clear-key", { json: { kind } });
+      toast("Key removed");
+      await model.reload();
+    } catch (err) {
+      toast((err as Error).message || "Couldn't remove the key");
+    }
+  };
+
+  return <VoiceSectionView model={model} view={view} onClearKey={clearKey} />;
+}
+
+/** The section's markup, given the model and the server's verdict (so a test
+ * can render it without a dialog or a fetch). */
+export function VoiceSectionView({
+  model,
+  view,
+  onClearKey,
+}: {
+  model: SettingsModel;
+  view: VoiceView | null;
+  onClearKey(kind: VoiceKind): void;
+}) {
+  const approve = model.get("voice", "approve_dialogs") !== false;
+  return (
+    <section className="voice-section" id="mobile-voice">
+      <h3 className="set-section-title">Voice</h3>
+      <p className="set-hint set-block-hint" id="voice-intro">
+        Talk to a session from the phone page: tap the mic on /m. Speech runs on the phone by default.
+      </p>
+      <VoiceKindBlock kind="stt" title="Recognition" model={model} view={view} onClearKey={onClearKey} />
+      <VoiceKindBlock kind="tts" title="Voice" model={model} view={view} onClearKey={onClearKey} />
+      <div className="set-row set-switch-row" id="voice-approve-row">
+        <span className="notif-rule-text">
+          <span className="set-label" id="voice-approve-label">
+            Approve dialogs by voice
+          </span>
+          <span className="set-hint notif-rule-desc">
+            A spoken yes or no answers a permission dialog after its command is read aloud. 'Always' is
+            only accepted when you say the word.
+          </span>
+        </span>
+        {/* label wraps only the switch, so clicking the row text never flips it */}
+        <label className="ca-switch">
+          <input
+            type="checkbox"
+            id="voice-approve"
+            aria-labelledby="voice-approve-label"
+            checked={approve}
+            onChange={(e) => {
+              model.saveField("voice", "approve_dialogs", e.target.checked);
+            }}
+          />
+          <span className="ca-slider" />
+        </label>
+      </div>
+      <div className="voice-notes">
+        <p className="set-hint" id="voice-privacy">
+          Phone recognition sends audio to Google on Android and to Apple on iOS when no on-device model
+          exists.
+        </p>
+        <p className="set-hint" id="voice-iphone">
+          On iPhone, voice needs a Safari tab: the home-screen icon cannot hear you. Server recognition
+          fixes that.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+/** One kind — recognition or the voice: phone | server, then the backend
+ * fields that apply, then the server's verdict. */
+function VoiceKindBlock({
+  kind,
+  title,
+  model,
+  view,
+  onClearKey,
+}: {
+  kind: VoiceKind;
+  title: string;
+  model: SettingsModel;
+  view: VoiceView | null;
+  onClearKey(kind: VoiceKind): void;
+}) {
+  const where = String(model.get("voice", kind) || "phone");
+  const backend = String(model.get("voice", kind + "_backend") || "");
+  const f = voiceFields(kind, where, backend);
+  const line = readinessLine(kind, view, where);
+  const keySaved = model.get("voice", kind + "_api_key") === SECRET_MASK;
+  const local = backend === "local";
+  return (
+    <div className="voice-kind" data-kind={kind}>
+      <div className="voice-field-row">
+        <span className="set-label">{title}</span>
+        <SettingField
+          group="voice"
+          field={kind}
+          options={[
+            { value: "phone", label: "Phone" },
+            { value: "server", label: "Server" },
+          ]}
+        />
+        <span />
+        <span className="set-hint">
+          {kind === "stt" ? "Where your words become text." : "Where the agent's words become speech."}
+        </span>
+      </div>
+      {f.backend && (
+        <div className="voice-field-row">
+          <span className="set-label">Backend</span>
+          <SettingField group="voice" field={kind + "_backend"} options={VOICE_BACKENDS} />
+          <span />
+        </div>
+      )}
+      {f.url && (
+        <div className="voice-field-row">
+          <span className="set-label">URL</span>
+          <SettingField group="voice" field={kind + "_url"} placeholder="https://api.openai.com/v1" />
+          <span />
+          <span className="set-hint">
+            The host's base URL; blank means OpenAI. Groq: https://api.groq.com/openai/v1.
+          </span>
+        </div>
+      )}
+      {f.key && (
+        <div className="voice-field-row">
+          <span className="set-label">API key</span>
+          <SettingField group="voice" field={kind + "_api_key"} type="password" placeholder="paste the host's key" />
+          {keySaved ? (
+            <button
+              type="button"
+              className="test-btn"
+              id={"voice-clear-" + kind}
+              title="Forget the saved key"
+              onClick={() => onClearKey(kind)}
+            >
+              Clear
+            </button>
+          ) : (
+            <span />
+          )}
+          <span className="set-hint">Leave blank to keep the saved one.</span>
+        </div>
+      )}
+      {f.model && (
+        <div className="voice-field-row">
+          <span className="set-label">Model</span>
+          <SettingField
+            group="voice"
+            field={kind + "_model"}
+            placeholder={local ? "small" : kind === "stt" ? "gpt-transcribe" : "gpt-4o-mini-tts"}
+          />
+          <span />
+          <span className="set-hint">
+            {local
+              ? "A faster-whisper size: tiny, base, small or medium."
+              : "The host's model name (Groq: whisper-large-v3-turbo)."}
+          </span>
+        </div>
+      )}
+      {f.voice && (
+        <div className="voice-field-row">
+          <span className="set-label">Voice name</span>
+          <SettingField group="voice" field="tts_voice" placeholder={local ? "en_US-lessac-medium" : "alloy"} />
+          <span />
+        </div>
+      )}
+      {line.text && (
+        <p className={"set-hint voice-ready st-" + (line.ok ? "ok" : "fail")} id={"voice-ready-" + kind}>
+          <span className={"mobile-row-glyph st-" + (line.ok ? "ok" : "fail")} aria-hidden="true">
+            {line.ok ? "✓" : "✗"}
+          </span>
+          {line.text}
+        </p>
+      )}
+    </div>
   );
 }

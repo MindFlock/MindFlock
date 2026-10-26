@@ -204,6 +204,22 @@ GOLDEN = {
         },
         "Do you trust the contents of this directory?",
     ),
+    "codex_update": (
+        _codex,
+        {
+            "heading": None,
+            "question": "Update available · 0.146.0 → 0.164.0",
+            "command": None,
+            "detail": "Release notes: https://github.com/openai/codex/releases/latest",
+            "options": _opts(
+                ("Update now (runs `npm install -g @openai/codex`)", "other"),
+                ("Skip", "other"),
+                ("Skip until next version", "other"),
+            ),
+        },
+        "Update available · 0.146.0 → 0.164.0 Release notes: "
+        "https://github.com/openai/codex/releases/latest",
+    ),
 }
 
 
@@ -218,7 +234,8 @@ def test_golden_screen_parses(name):
     assert got == want
     # The region is the dialog itself: cursor-free, its options included.
     assert "❯" not in region and "›" not in region
-    assert want["options"][-1]["label"].split(",")[0] in region
+    # The region id is whitespace-free (see dialogs._id_key).
+    assert want["options"][-1]["label"].split(",")[0].replace(" ", "") in region
 
 
 @pytest.mark.parametrize("name", sorted(GOLDEN))
@@ -281,7 +298,7 @@ def test_the_fixtures_use_the_providers_own_wording():
         assert waiting(claude, _screen(name)), name
     trust = claude.trust_prompt().patterns
     assert any(p in _screen("claude_trust_folder") for p in trust)
-    for name in ("codex_exec", "codex_edits"):
+    for name in ("codex_exec", "codex_edits", "codex_update"):
         assert waiting(codex, _screen(name)), name
     assert not waiting(claude, _screen("claude_printed_list"))
 

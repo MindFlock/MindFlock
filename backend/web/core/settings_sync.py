@@ -178,8 +178,11 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
         "ntfy_server",
         "ntfy_topic",
         "ntfy_token",
+        "ntfy_agent_words",
     ),
     "extensions": ("disabled",),
+    # A personal policy (may a spoken "yes" answer a dialog), not a machine fact.
+    "voice": ("approve_dialogs",),
     "prefs": (
         "keymap",
         "prompt_presets",
@@ -239,6 +242,20 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         "mcp_shared_servers",
     ),
     "notifications": ("ntfy_click_url",),
+    # Which speech backends THIS machine runs or is keyed for.
+    "voice": (
+        "stt",
+        "tts",
+        "stt_backend",
+        "stt_url",
+        "stt_api_key",
+        "stt_model",
+        "tts_backend",
+        "tts_url",
+        "tts_api_key",
+        "tts_model",
+        "tts_voice",
+    ),
     "peer": (
         "enabled",
         "listen_host",
@@ -340,6 +357,7 @@ GROUP_LABELS: Dict[str, str] = {
     "prefs": "Preferences",
     "person": "You",
     "store": "Saved items",
+    "voice": "Voice",
 }
 
 LABELS: Dict[str, str] = {
@@ -397,6 +415,8 @@ LABELS: Dict[str, str] = {
     "notifications.ntfy_enabled": "Phone notifications on/off",
     "notifications.ntfy_server": "ntfy server",
     "notifications.ntfy_topic": "ntfy topic",
+    "notifications.ntfy_agent_words": "Agent's words in phone pushes",
+    "voice.approve_dialogs": "Approve dialogs by voice",
     "notifications.ntfy_token": "ntfy token",
     "extensions.disabled": "Disabled extensions",
     "prefs.keymap": "Keyboard shortcuts",

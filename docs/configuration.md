@@ -638,6 +638,14 @@ server merges on save so multiple processes can share it.
   by the explorer's self-heal at startup, and by `mindflock doctor`. Follows
   `$MINDFLOCK_HOME` (like `install.json`). See
   [extensions.md](extensions.md#worked-example-the-database-client).
+- `voice/` — the local speech backend's model files
+  (`backend/web/core/speech.py`, `voice.stt_backend` / `tts_backend` =
+  `"local"`): `whisper/` (faster-whisper's download root — the CTranslate2
+  model, `small` unless `voice.stt_model` names another size) and
+  `piper/<voice>.onnx` + `.onnx.json` (~60 MB each). Downloaded from Hugging
+  Face on first use, never at server start. Override with
+  `$MINDFLOCK_VOICE_DIR`. See
+  [web-api.md](web-api.md#voice-talking-to-a-session-from-the-phone).
 - `accounts/<id>/` — an `account`-kind auth profile's isolated CLI config dir
   (mode 0700), created on save and pointed at by `CLAUDE_CONFIG_DIR` /
   `CODEX_HOME` when a session runs under that profile. **Holds real
@@ -657,6 +665,8 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `usage-history.json` | Durable daily token/cost ledger |
 | `scroll-speed` | Terminal wheel speed, 1–20 (also settable in the UI) |
 | `.exit-markers/<session>.code` | Last exit code per session (clean-quit vs crash detection) |
+| `.activity-markers/<session>.json`, `<session>.reply.json` | The per-session `{state, ts}` activity marker the CLI's lifecycle hooks write ([providers.md](providers.md#activity-signal-activity_markerspy)), and beside it the reply the `Stop` hook files — `{"ts", "text"}`, the payload's `last_assistant_message` cut at 8000 chars — which is where a session's spoken `Say:` line is read from (the `last_say` row field, the `say` event data, `GET …/voice`). Both keyed by tmux session name; the reply file goes with the session. Override the directory with `MINDFLOCK_ACTIVITY_MARKER_DIR` (below) |
+| `.voice/<session>.on` | The per-session **voice flag** (`backend/web/core/voice.py`): exists while a phone is talking to that session. The installed `UserPromptSubmit` hook tests for it at fire time and, when it exists, prints the voice instruction for Claude Code to inject; `POST …/voice` writes and removes it, session removal drops it, so a closed session leaves no flag behind and a namesake inherits none. Override the directory with `MINDFLOCK_VOICE_FLAG_DIR` |
 | `prompts/` | Generated ticket prompts (pruned after 1 h) |
 | `.red-zones/<sha1>.json` | Per-worktree zone guard files the tool hook reads at fire time (`v: 2`: red `rules`/`files`/`dirs`/`sym`, green `green_rules` + `companions`; GC'd a day after their worktree stops being live) |
 | `.tool-feed/.snap/<tool_use_id>.json` | The Bash backstop's pre-command snapshot (zoned-file stats + the `git status` dirty set), consumed by the post hook; stale ones GC'd hourly |
@@ -755,6 +765,8 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_SESSION_NAME` | — | Read by the injected CLI hook commands at fire time to attribute activity/thread markers to a MindFlock window; unset, the hooks fall back to the live tmux `#{session_name}` |
 | `MINDFLOCK_PROVIDER_BIN_<NAME>` | — | Per-provider binary override (provider name uppercased, non-alphanumerics → `_`; e.g. `MINDFLOCK_PROVIDER_BIN_CLAUDE=/opt/claude`). Wins over Settings → `coding_cli.binary_paths` and the provider TOML's `binary_path` |
 | `MINDFLOCK_ACTIVITY_MARKER_DIR` | `~/.mindflock-assistant/.activity-markers` | Per-session `{state, ts}` markers the CLI activity hooks write (working/idle/clarify detection — Claude, Codex, and opt-in TOML providers; see [providers.md](providers.md)). Read by the hook **at fire-time from the firing CLI's environment**, not by the server at install time — so a sandboxed CLI (redirected `HOME`) writes into its own sandbox instead of poisoning the shared hooks file's path for cohabiting sessions. Note: does **not** follow `MINDFLOCK_ASSISTANT_DIR` |
+| `MINDFLOCK_VOICE_FLAG_DIR` | `~/.mindflock-assistant/.voice` | Per-session voice flags (`<session>.on`) that say a phone is talking to that session — written by `POST /api/instances/{title}/voice`, tested **at fire time** by the installed `UserPromptSubmit` hook (from the firing CLI's environment, exactly like the marker dir above), which then prints the voice instruction for Claude Code to inject. Through the home guard, so a test can never flip a real session's flag. Does **not** follow `MINDFLOCK_ASSISTANT_DIR` |
+| `MINDFLOCK_VOICE_DIR` | `~/.mindflock/voice` | Where the local speech backend keeps its downloaded models (`whisper/`, `piper/`) when `voice.stt_backend` / `tts_backend` is `local` |
 | `MINDFLOCK_THREAD_MARKER_DIR` | `~/.mindflock-assistant/.thread-markers` | Per-window conversation-id markers so sessions sharing a directory each resume their *own* thread. Note: does **not** follow `MINDFLOCK_ASSISTANT_DIR` |
 | `CODEX_HOME` | `~/.codex` | Codex CLI data dir; usage is read from `$CODEX_HOME/sessions` |
 | `ANTIGRAVITY_CLI_DIR` | `~/.gemini/antigravity-cli` | Antigravity CLI state dir (conversation DBs, usage) |
@@ -988,7 +1000,8 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   merely on the same tailnet is never pulled from. Shared: ticket sources,
   GitHub options/repos/token, repository branches and Verify options, default
   agents and launch args, budgets, agent limits, trusted Tailscale accounts,
-  notification rules and ntfy, accent and scroll speed, disabled extensions,
+  notification rules and ntfy (the agent-words push toggle included), the
+  voice approval policy (`voice.approve_dialogs`), accent and scroll speed, disabled extensions,
   UI preferences (`prefs`: keymap, prompt presets, theme, diff view, bars,
   break/idle reminders, hints, Map tour seen), session templates, red zones of repos with a
   remote, and user agent-CLI providers (`~/.mindflock/providers/*.toml`; a
@@ -996,7 +1009,8 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   `binary_path`). Never shared: paths, binary paths, workspace dir, bind/serve
   mode, the access token and gate mode, remote control, shared link, ingestion
   autostart, the engine mode/session cap, the local model, platform/IDE
-  commands, signed-in accounts and peer links. A
+  commands, the speech backends and their keys (the rest of `voice`),
+  signed-in accounts and peer links. A
   repository given as a local checkout travels as its origin URL and lands as
   the other machine's checkout of the same repo. A default agent that isn't
   installed on a machine is held back there ("not applied here") until it is.
@@ -1128,6 +1142,49 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   on an empty write, and dropped if `_server` is retargeted at a different host).
   `_click_url` is opened when you tap the notification; a `token=` parameter is
   stripped from it, since it is stored on the ntfy server.
+  `_agent_words` (**Include the agent's words in pushes**, default on; synced
+  like the rest of the channel) is pocket mode: the *has finished* push's
+  body is the session's spoken `Say:` line and the *needs you: Question*
+  push's body is the dialog's question and command, so a phone that reads
+  notifications aloud (iOS Announce Notifications) says something useful. Off
+  keeps every body generic — the words would otherwise travel through the
+  ntfy server. The two pushes' click URL (`/m?s=<title>&voice=1`) and the
+  dialog push's one-tap Yes / No buttons do not depend on it. See
+  [web-ui.md](web-ui.md#voice-talking-to-a-session) and
+  [web-api.md](web-api.md#addon-routes).
+- **Voice** (`voice.*`, Settings → Your phone → Voice) — talking to a session
+  from the phone page ([web-ui.md](web-ui.md#voice-talking-to-a-session)).
+  Speech itself comes from the phone's own engines unless a field here points
+  at a server backend:
+  - `approve_dialogs` (default `true`) — whether a spoken "yes" / "no" may
+    answer a permission dialog after its command was read aloud ("always"
+    only when said literally). `false`: dialogs are read out, never answered
+    by voice. A personal policy, so it is **synced** across your devices.
+  - `stt` / `tts` — `"phone"` (default) or `"server"`: where recognition and
+    the voice run. Server recognition is what would let an iOS home-screen
+    icon hear you (Web Speech recognition exists only in a Safari tab) — the
+    routes and backends exist (`POST /api/voice/transcribe`, `POST
+    /api/voice/speak`), though this build's phone page still uses the phone's
+    engines whatever these say.
+  - `stt_backend` / `tts_backend` — which server backend
+    (`backend/web/core/speech.py`): `""` = the first ready one, `"openai"` =
+    any OpenAI-compatible host (OpenAI, Groq, a self-hosted server),
+    `"local"` = faster-whisper / piper on this machine (`uv sync --group
+    voice`; models under `~/.mindflock/voice/`, refused while memory is low,
+    unloaded after 10 idle minutes).
+  - `stt_url` / `tts_url` — base URL of a compatible host (blank =
+    `https://api.openai.com/v1`); `stt_model` / `tts_model` / `tts_voice` —
+    the model and voice names it wants (blank = `gpt-transcribe`,
+    `gpt-4o-mini-tts`, `alloy`; for the local backend the whisper size,
+    default `small`, and the piper voice, default `en_US-lessac-medium`).
+  - `stt_api_key` / `tts_api_key` — secrets (masked on read as `•••set`,
+    kept on an empty write; `POST /api/voice/clear-key {kind}` forgets one).
+
+  Everything but `approve_dialogs` names **this** machine's backends and keys
+  and stays local (never synced). Read on every call, so a save applies at
+  once. Written through `POST /api/settings` (`{"voice": {"stt": "server"}}`,
+  owner only); `GET /api/voice` reports the effective state plus the server's
+  readiness verdict. See [web-api.md](web-api.md#voice-talking-to-a-session-from-the-phone).
 
 The whole `notifications` group as it lands in `settings.json`:
 
@@ -1139,7 +1196,26 @@ The whole `notifications` group as it lands in `settings.json`:
   "ntfy_server": "https://ntfy.sh",      // omitted = the public default
   "ntfy_topic": "mindflock-xTPq…",       // on a public server this IS the credential
   "ntfy_token": "tk_…",                  // secret: masked on read as "•••set"
-  "ntfy_click_url": "https://box.tailnet.ts.net/m"
+  "ntfy_click_url": "https://box.tailnet.ts.net/m",
+  "ntfy_agent_words": false              // only written when OFF (pocket mode is the default)
+}
+```
+
+And the `voice` group, with every field at its default left out the same way
+(`approve_dialogs` is written only when `false`, `stt` / `tts` only when
+`"server"`, the strings only when set):
+
+```jsonc
+"voice": {
+  "stt": "server",                       // recognition on a server backend
+  "stt_backend": "openai",               // "" = whichever is ready, "openai", "local"
+  "stt_url": "https://api.groq.com/openai/v1",   // any OpenAI-compatible host; blank = api.openai.com
+  "stt_api_key": "gsk_…",                // pragma: allowlist secret — an example; masked on read as "•••set"
+  "stt_model": "whisper-large-v3-turbo", // the host's model name; a whisper size ("small") for "local"
+  "tts": "server",
+  "tts_backend": "local",                // piper on this machine
+  "tts_voice": "en_US-lessac-medium",    // the piper voice; a host's voice name ("alloy") for "openai"
+  "approve_dialogs": false               // dialogs are read out, never answered by voice
 }
 ```
 

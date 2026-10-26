@@ -13,7 +13,14 @@ import { SECRET_MASK } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 import { AdvancedFold } from "../settingsMode";
 import { flashSaved } from "../savedCue";
-import { groupRules, ONLY_BELL_HINT, ruleCopy } from "./notifyCopy";
+import {
+  AGENT_WORDS_LABEL,
+  ANNOUNCE_TIP,
+  agentWordsHint,
+  groupRules,
+  ONLY_BELL_HINT,
+  ruleCopy,
+} from "./notifyCopy";
 
 const NOTIFY_KEY = "mindflock.notify.enabled";
 
@@ -222,6 +229,8 @@ interface NtfyView {
   topic?: string;
   has_token?: boolean;
   click_url?: string;
+  /** Pocket mode: the agent's words in push bodies (default on). */
+  agent_words?: boolean;
   configured?: boolean;
   active?: boolean;
   public_server?: boolean;
@@ -458,6 +467,37 @@ function Ntfy({ onChange, setup = 0 }: { onChange?(v: NtfyView): void; setup?: n
           Opened when you tap an alert. Don't put an access token in it.
         </span>
       </div>
+      {/* Pocket mode: the push body carries the agent's own words — a finished
+          turn's spoken line, a dialog's question — so a phone that reads
+          notifications aloud says something useful while it stays in a
+          pocket. Saved through the same view as the fields above. */}
+      <div
+        className="set-row set-switch-row notif-rule"
+        id="ntfy-agent-words-row"
+        title="Put the agent's spoken line and a dialog's question in the push itself, so a phone that reads notifications aloud says something useful"
+      >
+        <span className="notif-rule-text">
+          <span className="set-label" id="ntfy-agent-words-label">
+            {AGENT_WORDS_LABEL}
+          </span>
+          <span className="set-hint notif-rule-desc" id="ntfy-agent-words-hint">
+            {agentWordsHint(!!view.public_server)}
+          </span>
+        </span>
+        <label className="ca-switch">
+          <input
+            type="checkbox"
+            id="ntfy-agent-words"
+            aria-labelledby="ntfy-agent-words-label"
+            checked={view.agent_words !== false}
+            onChange={(e) => save({ agent_words: e.target.checked }, e.currentTarget)}
+          />
+          <span className="ca-slider" />
+        </label>
+      </div>
+      <p className="set-hint" id="ntfy-announce-tip">
+        {ANNOUNCE_TIP}
+      </p>
       <div className="ntfy-test-row">
         <button
           type="button"

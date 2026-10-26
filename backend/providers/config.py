@@ -448,6 +448,10 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
             "Yes, just this once",
             "No, and tell Codex what to do differently",
             "Yes, provide the requested info",
+            # The self-update picker ("Update available · a → b" over
+            # Update now / Skip / Skip until next version): a human decision
+            # too, and one a typed Enter must never make (it did, once).
+            r"Update available · ",
         ),
         # Codex ships a first-class hooks engine whose config shape and payload
         # field names (`session_id`, `hook_event_name`, `cwd`) match Claude
