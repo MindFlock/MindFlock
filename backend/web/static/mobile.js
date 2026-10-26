@@ -2759,7 +2759,7 @@
   //        onStatus carries a caption that is not words ("Transcribing…").
   //        PhoneSTT over webkitSpeechRecognition (continuous), adding end()
   //        (stop gracefully: what was heard still arrives); ServerSTT
-  //        records a clip (MediaRecorder) per phrase — its silence detector
+  //        records a clip (WAV, off the AudioContext) per phrase — its silence detector
   //        ends the clip — and POSTs it to /api/voice/transcribe, adding
   //        finish() (end the clip now: the tap) and pending() (on its way)
   //   tts {name, available(), prime(), speak(text) → Promise, cancel(),
@@ -2961,20 +2961,26 @@
     return { name: "phone", available: available, prime: prime, speak: speak, cancel: cancel, voices: voices };
   }
 
-  // --- ServerSTT: MediaRecorder → POST /api/voice/transcribe -----------------
-  // The phone records ONE clip and the server recognises it (Settings → Your
-  // phone → Voice, recognition "server"; GET /api/voice says when the server
-  // is ready). This is the recognizer an iOS home-screen app has — Web
-  // Speech exists only in a Safari tab — and the one that keeps the audio
-  // off Google's and Apple's servers. The shape follows PLAN.md §2:
-  // record → stop → one blob (a timeslice under a second yields EMPTY blobs
-  // on Safari 26, so start() takes no argument); the mic stream is asked for
-  // once and kept across turns, its tracks stopped when voice goes off or the
-  // page hides (release()); iOS records audio/mp4 (AAC) before 18.4 and
-  // webm/opus after, so the first supported entry of SERVER_MIMES is used and
-  // sent as the Content-Type. There are no interim words: onStatus says
-  // "Listening… <n> s" (the machine adds the radio hint), and onLevel feeds
-  // the strip's level meter from an AnalyserNode on the shared AudioContext.
+  // --- ServerSTT: WAV recorder → POST /api/voice/transcribe ------------------
+  // The phone records ONE clip and the server recognises it (Settings →
+  // Voice, recognition "server"; GET /api/voice says when the server is
+  // ready). This is the recognizer an iOS home-screen app has — Web Speech
+  // exists only in a Safari tab — and the one that keeps the audio off
+  // Google's and Apple's servers. The clip is 16-bit PCM mono WAV at 16 kHz,
+  // whatever the browser: the server's built-in recognizers (Windows'
+  // System.Speech, macOS' Speech framework) need plain PCM, and faster-whisper
+  // and OpenAI take WAV too. The browser's own recorder cannot make it
+  // (webm/opus on Chrome, mp4/AAC on Safari), so the samples come straight off the shared
+  // AudioContext (voiceAudioCtx, made inside the tap): the mic stream →
+  // ScriptProcessorNode(4096, 1, 1) → a muted GainNode → the destination
+  // (Chrome does not run a ScriptProcessor that reaches nothing). Each block's
+  // channel 0 is copied into a list; finish() joins them, resamples to
+  // VOICE_WAV_RATE (voiceResample) and encodes (voiceWavEncode) — the same
+  // algorithm as the desktop app's lib/wavRecorder.ts. The mic stream is
+  // asked for once and kept across turns, its tracks stopped when voice goes
+  // off or the page hides (release()). There are no interim words: onStatus
+  // says "Listening… <n> s" (the machine adds the radio hint), and onLevel
+  // feeds the strip's level meter from the RMS of the same blocks.
   // The clip is one phrase: it ends on VOICE_SILENCE_MS of quiet after speech
   // was heard, on a tap (finish()), or at the cap (VOICE_CLIP_MAX_MS, or the listening window if
   // that is shorter); stop() discards it and never reports, like PhoneSTT's.
@@ -2982,28 +2988,61 @@
   // waits instead of expiring. Errors reach onError with PhoneSTT's codes
   // plus "server" (detail = the line to show; a 409 is the one-line hint to
   // turn recognition on) and "nothing-recorded".
-  var SERVER_MIMES = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
+  var VOICE_WAV_RATE = 16000;            // the rate of the uploaded clip
   var VOICE_SILENCE_MS = 1800;           // quiet after speech that ends the clip
   var VOICE_CLIP_MAX_MS = 12000;         // the hard cap on one clip
-  var VOICE_LEVEL_MS = 100;              // meter / silence sampling period
+  var VOICE_LEVEL_MS = 100;              // the caption clock's period
   var VOICE_RMS_SPEECH = 0.02;           // RMS (0..1) above which the clip has speech
   var VOICE_UPLOAD_TIMEOUT_MS = 45000;   // the transcribe request's own cap
+  // Linear interpolation from `from` Hz to `to` Hz (mono); the input itself
+  // when the rates match.
+  function voiceResample(samples, from, to) {
+    if (!from || !to || from === to || !samples.length) return samples;
+    var n = samples.length;
+    var out = new Float32Array(Math.floor((n * to) / from));
+    var step = from / to;
+    for (var i = 0; i < out.length; i++) {
+      var pos = i * step, i0 = Math.floor(pos), i1 = i0 + 1 < n ? i0 + 1 : n - 1;
+      out[i] = samples[i0] + (samples[i1] - samples[i0]) * (pos - i0);
+    }
+    return out;
+  }
+  // 16-bit PCM mono WAV: the 44-byte RIFF header, little-endian, then the
+  // samples clamped to [-1, 1]. An ArrayBuffer (the caller makes the Blob).
+  function voiceWavEncode(samples, rate) {
+    var size = samples.length * 2;
+    var buf = new ArrayBuffer(44 + size), v = new DataView(buf);
+    function ascii(at, s) { for (var i = 0; i < s.length; i++) v.setUint8(at + i, s.charCodeAt(i)); }
+    ascii(0, "RIFF");
+    v.setUint32(4, 36 + size, true);
+    ascii(8, "WAVE");
+    ascii(12, "fmt ");
+    v.setUint32(16, 16, true);         // fmt chunk size
+    v.setUint16(20, 1, true);          // PCM
+    v.setUint16(22, 1, true);          // mono
+    v.setUint32(24, rate, true);
+    v.setUint32(28, rate * 2, true);   // byte rate = rate * block align
+    v.setUint16(32, 2, true);          // block align = channels * 2 bytes
+    v.setUint16(34, 16, true);         // bits per sample
+    ascii(36, "data");
+    v.setUint32(40, size, true);
+    for (var i = 0, at = 44; i < samples.length; i++, at += 2) {
+      var s = samples[i];
+      var c = s > 1 ? 1 : s < -1 ? -1 : s === s ? s : 0;
+      v.setInt16(at, c < 0 ? Math.round(c * 32768) : Math.round(c * 32767), true);
+    }
+    return buf;
+  }
   function ServerSTT() {
     var stream = null;        // the microphone, kept across turns
     var token = null;         // one object per start(); null = not active
-    var rec = null;           // the MediaRecorder of the current clip
+    var rec = null;           // the recording of the current clip (recStart)
     var uploading = false;    // the clip is on its way to the server
     var aborter = null;       // AbortController of that upload
-    var source = null, analyser = null, meterTimer = null, capTimer = null;
+    var clockTimer = null, capTimer = null;
     function available() {
-      return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
-    }
-    function pickMime() {
-      if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return "";
-      for (var i = 0; i < SERVER_MIMES.length; i++) {
-        try { if (MediaRecorder.isTypeSupported(SERVER_MIMES[i])) return SERVER_MIMES[i]; } catch (e) {}
-      }
-      return "";
+      return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia &&
+                (window.AudioContext || window.webkitAudioContext));
     }
     function getStream() {
       if (stream && stream.active !== false) return Promise.resolve(stream);
@@ -3016,53 +3055,57 @@
       if (n === "NotFoundError" || n === "DevicesNotFoundError" || n === "OverconstrainedError") return "audio-capture";
       return "start-failed";
     }
-    // The caption's clock, the level meter and the silence detector: RMS of
-    // the time-domain signal every VOICE_LEVEL_MS. The detector needs the
-    // shared AudioContext RUNNING (voicePrime makes it inside the tap); when
-    // it is not, there is no detector and the cap decides, so nothing that
-    // was said is ever thrown away for want of a meter.
-    function meterStart(s, mine, h) {
+    // The recording graph of one clip, and its silence detector: the RMS of
+    // every block drives the level meter and ends the clip after a phrase.
+    // A context that is not running (made outside a tap) delivers no blocks:
+    // then the cap decides, and the clip says so.
+    function recStart(s, mine, h) {
       var ctx = voiceAudioCtx();
-      var m = { heard: false, lastLoud: 0, floor: 0, t0: Date.now(), live: false };
-      if (ctx && ctx.state === "running" && ctx.createMediaStreamSource) {
-        try {
-          source = ctx.createMediaStreamSource(s);
-          analyser = ctx.createAnalyser();
-          analyser.fftSize = 1024;
-          source.connect(analyser);
-          m.live = true;
-        } catch (e) { source = analyser = null; }
-      }
-      var buf = m.live ? new Uint8Array(analyser.fftSize) : null;
-      meterTimer = setInterval(function () {
-        if (token !== mine) { clearInterval(meterTimer); return; }
-        var now = Date.now();
-        if (h.onStatus) h.onStatus("Listening… " + Math.round((now - m.t0) / 1000) + " s");
-        if (!m.live || !analyser) return;
-        analyser.getByteTimeDomainData(buf);
+      if (!ctx || !ctx.createScriptProcessor || !ctx.createMediaStreamSource) return null;
+      var g = { ctx: ctx, rate: ctx.sampleRate, blocks: [], frames: 0,
+                source: null, proc: null, mute: null,
+                heard: false, lastLoud: 0, floor: 0, t0: Date.now() };
+      try {
+        g.source = ctx.createMediaStreamSource(s);
+        g.proc = ctx.createScriptProcessor(4096, 1, 1);
+        g.mute = ctx.createGain();
+        g.mute.gain.value = 0;
+        g.source.connect(g.proc);
+        g.proc.connect(g.mute);
+        g.mute.connect(ctx.destination);
+      } catch (e) { recStop(g); return null; }
+      g.proc.onaudioprocess = function (ev) {
+        if (token !== mine || rec !== g) return;
+        // The engine reuses the input buffer between callbacks: copy it.
+        var block = new Float32Array(ev.inputBuffer.getChannelData(0));
+        if (!block.length) return;
+        g.blocks.push(block);
+        g.frames += block.length;
         var sum = 0;
-        for (var i = 0; i < buf.length; i++) { var d = (buf[i] - 128) / 128; sum += d * d; }
-        var rms = Math.sqrt(sum / buf.length);
+        for (var i = 0; i < block.length; i++) sum += block[i] * block[i];
+        var rms = Math.sqrt(sum / block.length), now = Date.now();
         // The noise floor follows the quiet moments (and may creep up);
         // speech is well above it.
-        m.floor = m.floor === 0 ? rms : Math.min(rms, m.floor * 1.05 + 0.001);
-        var loud = rms > Math.max(VOICE_RMS_SPEECH, m.floor * 3);
-        if (loud) { m.heard = true; m.lastLoud = now; }
+        g.floor = g.floor === 0 ? rms : Math.min(rms, g.floor * 1.05 + 0.001);
+        var loud = rms > Math.max(VOICE_RMS_SPEECH, g.floor * 3);
+        if (loud) { g.heard = true; g.lastLoud = now; }
         if (h.onLevel) h.onLevel(Math.min(1, rms * 4));
-        if (m.heard && now - m.lastLoud > VOICE_SILENCE_MS) finish();
-      }, VOICE_LEVEL_MS);
-      return m;
+        if (g.heard && now - g.lastLoud > VOICE_SILENCE_MS) finish();
+      };
+      return g;
     }
-    function meterStop() {
-      clearInterval(meterTimer);
-      meterTimer = null;
-      if (source) { try { source.disconnect(); } catch (e) {} }
-      source = analyser = null;
+    function recStop(g) {
+      clearInterval(clockTimer);
+      clockTimer = null;
+      if (!g) return;
+      if (g.proc) g.proc.onaudioprocess = null;
+      [g.source, g.proc, g.mute].forEach(function (n) { if (n) { try { n.disconnect(); } catch (e) {} } });
+      g.source = g.proc = g.mute = null;
     }
     function start(h) {
       stop();
       if (!available()) { if (h.onError) h.onError("unavailable"); return false; }
-      var mine = { h: h, meter: null };
+      var mine = { h: h };
       token = mine;
       var remaining = h.until ? h.until - Date.now() : VOICE_CLIP_MAX_MS;
       if (remaining < 1500) {
@@ -3073,38 +3116,20 @@
       var capMs = Math.min(VOICE_CLIP_MAX_MS, remaining);
       getStream().then(function (s) {
         if (token !== mine) return;
-        var mt = pickMime(), r;
-        try { r = mt ? new MediaRecorder(s, { mimeType: mt }) : new MediaRecorder(s); }
-        catch (e) { token = null; if (h.onError) h.onError("start-failed"); return; }
-        var mime = r.mimeType || mt || "audio/webm";
-        voice.rec.mime = mime;
-        var chunks = [];
-        r.ondataavailable = function (ev) { if (ev.data && ev.data.size) chunks.push(ev.data); };
-        r.onerror = function () {
-          if (token !== mine) return;
-          token = null; rec = null;
-          clearTimeout(capTimer);
-          meterStop();
-          if (h.onError) h.onError("start-failed");
-        };
-        r.onstop = function () {
-          if (token !== mine) return;      // stop(): the clip is discarded
-          meterStop();
-          clearTimeout(capTimer);
-          var blob = new Blob(chunks, { type: mime });
-          if (!blob.size) { token = null; if (h.onError) h.onError("nothing-recorded", "Nothing recorded"); return; }
-          upload(blob, mime, mine);
-        };
-        rec = r;
-        // No timeslice: ONE blob at stop (short slices come back empty on Safari).
-        try { r.start(); } catch (e) { token = null; rec = null; if (h.onError) h.onError("start-failed"); return; }
+        var g = recStart(s, mine, h);
+        if (!g) { token = null; if (h.onError) h.onError("start-failed"); return; }
+        rec = g;
+        voice.rec.mime = "audio/wav";
         if (h.onStatus) h.onStatus("Listening…");
-        mine.meter = meterStart(s, mine, h);
+        clockTimer = setInterval(function () {
+          if (token !== mine || rec !== g) { clearInterval(clockTimer); return; }
+          if (h.onStatus) h.onStatus("Listening… " + Math.round((Date.now() - g.t0) / 1000) + " s");
+        }, VOICE_LEVEL_MS);
         capTimer = setTimeout(function () {
           if (token !== mine) return;
           // A detector that heard nothing has no words to send (the window
-          // may listen again); without a detector the server knows better.
-          if (mine.meter && mine.meter.live && !mine.meter.heard) { discard(); if (h.onEnd) h.onEnd(); return; }
+          // may listen again).
+          if (g.frames && !g.heard) { discard(); if (h.onEnd) h.onEnd(); return; }
           finish();
         }, capMs);
       }).catch(function (err) {
@@ -3118,17 +3143,26 @@
     // on the mic or the strip, the cap. The words (or the error) reach
     // start()'s handlers.
     function finish() {
-      var r = rec, mine = token;
-      if (!r || !mine) return false;
+      var g = rec, mine = token;
+      if (!g || !mine) return false;
       rec = null;
       clearTimeout(capTimer);
-      if (mine.h.onStatus) mine.h.onStatus("Transcribing…");
+      recStop(g);
       if (mine.h.onLevel) mine.h.onLevel(null);
-      try { r.stop(); } catch (e) {
+      if (!g.frames) {
         token = null;
-        meterStop();
-        if (mine.h.onError) mine.h.onError("start-failed");
+        if (mine.h.onError) {
+          mine.h.onError("nothing-recorded", g.ctx.state === "running" ? "Nothing recorded"
+            : "Nothing recorded: AudioContext " + g.ctx.state + " — tap the mic once");
+        }
+        return true;
       }
+      if (mine.h.onStatus) mine.h.onStatus("Transcribing…");
+      var all = new Float32Array(g.frames), at = 0;
+      g.blocks.forEach(function (b) { all.set(b, at); at += b.length; });
+      g.blocks = [];
+      var wav = voiceWavEncode(voiceResample(all, g.rate, VOICE_WAV_RATE), VOICE_WAV_RATE);
+      upload(new Blob([wav], { type: "audio/wav" }), "audio/wav", mine);
       return true;
     }
     function upload(blob, mime, mine) {
@@ -3160,7 +3194,7 @@
         voice.rec.last = { ms: Date.now() - t0, backend: "", error: why, at: Date.now() };
         if (h.onError) {
           h.onError("server", x.r.status === 409
-            ? "Server recognition is off: Settings → Your phone → Voice"
+            ? "Server recognition is off: Settings → Voice"
             : "Couldn't transcribe: " + why);
         }
       }).catch(function (err) {
@@ -3174,10 +3208,9 @@
     function discard() {
       token = null;
       clearTimeout(capTimer);
-      meterStop();
-      var r = rec;
+      var g = rec;
       rec = null;
-      if (r) { try { r.ondataavailable = r.onstop = r.onerror = null; if (r.state !== "inactive") r.stop(); } catch (e) {} }
+      recStop(g);
       if (uploading) { uploading = false; if (aborter) { try { aborter.abort(); } catch (e) {} } aborter = null; }
     }
     // stop(): drop whatever is going on — the clip, the upload — and report
@@ -3404,7 +3437,7 @@
     lastPrompt: null,            // Diagnostics: {dictated, say} of that prompt
     lastRoute: "",               // Diagnostics: what /api/voice/route last said (or why it did not)
     cfg: { stt: "phone", tts: "phone", approve_dialogs: true, loaded: false,
-           server_ready: {}, backends: { stt: [], tts: [] } },
+           server_ready: {}, backends: { stt: [], tts: [] }, system: null },
     audioCtx: null,              // the page's one AudioContext (voiceAudioCtx)
     rec: { mime: "", last: null, lastSpeak: null },   // Diagnostics: recorder type, last transcribe / speak
     sttHinted: false,            // "server recognition isn't ready" said once
@@ -3679,7 +3712,7 @@
           // is retried like a blip (onEnd restarts), the second in a window
           // stops the loop and says why, instead of eight silent restarts.
           if (++voiceListen_.netErrs >= 2) {
-            voiceError("Speech recognition failed (network): this browser cannot reach its speech service. Use Chrome, Edge or Safari, or turn on server recognition (Settings → Your phone → Voice).");
+            voiceError("Speech recognition failed (network): this browser cannot reach its speech service. Use Chrome, Edge or Safari, or turn on server recognition (Settings → Voice).");
             voiceListen_.until = 0;
             voiceIdle();
           }
@@ -4518,6 +4551,7 @@
           voice.cfg.approve_dialogs = j.approve_dialogs !== false;
           voice.cfg.server_ready = j.server_ready && typeof j.server_ready === "object" ? j.server_ready : {};
           voice.cfg.backends = j.backends && typeof j.backends === "object" ? j.backends : { stt: [], tts: [] };
+          voice.cfg.system = j.system && typeof j.system === "object" ? j.system : null;
         } else if (!voice.cfg.loaded) {
           voice.cfg.server_ready = {};
         }
@@ -4554,7 +4588,7 @@
     if (voice.cfg.stt === "server" && !ready.stt && !voice.sttHinted && voice.state !== "off") {
       voice.sttHinted = true;
       voiceError("Server recognition isn't ready — " +
-        (ready.stt_detail || ready.detail || "see Settings → Your phone → Voice") + ". Using the phone's.");
+        (ready.stt_detail || ready.detail || "see Settings → Voice") + ". Using the phone's.");
     }
     safariAltEl.classList.toggle("hidden", voice.cfg.stt === "server");
   }
@@ -4898,6 +4932,9 @@
   // has a name (the owner's Phase-0 spike surface).
   function voiceDiag() {
     var vs = voice.tts.voices ? voice.tts.voices() : [];
+    // The server's built-in recognizer / voice (Windows, macOS): an older
+    // server sends no `system`, and then the line is left out.
+    var sys = voice.cfg.system;
     var lines = [
       "Recognition: " + (voice.stt.available()
         ? "available (" + (window.SpeechRecognition ? "SpeechRecognition" : "webkitSpeechRecognition") + ")"
@@ -4912,8 +4949,10 @@
       "Events socket: " + voice.eventsState + (voice.eventsSeq ? " (seq " + voice.eventsSeq + ")" : ""),
       "Adapters: recognition " + voice.stt.name + ", voice " + voice.tts.name,
       "Backends: recognition " + voiceDiagBackend("stt") + ", voice " + voiceDiagBackend("tts"),
-      "Recorder: " + (voice.rec.mime ? voice.rec.mime
-        : voiceAdapters.serverStt.available() ? "MediaRecorder available, no clip yet" : "MediaRecorder not supported"),
+      sys && sys.platform ? "Built-in engine: " + sys.platform + (sys.detail ? " — " + sys.detail : "") : "",
+      "Recorder: " + (voiceAdapters.serverStt.available()
+        ? "WAV 16 kHz (ScriptProcessor)" + (voice.rec.mime ? "" : ", no clip yet")
+        : "not supported (no Web Audio or microphone)"),
       "AudioContext: " + (voice.audioCtx ? String(voice.audioCtx.state)
         : (window.AudioContext || window.webkitAudioContext) ? "not created — the server adapters make it on a tap" : "not supported"),
       "Last transcribe: " + voiceDiagLast(voice.rec.last),
@@ -4926,7 +4965,7 @@
         : "none yet"),
       "Router: " + (voice.lastRoute || "not asked yet"),
       "State: " + voice.state + (voice.session ? " · " + nameOf(voice.session) : ""),
-    ];
+    ].filter(Boolean);
     if (voice.lastError) lines.push("Last error: " + voice.lastError);
     voiceDiagEl.textContent = lines.join("\n");
   }

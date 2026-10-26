@@ -233,7 +233,7 @@ def test_mobile_js_a_network_error_is_said_not_retried_in_silence():
     assert (
         "Speech recognition failed (network): this browser cannot reach its "
         "speech service. Use Chrome, Edge or Safari, or turn on server "
-        "recognition (Settings → Your phone → Voice)." in rs
+        "recognition (Settings → Voice)." in rs
     )
     assert "L.netErrs = 0;" in _fn(js, "voiceListen")
 
@@ -783,6 +783,72 @@ def test_mobile_js_voice_ios_rules():
         assert word in diag, word
 
 
+def test_mobile_js_server_recognizer_records_wav():
+    """The server recognizer records 16 kHz 16-bit PCM mono WAV off the
+    shared AudioContext — what the built-in Windows / macOS recognizers need
+    and every other backend accepts — with one recorder for every browser:
+    no MediaRecorder (webm on Chrome, mp4 on Safari) is left."""
+    js = _js()
+    v = _voice_section(js)
+    assert "MediaRecorder" not in v
+    assert "createAnalyser" not in v and "SERVER_MIMES" not in v
+    stt = _fn(js, "ServerSTT")
+    assert "var ctx = voiceAudioCtx();" in stt
+    assert "ctx.createMediaStreamSource(s)" in stt
+    assert "ctx.createScriptProcessor(4096, 1, 1)" in stt
+    # Chrome runs a ScriptProcessor only when it reaches the destination:
+    # through a muted gain, so the mic never plays.
+    assert "g.mute.gain.value = 0;" in stt
+    assert (
+        "g.proc.connect(g.mute);" in stt and "g.mute.connect(ctx.destination);" in stt
+    )
+    # Channel 0 copied per block; the silence detector reads the same blocks.
+    assert "new Float32Array(ev.inputBuffer.getChannelData(0))" in stt
+    assert "Math.max(VOICE_RMS_SPEECH, g.floor * 3)" in stt
+    assert "now - g.lastLoud > VOICE_SILENCE_MS" in stt
+    assert "Math.min(VOICE_CLIP_MAX_MS, remaining)" in stt
+    assert "h.onLevel(Math.min(1, rms * 4))" in stt
+    # finish(): join, resample to 16 kHz, encode, upload as audio/wav.
+    assert "var VOICE_WAV_RATE = 16000;" in v
+    assert (
+        "voiceWavEncode(voiceResample(all, g.rate, VOICE_WAV_RATE), VOICE_WAV_RATE)"
+        in stt
+    )
+    assert 'new Blob([wav], { type: "audio/wav" })' in stt
+    assert 'headers: { "Content-Type": mime }' in stt
+    assert 'voice.rec.mime = "audio/wav";' in stt
+    # Every way out takes the graph down.
+    assert stt.count("recStop(g)") >= 3
+    assert "n.disconnect();" in stt
+    assert "function voiceWavEncode(samples, rate)" in v
+    assert "function voiceResample(samples, from, to)" in v
+    # The way to turn it on is the Settings → Voice tab now.
+    assert '"Server recognition is off: Settings → Voice"' in stt
+    assert "Settings → Your phone → Voice" not in js
+    assert "Settings → Your phone → Voice" not in _html()
+    assert "or turn on server recognition in Settings → Voice" in _html()
+
+
+def test_mobile_js_diagnostics_recorder_and_built_in_engine():
+    js = _js()
+    diag = _fn(js, "voiceDiag")
+    assert '"WAV 16 kHz (ScriptProcessor)"' in diag
+    assert "MediaRecorder" not in diag
+    # GET /api/voice's `system` (the server's built-in engine), said only
+    # when the server sends it.
+    assert "var sys = voice.cfg.system;" in diag
+    assert (
+        'sys && sys.platform ? "Built-in engine: " + sys.platform + '
+        '(sys.detail ? " — " + sys.detail : "") : ""' in diag
+    )
+    assert "].filter(Boolean);" in diag
+    load = _fn(js, "voiceLoadCfg")
+    assert (
+        'voice.cfg.system = j.system && typeof j.system === "object" ? j.system : null;'
+        in load
+    )
+
+
 def test_mobile_js_voice_calls_no_native_dialog():
     v = _voice_section(_js())
     code = re.sub(r"/\*.*?\*/", "", v, flags=re.S)
@@ -907,3 +973,58 @@ def test_voice_matchers_under_node():
         == "one: main. two: develop. three: release. Say one, two, or three."
     )
     assert out["choices"]["two"] == "one: main. two: develop. Say one or two."
+
+
+@pytest.mark.skipif(_node() is None, reason="needs node")
+def test_voice_wav_encoder_under_node():
+    """voiceResample / voiceWavEncode, the page's own copies run as-is: the
+    44-byte RIFF header of 16-bit PCM mono, samples scaled and clamped,
+    48 kHz → 16 kHz a third of the length (linear interpolation)."""
+    js = _js()
+    fns = js[js.index("  function voiceResample(") : js.index("  function ServerSTT(")]
+    script = (
+        fns + "\nvar out = {};\n"
+        "var buf = voiceWavEncode(new Float32Array([0, 1, -1, 0.5, 2, -3, NaN]), 16000);\n"
+        "var v = new DataView(buf), b = new Uint8Array(buf);\n"
+        "function ascii(at, n) { return String.fromCharCode.apply(null, Array.from(b.slice(at, at + n))); }\n"
+        "out.len = buf.byteLength;\n"
+        "out.riff = ascii(0, 4); out.size = v.getUint32(4, true); out.wave = ascii(8, 4);\n"
+        "out.fmt = ascii(12, 4); out.fmtSize = v.getUint32(16, true); out.pcm = v.getUint16(20, true);\n"
+        "out.channels = v.getUint16(22, true); out.rate = v.getUint32(24, true);\n"
+        "out.byteRate = v.getUint32(28, true); out.align = v.getUint16(32, true); out.bits = v.getUint16(34, true);\n"
+        "out.data = ascii(36, 4); out.dataSize = v.getUint32(40, true);\n"
+        "out.samples = []; for (var i = 0; i < 7; i++) out.samples.push(v.getInt16(44 + i * 2, true));\n"
+        "var sec = new Float32Array(48000); for (var i = 0; i < sec.length; i++) sec[i] = i / 48000;\n"
+        "var r = voiceResample(sec, 48000, 16000);\n"
+        "out.down = r.length; out.down3 = [r[0], r[1], r[2]].map(function (x) { return Math.round(x * 48000); });\n"
+        "out.same = voiceResample(sec, 16000, 16000) === sec;\n"
+        "out.up = voiceResample(new Float32Array([0, 1]), 8000, 16000).length;\n"
+        "out.mid = Array.from(voiceResample(new Float32Array([0, 1, 0]), 8000, 16000));\n"
+        "out.empty = voiceWavEncode(new Float32Array(0), 16000).byteLength;\n"
+        "console.log(JSON.stringify(out));\n"
+    )
+    res = subprocess.run(
+        [_node(), "-e", script], capture_output=True, text=True, timeout=30
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    assert out["len"] == 44 + 7 * 2
+    assert (out["riff"], out["wave"], out["fmt"], out["data"]) == (
+        "RIFF",
+        "WAVE",
+        "fmt ",
+        "data",
+    )
+    assert out["size"] == 36 + 14 and out["dataSize"] == 14
+    assert out["fmtSize"] == 16 and out["pcm"] == 1 and out["channels"] == 1
+    assert out["rate"] == 16000 and out["byteRate"] == 32000
+    assert out["align"] == 2 and out["bits"] == 16
+    # 1 → 32767, -1 → -32768, out of range clamped, NaN → silence.
+    assert out["samples"] == [0, 32767, -32768, 16384, 32767, -32768, 0]
+    assert out["down"] == 16000
+    assert out["down3"] == [0, 3, 6]
+    assert out["same"] is True
+    assert out["up"] == 4
+    # Between the samples, the straight line; past the last, the last.
+    assert out["mid"] == [0, 0.5, 1, 0.5, 0, 0]
+    assert out["empty"] == 44
