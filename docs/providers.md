@@ -80,10 +80,11 @@ The Claude provider launches plain `claude` (Claude Code). It:
   classified instead ([Background jobs](#background-jobs))
 - reads token usage from Claude Code transcripts (below)
 - answers `voice_prompt_hook()` **True**: the `UserPromptSubmit` hook it
-  installs prints the phone's voice instruction itself while the session's
-  voice flag exists, and Claude Code injects a prompt hook's stdout as
-  context — so the `/send` route never appends the sentence for a Claude
-  session (it would be read twice). See [Activity signal](#activity-signal-activity_markerspy)
+  installs prints the voice instruction itself for a prompt that asked for a
+  spoken reply (the one-shot `.next` file `/send {say: true}` arms), and
+  Claude Code injects a prompt hook's stdout as context — so the `/send`
+  route never appends the sentence for a Claude session (it would be read
+  twice). See [Activity signal](#activity-signal-activity_markerspy)
 
 ## Background jobs
 
@@ -255,12 +256,15 @@ it:
   branch; where the payload lacks the field it files an empty text (best
   effort — Codex may not send it).
 - `UserPromptSubmit` prints `activity_markers.VOICE_INSTRUCTION` (re-exported
-  as `core.spoken.INSTRUCTION`) to stdout while
-  `<voice dir>/<session>.on` exists — the voice flag `core/voice.py` keeps
-  and `POST /api/instances/{title}/voice` sets. Claude Code injects a prompt
-  hook's stdout as additional context, invisibly and with no relaunch, so the
-  session is asked to end its reply with a `Say:` line only for the prompts
-  typed while the phone is listening. The flag dir is resolved **at fire
+  as `core.spoken.INSTRUCTION`) to stdout when the one-shot
+  `<voice dir>/<session>.next` exists — armed by `POST /api/instances/{title}/
+  send {say: true}` right before the keystrokes (`core/voice.py` keeps it; it
+  holds the arming time) — and deletes the file either way, printing only
+  when it is under 120 s old. Claude Code injects a prompt hook's stdout as
+  additional context, invisibly and with no relaunch, so the session is asked
+  to end its reply with a `Say:` line only for the prompts whose reply will
+  be spoken; the sticky `<session>.on` flag (a phone is in a voice
+  conversation) asks nothing. The flag dir is resolved **at fire
   time** exactly like the marker dir — `MINDFLOCK_VOICE_FLAG_DIR`, else
   `~/.mindflock-assistant/.voice` — never baked in. This branch is written
   only when `hook_command(..., prompt_context=True)`, which defaults to

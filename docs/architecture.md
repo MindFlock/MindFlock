@@ -120,18 +120,21 @@ FastAPI app `backend.web.server:app`. Key pieces:
   [web-ui.md](web-ui.md#notifications-).
 - **Voice** — talking to a session from the phone page
   ([web-ui.md](web-ui.md#voice-talking-to-a-session)). The session writes
-  its own spoken line: while its voice flag is on every prompt carries one
-  instruction asking for a final `Say:` line, and the CLI's `Stop` hook files
-  the reply beside the activity marker. **`core/spoken.py`** is the pure text
+  its own spoken line: every prompt sent with `say: true` (a dictated one
+  whose reply will be spoken) carries one instruction asking for a final
+  `Say:` line, and the CLI's `Stop` hook files the reply beside the activity
+  marker. **`core/spoken.py`** is the pure text
   side — the instruction, `extract_say`, the markdown stripper, the digest
   fallback, `has_question`, and one mtime-cached reader of the reply file —
   serving the `spoken` record (`{say, source, has_question, ts}`) that the
   `last_say` row field, the `say` keys on `session.activity_changed` (idle)
   and `session.turn_ended` (deduped per channel in `core/state_events.py`),
   the `say` output view and the voice routes all share. **`core/voice.py`**
-  is the per-session flag: a **file** (`~/.mindflock-assistant/.voice/
-  <tmux session>.on`) because the CLI's own `UserPromptSubmit` hook must see
-  it at fire time with no server round trip. **`routes/voice.py`** turns
+  is the per-session voice files: the conversation marker `.on` and the
+  one-shot `.next` a `say: true` prompt arms — **files** under
+  `~/.mindflock-assistant/.voice/<tmux session>` because the CLI's own
+  `UserPromptSubmit` hook must see the request at fire time with no server
+  round trip (it deletes `.next` once read). **`routes/voice.py`** turns
   them into `GET/POST /api/instances/{title}/voice`, `…/voice/condense`
   (the one headless model call, only when a listener asks) and the view;
   `server._voice_suffix` types the instruction after a prompt for CLIs whose
@@ -557,7 +560,7 @@ independent cadences, so each side has to tolerate the other being older. See
 | `~/.mindflock/red_zones.json` | config (`backend/config/red_zones.py`) + web | keep-out (red) and only-here (green) zones per repo ([web-ui.md → Zones](web-ui.md#zones-keep-out-red-and-only-here-green)); read by the agent tool hook too |
 | `~/.mindflock/peer/` | peer (`backend/peer/paths.py`) | `identity/` (this install's peer key), `links.json`, `shares/<id>/` (one shared folder each), `relay/` (the relay ingress) |
 | `~/.mindflock/hooks/` | user | shell hooks run on session events ([extensions.md](extensions.md)) |
-| `~/.mindflock-assistant/` | providers/web | assistant instructions + todos, `providers/*.toml`, `pricing.json`, `usage-history.json`, `scroll-speed`, `.exit-markers/`, `prompts/`, `.activity-markers/` (the hooks' `{state, ts}` markers and, per session, the `Stop` hook's `<session>.reply.json` the spoken line is read from), `.voice/<session>.on` (the voice flag the `UserPromptSubmit` hook tests for) |
+| `~/.mindflock-assistant/` | providers/web | assistant instructions + todos, `providers/*.toml`, `pricing.json`, `usage-history.json`, `scroll-speed`, `.exit-markers/`, `prompts/`, `.activity-markers/` (the hooks' `{state, ts}` markers and, per session, the `Stop` hook's `<session>.reply.json` the spoken line is read from), `.voice/<session>.on` (a phone is in a voice conversation with the session) and the one-shot `.voice/<session>.next` (a `/send {say: true}` prompt's request for a `Say:` line, consumed by the `UserPromptSubmit` hook) |
 | `~/.mindflock/voice/` | web (`core/speech.py`) | the local speech backend's downloaded models (`whisper/`, `piper/`), only when a server backend is `local` |
 | `./config.toml` | pipeline + provisioning | all configuration (gitignored — holds tokens) |
 | `./state.json` | pipeline | `last_run_timestamp`, `processed_stories`, `processed_prs` |

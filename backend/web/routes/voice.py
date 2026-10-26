@@ -12,7 +12,9 @@ condensation:
   it ON for a CLI whose prompt hook injects the instruction (Claude) re-runs
   the provider's ``install_activity_hooks`` so a session launched by an
   older build gets the voice-aware hook text — Claude Code hot-reloads its
-  hooks file, no relaunch. Turning it off removes the flag file.
+  hooks file, no relaunch. Turning it off removes the flag file. The flag
+  asks nothing of the session: each spoken prompt asks for its own ``Say:``
+  line with ``/send``'s ``say`` (the one-shot ``.next`` the hook consumes).
 * ``POST /api/instances/{title}/voice/condense`` → ``{text, source:
   "model"}`` — ONE headless model call (``core.commit_message.pick_argv`` +
   ``_run``, the ``/api/session-plan`` pattern) condensing the newest reply
@@ -31,8 +33,9 @@ condensation:
   ``<device>::<title>`` rows included), read only once the phrase IS a
   command. ``new`` creates the session the way the New dialog does
   (``core.session_create``, the task as its first prompt) in the named
-  repository, else the current session's, else the most recent, and turns
-  its voice flag on so its first reply carries a ``Say:`` line. Always 200
+  repository, else the current session's, else the most recent, turns its
+  voice flag on and arms the one-shot ``.next`` so its seeded first prompt
+  asks for a ``Say:`` line. Always 200
   — a failed create is ``{kind: "new-failed", say}``; 400 only for a body
   that is not an object.
 
@@ -312,8 +315,15 @@ async def _start_new(text: str, session: str, rows: list, request) -> dict:
         return _failed(body.get("error") or "HTTP %d" % status)
     title = str(body.get("title") or title)
     try:
-        # The person is talking to it: its first reply ends with a Say: line.
-        _voice.set_on(tmux.to_mindflock_tmux_name(title), True)
+        # The person is talking to it: the voice marker goes on, and the
+        # seeded first prompt asks for its Say: line the way a dictated
+        # /send {say: true} does — the one-shot .next the prompt hook
+        # consumes (a CLI without that hook gets no line on this first
+        # prompt; its later dictated prompts do, typed by /send).
+        name = tmux.to_mindflock_tmux_name(title)
+        _voice.set_on(name, True)
+        if plan["task"]:
+            _voice.arm_next(name)
     except Exception:  # noqa: BLE001 — the session exists; voice is enrichment
         pass
     return _voice_router.started(title, plan["repo_name"])

@@ -5601,12 +5601,16 @@ its toolbar counts it again. See
 
 ## Voice input
 
-The mic button (🎙, Chromium's `webkitSpeechRecognition`) dictates into the
-focused terminal or text box, with a live caption bar. It types and never
-submits, and nothing is spoken back. The phone page's mic is a different
-thing — a spoken conversation with a session, with the session's own reply
-read aloud — see [Voice: talking to a session](#voice-talking-to-a-session)
-under the Mobile UI.
+The mic in the top bar, beside the bell, talks to the **focused session**:
+click (or hold) to talk, a phrase ending in "over" sends, one ending in
+"disregard" starts over, a lone phrase is offered to the voice router first
+("switch to …", "new session …", "what needs me", "what sessions do I have"),
+and the reply is read aloud only while *Read replies aloud* is on (off by
+default; right-click the mic) — see [The mic](#layout) in the top bar section.
+Words said while a text box has focus are typed there instead and never
+submitted. The phone page's mic is the hands-free version of the same
+conversation, with spoken replies on by default — see
+[Voice: talking to a session](#voice-talking-to-a-session) under the Mobile UI.
 
 ## Mobile UI (`/m`)
 
