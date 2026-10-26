@@ -74,6 +74,19 @@ export function apiText(path: string, opts?: RequestInit & { json?: unknown }): 
   return request(path, opts);
 }
 
+/** For bytes: a raw body in (a recorded clip for /api/voice/transcribe) or
+ * audio out (/api/voice/speak). The same 401 reload as api(), but the
+ * Response comes back whatever its status — the caller reads the body the way
+ * it needs (arrayBuffer, or json for the error). */
+export async function apiRaw(path: string, init?: RequestInit): Promise<Response> {
+  const r = await fetch(path, init);
+  if (r.status === 401) {
+    location.reload();
+    throw new ApiError(401, "unauthorized", null);
+  }
+  return r;
+}
+
 /** Instance-scoped fetch: `api('/api/instances/' + encodeURIComponent(title) +
  * suffix, opts)`. Centralizes the encode-and-concat so no call site can forget
  * encodeURIComponent. `suffix` starts the path segment(s) after the title,

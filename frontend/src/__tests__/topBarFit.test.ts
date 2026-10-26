@@ -88,6 +88,16 @@ describe("TopBar wiring around the fold", () => {
     expect(se < mo && mo < pa).toBe(true);
   });
 
+  it("the mic never folds: it rides in the left cluster, measured as fixed width", () => {
+    // The fold measures `start.firstElementChild` (the .tb-left cluster) as
+    // one fixed width, so the mic beside the bell is counted, never folded.
+    const left = TOPBAR.slice(TOPBAR.indexOf('<div className="tb-left">'), TOPBAR.indexOf('<nav className="tb-menu"'));
+    expect(left).toContain("<TopBarMic />");
+    expect(TOPBAR).toContain("w(start.firstElementChild)");
+    const mic = TOPBAR.indexOf("<TopBarMic />");
+    expect(TOPBAR.slice(mic - 80, mic + 80)).not.toContain("tb-folded");
+  });
+
   it("the calm rule still decides what is on the bar; the fold only lays it out", () => {
     expect(TOPBAR).toMatch(/\{shows\.verify && \(\s*<button\s+id="verify-btn"/);
     expect(TOPBAR).toMatch(/\{shows\.schedule && \(\s*<button\s+id="schedule-btn"/);

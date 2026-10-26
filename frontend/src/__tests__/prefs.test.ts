@@ -79,7 +79,7 @@ describe("PREF_MAP", () => {
   it("looks up both ways, and per-browser keys are not prefs", () => {
     expect(prefFieldFor("mf_keymap")).toBe("keymap");
     expect(lsKeyFor("theme")).toBe("cs_theme");
-    for (const k of ["cs_order", "mf_aliases", "cs_sidebar", "mf_hints_seen", "cs_accent", "mf_prefs_seeded", "mf_customize_page"])
+    for (const k of ["cs_order", "mf_aliases", "cs_sidebar", "mf_hints_seen", "cs_accent", "mf_prefs_seeded", "mf_customize_page", "cs_voice_desktop"])
       expect(prefFieldFor(k)).toBeNull();
   });
 });

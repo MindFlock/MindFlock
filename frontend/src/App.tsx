@@ -18,7 +18,6 @@ import { TopBar } from "./components/TopBar";
 import { ConnBanner } from "./components/ConnBanner";
 import { MemoryNotice } from "./components/MemoryNotice";
 import { StateNotice } from "./components/StateNotice";
-import { VoiceInput } from "./components/VoiceInput";
 import { EventToasts } from "./components/EventToasts";
 import { Sidebar } from "./components/sidebar/Sidebar";
 import { TerminalGrid, type SpecialPaneDesc } from "./components/grid/TerminalGrid";
@@ -299,7 +298,6 @@ export default function App() {
         onOpenTodo={() => useUi.getState().openDialogFor("todo")}
       />
       <TerminalGrid specialPanes={specialPanes} />
-      <VoiceInput />
 
       {/* Dialogs (each renders null unless open) */}
       <NewSessionDialog />

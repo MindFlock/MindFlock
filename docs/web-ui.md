@@ -29,8 +29,9 @@ keys, event names and MCP tool names keep their older names (`/api/instances`,
 ## Layout
 
 **Top bar** — on the left: the brand logo, the sidebar toggle (`Ctrl+B` / `⌘B`),
-the theme toggle 🌙 and the notifications 🔔 bell, whose one amber badge counts
-everything that needs you (see [Notifications](#notifications-)). Then the menu,
+the theme toggle 🌙, the notifications 🔔 bell, whose one amber badge counts
+everything that needs you (see [Notifications](#notifications-)), and the
+mic right after it (below: talk to the focused session). Then the menu,
 which carries only the daily loop — **New**, **Intake** (`Alt+I`; see
 [Intake](#intake)), **Verify** (`Alt+V`), **Schedule** (`Alt+S`; see
 [Schedule](#schedule)) and **Settings** — and ends in a
@@ -105,7 +106,8 @@ Four entries left the bar:
 In the desktop shell **on macOS** the bar mirrors. The window keeps the OS
 traffic lights top-left (`titleBarStyle: 'hidden'` — the shell draws no – □ ✕
 there), so the bar reserves ~78px in that corner and moves the logo / theme /
-bell cluster to the right, where a Mac has nothing else; the sidebar toggle and
+bell cluster (mic, bell, theme, logo — the mic now *before* the bell, reading
+inward from the corner) to the right, where a Mac has nothing else; the sidebar toggle and
 the menu stay where they are. It is the same elements with the same behaviour,
 mirrored — the one difference is DOM order: the mirrored cluster sits after the
 drag region, so `Tab` reaches the theme toggle and bell last there instead of
@@ -122,6 +124,50 @@ where something really draws native controls. Two DOM hooks come with it, for
 theme and addon authors styling against the bar: `#topbar[data-mac]` (native
 title bar) and `#topbar[data-mac-lights]` (…and the lights are visible right
 now).
+
+**The mic** (`#mic-btn`, a monochrome glyph like the bell's) talks to the
+**focused session** — the tooltip names it (*Talk to Login fix — click to talk,
+right-click for options*). With no session focused, the words wait with *Click
+a session first*.
+
+- **Push to talk.** *Click to talk* (the default): a click starts listening
+  (the button turns red and pulses), a second click stops and **sends** what
+  was heard — nothing heard, nothing sent. *Hold to talk*: hold the button (or
+  Space / Enter on it) while you speak; releasing sends, after waiting up to
+  1.5 s for the phrase still being recognised.
+- **Radio words**, in both modes: a phrase that *ends* in “over” sends at once,
+  one that ends in “disregard” (or “disregard that”) empties the draft and keeps
+  listening, and **Esc** drops it all. Two minutes without a word stops
+  listening and keeps the words, unsent (*Not sent — click the mic to
+  continue*: the next click carries on from them). What was heard shows in a
+  small caption under the mic.
+- **A text box focused** (Send a message, a dialog field…): the words go into
+  the box at the cursor and nothing is sent — dictation, not a prompt.
+- **Routing.** When you said one phrase, it is first offered to the voice
+  router: “switch to the login fix” selects that session (and the conversation
+  stays there — later words go to it), “start a new session for the billing
+  page” starts one and selects it, “what needs me” / “status” answer out loud
+  without sending anything. Everything else — and everything when the router
+  can't be reached — is a prompt for the focused session (`POST
+  /api/instances/{title}/send` with `dialog_safe`, so a session on a permission
+  prompt queues it: *Queued for …*).
+- **Replies read aloud** are **off** by default here (the phone is the
+  hands-free surface). Turned on, a prompt the mic sends asks the session for a
+  closing `Say:` line, and when that turn ends the line is read once, prefixed
+  with the session's name (*“Login fix: Fixed the login bug. Should I push
+  it?”*) — only for prompts this mic sent, never for ones typed or sent from the
+  phone. Nothing is read while the mic listens; queued lines wait.
+- **Options**: right-click or Shift+click the mic for *Read replies aloud*,
+  *Click to talk* / *Hold to talk*, a diagnostics line (which recogniser and
+  which voice are in use), and a link to the speech engines in **Settings →
+  Your phone → Voice**. The choice is kept per browser (`cs_voice_desktop`).
+
+Recognition is the browser's Web Speech, or the server's when Settings → Your
+phone → Voice says *server* and it is ready — the Electron desktop app and
+Chromium builds without Google's speech service (Arc) need the server's: their
+Web Speech fails with *Speech recognition failed (network)*. How the `Say:` line
+is produced and which engines exist: [Voice: talking to a
+session](#voice-talking-to-a-session).
 
 **Sidebar** — session list with drag-to-reorder, stage chips, and a
 close ✕ per row (closes the session, keeps the worktree). The chip is the
