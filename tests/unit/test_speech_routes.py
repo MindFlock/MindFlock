@@ -5,6 +5,8 @@ the backend registry swapped for fakes and the settings store at a tmp file
 
 from __future__ import annotations
 
+import io
+import wave
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +16,7 @@ from backend.config import settings as S
 from backend.web import server
 from backend.web.core import auth as _auth
 from backend.web.core import speech
+from backend.web.core import speech_stream
 from backend.web.routes import speech as routes
 
 client = TestClient(server.app)
@@ -401,6 +404,185 @@ def test_413_holds_for_a_chunked_upload_without_content_length(fakes, monkeypatc
     )
     assert r.status_code == 413
     assert fakes.stt.calls == []
+
+
+# --------------------------------------------------------------------------- #
+# /api/voice/stream*
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def streaming(fakes):
+    """The fake recognizer streams: each pass answers with the next of
+    ``stt.passes`` (an exception is raised)."""
+    stt = fakes.stt
+    stt.streams, stt.passes, stt.langs = True, [], []
+
+    def stream_transcriber(lang=""):
+        stt.langs.append(lang)
+
+        def run(audio, prompt):
+            stt.calls.append(("pass", len(audio), prompt))
+            out = stt.passes.pop(0)
+            if isinstance(out, BaseException):
+                raise out
+            return out
+
+        return run
+
+    stt.stream_transcriber = stream_transcriber
+    speech_stream.clear()
+    yield stt
+    speech_stream.clear()
+
+
+def _wav(seconds=0.5, rate=16000, channels=1):
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(channels)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"\x00\x00" * int(seconds * rate) * channels)
+    return buf.getvalue()
+
+
+def _words(text, step=0.5):
+    return [(w, i * step, i * step + 0.4) for i, w in enumerate(text.split())]
+
+
+def _open(lang="en-US"):
+    return client.post("/api/voice/stream", json={"lang": lang})
+
+
+def _chunk(sid, body=None, ctype="audio/wav"):
+    return client.post(
+        "/api/voice/stream/%s/chunk" % sid,
+        content=_wav() if body is None else body,
+        headers={"Content-Type": ctype},
+    )
+
+
+class TestStream:
+    def test_get_says_whether_the_ready_backend_streams(self, fakes):
+        assert client.get("/api/voice").json()["server_ready"]["stt_stream"] is False
+        fakes.stt.streams = True
+        assert client.get("/api/voice").json()["server_ready"]["stt_stream"] is True
+
+    def test_a_backend_that_does_not_stream_is_409(self, fakes):
+        r = _open()
+        assert r.status_code == 409
+        assert r.json()["error"] == (
+            "fake recognition does not stream: send one clip per phrase"
+        )
+
+    def test_no_ready_backend_is_409(self, streaming):
+        streaming.ok, streaming.detail = False, "local models not installed"
+        r = _open()
+        assert r.status_code == 409
+        assert r.json()["error"] == (
+            "no recognition backend is ready (local models not installed)"
+        )
+
+    def test_open_chunk_end(self, streaming):
+        r = _open("en-US")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ready"] is True and isinstance(body["id"], str) and body["id"]
+        sid = body["id"]
+        assert streaming.langs == ["en-US"]
+        streaming.passes += [
+            _words("hello world"),
+            _words("Hello world how"),
+            _words("Hello world how are you"),
+        ]
+        r = _chunk(sid)
+        assert r.status_code == 200
+        first = r.json()
+        assert set(first) == {"committed", "partial", "ms", "audio_s"}
+        assert first["committed"] == "" and first["partial"] == "hello world"
+        assert isinstance(first["ms"], int) and first["audio_s"] == 0.5
+        second = _chunk(sid).json()
+        assert (second["committed"], second["partial"]) == ("Hello world", "how")
+        assert second["audio_s"] == 1.0
+        assert streaming.calls[-1] == ("pass", 16000, "")
+        r = client.post("/api/voice/stream/%s/end" % sid)
+        assert r.status_code == 200
+        assert r.json() == {"committed": "how are you", "partial": ""}
+        assert streaming.calls[-1] == ("pass", 16000, "Hello world")
+        # Gone afterwards.
+        assert _chunk(sid).status_code == 404
+        assert client.post("/api/voice/stream/%s/end" % sid).status_code == 404
+
+    def test_a_bad_lang_is_dropped(self, streaming):
+        assert (
+            client.post("/api/voice/stream", json={"lang": "en US;"}).status_code == 200
+        )
+        assert client.post("/api/voice/stream").status_code == 200
+        assert streaming.langs == ["", ""]
+
+    def test_unknown_id_is_404(self, streaming):
+        r = _chunk("nope")
+        assert r.status_code == 404
+        assert "no such voice stream" in r.json()["error"]
+        assert client.post("/api/voice/stream/nope/end").status_code == 404
+
+    def test_not_wav_is_415(self, streaming):
+        sid = _open().json()["id"]
+        r = _chunk(sid, b"\x1aE\xdf\xa3clip", "audio/webm")
+        assert r.status_code == 415
+        assert r.json()["error"] == "send the chunk as audio/wav, not audio/webm"
+        r = _chunk(sid, b"not a wav at all")
+        assert r.status_code == 415 and "as a WAV file" in r.json()["error"]
+        r = _chunk(sid, _wav(rate=48000))
+        assert r.status_code == 415
+        assert r.json()["error"].startswith("send 16 kHz mono 16-bit WAV")
+        assert [c for c in streaming.calls if c[0] == "pass"] == []
+
+    def test_over_the_cap_is_413(self, streaming, monkeypatch):
+        sid = _open().json()["id"]
+        monkeypatch.setattr(routes, "MAX_AUDIO_BYTES", 64)
+        r = _chunk(sid)
+        assert r.status_code == 413
+        assert streaming.calls == []
+
+    def test_a_failed_pass_is_502_and_keeps_the_chunk(self, streaming):
+        sid = _open().json()["id"]
+        streaming.passes += [speech.SpeechError("faster-whisper failed: boom"), []]
+        r = _chunk(sid)
+        assert r.status_code == 502
+        assert r.json()["error"] == "faster-whisper failed: boom"
+        assert _chunk(sid).json()["audio_s"] == 1.0
+
+    def test_delete_abandons(self, streaming):
+        sid = _open().json()["id"]
+        r = client.delete("/api/voice/stream/" + sid)
+        assert r.status_code == 204
+        assert _chunk(sid).status_code == 404
+        assert client.delete("/api/voice/stream/" + sid).status_code == 204
+        assert [c for c in streaming.calls if c[0] == "pass"] == []
+
+    def test_at_most_four_streams(self, streaming):
+        ids = [_open().json()["id"] for _ in range(speech_stream.MAX_STREAMS)]
+        r = _open()
+        assert r.status_code == 409
+        assert r.json()["error"] == "4 voice streams are already open: end one first"
+        client.delete("/api/voice/stream/" + ids[0])
+        assert _open().status_code == 200
+
+    def test_a_stream_expires_a_minute_after_its_last_chunk(
+        self, streaming, monkeypatch
+    ):
+        clock = [5000.0]
+        monkeypatch.setattr(speech_stream, "_now", lambda: clock[0])
+        sid = _open().json()["id"]
+        streaming.passes += [[], []]
+        clock[0] += speech_stream.EXPIRE_SECONDS - 1
+        assert _chunk(sid).status_code == 200
+        clock[0] += speech_stream.EXPIRE_SECONDS - 1
+        assert _chunk(sid).status_code == 200
+        clock[0] += speech_stream.EXPIRE_SECONDS
+        assert _chunk(sid).status_code == 404
+        # An expired stream no longer counts against the cap.
+        for _ in range(speech_stream.MAX_STREAMS):
+            assert _open().status_code == 200
 
 
 # --------------------------------------------------------------------------- #
