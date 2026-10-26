@@ -5623,7 +5623,15 @@ _SEND_IN_DIALOG = "Answer its prompt first — typing now would answer the dialo
 _SEND_WAKING = "It was asleep — waking it now; send again in a few seconds"
 
 
-def _deliver_to_sleeper(inst, title: str, text: str, *, boot: bool, submit: bool):
+def _say_kw(say: bool) -> dict:
+    """``enqueue``'s ``say`` keyword, passed only when true: a queued text
+    asks for a spoken reply only when its ``/send`` did."""
+    return {"say": True} if say else {}
+
+
+def _deliver_to_sleeper(
+    inst, title: str, text: str, *, boot: bool, submit: bool, say: bool = False
+):
     """``_deliver_to_agent`` for a SLEEPING session (core.sleep): wake it,
     then put the text on its prompt queue — at the front for a person's
     ``/send``, at the back for a MindFlock-composed message — because a CLI
@@ -5631,7 +5639,8 @@ def _deliver_to_sleeper(inst, title: str, text: str, *, boot: bool, submit: bool
     queue's boot grace, so the drain sends it once the CLI has drawn its
     prompt and settled idle. Not queueable (an unsubmitted paste; a looping
     queue, which would re-send it forever): it just wakes →
-    ``(False, _SEND_WAKING)``."""
+    ``(False, _SEND_WAKING)``. ``say`` rides the queue entry (armed when the
+    drain types it)."""
     _woke, err = _sleep.ensure_awake(
         inst,
         title,
@@ -5642,7 +5651,7 @@ def _deliver_to_sleeper(inst, title: str, text: str, *, boot: bool, submit: bool
     if not submit or _prompt_queue.get_state(title)["loop"]:
         return False, _SEND_WAKING
     try:
-        _prompt_queue.enqueue(title, text, index=0 if boot else None)
+        _prompt_queue.enqueue(title, text, index=0 if boot else None, **_say_kw(say))
     except ValueError as qerr:
         return False, str(qerr)
     _emit_queue_changed(title)
@@ -5657,6 +5666,7 @@ def _deliver_to_agent(
     boot: bool = False,
     submit: bool = True,
     dialog_safe: bool = False,
+    say: bool = False,
 ):
     """Type ``text`` into ``title``'s agent → ``(told, reason)``.
 
@@ -5686,20 +5696,21 @@ def _deliver_to_agent(
     A PAUSED session is never typed into nor relaunched, either way:
     ``(False, PAUSED_REFUSED)`` — Resume starts its agent again.
 
+    ``say`` (``/send``'s, for a submitted text) asks for THIS reply's
+    ``Say:`` line (:func:`_voice_say`) at the last moment — right before the
+    keystrokes, after every dialog/queue decision; a queued text carries it
+    in its queue entry instead, and a failed send disarms it again.
+
     Blocking (tmux + an activity probe) — call it via ``asyncio.to_thread``.
     Every collaborator is read off this module so tests patch the server.
     """
     if getattr(inst, "Status", None) == Paused:
         return False, PAUSED_REFUSED
-    if submit:
-        # Every submitted prompt — /send, /queue, the Code Map's notices, the
-        # autopilot — carries the voice instruction for a hook-less CLI
-        # (idempotent: /send has usually added it already).
-        text = _voice_suffix(inst, title, text)
+    say = bool(say and submit)
     if _sleep.is_sleeping(title):
         if not boot and _budget_locked(title):
             return False, "over budget"
-        return _deliver_to_sleeper(inst, title, text, boot=boot, submit=submit)
+        return _deliver_to_sleeper(inst, title, text, boot=boot, submit=submit, say=say)
     if boot:
         name, err = _agent_session_ready(inst, title)
         if err is not None:
@@ -5717,7 +5728,7 @@ def _deliver_to_agent(
                 if not submit:
                     return False, _SEND_IN_DIALOG
                 try:
-                    _prompt_queue.enqueue(title, text)
+                    _prompt_queue.enqueue(title, text, **_say_kw(say))
                 except ValueError as err:
                     return False, str(err)
                 _emit_queue_changed(title)
@@ -5734,7 +5745,7 @@ def _deliver_to_agent(
             activity = "working"
         if activity in _DELIVER_QUEUE_ACTIVITIES or _dialog_on_screen(inst, name):
             try:
-                _prompt_queue.enqueue(title, text)
+                _prompt_queue.enqueue(title, text, **_say_kw(say))
             except ValueError as err:
                 return False, str(err)
             _emit_queue_changed(title)
@@ -5743,7 +5754,10 @@ def _deliver_to_agent(
     # prompts dialog, the Map's buttons) — automation types via
     # _send_queued_item and the limit watcher, never through here.
     _note_human_input(title)
-    if not _send_to_agent(name, text, submit):
+    typed = _voice_say(inst, title, text) if say else text
+    if not _send_to_agent(name, typed, submit):
+        if say:
+            _voice_say_cancel(title)
         return False, _SEND_FAILED
     return "sent", None
 
@@ -5811,24 +5825,57 @@ async def instance_owner(title: str, request: Request, payload: dict = None):
     return JSONResponse(_ownership.row_fields(title))
 
 
-def _voice_suffix(inst, title: str, text: str) -> str:
-    """``text`` with the voice instruction appended when voice mode is on for
-    ``title`` and its CLI has no prompt hook to inject it (``providers.*.
-    voice_prompt_hook``). Claude's UserPromptSubmit hook carries the sentence
-    itself, so Claude never gets it twice; a CLI without that channel (Codex,
-    the config-driven ones) reads it typed after the prompt. Only for a
-    SUBMITTED text — a paste left for review is the user's to finish."""
-    try:
-        if not _voice_on(title):
-            return text
-        if text.rstrip().endswith(_spoken.INSTRUCTION):
-            return text  # already carried (the route, then the drain)
-        prov = providers.resolve(getattr(inst, "Program", "") or "")
-        if prov.voice_prompt_hook():
-            return text
-        return text.rstrip("\n") + "\n\n" + _spoken.INSTRUCTION
-    except Exception:  # noqa: BLE001 — never lose the prompt over the suffix
+def _voice_suffix(text: str) -> str:
+    """``text`` with the voice instruction typed after it — how a CLI without
+    a prompt hook (Codex, the config-driven ones) is asked for a ``Say:``
+    line. Idempotent: a text that already ends with it is left alone."""
+    if text.rstrip().endswith(_spoken.INSTRUCTION):
         return text
+    return text.rstrip("\n") + "\n\n" + _spoken.INSTRUCTION
+
+
+def _voice_say(inst, title: str, text: str) -> str:
+    """Ask ``title``'s agent to end the reply to ``text`` with a ``Say:``
+    line → the text to type. Called right before the keystrokes (the
+    delivery, the queue drain, Send now) for a prompt sent with ``say:
+    true`` — never at request time, so a queued prompt does not arm early.
+
+    A CLI whose provider answers ``voice_prompt_hook()`` (Claude) gets the
+    ONE-SHOT ``.next`` request its UserPromptSubmit hook consumes
+    (``core.voice.arm_next``), after a re-pin of its hooks so a session
+    launched by an older build (whose hook still reads only the sticky
+    ``.on``) gets the hook that knows ``.next`` — Claude Code hot-reloads
+    the file. Every other CLI, or an arm that fails, gets the instruction
+    typed after the prompt (:func:`_voice_suffix`). Never raises: the prompt
+    is never lost over the request."""
+    try:
+        prov = providers.resolve(getattr(inst, "Program", "") or "")
+        if not prov.voice_prompt_hook():
+            return _voice_suffix(text)
+        name = tmux.to_mindflock_tmux_name(title)
+        try:
+            wt = inst.GetWorktreePath() or ""
+            if wt:
+                # Idempotent (the merge skips an unchanged file), best-effort.
+                prov.install_activity_hooks(wt, name)
+        except Exception:  # noqa: BLE001 — the hooks are enrichment
+            pass
+        try:
+            _voice.arm_next(name)
+        except OSError:
+            return _voice_suffix(text)  # unarmable: say it in the prompt
+        return text
+    except Exception:  # noqa: BLE001 — never lose the prompt over the request
+        return text
+
+
+def _voice_say_cancel(title: str) -> None:
+    """Undo :func:`_voice_say`'s arm after a send that never landed, so the
+    request cannot ride the NEXT prompt. Never raises."""
+    try:
+        _voice.disarm_next(tmux.to_mindflock_tmux_name(title))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @app.post("/api/instances/{title}/send")
@@ -5849,7 +5896,14 @@ async def instance_send(
     Another person holding the keyboard (core.ownership) is 409 ``{"error":
     "driven by <name>", "driver"}`` unless ``"take": true``. A paused session
     is 409 ``{"error": "session is paused — resume it first", "paused":
-    true}``: nothing is typed and the agent is not relaunched."""
+    true}``: nothing is typed and the agent is not relaunched.
+
+    ``say=true`` (with ``submit``) asks for THIS reply's ``Say:`` line — the
+    client decides per prompt (phone dictation yes, typing no): Claude's
+    prompt hook gets a one-shot request armed right before the keystrokes,
+    any other CLI the instruction typed after the text (:func:`_voice_say`).
+    A queued message keeps it in its queue entry and is armed when the
+    drain types it. Absent/false, or ``submit=false``: never asked for."""
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
@@ -5858,8 +5912,7 @@ async def instance_send(
         return JSONResponse({"error": "empty message"}, status_code=400)
     submit = bool((payload or {}).get("submit", True))
     dialog_safe = bool((payload or {}).get("dialog_safe", False))
-    if submit:
-        text = _voice_suffix(inst, title, text)
+    say = submit and (payload or {}).get("say") is True
     busy = _driven_elsewhere(request, title, payload)
     if busy is not None:
         return busy
@@ -5874,7 +5927,13 @@ async def instance_send(
     asleep = _sleep.is_sleeping(title)
     told, reason = await asyncio.to_thread(
         lambda: _deliver_to_agent(
-            inst, title, text, boot=True, submit=submit, dialog_safe=dialog_safe
+            inst,
+            title,
+            text,
+            boot=True,
+            submit=submit,
+            dialog_safe=dialog_safe,
+            say=say,
         )
     )
     if told is False:
@@ -6095,8 +6154,14 @@ async def post_queue_send_now(
     if err is not None:
         return JSONResponse({"error": err}, status_code=409)
     _note_human_input(title)  # the user clicked Send now
-    ok = await asyncio.to_thread(_send_to_agent, name, it["text"], True)
+    say = it.get("say") is True
+    typed = it["text"]
+    if say:
+        typed = await asyncio.to_thread(_voice_say, inst, title, typed)
+    ok = await asyncio.to_thread(_send_to_agent, name, typed, True)
     if not ok:
+        if say:
+            _voice_say_cancel(title)
         return JSONResponse(
             {"error": "failed to send to agent session"}, status_code=502
         )
@@ -6108,7 +6173,7 @@ async def post_queue_send_now(
     )
     rec["armed"] = False
     rec["sent_at"] = time.time()
-    rec["sent_text"] = it["text"]
+    rec["sent_text"] = typed
     rec["idle_since"] = None
     _events.BUS.emit(
         "session.prompt_sent",

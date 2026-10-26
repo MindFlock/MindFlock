@@ -98,8 +98,7 @@
 
     <!-- Voice strip (mobile.js VOICE section): hidden until voice mode is on.
          The state word, the live caption (what the phone heard, the line
-         being spoken, the dialog's question), the 2.5 s send countdown, a
-         Cancel, the ⚙ that opens the voice sheet, and the one big button a
+         being spoken, the dialog's question, how to send), a Cancel, the ⚙ that opens the voice sheet, and the one big button a
          deep link (/m?s=…&voice=1) or a resume needs: a page cannot speak
          until it has been tapped once. -->
     <div id="voice-strip" class="hidden" role="status" aria-live="polite">
@@ -109,7 +108,6 @@
         <button type="button" id="voice-cancel" class="hidden">Cancel</button>
         <button type="button" id="voice-gear" aria-label="Voice settings">⚙</button>
       </div>
-      <div id="voice-countdown" class="hidden"><div id="voice-countdown-bar"></div></div>
       <!-- The level meter while the server adapter records a clip (it has no
            interim words to show); mobile.js voiceLevel. -->
       <div id="voice-level" class="hidden" aria-hidden="true"><div id="voice-level-bar"></div></div>
@@ -145,8 +143,9 @@
       <button type="button" id="send" aria-label="Send">Send</button>
       <!-- The mic: voice mode for the selected session (mobile.js VOICE
            section). A click handler, never touchstart — the first speak() of
-           the page has to run inside a real activation. data-state paints it
-           off / idle / listening / speaking / working. -->
+           the page has to run inside a real activation; with Hold to talk,
+           pointerdown starts listening and pointerup sends. data-state
+           paints it off / idle / listening / speaking / working. -->
       <button type="button" id="voice-btn" aria-label="Talk to this session" data-state="off">🎙</button>
     </div>
 
@@ -237,7 +236,8 @@
     </div>
 
     <!-- Voice sheet (the strip's ⚙): voice mode for the selected session,
-         hands-free, speech rate, the voice, the read-only approve-dialogs
+         push to talk (tap / hold), spoken replies, hands-free, speech rate,
+         the voice, the read-only approve-dialogs
          line (that setting lives in Settings → Your phone), and Diagnostics —
          what THIS phone can and cannot do, stated plainly, so a silent
          failure has a name. -->
@@ -247,6 +247,17 @@
         <label class="voice-opt">
           <input type="checkbox" id="voice-on-toggle" />
           <span>Voice mode for <span id="voice-sheet-session">this session</span></span>
+        </label>
+        <label class="voice-opt voice-opt-col" for="voice-ptt">
+          <span>Push to talk</span>
+          <select id="voice-ptt" aria-label="Push to talk">
+            <option value="toggle">Tap to talk</option>
+            <option value="hold">Hold to talk</option>
+          </select>
+        </label>
+        <label class="voice-opt">
+          <input type="checkbox" id="voice-replies" checked />
+          <span>Spoken replies <span class="new-muted">— read the session's answer to what you said aloud</span></span>
         </label>
         <label class="voice-opt">
           <input type="checkbox" id="voice-handsfree" />

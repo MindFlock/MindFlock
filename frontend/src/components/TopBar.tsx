@@ -1,5 +1,5 @@
 /** Top bar (port of the 030 partial + section 17's chrome wiring):
- * sidebar/theme cluster, notifications bell, the main menu (New / Intake /
+ * sidebar/theme cluster, notifications bell and mic, the main menu (New / Intake /
  * Verify / Schedule / Settings, then the command palette as an icon), centered
  * wordmark, and the Electron drag region.
  *
@@ -20,6 +20,7 @@ import { useDoctor, useTestPlans } from "../state/queries";
 import { dueCount, failingCount, verifyCountLine } from "./dialogs/verify";
 import { rethemeAll } from "../lib/terminals";
 import { NotificationsBell } from "./NotificationsBell";
+import { TopBarMic } from "./TopBarMic";
 import { redrawFavicon } from "./EventToasts";
 import { THEME_CHANGED } from "../lib/prefs";
 import { setTheme } from "../lib/theme";
@@ -368,6 +369,9 @@ export function TopBar() {
           </button>
           {!mac && themeToggle}
           {!mac && <NotificationsBell />}
+          {/* The mic sits beside the bell (TopBarMic): talk to the focused
+              session — the bell says what needs you, the mic answers it. */}
+          {!mac && <TopBarMic />}
         </div>
         <nav className="tb-menu" ref={menuRef} aria-label="Main actions">
           <button
@@ -542,6 +546,7 @@ export function TopBar() {
           corner, the way it does on the left everywhere else. */}
       {mac && (
         <div className="tb-end">
+          <TopBarMic />
           <NotificationsBell />
           {themeToggle}
           {logo}

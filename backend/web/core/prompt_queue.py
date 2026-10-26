@@ -77,11 +77,15 @@ def queue_path() -> str:
 
 
 # On-disk shape::
-#   {"<title>": {"items": [{"id", "text", "added"}],
+#   {"<title>": {"items": [{"id", "text", "added", "say"?}],
 #                "loop": bool, "enabled": bool,
 #                "last_sent": epoch|null, "last_text": str}}
 # ``enabled`` gates the drain loop for that session; ``loop`` re-appends a sent
-# item instead of dropping it. Everything defaults sanely when absent.
+# item instead of dropping it. An item's ``say: true`` (written only when
+# true) asks for a spoken reply when the drain delivers it — the /send
+# request's ``say``, kept until the prompt actually goes in; an item without
+# it (every entry from before the field existed) reads as false. Everything
+# defaults sanely when absent.
 def _load() -> dict:
     return read_json(queue_path(), {}, expect=dict)
 
@@ -118,13 +122,14 @@ def _normalize(entry) -> dict:
             items = []
             for it in raw:
                 if isinstance(it, dict) and str(it.get("text", "")).strip():
-                    items.append(
-                        {
-                            "id": str(it.get("id") or _new_id(len(items))),
-                            "text": str(it["text"]),
-                            "added": float(it.get("added") or 0.0),
-                        }
-                    )
+                    item = {
+                        "id": str(it.get("id") or _new_id(len(items))),
+                        "text": str(it["text"]),
+                        "added": float(it.get("added") or 0.0),
+                    }
+                    if it.get("say") is True:
+                        item["say"] = True
+                    items.append(item)
             e["items"] = items[:_MAX_ITEMS]
         e["loop"] = bool(entry.get("loop", False))
         try:
@@ -163,12 +168,18 @@ def get_state(title: str) -> dict:
 
 
 def list_queue(title: str) -> List[dict]:
-    """Just the pending items for ``title`` (list of ``{id, text, added}``)."""
+    """Just the pending items for ``title`` (list of ``{id, text, added}``,
+    plus ``say: true`` on an item that wants a spoken reply)."""
     return get_state(title)["items"]
 
 
-def enqueue(title: str, text: str, index: Optional[int] = None) -> dict:
+def enqueue(
+    title: str, text: str, index: Optional[int] = None, say: bool = False
+) -> dict:
     """Add a prompt to ``title``'s queue. Returns the new entry.
+
+    ``say`` marks the item as wanting a spoken reply (``/send``'s ``say``):
+    the drain arms it as it delivers the item, never earlier.
 
     Appends by default; with ``index`` the prompt is inserted at that 0-based
     position (clamped), which is how "add above/below this item" lands in the
@@ -184,6 +195,8 @@ def enqueue(title: str, text: str, index: Optional[int] = None) -> dict:
             if len(entry["items"]) >= _MAX_ITEMS:
                 raise ValueError("queue is full (%d items)" % _MAX_ITEMS)
             item = {"id": _new_id(), "text": text, "added": time.time()}
+            if say:
+                item["say"] = True
             if index is None:
                 entry["items"].append(item)
             else:
@@ -370,7 +383,10 @@ def record_sent(title: str, item_id: str) -> dict:
         entry["last_sent"] = now
         entry["last_text"] = sent["text"]
         if entry["loop"]:
-            items.append({"id": _new_id(), "text": sent["text"], "added": now})
+            again = {"id": _new_id(), "text": sent["text"], "added": now}
+            if sent.get("say"):
+                again["say"] = True
+            items.append(again)
         data[title] = entry
         _save(data)
         return entry

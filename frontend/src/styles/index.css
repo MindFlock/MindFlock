@@ -30,6 +30,7 @@
 @import "../components/usage/usage.css" layer(components); /* 090 */
 @import "../components/grid/QueueTab.css" layer(components); /* 100 */
 @import "../components/NotificationsBell.css" layer(components); /* 110 + 270 */
+@import "../components/TopBarMic.css" layer(components); /* the mic beside the bell */
 @import "../components/AnswerStrip.css" layer(components); /* 110 — rail, bell
    and Thread hosts; the rail's per-depth indents in SidebarRow.css out-rank it */
 @import "../components/sidebar/BulkBar.css" layer(components); /* 110 */

@@ -44,6 +44,9 @@
       "artifactName": "MindFlock-Setup.exe"
     },
     "mac": {
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "MindFlock listens only while you click or hold the mic to talk to a session."
+      },
       "target": [
         {
           "target": "dmg",

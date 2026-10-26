@@ -1178,7 +1178,7 @@ row, unless it is waived here). The per-session zones read also answers
 
 | Method | Path | Behavior |
 |---|---|---|
-| POST | `/api/instances/{title}/send` | Body `{text, submit?, dialog_safe?}`. Types `text` into the **agent** window and (default) presses Enter, booting/resuming the agent tmux first if it isn't running — so one call kicks a fresh session into motion (max token use). `submit:false` types without submitting. Enter is a separate keystroke a beat after the text so an agent TUI doesn't read the burst as a paste. A **sleeping** agent is woken and the text put at the front of its prompt queue instead of typed into the booting CLI → `{sent: false, queued: true, submitted: false, woke: true}`; an unsubmitted paste (or a looping queue) only wakes it → **409** `{error, waking: true}` — send again in a moment. `dialog_safe:true` (the web UI's Thread "Send now" and every playbook paste) re-probes the agent's live, uncached activity first — and checks the screen for a dialog, which outranks the reading (see the screen-evidence guard under [Inter-agent messages](#inter-agent-messages)) — and never types into a prompt or the usage-limit menu (a digit or an Enter there would answer it): on `clarify`/`limit`, a dialog on screen (or an activity that can't be read) a submitted message is **queued** instead → `{sent: false, queued: true, submitted: false}` (the drain delivers it once the agent is free), and an unsubmitted paste is **409** `{error, in_dialog: true}` with nothing typed (queueing it would submit it later). A working agent is still typed into. **Voice suffix:** while [voice mode](#voice-talking-to-a-session-from-the-phone) is on for the session and its CLI has no prompt hook that injects the voice instruction itself (`provider.voice_prompt_hook()` is false — Codex and the config-driven CLIs), a *submitted* `text` gets `"\n\n"` + `core.spoken.INSTRUCTION` appended before anything else happens, so a queued text carries it too; Claude Code never gets it here (its own `UserPromptSubmit` hook injects the sentence, and typing it as well would say it twice), and `submit:false` texts are left alone. → `{sent, submitted}` (409 if the workspace is gone, `{paused: true}` when the session is paused — nothing typed, the agent not relaunched — or `{budget_locked: true}` when the session is over budget, 502 if the send fails) |
+| POST | `/api/instances/{title}/send` | Body `{text, submit?, dialog_safe?, say?}`. Types `text` into the **agent** window and (default) presses Enter, booting/resuming the agent tmux first if it isn't running — so one call kicks a fresh session into motion (max token use). `submit:false` types without submitting. Enter is a separate keystroke a beat after the text so an agent TUI doesn't read the burst as a paste. A **sleeping** agent is woken and the text put at the front of its prompt queue instead of typed into the booting CLI → `{sent: false, queued: true, submitted: false, woke: true}`; an unsubmitted paste (or a looping queue) only wakes it → **409** `{error, waking: true}` — send again in a moment. `dialog_safe:true` (the web UI's Thread "Send now" and every playbook paste) re-probes the agent's live, uncached activity first — and checks the screen for a dialog, which outranks the reading (see the screen-evidence guard under [Inter-agent messages](#inter-agent-messages)) — and never types into a prompt or the usage-limit menu (a digit or an Enter there would answer it): on `clarify`/`limit`, a dialog on screen (or an activity that can't be read) a submitted message is **queued** instead → `{sent: false, queued: true, submitted: false}` (the drain delivers it once the agent is free), and an unsubmitted paste is **409** `{error, in_dialog: true}` with nothing typed (queueing it would submit it later). A working agent is still typed into. **`say`** (boolean, default `false`; anything but JSON `true` reads as false) asks for a spoken reply to *this* prompt: the session ends this one reply with the `Say:` line [voice mode](#voice-talking-to-a-session-from-the-phone) speaks. The client decides per prompt — the phone's dictation sends `true`, typing sends nothing, the desktop mic sends `true` only while "read replies aloud" is on; the server never guesses from the device or from the voice flag, because the line costs tokens. It is applied right before the keystrokes, after every dialog/queue decision: for a CLI whose prompt hook injects the instruction (`provider.voice_prompt_hook()`: Claude) the delivery re-pins the worktree's hooks (a session launched by an older build gets the hook that knows the request; Claude Code hot-reloads it) and arms the one-shot `<voice dir>/<tmux session>.next` that hook consumes; for every other CLI (Codex, the config-driven ones), or when the file can't be written, `"\n\n"` + `core.spoken.INSTRUCTION` is typed after the text. A failed send disarms it again. A **queued** prompt (dialog_safe on a prompt, an asleep agent) keeps `say: true` on its queue item and is armed only when the drain or Send now types it; queue items without the field (all older entries) read as false. `submit:false` (a paste left for review) never asks. Absent/false: no instruction, whatever the voice flag says. → `{sent, submitted}` (409 if the workspace is gone, `{paused: true}` when the session is paused — nothing typed, the agent not relaunched — or `{budget_locked: true}` when the session is over budget, 502 if the send fails) |
 | POST | `/api/instances/{title}/driver` | Take or release the session's keyboard ([people.md](people.md#owner-driver-viewers)). `{"take": true}` makes the caller's person the driver — anyone who can reach the session may; the previous driver hears it as a `session.driver_changed` event and their open terminals turn read-only. `{"release": true}` gives it up (**409** `{error: "driven by <name>", driver}` when another person holds it). → `{owner, driver, driver_name, viewers}` (+ `previous`, the old driver's id, on a take). **400** neither, **404** unknown. A remote row (`<device>::<title>`) is forwarded like every per-session route, carrying the caller's person |
 | POST | `/api/instances/{title}/owner` | `{"person": "<id>"}` — give the session to another person. The owner otherwise never changes (it defaults to the person the session was created for). This device's owner only (`may_configure`, **403**; so not through a gateway). → the presence fields; **400** not a person id, **404** unknown |
 | GET | `/api/instances/{title}/queue` | `{items: [{id, text, added}], pending, enabled, loop, loop_interval, wait_for_limit, limited_until, last_sent}` |
@@ -1244,16 +1244,22 @@ can read another's result and unblock a dialog. See [mcp.md](mcp.md).
 
 What the phone page's voice mode calls
 ([web-ui.md](web-ui.md#voice-talking-to-a-session)). The words a session
-speaks are written by the session itself: while its **voice flag** is on,
-every prompt it receives carries one instruction
+speaks are written by the session itself: a prompt sent with **`say:
+true`** (`/send`, decided per prompt by the client — see [Send a
+message](#send-a-message--prompt-queue)) carries one instruction
 (`backend.web.core.spoken.INSTRUCTION`, exposed for the phone to parse
-against) asking it to end each reply with one final line starting `Say:` —
+against) asking it to end that reply with one final line starting `Say:` —
 at most two short plain sentences, no code, paths or markdown, saying what it
-did or will do and any question it has. Claude Code gets the sentence from
-its own `UserPromptSubmit` hook (the activity hook MindFlock installs per
-worktree prints it as injected context while the flag file exists); a CLI
-without that channel gets it typed after the prompt by `/send` (the voice
-suffix under [Send a message](#send-a-message--prompt-queue)). When the turn
+did or will do and any question it has. Only those prompts: the line costs
+tokens. Claude Code gets the sentence from its own `UserPromptSubmit` hook:
+the delivery arms the one-shot `<voice dir>/<tmux session>.next` (the arming
+unix time as text) right before typing the prompt, and the activity hook
+MindFlock installs per worktree prints the sentence as injected context when
+that file is younger than 120 s, deleting it either way — so a prompt that
+never got submitted cannot lend its line to the next one. A CLI without that
+channel gets the sentence typed after the prompt. The sticky **voice flag**
+(`<voice dir>/<tmux session>.on`, below) no longer injects anything: it marks
+"a phone is in a voice conversation with this session". When the turn
 ends, the same hook's `Stop` branch files the payload's
 `last_assistant_message` beside the activity marker as
 `<marker dir>/<tmux session>.reply.json` (`{"ts", "text"}`, text cut at
@@ -1281,7 +1287,7 @@ listener asks. The hook branches are in
 | Method | Path | Behavior |
 |---|---|---|
 | GET | `/api/instances/{title}/voice` | `{on, say, has_question, source, ts}` — the session's voice flag plus its current spoken record. **404** unknown session |
-| POST | `/api/instances/{title}/voice` | Body `{"on": true\|false}` → the same shape, read back after the write (never assumed). **On** writes `<flag dir>/<tmux session>.on` — `MINDFLOCK_VOICE_FLAG_DIR`, else `~/.mindflock-assistant/.voice`, keyed by the tmux session name the hook resolves (never by title) — and, for a CLI whose prompt hook injects the instruction itself (`provider.voice_prompt_hook()`: Claude), re-runs `install_activity_hooks` on the worktree so a session launched by an older build gets the voice-aware hook text; Claude Code hot-reloads its hooks file, no relaunch. Best effort: the flag is set either way. **Off** removes the flag file. The flag outlives the phone page (it only asks the session to end its replies with a `Say:` line) and is dropped with the session, together with its reply file, so a namesake inherits neither. **400** `{error: "on must be true or false"}` when the body is not an object with a boolean `on` (a non-JSON body included), **404** unknown, **500** `{error}` when the flag file can't be written |
+| POST | `/api/instances/{title}/voice` | Body `{"on": true\|false}` → the same shape, read back after the write (never assumed). **On** writes `<flag dir>/<tmux session>.on` — `MINDFLOCK_VOICE_FLAG_DIR`, else `~/.mindflock-assistant/.voice`, keyed by the tmux session name the hook resolves (never by title) — and, for a CLI whose prompt hook injects the instruction itself (`provider.voice_prompt_hook()`: Claude), re-runs `install_activity_hooks` on the worktree so a session launched by an older build gets the voice-aware hook text; Claude Code hot-reloads its hooks file, no relaunch. Best effort: the flag is set either way. **Off** removes the flag file. The flag is the "a phone is in a voice conversation" marker (the row's `voice`): it asks nothing of the session — each spoken prompt asks for its own `Say:` line with `/send`'s `say` (the one-shot `.next`, also dropped with the session). It outlives the phone page and is dropped with the session, together with its reply file, so a namesake inherits neither. **400** `{error: "on must be true or false"}` when the body is not an object with a boolean `on` (a non-JSON body included), **404** unknown, **500** `{error}` when the flag file can't be written |
 | POST | `/api/instances/{title}/voice/condense` | Condense the newest reply for a listener → `{text, source: "model"}`. **One** headless model call (`core.commit_message.pick_argv` + `_run`, the `POST /api/session-plan` pattern, cwd `$HOME` so no repo's `AGENTS.md` reaches a prompt whose answer is read aloud): the provider's newest assistant text, else the reply file, else the pane's visible screen — its tail (≤ 6000 chars) followed by *"Condense this for someone listening, not reading: at most two short plain sentences, no code, paths or markdown; include any question for them."* — asked of the session's own CLI (else the flock's default), 45 s timeout. The answer is markdown-stripped and cut at 600 chars. Never cached and never taken on a poll: this is the one voice step that costs money, and the phone sends it only for "summarize that". **409** `{error}` when there is nothing to condense (`nothing to condense — the session has not replied yet`) or no installed CLI, **504** when the CLI doesn't answer in time, **502** when it fails or returns nothing, **404** unknown |
 | GET | `/api/instances/{title}/output?view=say` | The spoken record as an output view → `{view: "say", text, source, has_question, truncated: false, activity}` (`text` `""` and `source` `"none"` when there is nothing). The MindFlock MCP's `read_output` keeps its own view list and does not offer it |
 
@@ -1331,6 +1337,66 @@ or a slow host never stalls the event loop.
 | POST | `/api/voice/transcribe?lang=` | Recognise one recorded clip. The **raw audio is the body** — not multipart — and `Content-Type` names its format: `audio/webm`, `audio/mp4`, `audio/wav`, `audio/ogg` or `audio/mpeg` (a `;codecs=` suffix is fine). `?lang=` is a BCP-47-ish hint for the backend (`en`, `pt-BR`; anything else is dropped). → `{text, backend, ms}`. Status codes in the order they are checked: **415** `{error}` the body is not `audio/*`; **413** over 10 MB (from `Content-Length`, then the body itself); **400** an empty clip; **409** `{error}` when `voice.stt` is not `"server"` (*Server recognition is off: turn it on under Settings → Your phone → Voice.*) or no backend is ready (the detail says which); **502** `{error}` when the backend failed; **200** |
 | POST | `/api/voice/speak` | `{text, voice?}` → the audio bytes, `Content-Type` the backend's (`audio/mpeg` for a host, `audio/wav` for piper), `X-Voice-Backend` its id, `Cache-Control: no-store`. `voice` (≤ 64 chars) overrides `voice.tts_voice` for this one call. **400** no text, **413** over 1200 chars (a `Say:` line is ≤ 320, a dialog read-out a few hundred), then **409** / **502** as above |
 | POST | `/api/voice/clear-key` | `{"kind": "stt"\|"tts"}` → `{ok: true, kind}` — forget a saved API key. `POST /api/settings` keeps a secret whenever its field arrives blank (the app-wide convention, so a form resubmit never wipes a token), which leaves no way back to *no key*: this is it. Owner only (`auth.may_configure`, **403**); **400** any other `kind`; **500** when the settings file can't be read |
+
+**The voice router** (`backend/web/routes/voice.py` over the pure
+`core/voice_router.py`) — one server route that decides whether a finished
+phrase is words for the session or a command, so the phone page and the
+desktop mic share one grammar (the phone keeps its own copy, mobile.js
+`VOICE_CMD`, only as an offline fallback). The default is that the person is
+still talking to the session they are on: anything that is not plainly a
+command is `{"kind": "prompt"}`, and every pattern matches the WHOLE phrase —
+a false command is worse than a missed one.
+
+`POST /api/voice/route` with `{"text": "<one finished phrase>", "session":
+"<the title being talked to, or ''>"}` → **200** with one of the shapes below
+(**400** `{error}` only for a body that is not an object; an unknown
+`session` reads as none). Matching is case- and punctuation-insensitive
+(`voiceNorm`: lowercase, anything but letters, digits and `'` a space), and a
+leading `ok`/`okay`/`hey`/`please` and a trailing `please` are dropped.
+
+| Phrase | Answer |
+|---|---|
+| anything else, or blank | `{"kind": "prompt"}` — send it to the session (`/send`). No session rows are read. |
+| `(switch\|go\|change\|jump) (over )?to <name>` | `{"kind": "switch", "title", "name", "say": "Now on <name>. <its last_say>"}`. `<name>` is matched against each row's display `name` and its title: a unique prefix, else the unique best word overlap, else a unique loose containment (mobile.js `voiceMatchSession`). A tie → `{"kind": "ambiguous", "say": "Which one: <A>, <B>?"}`; nothing → `{"kind": "no-session", "say": "No session called <words>. Sessions: <A>, <B>, <C>."}` (at most 6 names; `"There are no sessions."` with none). Other devices' `<device>::<title>` rows count — the client selects the title it gets. |
+| `(what\|which) sessions (do i have\|are (up\|open\|running))`, `list (the \|my )?sessions`, `what('s\| is) (up\|open\|running)` | `{"kind": "list", "say": "Sessions: <A> (working), <B> (waiting on you), <C> (idle)."}` — at most 10, then `, and N more`. |
+| `(what\|who) needs (me\|attention\|my attention)` | `{"kind": "needs", "say": …}` — the rail bell's attention set (a question, a failed setup or pre-commit, failing checks, an offline terminal, idle 20 min on uncommitted work), most urgent first, three at most: `"<A> is asking: <its last_say>"` / `"<B> is waiting on failing checks."` / `"Nothing needs you."` |
+| `status`, `what's it doing`, `what's happening`, `what's going on` | `{"kind": "status", "say": "<name> is working for 5 minutes. <its last_turn>"}` — the CURRENT session (`"No session is open."` / `"<title> is not listed."`). |
+| `[start\|open\|create\|make\|spin up] [a\|another] new session [called\|named <name>] [in\|for\|on <repo>] [to\|and\|that <task>]`, or the bare `new session <task>` | Creates a session → `{"kind": "new", "title", "name", "say": "Started <name> in <repo name>."}`, or `{"kind": "new-failed", "say"}`. See below. |
+| `cancel`, `never mind`, `scratch that`, `forget it` / `stop`, `stop listening` / `voice off` / `say that again`, `repeat` / `summarize (that)`, `what did it say` | `{"kind": "cancel"\|"stop"\|"off"\|"repeat"\|"condense"}` with no `say` — the client acts on its own. |
+
+Every `say` is a sentence the client speaks as is. Rows are
+[`GET /api/instances`](#get-apiinstances)'s own (`name`, `activity`,
+`activity_since`, `last_say`, `last_turn`, …), read only once the phrase is a
+command; rows hidden off the rail (`hidden_by`) are never named.
+
+**`new`**: examples — `new session to fix the login bug`, `open a new
+session called parser in mindflock`, `start a new session in sitecheck and
+add tests for the queue`, `new session`. The **repository** is the one
+named, when the words after `in`/`for`/`on` (or their longest leading run —
+`in mindflock fix the tests` is repo `mindflock`, task `fix the tests`) name
+one MindFlock knows: what the New dialog suggests
+(`GET /api/repos/suggest`) plus every local session's
+repository, by folder name with spacing, case and punctuation ignored
+(`site check bot 5` is `sitecheck-bot5`; an unambiguous start like
+`sitecheck` picks the most recent match). Words after `for`/`on` that name no
+repository are the task (`new session for the login bug`); after `in` they
+were meant as a repository and nothing is guessed: `"I don't know a
+repository called <words>. Repositories: …"`. Named none → the current
+session's repository (a local row), else the only one known, else the most
+recent; nothing → `"I don't know which repository: say new session in
+<A>, <B>."`. The **title** is the `called` name hyphenated (≤ 32 chars), else
+the first four words of the task named the New dialog's way
+(`title_from_prompt`: `fix the login bug` → `fix-login-bug`), else
+`voice-session`; made unique with `-2`, `-3`… against every session and
+rename (`core.session_create.free_title`). The session is created exactly
+like the New dialog's (`core.session_create.create_result`, the same code as
+`POST /api/instances`, so the provider, branch, launch flags and plan-first
+are the defaults), with the task as its first `prompt` (seeded or queued as
+that route decides), and its **voice flag is turned on** so its first reply
+ends with a `Say:` line. Only local sessions are created. A refused create
+→ `{"kind": "new-failed", "say": "Couldn't start it: <its error>."}`, still
+200; a create that fails later in the background is reported the way every
+create's is (`session.create_failed`, [`GET /api/create_failures`](#get-apicreate_failures)).
 
 ### Inter-agent messages
 

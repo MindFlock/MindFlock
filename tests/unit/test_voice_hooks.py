@@ -6,7 +6,8 @@ environment, fed Claude Code's Stop / UserPromptSubmit payloads on stdin.
 tmux server are needed; every directory the hook can write to points into
 ``tmp_path``. The existing guarantees ride along: the marker still carries
 ``state`` + ``ts``, the thread marker is still recorded, nothing is printed
-unless voice is on, and the script never fails (``|| true`` aside).
+unless a one-shot ``.next`` request is armed (and then once), and the script
+never fails (``|| true`` aside).
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import json
 import os
 import shlex
 import subprocess
+import time
 
 import pytest
 
@@ -148,70 +150,124 @@ def test_the_reply_file_is_what_core_spoken_reads(dirs):
 
 
 # --------------------------------------------------------------------------- #
-# UserPromptSubmit: the instruction, only with the flag
+# UserPromptSubmit: the instruction, once, from the one-shot `.next`
 # --------------------------------------------------------------------------- #
-def test_prompt_submit_prints_the_instruction_only_when_the_flag_exists(dirs):
-    cmd = am.hook_command("working")  # the UserPromptSubmit entry
-    payload = {
-        "hook_event_name": "UserPromptSubmit",
-        "session_id": "conv-2",
-        "prompt": "fix it",
-    }
-    r = _fire(cmd, payload)
+def _arm(dirs, session="mindflock_voice", age=0.0):
+    dirs["v"].mkdir(parents=True, exist_ok=True)
+    p = dirs["v"] / (session + ".next")
+    p.write_text("%d\n" % int(time.time() - age))
+    return p
+
+
+_PROMPT = {"hook_event_name": "UserPromptSubmit", "session_id": "conv-2"}
+
+
+def test_prompt_submit_prints_nothing_without_a_request(dirs):
+    r = _fire(am.hook_command("working"), _PROMPT)
     assert r.returncode == 0 and r.stdout == b""
-    assert _marker(dirs)["state"] == "working"
-    dirs["v"].mkdir(parents=True)
-    (dirs["v"] / "mindflock_voice.on").write_text("1\n")
-    r = _fire(cmd, payload)
-    assert r.returncode == 0
-    assert r.stdout.decode("utf-8").strip() == am.VOICE_INSTRUCTION
     assert _marker(dirs)["state"] == "working"
     assert thread_markers.read("mindflock_voice") == "conv-2"
 
 
-def test_the_flag_is_per_session_and_read_from_the_firing_env(dirs, tmp_path):
+def test_a_young_request_prints_the_instruction_once_and_is_consumed(dirs):
+    cmd = am.hook_command("working")  # the UserPromptSubmit entry
+    nxt = _arm(dirs)
+    r = _fire(cmd, _PROMPT)
+    assert r.returncode == 0
+    assert r.stdout.decode("utf-8").strip() == am.VOICE_INSTRUCTION
+    assert not nxt.exists()
+    assert _marker(dirs)["state"] == "working"
+    assert thread_markers.read("mindflock_voice") == "conv-2"
+    # One-shot: the next prompt (typed, not spoken) gets nothing.
+    assert _fire(cmd, _PROMPT).stdout == b""
+
+
+def test_a_stale_request_prints_nothing_and_is_still_consumed(dirs):
     cmd = am.hook_command("working")
-    payload = {"hook_event_name": "UserPromptSubmit"}
+    nxt = _arm(dirs, age=am.VOICE_NEXT_MAX_AGE_S + 5)
+    r = _fire(cmd, _PROMPT)
+    assert r.returncode == 0 and r.stdout == b""
+    assert not nxt.exists()
+
+
+@pytest.mark.parametrize("body", ["", "garbage\n", "1e400\n"])
+def test_an_unreadable_request_never_fails_the_hook(dirs, body):
     dirs["v"].mkdir(parents=True)
-    (dirs["v"] / "mindflock_other.on").write_text("1\n")
-    assert _fire(cmd, payload).stdout == b""  # another session's flag
+    nxt = dirs["v"] / "mindflock_voice.next"
+    nxt.write_text(body)
+    r = _fire(am.hook_command("working"), _PROMPT)
+    assert r.returncode == 0 and r.stdout == b""
+    assert not nxt.exists()
+    assert _marker(dirs)["state"] == "working"
+
+
+def test_the_sticky_flag_alone_no_longer_prints(dirs):
+    dirs["v"].mkdir(parents=True)
+    on = dirs["v"] / "mindflock_voice.on"
+    on.write_text("1\n")
+    assert _fire(am.hook_command("working"), _PROMPT).stdout == b""
+    assert on.exists()  # the conversation marker is never consumed
+
+
+def test_the_request_is_per_session_and_read_from_the_firing_env(dirs, tmp_path):
+    cmd = am.hook_command("working")
+    other = _arm(dirs, session="mindflock_other")
+    assert _fire(cmd, _PROMPT).stdout == b""  # another session's request
+    assert other.exists()
     assert (
-        _fire(cmd, payload, session="mindflock_other").stdout.strip()
+        _fire(cmd, _PROMPT, session="mindflock_other").stdout.strip()
         == am.VOICE_INSTRUCTION.encode()
     )
     # The flag dir is resolved when the hook FIRES, from its own environment.
     alt = tmp_path / "alt-voice"
     alt.mkdir()
-    (alt / "mindflock_voice.on").write_text("1\n")
+    (alt / "mindflock_voice.next").write_text("%d\n" % int(time.time()))
     assert (
-        _fire(cmd, payload, MINDFLOCK_VOICE_FLAG_DIR=str(alt)).stdout.strip()
+        _fire(cmd, _PROMPT, MINDFLOCK_VOICE_FLAG_DIR=str(alt)).stdout.strip()
         == am.VOICE_INSTRUCTION.encode()
     )
     assert str(dirs["v"]) not in cmd and str(alt) not in cmd
 
 
-def test_the_flag_is_what_core_voice_writes(dirs):
+def test_the_request_is_what_core_voice_arms(dirs):
     from backend.web.core import voice
 
     cmd = am.hook_command("working")
-    payload = {"hook_event_name": "UserPromptSubmit"}
-    assert voice.is_on("mindflock_voice") is False
+    assert voice.next_path("mindflock_voice") == dirs["v"] / "mindflock_voice.next"
+    voice.arm_next("mindflock_voice")
+    assert _fire(cmd, _PROMPT).stdout.strip() == am.VOICE_INSTRUCTION.encode()
+    voice.arm_next("mindflock_voice")
+    voice.disarm_next("mindflock_voice")
+    assert _fire(cmd, _PROMPT).stdout == b""
+    voice.disarm_next("mindflock_voice")  # idempotent
+    # The sticky flag is still core.voice's, and forget drops both.
     assert voice.set_on("mindflock_voice", True) is True
     assert voice.flag_path("mindflock_voice") == dirs["v"] / "mindflock_voice.on"
-    assert _fire(cmd, payload).stdout.strip() == am.VOICE_INSTRUCTION.encode()
-    assert voice.set_on("mindflock_voice", False) is False
-    assert _fire(cmd, payload).stdout == b""
+    voice.arm_next("mindflock_voice")
+    voice.forget("mindflock_voice")
+    assert voice.is_on("mindflock_voice") is False
+    assert not voice.next_path("mindflock_voice").exists()
     voice.forget("mindflock_voice")  # idempotent
 
 
-def test_stop_never_prints_even_with_the_flag(dirs):
-    dirs["v"].mkdir(parents=True)
-    (dirs["v"] / "mindflock_voice.on").write_text("1\n")
+def test_stop_files_the_reply_with_the_sticky_flag_off(dirs):
+    r = _fire(
+        am.hook_command("idle"),
+        {"hook_event_name": "Stop", "last_assistant_message": "Say: Done."},
+    )
+    assert r.returncode == 0 and r.stdout == b""
+    assert not (dirs["v"] / "mindflock_voice.on").exists()
+    assert _reply(dirs)["text"] == "Say: Done."
+
+
+def test_stop_never_prints_even_with_a_request(dirs):
+    nxt = _arm(dirs)
     r = _fire(
         am.hook_command("idle"),
         {"hook_event_name": "Stop", "last_assistant_message": "m"},
     )
     assert r.stdout == b""
+    assert nxt.exists()  # only a prompt consumes it
 
 
 def test_a_hook_without_a_session_still_no_ops(dirs):
@@ -239,11 +295,11 @@ def test_a_hook_without_a_session_still_no_ops(dirs):
 def test_codex_install_files_replies_but_never_prints(dirs):
     cmd = am.hook_command("working", record_thread=False)
     assert "print(" not in cmd and ".reply.json" in cmd
-    dirs["v"].mkdir(parents=True)
-    (dirs["v"] / "mindflock_voice.on").write_text("1\n")
+    nxt = _arm(dirs)
     r = _fire(cmd, {"hook_event_name": "UserPromptSubmit", "session_id": "codex-id"})
     assert r.returncode == 0 and r.stdout == b""
     assert thread_markers.read("mindflock_voice") == ""  # still no thread marker
+    assert nxt.exists()  # Codex gets the sentence typed, never this file
     _fire(
         am.hook_command("idle", record_thread=False),
         {"hook_event_name": "Stop", "last_assistant_message": "codex said"},
