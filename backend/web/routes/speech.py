@@ -1,18 +1,25 @@
-"""The phone's optional server speech: ``/api/voice*`` (docs/web-ui.md, "Voice").
+"""Server speech: ``/api/voice*`` (docs/web-ui.md, "Voice"; docs/web-api.md).
 
-``GET /api/voice`` tells the phone page where speech runs and what the server
-could do instead; ``transcribe`` and ``speak`` are the two server-side engines
-of ``core.speech`` behind HTTP. Any signed-in client may call them (the phone
-does); only the owner clears a saved key. The engine calls run in a worker
-thread (``asyncio.to_thread``) — a local model or a slow host never stalls
-the event loop.
+``GET /api/voice`` tells a page where speech runs and what the server can do;
+``transcribe`` and ``speak`` are the server-side engines of ``core.speech``
+behind HTTP — the built-in ``system`` engine first (Windows / macOS speech,
+nothing to install), then ``openai`` and ``local``. Any signed-in client may
+call them whenever a backend of that kind is ready: the desktop app's mic
+always does (Electron has no working Web Speech recognition), the phone page
+does when ``voice.stt`` / ``voice.tts`` is ``"server"`` — those two settings
+only say which engine the PHONE prefers, they no longer gate these routes.
+Pages record ``audio/wav`` (the one format every backend, the built-in
+recognizer included, accepts). Only the owner clears a saved key. The engine
+calls run in a worker thread (``asyncio.to_thread``) — a local model, a
+PowerShell round trip or a slow host never stalls the event loop.
 
 Status codes, in the order they are checked:
 
 * ``transcribe`` — 415 body is not ``audio/*``; 413 over
-  :data:`MAX_AUDIO_BYTES`; 400 empty; 409 ``voice.stt`` is not ``"server"``
-  or no backend is ready (``{"error"}`` says which); 502 the backend failed;
-  200 ``{"text", "backend", "ms"}``.
+  :data:`MAX_AUDIO_BYTES`; 400 empty; 409 no recognition backend is ready
+  (``{"error"}`` is :func:`core.speech.select`'s reason); 502 the backend
+  failed (the built-in recognizer refuses a non-WAV clip this way); 200
+  ``{"text", "backend", "ms"}``.
 * ``speak`` — 400 no text; 413 over :data:`MAX_SPEAK_CHARS`; 409 / 502 as
   above; 200 the audio bytes (``audio/mpeg`` or ``audio/wav``) with
   ``X-Voice-Backend``.
@@ -50,16 +57,9 @@ def _settings():
 
 
 def _refusal(kind: str) -> Tuple[Optional[_speech.Backend], Optional[JSONResponse]]:
-    """The backend a ``kind`` request may use, or the 409 that says why not."""
-    where = _settings().voice.stt if kind == "stt" else _settings().voice.tts
-    if where != "server":
-        return None, JSONResponse(
-            {
-                "error": "Server %s is off: turn it on under Settings → Your phone → Voice."
-                % _speech.KIND_WORD[kind]
-            },
-            status_code=409,
-        )
+    """The backend a ``kind`` request may use, or the 409 that says why not
+    (no backend of that kind is ready). ``voice.stt`` / ``voice.tts`` are
+    not consulted: they are the phone page's preference, not a gate."""
     backend, detail = _speech.select(kind)
     if backend is None:
         return None, JSONResponse({"error": detail}, status_code=409)
@@ -86,11 +86,14 @@ def voice_get() -> JSONResponse:
         {"stt": "phone"|"server", "tts": "phone"|"server",
          "approve_dialogs": bool, "agent_words": bool,
          "backends": {"stt": [ids], "tts": [ids]},
-         "server_ready": {"stt": bool, "tts": bool, "detail": str, …}}
+         "server_ready": {"stt": bool, "tts": bool, "detail": str, …},
+         "system": {"available": bool, "platform": str, "detail": str,
+                    "voices": [names], "recognizers": [culture tags]}}
 
-    Readable by any signed-in client (the phone page reads it on load) —
-    no owner check. ``server_ready`` is :func:`core.speech.describe`'s
-    offline verdict on the saved fields (no network, no model load)."""
+    Readable by any signed-in client (the phone page and the desktop app
+    read it on load) — no owner check. ``server_ready`` and ``system`` are
+    :func:`core.speech.describe`'s offline verdict on the saved fields (no
+    network, no model load; the built-in engine is probed once per process)."""
     s = _settings()
     body = {
         "stt": s.voice.stt,
@@ -106,9 +109,10 @@ def voice_get() -> JSONResponse:
 async def voice_transcribe(request: Request, lang: str = "") -> JSONResponse:
     """Recognise one recorded clip. The RAW audio is the body — not multipart,
     so no form parser is needed — and ``Content-Type`` names its format
-    (``audio/webm``, ``audio/mp4``, ``audio/wav``, ``audio/ogg``,
-    ``audio/mpeg``; a ``;codecs=`` suffix is fine). ``?lang=en`` is a hint
-    for the backend. → ``{"text", "backend", "ms"}``; see the module doc for
+    (``audio/wav`` from every page today; ``audio/webm``, ``audio/mp4``,
+    ``audio/ogg``, ``audio/mpeg`` for the other backends; a ``;codecs=``
+    suffix is fine). ``?lang=en`` is a hint for the backend (the built-in
+    recognizer maps it to an installed culture, ``en`` → ``en-US``). → ``{"text", "backend", "ms"}``; see the module doc for
     the status codes."""
     mime = _speech.mime_of(request.headers.get("content-type", ""))
     if not mime.startswith("audio/"):
@@ -160,8 +164,8 @@ async def voice_transcribe(request: Request, lang: str = "") -> JSONResponse:
 @router.post("/api/voice/speak")
 async def voice_speak(payload: Optional[dict] = None) -> Response:
     """Say ``{"text", "voice"?}`` → the audio bytes, ``Content-Type`` the
-    backend's (``audio/mpeg`` for a host, ``audio/wav`` for piper) and
-    ``X-Voice-Backend`` its id. ``voice`` overrides ``voice.tts_voice`` for
+    backend's (``audio/mpeg`` for a host, ``audio/wav`` for piper and the
+    built-in engine) and ``X-Voice-Backend`` its id. ``voice`` overrides ``voice.tts_voice`` for
     this one call. See the module doc for the status codes."""
     body = payload if isinstance(payload, dict) else {}
     text = body.get("text")

@@ -101,6 +101,42 @@ class TestGet:
         assert sr["tts"] is False
         assert sr["tts_detail"] == "local models not installed: uv sync --group voice"
 
+    def test_system_block(self, fakes, monkeypatch):
+        from backend.web.core import speech_system
+
+        found = speech_system.Probe(
+            "wsl",
+            stt_ok=True,
+            stt_detail="Windows (from WSL) speech recognition (en-US)",
+            tts_ok=True,
+            tts_detail="Windows (from WSL) voices: Microsoft Zira Desktop",
+            voices=["Microsoft Zira Desktop"],
+            recognizers=["en-US"],
+        )
+        monkeypatch.setattr(speech_system, "probe", lambda: found)
+        system = client.get("/api/voice").json()["system"]
+        assert system == {
+            "available": True,
+            "platform": "wsl",
+            "detail": "Recognition: Windows (from WSL) speech recognition (en-US)."
+            " Voice: Windows (from WSL) voices: Microsoft Zira Desktop.",
+            "voices": ["Microsoft Zira Desktop"],
+            "recognizers": ["en-US"],
+        }
+
+    def test_system_block_is_offline_under_pytest(self, fakes):
+        # Nothing is spawned for a poll in the suite: the block is there, the
+        # engine unprobed (or plain Linux's sentence).
+        system = client.get("/api/voice").json()["system"]
+        assert set(system) == {
+            "available",
+            "platform",
+            "detail",
+            "voices",
+            "recognizers",
+        }
+        assert system["available"] is False and system["voices"] == []
+
     def test_readable_without_configure_rights(self, fakes, monkeypatch):
         async def _refuse(scope):
             return False
@@ -176,11 +212,14 @@ class TestTranscribe:
         _voice(stt="server")
         assert _transcribe(body=b"").status_code == 400
 
-    def test_409_when_recognition_runs_on_the_phone(self, fakes):
-        r = _transcribe()
-        assert r.status_code == 409
-        assert "Settings" in r.json()["error"]
-        assert fakes.stt.calls == []
+    def test_served_while_the_phone_prefers_its_own_recognizer(self, fakes):
+        # voice.stt only says which engine the PHONE page prefers; the desktop
+        # app's mic always transcribes on the server, so it is not a gate.
+        _voice(stt="phone")
+        r = _transcribe(body=b"RIFF\x00\x00\x00\x00WAVEfmt ", ctype="audio/wav")
+        assert r.status_code == 200, r.text
+        assert r.json()["text"] == "hello there"
+        assert fakes.stt.calls[0][2] == "audio/wav"
 
     def test_409_when_no_backend_is_ready(self, fakes):
         _voice(stt="server")
@@ -267,10 +306,11 @@ class TestSpeak:
         assert "1201" in r.json()["error"]
         assert len(fakes.tts.calls) == 1
 
-    def test_409_when_the_voice_runs_on_the_phone(self, fakes):
+    def test_served_while_the_phone_prefers_its_own_voice(self, fakes):
+        _voice(tts="phone")
         r = client.post("/api/voice/speak", json={"text": "Hi"})
-        assert r.status_code == 409
-        assert "Settings" in r.json()["error"]
+        assert r.status_code == 200, r.text
+        assert fakes.tts.calls == [("speak", "Hi", "")]
 
     def test_409_when_no_backend_is_ready(self, fakes):
         _voice(tts="server")

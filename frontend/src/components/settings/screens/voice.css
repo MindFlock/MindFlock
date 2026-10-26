@@ -1,10 +1,12 @@
-/* Settings → Your phone → Voice (screens/Mobile.tsx, VoiceSection): where
-   speech runs (phone | server) for recognition and the voice, and the
-   server-backend fields that unfold under a "server" choice. Same grid as
-   the ntfy form: label | control | side button, hint under the control. */
+/* Settings → Voice (screens/Voice.tsx): the server's engine for recognition
+   and the voice with the fields each needs, where the phone page runs them,
+   and the Try-it row. Same grid as the ntfy form: label | control | side
+   button, hint under the control. */
 
-.voice-section {
-  margin-top: 28px;
+.voice-sub {
+  margin: 0 0 2px;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .voice-kind {
@@ -44,6 +46,27 @@
 
 .voice-ready .mobile-row-glyph {
   margin-right: 6px;
+}
+
+.voice-try {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0 0;
+}
+
+.voice-try-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.voice-try p {
+  margin: 0;
+}
+
+/* Your phone's pointer to this screen (Mobile.tsx #mobile-voice). */
+.voice-moved {
+  margin-top: 24px;
 }
 
 .voice-notes {

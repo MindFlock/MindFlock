@@ -102,7 +102,7 @@ describe("settings screens", () => {
       Agents: ["coding", "providers", "accounts", "localmodel"],
       Code: ["workspace", "ide"],
       "This device": ["security", "appearance"],
-      "Devices and people": ["devices", "mobile", "peer"],
+      "Devices and people": ["devices", "mobile", "voice", "peer"],
       Extensions: ["extensions"],
       Troubleshooting: ["doctor", "logs", "advanced", "traffic"],
     };

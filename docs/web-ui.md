@@ -158,16 +158,35 @@ a session first*.
   it?”*) — only for prompts this mic sent, never for ones typed or sent from the
   phone. Nothing is read while the mic listens; queued lines wait.
 - **Options**: right-click or Shift+click the mic for *Read replies aloud*,
-  *Click to talk* / *Hold to talk*, a diagnostics line (which recogniser and
-  which voice are in use), and a link to the speech engines in **Settings →
-  Your phone → Voice**. The choice is kept per browser (`cs_voice_desktop`).
+  *Click to talk* / *Hold to talk*, a diagnostics line naming the engines in
+  use (*Recognition: server, built in (Windows via WSL) · Voice: server
+  (piper)*, *Recognition: this browser · Voice: this browser*, and why the
+  server's recogniser isn't ready when it would be used), and a link to the
+  speech engines in **Settings → Voice**. The choice is kept per browser
+  (`cs_voice_desktop`).
 
-Recognition is the browser's Web Speech, or the server's when Settings → Your
-phone → Voice says *server* and it is ready — the Electron desktop app and
-Chromium builds without Google's speech service (Arc) need the server's: their
-Web Speech fails with *Speech recognition failed (network)*. How the `Say:` line
-is produced and which engines exist: [Voice: talking to a
-session](#voice-talking-to-a-session).
+**Which engine.** In the **desktop app** (Electron — its Chromium has no
+Google speech key, so Web Speech fails there on every start) recognition and
+the voice both use the **server's** engines whenever `GET /api/voice` says that
+kind is ready (`server_ready.stt` / `.tts`: the built-in Windows or macOS
+engine, whisper, piper or a host), whatever `voice.stt` / `voice.tts` say —
+those are the phone page's preference. With no server recogniser ready the mic
+never tries Web Speech: it says *Speech needs the server's engine here:
+Settings → Voice*. With no server voice, replies use the app's own
+speechSynthesis. In a **browser tab** it is the phone's rule: Web Speech and
+speechSynthesis, unless Settings → Voice says *server* for that kind and it is
+ready (Chromium builds without Google's speech service, such as Arc, need that:
+their Web Speech fails with *Speech recognition failed (network)*). The mic
+re-reads `GET /api/voice` when the window regains focus and after any settings
+save.
+
+**The server's recogniser** records each phrase as **16 kHz 16-bit mono WAV**
+(`lib/wavRecorder.ts`, through the page's one AudioContext, made inside the
+click) — the built-in recognisers take nothing but PCM — ends a clip after
+1.8 s of quiet following speech or at 12 s, and uploads it as `audio/wav` to
+`POST /api/voice/transcribe`; a clip the level meter heard no speech in is not
+sent. How the `Say:` line is produced and which engines exist: [Voice: talking
+to a session](#voice-talking-to-a-session).
 
 **Sidebar** — session list with drag-to-reorder, stage chips, and a
 close ✕ per row (closes the session, keeps the worktree). The chip is the
@@ -4716,9 +4735,10 @@ talks to, and the first-hour screen (`DEFAULT_SETTINGS_SCREEN` in
 `lib/openSettings.ts`).
 
 **Basic first, advanced on request.** Out of the box the nav lists only the
-six screens a new user needs to point MindFlock at a repo and a tracker and
-run agents — **General**, **Connections**, **Notifications**, **Agents**,
-**Workspace** and **Appearance** — as one flat list with no headings. **Show
+seven screens a new user needs to point MindFlock at a repo and a tracker,
+run agents and talk to them — **General**, **Connections**, **Notifications**,
+**Agents**, **Workspace**, **Appearance** and **Voice** — as one flat list
+with no headings. **Show
 advanced settings** at the foot of the nav (`#settings-advanced-toggle`, with
 "*N* more screens" under it) reveals every other screen; **Hide advanced
 settings** puts them away again. The choice is the synced pref
@@ -4759,15 +4779,16 @@ In advanced mode the nav is grouped under non-clickable headings
 **Notifications** first, then **Agents** (Agents, Custom agents, Accounts,
 Local model, Agent orchestration), **Code** (Workspace, IDE), **This device**
 (Security, Appearance), **Devices and people** (**Your devices**, **Your
-phone**, **People** — the two ways to trust another machine: yours, and
-someone else's), **Extensions** (its own group: loaded extensions and any
+phone**, **Voice**, **People** — the two ways to trust another machine:
+yours, and someone else's, with Voice, the only basic screen in the group,
+next to the phone it used to live under), **Extensions** (its own group: loaded extensions and any
 that failed to load) and **Troubleshooting** (Doctor, System logs, Engine &
 updates, and Site traffic in a `--mindflock-dev` shell only). The list is
 `SCREENS` in `components/settings/SettingsDialog.tsx`. Every screen key is
 stable — Your devices is still `devices`, Your phone `mobile`, People `peer` —
 and the new names and the moved controls' names (`your-devices`,
-`your-phone`, `people`, `remote-control`, `tailnet-trust`, `settings-sync`, …)
-route to the right screen too, so deep links, the palette (**Your devices**,
+`your-phone`, `people`, `remote-control`, `tailnet-trust`, `settings-sync`,
+`mobile-voice`, `speech`, `microphone`, …) route to the right screen too, so deep links, the palette (**Your devices**,
 **Your phone**, **People…**), the legacy Intake hand-off and the Connections
 cards' **Configure** buttons land where they always did.
 
@@ -5371,27 +5392,61 @@ labels above the inputs.
   lands on the login prompt, which is the intended trade: one extra tap on a new
   device instead of this machine's token sitting on a third party's server.
 
-  Below the four rows, **Voice** (`voice.*`,
-  [configuration.md](configuration.md#web-exposed-settings)) — *Talk to a
-  session from the phone page: tap the mic on /m. Speech runs on the phone by
-  default.* Two blocks, **Recognition** and **Voice**, each a **phone | server**
-  choice; on *server* the block grows a **Backend** picker (*Whichever is
-  ready* · *OpenAI-compatible host* · *Local models on this computer*),
-  **URL** and **API key** for a host (the key follows the secret-field
-  pattern: masked once saved, blank keeps it, **Clear** forgets it through
-  `POST /api/voice/clear-key`), **Model** (the host's model, or a whisper size
-  for the local backend) and, for the voice, **Voice name**; under each block
-  a readiness line from `GET /api/voice` (*Server recognition ready (local):
-  …* / *Server voice not ready: …*), re-read after every save. Then
-  **Approve dialogs by voice** (*A spoken yes or no answers a permission
-  dialog after its command is read aloud. 'Always' is only accepted when you
-  say the word.*) and two notes: *Phone recognition sends audio to Google on
-  Android and to Apple on iOS when no on-device model exists* and *On iPhone,
-  voice needs a Safari tab: the home-screen icon cannot hear you. Server
-  recognition fixes that.* The server routes and backends are described in
-  [web-api.md](web-api.md#voice-talking-to-a-session-from-the-phone); the
-  phone page itself still uses the phone's engines in this build, whatever
-  the two choices say (its Diagnostics says so). See
+  Below the four rows one line, `#mobile-voice`, says *Voice settings moved
+  to Settings → Voice* and links there (the old anchor still lands on it).
+
+- **Voice** (screen key `voice`; also `mobile-voice`, `speech`,
+  `microphone`; `components/settings/screens/Voice.tsx`) — talking to
+  sessions out loud, from the desktop app's mic in the top bar and from the
+  phone page. A **basic** screen, right after Your phone, so a fresh user
+  finds it. Its settings are `voice.*`
+  ([configuration.md](configuration.md#web-exposed-settings)); the screen
+  re-reads `GET /api/voice` after every save. In order:
+  - The intro says what runs where: the desktop app's mic always uses this
+    computer's engines, the phone page uses the phone's own unless told
+    otherwise, and out of the box this computer uses its **built-in engine**
+    (Windows' System.Speech — also from WSL — or macOS' Speech framework),
+    so a fresh install talks with nothing to download.
+  - **Recognition** and **Voice** (`#voice-engines`, where the mic and the
+    phone page deep-link): each an **Engine** picker — *This computer (built
+    in)* · *OpenAI-compatible host* · *Local models (faster-whisper /
+    piper)*, built in first; a saved `""` shows whichever engine the server
+    resolved it to, the built-in one wherever it exists. The built-in engine
+    needs nothing filled in except, for the voice, **Voice name** — a select
+    of the system's voices (`system.voices`, the system default first; free
+    text when it lists none). A host adds **URL** and **API key** (masked
+    once saved, blank keeps it, **Clear** forgets it through
+    `POST /api/voice/clear-key`) and **Model**; local models add a whisper
+    size for recognition and a piper voice name. Under each block a
+    readiness line from `GET /api/voice` (*Server recognition ready
+    (system): Windows via WSL — recognizer en-US, voices David, Zira.* /
+    *Server voice not ready: …*): with the built-in engine picked its own
+    sentence is the detail (the Linux one, macOS' permission one); a server
+    too old to report `system` says it has no built-in engine yet.
+  - **On the phone page**: where recognition and the voice run for the
+    phone (`voice.stt` / `voice.tts`: *The phone* · *This computer*), with
+    *The desktop app always uses this computer.*
+  - **Approve dialogs by voice** (*A spoken yes or no answers a permission
+    dialog after its command is read aloud. 'Always' is only accepted when
+    you say the word.*).
+  - **Try it**: **Say a test sentence** (`POST /api/voice/speak` *This is
+    MindFlock speaking.*, played through an AudioContext made in the click;
+    then *Spoke with system in 240 ms.* or the error) and **Try recognition**
+    (asks for the microphone, records three seconds as WAV with a countdown
+    on the button — `lib/wavRecorder.ts` — and sends it to
+    `POST /api/voice/transcribe`; then *Heard: “…” (system, 412 ms)*, *Heard
+    nothing…* or the error; a refused microphone gets a plain sentence).
+    Each button is disabled, with the reason under the row, until the
+    server has that engine ready (or while the browser cannot record).
+  - Privacy notes: the built-in engines (Windows' and Apple's on-device
+    speech) and local models keep audio on this computer, a host receives
+    what you send it; the phone's own recognition sends audio to Google on
+    Android and to Apple on iOS when no on-device model exists; on iPhone,
+    voice needs a Safari tab (the home-screen icon cannot hear you), which
+    recognition on this computer fixes.
+
+  The server routes and backends are described in
+  [web-api.md](web-api.md#voice-talking-to-a-session-from-the-phone). See
   [Voice: talking to a session](#voice-talking-to-a-session).
 
 - **Your devices → One link for all devices** (`general.shared_link`; moved
@@ -5608,7 +5663,10 @@ click (or hold) to talk, a phrase ending in "over" sends, one ending in
 and the reply is read aloud only while *Read replies aloud* is on (off by
 default; right-click the mic) — see [The mic](#layout) in the top bar section.
 Words said while a text box has focus are typed there instead and never
-submitted. The phone page's mic is the hands-free version of the same
+submitted. In the desktop app the words and the voice go through the
+server's engines whenever one is ready (Settings → Voice) — the app's own
+Web Speech can't recognise — and in a browser tab through the browser's unless Settings say
+*server*; the server's recogniser is sent each phrase as a WAV clip. The phone page's mic is the hands-free version of the same
 conversation, with spoken replies on by default — see
 [Voice: talking to a session](#voice-talking-to-a-session) under the Mobile UI.
 
@@ -5804,10 +5862,25 @@ first mic tap — a **Voice needs Safari: open this page in a Safari tab**
 banner with this page's URL and **Copy**. Without a recognizer the mic still
 turns voice on as a read-aloud mode (*No speech recognition here — replies
 are still read aloud*): replies and dialogs are spoken, nothing listens.
-Server recognition (Settings → Your phone → Voice, `voice.stt = "server"`)
+Server recognition (Settings → Voice, `voice.stt = "server"`)
 is what lets the home-screen icon hear you: the page then records a clip
-(`MediaRecorder`) and sends it to the server's recognizer instead, and the
+and sends it to the server's recognizer instead, and the
 Safari banner goes away. Diagnostics (below) names the adapter in use.
+The clip is **16-bit PCM mono WAV at 16 kHz** (`Content-Type: audio/wav`) in
+every browser: the server's built-in recognizers — Windows' System.Speech and
+macOS' Speech framework, which work on a fresh install with no model
+download — need plain PCM, and faster-whisper and OpenAI take WAV too, while
+`MediaRecorder` only makes webm/opus (Chrome) or mp4/AAC (Safari). So the
+page pulls the samples off its one `AudioContext` (made inside the tap): the
+mic stream → a `ScriptProcessorNode(4096, 1, 1)` → a muted gain → the
+destination (Chrome does not run a processor that reaches nothing). Each
+block's first channel is kept; when the clip ends they are joined, resampled
+to 16 kHz by linear interpolation, clamped and written behind the 44-byte
+RIFF header — the desktop app's recorder (`lib/wavRecorder.ts`) does the
+same. The RMS of those blocks drives the level meter and the silence
+detector: 1.8 s of quiet after speech ends the clip (a tap ends it at once,
+12 s or the listening window is the cap, and a clip that heard no speech is
+dropped).
 A Chromium browser that does not ship Google's speech key — Arc, Brave,
 Vivaldi, Opera — has the recognizer but every start fails with a `network`
 error and nothing is heard: the first is retried, the second in a listening
@@ -5938,7 +6011,7 @@ and one that was just answered says *Already answered.* Not understood, or
 silence: *I didn't catch that: say yes, no, or always.* — twice, then
 *<name> is waiting on you.* A dialog the provider can't parse (a free-text
 question) is announced as *<name> is waiting on you: open the screen.*
-**Approve dialogs by voice** (Settings → Your phone → Voice,
+**Approve dialogs by voice** (Settings → Voice,
 `voice.approve_dialogs`, on by default) turns the answering off: the dialog
 is still read out, followed by *Answer it on the screen.*, and nothing
 listens. The ⚙ sheet shows that setting read-only.
@@ -5956,7 +6029,11 @@ so a silent failure has a name — *Recognition* (available, or *NOT available
 session*, the *Events socket* state and sequence number, *Backends*
 (recognition and voice: which adapter is active — the phone's, or the
 server's when Settings say server and `GET /api/voice` reports it ready),
-*Primed*
+*Built-in engine* (*<platform> — <detail>*, from the `system` object of
+`GET /api/voice`; left out when an older server sends none), *Recorder*
+(*WAV 16 kHz (ScriptProcessor)*, or *not supported* without Web Audio or a
+microphone), *AudioContext* (its state), *Last transcribe* / *Last speak*
+(how long the server took and which backend, or why it failed), *Primed*
 (whether a tap has unlocked speech output yet), *Push to talk* (tap or
 hold), *Replies* (on or off), *Last prompt* (dictated or typed, and whether
 it asked for a `Say:` line), *Router* (what `/api/voice/route` last answered,
@@ -5992,7 +6069,7 @@ the OS reading a push. Dictation is for intent, not code — the explicit
 only through its compact voices and cuts long utterances, so lines are
 chunked by sentence with a timeout behind each chunk. Phone recognition
 sends audio to Google on Android and to Apple on iOS when no on-device model
-exists (the Settings screen says so). With Settings → Your phone → Voice
+exists (the Settings screen says so). With Settings → Voice
 set to the server for recognition or speech, the page uses the server's
 engines (`POST /api/voice/transcribe`, `POST /api/voice/speak`, audio played
 through one `AudioContext`) whenever `GET /api/voice` reports that backend

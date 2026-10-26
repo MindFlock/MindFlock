@@ -1,27 +1,39 @@
 /** The desktop mic (components/TopBarMic.tsx + lib/voiceDesktop.ts): the
- * radio words, the push-to-talk machine, the prefs, the reply rules and the
- * speech queue — pure, so pinned here — and the wiring around them pinned
- * against the source: where the mic sits, that the old dictation button is
- * gone, and what goes on /send. */
+ * radio words, the push-to-talk machine, the prefs, the reply rules, the
+ * speech queue and the engine choice — pure, so pinned here — the server
+ * recognizer's WAV path against a mocked recorder and `apiRaw`, and the
+ * wiring around them pinned against the source: where the mic sits, that the
+ * old dictation button is gone, and what goes on /send. */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_VOICE_CFG,
   DEFAULT_VOICE_PREFS,
   Dictation,
   ReplyTracker,
   SpeechQueue,
   VOICE_PREFS_KEY,
+  engineDiagnostics,
+  isElectron,
   loadVoicePrefs,
+  noRecognizerLine,
   parseRadio,
   recognizerErrorLine,
   saveVoicePrefs,
   sentenceChunks,
+  serverRecognizer,
   spokenLine,
   sttEngine,
   ttsEngine,
+  type RecognizerHandlers,
   type Speaker,
+  type VoiceCfg,
 } from "../lib/voiceDesktop";
-import { ALL_CODE, ALL_CSS, code, cssRule, fn, src } from "./sourceText";
+import { ALL_CODE, ALL_CSS, blockFrom, code, cssRule, fn, src } from "./sourceText";
+
+const mocks = vi.hoisted(() => ({ api: vi.fn(), apiRaw: vi.fn(), startWavRecording: vi.fn() }));
+vi.mock("../api/client", () => ({ api: mocks.api, apiRaw: mocks.apiRaw }));
+vi.mock("../lib/wavRecorder", () => ({ startWavRecording: mocks.startWavRecording }));
 
 function memKV(init: Record<string, string> = {}) {
   const m = new Map(Object.entries(init));
@@ -225,21 +237,97 @@ describe("SpeechQueue", () => {
 });
 
 describe("engines and errors", () => {
-  it("uses the server only when Settings say so AND it is ready", () => {
-    const off = { stt: "phone" as const, tts: "phone" as const, server_ready: { stt: true, tts: true } };
-    const on = { stt: "server" as const, tts: "server" as const, server_ready: { stt: true, tts: true } };
-    const notReady = { stt: "server" as const, tts: "server" as const, server_ready: {} };
-    expect(sttEngine(off, true)).toBe("browser");
-    expect(sttEngine(on, true)).toBe("server");
-    expect(sttEngine(on, false)).toBe("browser");
-    expect(sttEngine(notReady, true)).toBe("browser");
-    expect(ttsEngine(on)).toBe("server");
-    expect(ttsEngine(notReady)).toBe("browser");
+  const cfg = (over: Partial<VoiceCfg> = {}): VoiceCfg => ({ ...DEFAULT_VOICE_CFG, ...over });
+  const ready = { stt: true, tts: true, stt_backend: "system", tts_backend: "piper" };
+
+  it.each([
+    // [where, voice.stt, server ready, page can record, → engine]
+    ["desktop app", "phone", true, true, "server"],
+    ["desktop app", "server", true, true, "server"],
+    ["desktop app", "phone", false, true, "none"],
+    ["desktop app", "server", false, true, "none"],
+    ["desktop app", "server", true, false, "none"],
+    ["browser tab", "phone", true, true, "browser"],
+    ["browser tab", "phone", false, true, "browser"],
+    ["browser tab", "server", true, true, "server"],
+    ["browser tab", "server", false, true, "browser"],
+    ["browser tab", "server", true, false, "browser"],
+  ] as const)("recognition: %s, voice.stt=%s, ready=%s, can record=%s → %s", (where, stt, ok, rec, want) => {
+    const c = cfg({ stt, server_ready: ok ? ready : {} });
+    expect(sttEngine(c, rec, where === "desktop app")).toBe(want);
+  });
+
+  it.each([
+    ["desktop app", "phone", true, "server"],
+    ["desktop app", "phone", false, "browser"],
+    ["browser tab", "phone", true, "browser"],
+    ["browser tab", "server", true, "server"],
+    ["browser tab", "server", false, "browser"],
+  ] as const)("voice: %s, voice.tts=%s, ready=%s → %s", (where, tts, ok, want) => {
+    expect(ttsEngine(cfg({ tts, server_ready: ok ? ready : {} }), where === "desktop app")).toBe(want);
+  });
+
+  it("with no recognizer, the desktop app points at the server's engine, never at another browser", () => {
+    expect(noRecognizerLine(true)).toBe("Speech needs the server's engine here: Settings → Voice");
+    expect(noRecognizerLine(false)).toBe(
+      "Voice input needs Chrome, Edge or Safari — or server recognition (Settings → Voice)"
+    );
+  });
+
+  it("the desktop app is the preload's mfapp bridge or Electron's user agent", () => {
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0 Chrome/140.0" });
+    expect(isElectron()).toBe(false);
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0 Chrome/140.0 Electron/38.1.0" });
+    expect(isElectron()).toBe(true);
+    vi.stubGlobal("navigator", { userAgent: "" });
+    vi.stubGlobal("window", { mfapp: {} });
+    expect(isElectron()).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    [
+      "the built-in engine on WSL + piper",
+      cfg({ server_ready: ready, system: { available: true, platform: "wsl" } }),
+      "server",
+      "server",
+      true,
+      "Recognition: server, built in (Windows via WSL) · Voice: server (piper)",
+    ],
+    [
+      "the built-in engine on a Mac, both ways",
+      cfg({ server_ready: { stt: true, tts: true, stt_backend: "system", tts_backend: "system" }, system: { platform: "macos" } }),
+      "server",
+      "server",
+      true,
+      "Recognition: server, built in (macOS) · Voice: server, built in (macOS)",
+    ],
+    ["a browser tab on its own engines", cfg(), "browser", "browser", false, "Recognition: this browser · Voice: this browser"],
+    [
+      "the desktop app with no server engine",
+      cfg({ server_ready: { stt: false, stt_detail: "no engine installed" } }),
+      "none",
+      "browser",
+      true,
+      "Recognition: none (server recognition isn't ready: no engine installed) · Voice: this browser",
+    ],
+    [
+      "a tab asking for the server before it is ready",
+      cfg({ stt: "server", server_ready: { stt: false, stt_detail: "whisper is not installed" } }),
+      "browser",
+      "browser",
+      false,
+      "Recognition: this browser (server recognition isn't ready: whisper is not installed) · Voice: this browser",
+    ],
+    ["a tab with no Web Speech", cfg(), "none", "none", false, "Recognition: none in this browser · Voice: none"],
+  ] as const)("diagnostics: %s", (_name, c, stt, tts, electron, want) => {
+    expect(engineDiagnostics(c, stt, tts, electron)).toBe(want);
   });
 
   it("says what a network failure and a denied mic mean", () => {
     expect(recognizerErrorLine("network")).toBe(
-      "Speech recognition failed (network): use Chrome, Edge or Safari, or turn on server recognition in Settings → Your phone → Voice"
+      "Speech recognition failed (network): use Chrome, Edge or Safari, or turn on server recognition in Settings → Voice"
     );
     expect(recognizerErrorLine("not-allowed")).toBe("Microphone permission denied");
   });
@@ -249,6 +337,126 @@ describe("engines and errors", () => {
       "Login fix: Fixed note.txt today.",
       "Should I push it?",
     ]);
+  });
+});
+
+describe("serverRecognizer: a WAV clip per phrase", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    mocks.apiRaw.mockReset();
+    mocks.startWavRecording.mockReset();
+  });
+
+  class FakeCtx {
+    state = "running";
+    sampleRate = 48000;
+    resume() {
+      return Promise.resolve();
+    }
+  }
+  const stream = { active: true, getTracks: () => [] };
+
+  function setup(text = "fix the login bug") {
+    vi.stubGlobal("window", { AudioContext: FakeCtx });
+    vi.stubGlobal("navigator", { language: "en-US", userAgent: "", mediaDevices: { getUserMedia: async () => stream } });
+    const clips: Array<{ opts: { targetRate?: number; onLevel?: (rms: number) => void }; stop: ReturnType<typeof vi.fn>; cancel: ReturnType<typeof vi.fn> }> = [];
+    mocks.startWavRecording.mockImplementation((_s: unknown, _c: unknown, opts) => {
+      const blob = new Blob([new Uint8Array(44 + 3200)], { type: "audio/wav" });
+      const clip = { opts, stop: vi.fn(() => Promise.resolve(blob)), cancel: vi.fn(), seconds: () => 0.1 };
+      clips.push(clip);
+      return clip;
+    });
+    mocks.apiRaw.mockImplementation(async () => ({ ok: true, status: 200, json: async () => ({ text }) }));
+    const finals: string[] = [];
+    const errors: string[] = [];
+    let ended = 0;
+    const h: RecognizerHandlers = {
+      onInterim: () => {},
+      onFinal: (t) => void finals.push(t),
+      onError: (code, detail) => void errors.push(detail || code),
+      onEnd: () => void ended++,
+    };
+    return { clips, finals, errors, h, ended: () => ended };
+  }
+
+  it("records through startWavRecording (16 kHz, the page's AudioContext) and posts audio/wav", async () => {
+    const t = setup();
+    const r = serverRecognizer();
+    expect(r.available()).toBe(true);
+    expect(r.start(t.h)).toBe(true);
+    await vi.waitFor(() => expect(t.clips.length).toBe(1));
+    const [s, ctx, opts] = mocks.startWavRecording.mock.calls[0];
+    expect(s).toBe(stream);
+    expect(ctx).toBeInstanceOf(FakeCtx);
+    expect(opts.targetRate).toBe(16000);
+    t.clips[0].opts.onLevel!(0.001); // the first block sets the noise floor
+    t.clips[0].opts.onLevel!(0.3); // speech
+    r.finish();
+    await vi.waitFor(() => expect(t.ended()).toBe(1));
+    expect(t.clips[0].stop).toHaveBeenCalled();
+    expect(mocks.apiRaw).toHaveBeenCalledTimes(1);
+    const [url, init] = mocks.apiRaw.mock.calls[0];
+    expect(url).toBe("/api/voice/transcribe?lang=en-US");
+    expect(init.method).toBe("POST");
+    expect(init.headers["Content-Type"]).toBe("audio/wav");
+    expect((init.body as Blob).type).toBe("audio/wav");
+    expect(t.finals).toEqual(["fix the login bug"]);
+    expect(t.errors).toEqual([]);
+  });
+
+  it("silence after speech ends the clip and starts the next; stop() cancels the one recording", async () => {
+    const t = setup();
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const r = serverRecognizer();
+    r.start(t.h);
+    await vi.waitFor(() => expect(t.clips.length).toBe(1));
+    const level = t.clips[0].opts.onLevel!;
+    level(0.001); // the noise floor
+    level(0.3); // speech
+    now += 1000;
+    level(0.001);
+    expect(t.clips[0].stop).not.toHaveBeenCalled(); // not quiet for long enough yet
+    now += 1000; // 2 s of quiet > SILENCE_MS
+    level(0.001);
+    expect(t.clips[0].stop).toHaveBeenCalled();
+    await vi.waitFor(() => expect(t.clips.length).toBe(2));
+    await vi.waitFor(() => expect(t.finals).toEqual(["fix the login bug"]));
+    r.stop();
+    expect(t.clips[1].cancel).toHaveBeenCalled();
+    expect(t.ended()).toBe(0); // stop() reports nothing
+  });
+
+  it("a clip the detector heard no speech in is not uploaded", async () => {
+    const t = setup();
+    const r = serverRecognizer();
+    r.start(t.h);
+    await vi.waitFor(() => expect(t.clips.length).toBe(1));
+    t.clips[0].opts.onLevel!(0.001);
+    r.finish();
+    await vi.waitFor(() => expect(t.ended()).toBe(1));
+    expect(mocks.apiRaw).not.toHaveBeenCalled();
+  });
+
+  it("a 409 (no engine ready) says where to set one up", async () => {
+    const t = setup();
+    mocks.apiRaw.mockImplementation(async () => ({ ok: false, status: 409, json: async () => ({ error: "no backend" }) }));
+    const r = serverRecognizer();
+    r.start(t.h);
+    await vi.waitFor(() => expect(t.clips.length).toBe(1));
+    t.clips[0].opts.onLevel!(0.001);
+    t.clips[0].opts.onLevel!(0.3);
+    r.finish();
+    await vi.waitFor(() => expect(t.errors).toEqual(["Server recognition isn't ready: Settings → Voice"]));
+  });
+
+  it("no MediaRecorder left: the WAV recorder is the only way a clip is made", () => {
+    const lib = code("lib/voiceDesktop.ts");
+    expect(lib).not.toContain("MediaRecorder");
+    expect(lib).not.toContain("SERVER_MIMES");
+    expect(lib).toContain('import { startWavRecording, type WavRecording } from "./wavRecorder";');
+    expect(lib).toContain('headers: { "Content-Type": "audio/wav" }');
   });
 });
 
@@ -294,9 +502,30 @@ describe("wiring", () => {
   it("opens its options on right-click and Shift+click, and deep-links the speech engines", () => {
     expect(MIC).toContain("onContextMenu=");
     expect(MIC).toContain("e.shiftKey");
-    expect(MIC).toContain('openSettings("mobile")');
+    expect(MIC).toContain("openSettings(VOICE_SCREEN)");
+    expect(MIC).toContain('const VOICE_SCREEN = "voice" as SettingsScreen;');
+    expect(MIC).toContain("Speech engines: Settings → Voice");
     expect(MIC).toContain("Read replies aloud");
     expect(MIC).toContain("Click to talk");
     expect(MIC).toContain("Hold to talk");
+  });
+
+  it("asks for the engine before starting: with none (the desktop app, server not ready) it says so and starts nothing", () => {
+    const start = blockFrom(MIC, "const start = (", "const finish = (");
+    const none = start.indexOf('if (engine === "none")');
+    expect(none).toBeGreaterThan(-1);
+    expect(start.indexOf("say(noRecognizerLine())")).toBeGreaterThan(none);
+    expect(start.indexOf("r.start(")).toBeGreaterThan(none);
+    expect(start.slice(none, start.indexOf("r.start("))).toContain("return;");
+  });
+
+  it("re-reads GET /api/voice on window focus and after a settings save", () => {
+    expect(MIC).toContain('window.addEventListener("focus", onFocus)');
+    expect(MIC).toContain('window.removeEventListener("focus", onFocus)');
+    expect(MIC).toMatch(/getQueryCache\(\)\.subscribe[\s\S]{0,200}queryKey\[0\] !== "settings"/);
+  });
+
+  it("no old Settings path is left in the mic", () => {
+    for (const f of ["components/TopBarMic.tsx", "lib/voiceDesktop.ts"]) expect(src(f)).not.toContain("Your phone → Voice");
   });
 });

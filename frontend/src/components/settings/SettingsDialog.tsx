@@ -12,13 +12,14 @@
  * "Devices and people" group): Your devices (key "devices") holds pairing,
  * the fleet key, Make reachable, the shared phone link, settings sync and
  * an Advanced fold with the older routes; Your phone ("mobile") is the QR
- * and /m link; People ("peer") is peer links; Security keeps the access
+ * and /m link; Voice ("voice") is speech for the desktop mic and the phone
+ * page; People ("peer") is peer links; Security keeps the access
  * token and the gate. Keys never changed — screenKeys.ts maps the new
  * names and the moved controls' names onto them.
  *
- * Basic vs advanced (settingsMode.tsx): the nav lists the six screens a new
+ * Basic vs advanced (settingsMode.tsx): the nav lists the seven screens a new
  * user needs — General, Connections, Notifications, Agents, Workspace,
- * Appearance — until "Show advanced settings" at its foot reveals the rest
+ * Appearance, Voice — until "Show advanced settings" at its foot reveals the rest
  * (a synced pref). Screens marked `advanced` below are the rest; a deep link
  * to one still opens it, listed last under an "Advanced" heading.
  *
@@ -61,6 +62,7 @@ import { noteTouched } from "./savedCue";
 import { General } from "./screens/General";
 import { Appearance } from "./screens/Appearance";
 import { Mobile } from "./screens/Mobile";
+import { Voice } from "./screens/Voice";
 import { PeerLinks } from "./screens/PeerLinks";
 import { Connections } from "./screens/Connections";
 import { Notifications } from "./screens/Notifications";
@@ -125,6 +127,9 @@ const SCREENS = [
   // (old deep links, the palette, docs) — screenKeys.ts maps the new names.
   { key: "devices", label: "Your devices", group: "Devices and people", advanced: true, el: (p) => <Devices {...p} /> },
   { key: "mobile", label: "Your phone", group: "Devices and people", advanced: true, el: (p) => <Mobile {...p} /> },
+  // Voice is basic: the desktop mic and the phone page both use it, and a
+  // fresh install's built-in engine needs a newcomer to find "Try it".
+  { key: "voice", label: "Voice", group: "Devices and people", el: (p) => <Voice {...p} /> },
   { key: "peer", label: "People", group: "Devices and people", advanced: true, el: (p) => <PeerLinks {...p} /> },
   // Extensions are a thing you add, not a fault to chase: their own group.
   { key: "extensions", label: "Extensions", group: "Extensions", advanced: true, el: (p) => <Extensions {...p} /> },

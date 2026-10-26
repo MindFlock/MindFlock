@@ -638,9 +638,9 @@ server merges on save so multiple processes can share it.
   by the explorer's self-heal at startup, and by `mindflock doctor`. Follows
   `$MINDFLOCK_HOME` (like `install.json`). See
   [extensions.md](extensions.md#worked-example-the-database-client).
-- `voice/` — the local speech backend's model files
+- `voice/` — the optional local speech backend's model files
   (`backend/web/core/speech.py`, `voice.stt_backend` / `tts_backend` =
-  `"local"`): `whisper/` (faster-whisper's download root — the CTranslate2
+  `"local"`; the built-in `system` engine keeps nothing here): `whisper/` (faster-whisper's download root — the CTranslate2
   model, `small` unless `voice.stt_model` names another size) and
   `piper/<voice>.onnx` + `.onnx.json` (~60 MB each). Downloaded from Hugging
   Face on first use, never at server start. Override with
@@ -766,7 +766,8 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_PROVIDER_BIN_<NAME>` | — | Per-provider binary override (provider name uppercased, non-alphanumerics → `_`; e.g. `MINDFLOCK_PROVIDER_BIN_CLAUDE=/opt/claude`). Wins over Settings → `coding_cli.binary_paths` and the provider TOML's `binary_path` |
 | `MINDFLOCK_ACTIVITY_MARKER_DIR` | `~/.mindflock-assistant/.activity-markers` | Per-session `{state, ts}` markers the CLI activity hooks write (working/idle/clarify detection — Claude, Codex, and opt-in TOML providers; see [providers.md](providers.md)). Read by the hook **at fire-time from the firing CLI's environment**, not by the server at install time — so a sandboxed CLI (redirected `HOME`) writes into its own sandbox instead of poisoning the shared hooks file's path for cohabiting sessions. Note: does **not** follow `MINDFLOCK_ASSISTANT_DIR` |
 | `MINDFLOCK_VOICE_FLAG_DIR` | `~/.mindflock-assistant/.voice` | Per-session voice files: `<session>.on` (a phone is in a voice conversation with that session — written by `POST /api/instances/{title}/voice`, the row's `voice`) and the one-shot `<session>.next` (armed by `POST …/send {say: true}`, consumed **at fire time** by the installed `UserPromptSubmit` hook from the firing CLI's environment, exactly like the marker dir above, which prints the voice instruction for Claude Code to inject when the file is under 120 s old). Through the home guard, so a test can never flip a real session's flag. Does **not** follow `MINDFLOCK_ASSISTANT_DIR` |
-| `MINDFLOCK_VOICE_DIR` | `~/.mindflock/voice` | Where the local speech backend keeps its downloaded models (`whisper/`, `piper/`) when `voice.stt_backend` / `tts_backend` is `local` |
+| `MINDFLOCK_VOICE_DIR` | `~/.mindflock/voice` | Where the optional local speech backend keeps its downloaded models (`whisper/`, `piper/`) when `voice.stt_backend` / `tts_backend` is `local` (the built-in `system` engine needs no files) |
+| `MINDFLOCK_SPEECH_PROBE` | unset | `1` lets the built-in speech engine (`core/speech_system.py`) probe the OS **under pytest**, where it otherwise spawns nothing (the suite reads `GET /api/voice` and the doctor everywhere); the real smoke test sets it. Ignored outside pytest |
 | `MINDFLOCK_THREAD_MARKER_DIR` | `~/.mindflock-assistant/.thread-markers` | Per-window conversation-id markers so sessions sharing a directory each resume their *own* thread. Note: does **not** follow `MINDFLOCK_ASSISTANT_DIR` |
 | `CODEX_HOME` | `~/.codex` | Codex CLI data dir; usage is read from `$CODEX_HOME/sessions` |
 | `ANTIGRAVITY_CLI_DIR` | `~/.gemini/antigravity-cli` | Antigravity CLI state dir (conversation DBs, usage) |
@@ -1152,31 +1153,50 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   dialog push's one-tap Yes / No buttons do not depend on it. See
   [web-ui.md](web-ui.md#voice-talking-to-a-session) and
   [web-api.md](web-api.md#addon-routes).
-- **Voice** (`voice.*`, Settings → Your phone → Voice) — talking to a session
-  from the phone page ([web-ui.md](web-ui.md#voice-talking-to-a-session)).
-  Speech itself comes from the phone's own engines unless a field here points
-  at a server backend:
+- **Voice** (`voice.*`, Settings → Voice) — talking to a session from the
+  phone page and the desktop app's mic
+  ([web-ui.md](web-ui.md#voice-talking-to-a-session)). The phone page uses its
+  own engines unless `stt` / `tts` say server; the desktop app always uses the
+  server's (Electron has no working Web Speech recognition). **On a fresh
+  install the server's speech is the operating system's own engine** —
+  nothing to install, no key: Windows (and WSL, through `powershell.exe`)
+  uses .NET `System.Speech` (its recognizer cultures, e.g. `en-US`, and voices
+  such as Microsoft David / Zira Desktop), macOS uses `say` and Apple's
+  Speech framework (on-device where supported). macOS recognition needs
+  Dictation turned on (System Settings → Keyboard → Dictation) — the voice
+  does not; `GET /api/voice`'s `system.detail` says so when it is off, and a
+  denied Speech Recognition permission (System Settings → Privacy & Security
+  → Speech Recognition) the same way. Plain Linux has no built-in engine: there the
+  `local` models or an OpenAI-compatible host are the way to server speech.
+  `mindflock doctor` lists what this machine has under "Built-in speech".
+  Swapping in another engine is optional:
   - `approve_dialogs` (default `true`) — whether a spoken "yes" / "no" may
     answer a permission dialog after its command was read aloud ("always"
     only when said literally). `false`: dialogs are read out, never answered
     by voice. A personal policy, so it is **synced** across your devices.
-  - `stt` / `tts` — `"phone"` (default) or `"server"`: where recognition and
-    the voice run. Server recognition is what would let an iOS home-screen
-    icon hear you (Web Speech recognition exists only in a Safari tab) — the
-    routes and backends exist (`POST /api/voice/transcribe`, `POST
-    /api/voice/speak`), though this build's phone page still uses the phone's
-    engines whatever these say.
+  - `stt` / `tts` — `"phone"` (default) or `"server"`: which engine the
+    **phone page** prefers. Server recognition is what lets an iOS
+    home-screen icon hear you (Web Speech recognition exists only in a Safari
+    tab). Not a gate: `POST /api/voice/transcribe` / `speak` serve any
+    signed-in client (the desktop app's mic included) whenever a backend of
+    that kind is ready.
   - `stt_backend` / `tts_backend` — which server backend
-    (`backend/web/core/speech.py`): `""` = the first ready one, `"openai"` =
-    any OpenAI-compatible host (OpenAI, Groq, a self-hosted server),
-    `"local"` = faster-whisper / piper on this machine (`uv sync --group
-    voice`; models under `~/.mindflock/voice/`, refused while memory is low,
-    unloaded after 10 idle minutes).
+    (`backend/web/core/speech.py`): `""` (default) = the first ready one,
+    which is the built-in engine wherever it exists; `"system"` = this
+    computer's own speech engine (above); `"openai"` = any OpenAI-compatible
+    host (OpenAI, Groq, a self-hosted server); `"local"` = faster-whisper /
+    piper on this machine — the optional upgrade, installed with `uv sync
+    --group voice` (models under `~/.mindflock/voice/` or
+    `$MINDFLOCK_VOICE_DIR`, refused while memory is low, unloaded after 10
+    idle minutes).
   - `stt_url` / `tts_url` — base URL of a compatible host (blank =
     `https://api.openai.com/v1`); `stt_model` / `tts_model` / `tts_voice` —
     the model and voice names it wants (blank = `gpt-transcribe`,
     `gpt-4o-mini-tts`, `alloy`; for the local backend the whisper size,
-    default `small`, and the piper voice, default `en_US-lessac-medium`).
+    default `small`, and the piper voice, default `en_US-lessac-medium`; for
+    `system`, `tts_voice` is the OS voice name — `Microsoft Zira Desktop` on
+    Windows, `Samantha` on macOS — and a name the OS does not have falls back
+    to its default voice).
   - `stt_api_key` / `tts_api_key` — secrets (masked on read as `•••set`,
     kept on an empty write; `POST /api/voice/clear-key {kind}` forgets one).
 
@@ -1208,7 +1228,7 @@ And the `voice` group, with every field at its default left out the same way
 ```jsonc
 "voice": {
   "stt": "server",                       // recognition on a server backend
-  "stt_backend": "openai",               // "" = whichever is ready, "openai", "local"
+  "stt_backend": "openai",               // "" = whichever is ready (the built-in engine first), "system", "openai", "local"
   "stt_url": "https://api.groq.com/openai/v1",   // any OpenAI-compatible host; blank = api.openai.com
   "stt_api_key": "gsk_…",                // pragma: allowlist secret — an example; masked on read as "•••set"
   "stt_model": "whisper-large-v3-turbo", // the host's model name; a whisper size ("small") for "local"

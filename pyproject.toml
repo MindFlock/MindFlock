@@ -11,6 +11,10 @@ requires-python = ">=3.12"
 dependencies = [
     "aiohttp",
     "tomli",
+    # macOS's built-in speech recognition (backend/web/core/speech_system.py):
+    # in the MAIN dependencies because `uv tool install "mindflock[web]"`
+    # installs no groups, and the OS engine must work on a fresh install.
+    "pyobjc-framework-Speech; sys_platform == 'darwin'",
 ]
 
 [project.urls]
@@ -53,9 +57,10 @@ dev = [
     # tests point it at /usr/bin/google-chrome, so no `playwright install`.
     "playwright",
 ]
-# Optional server-side speech for the phone's voice mode (backend/web/core/
-# speech.py, backend id "local"): `uv sync --group voice`. Never imported at
-# server start — the backend loads them lazily on the first call.
+# The optional speech upgrade (backend/web/core/speech.py, backend id
+# "local"): `uv sync --group voice`. The OS's own engines (id "system") need
+# nothing from here. Never imported at server start — the backend loads them
+# lazily on the first call.
 voice = [
     "faster-whisper",
     "piper-tts",

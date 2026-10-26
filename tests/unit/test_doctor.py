@@ -1437,3 +1437,68 @@ class TestGroups:
         )
         out = doctor.run_checks("run")
         assert calls == ["git"] and [c.id for c in out] == ["git"]
+
+
+class TestBuiltinSpeech:
+    """The informational "Built-in speech" row (core/speech_system.py): the
+    OS engine the voice features use by default — never a failure."""
+
+    @pytest.fixture
+    def probe(self, monkeypatch):
+        from backend.web.core import speech_system
+
+        box = {}
+        monkeypatch.setattr(speech_system, "probe", lambda: box["found"])
+        return lambda **kw: box.__setitem__("found", speech_system.Probe(**kw))
+
+    def test_windows_lists_cultures_and_voices(self, probe):
+        probe(
+            platform="wsl",
+            stt_ok=True,
+            stt_detail="x",
+            tts_ok=True,
+            tts_detail="y",
+            voices=["Microsoft David Desktop", "Microsoft Zira Desktop"],
+            recognizers=["en-US"],
+        )
+        c = doctor.check_builtin_speech()
+        assert (c.id, c.label, c.status, c.group) == (
+            "builtin-speech",
+            "Built-in speech",
+            "ok",
+            "optional",
+        )
+        assert c.detail == (
+            "Windows via WSL — recognition: en-US; "
+            "voices: Microsoft David Desktop, Microsoft Zira Desktop"
+        )
+        assert not c.cmd and not c.install
+
+    def test_mac_without_permission_is_info_with_the_reason(self, probe):
+        probe(
+            platform="mac",
+            stt_ok=False,
+            stt_detail="Apple speech recognition needs permission: System Settings"
+            " → Privacy & Security → Speech Recognition",
+            tts_ok=True,
+            tts_detail="macOS voices: Samantha",
+            voices=["Samantha"],
+        )
+        c = doctor.check_builtin_speech()
+        assert c.status == "info"
+        assert c.detail.startswith(
+            "macOS — recognition: Apple speech recognition needs"
+        )
+        assert c.detail.endswith("; voices: Samantha")
+
+    def test_linux_says_what_to_use_instead(self, probe):
+        from backend.web.core import speech_system
+
+        probe(platform="none")
+        c = doctor.check_builtin_speech()
+        assert c.status == "info" and c.detail == speech_system.LINUX_NONE
+        assert "uv sync --group voice" in c.detail
+
+    def test_registered_and_optional(self):
+        assert doctor.CHECKS_BY_ID["builtin-speech"] is doctor.check_builtin_speech
+        assert doctor.group_of("builtin-speech") == "optional"

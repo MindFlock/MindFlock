@@ -1,15 +1,17 @@
-"""Optional server-side speech for the phone's voice mode (docs/web-ui.md,
-"Voice").
-
-Out of the box the phone does its own speech — Web Speech recognition and
-``speechSynthesis`` — and nothing here runs. This module is the pluggable
-alternative for the two cases where the phone's engines fall short: an iOS
-home-screen icon (Web Speech recognition exists only in a Safari tab) and
-built-in voices that disappoint. ``routes/speech.py`` turns it into
+"""Server-side speech for the voice features (docs/web-ui.md, "Voice"): the
+phone page's optional server engines and the desktop app's mic, which
+always uses the server (Electron's Chromium has no working Web Speech
+recognition). ``routes/speech.py`` turns it into
 ``POST /api/voice/transcribe`` and ``POST /api/voice/speak``.
 
-Two backend ids, each in a recognition (``stt``) and a voice (``tts``) flavour:
+Three backend ids, each in a recognition (``stt``) and a voice (``tts``)
+flavour, in preference order (:data:`BACKENDS`):
 
+* ``system`` — the operating system's own engines
+  (:mod:`backend.web.core.speech_system`): Windows ``System.Speech`` through
+  PowerShell (natively or from WSL) and macOS ``say`` + Apple's Speech
+  framework. Nothing to install, so it is first: on a fresh Windows or
+  macOS install, "the first ready one" is this. Plain Linux has none.
 * ``openai`` — any OpenAI-compatible host with a key: OpenAI itself, Groq's
   whisper, a self-hosted compatible server. ``{url}/audio/transcriptions``
   (multipart ``file`` + ``model``) for recognition, ``{url}/audio/speech``
@@ -18,13 +20,14 @@ Two backend ids, each in a recognition (``stt``) and a voice (``tts``) flavour:
   :data:`OPENAI_URL`; the model fields are free text because every host has
   its own names (Groq wants ``whisper-large-v3-turbo``).
 * ``local`` — faster-whisper (recognition) and piper (voice) on this machine,
-  installed with ``uv sync --group voice`` (the ``voice`` dependency group in
-  pyproject.toml). Both are imported lazily inside the call, never at module
-  import, so the server starts without them; both are refused while
-  :func:`backend.memory_pressure.is_low` (this box has been OOM-killed before);
-  a loaded model stays in a module cache and is unloaded after
-  :data:`IDLE_SECONDS` without use — a daemon timer armed on load sweeps it,
-  and :func:`sweep_idle` is cheap enough for a server tick to call too.
+  the optional upgrade installed with ``uv sync --group voice`` (the
+  ``voice`` dependency group in pyproject.toml). Both are imported lazily
+  inside the call, never at module import, so the server starts without
+  them; both are refused while :func:`backend.memory_pressure.is_low` (this
+  box has been OOM-killed before); a loaded model stays in a module cache
+  and is unloaded after :data:`IDLE_SECONDS` without use — a daemon timer
+  armed on load sweeps it, and :func:`sweep_idle` is cheap enough for a
+  server tick to call too.
 
 Files the local backend keeps, under ``~/.mindflock/voice/`` (or
 ``$MINDFLOCK_VOICE_DIR``):
@@ -41,10 +44,12 @@ faster-whisper decodes webm/mp4 clips through its bundled PyAV, so a system
 that is the first thing to try when a clip is refused.
 
 Settings come from ``VoiceSettings`` (``backend.config.settings``), read on
-every call so a save in Settings → Your phone → Voice takes effect at once.
+every call so a save in Settings → Voice takes effect at once.
 Tests replace :func:`_http` (the one HTTP exchange), :func:`_installed` /
-:func:`_import` (the lazy runtimes) and :func:`_now` (the idle clock); nothing
-here is reached by the test suite over the network.
+:func:`_import` (the lazy runtimes) and :func:`_now` (the idle clock);
+nothing here is reached by the test suite over the network.
+``speech_system`` has its own seams (its subprocess runner) and spawns
+nothing under pytest.
 """
 
 from __future__ import annotations
@@ -585,11 +590,16 @@ class LocalTTS(Backend):
 # Registry
 # --------------------------------------------------------------------------- #
 #: Every backend by kind, in preference order (the first ready one wins when
-#: no backend is configured). Tests swap in fakes.
+#: no backend is configured). ``speech_system`` puts the built-in ``system``
+#: pair first when it is imported, just below. Tests swap in fakes.
 BACKENDS: Dict[str, List[Backend]] = {
     "stt": [OpenAISTT(), LocalSTT()],
     "tts": [OpenAITTS(), LocalTTS()],
 }
+
+# Imported here, after Backend and BACKENDS exist, because it subclasses one
+# and registers into the other (either module may be imported first).
+from backend.web.core import speech_system as _system  # noqa: E402
 
 
 def backends(kind: str) -> List[Backend]:
@@ -657,10 +667,16 @@ def describe() -> dict:
         {"backends": {"stt": [ids], "tts": [ids]},
          "server_ready": {"stt": bool, "tts": bool, "detail": str,
                           "stt_backend": id|"", "stt_detail": str,
-                          "tts_backend": id|"", "tts_detail": str}}
+                          "tts_backend": id|"", "tts_detail": str},
+         "system": {"available": bool,
+                    "platform": "windows"|"wsl"|"mac"|"none",
+                    "detail": str, "voices": [names],
+                    "recognizers": [culture tags]}}
 
     ``detail`` is the one-paragraph summary; the per-kind keys are what the
-    Settings screen prints under each row. Offline and cheap.
+    Settings screen prints under each row; ``system`` is the built-in
+    engine's own report (:func:`speech_system.describe`). Offline and cheap:
+    the built-in engine is probed once per process, not per call.
     """
     ready: dict = {}
     lines: List[str] = []
@@ -676,4 +692,8 @@ def describe() -> dict:
             else "Server %s not ready: %s" % (word, detail)
         )
     ready["detail"] = ". ".join(lines) + "."
-    return {"backends": {k: ids(k) for k in ("stt", "tts")}, "server_ready": ready}
+    return {
+        "backends": {k: ids(k) for k in ("stt", "tts")},
+        "server_ready": ready,
+        "system": _system.describe(),
+    }
