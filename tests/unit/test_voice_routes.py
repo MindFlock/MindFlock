@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -340,7 +341,7 @@ def test_run_oneshot_uses_the_session_plan_pattern(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# /send: the instruction suffix for CLIs without a prompt hook
+# /send `say`: the route parses it, the delivery asks for the Say line
 # --------------------------------------------------------------------------- #
 @pytest.fixture
 def send(monkeypatch, env):
@@ -356,63 +357,181 @@ def send(monkeypatch, env):
     return sent
 
 
-def test_send_appends_the_instruction_for_a_cli_without_a_prompt_hook(send, env):
-    env.state.hook = False
-    voice.set_on("mindflock_w", True)
-    r = client.post("/api/instances/w/send", json={"text": "fix the bug\n"})
-    assert r.status_code == 200 and r.json() == {"sent": True, "submitted": True}
-    assert send[-1][1] == "fix the bug\n\n" + spoken.INSTRUCTION
-    assert send[-1][2]["submit"] is True
+@pytest.mark.parametrize(
+    "body, say",
+    [
+        ({"text": "fix it", "say": True}, True),
+        ({"text": "fix it"}, False),
+        ({"text": "fix it", "say": False}, False),
+        ({"text": "fix it", "say": "yes"}, False),  # a boolean, not truthy
+        ({"text": "draft", "say": True, "submit": False}, False),  # a paste
+    ],
+)
+def test_send_hands_say_to_the_delivery_untouched(send, env, body, say):
+    r = client.post("/api/instances/w/send", json=body)
+    assert r.status_code == 200
+    title, text, kw = send[-1]
+    assert text == body["text"]  # nothing appended at request time
+    assert kw["say"] is say
 
 
-def test_send_never_appends_for_claude(send, env):
-    env.state.hook = True  # Claude: the UserPromptSubmit hook injects it
-    voice.set_on("mindflock_w", True)
-    client.post("/api/instances/w/send", json={"text": "fix the bug"})
-    assert send[-1][1] == "fix the bug"
-
-
-def test_send_leaves_an_unsubmitted_paste_and_a_voice_off_session_alone(send, env):
-    env.state.hook = False
-    voice.set_on("mindflock_w", True)
-    client.post("/api/instances/w/send", json={"text": "draft", "submit": False})
-    assert send[-1][1] == "draft" and send[-1][2]["submit"] is False
-    voice.set_on("mindflock_w", False)
-    client.post("/api/instances/w/send", json={"text": "plain"})
-    assert send[-1][1] == "plain"
-
-
-def test_send_suffix_rides_a_queued_message_too(monkeypatch, env):
-    env.state.hook = False
-    voice.set_on("mindflock_w", True)
-    seen = []
-    monkeypatch.setattr(
-        server,
-        "_deliver_to_agent",
-        lambda inst, title, text, **kw: (seen.append(text), ("queued", None))[1],
-    )
+@pytest.fixture
+def typed(monkeypatch, env, tmp_path):
+    """The REAL _deliver_to_agent with the tmux seams stubbed; records what
+    is typed and whether ``.next`` was armed at that instant."""
+    monkeypatch.setenv("MINDFLOCK_PROMPT_QUEUE_FILE", str(tmp_path / "pq.json"))
     monkeypatch.setattr(server, "_driven_elsewhere", lambda req, title, payload: None)
     monkeypatch.setattr(server._sleep, "is_sleeping", lambda title: False)
-    r = client.post(
-        "/api/instances/w/send", json={"text": "later", "dialog_safe": True}
+    monkeypatch.setattr(
+        server, "_ensure_agent_session", lambda i, t: ("mindflock_" + t, None)
     )
-    assert r.json()["queued"] is True
-    assert seen == ["later\n\n" + spoken.INSTRUCTION]
+    monkeypatch.setattr(server, "_note_human_input", lambda title: None)
+    monkeypatch.setattr(server, "_dialog_on_screen", lambda inst, name: False)
+    out = SimpleNamespace(sent=[], ok=True)
+
+    def send_to_agent(name, text, submit=True):
+        out.sent.append((name, text, submit, voice.next_path(name).exists()))
+        return out.ok
+
+    monkeypatch.setattr(server, "_send_to_agent", send_to_agent)
+    return out
 
 
-def test_voice_suffix_never_loses_the_prompt(env):
+def test_say_on_claude_arms_next_right_before_the_keystrokes(typed, env):
+    env.state.hook = True
+    r = client.post("/api/instances/w/send", json={"text": "fix it", "say": True})
+    assert r.json() == {"sent": True, "submitted": True}
+    assert typed.sent == [("mindflock_w", "fix it", True, True)]
+    # The hook re-pinned first (an older build's hook knows only `.on`).
+    assert env.state.installs == [("/tmp/wt", "mindflock_w")]
+    nxt = voice.next_path("mindflock_w")
+    assert float(nxt.read_text()) == pytest.approx(time.time(), abs=5)
+    assert not voice.is_on("mindflock_w")  # the sticky flag is not touched
+
+
+def test_say_on_a_hookless_cli_types_the_instruction(typed, env):
+    env.state.hook = False
+    client.post("/api/instances/w/send", json={"text": "fix it\n", "say": True})
+    assert typed.sent == [
+        ("mindflock_w", "fix it\n\n" + spoken.INSTRUCTION, True, False)
+    ]
+    assert env.state.installs == []
+
+
+@pytest.mark.parametrize("hook", [True, False])
+def test_no_say_asks_for_nothing_even_with_the_sticky_flag(typed, env, hook):
+    env.state.hook = hook
+    voice.set_on("mindflock_w", True)
+    client.post("/api/instances/w/send", json={"text": "plain"})
+    client.post(
+        "/api/instances/w/send", json={"text": "draft", "say": True, "submit": False}
+    )
+    assert typed.sent == [
+        ("mindflock_w", "plain", True, False),
+        ("mindflock_w", "draft", False, False),
+    ]
+    assert not voice.next_path("mindflock_w").exists()
+
+
+def test_a_failed_send_disarms_again(typed, env):
+    env.state.hook = True
+    typed.ok = False
+    r = client.post("/api/instances/w/send", json={"text": "fix it", "say": True})
+    assert r.status_code == 502
+    assert typed.sent[-1][3] is True  # it was armed for the keystrokes ...
+    assert not voice.next_path("mindflock_w").exists()  # ... and taken back
+
+
+def test_an_unarmable_request_falls_back_to_typing_it(typed, env, monkeypatch):
+    env.state.hook = True
+
+    def boom(name):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(voice, "arm_next", boom)
+    client.post("/api/instances/w/send", json={"text": "fix it", "say": True})
+    assert typed.sent[-1][1] == "fix it\n\n" + spoken.INSTRUCTION
+
+
+def test_voice_say_never_loses_the_prompt(env, monkeypatch):
     def boom(prog):
         raise RuntimeError("no provider")
 
-    import backend.providers as providers_mod
+    monkeypatch.setattr(server.providers, "resolve", boom)
+    assert server._voice_say(_Inst("w"), "w", "keep me") == "keep me"
+    assert server._voice_suffix("x\n\n" + spoken.INSTRUCTION + "\n") == (
+        "x\n\n" + spoken.INSTRUCTION + "\n"
+    )  # idempotent
 
+
+@pytest.mark.parametrize("hook", [True, False])
+def test_a_queued_say_prompt_keeps_say_and_arms_at_the_drain(
+    typed, env, monkeypatch, hook
+):
+    from backend.web.core import prompt_queue as pq
+    from backend.web.core import queue_driver
+
+    env.state.hook = hook
+    env.state.activity = "clarify"  # dialog_safe: queued, not typed
+    r = client.post(
+        "/api/instances/w/send",
+        json={"text": "later", "say": True, "dialog_safe": True},
+    )
+    assert r.json()["queued"] is True
+    assert typed.sent == [] and not voice.next_path("mindflock_w").exists()
+    (item,) = pq.list_queue("w")
+    assert item["text"] == "later" and item["say"] is True
+    # The drain types it: armed (Claude) / suffixed (others) only now.
+    monkeypatch.setattr(queue_driver, "_dialog_on_screen", lambda inst, name: False)
+    rec = {"armed": True, "sent_at": 0.0}
+    assert queue_driver._send_queued_item("w", "mindflock_w", item, rec, time.time())
+    if hook:
+        assert typed.sent == [("mindflock_w", "later", True, True)]
+    else:
+        assert typed.sent == [
+            ("mindflock_w", "later\n\n" + spoken.INSTRUCTION, True, False)
+        ]
+    assert rec["sent_text"] == typed.sent[-1][1]
+    assert pq.list_queue("w") == []
+
+
+def test_a_queued_prompt_without_say_drains_plain(typed, env, monkeypatch):
+    from backend.web.core import prompt_queue as pq
+    from backend.web.core import queue_driver
+
+    env.state.hook = False
     voice.set_on("mindflock_w", True)
-    orig = providers_mod.resolve
-    providers_mod.resolve = boom
-    try:
-        assert server._voice_suffix(_Inst("w"), "w", "keep me") == "keep me"
-    finally:
-        providers_mod.resolve = orig
+    pq.enqueue("w", "typed by hand")
+    (item,) = pq.list_queue("w")
+    assert "say" not in item
+    monkeypatch.setattr(queue_driver, "_dialog_on_screen", lambda inst, name: False)
+    assert queue_driver._send_queued_item("w", "mindflock_w", item, {}, time.time())
+    assert typed.sent == [("mindflock_w", "typed by hand", True, False)]
+
+
+def test_a_failed_drain_send_disarms_and_keeps_the_item(typed, env, monkeypatch):
+    from backend.web.core import prompt_queue as pq
+    from backend.web.core import queue_driver
+
+    env.state.hook = True
+    typed.ok = False
+    pq.enqueue("w", "later", say=True)
+    (item,) = pq.list_queue("w")
+    monkeypatch.setattr(queue_driver, "_dialog_on_screen", lambda inst, name: False)
+    assert not queue_driver._send_queued_item("w", "mindflock_w", item, {}, time.time())
+    assert not voice.next_path("mindflock_w").exists()
+    assert pq.list_queue("w") == [item]
+
+
+def test_send_now_arms_a_say_item(typed, env):
+    from backend.web.core import prompt_queue as pq
+
+    env.state.hook = True
+    pq.enqueue("w", "now please", say=True)
+    (item,) = pq.list_queue("w")
+    r = client.post("/api/instances/w/queue/send_now", json={"id": item["id"]})
+    assert r.status_code == 200, r.text
+    assert typed.sent == [("mindflock_w", "now please", True, True)]
 
 
 # --------------------------------------------------------------------------- #

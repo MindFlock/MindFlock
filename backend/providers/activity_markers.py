@@ -59,12 +59,19 @@ TOOL_HOOK_TAG_PREFIX = "# mindflock-activity tool-hook"
 # carries two event-keyed branches for it: ``Stop`` files the payload's
 # ``last_assistant_message`` beside the marker as ``<session>.reply.json`` (the
 # exact text the session just said, so the spoken line costs no transcript
-# scan), and ``UserPromptSubmit`` prints :data:`VOICE_INSTRUCTION` while
-# ``<voice dir>/<session>.on`` exists — Claude Code injects a prompt hook's
-# stdout as additional context, invisibly and with no relaunch. The flag dir
-# is resolved at fire time exactly like the marker dir (never baked in).
-# ``backend.web.core.voice`` owns the flag, ``backend.web.core.spoken`` the
-# reader; both read these constants so the three agree on the paths.
+# scan), and ``UserPromptSubmit`` consumes ``<voice dir>/<session>.next`` —
+# the ONE-SHOT request the /send delivery arms right before a ``say: true``
+# prompt is typed: younger than :data:`VOICE_NEXT_MAX_AGE_S`, the hook prints
+# :data:`VOICE_INSTRUCTION` (Claude Code injects a prompt hook's stdout as
+# additional context, invisibly and with no relaunch); stale or not, it
+# deletes the file, so a prompt that never got submitted cannot attach its
+# Say line to the next one. The Say line costs tokens, so only the prompts
+# whose reply will be spoken ask for it. The sticky ``<session>.on`` (a phone
+# is in a voice conversation) is NOT read here any more — the Stop branch
+# files every reply regardless. The flag dir is resolved at fire time
+# exactly like the marker dir (never baked in). ``backend.web.core.voice``
+# owns the flags, ``backend.web.core.spoken`` the reader; both read these
+# constants so the three agree on the paths.
 # --------------------------------------------------------------------------- #
 #: The instruction, byte for byte from the build contract (the phone page
 #: parses the ``Say:`` line it asks for). Re-exported as
@@ -78,6 +85,8 @@ VOICE_INSTRUCTION = (
 )
 VOICE_FLAG_DIR_ENV = "MINDFLOCK_VOICE_FLAG_DIR"
 VOICE_FLAG_SUBDIR = (".mindflock-assistant", ".voice")
+#: An armed ``.next`` older than this (seconds) is dropped unprinted.
+VOICE_NEXT_MAX_AGE_S = 120
 #: Cap on the reply text the Stop hook files (characters).
 REPLY_TEXT_MAX = 8000
 
@@ -295,8 +304,10 @@ def hook_command(
     Voice mode rides the same script (see :data:`VOICE_INSTRUCTION`): on a
     ``Stop`` payload the hook files ``last_assistant_message`` as the
     session's reply file (every CLI; best effort where the payload lacks the
-    field), and on ``UserPromptSubmit`` it prints the instruction while the
-    session's voice flag exists — only when ``prompt_context`` is true, which
+    field), and on ``UserPromptSubmit`` it consumes the session's one-shot
+    ``.next`` request (printing the instruction when the request is younger
+    than :data:`VOICE_NEXT_MAX_AGE_S`, deleting it always) — only when
+    ``prompt_context`` is true, which
     defaults to ``record_thread``: the Claude install. Claude Code documents a
     prompt hook's stdout as injected context; a CLI without that channel gets
     the same sentence typed after its prompt by the /send route, and a hook
@@ -391,8 +402,18 @@ def hook_command(
                 json.dumps(VOICE_FLAG_DIR_ENV),
                 ",".join(json.dumps(x) for x in VOICE_FLAG_SUBDIR),
             ),
-            "        if os.path.exists(os.path.join(vd,s+'.on')):",
-            "            print(%s)" % json.dumps(VOICE_INSTRUCTION),
+            "        np=os.path.join(vd,s+'.next')",
+            "        if os.path.exists(np):",
+            "            try:",
+            "                t=float(open(np).read().strip() or 0)",
+            "            except Exception:",
+            "                t=0",
+            "            try:",
+            "                os.remove(np)",
+            "            except Exception:",
+            "                pass",
+            "            if 0<=time.time()-t<%d:" % VOICE_NEXT_MAX_AGE_S,
+            "                print(%s)" % json.dumps(VOICE_INSTRUCTION),
             "    except Exception:",
             "        pass",
         ]
