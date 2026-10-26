@@ -1338,6 +1338,66 @@ or a slow host never stalls the event loop.
 | POST | `/api/voice/speak` | `{text, voice?}` → the audio bytes, `Content-Type` the backend's (`audio/mpeg` for a host, `audio/wav` for piper), `X-Voice-Backend` its id, `Cache-Control: no-store`. `voice` (≤ 64 chars) overrides `voice.tts_voice` for this one call. **400** no text, **413** over 1200 chars (a `Say:` line is ≤ 320, a dialog read-out a few hundred), then **409** / **502** as above |
 | POST | `/api/voice/clear-key` | `{"kind": "stt"\|"tts"}` → `{ok: true, kind}` — forget a saved API key. `POST /api/settings` keeps a secret whenever its field arrives blank (the app-wide convention, so a form resubmit never wipes a token), which leaves no way back to *no key*: this is it. Owner only (`auth.may_configure`, **403**); **400** any other `kind`; **500** when the settings file can't be read |
 
+**The voice router** (`backend/web/routes/voice.py` over the pure
+`core/voice_router.py`) — one server route that decides whether a finished
+phrase is words for the session or a command, so the phone page and the
+desktop mic share one grammar (the phone keeps its own copy, mobile.js
+`VOICE_CMD`, only as an offline fallback). The default is that the person is
+still talking to the session they are on: anything that is not plainly a
+command is `{"kind": "prompt"}`, and every pattern matches the WHOLE phrase —
+a false command is worse than a missed one.
+
+`POST /api/voice/route` with `{"text": "<one finished phrase>", "session":
+"<the title being talked to, or ''>"}` → **200** with one of the shapes below
+(**400** `{error}` only for a body that is not an object; an unknown
+`session` reads as none). Matching is case- and punctuation-insensitive
+(`voiceNorm`: lowercase, anything but letters, digits and `'` a space), and a
+leading `ok`/`okay`/`hey`/`please` and a trailing `please` are dropped.
+
+| Phrase | Answer |
+|---|---|
+| anything else, or blank | `{"kind": "prompt"}` — send it to the session (`/send`). No session rows are read. |
+| `(switch\|go\|change\|jump) (over )?to <name>` | `{"kind": "switch", "title", "name", "say": "Now on <name>. <its last_say>"}`. `<name>` is matched against each row's display `name` and its title: a unique prefix, else the unique best word overlap, else a unique loose containment (mobile.js `voiceMatchSession`). A tie → `{"kind": "ambiguous", "say": "Which one: <A>, <B>?"}`; nothing → `{"kind": "no-session", "say": "No session called <words>. Sessions: <A>, <B>, <C>."}` (at most 6 names; `"There are no sessions."` with none). Other devices' `<device>::<title>` rows count — the client selects the title it gets. |
+| `(what\|which) sessions (do i have\|are (up\|open\|running))`, `list (the \|my )?sessions`, `what('s\| is) (up\|open\|running)` | `{"kind": "list", "say": "Sessions: <A> (working), <B> (waiting on you), <C> (idle)."}` — at most 10, then `, and N more`. |
+| `(what\|who) needs (me\|attention\|my attention)` | `{"kind": "needs", "say": …}` — the rail bell's attention set (a question, a failed setup or pre-commit, failing checks, an offline terminal, idle 20 min on uncommitted work), most urgent first, three at most: `"<A> is asking: <its last_say>"` / `"<B> is waiting on failing checks."` / `"Nothing needs you."` |
+| `status`, `what's it doing`, `what's happening`, `what's going on` | `{"kind": "status", "say": "<name> is working for 5 minutes. <its last_turn>"}` — the CURRENT session (`"No session is open."` / `"<title> is not listed."`). |
+| `[start\|open\|create\|make\|spin up] [a\|another] new session [called\|named <name>] [in\|for\|on <repo>] [to\|and\|that <task>]`, or the bare `new session <task>` | Creates a session → `{"kind": "new", "title", "name", "say": "Started <name> in <repo name>."}`, or `{"kind": "new-failed", "say"}`. See below. |
+| `cancel`, `never mind`, `scratch that`, `forget it` / `stop`, `stop listening` / `voice off` / `say that again`, `repeat` / `summarize (that)`, `what did it say` | `{"kind": "cancel"\|"stop"\|"off"\|"repeat"\|"condense"}` with no `say` — the client acts on its own. |
+
+Every `say` is a sentence the client speaks as is. Rows are
+[`GET /api/instances`](#get-apiinstances)'s own (`name`, `activity`,
+`activity_since`, `last_say`, `last_turn`, …), read only once the phrase is a
+command; rows hidden off the rail (`hidden_by`) are never named.
+
+**`new`**: examples — `new session to fix the login bug`, `open a new
+session called parser in mindflock`, `start a new session in sitecheck and
+add tests for the queue`, `new session`. The **repository** is the one
+named, when the words after `in`/`for`/`on` (or their longest leading run —
+`in mindflock fix the tests` is repo `mindflock`, task `fix the tests`) name
+one MindFlock knows: what the New dialog suggests
+(`GET /api/repos/suggest`) plus every local session's
+repository, by folder name with spacing, case and punctuation ignored
+(`site check bot 5` is `sitecheck-bot5`; an unambiguous start like
+`sitecheck` picks the most recent match). Words after `for`/`on` that name no
+repository are the task (`new session for the login bug`); after `in` they
+were meant as a repository and nothing is guessed: `"I don't know a
+repository called <words>. Repositories: …"`. Named none → the current
+session's repository (a local row), else the only one known, else the most
+recent; nothing → `"I don't know which repository: say new session in
+<A>, <B>."`. The **title** is the `called` name hyphenated (≤ 32 chars), else
+the first four words of the task named the New dialog's way
+(`title_from_prompt`: `fix the login bug` → `fix-login-bug`), else
+`voice-session`; made unique with `-2`, `-3`… against every session and
+rename (`core.session_create.free_title`). The session is created exactly
+like the New dialog's (`core.session_create.create_result`, the same code as
+`POST /api/instances`, so the provider, branch, launch flags and plan-first
+are the defaults), with the task as its first `prompt` (seeded or queued as
+that route decides), and its **voice flag is turned on** so its first reply
+ends with a `Say:` line. Only local sessions are created. A refused create
+→ `{"kind": "new-failed", "say": "Couldn't start it: <its error>."}`, still
+200; a create that fails later in the background is reported the way every
+create's is (`session.create_failed`, [`GET /api/create_failures`](#get-apicreate_failures)).
+
 ### Inter-agent messages
 
 A message one session's agent (through the MindFlock MCP), the CLI
