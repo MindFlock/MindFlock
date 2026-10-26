@@ -24168,6 +24168,14 @@ async function api(path, opts) {
 function apiText(path, opts) {
 	return request(path, opts);
 }
+async function apiRaw(path, init) {
+	const r = await fetch(path, init);
+	if (r.status === 401) {
+		location.reload();
+		throw new ApiError(401, "unauthorized", null);
+	}
+	return r;
+}
 function instApi(title, suffix, opts) {
 	return api("/api/instances/" + encodeURIComponent(title) + suffix, opts);
 }
@@ -26365,7 +26373,7 @@ var BY_LS = new Map(PREF_MAP.map((p) => [p.ls, p]));
 var BY_FIELD = new Map(PREF_MAP.map((p) => [p.field, p]));
 var THEME_CHANGED = "mf-theme-changed";
 var SEEDED_KEY = "mf_prefs_seeded";
-function storage$1() {
+function storage$2() {
 	try {
 		return globalThis.localStorage || null;
 	} catch {
@@ -26387,7 +26395,7 @@ function coerce(p, v) {
 		case "raw": return typeof v === "string" && (!p.values || p.values.includes(v)) ? v : void 0;
 	}
 }
-function readLocal(field, kv = storage$1()) {
+function readLocal(field, kv = storage$2()) {
 	const p = BY_FIELD.get(field);
 	if (!p || !kv) return void 0;
 	let raw = null;
@@ -26404,7 +26412,7 @@ function readLocal(field, kv = storage$1()) {
 		return;
 	}
 }
-function readAllLocal(kv = storage$1()) {
+function readAllLocal(kv = storage$2()) {
 	const out = {};
 	for (const p of PREF_MAP) {
 		const v = readLocal(p.field, kv);
@@ -26412,7 +26420,7 @@ function readAllLocal(kv = storage$1()) {
 	}
 	return out;
 }
-function writeLocal(field, value, kv = storage$1()) {
+function writeLocal(field, value, kv = storage$2()) {
 	const p = BY_FIELD.get(field);
 	if (!p || !kv) return;
 	try {
@@ -26571,7 +26579,7 @@ function noteRefused(fields, resOrErr = null) {
 	onRefused(fresh, "Your " + what + " are kept in this browser only — this device didn't save them" + (why ? ": " + why : "."));
 }
 var FIELDS$1 = new Set(PREF_MAP.map((p) => p.field));
-function dirtyFields(kv = storage$1()) {
+function dirtyFields(kv = storage$2()) {
 	const out = /* @__PURE__ */ new Set();
 	if (!kv) return out;
 	try {
@@ -26595,7 +26603,7 @@ function markDirty(field, kv) {
 	d.add(field);
 	saveDirty(d, kv);
 }
-function settleFields(fields, sentGen = null, kv = storage$1()) {
+function settleFields(fields, sentGen = null, kv = storage$2()) {
 	const d = dirtyFields(kv);
 	let changed = false;
 	for (const f of fields) {
@@ -26618,12 +26626,12 @@ function withoutEcho(fn) {
 		suspended--;
 	}
 }
-function pendingFields(kv = storage$1()) {
+function pendingFields(kv = storage$2()) {
 	const out = dirtyFields(kv);
 	for (const f of pending$3) out.add(f);
 	return out;
 }
-function notePrefWrite(lsKey, kv = storage$1()) {
+function notePrefWrite(lsKey, kv = storage$2()) {
 	const field = prefFieldFor(lsKey);
 	if (!field || suspended) return;
 	pending$3.add(field);
@@ -26645,7 +26653,7 @@ function bodyFor(fields, kv) {
 	}
 	return body;
 }
-async function flushPrefWrites(kv = storage$1()) {
+async function flushPrefWrites(kv = storage$2()) {
 	if (timer) clearTimeout(timer);
 	timer = null;
 	const fields = /* @__PURE__ */ new Set([...pending$3, ...dirtyFields(kv)]);
@@ -26678,7 +26686,7 @@ function settleExcept(fields, refused, sentGen, kv, resOrErr) {
 	const mine = refused.filter((f) => fields.has(f));
 	if (mine.length) noteRefused(mine, resOrErr);
 }
-function flushPrefsOnHide(kv = storage$1()) {
+function flushPrefsOnHide(kv = storage$2()) {
 	if (timer) clearTimeout(timer);
 	timer = null;
 	const fields = /* @__PURE__ */ new Set([...pending$3, ...dirtyFields(kv)]);
@@ -33214,7 +33222,7 @@ var TEMPLATES_CHANGED = "mf-presets-changed";
 var TEMPLATES_MIRROR_KEY = "mindflock.templates_cache";
 var OLD_PRESETS_STORAGE_KEY = "mindflock.prompt_presets";
 var PRESETS_MIGRATED_KEY = "mf_presets_migrated";
-function storage() {
+function storage$1() {
 	try {
 		return typeof localStorage !== "undefined" ? localStorage : null;
 	} catch {
@@ -33240,7 +33248,7 @@ function runInfoFor(name) {
 function notify() {
 	if (typeof document !== "undefined") document.dispatchEvent(new Event(TEMPLATES_CHANGED));
 }
-function setTemplates(list, kv = storage()) {
+function setTemplates(list, kv = storage$1()) {
 	cache$1 = cleanList(list);
 	try {
 		kv?.setItem(TEMPLATES_MIRROR_KEY, JSON.stringify(cache$1));
@@ -33248,7 +33256,7 @@ function setTemplates(list, kv = storage()) {
 	notify();
 	return cache$1;
 }
-function templatesNow(kv = storage()) {
+function templatesNow(kv = storage$1()) {
 	if (cache$1) return cache$1;
 	try {
 		return cleanList(JSON.parse(kv?.getItem(TEMPLATES_MIRROR_KEY) || "[]"));
@@ -33525,7 +33533,7 @@ function planPresetMigration(local, server) {
 		skipped
 	};
 }
-async function migratePresetsOnce(server, kv = storage(), post = (t) => api("/api/templates", { json: t })) {
+async function migratePresetsOnce(server, kv = storage$1(), post = (t) => api("/api/templates", { json: t })) {
 	if (!kv) return 0;
 	let done = false;
 	let local = [];
@@ -36918,6 +36926,1410 @@ function NotificationsBell() {
 	}), document.body)] });
 }
 //#endregion
+//#region src/lib/voiceDesktop.ts
+function parseRadio(text) {
+	const t = String(text || "").trim();
+	const m = /^(.*?)[\s,.!?]*\b(over|disregard)(?:\s+(?:that|it|all|everything))?[.!?\s]*$/i.exec(t);
+	if (!m) return {
+		kind: "",
+		text: t
+	};
+	return {
+		kind: m[2].toLowerCase(),
+		text: m[1].trim()
+	};
+}
+var VOICE_PREFS_KEY = "cs_voice_desktop";
+function storage() {
+	try {
+		return typeof localStorage === "undefined" ? null : localStorage;
+	} catch {
+		return null;
+	}
+}
+function loadVoicePrefs(kv = storage()) {
+	let raw = null;
+	try {
+		const s = kv?.getItem(VOICE_PREFS_KEY);
+		raw = s ? JSON.parse(s) : null;
+	} catch {
+		raw = null;
+	}
+	const o = raw && typeof raw === "object" ? raw : {};
+	return {
+		ptt: o.ptt === "hold" ? "hold" : "toggle",
+		replies: o.replies === true
+	};
+}
+function saveVoicePrefs(p, kv = storage()) {
+	try {
+		kv?.setItem(VOICE_PREFS_KEY, JSON.stringify({
+			ptt: p.ptt,
+			replies: !!p.replies
+		}));
+	} catch {}
+}
+var DICT_IDLE_MS = 12e4;
+var HOLD_FINAL_WAIT_MS = 1500;
+var DICT_HINT = "Say “over” to send, “disregard” to start over";
+var Dictation = class {
+	listening = false;
+	phrases = [];
+	interim = "";
+	begin(keep = "") {
+		this.listening = true;
+		this.phrases = keep.trim() ? [keep.trim()] : [];
+		this.interim = "";
+	}
+	get text() {
+		return this.phrases.join(" ").trim();
+	}
+	get shown() {
+		return [this.text, this.interim.trim()].filter(Boolean).join(" ");
+	}
+	hearing(t) {
+		if (this.listening) this.interim = t;
+	}
+	heard(phrase) {
+		if (!this.listening) return { kind: "stopped" };
+		this.interim = "";
+		const p = parseRadio(phrase);
+		if (p.kind === "disregard") {
+			this.phrases = [];
+			return { kind: "cleared" };
+		}
+		if (p.text) this.phrases.push(p.text);
+		if (p.kind === "over" && this.text) return this.sendNow();
+		return { kind: "continue" };
+	}
+	finish() {
+		if (!this.listening) return { kind: "stopped" };
+		const tail = this.interim.trim();
+		this.interim = "";
+		if (tail) {
+			const p = parseRadio(tail);
+			if (p.kind === "disregard") this.phrases = [];
+			else if (p.text) this.phrases.push(p.text);
+		}
+		if (!this.text) {
+			this.listening = false;
+			return { kind: "stopped" };
+		}
+		return this.sendNow();
+	}
+	cancel() {
+		const had = this.listening || !!this.text;
+		this.listening = false;
+		this.phrases = [];
+		this.interim = "";
+		return had ? { kind: "dropped" } : { kind: "stopped" };
+	}
+	expire() {
+		this.listening = false;
+		this.interim = "";
+		return this.text ? {
+			kind: "kept",
+			text: this.text
+		} : { kind: "stopped" };
+	}
+	sendNow() {
+		const out = {
+			kind: "send",
+			text: this.text,
+			phrases: this.phrases.length
+		};
+		this.listening = false;
+		this.phrases = [];
+		return out;
+	}
+};
+var ROUTE_KINDS = /* @__PURE__ */ new Set([
+	"prompt",
+	"switch",
+	"new",
+	"ambiguous",
+	"no-session",
+	"new-failed",
+	"list",
+	"needs",
+	"status",
+	"cancel",
+	"stop",
+	"off",
+	"repeat",
+	"condense"
+]);
+async function routePhrase(text, session) {
+	try {
+		const r = await api("/api/voice/route", { json: {
+			text,
+			session
+		} });
+		if (r && typeof r === "object" && ROUTE_KINDS.has(String(r.kind))) return r;
+	} catch {}
+	return { kind: "prompt" };
+}
+function spokenLine(name, say) {
+	const s = String(say || "").trim();
+	const n = String(name || "").trim();
+	return n ? n + ": " + s : s;
+}
+var STAMP_SLACK_S = 5;
+var PENDING_MAX_MS = 18e5;
+var ReplyTracker = class {
+	pending = /* @__PURE__ */ new Map();
+	sent(title, say, now = Date.now()) {
+		if (!say) {
+			this.pending.delete(title);
+			return;
+		}
+		this.pending.set(title, {
+			sentAt: now,
+			working: false
+		});
+	}
+	waiting(title, now = Date.now()) {
+		const p = this.pending.get(title);
+		if (p && now - p.sentAt > PENDING_MAX_MS) this.pending.delete(title);
+		return this.pending.has(title);
+	}
+	working(title) {
+		const p = this.pending.get(title);
+		if (p) p.working = true;
+	}
+	take(title, name, say, ts, now = Date.now()) {
+		if (!this.waiting(title, now)) return null;
+		const p = this.pending.get(title);
+		const fresh = !ts || ts * 1e3 >= p.sentAt - STAMP_SLACK_S * 1e3;
+		const s = String(say || "").trim();
+		if (s && fresh) {
+			this.pending.delete(title);
+			return spokenLine(name, s);
+		}
+		if (p.working) {
+			this.pending.delete(title);
+			return spokenLine(name, "Finished.");
+		}
+		return null;
+	}
+	clear() {
+		this.pending.clear();
+	}
+};
+var SpeechQueue = class {
+	engine;
+	onSpeaking;
+	lines = [];
+	speaking = false;
+	held = false;
+	last = "";
+	constructor(engine, onSpeaking = () => {}) {
+		this.engine = engine;
+		this.onSpeaking = onSpeaking;
+	}
+	say(line) {
+		const t = String(line || "").trim();
+		if (!t) return;
+		this.lines.push(t);
+		this.pump();
+	}
+	get busy() {
+		return this.speaking;
+	}
+	get queued() {
+		return this.lines.length;
+	}
+	hold() {
+		this.held = true;
+		if (this.speaking) this.engine().cancel();
+	}
+	release() {
+		this.held = false;
+		this.pump();
+	}
+	cancel() {
+		this.lines = [];
+		if (this.speaking) this.engine().cancel();
+	}
+	pump() {
+		if (this.speaking || this.held || !this.lines.length) return;
+		const line = this.lines.shift();
+		this.last = line;
+		this.speaking = true;
+		this.onSpeaking(true);
+		const done = () => {
+			this.speaking = false;
+			this.onSpeaking(false);
+			this.pump();
+		};
+		this.engine().speak(line).then(done, done);
+	}
+};
+function sentenceChunks(text) {
+	const s = String(text || "").replace(/\s+/g, " ").trim();
+	if (!s) return [];
+	const pieces = [];
+	let start = 0;
+	for (let i = 0; i < s.length; i++) {
+		if (".!?".indexOf(s.charAt(i)) < 0) continue;
+		let j = i + 1;
+		while (j < s.length && ".!?\"')]".indexOf(s.charAt(j)) >= 0) j++;
+		if (j >= s.length || s.charAt(j) === " ") {
+			pieces.push(s.slice(start, j));
+			start = j;
+			i = j - 1;
+		}
+	}
+	if (start < s.length) pieces.push(s.slice(start));
+	const out = [];
+	for (let sent of pieces) {
+		sent = sent.trim();
+		while (sent.length > 180) {
+			let cut = Math.max(sent.lastIndexOf(", ", 180), sent.lastIndexOf("; ", 180));
+			if (cut < 40) cut = sent.lastIndexOf(" ", 180);
+			if (cut < 40) cut = 180;
+			out.push(sent.slice(0, cut + 1).trim());
+			sent = sent.slice(cut + 1).trim();
+		}
+		if (sent) out.push(sent);
+	}
+	return out;
+}
+var WORD_MS = 400;
+var CHUNK_GRACE_MS = 1500;
+function browserSpeaker() {
+	const synth = typeof window !== "undefined" ? window.speechSynthesis : void 0;
+	const keep = [];
+	let gen = 0;
+	const available = () => !!(synth && typeof SpeechSynthesisUtterance !== "undefined");
+	const unkeep = (u) => {
+		const i = keep.indexOf(u);
+		if (i >= 0) keep.splice(i, 1);
+	};
+	return {
+		available,
+		speak(text) {
+			return new Promise((resolve) => {
+				const parts = sentenceChunks(text);
+				if (!available() || !parts.length) return resolve();
+				const g = gen;
+				let i = 0;
+				const next = () => {
+					if (g !== gen || i >= parts.length) return resolve();
+					const part = parts[i++];
+					const u = new SpeechSynthesisUtterance(part);
+					u.lang = navigator.language || "en-US";
+					let done = false;
+					const finish = () => {
+						if (done) return;
+						done = true;
+						clearTimeout(timer);
+						unkeep(u);
+						next();
+					};
+					u.onend = finish;
+					u.onerror = finish;
+					const timer = setTimeout(finish, part.split(/\s+/).length * WORD_MS + CHUNK_GRACE_MS);
+					keep.push(u);
+					try {
+						synth.speak(u);
+					} catch {
+						finish();
+					}
+				};
+				setTimeout(next, 60);
+			});
+		},
+		cancel() {
+			gen++;
+			try {
+				synth?.cancel();
+			} catch {}
+		}
+	};
+}
+var audioCtx = null;
+function voiceAudioCtx() {
+	const AC = typeof window === "undefined" ? void 0 : window.AudioContext || window.webkitAudioContext;
+	if (!AC) return null;
+	if (!audioCtx) try {
+		audioCtx = new AC();
+	} catch {
+		return null;
+	}
+	if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+	return audioCtx;
+}
+var SPEAK_MAX_CHARS = 1200;
+function serverSpeaker(fallback) {
+	let gen = 0;
+	let playing = null;
+	const self = {
+		lastError: "",
+		speak(text) {
+			const groups = [];
+			let cur = "";
+			for (const s of sentenceChunks(text)) if (cur && (cur + " " + s).length > SPEAK_MAX_CHARS) {
+				groups.push(cur);
+				cur = s;
+			} else cur = cur ? cur + " " + s : s;
+			if (cur) groups.push(cur.slice(0, SPEAK_MAX_CHARS));
+			const g = gen;
+			const one = async (part) => {
+				const ctx = voiceAudioCtx();
+				if (!ctx || ctx.state !== "running") {
+					self.lastError = "AudioContext " + (ctx ? ctx.state : "missing");
+					return fallback.speak(part);
+				}
+				try {
+					const r = await apiRaw("/api/voice/speak", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ text: part })
+					});
+					if (!r.ok) {
+						const j = await r.json().catch(() => ({}));
+						throw new Error(j.error || "HTTP " + r.status);
+					}
+					const audio = await ctx.decodeAudioData(await r.arrayBuffer());
+					self.lastError = "";
+					if (g !== gen) return;
+					await new Promise((resolve) => {
+						const src = ctx.createBufferSource();
+						src.buffer = audio;
+						src.connect(ctx.destination);
+						let done = false;
+						const finish = () => {
+							if (done) return;
+							done = true;
+							clearTimeout(timer);
+							if (playing === src) playing = null;
+							resolve();
+						};
+						src.onended = finish;
+						const timer = setTimeout(finish, (audio.duration || 1) * 1e3 + CHUNK_GRACE_MS);
+						playing = src;
+						try {
+							src.start(0);
+						} catch {
+							finish();
+						}
+					});
+				} catch (err) {
+					self.lastError = String(err?.message || err);
+					if (g !== gen) return;
+					return fallback.speak(part);
+				}
+			};
+			return groups.reduce((p, part) => p.then(() => g === gen ? one(part) : void 0), Promise.resolve());
+		},
+		cancel() {
+			gen++;
+			const s = playing;
+			playing = null;
+			if (s) try {
+				s.onended = null;
+				s.stop(0);
+			} catch {}
+			fallback.cancel();
+		}
+	};
+	return self;
+}
+function speechRecCtor() {
+	if (typeof window === "undefined") return null;
+	const w = window;
+	return w.SpeechRecognition || w.webkitSpeechRecognition || null;
+}
+function browserRecognizer() {
+	let rec = null;
+	let want = false;
+	let finishing = false;
+	let h = null;
+	let interim = "";
+	let rapid = 0;
+	let startedAt = 0;
+	const open = () => {
+		const Ctor = speechRecCtor();
+		if (!Ctor || !h) return false;
+		let r;
+		try {
+			r = new Ctor();
+		} catch {
+			return false;
+		}
+		r.continuous = true;
+		r.interimResults = true;
+		r.maxAlternatives = 1;
+		r.lang = navigator.language || "en-US";
+		interim = "";
+		r.onresult = (ev) => {
+			let finals = "";
+			interim = "";
+			for (let i = ev.resultIndex; i < ev.results.length; i++) {
+				const res = ev.results[i];
+				const txt = res[0]?.transcript || "";
+				if (res.isFinal) finals += txt;
+				else interim += txt;
+			}
+			if (finals.trim()) h?.onFinal(finals.trim());
+			else h?.onInterim(interim.trim());
+		};
+		r.onerror = (ev) => {
+			const code = ev?.error || "error";
+			if (code === "no-speech" || code === "aborted") return;
+			want = false;
+			h?.onError(code);
+		};
+		r.onend = () => {
+			if (rec === r) rec = null;
+			const tail = interim.trim();
+			interim = "";
+			if (tail) h?.onFinal(tail);
+			if (want && !finishing) {
+				rapid = Date.now() - startedAt < 1e3 ? rapid + 1 : 0;
+				if (rapid < 8) {
+					setTimeout(() => {
+						if (want && !rec && !open()) {
+							want = false;
+							h?.onError("start-failed");
+							h?.onEnd();
+						}
+					}, 250);
+					return;
+				}
+				h?.onError("start-failed", "Speech recognition keeps stopping — try again, or another browser.");
+			}
+			want = false;
+			finishing = false;
+			h?.onEnd();
+		};
+		rec = r;
+		startedAt = Date.now();
+		try {
+			r.start();
+		} catch {
+			rec = null;
+			return false;
+		}
+		return true;
+	};
+	const self = {
+		name: "browser",
+		available: () => !!speechRecCtor(),
+		start(handlers) {
+			self.stop();
+			h = handlers;
+			want = true;
+			finishing = false;
+			rapid = 0;
+			if (!open()) {
+				want = false;
+				return false;
+			}
+			return true;
+		},
+		finish() {
+			if (!rec) {
+				if (want) {
+					want = false;
+					h?.onEnd();
+				}
+				return;
+			}
+			finishing = true;
+			want = false;
+			try {
+				rec.stop();
+			} catch {
+				rec = null;
+				h?.onEnd();
+			}
+		},
+		stop() {
+			want = false;
+			finishing = false;
+			const r = rec;
+			rec = null;
+			h = null;
+			if (!r) return;
+			r.onresult = r.onerror = r.onend = null;
+			try {
+				if (r.abort) r.abort();
+				else r.stop();
+			} catch {}
+		},
+		release() {
+			self.stop();
+		}
+	};
+	return self;
+}
+var SERVER_MIMES = [
+	"audio/webm;codecs=opus",
+	"audio/webm",
+	"audio/mp4",
+	"audio/ogg;codecs=opus"
+];
+var SILENCE_MS = 1800;
+var CLIP_MAX_MS = 12e3;
+var LEVEL_MS = 100;
+var RMS_SPEECH = .02;
+var UPLOAD_TIMEOUT_MS = 45e3;
+function serverRecognizer() {
+	let stream = null;
+	let h = null;
+	let want = false;
+	let finishing = false;
+	let token = null;
+	let rec = null;
+	let uploads = 0;
+	let source = null;
+	let meterTimer;
+	let capTimer;
+	const aborters = /* @__PURE__ */ new Set();
+	const pickMime = () => {
+		if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported) return "";
+		for (const m of SERVER_MIMES) try {
+			if (MediaRecorder.isTypeSupported(m)) return m;
+		} catch {}
+		return "";
+	};
+	const getStream = async () => {
+		if (stream && stream.active !== false) return stream;
+		stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+		return stream;
+	};
+	const errCode = (err) => {
+		const n = err?.name || "";
+		if (n === "NotAllowedError" || n === "SecurityError" || n === "PermissionDeniedError") return "not-allowed";
+		if (n === "NotFoundError" || n === "DevicesNotFoundError" || n === "OverconstrainedError") return "audio-capture";
+		return "start-failed";
+	};
+	const meterStop = () => {
+		clearInterval(meterTimer);
+		meterTimer = void 0;
+		try {
+			source?.disconnect();
+		} catch {}
+		source = null;
+	};
+	const maybeEnd = () => {
+		if (!want && !token && uploads === 0 && h) {
+			finishing = false;
+			h.onEnd();
+		}
+	};
+	const upload = async (blob, mime) => {
+		const hh = h;
+		uploads++;
+		const ac = new AbortController();
+		aborters.add(ac);
+		const timer = setTimeout(() => ac.abort(), UPLOAD_TIMEOUT_MS);
+		const lang = String(navigator.language || "en").split(";")[0];
+		try {
+			const r = await apiRaw("/api/voice/transcribe?lang=" + encodeURIComponent(lang), {
+				method: "POST",
+				headers: { "Content-Type": mime },
+				body: blob,
+				signal: ac.signal
+			});
+			const j = await r.json().catch(() => ({}));
+			if (h !== hh || !hh) return;
+			if (r.ok) {
+				self.lastError = "";
+				const text = String(j.text || "").trim();
+				if (text) hh.onFinal(text);
+			} else {
+				self.lastError = String(j.error || "HTTP " + r.status);
+				want = false;
+				hh.onError("server", r.status === 409 ? "Server recognition is off: Settings → Your phone → Voice" : "Couldn't transcribe: " + self.lastError);
+			}
+		} catch (err) {
+			if (h !== hh || !hh) return;
+			const why = err?.name === "AbortError" ? "the server took too long" : String(err?.message || err);
+			self.lastError = why;
+			want = false;
+			hh.onError("server", "Couldn't reach the server: " + why);
+		} finally {
+			clearTimeout(timer);
+			aborters.delete(ac);
+			uploads--;
+		}
+		if (h === hh) maybeEnd();
+	};
+	const endClip = () => {
+		const r = rec;
+		rec = null;
+		clearTimeout(capTimer);
+		meterStop();
+		if (!r) return;
+		try {
+			r.stop();
+		} catch {
+			token = null;
+		}
+	};
+	const clip = async () => {
+		const mine = {};
+		token = mine;
+		let s;
+		try {
+			s = await getStream();
+		} catch (err) {
+			if (token !== mine) return;
+			token = null;
+			want = false;
+			h?.onError(errCode(err));
+			maybeEnd();
+			return;
+		}
+		if (token !== mine) return;
+		const mt = pickMime();
+		let r;
+		try {
+			r = mt ? new MediaRecorder(s, { mimeType: mt }) : new MediaRecorder(s);
+		} catch {
+			token = null;
+			want = false;
+			h?.onError("start-failed");
+			maybeEnd();
+			return;
+		}
+		const mime = r.mimeType || mt || "audio/webm";
+		const chunks = [];
+		let heard = false;
+		let live = false;
+		r.ondataavailable = (ev) => {
+			if (ev.data && ev.data.size) chunks.push(ev.data);
+		};
+		r.onstop = () => {
+			if (token !== mine) return;
+			token = null;
+			const blob = new Blob(chunks, { type: mime });
+			if (blob.size && (heard || !live)) upload(blob, mime);
+			if (want && !finishing) clip();
+			else maybeEnd();
+		};
+		rec = r;
+		try {
+			r.start();
+		} catch {
+			token = null;
+			rec = null;
+			want = false;
+			h?.onError("start-failed");
+			maybeEnd();
+			return;
+		}
+		h?.onStatus?.("Listening…");
+		const ctx = voiceAudioCtx();
+		let analyser = null;
+		if (ctx && ctx.state === "running") try {
+			source = ctx.createMediaStreamSource(s);
+			analyser = ctx.createAnalyser();
+			analyser.fftSize = 1024;
+			source.connect(analyser);
+			live = true;
+		} catch {
+			source = null;
+			analyser = null;
+		}
+		if (analyser) {
+			const buf = new Uint8Array(analyser.fftSize);
+			let floor = 0;
+			let lastLoud = 0;
+			meterTimer = setInterval(() => {
+				if (token !== mine || !analyser) return;
+				analyser.getByteTimeDomainData(buf);
+				let sum = 0;
+				for (let i = 0; i < buf.length; i++) {
+					const d = (buf[i] - 128) / 128;
+					sum += d * d;
+				}
+				const rms = Math.sqrt(sum / buf.length);
+				floor = floor === 0 ? rms : Math.min(rms, floor * 1.05 + .001);
+				const now = Date.now();
+				if (rms > Math.max(RMS_SPEECH, floor * 3)) {
+					if (!heard) h?.onSpeech?.();
+					heard = true;
+					lastLoud = now;
+				}
+				if (heard && now - lastLoud > SILENCE_MS) endClip();
+			}, LEVEL_MS);
+		}
+		capTimer = setTimeout(() => {
+			if (token === mine) endClip();
+		}, CLIP_MAX_MS);
+	};
+	const self = {
+		name: "server",
+		lastError: "",
+		available: () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== "undefined",
+		start(handlers) {
+			self.stop();
+			if (!self.available()) return false;
+			h = handlers;
+			want = true;
+			finishing = false;
+			clip();
+			return true;
+		},
+		finish() {
+			want = false;
+			finishing = true;
+			if (rec) {
+				h?.onStatus?.("Transcribing…");
+				endClip();
+			} else maybeEnd();
+		},
+		stop() {
+			want = false;
+			finishing = false;
+			h = null;
+			token = null;
+			clearTimeout(capTimer);
+			meterStop();
+			const r = rec;
+			rec = null;
+			if (r) try {
+				r.ondataavailable = null;
+				r.onstop = null;
+				if (r.state !== "inactive") r.stop();
+			} catch {}
+			aborters.forEach((a) => a.abort());
+			aborters.clear();
+		},
+		release() {
+			self.stop();
+			const s = stream;
+			stream = null;
+			s?.getTracks().forEach((t) => t.stop());
+		}
+	};
+	return self;
+}
+var DEFAULT_VOICE_CFG = {
+	stt: "phone",
+	tts: "phone",
+	server_ready: {}
+};
+async function loadVoiceCfg(prev) {
+	try {
+		const j = await api("/api/voice");
+		if (j && typeof j === "object") return {
+			stt: j.stt === "server" ? "server" : "phone",
+			tts: j.tts === "server" ? "server" : "phone",
+			server_ready: j.server_ready && typeof j.server_ready === "object" ? j.server_ready : {}
+		};
+	} catch {}
+	return prev || DEFAULT_VOICE_CFG;
+}
+function sttEngine(cfg, serverOk) {
+	return cfg.stt === "server" && !!cfg.server_ready.stt && serverOk ? "server" : "browser";
+}
+function ttsEngine(cfg) {
+	return cfg.tts === "server" && !!cfg.server_ready.tts ? "server" : "browser";
+}
+function recognizerErrorLine(code, detail) {
+	if (code === "network") return "Speech recognition failed (network): use Chrome, Edge or Safari, or turn on server recognition in Settings → Your phone → Voice";
+	if (code === "not-allowed" || code === "service-not-allowed") return "Microphone permission denied";
+	if (code === "audio-capture") return "No microphone found";
+	if (detail) return detail;
+	if (code === "unavailable" || code === "start-failed") return "Speech recognition did not start (" + code + ")";
+	return "Voice error: " + code;
+}
+//#endregion
+//#region src/components/TopBarMic.tsx
+var browserRec = browserRecognizer();
+var serverRec = serverRecognizer();
+var browserSp = browserSpeaker();
+var serverSp = serverSpeaker(browserSp);
+var tracker = new ReplyTracker();
+var cfgNow = DEFAULT_VOICE_CFG;
+var speakingListeners = /* @__PURE__ */ new Set();
+var queue = new SpeechQueue(() => ttsEngine(cfgNow) === "server" ? serverSp : browserSp, (on) => speakingListeners.forEach((l) => l(on)));
+function textField(el) {
+	if (!el || el.classList.contains("xterm-helper-textarea")) return null;
+	if (el instanceof HTMLTextAreaElement) return el.readOnly || el.disabled ? null : el;
+	if (el instanceof HTMLInputElement) return [
+		"text",
+		"search",
+		"url",
+		"email",
+		""
+	].includes(el.type) && !el.readOnly && !el.disabled ? el : null;
+	return null;
+}
+function insertIntoField(el, text) {
+	const start = el.selectionStart != null ? el.selectionStart : el.value.length;
+	const end = el.selectionEnd != null ? el.selectionEnd : el.value.length;
+	el.value = el.value.slice(0, start) + text + el.value.slice(end);
+	const pos = start + text.length;
+	try {
+		el.selectionStart = el.selectionEnd = pos;
+	} catch {}
+	el.dispatchEvent(new Event("input", { bubbles: true }));
+}
+function MicGlyph() {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+		viewBox: "0 0 24 24",
+		width: "15",
+		height: "15",
+		"aria-hidden": "true",
+		fill: "none",
+		stroke: "currentColor",
+		strokeWidth: "2",
+		strokeLinecap: "round",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+			x: "9",
+			y: "3",
+			width: "6",
+			height: "11",
+			rx: "3",
+			fill: "currentColor",
+			stroke: "none"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7" })]
+	});
+}
+function TopBarMic() {
+	const [prefs, setPrefsState] = (0, import_react.useState)(loadVoicePrefs);
+	const prefsRef = (0, import_react.useRef)(prefs);
+	prefsRef.current = prefs;
+	const [cfg, setCfg] = (0, import_react.useState)(null);
+	const [listening, setListening] = (0, import_react.useState)(false);
+	const [speaking, setSpeaking] = (0, import_react.useState)(queue.busy);
+	const [caption, setCaptionState] = (0, import_react.useState)("");
+	const [menuOpen, setMenuOpen] = (0, import_react.useState)(false);
+	const focusedName = useUi((s) => s.focused ? s.aliases[s.focused] || s.focused : "");
+	const btnRef = (0, import_react.useRef)(null);
+	const menuRef = (0, import_react.useRef)(null);
+	const dict = (0, import_react.useRef)(new Dictation()).current;
+	const rec = (0, import_react.useRef)(null);
+	const field = (0, import_react.useRef)(null);
+	const pressedField = (0, import_react.useRef)(null);
+	const kept = (0, import_react.useRef)("");
+	const deciding = (0, import_react.useRef)(null);
+	const idleTimer = (0, import_react.useRef)(void 0);
+	const captionTimer = (0, import_react.useRef)(void 0);
+	const holding = (0, import_react.useRef)(false);
+	const say = (text, sticky = false) => {
+		setCaptionState(text);
+		clearTimeout(captionTimer.current);
+		if (text && !sticky) captionTimer.current = setTimeout(() => setCaptionState(""), 6e3);
+	};
+	const setPrefs = (p) => {
+		setPrefsState(p);
+		saveVoicePrefs(p);
+		if (!p.replies) queue.cancel();
+	};
+	const refreshCfg = () => loadVoiceCfg(cfgNow === DEFAULT_VOICE_CFG ? null : cfgNow).then((c) => {
+		cfgNow = c;
+		setCfg(c);
+		return c;
+	});
+	(0, import_react.useEffect)(() => {
+		refreshCfg();
+		const l = (on) => setSpeaking(on);
+		speakingListeners.add(l);
+		return () => {
+			speakingListeners.delete(l);
+			clearTimeout(idleTimer.current);
+			clearTimeout(captionTimer.current);
+			rec.current?.stop();
+		};
+	}, []);
+	(0, import_react.useEffect)(() => {
+		let unsubs = [];
+		let retry;
+		const ended = (title, data, ts) => {
+			if (!tracker.waiting(title)) return;
+			const speak = (line) => {
+				if (!line) return;
+				say(line);
+				if (prefsRef.current.replies) queue.say(line);
+			};
+			const inline = String(data.say || "").trim();
+			if (inline) {
+				speak(tracker.take(title, displayName(title), inline, ts));
+				return;
+			}
+			instApi(title, "/voice").then((j) => speak(tracker.take(title, displayName(title), String(j?.say || ""), Number(j?.ts) || null))).catch(() => speak(tracker.take(title, displayName(title), "", null)));
+		};
+		const attach = () => {
+			const ev = window.mindflock?.events;
+			if (!ev) {
+				retry = setTimeout(attach, 1e3);
+				return;
+			}
+			const replay = (env) => typeof ev.isReplay === "function" && ev.isReplay(env);
+			unsubs = [ev.subscribe("session.activity_changed", (env) => {
+				if (replay(env)) return;
+				if (env.new === "working") tracker.working(env.session);
+				else if (env.new === "idle") ended(env.session, env.data || {}, Number(env.ts) || 0);
+			}), ev.subscribe("session.turn_ended", (env) => {
+				if (!replay(env)) ended(env.session, env.data || {}, Number(env.ts) || 0);
+			})];
+		};
+		attach();
+		return () => {
+			clearTimeout(retry);
+			unsubs.forEach((u) => u());
+		};
+	}, []);
+	const supported = browserRec.available() || !!cfg && sttEngine(cfg, serverRec.available()) === "server";
+	const armIdle = () => {
+		clearTimeout(idleTimer.current);
+		idleTimer.current = setTimeout(() => {
+			if (!dict.listening && !field.current) return;
+			halt();
+			if (field.current) {
+				field.current = null;
+				say("");
+				return;
+			}
+			outcome(dict.expire());
+		}, DICT_IDLE_MS);
+	};
+	const halt = () => {
+		clearTimeout(idleTimer.current);
+		deciding.current = null;
+		rec.current?.stop();
+		rec.current = null;
+		setListening(false);
+		queue.release();
+	};
+	const outcome = (out) => {
+		switch (out.kind) {
+			case "send":
+				halt();
+				dispatch(out.text, out.phrases);
+				return;
+			case "cleared":
+				say("Disregarded — go on", true);
+				return;
+			case "continue":
+				say(dict.shown || DICT_HINT, true);
+				return;
+			case "stopped":
+				halt();
+				say("");
+				return;
+			case "dropped":
+				halt();
+				kept.current = "";
+				say("Dropped");
+				return;
+			case "kept":
+				halt();
+				kept.current = out.text;
+				say("“" + out.text + "” — Not sent — click the mic to continue", true);
+				return;
+		}
+	};
+	const start = (into) => {
+		if (dict.listening || field.current) return;
+		if (!supported) {
+			say("Voice input needs Chrome, Edge or Safari — or server recognition (Settings → Your phone → Voice)");
+			return;
+		}
+		const c = cfgNow;
+		const r = sttEngine(c, serverRec.available()) === "server" ? serverRec : browserRec;
+		if (r === serverRec || ttsEngine(c) === "server") voiceAudioCtx();
+		queue.hold();
+		field.current = into;
+		if (!into) dict.begin(kept.current);
+		kept.current = "";
+		rec.current = r;
+		setListening(true);
+		say(into ? "Listening — the words go into the text box" : dict.shown || DICT_HINT, true);
+		armIdle();
+		const ok = r.start({
+			onInterim: (t) => {
+				if (rec.current !== r) return;
+				armIdle();
+				if (field.current) {
+					say(t || "Listening…", true);
+					return;
+				}
+				dict.hearing(t);
+				say(dict.shown || DICT_HINT, true);
+			},
+			onStatus: (t) => {
+				if (rec.current === r && !dict.shown && !field.current) say(t + " · " + DICT_HINT, true);
+			},
+			onSpeech: () => {
+				if (rec.current !== r) return;
+				armIdle();
+				if (!dict.shown && !field.current) say("Hearing you… · " + DICT_HINT, true);
+			},
+			onFinal: (t) => {
+				if (rec.current !== r) return;
+				armIdle();
+				const box = field.current;
+				if (box) {
+					const p = parseRadio(t);
+					if (p.kind === "disregard") say("Disregarded", true);
+					else if (p.text) insertIntoField(box, p.text + " ");
+					if (p.kind === "over") {
+						field.current = null;
+						halt();
+						say("");
+					} else if (p.kind !== "disregard") say("Listening — the words go into the text box", true);
+					return;
+				}
+				if (deciding.current) {
+					dict.hearing("");
+					const p = parseRadio(t);
+					if (p.kind === "disregard") dict.phrases = [];
+					else if (p.text) dict.phrases.push(p.text);
+					return;
+				}
+				outcome(dict.heard(t));
+			},
+			onError: (code, detail) => {
+				if (rec.current !== r) return;
+				const line = recognizerErrorLine(code, detail);
+				const words = dict.text;
+				field.current = null;
+				dict.cancel();
+				halt();
+				kept.current = words;
+				say(words ? line + " — “" + words + "” not sent" : line, true);
+			},
+			onEnd: () => {
+				if (rec.current !== r) return;
+				if (deciding.current) {
+					deciding.current();
+					return;
+				}
+				field.current = null;
+				outcome(dict.expire());
+			}
+		});
+		refreshCfg();
+		if (!ok) {
+			rec.current = null;
+			field.current = null;
+			dict.cancel();
+			setListening(false);
+			queue.release();
+			say("Speech recognition did not start");
+		}
+	};
+	const finish = () => {
+		const r = rec.current;
+		if (!r) return;
+		if (field.current) {
+			field.current = null;
+			halt();
+			say("");
+			return;
+		}
+		if (deciding.current) return;
+		let done = false;
+		const decide = () => {
+			if (done) return;
+			done = true;
+			clearTimeout(timer);
+			deciding.current = null;
+			outcome(dict.finish());
+		};
+		deciding.current = decide;
+		const timer = setTimeout(decide, r.name === "server" ? 45e3 : HOLD_FINAL_WAIT_MS);
+		r.finish();
+	};
+	const cancel = () => {
+		if (field.current) {
+			field.current = null;
+			halt();
+			say("");
+			return;
+		}
+		outcome(dict.cancel());
+	};
+	(0, import_react.useEffect)(() => {
+		if (!listening) return;
+		const onKey = (e) => {
+			if (e.key !== "Escape") return;
+			e.stopPropagation();
+			e.preventDefault();
+			cancel();
+		};
+		document.addEventListener("keydown", onKey, true);
+		return () => document.removeEventListener("keydown", onKey, true);
+	}, [listening]);
+	const announce = (line) => {
+		if (!line) return;
+		say(line);
+		if (prefsRef.current.replies) queue.say(line);
+	};
+	const dispatch = async (text, phrases) => {
+		const session = useUi.getState().focused || "";
+		if (phrases === 1) {
+			say("“" + text + "”…", true);
+			const r = await routePhrase(text, session);
+			if (r.kind !== "prompt") {
+				routed(r, text);
+				return;
+			}
+		}
+		await sendPrompt(text);
+	};
+	const routed = (r, text) => {
+		switch (r.kind) {
+			case "switch":
+			case "new":
+				if (r.title) {
+					const title = r.title;
+					if (r.kind === "new") refreshInstances().then(() => selectSession(title, { noKeyboard: true }));
+					else selectSession(title, { noKeyboard: true });
+				}
+				announce(r.say || (r.kind === "new" ? "Started " : "Now talking to ") + (r.name || r.title || "") + ".");
+				return;
+			case "cancel":
+				say("Dropped");
+				return;
+			case "stop":
+				say("");
+				return;
+			case "off":
+				queue.cancel();
+				browserRec.release();
+				serverRec.release();
+				say("Mic off");
+				return;
+			case "repeat":
+				if (queue.last) announce(queue.last);
+				else say("Nothing to repeat yet");
+				return;
+			case "condense":
+				say("");
+				return;
+			default:
+				announce(r.say || "");
+				if (!r.say) {
+					kept.current = text;
+					say("“" + text + "” — Not sent — click the mic to continue", true);
+				}
+		}
+	};
+	const sendPrompt = async (text) => {
+		const title = useUi.getState().focused;
+		if (!title) {
+			kept.current = text;
+			say("Click a session first — “" + text + "” not sent", true);
+			return;
+		}
+		const name = displayName(title);
+		const wantSay = prefsRef.current.replies;
+		say("Sending to " + name + "…", true);
+		try {
+			const r = await instApi(title, "/send", { json: {
+				text,
+				dialog_safe: true,
+				say: wantSay
+			} });
+			tracker.sent(title, wantSay);
+			say(r?.queued ? "Queued for " + name + "." : "Sent to " + name + ".");
+		} catch (err) {
+			kept.current = text;
+			const body = err instanceof ApiError ? err.body : null;
+			let line = "Couldn't send: " + (err?.message || "error");
+			if (err instanceof ApiError && err.status === 409) {
+				if (body?.waking) line = name + " is waking up — click the mic to send again in a moment";
+				else if (body?.paused) line = name + " is paused — resume it first";
+				else if (body?.queued) line = "Queued for " + name + ".";
+			}
+			say(line + " · “" + text + "”", true);
+		}
+	};
+	const hold = prefs.ptt === "hold";
+	const openMenu = () => {
+		setMenuOpen(true);
+		refreshCfg();
+	};
+	(0, import_react.useEffect)(() => {
+		if (!menuOpen) return;
+		const onDown = (e) => {
+			const t = e.target;
+			if (!menuRef.current?.contains(t) && !btnRef.current?.contains(t)) setMenuOpen(false);
+		};
+		const onKey = (e) => {
+			if (e.key !== "Escape") return;
+			e.stopPropagation();
+			e.preventDefault();
+			setMenuOpen(false);
+			btnRef.current?.focus();
+		};
+		document.addEventListener("mousedown", onDown);
+		document.addEventListener("keydown", onKey, true);
+		return () => {
+			document.removeEventListener("mousedown", onDown);
+			document.removeEventListener("keydown", onKey, true);
+		};
+	}, [menuOpen]);
+	const who = focusedName || "a session";
+	const title = !supported ? "Voice input needs Chrome, Edge or Safari, or server recognition — right-click for options" : listening ? hold ? "Listening — release to send" : "Listening — click to send, Esc to drop" : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") + ", right-click for options";
+	const rect = menuOpen ? btnRef.current?.getBoundingClientRect() : void 0;
+	const popStyle = rect ? {
+		top: rect.bottom + 6 + "px",
+		left: Math.max(8, Math.min(rect.left, window.innerWidth - 288)) + "px"
+	} : void 0;
+	const capRect = caption ? btnRef.current?.getBoundingClientRect() : void 0;
+	const capStyle = capRect ? {
+		top: capRect.bottom + 6 + "px",
+		left: Math.max(8, Math.min(capRect.left, window.innerWidth - 348)) + "px"
+	} : void 0;
+	const sttName = !supported ? "none in this browser" : cfg && sttEngine(cfg, serverRec.available()) === "server" ? "the server" : "this browser (Web Speech)";
+	const ttsName = cfg && ttsEngine(cfg) === "server" ? "the server" : browserSp.available() ? "this browser" : "none";
+	const sttNotReady = cfg?.stt === "server" && !cfg.server_ready.stt;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			id: "mic-btn",
+			ref: btnRef,
+			type: "button",
+			className: "tb-item" + (listening ? " listening" : "") + (speaking && !listening ? " speaking" : "") + (!supported ? " unsupported" : ""),
+			title,
+			"aria-label": listening ? "Listening — stop and send" : "Talk to " + who,
+			"aria-pressed": listening,
+			"aria-haspopup": "menu",
+			"aria-expanded": menuOpen,
+			onPointerDown: (e) => {
+				pressedField.current = textField(document.activeElement);
+				if (!hold || e.button !== 0 || e.shiftKey) return;
+				holding.current = true;
+				try {
+					e.currentTarget.setPointerCapture(e.pointerId);
+				} catch {}
+				start(pressedField.current);
+			},
+			onPointerUp: () => {
+				if (!holding.current) return;
+				holding.current = false;
+				finish();
+			},
+			onPointerCancel: () => {
+				if (!holding.current) return;
+				holding.current = false;
+				finish();
+			},
+			onMouseDown: (e) => e.preventDefault(),
+			onClick: (e) => {
+				if (e.shiftKey) {
+					menuOpen ? setMenuOpen(false) : openMenu();
+					return;
+				}
+				if (hold) return;
+				if (dict.listening || field.current) finish();
+				else start(pressedField.current);
+				pressedField.current = null;
+			},
+			onContextMenu: (e) => {
+				e.preventDefault();
+				menuOpen ? setMenuOpen(false) : openMenu();
+			},
+			onKeyDown: (e) => {
+				if (!hold || e.key !== " " && e.key !== "Enter") return;
+				e.preventDefault();
+				if (e.repeat || holding.current) return;
+				holding.current = true;
+				start(null);
+			},
+			onKeyUp: (e) => {
+				if (!hold || e.key !== " " && e.key !== "Enter") return;
+				e.preventDefault();
+				if (!holding.current) return;
+				holding.current = false;
+				finish();
+			},
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MicGlyph, {})
+		}),
+		caption && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			id: "mic-caption",
+			role: "status",
+			"aria-live": "polite",
+			style: capStyle,
+			children: caption
+		}), document.body),
+		menuOpen && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "mic-pop",
+			id: "mic-pop",
+			ref: menuRef,
+			style: popStyle,
+			role: "menu",
+			"aria-label": "Voice options",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "mic-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						role: "switch",
+						checked: prefs.replies,
+						onChange: (e) => setPrefs({
+							...prefs,
+							replies: e.target.checked
+						})
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Read replies aloud" })]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "mic-sub",
+					children: "Push to talk"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "mic-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "radio",
+						name: "mic-ptt",
+						checked: !hold,
+						onChange: () => setPrefs({
+							...prefs,
+							ptt: "toggle"
+						})
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Click to talk" })]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "mic-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "radio",
+						name: "mic-ptt",
+						checked: hold,
+						onChange: () => setPrefs({
+							...prefs,
+							ptt: "hold"
+						})
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Hold to talk" })]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "mic-hint",
+					children: [DICT_HINT, ". Esc drops it."]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "mic-diag",
+					children: [
+						"Recognition: ",
+						sttName,
+						sttNotReady ? " (server recognition isn't ready" + (cfg?.server_ready.stt_detail ? ": " + cfg.server_ready.stt_detail : "") + ")" : "",
+						" · ",
+						"Replies voice: ",
+						ttsName
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike mic-link",
+					onClick: () => {
+						setMenuOpen(false);
+						openSettings("mobile");
+						setTimeout(() => document.getElementById("mobile-voice")?.scrollIntoView({ block: "start" }), 300);
+					},
+					children: "Speech engines: Settings → Your phone → Voice"
+				})
+			]
+		}), document.body)
+	] });
+}
+//#endregion
 //#region src/lib/desktopNotify.ts
 function bridge$1() {
 	if (typeof window === "undefined") return null;
@@ -38510,7 +39922,8 @@ function TopBar() {
 							})
 						}),
 						!mac && themeToggle,
-						!mac && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NotificationsBell, {})
+						!mac && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NotificationsBell, {}),
+						!mac && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TopBarMic, {})
 					]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
 					className: "tb-menu",
@@ -38675,6 +40088,7 @@ function TopBar() {
 			mac && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "tb-end",
 				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TopBarMic, {}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NotificationsBell, {}),
 					themeToggle,
 					logo
@@ -38938,121 +40352,6 @@ function StateNotice() {
 			})
 		]
 	});
-}
-//#endregion
-//#region src/components/VoiceInput.tsx
-var SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-function insertIntoField(el, text) {
-	const start = el.selectionStart != null ? el.selectionStart : el.value.length;
-	const end = el.selectionEnd != null ? el.selectionEnd : el.value.length;
-	el.value = el.value.slice(0, start) + text + el.value.slice(end);
-	const pos = start + text.length;
-	try {
-		el.selectionStart = el.selectionEnd = pos;
-	} catch {}
-	el.dispatchEvent(new Event("input", { bubbles: true }));
-}
-function VoiceInput() {
-	const [listening, setListening] = (0, import_react.useState)(false);
-	const [caption, setCaption] = (0, import_react.useState)(null);
-	const recogRef = (0, import_react.useRef)(null);
-	const listeningRef = (0, import_react.useRef)(false);
-	const captionTimer = (0, import_react.useRef)(void 0);
-	const flash = (text, sticky = false) => {
-		setCaption(text);
-		clearTimeout(captionTimer.current);
-		if (!sticky) captionTimer.current = setTimeout(() => setCaption(null), 2500);
-	};
-	const route = (text) => {
-		const ae = document.activeElement;
-		const isHelper = ae?.classList?.contains("xterm-helper-textarea");
-		if (ae && !isHelper && (ae.tagName === "TEXTAREA" || ae.tagName === "INPUT")) {
-			insertIntoField(ae, text);
-			return;
-		}
-		const paneTitle = (ae?.closest?.(".pane"))?.dataset.title;
-		if (paneTitle) {
-			const tab = useUi.getState().lastTab[paneTitle];
-			if (peekTerm(paneTitle, tab === "shell" ? "shell" : "agent")?.send(text)) return;
-		}
-		const focused = useUi.getState().focused;
-		if (focused) {
-			const tab = useUi.getState().lastTab[focused];
-			if ((peekTerm(focused, tab === "shell" ? "shell" : "agent") || peekTerm(focused, "agent"))?.send(text)) return;
-		}
-		flash("Nothing focused to dictate into — click a terminal or text box.");
-	};
-	(0, import_react.useEffect)(() => {
-		if (!SpeechRec) return;
-		const recog = new SpeechRec();
-		recog.continuous = true;
-		recog.interimResults = true;
-		recog.lang = navigator.language || "en-US";
-		recog.onresult = (ev) => {
-			let interim = "";
-			for (let i = ev.resultIndex; i < ev.results.length; i++) {
-				const res = ev.results[i];
-				const txt = res[0].transcript;
-				if (res.isFinal) route(txt.replace(/^\s+/, "") + " ");
-				else interim += txt;
-			}
-			flash(interim ? "🎙 " + interim : "Listening…", true);
-		};
-		recog.onerror = (ev) => {
-			if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
-				flash("Microphone permission denied.");
-				stop();
-			} else if (ev.error !== "no-speech") flash("Voice error: " + ev.error);
-		};
-		recog.onend = () => {
-			if (listeningRef.current) try {
-				recog.start();
-			} catch {}
-		};
-		recogRef.current = recog;
-		return () => {
-			listeningRef.current = false;
-			try {
-				recog.stop();
-			} catch {}
-		};
-	}, []);
-	const stop = () => {
-		listeningRef.current = false;
-		setListening(false);
-		setCaption(null);
-		try {
-			recogRef.current?.stop();
-		} catch {}
-	};
-	const start = () => {
-		if (!recogRef.current) return;
-		listeningRef.current = true;
-		setListening(true);
-		flash("Listening…", true);
-		try {
-			recogRef.current.start();
-		} catch {}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-		id: "mic-btn",
-		type: "button",
-		className: (listening ? "listening" : "") + (!SpeechRec ? " unsupported" : ""),
-		title: !SpeechRec ? "Voice input not supported in this browser (try Chrome/Edge)" : listening ? "Stop voice input" : "Voice input — dictate into the focused terminal or text box",
-		"aria-label": "Toggle voice input",
-		onClick: () => {
-			if (!SpeechRec) {
-				flash("Voice input needs the Web Speech API (Chrome or Edge).");
-				return;
-			}
-			listening ? stop() : start();
-		},
-		children: "🎤"
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		id: "mic-caption",
-		className: caption == null ? "hidden" : "",
-		children: caption || ""
-	})] });
 }
 //#endregion
 //#region src/lib/devices.ts
@@ -102426,7 +103725,6 @@ function App() {
 			onOpenTodo: () => useUi.getState().openDialogFor("todo")
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TerminalGrid, { specialPanes }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceInput, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewSessionDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsDialog, { onOpenSysLogsPane: () => toggleSpecial("syslogs") }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(IntakeDialog, {}),

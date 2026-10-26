@@ -45,4 +45,17 @@ describe("TopBar.tsx and lib/shell.ts carry the mac title bar", () => {
     expect(TOPBAR.indexOf('className="tb-drag"')).toBeGreaterThan(-1);
     expect(TOPBAR.indexOf('className="tb-drag"')).toBeLessThan(TOPBAR.indexOf('className="tb-end"'));
   });
+
+  it("mirrors the mic with the bell: after it on the left, before it in .tb-end", () => {
+    // Left (Windows / Linux / a browser): bell, then mic. The Mac mirror reads
+    // from the far corner inward — logo, theme, bell — so the mic comes first.
+    const left = TOPBAR.slice(TOPBAR.indexOf('<div className="tb-left">'), TOPBAR.indexOf('<nav className="tb-menu"'));
+    expect(left.indexOf("{!mac && <TopBarMic />}")).toBeGreaterThan(left.indexOf("{!mac && <NotificationsBell />}"));
+    const end = TOPBAR.slice(TOPBAR.indexOf('<div className="tb-end">'));
+    expect(end.indexOf("<TopBarMic />")).toBeGreaterThan(-1);
+    expect(end.indexOf("<TopBarMic />")).toBeLessThan(end.indexOf("<NotificationsBell />"));
+    // Rendered in exactly one of the two places at a time, one button id app-wide.
+    expect(TOPBAR.split("<TopBarMic />").length - 1).toBe(2);
+    expect(ALL_CODE.split('id="mic-btn"').length - 1).toBe(1);
+  });
 });
