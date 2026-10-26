@@ -113,6 +113,16 @@ describe("the nav and the palette use the new names", () => {
     expect(group("security")).toBe("This device");
   });
 
+  it("Voice sits right after Your phone, in the basic nav (no `advanced`)", () => {
+    const i = (key: string) => LIVE_KEYS.indexOf(key);
+    expect(i("voice")).toBe(i("mobile") + 1);
+    expect(NAV).toMatch(/\{ key: "voice", label: "Voice", group: "Devices and people", el: /);
+    expect(resolveScreenKey("mobile-voice", LIVE_KEYS)).toBe("voice");
+    // Your phone no longer renders the voice settings, only the pointer.
+    expect(SRC.mobile).not.toContain('id="voice-engines"');
+    expect(SCREEN_SRC["Voice.tsx"]).toContain('id="voice-engines"');
+  });
+
   it("Your phone is never hidden behind the Tailscale caps gate", () => {
     expect(NAV).not.toMatch(/"mobile" \? "tailscale"/);
   });
