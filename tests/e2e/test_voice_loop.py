@@ -201,17 +201,22 @@ def test_voice_loop_from_flag_to_push(mf_server):
         prompt_cmd = next(
             c for c in hooks["UserPromptSubmit"] if "hook_event_name" in c
         )
-        rc, out = _fire(
-            srv,
-            prompt_cmd,
-            {
-                "hook_event_name": "UserPromptSubmit",
-                "session_id": "sid-1",
-                "prompt": "hi",
-            },
-            name,
-        )
-        assert rc == 0 and spoken.INSTRUCTION in out, (rc, out)
+        submit = {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sid-1",
+            "prompt": "hi",
+        }
+        # The sticky flag asks nothing of the session by itself: the Say line
+        # is requested per prompt (`/send {say: true}` arms the one-shot .next
+        # the hook consumes once, printing only while it is fresh).
+        rc, out = _fire(srv, prompt_cmd, submit, name)
+        assert rc == 0 and spoken.INSTRUCTION not in out, (rc, out)
+        nxt = flag.with_name(flag.name[: -len(".on")] + ".next")
+        nxt.write_text(str(int(time.time())), encoding="utf-8")
+        rc, out = _fire(srv, prompt_cmd, submit, name)
+        assert rc == 0 and spoken.INSTRUCTION in out and not nxt.exists(), (rc, out)
+        rc, out = _fire(srv, prompt_cmd, submit, name)
+        assert rc == 0 and spoken.INSTRUCTION not in out, (rc, out)
         # Off: the same hook prints nothing.
         _post(srv, "/api/instances/talk/voice", {"on": False})
         rc, out = _fire(

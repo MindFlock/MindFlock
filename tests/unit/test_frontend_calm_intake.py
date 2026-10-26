@@ -280,6 +280,7 @@ def test_settings_nav_order_and_groups():
         "appearance",
         "devices",
         "mobile",
+        "voice",
         "peer",
         "extensions",
         "doctor",
