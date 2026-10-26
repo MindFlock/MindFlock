@@ -407,6 +407,82 @@ class TestLocalSTT:
         assert speech.loaded() == []
 
 
+class TestLocalStream:
+    """``LocalSTT.stream_transcriber``: the float32 window straight into the
+    model with the streaming arguments, words back with their timestamps."""
+
+    @pytest.fixture
+    def model(self, monkeypatch):
+        from array import array
+
+        seen: dict = {"loads": 0, "calls": []}
+
+        class _Model:
+            def __init__(self, name, **kw):
+                seen["loads"] += 1
+
+            def transcribe(self, audio, **kw):
+                seen["calls"].append((audio, kw))
+                w = SimpleNamespace
+                segs = [
+                    w(words=[w(word=" Hello", start=0.0, end=0.4)]),
+                    w(words=[w(word=" there.", start=0.5, end=0.9)]),
+                    w(words=None),
+                ]
+                return iter(segs), SimpleNamespace(language="en")
+
+        fw = SimpleNamespace(WhisperModel=_Model)
+
+        def frombuffer(raw, dtype):
+            out = array("f")
+            out.frombytes(raw)
+            return ("np", dtype, list(out))
+
+        np = SimpleNamespace(float32="float32", frombuffer=frombuffer)
+        monkeypatch.setattr(speech, "_installed", lambda name: name == "faster_whisper")
+        monkeypatch.setattr(
+            speech, "_import", lambda name: {"faster_whisper": fw, "numpy": np}[name]
+        )
+        return seen
+
+    def test_a_pass(self, model):
+        from array import array
+
+        stt = speech.LocalSTT()
+        assert stt.streams is True
+        run = stt.stream_transcriber("pt-BR")
+        words = run(array("f", [0.0, 0.5]), "earlier words")
+        # Raw words: the stream strips them.
+        assert words == [(" Hello", 0.0, 0.4), (" there.", 0.5, 0.9)]
+        audio, kw = model["calls"][0]
+        assert audio == ("np", "float32", [0.0, 0.5])
+        assert kw == {
+            "language": "pt",
+            "beam_size": 1,
+            "word_timestamps": True,
+            "initial_prompt": "earlier words",
+            "condition_on_previous_text": False,
+        }
+        run(array("f"), "")
+        assert model["calls"][1][1]["initial_prompt"] is None
+        assert model["loads"] == 1  # the cached model
+        assert speech.loaded() == ["whisper:small"]
+
+    def test_refusals_are_speech_errors(self, model, monkeypatch):
+        from array import array
+
+        run = speech.LocalSTT().stream_transcriber("")
+        monkeypatch.setattr(memory_pressure, "is_low", lambda **kw: True)
+        with pytest.raises(speech.SpeechError, match="held back"):
+            run(array("f", [0.0]), "")
+        assert model["calls"] == []
+
+    def test_other_backends_do_not_stream(self):
+        assert speech.OpenAISTT().streams is False
+        with pytest.raises(speech.SpeechError, match="does not stream"):
+            speech.OpenAISTT().stream_transcriber("en")
+
+
 class _FakePiper:
     """Stand-ins for ``piper.download_voices`` and ``piper.voice``."""
 
@@ -615,6 +691,13 @@ class TestRegistry:
             "recognizers",
             "stt_quality",
         }
+
+    def test_stt_stream_follows_the_ready_backend(self, registry):
+        assert speech.describe()["server_ready"]["stt_stream"] is False
+        registry["stt"][1].streams = True  # "b", the ready one, streams
+        assert speech.describe()["server_ready"]["stt_stream"] is True
+        registry["stt"][1]._ok = False  # nothing ready: nothing streams
+        assert speech.describe()["server_ready"]["stt_stream"] is False
 
     def test_select_follows_the_registry_order(self, registry):
         registry["stt"][0]._ok = True

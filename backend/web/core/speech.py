@@ -42,6 +42,10 @@ Files the local backend keeps, under ``~/.mindflock/voice/`` (or
   from Hugging Face on first use (:data:`PIPER_VOICE` unless
   ``voice.tts_voice`` names a piper voice; ~60 MB each).
 
+``local`` recognition is also the one that streams (:attr:`Backend.streams`,
+:meth:`LocalSTT.stream_transcriber`): ``core.speech_stream`` re-transcribes a
+growing window and commits the words two passes agree on.
+
 faster-whisper decodes webm/mp4 clips through its bundled PyAV, so a system
 ``ffmpeg`` is not required; ``ready()`` still says when it is missing because
 that is the first thing to try when a clip is refused.
@@ -380,6 +384,14 @@ class Backend:
     def speak(self, text: str, voice: str = "") -> Tuple[bytes, str]:
         raise SpeechError("%s does not do voices" % self.label)
 
+    #: Whether :meth:`stream_transcriber` works (``POST /api/voice/stream``).
+    streams: bool = False
+
+    def stream_transcriber(self, lang: str = "") -> Callable:
+        """The ``transcribe(audio, prompt)`` a :class:`speech_stream.Stream`
+        is built on — only a backend whose :attr:`streams` is true has one."""
+        raise SpeechError("%s does not stream" % self.label)
+
 
 class _OpenAI(Backend):
     id = "openai"
@@ -575,6 +587,7 @@ class LocalSTT(Backend):
     id = "local"
     kind = "stt"
     label = "faster-whisper on this computer"
+    streams = True
 
     def _model_name(self) -> str:
         return whisper_model(_voice().stt_model)
@@ -602,7 +615,8 @@ class LocalSTT(Backend):
             name, device="cpu", compute_type="int8", download_root=str(root)
         )
 
-    def transcribe(self, audio: bytes, mime: str, lang: str = "") -> str:
+    def _model(self):
+        """The cached model, after the install and memory checks."""
         if not _installed("faster_whisper"):
             raise SpeechError(NOT_INSTALLED)
         low = _memory_block()
@@ -610,13 +624,16 @@ class LocalSTT(Backend):
             raise SpeechError("local recognition held back: " + low)
         name = self._model_name()
         try:
-            model = _cached("whisper:" + name, lambda: self._load(name))
+            return _cached("whisper:" + name, lambda: self._load(name))
         except SpeechError:
             raise
         except Exception as err:  # noqa: BLE001 — download, CPU feature, …
             raise SpeechError(
                 "could not load faster-whisper %s: %s" % (name, err)
             ) from err
+
+    def transcribe(self, audio: bytes, mime: str, lang: str = "") -> str:
+        model = self._model()
         path = _temp_clip(audio, mime)
         try:
             segments, _info = model.transcribe(
@@ -631,6 +648,38 @@ class LocalSTT(Backend):
             except OSError:
                 pass
         return " ".join(w for w in words if w).strip()
+
+    def stream_transcriber(self, lang: str = "") -> Callable:
+        """One pass of a stream (``core.speech_stream``): the float32 window
+        straight into the model (no clip file, no PyAV) with word timestamps,
+        greedy decoding and the committed text as the prompt →
+        ``[(word, start_s, end_s)]``. The model is fetched per pass, so the
+        idle unload never strands a stream."""
+        language = whisper_language(lang)
+
+        def run(audio, prompt: str) -> List[Tuple[str, float, float]]:
+            model = self._model()
+            np = _import("numpy")
+            # A copy: the stream trims its buffer later, which a view would block.
+            samples = np.frombuffer(bytes(audio), dtype=np.float32)
+            try:
+                segments, _info = model.transcribe(
+                    samples,
+                    language=language,
+                    beam_size=1,
+                    word_timestamps=True,
+                    initial_prompt=prompt or None,
+                    condition_on_previous_text=False,
+                )
+                return [
+                    (str(w.word), float(w.start), float(w.end))
+                    for seg in segments
+                    for w in (getattr(seg, "words", None) or ())
+                ]
+            except Exception as err:  # noqa: BLE001
+                raise SpeechError("faster-whisper failed: %s" % err) from err
+
+        return run
 
 
 class LocalTTS(Backend):
@@ -763,7 +812,8 @@ def describe() -> dict:
         {"backends": {"stt": [ids], "tts": [ids]},
          "server_ready": {"stt": bool, "tts": bool, "detail": str,
                           "stt_backend": id|"", "stt_detail": str,
-                          "tts_backend": id|"", "tts_detail": str},
+                          "tts_backend": id|"", "tts_detail": str,
+                          "stt_stream": bool},
          "system": {"available": bool,
                     "platform": "windows"|"wsl"|"mac"|"none",
                     "detail": str, "voices": [names],
@@ -771,8 +821,10 @@ def describe() -> dict:
                     "stt_quality": "basic"|"good"|"none"}}
 
     ``detail`` is the one-paragraph summary; the per-kind keys are what the
-    Settings screen prints under each row; ``system`` is the built-in
-    engine's own report (:func:`speech_system.describe`). Offline and cheap:
+    Settings screen prints under each row; ``stt_stream`` says the ready
+    recognition backend streams (``POST /api/voice/stream``: only
+    ``local``); ``system`` is the built-in engine's own report
+    (:func:`speech_system.describe`). Offline and cheap:
     the built-in engine is probed once per process, not per call.
     """
     ready: dict = {}
@@ -782,6 +834,8 @@ def describe() -> dict:
         ready[kind] = backend is not None
         ready[kind + "_backend"] = backend.id if backend else ""
         ready[kind + "_detail"] = detail
+        if kind == "stt":
+            ready["stt_stream"] = bool(backend is not None and backend.streams)
         word = KIND_WORD[kind]
         lines.append(
             "Server %s ready (%s): %s" % (word, backend.id, detail)
