@@ -348,16 +348,37 @@
     if (want !== current) select(want);
   }
 
+  // The rows are numbered 1, 2, … top to bottom, and rowOrder is that order:
+  // what "session two" means by voice. While the sheet is open the order
+  // holds (a row that changes state does not jump under the finger or the
+  // number just read); a new session goes to the end, a closed one drops
+  // out. Closed, the next render sorts afresh.
+  var rowOrder = [];
   function renderRows() {
     sessionListEl.innerHTML = "";
+    var sorted = instances.slice().sort(function (a, b) {
+      return attnRank(a) - attnRank(b);
+    }).map(function (inst) { return inst.title; });
+    var open = !!sessionsSheet && !sessionsSheet.classList.contains("hidden");
+    if (open && rowOrder.length) {
+      var kept = rowOrder.filter(function (t) { return sorted.indexOf(t) >= 0; });
+      rowOrder = kept.concat(sorted.filter(function (t) { return kept.indexOf(t) < 0; }));
+    } else {
+      rowOrder = sorted;
+    }
     if (!instances.length) {
       sessionListEl.appendChild(folderNote("No open sessions."));
       return;
     }
-    instances.slice().sort(function (a, b) {
-      return attnRank(a) - attnRank(b);
-    }).forEach(function (inst) {
-      sessionListEl.appendChild(sessionRow(inst));
+    rowOrder.forEach(function (title, i) {
+      var row = sessionRow(instByTitle(title));
+      var main = row.querySelector(".sess-main");
+      var num = document.createElement("span");
+      num.className = "sess-num";
+      num.textContent = String(i + 1);
+      num.setAttribute("aria-hidden", "true");
+      main.insertBefore(num, main.firstChild);
+      sessionListEl.appendChild(row);
     });
   }
 
@@ -2120,7 +2141,8 @@
   function closeSheet(el) { el.classList.add("hidden"); }
 
   function openSessionsSheet() {
-    renderRows();
+    renderRows();   // closed: a fresh sort, then held while open
+    document.getElementById("sessions-voice-note").classList.toggle("hidden", voice.state === "off");
     openSheet(sessionsSheet);
   }
 
@@ -2702,9 +2724,14 @@
   //              nothing has been heard for VOICE_DICT_IDLE_MS (kept, not
   //              sent). Only "submit" and the Send button send. The first phrase said
   //              into an empty box goes to POST /api/voice/route, which says
-  //              whether it is a prompt or a command ("switch to…", "new
-  //              session…"); the local VOICE_CMD table answers when the
-  //              server cannot
+  //              whether it is a prompt or a command ("switch to…", "session
+  //              two", "next session", "new session…", "session three yes");
+  //              the local VOICE_CMD table answers when the server cannot.
+  //              At the END of any phrase (and of every streamed run of
+  //              words) a stop phrase ("stop recording", "that's all") stops
+  //              listening with the box kept, and while the session is asking
+  //              (voiceAsks) an answer ("yes", "no thanks", "option two")
+  //              answers it — neither ever lands in the box
   //   sending    POST /send (or /answer) in flight
   //   working    the agent has the prompt; a 3 s poll of last_reply waits for
   //              its first sentence and speaks it ONCE as the "what it is
@@ -2718,8 +2745,11 @@
   //              always / a number — free text is NEVER typed into a dialog
   //
   // Voice is for the SELECTED session (`current`): picking another session
-  // moves voice to it (POST /voice {on:true} there), "switch to <name>" does
-  // the same by voice. The flag of the session you left stays on.
+  // moves voice to it (POST /voice {on:true} there), "switch to <name>",
+  // "session two" (the Sessions sheet's second row, as numbered there) and
+  // "next session" do the same by voice. The flag of the session you left
+  // stays on. An answer for ANOTHER session ("session three yes", "tell
+  // parser no") answers it there without moving voice.
   //
   // Spoken replies (prefs.replies, on by default): the Say: line is asked
   // for PER PROMPT — POST /send carries say:true only for a prompt that was
@@ -2756,7 +2786,7 @@
   //
   // Adapters, reachable as window.mfVoice.stt / .tts, all with one surface:
   //   stt {name, available(), start({onInterim, onFinal, onError, onEnd,
-  //        onLevel?, onStatus?, until?, whole?}), stop(), active(), release()} —
+  //        onLevel?, onStatus?, until?, whole?, answers?}), stop(), active(), release()} —
   //        onFinal fires once per PHRASE (one start may deliver several);
   //        onStatus carries a caption that is not words ("Transcribing…").
   //        PhoneSTT over webkitSpeechRecognition (continuous), adding end()
@@ -2767,7 +2797,9 @@
   //        on a server that streams it sends the phrase in chunks and
   //        onFinal fires with each run of settled words as they come, unless
   //        whole() says the phrase must arrive in one piece (it may be a
-  //        command, or a dialog's answer)
+  //        command, or a dialog's answer); a stop phrase is handed over the
+  //        moment it settles, and the words that may start a control phrase
+  //        (answers(): the session is asking, so "yes" too) are held back
   //   tts {name, available(), prime(), speak(text) → Promise, cancel(),
   //        voices()} — PhoneTTS over speechSynthesis; ServerTTS POSTs
   //        /api/voice/speak and plays the audio through one AudioContext,
@@ -3147,12 +3179,19 @@
   // radio word that ends the phrase) and, with it, any words that would make
   // the run END in a radio word ("go over the" → "go" now, "over the"
   // waits: an "over" mid-sentence is a word, but "go over" alone would stop
-  // listening). [now, held].
-  function voiceStreamSplit(text) {
+  // listening) — and up to VOICE_HOLD_MAX trailing words that may be the
+  // start of a control phrase ("fix it stop" → "fix it" now, "stop" waits:
+  // it may be "stop recording"; with `answers`, the session is asking and
+  // "yes" / "option" wait too). [now, held].
+  function voiceStreamSplit(text, answers) {
     var words = String(text || "").trim().split(/\s+/).filter(Boolean);
     var held = words.length ? [words.pop()] : [];
     while (words.length && voiceDictParse(words.join(" ")).kind) held.unshift(words.pop());
-    return [words.join(" "), held.join(" ")];
+    var all = words.concat(held);
+    for (var k = Math.min(VOICE_HOLD_MAX, all.length); k > held.length; k--) {
+      if (voiceMayStart(all.slice(all.length - k).join(" "), answers)) { held = all.slice(all.length - k); break; }
+    }
+    return [all.slice(0, all.length - held.length).join(" "), held.join(" ")];
   }
   function voiceJoin(a, b) {
     a = String(a || "").trim();
@@ -3454,8 +3493,16 @@
       var h = mine.h;
       g.pend = voiceJoin(g.pend, committed);
       g.partial = String(partial || "").trim();
+      // A stop phrase acts the moment it settles, mid-phrase or not.
+      var tail = voiceTail(g.pend, false);
+      if (tail && tail.kind === "stop") {
+        var all = g.pend;
+        g.pend = "";
+        if (h.onFinal) h.onFinal(all);
+        return;
+      }
       if (!(h.whole && h.whole())) {
-        var cut = voiceStreamSplit(g.pend);
+        var cut = voiceStreamSplit(g.pend, !!(h.answers && h.answers()));
         if (cut[0]) {
           g.pend = cut[1];
           if (h.onFinal) h.onFinal(cut[0]);
@@ -3754,6 +3801,7 @@
     sttHinted: false,            // "server recognition isn't ready" said once
     saved: null,                 // {session, on} from localStorage, for "Tap to resume voice"
     lastSay: { text: "", ts: 0 }, // never speak the same say twice
+    asked: false,                // that say asked a question: "yes" / "no" answer it (voiceAsks)
     lastLine: "",                // "say that again"
     lastError: "",
     pendingSay: null,            // a reply that arrived mid-dictation, spoken when idle
@@ -4011,6 +4059,9 @@
       // is empty: the router decides) or a dialog's answer; else its words
       // go into the box as they settle.
       whole: function () { return mode === "dialog" || !composeEl.value.trim(); },
+      // The session is asking: an answer at the end of the words acts, so
+      // the stream holds back what may start one.
+      answers: function () { return !!voiceAsks(voice.session); },
       onInterim: function (t) { if (voiceIsListening()) { voiceHeardSome(); voiceCaption(t || voiceDictHint()); } },
       onStatus: function (t) { if (voiceIsListening()) voiceCaption(mode === "dialog" ? t : t + " · " + voiceDictHint()); },
       onLevel: function (v) { voiceLevel(voiceIsListening() ? v : null); },
@@ -4119,12 +4170,16 @@
   function voiceHeard(text, mode) {
     var L = voiceListen_;
     if (L.routing) { L.routeQ.push([text, mode]); return; }   // after the phrase being routed
+    // A stop phrase at the end, in any mode (before a dialog's "no" can
+    // read "stop" as a refusal): the words before it kept, listening over.
+    var stop = voiceTail(text, false);
+    if (stop) { voiceStopPhrase(stop.text, mode); return; }
     var p = voiceDictParse(text);
     if (mode === "dialog") {
       if (p.kind === "disregard" || !p.text) { voiceListenContinue(); return; }
       clearTimeout(L.timer);
       voice.stt.stop();
-      voiceDialogAnswer(p.text);
+      voiceDialogHeard(p.text);
       return;
     }
     if (p.kind === "disregard") {
@@ -4148,17 +4203,43 @@
       });
       return;
     }
+    voiceHeardRest(p);
+  }
+  // A phrase that is not a command: a whole-phrase answer to ANOTHER
+  // session ("session three yes") answers it, voice staying here; while
+  // this session is asking, an answer at the end answers it (the words
+  // before it join the box); else it is dictation. True when it acted.
+  function voiceHeardRest(p) {
+    if (p.text && voiceAnswerOther(p.text)) return true;
+    var a = p.text && voiceAsks(voice.session) ? voiceTail(p.text, true) : null;
+    if (a && a.kind === "answer") {
+      if (a.text) voiceAppend(a.text);
+      voiceStopForCommand();
+      voiceAnswerLocal(voice.session, a);
+      return true;
+    }
     voiceHeardWords(p);
+    return false;
+  }
+  function voiceAppend(text) {
+    var cur = composeEl.value.trim();
+    composeEl.value = cur ? cur + " " + text : text;
+    autosizeCompose();
+    voice.dictated = true;
+  }
+  // A stop phrase: listening ends, the words said before it join the box
+  // (radio words still count: "fix it over, that's all").
+  function voiceStopPhrase(before, mode) {
+    voiceStopForCommand();
+    var p = voiceDictParse(before);
+    if (mode !== "dialog" && p.kind !== "disregard" && p.text) voiceAppend(p.text);
+    if (mode === "dialog") { voiceIdle(nameOf(voice.session) + " is waiting on you"); return; }
+    voiceListenKept();
   }
   // The words of a phrase that is not a command: into the box, then
   // "submit" (send) or "over" (stop, keep).
   function voiceHeardWords(p) {
-    if (p.text) {
-      var cur = composeEl.value.trim();
-      composeEl.value = cur ? cur + " " + p.text : p.text;
-      autosizeCompose();
-      voice.dictated = true;
-    }
+    if (p.text) voiceAppend(p.text);
     if (p.kind === "submit") {
       if (composeEl.value.trim()) { voiceSend(composeEl.value); return; }
       voiceCaption("Nothing to send yet");
@@ -4199,15 +4280,120 @@
     return { kind: (m[2] || m[3]).toLowerCase(), text: m[1].trim() };
   }
 
+  // --- control phrases: they act at the END of any phrase -------------------
+  // A stop phrase ("stop recording", "that's all", "mic off"…) ends listening
+  // wherever it is said, the words before it kept in the box. While the
+  // session is asking (voiceAsks: a dialog, or a Say line with a question),
+  // an answer ("yes", "no thanks", "always", "option two") at the end of a
+  // phrase answers it. Both are matched on the last VOICE_TAIL_MAX words
+  // ("yes and don't ask me again" is six), and a stream holds back up to
+  // VOICE_HOLD_MAX words that may start one (voiceStreamSplit), so a
+  // control phrase never lands in the box. A number answers only as
+  // the whole phrase or with its marker ("option two"): "add two" is words.
+  var VOICE_TAIL_MAX = 6;
+  var VOICE_HOLD_MAX = 3;
+  var VOICE_STOP = /^(?:stop (?:listening|recording|dictating)|(?:mic|microphone) off|that'?s all|that is all|(?:i'?m )?done talking)$/;
+  var VOICE_ANS_YES = /^(?:yes|yeah|yep|yup|sure|ok|okay|allow|approve|go ahead|do it)(?: (?:it|that|please))?$/;
+  var VOICE_ANS_NO = /^(?:no|nope|nah|deny|reject|don'?t|skip)(?: (?:it|that|thanks|thank you))?$/;
+  var VOICE_ANS_NUM = /^(?:option|number|choice) (\S+)$|^(?:the )?(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth)(?: one| option)?$/;
+  // What the held-back words may be the start of (voiceMayStart).
+  var VOICE_HOLD_STOP = ["stop listening", "stop recording", "stop dictating", "mic off", "microphone off",
+                         "that's all", "thats all", "that is all", "done talking", "i'm done talking", "im done talking"];
+  var VOICE_HOLD_ANSWER = ["yes always", "yes and always", "yeah always", "ok always", "always allow", "don't ask again",
+                           "do not ask again", "never ask again", "no thanks", "no thank you", "go ahead", "do it",
+                           "option", "number", "choice", "the first", "the second", "the third", "answer", "reply"];
+  var VOICE_NUM_WORDS = { ten: 10, eleven: 11, twelve: 12 };
+  // "two" / "2" / "second" → 2; 0 when it is not a number.
+  function voiceNumber(word) {
+    var w = String(word || "").toLowerCase();
+    if (/^\d+$/.test(w)) return parseInt(w, 10);
+    return VOICE_NUM_VALUE[w] || VOICE_NUM_WORDS[w] || 0;
+  }
+  // Could these (normalized) words be the start of a control phrase?
+  function voiceMayStart(words, answers) {
+    var t = voiceNorm(words);
+    if (!t) return false;
+    var lists = answers ? VOICE_HOLD_STOP.concat(VOICE_HOLD_ANSWER) : VOICE_HOLD_STOP;
+    for (var i = 0; i < lists.length; i++) if ((lists[i] + " ").indexOf(t + " ") === 0) return true;
+    return answers ? !!voiceAnswerWords(t, true) : false;
+  }
+  // An answer phrase (normalized, the whole of `t`) → {choice, number?}, or
+  // null. "answer yes" / "reply no" are answers too. `whole`: t is the whole
+  // phrase, so a bare number counts.
+  function voiceAnswerWords(t, whole) {
+    t = String(t || "").replace(/^(?:answer|reply|say|pick|choose|select) /, "").replace(/ please$/, "");
+    if (VOICE_ALWAYS.test(t)) return { choice: "always" };
+    if (VOICE_ANS_NO.test(t)) return { choice: "no" };
+    if (VOICE_ANS_YES.test(t)) return { choice: "yes" };
+    var m = VOICE_ANS_NUM.exec(t) || (whole ? /^(\S+)$/.exec(t) : null);
+    var n = m ? voiceNumber(m[1] || m[2]) : 0;
+    return n ? { choice: "number", number: n } : null;
+  }
+  // The control phrase a phrase ENDS with: {kind: "stop"} or (answers: the
+  // session is asking) {kind: "answer", choice, number?}, plus `text` (the
+  // words before it, as said) and `said` (the phrase itself, as said).
+  // The longest match wins: "no thanks" over "thanks".
+  function voiceTail(text, answers) {
+    var words = String(text || "").trim().split(/\s+/).filter(Boolean);
+    for (var k = Math.min(VOICE_TAIL_MAX, words.length); k >= 1; k--) {
+      var t = voiceNorm(words.slice(words.length - k).join(" "));
+      var hit = VOICE_STOP.test(t) ? { kind: "stop" } : null;
+      if (!hit && answers) {
+        hit = voiceAnswerWords(t, k === words.length);
+        if (hit) hit.kind = "answer";
+      }
+      if (hit) {
+        hit.text = words.slice(0, words.length - k).join(" ").replace(/[\s,;:.!?-]+$/, "");
+        hit.said = words.slice(words.length - k).join(" ").replace(/[.!?]+$/, "");
+        return hit;
+      }
+    }
+    return null;
+  }
+  // A whole phrase that answers ANOTHER session: "session three yes",
+  // "session 2, option one", "tell parser no", "answer the login fix
+  // always" → {index | name, choice, number?, said}, or null. The name is
+  // resolved by the caller (voiceMatchSession).
+  function voiceTargetAnswer(text) {
+    var t = voiceNorm(text);
+    var m = /^session (?:number )?(\S+) (.+)$/.exec(t);
+    if (m) {
+      var n = voiceNumber(m[1]), a = n ? voiceAnswerWords(m[2], true) : null;
+      if (a) { a.index = n; a.said = m[2]; return a; }
+      return null;
+    }
+    m = /^(?:tell|answer|reply to) (.+)$/.exec(t);
+    if (!m) return null;
+    var words = m[1].split(" ");
+    // The longest answer at the end, so "tell parser no thanks" is "no thanks".
+    for (var k = Math.min(VOICE_TAIL_MAX, words.length - 1); k >= 1; k--) {
+      var said = words.slice(words.length - k).join(" ");
+      var hit = voiceAnswerWords(said, true);
+      if (hit) {
+        hit.name = words.slice(0, words.length - k).join(" ").replace(/ (?:to|with)$/, "");
+        hit.said = said;
+        return hit;
+      }
+    }
+    return null;
+  }
+
   // --- voice commands (matched on the WHOLE transcript, case- and
   // punctuation-insensitive; anything else is a prompt) -------------------
   function voiceNorm(text) {
     return String(text || "").toLowerCase().replace(/[’`]/g, "'")
       .replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
   }
+  // By number and by step before by name: "go to session two" is row two.
+  // focus / open / show / select <name> switch only on a session whose
+  // name starts so (voiceRouted) — "open the readme" stays a prompt.
   var VOICE_CMD = [
     { kind: "cancel",   re: /^(?:cancel|never ?mind|scratch that|forget it)$/ },
+    { kind: "switch_index", re: /^(?:(?:switch|go|change|jump|move) (?:over )?to |focus (?:on )?|open |show |select )?session (?:number )?(\S+)$/ },
+    { kind: "switch_rel", re: /^(?:(?:switch|go|change|jump|move) (?:over )?to |focus (?:on )?|open |show |select )?(?:the )?(next|previous|prev) (?:session|one)$/ },
     { kind: "switch",   re: /^(?:switch|go|change|jump) (?:over )?to (.+)$/ },
+    { kind: "focus",    re: /^(?:focus(?: on)?|open|show|select) (.+)$/ },
+    { kind: "question", re: /^(?:what(?: is|'s| was) (?:it|that) asking(?: me)?(?: for)?|what does it (?:want|need)(?: from me)?|what(?: is|'s| was) the question)$/ },
     { kind: "needs",    re: /^(?:what|who) needs (?:me|attention|my attention)$/ },
     { kind: "status",   re: /^(?:what'?s it doing|what is it doing|status|what'?s happening|what'?s going on)$/ },
     { kind: "condense", re: /^(?:summari[sz]e(?: that| it)?|what did it say|summary)$/ },
@@ -4226,7 +4412,14 @@
   function voiceRunCommand(cmd) {
     switch (cmd.kind) {
       case "cancel": voiceIdle("Dropped"); return;
-      case "switch": voiceSwitch(cmd.arg); return;
+      case "switch":
+      case "focus": voiceSwitch(cmd.arg); return;
+      case "switch_index":
+        if (voiceNumber(cmd.arg)) voiceSwitchIndex(voiceNumber(cmd.arg)); else voiceSwitch(cmd.arg);
+        return;
+      case "switch_rel": voiceSwitchRel(cmd.arg === "next" ? 1 : -1); return;
+      case "question": voiceQuestion(voice.session); return;
+      case "stop": voiceIdle(composeEl.value.trim() ? VOICE_KEPT : undefined); return;
       case "needs": voiceNeedsMe(); return;
       case "status": voiceStatus(); return;
       case "condense": voiceCondense(); return;
@@ -4247,10 +4440,13 @@
   // already created, a line to say, or one of the bare commands. Anything
   // else — a non-200, the network, VOICE_ROUTE_TIMEOUT_MS, an older server
   // that answers {} — is null, and the local VOICE_CMD table decides, so
-  // the page works offline too.
+  // the page works offline too. A kind this page does not know (a newer
+  // server) is a prompt: the words stay words. `session`: the session the
+  // phrase is about (an answer by row number asks again with its title).
   var VOICE_ROUTE_KINDS = ["prompt", "switch", "new", "ambiguous", "no-session", "new-failed", "list",
-                           "needs", "status", "cancel", "stop", "off", "repeat", "condense"];
-  function voiceRoute(text) {
+                           "needs", "status", "cancel", "stop", "off", "repeat", "condense",
+                           "switch_index", "switch_rel", "answer", "question"];
+  function voiceRoute(text, session) {
     var aborter = window.AbortController ? new AbortController() : null;
     var timer = null;
     var late = new Promise(function (resolve) {
@@ -4263,16 +4459,22 @@
     var asked = fetch("/api/voice/route", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: text, session: voice.session || current }),
+      body: JSON.stringify({ text: text, session: session || voice.session || current }),
       signal: aborter ? aborter.signal : undefined,
     }).then(function (r) {
       if (!r.ok) { voice.lastRoute = "HTTP " + r.status + " — the local table"; return null; }
       return r.json().catch(function () { return null; }).then(function (j) {
-        if (!j || typeof j !== "object" || VOICE_ROUTE_KINDS.indexOf(j.kind) < 0) {
+        if (!j || typeof j !== "object" || !j.kind) {
           voice.lastRoute = "no answer — the local table";
           return null;
         }
-        voice.lastRoute = String(j.kind);
+        if (VOICE_ROUTE_KINDS.indexOf(j.kind) < 0) {
+          voice.lastRoute = String(j.kind) + " (unknown here: a prompt)";
+          return { kind: "prompt" };
+        }
+        voice.lastRoute = String(j.kind) + (j.kind === "switch_index" || (j.kind === "answer" && j.index) ? " " + j.index
+                        : j.kind === "switch_rel" ? " " + (Number(j.delta) > 0 ? "+" : "") + j.delta
+                        : j.kind === "answer" ? " " + (j.choice || "") + (j.dialog_id ? " (dialog)" : j.no_dialog ? " (no dialog)" : "") : "");
         return j;
       });
     }).catch(function () {
@@ -4287,14 +4489,17 @@
   function voiceRouted(res, p) {
     if (!res) {
       var cmd = voiceCommand(p.text);
-      if (!cmd) { voiceHeardWords(p); return false; }
+      // "open the readme" is a prompt: open / show / select / focus switch
+      // only to a session named so.
+      if (cmd && cmd.kind === "focus" && !voiceStrictMatch(cmd.arg)) cmd = null;
+      if (!cmd) return voiceHeardRest(p);   // an answer, or the words
       voiceStopForCommand();
       voiceRunCommand(cmd);
       return true;
     }
     var say = String(res.say || "").trim();
     switch (res.kind) {
-      case "prompt": voiceHeardWords(p); return false;
+      case "prompt": return voiceHeardRest(p);
       case "switch":
       case "new":
         voiceStopForCommand();
@@ -4306,6 +4511,23 @@
             if (inst.activity === "clarify") { voice.dialogKey = ""; voiceDialog(); } else voiceIdle();
           });
         });
+        return true;
+      case "switch_index":
+        voiceStopForCommand();
+        voiceSwitchIndex(Number(res.index) || 0);
+        return true;
+      case "switch_rel":
+        voiceStopForCommand();
+        voiceSwitchRel(Number(res.delta) || 1);
+        return true;
+      case "answer":
+        voiceStopForCommand();
+        voiceRoutedAnswer(res, p, false);
+        return true;
+      case "question":
+        voiceStopForCommand();
+        if (!say) { voiceQuestion(String(res.title || "") || voice.session); return true; }
+        voiceSayThenIdle(voiceNameFirst(String(res.title || "") || voice.session, say));
         return true;
       case "needs":
       case "status":
@@ -4326,6 +4548,114 @@
         voiceRunCommand({ kind: res.kind, arg: "" });
         return true;
     }
+  }
+  // The router's answer to a question or a dialog: {choice, number?,
+  // index?, title?, dialog_id?, keys?, no_dialog?, say?}. With dialog_id +
+  // keys it is POSTed as is (only with Approve dialogs by voice on —
+  // "always" is the router's call); with only a row number (index) the
+  // page names that row's session and asks again; no_dialog is said; and
+  // an answer to a question is a prompt to that session. `again`: this is
+  // the second ask, never a third.
+  function voiceRoutedAnswer(res, p, again) {
+    var say = String(res.say || "").trim();
+    var title = String(res.title || "");
+    if (!title && res.index) {
+      title = voiceRowTitle(Number(res.index));
+      if (!title) { voiceSayThenIdle("There is no session " + res.index + "."); return; }
+      if (!again && !res.dialog_id && !res.no_dialog) {
+        voiceSetState("sending", p.text);
+        voiceRoute(p.text, title).then(function (r2) {
+          if (voice.state !== "sending") return;
+          if (r2 && r2.kind === "answer") { r2.title = r2.title || title; voiceRoutedAnswer(r2, p, true); return; }
+          var ta = voiceTargetAnswer(p.text);
+          voiceAnswerLocal(title, ta || { choice: String(res.choice || ""), said: voiceAnswerText(p.text) });
+        });
+        return;
+      }
+    }
+    title = title || voice.session;
+    if (res.no_dialog) { voiceSayThenIdle(say ? voiceNameFirst(title, say) : nameOf(title) + " isn't asking anything."); return; }
+    if (res.dialog_id && res.keys && res.keys.length) {
+      if (!voice.cfg.loaded || !voice.cfg.approve_dialogs) { voiceSayThenIdle("Answer it on the screen."); return; }
+      voiceAnswerPost(title, String(res.dialog_id), res.keys.map(String),
+                      res.choice === "number" ? String(res.number || res.keys[0]) : String(res.choice || "that"), say);
+      return;
+    }
+    voiceAnswerSend(title, voiceAnswerText(p.text));
+  }
+  // What `title` is waiting on: "dialog" (a permission prompt / clarify),
+  // "question" (its last Say line asked one), or "" — what makes "yes" an
+  // answer rather than a word. A clarify reading right after a voice
+  // answer is the row lagging, not a new dialog.
+  function voiceAsks(title) {
+    var inst = instByTitle(title);
+    if (!inst) return "";
+    var mine = title === voice.session;
+    if (mine && voice.dialog) return "dialog";
+    if (inst.activity === "clarify" && !(mine && Date.now() - (voice.answeredAt || 0) < VOICE_ANSWERED_GRACE_MS)) return "dialog";
+    if (mine && voice.asked) return "question";
+    if (inst.activity === "idle" && /\?["')\]\s]*$/.test(String(inst.last_say || ""))) return "question";
+    return "";
+  }
+  // A whole phrase answering ANOTHER session ("session three yes", "tell
+  // parser no"): answered there, voice stays here. False when the phrase is
+  // not one, or names this session (then it is this one's answer).
+  function voiceAnswerOther(text) {
+    var ta = voiceTargetAnswer(text);
+    if (!ta) return false;
+    var title = ta.index ? voiceRowTitle(ta.index) : "";
+    if (ta.name) { var m = voiceMatchSession(ta.name); title = m.hit ? m.hit.title : ""; }
+    if (ta.index && !title) { voiceStopForCommand(); voiceSayThenIdle("There is no session " + ta.index + "."); return true; }
+    if (!title || title === voice.session) return false;
+    voiceStopForCommand();
+    voiceAnswerLocal(title, ta);
+    return true;
+  }
+  // "session two yes" / "tell parser no thanks" → "yes" / "no thanks": what
+  // the session is told; any other phrase is told as said.
+  function voiceAnswerText(text) {
+    var ta = voiceTargetAnswer(text);
+    return ta ? ta.said : String(text || "").trim();
+  }
+  // An answer the page decides ({choice, said}: the router was not asked,
+  // or could not say): a question's answer is a prompt; a dialog's is the
+  // option voiceParseAnswer picks from GET /dialog — "always" only when
+  // said, a number never on a permission prompt, as when it is read out.
+  function voiceAnswerLocal(title, a) {
+    var asks = voiceAsks(title), name = nameOf(title);
+    if (asks === "question") { voiceAnswerSend(title, a.said); return; }
+    voiceSetState("sending", a.said);
+    fetch("/api/instances/" + encodeURIComponent(title) + "/dialog?quiet=1")
+      .then(function (r) { return r.status === 204 ? null : r.ok ? r.json() : null; })
+      .catch(function () { return null; })
+      .then(function (d) {
+        if (voice.state !== "sending") return;
+        if (!d || !d.parsed || !(d.options || []).length) {
+          voiceSayThenIdle(asks ? name + " is waiting on you: open the screen." : name + " isn't asking anything.");
+          return;
+        }
+        if (!voice.cfg.loaded || !voice.cfg.approve_dialogs) { voiceSayThenIdle("Answer it on the screen."); return; }
+        var opt = voiceParseAnswer(a.said, d.options);
+        if (!opt) { voiceSayThenIdle("I didn't catch that: " + voiceDialogChoices(d).replace(/^.*\bSay /, "say ")); return; }
+        if (title === voice.session) { voice.dialog = d; voice.dialogKey = String(d.id); }
+        voiceAnswerPost(title, String(d.id), [String(opt.key)], voiceKindWord(opt), "");
+      });
+  }
+  // A question's answer goes as a prompt: to this session with the words
+  // already in the box before it (one reply), to another session without
+  // touching the box.
+  function voiceAnswerSend(title, words) {
+    voice.dictated = true;
+    if (title === voice.session) voiceSend(voiceJoin(composeEl.value, words));
+    else voiceSend(words, title);
+  }
+  // "Answered yes." from the router, said with the session's name first.
+  function voiceNameFirst(title, say) {
+    var name = nameOf(title);
+    return voiceNorm(say).indexOf(voiceNorm(name)) === 0 ? say : name + ": " + say;
+  }
+  function voiceSayThenIdle(line) {
+    speakLine(line).then(function (ok) { if (ok) voiceIdle(composeEl.value.trim() ? VOICE_KEPT : undefined); });
   }
   // A command ends the listen: the recognizer, its clock, the window.
   function voiceStopForCommand() {
@@ -4360,10 +4690,15 @@
   }
 
   // --- send + the "what it is doing" ack --------------------------------------
-  function voiceSend(text) {
+  // `to`: another session's question answered by voice ("tell parser use
+  // the old schema"…): sent there, the box and voice stay here, and its
+  // reply is that session's — no ack, no "working" here.
+  function voiceSend(text, to) {
     text = String(text || "").trim();
     if (!text) { voiceIdle(); return; }
-    var title = voice.session || current;
+    var here = voice.session || current;
+    var title = to || here;
+    var other = title !== here;
     var name = nameOf(title);
     // The Say line is asked for per prompt: only a dictated one, and only
     // with Spoken replies on — a typed prompt costs no Say tokens.
@@ -4384,6 +4719,11 @@
       }).then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (j) {
           if (voice.state !== "sending") return;
+          if (r.ok && other) {
+            var to2 = j && j.queued ? "Queued for " + name + "." : "Sent to " + name + ".";
+            speakLine(to2).then(function (ok) { if (ok) voiceIdle(composeEl.value.trim() ? VOICE_KEPT : undefined); });
+            return;
+          }
           if (r.ok) {
             composeEl.value = "";
             autosizeCompose();
@@ -4391,6 +4731,7 @@
             voice.expectSay = say;     // its reply is read out only if it was asked for
             voice.lastPrompt = { dictated: dictated, say: say };
             voice.pendingSay = null;   // anything that arrived before this prompt is old news
+            voice.asked = false;       // answered
             // A new turn: its reply is news even when it repeats the last
             // one word for word ("All tests pass." twice). The dedupe below
             // only has to stop idle + turn_ended speaking ONE reply twice.
@@ -4493,6 +4834,7 @@
     // alone dedupes until the next send clears it.
     voice.lastSay = { text: say, ts: Number(data.at) || Number(data.ts) || Infinity };
     var q = !!(data && data.has_question);
+    voice.asked = q;
     speakLine(name + ": " + say).then(function (ok) { if (ok) voiceAfterReply(q); });
   }
   function voiceAfterReply(hasQuestion) {
@@ -4728,30 +5070,51 @@
     return opt.kind === "yes" ? "yes" : opt.kind === "no" ? "no" : opt.kind === "always" ? "always"
          : stripMarkdown(opt.label || "that");
   }
+  // A phrase while a dialog listens: "session two yes" answers THAT one
+  // (voice stays), "what is it asking" / "say that again" reads this one
+  // again, anything else is this dialog's answer.
+  function voiceDialogHeard(text) {
+    if (voiceAnswerOther(text)) return;
+    var c = voiceCommand(text);
+    if (c && (c.kind === "question" || c.kind === "repeat") && voice.dialog) { voiceReadDialog(voice.dialog); return; }
+    voiceDialogAnswer(text);
+  }
   function voiceDialogAnswer(text) {
     var d = voice.dialog;
     if (!d) { voiceIdle(); return; }
     var opt = voiceParseAnswer(text, d.options);
     if (!opt) { voiceDialogRetry(); return; }
-    var title = voice.session;
-    voiceSetState("sending", voiceKindWord(opt));
+    voiceAnswerPost(voice.session, d.id, [String(opt.key)], voiceKindWord(opt), "");
+  }
+  // POST /answer, pinned to the dialog it was read from, by the person.
+  // This session's: "Answered yes." and it is working again. Another's
+  // ("session two yes"): said with its name first, and voice stays here.
+  function voiceAnswerPost(title, dialogId, keys, word, say) {
+    var mine = title === voice.session, name = nameOf(title);
+    voiceSetState("sending", word);
     fetch("/api/instances/" + encodeURIComponent(title) + "/answer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keys: [String(opt.key)], dialog_id: d.id, by: "user" }),
+      body: JSON.stringify({ keys: keys, dialog_id: dialogId, by: "user" }),
     }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (j) {
-        if (voice.state === "off" || voice.session !== title) return;
+        if (voice.state === "off" || (mine && voice.session !== title)) return;
         if (r.ok) {
-          voice.dialog = null;
-          voice.lastSay = { text: "", ts: 0 };   // the agent carries on: a new turn
-          voice.answeredAt = Date.now();         // the row reads clarify for a poll or two yet
-          speakLine("Answered " + voiceKindWord(opt) + ".").then(function (ok) {
-            if (ok) voiceSetState("working", "");
+          if (mine) {
+            voice.dialog = null;
+            voice.asked = false;
+            voice.lastSay = { text: "", ts: 0 };   // the agent carries on: a new turn
+            voice.answeredAt = Date.now();         // the row reads clarify for a poll or two yet
+          }
+          var line = say ? voiceNameFirst(title, say) : mine ? "Answered " + word + "." : name + ": answered " + word + ".";
+          speakLine(line).then(function (ok) {
+            if (!ok) return;
+            if (mine) voiceSetState("working", ""); else voiceIdle(composeEl.value.trim() ? VOICE_KEPT : undefined);
           });
           return;
         }
         if (r.status === 409 && j && j.dialog_changed) {
+          if (!mine) { voiceSayThenIdle(name + " is asking something else now."); return; }
           voice.dialog = null;
           voice.dialogKey = "";
           voiceSetState("idle", "");
@@ -4759,17 +5122,17 @@
           return;
         }
         if (r.status === 409 && j && j.dialog_answered) {
-          voice.dialog = null;
-          speakLine("Already answered.").then(function (ok) { if (ok) voiceIdle(); });
+          if (mine) voice.dialog = null;
+          voiceSayThenIdle("Already answered.");
           return;
         }
         voiceError((j && j.error) || ("HTTP " + r.status));
-        speakLine("Couldn't answer that.").then(function (ok) { if (ok) voiceIdle(); });
+        voiceSayThenIdle("Couldn't answer that.");
       });
     }).catch(function (err) {
       if (voice.state === "off") return;
       voiceError(String((err && err.message) || err));
-      speakLine("Couldn't answer that.").then(function (ok) { if (ok) voiceIdle(); });
+      voiceSayThenIdle("Couldn't answer that.");
     });
   }
 
@@ -4808,13 +5171,59 @@
       speakLine(line).then(function (ok) { if (ok) voiceIdle(); });
       return;
     }
-    var title = m.hit.title;
+    voiceSwitchTo(m.hit.title);
+  }
+  // "focus parser" / "open login fix": only a session whose name (or
+  // title) is said, or starts so — a looser match is a prompt's words.
+  function voiceStrictMatch(query) {
+    var q = voiceNorm(query).replace(/^the /, "");
+    var m = voiceMatchSession(q);
+    return !!(q && m.hit && (m.hit.n.indexOf(q) === 0 || m.hit.t.indexOf(q) === 0));
+  }
+  // The Nth row of the Sessions sheet as it is shown (rowOrder), 1-based.
+  function voiceRowTitle(n) {
+    return n >= 1 && n <= rowOrder.length ? rowOrder[n - 1] : "";
+  }
+  // "session two": the second row shown.
+  function voiceSwitchIndex(n) {
+    var title = voiceRowTitle(n);
+    if (!title) { voiceSayThenIdle("There is no session " + n + "."); return; }
+    voiceSwitchTo(title);
+  }
+  // "next session" / "previous session": a step from this session's row,
+  // round the ends.
+  function voiceSwitchRel(delta) {
+    var n = rowOrder.length;
+    if (!n) { voiceSayThenIdle("There are no sessions."); return; }
+    var i = rowOrder.indexOf(voice.session || current);
+    voiceSwitchTo(rowOrder[i < 0 ? 0 : (((i + delta) % n) + n) % n]);
+  }
+  // Voice follows the selection (voiceOnSelect), as a tap on the row would
+  // — the sheet closes the same way.
+  function voiceSwitchTo(title) {
     var inst = instByTitle(title) || {};
-    select(title);                                  // voiceOnSelect moves voice + the flag
-    speakLine("Now on " + m.hit.name + "." + (inst.last_say ? " " + endSentence(inst.last_say) : "")).then(function (ok) {
+    closeSheet(sessionsSheet);
+    select(title);
+    speakLine("Now on " + nameOf(title) + "." + (inst.last_say ? " " + endSentence(inst.last_say) : "")).then(function (ok) {
       if (!ok) return;
       if (inst.activity === "clarify") { voice.dialogKey = ""; voiceDialog(); } else voiceIdle();
     });
+  }
+  // "What is it asking?": this session's dialog is read out again (and
+  // listened for); else the question its Say line asked.
+  function voiceQuestion(title) {
+    var inst = instByTitle(title), name = nameOf(title);
+    if (title === voice.session && inst && inst.activity === "clarify") {
+      voice.dialogKey = "";
+      voiceSetState("idle", "");
+      voiceDialog();
+      return;
+    }
+    var q = voiceAsks(title) === "question"
+      ? String((inst && inst.last_say) || (title === voice.session ? voice.lastSay.text : "")) : "";
+    voiceSayThenIdle(q ? name + ": " + endSentence(stripMarkdown(q))
+                     : inst && inst.activity === "clarify" ? name + " is waiting on you: open the screen."
+                     : name + " isn't asking anything.");
   }
   function voiceNeedsMe() {
     var rows = instances.filter(function (i) { return sessionState(i).inBell; })
@@ -4985,6 +5394,7 @@
     voice.lastSay = { text: String(inst.last_say || ""), ts: Infinity };
     voice.pendingSay = null;
     voice.expectSay = null;      // the last prompt went to another session
+    voice.asked = false;
     voice.dialog = null;
     voice.dialogKey = "";
     voiceSetState("idle", voiceTalkHint());
@@ -5302,6 +5712,10 @@
         ? (voice.lastPrompt.dictated ? "dictated" : "typed") + ", say " + (voice.lastPrompt.say ? "yes" : "no")
         : "none yet"),
       "Router: " + (voice.lastRoute || "not asked yet"),
+      "Session numbers: " + (rowOrder.length
+        ? rowOrder.map(function (t, i) { return (i + 1) + " " + nameOf(t); }).join(", ") +
+          " — the Sessions sheet's order, held while it is open"
+        : "none yet"),
       "State: " + voice.state + (voice.session ? " · " + nameOf(voice.session) : ""),
     ].filter(Boolean);
     if (voice.lastError) lines.push("Last error: " + voice.lastError);

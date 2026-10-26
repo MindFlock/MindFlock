@@ -178,13 +178,15 @@
       </div>
     </div>
 
-    <!-- Sessions: the picker. Attention first, each row painted with the
-         rail's state (tone dot + word). Tap a row to open it; its ⋯ — or a
-         long press on the row — opens that session's actions. -->
+    <!-- Sessions: the picker. Attention first, each row numbered and painted
+         with the rail's state (tone dot + word). Tap a row to open it; its ⋯
+         — or a long press on the row — opens that session's actions. -->
     <div id="sessions-sheet" class="sheet hidden" role="dialog" aria-label="Sessions">
       <div class="sheet-box">
         <div class="sheet-title">Sessions</div>
         <div id="session-list" class="sheet-list"></div>
+        <!-- Shown while voice is on: the numbers are what "session two" means. -->
+        <div id="sessions-voice-note" class="new-muted hidden">Say “session 2” or “next session” to switch; the numbers hold while this is open.</div>
         <div class="sheet-actions">
           <button type="button" id="sessions-recent">Recently closed</button>
           <button type="button" id="sessions-new">New session</button>
