@@ -5851,8 +5851,9 @@ you then press and hold the mic to talk. A **voice
 strip** appears above the composer with the state word
 (*Your turn* · *Listening…* · *Sending…* · *Working…* · *Speaking…* ·
 *Waiting on you*), a caption (what it hears, the line being spoken, the
-dialog question, how to send — *Tap again or say "over" to send* /
-*Release or say "over" to send*), **Cancel** and **⚙**. Voice follows the
+dialog question, the radio words — *Say "over" to keep it, "submit" to
+send, "disregard" to start over* / *Release to keep it; say "submit" to
+send*), **Cancel** and **⚙**. Voice follows the
 **selected** session: picking another session in the Sessions sheet (or
 saying "switch to <name>") moves the conversation there; the flag of the
 session you left stays on. **On iPhone, open `/m` in a Safari tab.** iOS has speech
@@ -5875,12 +5876,20 @@ page pulls the samples off its one `AudioContext` (made inside the tap): the
 mic stream → a `ScriptProcessorNode(4096, 1, 1)` → a muted gain → the
 destination (Chrome does not run a processor that reaches nothing). Each
 block's first channel is kept; when the clip ends they are joined, resampled
-to 16 kHz by linear interpolation, clamped and written behind the 44-byte
-RIFF header — the desktop app's recorder (`lib/wavRecorder.ts`) does the
-same. The RMS of those blocks drives the level meter and the silence
-detector: 1.8 s of quiet after speech ends the clip (a tap ends it at once,
-12 s or the listening window is the cap, and a clip that heard no speech is
-dropped).
+to 16 kHz, clamped and written behind the 44-byte RIFF header — the same
+clip as the desktop app's recorder (`lib/wavRecorder.ts`). The resampling is
+anti-aliased: the browser's own resampler first (an
+`OfflineAudioContext(1, n × 16000 / rate, 16000)` rendering the clip through
+a buffer source), and where that is missing, refuses the rate, fails or
+takes over 5 s, a low-pass decimator in the page — each output sample is a
+windowed-sinc (Blackman) weighted average of the input samples around it,
+cut off at 0.45 of 16 kHz — so sound above the clip's 8 kHz Nyquist is
+filtered out instead of folding back into the speech band as noise (plain
+interpolation, the old way, let it fold back at full level). Speech up to
+about 6 kHz keeps its level. The RMS of those blocks drives the level meter
+and the silence detector: 1.1 s of quiet after speech ends the clip, so a
+phrase arrives sooner (a tap ends it at once, 12 s or the listening window
+is the cap, and a clip that heard no speech is dropped).
 A Chromium browser that does not ship Google's speech key — Arc, Brave,
 Vivaldi, Opera — has the recognizer but every start fails with a `network`
 error and nothing is heard: the first is retried, the second in a listening
@@ -5895,27 +5904,33 @@ lands in the compose box, and the mic stays open across pauses. How it ends
 is the ⚙ sheet's **Push to talk** (a per-phone setting):
 
 - **Tap to talk** (the default) — a tap on the mic starts listening; the
-  next tap on the mic (or on the strip) stops and **sends** the box. A
-  second tap with nothing in the box only stops.
+  next tap on the mic (or on the strip) means **"over"**: listening stops
+  and the words stay in the box, unsent.
 - **Hold to talk** — press and hold the mic to talk; letting go (or the
-  phone cancelling the touch) stops and sends. A release that heard nothing
-  only stops. The first tap of a session still just turns voice on, and a
-  plain click (a keyboard, a screen reader) starts a tap-style listen.
+  phone cancelling the touch) means "over" too. The first tap of a session
+  still just turns voice on, and a plain click (a keyboard, a screen
+  reader) starts a tap-style listen.
 
-Either way the words still on their way are waited for before the box goes:
-the phone's last phrase (at most 1.5 s), a server clip being transcribed,
-a route answer (below). The radio words work in both modes: end a phrase
-with **"over"** and the box is sent; end it with **"disregard"** and the
-box is emptied and listening goes on. **Cancel** stops and drops the words,
-**Send** sends whatever is in the box at once, and two minutes without a
-word stops with the words kept, unsent (*Kept, not sent — Send sends it, or
-tap the mic to go on*). The last word of a phrase is what counts — an
-"over" in the middle of a sentence is a word — and case and punctuation do
-not matter (*Over.*, *Disregard that.*). Commands ("switch to…", "new
+Either way the words still on their way are waited for before listening
+stops: the phone's last phrase (at most 1.5 s), a server clip being
+transcribed, a route answer (below). The radio words work in both modes:
+end a phrase with **"over"** and listening stops with the words in the box,
+nothing sent (*In the box — say "submit", or tap Send*); end it with
+**"submit"** and the box (with that phrase's words) is **sent**; end it
+with **"disregard"** (or *disregard that*) and the box is emptied and
+listening goes on. **"submit" and the Send button are the only ways to
+send** — the push-to-talk gesture never does. A "submit" with nothing in
+the box says *Nothing to send yet* and listens on. **Cancel** stops and
+drops the words, **Send** sends whatever is in the box at once, and two
+minutes without a word stops with the words kept, unsent (*Kept, not sent —
+Send sends it, or tap the mic to go on*). The last word of a phrase is what
+counts — an "over" in the middle of a sentence is a word, and so is
+"submitted" — and case and punctuation do not matter (*Over.*, *Submit!*,
+*Disregard that.*). Commands ("switch to…", "new
 session…", "what needs me", "voice off"…) are commands only while the box
 is empty; mid-message they are words (see **Voice commands** below). Then
 *Sent to <name>.* (or *Queued for <name> — it is on a prompt.*: while voice
-is on, Send, "over" and push to talk go through `POST /send {dialog_safe:
+is on, Send and "submit" go through `POST /send {dialog_safe:
 true, say}`, so a prompt is queued
 rather than typed into a dialog; a waking session says *<name> is waking up,
 try again in a moment.*, a paused one *<name> is paused. Resume it first.*,
@@ -6032,7 +6047,10 @@ server's when Settings say server and `GET /api/voice` reports it ready),
 *Built-in engine* (*<platform> — <detail>*, from the `system` object of
 `GET /api/voice`; left out when an older server sends none), *Recorder*
 (*WAV 16 kHz (ScriptProcessor)*, or *not supported* without Web Audio or a
-microphone), *AudioContext* (its state), *Last transcribe* / *Last speak*
+microphone), *Resampler* (which one made the last clip — *OfflineAudioContext
+(the browser's)*, or *low-pass decimator* and why — or which one will),
+*Silence stop* (*1100 ms after speech*, and the clip cap), *AudioContext*
+(its state), *Last transcribe* / *Last speak*
 (how long the server took and which backend, or why it failed), *Primed*
 (whether a tap has unlocked speech output yet), *Push to talk* (tap or
 hold), *Replies* (on or off), *Last prompt* (dictated or typed, and whether
@@ -6065,7 +6083,8 @@ the page is hidden it stops listening and speaking, closes its socket and
 releases the wake lock; on return it re-locks, reconnects and asks for a
 line that arrived meanwhile. Nothing speaks while the phone is locked except
 the OS reading a push. Dictation is for intent, not code — the explicit
-"over" and the editable box are the mitigation for misheard identifiers. iOS speaks
+"submit" (after "over" leaves the words to read) and the editable box are
+the mitigation for misheard identifiers. iOS speaks
 only through its compact voices and cuts long utterances, so lines are
 chunked by sentence with a timeout behind each chunk. Phone recognition
 sends audio to Google on Android and to Apple on iOS when no on-device model

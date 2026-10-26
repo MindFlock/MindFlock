@@ -238,20 +238,33 @@ def test_mobile_js_a_network_error_is_said_not_retried_in_silence():
     assert "L.netErrs = 0;" in _fn(js, "voiceListen")
 
 
-def test_mobile_js_radio_rules_over_and_disregard():
+def test_mobile_js_radio_rules_over_submit_and_disregard():
     """Dictation is radio-style: every phrase lands in the compose box and
-    listening goes on across pauses; a trailing "over" sends the box, a
-    trailing "disregard" empties it and listens on; Cancel drops the words,
-    VOICE_DICT_IDLE_MS of silence stops with them kept, never sent, and there
-    is no countdown anywhere. Commands are commands only while the box is
-    empty; a dialog answer needs no "over"."""
+    listening goes on across pauses; a trailing "over" stops listening with
+    the words left in the box (nothing sent), a trailing "submit" sends the
+    box, a trailing "disregard" empties it and listens on; Cancel drops the
+    words, VOICE_DICT_IDLE_MS of silence stops with them kept, never sent,
+    and there is no countdown anywhere. Commands are commands only while the
+    box is empty; a dialog answer needs no "over"."""
     js = _js()
     v = _voice_section(js)
     heard = _fn(js, "voiceHeard")
     assert "var p = voiceDictParse(text);" in heard
     assert 'p.kind === "disregard"' in heard and 'composeEl.value = "";' in heard
     words = _fn(js, "voiceHeardWords")
-    assert 'if (p.kind === "over") {' in words and "voiceSend(composeEl.value)" in words
+    # "submit" sends (an empty box: says so and listens on); "over" keeps.
+    submit = words.split('if (p.kind === "submit") {')[1].split("\n    }\n")[0]
+    assert (
+        "if (composeEl.value.trim()) { voiceSend(composeEl.value); return; }" in submit
+    )
+    assert 'voiceCaption("Nothing to send yet");' in submit
+    over = words.split('if (p.kind === "over") {')[1].split("\n    }\n")[0]
+    assert "voiceListenKept();" in over and "voiceSend" not in over
+    assert words.count("voiceSend(") == 1
+    kept = _fn(js, "voiceListenKept")
+    assert "voiceIdle(composeEl.value.trim() ? VOICE_KEPT : undefined);" in kept
+    assert "voiceSend" not in kept
+    assert 'var VOICE_KEPT = "In the box — say “submit”, or tap Send";' in v
     assert (
         "if (p.text && !composeEl.value.trim()) {" in heard
     )  # commands: empty box only
@@ -277,15 +290,13 @@ def test_mobile_js_radio_rules_over_and_disregard():
     assert '"Kept, not sent — Send sends it, or tap the mic to go on"' in _fn(
         js, "voiceListenStop"
     )
-    # The hint names the gesture that sends, with the radio words.
+    # The hints name the radio words (and, holding, the release).
     assert (
-        'var VOICE_HINT_TAP = "Tap again or say “over” to send, “disregard” to start over";'
+        'var VOICE_HINT_TAP = "Say “over” to keep it, “submit” to send, “disregard” to start over";'
         in v
     )
-    assert (
-        'var VOICE_HINT_HOLD = "Release or say “over” to send, “disregard” to start over";'
-        in v
-    )
+    assert 'var VOICE_HINT_HOLD = "Release to keep it; say “submit” to send";' in v
+    assert "“over” to send" not in v and "Release or say" not in v
     assert "return voiceListen_.held ? VOICE_HINT_HOLD : VOICE_HINT_TAP;" in _fn(
         js, "voiceDictHint"
     )
@@ -308,19 +319,22 @@ def test_mobile_js_radio_rules_over_and_disregard():
 
 
 def test_mobile_js_push_to_talk_toggle_and_hold():
-    """Push to talk (prefs.ptt, "toggle" by default): in toggle mode the
-    second tap on the mic or the strip SENDS the box (an empty box only
-    stops); in hold mode pointerdown on the mic starts listening and
-    pointerup / pointercancel sends — after waiting for the words still on
-    their way (VOICE_SEND_WAIT_MS for the phone's last phrase, as long as a
-    server clip is pending, a route answer) — and a release that heard
-    nothing only stops. The click a release fires is swallowed; the click
-    still turns voice on and starts a tap-style listen for a keyboard. The
-    silence stop keeps the words, unsent."""
+    """Push to talk (prefs.ptt, "toggle" by default): the gesture end means
+    "over", never a send. In toggle mode the second tap on the mic or the
+    strip stops listening; in hold mode pointerdown on the mic starts
+    listening and pointerup / pointercancel stops it — after waiting for the
+    words still on their way (VOICE_OVER_WAIT_MS for the phone's last
+    phrase, as long as a server clip is pending, a route answer) — with the
+    words left in the box. Only "submit" and the Send button send. The click
+    a release fires is swallowed; the click still turns voice on and starts
+    a tap-style listen for a keyboard. The silence stop keeps the words,
+    unsent."""
     js = _js()
     v = _voice_section(js)
     html = _html()
-    assert "var VOICE_SEND_WAIT_MS = 1500;" in v
+    assert "var VOICE_OVER_WAIT_MS = 1500;" in v
+    for gone in ("voiceListenSend", "sendAfter", "sendBy", "VOICE_SEND_WAIT_MS"):
+        assert gone not in v, gone
     # The sheet's choice, and the default.
     assert (
         'prefs: { rate: 1, voiceName: "", handsFree: false, ptt: "toggle", replies: true }'
@@ -330,37 +344,39 @@ def test_mobile_js_push_to_talk_toggle_and_hold():
     assert '<option value="toggle">Tap to talk</option>' in sel
     assert '<option value="hold">Hold to talk</option>' in sel
     assert ">Push to talk<" in html
-    # Toggle: the second tap (mic or strip) sends; a dialog tap only stops.
+    # Toggle: the second tap (mic or strip) is "over"; a dialog tap only stops.
     tap = _fn(js, "voiceTap")
-    assert "if (voiceIsListening()) { voiceListenSend(); return; }" in tap
+    assert "if (voiceIsListening()) { voiceListenOver(); return; }" in tap
     assert "voiceListenDone();" not in tap
     strip = v.split('voiceStrip.addEventListener("click", function (ev) {')[1].split(
         "\n  });\n"
     )[0]
-    assert "if (voiceIsListening()) voiceListenSend();" in strip
-    send = _fn(js, "voiceListenSend")
-    assert 'if (L.mode === "dialog") { voiceListenDone(); return; }' in send
-    assert "L.sendAfter = true;" in send and "L.until = 0;" in send
-    assert "if (s.finish) s.finish(); else if (s.end) s.end();" in send
+    assert "if (voiceIsListening()) voiceListenOver();" in strip
+    over = _fn(js, "voiceListenOver")
+    assert 'if (L.mode === "dialog") { voiceListenDone(); return; }' in over
+    assert "L.overAfter = true;" in over and "L.until = 0;" in over
+    assert "if (s.finish) s.finish(); else if (s.end) s.end();" in over
     soon = _fn(js, "voiceListenFlushSoon")
     assert (
-        "L.routing || (s.pending && s.pending()) || (s.active() && Date.now() < L.sendBy)"
+        "L.routing || (s.pending && s.pending()) || (s.active() && Date.now() < L.overBy)"
         in soon
     )
+    # Once the words are in: stop and keep them — no path to a send.
     flush = _fn(js, "voiceListenFlush")
-    assert (
-        "if (composeEl.value.trim() && (L.heard || !L.held)) { voiceSend(composeEl.value); return; }"
-        in flush
+    assert "voiceListenKept();" in flush
+    for fn in ("voiceListenOver", "voiceListenFlushSoon", "voiceListenFlush"):
+        assert "voiceSend" not in _fn(js, fn), fn
+    assert '(voiceListen_.held ? "Release to keep it" : "Tap to keep it")' in _fn(
+        js, "voiceSetState"
     )
-    assert "voiceListenStop();" in flush
     # The phrase that ends after the press: PhoneSTT's graceful end().
     stt = _fn(js, "PhoneSTT")
     assert "function end() {" in stt and "r.stop();" in stt.split("function end() {")[1]
-    # The recognizer ending / a phrase landing while a send is due flushes.
-    assert "if (L.sendAfter) { voiceListenFlushSoon(); return; }" in _fn(
+    # The recognizer ending / a phrase landing while an "over" is due flushes.
+    assert "if (L.overAfter) { voiceListenFlushSoon(); return; }" in _fn(
         js, "voiceRecStart"
     )
-    assert "if (voiceListen_.sendAfter) { voiceListenFlushSoon(); return; }" in _fn(
+    assert "if (voiceListen_.overAfter) { voiceListenFlushSoon(); return; }" in _fn(
         js, "voiceListenContinue"
     )
     # Hold: the pointer events on the mic, the click kept for the rest.
@@ -374,7 +390,7 @@ def test_mobile_js_push_to_talk_toggle_and_hold():
     assert 'voiceListen("prompt", VOICE_DICT_IDLE_MS, true);' in hold
     assert "setPointerCapture(ev.pointerId)" in hold
     end = _fn(js, "voiceHoldEnd")
-    assert "if (voiceIsListening() && voiceListen_.held) voiceListenSend();" in end
+    assert "if (voiceIsListening() && voiceListen_.held) voiceListenOver();" in end
     assert (
         'ev.type !== "pointercancel"' in end
         and "voiceHold.swallowUntil = Date.now() + 1000;" in end
@@ -395,7 +411,7 @@ def test_mobile_js_push_to_talk_toggle_and_hold():
         in _fn(js, "voiceTalkHint")
     )
     # The silence stop is still the kept-not-sent one.
-    assert "voiceListenSend" not in _fn(js, "voiceListenExpired")
+    assert "voiceListenOver" not in _fn(js, "voiceListenExpired")
 
 
 def test_mobile_js_spoken_replies_say_per_prompt():
@@ -806,14 +822,34 @@ def test_mobile_js_server_recognizer_records_wav():
     assert "new Float32Array(ev.inputBuffer.getChannelData(0))" in stt
     assert "Math.max(VOICE_RMS_SPEECH, g.floor * 3)" in stt
     assert "now - g.lastLoud > VOICE_SILENCE_MS" in stt
+    # A phrase arrives 1.1 s after the last word, not 1.8 s; the cap stays.
+    assert "var VOICE_SILENCE_MS = 1100;" in v
+    assert "var VOICE_CLIP_MAX_MS = 12000;" in v
     assert "Math.min(VOICE_CLIP_MAX_MS, remaining)" in stt
     assert "h.onLevel(Math.min(1, rms * 4))" in stt
-    # finish(): join, resample to 16 kHz, encode, upload as audio/wav.
+    # finish(): join, resample to 16 kHz (anti-aliased, async), encode,
+    # upload as audio/wav. pending() covers the resample too.
     assert "var VOICE_WAV_RATE = 16000;" in v
-    assert (
-        "voiceWavEncode(voiceResample(all, g.rate, VOICE_WAV_RATE), VOICE_WAV_RATE)"
-        in stt
-    )
+    fin = stt.split("function finish() {")[1].split("\n    function upload(")[0]
+    assert "uploading = true;" in fin
+    assert fin.index("uploading = true;") < fin.index("voiceResampleClip(all, g.rate)")
+    assert "if (token !== mine) return;" in fin
+    assert "var wav = voiceWavEncode(pcm, VOICE_WAV_RATE);" in fin
+    assert "voiceResample(" not in fin
+    # The browser's resampler first; voiceResample only as its fallback.
+    clip = _fn(js, "voiceResampleClip")
+    assert "window.OfflineAudioContext || window.webkitOfflineAudioContext" in clip
+    assert "new OAC(1, Math.ceil((samples.length * to) / from), to)" in clip
+    assert "octx.createBufferSource()" in clip and "octx.startRendering()" in clip
+    assert "octx.oncomplete" in clip  # older WebKit: the event, no promise
+    assert "VOICE_RESAMPLE_TIMEOUT_MS" in clip
+    assert "resolve(voiceResample(samples, from, to));" in clip
+    assert "voice.rec.resampler = " in clip
+    # The fallback is a low-pass decimator, never a plain interpolation down.
+    rs = _fn(js, "voiceResample")
+    assert "Math.sin(2 * Math.PI * fc * x) / (Math.PI * x)" in rs
+    assert "var fc = VOICE_SINC_CUTOFF / step" in rs
+    assert "if (step < 1) {" in rs  # interpolation only going UP
     assert 'new Blob([wav], { type: "audio/wav" })' in stt
     assert 'headers: { "Content-Type": mime }' in stt
     assert 'voice.rec.mime = "audio/wav";' in stt
@@ -833,6 +869,9 @@ def test_mobile_js_diagnostics_recorder_and_built_in_engine():
     js = _js()
     diag = _fn(js, "voiceDiag")
     assert '"WAV 16 kHz (ScriptProcessor)"' in diag
+    # Which resampler ran (or would), and the silence stop.
+    assert '"Resampler: " + (voice.rec.resampler ||' in diag
+    assert '"Silence stop: " + VOICE_SILENCE_MS + " ms after speech' in diag
     assert "MediaRecorder" not in diag
     # GET /api/voice's `system` (the server's built-in engine), said only
     # when the server sends it.
@@ -917,7 +956,7 @@ def test_voice_matchers_under_node():
         "out.choices.yn = voiceDialogChoices({ options: YN });\n"
         "out.choices.other = voiceDialogChoices({ options: OTHER });\n"
         "out.choices.two = voiceDialogChoices({ options: OTHER.slice(0, 2) });\n"
-        "out.dict = ['fix the login bug over', 'Over.', 'disregard', 'Disregard that.', 'move it over', 'hangover', 'fix it, over!', 'nothing here', ''].map(function (t) { var p = voiceDictParse(t); return p.kind + '|' + p.text; });\n"
+        "out.dict = ['fix the login bug over', 'Over.', 'disregard', 'Disregard that.', 'move it over', 'hangover', 'fix it, over!', 'nothing here', '', 'fix the login bug submit', 'Submit.', 'submit', 'add a test, Submit!', 'submitted', 'over it', 'Submit it'].map(function (t) { var p = voiceDictParse(t); return p.kind + '|' + p.text; });\n"
         "console.log(JSON.stringify(out));\n"
     )
     res = subprocess.run(
@@ -936,6 +975,14 @@ def test_voice_matchers_under_node():
         "over|fix it",
         "|nothing here",
         "|",
+        "submit|fix the login bug",
+        "submit|",
+        "submit|",
+        "submit|add a test",
+        "|submitted",
+        # "that / it" after the word belongs to "disregard" only.
+        "|over it",
+        "|Submit it",
     ]
     assert out["answers"]["yes"] == ["1", "1", "1", "1"]
     assert out["answers"]["no"] == ["3", "3", "3", "3"]
@@ -979,9 +1026,13 @@ def test_voice_matchers_under_node():
 def test_voice_wav_encoder_under_node():
     """voiceResample / voiceWavEncode, the page's own copies run as-is: the
     44-byte RIFF header of 16-bit PCM mono, samples scaled and clamped,
-    48 kHz → 16 kHz a third of the length (linear interpolation)."""
+    48 kHz → 16 kHz a third of the length — low-pass filtered: what a 16 kHz
+    clip cannot hold (above its 8 kHz Nyquist) is filtered out instead of
+    folding back into the speech band, while speech keeps its level."""
     js = _js()
-    fns = js[js.index("  function voiceResample(") : js.index("  function ServerSTT(")]
+    fns = js[
+        js.index("  var VOICE_RESAMPLE_TIMEOUT_MS") : js.index("  function ServerSTT(")
+    ]
     script = (
         fns + "\nvar out = {};\n"
         "var buf = voiceWavEncode(new Float32Array([0, 1, -1, 0.5, 2, -3, NaN]), 16000);\n"
@@ -996,7 +1047,13 @@ def test_voice_wav_encoder_under_node():
         "out.samples = []; for (var i = 0; i < 7; i++) out.samples.push(v.getInt16(44 + i * 2, true));\n"
         "var sec = new Float32Array(48000); for (var i = 0; i < sec.length; i++) sec[i] = i / 48000;\n"
         "var r = voiceResample(sec, 48000, 16000);\n"
-        "out.down = r.length; out.down3 = [r[0], r[1], r[2]].map(function (x) { return Math.round(x * 48000); });\n"
+        "out.down = r.length; out.ramp = [r[1000], r[1001], r[8000]].map(function (x) { return Math.round(x * 48000); });\n"
+        "function gain(f, from) { var n = from, x = new Float32Array(n), i, s = 0, t = 0;\n"
+        "  for (i = 0; i < n; i++) { x[i] = Math.sin(2 * Math.PI * f * i / from); t += x[i] * x[i]; }\n"
+        "  var y = voiceResample(x, from, 16000);\n"
+        "  for (i = 200; i < y.length - 200; i++) s += y[i] * y[i];\n"
+        "  return 10 * Math.log10((s / (y.length - 400)) / (t / n)); }\n"
+        "out.db = {}; [300, 3000, 7000, 10000, 12000, 20000].forEach(function (f) { out.db[f] = gain(f, 48000); out.db['44k' + f] = gain(f, 44100); });\n"
         "out.same = voiceResample(sec, 16000, 16000) === sec;\n"
         "out.up = voiceResample(new Float32Array([0, 1]), 8000, 16000).length;\n"
         "out.mid = Array.from(voiceResample(new Float32Array([0, 1, 0]), 8000, 16000));\n"
@@ -1022,7 +1079,20 @@ def test_voice_wav_encoder_under_node():
     # 1 → 32767, -1 → -32768, out of range clamped, NaN → silence.
     assert out["samples"] == [0, 32767, -32768, 16384, 32767, -32768, 0]
     assert out["down"] == 16000
-    assert out["down3"] == [0, 3, 6]
+    # A symmetric kernel keeps a straight line straight (away from the ends).
+    assert out["ramp"] == [3000, 3003, 24000]
+    db = out["db"]
+    for rate in ("", "44k"):
+        # Speech keeps its level: a 300 Hz and a 3 kHz tone, within 0.1 dB.
+        assert abs(db[rate + "300"]) < 0.1, db
+        assert abs(db[rate + "3000"]) < 0.1, db
+        # Inside the clip's band but near its edge: dented, never gone.
+        assert -6 < db[rate + "7000"] < 0, db
+        # Above the 16 kHz clip's 8 kHz Nyquist: filtered out (>20 dB of
+        # energy lost) instead of folding back to 6, 4 kHz… at full level as
+        # a plain interpolation would.
+        for f in ("10000", "12000", "20000"):
+            assert db[rate + f] < -20, (rate + f, db)
     assert out["same"] is True
     assert out["up"] == 4
     # Between the samples, the straight line; past the last, the last.
