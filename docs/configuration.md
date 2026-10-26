@@ -643,7 +643,8 @@ server merges on save so multiple processes can share it.
   `"local"`; the built-in `system` engine keeps nothing here): `whisper/` (faster-whisper's download root — the CTranslate2
   model, `small` unless `voice.stt_model` names another size) and
   `piper/<voice>.onnx` + `.onnx.json` (~60 MB each). Downloaded from Hugging
-  Face on first use, never at server start. Override with
+  Face on first use or by the one-click install (Settings → Voice, `POST
+  /api/voice/install-local`), never at server start. Override with
   `$MINDFLOCK_VOICE_DIR`. See
   [web-api.md](web-api.md#voice-talking-to-a-session-from-the-phone).
 - `accounts/<id>/` — an `account`-kind auth profile's isolated CLI config dir
@@ -768,6 +769,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_VOICE_FLAG_DIR` | `~/.mindflock-assistant/.voice` | Per-session voice files: `<session>.on` (a phone is in a voice conversation with that session — written by `POST /api/instances/{title}/voice`, the row's `voice`) and the one-shot `<session>.next` (armed by `POST …/send {say: true}`, consumed **at fire time** by the installed `UserPromptSubmit` hook from the firing CLI's environment, exactly like the marker dir above, which prints the voice instruction for Claude Code to inject when the file is under 120 s old). Through the home guard, so a test can never flip a real session's flag. Does **not** follow `MINDFLOCK_ASSISTANT_DIR` |
 | `MINDFLOCK_VOICE_DIR` | `~/.mindflock/voice` | Where the optional local speech backend keeps its downloaded models (`whisper/`, `piper/`) when `voice.stt_backend` / `tts_backend` is `local` (the built-in `system` engine needs no files) |
 | `MINDFLOCK_SPEECH_PROBE` | unset | `1` lets the built-in speech engine (`core/speech_system.py`) probe the OS **under pytest**, where it otherwise spawns nothing (the suite reads `GET /api/voice` and the doctor everywhere); the real smoke test sets it. Ignored outside pytest |
+| `MINDFLOCK_SPEECH_WARM` | unset | `1` lets the built-in Windows/WSL engine keep its **warm** PowerShell under pytest (one long-lived `powershell.exe` per server with `System.Speech` loaded, fed one request per line — a call takes ~0.05–0.2 s instead of the ~1 s start-up; it exits after 10 idle minutes and is restarted after any failure). Outside pytest it is always on, with the one-shot script as the fallback when it cannot start. Ignored outside pytest |
 | `MINDFLOCK_THREAD_MARKER_DIR` | `~/.mindflock-assistant/.thread-markers` | Per-window conversation-id markers so sessions sharing a directory each resume their *own* thread. Note: does **not** follow `MINDFLOCK_ASSISTANT_DIR` |
 | `CODEX_HOME` | `~/.codex` | Codex CLI data dir; usage is read from `$CODEX_HOME/sessions` |
 | `ANTIGRAVITY_CLI_DIR` | `~/.gemini/antigravity-cli` | Antigravity CLI state dir (conversation DBs, usage) |
@@ -1185,15 +1187,29 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     which is the built-in engine wherever it exists; `"system"` = this
     computer's own speech engine (above); `"openai"` = any OpenAI-compatible
     host (OpenAI, Groq, a self-hosted server); `"local"` = faster-whisper /
-    piper on this machine — the optional upgrade, installed with `uv sync
-    --group voice` (models under `~/.mindflock/voice/` or
-    `$MINDFLOCK_VOICE_DIR`, refused while memory is low, unloaded after 10
-    idle minutes).
+    piper on this machine — the optional upgrade (models under
+    `~/.mindflock/voice/` or `$MINDFLOCK_VOICE_DIR`, refused while memory is
+    low, unloaded after 10 idle minutes). The built-in Windows recognizer is
+    basic (`GET /api/voice`'s `system.stt_quality`): SAPI 5 desktop
+    dictation is the only Windows engine that reads a recorded clip offline,
+    so `local` is the accurate one there. **One-click install**: Settings →
+    Voice → *Install local models* (`POST /api/voice/install-local`, owner
+    only) installs `faster-whisper` and `piper-tts` into the interpreter the
+    server runs (`uv pip install --python <it>`, or its own pip without
+    `uv`), downloads the recognition model (`stt_model`, default `small`)
+    into `<voice dir>/whisper/` and the voice (`tts_voice`, default
+    `en_US-lessac-medium`) into `<voice dir>/piper/`, then sets
+    `stt_backend` to `"local"` (the voice backend is left alone). The
+    manual equivalent, from a source checkout, is `uv sync --group voice`
+    (the models then download on first use).
   - `stt_url` / `tts_url` — base URL of a compatible host (blank =
     `https://api.openai.com/v1`); `stt_model` / `tts_model` / `tts_voice` —
     the model and voice names it wants (blank = `gpt-transcribe`,
     `gpt-4o-mini-tts`, `alloy`; for the local backend the whisper size,
-    default `small`, and the piper voice, default `en_US-lessac-medium`; for
+    default `small`, and the piper voice, default `en_US-lessac-medium` —
+    the fields are shared, so a name that is not a faster-whisper size or a
+    piper voice (`whisper-1`, `Microsoft Zira Desktop`) reads as the default
+    there; for
     `system`, `tts_voice` is the OS voice name — `Microsoft Zira Desktop` on
     Windows, `Samantha` on macOS — and a name the OS does not have falls back
     to its default voice).

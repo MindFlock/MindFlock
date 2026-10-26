@@ -492,6 +492,45 @@ class TestLocalTTS:
         assert speech.loaded() == []
 
 
+class TestLocalNames:
+    """``voice.stt_model`` / ``voice.tts_voice`` are shared with the other
+    backends: a host's model or an OS voice must not break ``local``."""
+
+    def test_whisper_model(self):
+        assert speech.whisper_model("") == "small"
+        assert speech.whisper_model(" medium.en ") == "medium.en"
+        assert speech.whisper_model("large-v3-turbo") == "large-v3-turbo"
+        assert speech.whisper_model("Systran/faster-whisper-tiny") == (
+            "Systran/faster-whisper-tiny"
+        )
+        assert speech.whisper_model("whisper-1") == "small"
+        assert speech.whisper_model("whisper-large-v3-turbo") == "small"
+
+    def test_piper_voice(self):
+        assert speech.piper_voice("") == "en_US-lessac-medium"
+        assert speech.piper_voice("en_GB-alan-low") == "en_GB-alan-low"
+        assert speech.piper_voice("de_DE-thorsten-high") == "de_DE-thorsten-high"
+        for other in ("alloy", "Microsoft Zira Desktop", "Samantha", "en_US"):
+            assert speech.piper_voice(other) == "en_US-lessac-medium"
+
+    def test_an_os_voice_in_settings_speaks_the_default_piper_voice(self, piper):
+        _set(tts_voice="Microsoft Zira Desktop")
+        speech.LocalTTS().speak("Hi", "")
+        assert piper.downloads[0][0] == "en_US-lessac-medium"
+
+    def test_a_host_model_in_settings_loads_the_default_size(self):
+        _set(stt_model="whisper-1")
+        assert speech.LocalSTT()._model_name() == "small"
+
+    def test_invalidate_drops_the_import_caches(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            speech.importlib, "invalidate_caches", lambda: calls.append(1)
+        )
+        speech.invalidate()
+        assert calls == [1]
+
+
 # --------------------------------------------------------------------------- #
 # The registry
 # --------------------------------------------------------------------------- #
@@ -574,6 +613,7 @@ class TestRegistry:
             "detail",
             "voices",
             "recognizers",
+            "stt_quality",
         }
 
     def test_select_follows_the_registry_order(self, registry):

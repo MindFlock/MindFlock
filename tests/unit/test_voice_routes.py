@@ -535,6 +535,139 @@ def test_send_now_arms_a_say_item(typed, env):
 
 
 # --------------------------------------------------------------------------- #
+# /send {"enter": true}: press Enter on the draft live dictation typed
+# --------------------------------------------------------------------------- #
+def test_enter_presses_enter_and_arms_next_on_claude(typed, env):
+    env.state.hook = True
+    r = client.post("/api/instances/w/send", json={"enter": True, "say": True})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"sent": True, "submitted": True, "entered": True}
+    # Nothing typed but the Enter itself (the helper's separate keystroke),
+    # with the one-shot request armed at that instant.
+    assert typed.sent == [("mindflock_w", "", True, True)]
+    assert env.state.installs == [("/tmp/wt", "mindflock_w")]
+
+
+def test_enter_on_a_hookless_cli_types_the_instruction_after_the_draft(typed, env):
+    env.state.hook = False
+    r = client.post(
+        "/api/instances/w/send", json={"enter": True, "text": "", "say": True}
+    )
+    assert r.json()["entered"] is True
+    assert typed.sent == [("mindflock_w", "\n\n" + spoken.INSTRUCTION, True, False)]
+
+
+def test_enter_without_say_presses_only_enter(typed, env):
+    env.state.hook = True
+    voice.set_on("mindflock_w", True)  # the sticky flag asks nothing per prompt
+    r = client.post("/api/instances/w/send", json={"enter": True})
+    assert r.status_code == 200
+    assert typed.sent == [("mindflock_w", "", True, False)]
+    assert not voice.next_path("mindflock_w").exists()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"enter": True, "text": "words"},
+        {"enter": True, "submit": False},
+        {"enter": "yes"},  # a boolean, not truthy: the plain empty-message 400
+        {},
+    ],
+)
+def test_enter_bad_forms_are_400(typed, env, body):
+    r = client.post("/api/instances/w/send", json=body)
+    assert r.status_code == 400
+    assert typed.sent == []
+
+
+@pytest.mark.parametrize("activity", ["clarify", "limit", "unknown"])
+def test_enter_never_answers_a_dialog(typed, env, activity):
+    env.state.activity = activity
+    r = client.post("/api/instances/w/send", json={"enter": True, "say": True})
+    assert r.status_code == 409
+    assert r.json()["in_dialog"] is True
+    assert typed.sent == []
+    assert not voice.next_path("mindflock_w").exists()
+
+
+def test_enter_checks_the_screen_for_a_dialog(typed, env, monkeypatch):
+    monkeypatch.setattr(server, "_dialog_on_screen", lambda inst, name: True)
+    r = client.post("/api/instances/w/send", json={"enter": True})
+    assert r.status_code == 409 and r.json()["in_dialog"] is True
+    assert typed.sent == []
+
+
+def test_enter_into_a_working_agent_goes_through(typed, env):
+    env.state.activity = "working"  # like a dialog_safe send: the CLI queues it
+    r = client.post("/api/instances/w/send", json={"enter": True})
+    assert r.status_code == 200
+    assert typed.sent == [("mindflock_w", "", True, False)]
+
+
+def test_enter_refuses_a_paused_session(typed, env):
+    env.instances["w"].Status = server.Paused
+    r = client.post("/api/instances/w/send", json={"enter": True})
+    assert r.status_code == 409
+    assert r.json()["paused"] is True
+    assert typed.sent == []
+
+
+def test_enter_refuses_an_asleep_session_without_waking_or_queueing(
+    typed, env, monkeypatch
+):
+    from backend.web.core import prompt_queue as pq
+
+    monkeypatch.setattr(server._sleep, "is_sleeping", lambda title: True)
+    woke = []
+    monkeypatch.setattr(server._sleep, "ensure_awake", lambda *a: woke.append(a))
+    r = client.post("/api/instances/w/send", json={"enter": True, "say": True})
+    assert r.status_code == 409
+    assert "asleep" in r.json()["error"]
+    assert typed.sent == [] and woke == [] and pq.list_queue("w") == []
+
+
+def test_enter_refuses_a_session_that_is_not_running(typed, env, monkeypatch):
+    env.tm.alive = False
+    booted = []
+    monkeypatch.setattr(
+        server, "_ensure_agent_session", lambda i, t: booted.append(t) or ("x", None)
+    )
+    r = client.post("/api/instances/w/send", json={"enter": True})
+    assert r.status_code == 409
+    assert "isn't running" in r.json()["error"]
+    assert typed.sent == [] and booted == []
+
+
+def test_enter_over_budget_is_409(typed, env, monkeypatch):
+    monkeypatch.setattr(server, "_budget_locked", lambda t: True)
+    r = client.post("/api/instances/w/send", json={"enter": True})
+    assert r.status_code == 409 and r.json()["budget_locked"] is True
+    assert typed.sent == []
+
+
+def test_enter_respects_the_driver(typed, env, monkeypatch):
+    from fastapi.responses import JSONResponse
+
+    monkeypatch.setattr(
+        server,
+        "_driven_elsewhere",
+        lambda req, title, payload: JSONResponse({"error": "driven by B"}, 409),
+    )
+    r = client.post("/api/instances/w/send", json={"enter": True})
+    assert r.status_code == 409 and typed.sent == []
+
+
+def test_a_failed_enter_is_502_and_disarms(typed, env):
+    env.state.hook = True
+    typed.ok = False
+    r = client.post("/api/instances/w/send", json={"enter": True, "say": True})
+    assert r.status_code == 502
+    assert typed.sent[-1][3] is True
+    assert not voice.next_path("mindflock_w").exists()
+
+
+# --------------------------------------------------------------------------- #
 # Rows: last_say + voice
 # --------------------------------------------------------------------------- #
 def _real_inst(title):

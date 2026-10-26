@@ -122,6 +122,7 @@ class TestGet:
             " Voice: Windows (from WSL) voices: Microsoft Zira Desktop.",
             "voices": ["Microsoft Zira Desktop"],
             "recognizers": ["en-US"],
+            "stt_quality": "basic",
         }
 
     def test_system_block_is_offline_under_pytest(self, fakes):
@@ -134,6 +135,7 @@ class TestGet:
             "detail",
             "voices",
             "recognizers",
+            "stt_quality",
         }
         assert system["available"] is False and system["voices"] == []
 
@@ -142,10 +144,19 @@ class TestGet:
             return False
 
         monkeypatch.setattr(_auth, "may_configure", _refuse)
-        assert client.get("/api/voice").status_code == 200
-        # …while the owner-only key clearing is refused for the same caller.
+        r = client.get("/api/voice")
+        assert r.status_code == 200
+        # It reports that this caller may not use the owner-only routes…
+        assert r.json()["configure_allowed"] is False
+        # …which refuse the same caller.
         r = client.post("/api/voice/clear-key", json={"kind": "stt"})
         assert r.status_code == 403
+        r = client.post("/api/voice/install-local")
+        assert r.status_code == 403
+        assert client.get("/api/voice/install-local").status_code == 200
+
+    def test_configure_allowed_for_the_owner(self, fakes):
+        assert client.get("/api/voice").json()["configure_allowed"] is True
 
 
 # --------------------------------------------------------------------------- #
@@ -390,3 +401,66 @@ def test_413_holds_for_a_chunked_upload_without_content_length(fakes, monkeypatc
     )
     assert r.status_code == 413
     assert fakes.stt.calls == []
+
+
+# --------------------------------------------------------------------------- #
+# /api/voice/install-local
+# --------------------------------------------------------------------------- #
+class TestInstallLocal:
+    @pytest.fixture
+    def install(self, monkeypatch):
+        from backend.web.core import speech_install as si
+
+        box = {"running": False, "starts": 0}
+        state = {
+            "state": "idle",
+            "step": "",
+            "log": [],
+            "started": None,
+            "finished": None,
+            "error": "",
+        }
+
+        def start():
+            if box["running"]:
+                return False
+            box["running"] = True
+            box["starts"] += 1
+            state.update(state="running", step="installing packages", started=1.0)
+            return True
+
+        monkeypatch.setattr(si, "start", start)
+        monkeypatch.setattr(si, "status", lambda: dict(state))
+        return SimpleNamespace(box=box, state=state)
+
+    def test_get_is_the_status(self, install):
+        r = client.get("/api/voice/install-local")
+        assert r.status_code == 200
+        assert r.json() == {
+            "state": "idle",
+            "step": "",
+            "log": [],
+            "started": None,
+            "finished": None,
+            "error": "",
+        }
+
+    def test_post_starts_it_once(self, install):
+        r = client.post("/api/voice/install-local")
+        assert r.status_code == 200
+        assert r.json()["state"] == "running"
+        assert r.json()["step"] == "installing packages"
+        r = client.post("/api/voice/install-local")
+        assert r.status_code == 409
+        assert r.json()["state"] == "running"
+        assert r.json()["error"] == "the install is already running"
+        assert install.box["starts"] == 1
+
+    def test_post_is_owner_only(self, install, monkeypatch):
+        async def _refuse(scope):
+            return False
+
+        monkeypatch.setattr(_auth, "may_configure", _refuse)
+        r = client.post("/api/voice/install-local")
+        assert r.status_code == 403
+        assert install.box["starts"] == 0
