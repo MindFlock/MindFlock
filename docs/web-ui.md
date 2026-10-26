@@ -130,8 +130,12 @@ now).
 right-click for options*). The words are **typed into the session's input
 field as you speak**: each phrase, the moment it is recognised, goes down the
 session's agent terminal as keys (with a trailing space), exactly as if you had
-typed it; the caption under the mic shows the running text. Nothing is
-submitted until you say so. With no session focused, nothing is typed (*Click
+typed it; the caption under the mic shows the running text. When the server's
+recogniser streams (see below) the words go in **while you speak**, a few at a
+time as the recogniser commits them — the last word always waits for the next
+ones or the end of the phrase, so a closing radio word is never typed — and the
+words it may still change show after them in the caption, muted and italic;
+they are never typed. Nothing is submitted until you say so. With no session focused, nothing is typed (*Click
 a session first*).
 
 - **Radio words**, the last word of a phrase (any case or punctuation):
@@ -175,9 +179,11 @@ a session first*).
   wait.
 - **Options**: right-click or Shift+click the mic for *Read replies aloud*,
   *Click to talk* / *Hold to talk*, a diagnostics line naming the engines in
-  use (*Recognition: server, built in (Windows via WSL) — 16 kHz clips,
-  browser resampler, a phrase ends after 1.1 s of quiet · Voice: server
-  (piper)*, *Recognition: this browser · Voice: this browser*, and why the
+  use (*Recognition: server, built in (Windows via WSL) — one clip per phrase:
+  16 kHz, browser resampler, a phrase ends after 1.1 s of quiet · Voice: server
+  (piper)*, *Recognition: server (local) — streaming (words as you speak):
+  16 kHz, windowed-sinc resampler, a phrase ends after 1.1 s of quiet*,
+  *Recognition: this browser · Voice: this browser*, and why the
   server's recogniser isn't ready when it would be used), and a link to the
   speech engines in **Settings → Voice**. The choice is kept per browser
   (`cs_voice_desktop`).
@@ -206,8 +212,30 @@ none, a Blackman-windowed sinc — never plain interpolation, whose aliasing
 folds everything above 8 kHz back into the speech band. A clip ends after
 1.1 s of quiet following speech (short, so typing keeps up with you) or at
 12 s, and is uploaded as `audio/wav` to `POST /api/voice/transcribe`; a clip
-the level meter heard no speech in is not sent. How the `Say:` line is produced and which engines exist: [Voice: talking
-to a session](#voice-talking-to-a-session).
+the level meter heard no speech in is not sent.
+
+**Streaming.** When `GET /api/voice` says `server_ready.stt_stream` (only the
+local whisper engine streams) the mic streams instead of sending clips. At a
+phrase's first speech it opens `POST /api/voice/stream {lang}` → `{id}`; then,
+whenever the previous request is back and at least 300 ms of new audio exists,
+the recorder's `take()` (the WAV since the last take, 16 kHz through the
+windowed sinc, recording on) goes to `POST /api/voice/stream/{id}/chunk` —
+never two at once. Each answer's `committed` words are typed as above; its
+`partial` is the muted tail. The quiet before the first word is not sent. The
+same 1.1 s of quiet ends the phrase: `…/end` flushes its last words (the
+phrase's radio word, if any, is read off the whole phrase then — "over",
+"submit", "disregard" act exactly as in clip mode), and the next phrase opens a
+new stream; there is no 12 s cap. Letting go (or the second click) sends what
+was said since the last chunk, flushes, and is "over". A dictation's **first
+phrase** still goes to the router whole: when its first words could start a
+command ("switch to …", "what needs me", "stop" …) it waits for the end of the
+phrase; when they can't — almost every prompt — it is typed as it comes. A
+`409` on the open means the server can't stream right now: that phrase and the
+rest go as clips. Any failed chunk or end (the network, a stream expired after
+60 s, a 5xx) drops the stream (`DELETE`), types the words held back, says
+*Streaming stopped (…) — one clip per phrase from here* once, and the rest of
+that dictation goes as clips. How the `Say:` line is produced and which
+engines exist: [Voice: talking to a session](#voice-talking-to-a-session).
 
 **Sidebar** — session list with drag-to-reorder, stage chips, and a
 close ✕ per row (closes the session, keeps the worktree). The chip is the
@@ -5422,14 +5450,22 @@ labels above the inputs.
   phone page. A **basic** screen, right after Your phone, so a fresh user
   finds it. Its settings are `voice.*`
   ([configuration.md](configuration.md#web-exposed-settings)); the screen
-  re-reads `GET /api/voice` after every save. In order:
+  re-reads `GET /api/voice` after every save. It is laid out like every
+  other screen, from the shared Settings pieces only: one uppercase
+  `.set-section-title` per concern, each field a stacked `.set-row` (label,
+  control, hint under it — the same selects and inputs as General), the
+  switch a standard `.set-switch-row`, and the installer and the Try-it
+  buttons General's action rows (label and hint on the left, the button on
+  the right, progress and results in the hint). Status lines carry Your
+  phone's ✓ / ✗ glyph. `voice.css` keeps only the installer's progress bar
+  and its cut-to-one-line log. In order:
   - The intro says what runs where: the desktop app's mic always uses this
     computer's engines, the phone page uses the phone's own unless told
     otherwise, and out of the box this computer uses its **built-in engine**
     (Windows' System.Speech — also from WSL — or macOS' Speech framework),
     so a fresh install talks with nothing to download.
   - **Recognition** and **Voice** (`#voice-engines`, where the mic and the
-    phone page deep-link): each an **Engine** picker — *This computer (built
+    phone page deep-link; two titled sections): each an **Engine** picker — *This computer (built
     in)* · *OpenAI-compatible host* · *Local models (faster-whisper /
     piper)*, built in first; a saved `""` shows whichever engine the server
     resolved it to, the built-in one wherever it exists. The built-in engine
@@ -5443,8 +5479,10 @@ labels above the inputs.
     (system): Windows via WSL — recognizer en-US, voices David, Zira.* /
     *Server voice not ready: …*): with the built-in engine picked its own
     sentence is the detail (the Linux one, macOS' permission one); a server
-    too old to report `system` says it has no built-in engine yet.
-  - **The local-models installer** (`#voice-install`, under Recognition).
+    too old to report `system` says it has no built-in engine yet. A saved
+    key's **Clear** sits in the key's hint line.
+  - **The local-models installer** (`#voice-install`, under Recognition: a
+    *Local models* action row, its status in the hint).
     Windows' built-in recognizer is the old desktop (SAPI) one —
     `system.stt_quality: "basic"` (macOS' is `"good"`), or a built-in
     readiness detail ending *basic accuracy — install local models for
@@ -5457,9 +5495,9 @@ labels above the inputs.
     (faster-whisper and piper into the server's own environment, then the
     whisper model — `voice.stt_model`, default `small` — and the piper
     voice), then polls `GET /api/voice/install-local` every 2 s while it is
-    `running`: the button reads *Installing…* beside a `<progress>` (the
-    server reports no percentage), the step and the install's last log
-    line. *done* → *Installed — recognition now uses local models.* (the
+    `running`: the button reads *Installing…*, and the hint shows the step,
+    a `<progress>` (the server reports no percentage) and the install's
+    last log line. *done* → *Installed — recognition now uses local models.* (the
     server switched `voice.stt_backend` to `local` itself; the screen
     re-reads the settings and `GET /api/voice`); *failed* → the error and
     **Try again**; a 409 → *Already installing* and that install is
@@ -5468,22 +5506,24 @@ labels above the inputs.
     installer (its `GET` fails). A viewer who may not change the server
     (`configure_allowed: false` in `GET /api/voice`, or the POST's 403)
     gets it disabled with the reason.
-  - **On the phone page**: where recognition and the voice run for the
-    phone (`voice.stt` / `voice.tts`: *The phone* · *This computer*), with
-    *The desktop app always uses this computer.*
-  - **Approve dialogs by voice** (*A spoken yes or no answers a permission
-    dialog after its command is read aloud. 'Always' is only accepted when
-    you say the word.*).
-  - **Try it**: **Say a test sentence** (`POST /api/voice/speak` *This is
+  - **On the phone page** (`#voice-phone`): *The desktop app always uses
+    this computer.* under the title, then where recognition and the voice
+    run for the phone (`voice.stt` / `voice.tts`: *The phone* · *This
+    computer*), two rows.
+  - **Permission dialogs**: the **Approve dialogs by voice** switch (*A
+    spoken yes or no answers a permission dialog after its command is read
+    aloud. 'Always' is only accepted when you say the word.*).
+  - **Try it** (`#voice-try`), one action row per button: **Say a test sentence** (`POST /api/voice/speak` *This is
     MindFlock speaking.*, played through an AudioContext made in the click;
     then *Spoke with system in 240 ms.* or the error) and **Try recognition**
     (asks for the microphone, records three seconds as WAV with a countdown
     on the button — `lib/wavRecorder.ts` — and sends it to
     `POST /api/voice/transcribe`; then *Heard: “…” (system, 412 ms)*, *Heard
     nothing…* or the error; a refused microphone gets a plain sentence).
-    Each button is disabled, with the reason under the row, until the
-    server has that engine ready (or while the browser cannot record).
-  - Privacy notes: the built-in engines (Windows' and Apple's on-device
+    Each row's hint says what its button does, its last result, or — with
+    the button disabled — why, until the server has that engine ready (or
+    while the browser cannot record).
+  - **Privacy**: the built-in engines (Windows' and Apple's on-device
     speech) and local models keep audio on this computer, a host receives
     what you send it; the phone's own recognition sends audio to Google on
     Android and to Apple on iOS when no on-device model exists; on iPhone,
@@ -5703,7 +5743,8 @@ its toolbar counts it again. See
 
 The mic in the top bar, beside the bell, talks to the **focused session** and
 types as you speak: click (or hold) to talk, and each recognised phrase lands
-in the session's input field at once. A phrase ending in "over" stops and
+in the session's input field at once — word by word while you speak when the
+server's recogniser streams. A phrase ending in "over" stops and
 leaves the words there, one ending in "submit" submits them (Enter, after the
 server's dialog checks), one ending in "disregard" takes back what was typed
 and keeps listening, Esc takes it back and stops. Nothing is typed into a
@@ -5716,7 +5757,10 @@ never submitted. In the desktop app the words and the voice go through the
 server's engines whenever one is ready (Settings → Voice) — the app's own Web
 Speech can't recognise — and in a browser tab through the browser's unless
 Settings say *server*; the server's recogniser is sent each phrase as a 16 kHz
-WAV clip, resampled without aliasing. The phone page's mic is the hands-free
+WAV clip, resampled without aliasing — or, when it streams (the local whisper
+engine), short chunks while you speak, so the words appear as you say them
+(the last one held back until the next, so a radio word is never typed; the
+unsure tail shown muted in the caption, never typed). The phone page's mic is the hands-free
 version of the same conversation, with spoken replies on by default — see
 [Voice: talking to a session](#voice-talking-to-a-session) under the Mobile UI.
 
@@ -5940,6 +5984,27 @@ about 6 kHz keeps its level. The RMS of those blocks drives the level meter
 and the silence detector: 1.1 s of quiet after speech ends the clip, so a
 phrase arrives sooner (a tap ends it at once, 12 s or the listening window
 is the cap, and a clip that heard no speech is dropped).
+When the server streams (`GET /api/voice` → `server_ready.stt_stream: true`,
+the local whisper backend) the words appear **while you speak**: the tap
+opens a stream (`POST /api/voice/stream {lang}` → `{id}`), and whenever the
+previous request is back and 300 ms of new audio is in, the samples since the
+last cut go out as one more 16 kHz WAV (`POST /api/voice/stream/{id}/chunk`
+→ `{committed, partial}`) — one request at a time, so a slow server gets
+fewer, longer chunks rather than a queue. `committed` words never change and
+go into the box as they come, all but the last (it may be the radio word
+that ends the phrase) and never a run that would *end* in a radio word
+(*go over the code* reaches the box as *go*, then *over the code*), so
+*over*, *submit* and *disregard* still act only as the phrase's real end;
+the held words and `partial`, the unstable tail, are the caption. A phrase
+said into an empty box (it may be a command — the router decides) or a
+dialog's answer arrives whole at its end, the caption showing it as it
+comes. The phrase ends as a clip does (silence, the tap, the cap — 30 s
+here); the unsent rest goes out, `POST …/end` → `{committed}` flushes the
+last words, and the next phrase opens a new stream; Cancel or voice off
+`DELETE`s it. A 409 on the open (the server does not stream after all: a
+clip per phrase until `GET /api/voice` says otherwise) or any failed request
+turns the phrase into a clip — the words so far stay, the audio the stream
+had not answered is transcribed in one piece.
 A Chromium browser that does not ship Google's speech key — Arc, Brave,
 Vivaldi, Opera — has the recognizer but every start fails with a `network`
 error and nothing is heard: the first is retried, the second in a listening
@@ -6099,7 +6164,9 @@ server's when Settings say server and `GET /api/voice` reports it ready),
 (*WAV 16 kHz (ScriptProcessor)*, or *not supported* without Web Audio or a
 microphone), *Resampler* (which one made the last clip — *OfflineAudioContext
 (the browser's)*, or *low-pass decimator* and why — or which one will),
-*Silence stop* (*1100 ms after speech*, and the clip cap), *AudioContext*
+*Silence stop* (*1100 ms after speech*, and the clip cap), *Recognition
+stream* with server recognition (*words as you speak* or *one clip per
+phrase*, and the last chunk's time or why it failed), *AudioContext*
 (its state), *Last transcribe* / *Last speak*
 (how long the server took and which backend, or why it failed), *Primed*
 (whether a tap has unlocked speech output yet), *Push to talk* (tap or

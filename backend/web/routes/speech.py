@@ -23,6 +23,16 @@ Status codes, in the order they are checked:
 * ``speak`` — 400 no text; 413 over :data:`MAX_SPEAK_CHARS`; 409 / 502 as
   above; 200 the audio bytes (``audio/mpeg`` or ``audio/wav``) with
   ``X-Voice-Backend``.
+* ``stream`` (open) — 409 no recognition backend is ready, the ready one
+  does not stream (only ``local`` does: the client sends one clip per phrase
+  instead), or :data:`speech_stream.MAX_STREAMS` are open; 200
+  ``{"id", "ready": true}``.
+* ``stream/{id}/chunk`` — 404 unknown or expired id; 415 not ``audio/wav``,
+  or a WAV that is not 16 kHz mono 16-bit; 413 over
+  :data:`MAX_AUDIO_BYTES`; 502 the pass failed (the chunk is kept); 200
+  ``{"committed", "partial", "ms", "audio_s"}``.
+* ``stream/{id}/end`` — 404 as above; 502; 200 ``{"committed", "partial":
+  ""}`` and the stream is gone. ``DELETE stream/{id}`` — 204, always.
 * ``install-local`` — ``POST`` 403 not the owner; 409 already running; 200
   the status (``core.speech_install``). ``GET`` the status, for anyone.
 """
@@ -40,6 +50,7 @@ from fastapi.responses import JSONResponse
 from backend.web.core import auth as _auth
 from backend.web.core import speech as _speech
 from backend.web.core import speech_install as _install
+from backend.web.core import speech_stream as _stream
 
 router = APIRouter()
 
@@ -49,6 +60,8 @@ MAX_AUDIO_BYTES = 10 * 1024 * 1024
 #: The ``/speak`` text cap (413 above): a Say line is ≤ 320 chars and a
 #: dialog read-out a few hundred, so this is generous without being a job.
 MAX_SPEAK_CHARS = 1200
+#: The ``Content-Type`` values a stream chunk may carry.
+_WAV_TYPES = frozenset({"audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave"})
 #: ``?lang=`` as a BCP-47-ish tag (``en``, ``pt-BR``); anything else is dropped.
 _LANG = re.compile(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?$")
 
@@ -67,6 +80,30 @@ def _refusal(kind: str) -> Tuple[Optional[_speech.Backend], Optional[JSONRespons
     if backend is None:
         return None, JSONResponse({"error": detail}, status_code=409)
     return backend, None
+
+
+def _too_big() -> JSONResponse:
+    return JSONResponse(
+        {"error": "the clip is over %d MB" % (MAX_AUDIO_BYTES // (1024 * 1024))},
+        status_code=413,
+    )
+
+
+async def _capped_body(request: Request) -> Optional[bytes]:
+    """The raw body, or ``None`` once it passes :data:`MAX_AUDIO_BYTES`.
+    Read in chunks and stopped at the cap: a chunked upload carries no
+    Content-Length, and ``request.body()`` would hold all of it first."""
+    length = request.headers.get("content-length", "")
+    if length.isdigit() and int(length) > MAX_AUDIO_BYTES:
+        return None
+    chunks: list = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_AUDIO_BYTES:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _failed(err: BaseException) -> JSONResponse:
@@ -132,23 +169,9 @@ async def voice_transcribe(request: Request, lang: str = "") -> JSONResponse:
             },
             status_code=415,
         )
-    too_big = JSONResponse(
-        {"error": "the clip is over %d MB" % (MAX_AUDIO_BYTES // (1024 * 1024))},
-        status_code=413,
-    )
-    length = request.headers.get("content-length", "")
-    if length.isdigit() and int(length) > MAX_AUDIO_BYTES:
-        return too_big
-    # Read the body in chunks and stop at the cap: a chunked upload carries
-    # no Content-Length, and ``request.body()`` would hold all of it first.
-    chunks: list = []
-    size = 0
-    async for chunk in request.stream():
-        size += len(chunk)
-        if size > MAX_AUDIO_BYTES:
-            return too_big
-        chunks.append(chunk)
-    audio = b"".join(chunks)
+    audio = await _capped_body(request)
+    if audio is None:
+        return _too_big()
     if not audio:
         return JSONResponse({"error": "the clip is empty"}, status_code=400)
     backend, refused = _refusal("stt")
@@ -168,6 +191,104 @@ async def voice_transcribe(request: Request, lang: str = "") -> JSONResponse:
             "ms": int((time.monotonic() - started) * 1000),
         }
     )
+
+
+@router.post("/api/voice/stream")
+def voice_stream_open(payload: Optional[dict] = None) -> JSONResponse:
+    """Open a streaming recognition (``core.speech_stream``):
+    ``{"lang": "en-US"}`` → ``{"id", "ready": true}``. Only a backend that
+    streams (``local``) can; ``GET /api/voice``'s ``server_ready.stt_stream``
+    says so beforehand. See the module doc for the status codes."""
+    body = payload if isinstance(payload, dict) else {}
+    lang = body.get("lang")
+    lang = lang.strip() if isinstance(lang, str) else ""
+    lang = lang if _LANG.match(lang) else ""
+    backend, refused = _refusal("stt")
+    if refused is not None or backend is None:
+        return refused or _failed(RuntimeError("no backend"))
+    if not backend.streams:
+        return JSONResponse(
+            {
+                "error": "%s recognition does not stream: send one clip per phrase"
+                % backend.id
+            },
+            status_code=409,
+        )
+    sid = _stream.open_stream(backend.stream_transcriber(lang))
+    if sid is None:
+        return JSONResponse(
+            {
+                "error": "%d voice streams are already open: end one first"
+                % _stream.MAX_STREAMS
+            },
+            status_code=409,
+        )
+    return JSONResponse({"id": sid, "ready": True})
+
+
+def _no_stream() -> JSONResponse:
+    return JSONResponse(
+        {"error": "no such voice stream (it ended or expired): open another"},
+        status_code=404,
+    )
+
+
+@router.post("/api/voice/stream/{sid}/chunk")
+async def voice_stream_chunk(sid: str, request: Request) -> JSONResponse:
+    """Feed one ``audio/wav`` chunk (16 kHz mono 16-bit PCM, the raw body)
+    → ``{"committed": newly committed words, "partial": the unstable tail,
+    "ms": inference ms, "audio_s": seconds held}``. Send the next chunk only
+    after this one returned. See the module doc for the status codes."""
+    stream = _stream.get_stream(sid)
+    if stream is None:
+        return _no_stream()
+    mime = _speech.mime_of(request.headers.get("content-type", ""))
+    if mime not in _WAV_TYPES:
+        return JSONResponse(
+            {"error": "send the chunk as audio/wav, not %s" % (mime or "nothing")},
+            status_code=415,
+        )
+    audio = await _capped_body(request)
+    if audio is None:
+        return _too_big()
+    try:
+        samples = _stream.decode_wav(audio)
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=415)
+    try:
+        committed, partial = await asyncio.to_thread(stream.feed, samples)
+    except Exception as err:  # noqa: BLE001 — every failure is the backend's
+        return _failed(err)
+    return JSONResponse(
+        {
+            "committed": committed,
+            "partial": partial,
+            "ms": stream.last_ms,
+            "audio_s": round(stream.held_seconds, 2),
+        }
+    )
+
+
+@router.post("/api/voice/stream/{sid}/end")
+async def voice_stream_end(sid: str) -> JSONResponse:
+    """Finish a stream: one last pass, all of it committed →
+    ``{"committed": the words not committed before, "partial": ""}``. The
+    stream is gone afterwards (404 for a second ``end``)."""
+    stream = _stream.close_stream(sid)
+    if stream is None:
+        return _no_stream()
+    try:
+        rest = await asyncio.to_thread(stream.finish)
+    except Exception as err:  # noqa: BLE001
+        return _failed(err)
+    return JSONResponse({"committed": rest, "partial": ""})
+
+
+@router.delete("/api/voice/stream/{sid}")
+def voice_stream_abandon(sid: str) -> Response:
+    """Abandon a stream without a last pass → 204 (unknown ids too)."""
+    _stream.close_stream(sid)
+    return Response(status_code=204)
 
 
 @router.post("/api/voice/speak")

@@ -36929,6 +36929,7 @@ function NotificationsBell() {
 //#region src/lib/wavRecorder.ts
 var DEFAULT_TARGET_RATE = 16e3;
 var BLOCK_FRAMES = 4096;
+var TAKE_MIN_S = .3;
 function encodeWav(samples, sampleRate) {
 	const dataSize = samples.length * 2;
 	const buf = new ArrayBuffer(44 + dataSize);
@@ -37018,6 +37019,7 @@ function startWavRecording(stream, ctx, opts = {}) {
 	mute.gain.value = 0;
 	let blocks = [];
 	let frames = 0;
+	let fresh = 0;
 	let done = false;
 	let result = null;
 	processor.onaudioprocess = (e) => {
@@ -37025,6 +37027,7 @@ function startWavRecording(stream, ctx, opts = {}) {
 		const block = e.inputBuffer.getChannelData(0).slice();
 		blocks.push(block);
 		frames += block.length;
+		fresh += block.length;
 		if (onLevel && block.length) {
 			let sum = 0;
 			for (let i = 0; i < block.length; i++) sum += block[i] * block[i];
@@ -37045,23 +37048,32 @@ function startWavRecording(stream, ctx, opts = {}) {
 			node.disconnect();
 		} catch {}
 	};
+	const drain = () => {
+		const all = new Float32Array(fresh);
+		let at = 0;
+		for (const b of blocks) {
+			all.set(b, at);
+			at += b.length;
+		}
+		blocks = [];
+		fresh = 0;
+		return all;
+	};
 	return {
 		stop() {
 			if (result) return result;
 			teardown();
-			const all = new Float32Array(blocks.reduce((n, b) => n + b.length, 0));
-			let at = 0;
-			for (const b of blocks) {
-				all.set(b, at);
-				at += b.length;
-			}
-			blocks = [];
-			result = resampleTo(all, ctx.sampleRate, targetRate).then((pcm) => encodeWav(pcm, targetRate));
+			result = resampleTo(drain(), ctx.sampleRate, targetRate).then((pcm) => encodeWav(pcm, targetRate));
 			return result;
+		},
+		take() {
+			if (done || fresh < TAKE_MIN_S * ctx.sampleRate) return null;
+			return encodeWav(resample(drain(), ctx.sampleRate, targetRate), targetRate);
 		},
 		cancel() {
 			teardown();
 			blocks = [];
+			fresh = 0;
 		},
 		seconds() {
 			return frames / ctx.sampleRate;
@@ -37082,6 +37094,87 @@ function parseRadio(text) {
 		text: m[1].trim()
 	};
 }
+function routerWords(text) {
+	return String(text || "").toLowerCase().replace(/[’`]/g, "'").replace(/[^a-z0-9' ]+/g, " ").split(" ").filter(Boolean);
+}
+var COMMANDS = [
+	"cancel",
+	"never mind",
+	"nevermind",
+	"scratch that",
+	"forget it",
+	"switch|go|change|jump to *",
+	"switch|go|change|jump over to *",
+	"what|which sessions do i have",
+	"what|which sessions are up|open|running",
+	"list sessions *",
+	"list the|my sessions",
+	"what's|whats up|open|running",
+	"what is up|open|running",
+	"what|who needs me|attention",
+	"what|who needs my attention",
+	"what's|whats it doing",
+	"what is it doing",
+	"status",
+	"what's|whats happening",
+	"what's|whats going on",
+	"summarize|summarise",
+	"summarize|summarise that|it",
+	"what did it say",
+	"summary",
+	"say that again",
+	"repeat",
+	"repeat that",
+	"voice off",
+	"turn voice off",
+	"turn off voice",
+	"stop listening",
+	"stop",
+	"new session *",
+	"a|another new session *",
+	"start|open|create|make new session *",
+	"start|open|create|make a|another new session *",
+	"spin up new session *",
+	"spin up a|another new session *"
+].map((p) => p.split(" ").map((slot) => slot.split("|")));
+var ROUTER_LEADS = /* @__PURE__ */ new Set([
+	"ok",
+	"okay",
+	"hey",
+	"please"
+]);
+function mayBeCommand(text) {
+	let w = routerWords(text);
+	if (w.length > 1 && ROUTER_LEADS.has(w[0])) w = w.slice(1);
+	if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
+	if (!w.length) return true;
+	return COMMANDS.some((p) => {
+		for (let i = 0; i < w.length; i++) {
+			if (i >= p.length) return false;
+			if (p[i][0] === "*") return true;
+			if (!p[i].includes(w[i])) return false;
+		}
+		return true;
+	});
+}
+var RADIO_WORD = /^(?:over|submit|disregard)$/;
+var RADIO_TAIL = /^(?:that|it|all|everything)$/;
+var bareWord = (w) => w.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, "");
+function holdBack(text) {
+	const ws = String(text || "").trim().split(/\s+/).filter(Boolean);
+	if (!ws.length) return {
+		type: "",
+		held: ""
+	};
+	let n = ws.length - 1;
+	while (n > 0 && !bareWord(ws[n])) n--;
+	if (n > 0 && RADIO_TAIL.test(bareWord(ws[n])) && RADIO_WORD.test(bareWord(ws[n - 1]))) n--;
+	return {
+		type: ws.slice(0, n).join(" "),
+		held: ws.slice(n).join(" ")
+	};
+}
+var joinWords = (a, b) => [a.trim(), b.trim()].filter(Boolean).join(" ");
 var VOICE_PREFS_KEY = "cs_voice_desktop";
 function storage() {
 	try {
@@ -37120,16 +37213,50 @@ var Dictation = class {
 	listening = false;
 	interim = "";
 	typed = "";
+	held = "";
+	partial = "";
+	routes = true;
 	begin() {
 		this.listening = true;
 		this.interim = "";
 		this.typed = "";
+		this.held = "";
+		this.partial = "";
 	}
 	get shown() {
-		return [this.typed.trim(), this.interim.trim()].filter(Boolean).join(" ");
+		return [
+			this.typed.trim(),
+			this.held.trim(),
+			this.interim.trim()
+		].filter(Boolean).join(" ");
 	}
 	hearing(t) {
 		if (this.listening) this.interim = t;
+	}
+	unsure(t) {
+		if (this.listening) this.partial = t;
+	}
+	words(w) {
+		if (!this.listening) return { kind: "stopped" };
+		const all = joinWords(this.held, w);
+		if (this.routes && !this.typed && mayBeCommand(all)) {
+			this.held = all;
+			return { kind: "continue" };
+		}
+		const cut = holdBack(all);
+		this.held = cut.held;
+		return cut.type ? {
+			kind: "type",
+			text: cut.type + " ",
+			route: false
+		} : { kind: "continue" };
+	}
+	flush(w) {
+		if (!this.listening) return { kind: "stopped" };
+		const all = joinWords(this.held, w);
+		this.held = "";
+		this.partial = "";
+		return this.heard(all);
 	}
 	wrote(text) {
 		this.typed += text;
@@ -37159,7 +37286,9 @@ var Dictation = class {
 	}
 	finish() {
 		if (!this.listening) return { kind: "stopped" };
-		const tail = this.interim.trim();
+		const tail = joinWords(this.held, this.interim);
+		this.held = "";
+		this.partial = "";
 		const out = tail ? this.heard(tail) : { kind: "continue" };
 		this.listening = false;
 		if (out.kind === "type") return {
@@ -37179,7 +37308,6 @@ var Dictation = class {
 	cancel() {
 		if (!this.listening) return { kind: "stopped" };
 		this.listening = false;
-		this.interim = "";
 		return {
 			kind: "dropped",
 			text: this.erase()
@@ -37189,15 +37317,20 @@ var Dictation = class {
 		if (!this.listening) return { kind: "stopped" };
 		this.listening = false;
 		this.interim = "";
+		const rest = parseRadio(this.held).text;
+		this.held = "";
+		this.partial = "";
 		return {
 			kind: "over",
-			text: ""
+			text: rest ? rest + " " : ""
 		};
 	}
 	erase() {
 		const text = this.typed;
 		this.typed = "";
 		this.interim = "";
+		this.held = "";
+		this.partial = "";
 		return text;
 	}
 };
@@ -37251,6 +37384,7 @@ var LiveDictation = class {
 		this.target = target;
 		this.hooks = hooks;
 		this.dict.begin();
+		this.dict.routes = target?.kind !== "field";
 	}
 	get active() {
 		return !this.done;
@@ -37262,6 +37396,20 @@ var LiveDictation = class {
 	}
 	heard(phrase) {
 		return this.step(() => this.dict.heard(phrase));
+	}
+	words(w) {
+		return this.step(() => this.dict.words(w));
+	}
+	flush(w) {
+		return this.step(() => this.dict.flush(w));
+	}
+	unsure(t) {
+		if (this.done) return;
+		this.dict.unsure(t);
+		this.show();
+	}
+	notice(line) {
+		if (!this.done) this.hooks.caption(line, true);
 	}
 	finish() {
 		return this.step(() => this.dict.finish());
@@ -37281,7 +37429,8 @@ var LiveDictation = class {
 	show() {
 		if (this.done) return;
 		const field = this.target?.kind === "field";
-		this.hooks.caption(this.dict.shown || (field ? "Listening — the words go into the text box" : DICT_HINT), true);
+		const shown = this.dict.shown || (field ? "Listening — the words go into the text box" : DICT_HINT);
+		this.hooks.caption(shown, true, this.dict.partial);
 	}
 	step(next) {
 		this.chain = this.chain.then(() => this.done ? void 0 : this.apply(next())).catch(() => {});
@@ -37304,7 +37453,7 @@ var LiveDictation = class {
 				this.end("");
 				return;
 			case "type":
-				if (await this.put(out.text)) this.show();
+				if (await this.put(out.text, out.route !== false)) this.show();
 				return;
 			case "erase":
 				t?.erase(out.text);
@@ -37335,11 +37484,11 @@ var LiveDictation = class {
 			}
 		}
 	}
-	async put(text) {
+	async put(text, route = true) {
 		const t = this.target;
 		if (!this.dict.typed && t?.kind !== "field") {
 			const words = text.trim();
-			if (await this.hooks.route(words)) {
+			if (route && await this.hooks.route(words)) {
 				this.end(null);
 				return false;
 			}
@@ -37791,7 +37940,10 @@ var CLIP_MAX_MS = 12e3;
 var RMS_SPEECH = .02;
 var UPLOAD_TIMEOUT_MS = 45e3;
 var CLIP_RATE = 16e3;
-function serverRecognizer() {
+var TAIL_MIN_BYTES = 1644;
+var wordsOf = (v) => String((Array.isArray(v) ? v.join(" ") : v) || "").trim();
+var langTag = () => String(navigator.language || "en").split(";")[0];
+function serverRecognizer(opts = {}) {
 	let stream = null;
 	let h = null;
 	let want = false;
@@ -37801,6 +37953,9 @@ function serverRecognizer() {
 	let uploads = 0;
 	let capTimer;
 	const aborters = /* @__PURE__ */ new Set();
+	let streaming = false;
+	let lastEnd = Promise.resolve();
+	const open = /* @__PURE__ */ new Set();
 	const getStream = async () => {
 		if (stream && stream.active !== false) return stream;
 		stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -37812,6 +37967,7 @@ function serverRecognizer() {
 		if (n === "NotFoundError" || n === "DevicesNotFoundError" || n === "OverconstrainedError") return "audio-capture";
 		return "start-failed";
 	};
+	const why = (err) => err?.name === "AbortError" ? "the server took too long" : String(err?.message || err);
 	const maybeEnd = () => {
 		if (!want && !token && uploads === 0 && h) {
 			finishing = false;
@@ -37830,9 +37986,8 @@ function serverRecognizer() {
 		const ac = new AbortController();
 		aborters.add(ac);
 		const timer = setTimeout(() => ac.abort(), UPLOAD_TIMEOUT_MS);
-		const lang = String(navigator.language || "en").split(";")[0];
 		try {
-			const r = await apiRaw("/api/voice/transcribe?lang=" + encodeURIComponent(lang), {
+			const r = await apiRaw("/api/voice/transcribe?lang=" + encodeURIComponent(langTag()), {
 				method: "POST",
 				headers: { "Content-Type": "audio/wav" },
 				body: blob,
@@ -37851,10 +38006,9 @@ function serverRecognizer() {
 			}
 		} catch (err) {
 			if (h !== hh || !hh) return;
-			const why = err?.name === "AbortError" ? "the server took too long" : String(err?.message || err);
-			self.lastError = why;
+			self.lastError = why(err);
 			want = false;
-			hh.onError("server", "Couldn't reach the server: " + why);
+			hh.onError("server", "Couldn't reach the server: " + self.lastError);
 		} finally {
 			clearTimeout(timer);
 			aborters.delete(ac);
@@ -37862,11 +38016,168 @@ function serverRecognizer() {
 		}
 		if (h === hh) maybeEnd();
 	};
+	const call = async (path, init) => {
+		const ac = new AbortController();
+		aborters.add(ac);
+		const timer = setTimeout(() => ac.abort(), UPLOAD_TIMEOUT_MS);
+		try {
+			const r = await apiRaw(path, {
+				...init,
+				signal: ac.signal
+			});
+			const j = await r.json().catch(() => ({}));
+			return {
+				ok: r.ok,
+				status: r.status,
+				j
+			};
+		} finally {
+			clearTimeout(timer);
+			aborters.delete(ac);
+		}
+	};
+	const streamPath = (sid, op) => "/api/voice/stream/" + encodeURIComponent(sid) + op;
+	const abandon = (sid) => {
+		open.delete(sid);
+		apiRaw(streamPath(sid, ""), { method: "DELETE" }).catch(() => {});
+	};
+	const fallBack = (c, line) => {
+		if (!c.stream) return;
+		streaming = false;
+		for (const p of /* @__PURE__ */ new Set([c, cur])) {
+			if (!p?.stream) continue;
+			p.stream = false;
+			const sid = p.sid;
+			p.sid = null;
+			if (sid) {
+				abandon(sid);
+				h?.onPartial?.("");
+				h?.onFlush?.("");
+			}
+			if (cur === p) {
+				clearTimeout(capTimer);
+				capTimer = setTimeout(() => {
+					if (cur === p) endClip();
+				}, CLIP_MAX_MS);
+			}
+		}
+		if (line) h?.onNotice?.(line);
+	};
+	const streamFailed = (c, err) => {
+		self.lastError = why(err);
+		fallBack(c, "Streaming stopped (" + self.lastError + ") — one clip per phrase from here");
+	};
+	const run = (c, req) => {
+		c.busy = req().finally(() => {
+			c.busy = null;
+			pump(c);
+		});
+	};
+	const openStream = (c) => {
+		const hh = h;
+		const before = lastEnd;
+		run(c, async () => {
+			await before;
+			if (h !== hh || !c.stream) return;
+			try {
+				const r = await call("/api/voice/stream", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ lang: langTag() })
+				});
+				const id = String(r.j.id || "");
+				if (h !== hh || !c.stream) {
+					if (r.ok && id) apiRaw(streamPath(id, ""), { method: "DELETE" }).catch(() => {});
+					return;
+				}
+				if (r.ok && id) {
+					c.sid = id;
+					open.add(id);
+				} else if (r.status === 409) {
+					self.lastError = String(r.j.error || "the server can't stream");
+					fallBack(c, "");
+				} else throw new Error(String(r.j.error || "HTTP " + r.status));
+			} catch (err) {
+				if (h === hh) streamFailed(c, err);
+			}
+		});
+	};
+	const sendChunk = async (c, blob, hh) => {
+		try {
+			const r = await call(streamPath(c.sid, "/chunk"), {
+				method: "POST",
+				headers: { "Content-Type": "audio/wav" },
+				body: blob
+			});
+			if (h !== hh || !hh || !c.stream) return;
+			if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
+			self.lastError = "";
+			const w = wordsOf(r.j.committed);
+			if (w) hh.onWords?.(w);
+			hh.onPartial?.(wordsOf(r.j.partial));
+		} catch (err) {
+			if (h === hh) streamFailed(c, err);
+		}
+	};
+	const pump = (c) => {
+		if (!c.stream || !c.sid || c.busy || c.ending || !c.rec || h === null) return;
+		const blob = c.rec.take();
+		if (!blob) return;
+		c.fresh = false;
+		const hh = h;
+		run(c, () => sendChunk(c, blob, hh));
+	};
+	const endStream = async (c) => {
+		const hh = h;
+		const mine = token;
+		c.ending = true;
+		uploads++;
+		let release = () => {};
+		lastEnd = new Promise((r) => release = r);
+		try {
+			const tail = await c.rec.stop().catch(() => null);
+			if (token !== mine) return;
+			token = null;
+			if (want && !finishing) clip();
+			if (c.busy) await c.busy;
+			if (h !== hh || !hh) return;
+			if (!c.stream) {
+				if (c.heard && tail && tail.size > 44) upload(tail);
+				return;
+			}
+			if (!c.sid) return;
+			if (tail && tail.size > TAIL_MIN_BYTES && c.fresh) await sendChunk(c, tail, hh);
+			if (h !== hh || !c.stream || !c.sid) return;
+			const sid = c.sid;
+			c.sid = null;
+			open.delete(sid);
+			try {
+				const r = await call(streamPath(sid, "/end"), { method: "POST" });
+				if (h !== hh) return;
+				if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
+				c.stream = false;
+				hh.onPartial?.("");
+				hh.onFlush?.(wordsOf(r.j.committed));
+			} catch (err) {
+				if (h !== hh) return;
+				c.sid = sid;
+				streamFailed(c, err);
+			}
+		} finally {
+			release();
+			uploads--;
+			if (h === hh) maybeEnd();
+		}
+	};
 	const endClip = () => {
 		const c = cur;
 		cur = null;
 		clearTimeout(capTimer);
 		if (!c?.rec) return;
+		if (c.stream) {
+			endStream(c);
+			return;
+		}
 		const mine = token;
 		c.rec.stop().then((blob) => {
 			if (token !== mine) return;
@@ -37894,13 +38205,23 @@ function serverRecognizer() {
 		const ctx = voiceAudioCtx();
 		if (ctx && ctx.state === "suspended") await ctx.resume().catch(() => {});
 		if (token !== mine) return;
+		if (!want) {
+			token = null;
+			maybeEnd();
+			return;
+		}
 		if (!ctx || ctx.state !== "running") {
 			failed("start-failed", "The audio engine isn't running — click the mic again");
 			return;
 		}
 		const c = {
 			rec: null,
-			heard: false
+			heard: false,
+			stream: streaming,
+			sid: null,
+			busy: null,
+			fresh: false,
+			ending: false
 		};
 		let floor = 0;
 		let lastLoud = 0;
@@ -37909,11 +38230,16 @@ function serverRecognizer() {
 			floor = floor === 0 ? rms : Math.min(rms, floor * 1.05 + .001);
 			const now = Date.now();
 			if (rms > Math.max(RMS_SPEECH, floor * 3)) {
-				if (!c.heard) h?.onSpeech?.();
+				if (!c.heard) {
+					h?.onSpeech?.();
+					if (c.stream) openStream(c);
+				}
 				c.heard = true;
+				c.fresh = true;
 				lastLoud = now;
-			}
+			} else if (!c.heard && c.stream) c.rec?.take();
 			if (c.heard && now - lastLoud > SILENCE_MS) endClip();
+			else pump(c);
 		};
 		try {
 			c.rec = startWavRecording(s, ctx, {
@@ -37926,7 +38252,7 @@ function serverRecognizer() {
 		}
 		cur = c;
 		h?.onStatus?.("Listening…");
-		capTimer = setTimeout(() => {
+		if (!c.stream) capTimer = setTimeout(() => {
 			if (cur === c) endClip();
 		}, CLIP_MAX_MS);
 	};
@@ -37940,6 +38266,8 @@ function serverRecognizer() {
 			h = handlers;
 			want = true;
 			finishing = false;
+			streaming = !!opts.stream?.();
+			lastEnd = Promise.resolve();
 			clip();
 			return true;
 		},
@@ -37962,6 +38290,7 @@ function serverRecognizer() {
 			c?.rec?.cancel();
 			aborters.forEach((a) => a.abort());
 			aborters.clear();
+			open.forEach(abandon);
 		},
 		release() {
 			self.stop();
@@ -38022,12 +38351,12 @@ function serverEngineName(backend, system) {
 	}
 	return id ? "server (" + id + ")" : "server";
 }
-function clipsLine() {
-	return " — 16 kHz clips, " + resamplerName() + ", a phrase ends after 1.1 s of quiet";
+function clipsLine(stream) {
+	return " — " + (stream ? "streaming (words as you speak): 16 kHz, windowed-sinc resampler" : "one clip per phrase: 16 kHz, " + resamplerName()) + ", a phrase ends after 1.1 s of quiet";
 }
 function engineDiagnostics(cfg, stt, tts, electron = isElectron()) {
 	const ready = cfg.server_ready;
-	let rec = stt === "server" ? serverEngineName(ready.stt_backend, cfg.system) + clipsLine() : stt === "browser" ? "this browser" : electron ? "none" : "none in this browser";
+	let rec = stt === "server" ? serverEngineName(ready.stt_backend, cfg.system) + clipsLine(!!ready.stt_stream) : stt === "browser" ? "this browser" : electron ? "none" : "none in this browser";
 	if (stt !== "server" && !ready.stt && (electron || cfg.stt === "server")) rec += " (server recognition isn't ready" + (ready.stt_detail ? ": " + ready.stt_detail : "") + ")";
 	const voice = tts === "server" ? serverEngineName(ready.tts_backend, cfg.system) : tts === "browser" ? "this browser" : "none";
 	return "Recognition: " + rec + " · Voice: " + voice;
@@ -38043,11 +38372,11 @@ function recognizerErrorLine(code, detail) {
 //#endregion
 //#region src/components/TopBarMic.tsx
 var browserRec = browserRecognizer();
-var serverRec = serverRecognizer();
+var cfgNow = DEFAULT_VOICE_CFG;
+var serverRec = serverRecognizer({ stream: () => !!cfgNow.server_ready.stt_stream });
 var browserSp = browserSpeaker();
 var serverSp = serverSpeaker(browserSp);
 var tracker = new ReplyTracker();
-var cfgNow = DEFAULT_VOICE_CFG;
 var speakingListeners = /* @__PURE__ */ new Set();
 var queue = new SpeechQueue(() => ttsEngine(cfgNow) === "server" ? serverSp : browserSp, (on) => speakingListeners.forEach((l) => l(on)));
 function recEngine(c) {
@@ -38130,6 +38459,7 @@ function TopBarMic() {
 	const [listening, setListening] = (0, import_react.useState)(false);
 	const [speaking, setSpeaking] = (0, import_react.useState)(queue.busy);
 	const [caption, setCaptionState] = (0, import_react.useState)("");
+	const [unsure, setUnsure] = (0, import_react.useState)("");
 	const [menuOpen, setMenuOpen] = (0, import_react.useState)(false);
 	const focusedName = useUi((s) => s.focused ? s.aliases[s.focused] || s.focused : "");
 	const btnRef = (0, import_react.useRef)(null);
@@ -38141,8 +38471,9 @@ function TopBarMic() {
 	const idleTimer = (0, import_react.useRef)(void 0);
 	const captionTimer = (0, import_react.useRef)(void 0);
 	const holding = (0, import_react.useRef)(false);
-	const say = (text, sticky = false) => {
+	const say = (text, sticky = false, tail = "") => {
 		setCaptionState(text);
+		setUnsure(tail);
 		clearTimeout(captionTimer.current);
 		if (text && !sticky) captionTimer.current = setTimeout(() => setCaptionState(""), 6e3);
 	};
@@ -38283,6 +38614,22 @@ function TopBarMic() {
 				if (live.current !== d) return;
 				armIdle();
 				d.heard(t);
+			},
+			onWords: (t) => {
+				if (live.current !== d) return;
+				armIdle();
+				d.words(t);
+			},
+			onFlush: (t) => {
+				if (live.current === d) d.flush(t);
+			},
+			onPartial: (t) => {
+				if (live.current !== d) return;
+				if (t) armIdle();
+				d.unsure(t);
+			},
+			onNotice: (t) => {
+				if (live.current === d) d.notice(t);
 			},
 			onError: (code, detail) => {
 				if (live.current !== d) return;
@@ -38474,12 +38821,15 @@ function TopBarMic() {
 			},
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MicGlyph, {})
 		}),
-		caption && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		caption && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "mic-caption",
 			role: "status",
 			"aria-live": "polite",
 			style: capStyle,
-			children: caption
+			children: [caption, unsure && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "mic-unsure",
+				children: [" ", unsure]
+			})]
 		}), document.body),
 		menuOpen && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "mic-pop",
@@ -86982,19 +87332,15 @@ function VoiceSection({ active }) {
 function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
 	const approve = model.get("voice", "approve_dialogs") !== false;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-		className: "voice-section",
 		id: "voice-screen",
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-				className: "set-section-title",
-				children: "Voice"
-			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "set-hint set-block-hint",
 				id: "voice-intro",
 				children: "Talk to your sessions and hear them answer. The desktop app's mic (in the top bar) always uses this computer's engines; the phone page uses the phone's own unless you choose otherwise below. Out of the box this computer uses its built-in engine, so there is nothing to download; pick local models or a hosted service only if you want them."
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-section",
 				id: "voice-engines",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceKindBlock, {
 					kind: "stt",
@@ -87012,12 +87358,17 @@ function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
 				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "voice-kind",
+				className: "set-section",
 				id: "voice-phone",
 				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
-						className: "voice-sub",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+						className: "set-section-title",
 						children: "On the phone page"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "set-hint",
+						id: "voice-phone-hint",
+						children: "The phone's own engine needs nothing set up. The desktop app always uses this computer."
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PhoneWhere, {
 						kind: "stt",
@@ -87026,13 +87377,12 @@ function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PhoneWhere, {
 						kind: "tts",
 						title: "The voice runs on"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						className: "set-hint",
-						id: "voice-phone-hint",
-						children: "The phone's own engine needs nothing set up. The desktop app always uses this computer."
 					})
 				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+				className: "set-section-title",
+				children: "Permission dialogs"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "set-row set-switch-row",
@@ -87061,8 +87411,13 @@ function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
 				})]
 			}),
 			tryRow ?? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TryButtons, { view }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+				className: "set-section-title",
+				children: "Privacy"
+			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "voice-notes",
+				className: "set-row",
+				id: "voice-privacy-notes",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "set-hint",
@@ -87087,30 +87442,33 @@ function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
 function PhoneWhere({ kind, title }) {
 	const model = useSettings();
 	const where = String(model.get("voice", kind) || "phone");
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "voice-field-row",
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row",
 		"data-phone-kind": kind,
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: title
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-				"data-group": "voice",
-				"data-field": kind,
-				value: where,
-				onChange: (e) => model.saveField("voice", kind, e.target.value),
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-					value: "phone",
-					children: "The phone"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-					value: "server",
-					children: "This computer"
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {})
-		]
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "set-label",
+			children: title
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+			"data-group": "voice",
+			"data-field": kind,
+			value: where,
+			onChange: (e) => model.saveField("voice", kind, e.target.value),
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+				value: "phone",
+				children: "The phone"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+				value: "server",
+				children: "This computer"
+			})]
+		})]
 	});
+}
+function StatusText({ ok, text }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "mobile-row-glyph st-" + (ok ? "ok" : "fail"),
+		"aria-hidden": "true",
+		children: ok ? "✓ " : "✗ "
+	}), text] });
 }
 function VoiceKindBlock({ kind, title, model, view, onClearKey, install }) {
 	const backend = effectiveBackend(kind, String(model.get("voice", kind + "_backend") || ""), view);
@@ -87121,138 +87479,132 @@ function VoiceKindBlock({ kind, title, model, view, onClearKey, install }) {
 	const voices = view?.system?.voices || [];
 	const offer = kind === "stt" ? installOffer(backend, view) : null;
 	const showInstall = kind === "stt" && !!install?.supported && (!!offer || install.status.state === "running" || install.touched);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "voice-kind",
-		"data-kind": kind,
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
-				className: "voice-sub",
-				children: title
-			}),
-			f.backend && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "voice-field-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: "Engine"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
-						"data-group": "voice",
-						"data-field": kind + "_backend",
-						value: backend,
-						onChange: (e) => model.saveField("voice", kind + "_backend", e.target.value),
-						children: VOICE_BACKENDS.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: o.value,
-							children: o.label
-						}, o.value))
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-hint",
-						children: kind === "stt" ? "What turns your words into text." : "What reads the agent's words aloud."
-					})
-				]
-			}),
-			f.url && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "voice-field-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: "URL"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-						group: "voice",
-						field: kind + "_url",
-						placeholder: "https://api.openai.com/v1"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-hint",
-						children: "The host's base URL; blank means OpenAI. Groq: https://api.groq.com/openai/v1."
-					})
-				]
-			}),
-			f.key && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "voice-field-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: "API key"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-						group: "voice",
-						field: kind + "_api_key",
-						type: "password",
-						placeholder: "paste the host's key"
-					}),
-					keySaved ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			"data-kind": kind,
+			children: title
+		}),
+		f.backend && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Engine"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+					"data-group": "voice",
+					"data-field": kind + "_backend",
+					value: backend,
+					onChange: (e) => model.saveField("voice", kind + "_backend", e.target.value),
+					children: VOICE_BACKENDS.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: o.value,
+						children: o.label
+					}, o.value))
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: kind === "stt" ? "What turns your words into text." : "What reads the agent's words aloud."
+				})
+			]
+		}),
+		f.url && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "URL"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+					group: "voice",
+					field: kind + "_url",
+					placeholder: "https://api.openai.com/v1"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "The host's base URL; blank means OpenAI. Groq: https://api.groq.com/openai/v1."
+				})
+			]
+		}),
+		f.key && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "API key"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+					group: "voice",
+					field: kind + "_api_key",
+					type: "password",
+					placeholder: "paste the host's key"
+				}),
+				keySaved ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "test-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "test-btn",
 						id: "voice-clear-" + kind,
 						title: "Forget the saved key",
 						onClick: () => onClearKey(kind),
 						children: "Clear"
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-hint",
-						children: "Leave blank to keep the saved one."
-					})
-				]
-			}),
-			f.model && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "voice-field-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: "Model"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-						group: "voice",
-						field: kind + "_model",
-						placeholder: local ? "small" : kind === "stt" ? "gpt-transcribe" : "gpt-4o-mini-tts"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-hint",
-						children: local ? "A faster-whisper size: tiny, base, small or medium." : "The host's model name (Groq: whisper-large-v3-turbo)."
-					})
-				]
-			}),
-			f.voice && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "voice-field-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: "Voice name"
-					}),
-					backend === "system" && voices.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-						group: "voice",
-						field: "tts_voice",
-						options: systemVoiceOptions(voices, model.get("voice", "tts_voice"))
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-						group: "voice",
-						field: "tts_voice",
-						placeholder: backend === "system" ? "the system's default" : local ? "en_US-lessac-medium" : "alloy"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {})
-				]
-			}),
-			line.text && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "set-hint voice-ready st-" + (line.ok ? "ok" : "fail"),
-				id: "voice-ready-" + kind,
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "mobile-row-glyph st-" + (line.ok ? "ok" : "fail"),
-					"aria-hidden": "true",
-					children: line.ok ? "✓" : "✗"
-				}), line.text]
-			}),
-			showInstall && install && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallRow, {
-				offer,
-				install,
-				allowed: view?.configure_allowed !== false
+						children: "A key is saved. Leave blank to keep it."
+					})]
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "Leave blank to keep the saved one."
+				})
+			]
+		}),
+		f.model && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Model"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+					group: "voice",
+					field: kind + "_model",
+					placeholder: local ? "small" : kind === "stt" ? "gpt-transcribe" : "gpt-4o-mini-tts"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: local ? "A faster-whisper size: tiny, base, small or medium." : "The host's model name (Groq: whisper-large-v3-turbo)."
+				})
+			]
+		}),
+		f.voice && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Voice name"
+			}), backend === "system" && voices.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+				group: "voice",
+				field: "tts_voice",
+				options: systemVoiceOptions(voices, model.get("voice", "tts_voice"))
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+				group: "voice",
+				field: "tts_voice",
+				placeholder: backend === "system" ? "the system's default" : local ? "en_US-lessac-medium" : "alloy"
+			})]
+		}),
+		line.text && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			id: "voice-ready-" + kind,
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatusText, {
+				ok: line.ok,
+				text: line.text
 			})
-		]
-	});
+		}),
+		showInstall && install && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallRow, {
+			offer,
+			install,
+			allowed: view?.configure_allowed !== false
+		})
+	] });
 }
 function systemVoiceOptions(voices, saved) {
 	const out = [{
@@ -87392,35 +87744,38 @@ async function installLocalModels(onStatus, opts = {}) {
 }
 function InstallRow({ offer, install, allowed }) {
 	const v = installView(install.status, allowed);
+	const state = install.status.state;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "voice-install",
+		className: "set-row onboarding-action",
 		id: "voice-install",
 		"data-offer": offer || "",
-		children: [offer === "basic" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			id: "voice-install-why",
-			children: INSTALL_BASIC_LINE
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "voice-install-row",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "onboarding-action-text",
 			children: [
-				v.button && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					id: "voice-install-btn",
-					disabled: v.disabled,
-					title: !allowed || install.status.refused ? v.text : void 0,
-					onClick: install.onInstall,
-					children: v.button === "retry" ? "Try again" : v.button === "busy" ? "Installing…" : INSTALL_LABEL
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Local models"
+				}),
+				offer === "basic" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					id: "voice-install-why",
+					children: INSTALL_BASIC_LINE
+				}),
+				v.text ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					id: "voice-install-status",
+					role: "status",
+					children: state === "done" || state === "failed" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatusText, {
+						ok: state === "done",
+						text: v.text
+					}) : v.text
+				}) : offer !== "basic" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "Downloads faster-whisper and a piper voice; both run on this computer."
 				}),
 				v.button === "busy" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("progress", {
 					className: "voice-install-progress",
 					"aria-label": "Installing local models"
-				}),
-				v.text && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint voice-install-status" + (install.status.state === "done" ? " st-ok" : install.status.state === "failed" ? " st-fail" : ""),
-					id: "voice-install-status",
-					role: "status",
-					children: v.text
 				}),
 				v.last && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint voice-install-log",
@@ -87429,24 +87784,51 @@ function InstallRow({ offer, install, allowed }) {
 					children: v.last
 				})
 			]
+		}), v.button && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "test-btn",
+			id: "voice-install-btn",
+			disabled: v.disabled,
+			title: !allowed || install.status.refused ? v.text : void 0,
+			onClick: install.onInstall,
+			children: v.button === "retry" ? "Try again" : v.button === "busy" ? "Installing…" : INSTALL_LABEL
 		})]
 	});
 }
 var canRecord = () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
 function TryButtons({ view, busy = "", left = 0, result = null, onSay, onHear }) {
 	const st = tryState(view, canRecord());
-	const why = [st.say.ok ? "" : st.say.why, st.hear.ok ? "" : st.hear.why].filter(Boolean);
+	const hint = (kind, why, idle) => result?.kind === kind ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "set-hint",
+		id: "voice-try-result",
+		role: "status",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatusText, {
+			ok: result.ok,
+			text: result.text
+		})
+	}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "set-hint",
+		id: `voice-try-${kind}-hint`,
+		children: why || idle
+	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "voice-try",
+		className: "set-section",
 		id: "voice-try",
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
-				className: "voice-sub",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+				className: "set-section-title",
 				children: "Try it"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "voice-try-buttons",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				className: "set-row onboarding-action",
+				"data-try": "say",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "onboarding-action-text",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "The voice"
+					}), hint("say", st.say.why, `Speaks “${TEST_SENTENCE}” through this computer's speakers.`)]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "test-btn",
 					id: "voice-try-say",
@@ -87454,6 +87836,17 @@ function TryButtons({ view, busy = "", left = 0, result = null, onSay, onHear })
 					title: st.say.why || void 0,
 					onClick: onSay,
 					children: busy === "say" ? "Speaking…" : "Say a test sentence"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row onboarding-action",
+				"data-try": "hear",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "onboarding-action-text",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Recognition"
+					}), hint("hear", st.hear.why, `Listens for ${LISTEN_SECONDS} seconds: say a short sentence.`)]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "test-btn",
@@ -87463,24 +87856,6 @@ function TryButtons({ view, busy = "", left = 0, result = null, onSay, onHear })
 					onClick: onHear,
 					children: busy === "hear" ? left > 0 ? `Listening… ${left}` : "Recognizing…" : "Try recognition"
 				})]
-			}),
-			result ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "set-hint voice-try-result st-" + (result.ok ? "ok" : "fail"),
-				id: "voice-try-result",
-				role: "status",
-				children: result.text
-			}) : why.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "set-hint",
-				id: "voice-try-why",
-				children: [...new Set(why)].join(" ")
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "set-hint",
-				id: "voice-try-hint",
-				children: [
-					"Recognition listens for ",
-					LISTEN_SECONDS,
-					" seconds: say a short sentence."
-				]
 			})
 		]
 	});
@@ -87504,15 +87879,22 @@ function TryRow({ view }) {
 		const c = ctx();
 		setBusy("say");
 		setResult(null);
-		setResult(await speakTest(c, view?.server_ready?.tts_backend || ""));
+		setResult({
+			kind: "say",
+			...await speakTest(c, view?.server_ready?.tts_backend || "")
+		});
 		setBusy("");
 	};
 	const onHear = async () => {
 		const c = ctx();
 		setBusy("hear");
 		setResult(null);
+		const heard = (r) => setResult({
+			kind: "hear",
+			...r
+		});
 		if (!c) {
-			setResult({
+			heard({
 				ok: false,
 				text: "This browser can't record audio."
 			});
@@ -87523,7 +87905,7 @@ function TryRow({ view }) {
 		try {
 			stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 		} catch (err) {
-			setResult({
+			heard({
 				ok: false,
 				text: micErrorText(err)
 			});
@@ -87540,10 +87922,10 @@ function TryRow({ view }) {
 			const wav = await rec.stop();
 			stream.getTracks().forEach((t) => t.stop());
 			const lang = String(navigator.language || "en").split(";")[0];
-			setResult(await transcribeTest(wav, lang));
+			heard(await transcribeTest(wav, lang));
 		} catch (err) {
 			stream.getTracks().forEach((t) => t.stop());
-			setResult({
+			heard({
 				ok: false,
 				text: "Couldn't record: " + noDot(String(err?.message || err)) + "."
 			});

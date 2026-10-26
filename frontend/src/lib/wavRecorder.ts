@@ -11,6 +11,8 @@
 
 const DEFAULT_TARGET_RATE = 16000;
 const BLOCK_FRAMES = 4096;
+/** {@link WavRecording.take} returns nothing for less audio than this (s). */
+export const TAKE_MIN_S = 0.3;
 
 /** 16-bit PCM mono WAV (44-byte RIFF header, little-endian), type "audio/wav". */
 export function encodeWav(samples: Float32Array, sampleRate: number): Blob {
@@ -125,6 +127,12 @@ export interface WavRecording {
   /** Stop and return the WAV of everything heard since start (resampled to
    * the target rate by {@link resampleTo}). */
   stop(): Promise<Blob>;
+  /** The WAV of what was heard since the previous take() (or start), and
+   * recording goes on — a streaming recognizer's next chunk. Null for less
+   * than {@link TAKE_MIN_S} (kept for the next take), or once stopped.
+   * Synchronous, so it resamples with {@link resample}; {@link stop} then
+   * returns only what came after the last take. */
+  take(): Blob | null;
   /** Drop everything; no blob. */
   cancel(): void;
   /** Seconds recorded so far. */
@@ -141,7 +149,7 @@ export interface WavRecorderOptions {
 /** Record a MediaStream through `ctx` (the caller's AudioContext, already running) with a
  * ScriptProcessorNode(4096, 1, 1) — deprecated but present everywhere, including iOS Safari;
  * no AudioWorklet module file to load. Mono (first channel), resampled to targetRate in stop()
- * ({@link resampleTo}). */
+ * ({@link resampleTo}) and in take() ({@link resample}). */
 export function startWavRecording(
   stream: MediaStream,
   ctx: AudioContext,
@@ -158,6 +166,7 @@ export function startWavRecording(
 
   let blocks: Float32Array[] = [];
   let frames = 0;
+  let fresh = 0; // frames in `blocks`: since start or the last take()
   let done = false;
   let result: Promise<Blob> | null = null;
 
@@ -167,6 +176,7 @@ export function startWavRecording(
     const block = e.inputBuffer.getChannelData(0).slice();
     blocks.push(block);
     frames += block.length;
+    fresh += block.length;
     if (onLevel && block.length) {
       let sum = 0;
       for (let i = 0; i < block.length; i++) sum += block[i] * block[i];
@@ -190,24 +200,36 @@ export function startWavRecording(
     }
   };
 
+  /** Everything in `blocks`, in one array; the list starts over. */
+  const drain = () => {
+    const all = new Float32Array(fresh);
+    let at = 0;
+    for (const b of blocks) {
+      all.set(b, at);
+      at += b.length;
+    }
+    blocks = [];
+    fresh = 0;
+    return all;
+  };
+
   return {
     stop() {
       if (result) return result;
       teardown();
       // After cancel() the list is already empty: an empty WAV, not a throw.
-      const all = new Float32Array(blocks.reduce((n, b) => n + b.length, 0));
-      let at = 0;
-      for (const b of blocks) {
-        all.set(b, at);
-        at += b.length;
-      }
-      blocks = [];
+      const all = drain();
       result = resampleTo(all, ctx.sampleRate, targetRate).then((pcm) => encodeWav(pcm, targetRate));
       return result;
+    },
+    take() {
+      if (done || fresh < TAKE_MIN_S * ctx.sampleRate) return null;
+      return encodeWav(resample(drain(), ctx.sampleRate, targetRate), targetRate);
     },
     cancel() {
       teardown();
       blocks = [];
+      fresh = 0;
     },
     seconds() {
       return frames / ctx.sampleRate;
