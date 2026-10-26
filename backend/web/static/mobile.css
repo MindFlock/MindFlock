@@ -753,6 +753,16 @@ html, body {
   user-select: none;
 }
 .sess-main:active { background: var(--border); }
+/* The row's number, in the order shown: "session two" by voice is the
+   second row. Held while the sheet is open (renderRows). */
+.sess-num {
+  flex: 0 0 auto;
+  min-width: 1.2em;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
 .sess-row.current .sess-main { border-color: var(--accent); }
 .sess-text {
   flex: 1 1 auto;

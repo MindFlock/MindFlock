@@ -40,14 +40,33 @@ const state = {
   streamMaxInflight: 0,
   chunkDelay: 120,        // ms each chunk takes to answer
   streamFailChunk: {},    // id → n: that stream's nth chunk answers 500
+  dialogsBy: {},          // title → its dialog (GET /dialog and the router's answers); else `dialog`
 };
+const NUMS = { one: 1, two: 2, three: 3, four: 4, nine: 9, "1": 1, "2": 2, "3": 3, "4": 4, "9": 9 };
 
 // A small stand-in for the server's router (POST /api/voice/route): the
 // commands the scenarios say, a session it creates for "new session …",
 // and "prompt" for everything else.
-function routeAnswer(text) {
+function routeAnswer(text, session) {
   const t = String(text || "").toLowerCase().replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
   let m;
+  // The widened vocabulary: numbered / stepped switching, answers (by row
+  // number the router names only the index; asked again with that row's
+  // title it names the dialog), "what is it asking".
+  if ((m = /^session (\w+)$/.exec(t)) && NUMS[m[1]]) return { kind: "switch_index", index: NUMS[m[1]] };
+  if (t === "next session") return { kind: "switch_rel", delta: 1 };
+  if (t === "previous session") return { kind: "switch_rel", delta: -1 };
+  if ((m = /^session (\w+) (yes|no)$/.exec(t)) && NUMS[m[1]]) {
+    const d = state.dialogsBy[session];
+    if (d) return { kind: "answer", choice: m[2], title: session, dialog_id: d.id, keys: [m[2] === "yes" ? "1" : "2"], say: "Answered " + m[2] + "." };
+    return { kind: "answer", choice: m[2], index: NUMS[m[1]] };
+  }
+  if (t === "yes" && state.dialogsBy[session]) return { kind: "answer", choice: "yes", dialog_id: state.dialogsBy[session].id, keys: ["1"] };
+  if (t === "what is it asking") {
+    const row = state.rows.find((r) => r.title === session);
+    return { kind: "question", say: (row ? row.name : session) + ": Should I deploy it?" };
+  }
+  if (t === "is it a newer kind") return { kind: "summon_the_flock" };
   if ((m = /^switch to (.+)$/.exec(t))) {
     const row = state.rows.find((r) => r.name.toLowerCase() === m[1]);
     if (!row) return { kind: "no-session", say: "No session called " + m[1] + "." };
@@ -134,12 +153,14 @@ async function mock(route) {
     return json(route, { view, text: view === "last_reply" ? state.lastReply : "", source: "x", has_question: false, truncated: false, activity: "working" });
   }
   if ((mm = /^\/api\/instances\/([^/]+)\/dialog$/.exec(p))) {
-    if (!state.dialog) return route.fulfill({ status: 204, body: "" });
-    return json(route, state.dialog);
+    const dt = decodeURIComponent(mm[1]);
+    const d = dt in state.dialogsBy ? state.dialogsBy[dt] : state.dialog;
+    if (!d) return route.fulfill({ status: 204, body: "" });
+    return json(route, d);
   }
   if ((mm = /^\/api\/instances\/([^/]+)\/answer$/.exec(p))) return json(route, state.answerReply || { ok: true }, state.answerStatus || 200);
   if (p === "/api/voice/route" && state.routeDelay) await sleep(state.routeDelay);
-  if (p === "/api/voice/route") return state.routeStatus ? json(route, { error: "no route" }, state.routeStatus) : json(route, routeAnswer(body.text));
+  if (p === "/api/voice/route") return state.routeStatus ? json(route, { error: "no route" }, state.routeStatus) : json(route, routeAnswer(body.text, body.session));
   if (p === "/api/voice") return state.voiceCfg ? json(route, state.voiceCfg) : json(route, { error: "nope" }, 404);
   if (p === "/api/fleet") return json(route, { in_fleet: false, members: [], requests: [] });
   if (p === "/api/update/check") return json(route, {});
@@ -867,6 +888,193 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     check("a chunk failing mid-phrase → the rest as a clip, behind the words so far", state.transcribes.length === 2 && (await page4.evaluate(() => document.getElementById("compose").value)) === "check the build logs", JSON.stringify([state.transcribes.length, await page4.evaluate(() => document.getElementById("compose").value)]));
     check("…the broken stream was DELETEd, never ended", state.streamDeletes.slice(deletesF).indexOf(sidF) >= 0 && state.streamEnds.indexOf(sidF) < 0, JSON.stringify([sidF, state.streamDeletes, state.streamEnds]));
     await page4.close();
+    state.voiceCfg = null;
+
+
+    // ---- the wider vocabulary: numbered rows, stop phrases anywhere, answers
+    state.voiceCfg = { stt: "phone", tts: "phone", approve_dialogs: true };
+    state.routeStatus = 0;
+    state.routeDelay = 0;
+    state.dialog = null;
+    state.dialogsBy = {};
+    state.rows = [
+      { title: "login-fix", name: "Login fix", activity: "idle", status: "running", last_turn: "", last_say: null, voice: false },
+      { title: "invoice-parser", name: "Invoice parser", activity: "idle", status: "running", last_turn: "", last_say: null, voice: false },
+      { title: "api-docs", name: "API docs", activity: "idle", status: "running", last_turn: "", last_say: "Docs rebuilt. Anything else?", voice: false },
+    ];
+    const page5 = await ctx.newPage();
+    page5.on("pageerror", (e) => errors.push(String(e)));
+    await page5.route("**/api/**", mock);
+    await page5.evaluate(() => { try { localStorage.removeItem("cs_voice"); } catch (e) {} }).catch(() => {});
+    await page5.goto(`http://127.0.0.1:${PORT}/mobile.html?s=login-fix`, { waitUntil: "load" });
+    await waitFor(page5, () => window.mfVoice && window.mfVoice.cfg && document.getElementById("picker-title").textContent === "Login fix", 5000, "vocab page loaded");
+    const rowTitles = () => page5.evaluate(() => Array.from(document.querySelectorAll("#session-list .sess-row")).map((r) => r.getAttribute("data-title")));
+    const listen5 = async (label) => {
+      if (!["listening", "awaiting"].includes(await vstate(page5))) await page5.click("#voice-btn");
+      return waitFor(page5, () => window.mfVoice.state === "listening" || window.mfVoice.state === "awaiting", 3000, label);
+    };
+    const idle5 = (label) => waitFor(page5, () => window.mfVoice.state === "idle", 4000, label);
+    const posts5 = (p) => state.posts.filter((x) => x.path.endsWith(p));
+    await page5.click("#voice-btn");
+    await waitFor(page5, () => window.mfVoice.state === "listening", 3000, "vocab listening");
+    await page5.click("#voice-cancel");
+    await idle5("vocab idle");
+
+    // Numbered rows, in the order shown, held while the sheet is open.
+    await page5.click("#picker");
+    await waitFor(page5, () => !document.getElementById("sessions-sheet").classList.contains("hidden"), 2000, "sessions sheet");
+    const order0 = await rowTitles();
+    const nums0 = await page5.evaluate(() => Array.from(document.querySelectorAll("#session-list .sess-num")).map((n) => n.textContent));
+    check("the Sessions sheet numbers its rows 1, 2, 3 in the order shown", nums0.join(",") === "1,2,3" && order0.length === 3, JSON.stringify([nums0, order0]));
+    check("…and says how to use the numbers while voice is on", !(await page5.evaluate(() => document.getElementById("sessions-voice-note").classList.contains("hidden"))));
+    // A row that now needs you would sort first; a new session arrives.
+    state.rows.find((r) => r.title === order0[2]).activity = "clarify";
+    state.rows.push({ title: "new-thing", name: "New thing", activity: "idle", status: "running", last_turn: "", last_say: null, voice: false });
+    await waitFor(page5, () => document.querySelectorAll("#session-list .sess-row").length === 4, 6000, "the new row");
+    const order1 = await rowTitles();
+    check("while the sheet is open the order holds; a new session goes to the end", JSON.stringify(order1) === JSON.stringify(order0.concat(["new-thing"])), JSON.stringify([order0, order1]));
+    await page5.evaluate(() => document.getElementById("sessions-sheet").classList.add("hidden"));
+    state.rows.find((r) => r.title === order0[2]).activity = "idle";
+    state.rows.pop();
+    await waitFor(page5, () => document.querySelectorAll("#session-list .sess-row").length === 3, 6000, "back to three rows");
+    const order = await rowTitles();
+
+    // "session two" (the router's switch_index) → the second row shown.
+    await listen5("listening for session two");
+    await page5.evaluate(() => window.__hear("session two"));
+    await page5.waitForFunction((t) => window.mfVoice.session === t, order[1], { timeout: 4000 }).catch(() => {});
+    check("'session two' selects the second row shown, voice follows", (await page5.evaluate(() => window.mfVoice.session)) === order[1], JSON.stringify([order, await page5.evaluate(() => window.mfVoice.session)]));
+    check("…the router said switch_index (diagnostics: last route kind)", /^switch_index 2/.test(await page5.evaluate(() => window.mfVoice.lastRoute)), await page5.evaluate(() => window.mfVoice.lastRoute));
+    await idle5("idle after session two");
+    // "next session" → the row after it.
+    await listen5("listening for next session");
+    await page5.evaluate(() => window.__hear("next session"));
+    await page5.waitForFunction((t) => window.mfVoice.session === t, order[2], { timeout: 4000 }).catch(() => {});
+    check("'next session' moves one row down", (await page5.evaluate(() => window.mfVoice.session)) === order[2]);
+    await idle5("idle after next");
+    // Out of range.
+    await listen5("listening for session nine");
+    await page5.evaluate(() => window.__hear("session nine"));
+    await waitFor(page5, () => window.__spoken.includes("There is no session 9."), 3000, "no session 9");
+    check("'session nine' → 'There is no session 9.'", (await spoken(page5)).includes("There is no session 9.") && (await page5.evaluate(() => window.mfVoice.session)) === order[2]);
+    await idle5("idle after nine");
+    // A 404 route → the local table numbers the rows the same way.
+    state.routeStatus = 404;
+    await listen5("listening for local session one");
+    await page5.evaluate(() => window.__hear("go to session one"));
+    await page5.waitForFunction((t) => window.mfVoice.session === t, order[0], { timeout: 4000 }).catch(() => {});
+    check("route 404 → the local table: 'go to session one' → the first row", (await page5.evaluate(() => window.mfVoice.session)) === order[0]);
+    await idle5("idle after local");
+    state.routeStatus = 0;
+    const cur = order[0];
+    const curName = state.rows.find((r) => r.title === cur).name;
+
+    // "stop recording" in the middle of dictation: stop, the box kept, nothing sent.
+    const sends5 = posts5("/send").length;
+    await listen5("listening for dictation");
+    await page5.evaluate(() => window.__hear("fix the flaky test"));
+    await waitFor(page5, () => document.getElementById("compose").value === "fix the flaky test", 3000, "dictated");
+    const routes5 = posts5("/voice/route").length;
+    await page5.evaluate(() => window.__hear("and the docs, stop recording"));
+    await idle5("stopped by the phrase");
+    check("'… stop recording' mid-dictation stops listening, the box kept without the words", (await vstate(page5)) === "idle" && (await page5.evaluate(() => document.getElementById("compose").value)) === "fix the flaky test and the docs" && posts5("/send").length === sends5, await page5.evaluate(() => document.getElementById("compose").value));
+    check("…never asked the router", posts5("/voice/route").length === routes5);
+    check("…and the strip says how to send", /^In the box/.test(await page5.evaluate(() => document.getElementById("voice-caption").textContent)));
+    await listen5("listening for that's all");
+    await page5.evaluate(() => window.__hear("That's all."));
+    await idle5("that's all");
+    check("'that's all' alone stops too, the box untouched", (await page5.evaluate(() => document.getElementById("compose").value)) === "fix the flaky test and the docs");
+    await page5.evaluate(() => { const c = document.getElementById("compose"); c.value = ""; c.dispatchEvent(new Event("input")); });
+
+    // "yes" with a pending dialog (the router names it) → POST /answer.
+    state.dialogsBy[cur] = { id: "dv1", parsed: true, question: "Allow npm publish?", command: "npm publish", options: [{ key: "1", label: "Yes", kind: "yes" }, { key: "2", label: "No", kind: "no" }] };
+    await listen5("listening for yes");
+    await page5.evaluate(() => window.__hear("yes"));
+    await waitFor(page5, () => window.mfVoice.state === "working", 4000, "answered by the router");
+    let ans5 = posts5("/answer");
+    check("'yes' with a pending dialog → POST /answer {keys:['1'], dialog_id, by:'user'}", ans5.length >= 1 && ans5[ans5.length - 1].path.includes(cur) && JSON.stringify(ans5[ans5.length - 1].body) === JSON.stringify({ keys: ["1"], dialog_id: "dv1", by: "user" }), JSON.stringify(ans5));
+    check("…'Answered yes.'", (await spoken(page5)).includes("Answered yes."));
+    await page5.click("#voice-cancel");
+    await idle5("idle after answer");
+    // Approve dialogs by voice off: read, never answered.
+    await page5.evaluate(() => { window.mfVoice.cfg.approve_dialogs = false; });
+    const nAns = posts5("/answer").length;
+    await listen5("listening for gated yes");
+    await page5.evaluate(() => window.__hear("yes"));
+    await waitFor(page5, () => window.__spoken.filter((t) => t === "Answer it on the screen.").length >= 1, 3000, "gated");
+    check("approve_dialogs off → 'Answer it on the screen.', no /answer", posts5("/answer").length === nAns);
+    await idle5("idle after gated");
+    await page5.evaluate(() => { window.mfVoice.cfg.approve_dialogs = true; });
+    delete state.dialogsBy[cur];
+
+    // "session two yes": the router names only the row → asked again with
+    // that row's title → /answer THERE; voice stays here.
+    const other = order[1], otherName = state.rows.find((r) => r.title === other).name;
+    state.dialogsBy[other] = { id: "dv2", parsed: true, question: "Allow rm build?", command: "rm -rf build", options: [{ key: "1", label: "Yes", kind: "yes" }, { key: "2", label: "No", kind: "no" }] };
+    await listen5("listening for session two yes");
+    await page5.evaluate(() => window.__hear("session two yes"));
+    await waitFor(page5, () => window.__spoken.some((t) => /: Answered yes\.$/.test(t)), 4000, "targeted answer");
+    ans5 = posts5("/answer");
+    const r5 = posts5("/voice/route").slice(-2);
+    check("'session two yes' answers row two: POST /answer there", ans5.length === nAns + 1 && ans5[ans5.length - 1].path.includes(other) && ans5[ans5.length - 1].body.dialog_id === "dv2" && ans5[ans5.length - 1].body.keys[0] === "1", JSON.stringify(ans5.slice(-1)));
+    check("…the router was asked again about that row's session", r5.length === 2 && r5[1].body.session === other, JSON.stringify(r5));
+    check("…said name first", (await spoken(page5)).includes(otherName + ": Answered yes."));
+    check("…and voice stayed on the current session", (await page5.evaluate(() => window.mfVoice.session)) === cur && (await page5.evaluate(() => document.getElementById("picker-title").textContent)) === curName);
+    await idle5("idle after targeted");
+    // The same offline: the page reads that session's dialog itself.
+    state.routeStatus = 404;
+    await listen5("listening for local targeted");
+    await page5.evaluate(() => window.__hear("session two, no"));
+    await page5.waitForFunction((line) => window.__spoken.includes(line), otherName + ": answered no.", { timeout: 4000, polling: 50 }).catch(() => console.log("  timeout waiting for local targeted"));
+    ans5 = posts5("/answer");
+    check("route 404 → 'session two, no' answers row two's dialog locally (key 2), voice stays", ans5.length === nAns + 2 && ans5[ans5.length - 1].path.includes(other) && ans5[ans5.length - 1].body.keys[0] === "2" && (await page5.evaluate(() => window.mfVoice.session)) === cur, JSON.stringify(ans5.slice(-1)));
+    await idle5("idle after local targeted");
+    state.routeStatus = 0;
+    delete state.dialogsBy[other];
+
+    // "what is it asking" → the router's say.
+    await listen5("listening for what is it asking");
+    await page5.evaluate(() => window.__hear("What is it asking?"));
+    await waitFor(page5, () => window.__spoken.some((t) => t.indexOf("Should I deploy it?") >= 0), 3000, "question say");
+    check("'what is it asking' speaks the router's say, name first", (await spoken(page5)).includes(curName + ": Should I deploy it?"));
+    await idle5("idle after question");
+
+    // A question (no dialog): the answer is a prompt to this session.
+    await page5.evaluate((t) => window.mfVoice.onEvent({ seq: 500, event: "session.activity_changed", session: t, old: "working", new: "idle", ts: Date.now() / 1000, data: { say: "Tests pass. Should I push?", has_question: true, source: "hook" } }), cur);
+    await waitFor(page5, () => window.mfVoice.state === "awaiting" && window.__rec && window.__rec.started, 4000, "awaiting the answer");
+    const sendsQ = posts5("/send").length;
+    await page5.evaluate(() => window.__hear("no thanks"));
+    await waitFor(page5, () => window.mfVoice.state === "working", 4000, "question answered");
+    const sq = posts5("/send").slice(sendsQ);
+    check("a question's answer ('no thanks') goes as a prompt to this session, no 'submit' needed", sq.length === 1 && sq[0].path.includes(cur) && sq[0].body.text === "no thanks", JSON.stringify(sq));
+    await page5.click("#voice-cancel");
+    await idle5("idle after the question");
+    // Another session's question: "tell API docs yes" → /send there, voice stays.
+    await listen5("listening for tell");
+    await page5.evaluate(() => { document.getElementById("compose").value = "draft for later"; });
+    await page5.evaluate(() => window.__hear("tell API docs yes"));
+    await waitFor(page5, () => window.__spoken.includes("Sent to API docs."), 4000, "tell");
+    const st = posts5("/send").slice(-1)[0];
+    check("'tell API docs yes' (it asked a question) → /send 'yes' there", st && st.path.includes("api-docs") && st.body.text === "yes", JSON.stringify(st));
+    check("…voice stays here and the box is kept", (await page5.evaluate(() => window.mfVoice.session)) === cur && (await page5.evaluate(() => document.getElementById("compose").value)) === "draft for later");
+    await idle5("idle after tell");
+    await page5.evaluate(() => { const c = document.getElementById("compose"); c.value = ""; c.dispatchEvent(new Event("input")); });
+
+    // A kind this page does not know is a prompt: the words stay words.
+    await listen5("listening for an unknown kind");
+    await page5.evaluate(() => window.__hear("is it a newer kind"));
+    await waitFor(page5, () => document.getElementById("compose").value === "is it a newer kind", 3000, "unknown kind in the box");
+    check("an unknown route kind → a prompt (the words in the box, still listening)", (await page5.evaluate(() => document.getElementById("compose").value)) === "is it a newer kind" && (await vstate(page5)) === "listening");
+    await page5.click("#voice-cancel");
+
+    // Diagnostics: the route kind and the numbering.
+    await page5.click("#voice-gear");
+    await sleep(200);
+    const diag6 = await page5.evaluate(() => document.getElementById("voice-diag").textContent);
+    check("diagnostics: the session numbers, as the sheet shows them", diag6.indexOf("Session numbers: 1 ") >= 0 && /held while it is open/.test(diag6), diag6.replace(/\n/g, " | "));
+    check("diagnostics: the last route kind", /Router: summon_the_flock \(unknown here: a prompt\)/.test(diag6), diag6.replace(/\n/g, " | "));
+    await page5.click("#voice-done");
+    await page5.close();
     state.voiceCfg = null;
   } catch (e) {
     console.log("HARNESS ERROR", e && e.stack || e);

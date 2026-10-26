@@ -5949,8 +5949,13 @@ dialog question, the radio words — *Say "over" to keep it, "submit" to
 send, "disregard" to start over* / *Release to keep it; say "submit" to
 send*), **Cancel** and **⚙**. Voice follows the
 **selected** session: picking another session in the Sessions sheet (or
-saying "switch to <name>") moves the conversation there; the flag of the
-session you left stays on. **On iPhone, open `/m` in a Safari tab.** iOS has speech
+saying "switch to <name>", "session two", "next session") moves the
+conversation there; the flag of the session you left stays on. The Sessions
+sheet numbers its rows **1, 2, 3…** in the order shown (attention first),
+and that order holds while the sheet is open — a row that changes state
+does not jump, a new session is added at the end — so the number you read
+is the number you say. With voice on the sheet says so under the list
+(*Say "session 2" or "next session" to switch…*). **On iPhone, open `/m` in a Safari tab.** iOS has speech
 recognition only there (WebKit bug 225298): the home-screen icon, and every
 other iOS browser, can speak but cannot hear you, and the page says so on the
 first mic tap — a **Voice needs Safari: open this page in a Safari tab**
@@ -5995,6 +6000,11 @@ go into the box as they come, all but the last (it may be the radio word
 that ends the phrase) and never a run that would *end* in a radio word
 (*go over the code* reaches the box as *go*, then *over the code*), so
 *over*, *submit* and *disregard* still act only as the phrase's real end;
+up to three trailing words that may *start* a control phrase wait too
+(*fix it stop* reaches the box as *fix it*: *stop* may be *stop
+recording*; while the session is asking, *yes*, *no*, *option* wait as
+well), so a control phrase never lands in the box, and a stop phrase acts
+the moment its words settle, mid-phrase;
 the held words and `partial`, the unstable tail, are the caption. A phrase
 said into an empty box (it may be a command — the router decides) or a
 dialog's answer arrives whole at its end, the caption showing it as it
@@ -6043,7 +6053,9 @@ counts — an "over" in the middle of a sentence is a word, and so is
 "submitted" — and case and punctuation do not matter (*Over.*, *Submit!*,
 *Disregard that.*). Commands ("switch to…", "new
 session…", "what needs me", "voice off"…) are commands only while the box
-is empty; mid-message they are words (see **Voice commands** below). Then
+is empty; mid-message they are words (see **Voice commands** below) — except
+the **control words**, which act at the end of *any* phrase: a stop phrase
+always, an answer while the session is asking (below). Then
 *Sent to <name>.* (or *Queued for <name> — it is on a prompt.*: while voice
 is on, Send and "submit" go through `POST /send {dialog_safe:
 true, say}`, so a prompt is queued
@@ -6109,15 +6121,52 @@ or "please" in front:
 | Say | Does |
 |---|---|
 | *cancel* · *never mind* · *scratch that* · *forget it* | drops the dictated text |
+| *session two* · *go to session 3* · *focus (on) session number four* | moves voice to that row of the Sessions sheet, numbered as shown (the router: `{kind: "switch_index", index}`); past the last row, *There is no session N.* |
+| *next session* · *previous session* · *switch to the next one* | one row down / up from the current session's, round the ends (`{kind: "switch_rel", delta: ±1}`) |
 | *switch to <name>* · *go to <name>* · *change to* · *jump (over) to* | moves voice to that session — by name or title: a prefix, then word overlap, then loose containment. A tie asks *Which one: a, b?*; a miss says *No session called X. Sessions: …*; a hit says *Now on <name>.* plus its last line, and reads its dialog when it is on one |
+| *focus (on) <name>* · *open <name>* · *show <name>* · *select <name>* | the same, but only for a session whose name (or title) is said or starts so — *open the readme* stays a prompt |
+| *what is it asking* · *what's it asking (me)* · *what does it want* · *what's the question* | the current session's question: its dialog read out again (and listened for), or the question its last line asked; the router's `{kind: "question", say}` is said name first |
 | *what needs me* · *who needs me* · *what needs (my) attention* | the sessions in the bell, attention first, at most three: *<name> is asking: <its line>.* or *<name> is <state word>.* — else *Nothing needs you.* |
 | *what's it doing* · *what is it doing* · *status* · *what's happening* · *what's going on* | the state word (*for N minutes* while working) and the session's latest turn snippet |
 | *summarize that* · *summarize it* · *summarise* · *what did it say* · *summary* | one model call on the server (`POST /voice/condense`, 10–45 s): the newest reply in two sentences — *That took too long.* on a timeout, the route's own sentence on any other refusal |
 | *say that again* · *repeat (that)* | the last line again |
 | *voice off* · *turn voice off* · *turn off voice* | voice mode off (`POST /voice {on: false}`) |
 | *stop listening* · *stop* | back to idle |
+| *session three yes* · *session 2, option one* · *tell <name> no* · *answer <name> always* | answers **that** session (below) — voice stays where it is |
 
-Anything else is a prompt.
+Anything else is a prompt — and so is any `kind` the page does not know (a
+newer server's): the words stay words.
+
+**Control words, anywhere.** At the end of every phrase — and of every run
+of words a streaming recognizer settles — two kinds of words act whatever
+is in the box, and never land in it:
+
+| Say (at the end) | Does |
+|---|---|
+| *stop recording* · *stop listening* · *stop dictating* · *mic off* · *that's all* · *that is all* · *done talking* · *I'm done talking* | stops listening; the words said before it stay in the box, unsent (*In the box — say "submit", or tap Send*). In a dialog too — before *stop* could be read as a *no* |
+| *yes* · *no (thanks)* · *always* · *yes and don't ask again* · *option two* · *the second one* · *answer yes* | **only while the session is asking** — a dialog is up, or its last `Say:` line asked a question: answers it. A bare number counts only as the whole phrase (*add two* is words) |
+
+An answer to a **dialog** is the option the dialog's own words pick (the
+table under *Dialogs by voice*: *always* only when said, a number never on a
+permission prompt), POSTed as below — only with **Approve dialogs by voice**
+on, else *Answer it on the screen.* An answer to a **question** is a prompt:
+it goes to the session through `POST /send` like any other (with the words
+already in the box in front of it), no *submit* needed. Said into an empty
+box the router decides first: `{kind: "answer", choice, number?, dialog_id,
+keys, say?}` is POSTed as is (`POST /answer {keys, dialog_id, by: "user"}` —
+*always* is the router's call), `{kind: "answer", index}` (only the row
+number) is turned into that row's title and asked again with `session` set
+to it, `no_dialog` is said (*<name> isn't asking anything.*), and an answer
+with no dialog is the question's prompt. Its `say` is spoken name first.
+
+**Answering another session.** *session three yes*, *session 2, option one*,
+*tell parser no thanks*, *answer the login fix always* — the whole phrase,
+a row number or a name, then an answer — answer **that** session's dialog
+(or question) without moving voice: *Invoice parser: answered yes.* (or
+*Sent to Invoice parser.* for a question's answer, the box left as it was),
+and voice stays on the session you were talking to. Offline the page reads
+that session's dialog itself (`GET /dialog?quiet=1`) and picks the option
+with the same rules.
 
 **Dialogs by voice.** When the session lands on a permission dialog
 (`clarify`), the page fetches it (`GET /dialog?quiet=1`) and reads it out:
@@ -6125,7 +6174,9 @@ Anything else is a prompt.
 (*Say yes or no.* when the dialog offers no always; a dialog of other choices
 lists them — *one: main. two: develop. three: release. Say one, two, or
 three.*). It then listens for 12 s. Only option words are accepted, and free
-text is **never** typed into a dialog:
+text is **never** typed into a dialog (a stop phrase stops listening, the
+dialog left waiting; *what is it asking* reads it again; *session two yes*
+answers that other session instead):
 
 | Means | Words |
 |---|---|
@@ -6171,8 +6222,12 @@ phrase*, and the last chunk's time or why it failed), *AudioContext*
 (how long the server took and which backend, or why it failed), *Primed*
 (whether a tap has unlocked speech output yet), *Push to talk* (tap or
 hold), *Replies* (on or off), *Last prompt* (dictated or typed, and whether
-it asked for a `Say:` line), *Router* (what `/api/voice/route` last answered,
-or why the local table decided), *State*, and the last error. The choices
+it asked for a `Say:` line), *Router* (what `/api/voice/route` last answered
+— its kind, with the row for *switch_index* / an answer by number, the step
+for *switch_rel*, the choice and whether a dialog was named for *answer* — or
+why the local table decided), *Session numbers* (*1 Login fix, 2 Invoice
+parser, …* — the Sessions sheet's order, held while it is open), *State*,
+and the last error. The choices
 are this phone's own (with the rate and the voice, in `localStorage`).
 Refreshed every second while the sheet is open.
 
