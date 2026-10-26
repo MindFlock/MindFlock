@@ -11,7 +11,10 @@
  *
  * Replies are read aloud only when "Read replies aloud" is on (off by
  * default), for the prompts this mic sent, prefixed with the session's name.
- * Right-click or Shift+click opens those options. The logic that isn't DOM —
+ * Right-click or Shift+click opens those options. In the desktop app the
+ * words and the voice go through the server's engines (its Web Speech fails
+ * there); in a browser tab, through the browser's unless Settings → Voice
+ * says "server" (lib/voiceDesktop sttEngine). The logic that isn't DOM —
  * the radio parser, the push-to-talk machine, the reply tracker, the speech
  * queue and the engines — lives in lib/voiceDesktop.ts. */
 
@@ -19,9 +22,9 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ApiError, instApi } from "../api/client";
 import { displayName, useUi } from "../state/store";
-import { refreshInstances, type EventEnvelope } from "../state/queries";
+import { queryClient, refreshInstances, type EventEnvelope } from "../state/queries";
 import { selectSession } from "../lib/sessionActions";
-import { openSettings } from "../lib/openSettings";
+import { openSettings, type SettingsScreen } from "../lib/openSettings";
 import {
   DICT_HINT,
   DICT_IDLE_MS,
@@ -32,8 +35,10 @@ import {
   SpeechQueue,
   browserRecognizer,
   browserSpeaker,
+  engineDiagnostics,
   loadVoiceCfg,
   loadVoicePrefs,
+  noRecognizerLine,
   parseRadio,
   recognizerErrorLine,
   routePhrase,
@@ -46,6 +51,7 @@ import {
   type DictOutcome,
   type Recognizer,
   type RouteReply,
+  type SttEngine,
   type VoiceCfg,
   type VoicePrefs,
 } from "../lib/voiceDesktop";
@@ -63,6 +69,16 @@ const queue = new SpeechQueue(
   () => (ttsEngine(cfgNow) === "server" ? serverSp : browserSp),
   (on) => speakingListeners.forEach((l) => l(on))
 );
+
+/** The recognizer this page has under `c`: "none" when it has none. */
+function recEngine(c: VoiceCfg): SttEngine {
+  const e = sttEngine(c, serverRec.available());
+  return e === "browser" && !browserRec.available() ? "none" : e;
+}
+
+// The Voice tab of Settings (SettingsDialog's SCREENS) lands with the
+// voice-settings-tab branch; until then the key falls back to the default screen.
+const VOICE_SCREEN = "voice" as SettingsScreen;
 
 /** A box the words can go into instead of a session (never the terminal's
  * hidden xterm textarea: that one IS the session). */
@@ -149,8 +165,19 @@ export function TopBarMic() {
     void refreshCfg();
     const l = (on: boolean) => setSpeaking(on);
     speakingListeners.add(l);
+    // Where speech runs moves with Settings (another window, an engine just
+    // installed): re-read it when the window comes back, and after a settings
+    // save here — every writer puts the server's echo into ["settings"].
+    const onFocus = () => void refreshCfg();
+    window.addEventListener("focus", onFocus);
+    const unsubSettings = queryClient.getQueryCache().subscribe((event) => {
+      if (event.query.queryKey[0] !== "settings" || event.type !== "updated") return;
+      if ((event as { action?: { type?: string } }).action?.type === "success") void refreshCfg();
+    });
     return () => {
       speakingListeners.delete(l);
+      window.removeEventListener("focus", onFocus);
+      unsubSettings();
       clearTimeout(idleTimer.current);
       clearTimeout(captionTimer.current);
       rec.current?.stop();
@@ -205,7 +232,8 @@ export function TopBarMic() {
   }, []);
 
   // --- listening ---------------------------------------------------------- //
-  const supported = browserRec.available() || (!!cfg && sttEngine(cfg, serverRec.available()) === "server");
+  const sttNow = recEngine(cfg || cfgNow);
+  const supported = sttNow !== "none";
 
   const armIdle = () => {
     clearTimeout(idleTimer.current);
@@ -262,14 +290,16 @@ export function TopBarMic() {
 
   const start = (into: HTMLInputElement | HTMLTextAreaElement | null) => {
     if (dict.listening || field.current) return;
-    if (!supported) {
-      say("Voice input needs Chrome, Edge or Safari — or server recognition (Settings → Your phone → Voice)");
+    const c = cfgNow;
+    const engine = recEngine(c);
+    if (engine === "none") {
+      say(noRecognizerLine());
+      void refreshCfg();
       return;
     }
-    const c = cfgNow;
-    const r = sttEngine(c, serverRec.available()) === "server" ? serverRec : browserRec;
+    const r = engine === "server" ? serverRec : browserRec;
     // Inside the gesture: a context made here runs (server playback and the
-    // server recognizer's silence detector need it running).
+    // server recognizer's recording need it running).
     if (r === serverRec || ttsEngine(c) === "server") voiceAudioCtx();
     queue.hold();
     field.current = into;
@@ -530,7 +560,7 @@ export function TopBarMic() {
 
   const who = focusedName || "a session";
   const title = !supported
-    ? "Voice input needs Chrome, Edge or Safari, or server recognition — right-click for options"
+    ? noRecognizerLine() + " — right-click for options"
     : listening
       ? hold
         ? "Listening — release to send"
@@ -546,13 +576,8 @@ export function TopBarMic() {
     ? { top: capRect.bottom + 6 + "px", left: Math.max(8, Math.min(capRect.left, window.innerWidth - 348)) + "px" }
     : undefined;
 
-  const sttName = !supported
-    ? "none in this browser"
-    : cfg && sttEngine(cfg, serverRec.available()) === "server"
-      ? "the server"
-      : "this browser (Web Speech)";
-  const ttsName = cfg && ttsEngine(cfg) === "server" ? "the server" : browserSp.available() ? "this browser" : "none";
-  const sttNotReady = cfg?.stt === "server" && !cfg.server_ready.stt;
+  const ttsNow = ttsEngine(cfg || cfgNow) === "server" ? "server" : browserSp.available() ? "browser" : "none";
+  const diagnostics = engineDiagnostics(cfg || cfgNow, sttNow, ttsNow);
 
   return (
     <>
@@ -662,22 +687,16 @@ export function TopBarMic() {
               <span>Hold to talk</span>
             </label>
             <div className="mic-hint">{DICT_HINT}. Esc drops it.</div>
-            <div className="mic-diag">
-              Recognition: {sttName}
-              {sttNotReady ? " (server recognition isn't ready" + (cfg?.server_ready.stt_detail ? ": " + cfg.server_ready.stt_detail : "") + ")" : ""}
-              {" · "}Replies voice: {ttsName}
-            </div>
+            <div className="mic-diag">{diagnostics}</div>
             <button
               type="button"
               className="linklike mic-link"
               onClick={() => {
                 setMenuOpen(false);
-                openSettings("mobile");
-                // The Voice section sits below the phone rows: bring it up.
-                setTimeout(() => document.getElementById("mobile-voice")?.scrollIntoView({ block: "start" }), 300);
+                openSettings(VOICE_SCREEN);
               }}
             >
-              Speech engines: Settings → Your phone → Voice
+              Speech engines: Settings → Voice
             </button>
           </div>,
           document.body

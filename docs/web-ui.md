@@ -158,16 +158,35 @@ a session first*.
   it?”*) — only for prompts this mic sent, never for ones typed or sent from the
   phone. Nothing is read while the mic listens; queued lines wait.
 - **Options**: right-click or Shift+click the mic for *Read replies aloud*,
-  *Click to talk* / *Hold to talk*, a diagnostics line (which recogniser and
-  which voice are in use), and a link to the speech engines in **Settings →
-  Your phone → Voice**. The choice is kept per browser (`cs_voice_desktop`).
+  *Click to talk* / *Hold to talk*, a diagnostics line naming the engines in
+  use (*Recognition: server, built in (Windows via WSL) · Voice: server
+  (piper)*, *Recognition: this browser · Voice: this browser*, and why the
+  server's recogniser isn't ready when it would be used), and a link to the
+  speech engines in **Settings → Voice**. The choice is kept per browser
+  (`cs_voice_desktop`).
 
-Recognition is the browser's Web Speech, or the server's when Settings → Your
-phone → Voice says *server* and it is ready — the Electron desktop app and
-Chromium builds without Google's speech service (Arc) need the server's: their
-Web Speech fails with *Speech recognition failed (network)*. How the `Say:` line
-is produced and which engines exist: [Voice: talking to a
-session](#voice-talking-to-a-session).
+**Which engine.** In the **desktop app** (Electron — its Chromium has no
+Google speech key, so Web Speech fails there on every start) recognition and
+the voice both use the **server's** engines whenever `GET /api/voice` says that
+kind is ready (`server_ready.stt` / `.tts`: the built-in Windows or macOS
+engine, whisper, piper or a host), whatever `voice.stt` / `voice.tts` say —
+those are the phone page's preference. With no server recogniser ready the mic
+never tries Web Speech: it says *Speech needs the server's engine here:
+Settings → Voice*. With no server voice, replies use the app's own
+speechSynthesis. In a **browser tab** it is the phone's rule: Web Speech and
+speechSynthesis, unless Settings → Voice says *server* for that kind and it is
+ready (Chromium builds without Google's speech service, such as Arc, need that:
+their Web Speech fails with *Speech recognition failed (network)*). The mic
+re-reads `GET /api/voice` when the window regains focus and after any settings
+save.
+
+**The server's recogniser** records each phrase as **16 kHz 16-bit mono WAV**
+(`lib/wavRecorder.ts`, through the page's one AudioContext, made inside the
+click) — the built-in recognisers take nothing but PCM — ends a clip after
+1.8 s of quiet following speech or at 12 s, and uploads it as `audio/wav` to
+`POST /api/voice/transcribe`; a clip the level meter heard no speech in is not
+sent. How the `Say:` line is produced and which engines exist: [Voice: talking
+to a session](#voice-talking-to-a-session).
 
 **Sidebar** — session list with drag-to-reorder, stage chips, and a
 close ✕ per row (closes the session, keeps the worktree). The chip is the
@@ -5608,7 +5627,10 @@ click (or hold) to talk, a phrase ending in "over" sends, one ending in
 and the reply is read aloud only while *Read replies aloud* is on (off by
 default; right-click the mic) — see [The mic](#layout) in the top bar section.
 Words said while a text box has focus are typed there instead and never
-submitted. The phone page's mic is the hands-free version of the same
+submitted. In the desktop app the words and the voice go through the
+server's engines whenever one is ready (Settings → Voice) — the app's own
+Web Speech can't recognise — and in a browser tab through the browser's unless Settings say
+*server*; the server's recogniser is sent each phrase as a WAV clip. The phone page's mic is the hands-free version of the same
 conversation, with spoken replies on by default — see
 [Voice: talking to a session](#voice-talking-to-a-session) under the Mobile UI.
 
