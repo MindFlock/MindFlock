@@ -670,6 +670,10 @@ class LocalSTT(Backend):
                     word_timestamps=True,
                     initial_prompt=prompt or None,
                     condition_on_previous_text=False,
+                    # Silence in a window makes whisper invent "Thank you.";
+                    # two passes would agree on it and commit it. The bundled
+                    # VAD drops the quiet stretches before decoding.
+                    vad_filter=True,
                 )
                 return [
                     (str(w.word), float(w.start), float(w.end))

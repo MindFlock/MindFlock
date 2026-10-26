@@ -462,6 +462,7 @@ class TestLocalStream:
             "word_timestamps": True,
             "initial_prompt": "earlier words",
             "condition_on_previous_text": False,
+            "vad_filter": True,
         }
         run(array("f"), "")
         assert model["calls"][1][1]["initial_prompt"] is None
