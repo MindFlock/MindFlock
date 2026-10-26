@@ -529,6 +529,37 @@ def invalidate() -> None:
     importlib.invalidate_caches()
 
 
+def _shim_av_open() -> None:
+    """Let faster-whisper 1.2 decode with PyAV 15+.
+
+    faster-whisper's ``decode_audio`` calls ``av.open(path, mode="r",
+    metadata_errors="ignore")``; PyAV 15 dropped that argument, so the first
+    clip fails with "open() got an unexpected keyword argument
+    'metadata_errors'". An older PyAV has no wheel for Python 3.13 (it would
+    build from source and fail), so instead ``av.open`` is wrapped ONCE to
+    drop the argument. No-op on PyAV < 15, when either module is missing, or
+    when already applied."""
+    try:
+        import av
+        from faster_whisper import audio as fw_audio
+    except Exception:  # noqa: BLE001 — nothing to shim
+        return
+    try:
+        major = int(str(getattr(av, "__version__", "0")).split(".")[0] or 0)
+    except ValueError:
+        major = 0
+    target = getattr(fw_audio, "av", av)
+    orig = getattr(target, "open", None)
+    if major < 15 or orig is None or getattr(orig, "_mf_shim", False):
+        return
+
+    def open_(*args, metadata_errors=None, **kwargs):  # noqa: ARG001 — dropped
+        return orig(*args, **kwargs)
+
+    open_._mf_shim = True  # type: ignore[attr-defined]
+    target.open = open_
+
+
 class LocalSTT(Backend):
     id = "local"
     kind = "stt"
@@ -553,6 +584,7 @@ class LocalSTT(Backend):
 
     def _load(self, name: str):
         fw = _import("faster_whisper")
+        _shim_av_open()
         root = voice_dir() / "whisper"
         root.mkdir(parents=True, exist_ok=True)
         return fw.WhisperModel(
