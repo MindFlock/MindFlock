@@ -683,3 +683,23 @@ def test_av_open_shim_leaves_older_pyav_alone(monkeypatch):
     before = fw_audio.av.open
     speech._shim_av_open()
     assert fw_audio.av.open is before
+
+
+# --- language tags ------------------------------------------------------------ #
+@pytest.mark.parametrize(
+    "tag,code",
+    [
+        ("en-US", "en"),
+        ("pt_BR", "pt"),
+        ("yue", "yue"),
+        ("EN", "en"),
+        ("", None),
+        ("123", None),
+        ("x", None),
+    ],
+)
+def test_whisper_language_is_the_primary_subtag(tag, code):
+    # navigator.language is BCP-47 ("en-US"); faster-whisper rejects anything
+    # but its own two/three-letter codes — the owner saw "'en-US' is not a
+    # valid language code" on the first live clip.
+    assert speech.whisper_language(tag) == code

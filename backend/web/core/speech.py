@@ -353,6 +353,16 @@ def _timer_fire() -> None:
 # --------------------------------------------------------------------------- #
 # Backends
 # --------------------------------------------------------------------------- #
+def whisper_language(lang: str) -> Optional[str]:
+    """The ISO-639 code a Whisper-style recognizer accepts, from whatever the
+    page sent: ``navigator.language`` is a BCP-47 tag (``en-US``, ``pt-BR``),
+    faster-whisper and the OpenAI-compatible hosts want ``en`` / ``pt`` (and
+    reject ``en-US`` outright). The primary subtag, lower-cased, when it is two
+    or three letters; ``None`` otherwise (let the model detect)."""
+    code = str(lang or "").strip().replace("_", "-").split("-", 1)[0].lower()
+    return code if 2 <= len(code) <= 3 and code.isalpha() else None
+
+
 class Backend:
     """One speech engine of one kind. ``ready()`` is cheap and offline; the
     work methods raise :class:`SpeechError` with a sentence for the UI."""
@@ -412,8 +422,9 @@ class OpenAISTT(_OpenAI):
         if not key:
             raise SpeechError("%s needs an API key for %s" % (self.label, _host(url)))
         fields = {"model": model, "response_format": "json"}
-        if lang:
-            fields["language"] = lang
+        code = whisper_language(lang)
+        if code:
+            fields["language"] = code
         body, ctype = _multipart(
             fields, "file", "clip" + _ext(mime), mime_of(mime), audio
         )
@@ -609,7 +620,7 @@ class LocalSTT(Backend):
         path = _temp_clip(audio, mime)
         try:
             segments, _info = model.transcribe(
-                path, language=(lang or None), beam_size=5
+                path, language=whisper_language(lang), beam_size=5
             )
             words = [str(getattr(s, "text", "") or "").strip() for s in segments]
         except Exception as err:  # noqa: BLE001

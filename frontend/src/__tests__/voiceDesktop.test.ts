@@ -7,6 +7,7 @@
  * gone, and what goes on /send. */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import MIC_SRC from "../components/TopBarMic.tsx?raw";
 import {
   DEFAULT_VOICE_CFG,
   DEFAULT_VOICE_PREFS,
@@ -833,5 +834,15 @@ describe("wiring", () => {
 
   it("no old Settings path is left in the mic", () => {
     for (const f of ["components/TopBarMic.tsx", "lib/voiceDesktop.ts"]) expect(src(f)).not.toContain("Your phone → Voice");
+  });
+});
+
+
+describe("the voice options popover closes easily", () => {
+  it("has a close button, closes on a mic click, and watches pointerdown in the capture phase", () => {
+    expect(MIC_SRC).toContain('id="mic-pop-close"');
+    expect(MIC_SRC).toContain("if (menuOpen) {\n            setMenuOpen(false);");
+    expect(MIC_SRC).toContain('document.addEventListener("pointerdown", onDown, true)');
+    expect(MIC_SRC).not.toContain('document.addEventListener("mousedown", onDown)');
   });
 });

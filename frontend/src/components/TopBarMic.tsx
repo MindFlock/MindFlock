@@ -474,10 +474,12 @@ export function TopBarMic() {
       setMenuOpen(false);
       btnRef.current?.focus();
     };
-    document.addEventListener("mousedown", onDown);
+    // Capture phase: a click on a terminal pane must close it too, and xterm
+    // keeps pointer events to itself once they reach it.
+    document.addEventListener("pointerdown", onDown, true);
     document.addEventListener("keydown", onKey, true);
     return () => {
-      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("pointerdown", onDown, true);
       document.removeEventListener("keydown", onKey, true);
     };
   }, [menuOpen]);
@@ -546,6 +548,10 @@ export function TopBarMic() {
             menuOpen ? setMenuOpen(false) : openMenu();
             return;
           }
+          if (menuOpen) {
+            setMenuOpen(false); // a click on the mic closes the options, never talks
+            return;
+          }
           if (hold) return; // the pointer (or the key) did it
           if (live.current) finish();
           else start(pressedField.current);
@@ -582,6 +588,22 @@ export function TopBarMic() {
       {menuOpen &&
         createPortal(
           <div className="mic-pop" id="mic-pop" ref={menuRef} style={popStyle} role="menu" aria-label="Voice options">
+            <div className="mic-pop-head">
+              <span className="mic-pop-title">Voice</span>
+              <button
+                type="button"
+                className="mic-pop-close"
+                id="mic-pop-close"
+                aria-label="Close"
+                title="Close (Esc)"
+                onClick={() => {
+                  setMenuOpen(false);
+                  btnRef.current?.focus();
+                }}
+              >
+                ×
+              </button>
+            </div>
             <label className="mic-row">
               <input
                 type="checkbox"
