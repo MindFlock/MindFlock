@@ -568,10 +568,24 @@ class TestRegistry:
             "Server recognition ready (b): b is fine. "
             "Server voice not ready: no voice backend is ready (a needs a key; b not installed)."
         )
+        assert set(d["system"]) == {
+            "available",
+            "platform",
+            "detail",
+            "voices",
+            "recognizers",
+        }
+
+    def test_select_follows_the_registry_order(self, registry):
+        registry["stt"][0]._ok = True
+        assert speech.select("stt") == (registry["stt"][0], "a needs a key")
 
     def test_real_registry_defaults(self):
-        assert speech.ids("stt") == ["openai", "local"]
-        assert speech.ids("tts") == ["openai", "local"]
+        # The built-in engine first: "" (the first ready one) lands on it
+        # wherever the OS has one — the fresh-install default.
+        assert speech.ids("stt") == ["system", "openai", "local"]
+        assert speech.ids("tts") == ["system", "openai", "local"]
+        assert speech.get("stt", "system").label == "This computer's speech engine"
         for kind in ("stt", "tts"):
             for b in speech.backends(kind):
                 assert b.kind == kind
