@@ -9,13 +9,30 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import MIC_SRC from "../components/TopBarMic.tsx?raw";
 import {
+  ANSWER_LISTEN_MS,
+  APPROVE_OFF_LINE,
+  CONTROL_MAX_WORDS,
   DEFAULT_VOICE_CFG,
   DEFAULT_VOICE_PREFS,
   DICT_HINT,
   Dictation,
+  HandsFree,
   LiveDictation,
+  STOPPED_LINE,
+  TALK_EVENT,
+  dialogChoices,
+  dialogRetryLine,
+  dialogSpeech,
   holdBack,
+  isAnswerPhrase,
   mayBeCommand,
+  pendingDiagnostics,
+  railRow,
+  railStep,
+  routePhrase,
+  runVoiceCommand,
+  stopTail,
+  talkKeyAction,
   OVER_LINE,
   ReplyTracker,
   SpeechQueue,
@@ -34,8 +51,12 @@ import {
   spokenLine,
   sttEngine,
   ttsEngine,
+  type CommandDeps,
+  type DictEnd,
   type DictTarget,
+  type HandsFreeDeps,
   type LiveHooks,
+  type RouteReply,
   type RecognizerHandlers,
   type Speaker,
   type VoiceCfg,
@@ -1283,7 +1304,7 @@ describe("wiring", () => {
     // The old one-shot prompt send is gone from the mic.
     expect(MIC).not.toContain("dialog_safe");
     expect(MIC).not.toContain("sendPrompt");
-    expect(MIC).toContain("submitted: (title, wantSay) => tracker.sent(title, wantSay)");
+    expect(MIC).toMatch(/submitted: \(title, wantSay\) => \{\s*tracker\.sent\(title, wantSay\);/);
     expect(MIC).toContain("replies: () => prefsRef.current.replies");
   });
 
@@ -1294,7 +1315,9 @@ describe("wiring", () => {
   });
 
   it("asks the router with a dictation's first phrase, and selects through the one selection authority", () => {
-    expect(MIC).toContain('routePhrase(text, useUi.getState().focused || "")');
+    // Hands-free listening asks about the session it read out.
+    expect(MIC).toContain('const session = opts.title || useUi.getState().focused || "";');
+    expect(MIC).toContain("routePhrase(text, session)");
     expect(MIC).toContain("selectSession(title, { noKeyboard: true })");
     expect(code("lib/voiceDesktop.ts")).toContain('api<RouteReply>("/api/voice/route", { json: { text, session } })');
   });
@@ -1336,7 +1359,7 @@ describe("wiring", () => {
     expect(none).toBeGreaterThan(-1);
     expect(start.indexOf("say(noRecognizerLine())")).toBeGreaterThan(none);
     expect(start.indexOf("r.start(")).toBeGreaterThan(none);
-    expect(start.slice(none, start.indexOf("r.start("))).toContain("return;");
+    expect(start.slice(none, start.indexOf("r.start("))).toContain("return null;");
   });
 
   it("re-reads GET /api/voice on window focus and after a settings save", () => {
@@ -1357,5 +1380,442 @@ describe("the voice options popover closes easily", () => {
     expect(MIC_SRC).toContain("if (menuOpen) {\n            setMenuOpen(false);");
     expect(MIC_SRC).toContain('document.addEventListener("pointerdown", onDown, true)');
     expect(MIC_SRC).not.toContain('document.addEventListener("mousedown", onDown)');
+  });
+});
+
+// --- the wider command set: stop at any point, numbered sessions, answers -- //
+
+describe("control words at any point", () => {
+  afterEach(() => {
+    mocks.peekTerm.mockReset();
+    mocks.instApi.mockReset();
+  });
+
+  function terms() {
+    const sent: Record<string, string[]> = {};
+    mocks.peekTerm.mockImplementation((title: string) => ({
+      send: (data: string) => ((sent[title] ||= []).push(data), true),
+    }));
+    return sent;
+  }
+
+  function hooks(over: Partial<LiveHooks> = {}) {
+    const captions: string[] = [];
+    const calls = { halt: 0, routed: [] as string[], ends: [] as DictEnd[] };
+    const h: LiveHooks = {
+      caption: (t) => void captions.push(t),
+      halt: () => void calls.halt++,
+      route: async (t) => {
+        calls.routed.push(t);
+        return false;
+      },
+      activity: () => "idle",
+      replies: () => false,
+      submitted: () => {},
+      done: (how) => void calls.ends.push(how),
+      ...over,
+    };
+    return { h, captions, calls, last: () => captions[captions.length - 1] };
+  }
+
+  it.each([
+    ["fix the bug that is", "fix the bug", "that is"],
+    ["fix it, that is all", "fix it,", "that is all"],
+    ["fix it stop", "fix it", "stop"],
+    ["fix it stop recording", "fix it", "stop recording"],
+    ["turn mic", "", "turn mic"],
+    ["and then that", "and then", "that"],
+    ["deploy it submit it", "deploy it", "submit it"],
+  ])("holdBack(%j) holds a control phrase that may still be said: types %j, holds %j", (text, type, held) => {
+    expect(holdBack(text)).toEqual({ type, held });
+    expect(CONTROL_MAX_WORDS).toBe(3);
+  });
+
+  it.each([
+    ["stop recording", ""],
+    ["Fix the bug, stop recording.", "Fix the bug"],
+    ["that's all", ""],
+    ["That is all.", ""],
+    ["ok mic off", "ok"],
+    ["stop the recording", null],
+    ["stop", null],
+    ["record it all", null],
+  ] as const)("stopTail(%j) → %j", (text, want) => {
+    expect(stopTail(text)).toBe(want);
+  });
+
+  it("a stop phrase at the end of a committed group stops at once, never typed; the words before it stay", async () => {
+    const sent = terms();
+    const k = hooks();
+    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    await d.words("fix the login bug stop recording");
+    expect(sent.t1).toEqual(["fix the login bug "]);
+    expect(sent.t1.join("")).not.toMatch(/stop|recording/);
+    expect(k.calls.halt).toBe(1);
+    expect(k.last()).toBe(OVER_LINE);
+    expect(k.calls.ends).toEqual(["stopped"]);
+    expect(d.active).toBe(false);
+    expect(mocks.instApi).not.toHaveBeenCalled();
+  });
+
+  it("…split across committed groups too: the held words wait for the rest of the phrase", async () => {
+    const sent = terms();
+    const k = hooks();
+    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    await d.words("ship it that is");
+    expect(sent.t1).toEqual(["ship it "]);
+    await d.words("all");
+    expect(sent.t1).toEqual(["ship it "]);
+    expect(k.calls.halt).toBe(1);
+  });
+
+  it("said alone, it stops without asking the router; a clip's phrase works the same", async () => {
+    terms();
+    const k = hooks();
+    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    await d.words("stop listening");
+    expect(k.calls.routed).toEqual([]);
+    expect(k.last()).toBe(STOPPED_LINE);
+    const sent = terms();
+    const k2 = hooks();
+    const d2 = new LiveDictation(sessionTarget("t2", "Billing"), k2.h);
+    await d2.heard("run the tests");
+    await d2.heard("Mic off.");
+    expect(sent.t2).toEqual(["run the tests "]);
+    expect(k2.calls.halt).toBe(1);
+  });
+
+  it("“stop” followed by more words is a prompt", async () => {
+    const sent = terms();
+    const d = new LiveDictation(sessionTarget("t1", "Login fix"), hooks().h);
+    await d.words("stop");
+    await d.words("the server and");
+    expect(sent.t1).toEqual(["stop the server "]);
+  });
+
+  it("with a question pending, a lone answer goes to the router at once — before the phrase ends", async () => {
+    terms();
+    const k = hooks({
+      pending: () => true,
+      route: async (t) => {
+        k.calls.routed.push(t);
+        return true;
+      },
+    });
+    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    await d.words("Yes.");
+    expect(k.calls.routed).toEqual(["Yes."]);
+    expect(k.calls.ends).toEqual(["acted"]);
+    // Nothing pending: "yes" may open a prompt — it waits for more words.
+    const k2 = hooks();
+    const d2 = new LiveDictation(sessionTarget("t1", "Login fix"), k2.h);
+    await d2.words("yes");
+    expect(k2.calls.routed).toEqual([]);
+    expect(d2.active).toBe(true);
+  });
+
+  it("only the WHOLE dictation is an answer: “the answer is no” is a prompt", () => {
+    for (const t of ["yes", "No.", "always", "yes always", "don't ask again", "two", "option 3", "the first one", "uh yes please"])
+      expect(isAnswerPhrase(t)).toBe(true);
+    for (const t of ["the answer is no", "yes and fix the tests", "no idea", "always run the tests"])
+      expect(isAnswerPhrase(t)).toBe(false);
+  });
+
+  it.each([
+    ["focus three", true],
+    ["select the login fix", true],
+    ["next session", true],
+    ["session three yes", true],
+    ["row 2", true],
+    ["yes", true],
+    ["always allow it", true],
+    ["what is it asking", true],
+    ["stop recording", true],
+    ["that's all", true],
+    ["yes and also fix the tests", false],
+    ["no idea why", false],
+    ["go ahead and push", false],
+  ] as const)("mayBeCommand(%j) → %s", (text, want) => {
+    expect(mayBeCommand(text)).toBe(want);
+  });
+});
+
+describe("the router's new answers", () => {
+  afterEach(() => {
+    mocks.api.mockReset();
+    mocks.instApi.mockReset();
+    mocks.peekTerm.mockReset();
+  });
+
+  const RAIL = ["t1", "\u0000win:chat", "t2", "t3"];
+
+  function deps(over: Partial<CommandDeps> = {}) {
+    const out = { selected: [] as string[], said: [] as string[], captions: [] as string[], submitted: [] as Array<[string, boolean]> };
+    const d: CommandDeps = {
+      railOrder: () => RAIL,
+      focused: () => "t1",
+      select: (t) => void out.selected.push(t),
+      name: (t) => ({ t1: "Login fix", t2: "Billing", t3: "Docs" })[t] || t,
+      caption: (l) => void out.captions.push(l),
+      announce: (l) => void out.said.push(l),
+      route: vi.fn(async () => ({ kind: "prompt" }) as RouteReply),
+      approveDialogs: async () => true,
+      activity: () => "idle",
+      replies: () => true,
+      submitted: (t, say) => void out.submitted.push([t, say]),
+      ...over,
+    };
+    return { d, out };
+  }
+
+  it("routePhrase passes the new kinds and treats an unknown one as a prompt", async () => {
+    mocks.api.mockResolvedValueOnce({ kind: "switch_index", index: 2 });
+    expect(await routePhrase("focus two", "t1")).toEqual({ kind: "switch_index", index: 2 });
+    mocks.api.mockResolvedValueOnce({ kind: "teleport" });
+    expect(await routePhrase("teleport", "t1")).toEqual({ kind: "prompt" });
+  });
+
+  it("switch_index maps through railOrder (windows count, as the badges do); out of range says so", async () => {
+    const { d, out } = deps();
+    expect(await runVoiceCommand({ kind: "switch_index", index: 3 }, "focus three", d)).toBe(true);
+    expect(out.selected).toEqual(["t2"]);
+    expect(out.said).toEqual(["Now talking to Billing."]);
+    await runVoiceCommand({ kind: "switch_index", index: 7 }, "focus seven", d);
+    expect(out.said[1]).toBe("There is no session 7");
+    await runVoiceCommand({ kind: "switch_index", index: 2 }, "focus two", d);
+    expect(out.said[2]).toBe("Row 2 is a window, not a session");
+    expect(out.selected).toEqual(["t2"]);
+    expect(railRow(RAIL, 0)).toBeNull();
+  });
+
+  it("switch_rel moves from the focused session's row, skipping windows and wrapping", async () => {
+    const { d, out } = deps();
+    await runVoiceCommand({ kind: "switch_rel", delta: 1 }, "next session", d);
+    await runVoiceCommand({ kind: "switch_rel", delta: -1 }, "previous session", d);
+    expect(out.selected).toEqual(["t2", "t3"]);
+    expect(railStep(RAIL, "t3", 1)).toBe("t1");
+    expect(railStep(RAIL, "gone", 1)).toBe("t1");
+    expect(railStep(RAIL, "gone", -1)).toBe("t3");
+    expect(railStep(["t1"], "t1", 1)).toBeNull();
+  });
+
+  it("an answer with keys posts /answer as the user — only while approving by voice is on", async () => {
+    const reply: RouteReply = { kind: "answer", choice: "yes", title: "t2", dialog_id: "d1", keys: ["1"], say: "Billing: allowed." };
+    mocks.instApi.mockResolvedValue({ ok: true });
+    const on = deps();
+    await runVoiceCommand(reply, "billing yes", on.d);
+    expect(mocks.instApi).toHaveBeenCalledWith("t2", "/answer", { json: { keys: ["1"], dialog_id: "d1", by: "user" } });
+    expect(on.out.said).toEqual(["Billing: allowed."]);
+    expect(on.out.selected).toEqual([]); // a targeted answer never moves focus
+    mocks.instApi.mockClear();
+    const off = deps({ approveDialogs: async () => false });
+    await runVoiceCommand(reply, "billing yes", off.d);
+    expect(mocks.instApi).not.toHaveBeenCalled();
+    expect(off.out.said).toEqual([APPROVE_OFF_LINE]);
+    expect(APPROVE_OFF_LINE).toBe("Approving by voice is off: Settings → Voice");
+  });
+
+  it("“always” only when the router says so: the keys sent are the router's, never widened", async () => {
+    mocks.instApi.mockResolvedValue({ ok: true });
+    const { d } = deps();
+    await runVoiceCommand({ kind: "answer", choice: "yes", dialog_id: "d1", keys: ["1"] }, "always", d);
+    expect(mocks.instApi).toHaveBeenLastCalledWith("t1", "/answer", { json: { keys: ["1"], dialog_id: "d1", by: "user" } });
+    await runVoiceCommand({ kind: "answer", choice: "always", dialog_id: "d1", keys: ["2"] }, "always", d);
+    expect(mocks.instApi).toHaveBeenLastCalledWith("t1", "/answer", { json: { keys: ["2"], dialog_id: "d1", by: "user" } });
+    // No keys from the router: nothing pressed, whatever was said.
+    mocks.instApi.mockReset();
+    mocks.instApi.mockResolvedValue({ has_question: false });
+    const n = deps();
+    await runVoiceCommand({ kind: "answer", choice: "always", no_dialog: true, say: "Login fix has no dialog up." }, "always", n.d);
+    expect(mocks.instApi.mock.calls.map((c) => c[1])).toEqual(["/voice"]);
+    expect(n.out.said).toEqual(["Login fix has no dialog up."]);
+  });
+
+  it("a 409 dialog_changed says so instead of pressing into the next prompt", async () => {
+    mocks.instApi.mockRejectedValueOnce(new mocks.ApiError(409, "the prompt changed", { dialog_changed: true }));
+    const { d, out } = deps();
+    await runVoiceCommand({ kind: "answer", choice: "no", dialog_id: "d1", keys: ["3"] }, "no", d);
+    expect(out.said).toEqual(["The prompt on Login fix changed — say it again."]);
+  });
+
+  it("an answer to a QUESTION goes as a prompt, typed and submitted with say", async () => {
+    const sent: string[] = [];
+    mocks.peekTerm.mockImplementation(() => ({ send: (x: string) => sent.push(x) > 0 }));
+    mocks.instApi.mockImplementation(async (_t: string, suffix: string) =>
+      suffix === "/voice" ? { say: "Which branch, main or dev?", has_question: true } : { ok: true }
+    );
+    const { d, out } = deps();
+    await runVoiceCommand({ kind: "answer", choice: "number", number: 2, no_dialog: true }, "two", d);
+    expect(sent).toEqual(["2 "]);
+    expect(mocks.instApi).toHaveBeenLastCalledWith("t1", "/send", { json: { enter: true, say: true } });
+    expect(out.submitted).toEqual([["t1", true]]);
+    expect(mocks.instApi.mock.calls.some((c) => c[1] === "/answer")).toBe(false);
+  });
+
+  it("a working session's old question is not answered", async () => {
+    mocks.instApi.mockResolvedValue({ has_question: true });
+    const { d, out } = deps({ activity: () => "working" });
+    await runVoiceCommand({ kind: "answer", choice: "yes" }, "yes", d);
+    expect(out.said).toEqual(["Login fix isn't asking anything."]);
+  });
+
+  it("an index-only answer maps the row to its title and asks the router again with it", async () => {
+    mocks.instApi.mockResolvedValue({ ok: true });
+    const route = vi.fn(async () => ({ kind: "answer", choice: "yes", title: "t3", dialog_id: "d9", keys: ["1"] }) as RouteReply);
+    const { d, out } = deps({ route });
+    await runVoiceCommand({ kind: "answer", choice: "yes", index: 4 }, "session four yes", d);
+    expect(route).toHaveBeenCalledWith("session four yes", "t3");
+    expect(mocks.instApi).toHaveBeenCalledWith("t3", "/answer", { json: { keys: ["1"], dialog_id: "d9", by: "user" } });
+    expect(out.selected).toEqual([]);
+    // Past the rail: said, never routed.
+    route.mockClear();
+    await runVoiceCommand({ kind: "answer", choice: "yes", index: 9 }, "session nine yes", d);
+    expect(route).not.toHaveBeenCalled();
+    expect(out.said[out.said.length - 1]).toBe("There is no session 9");
+  });
+
+  it("question: the router's sentence is spoken", async () => {
+    const { d, out } = deps();
+    expect(await runVoiceCommand({ kind: "question", say: "Billing: which port?" }, "what is it asking", d)).toBe(true);
+    expect(out.said).toEqual(["Billing: which port?"]);
+    expect(await runVoiceCommand({ kind: "switch", title: "t2" }, "switch to billing", d)).toBe(false);
+  });
+});
+
+describe("hands-free answering (Read replies aloud)", () => {
+  const PERMISSION = {
+    id: "d1",
+    parsed: true,
+    question: "Allow **git push**?",
+    command: null,
+    options: [
+      { key: "1", label: "Yes", kind: "yes" },
+      { key: "2", label: "Yes, and don't ask again", kind: "always" },
+      { key: "3", label: "No", kind: "no" },
+    ],
+  };
+
+  function deps(ends: DictEnd[], over: Partial<HandsFreeDeps> = {}) {
+    const out = { spoken: [] as string[], captions: [] as string[], listens: [] as Array<[string, number]> };
+    const d: HandsFreeDeps = {
+      replies: () => true,
+      focused: () => "t1",
+      name: () => "Login fix",
+      busy: () => false,
+      fetchDialog: async () => PERMISSION,
+      approveDialogs: async () => true,
+      speak: async (l) => void out.spoken.push(l),
+      caption: (l) => void out.captions.push(l),
+      listen: async (title, _hint, ms) => {
+        out.listens.push([title, ms]);
+        return ends.shift() || "missed";
+      },
+      ...over,
+    };
+    return { d, out };
+  }
+
+  it("ports the phone's wording: name first, the choices, the one retry line", () => {
+    expect(dialogSpeech("Login fix", PERMISSION)).toBe("Login fix: Allow git push? Say yes, no, or always.");
+    expect(dialogRetryLine(PERMISSION)).toBe("I didn't catch that: say yes, no, or always.");
+    const menu = { options: [{ key: "1", label: "Use `main`", kind: "other" }, { key: "2", label: "Use dev", kind: "other" }] };
+    expect(dialogChoices(menu)).toBe("one: Use main. two: Use dev. Say one or two.");
+    expect(dialogRetryLine(menu)).toBe("I didn't catch that: say one or two.");
+  });
+
+  it("a dialog is read aloud and the mic listens 12 s; a miss is retried ONCE, then it goes quiet", async () => {
+    const { d, out } = deps(["missed", "missed"]);
+    await new HandsFree(d).dialog("t1");
+    expect(out.spoken).toEqual([
+      "Login fix: Allow git push? Say yes, no, or always.",
+      "I didn't catch that: say yes, no, or always.",
+    ]);
+    expect(out.listens).toEqual([
+      ["t1", ANSWER_LISTEN_MS],
+      ["t1", ANSWER_LISTEN_MS],
+    ]);
+    expect(ANSWER_LISTEN_MS).toBe(12_000);
+    expect(out.captions).toEqual(["Login fix is waiting on you"]);
+  });
+
+  it("an answer ends it; the same dialog is not read twice", async () => {
+    const { d, out } = deps(["acted"]);
+    const hf = new HandsFree(d);
+    await hf.dialog("t1");
+    await hf.dialog("t1");
+    expect(out.listens).toHaveLength(1);
+    expect(out.spoken).toHaveLength(1);
+  });
+
+  it("off by default (replies off), never for an unfocused session, never while the mic is busy", async () => {
+    for (const over of [{ replies: () => false }, { focused: () => "t2" }, { busy: () => true }]) {
+      const { d, out } = deps([], over);
+      await new HandsFree(d).dialog("t1");
+      expect(out.spoken).toEqual([]);
+      expect(out.listens).toEqual([]);
+    }
+  });
+
+  it("approving by voice off: read out, then “answer it on the screen” — the mic never opens", async () => {
+    const { d, out } = deps([], { approveDialogs: async () => false });
+    await new HandsFree(d).dialog("t1");
+    expect(out.spoken[1]).toBe("Answer it on the screen.");
+    expect(out.listens).toEqual([]);
+  });
+
+  it("a question in a reply: the mic listens; a miss asks once more, then quiet", async () => {
+    const { d, out } = deps(["missed", "missed"]);
+    await new HandsFree(d).question("t1", "Which branch?");
+    expect(out.listens).toHaveLength(2);
+    expect(out.spoken).toEqual(["Still there? Login fix: Which branch?"]);
+    expect(out.captions).toEqual(["Login fix is waiting on you"]);
+  });
+
+  it("Diagnostics name what waits on the focused session", () => {
+    expect(pendingDiagnostics("Login fix", PERMISSION, true, "")).toBe("Pending: Login fix shows a dialog — Allow git push?");
+    expect(pendingDiagnostics("Login fix", null, false, "Which branch?")).toBe("Pending: Login fix asked — Which branch?");
+    expect(pendingDiagnostics("Login fix", null, false, "")).toBe("Pending: nothing on Login fix");
+  });
+
+  it("the mic wires it: a clarify reading reads the dialog, a reply's question opens the mic, and the hint names it", () => {
+    const MIC = code("components/TopBarMic.tsx");
+    expect(MIC).toContain('else if (env.new === "clarify") void hands.current?.dialog(env.session)');
+    expect(MIC).toContain("if (ask) void hands.current?.question(title, ask)");
+    expect(MIC).toContain('pending: (title) => liveActivity(title) === "clarify" || questions.has(title)');
+    expect(MIC).toContain("runVoiceCommand(r, text, {");
+    expect(MIC).toContain("railOrder: () => useUi.getState().railOrder");
+    expect(src("components/TopBarMic.tsx")).toContain("With Read replies aloud on");
+  });
+});
+
+describe("the push-to-talk hotkey", () => {
+  it("Hold to talk: down starts, up ends as “over” — a blur's up only ends a press the key began", () => {
+    expect(talkKeyAction("down", true, false, false)).toBe("start");
+    expect(talkKeyAction("down", true, true, true)).toBe(null); // a repeat never stops it
+    expect(talkKeyAction("up", true, true, true)).toBe("finish");
+    // The window blurred while the button (not the key) held the mic.
+    expect(talkKeyAction("up", true, true, false)).toBe(null);
+    expect(talkKeyAction("up", true, false, true)).toBe(null);
+  });
+
+  it("Click to talk: each down starts or ends as “over”; up (and a blur's up) is nothing", () => {
+    expect(talkKeyAction("down", false, false, false)).toBe("start");
+    expect(talkKeyAction("down", false, true, false)).toBe("finish");
+    expect(talkKeyAction("up", false, true, false)).toBe(null);
+    expect(talkKeyAction("up", false, true, true)).toBe(null);
+  });
+
+  it("listens on window (any focus, a terminal's too) and starts inside the key's gesture", () => {
+    expect(TALK_EVENT).toBe("mindflock:voice-talk");
+    const MIC = code("components/TopBarMic.tsx");
+    expect(MIC).toContain("window.addEventListener(TALK_EVENT, onTalk)");
+    expect(MIC).toContain("window.removeEventListener(TALK_EVENT, onTalk)");
+    const on = blockFrom(MIC, "const onTalk = (", "window.addEventListener(TALK_EVENT");
+    expect(on).toContain("talkKeyAction(phase, k.hold, !!live.current, keyHeld.current)");
+    // The same start() as a click: it makes/resumes the AudioContext synchronously.
+    expect(on).toContain("k.start(textField(document.activeElement))");
+    expect(on).toContain("k.finish()");
+    expect(blockFrom(MIC, "const start = (", "const finish = (")).toContain("voiceAudioCtx()");
+    expect(src("components/TopBarMic.tsx")).toContain("Hotkey: {talkShortcut()}");
   });
 });

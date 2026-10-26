@@ -55,7 +55,24 @@ export interface KeymapEntry extends Combo {
   help?: [string, string, string];
   /** Guard: false lets the keystroke fall through to the terminal/page. */
   when?: () => boolean;
-  run: (e: KeyboardEvent) => void;
+  /** Push-to-talk style: run(e, "down") once per physical press (key-repeat
+   * ignored), then run(e, "up") when that key or one of its modifiers is
+   * released — or run(null, "up") when the window loses focus mid-hold. */
+  holdable?: boolean;
+  run: (e: KeyboardEvent | null, phase?: HoldPhase) => void;
+}
+
+export type HoldPhase = "down" | "up";
+
+/** The talk hotkey's contract with the top-bar mic (TopBarMic): a window
+ * event whose detail.phase is "down" or "up". The mic reads it through its
+ * own push-to-talk mode — hold: down listens, up ends the phrase; toggle:
+ * each down flips, up is ignored. */
+export const VOICE_TALK_EVENT = "mindflock:voice-talk";
+
+function voiceTalk(phase: HoldPhase) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(VOICE_TALK_EVENT, { detail: { phase } }));
 }
 
 /** Cross-cutting actions the keymap can't import cleanly (they live in
@@ -528,6 +545,20 @@ export const KEYMAP: KeymapEntry[] = [
     run: () => useUi.getState().openDialogFor("schedule"),
   },
   {
+    // Talk to the focused session through the top-bar mic. Unlike Alt+I / V /
+    // S it has NO editing guard: the point is to focus a terminal and talk,
+    // and xterm's helper textarea is an editing target. Option+Space would
+    // type a non-breaking space on macOS, but the dispatcher prevents the
+    // default, so neither a terminal nor a text field ever sees the keystroke
+    // (and the mic can type the words into a focused field itself).
+    key: " ",
+    alt: true,
+    id: "talk",
+    holdable: true,
+    help: ["Navigation", "Alt+Space", "Talk to the focused session — hold or press, per the mic's push-to-talk mode"],
+    run: (_e, phase) => voiceTalk(phase || "down"),
+  },
+  {
     key: "Tab",
     mod: "ctrl",
     id: "cycle",
@@ -682,6 +713,7 @@ const KEY_DISP: Record<string, string> = {
   PageUp: "PgUp",
   Escape: "Esc",
   " ": "Space",
+  "\u00a0": "Space",
   ArrowUp: "↑",
   ArrowDown: "↓",
   ArrowLeft: "←",
@@ -704,7 +736,7 @@ export function comboProblem(c: Combo, selfId: string): string | null {
   for (const b of KEYMAP) {
     if (b.id === selfId || b.aliasOf === selfId || b.pairOf === selfId) continue;
     for (const t of effBindings(b)) {
-      if (t.key !== c.key) continue;
+      if (normKey(t.key) !== normKey(c.key)) continue;
       if (!!t.mod !== !!c.mod) continue;
       if (t.shift !== "any" && !!t.shift !== !!c.shift) continue;
       if (t.alt !== "any" && !!t.alt !== !!c.alt) continue;
@@ -722,7 +754,9 @@ export function sameCombo(a: Combo, b: Combo): boolean {
   // Normalize shift so a default's `undefined` equals a capture's `false`
   // ("any" only equals "any" — it matches more keystrokes than false does).
   const s = (x: boolean | "any" | undefined) => (x === "any" ? "any" : !!x);
-  return a.key === b.key && !!a.mod === !!b.mod && s(a.shift) === s(b.shift) && !!a.alt === !!b.alt;
+  return (
+    normKey(a.key) === normKey(b.key) && !!a.mod === !!b.mod && s(a.shift) === s(b.shift) && !!a.alt === !!b.alt
+  );
 }
 
 /** The default combos for an action — its primary entry plus any
@@ -752,6 +786,57 @@ function breakScreenUp(): boolean {
   return !!el && !el.classList.contains("break-leaving");
 }
 
+/** A key as the table stores it: letters lower-cased, and macOS's Option+Space
+ * (which reports the non-breaking space it would type) read as Space — on
+ * both sides, since the sheet's recorder may have stored either. */
+function normKey(key: string): string {
+  if (key === "\u00a0") return " ";
+  return key.length === 1 ? key.toLowerCase() : key;
+}
+
+// Holdable actions currently down, with the combo that pressed them — so the
+// release is matched against the binding that actually fired (rebinds
+// included), and an "up" is only ever sent after a "down".
+const _held = new Map<KeymapEntry, Combo>();
+
+function _release(b: KeymapEntry, e: KeyboardEvent | null) {
+  if (!_held.delete(b)) return;
+  b.run(e, "up");
+}
+
+/** Window blur mid-hold: the keyup will land in another window, so let go of
+ * everything now rather than leave the mic listening. */
+function _releaseAll() {
+  for (const b of Array.from(_held.keys())) _release(b, null);
+}
+
+const MOD_RELEASED: Record<string, (t: Combo) => boolean> = {
+  Alt: (t) => t.alt === true,
+  Shift: (t) => t.shift === true,
+  Control: (t) => !!t.mod,
+  Meta: (t) => t.mod === true,
+};
+
+function _dispatchUp(e: KeyboardEvent) {
+  // Never gated by the sheet's recorder or the break screen: a press that
+  // began before either appeared must still end.
+  if (!_held.size) return;
+  const key = e.key || "";
+  const norm = normKey(key);
+  for (const [b, t] of Array.from(_held)) {
+    if (normKey(t.key) === norm) {
+      e.preventDefault();
+      e.stopPropagation();
+      _release(b, e);
+    } else if (MOD_RELEASED[key]?.(t)) {
+      // Letting go of the modifier first ends the hold too (and on macOS the
+      // main key's own keyup never arrives while ⌘ is down). The modifier's
+      // keyup is left alone for everyone else.
+      _release(b, e);
+    }
+  }
+}
+
 function _dispatch(e: KeyboardEvent) {
   if (_rebindCapturing) return; // the "?" sheet is recording a new combo
   if (breakScreenUp()) return; // nothing behind the break card is reachable
@@ -759,23 +844,32 @@ function _dispatch(e: KeyboardEvent) {
     _handleChordKey(e);
     return;
   }
-  const key = e.key || "";
-  const norm = key.length === 1 ? key.toLowerCase() : key;
+  const norm = normKey(e.key || "");
   const mod = e.ctrlKey || e.metaKey;
   for (const b of KEYMAP) {
     for (const t of effBindings(b)) {
-      if (t.key !== norm) continue;
+      if (normKey(t.key) !== norm) continue;
       if (t.mod === "ctrl" ? !e.ctrlKey : t.mod ? !mod : mod) continue;
       if (t.shift !== "any" && !!t.shift !== e.shiftKey) continue;
       if (t.alt !== "any" && !!t.alt !== e.altKey) continue;
       // A CUSTOM bare-key combo (no Ctrl/Alt — an F-key, Insert, …) must
       // never fire while typing: the default bare keys ("/", "?", Delete)
       // carry their own editing guards, but an override can't inherit them.
-      // xterm's hidden helper textarea makes terminals count as editing too.
-      if (t !== b && !t.mod && !t.alt && isEditingTarget(document.activeElement)) continue;
+      // xterm's hidden helper textarea makes terminals count as editing too —
+      // except for a holdable action (talk), which is meant to be pressed
+      // from a terminal; the sheet already refuses bare printable keys.
+      if (t !== b && !t.mod && !t.alt && isEditingTarget(document.activeElement) && !(b.holdable && terminalFocused()))
+        continue;
       if (b.when && !b.when()) return; // bound but guarded — let the key through
       e.preventDefault();
       e.stopPropagation();
+      if (b.holdable) {
+        if (e.repeat) return; // auto-repeat while held: still one press
+        _release(b, e); // a fresh press whose release we never saw ends that one first
+        _held.set(b, t);
+        b.run(e, "down");
+        return;
+      }
       b.run(e);
       return;
     }
@@ -787,8 +881,14 @@ function _dispatch(e: KeyboardEvent) {
 export function installKeymap(host: KeymapHost): () => void {
   _host = host;
   document.addEventListener("keydown", _dispatch, true); // capture
+  document.addEventListener("keyup", _dispatchUp, true);
+  const win = typeof window !== "undefined" ? window : null;
+  win?.addEventListener("blur", _releaseAll);
   return () => {
     document.removeEventListener("keydown", _dispatch, true);
+    document.removeEventListener("keyup", _dispatchUp, true);
+    win?.removeEventListener("blur", _releaseAll);
+    _releaseAll();
     if (_host === host) _host = null;
     _chordPending = false;
     clearTimeout(_chordTimer);

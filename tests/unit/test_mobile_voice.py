@@ -268,7 +268,8 @@ def test_mobile_js_radio_rules_over_submit_and_disregard():
     assert (
         "if (p.text && !composeEl.value.trim()) {" in heard
     )  # commands: empty box only
-    assert "voiceDialogAnswer(p.text);" in heard
+    assert "voiceDialogHeard(p.text);" in heard
+    assert "voiceDialogAnswer(text);" in _fn(js, "voiceDialogHeard")
     assert "voiceListenContinue();" in heard and "voiceListenContinue();" in words
     # The phrase keeps the recognizer: no stop on a final, a restart only
     # when the adapter ended with it.
@@ -435,7 +436,8 @@ def test_mobile_js_spoken_replies_say_per_prompt():
         in send
     )
     # Dictated words set the flag; emptying the box clears it.
-    assert "voice.dictated = true;" in _fn(js, "voiceHeardWords")
+    assert "voiceAppend(p.text);" in _fn(js, "voiceHeardWords")
+    assert "voice.dictated = true;" in _fn(js, "voiceAppend")
     assert "voice.dictated = false;" in _fn(js, "voiceHeard")  # disregard
     assert "voice.dictated = false;" in _fn(js, "voiceCancelTap")
     assert "if (!composeEl.value.trim()) voice.dictated = false;" in _voice_section(js)
@@ -487,7 +489,10 @@ def test_mobile_js_router_first_then_the_local_table():
     assert "var VOICE_ROUTE_TIMEOUT_MS = 2000;" in v
     route = _fn(js, "voiceRoute")
     assert 'fetch("/api/voice/route", {' in route
-    assert "JSON.stringify({ text: text, session: voice.session || current })" in route
+    assert (
+        "JSON.stringify({ text: text, session: session || voice.session || current })"
+        in route
+    )
     assert "VOICE_ROUTE_TIMEOUT_MS" in route and "Promise.race([asked, late])" in route
     assert "if (!r.ok) {" in route and "return null;" in route
     assert "VOICE_ROUTE_KINDS.indexOf(j.kind) < 0" in route
@@ -519,9 +524,11 @@ def test_mobile_js_router_first_then_the_local_table():
     fallback = routed.split("if (!res) {")[1].split("\n    }\n")[0]
     assert (
         "var cmd = voiceCommand(p.text);" in fallback
-        and "voiceHeardWords(p);" in fallback
+        and "if (!cmd) return voiceHeardRest(p);" in fallback
     )
-    assert 'case "prompt": voiceHeardWords(p); return false;' in routed
+    # A prompt is still checked for an answer at its end (voiceHeardRest).
+    assert 'case "prompt": return voiceHeardRest(p);' in routed
+    assert "voiceHeardWords(p);" in _fn(js, "voiceHeardRest")
     # A command ends the listen: nothing queued behind it is dictated.
     assert (
         "if (voiceRouted(res, p)) { L.draining = false; L.routeQ = []; return; }"
@@ -537,6 +544,103 @@ def test_mobile_js_router_first_then_the_local_table():
     assert 'return fetch("/api/instances")' in _fn(js, "poll")
     # The silence clock waits for a route answer like a pending clip.
     assert "voiceListen_.routing" in _fn(js, "voiceListen")
+
+
+def test_mobile_js_wider_vocabulary_numbers_stops_and_answers():
+    """The phone's wider command set. The Sessions sheet numbers its rows in
+    the order shown and holds that order while open; "session two" is the
+    second row, "next session" a step from this one. A stop phrase acts at
+    the end of ANY phrase or streamed run (the box kept); while the session
+    is asking, an answer at the end answers it, the stream holding back up
+    to three words that may start one. An answer with dialog_id + keys is
+    POSTed only with Approve dialogs by voice on; one for another session
+    keeps voice where it is; a question's answer is a prompt."""
+    js = _js()
+    v = _voice_section(js)
+    # Numbered rows, held while the sheet is open; rowOrder is the order.
+    rows = _fn(js, "renderRows")
+    assert (
+        'var open = !!sessionsSheet && !sessionsSheet.classList.contains("hidden");'
+        in rows
+    )
+    assert "rowOrder = kept.concat(" in rows and "rowOrder = sorted;" in rows
+    assert "var row = sessionRow(instByTitle(title));" in rows
+    assert 'num.className = "sess-num";' in rows
+    assert "num.textContent = String(i + 1);" in rows
+    assert "main.insertBefore(num, main.firstChild);" in rows
+    assert ".sess-num {" in _css()
+    assert 'id="sessions-voice-note"' in _html()
+    # switch_index / switch_rel: the rows as shown.
+    assert 'return n >= 1 && n <= rowOrder.length ? rowOrder[n - 1] : "";' in _fn(
+        js, "voiceRowTitle"
+    )
+    idx = _fn(js, "voiceSwitchIndex")
+    assert "var title = voiceRowTitle(n);" in idx
+    assert '"There is no session " + n + "."' in idx
+    rel = _fn(js, "voiceSwitchRel")
+    assert "rowOrder.indexOf(voice.session || current)" in rel
+    assert "(((i + delta) % n) + n) % n" in rel
+    routed = _fn(js, "voiceRouted")
+    assert "voiceSwitchIndex(Number(res.index) || 0);" in routed
+    assert "voiceSwitchRel(Number(res.delta) || 1);" in routed
+    assert "voiceRoutedAnswer(res, p, false);" in routed
+    kinds = v.split("var VOICE_ROUTE_KINDS = [")[1].split("];")[0]
+    for kind in ("switch_index", "switch_rel", "answer", "question"):
+        assert '"%s"' % kind in kinds, kind
+    # An unknown kind (a newer server) is a prompt, not the local table.
+    route = _fn(js, "voiceRoute")
+    assert 'return { kind: "prompt" };' in route
+    # Stop phrases: first in voiceHeard (any mode, before a dialog's "no"),
+    # and the moment a stream settles one.
+    heard = _fn(js, "voiceHeard")
+    assert heard.index("var stop = voiceTail(text, false);") < heard.index(
+        'if (mode === "dialog") {'
+    )
+    stopper = _fn(js, "voiceStopPhrase")
+    assert "voiceStopForCommand();" in stopper and "voiceListenKept();" in stopper
+    assert "voiceSend" not in stopper
+    stt = _fn(js, "ServerSTT")
+    words = stt.split("function streamWords(g, mine, committed, partial) {")[1]
+    assert 'if (tail && tail.kind === "stop") {' in words
+    assert "var VOICE_HOLD_MAX = 3;" in v
+    assert "Math.min(VOICE_HOLD_MAX, all.length)" in _fn(js, "voiceStreamSplit")
+    assert "answers: function () { return !!voiceAsks(voice.session); }," in _fn(
+        js, "voiceRecStart"
+    )
+    # Answers only while the session is asking.
+    rest = _fn(js, "voiceHeardRest")
+    assert "voiceAsks(voice.session) ? voiceTail(p.text, true) : null" in rest
+    # The router's dialog answer: POST /answer gated by approve_dialogs.
+    ra = _fn(js, "voiceRoutedAnswer")
+    gate = ra.split("if (res.dialog_id && res.keys && res.keys.length) {")[1]
+    assert gate.index("voice.cfg.approve_dialogs") < gate.index("voiceAnswerPost(")
+    assert '"Answer it on the screen."' in gate
+    assert "voiceRoute(p.text, title).then(" in ra  # only the row number: ask again
+    assert "if (res.no_dialog)" in ra
+    local = _fn(js, "voiceAnswerLocal")
+    assert local.index("voice.cfg.approve_dialogs") < local.index("voiceAnswerPost(")
+    assert "voiceParseAnswer(a.said, d.options)" in local  # "always" only when said
+    # A targeted answer never moves voice: no select(), POST to that title.
+    other = _fn(js, "voiceAnswerOther")
+    assert "select(" not in other and "voiceAnswerLocal(title, ta);" in other
+    assert "if (!title || title === voice.session) return false;" in other
+    post = _fn(js, "voiceAnswerPost")
+    assert "var mine = title === voice.session" in post
+    assert "select(" not in post
+    # A question's answer is a prompt: here with the box, there without it.
+    send = _fn(js, "voiceAnswerSend")
+    assert "voiceSend(voiceJoin(composeEl.value, words));" in send
+    assert "else voiceSend(words, title);" in send
+    vs = _fn(js, "voiceSend")
+    assert "var other = title !== here;" in vs
+    keep = vs.split("if (r.ok && other) {")[1].split("\n          }\n")[0]
+    assert 'composeEl.value = ""' not in keep and "voiceAckStart" not in keep
+    # Said name first.
+    assert 'name + ": " + say' in _fn(js, "voiceNameFirst")
+    # Diagnostics: the last route kind, and the numbering.
+    diag = _fn(js, "voiceDiag")
+    assert '"Router: " + (voice.lastRoute' in diag
+    assert '"Session numbers: "' in diag
 
 
 def test_mobile_js_prime_runs_inside_the_tap_before_anything_async():
@@ -600,12 +704,13 @@ def test_mobile_js_voice_requests_have_the_contract_shape():
     assert "var VOICE_ACK_POLL_MS = 3000;" in v
     assert "firstSentence(text)" in _fn(js, "voiceAckTick")
     # The answer: pinned to the dialog it was read from, by the person.
-    ans = _fn(js, "voiceDialogAnswer")
-    assert '"/api/instances/" + encodeURIComponent(title) + "/answer"' in ans
     assert (
-        'JSON.stringify({ keys: [String(opt.key)], dialog_id: d.id, by: "user" })'
-        in ans
+        'voiceAnswerPost(voice.session, d.id, [String(opt.key)], voiceKindWord(opt), "");'
+        in _fn(js, "voiceDialogAnswer")
     )
+    ans = _fn(js, "voiceAnswerPost")
+    assert '"/api/instances/" + encodeURIComponent(title) + "/answer"' in ans
+    assert 'JSON.stringify({ keys: keys, dialog_id: dialogId, by: "user" })' in ans
     assert "j.dialog_changed" in ans and "j.dialog_answered" in ans
     assert '"Already answered."' in ans
     # The dialog itself, quietly (204 when there is none).
@@ -708,8 +813,10 @@ def test_mobile_js_voice_commands_and_switching():
     assert "words.indexOf(w) >= 0" in match
     assert "q.indexOf(r.n) >= 0" in match
     sw = _fn(js, "voiceSwitch")
-    assert "select(title);" in sw and '"Now on " + m.hit.name' in sw
+    assert "voiceSwitchTo(m.hit.title);" in sw
     assert '"Which one: "' in sw
+    to = _fn(js, "voiceSwitchTo")
+    assert "select(title);" in to and '"Now on " + nameOf(title)' in to
     # "What needs me": the rail's attention set, three at most.
     needs = _fn(js, "voiceNeedsMe")
     assert "sessionState(i).inBell" in needs and ".slice(0, 3)" in needs
@@ -915,7 +1022,7 @@ def test_mobile_js_server_recognizer_streams_words_as_you_speak():
     words = stt.split("function streamWords(g, mine, committed, partial) {")[1]
     words = words.split("\n    }\n")[0]
     assert "if (!(h.whole && h.whole())) {" in words
-    assert "var cut = voiceStreamSplit(g.pend);" in words
+    assert "var cut = voiceStreamSplit(g.pend, !!(h.answers && h.answers()));" in words
     assert "if (h.onFinal) h.onFinal(cut[0]);" in words
     assert "if (h.onInterim) h.onInterim(shown);" in words
     split = _fn(js, "voiceStreamSplit")
@@ -1120,19 +1227,34 @@ def test_voice_matchers_under_node():
 
 
 @pytest.mark.skipif(_node() is None, reason="needs node")
+def _control_fns(js: str) -> str:
+    """voiceNorm, the dialog word tables, voiceDictParse and the control
+    phrases (voiceTail, voiceTargetAnswer, …): what the matchers below run."""
+    return (
+        js[js.index("  function voiceNorm(") : js.index("  var VOICE_CMD = [")]
+        + js[
+            js.index('  var VOICE_ORD = ["one"') : js.index(
+                "  function voiceParseAnswer("
+            )
+        ]
+        + js[
+            js.index("  function voiceDictParse(") : js.index(
+                "  // --- voice commands (matched"
+            )
+        ]
+    )
+
+
 def test_voice_stream_split_under_node():
     """The stream's held-back end, run as-is: the last settled word waits
     for the next words or the flush, and a run never reaches the box ending
     in a radio word — so "over" / "submit" / "disregard" act only as the
-    phrase's real end, and mid-sentence they stay words."""
+    phrase's real end, and mid-sentence they stay words. Up to three
+    trailing words that may START a control phrase wait too ("stop" may be
+    "stop recording"); while the session is asking, so do answers."""
     js = _js()
     split = js[
         js.index("  function voiceStreamSplit(") : js.index("  function ServerSTT(")
-    ]
-    parse = js[
-        js.index("  function voiceDictParse(") : js.index(
-            "  // --- voice commands (matched"
-        )
     ]
     cases = [
         "",
@@ -1144,19 +1266,29 @@ def test_voice_stream_split_under_node():
         "add a test submit",
         "move it over to",
         "  spaced   out  words ",
+        "fix it stop",
+        "fix it stop recording",
+        "remove the logs that's",
+        "remove the logs that is all",
+        "turn the mic",
+        "add a test and yes",
+        "pick option",
     ]
+    asking = ["add a test and yes", "pick option", "fix the login bug", "it is no"]
     script = (
         split
-        + parse
-        + "\nconsole.log(JSON.stringify(%s.map(voiceStreamSplit).concat([[voiceJoin('a ', ' b'), voiceJoin('', 'b'), voiceJoin('a', null)]])));\n"
-        % json.dumps(cases)
+        + _control_fns(js)
+        + "\nconsole.log(JSON.stringify({plain: %s.map(function (t) { return voiceStreamSplit(t); }),"
+        " asking: %s.map(function (t) { return voiceStreamSplit(t, true); }),"
+        " join: [voiceJoin('a ', ' b'), voiceJoin('', 'b'), voiceJoin('a', null)]}));\n"
+        % (json.dumps(cases), json.dumps(asking))
     )
     res = subprocess.run(
         [_node(), "-e", script], capture_output=True, text=True, timeout=30
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
-    assert out[:-1] == [
+    assert out["plain"] == [
         ["", ""],
         ["", "fix"],
         ["fix the login", "bug"],
@@ -1166,8 +1298,147 @@ def test_voice_stream_split_under_node():
         ["add a test", "submit"],
         ["move it", "over to"],
         ["spaced out", "words"],
+        # A stop phrase never reaches the box, even half said.
+        ["fix it", "stop"],
+        ["fix it", "stop recording"],
+        ["remove the logs", "that's"],
+        ["remove the logs", "that is all"],
+        ["turn the", "mic"],
+        # Not asking: an answer word is a word.
+        ["add a test and", "yes"],
+        ["pick", "option"],
     ]
-    assert out[-1] == ["a b", "b", "a"]
+    assert out["asking"] == [
+        ["add a test and", "yes"],
+        ["pick", "option"],
+        ["fix the login", "bug"],
+        ["it is", "no"],
+    ]
+    assert out["join"] == ["a b", "b", "a"]
+
+
+@pytest.mark.skipif(_node() is None, reason="needs node")
+def test_voice_control_phrases_under_node():
+    """The control phrases, run as-is. A stop phrase at the END of any phrase
+    stops (the words before it kept); while the session is asking, an answer
+    at the end answers (a number only as the whole phrase or with its
+    marker); a whole phrase can answer another session by row number or by
+    name; the command table knows numbered and stepped switching, the
+    switch verbs and "what is it asking"."""
+    js = _js()
+    cmd_fns = js[
+        js.index("  var VOICE_CMD = [") : js.index("  function voiceRunCommand(")
+    ]
+    tails = [
+        ["fix the parser stop recording", False],
+        ["Stop listening.", False],
+        ["remove the logs, that's all", False],
+        ["mic off", False],
+        ["I'm done talking", False],
+        ["make it stop", False],
+        ["stop the server", False],
+        ["fix the parser yes", False],
+        ["fix the parser yes", True],
+        ["No, thanks.", True],
+        ["always allow", True],
+        ["yes and don't ask again", True],
+        ["two", True],
+        ["add two", True],
+        ["use option two", True],
+        ["the second one", True],
+        ["answer yes", True],
+        ["what about the tests", True],
+    ]
+    targets = [
+        "session three yes",
+        "Session 2, option one",
+        "session two",
+        "session banana yes",
+        "tell invoice parser no",
+        "tell parser to go ahead",
+        "answer the login fix always",
+        "answer yes",
+        "tell me a joke",
+    ]
+    cmds = [
+        "session two",
+        "go to session 3",
+        "focus on session number four",
+        "next session",
+        "switch to the previous one",
+        "focus parser",
+        "open the readme",
+        "show login fix",
+        "select api docs",
+        "what is it asking",
+        "What's it asking?",
+        "what does it want",
+        "stop listening",
+    ]
+    script = (
+        _control_fns(js)
+        + cmd_fns
+        + "\nvar out = {tails: %s.map(function (x) { var t = voiceTail(x[0], x[1]); return t ? [t.kind, t.choice || '', t.number || 0, t.text, t.said] : null; }),"
+        " targets: %s.map(function (x) { var t = voiceTargetAnswer(x); return t ? [t.index || t.name, t.choice, t.number || 0, t.said] : null; }),"
+        " cmds: %s.map(function (x) { var c = voiceCommand(x); return c ? c.kind + (c.arg ? ':' + c.arg : '') : null; }),"
+        " nums: ['two', '2', 'second', 'twelve', '12', 'banana'].map(voiceNumber)};\n"
+        "console.log(JSON.stringify(out));\n"
+        % (json.dumps(tails), json.dumps(targets), json.dumps(cmds))
+    )
+    res = subprocess.run(
+        [_node(), "-e", script], capture_output=True, text=True, timeout=30
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    assert out["tails"] == [
+        ["stop", "", 0, "fix the parser", "stop recording"],
+        ["stop", "", 0, "", "Stop listening"],
+        ["stop", "", 0, "remove the logs", "that's all"],
+        ["stop", "", 0, "", "mic off"],
+        ["stop", "", 0, "", "I'm done talking"],
+        None,
+        None,
+        # Not asking: "yes" is a word.
+        None,
+        ["answer", "yes", 0, "fix the parser", "yes"],
+        ["answer", "no", 0, "", "No, thanks"],
+        ["answer", "always", 0, "", "always allow"],
+        ["answer", "always", 0, "", "yes and don't ask again"],
+        # A bare number answers only as the whole phrase.
+        ["answer", "number", 2, "", "two"],
+        None,
+        ["answer", "number", 2, "use", "option two"],
+        ["answer", "number", 2, "", "the second one"],
+        ["answer", "yes", 0, "", "answer yes"],
+        None,
+    ]
+    assert out["targets"] == [
+        [3, "yes", 0, "yes"],
+        [2, "number", 1, "option one"],
+        None,
+        None,
+        ["invoice parser", "no", 0, "no"],
+        ["parser", "yes", 0, "go ahead"],
+        ["the login fix", "always", 0, "always"],
+        None,
+        None,
+    ]
+    assert out["cmds"] == [
+        "switch_index:two",
+        "switch_index:3",
+        "switch_index:four",
+        "switch_rel:next",
+        "switch_rel:previous",
+        "focus:parser",
+        "focus:the readme",
+        "focus:login fix",
+        "focus:api docs",
+        "question",
+        "question",
+        "question",
+        "stop",
+    ]
+    assert out["nums"] == [2, 2, 2, 12, 12, 0]
 
 
 @pytest.mark.skipif(_node() is None, reason="needs node")

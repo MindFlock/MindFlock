@@ -7,13 +7,22 @@ it, so the grammar lives here once. The phone keeps its own table
 a port of it: the same normalisation (:func:`norm`), the same session
 matcher (prefix → word overlap → loose containment, :func:`match_session`),
 the same attention rule as the rail's bell (:func:`session_state`) and the
-same sentences.
+same sentences. Answers to a session's dialog ("yes", "docs, always", "tell
+session three no") use the phone's dialog words too (mobile.js
+``VOICE_YES`` … ``voiceParseAnswer``, :func:`parse_answer`).
+
+Sessions said by number ("session three", "next one") are numbered by the
+CLIENT (the desktop's rail order, the phone's list order): the answer
+carries ``index`` / ``delta`` and the client maps it, sending the title back
+as ``title`` when it wants the rest (a dialog's keys, a ``say``).
 
 Pure: functions take the ``/api/instances`` rows (``title``, ``name``,
 ``activity``, ``activity_since``, ``last_say``, ``last_turn``, …), the known
-repositories and the text, and return the answer dict. No I/O — the route
-gathers the rows, resolves the title against the registry and creates the
-session.
+repositories, a session's ``/dialog`` body and the text, and return the
+answer dict. No I/O — the route gathers the rows, reads the dialog, resolves
+the title against the registry and creates the session. Nothing here
+presses a key: an answer carries the keys, and the client posts them to
+``/answer``.
 
 The default is ``{"kind": "prompt"}``: anything that is not plainly a command
 is words for the current session. A false command is worse than a missed one
@@ -33,10 +42,15 @@ from backend.web.core.spoken import strip_markdown
 __all__ = [
     "LOCAL_KINDS",
     "answer",
+    "choice_of",
     "command",
+    "dialog_choices",
+    "dialog_speech",
+    "finish",
     "match_repo",
     "match_session",
     "norm",
+    "parse_answer",
     "plan_new",
     "session_state",
     "started",
@@ -61,10 +75,32 @@ TITLE_WORDS = 4
 #: The title when there is neither a name nor a task.
 DEFAULT_TITLE = "voice-session"
 
-# The phone's table, in its order (mobile.js VOICE_CMD), plus "list".
+# Spoken counts: "session three", "number 12", "the second one". Ordinals
+# stop at tenth; digits run to 99.
+_NUMS = {
+    w: i + 1
+    for i, w in enumerate(
+        "one two three four five six seven eight nine ten eleven twelve thirteen"
+        " fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()
+    )
+}
+_ORDS = {
+    w: i + 1
+    for i, w in enumerate(
+        "first second third fourth fifth sixth seventh eighth ninth tenth".split()
+    )
+}
+_NUM_RX = r"(?:[1-9][0-9]?|" + "|".join(_NUMS) + ")"
+_ORD_RX = r"(?:[1-9][0-9]?(?:st|nd|rd|th)|" + "|".join(_ORDS) + ")"
+# The verbs that move the focus: "(switch|go|…) (over )?to …" ("go back to the
+# old approach" stays words for the agent).
+_VERB_RX = r"(?:switch|go|change|jump|focus|open|show|select) (?:over )?to"
+
+# The phone's table, in its order (mobile.js VOICE_CMD), plus "list" and the
+# wider "stop" (the client stops listening; typed text stays).
 _CMDS = [
     ("cancel", re.compile(r"^(?:cancel|never ?mind|scratch that|forget it)$")),
-    ("switch", re.compile(r"^(?:switch|go|change|jump) (?:over )?to (.+)$")),
+    ("switch", re.compile(r"^%s (.+)$" % _VERB_RX)),
     (
         "list",
         re.compile(
@@ -87,8 +123,83 @@ _CMDS = [
     ),
     ("repeat", re.compile(r"^(?:say that again|repeat(?: that)?)$")),
     ("off", re.compile(r"^(?:voice off|turn voice off|turn off voice)$")),
-    ("stop", re.compile(r"^(?:stop listening|stop)$")),
+    (
+        "stop",
+        re.compile(
+            r"^(?:stop"
+            r"|stop (?:listening|recording|dictating|the mic|the microphone)"
+            r"|(?:mic|microphone) off"
+            r"|turn (?:off the (?:mic|microphone)|the (?:mic|microphone) off)"
+            r"|pause listening|that'?s all|that is all"
+            r"|(?:i'?m |i am )?done talking)$"
+        ),
+    ),
 ]
+
+# "switch to session three", "go to 2", "session three", "number 4", "the
+# third session" — the client's own numbering (its rail / list order).
+_INDEX_RES = [
+    re.compile(r"^%s (?:(?:session|window|number) )?(%s)$" % (_VERB_RX, _NUM_RX)),
+    re.compile(r"^%s the (%s) (?:one|session|window)$" % (_VERB_RX, _ORD_RX)),
+    re.compile(r"^(?:session|window|number) (%s)$" % _NUM_RX),
+    re.compile(r"^the (%s) (?:session|window)$" % _ORD_RX),
+]
+# "the second one" alone: an option when the session is asking, else a session.
+_PICK_RE = re.compile(r"^(?:the )?(%s) one$" % _ORD_RX)
+# "next session", "go to the previous one", "go back".
+_REL_RE = re.compile(
+    r"^(?:(?:%s )?(?:the )?(next|previous|prev|last) (?:session|one|window)"
+    r"|go (back))$" % _VERB_RX
+)
+# "what is it asking", "what does docs want", "read the question".
+_QUESTION_RE = re.compile(
+    r"^(?:what(?:'?s| is) (?P<a>.+?) asking(?: me)?(?: for| about)?"
+    r"|what does (?P<b>.+?) want(?: me to do)?"
+    r"|what(?:'?s| is) the question"
+    r"|read(?: me)? (?:the|its|it's) question(?: again)?"
+    r"|read (?:that|it) again)$"
+)
+
+# --- answers: the phone's dialog words (mobile.js VOICE_YES … VOICE_NUM) -------
+_YES_RE = re.compile(
+    r"\b(?:yes|yeah|yep|yup|allow|approve|okay|ok|go ahead|do it|sure)\b"
+)
+_NO_RE = re.compile(r"\b(?:no|nope|deny|reject|don'?t|cancel|skip|stop)\b")
+# "always" must be SAID, and said as the whole answer: "always", "yes,
+# always", "always allow that", "yes and don't ask again".
+_ALWAYS_RE = re.compile(
+    r"^(?:(?:yes|yeah|yep|yup|ok|okay) ?)?(?:and )?"
+    r"(?:always(?: allow(?: (?:this|it|that|all))?)?"
+    r"|don'?t ask(?: me)? again|do not ask(?: me)? again|never ask(?: me)? again)$"
+)
+_PNUM_RE = re.compile(
+    r"\b(one|first|1|two|second|2|three|third|3|four|fourth|4|five|fifth|5|six|sixth"
+    r"|6|seven|seventh|7|eight|eighth|8|nine|ninth|9)\b"
+)
+_PNUM = {
+    w: (i // 3) + 1
+    for i, w in enumerate(
+        "one first 1 two second 2 three third 3 four fourth 4 five fifth 5 six sixth 6"
+        " seven seventh 7 eight eighth 8 nine ninth 9".split()
+    )
+}
+#: mobile.js ``VOICE_ORD``: options read out by number.
+_ORD_WORDS = ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine")
+# Every word an answer may be made of — a phrase with any other word in it is
+# not an answer ("yes, but run the tests first" is words for the session).
+# Numbers count only after option/choice ("option two") or as an ordinal
+# before one/option/choice ("the second one").
+_BODY_WORDS = frozenset(
+    "yes yeah yep yup sure ok okay approve approved allow allowed go ahead do it"
+    " that this all no nope deny denied reject don't dont not skip cancel stop"
+    " always and ask me again never thanks thank you".split()
+)
+_PICK_NOUNS = ("one", "option", "choice")
+# Who "it" is: the session being talked to.
+_SELF = frozenset(
+    ("it", "him", "her", "them", "the agent", "the session", "this session", "this one")
+)
+_NOUNS = ("session", "window", "number")
 
 # "(start|open|create|make|spin up)? (a|another)? new session (called|named
 # <name>)? (in|for|on <repo>)? (to|and|that <task>)?" — on the normalised
@@ -182,10 +293,161 @@ def _parse_new(w: _Words) -> Optional[dict]:
     }
 
 
+def _count(word: str) -> Optional[int]:
+    """``"three"`` / ``"3"`` / ``"third"`` / ``"3rd"`` → 3, else None."""
+    m = re.fullmatch(r"([1-9][0-9]?)(?:st|nd|rd|th)?", word or "")
+    if m:
+        return int(m.group(1))
+    return _NUMS.get(word) or _ORDS.get(word)
+
+
+def _ordinal(word: str) -> Optional[int]:
+    if re.fullmatch(_ORD_RX, word or ""):
+        return _count(word)
+    return None
+
+
+def choice_of(text) -> Optional[dict]:
+    """What an answer says, the phone's order (mobile.js ``voiceParseAnswer``):
+    the whole-answer always forms, then a NO anywhere, then a yes, then a
+    picked number → ``{"choice": "always"|"no"|"yes"}`` or ``{"choice":
+    "number", "number": N}``; None when ``text`` is not made only of answer
+    words (``_BODY_WORDS``, "option two", "the second one")."""
+    words = norm(text).split()
+    if not words:
+        return None
+    number = None
+    i = 0
+    while i < len(words):
+        w = words[i]
+        if w in ("option", "choice"):
+            j = i + 1
+            if j < len(words) and words[j] == "number":
+                j += 1
+            n = _count(words[j]) if j < len(words) and not _ordinal(words[j]) else None
+            if n is None:
+                return None
+            number = number or n
+            i = j + 1
+            continue
+        k = i + 1 if w == "the" else i
+        if k + 1 < len(words) and _ordinal(words[k]) and words[k + 1] in _PICK_NOUNS:
+            number = number or _ordinal(words[k])
+            i = k + 2
+            continue
+        if w not in _BODY_WORDS:
+            return None
+        i += 1
+    t = " ".join(words)
+    if _ALWAYS_RE.match(t):
+        return {"choice": "always"}
+    if _NO_RE.search(t):
+        return {"choice": "no"}
+    if _YES_RE.search(t):
+        return {"choice": "yes"}
+    if number is not None:
+        return {"choice": "number", "number": number}
+    return None
+
+
+def _target(words: List[str], loose: bool) -> Optional[dict]:
+    """Who an answer or a question is for: ``{"self": True}`` ("it"),
+    ``{"index": N}`` ("session three", "number 2", "the third session") or
+    ``{"name": words, "strict": loose}``; None for no target at all (a bare
+    "session", or "it" where only a name or number may stand)."""
+    t = " ".join(words)
+    if not t or t in _NOUNS:
+        return None
+    if t in _SELF:
+        return None if loose else {"self": True}
+    m = re.fullmatch(r"(?:session|window|number) (%s)" % _NUM_RX, t) or re.fullmatch(
+        r"the (%s) (?:session|window)" % _ORD_RX, t
+    )
+    if m:
+        return {"index": _count(m.group(1))}
+    if choice_of(t) is not None or t in ("all", "everything", "that", "this"):
+        return None
+    return {"name": t, "strict": loose}
+
+
+def _answer_command(words: List[str]) -> Optional[dict]:
+    """An answer phrase → ``{"kind": "answer", "choice", "number"?, "words",
+    "target"}``, or None. The forms, first match wins:
+
+    * bare — ``yes``, ``no, don't``, ``always allow``, ``option two``, and
+      ``answer <answer>``: target None (the session being talked to);
+    * ``(answer|say) <answer> (to|on|for) <target>``, ``tell <target> (to)?
+      <answer>`` — explicit: an unknown name is ``no-session``;
+    * ``<answer> to <target>``, ``<target>, <answer>`` — loose: the target
+      must be a number or a session's whole name (or the start of it, whole
+      words); anything else leaves the phrase a prompt."""
+
+    def hit(body, tgt):
+        c = choice_of(" ".join(body))
+        if c is None or tgt is None:
+            return None
+        return dict(c, kind="answer", words=" ".join(body), target=tgt)
+
+    if not words:
+        return None
+    c = choice_of(" ".join(words))
+    if c is not None:
+        return dict(c, kind="answer", words=" ".join(words), target=None)
+    n = len(words)
+    if words[0] == "answer":
+        c = choice_of(" ".join(words[1:]))
+        if c is not None:
+            return dict(c, kind="answer", words=" ".join(words[1:]), target=None)
+    if words[0] in ("answer", "say"):
+        for p in range(2, n - 1):
+            if words[p] in ("to", "on", "for"):
+                got = hit(words[1:p], _target(words[p + 1 :], False))
+                if got:
+                    return got
+    if words[0] == "tell":
+        for k in range(2, n):
+            body = words[k + 1 :] if words[k] == "to" else words[k:]
+            got = hit(body, _target(words[1:k], False))
+            if got:
+                return got
+    for p in range(1, n - 1):
+        if words[p] == "to":
+            got = hit(words[:p], _target(words[p + 1 :], True))
+            if got:
+                return got
+    for k in range(1, n):
+        got = hit(words[k:], _target(words[:k], True))
+        if got:
+            return got
+    return None
+
+
+def _question_command(text: str) -> Optional[dict]:
+    m = _QUESTION_RE.match(text)
+    if m is None:
+        return None
+    said = m.group("a") or m.group("b")
+    if not said:
+        return {"kind": "question", "target": None}
+    tgt = _target(said.split(), False)
+    if tgt is None:
+        return None
+    if tgt.get("self"):
+        tgt = None
+    elif "name" in tgt:
+        tgt["strict"] = True  # "what does the user want" is words for the agent
+    return {"kind": "question", "target": tgt}
+
+
 def command(text) -> Optional[dict]:
     """The command ``text`` is, or None (a prompt): ``{"kind", "arg"}``, and
     for ``new`` ``{"kind": "new", "name", "repo", "task"}`` as said (the repo
-    words unresolved — :func:`plan_new` resolves them)."""
+    words unresolved — :func:`plan_new` resolves them); ``{"kind":
+    "switch_index", "index"}``, ``{"kind": "switch_rel", "delta"}``, ``{"kind":
+    "pick", "index"}`` ("the second one": :func:`answer` decides), ``{"kind":
+    "answer", "choice", "number"?, "words", "target"}`` and ``{"kind":
+    "question", "target"}`` (targets unresolved — :func:`answer` resolves
+    them against the rows)."""
     w = _Words(text)
     if not w.text:
         return None
@@ -200,6 +462,13 @@ def command(text) -> Optional[dict]:
             "repo": " ".join(w.words[p["repo"][0] : p["repo"][1]]) if p["repo"] else "",
             "task": w.original(p["task"]) if p["task"] is not None else "",
         }
+    m = _REL_RE.match(w.text)
+    if m:
+        return {"kind": "switch_rel", "delta": 1 if m.group(1) == "next" else -1}
+    for rx in _INDEX_RES:
+        m = rx.match(w.text)
+        if m:
+            return {"kind": "switch_index", "index": _count(m.group(1))}
     for kind, rx in _CMDS[1:]:
         m = rx.match(w.text)
         if m:
@@ -207,7 +476,13 @@ def command(text) -> Optional[dict]:
                 "kind": kind,
                 "arg": (m.group(1) or "").strip() if m.groups() else "",
             }
-    return None
+    q = _question_command(w.text)
+    if q is not None:
+        return q
+    m = _PICK_RE.match(w.text)
+    if m:
+        return {"kind": "pick", "index": _count(m.group(1)), "words": w.text}
+    return _answer_command(w.words)
 
 
 # --- sessions ----------------------------------------------------------------
@@ -352,23 +627,85 @@ def _names(rows: List[dict], n: int = MAX_NAMES) -> str:
     return ", ".join(_name(r) for r in rows[:n])
 
 
-def _switch(arg: str, rows) -> dict:
-    hit, cands = match_session(arg, rows)
-    if hit is None:
-        if cands:
-            return {"kind": "ambiguous", "say": "Which one: %s?" % _names(cands)}
-        everyone = _listed(rows)
-        if not everyone:
-            return {"kind": "no-session", "say": "There are no sessions."}
-        return {
-            "kind": "no-session",
-            "say": "No session called %s. Sessions: %s." % (arg, _names(everyone)),
-        }
+def _unmatched(arg: str, rows, cands) -> dict:
+    """The ``ambiguous`` / ``no-session`` answer for a name that picked no
+    single session."""
+    if cands:
+        return {"kind": "ambiguous", "say": "Which one: %s?" % _names(cands)}
+    everyone = _listed(rows)
+    if not everyone:
+        return {"kind": "no-session", "say": "There are no sessions."}
+    return {
+        "kind": "no-session",
+        "say": "No session called %s. Sessions: %s." % (arg, _names(everyone)),
+    }
+
+
+def _switched(hit: dict) -> dict:
     name = _name(hit)
     say = "Now on %s." % name
     if hit.get("last_say"):
         say += " " + _end(hit["last_say"])
     return {"kind": "switch", "title": hit["title"], "name": name, "say": say}
+
+
+def _switch(arg: str, rows) -> dict:
+    hit, cands = match_session(arg, rows)
+    if hit is None:
+        return _unmatched(arg, rows, cands)
+    return _switched(hit)
+
+
+def _strict_match(query: str, rows) -> Tuple[Optional[dict], List[dict]]:
+    """A name said without a verb ("docs, yes"): only a session's whole name
+    or title, or its start in whole words ("invoice" for invoice-parser), a
+    leading "the"/"my" ignored — never :func:`match_session`'s word overlap,
+    so "update the docs, yes" is no answer to ``docs``."""
+    q = norm(query)
+    for lead in ("the ", "my "):
+        if q.startswith(lead):
+            q = q[len(lead) :]
+    if not q:
+        return None, []
+    cands = []
+    for r in _listed(rows):
+        for said in (norm(_name(r)), norm(r.get("title"))):
+            if said == q or said.startswith(q + " "):
+                cands.append(r)
+                break
+    exact = [r for r in cands if q in (norm(_name(r)), norm(r.get("title")))]
+    if len(exact) == 1:
+        return exact[0], []
+    if len(cands) == 1:
+        return cands[0], []
+    return None, cands
+
+
+def _resolve(tgt, session: str, rows, title: str):
+    """An answer's or a question's target → ``(row, None)``, ``(None,
+    {"index": N})`` (the client maps it), or ``(None, final answer)``.
+    ``tgt`` None is the session being talked to; ``title`` is the client's
+    own mapping of an index (or of next/previous) to a title."""
+    if tgt is None or tgt.get("self"):
+        row = _row(rows, session)
+        return (row, None) if row is not None else (None, {"kind": "prompt"})
+    if "index" in tgt:
+        if not title:
+            return None, {"index": tgt["index"]}
+        row = _row(rows, title)
+        if row is None:
+            return None, {"kind": "no-session", "say": "%s is not listed." % title}
+        return row, None
+    said = tgt["name"]
+    if tgt.get("strict"):
+        hit, cands = _strict_match(said, rows)
+        if hit is None and not cands:
+            return None, {"kind": "prompt"}
+    else:
+        hit, cands = match_session(said, rows)
+    if hit is None:
+        return None, _unmatched(said, rows, cands)
+    return hit, None
 
 
 def _list(rows, now: float) -> dict:
@@ -418,11 +755,46 @@ def _status(session: str, rows, now: float) -> dict:
     return {"kind": "status", "say": say}
 
 
-def answer(text, session: str, rows, now: Optional[float] = None) -> dict:
+def _answer_or_question(cmd: dict, session: str, rows, title: str) -> dict:
+    row, out = _resolve(cmd.get("target"), session, rows, title)
+    if row is None:
+        if cmd["kind"] == "question" and cmd.get("target") is None:
+            return {"kind": "question", "say": "No session is open."}
+        if "kind" in out:
+            return out
+        if cmd["kind"] == "question":
+            return {"kind": "question", "index": out["index"]}
+        got = {"kind": "answer", "choice": cmd["choice"]}
+        if cmd["choice"] == "number":
+            got["number"] = cmd["number"]
+        got.update(index=out["index"], words=cmd["words"])
+        return got
+    got = {"kind": cmd["kind"], "title": row["title"], "name": _name(row)}
+    if cmd["kind"] == "answer":
+        got["choice"] = cmd["choice"]
+        if cmd["choice"] == "number":
+            got["number"] = cmd["number"]
+        got["words"] = cmd["words"]
+        tgt = cmd.get("target")
+        if tgt is None or tgt.get("self"):
+            got["bare"] = True
+    return got
+
+
+def answer(
+    text, session: str, rows, now: Optional[float] = None, title: str = ""
+) -> dict:
     """The answer to ``text`` said to ``session`` (a title, ``""`` for none).
 
+    ``title``: the client's mapping of the phrase's numbered target ("session
+    three, yes") or next/previous to one of its titles, sent back — the
+    numbering is the client's (its rail or list order), so without it those
+    answers carry ``index`` / ``delta`` and no ``say``.
+
     ``new`` comes back as :func:`command` parsed it — the route resolves it
-    with :func:`plan_new` and creates the session. Every other kind is final."""
+    with :func:`plan_new` and creates the session; ``answer`` and
+    ``question`` that name a session come back for :func:`finish` (the route
+    reads that session's dialog). Every other kind is final."""
     cmd = command(text)
     if cmd is None:
         return {"kind": "prompt"}
@@ -434,11 +806,172 @@ def answer(text, session: str, rows, now: Optional[float] = None) -> dict:
         return cmd
     if kind == "switch":
         return _switch(cmd["arg"], rows)
+    if kind == "pick":
+        cur = _row(rows, session)
+        if cur is not None and cur.get("activity") == "clarify":
+            cmd = {
+                "kind": "answer",
+                "choice": "number",
+                "number": cmd["index"],
+                "words": cmd["words"],
+                "target": None,
+            }
+        else:
+            cmd = {"kind": "switch_index", "index": cmd["index"]}
+        kind = cmd["kind"]
+    if kind in ("switch_index", "switch_rel"):
+        if not title:
+            return dict(cmd)
+        row = _row(rows, title)
+        if row is None:
+            return {"kind": "no-session", "say": "%s is not listed." % title}
+        return _switched(row)
+    if kind in ("answer", "question"):
+        return _answer_or_question(cmd, session, rows, title)
     if kind == "list":
         return _list(rows, now)
     if kind == "needs":
         return _needs(rows, now)
     return _status(session, rows, now)
+
+
+# --- answering dialogs -----------------------------------------------------------
+def parse_answer(text, options) -> Optional[dict]:
+    """mobile.js ``voiceParseAnswer``: the option ``text`` picks, or None.
+
+    Permission dialogs (any yes/no/always option) take WORDS only: the
+    whole-answer always forms first (an always without an always option is
+    a yes), then a no anywhere — whatever else was said — then a yes.
+    Numbers never pick a permission (recognisers turn "too"/"to" into "2",
+    and "2" is the standing-permission option of Claude's dialog). Dialogs
+    made only of ``other`` options take a number, matched to the option's
+    own key."""
+    t = norm(text)
+    opts = [o for o in options or () if isinstance(o, dict)]
+
+    def by_kind(k):
+        return next((o for o in opts if o.get("kind") == k), None)
+
+    if any(o.get("kind") in ("yes", "no", "always") for o in opts):
+        if _ALWAYS_RE.match(t):
+            return by_kind("always") or by_kind("yes")
+        if _NO_RE.search(t):
+            return by_kind("no")
+        if _YES_RE.search(t):
+            return by_kind("yes")
+        return None
+    m = _PNUM_RE.search(t)
+    if m:
+        key = str(_PNUM[m.group(1)])
+        return next((o for o in opts if str(o.get("key")) == key), None)
+    return None
+
+
+def _kind_word(opt: dict) -> str:
+    """mobile.js ``voiceKindWord``."""
+    k = opt.get("kind")
+    if k in ("yes", "no", "always"):
+        return k
+    return strip_markdown(opt.get("label") or "") or "that"
+
+
+def dialog_choices(dialog: dict) -> str:
+    """mobile.js ``voiceDialogChoices``: how to answer, as said."""
+    opts = [o for o in dialog.get("options") or () if isinstance(o, dict)]
+    kinds = {o.get("kind") for o in opts}
+    if "yes" in kinds or "no" in kinds:
+        return "Say yes, no, or always." if "always" in kinds else "Say yes or no."
+    n = min(len(opts), len(_ORD_WORDS))
+    names = [
+        "%s: %s" % (_ORD_WORDS[i], strip_markdown(opts[i].get("label") or ""))
+        for i in range(n)
+    ]
+    nums = list(_ORD_WORDS[:n])
+    if len(nums) == 1:
+        said = nums[0]
+    elif len(nums) == 2:
+        said = "%s or %s" % (nums[0], nums[1])
+    else:
+        said = ", ".join(nums[:-1]) + ", or " + nums[-1]
+    return ". ".join(names) + ". Say " + said + "."
+
+
+def dialog_speech(name: str, dialog: dict) -> str:
+    """mobile.js ``voiceDialogSpeech``: ``<name>: <question> [It wants to
+    run: <command>.] <choices>``."""
+    parts = [
+        "%s: %s"
+        % (name, strip_markdown(dialog.get("question") or "") or "a permission prompt")
+    ]
+    if dialog.get("command"):
+        parts.append("It wants to run: %s." % str(dialog["command"])[:200])
+    parts.append(dialog_choices(dialog))
+    return " ".join(parts)
+
+
+def _parsed(dialog) -> bool:
+    return (
+        isinstance(dialog, dict)
+        and bool(dialog.get("parsed"))
+        and bool(dialog.get("options"))
+    )
+
+
+def finish(ans: dict, dialog, spoken=None, remote: bool = False) -> dict:
+    """An ``answer`` / ``question`` from :func:`answer` that names a session,
+    finished with that session's live dialog (the ``/dialog`` body, None when
+    it is not asking) and, for a question, its spoken record (``{"say",
+    "has_question"}``). ``remote``: another device's session, whose dialog
+    this server cannot read.
+
+    An answer to a parsed dialog → ``dialog_id`` + ``keys`` (the option
+    :func:`parse_answer` picks; ``[]`` and a "didn't catch that" ``say`` when
+    none) — never pressed here, the client POSTs ``/answer``. No parsed
+    dialog → ``no_dialog`` and why; but a BARE answer ("yes" said to the
+    session being talked to) with no parsed dialog is ``{"kind": "prompt"}``:
+    the agent may have asked in words, and the words reach it as typed."""
+    out = dict(ans)
+    bare = out.pop("bare", False)
+    name = out.get("name") or out.get("title") or ""
+    if out.get("kind") == "question":
+        if _parsed(dialog):
+            say = dialog_speech(name, dialog)
+        elif isinstance(dialog, dict) and dialog.get("question"):
+            say = _end("%s: %s" % (name, strip_markdown(dialog["question"])))
+        elif (
+            isinstance(spoken, dict)
+            and spoken.get("has_question")
+            and spoken.get("say")
+        ):
+            say = _end("%s: %s" % (name, strip_markdown(spoken["say"])))
+        else:
+            say = "%s: Nothing is being asked." % name
+        out["say"] = say
+        return out
+    if not _parsed(dialog):
+        if bare:
+            return {"kind": "prompt"}
+        out["no_dialog"] = True
+        if remote:
+            out["say"] = "%s is on another device: answer it there." % name
+        elif isinstance(dialog, dict):
+            out["say"] = "%s is waiting on you: open the screen." % name
+        else:
+            out["say"] = "%s is not asking anything." % name
+        return out
+    out["dialog_id"] = dialog.get("id")
+    opt = parse_answer(out.get("words") or "", dialog.get("options"))
+    if opt is None:
+        out["keys"] = []
+        choices = dialog_choices(dialog)
+        out["say"] = "I didn't catch that for %s: %s" % (
+            name,
+            "say " + choices.split("Say ", 1)[-1] if "Say " in choices else choices,
+        )
+        return out
+    out["keys"] = [str(opt.get("key"))]
+    out["say"] = "Answered %s on %s." % (_kind_word(opt), name)
+    return out
 
 
 # --- new sessions --------------------------------------------------------------

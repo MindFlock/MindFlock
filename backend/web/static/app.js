@@ -32660,6 +32660,11 @@ function jumpToNeedsYou(current) {
 }
 //#endregion
 //#region src/lib/keymap.ts
+var VOICE_TALK_EVENT = "mindflock:voice-talk";
+function voiceTalk(phase) {
+	if (typeof window === "undefined") return;
+	window.dispatchEvent(new CustomEvent(VOICE_TALK_EVENT, { detail: { phase } }));
+}
 var _host = null;
 function isEditingTarget(el) {
 	if (!el) return false;
@@ -32966,6 +32971,18 @@ var KEYMAP = [
 		run: () => useUi.getState().openDialogFor("schedule")
 	},
 	{
+		key: " ",
+		alt: true,
+		id: "talk",
+		holdable: true,
+		help: [
+			"Navigation",
+			"Alt+Space",
+			"Talk to the focused session — hold or press, per the mic's push-to-talk mode"
+		],
+		run: (_e, phase) => voiceTalk(phase || "down")
+	},
+	{
 		key: "Tab",
 		mod: "ctrl",
 		id: "cycle",
@@ -33137,6 +33154,7 @@ var KEY_DISP = {
 	PageUp: "PgUp",
 	Escape: "Esc",
 	" ": "Space",
+	"\xA0": "Space",
 	ArrowUp: "↑",
 	ArrowDown: "↓",
 	ArrowLeft: "←",
@@ -33152,7 +33170,7 @@ function comboProblem(c, selfId) {
 	for (const b of KEYMAP) {
 		if (b.id === selfId || b.aliasOf === selfId || b.pairOf === selfId) continue;
 		for (const t of effBindings(b)) {
-			if (t.key !== c.key) continue;
+			if (normKey(t.key) !== normKey(c.key)) continue;
 			if (!!t.mod !== !!c.mod) continue;
 			if (t.shift !== "any" && !!t.shift !== !!c.shift) continue;
 			if (t.alt !== "any" && !!t.alt !== !!c.alt) continue;
@@ -33165,7 +33183,7 @@ function comboProblem(c, selfId) {
 }
 function sameCombo(a, b) {
 	const s = (x) => x === "any" ? "any" : !!x;
-	return a.key === b.key && !!a.mod === !!b.mod && s(a.shift) === s(b.shift) && !!a.alt === !!b.alt;
+	return normKey(a.key) === normKey(b.key) && !!a.mod === !!b.mod && s(a.shift) === s(b.shift) && !!a.alt === !!b.alt;
 }
 function defaultCombosFor(id) {
 	return KEYMAP.filter((x) => x.id === id || x.aliasOf === id).map((x) => ({
@@ -33179,6 +33197,34 @@ function breakScreenUp() {
 	const el = document.getElementById("break-screen");
 	return !!el && !el.classList.contains("break-leaving");
 }
+function normKey(key) {
+	if (key === "\xA0") return " ";
+	return key.length === 1 ? key.toLowerCase() : key;
+}
+var _held = /* @__PURE__ */ new Map();
+function _release(b, e) {
+	if (!_held.delete(b)) return;
+	b.run(e, "up");
+}
+function _releaseAll() {
+	for (const b of Array.from(_held.keys())) _release(b, null);
+}
+var MOD_RELEASED = {
+	Alt: (t) => t.alt === true,
+	Shift: (t) => t.shift === true,
+	Control: (t) => !!t.mod,
+	Meta: (t) => t.mod === true
+};
+function _dispatchUp(e) {
+	if (!_held.size) return;
+	const key = e.key || "";
+	const norm = normKey(key);
+	for (const [b, t] of Array.from(_held)) if (normKey(t.key) === norm) {
+		e.preventDefault();
+		e.stopPropagation();
+		_release(b, e);
+	} else if (MOD_RELEASED[key]?.(t)) _release(b, e);
+}
 function _dispatch(e) {
 	if (_rebindCapturing) return;
 	if (breakScreenUp()) return;
@@ -33186,18 +33232,24 @@ function _dispatch(e) {
 		_handleChordKey(e);
 		return;
 	}
-	const key = e.key || "";
-	const norm = key.length === 1 ? key.toLowerCase() : key;
+	const norm = normKey(e.key || "");
 	const mod = e.ctrlKey || e.metaKey;
 	for (const b of KEYMAP) for (const t of effBindings(b)) {
-		if (t.key !== norm) continue;
+		if (normKey(t.key) !== norm) continue;
 		if (t.mod === "ctrl" ? !e.ctrlKey : t.mod ? !mod : mod) continue;
 		if (t.shift !== "any" && !!t.shift !== e.shiftKey) continue;
 		if (t.alt !== "any" && !!t.alt !== e.altKey) continue;
-		if (t !== b && !t.mod && !t.alt && isEditingTarget(document.activeElement)) continue;
+		if (t !== b && !t.mod && !t.alt && isEditingTarget(document.activeElement) && !(b.holdable && terminalFocused())) continue;
 		if (b.when && !b.when()) return;
 		e.preventDefault();
 		e.stopPropagation();
+		if (b.holdable) {
+			if (e.repeat) return;
+			_release(b, e);
+			_held.set(b, t);
+			b.run(e, "down");
+			return;
+		}
 		b.run(e);
 		return;
 	}
@@ -33205,8 +33257,14 @@ function _dispatch(e) {
 function installKeymap(host) {
 	_host = host;
 	document.addEventListener("keydown", _dispatch, true);
+	document.addEventListener("keyup", _dispatchUp, true);
+	const win = typeof window !== "undefined" ? window : null;
+	win?.addEventListener("blur", _releaseAll);
 	return () => {
 		document.removeEventListener("keydown", _dispatch, true);
+		document.removeEventListener("keyup", _dispatchUp, true);
+		win?.removeEventListener("blur", _releaseAll);
+		_releaseAll();
 		if (_host === host) _host = null;
 		_chordPending = false;
 		clearTimeout(_chordTimer);
@@ -37097,6 +37155,35 @@ function parseRadio(text) {
 function routerWords(text) {
 	return String(text || "").toLowerCase().replace(/[’`]/g, "'").replace(/[^a-z0-9' ]+/g, " ").split(" ").filter(Boolean);
 }
+var NUMS = [
+	"one",
+	"two",
+	"three",
+	"four",
+	"five",
+	"six",
+	"seven",
+	"eight",
+	"nine",
+	"first",
+	"second",
+	"third",
+	"fourth",
+	"fifth",
+	"sixth",
+	"seventh",
+	"eighth",
+	"ninth",
+	"1",
+	"2",
+	"3",
+	"4",
+	"5",
+	"6",
+	"7",
+	"8",
+	"9"
+].join("|");
 var COMMANDS = [
 	"cancel",
 	"never mind",
@@ -37128,8 +37215,29 @@ var COMMANDS = [
 	"voice off",
 	"turn voice off",
 	"turn off voice",
-	"stop listening",
+	"stop listening|recording",
 	"stop",
+	"mic|microphone off",
+	"turn mic|microphone off",
+	"that's|thats all",
+	"that is all",
+	"focus|open|show|select *",
+	"next|previous session|one",
+	`session|number|row ${NUMS} *`,
+	"yes|yeah|yep|yup|sure|ok|okay|allow|approve|no|nope|deny|reject|always",
+	"yes|yeah always",
+	"always allow *",
+	"don't|dont ask again",
+	"do not ask again",
+	"go ahead",
+	"do it",
+	`option|choice ${NUMS}`,
+	NUMS,
+	`the ${NUMS} one`,
+	"answer|tell|reply *",
+	"what is|what's|whats it asking",
+	"what's|whats|what is the question",
+	"what does it want",
 	"new session *",
 	"a|another new session *",
 	"start|open|create|make new session *",
@@ -37157,22 +37265,65 @@ function mayBeCommand(text) {
 		return true;
 	});
 }
-var RADIO_WORD = /^(?:over|submit|disregard)$/;
-var RADIO_TAIL = /^(?:that|it|all|everything)$/;
 var bareWord = (w) => w.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, "");
+var STOP_PHRASES = [
+	"stop recording",
+	"stop listening",
+	"mic off",
+	"microphone off",
+	"turn mic off",
+	"turn microphone off",
+	"that's all",
+	"thats all",
+	"that is all"
+].map((p) => p.split(" "));
+var CONTROL_PHRASES = [...STOP_PHRASES, ...[
+	"over",
+	"submit",
+	"disregard"
+].flatMap((w) => [[w], ...[
+	"that",
+	"it",
+	"all",
+	"everything"
+].map((tail) => [w, tail])])];
+var CONTROL_MAX_WORDS = Math.max(...CONTROL_PHRASES.map((p) => p.length));
+var wordIndexes = (ws) => ws.flatMap((w, i) => bareWord(w) ? [i] : []);
 function holdBack(text) {
 	const ws = String(text || "").trim().split(/\s+/).filter(Boolean);
 	if (!ws.length) return {
 		type: "",
 		held: ""
 	};
-	let n = ws.length - 1;
-	while (n > 0 && !bareWord(ws[n])) n--;
-	if (n > 0 && RADIO_TAIL.test(bareWord(ws[n])) && RADIO_WORD.test(bareWord(ws[n - 1]))) n--;
+	const idx = wordIndexes(ws);
+	let n = idx.length ? idx[idx.length - 1] : 0;
+	for (let k = 2; k <= Math.min(CONTROL_MAX_WORDS, idx.length); k++) {
+		const tail = idx.slice(-k).map((i) => bareWord(ws[i]));
+		if (CONTROL_PHRASES.some((p) => p.length >= k && tail.every((w, j) => p[j] === w))) n = idx[idx.length - k];
+	}
 	return {
 		type: ws.slice(0, n).join(" "),
 		held: ws.slice(n).join(" ")
 	};
+}
+function stopTail(text) {
+	const ws = String(text || "").trim().split(/\s+/).filter(Boolean);
+	const idx = wordIndexes(ws);
+	for (const p of STOP_PHRASES) {
+		if (idx.length < p.length) continue;
+		const tail = idx.slice(-p.length);
+		if (tail.every((i, j) => bareWord(ws[i]) === p[j])) return ws.slice(0, tail[0]).join(" ").replace(/[\s,;:]+$/, "");
+	}
+	return null;
+}
+var ANSWER_RE = new RegExp("^(?:(?:um|uh|er|so) )?(?:" + [
+	"yes|yeah|yep|yup|sure|ok|okay|allow|allow it|approve|go ahead|do it",
+	"no|nope|deny|reject|don'?t",
+	"always|yes always|yeah always|always allow(?: it| that| this| all)?|(?:don'?t|do not) ask(?: me)? again",
+	"(?:option |choice |number |the )?(?:" + NUMS + ")(?: one)?"
+].join("|") + ")(?: please)?$");
+function isAnswerPhrase(text) {
+	return ANSWER_RE.test(routerWords(text).join(" "));
 }
 var joinWords = (a, b) => [a.trim(), b.trim()].filter(Boolean).join(" ");
 var VOICE_PREFS_KEY = "cs_voice_desktop";
@@ -37205,10 +37356,17 @@ function saveVoicePrefs(p, kv = storage()) {
 		}));
 	} catch {}
 }
+var TALK_EVENT = "mindflock:voice-talk";
+function talkKeyAction(phase, hold, listening, keyHeld) {
+	if (!hold) return phase === "down" ? listening ? "finish" : "start" : null;
+	if (phase === "down") return listening ? null : "start";
+	return keyHeld && listening ? "finish" : null;
+}
 var DICT_IDLE_MS = 12e4;
 var HOLD_FINAL_WAIT_MS = 1500;
 var DICT_HINT = "Say over to leave it, submit to send, disregard to start over";
 var OVER_LINE = "In the field — say submit or press Enter";
+var STOPPED_LINE = "Stopped listening";
 var Dictation = class {
 	listening = false;
 	interim = "";
@@ -37216,6 +37374,7 @@ var Dictation = class {
 	held = "";
 	partial = "";
 	routes = true;
+	answering = false;
 	begin() {
 		this.listening = true;
 		this.interim = "";
@@ -37239,6 +37398,8 @@ var Dictation = class {
 	words(w) {
 		if (!this.listening) return { kind: "stopped" };
 		const all = joinWords(this.held, w);
+		const ctl = this.control(all);
+		if (ctl) return ctl;
 		if (this.routes && !this.typed && mayBeCommand(all)) {
 			this.held = all;
 			return { kind: "continue" };
@@ -37264,6 +37425,8 @@ var Dictation = class {
 	heard(phrase) {
 		if (!this.listening) return { kind: "stopped" };
 		this.interim = "";
+		const ctl = this.control(phrase);
+		if (ctl) return ctl;
 		const p = parseRadio(phrase);
 		const text = p.text ? p.text + " " : "";
 		switch (p.kind) {
@@ -37325,6 +37488,29 @@ var Dictation = class {
 			text: rest ? rest + " " : ""
 		};
 	}
+	control(all) {
+		const before = stopTail(all);
+		if (before !== null) {
+			this.listening = false;
+			this.interim = "";
+			this.held = "";
+			this.partial = "";
+			return {
+				kind: "over",
+				text: before ? before + " " : "",
+				stop: true
+			};
+		}
+		if (this.answering && this.routes && !this.typed && isAnswerPhrase(all)) {
+			this.held = "";
+			this.partial = "";
+			return {
+				kind: "type",
+				text: all.trim() + " "
+			};
+		}
+		return null;
+	}
 	erase() {
 		const text = this.typed;
 		this.typed = "";
@@ -37377,12 +37563,16 @@ async function submitDraft(title, name, say) {
 var LiveDictation = class {
 	target;
 	hooks;
+	opts;
 	dict = new Dictation();
 	chain = Promise.resolve();
 	done = false;
-	constructor(target, hooks) {
+	acted = false;
+	heardAnything = false;
+	constructor(target, hooks, opts = {}) {
 		this.target = target;
 		this.hooks = hooks;
+		this.opts = opts;
 		this.dict.begin();
 		this.dict.routes = target?.kind !== "field";
 	}
@@ -37391,20 +37581,25 @@ var LiveDictation = class {
 	}
 	hearing(t) {
 		if (this.done) return;
+		if (t) this.heardAnything = true;
 		this.dict.hearing(t);
 		this.show();
 	}
 	heard(phrase) {
+		if (phrase.trim()) this.heardAnything = true;
 		return this.step(() => this.dict.heard(phrase));
 	}
 	words(w) {
+		if (w.trim()) this.heardAnything = true;
 		return this.step(() => this.dict.words(w));
 	}
 	flush(w) {
+		if (w.trim()) this.heardAnything = true;
 		return this.step(() => this.dict.flush(w));
 	}
 	unsure(t) {
 		if (this.done) return;
+		if (t) this.heardAnything = true;
 		this.dict.unsure(t);
 		this.show();
 	}
@@ -37424,24 +37619,33 @@ var LiveDictation = class {
 		if (this.done) return;
 		this.dict.listening = false;
 		const kept = this.dict.typed.trim() && this.target?.kind === "session";
-		this.end(kept ? line + " — the words so far stay in the field" : line, true);
+		this.end(kept ? line + " — the words so far stay in the field" : line, true, "stopped");
+	}
+	drop() {
+		this.end("", false, "missed");
 	}
 	show() {
 		if (this.done) return;
 		const field = this.target?.kind === "field";
-		const shown = this.dict.shown || (field ? "Listening — the words go into the text box" : DICT_HINT);
+		const shown = this.dict.shown || this.opts.hint || (field ? "Listening — the words go into the text box" : DICT_HINT);
 		this.hooks.caption(shown, true, this.dict.partial);
 	}
 	step(next) {
-		this.chain = this.chain.then(() => this.done ? void 0 : this.apply(next())).catch(() => {});
+		this.chain = this.chain.then(() => {
+			if (this.done) return;
+			const t = this.target;
+			this.dict.answering = t?.kind === "session" && !!this.hooks.pending?.(t.title);
+			return this.apply(next());
+		}).catch(() => {});
 		return this.chain;
 	}
-	end(line, sticky = false) {
+	end(line, sticky = false, how) {
 		if (this.done) return;
 		this.done = true;
 		this.dict.listening = false;
 		this.hooks.halt();
 		if (line !== null) this.hooks.caption(line, sticky);
+		this.hooks.done?.(how || (this.acted || this.dict.typed ? "acted" : "missed"));
 	}
 	async apply(out) {
 		const t = this.target;
@@ -37461,11 +37665,11 @@ var LiveDictation = class {
 				return;
 			case "dropped":
 				t?.erase(out.text);
-				this.end(out.text ? "Disregarded" : "");
+				this.end(out.text ? "Disregarded" : "", false, "stopped");
 				return;
 			case "over":
 				if (out.text && !await this.put(out.text)) return;
-				this.end(t?.kind === "session" && this.dict.typed ? OVER_LINE : "");
+				this.end(t?.kind === "session" && this.dict.typed ? OVER_LINE : out.stop ? STOPPED_LINE : "", false, out.stop ? "stopped" : void 0);
 				return;
 			case "submit": {
 				const typedNow = !!out.text;
@@ -37474,6 +37678,7 @@ var LiveDictation = class {
 					this.end(t ? "" : "Click a session first");
 					return;
 				}
+				this.acted = true;
 				this.end("Submitting to " + t.name + "…", true);
 				if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
 				const say = this.hooks.replies();
@@ -37489,6 +37694,7 @@ var LiveDictation = class {
 		if (!this.dict.typed && t?.kind !== "field") {
 			const words = text.trim();
 			if (route && await this.hooks.route(words)) {
+				this.acted = true;
 				this.end(null);
 				return false;
 			}
@@ -37524,7 +37730,11 @@ var ROUTE_KINDS = /* @__PURE__ */ new Set([
 	"stop",
 	"off",
 	"repeat",
-	"condense"
+	"condense",
+	"switch_index",
+	"switch_rel",
+	"answer",
+	"question"
 ]);
 async function routePhrase(text, session) {
 	try {
@@ -37535,6 +37745,121 @@ async function routePhrase(text, session) {
 		if (r && typeof r === "object" && ROUTE_KINDS.has(String(r.kind))) return r;
 	} catch {}
 	return { kind: "prompt" };
+}
+var isWindowRow = (key) => key.startsWith("\0");
+function railRow(order, n) {
+	const i = Math.trunc(Number(n)) - 1;
+	return i >= 0 && i < order.length ? order[i] : null;
+}
+function railStep(order, from, delta) {
+	const sessions = order.filter((k) => !isWindowRow(k));
+	if (!sessions.length) return null;
+	const i = sessions.indexOf(from);
+	const step = delta < 0 ? -1 : 1;
+	if (i < 0) return step > 0 ? sessions[0] : sessions[sessions.length - 1];
+	const next = sessions[(i + step + sessions.length) % sessions.length];
+	return next === from ? null : next;
+}
+var APPROVE_OFF_LINE = "Approving by voice is off: Settings → Voice";
+async function questionPending(title, activity) {
+	if (activity === "working") return false;
+	try {
+		return !!(await instApi(title, "/voice"))?.has_question;
+	} catch {
+		return false;
+	}
+}
+function answerWords(r, text) {
+	if (r.choice === "number" && r.number) return String(r.number);
+	return r.choice || text.trim();
+}
+async function runVoiceCommand(r, text, deps) {
+	switch (r.kind) {
+		case "switch_index": {
+			const n = Math.trunc(Number(r.index));
+			const key = railRow(deps.railOrder(), n);
+			if (!key) deps.announce("There is no session " + n);
+			else if (isWindowRow(key)) deps.announce("Row " + n + " is a window, not a session");
+			else {
+				deps.select(key);
+				deps.announce(r.say || "Now talking to " + deps.name(key) + ".");
+			}
+			return true;
+		}
+		case "switch_rel": {
+			const key = railStep(deps.railOrder(), deps.focused(), Number(r.delta) || 1);
+			if (!key) deps.announce("There is no other session");
+			else {
+				deps.select(key);
+				deps.announce(r.say || "Now talking to " + deps.name(key) + ".");
+			}
+			return true;
+		}
+		case "answer":
+			await answer(r, text, deps, false);
+			return true;
+		case "question":
+			deps.announce(r.say || "Nothing is being asked.");
+			return true;
+		default: return false;
+	}
+}
+async function answer(r, text, deps, again) {
+	if (!r.title && r.index != null && !again) {
+		const key = railRow(deps.railOrder(), Number(r.index));
+		if (!key || isWindowRow(key)) {
+			deps.announce("There is no session " + Math.trunc(Number(r.index)));
+			return;
+		}
+		const next = await deps.route(text, key);
+		if (next.kind === "answer") await answer({
+			...next,
+			title: next.title || key,
+			index: void 0
+		}, text, deps, true);
+		else deps.announce(next.say || deps.name(key) + " isn't asking anything.");
+		return;
+	}
+	const title = r.title || deps.focused();
+	if (!title) {
+		deps.caption("Click a session first");
+		return;
+	}
+	const name = deps.name(title);
+	if (r.dialog_id && r.keys?.length) {
+		if (!await deps.approveDialogs()) {
+			deps.announce(APPROVE_OFF_LINE);
+			return;
+		}
+		try {
+			await instApi(title, "/answer", { json: {
+				keys: r.keys,
+				dialog_id: r.dialog_id,
+				by: "user"
+			} });
+			deps.announce(r.say || "Answered " + (r.choice === "number" ? String(r.number || "") : r.choice || "") + ".");
+		} catch (err) {
+			const body = err instanceof ApiError ? err.body : null;
+			if (body?.dialog_changed) deps.announce("The prompt on " + name + " changed — say it again.");
+			else if (body?.dialog_answered) deps.announce("Already answered.");
+			else deps.caption("Couldn't answer " + name + ": " + (err?.message || "error"), true);
+		}
+		return;
+	}
+	if (await questionPending(title, deps.activity(title))) {
+		const words = answerWords(r, text);
+		if (!sessionTarget(title, name).type(words + " ")) {
+			deps.caption("Couldn't type into " + name + " — its terminal isn't connected", true);
+			return;
+		}
+		await new Promise((res) => setTimeout(res, SUBMIT_SETTLE_MS));
+		const say = deps.replies();
+		const sent = await submitDraft(title, name, say);
+		if (sent.ok) deps.submitted(title, say);
+		deps.caption(sent.line, !sent.ok);
+		return;
+	}
+	deps.announce(r.say || name + " isn't asking anything.");
 }
 function spokenLine(name, say) {
 	const s = String(say || "").trim();
@@ -37583,6 +37908,98 @@ var ReplyTracker = class {
 		this.pending.clear();
 	}
 };
+var ANSWER_LISTEN_MS = 12e3;
+var ORD = [
+	"one",
+	"two",
+	"three",
+	"four",
+	"five",
+	"six",
+	"seven",
+	"eight",
+	"nine"
+];
+function plain(text) {
+	return String(text || "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[*_`#>]+/g, "").replace(/\s+/g, " ").trim();
+}
+function dialogChoices(d) {
+	const kinds = new Set(d.options.map((o) => o.kind));
+	if (kinds.has("yes") || kinds.has("no")) return kinds.has("always") ? "Say yes, no, or always." : "Say yes or no.";
+	const opts = d.options.slice(0, ORD.length);
+	const nums = opts.map((_, i) => ORD[i]);
+	const list = nums.length === 1 ? nums[0] : nums.length === 2 ? nums[0] + " or " + nums[1] : nums.slice(0, -1).join(", ") + ", or " + nums[nums.length - 1];
+	return opts.map((o, i) => ORD[i] + ": " + plain(o.label)).join(". ") + ". Say " + list + ".";
+}
+function dialogSpeech(name, d) {
+	const parts = [spokenLine(name, plain(d.question) || "a permission prompt")];
+	if (d.command) parts.push("It wants to run: " + String(d.command).slice(0, 200) + ".");
+	parts.push(dialogChoices(d));
+	return parts.join(" ");
+}
+function dialogRetryLine(d) {
+	return "I didn't catch that: " + dialogChoices(d).replace(/^.*\bSay /, "say ");
+}
+var HandsFree = class {
+	deps;
+	seen = "";
+	running = false;
+	constructor(deps) {
+		this.deps = deps;
+	}
+	async dialog(title) {
+		const x = this.deps;
+		if (!this.ready(title) || title !== x.focused()) return;
+		this.running = true;
+		try {
+			const d = await x.fetchDialog(title).catch(() => null);
+			if (!d || !d.parsed || !d.options.length || d.id === this.seen) return;
+			if (!x.replies() || x.busy() || title !== x.focused()) return;
+			this.seen = d.id;
+			const name = x.name(title);
+			await x.speak(dialogSpeech(name, d));
+			if (!await x.approveDialogs()) {
+				await x.speak("Answer it on the screen.");
+				return;
+			}
+			await this.listen(title, dialogRetryLine(d), name + ": " + dialogChoices(d));
+		} finally {
+			this.running = false;
+		}
+	}
+	async question(title, say) {
+		if (!this.ready(title)) return;
+		this.running = true;
+		try {
+			const name = this.deps.name(title);
+			await this.listen(title, "Still there? " + spokenLine(name, say), "Answer " + name + " — say submit to send");
+		} finally {
+			this.running = false;
+		}
+	}
+	ready(title) {
+		return !!title && !this.running && this.deps.replies() && !this.deps.busy();
+	}
+	async listen(title, retry, hint) {
+		const x = this.deps;
+		for (let tries = 0;; tries++) {
+			if (!x.replies() || x.busy()) return;
+			if (await x.listen(title, hint, ANSWER_LISTEN_MS) !== "missed") return;
+			if (tries >= 1) {
+				x.caption(x.name(title) + " is waiting on you");
+				return;
+			}
+			await x.speak(retry);
+		}
+	}
+};
+function pendingDiagnostics(name, dialog, dialogUp, question) {
+	if (!name) return "Pending: no session focused";
+	if (dialog) return "Pending: " + name + " shows a dialog — " + (plain(dialog.question) || "unparsed");
+	if (dialogUp) return "Pending: " + name + " shows a dialog";
+	if (question) return "Pending: " + name + " asked — " + plain(question);
+	return "Pending: nothing on " + name;
+}
 var SpeechQueue = class {
 	engine;
 	onSpeaking;
@@ -37596,9 +38013,14 @@ var SpeechQueue = class {
 	}
 	say(line) {
 		const t = String(line || "").trim();
-		if (!t) return;
-		this.lines.push(t);
-		this.pump();
+		if (!t) return Promise.resolve();
+		return new Promise((done) => {
+			this.lines.push({
+				text: t,
+				done
+			});
+			this.pump();
+		});
 	}
 	get busy() {
 		return this.speaking;
@@ -37615,21 +38037,24 @@ var SpeechQueue = class {
 		this.pump();
 	}
 	cancel() {
+		const dropped = this.lines;
 		this.lines = [];
+		dropped.forEach((l) => l.done());
 		if (this.speaking) this.engine().cancel();
 	}
 	pump() {
 		if (this.speaking || this.held || !this.lines.length) return;
 		const line = this.lines.shift();
-		this.last = line;
+		this.last = line.text;
 		this.speaking = true;
 		this.onSpeaking(true);
 		const done = () => {
 			this.speaking = false;
 			this.onSpeaking(false);
+			line.done();
 			this.pump();
 		};
-		this.engine().speak(line).then(done, done);
+		this.engine().speak(line.text).then(done, done);
 	}
 };
 function sentenceChunks(text) {
@@ -38313,6 +38738,7 @@ async function loadVoiceCfg(prev) {
 		if (j && typeof j === "object") return {
 			stt: j.stt === "server" ? "server" : "phone",
 			tts: j.tts === "server" ? "server" : "phone",
+			approve_dialogs: j.approve_dialogs === true,
 			server_ready: j.server_ready && typeof j.server_ready === "object" ? j.server_ready : {},
 			system: j.system && typeof j.system === "object" ? j.system : {}
 		};
@@ -38379,6 +38805,18 @@ var serverSp = serverSpeaker(browserSp);
 var tracker = new ReplyTracker();
 var speakingListeners = /* @__PURE__ */ new Set();
 var queue = new SpeechQueue(() => ttsEngine(cfgNow) === "server" ? serverSp : browserSp, (on) => speakingListeners.forEach((l) => l(on)));
+var questions = /* @__PURE__ */ new Map();
+function refreshQuestion(title) {
+	if (!title) return;
+	instApi(title, "/voice").then((j) => {
+		if (j?.has_question && liveActivity(title) !== "working") questions.set(title, String(j.say || ""));
+		else questions.delete(title);
+	}).catch(() => {});
+}
+function talkShortcut() {
+	const e = KEYMAP.find((b) => !b.aliasOf && /\btalk\b/i.test(String(b.help?.[2] || "")));
+	return e?.id && shortcutLabels(e.id)[0] || "the Talk shortcut in Keyboard shortcuts";
+}
 function recEngine(c) {
 	const e = sttEngine(c, serverRec.available());
 	return e === "browser" && !browserRec.available() ? "none" : e;
@@ -38471,6 +38909,9 @@ function TopBarMic() {
 	const idleTimer = (0, import_react.useRef)(void 0);
 	const captionTimer = (0, import_react.useRef)(void 0);
 	const holding = (0, import_react.useRef)(false);
+	const keyHeld = (0, import_react.useRef)(false);
+	const hands = (0, import_react.useRef)(null);
+	const [pendingLine, setPendingLine] = (0, import_react.useState)("");
 	const say = (text, sticky = false, tail = "") => {
 		setCaptionState(text);
 		setUnsure(tail);
@@ -38510,18 +38951,26 @@ function TopBarMic() {
 		let unsubs = [];
 		let retry;
 		const ended = (title, data, ts) => {
+			if (title === useUi.getState().focused) refreshQuestion(title);
 			if (!tracker.waiting(title)) return;
-			const speak = (line) => {
+			const speak = (line, ask = "") => {
 				if (!line) return;
 				say(line);
-				if (prefsRef.current.replies) queue.say(line);
+				if (!prefsRef.current.replies) return;
+				if (ask) questions.set(title, ask);
+				queue.say(line).then(() => {
+					if (ask) hands.current?.question(title, ask);
+				});
 			};
 			const inline = String(data.say || "").trim();
 			if (inline) {
-				speak(tracker.take(title, displayName(title), inline, ts));
+				speak(tracker.take(title, displayName(title), inline, ts), data.has_question ? inline : "");
 				return;
 			}
-			instApi(title, "/voice").then((j) => speak(tracker.take(title, displayName(title), String(j?.say || ""), Number(j?.ts) || null))).catch(() => speak(tracker.take(title, displayName(title), "", null)));
+			instApi(title, "/voice").then((j) => {
+				const said = String(j?.say || "");
+				speak(tracker.take(title, displayName(title), said, Number(j?.ts) || null), j?.has_question ? said : "");
+			}).catch(() => speak(tracker.take(title, displayName(title), "", null)));
 		};
 		const attach = () => {
 			const ev = window.mindflock?.events;
@@ -38532,16 +38981,24 @@ function TopBarMic() {
 			const replay = (env) => typeof ev.isReplay === "function" && ev.isReplay(env);
 			unsubs = [ev.subscribe("session.activity_changed", (env) => {
 				if (replay(env)) return;
-				if (env.new === "working") tracker.working(env.session);
-				else if (env.new === "idle") ended(env.session, env.data || {}, Number(env.ts) || 0);
+				if (env.new === "working") {
+					tracker.working(env.session);
+					questions.delete(env.session);
+				} else if (env.new === "idle") ended(env.session, env.data || {}, Number(env.ts) || 0);
+				else if (env.new === "clarify") hands.current?.dialog(env.session);
 			}), ev.subscribe("session.turn_ended", (env) => {
 				if (!replay(env)) ended(env.session, env.data || {}, Number(env.ts) || 0);
 			})];
 		};
 		attach();
+		refreshQuestion(useUi.getState().focused || "");
+		const unsubFocus = useUi.subscribe((s, prev) => {
+			if (s.focused !== prev.focused) refreshQuestion(s.focused || "");
+		});
 		return () => {
 			clearTimeout(retry);
 			unsubs.forEach((u) => u());
+			unsubFocus();
 		};
 	}, []);
 	const sttNow = recEngine(cfg || cfgNow);
@@ -38559,38 +39016,44 @@ function TopBarMic() {
 		setListening(false);
 		queue.release();
 	};
-	const target = (into) => {
+	const target = (into, session = "") => {
 		if (into) return fieldTarget(into);
-		const title = useUi.getState().focused;
+		const title = session || useUi.getState().focused;
 		return title ? sessionTarget(title, displayName(title)) : null;
 	};
-	const start = (into) => {
-		if (live.current) return;
+	const start = (into, opts = {}) => {
+		if (live.current) return null;
 		const c = cfgNow;
 		const engine = recEngine(c);
 		if (engine === "none") {
 			say(noRecognizerLine());
 			refreshCfg();
-			return;
+			return null;
 		}
 		const r = engine === "server" ? serverRec : browserRec;
 		if (r === serverRec || ttsEngine(c) === "server") voiceAudioCtx();
 		queue.hold();
-		const d = new LiveDictation(target(into), {
+		const d = new LiveDictation(target(into, opts.title), {
 			caption: say,
 			halt: () => {
 				if (live.current === d) halt();
 			},
 			route: async (text) => {
-				const reply = await routePhrase(text, useUi.getState().focused || "");
+				const session = opts.title || useUi.getState().focused || "";
+				const reply = await routePhrase(text, session);
 				if (reply.kind === "prompt") return false;
-				routed(reply, text);
+				await routed(reply, text, session);
 				return true;
 			},
 			activity: liveActivity,
 			replies: () => prefsRef.current.replies,
-			submitted: (title, wantSay) => tracker.sent(title, wantSay)
-		});
+			submitted: (title, wantSay) => {
+				tracker.sent(title, wantSay);
+				questions.delete(title);
+			},
+			pending: (title) => liveActivity(title) === "clarify" || questions.has(title),
+			done: (how) => opts.done?.(how)
+		}, { hint: opts.hint });
 		live.current = d;
 		rec.current = r;
 		setListening(true);
@@ -38648,8 +39111,25 @@ function TopBarMic() {
 		if (!ok) {
 			halt();
 			say("Speech recognition did not start");
+			return null;
 		}
+		return d;
 	};
+	const listenFor = (title, hint, ms) => new Promise((resolve) => {
+		let timer;
+		const d = start(null, {
+			title,
+			hint,
+			done: (how) => {
+				clearTimeout(timer);
+				resolve(how);
+			}
+		});
+		if (!d) return resolve("stopped");
+		timer = setTimeout(() => {
+			if (live.current === d && !d.heardAnything) d.drop();
+		}, ms);
+	});
 	const finish = () => {
 		const r = rec.current;
 		const d = live.current;
@@ -38682,7 +39162,23 @@ function TopBarMic() {
 		say(line);
 		if (prefsRef.current.replies) queue.say(line);
 	};
-	const routed = (r, text) => {
+	const routed = async (r, text, session) => {
+		if (await runVoiceCommand(r, text, {
+			railOrder: () => useUi.getState().railOrder,
+			focused: () => session,
+			select: (title) => selectSession(title, { noKeyboard: true }),
+			name: displayName,
+			caption: say,
+			announce,
+			route: routePhrase,
+			approveDialogs: () => refreshCfg().then((c) => !!c.approve_dialogs),
+			activity: liveActivity,
+			replies: () => prefsRef.current.replies,
+			submitted: (title, wantSay) => {
+				tracker.sent(title, wantSay);
+				questions.delete(title);
+			}
+		})) return;
 		switch (r.kind) {
 			case "switch":
 			case "new":
@@ -38717,11 +39213,66 @@ function TopBarMic() {
 				if (!r.say) say("“" + text + "” — not typed", true);
 		}
 	};
+	const latest = (0, import_react.useRef)({
+		listenFor,
+		refreshCfg
+	});
+	latest.current = {
+		listenFor,
+		refreshCfg
+	};
+	if (!hands.current) hands.current = new HandsFree({
+		replies: () => prefsRef.current.replies,
+		focused: () => useUi.getState().focused || "",
+		name: displayName,
+		busy: () => !!live.current,
+		fetchDialog: (title) => fetchDialog(title),
+		approveDialogs: () => latest.current.refreshCfg().then((c) => !!c.approve_dialogs),
+		speak: (line) => {
+			say(line, true);
+			return queue.say(line);
+		},
+		caption: say,
+		listen: (title, hint, ms) => latest.current.listenFor(title, hint, ms)
+	});
 	const hold = prefs.ptt === "hold";
 	const openMenu = () => {
 		setMenuOpen(true);
 		refreshCfg();
+		readPending();
 	};
+	const readPending = async () => {
+		const title = useUi.getState().focused || "";
+		const up = !!title && liveActivity(title) === "clarify";
+		let d = null;
+		if (up) d = await fetchDialog(title).catch(() => null);
+		setPendingLine(pendingDiagnostics(title ? displayName(title) : "", d, up, questions.get(title) || ""));
+	};
+	const keyRef = (0, import_react.useRef)({
+		hold,
+		start,
+		finish
+	});
+	keyRef.current = {
+		hold,
+		start,
+		finish
+	};
+	(0, import_react.useEffect)(() => {
+		const onTalk = (e) => {
+			const phase = e.detail?.phase;
+			if (phase !== "down" && phase !== "up") return;
+			const k = keyRef.current;
+			const act = talkKeyAction(phase, k.hold, !!live.current, keyHeld.current);
+			if (phase === "up") keyHeld.current = false;
+			if (act === "start") {
+				setMenuOpen(false);
+				if (k.start(textField(document.activeElement)) && k.hold) keyHeld.current = true;
+			} else if (act === "finish") k.finish();
+		};
+		window.addEventListener(TALK_EVENT, onTalk);
+		return () => window.removeEventListener(TALK_EVENT, onTalk);
+	}, []);
 	(0, import_react.useEffect)(() => {
 		if (!menuOpen) return;
 		const onDown = (e) => {
@@ -38902,12 +39453,23 @@ function TopBarMic() {
 					children: [
 						"The words are typed into the session as you speak. ",
 						DICT_HINT,
-						"; Esc takes them back."
+						"; Esc takes them back. Say “stop recording” to stop, “focus 3” or “next session” to switch, and “yes”, “no”, “always” or a number to answer a dialog. Hotkey: ",
+						talkShortcut(),
+						"."
 					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "mic-hint",
+					id: "mic-handsfree",
+					children: "With Read replies aloud on, a dialog on the focused session — or a question in a reply to what you sent — is read out and the mic listens 12 s for your answer."
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "mic-diag",
 					children: diagnostics
+				}),
+				pendingLine && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "mic-diag mic-pending",
+					children: pendingLine
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",

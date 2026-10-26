@@ -10,6 +10,7 @@ state.json is behind ENGINE), tmux and the providers stubbed at the seams,
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 import time
@@ -714,3 +715,55 @@ def test_the_cheap_row_carries_last_say_over_and_reads_voice_fresh(probes):
     voice.set_on("mindflock_vrow-2", True)
     row = server._session_snapshot_cheap(inst, {}, prev={"last_say": "carried over"})
     assert row["last_say"] == "carried over" and row["voice"] is True
+
+
+# --------------------------------------------------------------------------- #
+# POST /api/voice/route — the real dialog reader (GET …/dialog's own)
+# --------------------------------------------------------------------------- #
+_PERM = {
+    "id": "d1",
+    "parsed": True,
+    "question": "Run ls?",
+    "command": "ls",
+    "options": [
+        {"key": "1", "label": "Yes", "kind": "yes"},
+        {"key": "2", "label": "Yes, always", "kind": "always"},
+        {"key": "3", "label": "No", "kind": "no"},
+    ],
+}
+
+
+def test_voice_route_answers_read_the_dialog_route(env, monkeypatch):
+    """``_read_dialog`` is ``instance_dialog(quiet=1)``: a parsed dialog gives
+    its id and the key; 204 (not asking) gives none — and nothing is pressed."""
+    seen = {"dialog": (_PERM, None)}
+    monkeypatch.setattr(agent_io, "current_dialog", lambda n, p: seen["dialog"])
+    monkeypatch.setattr(
+        voice_routes,
+        "_session_rows",
+        lambda req: [{"title": "w", "name": "worker", "activity": "clarify"}],
+    )
+    monkeypatch.setattr(
+        agent_io, "send_answer", lambda *a: pytest.fail("the router pressed a key")
+    )
+
+    def route(text, session=""):
+        r = client.post("/api/voice/route", json={"text": text, "session": session})
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    env.state.activity = "clarify"
+    got = route("yes, always", "w")
+    assert (got["dialog_id"], got["keys"]) == ("d1", ["2"])
+    assert got["say"] == "Answered always on worker."
+    got = route("what is it asking", "w")
+    assert got["say"] == "worker: Run ls? It wants to run: ls. Say yes, no, or always."
+
+    # Not asking: the route's 204 → no dialog.
+    env.state.activity = "idle"
+    seen["dialog"] = ({"id": "x", "parsed": False, "options": []}, None)
+    assert route("yes", "w") == {"kind": "prompt"}
+    got = route("tell worker yes")
+    assert got["no_dialog"] is True and got["say"] == "worker is not asking anything."
+    # Unknown session: the route's 404 → no dialog, never an error.
+    assert asyncio.run(voice_routes._read_dialog("nope")) is None

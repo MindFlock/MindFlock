@@ -88,8 +88,8 @@ REPOS = [
 ]
 
 
-def ans(text, session="", rows=ROWS):
-    return vr.answer(text, session, rows, now=NOW)
+def ans(text, session="", rows=ROWS, title=""):
+    return vr.answer(text, session, rows, now=NOW, title=title)
 
 
 # --- not a command ------------------------------------------------------------
@@ -108,6 +108,20 @@ def ans(text, session="", rows=ROWS):
         "what needs to change here",
         "stop the server and restart it",
         "new sessions are slow",
+        "stop the server",
+        "yes but run the tests first",
+        "I think yes is right",
+        "no idea what you mean",
+        "update the docs, yes",
+        "there is no session for that",
+        "the answer is no",
+        "yes to the refactor",
+        "two",
+        "what does the user want",
+        "open the file",
+        "go back to the old approach",
+        "session",
+        "the second",
     ],
 )
 def test_conservative_non_matches_are_prompts(text):
@@ -123,6 +137,17 @@ def test_conservative_non_matches_are_prompts(text):
         ("forget it", "cancel"),
         ("Stop listening", "stop"),
         ("stop", "stop"),
+        ("stop recording", "stop"),
+        ("Stop the mic.", "stop"),
+        ("stop the microphone", "stop"),
+        ("mic off", "stop"),
+        ("turn off the mic", "stop"),
+        ("turn the mic off", "stop"),
+        ("pause listening", "stop"),
+        ("That's all.", "stop"),
+        ("that is all", "stop"),
+        ("done talking", "stop"),
+        ("okay, I'm done talking", "stop"),
         ("voice off", "off"),
         ("turn off voice", "off"),
         ("Say that again", "repeat"),
@@ -365,6 +390,391 @@ def test_title_base():
     assert len(vr.title_base("a very long name " * 5, "")) <= vr.TITLE_MAX
 
 
+# --- switch by number / relative ------------------------------------------------
+@pytest.mark.parametrize(
+    "text,index",
+    [
+        ("switch to session three", 3),
+        ("go to 2", 2),
+        ("Go over to window 4.", 4),
+        ("focus to number twelve", 12),
+        ("open to session one", 1),
+        ("show to number 20", 20),
+        ("select to the third one", 3),
+        ("jump to the 2nd session", 2),
+        ("session three", 3),
+        ("Session 3.", 3),
+        ("number two", 2),
+        ("window five", 5),
+        ("the third session", 3),
+        ("okay, session nineteen please", 19),
+    ],
+)
+def test_switch_index_is_the_clients_number(text, index):
+    assert ans(text) == {"kind": "switch_index", "index": index}
+
+
+@pytest.mark.parametrize(
+    "text,delta",
+    [
+        ("next session", 1),
+        ("next one", 1),
+        ("go to the next window", 1),
+        ("previous session", -1),
+        ("last one", -1),
+        ("switch to the previous one", -1),
+        ("go back", -1),
+        ("ok go back please", -1),
+    ],
+)
+def test_switch_rel(text, delta):
+    assert ans(text) == {"kind": "switch_rel", "delta": delta}
+
+
+def test_title_maps_a_number_to_the_full_switch():
+    assert ans("session two", title="docs") == {
+        "kind": "switch",
+        "title": "docs",
+        "name": "API docs",
+        "say": "Now on API docs. Should I push?",
+    }
+    assert ans("next one", title="login-fix")["title"] == "login-fix"
+    assert ans("session two", title="gone") == {
+        "kind": "no-session",
+        "say": "gone is not listed.",
+    }
+
+
+@pytest.mark.parametrize(
+    "text,title",
+    [
+        ("focus to docs", "docs"),
+        ("open to the invoice parser", "invoice-parser"),
+        ("show to billing", "mac::billing"),
+        ("select to login fix", "login-fix"),
+    ],
+)
+def test_switch_by_name_takes_the_new_verbs(text, title):
+    a = ans(text)
+    assert (a["kind"], a["title"]) == ("switch", title)
+
+
+# --- answers: the phone's word tables -----------------------------------------------
+OPTS = [
+    {"key": "1", "label": "Yes", "kind": "yes"},
+    {"key": "2", "label": "Yes, always", "kind": "always"},
+    {"key": "3", "label": "No", "kind": "no"},
+]
+YN = [
+    {"key": "1", "label": "Yes", "kind": "yes"},
+    {"key": "2", "label": "No", "kind": "no"},
+]
+OTHER = [
+    {"key": "1", "label": "main", "kind": "other"},
+    {"key": "2", "label": "develop", "kind": "other"},
+    {"key": "3", "label": "release", "kind": "other"},
+]
+# tests/unit/test_mobile_voice.py test_voice_matchers_under_node, verbatim.
+PHONE_CASES = {
+    "yes": ["yes", "Yeah, sure!", "ok go ahead", "Allow it."],
+    "no": ["no", "No, don't.", "nope", "skip that"],
+    "always": [
+        "always",
+        "Always allow.",
+        "yes, always",
+        "don't ask again",
+        "yes and do not ask again",
+    ],
+    "none": ["banana", "", "maybe later", "I always forget which"],
+    "refusals": ["no, not always", "No! don't always allow that", "no, option 2"],
+    "two": ["option two", "two", "the second one", "2", "number two"],
+}
+PHONE_KEYS = {
+    "yes": ["1", "1", "1", "1"],
+    "no": ["3", "3", "3", "3"],
+    "always": ["2", "2", "2", "2", "2"],
+    "none": [None, None, None, None],
+    "refusals": ["3", "3", "3"],
+    "two": [None, None, None, None, None],
+}
+
+
+def _key(opt):
+    return opt["key"] if opt else None
+
+
+@pytest.mark.parametrize("group", sorted(PHONE_CASES))
+def test_parse_answer_is_the_phones(group):
+    got = [_key(vr.parse_answer(t, OPTS)) for t in PHONE_CASES[group]]
+    assert got == PHONE_KEYS[group]
+
+
+def test_parse_answer_yes_only_and_other_dialogs():
+    # With no always option, "always" is still a yes; "yeah sure" never widens.
+    assert _key(vr.parse_answer("always allow", YN)) == "1"
+    assert _key(vr.parse_answer("yeah sure", YN)) == "1"
+    # Dialogs made only of `other` options take a number, by the option's key.
+    got = [
+        _key(vr.parse_answer(t, OTHER)) for t in ("option two", "three", "first", "yes")
+    ]
+    assert got == ["2", "3", "1", None]
+
+
+def test_choice_of_the_phones_cases():
+    def choices(group):
+        out = []
+        for t in PHONE_CASES[group]:
+            c = vr.choice_of(t)
+            out.append(c and (c["choice"], c.get("number")))
+        return out
+
+    assert choices("yes") == [("yes", None)] * 4
+    assert choices("no") == [("no", None)] * 4
+    assert choices("always") == [("always", None)] * 5
+    # Not made only of answer words: no answer at all (a prompt).
+    assert choices("none") == [None] * 4
+    assert choices("refusals") == [("no", None)] * 3
+    # A number is an answer only as "option two" / "the second one".
+    assert choices("two") == [("number", 2), None, ("number", 2), None, None]
+
+
+def test_dialog_choices_are_the_phones():
+    assert vr.dialog_choices({"options": OPTS}) == "Say yes, no, or always."
+    assert vr.dialog_choices({"options": YN}) == "Say yes or no."
+    assert (
+        vr.dialog_choices({"options": OTHER})
+        == "one: main. two: develop. three: release. Say one, two, or three."
+    )
+    assert (
+        vr.dialog_choices({"options": OTHER[:2]})
+        == "one: main. two: develop. Say one or two."
+    )
+
+
+# --- answers: forms and targets -------------------------------------------------------
+@pytest.mark.parametrize(
+    "text,choice",
+    [
+        ("yes", "yes"),
+        ("Yes.", "yes"),
+        ("no", "no"),
+        ("always allow", "always"),
+        ("approve", "yes"),
+        ("deny", "no"),
+        ("allow it", "yes"),
+        ("go ahead", "yes"),
+        ("okay", "yes"),
+        ("answer yes", "yes"),
+        ("tell it no", "no"),
+        ("tell the agent to go ahead", "yes"),
+        ("yes and don't ask me again", "always"),
+    ],
+)
+def test_bare_answers_are_for_the_session_being_talked_to(text, choice):
+    a = ans(text, session="docs")
+    assert (a["kind"], a["title"], a["name"], a["choice"]) == (
+        "answer",
+        "docs",
+        "API docs",
+        choice,
+    )
+    assert a["bare"] is True  # finish() turns it into a prompt without a dialog
+    assert ans(text) == {"kind": "prompt"}  # no session: words, as before
+    assert ans(text, session="gone") == {"kind": "prompt"}
+
+
+def test_bare_number_answer():
+    a = ans("option two", session="docs")
+    assert (a["choice"], a["number"], a["words"]) == ("number", 2, "option two")
+
+
+def test_the_second_one_is_an_option_only_while_the_session_asks():
+    a = ans("the second one", session="docs")  # docs is asking
+    assert (a["kind"], a["choice"], a["number"], a["title"]) == (
+        "answer",
+        "number",
+        2,
+        "docs",
+    )
+    assert ans("the second one", session="invoice-parser") == {
+        "kind": "switch_index",
+        "index": 2,
+    }
+    assert ans("the 3rd one") == {"kind": "switch_index", "index": 3}
+
+
+@pytest.mark.parametrize(
+    "text,choice,index",
+    [
+        ("session three, yes", "yes", 3),
+        ("Number 2: no.", "no", 2),
+        ("tell number 2 no", "no", 2),
+        ("tell session four to go ahead", "yes", 4),
+        ("answer yes to session 3", "yes", 3),
+        ("say no for window one", "no", 1),
+        ("the second session, always", "always", 2),
+        ("yes to session five", "yes", 5),
+    ],
+)
+def test_answer_by_number_is_mapped_by_the_client(text, choice, index):
+    a = ans(text, session="invoice-parser")
+    assert a == {
+        "kind": "answer",
+        "choice": choice,
+        "index": index,
+        "words": a["words"],
+    }
+    # Sent back with the client's title: the full answer for that session.
+    b = vr.answer(text, "invoice-parser", ROWS, now=NOW, title="docs")
+    assert (b["title"], b["name"], b["choice"]) == ("docs", "API docs", choice)
+    assert "bare" not in b and "index" not in b
+
+
+@pytest.mark.parametrize(
+    "text,title,choice",
+    [
+        ("docs, always", "docs", "always"),
+        ("API docs, yes", "docs", "yes"),
+        ("the invoice parser: no", "invoice-parser", "no"),
+        ("invoice, go ahead", "invoice-parser", "yes"),
+        ("yes to the invoice parser", "invoice-parser", "yes"),
+        ("tell docs to go ahead", "docs", "yes"),
+        ("tell docs no", "docs", "no"),
+        ("tell the parser yes", "invoice-parser", "yes"),
+        ("answer no on billing", "mac::billing", "no"),
+        ("answer always for docs", "docs", "always"),
+    ],
+)
+def test_answer_by_name(text, title, choice):
+    a = ans(text, session="login-fix")
+    assert (a["kind"], a["title"], a["choice"]) == ("answer", title, choice)
+    assert "bare" not in a
+
+
+def test_answer_by_name_ambiguous_and_unknown():
+    which = {"kind": "ambiguous", "say": "Which one: login-fix, login-page?"}
+    assert ans("tell login yes") == which
+    assert ans("login, yes") == which
+    assert ans("tell narnia yes")["kind"] == "no-session"
+    assert ans("answer yes to verify")["kind"] == "no-session"  # hidden off the rail
+    # Said without a verb, an unknown name was never a target: words.
+    assert ans("narnia, yes") == {"kind": "prompt"}
+    assert ans("yes to narnia") == {"kind": "prompt"}
+
+
+# --- read back -------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "text",
+    [
+        "what is it asking",
+        "What's it asking me?",
+        "read the question",
+        "read me the question again",
+        "what does it want",
+        "read that again",
+        "what's the question",
+    ],
+)
+def test_question_is_for_the_session(text):
+    assert ans(text, session="docs") == {
+        "kind": "question",
+        "title": "docs",
+        "name": "API docs",
+    }
+    assert ans(text) == {"kind": "question", "say": "No session is open."}
+
+
+def test_question_targets():
+    assert ans("what does docs want")["title"] == "docs"
+    assert ans("what is the invoice parser asking")["title"] == "invoice-parser"
+    assert ans("what is session 2 asking") == {"kind": "question", "index": 2}
+    assert ans("what is session 2 asking", title="docs")["title"] == "docs"
+    assert ans("what is login asking")["kind"] == "ambiguous"
+    assert ans("what does the user want") == {"kind": "prompt"}
+    assert ans("what did it say") == {"kind": "condense"}
+
+
+# --- finish: the dialog --------------------------------------------------------------
+PERM = {
+    "id": "d1",
+    "parsed": True,
+    "question": "Run **ls**?",
+    "command": "ls -la",
+    "options": OPTS,
+}
+PICK = {"id": "d2", "parsed": True, "question": "Which branch?", "options": OTHER}
+UNPARSED = {"id": "d3", "parsed": False, "question": "Should I push?", "options": []}
+
+
+def fin(text, dialog, session="docs", spoken=None, remote=False, title=""):
+    a = vr.answer(text, session, ROWS, now=NOW, title=title)
+    return vr.finish(a, dialog, spoken, remote=remote)
+
+
+def test_finish_picks_the_key_the_phone_would():
+    assert fin("yes", PERM) == {
+        "kind": "answer",
+        "title": "docs",
+        "name": "API docs",
+        "choice": "yes",
+        "words": "yes",
+        "dialog_id": "d1",
+        "keys": ["1"],
+        "say": "Answered yes on API docs.",
+    }
+    assert fin("docs, always", PERM, session="")["keys"] == ["2"]
+    assert fin("no, not always", PERM)["keys"] == ["3"]
+    got = fin("always", dict(PERM, options=YN))
+    assert (got["keys"], got["say"]) == (["1"], "Answered yes on API docs.")
+    got = fin("option two", PICK)
+    assert (got["keys"], got["say"]) == (["2"], "Answered develop on API docs.")
+    # The target's words never pick an option: "session two" is no "two".
+    got = fin("session two, yes", PICK, title="docs")
+    assert (got["keys"], got["say"]) == (
+        [],
+        "I didn't catch that for API docs: say one, two, or three.",
+    )
+
+
+def test_finish_numbers_never_pick_a_permission():
+    got = fin("option two", PERM)
+    assert got["dialog_id"] == "d1" and got["keys"] == []
+    assert got["say"] == "I didn't catch that for API docs: say yes, no, or always."
+
+
+def test_finish_without_a_dialog():
+    # Bare: the agent may have asked in words — the words go to it, as before.
+    assert fin("yes", None) == {"kind": "prompt"}
+    assert fin("yes", UNPARSED) == {"kind": "prompt"}
+    # Targeted: said so.
+    got = fin("docs, yes", None, session="")
+    assert got["no_dialog"] is True and "keys" not in got
+    assert got["say"] == "API docs is not asking anything."
+    got = fin("docs, yes", UNPARSED, session="")
+    assert got["say"] == "API docs is waiting on you: open the screen."
+    got = fin("billing, yes", None, session="", remote=True)
+    assert got["say"] == "billing is on another device: answer it there."
+
+
+def test_finish_question_reads_it_out():
+    assert fin("what is it asking", PERM)["say"] == (
+        "API docs: Run ls? It wants to run: ls -la. Say yes, no, or always."
+    )
+    assert fin("read the question", PICK)["say"] == (
+        "API docs: Which branch? one: main. two: develop. three: release. "
+        "Say one, two, or three."
+    )
+    assert fin("what does it want", UNPARSED)["say"] == "API docs: Should I push?"
+    spoken = {"say": "Should I push", "has_question": True}
+    assert fin("what does it want", None, spoken=spoken)["say"] == (
+        "API docs: Should I push."
+    )
+    spoken = {"say": "Done.", "has_question": False}
+    assert fin("read that again", None, spoken=spoken)["say"] == (
+        "API docs: Nothing is being asked."
+    )
+
+
 # --- the route -----------------------------------------------------------------------
 @pytest.fixture
 def env(monkeypatch, tmp_path):
@@ -374,7 +784,13 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(tmp_path / "settings.json"))
     monkeypatch.setattr(aliases, "owner_of", lambda *a, **k: "")
     state = SimpleNamespace(
-        rows=list(ROWS), created=[], create=(202, None), row_reads=0
+        rows=list(ROWS),
+        created=[],
+        create=(202, None),
+        row_reads=0,
+        dialogs={},
+        dialog_reads=[],
+        spoken={},
     )
 
     def rows(request):
@@ -386,15 +802,24 @@ def env(monkeypatch, tmp_path):
         status, body = state.create
         return status, body if body is not None else {"title": payload["title"]}
 
+    async def read_dialog(title):
+        state.dialog_reads.append(title)
+        return state.dialogs.get(title)
+
     monkeypatch.setattr(voice_routes, "_session_rows", rows)
     monkeypatch.setattr(voice_routes, "_create_session", create)
+    monkeypatch.setattr(voice_routes, "_read_dialog", read_dialog)
+    monkeypatch.setattr(voice_routes, "_read_spoken", lambda t: state.spoken.get(t, {}))
     monkeypatch.setattr(server, "suggest_repos", lambda **kw: list(REPOS))
     monkeypatch.setattr(server, "_recent_repo_paths", lambda: [])
     return state
 
 
-def route(text, session=""):
-    r = client.post("/api/voice/route", json={"text": text, "session": session})
+def route(text, session="", title=None):
+    body = {"text": text, "session": session}
+    if title is not None:
+        body["title"] = title
+    r = client.post("/api/voice/route", json=body)
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -483,3 +908,72 @@ def test_session_rows_are_the_instances_listing(monkeypatch):
         "name": "billing",
         "say": "Now on billing.",
     }
+
+
+def test_route_answer_carries_the_dialogs_keys(env):
+    env.dialogs["docs"] = PERM
+    assert route("yes", "docs") == {
+        "kind": "answer",
+        "title": "docs",
+        "name": "API docs",
+        "choice": "yes",
+        "words": "yes",
+        "dialog_id": "d1",
+        "keys": ["1"],
+        "say": "Answered yes on API docs.",
+    }
+    got = route("tell docs no", "invoice-parser")
+    assert (got["dialog_id"], got["keys"]) == ("d1", ["3"])
+    assert env.dialog_reads == ["docs", "docs"]
+
+
+def test_route_answer_without_a_dialog(env):
+    assert route("yes", "docs") == {"kind": "prompt"}
+    got = route("docs, yes", "invoice-parser")
+    assert got["no_dialog"] is True
+    assert got["say"] == "API docs is not asking anything."
+
+
+def test_route_numbered_answer_is_mapped_then_resent(env):
+    env.dialogs["docs"] = PERM
+    first = route("session three, always", "invoice-parser")
+    assert first == {
+        "kind": "answer",
+        "choice": "always",
+        "index": 3,
+        "words": "always",
+    }
+    assert env.dialog_reads == []  # nothing to read until the client maps it
+    # The client maps 3 → docs and sends the same phrase back with its title …
+    got = route("session three, always", "invoice-parser", title="docs")
+    assert (got["title"], got["keys"]) == ("docs", ["2"])
+    # … or the bare words to that session.
+    got = route(first["words"], "docs")
+    assert (got["title"], got["keys"]) == ("docs", ["2"])
+
+
+def test_route_remote_answer_is_never_read(env):
+    got = route("billing, yes")
+    assert got["no_dialog"] is True and got["title"] == "mac::billing"
+    assert env.dialog_reads == []
+
+
+def test_route_question(env):
+    env.dialogs["docs"] = PERM
+    assert route("what is it asking", "docs")["say"] == (
+        "API docs: Run ls? It wants to run: ls -la. Say yes, no, or always."
+    )
+    env.spoken["invoice-parser"] = {"say": "Which file?", "has_question": True}
+    assert route("what does the invoice parser want")["say"] == (
+        "invoice-parser: Which file?"
+    )
+    assert route("what is session 4 asking") == {"kind": "question", "index": 4}
+
+
+def test_route_switch_by_number(env):
+    assert route("session three") == {"kind": "switch_index", "index": 3}
+    assert route("next one") == {"kind": "switch_rel", "delta": 1}
+    assert route("session three", title="docs")["say"] == (
+        "Now on API docs. Should I push?"
+    )
+    assert route("stop recording") == {"kind": "stop"}

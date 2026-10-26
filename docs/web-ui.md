@@ -132,8 +132,10 @@ field as you speak**: each phrase, the moment it is recognised, goes down the
 session's agent terminal as keys (with a trailing space), exactly as if you had
 typed it; the caption under the mic shows the running text. When the server's
 recogniser streams (see below) the words go in **while you speak**, a few at a
-time as the recogniser commits them — the last word always waits for the next
-ones or the end of the phrase, so a closing radio word is never typed — and the
+time as the recogniser commits them — the last word (and up to three when they
+could still become a control phrase: “submit it”, “stop recording”, “that is
+all”) always waits for the next ones or the end of the phrase, so a closing
+radio word or stop phrase is never typed — and the
 words it may still change show after them in the caption, muted and italic;
 they are never typed. Nothing is submitted until you say so. With no session focused, nothing is typed (*Click
 a session first*).
@@ -149,12 +151,24 @@ a session first*).
   typed — one backspace per character, never Escape, which in Claude Code would
   also interrupt a running turn — and keeps listening. **Esc** is “disregard”
   and stop.
+- **Stop at any moment**: **“stop recording”**, “stop listening”, “mic off”
+  or “that's all” at the end of any committed words — mid-phrase too, not only
+  as the last word of a phrase — stops listening at once; the phrase is never
+  typed and what was typed before it stays in the field (*Stopped listening*
+  when nothing was).
 - **Push to talk.** *Click to talk* (the default): a click starts listening
   (the button turns red and pulses), a second click is “over”. *Hold to talk*:
   hold the button (or Space / Enter on it) while you speak; releasing is
   “over”, after waiting up to 1.5 s for the phrase still being recognised (it
   is typed like the rest). Two minutes without a word stops listening; the
   words stay where they are.
+- **The Talk hotkey** (the keymap's Talk action, default Alt+Space,
+  rebindable in Keyboard shortcuts) does the same from anywhere — a terminal
+  pane included: the keymap dispatches `mindflock:voice-talk` on `window` with
+  `{phase: "down" | "up"}`. In *Hold to talk* a press starts and the release
+  is “over” (a window blur's `up` ends only a press the key began); in *Click
+  to talk* each press starts or ends (“over”) and releases do nothing. The
+  keydown counts as the gesture that starts the audio engine, as a click does.
 - **A dialog on screen.** Before a dictation's first phrase is typed, the
   session's live activity is checked (the rows the app already polls): on a
   question, permission prompt or usage-limit menu (`clarify` / `limit`) nothing
@@ -165,18 +179,47 @@ a session first*).
   the cursor, and “over” and “submit” both just stop — Enter is never pressed
   in a text box.
 - **Routing.** A dictation's first phrase is first offered to the voice
-  router: “switch to the login fix” selects that session (and the conversation
-  stays there — later words go to it), “start a new session for the billing
-  page” starts one and selects it, “what needs me” / “status” answer out loud —
-  none of them is typed. Everything else — and everything when the router
-  can't be reached — is typed into the focused session.
+  router: “switch to the login fix” (or focus / open / show / select it)
+  selects that session (and the conversation stays there — later words go to
+  it), “start a new session for the billing page” starts one and selects it,
+  “what needs me” / “status” / “what is it asking” answer out loud — none of
+  them is typed. Everything else — and everything when the router can't be
+  reached, or answers with a kind this page doesn't know — is typed into the
+  focused session.
+- **Numbered sessions.** Sessions are numbered as the rail's badges number
+  them (`railOrder`, the same rows Alt+N reads — window rows count): “focus
+  three” / “session 3” selects row 3 (*There is no session 7* past the end;
+  *Row 2 is a window, not a session*), “next session” / “previous session”
+  move from the focused one, skipping windows and wrapping.
+- **Answering by voice.** While the focused session shows a dialog (its row
+  reads `clarify`) or its last `Say:` line asked a question (`GET
+  /api/instances/{title}/voice` `has_question`, until it works again), a lone
+  “yes”, “no”, “always” or a number goes to the router the moment it is
+  committed. When the router resolved the dialog, its `keys` are pressed with
+  `POST /api/instances/{title}/answer {keys, dialog_id, by: "user"}` — only
+  while **Approve dialogs by voice** is on in Settings → Voice (`GET
+  /api/voice` `approve_dialogs`; off: *Approving by voice is off: Settings →
+  Voice*). “Always” is pressed only when the router says so, never inferred
+  here. A question (no dialog) gets the answer as a prompt: typed and
+  submitted like “submit”, with `say` per *Read replies aloud*. “Session three
+  yes” answers that session without moving focus (a row number alone is mapped
+  to its title and asked again). No dialog and no question: the router's
+  sentence is shown (and read, with replies on).
 - **Replies read aloud** are **off** by default here (the phone is the
   hands-free surface). Turned on, a draft the mic submits asks the session for
   a closing `Say:` line, and when that turn ends the line is read once,
   prefixed with the session's name (*“Login fix: Fixed the login bug. Should I
   push it?”*) — only for drafts this mic submitted, never for prompts typed or
   sent from the phone. Nothing is read while the mic listens; queued lines
-  wait.
+  wait. **Hands-free**, with the same switch on (no other setting): a dialog
+  that comes up on the focused session is read out name first in the phone's
+  words (*“Login fix: Allow git push? Say yes, no, or always.”*), and a reply
+  that asks a question opens the mic once it has been read; the mic then
+  listens 12 s for the answer. A miss — silence, or words the router doesn't
+  take as an answer — gets one retry (*I didn't catch that: say yes, no, or
+  always.* / *Still there? …*), then it goes quiet (*Login fix is waiting on
+  you*). With approving by voice off the dialog is read and *Answer it on the
+  screen.* follows; the mic doesn't open.
 - **Options**: right-click or Shift+click the mic for *Read replies aloud*,
   *Click to talk* / *Hold to talk*, a diagnostics line naming the engines in
   use (*Recognition: server, built in (Windows via WSL) — one clip per phrase:
@@ -184,7 +227,10 @@ a session first*).
   (piper)*, *Recognition: server (local) — streaming (words as you speak):
   16 kHz, windowed-sinc resampler, a phrase ends after 1.1 s of quiet*,
   *Recognition: this browser · Voice: this browser*, and why the
-  server's recogniser isn't ready when it would be used), and a link to the
+  server's recogniser isn't ready when it would be used), what waits on the
+  focused session (*Pending: Login fix shows a dialog — Allow git push?*,
+  *Pending: Login fix asked — …*, *Pending: nothing on Login fix*), a hint
+  naming the new words, the Talk hotkey and hands-free answering, and a link to the
   speech engines in **Settings → Voice**. The choice is kept per browser
   (`cs_voice_desktop`).
 
@@ -2295,6 +2341,7 @@ built-in alias.
 | `Alt+I` | Intake — tickets, PRs and issues waiting to become sessions |
 | `Alt+V` | Verify — pushed changes nobody has checked |
 | `Alt+S` | Schedule — templates that start sessions on their own |
+| `Alt+Space` | Talk to the focused session through the top-bar mic — hold it (hold-to-talk) or press once to start and again to stop (click-to-talk), following the mic's push-to-talk mode. Works while a terminal has focus; the keystroke never reaches the terminal (or, on a Mac, types a non-breaking space). Key-repeat while held is ignored, and letting go of either key — or switching away from the window — ends a hold. The keymap only reports the key: it fires a `mindflock:voice-talk` window event with `detail.phase` `"down"` / `"up"`, and the mic decides what that means. Rebindable like the rest; a rebind applies to the release as well as the press |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` (also `Ctrl+PgDn` / `Ctrl+PgUp`) | Next / previous window — sessions and open windows (assistant, logs, extension panes), one list |
 | `Ctrl+1…9` / `Alt+1…9` | Focus the Nth sidebar row — a session or a window, matching the number badges |
 | `/` | Focus the sidebar session filter (when it's showing) |
@@ -5747,12 +5794,18 @@ in the session's input field at once — word by word while you speak when the
 server's recogniser streams. A phrase ending in "over" stops and
 leaves the words there, one ending in "submit" submits them (Enter, after the
 server's dialog checks), one ending in "disregard" takes back what was typed
-and keeps listening, Esc takes it back and stops. Nothing is typed into a
-session showing a dialog. A dictation's first phrase is offered to the voice
-router first ("switch to …", "new session …", "what needs me", "what sessions
-do I have"), and the reply is read aloud only while *Read replies aloud* is on
-(off by default; right-click the mic) — see [The mic](#layout) in the top bar
-section. Words said while a text box has focus are typed there instead and
+and keeps listening, Esc takes it back and stops; "stop recording" (or "that's
+all", "mic off") stops at any point, never typed. The Talk hotkey (default
+Alt+Space) works like the button from anywhere. Nothing is typed into a
+session showing a dialog — a lone "yes", "no", "always" or a number answers it
+instead (pressed only with *Approve dialogs by voice* on), and answers a
+question the session asked as a prompt. A dictation's first phrase is offered
+to the voice router first ("switch to …", "focus three", "next session", "new
+session …", "what needs me", "what sessions do I have", "session three yes"),
+and the reply is read aloud only while *Read replies aloud* is on (off by
+default; right-click the mic) — with it on, a dialog on the focused session or
+a question in a reply is read out and the mic listens 12 s for the answer —
+see [The mic](#layout) in the top bar section. Words said while a text box has focus are typed there instead and
 never submitted. In the desktop app the words and the voice go through the
 server's engines whenever one is ready (Settings → Voice) — the app's own Web
 Speech can't recognise — and in a browser tab through the browser's unless
@@ -5949,8 +6002,13 @@ dialog question, the radio words — *Say "over" to keep it, "submit" to
 send, "disregard" to start over* / *Release to keep it; say "submit" to
 send*), **Cancel** and **⚙**. Voice follows the
 **selected** session: picking another session in the Sessions sheet (or
-saying "switch to <name>") moves the conversation there; the flag of the
-session you left stays on. **On iPhone, open `/m` in a Safari tab.** iOS has speech
+saying "switch to <name>", "session two", "next session") moves the
+conversation there; the flag of the session you left stays on. The Sessions
+sheet numbers its rows **1, 2, 3…** in the order shown (attention first),
+and that order holds while the sheet is open — a row that changes state
+does not jump, a new session is added at the end — so the number you read
+is the number you say. With voice on the sheet says so under the list
+(*Say "session 2" or "next session" to switch…*). **On iPhone, open `/m` in a Safari tab.** iOS has speech
 recognition only there (WebKit bug 225298): the home-screen icon, and every
 other iOS browser, can speak but cannot hear you, and the page says so on the
 first mic tap — a **Voice needs Safari: open this page in a Safari tab**
@@ -5995,6 +6053,11 @@ go into the box as they come, all but the last (it may be the radio word
 that ends the phrase) and never a run that would *end* in a radio word
 (*go over the code* reaches the box as *go*, then *over the code*), so
 *over*, *submit* and *disregard* still act only as the phrase's real end;
+up to three trailing words that may *start* a control phrase wait too
+(*fix it stop* reaches the box as *fix it*: *stop* may be *stop
+recording*; while the session is asking, *yes*, *no*, *option* wait as
+well), so a control phrase never lands in the box, and a stop phrase acts
+the moment its words settle, mid-phrase;
 the held words and `partial`, the unstable tail, are the caption. A phrase
 said into an empty box (it may be a command — the router decides) or a
 dialog's answer arrives whole at its end, the caption showing it as it
@@ -6043,7 +6106,9 @@ counts — an "over" in the middle of a sentence is a word, and so is
 "submitted" — and case and punctuation do not matter (*Over.*, *Submit!*,
 *Disregard that.*). Commands ("switch to…", "new
 session…", "what needs me", "voice off"…) are commands only while the box
-is empty; mid-message they are words (see **Voice commands** below). Then
+is empty; mid-message they are words (see **Voice commands** below) — except
+the **control words**, which act at the end of *any* phrase: a stop phrase
+always, an answer while the session is asking (below). Then
 *Sent to <name>.* (or *Queued for <name> — it is on a prompt.*: while voice
 is on, Send and "submit" go through `POST /send {dialog_safe:
 true, say}`, so a prompt is queued
@@ -6109,15 +6174,52 @@ or "please" in front:
 | Say | Does |
 |---|---|
 | *cancel* · *never mind* · *scratch that* · *forget it* | drops the dictated text |
+| *session two* · *go to session 3* · *focus (on) session number four* | moves voice to that row of the Sessions sheet, numbered as shown (the router: `{kind: "switch_index", index}`); past the last row, *There is no session N.* |
+| *next session* · *previous session* · *switch to the next one* | one row down / up from the current session's, round the ends (`{kind: "switch_rel", delta: ±1}`) |
 | *switch to <name>* · *go to <name>* · *change to* · *jump (over) to* | moves voice to that session — by name or title: a prefix, then word overlap, then loose containment. A tie asks *Which one: a, b?*; a miss says *No session called X. Sessions: …*; a hit says *Now on <name>.* plus its last line, and reads its dialog when it is on one |
+| *focus (on) <name>* · *open <name>* · *show <name>* · *select <name>* | the same, but only for a session whose name (or title) is said or starts so — *open the readme* stays a prompt |
+| *what is it asking* · *what's it asking (me)* · *what does it want* · *what's the question* | the current session's question: its dialog read out again (and listened for), or the question its last line asked; the router's `{kind: "question", say}` is said name first |
 | *what needs me* · *who needs me* · *what needs (my) attention* | the sessions in the bell, attention first, at most three: *<name> is asking: <its line>.* or *<name> is <state word>.* — else *Nothing needs you.* |
 | *what's it doing* · *what is it doing* · *status* · *what's happening* · *what's going on* | the state word (*for N minutes* while working) and the session's latest turn snippet |
 | *summarize that* · *summarize it* · *summarise* · *what did it say* · *summary* | one model call on the server (`POST /voice/condense`, 10–45 s): the newest reply in two sentences — *That took too long.* on a timeout, the route's own sentence on any other refusal |
 | *say that again* · *repeat (that)* | the last line again |
 | *voice off* · *turn voice off* · *turn off voice* | voice mode off (`POST /voice {on: false}`) |
 | *stop listening* · *stop* | back to idle |
+| *session three yes* · *session 2, option one* · *tell <name> no* · *answer <name> always* | answers **that** session (below) — voice stays where it is |
 
-Anything else is a prompt.
+Anything else is a prompt — and so is any `kind` the page does not know (a
+newer server's): the words stay words.
+
+**Control words, anywhere.** At the end of every phrase — and of every run
+of words a streaming recognizer settles — two kinds of words act whatever
+is in the box, and never land in it:
+
+| Say (at the end) | Does |
+|---|---|
+| *stop recording* · *stop listening* · *stop dictating* · *mic off* · *that's all* · *that is all* · *done talking* · *I'm done talking* | stops listening; the words said before it stay in the box, unsent (*In the box — say "submit", or tap Send*). In a dialog too — before *stop* could be read as a *no* |
+| *yes* · *no (thanks)* · *always* · *yes and don't ask again* · *option two* · *the second one* · *answer yes* | **only while the session is asking** — a dialog is up, or its last `Say:` line asked a question: answers it. A bare number counts only as the whole phrase (*add two* is words) |
+
+An answer to a **dialog** is the option the dialog's own words pick (the
+table under *Dialogs by voice*: *always* only when said, a number never on a
+permission prompt), POSTed as below — only with **Approve dialogs by voice**
+on, else *Answer it on the screen.* An answer to a **question** is a prompt:
+it goes to the session through `POST /send` like any other (with the words
+already in the box in front of it), no *submit* needed. Said into an empty
+box the router decides first: `{kind: "answer", choice, number?, dialog_id,
+keys, say?}` is POSTed as is (`POST /answer {keys, dialog_id, by: "user"}` —
+*always* is the router's call), `{kind: "answer", index}` (only the row
+number) is turned into that row's title and asked again with `session` set
+to it, `no_dialog` is said (*<name> isn't asking anything.*), and an answer
+with no dialog is the question's prompt. Its `say` is spoken name first.
+
+**Answering another session.** *session three yes*, *session 2, option one*,
+*tell parser no thanks*, *answer the login fix always* — the whole phrase,
+a row number or a name, then an answer — answer **that** session's dialog
+(or question) without moving voice: *Invoice parser: answered yes.* (or
+*Sent to Invoice parser.* for a question's answer, the box left as it was),
+and voice stays on the session you were talking to. Offline the page reads
+that session's dialog itself (`GET /dialog?quiet=1`) and picks the option
+with the same rules.
 
 **Dialogs by voice.** When the session lands on a permission dialog
 (`clarify`), the page fetches it (`GET /dialog?quiet=1`) and reads it out:
@@ -6125,7 +6227,9 @@ Anything else is a prompt.
 (*Say yes or no.* when the dialog offers no always; a dialog of other choices
 lists them — *one: main. two: develop. three: release. Say one, two, or
 three.*). It then listens for 12 s. Only option words are accepted, and free
-text is **never** typed into a dialog:
+text is **never** typed into a dialog (a stop phrase stops listening, the
+dialog left waiting; *what is it asking* reads it again; *session two yes*
+answers that other session instead):
 
 | Means | Words |
 |---|---|
@@ -6171,8 +6275,12 @@ phrase*, and the last chunk's time or why it failed), *AudioContext*
 (how long the server took and which backend, or why it failed), *Primed*
 (whether a tap has unlocked speech output yet), *Push to talk* (tap or
 hold), *Replies* (on or off), *Last prompt* (dictated or typed, and whether
-it asked for a `Say:` line), *Router* (what `/api/voice/route` last answered,
-or why the local table decided), *State*, and the last error. The choices
+it asked for a `Say:` line), *Router* (what `/api/voice/route` last answered
+— its kind, with the row for *switch_index* / an answer by number, the step
+for *switch_rel*, the choice and whether a dialog was named for *answer* — or
+why the local table decided), *Session numbers* (*1 Login fix, 2 Invoice
+parser, …* — the Sessions sheet's order, held while it is open), *State*,
+and the last error. The choices
 are this phone's own (with the rate and the voice, in `localStorage`).
 Refreshed every second while the sheet is open.
 
