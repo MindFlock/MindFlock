@@ -1406,7 +1406,8 @@ command is `{"kind": "prompt"}`, and every pattern matches the WHOLE phrase —
 a false command is worse than a missed one.
 
 `POST /api/voice/route` with `{"text": "<one finished phrase>", "session":
-"<the title being talked to, or ''>"}` → **200** with one of the shapes below
+"<the title being talked to, or ''>", "title": "<optional: the client's
+mapping of a numbered target>"}` → **200** with one of the shapes below
 (**400** `{error}` only for a body that is not an object; an unknown
 `session` reads as none). Matching is case- and punctuation-insensitive
 (`voiceNorm`: lowercase, anything but letters, digits and `'` a space), and a
@@ -1415,17 +1416,82 @@ leading `ok`/`okay`/`hey`/`please` and a trailing `please` are dropped.
 | Phrase | Answer |
 |---|---|
 | anything else, or blank | `{"kind": "prompt"}` — send it to the session (`/send`). No session rows are read. |
-| `(switch\|go\|change\|jump) (over )?to <name>` | `{"kind": "switch", "title", "name", "say": "Now on <name>. <its last_say>"}`. `<name>` is matched against each row's display `name` and its title: a unique prefix, else the unique best word overlap, else a unique loose containment (mobile.js `voiceMatchSession`). A tie → `{"kind": "ambiguous", "say": "Which one: <A>, <B>?"}`; nothing → `{"kind": "no-session", "say": "No session called <words>. Sessions: <A>, <B>, <C>."}` (at most 6 names; `"There are no sessions."` with none). Other devices' `<device>::<title>` rows count — the client selects the title it gets. |
+| `(switch\|go\|change\|jump\|focus\|open\|show\|select) (over )?to <name>` | `{"kind": "switch", "title", "name", "say": "Now on <name>. <its last_say>"}`. `<name>` is matched against each row's display `name` and its title: a unique prefix, else the unique best word overlap, else a unique loose containment (mobile.js `voiceMatchSession`). A tie → `{"kind": "ambiguous", "say": "Which one: <A>, <B>?"}`; nothing → `{"kind": "no-session", "say": "No session called <words>. Sessions: <A>, <B>, <C>."}` (at most 6 names; `"There are no sessions."` with none). Other devices' `<device>::<title>` rows count — the client selects the title it gets. |
 | `(what\|which) sessions (do i have\|are (up\|open\|running))`, `list (the \|my )?sessions`, `what('s\| is) (up\|open\|running)` | `{"kind": "list", "say": "Sessions: <A> (working), <B> (waiting on you), <C> (idle)."}` — at most 10, then `, and N more`. |
 | `(what\|who) needs (me\|attention\|my attention)` | `{"kind": "needs", "say": …}` — the rail bell's attention set (a question, a failed setup or pre-commit, failing checks, an offline terminal, idle 20 min on uncommitted work), most urgent first, three at most: `"<A> is asking: <its last_say>"` / `"<B> is waiting on failing checks."` / `"Nothing needs you."` |
 | `status`, `what's it doing`, `what's happening`, `what's going on` | `{"kind": "status", "say": "<name> is working for 5 minutes. <its last_turn>"}` — the CURRENT session (`"No session is open."` / `"<title> is not listed."`). |
+| `(switch\|go\|…) (over )?to [session\|window\|number] <N>`, `(switch\|go\|…) to the <Nth> (one\|session\|window)`, `session <N>`, `number <N>`, `window <N>`, `the <Nth> session` | `{"kind": "switch_index", "index": N}` — 1-based, in the CLIENT's numbering (the desktop's rail order, the phone's list order), so the client maps it. `<N>`: `one`…`twenty` or digits; `<Nth>`: `first`…`tenth` or `3rd`. `the <Nth> one` alone is this too — unless the session being talked to is asking (`activity: clarify`), when it picks that option (an `answer`, below). |
+| `next (session\|one\|window)`, `(previous\|last) (session\|one\|window)` (optionally after `(switch\|go\|…) to the`), `go back` | `{"kind": "switch_rel", "delta": 1\|-1}` — the client moves along its own order. |
+| An answer to a dialog — bare: `yes`, `no`, `always allow`, `approve`, `deny`, `allow it`, `go ahead`, `option two`, `the second option`, `answer <answer>`, `tell it <answer>`; targeted: `<target>, <answer>`, `<answer> to <target>`, `(answer\|say) <answer> (to\|on\|for) <target>`, `tell <target> (to )?<answer>` | `{"kind": "answer", "choice", "number"?, "words", …}` — see **Answers** below. |
+| `what('s\| is) <it\|target> asking`, `what does <it\|target> want`, `what's the question`, `read (me )?the question (again)?`, `read that again` | `{"kind": "question", "title", "name", "say": "<name>: <the dialog's question, what it runs and the choices>"}` — the dialog read out the phone's way (`voiceDialogSpeech`); with no parsed dialog the dialog's question line, else the session's `Say:` line when it `has_question`, else `"<name>: Nothing is being asked."`. A numbered target → `{"kind": "question", "index": N}` (map it, send `title`); no session → `{"kind": "question", "say": "No session is open."}`. `what did it say` is still `condense`. |
 | `[start\|open\|create\|make\|spin up] [a\|another] new session [called\|named <name>] [in\|for\|on <repo>] [to\|and\|that <task>]`, or the bare `new session <task>` | Creates a session → `{"kind": "new", "title", "name", "say": "Started <name> in <repo name>."}`, or `{"kind": "new-failed", "say"}`. See below. |
-| `cancel`, `never mind`, `scratch that`, `forget it` / `stop`, `stop listening` / `voice off` / `say that again`, `repeat` / `summarize (that)`, `what did it say` | `{"kind": "cancel"\|"stop"\|"off"\|"repeat"\|"condense"}` with no `say` — the client acts on its own. |
+| `cancel`, `never mind`, `scratch that`, `forget it` / `stop`, `stop (listening\|recording\|dictating\|the mic\|the microphone)`, `mic off`, `turn off the mic`, `pause listening`, `that's all`, `done talking` / `voice off` / `say that again`, `repeat` / `summarize (that)`, `what did it say` | `{"kind": "cancel"\|"stop"\|"off"\|"repeat"\|"condense"}` with no `say` — the client acts on its own (`stop`: it stops listening; typed text stays). |
 
 Every `say` is a sentence the client speaks as is. Rows are
 [`GET /api/instances`](#get-apiinstances)'s own (`name`, `activity`,
 `activity_since`, `last_say`, `last_turn`, …), read only once the phrase is a
-command; rows hidden off the rail (`hidden_by`) are never named.
+command; rows hidden off the rail (`hidden_by`) are never named. Words that
+are not one of these forms stay a prompt: `yes, but run the tests first`,
+`stop the server`, `go back to the old approach`, `the answer is no`.
+
+**Numbers are the client's.** `switch_index` / `switch_rel` and a numbered
+target (`session three, yes`, `what is number 2 asking`) carry `index` /
+`delta` and no `say`. To finish one, the client maps it to a title and calls
+again — either the same `text` with `"title": "<that title>"` (a switch then
+comes back as the full `switch` answer with its `say`; an answer or question
+as below), or the answer's own `words` with `"session": "<that title>"`. No
+other route is needed.
+
+**Answers.** An answer is a phrase made only of answer words (yes, yeah, yep,
+yup, sure, ok/okay, approve, allow, go ahead, do it, no, nope, deny, reject,
+don't, skip, cancel, stop, always, don't ask again, … — any other word and
+it is a prompt), or `option <N>` / `the <Nth> one`. `choice` is what it
+says, the phone's order (mobile.js `voiceParseAnswer`): `always` only for a
+whole-answer always form (`always`, `yes, always`, `always allow that`,
+`yes and don't ask again`), else `no` for a NO anywhere (`no, not always`,
+`no, option 2`), else `yes`, else `number` with `number: N`. `words` is the
+answer part as heard (normalised, the target removed). The **target** is the
+session being talked to (bare forms, `it`, `the agent`), a number (`session
+<N>`, `number <N>`, `window <N>`, `the <Nth> session` → `index: N`, see
+above), or a name. After `tell` / `answer … to` a name is matched like
+`switch` (a tie → `ambiguous`, nothing → `no-session`); in `<name>, yes` and
+`yes to <name>` only a session's whole name or title, or its start in whole
+words (`invoice` for invoice-parser), counts, and an unknown name leaves the
+phrase a prompt (`update the docs, yes`).
+
+For a resolved local session the server reads its live dialog — the same
+body [`GET /api/instances/{title}/dialog?quiet=1`](#another-agents-view-output--answer)
+serves — and adds:
+
+- a parsed dialog: `"dialog_id"` and `"keys": ["<key>"]`, the option the
+  phone's `voiceParseAnswer` picks (permission dialogs take words only —
+  numbers never pick one, and `always` without an always option is the yes;
+  dialogs of `other` options take a number, by the option's key), with
+  `"say": "Answered <yes|no|always|the option's label> on <name>."`. When
+  nothing is picked: `"keys": []` and `"say": "I didn't catch that for
+  <name>: say yes, no, or always."`.
+- no parsed dialog: `"no_dialog": true`, `"say": "<name> is not asking
+  anything."` (`"… is waiting on you: open the screen."` for a dialog it
+  can't parse; `"… is on another device: answer it there."` for a
+  `<device>::<title>` row, whose dialog is never read here). A BARE answer
+  with no parsed dialog is `{"kind": "prompt"}` instead — the agent may have
+  asked in words, and `yes` reaches it typed, as before.
+
+Nothing is pressed here: the client posts `{"keys", "dialog_id", "by":
+"user"}` to [`/answer`](#another-agents-view-output--answer) — it owns
+`approve_dialogs` — and speaks the `say` once that succeeds. Example:
+
+```json
+POST /api/voice/route {"text": "docs, always", "session": "parser"}
+→ {"kind": "answer", "title": "docs", "name": "API docs", "choice": "always",
+   "words": "always", "dialog_id": "a1b2c3", "keys": ["2"],
+   "say": "Answered always on API docs."}
+
+POST /api/voice/route {"text": "session three, yes", "session": "parser"}
+→ {"kind": "answer", "choice": "yes", "index": 3, "words": "yes"}
+POST /api/voice/route {"text": "session three, yes", "session": "parser", "title": "docs"}
+→ (the full answer for docs, as above)
+```
 
 **`new`**: examples — `new session to fix the login bug`, `open a new
 session called parser in mindflock`, `start a new session in sitecheck and

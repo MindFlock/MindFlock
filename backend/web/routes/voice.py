@@ -22,21 +22,27 @@ condensation:
   this is the step that costs money, and it runs only when the listener asks
   ("summarize that"). 409 ``{error}`` with no reply or no CLI, 504 on
   timeout, 502 when the CLI fails.
-* ``POST /api/voice/route {text, session}`` → ``{kind, …}`` — the voice
+* ``POST /api/voice/route {text, session, title?}`` → ``{kind, …}`` — the voice
   router (``core.voice_router``): one finished phrase said to ``session``
   (a title, ``""`` for none) is either a prompt for that session (``{kind:
   "prompt"}``, the default) or a command: ``switch`` / ``ambiguous`` /
   ``no-session``, ``list``, ``needs``, ``status`` (each with the ``say`` the
-  client speaks), ``new`` / ``new-failed``, or one the client carries out
-  itself (``cancel``, ``stop``, ``off``, ``repeat``, ``condense``; no
-  ``say``). The rows are ``GET /api/instances``'s own (other devices'
-  ``<device>::<title>`` rows included), read only once the phrase IS a
-  command. ``new`` creates the session the way the New dialog does
-  (``core.session_create``, the task as its first prompt) in the named
-  repository, else the current session's, else the most recent, turns its
-  voice flag on and arms the one-shot ``.next`` so its seeded first prompt
-  asks for a ``Say:`` line. Always 200
-  — a failed create is ``{kind: "new-failed", say}``; 400 only for a body
+  client speaks), ``new`` / ``new-failed``, ``switch_index`` /
+  ``switch_rel`` (the client's own numbering: it maps ``index`` / ``delta``),
+  ``answer`` (a session's dialog: ``dialog_id`` + ``keys`` the client posts
+  to ``/answer`` — nothing is pressed here — or ``no_dialog``), ``question``
+  (its dialog read out), or one the client carries out itself (``cancel``,
+  ``stop``, ``off``, ``repeat``, ``condense``; no ``say``). An optional
+  ``title`` maps a numbered target the client resolved ("session three,
+  yes" → its title) for the full answer. The rows are ``GET
+  /api/instances``'s own (other devices' ``<device>::<title>`` rows
+  included), read only once the phrase IS a command. ``new`` creates the
+  session the way the New dialog does (``core.session_create``, the task as
+  its first prompt) in the named repository, else the current session's,
+  else the most recent, turns its voice flag on and arms the one-shot
+  ``.next`` so its seeded first prompt asks for a ``Say:`` line. The dialog
+  is ``GET …/dialog?quiet=1``'s own (``_read_dialog``), read only for an
+  answer or question naming a local session. Always 200 — a failed create is ``{kind: "new-failed", say}``; 400 only for a body
   that is not an object.
 
 Routes only translate HTTP into core calls; the registry lookup, the tmux
@@ -329,6 +335,56 @@ async def _start_new(text: str, session: str, rows: list, request) -> dict:
     return _voice_router.started(title, plan["repo_name"])
 
 
+async def _read_dialog(title: str):
+    """The dialog ``title``'s agent is blocked on — ``GET
+    /api/instances/{title}/dialog?quiet=1``'s own body, the same reader and
+    gate (the provider parses the visible screen) — or None when it is not
+    asking (204), is gone or can't be read. Module-level so tests replace
+    it."""
+    try:
+        resp = await _server().instance_dialog(title, quiet="1")
+    except Exception:  # noqa: BLE001 — unreadable reads as "not asking"
+        return None
+    if getattr(resp, "status_code", 0) != 200:
+        return None
+    try:
+        body = json.loads(resp.body)
+    except Exception:  # noqa: BLE001
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def _read_spoken(title: str) -> dict:
+    """``{say, has_question}`` — the spoken record ``GET …/voice`` serves.
+    Blocking; module-level so tests replace it."""
+    inst = _server().ENGINE.instances.get(title)
+    if inst is None:
+        return {}
+    try:
+        return _spoken.spoken_for(title, inst) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+async def _finish_answer(ans: dict, rows: list) -> dict:
+    """An ``answer`` / ``question`` naming a session, finished with its live
+    dialog. Another device's session can't be read here: its row's
+    ``last_say`` stands in for a question, and an answer says so."""
+    title = ans["title"]
+    row = next((r for r in rows if r.get("title") == title), None) or {}
+    if row.get("device") or "::" in title:
+        spoken = {
+            "say": row.get("last_say"),
+            "has_question": row.get("activity") == "clarify",
+        }
+        return _voice_router.finish(ans, None, spoken, remote=True)
+    dialog = await _read_dialog(title)
+    spoken = None
+    if ans["kind"] == "question":
+        spoken = await asyncio.to_thread(_read_spoken, title)
+    return _voice_router.finish(ans, dialog, spoken)
+
+
 @router.post("/api/voice/route")
 async def voice_route(request: Request) -> JSONResponse:
     """One finished phrase → ``{kind, …}`` (see the module docstring and
@@ -341,6 +397,7 @@ async def voice_route(request: Request) -> JSONResponse:
         return JSONResponse({"error": "body must be an object"}, status_code=400)
     text = str(payload.get("text") or "")
     session = str(payload.get("session") or "")
+    title = str(payload.get("title") or "")
     cmd = _voice_router.command(text)
     if cmd is None:
         return JSONResponse({"kind": "prompt"})
@@ -349,4 +406,7 @@ async def voice_route(request: Request) -> JSONResponse:
     rows = await asyncio.to_thread(_session_rows, request)
     if cmd["kind"] == "new":
         return JSONResponse(await _start_new(text, session, rows, request))
-    return JSONResponse(_voice_router.answer(text, session, rows))
+    ans = _voice_router.answer(text, session, rows, title=title)
+    if ans.get("kind") in ("answer", "question") and ans.get("title"):
+        ans = await _finish_answer(ans, rows)
+    return JSONResponse(ans)
