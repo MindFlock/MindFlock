@@ -5736,11 +5736,12 @@ output (iOS and Android speak nothing until the first `speak()` runs inside
 a tap; the same tap sets `navigator.audioSession.type = "playback"` so the
 silent switch does not mute the page), takes a screen wake lock, turns voice
 mode on for the selected session (`POST /api/instances/<title>/voice
-{on: true}`), opens the events socket and listens for 15 s (Android buzzes
-30 ms). A **voice strip** appears above the composer with the state word
+{on: true}`), opens the events socket and listens — 15 s for a first word,
+then for as long as you keep talking (Android buzzes 30 ms). A **voice
+strip** appears above the composer with the state word
 (*Your turn* · *Listening…* · *Sending…* · *Working…* · *Speaking…* ·
 *Waiting on you*), a caption (what it hears, the line being spoken, the
-dialog question), a countdown bar, **Cancel** and **⚙**. Voice follows the
+dialog question), **Cancel** and **⚙**. Voice follows the
 **selected** session: picking another session in the Sessions sheet (or
 saying "switch to <name>") moves the conversation there; the flag of the
 session you left stays on — it only asks that session to end its replies
@@ -5763,12 +5764,21 @@ cannot reach its speech service…* on the strip (Diagnostics keeps it as *Last
 error*). Use Chrome, Edge or Safari there, or server recognition, whose clip
 records in any browser.
 
-**The loop.** Say the prompt; interim words show in the compose box. When
-the phrase is final it sits in the box behind a **2.5 s countdown** — tap the
-strip, **Cancel**, or edit the text to stop the clock and keep the words; say
-"cancel" to drop them; **Send** sends at once. Then *Sent to <name>.* (or
-*Queued for <name> — it is on a prompt.*: while voice is on, Send and the
-countdown go through `POST /send {dialog_safe: true}`, so a prompt is queued
+**The loop.** Radio rules. Say the prompt phrase by phrase: interim words
+show in the strip's caption, each finished phrase lands in the compose box,
+and the mic stays open across pauses. What happens to the box is yours to
+say: end with **"over"** and it is sent; end with **"disregard"** and the
+box is emptied and listening goes on; a tap on the mic or the strip stops
+listening with the words kept (*Kept, not sent — Send sends it, or tap the
+mic to go on*), **Cancel** stops and drops them, **Send** sends whatever is
+in the box at once, and two minutes without a word stops the same way as the
+tap. The last word of a phrase is what counts — an "over" in the middle of a
+sentence is a word — and case and punctuation do not matter (*Over.*,
+*Disregard that.*). Commands ("switch to…", "what needs me", "voice off",
+"stop"…) are commands only while the box is empty; mid-message they are
+words. Then *Sent to <name>.* (or *Queued for <name> — it is on a prompt.*:
+while voice is on, Send and "over" go through `POST /send {dialog_safe:
+true}`, so a prompt is queued
 rather than typed into a dialog; a waking session says *<name> is waking up,
 try again in a moment.*, a paused one *<name> is paused. Resume it first.*,
 anything else *Couldn't send.* with the text kept). While the agent works the
@@ -5779,8 +5789,9 @@ session gets no such sentence (its screen fallback is skipped), only the line
 at the end. When the turn ends — `session.activity_changed` → `idle` over
 `WS /api/events`, with the page's 4 s session poll as the fallback — the
 page speaks the session's **`Say:` line**. If that line asks a question the
-mic reopens for 12 s (one *Still there? <line>* re-prompt, then idle);
-otherwise it goes quiet — or, with **Hands-free** on, listens 8 s after every
+mic reopens — 12 s for a first word, then the same radio rules (one *Still
+there? <line>* re-prompt when nothing was said, then idle); otherwise it goes
+quiet — or, with **Hands-free** on, listens 8 s for a first word after every
 reply. A turn that ends with no line at all says *<name> finished.* A line
 that arrives mid-dictation waits until the page is idle and is dropped once a
 new prompt is sent; a line you have already heard is never repeated (the
@@ -5883,8 +5894,8 @@ tap to reply". See [Notifications](#notifications-).
 the page is hidden it stops listening and speaking, closes its socket and
 releases the wake lock; on return it re-locks, reconnects and asks for a
 line that arrived meanwhile. Nothing speaks while the phone is locked except
-the OS reading a push. Dictation is for intent, not code — the countdown and
-the editable box are the mitigation for misheard identifiers. iOS speaks
+the OS reading a push. Dictation is for intent, not code — the explicit
+"over" and the editable box are the mitigation for misheard identifiers. iOS speaks
 only through its compact voices and cuts long utterances, so lines are
 chunked by sentence with a timeout behind each chunk. Phone recognition
 sends audio to Google on Android and to Apple on iOS when no on-device model

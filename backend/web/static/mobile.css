@@ -899,15 +899,6 @@ html, body {
 }
 #voice-gear { font-size: 16px; padding: 3px 9px; }
 #voice-cancel:active, #voice-gear:active { background: var(--border); }
-/* The send countdown: a bar that drains over VOICE_CONFIRM_MS. */
-#voice-countdown {
-  height: 4px;
-  margin-top: 6px;
-  background: var(--border);
-  border-radius: 2px;
-  overflow: hidden;
-}
-#voice-countdown-bar { height: 100%; width: 100%; background: var(--accent); }
 /* The level meter while the server adapter records (no interim words). */
 #voice-level {
   height: 4px;

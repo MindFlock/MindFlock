@@ -2690,10 +2690,13 @@
   // One state machine, `voice.state`:
   //   off        voice mode is off (strip hidden, mic reads "off")
   //   idle       on; nothing happening — "Your turn", tap to talk
-  //   listening  the recognizer is up for a prompt
-  //   confirming the final transcript sits in the compose box behind a 2.5 s
-  //              countdown; a tap on the strip, Cancel or an edit stops the
-  //              clock and keeps the words; Send sends at once
+  //   listening  the recognizer is up for a prompt. Radio rules: every
+  //              phrase heard lands in the compose box and it keeps listening
+  //              across pauses until a trailing "over" sends the box, a
+  //              trailing "disregard" empties it and listens on, a tap on
+  //              the mic or the strip stops with the words kept (Send sends
+  //              them), Cancel stops and drops them, or nothing has been
+  //              heard for VOICE_DICT_IDLE_MS (kept, not sent)
   //   sending    POST /send (or /answer) in flight
   //   working    the agent has the prompt; a 3 s poll of last_reply waits for
   //              its first sentence and speaks it ONCE as the "what it is
@@ -2736,10 +2739,13 @@
   //
   // Adapters, reachable as window.mfVoice.stt / .tts, all with one surface:
   //   stt {name, available(), start({onInterim, onFinal, onError, onEnd,
-  //        onLevel?, until?}), stop(), active(), release()} — PhoneSTT over
-  //        webkitSpeechRecognition; ServerSTT records a clip (MediaRecorder)
-  //        and POSTs it to /api/voice/transcribe, adding finish() (send the
-  //        clip now: "tap when done") and pending() (the clip is on its way)
+  //        onLevel?, onStatus?, until?}), stop(), active(), release()} —
+  //        onFinal fires once per PHRASE (one start may deliver several);
+  //        onStatus carries a caption that is not words ("Transcribing…").
+  //        PhoneSTT over webkitSpeechRecognition (continuous); ServerSTT
+  //        records a clip (MediaRecorder) per phrase — its silence detector
+  //        ends the clip — and POSTs it to /api/voice/transcribe, adding
+  //        finish() (end the clip now: the tap) and pending() (on its way)
   //   tts {name, available(), prime(), speak(text) → Promise, cancel(),
   //        voices()} — PhoneTTS over speechSynthesis; ServerTTS POSTs
   //        /api/voice/speak and plays the audio through one AudioContext,
@@ -2757,8 +2763,6 @@
   var voiceCaptionEl = document.getElementById("voice-caption");
   var voiceCancelBtn = document.getElementById("voice-cancel");
   var voiceGearBtn = document.getElementById("voice-gear");
-  var voiceCountdownEl = document.getElementById("voice-countdown");
-  var voiceCountdownBar = document.getElementById("voice-countdown-bar");
   var voiceLevelEl = document.getElementById("voice-level");
   var voiceLevelBar = document.getElementById("voice-level-bar");
   var voiceHearBtn = document.getElementById("voice-hear");
@@ -2782,7 +2786,9 @@
   var ANDROID = /Android/i.test(navigator.userAgent);
   var SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition || null;
   var VOICE_STORE = "cs_voice";          // localStorage: session, on, rate, voiceName, handsFree
-  var VOICE_CONFIRM_MS = 2500;           // the countdown before a dictated prompt is sent
+  var VOICE_DICT_IDLE_MS = 120000;       // listening ends after this long without a word (the words stay)
+  var VOICE_RAPID_RESTART_MAX = 8;       // recognizers that die within a second of starting, in a row
+  var VOICE_DICT_HINT = "Say “over” to send, “disregard” to start over";
   var VOICE_TAP_MS = 15000;              // listening window after a deliberate tap
   var VOICE_ANSWER_MS = 12000;           // ...after the agent asked a question
   var VOICE_HANDSFREE_MS = 8000;         // ...after a plain reply, hands-free only
@@ -2805,12 +2811,16 @@
       if (!SpeechRec) { if (h.onError) h.onError("unavailable"); return false; }
       var r;
       try { r = new SpeechRec(); } catch (e) { if (h.onError) h.onError("unavailable"); return false; }
-      r.continuous = false;
+      // continuous: Chrome keeps one session up across pauses and delivers
+      // a final per phrase (no restart, no Android beep per phrase); iOS
+      // ignores it and ends after each phrase — the state machine restarts.
+      r.continuous = true;
       r.interimResults = true;
       r.maxAlternatives = 1;
       r.lang = navigator.language || "en-US";
-      var finals = "", interim = "", delivered = false;
+      var interim = "";
       r.onresult = function (ev) {
+        var finals = "";
         interim = "";
         for (var i = ev.resultIndex; i < ev.results.length; i++) {
           var res = ev.results[i];
@@ -2818,9 +2828,7 @@
           if (res.isFinal) finals += txt; else interim += txt;
         }
         if (finals.trim()) {
-          delivered = true;
-          stop();
-          if (h.onFinal) h.onFinal(finals.trim());
+          if (h.onFinal) h.onFinal(finals.trim());   // one phrase; the recognizer stays up
         } else if (h.onInterim) {
           h.onInterim(interim.trim());
         }
@@ -2832,12 +2840,10 @@
         if (rec === r) rec = null;
         // iOS: a final can stall and never arrive — the last interim reading
         // is what was said, and better than losing the words.
-        if (!delivered && interim.trim()) {
-          delivered = true;
-          if (h.onFinal) h.onFinal(interim.trim());
-          return;
-        }
-        if (!delivered && h.onEnd) h.onEnd();
+        var tail = interim.trim();
+        interim = "";
+        if (tail && h.onFinal) h.onFinal(tail);
+        if (h.onEnd) h.onEnd();
       };
       rec = r;
       try { r.start(); } catch (e) {
@@ -2939,11 +2945,11 @@
   // once and kept across turns, its tracks stopped when voice goes off or the
   // page hides (release()); iOS records audio/mp4 (AAC) before 18.4 and
   // webm/opus after, so the first supported entry of SERVER_MIMES is used and
-  // sent as the Content-Type. There are no interim words: the caption says
-  // "Listening… tap when done" with the seconds, and onLevel feeds the
-  // strip's level meter from an AnalyserNode on the shared AudioContext. The
-  // clip ends on a tap (finish()), on VOICE_SILENCE_MS of quiet after speech
-  // was heard, or at the cap (VOICE_CLIP_MAX_MS, or the listening window if
+  // sent as the Content-Type. There are no interim words: onStatus says
+  // "Listening… <n> s" (the machine adds the radio hint), and onLevel feeds
+  // the strip's level meter from an AnalyserNode on the shared AudioContext.
+  // The clip is one phrase: it ends on VOICE_SILENCE_MS of quiet after speech
+  // was heard, on a tap (finish()), or at the cap (VOICE_CLIP_MAX_MS, or the listening window if
   // that is shorter); stop() discards it and never reports, like PhoneSTT's.
   // While the clip is on its way (pending()) the state machine's window
   // waits instead of expiring. Errors reach onError with PhoneSTT's codes
@@ -3004,7 +3010,7 @@
       meterTimer = setInterval(function () {
         if (token !== mine) { clearInterval(meterTimer); return; }
         var now = Date.now();
-        if (h.onInterim) h.onInterim("Listening… tap when done · " + Math.round((now - m.t0) / 1000) + " s");
+        if (h.onStatus) h.onStatus("Listening… " + Math.round((now - m.t0) / 1000) + " s");
         if (!m.live || !analyser) return;
         analyser.getByteTimeDomainData(buf);
         var sum = 0;
@@ -3065,7 +3071,7 @@
         rec = r;
         // No timeslice: ONE blob at stop (short slices come back empty on Safari).
         try { r.start(); } catch (e) { token = null; rec = null; if (h.onError) h.onError("start-failed"); return; }
-        if (h.onInterim) h.onInterim("Listening… tap when done");
+        if (h.onStatus) h.onStatus("Listening…");
         mine.meter = meterStart(s, mine, h);
         capTimer = setTimeout(function () {
           if (token !== mine) return;
@@ -3081,14 +3087,15 @@
       });
       return true;
     }
-    // End the clip and send it: the tap on the mic or the strip, the silence
-    // detector, the cap. The words (or the error) reach start()'s handlers.
+    // End the clip and send it: the silence detector after a phrase, the tap
+    // on the mic or the strip, the cap. The words (or the error) reach
+    // start()'s handlers.
     function finish() {
       var r = rec, mine = token;
       if (!r || !mine) return false;
       rec = null;
       clearTimeout(capTimer);
-      if (mine.h.onInterim) mine.h.onInterim("Transcribing…");
+      if (mine.h.onStatus) mine.h.onStatus("Transcribing…");
       if (mine.h.onLevel) mine.h.onLevel(null);
       try { r.stop(); } catch (e) {
         token = null;
@@ -3426,7 +3433,7 @@
 
   // --- the strip, the mic, captions -----------------------------------------
   var VOICE_WORDS = {
-    idle: "Your turn", listening: "Listening…", confirming: "Sending…", sending: "Sending…",
+    idle: "Your turn", listening: "Listening…", sending: "Sending…",
     working: "Working…", speaking: "Speaking…", awaiting: "Listening…", dialog: "Waiting on you",
   };
   function voiceBtnState(s) {
@@ -3444,7 +3451,6 @@
     voiceStrip.classList.toggle("hidden", s === "off" && !voice.hearPending);
     voiceStateEl.textContent = VOICE_WORDS[s] || "";
     if (caption !== undefined) voiceCaption(caption);
-    if (s !== "confirming") voiceCountdownStop();
     if (!voiceIsListening()) voiceLevel(null);
     voiceCancelBtn.classList.toggle("hidden", s === "off" || s === "idle");
     if (!voiceSheet.classList.contains("hidden")) voiceOnToggle.checked = s !== "off";
@@ -3470,14 +3476,20 @@
     if (voiceLevelEl.classList.contains("hidden")) { voiceLevelEl.classList.remove("hidden"); fitSoon(); }
     voiceLevelBar.style.width = (Math.min(1, Math.max(0, Number(v) || 0)) * 100).toFixed(0) + "%";
   }
-  // The tap on the mic or the strip while listening: an adapter holding a
-  // clip sends it ("tap when done"); anything else — a live recognizer, a
-  // clip already on its way — stops, and the words are dropped.
+  // The tap on the mic or the strip while listening: a clip being recorded
+  // is finished and transcribed first (its words count), then listening
+  // stops with whatever is in the box — kept, not sent.
   function voiceListenDone() {
     var s = voice.stt;
-    if (s.finish && s.active() && !(s.pending && s.pending()) && s.finish()) return;
+    if (s.finish && s.active() && !(s.pending && s.pending()) && s.finish()) { voiceListen_.stopAfter = true; return; }
+    voiceListenStop();
+  }
+  // Listening ends with words in the box but no "over": nothing is sent,
+  // nothing is lost — Send sends them, the mic goes on adding to them.
+  function voiceListenStop() {
     voiceListen_.until = 0;
-    voiceIdle();
+    voiceListen_.stopAfter = false;
+    voiceIdle(composeEl.value.trim() ? "Kept, not sent — Send sends it, or tap the mic to go on" : undefined);
   }
   function voiceIdle(caption) {
     clearTimeout(voiceListen_.timer);
@@ -3513,18 +3525,22 @@
   }
 
   // --- listening ----------------------------------------------------------------
-  var voiceListen_ = { netErrs: 0, mode: "", until: 0, restarts: 0, timer: null, reprompted: false };
+  var voiceListen_ = { netErrs: 0, mode: "", until: 0, restarts: 0, timer: null, reprompted: false,
+                       heard: false, startedAt: 0, rapid: 0, stopAfter: false };
   function voiceListen(mode, windowMs) {
     var L = voiceListen_;
     L.mode = mode;
-    L.until = Date.now() + windowMs;
+    L.until = Date.now() + windowMs;   // to the first word; every word moves it VOICE_DICT_IDLE_MS out
     L.restarts = 0;
+    L.rapid = 0;
     L.netErrs = 0;
+    L.heard = false;
+    L.stopAfter = false;
     clearTimeout(L.timer);
     voice.tts.cancel();
     voiceSpeakSeq++;
     voiceSetState(mode === "dialog" ? "dialog" : mode === "answer" ? "awaiting" : "listening",
-                  mode === "dialog" && voice.dialog ? (voice.dialog.question || "") : "");
+                  mode === "dialog" && voice.dialog ? (voice.dialog.question || "") : VOICE_DICT_HINT);
     voiceError("");
     if (!voice.stt.available()) {
       voiceError("No speech recognition in this browser.");
@@ -3535,20 +3551,25 @@
     if (ANDROID && navigator.vibrate) { try { navigator.vibrate(30); } catch (e) {} }
     voiceRecStart();
     // A recognizer that never ends is still bound by the window — but a clip
-    // on its way to the server is not expired: its words are coming.
+    // on its way to the server is not expired: its words are coming. The
+    // window moves out with every word, so the clock re-arms until it is due.
     L.timer = setTimeout(function expire() {
       if (voiceListen_.mode !== mode || !voiceIsListening()) return;
+      var left = voiceListen_.until - Date.now();
+      if (left > 0) { voiceListen_.timer = setTimeout(expire, left + 500); return; }
       if (voice.stt.pending && voice.stt.pending()) { voiceListen_.timer = setTimeout(expire, 500); return; }
       voiceListenExpired();
     }, windowMs + 500);
   }
   function voiceRecStart() {
     var mode = voiceListen_.mode;
+    voiceListen_.startedAt = Date.now();
     voice.stt.start({
       until: voiceListen_.until,
-      onInterim: function (t) { if (voiceIsListening()) voiceCaption(t); },
+      onInterim: function (t) { if (voiceIsListening()) { voiceHeardSome(); voiceCaption(t || VOICE_DICT_HINT); } },
+      onStatus: function (t) { if (voiceIsListening()) voiceCaption(mode === "dialog" ? t : t + " · " + VOICE_DICT_HINT); },
       onLevel: function (v) { voiceLevel(voiceIsListening() ? v : null); },
-      onFinal: function (t) { if (voiceIsListening()) voiceHeard(t, mode); },
+      onFinal: function (t) { if (voiceIsListening()) { voiceHeardSome(); voiceHeard(t, mode); } },
       onError: function (code, detail) {
         if (!voiceIsListening()) return;
         if (code === "not-allowed" || code === "service-not-allowed") {
@@ -3585,8 +3606,21 @@
       },
       onEnd: function () {
         if (!voiceIsListening()) return;
+        if (voice.stt.active()) return;   // already up again (voiceListenContinue)
         var L = voiceListen_;
-        if (Date.now() < L.until && L.restarts < 8) {
+        if (L.stopAfter) { voiceListenStop(); return; }
+        // Phones end the recognizer after every phrase: start it again for
+        // as long as the window is open. One that dies within a second of
+        // starting, VOICE_RAPID_RESTART_MAX times running, is broken, not
+        // quiet — say so instead of looping.
+        L.rapid = Date.now() - L.startedAt < 1000 ? L.rapid + 1 : 0;
+        if (L.rapid >= VOICE_RAPID_RESTART_MAX) {
+          voiceError("Speech recognition keeps stopping — try again, or another browser.");
+          L.until = 0;
+          voiceIdle();
+          return;
+        }
+        if (Date.now() < L.until) {
           L.restarts++;
           setTimeout(function () {
             if (voiceIsListening() && voiceListen_.mode === mode) voiceRecStart();
@@ -3597,10 +3631,26 @@
       },
     });
   }
+  // A word (interim or final) moves the window out: dictation ends only on
+  // "over", the mic, Cancel, or VOICE_DICT_IDLE_MS of silence.
+  function voiceHeardSome() {
+    var L = voiceListen_;
+    L.heard = true;
+    L.until = Math.max(L.until, Date.now() + VOICE_DICT_IDLE_MS);
+  }
+  // After a phrase: keep listening. An adapter that ended with the phrase (a
+  // clip, iOS) is started again; Chrome's continuous session is still up.
+  function voiceListenContinue() {
+    if (!voiceIsListening()) return;
+    if (voiceListen_.stopAfter) { voiceListenStop(); return; }
+    if (!voice.stt.active()) voiceRecStart();
+  }
   function voiceListenExpired() {
     var mode = voiceListen_.mode;
     clearTimeout(voiceListen_.timer);
     voice.stt.stop();
+    // Words but no "over" and then silence: kept in the box, never sent.
+    if (mode !== "dialog" && composeEl.value.trim()) { voiceListenStop(); return; }
     if (mode === "answer" && !voiceListen_.reprompted && voice.lastSay.text) {
       voiceListen_.reprompted = true;
       speakLine("Still there? " + voice.lastSay.text).then(function (ok) {
@@ -3611,13 +3661,54 @@
     if (mode === "dialog") { voiceDialogRetry(); return; }
     voiceIdle();
   }
+  // One phrase. Radio rules: a trailing "over" sends the box, a trailing
+  // "disregard" empties it and listens on, anything else is appended and
+  // listening goes on. A command ("switch to…", "voice off"…) is one only
+  // while the box is empty; mid-message those are words. A dialog answer
+  // ("yes", "two") needs no "over"; one is stripped when said.
   function voiceHeard(text, mode) {
-    clearTimeout(voiceListen_.timer);
-    voice.stt.stop();
-    if (mode === "dialog") { voiceDialogAnswer(text); return; }
-    var cmd = voiceCommand(text);
-    if (cmd) { voiceRunCommand(cmd); return; }
-    voiceConfirm(text);
+    var p = voiceDictParse(text);
+    if (mode === "dialog") {
+      if (p.kind === "disregard" || !p.text) { voiceListenContinue(); return; }
+      clearTimeout(voiceListen_.timer);
+      voice.stt.stop();
+      voiceDialogAnswer(p.text);
+      return;
+    }
+    if (p.kind === "disregard") {
+      composeEl.value = "";
+      autosizeCompose();
+      voiceCaption("Disregarded — go on");
+      voiceListenContinue();
+      return;
+    }
+    if (p.text && !composeEl.value.trim()) {
+      var cmd = voiceCommand(p.text);
+      if (cmd) { clearTimeout(voiceListen_.timer); voice.stt.stop(); voiceRunCommand(cmd); return; }
+    }
+    if (p.text) {
+      var cur = composeEl.value.trim();
+      composeEl.value = cur ? cur + " " + p.text : p.text;
+      autosizeCompose();
+    }
+    if (p.kind === "over") {
+      if (composeEl.value.trim()) { voiceSend(composeEl.value); return; }
+      voiceCaption("Nothing to send yet");
+      voiceListenContinue();
+      return;
+    }
+    voiceCaption(VOICE_DICT_HINT);
+    voiceListenContinue();
+  }
+  // "fix the bug over" → {kind: "over", text: "fix the bug"}; "… disregard"
+  // (or "disregard that") → {kind: "disregard"}; else {kind: "", text}. Case
+  // and punctuation do not matter ("Over." from iOS); only the LAST word
+  // counts — an "over" in the middle of a sentence is a word.
+  function voiceDictParse(text) {
+    var t = String(text || "").trim();
+    var m = /^(.*?)[\s,.!?]*\b(over|disregard)(?:\s+(?:that|it|all|everything))?[.!?\s]*$/i.exec(t);
+    if (!m) return { kind: "", text: t };
+    return { kind: m[2].toLowerCase(), text: m[1].trim() };
   }
 
   // --- voice commands (matched on the WHOLE transcript, case- and
@@ -3662,49 +3753,12 @@
     }
   }
 
-  // --- confirm: the words go to the compose box behind a countdown -----------
-  var voiceCd = { t0: 0, timer: null, tick: null };
-  function voiceConfirm(text) {
-    var cur = composeEl.value.trim();
-    composeEl.value = cur ? cur + " " + text : text;
-    autosizeCompose();
-    voiceSetState("confirming", text + " — tap to edit");
-    voiceCountdownStart();
-  }
-  function voiceCountdownStart() {
-    voiceCountdownStop();
-    voiceCd.t0 = Date.now();
-    voiceCountdownEl.classList.remove("hidden");
-    voiceCountdownBar.style.width = "100%";
-    voiceCd.tick = setInterval(function () {
-      var left = Math.max(0, 1 - (Date.now() - voiceCd.t0) / VOICE_CONFIRM_MS);
-      voiceCountdownBar.style.width = (left * 100).toFixed(1) + "%";
-    }, 50);
-    voiceCd.timer = setTimeout(function () {
-      voiceCountdownStop();
-      if (voice.state === "confirming") voiceSend(composeEl.value);
-    }, VOICE_CONFIRM_MS);
-  }
-  function voiceCountdownStop() {
-    clearTimeout(voiceCd.timer);
-    clearInterval(voiceCd.tick);
-    voiceCd.timer = voiceCd.tick = null;
-    voiceCountdownEl.classList.add("hidden");
-  }
-  // A tap on the strip, Cancel, or an edit: the clock stops, the words stay.
-  function voiceHoldText() {
-    if (voice.state !== "confirming") return false;
-    voiceCountdownStop();
-    voiceSetState("idle", "Edit it, then Send");
-    return true;
-  }
   // The Send button while voice is on: the draft goes through POST /send so
   // the ack + working + reply loop runs (an empty box stays a bare Enter
   // down the PTY, as before).
   function voiceTakesSend() {
     if (voice.state === "off" || !composeEl.value.trim()) return false;
     if (voice.state === "sending") return true;   // one tap, one prompt
-    if (voice.state === "confirming") voiceCountdownStop();
     voiceSend(composeEl.value);
     return true;
   }
@@ -3810,8 +3864,8 @@
     if (voice.state === "off") return;
     var say = String((data && data.say) || "").trim();
     if (say && voiceSaidAlready(say, Number(data.ts) || 0)) return;
-    var busy = voice.state === "listening" || voice.state === "confirming" ||
-               voice.state === "sending" || voice.state === "awaiting" || voice.state === "dialog";
+    var busy = voice.state === "listening" || voice.state === "sending" ||
+               voice.state === "awaiting" || voice.state === "dialog";
     if (busy) { voice.pendingSay = data; return; }
     voiceAckStop();
     var name = nameOf(voice.session);
@@ -4009,7 +4063,7 @@
       .then(function (d) {
         voice.dialogBusy = false;
         if (voice.session !== title || voice.state === "off") return;
-        if (voiceIsListening() || voice.state === "confirming" || voice.state === "sending") return;
+        if (voiceIsListening() || voice.state === "sending") return;
         var key = d && d.parsed && (d.options || []).length ? String(d.id) : "none";
         // The row reads clarify for a poll or two after a voice answer; the
         // dialog is gone (204) and "waiting on you" would be wrong.
@@ -4312,7 +4366,6 @@
     voice.tts.cancel();
     voiceSpeakSeq++;
     voiceAckStop();
-    voiceCountdownStop();
     voice.session = title;
     voice.lastSay = { text: String(inst.last_say || ""), ts: Infinity };
     voice.pendingSay = null;
@@ -4330,7 +4383,6 @@
     voice.tts.cancel();
     voiceSpeakSeq++;
     voiceAckStop();
-    voiceCountdownStop();
     voiceEventsClose();
     voice.eventsSeq = 0;
     voiceWakeRelease();
@@ -4363,16 +4415,17 @@
     }
     if (s === "off") { voiceTurnOn(current, true); return; }
     if (voiceIsListening()) { voiceListenDone(); return; }
-    if (s === "confirming") { voiceHoldText(); return; }
     if (s === "sending") return;
     // idle, working or speaking: talk (speech is cut short)
     voiceListen("prompt", VOICE_TAP_MS);
   }
+  // Cancel: while dictating the words go too; otherwise whatever is being
+  // said or awaited stops.
   function voiceCancelTap() {
-    if (voice.state === "confirming") { voiceHoldText(); return; }
     voice.tts.cancel();
     voiceSpeakSeq++;
     voiceAckStop();
+    if (voiceIsListening()) { composeEl.value = ""; autosizeCompose(); }
     voiceListen_.until = 0;
     voiceIdle();
   }
@@ -4380,12 +4433,10 @@
   voiceCancelBtn.addEventListener("click", voiceCancelTap);
   voiceStrip.addEventListener("click", function (ev) {
     if (ev.target === voiceStrip || ev.target === voiceStateEl || ev.target === voiceCaptionEl ||
-        ev.target === voiceCountdownEl || ev.target === voiceCountdownBar ||
         ev.target === voiceLevelEl || ev.target === voiceLevelBar) {
-      if (voiceIsListening()) voiceListenDone(); else voiceHoldText();
+      if (voiceIsListening()) voiceListenDone();
     }
   });
-  composeEl.addEventListener("input", function () { if (voice.state === "confirming") voiceHoldText(); });
 
   // The one big button a deep link / a resume needs: a page cannot speak
   // until it has been tapped once.
@@ -4463,8 +4514,7 @@
       voiceAckStop();
       voiceEventsClose();
       voiceWakeRelease();
-      if (voice.state === "confirming") voiceHoldText();
-      else if (voice.state !== "working") voiceSetState("idle", "Tap to talk");
+      if (voice.state !== "working") voiceSetState("idle", "Tap to talk");
       return;
     }
     voiceWakeLock();

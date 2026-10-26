@@ -69,14 +69,12 @@ def test_mobile_html_has_the_voice_controls():
     composer = html.split('<div id="composer">')[1].split("</div>")[0]
     assert 'id="send"' in composer and 'id="voice-btn"' in composer
     assert 'data-state="off"' in composer
-    # The strip above the composer: state word, caption, countdown, Cancel,
-    # the gear, the one big "Tap to hear" button, an error line.
+    # The strip above the composer: state word, caption, Cancel, the gear,
+    # the one big "Tap to hear" button, an error line.
     for el in (
         'id="voice-strip"',
         'id="voice-state"',
         'id="voice-caption"',
-        'id="voice-countdown"',
-        'id="voice-countdown-bar"',
         'id="voice-cancel"',
         'id="voice-gear"',
         'id="voice-hear"',
@@ -122,7 +120,6 @@ def test_mobile_css_voice_rules():
         '#voice-btn[data-state="speaking"]',
         '#voice-btn[data-state="working"]',
         "#voice-strip",
-        "#voice-countdown-bar",
         "#voice-hear",
         "#voice-safari-banner",
         "#voice-sheet .sheet-box",
@@ -152,7 +149,9 @@ def test_mobile_js_voice_state_machine_and_adapters():
         "function voiceListen(",
         "function voiceHeard(",
         "function voiceCommand(",
-        "function voiceConfirm(",
+        "function voiceDictParse(",
+        "function voiceListenContinue(",
+        "function voiceListenStop(",
         "function voiceSend(",
         "function voiceAckTick(",
         "function voiceReply(",
@@ -175,13 +174,12 @@ def test_mobile_js_voice_state_machine_and_adapters():
         "function voicePrime(",
     ):
         assert fn in v, fn
-    # The nine states, named in the header so the next reader has them.
+    # The eight states, named in the header so the next reader has them.
     header = v.split("var voiceBtn = ")[0]
     for state in (
         "off",
         "idle",
         "listening",
-        "confirming",
         "sending",
         "working",
         "speaking",
@@ -198,7 +196,7 @@ def test_mobile_js_voice_state_machine_and_adapters():
     # The PhoneSTT surface and its recognizer settings.
     stt = _fn(js, "PhoneSTT")
     assert "window.SpeechRecognition || window.webkitSpeechRecognition" in v
-    assert "r.continuous = false;" in stt
+    assert "r.continuous = true;" in stt
     assert "r.interimResults = true;" in stt
     assert 'r.lang = navigator.language || "en-US";' in stt
     assert (
@@ -238,6 +236,62 @@ def test_mobile_js_a_network_error_is_said_not_retried_in_silence():
         "recognition (Settings → Your phone → Voice)." in rs
     )
     assert "L.netErrs = 0;" in _fn(js, "voiceListen")
+
+
+def test_mobile_js_radio_rules_over_and_disregard():
+    """Dictation is radio-style: every phrase lands in the compose box and
+    listening goes on across pauses; a trailing "over" sends the box, a
+    trailing "disregard" empties it and listens on; a tap on the mic or the
+    strip, Cancel, or VOICE_DICT_IDLE_MS of silence stops — words kept, never
+    sent — and there is no countdown anywhere. Commands are commands only
+    while the box is empty; a dialog answer needs no "over"."""
+    js = _js()
+    v = _voice_section(js)
+    heard = _fn(js, "voiceHeard")
+    assert "var p = voiceDictParse(text);" in heard
+    assert 'p.kind === "disregard"' in heard and 'composeEl.value = "";' in heard
+    assert 'if (p.kind === "over") {' in heard and "voiceSend(composeEl.value)" in heard
+    assert (
+        "if (p.text && !composeEl.value.trim()) {" in heard
+    )  # commands: empty box only
+    assert "voiceDialogAnswer(p.text);" in heard
+    assert "voiceListenContinue();" in heard
+    # The phrase keeps the recognizer: no stop on a final, a restart only
+    # when the adapter ended with it.
+    cont = _fn(js, "voiceListenContinue")
+    assert "if (!voice.stt.active()) voiceRecStart();" in cont
+    assert (
+        "voice.stt.stop();"
+        not in _fn(js, "PhoneSTT").split("r.onend")[0].split("r.onresult")[1]
+    )
+    # Words move the window out; silence with words kept, not sent.
+    assert "L.until = Math.max(L.until, Date.now() + VOICE_DICT_IDLE_MS);" in _fn(
+        js, "voiceHeardSome"
+    )
+    expired = _fn(js, "voiceListenExpired")
+    assert (
+        'if (mode !== "dialog" && composeEl.value.trim()) { voiceListenStop(); return; }'
+        in expired
+    )
+    assert '"Kept, not sent — Send sends it, or tap the mic to go on"' in _fn(
+        js, "voiceListenStop"
+    )
+    assert 'var VOICE_DICT_HINT = "Say “over” to send, “disregard” to start over";' in v
+    # Cancel while dictating drops the words.
+    assert (
+        'if (voiceIsListening()) { composeEl.value = ""; autosizeCompose(); }'
+        in _fn(js, "voiceCancelTap")
+    )
+    # No countdown left anywhere.
+    for gone in (
+        "confirming",
+        "voiceConfirm",
+        "voiceCountdown",
+        "VOICE_CONFIRM_MS",
+        "voiceHoldText",
+    ):
+        assert gone not in v, gone
+    assert "voice-countdown" not in _html() and "voice-countdown" not in _css()
 
 
 def test_mobile_js_prime_runs_inside_the_tap_before_anything_async():
@@ -323,7 +377,7 @@ def test_mobile_js_voice_requests_have_the_contract_shape():
     # Reconnect with backoff 1 s .. 30 s, resuming from the last seq.
     assert "Math.min(30000, wait * 2)" in v
     assert '"?since=" + voice.eventsSeq' in v
-    assert "var VOICE_CONFIRM_MS = 2500;" in v
+    assert "var VOICE_DICT_IDLE_MS = 120000;" in v
 
 
 def test_mobile_js_dialog_word_tables():
@@ -510,6 +564,11 @@ def test_voice_matchers_under_node():
     dialog_fns = js[
         js.index('  var VOICE_ORD = ["one"') : js.index("  function voiceDialog() {")
     ]
+    dict_fns = js[
+        js.index("  function voiceDictParse(") : js.index(
+            "  // --- voice commands (matched"
+        )
+    ]
     cases = {
         "yes": ["yes", "Yeah, sure!", "ok go ahead", "Allow it."],
         "no": ["no", "No, don't.", "nope", "skip that"],
@@ -531,6 +590,7 @@ def test_voice_matchers_under_node():
         + text_fns
         + cmd_fns
         + dialog_fns
+        + dict_fns
         + "\nvar OPTS = [{key:'1',label:'Yes',kind:'yes'},{key:'2',label:'Yes, always',kind:'always'},{key:'3',label:'No',kind:'no'}];\n"
         "var YN = [{key:'1',label:'Yes',kind:'yes'},{key:'2',label:'No',kind:'no'}];\n"
         "var OTHER = [{key:'1',label:'main',kind:'other'},{key:'2',label:'develop',kind:'other'},{key:'3',label:'release',kind:'other'}];\n"
@@ -548,6 +608,7 @@ def test_voice_matchers_under_node():
         "out.choices.yn = voiceDialogChoices({ options: YN });\n"
         "out.choices.other = voiceDialogChoices({ options: OTHER });\n"
         "out.choices.two = voiceDialogChoices({ options: OTHER.slice(0, 2) });\n"
+        "out.dict = ['fix the login bug over', 'Over.', 'disregard', 'Disregard that.', 'move it over', 'hangover', 'fix it, over!', 'nothing here', ''].map(function (t) { var p = voiceDictParse(t); return p.kind + '|' + p.text; });\n"
         "console.log(JSON.stringify(out));\n"
     )
     res = subprocess.run(
@@ -555,6 +616,18 @@ def test_voice_matchers_under_node():
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
+    # Radio words: the LAST word, any case or punctuation; mid-sentence is a word.
+    assert out["dict"] == [
+        "over|fix the login bug",
+        "over|",
+        "disregard|",
+        "disregard|",
+        "over|move it",
+        "|hangover",
+        "over|fix it",
+        "|nothing here",
+        "|",
+    ]
     assert out["answers"]["yes"] == ["1", "1", "1", "1"]
     assert out["answers"]["no"] == ["3", "3", "3", "3"]
     # "always" only when said — and said in any of its forms.
