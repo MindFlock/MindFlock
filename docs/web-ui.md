@@ -130,8 +130,12 @@ now).
 right-click for options*). The words are **typed into the session's input
 field as you speak**: each phrase, the moment it is recognised, goes down the
 session's agent terminal as keys (with a trailing space), exactly as if you had
-typed it; the caption under the mic shows the running text. Nothing is
-submitted until you say so. With no session focused, nothing is typed (*Click
+typed it; the caption under the mic shows the running text. When the server's
+recogniser streams (see below) the words go in **while you speak**, a few at a
+time as the recogniser commits them — the last word always waits for the next
+ones or the end of the phrase, so a closing radio word is never typed — and the
+words it may still change show after them in the caption, muted and italic;
+they are never typed. Nothing is submitted until you say so. With no session focused, nothing is typed (*Click
 a session first*).
 
 - **Radio words**, the last word of a phrase (any case or punctuation):
@@ -175,9 +179,11 @@ a session first*).
   wait.
 - **Options**: right-click or Shift+click the mic for *Read replies aloud*,
   *Click to talk* / *Hold to talk*, a diagnostics line naming the engines in
-  use (*Recognition: server, built in (Windows via WSL) — 16 kHz clips,
-  browser resampler, a phrase ends after 1.1 s of quiet · Voice: server
-  (piper)*, *Recognition: this browser · Voice: this browser*, and why the
+  use (*Recognition: server, built in (Windows via WSL) — one clip per phrase:
+  16 kHz, browser resampler, a phrase ends after 1.1 s of quiet · Voice: server
+  (piper)*, *Recognition: server (local) — streaming (words as you speak):
+  16 kHz, windowed-sinc resampler, a phrase ends after 1.1 s of quiet*,
+  *Recognition: this browser · Voice: this browser*, and why the
   server's recogniser isn't ready when it would be used), and a link to the
   speech engines in **Settings → Voice**. The choice is kept per browser
   (`cs_voice_desktop`).
@@ -206,8 +212,30 @@ none, a Blackman-windowed sinc — never plain interpolation, whose aliasing
 folds everything above 8 kHz back into the speech band. A clip ends after
 1.1 s of quiet following speech (short, so typing keeps up with you) or at
 12 s, and is uploaded as `audio/wav` to `POST /api/voice/transcribe`; a clip
-the level meter heard no speech in is not sent. How the `Say:` line is produced and which engines exist: [Voice: talking
-to a session](#voice-talking-to-a-session).
+the level meter heard no speech in is not sent.
+
+**Streaming.** When `GET /api/voice` says `server_ready.stt_stream` (only the
+local whisper engine streams) the mic streams instead of sending clips. At a
+phrase's first speech it opens `POST /api/voice/stream {lang}` → `{id}`; then,
+whenever the previous request is back and at least 300 ms of new audio exists,
+the recorder's `take()` (the WAV since the last take, 16 kHz through the
+windowed sinc, recording on) goes to `POST /api/voice/stream/{id}/chunk` —
+never two at once. Each answer's `committed` words are typed as above; its
+`partial` is the muted tail. The quiet before the first word is not sent. The
+same 1.1 s of quiet ends the phrase: `…/end` flushes its last words (the
+phrase's radio word, if any, is read off the whole phrase then — "over",
+"submit", "disregard" act exactly as in clip mode), and the next phrase opens a
+new stream; there is no 12 s cap. Letting go (or the second click) sends what
+was said since the last chunk, flushes, and is "over". A dictation's **first
+phrase** still goes to the router whole: when its first words could start a
+command ("switch to …", "what needs me", "stop" …) it waits for the end of the
+phrase; when they can't — almost every prompt — it is typed as it comes. A
+`409` on the open means the server can't stream right now: that phrase and the
+rest go as clips. Any failed chunk or end (the network, a stream expired after
+60 s, a 5xx) drops the stream (`DELETE`), types the words held back, says
+*Streaming stopped (…) — one clip per phrase from here* once, and the rest of
+that dictation goes as clips. How the `Say:` line is produced and which
+engines exist: [Voice: talking to a session](#voice-talking-to-a-session).
 
 **Sidebar** — session list with drag-to-reorder, stage chips, and a
 close ✕ per row (closes the session, keeps the worktree). The chip is the
@@ -5703,7 +5731,8 @@ its toolbar counts it again. See
 
 The mic in the top bar, beside the bell, talks to the **focused session** and
 types as you speak: click (or hold) to talk, and each recognised phrase lands
-in the session's input field at once. A phrase ending in "over" stops and
+in the session's input field at once — word by word while you speak when the
+server's recogniser streams. A phrase ending in "over" stops and
 leaves the words there, one ending in "submit" submits them (Enter, after the
 server's dialog checks), one ending in "disregard" takes back what was typed
 and keeps listening, Esc takes it back and stops. Nothing is typed into a
@@ -5716,7 +5745,10 @@ never submitted. In the desktop app the words and the voice go through the
 server's engines whenever one is ready (Settings → Voice) — the app's own Web
 Speech can't recognise — and in a browser tab through the browser's unless
 Settings say *server*; the server's recogniser is sent each phrase as a 16 kHz
-WAV clip, resampled without aliasing. The phone page's mic is the hands-free
+WAV clip, resampled without aliasing — or, when it streams (the local whisper
+engine), short chunks while you speak, so the words appear as you say them
+(the last one held back until the next, so a radio word is never typed; the
+unsure tail shown muted in the caption, never typed). The phone page's mic is the hands-free
 version of the same conversation, with spoken replies on by default — see
 [Voice: talking to a session](#voice-talking-to-a-session) under the Mobile UI.
 

@@ -65,6 +65,12 @@
   pointer-events: none;
 }
 
+/* Streamed words the recognizer may still change: shown, never typed. */
+#mic-caption .mic-unsure {
+  color: var(--muted);
+  font-style: italic;
+}
+
 /* Right-click / Shift+click: replies on or off, click or hold, diagnostics.
    Same surface as .notif-pop; TopBarMic clamps `left` with 280px + 8px. */
 .mic-pop {

@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { encodeWav, resample, resampleTo, resamplerName, startWavRecording } from "../lib/wavRecorder";
+import { TAKE_MIN_S, encodeWav, resample, resampleTo, resamplerName, startWavRecording } from "../lib/wavRecorder";
 import { code } from "./sourceText";
 
 async function view(blob: Blob): Promise<DataView> {
@@ -339,6 +339,80 @@ describe("startWavRecording", () => {
     const v = await view(await rec.stop());
     expect(v.getUint32(40, true)).toBe(0);
     expect(levels).toHaveLength(1);
+  });
+
+  /** The samples of a 16-bit WAV, back in -1..1. */
+  async function pcmOf(blob: Blob): Promise<number[]> {
+    const v = await view(blob);
+    const n = v.getUint32(40, true) / 2;
+    return Array.from({ length: n }, (_, i) => v.getInt16(44 + i * 2, true) / 32767);
+  }
+
+  describe("take(): the chunks of a stream, recording on", () => {
+    it("consecutive takes are disjoint and in order, each at the target rate", async () => {
+      const g = fakeGraph(16000);
+      const rec = startWavRecording(STREAM, g.ctx);
+      const n = Math.ceil(TAKE_MIN_S * 16000);
+      g.fire(new Float32Array(n).fill(0.25));
+      const a = rec.take()!;
+      g.fire(new Float32Array(n).fill(-0.5));
+      g.fire(new Float32Array(n).fill(0.75));
+      const b = rec.take()!;
+      expect(a.type).toBe("audio/wav");
+      expect((await view(a)).getUint32(24, true)).toBe(16000);
+      const pa = await pcmOf(a);
+      const pb = await pcmOf(b);
+      expect(pa).toHaveLength(n);
+      expect(pb).toHaveLength(2 * n);
+      expect(pa.every((x) => Math.abs(x - 0.25) < 1e-3)).toBe(true);
+      expect(pb[0]).toBeCloseTo(-0.5, 3);
+      expect(pb[2 * n - 1]).toBeCloseTo(0.75, 3);
+      // Recording went on: nothing torn down.
+      for (const node of [g.source, g.processor, g.gain]) expect(node.disconnects).toBe(0);
+      expect(rec.seconds()).toBeCloseTo((3 * n) / 16000, 9);
+    });
+
+    it("resamples like stop(): 48 kHz in, 16 kHz out", async () => {
+      const g = fakeGraph(48000);
+      const rec = startWavRecording(STREAM, g.ctx);
+      g.fire(new Float32Array(4800 * 3).fill(0.5)); // 0.3 s
+      const v = await view(rec.take()!);
+      expect(v.getUint32(24, true)).toBe(16000);
+      expect(v.getUint32(40, true)).toBe(4800 * 2);
+      expect(v.getInt16(44 + 2400 * 2, true)).toBe(Math.round(0.5 * 32767));
+    });
+
+    it("under TAKE_MIN_S is null — and kept for the next take", async () => {
+      expect(TAKE_MIN_S).toBe(0.3);
+      const g = fakeGraph(16000);
+      const rec = startWavRecording(STREAM, g.ctx);
+      expect(rec.take()).toBeNull();
+      g.fire(new Float32Array(4000).fill(0.1)); // 0.25 s
+      expect(rec.take()).toBeNull();
+      g.fire(new Float32Array(1000).fill(0.2)); // 0.3125 s in all
+      const p = await pcmOf(rec.take()!);
+      expect(p).toHaveLength(5000);
+      expect(p[0]).toBeCloseTo(0.1, 3);
+      expect(p[4999]).toBeCloseTo(0.2, 3);
+      expect(rec.take()).toBeNull();
+    });
+
+    it("stop() after takes returns only the remainder; take() after stop or cancel is null", async () => {
+      const g = fakeGraph(16000);
+      const rec = startWavRecording(STREAM, g.ctx);
+      g.fire(new Float32Array(4800).fill(0.25));
+      expect(rec.take()).not.toBeNull();
+      g.fire(new Float32Array(100).fill(-0.25)); // too short to take, still the tail
+      const tail = await pcmOf(await rec.stop());
+      expect(tail).toHaveLength(100);
+      expect(tail[0]).toBeCloseTo(-0.25, 3);
+      expect(rec.take()).toBeNull();
+      const g2 = fakeGraph(16000);
+      const rec2 = startWavRecording(STREAM, g2.ctx);
+      g2.fire(new Float32Array(4800).fill(0.25));
+      rec2.cancel();
+      expect(rec2.take()).toBeNull();
+    });
   });
 
   it("stop twice does not throw and returns the same clip", async () => {
