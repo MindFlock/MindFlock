@@ -1407,6 +1407,38 @@ def check_db_drivers() -> Optional[Check]:
     )
 
 
+def check_builtin_speech() -> Check:
+    """Informational, never a failure: the operating system's own speech
+    engine the voice features use by default (:mod:`backend.web.core.
+    speech_system`) — its recognizer cultures and voices, or why there is
+    none (plain Linux: local models or an OpenAI-compatible host instead)."""
+    from backend.web.core import speech_system
+
+    found = speech_system.probe()
+    if found.platform == "none":
+        return Check(
+            "builtin-speech", "Built-in speech", "info", speech_system.LINUX_NONE
+        )
+    where = {"windows": "Windows", "wsl": "Windows via WSL", "mac": "macOS"}.get(
+        found.platform, found.platform
+    )
+    parts = [
+        "recognition: "
+        + (
+            ", ".join(found.recognizers)
+            if found.stt_ok and found.recognizers
+            else found.stt_detail
+        ),
+        "voices: " + (", ".join(found.voices) if found.tts_ok else found.tts_detail),
+    ]
+    return Check(
+        "builtin-speech",
+        "Built-in speech",
+        "ok" if found.stt_ok and found.tts_ok else "info",
+        "%s — %s" % (where, "; ".join(parts)),
+    )
+
+
 #: A probe may answer ``None`` — "doesn't apply on this host" (the Assistant
 #: CLI check when the Assistant uses the default provider) — and is then left
 #: out of the report entirely; or a list (one row per synced agent CLI).
@@ -1431,6 +1463,7 @@ CHECKS_BY_ID: dict[str, Callable[[], "Optional[Check] | List[Check]"]] = {
     "state-schema": check_state_schema,
     "cache-seeds": check_cache_seeds,
     "db-drivers": check_db_drivers,
+    "builtin-speech": check_builtin_speech,
 }
 
 _ALL_CHECKS: List[Callable[[], "Optional[Check] | List[Check]"]] = list(

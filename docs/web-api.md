@@ -1297,12 +1297,46 @@ and the `say` / `has_question` / `source` keys on `session.activity_changed`
 events](#session-events-websocket)) carry the same record; the two
 pocket-mode pushes put it in the push body ([Addon routes](#addon-routes)).
 
-**Server speech** (`backend/web/routes/speech.py` over `core/speech.py`) —
-optional. Out of the box the phone does its own speech (Web Speech
-recognition and `speechSynthesis`) and none of this runs. These routes are the
-pluggable alternative behind Settings → Your phone → Voice (`voice.stt` /
-`voice.tts` = `"server"`; [configuration.md](configuration.md#web-exposed-settings)).
-Two backend ids, each in a recognition (`stt`) and a voice (`tts`) flavour:
+**Server speech** (`backend/web/routes/speech.py` over `core/speech.py`). The
+desktop app's mic always uses it (Electron's Chromium has no working Web
+Speech recognition: every start fails with `network`); the phone page uses
+its own engines (Web Speech recognition and `speechSynthesis`) unless
+Settings → Voice says server (`voice.stt` / `voice.tts` = `"server"`;
+[configuration.md](configuration.md#web-exposed-settings)). Every page
+records **`audio/wav`**, the one clip format every backend accepts. Three
+backend ids, each in a recognition (`stt`) and a voice (`tts`) flavour, in
+preference order:
+
+- `system` — **the operating system's own speech engine**
+  (`core/speech_system.py`), first because it needs nothing installed: on a
+  fresh Windows or macOS install it is what "the first ready one" picks.
+  Windows (natively, or from WSL through `powershell.exe` interop): .NET
+  `System.Speech` through Windows PowerShell — `SpeechSynthesizer` writes a
+  WAV (`audio/wav` back), `SpeechRecognitionEngine` with a dictation grammar
+  reads a WAV clip phrase by phrase (`?lang=en` picks an installed culture,
+  `en` → `en-US`); scripts travel base64-encoded with every value a quoted
+  literal, 20 s per call, files in the Windows temp dir (deleted after).
+  A non-WAV clip is **502** *the built-in recognizer needs a WAV clip
+  (audio/wav): reload the page*. macOS: `say` for the voice (WAV,
+  16-bit 22.05 kHz) and Apple's Speech framework (PyObjC,
+  `pyobjc-framework-Speech`, a main dependency on macOS) for recognition —
+  on-device when supported, WAV or MP4/M4A clips, run in a short-lived helper
+  process. Its one precondition is **Dictation** (System Settings → Keyboard
+  → Dictation): the probe reads it with `defaults read
+  com.apple.assistant.support "Dictation Enabled"` (or `com.apple.HIToolbox
+  AppleDictationAutoEnable`) = 1, and when it is off — or a run fails with
+  kLSRErrorDomain 201 *Siri and Dictation are disabled*, then remembered for
+  a minute — recognition is not ready: *Turn on Dictation: System Settings →
+  Keyboard → Dictation — macOS recognition uses it* (`system.detail`, and
+  **502** from a transcribe that hit it). With Dictation on, macOS
+  authorizes the server without a dialog; a denied / restricted status reads
+  *needs permission: System Settings → Privacy & Security → Speech
+  Recognition*. The voice (`say`) needs neither. Plain Linux has none (*no built-in speech engine
+  on Linux: local models (uv sync --group voice) or an OpenAI-compatible
+  host*). The platform is probed once per server process (voices,
+  recognizer cultures), never per request; a failed probe is retried after a
+  minute. `voice.tts_voice` is used only when it names an installed OS voice
+  (`Microsoft Zira Desktop`, `Samantha`), else the OS default.
 
 - `openai` — any OpenAI-compatible host with a key: `{stt_url}/audio/transcriptions`
   (multipart `file` + `model`, `voice.stt_model`, default `gpt-transcribe`) for
@@ -1327,15 +1361,18 @@ Two backend ids, each in a recognition (`stt`) and a voice (`tts`) flavour:
 The configured backend (`voice.stt_backend` / `voice.tts_backend`) is the
 only candidate when set — its own detail says what is missing; unset, the
 first ready one is used. Settings are read on every call, so a save applies
-at once. Any signed-in client may transcribe and speak (the phone does); only
-the owner clears a key. Engine calls run on a worker thread, so a local model
-or a slow host never stalls the event loop.
+at once. Any signed-in client may transcribe and speak **whenever a backend
+of that kind is ready** — `voice.stt` / `voice.tts` only say which engine the
+phone page prefers and no longer gate these routes (the old 409 *Server
+recognition is off* is gone); only the owner clears a key. Engine calls run
+on a worker thread, so a local model, a PowerShell round trip or a slow host
+never stalls the event loop.
 
 | Method | Path | Behavior |
 |---|---|---|
-| GET | `/api/voice` | Where speech runs and what the server offers: `{stt: "phone"\|"server", tts: "phone"\|"server", approve_dialogs, agent_words, backends: {stt: [ids], tts: [ids]}, server_ready: {stt, tts, detail, stt_backend, stt_detail, tts_backend, tts_detail}}` — `approve_dialogs` is `voice.approve_dialogs`, `agent_words` is `notifications.ntfy_agent_words`, `server_ready` the offline verdict on the saved fields (whether each kind has a ready backend, which, and why not; `detail` is the one-paragraph summary) — no network, no model load. Readable by any signed-in client; the phone page reads it when voice is turned on and when its ⚙ sheet opens, and treats a missing route as the defaults (phone, phone, approval on) |
-| POST | `/api/voice/transcribe?lang=` | Recognise one recorded clip. The **raw audio is the body** — not multipart — and `Content-Type` names its format: `audio/webm`, `audio/mp4`, `audio/wav`, `audio/ogg` or `audio/mpeg` (a `;codecs=` suffix is fine). `?lang=` is a BCP-47-ish hint for the backend (`en`, `pt-BR`; anything else is dropped). → `{text, backend, ms}`. Status codes in the order they are checked: **415** `{error}` the body is not `audio/*`; **413** over 10 MB (from `Content-Length`, then the body itself); **400** an empty clip; **409** `{error}` when `voice.stt` is not `"server"` (*Server recognition is off: turn it on under Settings → Your phone → Voice.*) or no backend is ready (the detail says which); **502** `{error}` when the backend failed; **200** |
-| POST | `/api/voice/speak` | `{text, voice?}` → the audio bytes, `Content-Type` the backend's (`audio/mpeg` for a host, `audio/wav` for piper), `X-Voice-Backend` its id, `Cache-Control: no-store`. `voice` (≤ 64 chars) overrides `voice.tts_voice` for this one call. **400** no text, **413** over 1200 chars (a `Say:` line is ≤ 320, a dialog read-out a few hundred), then **409** / **502** as above |
+| GET | `/api/voice` | Where speech runs and what the server offers: `{stt: "phone"\|"server", tts: "phone"\|"server", approve_dialogs, agent_words, backends: {stt: [ids], tts: [ids]}, server_ready: {stt, tts, detail, stt_backend, stt_detail, tts_backend, tts_detail}, system: {available, platform: "windows"\|"wsl"\|"mac"\|"none", detail, voices: [names], recognizers: [culture tags]}}` — `approve_dialogs` is `voice.approve_dialogs`, `agent_words` is `notifications.ntfy_agent_words`, `backends` lists `system` first, `server_ready` the offline verdict on the saved fields (whether each kind has a ready backend, which, and why not; `detail` is the one-paragraph summary), `system` the built-in engine's own report (`available` when it can recognise or speak; `voices` the OS voice names a Settings picker offers, `recognizers` the recognition cultures such as `en-US`) — no network, no model load, the built-in engine probed once per process. Readable by any signed-in client; the desktop app reads it for its mic, the phone page reads it when voice is turned on and when its ⚙ sheet opens, and treats a missing route as the defaults (phone, phone, approval on) |
+| POST | `/api/voice/transcribe?lang=` | Recognise one recorded clip. The **raw audio is the body** — not multipart — and `Content-Type` names its format: `audio/wav` (what every page sends; the only format the built-in Windows recognizer reads), `audio/webm`, `audio/mp4`, `audio/ogg` or `audio/mpeg` (a `;codecs=` suffix is fine). `?lang=` is a BCP-47-ish hint for the backend (`en`, `pt-BR`; anything else is dropped). → `{text, backend, ms}`. Status codes in the order they are checked: **415** `{error}` the body is not `audio/*`; **413** over 10 MB (from `Content-Length`, then the body itself); **400** an empty clip; **409** `{error}` when no recognition backend is ready (the detail says which and why — `voice.stt` is not consulted); **502** `{error}` when the backend failed (the built-in recognizer refuses a non-WAV clip this way); **200** |
+| POST | `/api/voice/speak` | `{text, voice?}` → the audio bytes, `Content-Type` the backend's (`audio/mpeg` for a host, `audio/wav` for piper and the built-in engine), `X-Voice-Backend` its id, `Cache-Control: no-store`. `voice` (≤ 64 chars) overrides `voice.tts_voice` for this one call. **400** no text, **413** over 1200 chars (a `Say:` line is ≤ 320, a dialog read-out a few hundred), then **409** / **502** as above |
 | POST | `/api/voice/clear-key` | `{"kind": "stt"\|"tts"}` → `{ok: true, kind}` — forget a saved API key. `POST /api/settings` keeps a secret whenever its field arrives blank (the app-wide convention, so a form resubmit never wipes a token), which leaves no way back to *no key*: this is it. Owner only (`auth.may_configure`, **403**); **400** any other `kind`; **500** when the settings file can't be read |
 
 **The voice router** (`backend/web/routes/voice.py` over the pure

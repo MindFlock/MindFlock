@@ -1817,23 +1817,33 @@ class PersonSettings:
 
 @dataclass
 class VoiceSettings:
-    """Talking to sessions from the phone (docs/web-ui.md, "Voice").
+    """Talking to sessions by voice (docs/web-ui.md, "Voice"; Settings → Voice).
 
-    Speech itself comes from the phone's own engines (Web Speech recognition
-    and synthesis) unless a field here points at a server backend:
+    The phone page uses its own engines (Web Speech recognition and
+    synthesis) unless ``stt`` / ``tts`` say ``"server"``; the desktop app's
+    mic always uses the server's (Electron has no working Web Speech
+    recognition). The server's engines are :mod:`backend.web.core.speech`:
 
     * ``approve_dialogs`` — whether a spoken "yes"/"no" may answer a permission
       dialog after its command was read aloud ("always" only when said
       literally). Off: dialogs are read out, never answered by voice.
-    * ``stt`` / ``tts`` — ``"phone"`` (default) or ``"server"``: where
-      recognition / the voice run. Server recognition is what makes an iOS
+    * ``stt`` / ``tts`` — ``"phone"`` (default) or ``"server"``: which engine
+      the PHONE page prefers. Server recognition is what makes an iOS
       home-screen icon hands-free (Web Speech works only in a Safari tab).
-    * ``stt_backend`` / ``tts_backend`` — which server backend
-      (:mod:`backend.web.core.speech`): ``""`` = the first ready one,
-      ``"openai"`` = any OpenAI-compatible host (OpenAI, Groq, ...),
-      ``"local"`` = faster-whisper / piper on this machine.
+      Not a gate: ``/api/voice/transcribe`` / ``speak`` serve any signed-in
+      client whenever a backend is ready.
+    * ``stt_backend`` / ``tts_backend`` — which server backend: ``""`` = the
+      first ready one, which is the built-in engine wherever it exists (the
+      fresh-install default on Windows, WSL and macOS); ``"system"`` = this
+      computer's own speech engine (Windows ``System.Speech``, macOS ``say``
+      + Apple's Speech framework); ``"openai"`` = any OpenAI-compatible host
+      (OpenAI, Groq, ...); ``"local"`` = faster-whisper / piper on this
+      machine (``uv sync --group voice``).
     * ``stt_url`` / ``tts_url`` — base URL of a compatible host; ``stt_model``
       / ``tts_model`` / ``tts_voice`` — the model and voice names it wants.
+      For ``system``, ``tts_voice`` is the OS voice name (a Windows voice like
+      "Microsoft Zira Desktop", a macOS voice like "Samantha"); a name the OS
+      does not have falls back to its default voice.
     * ``stt_api_key`` / ``tts_api_key`` — SECRETS (masked on read, keep-on-empty
       on write by the settings addon).
 
