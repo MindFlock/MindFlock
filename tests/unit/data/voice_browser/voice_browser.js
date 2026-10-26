@@ -26,6 +26,8 @@ const state = {
   posts: [],          // {url, body}
   routeStatus: 0,     // non-zero → /api/voice/route answers that status (an older server: 404)
   routeDelay: 0,      // ms before /api/voice/route answers (past 2 s the page stops waiting)
+  transcribes: [],    // POST /api/voice/transcribe: {ctype, head, len, rate}
+  transcribeReply: { text: "", backend: "builtin", ms: 90 },
 };
 
 // A small stand-in for the server's router (POST /api/voice/route): the
@@ -63,6 +65,19 @@ async function mock(route) {
   const p = url.pathname;
   const m = req.method();
   let body = null;
+  if (p === "/api/voice/transcribe" && m === "POST") {
+    // The clip is binary: read it as bytes, never as JSON.
+    const buf = req.postDataBuffer() || Buffer.alloc(0);
+    state.transcribes.push({
+      ctype: req.headers()["content-type"] || "",
+      head: buf.slice(0, 4).toString("latin1"),
+      wave: buf.slice(8, 12).toString("latin1"),
+      len: buf.length,
+      rate: buf.length >= 28 ? buf.readUInt32LE(24) : 0,
+      dataSize: buf.length >= 44 ? buf.readUInt32LE(40) : 0,
+    });
+    return json(route, state.transcribeReply);
+  }
   if (m === "POST") { try { body = JSON.parse(req.postData() || "{}"); } catch (e) { body = {}; } state.posts.push({ path: p, body }); }
   if (p === "/api/instances" && m === "GET") return json(route, state.rows);
   let mm;
@@ -588,6 +603,68 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     check("…name first", await spokeAs(page2, "API docs", "Docs rebuilt. Anything else?"));
     check("question → listening for the answer", (await page2.evaluate(() => window.mfVoice.state)) === "awaiting");
     await page2.close();
+
+    // ---- server recognition: the page records WAV and POSTs it
+    // getUserMedia hands over a stream the test controls: a 440 Hz tone
+    // whose gain __tone() sets (a hush of noise, never digital silence, so
+    // the noise floor has something to follow).
+    state.voiceCfg = {
+      stt: "server", tts: "phone", approve_dialogs: true,
+      server_ready: { stt: true, tts: false, stt_backend: "builtin" },
+      backends: { stt: ["builtin"], tts: [] },
+      system: { available: true, platform: "Windows", detail: "System.Speech (en-US)", voices: [], recognizers: ["en-US"] },
+    };
+    state.transcribeReply = { text: "fix the parser over", backend: "builtin", ms: 90 };
+    state.transcribes = [];
+    const sends3 = posts("/send").length;
+    const page3 = await ctx.newPage();
+    page3.on("pageerror", (e) => errors.push(String(e)));
+    await page3.addInitScript(() => {
+      window.__gum = 0;
+      navigator.mediaDevices.getUserMedia = function () {
+        window.__gum++;
+        const ac = new AudioContext();
+        const osc = ac.createOscillator();
+        const gain = ac.createGain();
+        const dst = ac.createMediaStreamDestination();
+        gain.gain.value = 0.002;
+        osc.frequency.value = 440;
+        osc.connect(gain); gain.connect(dst); osc.start();
+        window.__tone = (g) => { gain.gain.value = g; };
+        return Promise.resolve(dst.stream);
+      };
+    });
+    await page3.route("**/api/**", mock);
+    await page3.evaluate(() => { try { localStorage.removeItem("cs_voice"); } catch (e) {} }).catch(() => {});
+    await page3.goto(`http://127.0.0.1:${PORT}/mobile.html?s=invoice-parser`, { waitUntil: "load" });
+    await waitFor(page3, () => window.mfVoice && window.mfVoice.cfg.loaded && document.getElementById("picker-title").textContent === "Invoice parser", 5000, "server page loaded");
+    await page3.click("#voice-btn");
+    await waitFor(page3, () => window.mfVoice.state === "listening" && window.mfVoice.stt.name === "server" && window.__tone, 4000, "server listening");
+    check("server recognition: the server adapter listens on the tap", (await page3.evaluate(() => window.mfVoice.stt.name)) === "server" && (await page3.evaluate(() => window.mfVoice.state)) === "listening");
+    check("…through the page's one AudioContext, running", (await page3.evaluate(() => window.mfVoice.audioCtx && window.mfVoice.audioCtx.state)) === "running");
+    await sleep(400);
+    await page3.evaluate(() => window.__tone(0.4));
+    await sleep(900);
+    const level = await page3.evaluate(() => document.getElementById("voice-level-bar").style.width || "");
+    check("the level meter moves with the voice", /%$/.test(level) && parseFloat(level) > 0, level);
+    await page3.evaluate(() => window.__tone(0.002));
+    // VOICE_SILENCE_MS of quiet after speech ends the clip by itself.
+    const t0 = Date.now();
+    while (!state.transcribes.length && Date.now() - t0 < 6000) await sleep(50);
+    const tr = state.transcribes[0] || {};
+    check("silence after speech ended the clip: one POST /api/voice/transcribe", state.transcribes.length === 1, JSON.stringify(state.transcribes));
+    check("…Content-Type audio/wav", tr.ctype === "audio/wav", tr.ctype);
+    check("…the body is a RIFF/WAVE file at 16 kHz", tr.head === "RIFF" && tr.wave === "WAVE" && tr.rate === 16000 && tr.dataSize === tr.len - 44 && tr.len > 44 + 16000, JSON.stringify(tr));
+    await waitFor(page3, () => window.mfVoice.state === "working", 5000, "server words sent");
+    const sent3 = posts("/send").slice(sends3);
+    check("the server's 'fix the parser over' went through the radio rules: sent", sent3.length === 1 && sent3[0].body.text === "fix the parser" && sent3[0].path.includes("invoice-parser"), JSON.stringify(sent3));
+    check("the microphone was asked for once", (await page3.evaluate(() => window.__gum)) === 1);
+    await page3.click("#voice-gear");
+    await sleep(200);
+    const diag3 = await page3.evaluate(() => document.getElementById("voice-diag").textContent);
+    check("diagnostics: the WAV recorder and the server's built-in engine", /Recorder: WAV 16 kHz \(ScriptProcessor\)/.test(diag3) && /Built-in engine: Windows — System\.Speech \(en-US\)/.test(diag3) && /Last transcribe: 90 ms via builtin/.test(diag3), diag3.replace(/\n/g, " | "));
+    await page3.close();
+    state.voiceCfg = null;
   } catch (e) {
     console.log("HARNESS ERROR", e && e.stack || e);
     results.push({ name: "harness", ok: false, detail: String(e) });

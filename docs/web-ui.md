@@ -5804,10 +5804,25 @@ first mic tap — a **Voice needs Safari: open this page in a Safari tab**
 banner with this page's URL and **Copy**. Without a recognizer the mic still
 turns voice on as a read-aloud mode (*No speech recognition here — replies
 are still read aloud*): replies and dialogs are spoken, nothing listens.
-Server recognition (Settings → Your phone → Voice, `voice.stt = "server"`)
+Server recognition (Settings → Voice, `voice.stt = "server"`)
 is what lets the home-screen icon hear you: the page then records a clip
-(`MediaRecorder`) and sends it to the server's recognizer instead, and the
+and sends it to the server's recognizer instead, and the
 Safari banner goes away. Diagnostics (below) names the adapter in use.
+The clip is **16-bit PCM mono WAV at 16 kHz** (`Content-Type: audio/wav`) in
+every browser: the server's built-in recognizers — Windows' System.Speech and
+macOS' Speech framework, which work on a fresh install with no model
+download — need plain PCM, and faster-whisper and OpenAI take WAV too, while
+`MediaRecorder` only makes webm/opus (Chrome) or mp4/AAC (Safari). So the
+page pulls the samples off its one `AudioContext` (made inside the tap): the
+mic stream → a `ScriptProcessorNode(4096, 1, 1)` → a muted gain → the
+destination (Chrome does not run a processor that reaches nothing). Each
+block's first channel is kept; when the clip ends they are joined, resampled
+to 16 kHz by linear interpolation, clamped and written behind the 44-byte
+RIFF header — the desktop app's recorder (`lib/wavRecorder.ts`) does the
+same. The RMS of those blocks drives the level meter and the silence
+detector: 1.8 s of quiet after speech ends the clip (a tap ends it at once,
+12 s or the listening window is the cap, and a clip that heard no speech is
+dropped).
 A Chromium browser that does not ship Google's speech key — Arc, Brave,
 Vivaldi, Opera — has the recognizer but every start fails with a `network`
 error and nothing is heard: the first is retried, the second in a listening
@@ -5938,7 +5953,7 @@ and one that was just answered says *Already answered.* Not understood, or
 silence: *I didn't catch that: say yes, no, or always.* — twice, then
 *<name> is waiting on you.* A dialog the provider can't parse (a free-text
 question) is announced as *<name> is waiting on you: open the screen.*
-**Approve dialogs by voice** (Settings → Your phone → Voice,
+**Approve dialogs by voice** (Settings → Voice,
 `voice.approve_dialogs`, on by default) turns the answering off: the dialog
 is still read out, followed by *Answer it on the screen.*, and nothing
 listens. The ⚙ sheet shows that setting read-only.
@@ -5956,7 +5971,11 @@ so a silent failure has a name — *Recognition* (available, or *NOT available
 session*, the *Events socket* state and sequence number, *Backends*
 (recognition and voice: which adapter is active — the phone's, or the
 server's when Settings say server and `GET /api/voice` reports it ready),
-*Primed*
+*Built-in engine* (*<platform> — <detail>*, from the `system` object of
+`GET /api/voice`; left out when an older server sends none), *Recorder*
+(*WAV 16 kHz (ScriptProcessor)*, or *not supported* without Web Audio or a
+microphone), *AudioContext* (its state), *Last transcribe* / *Last speak*
+(how long the server took and which backend, or why it failed), *Primed*
 (whether a tap has unlocked speech output yet), *Push to talk* (tap or
 hold), *Replies* (on or off), *Last prompt* (dictated or typed, and whether
 it asked for a `Say:` line), *Router* (what `/api/voice/route` last answered,
@@ -5992,7 +6011,7 @@ the OS reading a push. Dictation is for intent, not code — the explicit
 only through its compact voices and cuts long utterances, so lines are
 chunked by sentence with a timeout behind each chunk. Phone recognition
 sends audio to Google on Android and to Apple on iOS when no on-device model
-exists (the Settings screen says so). With Settings → Your phone → Voice
+exists (the Settings screen says so). With Settings → Voice
 set to the server for recognition or speech, the page uses the server's
 engines (`POST /api/voice/transcribe`, `POST /api/voice/speak`, audio played
 through one `AudioContext`) whenever `GET /api/voice` reports that backend
