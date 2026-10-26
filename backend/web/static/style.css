@@ -8833,6 +8833,33 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   margin-top: 4px;
   font-size: 11px;
 }
+
+/* The options' header: a title and a plain close button (Esc, a click on the
+   mic, or a click anywhere else close it too). */
+.mic-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+.mic-pop-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+.mic-pop-close {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+.mic-pop-close:hover {
+  color: var(--text);
+  background: var(--panel-2);
+}
 }
 
 /* the mic beside the bell */

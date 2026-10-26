@@ -38388,10 +38388,10 @@ function TopBarMic() {
 			setMenuOpen(false);
 			btnRef.current?.focus();
 		};
-		document.addEventListener("mousedown", onDown);
+		document.addEventListener("pointerdown", onDown, true);
 		document.addEventListener("keydown", onKey, true);
 		return () => {
-			document.removeEventListener("mousedown", onDown);
+			document.removeEventListener("pointerdown", onDown, true);
 			document.removeEventListener("keydown", onKey, true);
 		};
 	}, [menuOpen]);
@@ -38445,6 +38445,10 @@ function TopBarMic() {
 					menuOpen ? setMenuOpen(false) : openMenu();
 					return;
 				}
+				if (menuOpen) {
+					setMenuOpen(false);
+					return;
+				}
 				if (hold) return;
 				if (live.current) finish();
 				else start(pressedField.current);
@@ -38485,6 +38489,24 @@ function TopBarMic() {
 			role: "menu",
 			"aria-label": "Voice options",
 			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "mic-pop-head",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "mic-pop-title",
+						children: "Voice"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "mic-pop-close",
+						id: "mic-pop-close",
+						"aria-label": "Close",
+						title: "Close (Esc)",
+						onClick: () => {
+							setMenuOpen(false);
+							btnRef.current?.focus();
+						},
+						children: "×"
+					})]
+				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "mic-row",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
