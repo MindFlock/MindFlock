@@ -11,6 +11,10 @@ export const LEGACY_SCREEN_KEYS: Record<string, string> = {
   "your-devices": "devices",
   "your-phone": "mobile",
   phone: "mobile",
+  // Voice moved off Your phone onto its own screen.
+  "mobile-voice": "voice",
+  speech: "voice",
+  microphone: "voice",
   people: "peer",
   "peer-links": "peer",
   peers: "peer",

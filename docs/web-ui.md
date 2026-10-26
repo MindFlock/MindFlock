@@ -4716,9 +4716,10 @@ talks to, and the first-hour screen (`DEFAULT_SETTINGS_SCREEN` in
 `lib/openSettings.ts`).
 
 **Basic first, advanced on request.** Out of the box the nav lists only the
-six screens a new user needs to point MindFlock at a repo and a tracker and
-run agents — **General**, **Connections**, **Notifications**, **Agents**,
-**Workspace** and **Appearance** — as one flat list with no headings. **Show
+seven screens a new user needs to point MindFlock at a repo and a tracker,
+run agents and talk to them — **General**, **Connections**, **Notifications**,
+**Agents**, **Workspace**, **Appearance** and **Voice** — as one flat list
+with no headings. **Show
 advanced settings** at the foot of the nav (`#settings-advanced-toggle`, with
 "*N* more screens" under it) reveals every other screen; **Hide advanced
 settings** puts them away again. The choice is the synced pref
@@ -4759,15 +4760,16 @@ In advanced mode the nav is grouped under non-clickable headings
 **Notifications** first, then **Agents** (Agents, Custom agents, Accounts,
 Local model, Agent orchestration), **Code** (Workspace, IDE), **This device**
 (Security, Appearance), **Devices and people** (**Your devices**, **Your
-phone**, **People** — the two ways to trust another machine: yours, and
-someone else's), **Extensions** (its own group: loaded extensions and any
+phone**, **Voice**, **People** — the two ways to trust another machine:
+yours, and someone else's, with Voice, the only basic screen in the group,
+next to the phone it used to live under), **Extensions** (its own group: loaded extensions and any
 that failed to load) and **Troubleshooting** (Doctor, System logs, Engine &
 updates, and Site traffic in a `--mindflock-dev` shell only). The list is
 `SCREENS` in `components/settings/SettingsDialog.tsx`. Every screen key is
 stable — Your devices is still `devices`, Your phone `mobile`, People `peer` —
 and the new names and the moved controls' names (`your-devices`,
-`your-phone`, `people`, `remote-control`, `tailnet-trust`, `settings-sync`, …)
-route to the right screen too, so deep links, the palette (**Your devices**,
+`your-phone`, `people`, `remote-control`, `tailnet-trust`, `settings-sync`,
+`mobile-voice`, `speech`, `microphone`, …) route to the right screen too, so deep links, the palette (**Your devices**,
 **Your phone**, **People…**), the legacy Intake hand-off and the Connections
 cards' **Configure** buttons land where they always did.
 
@@ -5371,27 +5373,61 @@ labels above the inputs.
   lands on the login prompt, which is the intended trade: one extra tap on a new
   device instead of this machine's token sitting on a third party's server.
 
-  Below the four rows, **Voice** (`voice.*`,
-  [configuration.md](configuration.md#web-exposed-settings)) — *Talk to a
-  session from the phone page: tap the mic on /m. Speech runs on the phone by
-  default.* Two blocks, **Recognition** and **Voice**, each a **phone | server**
-  choice; on *server* the block grows a **Backend** picker (*Whichever is
-  ready* · *OpenAI-compatible host* · *Local models on this computer*),
-  **URL** and **API key** for a host (the key follows the secret-field
-  pattern: masked once saved, blank keeps it, **Clear** forgets it through
-  `POST /api/voice/clear-key`), **Model** (the host's model, or a whisper size
-  for the local backend) and, for the voice, **Voice name**; under each block
-  a readiness line from `GET /api/voice` (*Server recognition ready (local):
-  …* / *Server voice not ready: …*), re-read after every save. Then
-  **Approve dialogs by voice** (*A spoken yes or no answers a permission
-  dialog after its command is read aloud. 'Always' is only accepted when you
-  say the word.*) and two notes: *Phone recognition sends audio to Google on
-  Android and to Apple on iOS when no on-device model exists* and *On iPhone,
-  voice needs a Safari tab: the home-screen icon cannot hear you. Server
-  recognition fixes that.* The server routes and backends are described in
-  [web-api.md](web-api.md#voice-talking-to-a-session-from-the-phone); the
-  phone page itself still uses the phone's engines in this build, whatever
-  the two choices say (its Diagnostics says so). See
+  Below the four rows one line, `#mobile-voice`, says *Voice settings moved
+  to Settings → Voice* and links there (the old anchor still lands on it).
+
+- **Voice** (screen key `voice`; also `mobile-voice`, `speech`,
+  `microphone`; `components/settings/screens/Voice.tsx`) — talking to
+  sessions out loud, from the desktop app's mic in the top bar and from the
+  phone page. A **basic** screen, right after Your phone, so a fresh user
+  finds it. Its settings are `voice.*`
+  ([configuration.md](configuration.md#web-exposed-settings)); the screen
+  re-reads `GET /api/voice` after every save. In order:
+  - The intro says what runs where: the desktop app's mic always uses this
+    computer's engines, the phone page uses the phone's own unless told
+    otherwise, and out of the box this computer uses its **built-in engine**
+    (Windows' System.Speech — also from WSL — or macOS' Speech framework),
+    so a fresh install talks with nothing to download.
+  - **Recognition** and **Voice** (`#voice-engines`, where the mic and the
+    phone page deep-link): each an **Engine** picker — *This computer (built
+    in)* · *OpenAI-compatible host* · *Local models (faster-whisper /
+    piper)*, built in first; a saved `""` shows whichever engine the server
+    resolved it to, the built-in one wherever it exists. The built-in engine
+    needs nothing filled in except, for the voice, **Voice name** — a select
+    of the system's voices (`system.voices`, the system default first; free
+    text when it lists none). A host adds **URL** and **API key** (masked
+    once saved, blank keeps it, **Clear** forgets it through
+    `POST /api/voice/clear-key`) and **Model**; local models add a whisper
+    size for recognition and a piper voice name. Under each block a
+    readiness line from `GET /api/voice` (*Server recognition ready
+    (system): Windows via WSL — recognizer en-US, voices David, Zira.* /
+    *Server voice not ready: …*): with the built-in engine picked its own
+    sentence is the detail (the Linux one, macOS' permission one); a server
+    too old to report `system` says it has no built-in engine yet.
+  - **On the phone page**: where recognition and the voice run for the
+    phone (`voice.stt` / `voice.tts`: *The phone* · *This computer*), with
+    *The desktop app always uses this computer.*
+  - **Approve dialogs by voice** (*A spoken yes or no answers a permission
+    dialog after its command is read aloud. 'Always' is only accepted when
+    you say the word.*).
+  - **Try it**: **Say a test sentence** (`POST /api/voice/speak` *This is
+    MindFlock speaking.*, played through an AudioContext made in the click;
+    then *Spoke with system in 240 ms.* or the error) and **Try recognition**
+    (asks for the microphone, records three seconds as WAV with a countdown
+    on the button — `lib/wavRecorder.ts` — and sends it to
+    `POST /api/voice/transcribe`; then *Heard: “…” (system, 412 ms)*, *Heard
+    nothing…* or the error; a refused microphone gets a plain sentence).
+    Each button is disabled, with the reason under the row, until the
+    server has that engine ready (or while the browser cannot record).
+  - Privacy notes: the built-in engines (Windows' and Apple's on-device
+    speech) and local models keep audio on this computer, a host receives
+    what you send it; the phone's own recognition sends audio to Google on
+    Android and to Apple on iOS when no on-device model exists; on iPhone,
+    voice needs a Safari tab (the home-screen icon cannot hear you), which
+    recognition on this computer fixes.
+
+  The server routes and backends are described in
+  [web-api.md](web-api.md#voice-talking-to-a-session-from-the-phone). See
   [Voice: talking to a session](#voice-talking-to-a-session).
 
 - **Your devices → One link for all devices** (`general.shared_link`; moved

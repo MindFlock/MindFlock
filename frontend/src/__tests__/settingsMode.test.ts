@@ -1,7 +1,8 @@
 /** Settings: basic vs advanced (components/settings/settingsMode.tsx).
  *
  * Pinned here:
- *  - basic mode (the default) lists only the six screens a new user needs;
+ *  - basic mode (the default) lists only the seven screens a new user needs
+ *    (Voice among them: the desktop mic and the phone page both use it);
  *    every other screen waits behind "Show advanced settings";
  *  - advanced mode lists every screen, under its group headings;
  *  - a deep link to an advanced screen still opens it in basic mode, listed
@@ -35,7 +36,7 @@ const { pendingFields, prefFieldFor, PREF_DEFAULTS } = await import("../lib/pref
 const { useUi } = await import("../state/store");
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 
-const BASIC = ["general", "connections", "notifications", "coding", "workspace", "appearance"];
+const BASIC = ["general", "connections", "notifications", "coding", "workspace", "appearance", "voice"];
 const ADVANCED = [
   "providers",
   "accounts",
@@ -142,7 +143,7 @@ describe("deep links to an advanced screen", () => {
     it(`${target} opens ${key} in basic mode, last, under an "Advanced" heading`, () => {
       const { items, headings, active, html } = renderNav(target);
       expect(active).toBe(key);
-      // The basic six in order, then the linked screen LAST — so its
+      // The basic seven in order, then the linked screen LAST — so its
       // "Advanced" heading never sits over Workspace or Appearance.
       expect(items).toEqual([...[...BASIC].sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b)), key]);
       expect(headings).toEqual(["Advanced"]);
@@ -157,6 +158,15 @@ describe("deep links to an advanced screen", () => {
     const { active, headings } = renderNav("workspace");
     expect(active).toBe("workspace");
     expect(headings).toEqual([]);
+  });
+
+  it("Voice is basic, so its old and feature names stay basic too", () => {
+    for (const target of ["voice", "mobile-voice", "speech", "microphone"]) {
+      const { active, headings, items } = renderNav(target);
+      expect(active, target).toBe("voice");
+      expect(headings, target).toEqual([]);
+      expect(items, target).toEqual(BASIC);
+    }
   });
 });
 
@@ -176,6 +186,7 @@ const ORDER = [
   "appearance",
   "devices",
   "mobile",
+  "voice",
   "peer",
   "extensions",
   "doctor",
@@ -250,7 +261,7 @@ describe("advanced controls on basic screens are folded", () => {
   });
 
   it("the basic screens don't tell a newcomer about other devices", () => {
-    for (const f of ["General", "Workspace", "Appearance", "CodingCli"]) {
+    for (const f of ["General", "Workspace", "Appearance", "CodingCli", "Voice"]) {
       const text = src("components/settings/screens/" + f + ".tsx");
       expect(text, f).not.toMatch(/Tailscale|your devices|Your phone/i);
     }
