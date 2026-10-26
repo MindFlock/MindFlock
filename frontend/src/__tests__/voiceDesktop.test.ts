@@ -14,6 +14,8 @@ import {
   DICT_HINT,
   Dictation,
   LiveDictation,
+  holdBack,
+  mayBeCommand,
   OVER_LINE,
   ReplyTracker,
   SpeechQueue,
@@ -197,9 +199,13 @@ describe("LiveDictation: typing into the session as you speak", () => {
 
   function hooks(over: Partial<LiveHooks> = {}) {
     const captions: string[] = [];
+    const tails: string[] = [];
     const calls = { halt: 0, routed: [] as string[], submitted: [] as Array<[string, boolean]> };
     const h: LiveHooks = {
-      caption: (t) => void captions.push(t),
+      caption: (t, _sticky, unsure) => {
+        captions.push(t);
+        tails.push(unsure || "");
+      },
       halt: () => void calls.halt++,
       route: async (t) => {
         calls.routed.push(t);
@@ -210,7 +216,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
       submitted: (title, say) => void calls.submitted.push([title, say]),
       ...over,
     };
-    return { h, captions, calls, last: () => captions[captions.length - 1] };
+    return { h, captions, tails, calls, last: () => captions[captions.length - 1] };
   }
 
   it("types each final at once with a trailing space, and shows the running text", async () => {
@@ -402,11 +408,207 @@ describe("LiveDictation: typing into the session as you speak", () => {
     expect(sent.t1).toEqual(["one ", "two "]);
   });
 
+  describe("streamed words", () => {
+    it("are typed as they are committed, the last word held back until more come", async () => {
+      const sent = terms();
+      const k = hooks();
+      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      await d.words("fix the login");
+      expect(sent.t1).toEqual(["fix the "]);
+      expect(k.last()).toBe("fix the login"); // the held word is shown
+      await d.words("bug and");
+      expect(sent.t1).toEqual(["fix the ", "login bug "]);
+      await d.flush("add a test");
+      expect(sent.t1).toEqual(["fix the ", "login bug ", "and add a test "]);
+      // Words that can't open a command never wait on the router.
+      expect(k.calls.routed).toEqual([]);
+      expect(d.active).toBe(true);
+    });
+
+    it("a trailing “submit” in the flush is never typed, and presses Enter", async () => {
+      const sent = terms();
+      mocks.instApi.mockResolvedValueOnce({ ok: true });
+      const k = hooks();
+      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      await d.words("run the tests submit");
+      expect(sent.t1).toEqual(["run the tests "]);
+      expect(mocks.instApi).not.toHaveBeenCalled(); // held: more words may follow
+      await d.flush("");
+      expect(sent.t1).toEqual(["run the tests "]);
+      expect(sent.t1.join("")).not.toContain("submit");
+      expect(mocks.instApi).toHaveBeenCalledWith("t1", "/send", { json: { enter: true, say: false } });
+      expect(k.calls.halt).toBe(1);
+    });
+
+    it("“submit” arriving in the flush itself works the same; “submit it” is held whole", async () => {
+      const sent = terms();
+      mocks.instApi.mockResolvedValue({ ok: true });
+      const k = hooks();
+      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      await d.words("ship the fix");
+      await d.flush("Submit.");
+      expect(sent.t1).toEqual(["ship the ", "fix "]);
+      expect(mocks.instApi).toHaveBeenCalledTimes(1);
+      const sent2 = terms();
+      const d2 = new LiveDictation(sessionTarget("t2", "Billing"), hooks().h);
+      await d2.words("deploy it submit it");
+      expect(sent2.t2).toEqual(["deploy it "]);
+      await d2.flush("");
+      expect(sent2.t2).toEqual(["deploy it "]);
+      expect(mocks.instApi).toHaveBeenCalledTimes(2);
+    });
+
+    it("“over” at the end of a streamed phrase stops with the words in the field", async () => {
+      const sent = terms();
+      const k = hooks();
+      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      await d.words("leave it there over");
+      await d.flush("");
+      expect(sent.t1).toEqual(["leave it there "]);
+      expect(k.last()).toBe(OVER_LINE);
+      expect(mocks.instApi).not.toHaveBeenCalled();
+    });
+
+    it("“disregard” backspaces everything this dictation typed, streamed words included", async () => {
+      const sent = terms();
+      const k = hooks();
+      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      await d.heard("café"); // a phrase from before (clip or stream alike)
+      await d.words("scrap this whole");
+      await d.words("thing disregard");
+      expect(sent.t1).toEqual(["café ", "scrap this ", "whole thing "]);
+      await d.flush("that");
+      expect(sent.t1[3]).toBe("\x7f".repeat("café scrap this whole thing ".length));
+      expect(k.last()).toBe("Disregarded — go on");
+      expect(d.active).toBe(true);
+    });
+
+    it("the unsure tail is shown muted and never typed — not even when let go", async () => {
+      const sent = terms();
+      const k = hooks();
+      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      await d.words("fix the bug");
+      d.unsure("in the parser maybe");
+      expect(k.last()).toBe("fix the bug");
+      expect(k.tails[k.tails.length - 1]).toBe("in the parser maybe");
+      await d.flush("");
+      await d.finish();
+      expect(sent.t1.join("")).toBe("fix the bug ");
+      expect(sent.t1.join("")).not.toContain("parser");
+    });
+
+    it("a first phrase that may be a command waits whole for the router", async () => {
+      const sent = terms();
+      const k = hooks({
+        route: async (t) => {
+          k.calls.routed.push(t);
+          return true;
+        },
+      });
+      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      await d.words("switch to");
+      await d.words("the login fix");
+      expect(sent.t1).toBeUndefined();
+      expect(k.calls.routed).toEqual([]);
+      await d.flush("");
+      expect(k.calls.routed).toEqual(["switch to the login fix"]);
+      expect(sent.t1).toBeUndefined();
+    });
+
+    it("…and is typed once the words rule a command out", async () => {
+      const sent = terms();
+      const k = hooks();
+      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      await d.words("stop");
+      expect(sent.t1).toBeUndefined();
+      await d.words("the server first");
+      expect(sent.t1).toEqual(["stop the server "]);
+      expect(k.calls.routed).toEqual([]);
+    });
+
+    it("a radio word followed by more words is just a word", async () => {
+      const sent = terms();
+      const d = new LiveDictation(sessionTarget("t1", "Login fix"), hooks().h);
+      await d.words("submit");
+      await d.words("the form then");
+      await d.flush("wait");
+      expect(sent.t1).toEqual(["submit the form ", "then wait "]);
+      expect(mocks.instApi).not.toHaveBeenCalled();
+    });
+
+    it("the dialog guard still comes first", async () => {
+      const sent = terms();
+      const k = hooks({ activity: () => "clarify" });
+      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      await d.words("yes do it now");
+      expect(sent.t1).toBeUndefined();
+      expect(k.last()).toBe("Login fix is waiting on a dialog — answer it first");
+      expect(d.active).toBe(false);
+    });
+
+    it("a text box takes streamed words too, never routed", async () => {
+      const typed: string[] = [];
+      const box: DictTarget = { kind: "field", title: "", name: "the text box", type: (t) => typed.push(t) > 0, erase: () => true };
+      const k = hooks();
+      const d = new LiveDictation(box, k.h);
+      await d.words("switch to the");
+      await d.flush("other branch");
+      expect(typed).toEqual(["switch to ", "the other branch "]);
+      expect(k.calls.routed).toEqual([]);
+    });
+  });
+
   it("before a word, the caption names the radio words", () => {
     const k = hooks();
     new LiveDictation(sessionTarget("t1", "Login fix"), k.h).show();
     expect(k.last()).toBe(DICT_HINT);
     expect(DICT_HINT).toBe("Say over to leave it, submit to send, disregard to start over");
+  });
+});
+
+describe("streaming helpers", () => {
+  it.each([
+    ["fix the login bug", "fix the login", "bug"],
+    ["run the tests submit", "run the tests", "submit"],
+    ["deploy it submit it", "deploy it", "submit it"],
+    ["scrap that, Disregard that.", "scrap that,", "Disregard that."],
+    ["move it over", "move it", "over"],
+    ["it", "", "it"],
+    ["done .", "", "done ."],
+    ["", "", ""],
+  ])("holdBack(%j) types %j, holds %j", (text, type, held) => {
+    expect(holdBack(text)).toEqual({ type, held });
+  });
+
+  it.each([
+    // The router's commands, from their first word on.
+    ["switch", true],
+    ["switch to the login fix", true],
+    ["go over to billing", true],
+    ["ok switch to billing", true],
+    ["what needs me", true],
+    ["What's it doing?", true],
+    ["what sessions do i have", true],
+    ["start a new session for the billing page", true],
+    ["a", true],
+    ["new session fix the bug", true],
+    ["stop", true],
+    ["stop please", true],
+    ["cancel", true],
+    ["never mind", true],
+    ["repeat that", true],
+    ["turn voice off", true],
+    ["", true],
+    // Prompts: typed as they come.
+    ["fix the login bug", false],
+    ["go ahead and push", false],
+    ["what does this function do", false],
+    ["stop the server", false],
+    ["a bug in the parser", false],
+    ["status of the tests", false],
+    ["please fix it", false],
+  ] as const)("mayBeCommand(%j) → %s", (text, want) => {
+    expect(mayBeCommand(text)).toBe(want);
   });
 });
 
@@ -583,7 +785,7 @@ describe("engines and errors", () => {
       "server",
       "server",
       true,
-      "Recognition: server, built in (Windows via WSL) — 16 kHz clips, browser resampler, a phrase ends after 1.1 s of quiet · Voice: server (piper)",
+      "Recognition: server, built in (Windows via WSL) — one clip per phrase: 16 kHz, browser resampler, a phrase ends after 1.1 s of quiet · Voice: server (piper)",
     ],
     [
       "the built-in engine on a Mac, both ways",
@@ -591,7 +793,15 @@ describe("engines and errors", () => {
       "server",
       "server",
       true,
-      "Recognition: server, built in (macOS) — 16 kHz clips, browser resampler, a phrase ends after 1.1 s of quiet · Voice: server, built in (macOS)",
+      "Recognition: server, built in (macOS) — one clip per phrase: 16 kHz, browser resampler, a phrase ends after 1.1 s of quiet · Voice: server, built in (macOS)",
+    ],
+    [
+      "local whisper, streaming",
+      cfg({ server_ready: { stt: true, stt_backend: "local", stt_stream: true } }),
+      "server",
+      "browser",
+      true,
+      "Recognition: server (local) — streaming (words as you speak): 16 kHz, windowed-sinc resampler, a phrase ends after 1.1 s of quiet · Voice: this browser",
     ],
     ["a browser tab on its own engines", cfg(), "browser", "browser", false, "Recognition: this browser · Voice: this browser"],
     [
@@ -750,6 +960,296 @@ describe("serverRecognizer: a WAV clip per phrase", () => {
   });
 });
 
+describe("serverRecognizer: streaming, words as you speak", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    mocks.apiRaw.mockReset();
+    mocks.startWavRecording.mockReset();
+  });
+
+  class FakeCtx {
+    state = "running";
+    sampleRate = 48000;
+    resume() {
+      return Promise.resolve();
+    }
+  }
+  const stream = { active: true, getTracks: () => [] };
+  const resp = (status: number, body: unknown) => ({ ok: status < 300, status, json: async () => body });
+  const wav = (n = 3200) => new Blob([new Uint8Array(44 + n)], { type: "audio/wav" });
+
+  type Route = (url: string, init: RequestInit) => unknown;
+  /** A recorder whose take() has a chunk once `feed()` says enough audio came,
+   * a server answering through `route`, and handlers that record everything. */
+  function setup(route: Route) {
+    vi.stubGlobal("window", { AudioContext: FakeCtx });
+    vi.stubGlobal("navigator", { language: "en-US", userAgent: "", mediaDevices: { getUserMedia: async () => stream } });
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const clips: Array<{
+      opts: { onLevel?: (rms: number) => void };
+      take: ReturnType<typeof vi.fn>;
+      stop: ReturnType<typeof vi.fn>;
+      cancel: ReturnType<typeof vi.fn>;
+      feed(): void;
+    }> = [];
+    mocks.startWavRecording.mockImplementation((_s: unknown, _c: unknown, opts) => {
+      let ready = false;
+      const clip = {
+        opts,
+        take: vi.fn(() => {
+          if (!ready) return null;
+          ready = false;
+          return wav();
+        }),
+        stop: vi.fn(() => Promise.resolve(wav())),
+        cancel: vi.fn(),
+        seconds: () => 0.1,
+        feed() {
+          ready = true;
+        },
+      };
+      clips.push(clip);
+      return clip;
+    });
+    const calls: Array<[string, string]> = [];
+    mocks.apiRaw.mockImplementation(async (url: string, init: RequestInit) => {
+      calls.push([String(init?.method || "GET"), url]);
+      return route(url, init);
+    });
+    const ev: string[] = [];
+    const h: RecognizerHandlers = {
+      onInterim: (x) => void ev.push("interim:" + x),
+      onFinal: (x) => void ev.push("final:" + x),
+      onWords: (x) => void ev.push("words:" + x),
+      onPartial: (x) => void ev.push("partial:" + x),
+      onFlush: (x) => void ev.push("flush:" + x),
+      onNotice: (x) => void ev.push("notice:" + x),
+      onError: (code, detail) => void ev.push("error:" + (detail || code)),
+      onEnd: () => void ev.push("end"),
+    };
+    /** One audio block: loud or quiet, `ms` after the last. */
+    const block = (i: number, loud: boolean, ms = 100) => {
+      now += ms;
+      clips[i].opts.onLevel!(loud ? 0.3 : 0.001);
+    };
+    return { clips, calls, ev, h, block, chunks: () => calls.filter(([, u]) => u.endsWith("/chunk")).length };
+  }
+
+  /** A route that opens stream s1, s2… and answers chunks from `answers`. */
+  function server(answers: Array<() => unknown> = [], ends: string[] = []) {
+    let n = 0;
+    let c = 0;
+    let e = 0;
+    return (url: string) => {
+      if (url === "/api/voice/stream") return resp(200, { id: "s" + ++n, ready: true });
+      if (url.endsWith("/chunk")) return (answers[c++] || (() => resp(200, { committed: "", partial: "" })))();
+      if (url.endsWith("/end")) return resp(200, { committed: ends[e++] || "", partial: "" });
+      if (url.startsWith("/api/voice/transcribe")) return resp(200, { text: "the clip's words" });
+      return resp(204, {});
+    };
+  }
+
+  it("opens a stream at the first speech when the server can stream — never a clip upload", async () => {
+    const t = setup(server());
+    const r = serverRecognizer({ stream: () => true });
+    r.start(t.h);
+    await vi.waitFor(() => expect(t.clips.length).toBe(1));
+    t.block(0, false);
+    expect(t.calls).toEqual([]); // nothing before a word is heard
+    expect(t.clips[0].take).toHaveBeenCalled(); // the quiet before it is dropped
+    t.block(0, true);
+    await vi.waitFor(() => expect(t.calls).toEqual([["POST", "/api/voice/stream"]]));
+    const init = mocks.apiRaw.mock.calls[0][1];
+    expect(JSON.parse(init.body)).toEqual({ lang: "en-US" });
+    expect(init.headers["Content-Type"]).toBe("application/json");
+    r.stop();
+    // A stream open when stopped is abandoned.
+    expect(t.calls).toContainEqual(["DELETE", "/api/voice/stream/s1"]);
+  });
+
+  it("without stt_stream it records clips as before", async () => {
+    const t = setup(server());
+    const r = serverRecognizer({ stream: () => false });
+    r.start(t.h);
+    await vi.waitFor(() => expect(t.clips.length).toBe(1));
+    t.block(0, false);
+    t.block(0, true);
+    r.finish();
+    await vi.waitFor(() => expect(t.ev).toContain("end"));
+    expect(t.calls).toEqual([["POST", "/api/voice/transcribe?lang=en-US"]]);
+    expect(t.clips[0].take).not.toHaveBeenCalled();
+  });
+
+  it("paces chunks: never two in flight, and only once enough new audio exists", async () => {
+    let answer: (v: unknown) => void = () => {};
+    const slow = () => new Promise((res) => (answer = res));
+    const t = setup(server([slow, () => resp(200, { committed: "and add", partial: "a te" })]));
+    const r = serverRecognizer({ stream: () => true });
+    r.start(t.h);
+    await vi.waitFor(() => expect(t.clips.length).toBe(1));
+    t.block(0, false); // the noise floor
+    t.block(0, true); // speech: open
+    await vi.waitFor(() => expect(t.calls.length).toBe(1));
+    await Promise.resolve();
+    t.block(0, true); // under 300 ms new: take() has nothing
+    expect(t.chunks()).toBe(0);
+    t.clips[0].feed();
+    t.block(0, true);
+    expect(t.chunks()).toBe(1);
+    const [, init] = mocks.apiRaw.mock.calls[1];
+    expect(mocks.apiRaw.mock.calls[1][0]).toBe("/api/voice/stream/s1/chunk");
+    expect(init.method).toBe("POST");
+    expect(init.headers["Content-Type"]).toBe("audio/wav");
+    expect((init.body as Blob).type).toBe("audio/wav");
+    // More audio while the first is out: it waits.
+    t.clips[0].feed();
+    t.block(0, true);
+    t.block(0, true);
+    expect(t.chunks()).toBe(1);
+    answer(resp(200, { committed: "fix the bug", partial: "and" }));
+    // Back: the waiting audio goes at once.
+    await vi.waitFor(() => expect(t.chunks()).toBe(2));
+    await vi.waitFor(() =>
+      expect(t.ev).toEqual(["words:fix the bug", "partial:and", "words:and add", "partial:a te"])
+    );
+    r.stop();
+  });
+
+  it("a pause ends the phrase: /end flushes its last words, and the next phrase opens a new stream", async () => {
+    const t = setup(server([() => resp(200, { committed: "fix the", partial: "bug" })], ["bug"]));
+    const r = serverRecognizer({ stream: () => true });
+    r.start(t.h);
+    await vi.waitFor(() => expect(t.clips.length).toBe(1));
+    t.block(0, false);
+    t.block(0, true);
+    await vi.waitFor(() => expect(t.calls.length).toBe(1));
+    await Promise.resolve();
+    t.clips[0].feed();
+    t.block(0, true);
+    await vi.waitFor(() => expect(t.ev).toContain("words:fix the"));
+    for (let i = 0; i < 12; i++) t.block(0, false); // 1.2 s of quiet
+    await vi.waitFor(() => expect(t.ev).toContain("flush:bug"));
+    expect(t.calls).toContainEqual(["POST", "/api/voice/stream/s1/end"]);
+    expect(t.calls.filter(([, u]) => u.includes("transcribe"))).toEqual([]);
+    // The next phrase is already recording, and streams on its own id.
+    await vi.waitFor(() => expect(t.clips.length).toBe(2));
+    t.block(1, false);
+    t.block(1, true);
+    await vi.waitFor(() => expect(t.calls).toContainEqual(["POST", "/api/voice/stream"]));
+    expect(t.calls.filter(([, u]) => u === "/api/voice/stream").length).toBe(2);
+    expect(t.ev).not.toContain("end"); // still listening
+    r.stop();
+    // Opened as it stopped, or before: abandoned either way.
+    await vi.waitFor(() => expect(t.calls).toContainEqual(["DELETE", "/api/voice/stream/s2"]));
+  });
+
+  it("no 12 s cap while streaming", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const t = setup(server());
+      const r = serverRecognizer({ stream: () => true });
+      r.start(t.h);
+      await vi.waitFor(() => expect(t.clips.length).toBe(1));
+      t.block(0, false);
+      t.block(0, true);
+      vi.advanceTimersByTime(13_000);
+      expect(t.clips[0].stop).not.toHaveBeenCalled();
+      r.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("let go: the unsent tail goes as a last chunk, /end's words are flushed, then onEnd", async () => {
+    const t = setup(server([() => resp(200, { committed: "", partial: "ship" })], ["ship it"]));
+    const r = serverRecognizer({ stream: () => true });
+    r.start(t.h);
+    await vi.waitFor(() => expect(t.clips.length).toBe(1));
+    t.block(0, false);
+    t.block(0, true);
+    await vi.waitFor(() => expect(t.calls.length).toBe(1));
+    r.finish();
+    await vi.waitFor(() => expect(t.ev).toContain("end"));
+    expect(t.calls.map(([, u]) => u)).toEqual([
+      "/api/voice/stream",
+      "/api/voice/stream/s1/chunk",
+      "/api/voice/stream/s1/end",
+    ]);
+    expect(t.ev.slice(-2)).toEqual(["flush:ship it", "end"]);
+    expect(t.clips.length).toBe(1); // no next phrase
+  });
+
+  it("a 409 on the open: the phrase — and the rest — go as clips", async () => {
+    const t = setup((url) =>
+      url === "/api/voice/stream" ? resp(409, { error: "whisper does not stream" }) : server()(url)
+    );
+    const r = serverRecognizer({ stream: () => true });
+    r.start(t.h);
+    await vi.waitFor(() => expect(t.clips.length).toBe(1));
+    t.block(0, false);
+    t.block(0, true);
+    await vi.waitFor(() => expect(t.calls.length).toBe(1));
+    await Promise.resolve();
+    t.clips[0].feed();
+    t.block(0, true);
+    expect(t.chunks()).toBe(0);
+    for (let i = 0; i < 12; i++) t.block(0, false);
+    await vi.waitFor(() => expect(t.ev).toContain("final:the clip's words"));
+    expect(t.calls[1]).toEqual(["POST", "/api/voice/transcribe?lang=en-US"]);
+    expect(t.ev.filter((e) => e.startsWith("notice:"))).toEqual([]); // a 409 is no news
+    // The next phrase is a clip from the start: no second open.
+    await vi.waitFor(() => expect(t.clips.length).toBe(2));
+    t.block(1, false);
+    t.block(1, true);
+    expect(t.calls.filter(([, u]) => u === "/api/voice/stream").length).toBe(1);
+    r.stop();
+  });
+
+  it("a failing chunk: the stream is dropped, its held words flushed, one caption, and clips from then on", async () => {
+    for (const fail of [
+      () => resp(404, { error: "no such voice stream (it ended or expired): open another" }),
+      () => resp(502, { error: "inference failed" }),
+      () => Promise.reject(new TypeError("Failed to fetch")),
+    ]) {
+      mocks.apiRaw.mockReset();
+      mocks.startWavRecording.mockReset();
+      const t = setup(server([() => resp(200, { committed: "fix the", partial: "" }), fail]));
+      const r = serverRecognizer({ stream: () => true });
+      r.start(t.h);
+      await vi.waitFor(() => expect(t.clips.length).toBe(1));
+      t.block(0, false);
+      t.block(0, true);
+      await vi.waitFor(() => expect(t.calls.length).toBe(1));
+      await Promise.resolve();
+      t.clips[0].feed();
+      t.block(0, true);
+      await vi.waitFor(() => expect(t.ev).toContain("words:fix the"));
+      t.clips[0].feed();
+      t.block(0, true);
+      await vi.waitFor(() => expect(t.ev.some((e) => e.startsWith("notice:Streaming stopped"))).toBe(true));
+      expect(t.calls).toContainEqual(["DELETE", "/api/voice/stream/s1"]);
+      expect(t.ev).toContain("flush:");
+      // Still listening; the rest of the phrase is a clip.
+      t.clips[0].feed();
+      t.block(0, true);
+      expect(t.chunks()).toBe(2);
+      for (let i = 0; i < 12; i++) t.block(0, false);
+      await vi.waitFor(() => expect(t.ev).toContain("final:the clip's words"));
+      await vi.waitFor(() => expect(t.clips.length).toBe(2));
+      t.block(1, false);
+      t.block(1, true);
+      expect(t.calls.filter(([, u]) => u === "/api/voice/stream").length).toBe(1);
+      expect(t.ev.filter((e) => e.startsWith("notice:")).length).toBe(1);
+      expect(t.ev).not.toContain("end");
+      expect(t.ev.filter((e) => e.startsWith("error:"))).toEqual([]);
+      r.stop();
+      vi.restoreAllMocks();
+    }
+  });
+});
+
 describe("wiring", () => {
   const TOPBAR = src("components/TopBar.tsx");
   const MIC = code("components/TopBarMic.tsx");
@@ -815,6 +1315,19 @@ describe("wiring", () => {
     expect(MIC).toContain("Read replies aloud");
     expect(MIC).toContain("Click to talk");
     expect(MIC).toContain("Hold to talk");
+  });
+
+  it("streams when GET /api/voice says the server can, and the unsure tail is shown muted, never typed", () => {
+    expect(MIC).toContain("serverRecognizer({ stream: () => !!cfgNow.server_ready.stt_stream })");
+    expect(MIC).toContain("void d.words(t)");
+    expect(MIC).toContain("void d.flush(t)");
+    expect(MIC).toContain("d.unsure(t)");
+    expect(MIC).toContain('<span className="mic-unsure">');
+    expect(cssRule(src("components/TopBarMic.css"), "#mic-caption .mic-unsure")).toContain("var(--muted)");
+    const lib = code("lib/voiceDesktop.ts");
+    expect(lib).toContain('call("/api/voice/stream", {');
+    expect(lib).toContain('streamPath(c.sid!, "/chunk")');
+    expect(lib).toContain('streamPath(sid, "/end")');
   });
 
   it("asks for the engine before starting: with none (the desktop app, server not ready) it says so and starts nothing", () => {

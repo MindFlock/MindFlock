@@ -20,7 +20,10 @@
  * name. Right-click or Shift+click opens those options. In the desktop app
  * the words and the voice go through the server's engines (its Web Speech
  * fails there); in a browser tab, through the browser's unless Settings →
- * Voice says "server" (lib/voiceDesktop sttEngine). The logic that isn't DOM
+ * Voice says "server" (lib/voiceDesktop sttEngine). The server's recognizer
+ * streams when it can (`server_ready.stt_stream`): the words are typed while
+ * you speak, the last one held back in case it is a radio word, and the
+ * unsure tail shows muted in the caption. The logic that isn't DOM
  * — the radio parser, the dictation machine and its live driver, the reply
  * tracker, the speech queue and the engines — lives in lib/voiceDesktop.ts. */
 
@@ -67,11 +70,11 @@ import {
 // One of each for the page: the mic renders in one of two places (the mac
 // mirror), and what it sent must outlive a remount.
 const browserRec = browserRecognizer();
-const serverRec = serverRecognizer();
+let cfgNow: VoiceCfg = DEFAULT_VOICE_CFG;
+const serverRec = serverRecognizer({ stream: () => !!cfgNow.server_ready.stt_stream });
 const browserSp = browserSpeaker();
 const serverSp = serverSpeaker(browserSp);
 const tracker = new ReplyTracker();
-let cfgNow: VoiceCfg = DEFAULT_VOICE_CFG;
 const speakingListeners = new Set<(on: boolean) => void>();
 const queue = new SpeechQueue(
   () => (ttsEngine(cfgNow) === "server" ? serverSp : browserSp),
@@ -165,6 +168,7 @@ export function TopBarMic() {
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(queue.busy);
   const [caption, setCaptionState] = useState("");
+  const [unsure, setUnsure] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const focusedName = useUi((s) => (s.focused ? s.aliases[s.focused] || s.focused : ""));
 
@@ -180,9 +184,11 @@ export function TopBarMic() {
   const holding = useRef(false);
 
   /** The caption under the mic. `sticky`: stays until replaced (listening, or
-   * words waiting to be continued); otherwise it fades after a few seconds. */
-  const say = (text: string, sticky = false) => {
+   * words waiting to be continued); otherwise it fades after a few seconds.
+   * `tail`: streamed words the recognizer may still change, shown muted. */
+  const say = (text: string, sticky = false, tail = "") => {
     setCaptionState(text);
+    setUnsure(tail);
     clearTimeout(captionTimer.current);
     if (text && !sticky) captionTimer.current = setTimeout(() => setCaptionState(""), 6000);
   };
@@ -351,6 +357,24 @@ export function TopBarMic() {
         if (live.current !== d) return;
         armIdle();
         void d.heard(t);
+      },
+      // Streaming: committed words as they come, a phrase's end, the unsure
+      // tail (never typed), and the one line when it falls back to clips.
+      onWords: (t) => {
+        if (live.current !== d) return;
+        armIdle();
+        void d.words(t);
+      },
+      onFlush: (t) => {
+        if (live.current === d) void d.flush(t);
+      },
+      onPartial: (t) => {
+        if (live.current !== d) return;
+        if (t) armIdle();
+        d.unsure(t);
+      },
+      onNotice: (t) => {
+        if (live.current === d) d.notice(t);
       },
       onError: (code, detail) => {
         if (live.current !== d) return;
@@ -582,6 +606,7 @@ export function TopBarMic() {
         createPortal(
           <div id="mic-caption" role="status" aria-live="polite" style={capStyle}>
             {caption}
+            {unsure && <span className="mic-unsure"> {unsure}</span>}
           </div>,
           document.body
         )}

@@ -23,8 +23,9 @@
  * Pieces: {@link parseRadio}, the prefs, {@link Dictation} (the pure
  * state machine), {@link LiveDictation} (one dictation driving a target: the
  * router, the dialog guard, the typing, the submit), {@link ReplyTracker},
- * {@link SpeechQueue}, and the browser adapters (Web Speech / a WAV clip →
- * server, speechSynthesis / server audio) that the component wires together.
+ * {@link SpeechQueue}, and the browser adapters (Web Speech / a WAV clip or
+ * a stream of chunks → server, speechSynthesis / server audio) that the
+ * component wires together.
  * Which engine runs is {@link sttEngine} / {@link ttsEngine}: in the desktop
  * app (Electron) the server's whenever it is ready, in a browser tab the
  * browser's unless Settings say "server". */
@@ -49,6 +50,77 @@ export function parseRadio(text: string): { kind: RadioKind; text: string } {
   if (!m) return { kind: "", text: t };
   return { kind: m[2].toLowerCase() as RadioKind, text: m[1].trim() };
 }
+
+/** The words of a phrase as the router reads them (voice_router.py `norm`):
+ * lowercase, curly quotes straightened, anything but a–z, digits and `'` a
+ * space. */
+function routerWords(text: string): string[] {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[’`]/g, "'")
+    .replace(/[^a-z0-9' ]+/g, " ")
+    .split(" ")
+    .filter(Boolean);
+}
+
+/** The router's commands as word patterns (backend/web/core/voice_router.py
+ * `_CMDS` and `_NEW_RE`): each slot lists the words it takes, and a final "*"
+ * takes the rest of the phrase. Every command matches the WHOLE phrase. */
+const COMMANDS: string[][][] = [
+  "cancel", "never mind", "nevermind", "scratch that", "forget it",
+  "switch|go|change|jump to *", "switch|go|change|jump over to *",
+  "what|which sessions do i have", "what|which sessions are up|open|running",
+  "list sessions *", "list the|my sessions",
+  "what's|whats up|open|running", "what is up|open|running",
+  "what|who needs me|attention", "what|who needs my attention",
+  "what's|whats it doing", "what is it doing", "status",
+  "what's|whats happening", "what's|whats going on",
+  "summarize|summarise", "summarize|summarise that|it", "what did it say", "summary",
+  "say that again", "repeat", "repeat that",
+  "voice off", "turn voice off", "turn off voice",
+  "stop listening", "stop",
+  "new session *", "a|another new session *",
+  "start|open|create|make new session *", "start|open|create|make a|another new session *",
+  "spin up new session *", "spin up a|another new session *",
+].map((p) => p.split(" ").map((slot) => slot.split("|")));
+const ROUTER_LEADS = new Set(["ok", "okay", "hey", "please"]);
+
+/** Could the phrase that starts with `text` be a router command? A streamed
+ * first phrase that could waits whole for its end (the router reads whole
+ * phrases); one that can't — almost every prompt — is typed as it comes. The
+ * router's lead word and trailing "please" are dropped as it drops them. */
+export function mayBeCommand(text: string): boolean {
+  let w = routerWords(text);
+  if (w.length > 1 && ROUTER_LEADS.has(w[0])) w = w.slice(1);
+  if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
+  if (!w.length) return true;
+  return COMMANDS.some((p) => {
+    for (let i = 0; i < w.length; i++) {
+      if (i >= p.length) return false;
+      if (p[i][0] === "*") return true;
+      if (!p[i].includes(w[i])) return false;
+    }
+    return true;
+  });
+}
+
+const RADIO_WORD = /^(?:over|submit|disregard)$/;
+const RADIO_TAIL = /^(?:that|it|all|everything)$/;
+const bareWord = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, "");
+
+/** Streamed words → what may be typed now and what waits: the last word
+ * (it may be a radio word — never typed), with "submit it" / "disregard
+ * that" held whole and a bare punctuation token kept with its word. */
+export function holdBack(text: string): { type: string; held: string } {
+  const ws = String(text || "").trim().split(/\s+/).filter(Boolean);
+  if (!ws.length) return { type: "", held: "" };
+  let n = ws.length - 1;
+  while (n > 0 && !bareWord(ws[n])) n--;
+  if (n > 0 && RADIO_TAIL.test(bareWord(ws[n])) && RADIO_WORD.test(bareWord(ws[n - 1]))) n--;
+  return { type: ws.slice(0, n).join(" "), held: ws.slice(n).join(" ") };
+}
+
+const joinWords = (a: string, b: string) => [a.trim(), b.trim()].filter(Boolean).join(" ");
 
 // --- prefs (per browser: a hand's habit, not a synced setting) -------------- //
 
@@ -98,8 +170,9 @@ export function saveVoicePrefs(p: VoicePrefs, kv: KV | null = storage()): void {
 /** What a step of {@link Dictation} asks for. `text` to type is a phrase plus
  * its trailing space; `text` to erase is everything this dictation typed. */
 export type DictOutcome =
-  /** Type `text` now; listening goes on. */
-  | { kind: "type"; text: string }
+  /** Type `text` now; listening goes on. `route: false`: it can't be a
+   * router command (a streamed phrase's first words), so it goes straight in. */
+  | { kind: "type"; text: string; route?: boolean }
   /** "over": type `text` (if any), stop — the words stay in the field. */
   | { kind: "over"; text: string }
   /** "submit": type `text` (if any), stop, and submit the draft. */
@@ -125,27 +198,70 @@ export const OVER_LINE = "In the field — say submit or press Enter";
  * record of what it typed (in order) so "disregard" can take exactly that
  * back. Pure, so the radio words, push to talk and Escape are pinned by
  * tests; {@link LiveDictation} carries the outcomes out. A toggle's second
- * click and a hold's release are both {@link finish}: "over". */
+ * click and a hold's release are both {@link finish}: "over".
+ *
+ * A streaming recognizer delivers a phrase as it is said: {@link words} as
+ * they are committed, then {@link flush} at its end, which is that phrase's
+ * {@link heard} — so the radio words, read off the whole phrase, work alike. */
 export class Dictation {
   listening = false;
   interim = "";
   /** What this dictation typed so far — only what really went in
    * ({@link wrote}), since a disregard takes it back character by character. */
   typed = "";
+  /** Streaming: committed words not typed yet — the last one (it may be a
+   * radio word), or a first phrase whole while it may be a router command. */
+  held = "";
+  /** Streaming: the recognizer's unstable tail — shown, never typed. */
+  partial = "";
+  /** A first phrase goes past the router (false in a text box). */
+  routes = true;
 
   begin(): void {
     this.listening = true;
     this.interim = "";
     this.typed = "";
+    this.held = "";
+    this.partial = "";
   }
 
-  /** The caption: what is in the field, then the words in flight. */
+  /** The caption: what is in the field, then the words in flight (the
+   * streamed {@link partial} is shown apart, muted). */
   get shown(): string {
-    return [this.typed.trim(), this.interim.trim()].filter(Boolean).join(" ");
+    return [this.typed.trim(), this.held.trim(), this.interim.trim()].filter(Boolean).join(" ");
   }
 
   hearing(t: string): void {
     if (this.listening) this.interim = t;
+  }
+
+  /** Streaming: the tail the recognizer may still change. */
+  unsure(t: string): void {
+    if (this.listening) this.partial = t;
+  }
+
+  /** Streaming: words committed in the phrase under way. All but the last
+   * are typed now; a first phrase that may be a command waits whole. */
+  words(w: string): DictOutcome {
+    if (!this.listening) return { kind: "stopped" };
+    const all = joinWords(this.held, w);
+    if (this.routes && !this.typed && mayBeCommand(all)) {
+      this.held = all;
+      return { kind: "continue" };
+    }
+    const cut = holdBack(all);
+    this.held = cut.held;
+    return cut.type ? { kind: "type", text: cut.type + " ", route: false } : { kind: "continue" };
+  }
+
+  /** Streaming: the phrase ended with its last committed words — with the
+   * held ones, the phrase's final ({@link heard}: radio words and all). */
+  flush(w: string): DictOutcome {
+    if (!this.listening) return { kind: "stopped" };
+    const all = joinWords(this.held, w);
+    this.held = "";
+    this.partial = "";
+    return this.heard(all);
   }
 
   /** `text` went into the field. */
@@ -175,7 +291,9 @@ export class Dictation {
    * in flight (no final yet) counts — it was said. */
   finish(): DictOutcome {
     if (!this.listening) return { kind: "stopped" };
-    const tail = this.interim.trim();
+    const tail = joinWords(this.held, this.interim);
+    this.held = "";
+    this.partial = "";
     const out = tail ? this.heard(tail) : { kind: "continue" as const };
     this.listening = false;
     if (out.kind === "type") return { kind: "over", text: out.text };
@@ -188,7 +306,6 @@ export class Dictation {
   cancel(): DictOutcome {
     if (!this.listening) return { kind: "stopped" };
     this.listening = false;
-    this.interim = "";
     return { kind: "dropped", text: this.erase() };
   }
 
@@ -198,7 +315,11 @@ export class Dictation {
     if (!this.listening) return { kind: "stopped" };
     this.listening = false;
     this.interim = "";
-    return { kind: "over", text: "" };
+    // Streamed words held back go in (a radio word among them does nothing).
+    const rest = parseRadio(this.held).text;
+    this.held = "";
+    this.partial = "";
+    return { kind: "over", text: rest ? rest + " " : "" };
   }
 
   /** Forget what was typed; returns it, for the target to take back. */
@@ -206,6 +327,8 @@ export class Dictation {
     const text = this.typed;
     this.typed = "";
     this.interim = "";
+    this.held = "";
+    this.partial = "";
     return text;
   }
 }
@@ -251,8 +374,9 @@ export function sessionTarget(title: string, name: string): DictTarget {
 
 /** What {@link LiveDictation} needs from the page. */
 export interface LiveHooks {
-  /** The caption under the mic; `sticky` stays until replaced. */
-  caption(text: string, sticky?: boolean): void;
+  /** The caption under the mic; `sticky` stays until replaced. `unsure`:
+   * a streamed tail the recognizer may still change, shown muted after it. */
+  caption(text: string, sticky?: boolean, unsure?: string): void;
   /** Listening is over: drop the recognizer (it reports nothing more). */
   halt(): void;
   /** A dictation's first phrase, for a session: true when the router acted
@@ -304,6 +428,7 @@ export class LiveDictation {
     private hooks: LiveHooks
   ) {
     this.dict.begin();
+    this.dict.routes = target?.kind !== "field";
   }
 
   /** Still taking words (false once over / submit / Escape / an error). */
@@ -319,6 +444,28 @@ export class LiveDictation {
 
   heard(phrase: string): Promise<void> {
     return this.step(() => this.dict.heard(phrase));
+  }
+
+  /** Streaming: committed words, typed as they come (the last held back). */
+  words(w: string): Promise<void> {
+    return this.step(() => this.dict.words(w));
+  }
+
+  /** Streaming: a phrase's end and its last words. */
+  flush(w: string): Promise<void> {
+    return this.step(() => this.dict.flush(w));
+  }
+
+  /** Streaming: the unstable tail, for the caption only. */
+  unsure(t: string): void {
+    if (this.done) return;
+    this.dict.unsure(t);
+    this.show();
+  }
+
+  /** A passing line (streaming fell back to clips): the next words replace it. */
+  notice(line: string): void {
+    if (!this.done) this.hooks.caption(line, true);
   }
 
   /** Push to talk let go: "over", after the phrases already heard. */
@@ -348,7 +495,8 @@ export class LiveDictation {
   show(): void {
     if (this.done) return;
     const field = this.target?.kind === "field";
-    this.hooks.caption(this.dict.shown || (field ? "Listening — the words go into the text box" : DICT_HINT), true);
+    const shown = this.dict.shown || (field ? "Listening — the words go into the text box" : DICT_HINT);
+    this.hooks.caption(shown, true, this.dict.partial);
   }
 
   private step(next: () => DictOutcome): Promise<void> {
@@ -374,7 +522,7 @@ export class LiveDictation {
         this.end("");
         return;
       case "type":
-        if (await this.put(out.text)) this.show();
+        if (await this.put(out.text, out.route !== false)) this.show();
         return;
       case "erase":
         t?.erase(out.text);
@@ -407,13 +555,14 @@ export class LiveDictation {
     }
   }
 
-  /** Type `text`; a session's first phrase goes past the router and the
-   * dialog guard first. False when it did not go in (and listening ended). */
-  private async put(text: string): Promise<boolean> {
+  /** Type `text`; a session's first phrase goes past the router (unless it
+   * can't be a command: `route` false) and the dialog guard first. False when
+   * it did not go in (and listening ended). */
+  private async put(text: string, route = true): Promise<boolean> {
     const t = this.target;
     if (!this.dict.typed && t?.kind !== "field") {
       const words = text.trim();
-      if (await this.hooks.route(words)) {
+      if (route && (await this.hooks.route(words))) {
         this.end(null);
         return false;
       }
@@ -837,6 +986,15 @@ export interface RecognizerHandlers {
   onStatus?(text: string): void;
   /** The server recognizer's detector heard speech (it has no interim words). */
   onSpeech?(): void;
+  /** Streaming (the server's, when it can): words committed — final, typed
+   * as they come. */
+  onWords?(text: string): void;
+  /** Streaming: the unstable tail after them — shown, never typed. */
+  onPartial?(text: string): void;
+  /** Streaming: a phrase ended (a pause, or finish()); its last words. */
+  onFlush?(text: string): void;
+  /** A passing line for the caption (streaming fell back to clips). */
+  onNotice?(text: string): void;
   /** `code`: the Web Speech error names, plus "server" / "nothing-recorded"
    * (`detail` is then the line to show). */
   onError(code: string, detail?: string): void;
@@ -1019,25 +1177,61 @@ const CLIP_MAX_MS = 12_000; // the hard cap on one clip
 const RMS_SPEECH = 0.02; // RMS (0..1) above which a clip has speech
 const UPLOAD_TIMEOUT_MS = 45_000;
 const CLIP_RATE = 16_000; // the built-in recognizers' rate; whisper's too
+/** A let-go phrase's last bit of audio under this many bytes (~50 ms) isn't sent. */
+const TAIL_MIN_BYTES = 44 + 1600;
 
-/** A WAV clip → POST /api/voice/transcribe (mobile.js ServerSTT): one clip
- * per phrase, recorded as 16 kHz PCM by lib/wavRecorder through the page's
- * one AudioContext (the built-in Windows / macOS recognizers take nothing
- * but PCM), ended by {@link SILENCE_MS} of quiet after speech or the cap,
- * and uploaded whole as `audio/wav`; the response's `{text}` is the phrase.
- * While listening is wanted the next clip starts as soon as one is sent, so
- * phrases arrive one by one like Chrome's finals. The mic stream is kept
- * until {@link Recognizer.release}. */
-export function serverRecognizer(): Recognizer & { lastError: string } {
+/** One phrase being recorded. `stream`: it streams (else it is a clip — clip
+ * mode, or streaming fell back); `sid` the stream once open; `busy` the one
+ * request in flight (the open, or a chunk); `fresh`: speech not sent yet. */
+interface Phrase {
+  rec: WavRecording | null;
+  heard: boolean;
+  stream: boolean;
+  sid: string | null;
+  busy: Promise<void> | null;
+  fresh: boolean;
+  ending: boolean;
+}
+
+/** A response's words (the server joins them with spaces). */
+const wordsOf = (v: unknown) => String((Array.isArray(v) ? v.join(" ") : v) || "").trim();
+const langTag = () => String(navigator.language || "en").split(";")[0];
+
+/** The server's recognizer (mobile.js ServerSTT), fed by lib/wavRecorder as
+ * 16 kHz PCM through the page's one AudioContext (the built-in Windows /
+ * macOS recognizers take nothing but PCM), in one of two ways:
+ *  - one WAV clip per phrase: ended by {@link SILENCE_MS} of quiet after
+ *    speech or the cap, uploaded whole as `audio/wav` to POST
+ *    /api/voice/transcribe; the response's `{text}` is the phrase;
+ *  - streaming, when `opts.stream()` says the server can (GET /api/voice
+ *    `server_ready.stt_stream`): at the first speech of a phrase POST
+ *    /api/voice/stream opens a stream, and whenever the previous request is
+ *    back and 300 ms (wavRecorder TAKE_MIN_S) of new audio exists, the recorder's take()
+ *    goes to /stream/{id}/chunk — its `committed` words (final) go to
+ *    onWords as they come, its `partial` (unstable) to onPartial. The same
+ *    quiet ends the phrase: /end flushes its last words to onFlush, and the
+ *    next phrase opens a new stream. No cap. A 409 on the open, or any
+ *    failed request, falls back to clips for the rest of the dictation.
+ * While listening is wanted the next phrase starts recording as soon as one
+ * ends, so phrases arrive one by one like Chrome's finals. The mic stream is
+ * kept until {@link Recognizer.release}. */
+export function serverRecognizer(opts: { stream?: () => boolean } = {}): Recognizer & { lastError: string } {
   let stream: MediaStream | null = null;
   let h: RecognizerHandlers | null = null;
   let want = false;
   let finishing = false;
   let token: object | null = null; // one per clip; null = no clip
-  let cur: { rec: WavRecording | null; heard: boolean } | null = null;
+  let cur: Phrase | null = null;
   let uploads = 0;
   let capTimer: ReturnType<typeof setTimeout> | undefined;
   const aborters = new Set<AbortController>();
+  /** This dictation streams (until a failure falls back to clips). */
+  let streaming = false;
+  /** The previous phrase's /end: the next stream opens after it, so words
+   * arrive in order and one stream at a time is open. */
+  let lastEnd: Promise<void> = Promise.resolve();
+  /** Streams open now, abandoned by stop(). */
+  const open = new Set<string>();
 
   const getStream = async () => {
     if (stream && stream.active !== false) return stream;
@@ -1050,6 +1244,8 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
     if (n === "NotFoundError" || n === "DevicesNotFoundError" || n === "OverconstrainedError") return "audio-capture";
     return "start-failed";
   };
+  const why = (err: unknown) =>
+    (err as Error)?.name === "AbortError" ? "the server took too long" : String((err as Error)?.message || err);
   /** The recognizer is done when nothing is wanted, recording or uploading. */
   const maybeEnd = () => {
     if (!want && !token && uploads === 0 && h) {
@@ -1072,9 +1268,8 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
     const ac = new AbortController();
     aborters.add(ac);
     const timer = setTimeout(() => ac.abort(), UPLOAD_TIMEOUT_MS);
-    const lang = String(navigator.language || "en").split(";")[0];
     try {
-      const r = await apiRaw("/api/voice/transcribe?lang=" + encodeURIComponent(lang), {
+      const r = await apiRaw("/api/voice/transcribe?lang=" + encodeURIComponent(langTag()), {
         method: "POST",
         headers: { "Content-Type": "audio/wav" },
         body: blob,
@@ -1098,10 +1293,9 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
       }
     } catch (err) {
       if (h !== hh || !hh) return;
-      const why = (err as Error)?.name === "AbortError" ? "the server took too long" : String((err as Error)?.message || err);
-      self.lastError = why;
+      self.lastError = why(err);
       want = false;
-      hh.onError("server", "Couldn't reach the server: " + why);
+      hh.onError("server", "Couldn't reach the server: " + self.lastError);
     } finally {
       clearTimeout(timer);
       aborters.delete(ac);
@@ -1110,12 +1304,192 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
     if (h === hh) maybeEnd();
   };
 
-  /** End the current clip and send it. */
+  // --- streaming ------------------------------------------------------------ //
+
+  /** One stream request (JSON back, whatever the status); throws on the
+   * network, an abort (stop()) or the timeout. */
+  const call = async (
+    path: string,
+    init: RequestInit
+  ): Promise<{ ok: boolean; status: number; j: Record<string, unknown> }> => {
+    const ac = new AbortController();
+    aborters.add(ac);
+    const timer = setTimeout(() => ac.abort(), UPLOAD_TIMEOUT_MS);
+    try {
+      const r = await apiRaw(path, { ...init, signal: ac.signal });
+      const j = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+      return { ok: r.ok, status: r.status, j };
+    } finally {
+      clearTimeout(timer);
+      aborters.delete(ac);
+    }
+  };
+  const streamPath = (sid: string, op: string) => "/api/voice/stream/" + encodeURIComponent(sid) + op;
+  const abandon = (sid: string) => {
+    open.delete(sid);
+    void apiRaw(streamPath(sid, ""), { method: "DELETE" }).catch(() => {});
+  };
+
+  /** Streaming is over for this dictation: close the phrase's stream, type
+   * what it held back (its words so far are its flush), and go on with it —
+   * and with a next phrase already recording — as a clip. `line`: said once,
+   * in the caption ("" for a 409: the server just can't stream now). */
+  const fallBack = (c: Phrase, line: string) => {
+    if (!c.stream) return;
+    streaming = false;
+    for (const p of new Set([c, cur])) {
+      if (!p?.stream) continue;
+      p.stream = false;
+      const sid = p.sid;
+      p.sid = null;
+      if (sid) {
+        abandon(sid);
+        h?.onPartial?.("");
+        h?.onFlush?.("");
+      }
+      if (cur === p) {
+        clearTimeout(capTimer);
+        capTimer = setTimeout(() => {
+          if (cur === p) endClip();
+        }, CLIP_MAX_MS);
+      }
+    }
+    if (line) h?.onNotice?.(line);
+  };
+  const streamFailed = (c: Phrase, err: unknown) => {
+    self.lastError = why(err);
+    fallBack(c, "Streaming stopped (" + self.lastError + ") — one clip per phrase from here");
+  };
+
+  /** `c`'s one request at a time; when it is back, the next chunk may go. */
+  const run = (c: Phrase, req: () => Promise<void>) => {
+    c.busy = req().finally(() => {
+      c.busy = null;
+      pump(c);
+    });
+  };
+
+  /** At the phrase's first speech: open its stream (after the previous
+   * phrase's /end). */
+  const openStream = (c: Phrase) => {
+    const hh = h;
+    const before = lastEnd;
+    run(c, async () => {
+      await before;
+      if (h !== hh || !c.stream) return;
+      try {
+        const r = await call("/api/voice/stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lang: langTag() }),
+        });
+        const id = String(r.j.id || "");
+        if (h !== hh || !c.stream) {
+          if (r.ok && id) void apiRaw(streamPath(id, ""), { method: "DELETE" }).catch(() => {});
+          return;
+        }
+        if (r.ok && id) {
+          c.sid = id;
+          open.add(id);
+        } else if (r.status === 409) {
+          self.lastError = String(r.j.error || "the server can't stream");
+          fallBack(c, "");
+        } else throw new Error(String(r.j.error || "HTTP " + r.status));
+      } catch (err) {
+        if (h === hh) streamFailed(c, err);
+      }
+    });
+  };
+
+  const sendChunk = async (c: Phrase, blob: Blob, hh: RecognizerHandlers | null) => {
+    try {
+      const r = await call(streamPath(c.sid!, "/chunk"), {
+        method: "POST",
+        headers: { "Content-Type": "audio/wav" },
+        body: blob,
+      });
+      if (h !== hh || !hh || !c.stream) return;
+      if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
+      self.lastError = "";
+      const w = wordsOf(r.j.committed);
+      if (w) hh.onWords?.(w);
+      hh.onPartial?.(wordsOf(r.j.partial));
+    } catch (err) {
+      if (h === hh) streamFailed(c, err);
+    }
+  };
+
+  /** The next chunk, when nothing is in flight and enough is new. */
+  const pump = (c: Phrase) => {
+    if (!c.stream || !c.sid || c.busy || c.ending || !c.rec || h === null) return;
+    const blob = c.rec.take();
+    if (!blob) return;
+    c.fresh = false;
+    const hh = h;
+    run(c, () => sendChunk(c, blob, hh));
+  };
+
+  /** A streamed phrase is over (a pause, or finish()): the next starts
+   * recording at once; this one's last chunk (when it holds speech not sent
+   * yet — at a pause it is usually just the quiet) and its /end follow the
+   * request in flight, and the flushed words go to onFlush. */
+  const endStream = async (c: Phrase) => {
+    const hh = h;
+    const mine = token;
+    c.ending = true;
+    uploads++;
+    let release = () => {};
+    lastEnd = new Promise<void>((r) => (release = r));
+    try {
+      const tail = await c.rec!.stop().catch(() => null);
+      if (token !== mine) return; // stop(): dropped
+      token = null;
+      if (want && !finishing) void clip();
+      if (c.busy) await c.busy;
+      if (h !== hh || !hh) return;
+      if (!c.stream) {
+        // Fell back before the stream took anything: the phrase is a clip.
+        if (c.heard && tail && tail.size > 44) void upload(tail);
+        return;
+      }
+      if (!c.sid) return; // no speech: no stream was opened
+      if (tail && tail.size > TAIL_MIN_BYTES && c.fresh) await sendChunk(c, tail, hh);
+      if (h !== hh || !c.stream || !c.sid) return;
+      const sid = c.sid;
+      c.sid = null;
+      open.delete(sid);
+      try {
+        const r = await call(streamPath(sid, "/end"), { method: "POST" });
+        if (h !== hh) return;
+        if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
+        c.stream = false;
+        hh.onPartial?.("");
+        hh.onFlush?.(wordsOf(r.j.committed));
+      } catch (err) {
+        if (h !== hh) return;
+        // Its held words still go in (fallBack flushes a phrase with a stream).
+        c.sid = sid;
+        streamFailed(c, err);
+      }
+    } finally {
+      release();
+      uploads--;
+      if (h === hh) maybeEnd();
+    }
+  };
+
+  // --- the phrase ------------------------------------------------------------ //
+
+  /** End the current phrase and send it. */
   const endClip = () => {
     const c = cur;
     cur = null;
     clearTimeout(capTimer);
     if (!c?.rec) return;
+    if (c.stream) {
+      void endStream(c);
+      return;
+    }
     const mine = token;
     c.rec.stop().then(
       (blob) => {
@@ -1150,11 +1524,17 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
     const ctx = voiceAudioCtx();
     if (ctx && ctx.state === "suspended") await ctx.resume().catch(() => {});
     if (token !== mine) return;
+    if (!want) {
+      // finish() came between two phrases: nothing more to record.
+      token = null;
+      maybeEnd();
+      return;
+    }
     if (!ctx || ctx.state !== "running") {
       failed("start-failed", "The audio engine isn't running — click the mic again");
       return;
     }
-    const c: { rec: WavRecording | null; heard: boolean } = { rec: null, heard: false };
+    const c: Phrase = { rec: null, heard: false, stream: streaming, sid: null, busy: null, fresh: false, ending: false };
     // The silence detector: the recorder's RMS per block against a noise
     // floor that follows the quiet moments.
     let floor = 0;
@@ -1164,11 +1544,20 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
       floor = floor === 0 ? rms : Math.min(rms, floor * 1.05 + 0.001);
       const now = Date.now();
       if (rms > Math.max(RMS_SPEECH, floor * 3)) {
-        if (!c.heard) h?.onSpeech?.();
+        if (!c.heard) {
+          h?.onSpeech?.();
+          if (c.stream) openStream(c);
+        }
         c.heard = true;
+        c.fresh = true;
         lastLoud = now;
+      } else if (!c.heard && c.stream) {
+        // Before the first word, keep only a lead-in (under TAKE_MIN_S):
+        // the stream is not sent the quiet before it.
+        c.rec?.take();
       }
       if (c.heard && now - lastLoud > SILENCE_MS) endClip();
+      else pump(c);
     };
     try {
       c.rec = startWavRecording(s, ctx, { targetRate: CLIP_RATE, onLevel });
@@ -1178,9 +1567,10 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
     }
     cur = c;
     h?.onStatus?.("Listening…");
-    capTimer = setTimeout(() => {
-      if (cur === c) endClip();
-    }, CLIP_MAX_MS);
+    if (!c.stream)
+      capTimer = setTimeout(() => {
+        if (cur === c) endClip();
+      }, CLIP_MAX_MS);
   };
 
   const self = {
@@ -1193,6 +1583,8 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
       h = handlers;
       want = true;
       finishing = false;
+      streaming = !!opts.stream?.();
+      lastEnd = Promise.resolve();
       void clip();
       return true;
     },
@@ -1215,6 +1607,7 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
       c?.rec?.cancel();
       aborters.forEach((a) => a.abort());
       aborters.clear();
+      open.forEach(abandon);
     },
     release() {
       self.stop();
@@ -1249,6 +1642,8 @@ export interface VoiceCfg {
     detail?: string;
     stt_backend?: string;
     stt_detail?: string;
+    /** The ready recognizer streams (POST /api/voice/stream): words as you speak. */
+    stt_stream?: boolean;
     tts_backend?: string;
     tts_detail?: string;
   };
@@ -1329,10 +1724,14 @@ function serverEngineName(backend: string | undefined, system: VoiceSystem): str
   return id ? "server (" + id + ")" : "server";
 }
 
-/** How the server's recognizer is fed: the clip's rate, the resampler that
- * makes it, and the quiet that ends a phrase. */
-function clipsLine(): string {
-  return " — 16 kHz clips, " + resamplerName() + ", a phrase ends after " + SILENCE_MS / 1000 + " s of quiet";
+/** How the server's recognizer is fed: streamed (the recorder's take() uses
+ * the windowed sinc) or a clip per phrase, the rate, the resampler, and the
+ * quiet that ends a phrase. */
+function clipsLine(stream: boolean): string {
+  const how = stream
+    ? "streaming (words as you speak): 16 kHz, windowed-sinc resampler"
+    : "one clip per phrase: 16 kHz, " + resamplerName();
+  return " — " + how + ", a phrase ends after " + SILENCE_MS / 1000 + " s of quiet";
 }
 
 /** The options' Diagnostics line: the engines actually in use (`stt` /
@@ -1347,7 +1746,7 @@ export function engineDiagnostics(
   const ready = cfg.server_ready;
   let rec =
     stt === "server"
-      ? serverEngineName(ready.stt_backend, cfg.system) + clipsLine()
+      ? serverEngineName(ready.stt_backend, cfg.system) + clipsLine(!!ready.stt_stream)
       : stt === "browser"
         ? "this browser"
         : electron
