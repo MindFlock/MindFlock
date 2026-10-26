@@ -20,6 +20,21 @@ condensation:
   this is the step that costs money, and it runs only when the listener asks
   ("summarize that"). 409 ``{error}`` with no reply or no CLI, 504 on
   timeout, 502 when the CLI fails.
+* ``POST /api/voice/route {text, session}`` → ``{kind, …}`` — the voice
+  router (``core.voice_router``): one finished phrase said to ``session``
+  (a title, ``""`` for none) is either a prompt for that session (``{kind:
+  "prompt"}``, the default) or a command: ``switch`` / ``ambiguous`` /
+  ``no-session``, ``list``, ``needs``, ``status`` (each with the ``say`` the
+  client speaks), ``new`` / ``new-failed``, or one the client carries out
+  itself (``cancel``, ``stop``, ``off``, ``repeat``, ``condense``; no
+  ``say``). The rows are ``GET /api/instances``'s own (other devices'
+  ``<device>::<title>`` rows included), read only once the phrase IS a
+  command. ``new`` creates the session the way the New dialog does
+  (``core.session_create``, the task as its first prompt) in the named
+  repository, else the current session's, else the most recent, and turns
+  its voice flag on so its first reply carries a ``Say:`` line. Always 200
+  — a failed create is ``{kind: "new-failed", say}``; 400 only for a body
+  that is not an object.
 
 Routes only translate HTTP into core calls; the registry lookup, the tmux
 name and the providers are read through the server module at call time, so
@@ -29,6 +44,7 @@ tests that patch ``server._x`` reach them.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 
 from fastapi import APIRouter, Request
@@ -36,9 +52,12 @@ from fastapi.responses import JSONResponse
 
 from backend.session import tmux
 from backend.web.core import agent_io as _agent_io
+from backend.web.core import auth as _auth
 from backend.web.core import commit_message as _commit_message
+from backend.web.core import session_create as _session_create
 from backend.web.core import spoken as _spoken
 from backend.web.core import voice as _voice
+from backend.web.core import voice_router as _voice_router
 from backend.web.routes import _server
 
 router = APIRouter()
@@ -204,3 +223,120 @@ async def voice_condense(title: str) -> JSONResponse:
         return err
     body, status = await asyncio.to_thread(_condense, inst, title)
     return JSONResponse(body, status_code=status)
+
+
+# ---- the voice router ---------------------------------------------------------
+#: A create error is read out: at most this many characters of it.
+NEW_REASON_MAX = 120
+
+
+def _session_rows(request) -> list:
+    """``GET /api/instances``'s rows, exactly as it serves them (its tick
+    snapshot, renames, other devices' rows). Blocking; module-level so tests
+    replace it."""
+    resp = _server().list_instances(request)
+    try:
+        rows = json.loads(resp.body)
+    except Exception:  # noqa: BLE001 — the listing always answers a JSON list
+        rows = []
+    return rows if isinstance(rows, list) else []
+
+
+def _known_repos(rows: list) -> list:
+    """``[{name, path, source}]`` most recent first: what the New dialog
+    offers (``/api/repos/suggest``) plus every local session's repository,
+    deduplicated by real path. Blocking (a shallow folder sweep)."""
+    srv = _server()
+    out: list = []
+    seen: set = set()
+
+    def add(path: str, name: str, source: str) -> None:
+        try:
+            real = os.path.realpath(os.path.expanduser(path))
+        except Exception:  # noqa: BLE001
+            return
+        if not path or real in seen:
+            return
+        seen.add(real)
+        out.append(
+            {"name": name or os.path.basename(real), "path": path, "source": source}
+        )
+
+    try:
+        suggested = srv.suggest_repos(
+            recent_paths=srv._recent_repo_paths(), cwd=os.getcwd()
+        )
+    except Exception:  # noqa: BLE001 — the sessions' own repos still count
+        suggested = []
+    for s in suggested or ():
+        if isinstance(s, dict):
+            add(
+                str(s.get("path") or ""),
+                str(s.get("name") or ""),
+                str(s.get("source") or ""),
+            )
+    for r in rows:
+        if isinstance(r, dict) and not r.get("device") and not r.get("pending"):
+            add(str(r.get("path") or ""), str(r.get("repo") or ""), "session")
+    return out
+
+
+async def _create_session(payload: dict, person: str):
+    """``(status, body)`` of the New dialog's create (``POST /api/instances``
+    in process). Module-level so tests replace it."""
+    return await _session_create.create_result(payload, person=person)
+
+
+def _failed(reason: str) -> dict:
+    reason = " ".join(str(reason or "it failed").split()).rstrip(".")
+    if len(reason) > NEW_REASON_MAX:
+        reason = reason[: NEW_REASON_MAX - 1].rstrip() + "…"
+    return {"kind": "new-failed", "say": "Couldn't start it: %s." % reason}
+
+
+async def _start_new(text: str, session: str, rows: list, request) -> dict:
+    """Resolve and create the session a ``new`` phrase asks for."""
+    repos = await asyncio.to_thread(_known_repos, rows)
+    plan = _voice_router.plan_new(text, session, rows, repos)
+    if plan.get("kind") != "new":
+        return plan
+    title = await asyncio.to_thread(_session_create.free_title, plan["title_base"])
+    payload = {"title": title, "repo_path": plan["repo_path"]}
+    if plan["task"]:
+        payload["prompt"] = plan["task"]
+    try:
+        status, body = await _create_session(payload, _auth.request_person(request))
+    except Exception as err:  # noqa: BLE001 — the client speaks why
+        return _failed(str(err))
+    if status >= 300:
+        return _failed(body.get("error") or "HTTP %d" % status)
+    title = str(body.get("title") or title)
+    try:
+        # The person is talking to it: its first reply ends with a Say: line.
+        _voice.set_on(tmux.to_mindflock_tmux_name(title), True)
+    except Exception:  # noqa: BLE001 — the session exists; voice is enrichment
+        pass
+    return _voice_router.started(title, plan["repo_name"])
+
+
+@router.post("/api/voice/route")
+async def voice_route(request: Request) -> JSONResponse:
+    """One finished phrase → ``{kind, …}`` (see the module docstring and
+    docs/web-api.md). 400 when the body is not an object."""
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001 — not JSON: a bad body, not a 422
+        payload = None
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "body must be an object"}, status_code=400)
+    text = str(payload.get("text") or "")
+    session = str(payload.get("session") or "")
+    cmd = _voice_router.command(text)
+    if cmd is None:
+        return JSONResponse({"kind": "prompt"})
+    if cmd["kind"] in _voice_router.LOCAL_KINDS:
+        return JSONResponse({"kind": cmd["kind"]})
+    rows = await asyncio.to_thread(_session_rows, request)
+    if cmd["kind"] == "new":
+        return JSONResponse(await _start_new(text, session, rows, request))
+    return JSONResponse(_voice_router.answer(text, session, rows))
