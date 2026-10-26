@@ -222,6 +222,24 @@ def test_mobile_js_voice_state_machine_and_adapters():
     assert "synth.cancel();" in tts
 
 
+def test_mobile_js_a_network_error_is_said_not_retried_in_silence():
+    """A Chromium without Google's speech key (Arc, Brave, Vivaldi, Opera)
+    fails every recognizer start with ``network`` and hears nothing. The
+    first is retried like a blip; the second in a listening window stops the
+    loop with the reason on the strip (and in Diagnostics as the last
+    error), never eight silent restarts back to "Tap to talk"."""
+    js = _js()
+    rs = _fn(js, "voiceRecStart")
+    assert 'code === "network"' in rs
+    assert "++voiceListen_.netErrs >= 2" in rs
+    assert (
+        "Speech recognition failed (network): this browser cannot reach its "
+        "speech service. Use Chrome, Edge or Safari, or turn on server "
+        "recognition (Settings → Your phone → Voice)." in rs
+    )
+    assert "L.netErrs = 0;" in _fn(js, "voiceListen")
+
+
 def test_mobile_js_prime_runs_inside_the_tap_before_anything_async():
     """iOS drops every later speak() unless the first one ran synchronously
     inside the gesture. So prime() is the FIRST statement of each gesture

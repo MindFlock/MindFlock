@@ -3513,12 +3513,13 @@
   }
 
   // --- listening ----------------------------------------------------------------
-  var voiceListen_ = { mode: "", until: 0, restarts: 0, timer: null, reprompted: false };
+  var voiceListen_ = { netErrs: 0, mode: "", until: 0, restarts: 0, timer: null, reprompted: false };
   function voiceListen(mode, windowMs) {
     var L = voiceListen_;
     L.mode = mode;
     L.until = Date.now() + windowMs;
     L.restarts = 0;
+    L.netErrs = 0;
     clearTimeout(L.timer);
     voice.tts.cancel();
     voiceSpeakSeq++;
@@ -3562,6 +3563,16 @@
           voiceError("Speech recognition did not start (" + code + ").");
           voiceListen_.until = 0;
           voiceIdle();
+        } else if (code === "network") {
+          // A Chromium without Google's speech key (Arc, Brave, Vivaldi,
+          // Opera…) fails EVERY start this way and hears nothing: the first
+          // is retried like a blip (onEnd restarts), the second in a window
+          // stops the loop and says why, instead of eight silent restarts.
+          if (++voiceListen_.netErrs >= 2) {
+            voiceError("Speech recognition failed (network): this browser cannot reach its speech service. Use Chrome, Edge or Safari, or turn on server recognition (Settings → Your phone → Voice).");
+            voiceListen_.until = 0;
+            voiceIdle();
+          }
         } else if (code === "server" || code === "nothing-recorded") {
           // The server adapter: the clip went nowhere and its words are
           // gone — say why (a 409 is the hint to turn recognition on) and
@@ -3570,7 +3581,7 @@
           voiceListen_.until = 0;
           voiceIdle();
         }
-        // no-speech / aborted / network: onEnd follows and the window decides.
+        // no-speech / aborted / a first network: onEnd follows and the window decides.
       },
       onEnd: function () {
         if (!voiceIsListening()) return;

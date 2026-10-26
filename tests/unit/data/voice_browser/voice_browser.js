@@ -81,6 +81,7 @@ const INIT = `
     return true;
   };
   window.__silence = function () { const r = window.__rec; if (!r || !r.started) return false; r.started = false; r.onerror && r.onerror({ error: "no-speech" }); r.onend && r.onend(); return true; };
+  window.__netfail = function () { const r = window.__rec; if (!r || !r.started) return false; r.started = false; r.onerror && r.onerror({ error: "network" }); r.onend && r.onend(); return true; };
   const synth = {
     speaking: false, pending: false,
     _voices: [{ name: "Samantha", lang: "en-US" }, { name: "Daniel", lang: "en-GB" }, { name: "Anna", lang: "de-DE" }],
@@ -352,8 +353,24 @@ const posts = (p) => state.posts.filter((x) => x.path.endsWith(p));
     check("…text stays in the box", (await page.evaluate(() => document.getElementById("compose").value)) === "hello there");
     state.sendStatus = 0; state.sendReply = null;
     await page.evaluate(() => { document.getElementById("compose").value = ""; });
-    // "voice off"
+    // ---- a Chromium without Google's speech key (Arc, Brave, Vivaldi…):
+    // every start fails with "network". The first is retried like a blip;
+    // the second stops the loop and says why — never eight silent restarts.
     await waitFor(page, () => window.mfVoice.state === "idle", 3000, "idle");
+    await page.click("#voice-btn");
+    await waitFor(page, () => window.mfVoice.state === "listening", 3000, "listening");
+    const startsBefore = await page.evaluate(() => window.__recStarts);
+    await page.evaluate(() => window.__netfail());
+    await sleep(500);
+    check("first network error → restarted once, still listening", (await vstate(page)) === "listening" && (await page.evaluate(() => window.__recStarts)) === startsBefore + 1, "starts " + (await page.evaluate(() => window.__recStarts)) + " vs " + startsBefore);
+    await page.evaluate(() => window.__netfail());
+    await waitFor(page, () => window.mfVoice.state === "idle", 3000, "idle after network errors");
+    await sleep(400);
+    const netErr = await page.evaluate(() => document.getElementById("voice-error").textContent);
+    check("second network error → idle, the reason shown", (await vstate(page)) === "idle" && /^Speech recognition failed \(network\)/.test(netErr) && !(await page.evaluate(() => document.getElementById("voice-error").classList.contains("hidden"))), netErr);
+    check("…and no further recognizer starts", (await page.evaluate(() => window.__recStarts)) === startsBefore + 1);
+    check("…diagnostics keep it as the last error", (await page.evaluate(() => window.mfVoice.lastError)).indexOf("network") > 0);
+    // "voice off"
     await page.click("#voice-btn");
     await waitFor(page, () => window.mfVoice.state === "listening", 3000, "listening");
     await page.evaluate(() => window.__hear("voice off"));

@@ -5755,6 +5755,13 @@ Server recognition (Settings → Your phone → Voice, `voice.stt = "server"`)
 is what lets the home-screen icon hear you: the page then records a clip
 (`MediaRecorder`) and sends it to the server's recognizer instead, and the
 Safari banner goes away. Diagnostics (below) names the adapter in use.
+A Chromium browser that does not ship Google's speech key — Arc, Brave,
+Vivaldi, Opera — has the recognizer but every start fails with a `network`
+error and nothing is heard: the first is retried, the second in a listening
+window stops the loop with *Speech recognition failed (network): this browser
+cannot reach its speech service…* on the strip (Diagnostics keeps it as *Last
+error*). Use Chrome, Edge or Safari there, or server recognition, whose clip
+records in any browser.
 
 **The loop.** Say the prompt; interim words show in the compose box. When
 the phrase is final it sits in the box behind a **2.5 s countdown** — tap the
