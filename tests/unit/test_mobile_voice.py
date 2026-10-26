@@ -825,7 +825,10 @@ def test_mobile_js_server_recognizer_records_wav():
     # A phrase arrives 1.1 s after the last word, not 1.8 s; the cap stays.
     assert "var VOICE_SILENCE_MS = 1100;" in v
     assert "var VOICE_CLIP_MAX_MS = 12000;" in v
-    assert "Math.min(VOICE_CLIP_MAX_MS, remaining)" in stt
+    assert (
+        "Math.min(streams() ? VOICE_STREAM_MAX_MS : VOICE_CLIP_MAX_MS, remaining)"
+        in stt
+    )
     assert "h.onLevel(Math.min(1, rms * 4))" in stt
     # finish(): join, resample to 16 kHz (anti-aliased, async), encode,
     # upload as audio/wav. pending() covers the resample too.
@@ -863,6 +866,100 @@ def test_mobile_js_server_recognizer_records_wav():
     assert "Settings → Your phone → Voice" not in js
     assert "Settings → Your phone → Voice" not in _html()
     assert "or turn on server recognition in Settings → Voice" in _html()
+
+
+def test_mobile_js_server_recognizer_streams_words_as_you_speak():
+    """On a server that streams (GET /api/voice → server_ready.stt_stream)
+    the phrase goes out in chunks while it is spoken: one stream per phrase,
+    a chunk once 300 ms of new audio is in and the previous request is back,
+    settled words into the box as they come (all but the held-back end), the
+    unstable tail in the caption, /end at the phrase's end, DELETE on stop.
+    A 409 on the open or any failed request turns the phrase into a clip."""
+    js = _js()
+    v = _voice_section(js)
+    stt = _fn(js, "ServerSTT")
+    # The routes, and the stream's own shape.
+    assert 'streamReq(g, "/api/voice/stream", {' in stt
+    assert "body: JSON.stringify({ lang: lang() })," in stt
+    assert (
+        'function streamUrl(sid, tail) { return "/api/voice/stream/" + '
+        'encodeURIComponent(sid) + (tail ? "/" + tail : ""); }' in stt
+    )
+    assert 'streamUrl(g.sid, "chunk")' in stt and 'streamUrl(g.sid, "end")' in stt
+    assert 'fetch(streamUrl(sid, ""), { method: "DELETE" })' in stt
+    assert 'headers: { "Content-Type": "audio/wav" },' in stt
+    # Only when the server says it streams; the clip path stays.
+    assert (
+        "function streams() { return !!(voice.cfg.server_ready && "
+        "voice.cfg.server_ready.stt_stream); }" in stt
+    )
+    assert "if (streams()) streamOpen(g, mine);" in stt
+    assert '"/api/voice/transcribe?lang="' in stt
+    # Pacing: 300 ms of new audio, never two requests in flight.
+    assert "var VOICE_STREAM_CHUNK_MS = 300;" in v
+    pump = stt.split("function streamPump(g, mine) {")[1].split("\n    }\n")[0]
+    assert "g.busy) return;" in pump
+    assert "g.queued * 1000 >= g.rate * VOICE_STREAM_CHUNK_MS" in pump
+    chunk = stt.split("function streamChunk(g, mine) {")[1].split("\n    }\n")[0]
+    assert "g.busy = true;" in chunk and "g.busy = false;" in chunk
+    assert "voiceResampleClip(all, g.rate)" in chunk  # 16 kHz, as a clip
+    assert "voiceWavEncode(pcm, VOICE_WAV_RATE)" in chunk
+    assert "g.blocks.splice(0, n);" in chunk  # cut only once answered
+    # The audio processor pumps; the silence stop ends the phrase as before.
+    assert 'else if (g.mode === "stream") streamPump(g, mine);' in stt
+    # The cap drops a phrase the detector missed only when the stream
+    # showed no words either.
+    assert "if (g.frames && !g.heard && !g.words) { discard();" in stt
+    # Settled words: all but the held-back end into the box; the rest +
+    # the partial into the caption; whole() keeps a phrase in one piece.
+    words = stt.split("function streamWords(g, mine, committed, partial) {")[1]
+    words = words.split("\n    }\n")[0]
+    assert "if (!(h.whole && h.whole())) {" in words
+    assert "var cut = voiceStreamSplit(g.pend);" in words
+    assert "if (h.onFinal) h.onFinal(cut[0]);" in words
+    assert "if (h.onInterim) h.onInterim(shown);" in words
+    split = _fn(js, "voiceStreamSplit")
+    assert "var held = words.length ? [words.pop()] : [];" in split
+    assert 'voiceDictParse(words.join(" ")).kind' in split
+    rs = _fn(js, "voiceRecStart")
+    assert (
+        'whole: function () { return mode === "dialog" || !composeEl.value.trim(); },'
+        in rs
+    )
+    # The end: the rest, then /end, its words through onFinal.
+    end = stt.split("function streamEnd(g, mine) {")[1].split("\n    }\n")[0]
+    assert "streamDone(g, mine, voiceJoin(g.pend, x.j.committed));" in end
+    fin = stt.split("function finish() {")[1].split("\n    function clipSend(")[0]
+    assert 'if (g.mode === "clip") clipSend(g, mine);' in fin
+    assert "else streamPump(g, mine);" in fin
+    # stop()/discard() DELETE the stream (an open on its way deletes its id).
+    disc = stt.split("function discard() {")[1].split("\n    }\n")[0]
+    assert "streamDrop(live);" in disc
+    drop = stt.split("function streamDrop(g) {")[1].split("\n    }\n")[0]
+    assert "streamDelete(g.sid);" in drop
+    assert "if (g.dead) { streamDelete(id); return; }" in stt
+    # Fallbacks: a 409 → clips until GET /api/voice says otherwise; any
+    # failure → the phrase as a clip behind the words so far.
+    assert (
+        "if (x.r.status === 409 && voice.cfg.server_ready) "
+        "voice.cfg.server_ready.stt_stream = false;" in stt
+    )
+    fail = stt.split("function streamFail(g, mine, why) {")[1].split("\n    }\n")[0]
+    assert 'g.mode = "clip";' in fail and "streamDelete(sid);" in fail
+    assert "g.lead = voiceJoin(g.pend, g.partial);" in fail
+    assert "if (g.ending && token === mine) clipSend(g, mine);" in fail
+    assert (
+        'upload(new Blob([wav], { type: "audio/wav" }), "audio/wav", mine, g.lead);'
+        in stt
+    )
+    assert "var text = voiceJoin(lead, x.j.text);" in stt
+    # Diagnostics: which way, and the last chunk.
+    diag = _fn(js, "voiceDiag")
+    assert '"Recognition stream: " + voiceDiagStream()' in diag
+    ds = _fn(js, "voiceDiagStream")
+    assert '"words as you speak (" + last + ")"' in ds
+    assert '"one clip per phrase"' in ds
+    assert '"last chunk " + c.ms + " ms"' in ds
 
 
 def test_mobile_js_diagnostics_recorder_and_built_in_engine():
@@ -1020,6 +1117,57 @@ def test_voice_matchers_under_node():
         == "one: main. two: develop. three: release. Say one, two, or three."
     )
     assert out["choices"]["two"] == "one: main. two: develop. Say one or two."
+
+
+@pytest.mark.skipif(_node() is None, reason="needs node")
+def test_voice_stream_split_under_node():
+    """The stream's held-back end, run as-is: the last settled word waits
+    for the next words or the flush, and a run never reaches the box ending
+    in a radio word — so "over" / "submit" / "disregard" act only as the
+    phrase's real end, and mid-sentence they stay words."""
+    js = _js()
+    split = js[
+        js.index("  function voiceStreamSplit(") : js.index("  function ServerSTT(")
+    ]
+    parse = js[
+        js.index("  function voiceDictParse(") : js.index(
+            "  // --- voice commands (matched"
+        )
+    ]
+    cases = [
+        "",
+        "fix",
+        "fix the login bug",
+        "fix the login bug over",
+        "go over the",
+        "fix it disregard that",
+        "add a test submit",
+        "move it over to",
+        "  spaced   out  words ",
+    ]
+    script = (
+        split
+        + parse
+        + "\nconsole.log(JSON.stringify(%s.map(voiceStreamSplit).concat([[voiceJoin('a ', ' b'), voiceJoin('', 'b'), voiceJoin('a', null)]])));\n"
+        % json.dumps(cases)
+    )
+    res = subprocess.run(
+        [_node(), "-e", script], capture_output=True, text=True, timeout=30
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    assert out[:-1] == [
+        ["", ""],
+        ["", "fix"],
+        ["fix the login", "bug"],
+        ["fix the login bug", "over"],
+        ["go", "over the"],
+        ["fix it", "disregard that"],
+        ["add a test", "submit"],
+        ["move it", "over to"],
+        ["spaced out", "words"],
+    ]
+    assert out[-1] == ["a b", "b", "a"]
 
 
 @pytest.mark.skipif(_node() is None, reason="needs node")
