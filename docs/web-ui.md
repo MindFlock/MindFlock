@@ -5737,15 +5737,17 @@ a tap; the same tap sets `navigator.audioSession.type = "playback"` so the
 silent switch does not mute the page), takes a screen wake lock, turns voice
 mode on for the selected session (`POST /api/instances/<title>/voice
 {on: true}`), opens the events socket and listens — 15 s for a first word,
-then for as long as you keep talking (Android buzzes 30 ms). A **voice
+then for as long as you keep talking (Android buzzes 30 ms). With **Hold to
+talk** (the ⚙ sheet's *Push to talk*) that first tap only turns voice on;
+you then press and hold the mic to talk. A **voice
 strip** appears above the composer with the state word
 (*Your turn* · *Listening…* · *Sending…* · *Working…* · *Speaking…* ·
 *Waiting on you*), a caption (what it hears, the line being spoken, the
-dialog question), **Cancel** and **⚙**. Voice follows the
+dialog question, how to send — *Tap again or say "over" to send* /
+*Release or say "over" to send*), **Cancel** and **⚙**. Voice follows the
 **selected** session: picking another session in the Sessions sheet (or
 saying "switch to <name>") moves the conversation there; the flag of the
-session you left stays on — it only asks that session to end its replies
-with a `Say:` line. **On iPhone, open `/m` in a Safari tab.** iOS has speech
+session you left stays on. **On iPhone, open `/m` in a Safari tab.** iOS has speech
 recognition only there (WebKit bug 225298): the home-screen icon, and every
 other iOS browser, can speak but cannot hear you, and the page says so on the
 first mic tap — a **Voice needs Safari: open this page in a Safari tab**
@@ -5764,21 +5766,34 @@ cannot reach its speech service…* on the strip (Diagnostics keeps it as *Last
 error*). Use Chrome, Edge or Safari there, or server recognition, whose clip
 records in any browser.
 
-**The loop.** Radio rules. Say the prompt phrase by phrase: interim words
-show in the strip's caption, each finished phrase lands in the compose box,
-and the mic stays open across pauses. What happens to the box is yours to
-say: end with **"over"** and it is sent; end with **"disregard"** and the
-box is emptied and listening goes on; a tap on the mic or the strip stops
-listening with the words kept (*Kept, not sent — Send sends it, or tap the
-mic to go on*), **Cancel** stops and drops them, **Send** sends whatever is
-in the box at once, and two minutes without a word stops the same way as the
-tap. The last word of a phrase is what counts — an "over" in the middle of a
-sentence is a word — and case and punctuation do not matter (*Over.*,
-*Disregard that.*). Commands ("switch to…", "what needs me", "voice off",
-"stop"…) are commands only while the box is empty; mid-message they are
-words. Then *Sent to <name>.* (or *Queued for <name> — it is on a prompt.*:
-while voice is on, Send and "over" go through `POST /send {dialog_safe:
-true}`, so a prompt is queued
+**The loop.** Push to talk, with radio rules. Say the prompt phrase by
+phrase: interim words show in the strip's caption, each finished phrase
+lands in the compose box, and the mic stays open across pauses. How it ends
+is the ⚙ sheet's **Push to talk** (a per-phone setting):
+
+- **Tap to talk** (the default) — a tap on the mic starts listening; the
+  next tap on the mic (or on the strip) stops and **sends** the box. A
+  second tap with nothing in the box only stops.
+- **Hold to talk** — press and hold the mic to talk; letting go (or the
+  phone cancelling the touch) stops and sends. A release that heard nothing
+  only stops. The first tap of a session still just turns voice on, and a
+  plain click (a keyboard, a screen reader) starts a tap-style listen.
+
+Either way the words still on their way are waited for before the box goes:
+the phone's last phrase (at most 1.5 s), a server clip being transcribed,
+a route answer (below). The radio words work in both modes: end a phrase
+with **"over"** and the box is sent; end it with **"disregard"** and the
+box is emptied and listening goes on. **Cancel** stops and drops the words,
+**Send** sends whatever is in the box at once, and two minutes without a
+word stops with the words kept, unsent (*Kept, not sent — Send sends it, or
+tap the mic to go on*). The last word of a phrase is what counts — an
+"over" in the middle of a sentence is a word — and case and punctuation do
+not matter (*Over.*, *Disregard that.*). Commands ("switch to…", "new
+session…", "what needs me", "voice off"…) are commands only while the box
+is empty; mid-message they are words (see **Voice commands** below). Then
+*Sent to <name>.* (or *Queued for <name> — it is on a prompt.*: while voice
+is on, Send, "over" and push to talk go through `POST /send {dialog_safe:
+true, say}`, so a prompt is queued
 rather than typed into a dialog; a waking session says *<name> is waking up,
 try again in a moment.*, a paused one *<name> is paused. Resume it first.*,
 anything else *Couldn't send.* with the text kept). While the agent works the
@@ -5788,20 +5803,33 @@ opens with "I'll …"); nothing else is narrated unless you ask. A Codex
 session gets no such sentence (its screen fallback is skipped), only the line
 at the end. When the turn ends — `session.activity_changed` → `idle` over
 `WS /api/events`, with the page's 4 s session poll as the fallback — the
-page speaks the session's **`Say:` line**. If that line asks a question the
+page speaks the session's **`Say:` line**. Every reply line starts with the
+session's name — *Login fix: Fixed the login bug. Should I push it?*, *Login
+fix: I'll look at the handler first.*, *Login fix finished.* — so a voice is
+never anonymous when you switch between sessions. If that line asks a question the
 mic reopens — 12 s for a first word, then the same radio rules (one *Still
 there? <line>* re-prompt when nothing was said, then idle); otherwise it goes
 quiet — or, with **Hands-free** on, listens 8 s for a first word after every
-reply. A turn that ends with no line at all says *<name> finished.* A line
+reply. A turn that ends with no line at all says *<name> finished.*
+
+**Spoken replies** (the ⚙ sheet, per phone, on by default) decide whether
+anything is read out for a prompt: *Sent to <name>.*, the first-sentence
+confirmation and the `Say:` line are spoken only while it is on (off, *Sent
+to <name>.* shows on the strip and the phone stays quiet). A **typed**
+prompt asks for no `Say:` line even with it on, so its reply is not read
+out either: the strip just says *Your turn* when the turn ends. A line
 that arrives mid-dictation waits until the page is idle and is dropped once a
 new prompt is sent; a line you have already heard is never repeated (the
 events compare by text, `GET /voice` by its stamp, and the line on screen
 when voice was turned on counts as heard).
 
-**Where the line comes from.** While voice mode is on, every prompt the
-session gets carries one instruction asking it to end its reply with one
-final line starting `Say:` — at most two short plain sentences a person can
-hear, saying what it did or will do and any question it has. Claude Code
+**Where the line comes from.** The `Say:` line is asked for **per
+prompt**: the page sends `say: true` on `POST /send` only for a prompt that
+was dictated (a phrase you said landed in the box) while Spoken replies is
+on, so a typed prompt costs no Say tokens. That prompt carries one
+instruction asking the session to end its reply with one final line
+starting `Say:` — at most two short plain sentences a person can hear,
+saying what it did or will do and any question it has. Claude Code
 receives it invisibly from the hook MindFlock installs in the worktree
 (nothing shows in the terminal; turning voice on re-pins the hook on a
 running session and Claude Code hot-reloads it); Codex and the other CLIs
@@ -5813,8 +5841,17 @@ by the model that did the work and costs no extra call. See
 [web-api.md](web-api.md#voice-talking-to-a-session-from-the-phone) for the
 routes, the row fields and the event data.
 
-**Voice commands** — the whole phrase, case and punctuation ignored, with an
-optional "ok", "okay", "hey" or "please" in front:
+**Voice commands.** The first phrase said into an empty box goes to the
+server's router first (`POST /api/voice/route {text, session}`), which
+knows every session and can act on what it hears: *switch to <name>* moves
+voice there and says so; *new session to fix the parser* creates the session, selects it and says so; *what sessions do I
+have* reads them; *what needs me* and *status* read the attention list and
+the current session; the bare commands below run on the page. **Anything
+else is a prompt and stays with the current session** — the words land in
+the box as usual. When the router cannot answer (an older server, no
+network, 2 s without a reply) the page's own table decides — the whole
+phrase, case and punctuation ignored, with an optional "ok", "okay", "hey"
+or "please" in front:
 
 | Say | Does |
 |---|---|
@@ -5856,7 +5893,9 @@ question) is announced as *<name> is waiting on you: open the screen.*
 is still read out, followed by *Answer it on the screen.*, and nothing
 listens. The ⚙ sheet shows that setting read-only.
 
-**The ⚙ sheet** — *Voice mode for <session>* on/off, **Hands-free** (listen
+**The ⚙ sheet** — *Voice mode for <session>* on/off, **Push to talk**
+(*Tap to talk* / *Hold to talk*), **Spoken replies** (on by default),
+**Hands-free** (listen
 after every reply, not only after questions; off by default), **Speech rate**
 0.7–1.6×, a **Voice** picker (the phone's `speechSynthesis` voices, this
 language first — iOS exposes only its compact built-in voices), the read-only
@@ -5868,7 +5907,11 @@ session*, the *Events socket* state and sequence number, *Backends*
 (recognition and voice: which adapter is active — the phone's, or the
 server's when Settings say server and `GET /api/voice` reports it ready),
 *Primed*
-(whether a tap has unlocked speech output yet), *State*, and the last error.
+(whether a tap has unlocked speech output yet), *Push to talk* (tap or
+hold), *Replies* (on or off), *Last prompt* (dictated or typed, and whether
+it asked for a `Say:` line), *Router* (what `/api/voice/route` last answered,
+or why the local table decided), *State*, and the last error. The choices
+are this phone's own (with the rate and the voice, in `localStorage`).
 Refreshed every second while the sheet is open.
 
 **Pocket mode.** Nothing on the web can speak while the phone is locked or

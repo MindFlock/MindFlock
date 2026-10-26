@@ -852,6 +852,11 @@ html, body {
   font-size: 20px;
   font-family: inherit;
   user-select: none;
+  -webkit-user-select: none;
+  /* Hold to talk: a long press is a press, never a callout, a selection or a
+     scroll that cancels the pointer. */
+  -webkit-touch-callout: none;
+  touch-action: none;
 }
 #voice-btn:active { background: var(--border); }
 #voice-btn[data-state="idle"] { border-color: var(--accent); color: var(--accent); }
@@ -976,7 +981,7 @@ html, body {
 .voice-opt input[type="checkbox"] { width: 20px; height: 20px; flex: 0 0 auto; }
 .voice-opt-col { flex-direction: column; align-items: stretch; gap: 6px; }
 .voice-opt input[type="range"] { width: 100%; }
-#voice-voice {
+#voice-voice, #voice-ptt {
   width: 100%;
   background: var(--bg);
   color: var(--text);
