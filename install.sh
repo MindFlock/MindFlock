@@ -59,8 +59,8 @@ set -eu
 
 # The uv installer we run if uv is absent: version-pinned + checksum-verified.
 # Bump both together (sha256 of https://astral.sh/uv/<version>/install.sh).
-UV_PINNED_VERSION="0.11.29"
-UV_INSTALLER_SHA256="504a79fd2ed0dcd47e7f04f0792cfd0871f62e24a7fe40fa8ae0f563a369f2bd"  # pragma: allowlist secret
+UV_PINNED_VERSION="0.13.5"
+UV_INSTALLER_SHA256="1c6e7f025499664633ac2dce43a210800510e9ef0625c52e034a8afdf8bf177a"  # pragma: allowlist secret
 # The interpreter uv pins the tool venv to. Kept in step with INSTALL_PYTHON in
 # backend/web/core/self_update.py (the in-app updater runs the same install).
 INSTALL_PYTHON="3.12"
