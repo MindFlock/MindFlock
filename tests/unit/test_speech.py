@@ -635,3 +635,51 @@ class TestRegistry:
             speech._ext("audio/mp4") == ".mp4"
             and speech._ext("audio/x-weird") == ".bin"
         )
+
+
+# --- the PyAV 15 shim --------------------------------------------------------- #
+def _fake_av(monkeypatch, version: str):
+    import sys
+    import types
+
+    calls: list = []
+
+    def open_(*args, **kwargs):
+        if "metadata_errors" in kwargs:
+            raise TypeError(
+                "open() got an unexpected keyword argument 'metadata_errors'"
+            )
+        calls.append((args, kwargs))
+        return "container"
+
+    av = types.ModuleType("av")
+    av.__version__ = version
+    av.open = open_
+    fw = types.ModuleType("faster_whisper")
+    fw_audio = types.ModuleType("faster_whisper.audio")
+    fw_audio.av = av
+    fw.audio = fw_audio
+    monkeypatch.setitem(sys.modules, "av", av)
+    monkeypatch.setitem(sys.modules, "faster_whisper", fw)
+    monkeypatch.setitem(sys.modules, "faster_whisper.audio", fw_audio)
+    return av, fw_audio, calls
+
+
+def test_av_open_shim_drops_metadata_errors_on_pyav_15(monkeypatch):
+    av, fw_audio, calls = _fake_av(monkeypatch, "19.0.2")
+    speech._shim_av_open()
+    assert (
+        fw_audio.av.open("/tmp/x.wav", mode="r", metadata_errors="ignore")
+        == "container"
+    )
+    assert calls == [(("/tmp/x.wav",), {"mode": "r"})]
+    first = fw_audio.av.open
+    speech._shim_av_open()  # idempotent: never wrapped twice
+    assert fw_audio.av.open is first
+
+
+def test_av_open_shim_leaves_older_pyav_alone(monkeypatch):
+    av, fw_audio, _calls = _fake_av(monkeypatch, "14.4.0")
+    before = fw_audio.av.open
+    speech._shim_av_open()
+    assert fw_audio.av.open is before
