@@ -1,18 +1,23 @@
 /** The desktop mic (components/TopBarMic.tsx + lib/voiceDesktop.ts): the
- * radio words, the push-to-talk machine, the prefs, the reply rules, the
- * speech queue and the engine choice — pure, so pinned here — the server
- * recognizer's WAV path against a mocked recorder and `apiRaw`, and the
- * wiring around them pinned against the source: where the mic sits, that the
- * old dictation button is gone, and what goes on /send. */
+ * radio words, the dictation machine, the prefs, the reply rules, the speech
+ * queue and the engine choice — pure, so pinned here — live typing against a
+ * mocked terminal (`peekTerm`) and `instApi`, the server recognizer's WAV path
+ * against a mocked recorder and `apiRaw`, and the wiring around them pinned
+ * against the source: where the mic sits, that the old dictation button is
+ * gone, and what goes on /send. */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_VOICE_CFG,
   DEFAULT_VOICE_PREFS,
+  DICT_HINT,
   Dictation,
+  LiveDictation,
+  OVER_LINE,
   ReplyTracker,
   SpeechQueue,
   VOICE_PREFS_KEY,
+  backspaces,
   engineDiagnostics,
   isElectron,
   loadVoicePrefs,
@@ -22,18 +27,44 @@ import {
   saveVoicePrefs,
   sentenceChunks,
   serverRecognizer,
+  sessionTarget,
   spokenLine,
   sttEngine,
   ttsEngine,
+  type DictTarget,
+  type LiveHooks,
   type RecognizerHandlers,
   type Speaker,
   type VoiceCfg,
 } from "../lib/voiceDesktop";
 import { ALL_CODE, ALL_CSS, blockFrom, code, cssRule, fn, src } from "./sourceText";
 
-const mocks = vi.hoisted(() => ({ api: vi.fn(), apiRaw: vi.fn(), startWavRecording: vi.fn() }));
-vi.mock("../api/client", () => ({ api: mocks.api, apiRaw: mocks.apiRaw }));
-vi.mock("../lib/wavRecorder", () => ({ startWavRecording: mocks.startWavRecording }));
+const mocks = vi.hoisted(() => {
+  class ApiError extends Error {
+    constructor(
+      public status: number,
+      message: string,
+      public body: unknown
+    ) {
+      super(message);
+    }
+  }
+  return {
+    api: vi.fn(),
+    apiRaw: vi.fn(),
+    instApi: vi.fn(),
+    ApiError,
+    peekTerm: vi.fn(),
+    startWavRecording: vi.fn(),
+    resamplerName: vi.fn(() => "browser resampler"),
+  };
+});
+vi.mock("../api/client", () => ({ api: mocks.api, apiRaw: mocks.apiRaw, instApi: mocks.instApi, ApiError: mocks.ApiError }));
+vi.mock("../lib/terminals", () => ({ peekTerm: mocks.peekTerm }));
+vi.mock("../lib/wavRecorder", () => ({
+  startWavRecording: mocks.startWavRecording,
+  resamplerName: mocks.resamplerName,
+}));
 
 function memKV(init: Record<string, string> = {}) {
   const m = new Map(Object.entries(init));
@@ -48,11 +79,17 @@ describe("parseRadio: only the last word is a radio word", () => {
   it.each([
     ["fix the login bug over", "over", "fix the login bug"],
     ["Over.", "over", ""],
+    ["run the tests submit", "submit", "run the tests"],
+    ["Submit.", "submit", ""],
+    ["SUBMIT IT!", "submit", ""],
+    ["ok, submit that.", "submit", "ok"],
     ["disregard", "disregard", ""],
     ["Disregard that.", "disregard", ""],
     ["scrap it, disregard it", "disregard", "scrap it"],
     ["move it over", "over", "move it"],
     ["hangover", "", "hangover"],
+    ["resubmit", "", "resubmit"],
+    ["submit the form then wait", "", "submit the form then wait"],
     ["start over the tests then stop", "", "start over the tests then stop"],
     ["", "", ""],
   ])("%j → %s", (text, kind, rest) => {
@@ -60,63 +97,315 @@ describe("parseRadio: only the last word is a radio word", () => {
   });
 });
 
-describe("Dictation: the push-to-talk machine", () => {
-  it("toggle: start → phrases → stop sends them, with the phrase count", () => {
+describe("Dictation: the machine (what to type, what to take back)", () => {
+  it("each final is typed at once, with a trailing space", () => {
     const d = new Dictation();
     d.begin();
-    expect(d.heard("fix the login bug")).toEqual({ kind: "continue" });
-    expect(d.heard("and add a test")).toEqual({ kind: "continue" });
-    expect(d.finish()).toEqual({ kind: "send", text: "fix the login bug and add a test", phrases: 2 });
-    expect(d.listening).toBe(false);
+    expect(d.heard("fix the login bug")).toEqual({ kind: "type", text: "fix the login bug " });
+    d.wrote("fix the login bug ");
+    expect(d.heard("and add a test")).toEqual({ kind: "type", text: "and add a test " });
+    d.wrote("and add a test ");
+    d.hearing("then push");
+    expect(d.shown).toBe("fix the login bug and add a test then push");
+    expect(d.listening).toBe(true);
   });
 
-  it("toggle: stopping with nothing heard just stops", () => {
+  it("“over” stops with the words in the field; “submit” stops and submits; the phrase before either is typed first", () => {
     const d = new Dictation();
     d.begin();
-    expect(d.finish()).toEqual({ kind: "stopped" });
+    expect(d.heard("run the tests over")).toEqual({ kind: "over", text: "run the tests " });
     expect(d.listening).toBe(false);
+    d.begin();
+    expect(d.heard("Over.")).toEqual({ kind: "over", text: "" });
+    d.begin();
+    expect(d.heard("run the tests, submit")).toEqual({ kind: "submit", text: "run the tests " });
+    expect(d.listening).toBe(false);
+    expect(d.heard("late words")).toEqual({ kind: "stopped" });
   });
 
-  it("hold: down then up sends — and a phrase still in flight on release counts", () => {
+  it("“disregard” takes back exactly what this dictation typed, and keeps listening", () => {
     const d = new Dictation();
-    d.begin(); // pointerdown
+    d.begin();
+    d.wrote("delete everything ");
+    expect(d.heard("Disregard that.")).toEqual({ kind: "erase", text: "delete everything " });
+    expect(d.listening).toBe(true);
+    expect(d.typed).toBe("");
+    expect(d.heard("keep everything over")).toEqual({ kind: "over", text: "keep everything " });
+  });
+
+  it("push to talk let go is “over”, and a phrase still in flight counts", () => {
+    const d = new Dictation();
+    d.begin();
     d.hearing("switch to the login fix");
-    expect(d.shown).toBe("switch to the login fix");
-    expect(d.finish()).toEqual({ kind: "send", text: "switch to the login fix", phrases: 1 }); // pointerup
-  });
-
-  it("a phrase ending in “over” sends at once; “over” alone with nothing to send keeps listening", () => {
-    const d = new Dictation();
-    d.begin();
-    expect(d.heard("Over.")).toEqual({ kind: "continue" });
-    expect(d.listening).toBe(true);
-    d.heard("run the tests");
-    expect(d.heard("over")).toEqual({ kind: "send", text: "run the tests", phrases: 1 });
+    expect(d.finish()).toEqual({ kind: "over", text: "switch to the login fix " });
     expect(d.listening).toBe(false);
+    d.begin();
+    expect(d.finish()).toEqual({ kind: "over", text: "" });
+    d.begin();
+    d.hearing("ship it submit");
+    expect(d.finish()).toEqual({ kind: "submit", text: "ship it " });
+    d.begin();
+    d.wrote("oops ");
+    d.hearing("disregard");
+    expect(d.finish()).toEqual({ kind: "dropped", text: "oops " });
   });
 
-  it("“disregard” clears the draft and keeps listening", () => {
+  it("Escape is “disregard” and stop; silence stops and leaves the words", () => {
     const d = new Dictation();
     d.begin();
-    d.heard("delete everything");
-    expect(d.heard("Disregard that.")).toEqual({ kind: "cleared" });
-    expect(d.listening).toBe(true);
-    expect(d.text).toBe("");
-    d.heard("keep everything over");
+    d.wrote("half a thought ");
+    expect(d.cancel()).toEqual({ kind: "dropped", text: "half a thought " });
     expect(d.listening).toBe(false);
+    expect(d.cancel()).toEqual({ kind: "stopped" });
+    d.begin();
+    d.wrote("half a thought ");
+    expect(d.expire()).toEqual({ kind: "over", text: "" });
+    expect(d.typed).toBe("half a thought ");
   });
 
-  it("Escape drops the words; silence keeps them unsent; the next round continues from them", () => {
-    const d = new Dictation();
-    d.begin();
-    d.heard("half a thought");
-    expect(d.cancel()).toEqual({ kind: "dropped" });
-    expect(d.text).toBe("");
-    d.begin();
-    d.heard("half a thought");
-    expect(d.expire()).toEqual({ kind: "kept", text: "half a thought" });
-    d.begin("half a thought");
-    expect(d.heard("and the rest over")).toEqual({ kind: "send", text: "half a thought and the rest", phrases: 2 });
+  it("one backspace per character typed — code points, not UTF-16 units or bytes", () => {
+    expect(backspaces("abc ")).toBe("\x7f".repeat(4));
+    expect(backspaces("café ")).toBe("\x7f".repeat(5));
+    expect(backspaces("ship it 🚀 ")).toBe("\x7f".repeat(10));
+    expect(backspaces("日本語 ")).toBe("\x7f".repeat(4));
+    expect(backspaces("")).toBe("");
+  });
+});
+
+describe("LiveDictation: typing into the session as you speak", () => {
+  afterEach(() => {
+    mocks.peekTerm.mockReset();
+    mocks.instApi.mockReset();
+  });
+
+  /** A terminal per session that records the raw keys sent down it. */
+  function terms(open = true) {
+    const sent: Record<string, string[]> = {};
+    mocks.peekTerm.mockImplementation((title: string, kind: string) => {
+      expect(kind).toBe("agent");
+      return {
+        send: (data: string) => {
+          if (!open) return false;
+          (sent[title] ||= []).push(data);
+          return true;
+        },
+      };
+    });
+    return sent;
+  }
+
+  function hooks(over: Partial<LiveHooks> = {}) {
+    const captions: string[] = [];
+    const calls = { halt: 0, routed: [] as string[], submitted: [] as Array<[string, boolean]> };
+    const h: LiveHooks = {
+      caption: (t) => void captions.push(t),
+      halt: () => void calls.halt++,
+      route: async (t) => {
+        calls.routed.push(t);
+        return false;
+      },
+      activity: () => "idle",
+      replies: () => false,
+      submitted: (title, say) => void calls.submitted.push([title, say]),
+      ...over,
+    };
+    return { h, captions, calls, last: () => captions[captions.length - 1] };
+  }
+
+  it("types each final at once with a trailing space, and shows the running text", async () => {
+    const sent = terms();
+    const k = hooks();
+    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    await d.heard("fix the login bug");
+    expect(sent.t1).toEqual(["fix the login bug "]);
+    await d.heard("and add a test");
+    expect(sent.t1).toEqual(["fix the login bug ", "and add a test "]);
+    expect(k.last()).toBe("fix the login bug and add a test");
+    // Only the first phrase was offered to the router.
+    expect(k.calls.routed).toEqual(["fix the login bug"]);
+    expect(k.calls.halt).toBe(0);
+    expect(d.active).toBe(true);
+  });
+
+  it("a session on a dialog gets nothing typed: the words are dropped and listening ends", async () => {
+    for (const activity of ["clarify", "limit"]) {
+      const sent = terms();
+      const k = hooks({ activity: () => activity });
+      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      await d.heard("yes do it");
+      expect(sent.t1).toBeUndefined();
+      expect(k.last()).toBe("Login fix is waiting on a dialog — answer it first");
+      expect(k.calls.halt).toBe(1);
+      expect(d.active).toBe(false);
+    }
+  });
+
+  it("the dialog is checked before the FIRST phrase only", async () => {
+    const sent = terms();
+    let act = "working";
+    const k = hooks({ activity: () => act });
+    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    await d.heard("one");
+    act = "clarify"; // the first phrase is already in the field: keep going
+    await d.heard("two");
+    expect(sent.t1).toEqual(["one ", "two "]);
+  });
+
+  it("“disregard” sends one backspace per character this dictation typed — multi-byte ones included — and goes on", async () => {
+    const sent = terms();
+    const k = hooks();
+    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    await d.heard("café");
+    await d.heard("ship it 🚀");
+    await d.heard("disregard that");
+    expect(sent.t1.slice(0, 2)).toEqual(["café ", "ship it 🚀 "]);
+    expect(sent.t1[2]).toBe("\x7f".repeat(5 + 10));
+    expect(sent.t1.join("")).not.toContain("\x1b"); // never Escape
+    expect(k.last()).toBe("Disregarded — go on");
+    expect(d.active).toBe(true);
+    // A fresh start: the next phrase is a first phrase again (router, dialog check).
+    await d.heard("keep everything");
+    expect(sent.t1[3]).toBe("keep everything ");
+    expect(k.calls.routed).toEqual(["café", "keep everything"]);
+  });
+
+  it("Escape takes it back and stops", async () => {
+    const sent = terms();
+    const k = hooks();
+    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    await d.heard("rm -rf");
+    await d.cancel();
+    expect(sent.t1).toEqual(["rm -rf ", "\x7f".repeat(7)]);
+    expect(k.calls.halt).toBe(1);
+    expect(d.active).toBe(false);
+  });
+
+  it("“over” stops with the words in the field, nothing submitted", async () => {
+    const sent = terms();
+    const k = hooks();
+    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    await d.heard("run the tests over");
+    expect(sent.t1).toEqual(["run the tests "]);
+    expect(k.last()).toBe(OVER_LINE);
+    expect(OVER_LINE).toBe("In the field — say submit or press Enter");
+    expect(k.calls.halt).toBe(1);
+    expect(mocks.instApi).not.toHaveBeenCalled();
+  });
+
+  it("push to talk let go is “over”: the phrase in flight is typed, nothing submitted", async () => {
+    const sent = terms();
+    const k = hooks();
+    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    await d.heard("fix the bug");
+    d.hearing("and the test");
+    await d.finish();
+    expect(sent.t1).toEqual(["fix the bug ", "and the test "]);
+    expect(k.last()).toBe(OVER_LINE);
+    expect(mocks.instApi).not.toHaveBeenCalled();
+    expect(d.active).toBe(false);
+    // Anything the recognizer delivers afterwards is ignored.
+    await d.heard("late");
+    expect(sent.t1).toHaveLength(2);
+  });
+
+  it("“submit” types the phrase, then presses Enter through /send {enter: true, say}", async () => {
+    const sent = terms();
+    for (const replies of [false, true]) {
+      mocks.instApi.mockResolvedValueOnce({ ok: true });
+      const k = hooks({ replies: () => replies });
+      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      await d.heard("run the tests submit");
+      expect(mocks.instApi).toHaveBeenLastCalledWith("t1", "/send", { json: { enter: true, say: replies } });
+      expect(k.calls.submitted).toEqual([["t1", replies]]);
+      expect(k.last()).toBe("Sent to Login fix.");
+      expect(k.calls.halt).toBe(1);
+    }
+    expect(sent.t1).toEqual(["run the tests ", "run the tests "]);
+  });
+
+  it("a 409 in_dialog leaves the draft and says to press Enter yourself", async () => {
+    terms();
+    mocks.instApi.mockRejectedValueOnce(new mocks.ApiError(409, "in a dialog", { in_dialog: true }));
+    const k = hooks({ replies: () => true });
+    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    await d.heard("yes submit");
+    expect(k.last()).toBe("Login fix is on a dialog — press Enter yourself when it is answered");
+    expect(k.calls.submitted).toEqual([]); // nothing went: no reply to wait for
+  });
+
+  it("a text box: words go in at the cursor; “over” and “submit” only stop — Enter is never pressed", async () => {
+    terms();
+    for (const word of ["over", "submit"]) {
+      const typed: string[] = [];
+      const erased: string[] = [];
+      const box: DictTarget = {
+        kind: "field",
+        title: "",
+        name: "the text box",
+        type: (t) => typed.push(t) > 0,
+        erase: (t) => erased.push(t) > 0,
+      };
+      const k = hooks();
+      const d = new LiveDictation(box, k.h);
+      await d.heard("hello");
+      await d.heard("oops disregard");
+      await d.heard("world " + word);
+      expect(typed).toEqual(["hello ", "world "]);
+      expect(erased).toEqual(["hello "]);
+      expect(k.calls.routed).toEqual([]); // a text box is never routed
+      expect(k.calls.halt).toBe(1);
+      expect(mocks.instApi).not.toHaveBeenCalled();
+      expect(mocks.peekTerm).not.toHaveBeenCalled();
+    }
+  });
+
+  it("a phrase the router acted on is not typed", async () => {
+    const sent = terms();
+    const k = hooks({ route: async () => true });
+    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    await d.heard("switch to the billing page");
+    expect(sent.t1).toBeUndefined();
+    expect(k.calls.halt).toBe(1);
+  });
+
+  it("no session focused: a non-command first phrase is not typed anywhere", async () => {
+    terms();
+    const k = hooks();
+    const d = new LiveDictation(null, k.h);
+    await d.heard("fix the bug");
+    expect(k.calls.routed).toEqual(["fix the bug"]);
+    expect(k.last()).toBe("Click a session first — “fix the bug” not typed");
+    expect(mocks.peekTerm).not.toHaveBeenCalled();
+  });
+
+  it("a terminal that isn't connected: says so and stops", async () => {
+    terms(false);
+    const k = hooks();
+    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    await d.heard("hello");
+    expect(k.last()).toBe("Couldn't type into Login fix — its terminal isn't connected");
+    expect(d.active).toBe(false);
+  });
+
+  it("phrases are carried out in order even while the first waits on the router", async () => {
+    const sent = terms();
+    let release: (v: boolean) => void = () => {};
+    const k = hooks({ route: () => new Promise<boolean>((r) => (release = r)) });
+    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    const a = d.heard("one");
+    const b = d.heard("two");
+    await Promise.resolve();
+    expect(sent.t1).toBeUndefined();
+    release(false);
+    await Promise.all([a, b]);
+    expect(sent.t1).toEqual(["one ", "two "]);
+  });
+
+  it("before a word, the caption names the radio words", () => {
+    const k = hooks();
+    new LiveDictation(sessionTarget("t1", "Login fix"), k.h).show();
+    expect(k.last()).toBe(DICT_HINT);
+    expect(DICT_HINT).toBe("Say over to leave it, submit to send, disregard to start over");
   });
 });
 
@@ -293,7 +582,7 @@ describe("engines and errors", () => {
       "server",
       "server",
       true,
-      "Recognition: server, built in (Windows via WSL) · Voice: server (piper)",
+      "Recognition: server, built in (Windows via WSL) — 16 kHz clips, browser resampler, a phrase ends after 1.1 s of quiet · Voice: server (piper)",
     ],
     [
       "the built-in engine on a Mac, both ways",
@@ -301,7 +590,7 @@ describe("engines and errors", () => {
       "server",
       "server",
       true,
-      "Recognition: server, built in (macOS) · Voice: server, built in (macOS)",
+      "Recognition: server, built in (macOS) — 16 kHz clips, browser resampler, a phrase ends after 1.1 s of quiet · Voice: server, built in (macOS)",
     ],
     ["a browser tab on its own engines", cfg(), "browser", "browser", false, "Recognition: this browser · Voice: this browser"],
     [
@@ -418,7 +707,7 @@ describe("serverRecognizer: a WAV clip per phrase", () => {
     now += 1000;
     level(0.001);
     expect(t.clips[0].stop).not.toHaveBeenCalled(); // not quiet for long enough yet
-    now += 1000; // 2 s of quiet > SILENCE_MS
+    now += 200; // 1.2 s of quiet > SILENCE_MS (1.1 s)
     level(0.001);
     expect(t.clips[0].stop).toHaveBeenCalled();
     await vi.waitFor(() => expect(t.clips.length).toBe(2));
@@ -455,7 +744,7 @@ describe("serverRecognizer: a WAV clip per phrase", () => {
     const lib = code("lib/voiceDesktop.ts");
     expect(lib).not.toContain("MediaRecorder");
     expect(lib).not.toContain("SERVER_MIMES");
-    expect(lib).toContain('import { startWavRecording, type WavRecording } from "./wavRecorder";');
+    expect(lib).toContain('import { resamplerName, startWavRecording, type WavRecording } from "./wavRecorder";');
     expect(lib).toContain('headers: { "Content-Type": "audio/wav" }');
   });
 });
@@ -486,17 +775,34 @@ describe("wiring", () => {
     expect(cssRule(src("components/TopBarMic.css"), "#topbar #mic-btn.listening")).toContain("mic-pulse");
   });
 
-  it("sends with dialog_safe and the replies pref as `say`", () => {
-    expect(MIC).toMatch(/instApi<[^>]*>\(title, "\/send", \{\s*json: \{ text, dialog_safe: true, say: wantSay \}/);
-    expect(MIC).toContain("const wantSay = prefsRef.current.replies;");
-    expect(MIC).toContain("tracker.sent(title, wantSay)");
+  it("types into the session's agent terminal, never a whole-prompt /send; submit is /send {enter: true}", () => {
+    const lib = code("lib/voiceDesktop.ts");
+    expect(lib).toContain('peekTerm(title, "agent")?.send(data)');
+    expect(lib).toMatch(/instApi<[^>]*>\(title, "\/send", \{ json: \{ enter: true, say \} \}\)/);
+    // The old one-shot prompt send is gone from the mic.
+    expect(MIC).not.toContain("dialog_safe");
+    expect(MIC).not.toContain("sendPrompt");
+    expect(MIC).toContain("submitted: (title, wantSay) => tracker.sent(title, wantSay)");
+    expect(MIC).toContain("replies: () => prefsRef.current.replies");
   });
 
-  it("asks the router first, for one phrase only, and selects through the one selection authority", () => {
-    expect(MIC).toContain("if (phrases === 1)");
-    expect(MIC).toContain("routePhrase(text, session)");
+  it("the dialog guard reads the rows the app already polls", () => {
+    expect(MIC).toContain('queryClient.getQueryData<Instance[]>(["instances"])');
+    expect(MIC).toContain("effectiveActivity(");
+    expect(MIC).toContain("activity: liveActivity");
+  });
+
+  it("asks the router with a dictation's first phrase, and selects through the one selection authority", () => {
+    expect(MIC).toContain('routePhrase(text, useUi.getState().focused || "")');
     expect(MIC).toContain("selectSession(title, { noKeyboard: true })");
     expect(code("lib/voiceDesktop.ts")).toContain('api<RouteReply>("/api/voice/route", { json: { text, session } })');
+  });
+
+  it("push to talk ends in finish() (\u201cover\u201d), Escape in cancel() (\u201cdisregard\u201d + stop)", () => {
+    const fin = blockFrom(MIC, "const finish = (", "// Escape on the mic");
+    expect(fin).toContain("void d.finish()");
+    expect(fin).not.toContain("instApi");
+    expect(MIC).toContain("void live.current?.cancel()");
   });
 
   it("opens its options on right-click and Shift+click, and deep-links the speech engines", () => {
