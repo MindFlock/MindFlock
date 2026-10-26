@@ -391,6 +391,221 @@ class TestWindows:
 
 
 # --------------------------------------------------------------------------- #
+# The warm PowerShell
+# --------------------------------------------------------------------------- #
+class _WarmProc:
+    """A fake ``Popen`` playing :func:`ss.warm_script`: a ready line, then
+    one JSON answer per base64 request line (``self.answer(req)``; return
+    None to say nothing, ``"exit"`` to die)."""
+
+    def __init__(self, owner, argv, cwd):
+        import queue as _q
+
+        self.owner, self.argv, self.cwd = owner, list(argv), cwd
+        self.out: "_q.Queue[bytes]" = _q.Queue()
+        self.code = None
+        self.killed = False
+        self.stdin = self
+        self.stdout = self
+        if owner.ready:
+            self.out.put(b'{"ready":true}\r\n')
+        else:
+            self._exit(1)
+
+    # stdin
+    def write(self, line):
+        req = json.loads(base64.b64decode(line.strip()).decode("utf-8"))
+        self.owner.requests.append(req)
+        answer = self.owner.answer(req)
+        if answer == "exit":
+            self._exit(1)
+        elif answer is not None:
+            self.out.put(json.dumps(answer).encode() + b"\r\n")
+
+    def flush(self):
+        pass
+
+    def close(self):
+        if self.code is None:
+            self._exit(0)
+
+    # stdout
+    def readline(self):
+        return self.out.get(timeout=10)
+
+    def _exit(self, code):
+        self.code = code
+        self.out.put(b"")
+
+    def poll(self):
+        return self.code
+
+    def kill(self):
+        self.killed = True
+        if self.code is None:
+            self._exit(-9)
+
+    def wait(self, timeout=None):
+        return self.code
+
+
+class _Warm:
+    def __init__(self, tmp_path):
+        self.tmp = str(tmp_path)
+        self.procs: list = []
+        self.requests: list = []
+        self.ready = True
+        self.fail_start = None
+        self.phrases = ["open a new session", "to fix the login bug"]
+        self.reply = None  # override: a dict / None / "exit"
+
+    def __call__(self, argv, cwd=None):
+        if self.fail_start:
+            raise self.fail_start
+        proc = _WarmProc(self, argv, cwd)
+        self.procs.append(proc)
+        return proc
+
+    def answer(self, req):
+        if self.reply is not None:
+            return self.reply if self.reply != "silent" else None
+        name = req["path"].rsplit("\\", 1)[-1]
+        local = os.path.join(self.tmp, name)
+        if req["op"] == "tts":
+            with open(local, "wb") as fh:
+                fh.write(WAV)
+            return {"ok": True}
+        if req["op"] == "stt":
+            assert os.path.exists(local)
+            return {"ok": True, "phrases": self.phrases}
+        return {"ok": False, "error": "unknown request"}
+
+
+@pytest.fixture
+def warm(wsl, monkeypatch, tmp_path):
+    """WSL with the warm process allowed and played by :class:`_Warm`."""
+    monkeypatch.setenv("MINDFLOCK_SPEECH_WARM", "1")
+    fake = _Warm(tmp_path)
+    monkeypatch.setattr(ss, "_popen", fake)
+    yield fake
+    ss.reset()
+
+
+class TestWarm:
+    def test_one_process_serves_every_call(self, warm, wsl, tmp_path):
+        stt, tts = ss.SystemSTT(), ss.SystemTTS()
+        for _ in range(3):
+            assert stt.transcribe(WAV, "audio/wav", "en") == (
+                "open a new session to fix the login bug"
+            )
+            assert tts.speak("Hi there", "Microsoft Zira Desktop") == (
+                WAV,
+                "audio/wav",
+            )
+        assert len(warm.procs) == 1 and ss._WARM.starts == 1
+        proc = warm.procs[0]
+        assert proc.argv[:4] == [PS, "-NoProfile", "-NonInteractive", "-EncodedCommand"]
+        assert _script(proc.argv) == ss.warm_script()
+        assert proc.cwd == str(tmp_path)  # the Windows temp dir, no UNC warning
+        assert wsl.scripts() == [ss.probe_script()]  # no one-shot after the probe
+        stt_req, tts_req = warm.requests[:2]
+        assert stt_req["op"] == "stt" and stt_req["culture"] == "en-US"
+        assert stt_req["path"].startswith("C:\\Users\\me\\AppData\\Local\\Temp\\")
+        assert tts_req == {
+            "op": "tts",
+            "path": tts_req["path"],
+            "text": "Hi there",
+            "voice": "Microsoft Zira Desktop",
+        }
+        assert os.listdir(tmp_path) == []  # every clip deleted
+
+    def test_text_is_data_in_a_base64_line_never_script(self, warm):
+        tts = ss.SystemTTS()
+        tts.speak("It's $(rm -r x)\nline two \u201cquoted\u201d", "alloy")
+        assert warm.requests[-1]["text"] == (
+            "It's $(rm -r x)\nline two \u201cquoted\u201d"
+        )
+        assert warm.requests[-1]["voice"] == ""  # not installed: the default
+        script = ss.warm_script()
+        assert "ConvertFrom-Json" in script and "FromBase64String" in script
+        assert "SetInputToNull()" in script and "SetOutputToNull()" in script
+        assert "Reply @{ready=$true}" in script
+
+    def test_a_failed_answer_raises_and_restarts(self, warm, wsl):
+        stt = ss.SystemSTT()
+        stt.transcribe(WAV, "audio/wav")
+        warm.reply = {"ok": False, "error": "the grammar broke"}
+        with pytest.raises(speech.SpeechError) as err:
+            stt.transcribe(WAV, "audio/wav")
+        assert str(err.value) == "the Windows speech engine failed: the grammar broke"
+        assert warm.procs[0].killed and not ss._WARM.running
+        warm.reply = None
+        assert stt.transcribe(WAV, "audio/wav")  # a fresh process
+        assert len(warm.procs) == 2
+
+    def test_a_timeout_kills_it(self, warm, monkeypatch):
+        stt = ss.SystemSTT()
+        stt.transcribe(WAV, "audio/wav")
+        monkeypatch.setattr(ss, "WARM_TIMEOUT", 0.2)
+        warm.reply = "silent"
+        with pytest.raises(speech.SpeechError) as err:
+            stt.transcribe(WAV, "audio/wav")
+        assert str(err.value) == "the Windows speech engine took longer than 0 s"
+        assert warm.procs[0].killed
+
+    def test_a_process_that_dies_mid_request_falls_back_to_one_shot(self, warm, wsl):
+        warm.reply = "exit"
+        assert ss.SystemSTT().transcribe(WAV, "audio/wav") == (
+            "Open a new session to fix the login bug"  # the one-shot fake's
+        )
+        assert "SetInputToWaveFile" in wsl.scripts()[-1]
+        assert not ss._WARM.running
+
+    @pytest.mark.parametrize("how", ["oserror", "no-ready"])
+    def test_cannot_start_falls_back_and_waits_before_retrying(
+        self, warm, wsl, monkeypatch, how
+    ):
+        clock = [5000.0]
+        monkeypatch.setattr(ss, "_now", lambda: clock[0])
+        if how == "oserror":
+            warm.fail_start = OSError("interop is off")
+        else:
+            warm.ready = False
+        tts = ss.SystemTTS()
+        assert tts.speak("Hi")[0] == WAV  # through the one-shot script
+        tries = len(warm.procs)
+        tts.speak("Hi")
+        assert len(warm.procs) == tries  # not retried at once
+        assert sum("SetOutputToWaveFile" in s for s in wsl.scripts()) == 2
+        warm.fail_start, warm.ready = None, True
+        clock[0] += ss.RETRY_SECONDS
+        tts.speak("Hi")
+        assert ss._WARM.running
+        assert sum("SetOutputToWaveFile" in s for s in wsl.scripts()) == 2
+
+    def test_idle_exit(self, warm, monkeypatch):
+        clock = [100.0]
+        monkeypatch.setattr(ss, "_now", lambda: clock[0])
+        ss.SystemSTT().transcribe(WAV, "audio/wav")
+        assert ss._WARM.reap_idle() is False
+        clock[0] += ss.WARM_IDLE - 1
+        assert ss._WARM.reap_idle() is False and ss._WARM.running
+        clock[0] += 2
+        assert ss._WARM.reap_idle() is True and not ss._WARM.running
+        assert warm.procs[0].code == 0  # stdin closed: it exited by itself
+        ss.SystemSTT().transcribe(WAV, "audio/wav")
+        assert len(warm.procs) == 2
+
+    def test_never_warm_under_pytest_without_the_opt_in(self, wsl, monkeypatch):
+        spawned = []
+        monkeypatch.setattr(ss, "_popen", lambda *a, **k: spawned.append(a))
+        monkeypatch.delenv("MINDFLOCK_SPEECH_WARM", raising=False)
+        ss.SystemSTT().transcribe(WAV, "audio/wav")
+        assert spawned == []
+        assert "SetInputToWaveFile" in wsl.scripts()[-1]
+
+
+# --------------------------------------------------------------------------- #
 # Caching and describe()
 # --------------------------------------------------------------------------- #
 class TestCaching:
@@ -418,7 +633,10 @@ class TestCaching:
         assert speech.ids("stt")[0] == "system" and speech.ids("tts")[0] == "system"
         backend, detail = speech.select("stt")
         assert backend.id == "system"
-        assert detail == "Windows (from WSL) speech recognition (en-US)"
+        assert detail == (
+            "Windows (from WSL) speech recognition (en-US):"
+            " basic accuracy — install local models for better recognition"
+        )
         assert speech.choose("tts") == "system"
 
     def test_describe_system_block(self, wsl):
@@ -433,7 +651,25 @@ class TestCaching:
             " Microsoft Zira Desktop.",
             "voices": ["Microsoft David Desktop", "Microsoft Zira Desktop"],
             "recognizers": ["en-US"],
+            "stt_quality": "basic",
         }
+        # The probe's own sentence stays plain; the recommendation rides
+        # only the ready() detail the Settings row prints.
+        assert d["server_ready"]["stt_detail"].endswith(
+            "basic accuracy — install local models for better recognition"
+        )
+
+    def test_mac_recognition_is_good_and_needs_no_recommendation(self, monkeypatch):
+        found = ss.Probe(
+            "mac",
+            stt_ok=True,
+            stt_detail="Apple speech recognition on this Mac",
+            tts_ok=True,
+            tts_detail="macOS voices: Samantha",
+        )
+        monkeypatch.setattr(ss, "probe", lambda: found)
+        assert ss.describe()["stt_quality"] == "good"
+        assert ss.SystemSTT().ready() == (True, "Apple speech recognition on this Mac")
 
     def test_describe_on_plain_linux(self, monkeypatch):
         _platform(monkeypatch, "linux", "Linux version 6.8.0")
@@ -443,6 +679,7 @@ class TestCaching:
             "detail": ss.LINUX_NONE,
             "voices": [],
             "recognizers": [],
+            "stt_quality": "none",
         }
 
     def test_registration_is_idempotent(self):
@@ -843,7 +1080,11 @@ class TestMac:
     ss.platform_kind() not in ("windows", "wsl"),
     reason="Windows speech is reachable only on Windows or WSL",
 )
-def test_real_windows_speech_round_trip():
+@pytest.mark.parametrize("warm", [False, True], ids=["one-shot", "warm"])
+def test_real_windows_speech_round_trip(monkeypatch, warm):
+    if warm:
+        monkeypatch.setenv("MINDFLOCK_SPEECH_WARM", "1")
+    starts = ss._WARM.starts
     started = __import__("time").monotonic()
     tts, stt = ss.SystemTTS(), ss.SystemSTT()
     ok, detail = tts.ready()
@@ -857,4 +1098,11 @@ def test_real_windows_speech_round_trip():
     text = stt.transcribe(audio, "audio/wav", "en")
     words = text.lower().replace(",", " ").split()
     assert "speech" in words and "check" in words, text
+    if warm:
+        # The same process again, and (once warm) well under a second.
+        t0 = __import__("time").monotonic()
+        again = stt.transcribe(audio, "audio/wav", "en").lower()
+        assert "speech" in again and "check" in again, again
+        assert ss._WARM.starts == starts + 1 and ss._WARM.running
+        assert __import__("time").monotonic() - t0 < 5
     assert __import__("time").monotonic() - started < 60

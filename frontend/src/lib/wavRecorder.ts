@@ -42,25 +42,88 @@ export function encodeWav(samples: Float32Array, sampleRate: number): Blob {
   return new Blob([buf], { type: "audio/wav" });
 }
 
-/** Linear-interpolation resample (mono). Returns the input when rates match. */
+/** Output-rate samples on each side of the fallback filter's centre: wider
+ * is a sharper band edge (and more work — the fallback only runs where the
+ * browser has no OfflineAudioContext). */
+const SINC_HALF_ZC = 16;
+/** The fallback's cutoff as a fraction of the lower Nyquist: just under it,
+ * so the band edge has room to fall before the frequencies that would alias. */
+const SINC_ROLLOFF = 0.9;
+
+/** Windowed-sinc resample (mono), the fallback for {@link resampleTo} where
+ * there is no OfflineAudioContext (Node tests, very old browsers). A Blackman-
+ * windowed sinc low-passes at {@link SINC_ROLLOFF} of the lower Nyquist, so a
+ * tone above the new Nyquist is filtered out instead of folding back into the
+ * speech band (plain linear interpolation let it alias). Each output is
+ * normalised by its taps' sum: a constant stays exactly constant, and the
+ * edges (where taps run off the clip) are not dimmed. ⌊n·to/from⌋ samples;
+ * the input itself when the rates match. */
 export function resample(samples: Float32Array, fromRate: number, toRate: number): Float32Array {
   if (fromRate === toRate || samples.length === 0) return samples;
   const n = samples.length;
   const outLen = Math.floor((n * toRate) / fromRate);
   const out = new Float32Array(outLen);
   const step = fromRate / toRate;
+  const ratio = Math.min(1, toRate / fromRate);
+  const fc = 0.5 * ratio * SINC_ROLLOFF; // cycles per input sample
+  const half = SINC_HALF_ZC / ratio; // input samples each side
   for (let i = 0; i < outLen; i++) {
-    const pos = i * step;
-    const i0 = Math.floor(pos);
-    const i1 = i0 + 1 < n ? i0 + 1 : n - 1;
-    const frac = pos - i0;
-    out[i] = samples[i0] + (samples[i1] - samples[i0]) * frac;
+    const t = i * step;
+    const lo = Math.max(0, Math.ceil(t - half));
+    const hi = Math.min(n - 1, Math.floor(t + half));
+    let acc = 0;
+    let wsum = 0;
+    for (let j = lo; j <= hi; j++) {
+      const x = j - t;
+      const u = x / half;
+      const win = 0.42 + 0.5 * Math.cos(Math.PI * u) + 0.08 * Math.cos(2 * Math.PI * u);
+      const arg = 2 * fc * x;
+      const w = (arg === 0 ? 1 : Math.sin(Math.PI * arg) / (Math.PI * arg)) * win;
+      acc += samples[j] * w;
+      wsum += w;
+    }
+    out[i] = wsum ? acc / wsum : 0;
   }
   return out;
 }
 
+type OfflineCtor = new (channels: number, length: number, sampleRate: number) => OfflineAudioContext;
+
+function offlineCtor(): OfflineCtor | null {
+  const g = globalThis as unknown as { OfflineAudioContext?: OfflineCtor; webkitOfflineAudioContext?: OfflineCtor };
+  return g.OfflineAudioContext || g.webkitOfflineAudioContext || null;
+}
+
+/** Which resampler {@link resampleTo} uses here, for the mic's diagnostics. */
+export function resamplerName(): string {
+  return offlineCtor() ? "browser resampler" : "windowed-sinc resampler";
+}
+
+/** Resample through the browser's own resampler — an OfflineAudioContext at
+ * the target rate rendering the clip from a buffer source (band-limited, high
+ * quality) — or {@link resample} where there is none or it refuses the rate
+ * (old Safari: nothing under 22.05 kHz). */
+export async function resampleTo(samples: Float32Array, fromRate: number, toRate: number): Promise<Float32Array> {
+  const OAC = offlineCtor();
+  if (!OAC || fromRate === toRate || samples.length === 0) return resample(samples, fromRate, toRate);
+  try {
+    const off = new OAC(1, Math.ceil((samples.length * toRate) / fromRate), toRate);
+    const buf = off.createBuffer(1, samples.length, fromRate);
+    buf.getChannelData(0).set(samples);
+    const src = off.createBufferSource();
+    src.buffer = buf;
+    src.connect(off.destination);
+    src.start(0);
+    const rendered = await off.startRendering();
+    return rendered.getChannelData(0).slice();
+  } catch {
+    return resample(samples, fromRate, toRate);
+  }
+}
+
 export interface WavRecording {
-  /** Stop and return the WAV of everything heard since start. */
+  /** Stop and return the WAV of everything heard since start (resampled to
+   * the target rate by {@link resampleTo}). */
   stop(): Promise<Blob>;
   /** Drop everything; no blob. */
   cancel(): void;
@@ -77,7 +140,8 @@ export interface WavRecorderOptions {
 
 /** Record a MediaStream through `ctx` (the caller's AudioContext, already running) with a
  * ScriptProcessorNode(4096, 1, 1) — deprecated but present everywhere, including iOS Safari;
- * no AudioWorklet module file to load. Mono (first channel), resampled to targetRate in stop(). */
+ * no AudioWorklet module file to load. Mono (first channel), resampled to targetRate in stop()
+ * ({@link resampleTo}). */
 export function startWavRecording(
   stream: MediaStream,
   ctx: AudioContext,
@@ -138,7 +202,7 @@ export function startWavRecording(
         at += b.length;
       }
       blocks = [];
-      result = Promise.resolve(encodeWav(resample(all, ctx.sampleRate, targetRate), targetRate));
+      result = resampleTo(all, ctx.sampleRate, targetRate).then((pcm) => encodeWav(pcm, targetRate));
       return result;
     },
     cancel() {

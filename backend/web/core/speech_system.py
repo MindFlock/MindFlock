@@ -20,7 +20,14 @@ Per platform (:func:`platform_kind`):
   base64-encoded, so no text is ever parsed as code or mangled by
   command-line quoting. On WSL the files live in the WINDOWS temp dir
   (resolved once by the probe, mapped with ``wslpath -u``) so PowerShell can
-  read them; they are deleted after each call.
+  read them; they are deleted after each call. Starting PowerShell costs
+  about a second — too slow for live dictation — so voice and recognition go
+  through ONE warm process per server (:class:`WarmPowerShell`: started on
+  first use, ``System.Speech`` loaded and the recognizer / synthesizer kept,
+  one base64 JSON request per stdin line and one JSON line back, idle-exit
+  after :data:`WARM_IDLE`, killed and restarted on any failure). The
+  one-shot ``-EncodedCommand`` script is the fallback whenever the warm
+  process cannot start.
 * ``mac`` — voice: ``say -o <wav> --data-format=LEI16@22050 [-v voice] -f
   <text file>`` (the text never rides argv). Recognition: Apple's Speech
   framework through PyObjC (``pyobjc-framework-Speech``, a main dependency on
@@ -41,9 +48,10 @@ Per platform (:func:`platform_kind`):
 a failed probe is retried after :data:`RETRY_SECONDS`, and a failed call
 drops the cache so the next poll asks again. Under pytest nothing is spawned
 unless ``MINDFLOCK_SPEECH_PROBE=1`` (the suite reads ``GET /api/voice`` and
-the doctor all over the place). Tests replace :func:`_run` (every
-subprocess), :func:`_sys_platform`, :func:`_read_proc_version`,
-:func:`_which` and :func:`_mac_helper`.
+the doctor all over the place), and the warm process only with
+``MINDFLOCK_SPEECH_WARM=1`` too. Tests replace :func:`_run` (every one-shot
+subprocess), :func:`_popen` (the warm one), :func:`_sys_platform`,
+:func:`_read_proc_version`, :func:`_which` and :func:`_mac_helper`.
 """
 
 from __future__ import annotations
@@ -52,6 +60,7 @@ import base64
 import importlib
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -70,6 +79,7 @@ __all__ = [
     "Probe",
     "SystemSTT",
     "SystemTTS",
+    "WarmPowerShell",
     "describe",
     "mac_probe",
     "mac_transcribe",
@@ -79,6 +89,7 @@ __all__ = [
     "reset",
     "stt_script",
     "tts_script",
+    "warm_script",
 ]
 
 LABEL = "This computer's speech engine"
@@ -90,6 +101,13 @@ MAC_STT_TIMEOUT = 30.0
 MAC_HELPER_SLACK = 15.0
 #: How long a failed probe is believed before the next poll asks again.
 RETRY_SECONDS = 60.0
+#: The warm PowerShell: how long it may sit unused before it exits, one
+#: request's limit (then it is killed), its start-up limit, and how often
+#: the idle watcher looks.
+WARM_IDLE = 600.0
+WARM_TIMEOUT = 30.0
+WARM_START_TIMEOUT = 15.0
+WARM_CHECK = 30.0
 WIN_POWERSHELL = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
 NEEDS_WAV = "the built-in recognizer needs a WAV clip (audio/wav): reload the page"
 LINUX_NONE = (
@@ -121,6 +139,13 @@ NOT_PROBED = (
     "the built-in speech engine is not probed under pytest"
     " (MINDFLOCK_SPEECH_PROBE=1 allows it)"
 )
+
+#: How well the built-in recognizer hears, per platform (``GET /api/voice``'s
+#: ``system.stt_quality``): Windows' SAPI 5 desktop recognizer is the only
+#: one that reads a file offline, and it is poor at free dictation; Apple's
+#: is good. The Settings screen recommends the local models for "basic".
+STT_QUALITY = {"windows": "basic", "wsl": "basic", "mac": "good"}
+BASIC_ACCURACY = "basic accuracy — install local models for better recognition"
 
 _WAV_MIMES = ("audio/wav", "audio/x-wav", "audio/wave")
 #: What Apple's recognizer decodes (AVFoundation): WAV and MP4/M4A.
@@ -179,10 +204,32 @@ def _run(
     return proc.returncode, proc.stdout, proc.stderr
 
 
+def _popen(argv: Sequence[str], cwd: Optional[str] = None):
+    """The warm PowerShell: a process with piped stdin/stdout (stderr
+    dropped — every failure is a JSON reply)."""
+    kwargs: dict = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return subprocess.Popen(
+        list(argv),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        cwd=cwd,
+        **kwargs,
+    )
+
+
 def _probe_allowed() -> bool:
     from backend.config.home_guard import under_pytest
 
     return os.environ.get("MINDFLOCK_SPEECH_PROBE") == "1" or not under_pytest()
+
+
+def _warm_allowed() -> bool:
+    from backend.config.home_guard import under_pytest
+
+    return os.environ.get("MINDFLOCK_SPEECH_WARM") == "1" or not under_pytest()
 
 
 # --------------------------------------------------------------------------- #
@@ -323,6 +370,266 @@ def _clixml_error(err: bytes) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# The warm PowerShell
+# --------------------------------------------------------------------------- #
+def warm_script() -> str:
+    """The warm process's loop: ``{"ready": true}`` once ``System.Speech``
+    is loaded, then per stdin line (base64 of a UTF-8 JSON request) one
+    compressed JSON line back. Requests: ``{"op": "stt", "path", "culture"}``
+    → ``{"ok": true, "phrases": [...]}`` (one recognizer per culture, kept);
+    ``{"op": "tts", "path", "text", "voice"}`` → ``{"ok": true}`` (one
+    synthesizer, kept; "" = its default voice); ``{"op": "ping"}``. Any
+    failure → ``{"ok": false, "error"}``. The request values are only ever
+    data — nothing from them is parsed as PowerShell. EOF on stdin ends it."""
+    return (
+        "$ErrorActionPreference = 'Stop'\n"
+        "$ProgressPreference = 'SilentlyContinue'\n"
+        "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false\n"
+        "$utf8 = New-Object System.Text.UTF8Encoding $false\n"
+        "function Reply($o) { [Console]::Out.WriteLine((ConvertTo-Json -InputObject $o"
+        " -Compress)); [Console]::Out.Flush() }\n"
+        "try { Add-Type -AssemblyName System.Speech }"
+        " catch { Reply @{ok=$false; error=$_.Exception.Message}; exit 1 }\n"
+        "$engines = @{}\n"
+        "$synth = $null\n"
+        "$defaultVoice = ''\n"
+        "Reply @{ready=$true}\n"
+        "while ($true) {\n"
+        "$line = [Console]::In.ReadLine()\n"
+        "if ($line -eq $null) { break }\n"
+        "$line = $line.Trim()\n"
+        "if ($line -eq '') { continue }\n"
+        "try {\n"
+        "$req = ConvertFrom-Json $utf8.GetString([Convert]::FromBase64String($line))\n"
+        "if ($req.op -eq 'stt') {\n"
+        "$c = [string]$req.culture\n"
+        "$e = $engines[$c]\n"
+        "if ($e -eq $null) {\n"
+        "if ($c) { $e = New-Object System.Speech.Recognition.SpeechRecognitionEngine"
+        " ([System.Globalization.CultureInfo]$c) }"
+        " else { $e = New-Object System.Speech.Recognition.SpeechRecognitionEngine }\n"
+        "$e.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar))\n"
+        "$engines[$c] = $e\n"
+        "}\n"
+        "$e.SetInputToWaveFile([string]$req.path)\n"
+        "$p = New-Object System.Collections.Generic.List[string]\n"
+        "try {\n"
+        "for ($n = 0; $n -lt 200; $n++) {\n"
+        "try { $r = $e.Recognize() } catch [System.InvalidOperationException] { break }\n"
+        "if ($r -eq $null) { break }\n"
+        "$p.Add($r.Text)\n"
+        "}\n"
+        "} finally { $e.SetInputToNull() }\n"
+        "Reply @{ok=$true; phrases=$p.ToArray()}\n"
+        "} elseif ($req.op -eq 'tts') {\n"
+        "if ($synth -eq $null) { $synth = New-Object"
+        " System.Speech.Synthesis.SpeechSynthesizer; $defaultVoice = $synth.Voice.Name }\n"
+        "$v = [string]$req.voice\n"
+        "if (-not $v) { $v = $defaultVoice }\n"
+        "$synth.SelectVoice($v)\n"
+        "$synth.SetOutputToWaveFile([string]$req.path)\n"
+        "try { $synth.Speak([string]$req.text) } finally { $synth.SetOutputToNull() }\n"
+        "Reply @{ok=$true}\n"
+        "} elseif ($req.op -eq 'ping') { Reply @{ok=$true} }\n"
+        "else { Reply @{ok=$false; error='unknown request'} }\n"
+        "} catch { Reply @{ok=$false; error=$_.Exception.Message} }\n"
+        "}\n"
+    )
+
+
+class _WarmUnavailable(Exception):
+    """The warm process cannot answer: use the one-shot script instead."""
+
+
+class WarmPowerShell:
+    """ONE long-lived PowerShell running :func:`warm_script` (Windows / WSL).
+
+    :meth:`request` starts it on first use and sends one request at a time
+    (a lock around the round trip). It raises :class:`_WarmUnavailable` —
+    the caller runs the one-shot script — when it is not allowed (pytest),
+    cannot start (then not retried for :data:`RETRY_SECONDS`), or died
+    before answering; a :class:`SpeechError` when the engine failed or took
+    longer than :data:`WARM_TIMEOUT`. Any failure kills the process; the
+    next request starts a fresh one. A watcher thread closes it after
+    :data:`WARM_IDLE` unused (:meth:`reap_idle`)."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._proc = None
+        self._key: Optional[Tuple[str, Optional[str]]] = None
+        self._replies: Optional["queue.Queue[Optional[bytes]]"] = None
+        self._stop: Optional[threading.Event] = None
+        self._used = 0.0
+        self._failed_at: Optional[float] = None
+        #: Processes started (tests and the doctor read it).
+        self.starts = 0
+
+    @property
+    def running(self) -> bool:
+        proc = self._proc
+        return proc is not None and proc.poll() is None
+
+    def request(
+        self,
+        ps: str,
+        cwd: Optional[str],
+        req: dict,
+        timeout: Optional[float] = None,
+    ) -> dict:
+        timeout = WARM_TIMEOUT if timeout is None else timeout
+        if not _warm_allowed():
+            raise _WarmUnavailable("not under pytest")
+        with self._lock:
+            if not self.running or self._key != (ps, cwd):
+                self._close_locked()
+                if (
+                    self._failed_at is not None
+                    and _now() - self._failed_at < RETRY_SECONDS
+                ):
+                    raise _WarmUnavailable("failed to start recently")
+                self._start_locked(ps, cwd)
+            self._used = _now()
+            line = base64.b64encode(json.dumps(req).encode("utf-8")) + b"\n"
+            try:
+                self._proc.stdin.write(line)
+                self._proc.stdin.flush()
+            except (OSError, ValueError) as err:
+                self._close_locked(kill=True)
+                raise _WarmUnavailable("write failed: %s" % err) from err
+            answer = self._read_locked(timeout)
+            self._used = _now()
+            if answer is None:
+                self._close_locked(kill=True)
+                raise _WarmUnavailable("the warm PowerShell exited")
+            if answer == "timeout":
+                self._close_locked(kill=True)
+                raise _speech.SpeechError(
+                    "the Windows speech engine took longer than %d s" % timeout
+                )
+            if not answer.get("ok"):
+                self._close_locked(kill=True)
+                raise _speech.SpeechError(
+                    "the Windows speech engine failed: %s"
+                    % (str(answer.get("error") or "no reason given")[:300])
+                )
+            return answer
+
+    def _start_locked(self, ps: str, cwd: Optional[str]) -> None:
+        encoded = base64.b64encode(warm_script().encode("utf-16-le")).decode("ascii")
+        argv = [ps, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
+        try:
+            proc = _popen(argv, cwd)
+        except OSError as err:
+            self._failed_at = _now()
+            raise _WarmUnavailable("could not start: %s" % err) from err
+        replies: "queue.Queue[Optional[bytes]]" = queue.Queue()
+        threading.Thread(
+            target=self._pump, args=(proc, replies), daemon=True, name="warm-ps-out"
+        ).start()
+        self._proc, self._key, self._replies = proc, (ps, cwd), replies
+        self.starts += 1
+        ready = self._read_locked(WARM_START_TIMEOUT)
+        if not isinstance(ready, dict) or not ready.get("ready"):
+            self._close_locked(kill=True)
+            self._failed_at = _now()
+            raise _WarmUnavailable("no ready line (%r)" % (ready,))
+        self._failed_at = None
+        stop = threading.Event()
+        self._stop = stop
+        threading.Thread(
+            target=self._watch, args=(stop,), daemon=True, name="warm-ps-idle"
+        ).start()
+
+    @staticmethod
+    def _pump(proc, replies) -> None:
+        """Every stdout line onto ``replies``; None at EOF."""
+        try:
+            for raw in iter(proc.stdout.readline, b""):
+                replies.put(raw)
+        except (OSError, ValueError):
+            pass
+        replies.put(None)
+
+    def _read_locked(self, timeout: float):
+        """The next JSON object line → dict, None (exited) or "timeout".
+        Lines that are not a JSON object (a stray warning) are skipped."""
+        deadline = _now() + timeout
+        while True:
+            left = deadline - _now()
+            if left <= 0:
+                return "timeout"
+            try:
+                raw = self._replies.get(timeout=left)
+            except queue.Empty:
+                return "timeout"
+            if raw is None:
+                return None
+            try:
+                answer = json.loads(raw.decode("utf-8-sig", "replace"))
+            except ValueError:
+                continue
+            if isinstance(answer, dict):
+                return answer
+
+    def _watch(self, stop: threading.Event) -> None:
+        while not stop.wait(WARM_CHECK):
+            self.reap_idle()
+
+    def reap_idle(self) -> bool:
+        """Close the process after :data:`WARM_IDLE` unused → closed it.
+        Never waits on a request in flight."""
+        if not self._lock.acquire(blocking=False):
+            return False
+        try:
+            if self._proc is None or _now() - self._used < WARM_IDLE:
+                return False
+            self._close_locked()
+            return True
+        finally:
+            self._lock.release()
+
+    def close(self) -> None:
+        with self._lock:
+            self._close_locked()
+
+    def _close_locked(self, kill: bool = False) -> None:
+        proc, self._proc, self._key = self._proc, None, None
+        if self._stop is not None:
+            self._stop.set()
+            self._stop = None
+        if proc is None:
+            return
+        try:
+            proc.stdin.close()  # the loop reads EOF and exits
+        except (OSError, ValueError):
+            pass
+        try:
+            if kill:
+                proc.kill()
+            proc.wait(timeout=2)
+        except Exception:  # noqa: BLE001 — a stuck shim: kill and move on
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+_WARM = WarmPowerShell()
+
+
+def _warm(found: "Probe", req: dict) -> Optional[dict]:
+    """``req`` through the warm PowerShell → its answer, or None when the
+    caller should run the one-shot script instead."""
+    ps = powershell_path(found.platform)
+    if not ps:
+        return None
+    try:
+        return _WARM.request(ps, _ps_cwd(found.platform, found.unix_temp), req)
+    except _WarmUnavailable:
+        return None
+
+
+# --------------------------------------------------------------------------- #
 # The probe
 # --------------------------------------------------------------------------- #
 @dataclass
@@ -348,10 +655,12 @@ _PROBE_LOCK = threading.Lock()
 
 
 def reset() -> None:
-    """Forget the cached probe (a failed call, tests)."""
+    """Forget the cached probe (a failed call, tests) and close the warm
+    PowerShell (the next call starts a fresh one)."""
     global _PROBE
     with _PROBE_LOCK:
         _PROBE = None
+    _WARM.close()
 
 
 def probe() -> Probe:
@@ -552,12 +861,17 @@ def _unlink(*paths: str) -> None:
 def _windows_speak(found: Probe, text: str, voice: str) -> Tuple[bytes, str]:
     kind = found.platform
     local, remote = _temp_pair(found, kind, ".wav")
+    picked = _pick_voice(voice, found.voices)
     try:
-        _powershell(
-            kind,
-            tts_script(remote, text, _pick_voice(voice, found.voices)),
-            _ps_cwd(kind, found.unix_temp),
-        )
+        if (
+            _warm(found, {"op": "tts", "path": remote, "text": text, "voice": picked})
+            is None
+        ):
+            _powershell(
+                kind,
+                tts_script(remote, text, picked),
+                _ps_cwd(kind, found.unix_temp),
+            )
         try:
             with open(local, "rb") as fh:
                 data = fh.read()
@@ -578,16 +892,22 @@ def _windows_transcribe(found: Probe, audio: bytes, lang: str) -> str:
     try:
         with open(local, "wb") as fh:
             fh.write(audio)
-        out = _powershell(
-            kind,
-            stt_script(remote, _pick_culture(lang, found.recognizers)),
-            _ps_cwd(kind, found.unix_temp),
-        )
+        culture = _pick_culture(lang, found.recognizers)
+        answer = _warm(found, {"op": "stt", "path": remote, "culture": culture})
+        if answer is not None:
+            phrases = [str(p).strip() for p in answer.get("phrases") or []]
+        else:
+            out = _powershell(
+                kind,
+                stt_script(remote, culture),
+                _ps_cwd(kind, found.unix_temp),
+            )
+            phrases = _lines(out, "P")
     except OSError as err:
         raise _speech.SpeechError("could not write the clip: %s" % err) from err
     finally:
         _unlink(local)
-    return " ".join(p for p in _lines(out, "P") if p).strip()
+    return " ".join(p for p in phrases if p).strip()
 
 
 # --------------------------------------------------------------------------- #
@@ -890,6 +1210,8 @@ class SystemSTT(_speech.Backend):
 
     def ready(self) -> Tuple[bool, str]:
         found = probe()
+        if found.stt_ok and STT_QUALITY.get(found.platform) == "basic":
+            return True, "%s: %s" % (found.stt_detail, BASIC_ACCURACY)
         return found.stt_ok, found.stt_detail
 
     def transcribe(self, audio: bytes, mime: str, lang: str = "") -> str:
@@ -939,8 +1261,11 @@ def describe() -> dict:
     """``GET /api/voice``'s ``system`` block::
 
     {"available": bool, "platform": "windows"|"wsl"|"mac"|"none",
-     "detail": str, "voices": [names], "recognizers": [culture tags]}
-    """
+     "detail": str, "voices": [names], "recognizers": [culture tags],
+     "stt_quality": "basic"|"good"|"none"}
+
+    ``stt_quality`` is a constant per platform (:data:`STT_QUALITY`), not a
+    measurement — the probe stays the only cost."""
     found = probe()
     if found.platform == "none":
         detail = LINUX_NONE
@@ -954,6 +1279,7 @@ def describe() -> dict:
         "detail": detail,
         "voices": list(found.voices),
         "recognizers": list(found.recognizers),
+        "stt_quality": STT_QUALITY.get(found.platform, "none"),
     }
 
 

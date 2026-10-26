@@ -12,7 +12,11 @@
  * picked, and copes with a server that has no `system` key; the phone page's
  * phone | server choice is its own block; Try it is disabled with a reason
  * until the server has an engine ready; the privacy and iPhone sentences are
- * always there; Your phone keeps only a pointer. */
+ * always there; Your phone keeps only a pointer. The local-models installer:
+ * its recommendation line and button only under a basic built-in recognizer
+ * or picked-but-missing local models, gone once they are ready or on a
+ * server without the installer; the POST, the 2 s polling and the
+ * done / failed / 409 / 403 texts; a non-owner's button disabled with why. */
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -48,6 +52,14 @@ vi.mock("../components/settings/useServerRestart", () => ({
 
 const {
   VoiceSectionView,
+  INSTALL_BASIC_LINE,
+  INSTALL_DONE,
+  INSTALL_LABEL,
+  INSTALL_REFUSED,
+  basicRecognizer,
+  installLocalModels,
+  installOffer,
+  installView,
   VOICE_BACKENDS,
   effectiveBackend,
   micErrorText,
@@ -62,6 +74,8 @@ const {
 const { SECRET_MASK, SettingsCtx } = await import("../components/settings/useSettings");
 const { resolveScreenKey } = await import("../components/settings/screenKeys");
 type VoiceView = import("../components/settings/screens/Voice").VoiceView;
+type InstallProps = import("../components/settings/screens/Voice").InstallProps;
+type InstallStatus = import("../components/settings/screens/Voice").InstallStatus;
 type Model = import("../components/settings/useSettings").SettingsModel;
 
 function model(voice: Record<string, unknown>): Model {
@@ -76,13 +90,13 @@ function model(voice: Record<string, unknown>): Model {
   };
 }
 
-function render(voice: Record<string, unknown>, view: VoiceView | null = null): string {
+function render(voice: Record<string, unknown>, view: VoiceView | null = null, install?: InstallProps): string {
   const m = model(voice);
   return renderToStaticMarkup(
     createElement(
       SettingsCtx.Provider,
       { value: m },
-      createElement(VoiceSectionView, { model: m, view, onClearKey: () => {} })
+      createElement(VoiceSectionView, { model: m, view, onClearKey: () => {}, install })
     )
   );
 }
@@ -386,5 +400,200 @@ describe("the move off Your phone", () => {
   it("the old and feature names open the Voice screen", () => {
     const keys = ["mobile", "voice"];
     for (const k of ["voice", "mobile-voice", "speech", "microphone"]) expect(resolveScreenKey(k, keys), k).toBe("voice");
+  });
+});
+
+describe("the local-models installer", () => {
+  /** Windows' basic recognizer, on the built-in engine (the new server key). */
+  const BASIC: VoiceView = {
+    ...BUILTIN,
+    server_ready: {
+      ...BUILTIN.server_ready,
+      stt_detail: "Windows speech recognizer en-US, basic accuracy — install local models for better recognition",
+    },
+    system: { ...SYSTEM, stt_quality: "basic" },
+  };
+  const MAC: VoiceView = { ...BUILTIN, system: { ...SYSTEM, platform: "mac", stt_quality: "good" } };
+  /** Local models picked, not installed. */
+  const LOCAL_MISSING: VoiceView = {
+    ...BUILTIN,
+    server_ready: { ...BUILTIN.server_ready, stt: false, stt_backend: "", stt_detail: "local models not installed: uv sync --group voice" },
+  };
+  const LOCAL_READY: VoiceView = {
+    ...BUILTIN,
+    server_ready: { ...BUILTIN.server_ready, stt: true, stt_backend: "local", stt_detail: "faster-whisper small" },
+    system: { ...SYSTEM, stt_quality: "basic" },
+  };
+  const inst = (status: InstallStatus = { state: "idle" }, more: Partial<InstallProps> = {}): InstallProps => ({
+    supported: true,
+    status,
+    touched: false,
+    onInstall: () => {},
+    ...more,
+  });
+  const esc = (t: string) => t.replace(/'/g, "&#x27;");
+
+  it("a basic recognizer is the server's word, or the built-in engine's detail on a server between the two", () => {
+    expect(basicRecognizer(BASIC)).toBe(true);
+    expect(basicRecognizer({ ...BASIC, system: SYSTEM })).toBe(true);
+    expect(basicRecognizer(MAC)).toBe(false);
+    expect(basicRecognizer(BUILTIN)).toBe(false);
+    expect(basicRecognizer(null)).toBe(false);
+  });
+
+  it("is offered for a basic built-in recognizer or missing local models, never once they recognise", () => {
+    expect(installOffer("system", BASIC)).toBe("basic");
+    expect(installOffer("system", MAC)).toBe(null);
+    expect(installOffer("openai", BASIC)).toBe(null);
+    expect(installOffer("local", LOCAL_MISSING)).toBe("local");
+    expect(installOffer("local", LOCAL_READY)).toBe(null);
+    expect(installOffer("system", LOCAL_READY)).toBe(null);
+    expect(installOffer("system", null)).toBe(null);
+  });
+
+  it("basic: the recommendation and the button under Recognition", () => {
+    const html = render({}, BASIC, inst());
+    expect(html).toContain(esc(INSTALL_BASIC_LINE));
+    expect(html).toMatch(/data-kind="stt"[\s\S]*id="voice-install-why"[\s\S]*data-kind="tts"/);
+    expect(tag(html, "voice-install-btn")).not.toContain("disabled");
+    expect(html).toContain(INSTALL_LABEL);
+  });
+
+  it("local models picked but missing: the button by the readiness line, no recommendation, on any platform", () => {
+    const html = render({ stt_backend: "local" }, { ...LOCAL_MISSING, system: { ...SYSTEM, platform: "mac", stt_quality: "good" } }, inst());
+    expect(html).toMatch(/id="voice-ready-stt"[\s\S]*id="voice-install-btn"/);
+    expect(html).not.toContain('id="voice-install-why"');
+  });
+
+  it("hidden for a good recognizer, once local models are ready, and on a server without the installer", () => {
+    for (const h of [
+      render({}, MAC, inst()),
+      render({}, BUILTIN, inst()),
+      render({ stt_backend: "local" }, LOCAL_READY, inst()),
+      render({}, BASIC, inst({ state: "idle" }, { supported: false })),
+      render({}, BASIC),
+    ])
+      expect(h).not.toContain('id="voice-install');
+  });
+
+  it("a non-owner's button is disabled with the reason", () => {
+    const html = render({}, { ...BASIC, configure_allowed: false }, inst());
+    expect(tag(html, "voice-install-btn")).toContain("disabled");
+    expect(html).toContain(esc(INSTALL_REFUSED));
+  });
+
+  it("running: busy button, progress, the step and the last log line; done: the sentence, no button", () => {
+    const running = render({}, BASIC, inst({ state: "running", step: "Downloading the recognition model (small)", log: ["a", "", "Fetching model.bin 40%"] }, { touched: true }));
+    expect(tag(running, "voice-install-btn")).toContain("disabled");
+    expect(running).toContain("Installing…");
+    expect(running).toContain("<progress");
+    expect(running).toContain("Installing: Downloading the recognition model (small)");
+    expect(running).toMatch(/id="voice-install-log"[^>]*>Fetching model.bin 40%</);
+    // Done, and the server switched recognition to local models: still said.
+    const done = render({ stt_backend: "local" }, LOCAL_READY, inst({ state: "done" }, { touched: true }));
+    expect(done).toContain(INSTALL_DONE + ".");
+    expect(done).not.toContain('id="voice-install-btn"');
+  });
+
+  it("failed: the error and Try again", () => {
+    const html = render({}, BASIC, inst({ state: "failed", error: "pip exited 1." }, { touched: true }));
+    expect(html).toContain("Couldn&#x27;t install: pip exited 1.");
+    expect(tag(html, "voice-install-btn")).not.toContain("disabled");
+    expect(html).toMatch(/id="voice-install-btn"[^>]*>Try again</);
+  });
+
+  it("installView: 409, 403 and idle", () => {
+    expect(installView({ state: "running", already: true }, true)).toMatchObject({ button: "busy", text: "Already installing" });
+    expect(installView({ state: "failed", refused: true, error: "only the owner" }, true)).toMatchObject({
+      button: "install",
+      disabled: true,
+      text: "only the owner.",
+    });
+    expect(installView({ state: "idle" }, true)).toEqual({ button: "install", disabled: false, text: "", last: "" });
+  });
+
+  describe("installLocalModels", () => {
+    const noWait = vi.fn(async () => {});
+    beforeEach(() => noWait.mockClear());
+
+    /** A fake `api`: the POST's answer, then the GETs in order. */
+    function server(post: () => unknown, gets: InstallStatus[]) {
+      const calls: Array<[string, RequestInit | undefined]> = [];
+      const call = (async (path: string, opts?: RequestInit) => {
+        calls.push([path, opts]);
+        if (opts?.method === "POST") return post();
+        const g = gets.shift();
+        if (!g) throw new Error("no more answers");
+        return g;
+      }) as <T>(path: string, opts?: RequestInit) => Promise<T>;
+      return { call, calls };
+    }
+
+    it("POSTs, polls every 2 s while running, ends on done", async () => {
+      const { call, calls } = server(
+        () => ({ state: "running" }),
+        [
+          { state: "running", step: "Installing packages", log: ["Collecting faster-whisper"] },
+          { state: "running", step: "Downloading the recognition model (small)", log: ["x"] },
+          { state: "done", step: "Done", log: [] },
+        ]
+      );
+      const seen: InstallStatus[] = [];
+      const end = await installLocalModels((s) => seen.push(s), { call, wait: noWait });
+      expect(calls[0]).toEqual(["/api/voice/install-local", { method: "POST" }]);
+      expect(calls.slice(1).map((c) => c[0])).toEqual(Array(3).fill("/api/voice/install-local"));
+      expect(calls.slice(1).every((c) => !c[1]?.method)).toBe(true);
+      expect(noWait).toHaveBeenCalledTimes(3);
+      expect(noWait).toHaveBeenCalledWith(2000);
+      expect(seen.map((s) => s.state)).toEqual(["running", "running", "running", "done"]);
+      expect(seen[1].step).toBe("Installing packages");
+      expect(end.state).toBe("done");
+      expect(installView(end, true).text).toBe(INSTALL_DONE + ".");
+    });
+
+    it("a failed install ends with the server's error", async () => {
+      const { call } = server(() => ({}), [{ state: "failed", error: "No space left on device", log: [] }]);
+      const end = await installLocalModels(() => {}, { call, wait: noWait });
+      expect(installView(end, true)).toMatchObject({ button: "retry", text: "Couldn't install: No space left on device." });
+    });
+
+    it("409: says it is already installing and follows that install", async () => {
+      const { call } = server(
+        () => {
+          throw Object.assign(new Error("an install is already running"), { status: 409 });
+        },
+        [{ state: "running", step: "Downloading the piper voice" }, { state: "done" }]
+      );
+      const seen: InstallStatus[] = [];
+      const end = await installLocalModels((s) => seen.push(s), { call, wait: noWait });
+      expect(installView(seen[0], true).text).toBe("Already installing");
+      expect(installView(seen[1], true).text).toBe("Already installing: Downloading the piper voice");
+      expect(end.state).toBe("done");
+    });
+
+    it("403: the owner check's sentence, no polling", async () => {
+      const { call, calls } = server(() => {
+        throw Object.assign(new Error("make the change on that computer itself"), { status: 403 });
+      }, []);
+      const end = await installLocalModels(() => {}, { call, wait: noWait });
+      expect(calls).toHaveLength(1);
+      expect(end).toMatchObject({ state: "failed", refused: true });
+      expect(installView(end, true)).toMatchObject({ disabled: true, text: "make the change on that computer itself." });
+    });
+
+    it("three unanswered polls in a row end it as failed; a closed screen stops polling", async () => {
+      const { call } = server(() => ({}), []);
+      const end = await installLocalModels(() => {}, { call, wait: noWait });
+      expect(end.state).toBe("failed");
+      expect(end.error).toMatch(/^lost track of the install/);
+      expect(noWait).toHaveBeenCalledTimes(3);
+
+      noWait.mockClear();
+      const two = server(() => ({}), [{ state: "running" }, { state: "running" }]);
+      const seen: InstallStatus[] = [];
+      const stopped = await installLocalModels((s) => seen.push(s), { call: two.call, wait: noWait, alive: () => false });
+      expect(stopped.state).toBe("running");
+      expect(two.calls).toHaveLength(1);
+    });
   });
 });

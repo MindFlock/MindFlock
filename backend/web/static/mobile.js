@@ -2692,13 +2692,15 @@
   //   idle       on; nothing happening — "Your turn", tap to talk
   //   listening  the recognizer is up for a prompt. Radio rules: every
   //              phrase heard lands in the compose box and it keeps listening
-  //              across pauses until a trailing "over" sends the box, a
-  //              trailing "disregard" empties it and listens on, push to talk
-  //              ends it and sends the box (prefs.ptt "toggle": the second
-  //              tap on the mic or the strip; "hold": letting go of the mic —
-  //              both wait for the words still on their way), Cancel stops
-  //              and drops them, or nothing has been heard for
-  //              VOICE_DICT_IDLE_MS (kept, not sent). The first phrase said
+  //              across pauses until a trailing "over" stops listening with
+  //              the words left in the box (nothing sent), a trailing
+  //              "submit" sends the box, a trailing "disregard" empties it
+  //              and listens on, push to talk ends it like "over" (prefs.ptt
+  //              "toggle": the second tap on the mic or the strip; "hold":
+  //              letting go of the mic — both wait for the words still on
+  //              their way, and never send), Cancel stops and drops them, or
+  //              nothing has been heard for VOICE_DICT_IDLE_MS (kept, not
+  //              sent). Only "submit" and the Send button send. The first phrase said
   //              into an empty box goes to POST /api/voice/route, which says
   //              whether it is a prompt or a command ("switch to…", "new
   //              session…"); the local VOICE_CMD table answers when the
@@ -2806,9 +2808,10 @@
   var VOICE_STORE = "cs_voice";          // localStorage: session, on, rate, voiceName, handsFree, ptt, replies
   var VOICE_DICT_IDLE_MS = 120000;       // listening ends after this long without a word (the words stay)
   var VOICE_RAPID_RESTART_MAX = 8;       // recognizers that die within a second of starting, in a row
-  var VOICE_HINT_TAP = "Tap again or say “over” to send, “disregard” to start over";
-  var VOICE_HINT_HOLD = "Release or say “over” to send, “disregard” to start over";
-  var VOICE_SEND_WAIT_MS = 1500;         // push to talk: how long the last phrase may take to arrive
+  var VOICE_HINT_TAP = "Say “over” to keep it, “submit” to send, “disregard” to start over";
+  var VOICE_HINT_HOLD = "Release to keep it; say “submit” to send";
+  var VOICE_KEPT = "In the box — say “submit”, or tap Send";
+  var VOICE_OVER_WAIT_MS = 1500;         // push to talk: how long the last phrase may take to arrive
   var VOICE_ROUTE_TIMEOUT_MS = 2000;     // POST /api/voice/route; past it the local table decides
   var VOICE_TAP_MS = 15000;              // listening window after a deliberate tap
   var VOICE_ANSWER_MS = 12000;           // ...after the agent asked a question
@@ -2975,8 +2978,9 @@
   // ScriptProcessorNode(4096, 1, 1) → a muted GainNode → the destination
   // (Chrome does not run a ScriptProcessor that reaches nothing). Each block's
   // channel 0 is copied into a list; finish() joins them, resamples to
-  // VOICE_WAV_RATE (voiceResample) and encodes (voiceWavEncode) — the same
-  // algorithm as the desktop app's lib/wavRecorder.ts. The mic stream is
+  // VOICE_WAV_RATE (voiceResampleClip: the browser's own anti-aliased
+  // resampler, else voiceResample's low-pass decimator) and encodes
+  // (voiceWavEncode) — the same clip as the desktop app's lib/wavRecorder.ts. The mic stream is
   // asked for once and kept across turns, its tracks stopped when voice goes
   // off or the page hides (release()). There are no interim words: onStatus
   // says "Listening… <n> s" (the machine adds the radio hint), and onLevel
@@ -2989,21 +2993,99 @@
   // plus "server" (detail = the line to show; a 409 is the one-line hint to
   // turn recognition on) and "nothing-recorded".
   var VOICE_WAV_RATE = 16000;            // the rate of the uploaded clip
-  var VOICE_SILENCE_MS = 1800;           // quiet after speech that ends the clip
+  var VOICE_SILENCE_MS = 1100;           // quiet after speech that ends the clip
   var VOICE_CLIP_MAX_MS = 12000;         // the hard cap on one clip
   var VOICE_LEVEL_MS = 100;              // the caption clock's period
   var VOICE_RMS_SPEECH = 0.02;           // RMS (0..1) above which the clip has speech
   var VOICE_UPLOAD_TIMEOUT_MS = 45000;   // the transcribe request's own cap
-  // Linear interpolation from `from` Hz to `to` Hz (mono); the input itself
-  // when the rates match.
+  var VOICE_RESAMPLE_TIMEOUT_MS = 5000;  // OfflineAudioContext's render; past it, voiceResample
+  var VOICE_SINC_HALF = 16;              // voiceResample's kernel half-width, in output samples
+  var VOICE_SINC_CUTOFF = 0.45;          // ...its cutoff, as a fraction of the output rate (0.5 = Nyquist)
+  var VOICE_SINC_STEPS = 64;             // ...its table: entries per input sample
+  // The clip at VOICE_WAV_RATE, resolved: the browser's own resampler
+  // (OfflineAudioContext(1, n * 16000 / rate, 16000) playing the clip — a
+  // proper anti-aliased one), else voiceResample (no OfflineAudioContext, a
+  // rate it refuses, a render that fails or never ends). voice.rec.resampler
+  // names the one that ran (Diagnostics).
+  function voiceResampleClip(samples, from) {
+    var to = VOICE_WAV_RATE;
+    if (!from || from === to) {
+      voice.rec.resampler = "none (the microphone runs at 16 kHz)";
+      return Promise.resolve(samples);
+    }
+    var OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    return new Promise(function (resolve) {
+      var done = false;
+      var timer = setTimeout(function () { settle(null, "the browser's render timed out"); }, VOICE_RESAMPLE_TIMEOUT_MS);
+      function settle(out, why) {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        if (out) { voice.rec.resampler = "OfflineAudioContext (the browser's)"; resolve(out); return; }
+        voice.rec.resampler = "low-pass decimator (" + why + ")";
+        resolve(voiceResample(samples, from, to));
+      }
+      function rendered(b) {
+        try { settle(b.getChannelData(0)); } catch (e) { settle(null, "the browser's render failed"); }
+      }
+      if (!OAC) { settle(null, "no OfflineAudioContext"); return; }
+      try {
+        var octx = new OAC(1, Math.ceil((samples.length * to) / from), to);
+        var buf = octx.createBuffer(1, samples.length, from);
+        buf.getChannelData(0).set(samples);
+        var src = octx.createBufferSource();
+        src.buffer = buf;
+        src.connect(octx.destination);
+        src.start(0);
+        // Older WebKit has only the event; the rest return a promise too.
+        octx.oncomplete = function (ev) { rendered(ev.renderedBuffer); };
+        var p = octx.startRendering();
+        if (p && p.then) p.then(rendered, function () { settle(null, "the browser's render failed"); });
+      } catch (e) {
+        settle(null, "the browser refused " + from + " → " + to + " Hz");
+      }
+    });
+  }
+  // From `from` Hz to `to` Hz (mono), the fallback: down (the usual 48 or
+  // 44.1 kHz mic → 16 kHz), a low-pass decimator — every output sample is
+  // the windowed-sinc (Blackman) weighted average of the input samples
+  // around it, cut off at VOICE_SINC_CUTOFF of the output rate, so what the
+  // 16 kHz clip cannot hold is filtered out instead of folding back into
+  // the speech band as noise (picking or interpolating samples aliases it,
+  // and a plain average of the span barely dents it). Up (an 8 kHz
+  // headset), linear interpolation: nothing above the new Nyquist to fold.
+  // The input itself when the rates match.
   function voiceResample(samples, from, to) {
     if (!from || !to || from === to || !samples.length) return samples;
     var n = samples.length;
     var out = new Float32Array(Math.floor((n * to) / from));
-    var step = from / to;
-    for (var i = 0; i < out.length; i++) {
-      var pos = i * step, i0 = Math.floor(pos), i1 = i0 + 1 < n ? i0 + 1 : n - 1;
-      out[i] = samples[i0] + (samples[i1] - samples[i0]) * (pos - i0);
+    var step = from / to, i;
+    if (step < 1) {
+      for (i = 0; i < out.length; i++) {
+        var pos = i * step, i0 = Math.floor(pos), i1 = i0 + 1 < n ? i0 + 1 : n - 1;
+        out[i] = samples[i0] + (samples[i1] - samples[i0]) * (pos - i0);
+      }
+      return out;
+    }
+    // The kernel, tabled VOICE_SINC_STEPS per input sample over
+    // [-half, half]: fc in cycles per input sample.
+    var fc = VOICE_SINC_CUTOFF / step, half = VOICE_SINC_HALF * step;
+    var size = Math.ceil(2 * half * VOICE_SINC_STEPS) + 1, kern = new Float32Array(size);
+    for (i = 0; i < size; i++) {
+      var x = i / VOICE_SINC_STEPS - half, u = i / (size - 1);
+      var sinc = x === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * x) / (Math.PI * x);
+      kern[i] = sinc * (0.42 - 0.5 * Math.cos(2 * Math.PI * u) + 0.08 * Math.cos(4 * Math.PI * u));
+    }
+    for (i = 0; i < out.length; i++) {
+      var c = i * step, lo = Math.max(0, Math.ceil(c - half)), hi = Math.min(n - 1, Math.floor(c + half));
+      var acc = 0, wsum = 0;
+      for (var k = lo; k <= hi; k++) {
+        var w = kern[Math.round((k - c + half) * VOICE_SINC_STEPS)];
+        acc += samples[k] * w;
+        wsum += w;
+      }
+      // Normalised by the weights it used: a level is kept, at the edges too.
+      out[i] = wsum ? acc / wsum : 0;
     }
     return out;
   }
@@ -3161,8 +3243,12 @@
       var all = new Float32Array(g.frames), at = 0;
       g.blocks.forEach(function (b) { all.set(b, at); at += b.length; });
       g.blocks = [];
-      var wav = voiceWavEncode(voiceResample(all, g.rate, VOICE_WAV_RATE), VOICE_WAV_RATE);
-      upload(new Blob([wav], { type: "audio/wav" }), "audio/wav", mine);
+      uploading = true;   // on its way from here: the resample, then the upload
+      voiceResampleClip(all, g.rate).then(function (pcm) {
+        if (token !== mine) return;   // stopped meanwhile (discard() cleared uploading)
+        var wav = voiceWavEncode(pcm, VOICE_WAV_RATE);
+        upload(new Blob([wav], { type: "audio/wav" }), "audio/wav", mine);
+      });
       return true;
     }
     function upload(blob, mime, mine) {
@@ -3439,7 +3525,7 @@
     cfg: { stt: "phone", tts: "phone", approve_dialogs: true, loaded: false,
            server_ready: {}, backends: { stt: [], tts: [] }, system: null },
     audioCtx: null,              // the page's one AudioContext (voiceAudioCtx)
-    rec: { mime: "", last: null, lastSpeak: null },   // Diagnostics: recorder type, last transcribe / speak
+    rec: { mime: "", last: null, lastSpeak: null, resampler: "" },   // Diagnostics: recorder type, last transcribe / speak, resampler
     sttHinted: false,            // "server recognition isn't ready" said once
     saved: null,                 // {session, on} from localStorage, for "Tap to resume voice"
     lastSay: { text: "", ts: 0 }, // never speak the same say twice
@@ -3516,7 +3602,7 @@
     voiceBtn.dataset.state = voiceBtnState(s);
     voiceBtn.setAttribute("aria-label",
       s === "off" ? "Talk to this session" : s === "dialog" ? "Stop listening"
-      : voiceIsListening() ? (voiceListen_.held ? "Release to send" : "Tap to send") : voiceTalkHint());
+      : voiceIsListening() ? (voiceListen_.held ? "Release to keep it" : "Tap to keep it") : voiceTalkHint());
     voiceStrip.classList.toggle("hidden", s === "off" && !voice.hearPending);
     voiceStateEl.textContent = VOICE_WORDS[s] || "";
     if (caption !== undefined) voiceCaption(caption);
@@ -3534,7 +3620,7 @@
   function voiceIsListening() {
     return voice.state === "listening" || voice.state === "awaiting" || voice.state === "dialog";
   }
-  // The gesture, named: what starts talking, and what sends while listening.
+  // The gesture, named: what starts talking, and what ends it (keeping the words).
   function voiceTalkHint() { return voice.prefs.ptt === "hold" ? "Hold the mic to talk" : "Tap to talk"; }
   function voiceDictHint() { return voiceListen_.held ? VOICE_HINT_HOLD : VOICE_HINT_TAP; }
   // The level meter under the strip while a clip records (the server adapter
@@ -3562,20 +3648,29 @@
   function voiceListenStop() {
     voiceListen_.until = 0;
     voiceListen_.stopAfter = false;
-    voiceListen_.sendAfter = false;
+    voiceListen_.overAfter = false;
     voiceIdle(composeEl.value.trim() ? "Kept, not sent — Send sends it, or tap the mic to go on" : undefined);
   }
-  // Push to talk ends a prompt: the second tap (toggle), letting go (hold).
-  // What was said is still on its way — the phone's last phrase (end():
-  // the recognizer hands it over, VOICE_SEND_WAIT_MS at most), a server
-  // clip being transcribed (pending(), however long it takes), a route
-  // answer — so the box is sent once nothing more is coming.
-  function voiceListenSend() {
+  // "over" (said, or the push-to-talk gesture): listening stops, the words
+  // stay in the box, nothing is sent — "submit" or the Send button sends.
+  function voiceListenKept() {
+    voiceListen_.until = 0;
+    voiceListen_.stopAfter = false;
+    voiceListen_.overAfter = false;
+    voiceIdle(composeEl.value.trim() ? VOICE_KEPT : undefined);
+  }
+  // Push to talk ends a prompt like "over": the second tap (toggle),
+  // letting go (hold). What was said is still on its way — the phone's last
+  // phrase (end(): the recognizer hands it over, VOICE_OVER_WAIT_MS at
+  // most), a server clip being transcribed (pending(), however long it
+  // takes), a route answer — so listening stops once nothing more is
+  // coming, the words in the box, unsent (a late "submit" still sends).
+  function voiceListenOver() {
     var L = voiceListen_, s = voice.stt;
     if (L.mode === "dialog") { voiceListenDone(); return; }
-    L.sendAfter = true;
+    L.overAfter = true;
     L.until = 0;                 // no more restarts
-    L.sendBy = Date.now() + VOICE_SEND_WAIT_MS;
+    L.overBy = Date.now() + VOICE_OVER_WAIT_MS;
     if (s.active() && !(s.pending && s.pending())) {
       if (s.finish) s.finish(); else if (s.end) s.end();
     }
@@ -3584,21 +3679,20 @@
   function voiceListenFlushSoon() {
     var L = voiceListen_, s = voice.stt;
     clearTimeout(L.timer);
-    if (!voiceIsListening() || !L.sendAfter) return;
-    if (L.routing || (s.pending && s.pending()) || (s.active() && Date.now() < L.sendBy)) {
+    if (!voiceIsListening() || !L.overAfter) return;
+    if (L.routing || (s.pending && s.pending()) || (s.active() && Date.now() < L.overBy)) {
       L.timer = setTimeout(voiceListenFlushSoon, 100);
       return;
     }
     voiceListenFlush();
   }
-  // Send the box — unless a hold heard nothing at all: that release only stops.
+  // The words are in: stop, keep them. Never a send.
   function voiceListenFlush() {
     var L = voiceListen_;
-    L.sendAfter = false;
+    L.overAfter = false;
     clearTimeout(L.timer);
     voice.stt.stop();
-    if (composeEl.value.trim() && (L.heard || !L.held)) { voiceSend(composeEl.value); return; }
-    voiceListenStop();
+    voiceListenKept();
   }
   function voiceIdle(caption) {
     clearTimeout(voiceListen_.timer);
@@ -3634,14 +3728,14 @@
   }
 
   // --- listening ----------------------------------------------------------------
-  // held: a hold-to-talk press is what is listening (letting go sends);
-  // sendAfter/sendBy: push to talk ended it, the box goes once the words
+  // held: a hold-to-talk press is what is listening (letting go stops);
+  // overAfter/overBy: push to talk ended it, listening stops once the words
   // are in; routing/routeQ/gen: a phrase is with /api/voice/route, the
   // phrases heard meanwhile wait their turn, and an answer for an older
   // listen is dropped.
   var voiceListen_ = { netErrs: 0, mode: "", until: 0, restarts: 0, timer: null, reprompted: false,
                        heard: false, startedAt: 0, rapid: 0, stopAfter: false, held: false,
-                       sendAfter: false, sendBy: 0, routing: false, routeQ: [], draining: false, gen: 0 };
+                       overAfter: false, overBy: 0, routing: false, routeQ: [], draining: false, gen: 0 };
   voice.listen = voiceListen_;   // tests age the window with it
   function voiceListen(mode, windowMs, held) {
     var L = voiceListen_;
@@ -3653,7 +3747,7 @@
     L.heard = false;
     L.stopAfter = false;
     L.held = !!held;
-    L.sendAfter = false;
+    L.overAfter = false;
     L.routing = false;
     L.routeQ = [];
     L.draining = false;
@@ -3731,7 +3825,7 @@
         if (voice.stt.active()) return;   // already up again (voiceListenContinue)
         var L = voiceListen_;
         if (L.stopAfter) { voiceListenStop(); return; }
-        if (L.sendAfter) { voiceListenFlushSoon(); return; }
+        if (L.overAfter) { voiceListenFlushSoon(); return; }
         // Phones end the recognizer after every phrase: start it again for
         // as long as the window is open. One that dies within a second of
         // starting, VOICE_RAPID_RESTART_MAX times running, is broken, not
@@ -3755,7 +3849,7 @@
     });
   }
   // A word (interim or final) moves the window out: dictation ends only on
-  // "over", the mic, Cancel, or VOICE_DICT_IDLE_MS of silence.
+  // "over", "submit", the mic, Cancel, or VOICE_DICT_IDLE_MS of silence.
   function voiceHeardSome() {
     var L = voiceListen_;
     L.heard = true;
@@ -3766,7 +3860,7 @@
   function voiceListenContinue() {
     if (!voiceIsListening() || voiceListen_.draining) return;
     if (voiceListen_.stopAfter) { voiceListenStop(); return; }
-    if (voiceListen_.sendAfter) { voiceListenFlushSoon(); return; }
+    if (voiceListen_.overAfter) { voiceListenFlushSoon(); return; }
     if (!voice.stt.active()) voiceRecStart();
   }
   function voiceListenExpired() {
@@ -3785,13 +3879,14 @@
     if (mode === "dialog") { voiceDialogRetry(); return; }
     voiceIdle();
   }
-  // One phrase. Radio rules: a trailing "over" sends the box, a trailing
+  // One phrase. Radio rules: a trailing "over" stops listening with the
+  // words in the box, a trailing "submit" sends the box, a trailing
   // "disregard" empties it and listens on, anything else is appended and
   // listening goes on. A command ("switch to…", "new session…", "voice
   // off"…) is one only while the box is empty — the server's router says
   // which (voiceRoute), the local table when it cannot; mid-message those
-  // are words. A dialog answer ("yes", "two") needs no "over"; one is
-  // stripped when said.
+  // are words. A dialog answer ("yes", "two") needs no "over"; an "over" or
+  // a "submit" is stripped when said.
   function voiceHeard(text, mode) {
     var L = voiceListen_;
     if (L.routing) { L.routeQ.push([text, mode]); return; }   // after the phrase being routed
@@ -3826,7 +3921,8 @@
     }
     voiceHeardWords(p);
   }
-  // The words of a phrase that is not a command: into the box, then "over".
+  // The words of a phrase that is not a command: into the box, then
+  // "submit" (send) or "over" (stop, keep).
   function voiceHeardWords(p) {
     if (p.text) {
       var cur = composeEl.value.trim();
@@ -3834,10 +3930,16 @@
       autosizeCompose();
       voice.dictated = true;
     }
-    if (p.kind === "over") {
+    if (p.kind === "submit") {
       if (composeEl.value.trim()) { voiceSend(composeEl.value); return; }
       voiceCaption("Nothing to send yet");
       voiceListenContinue();
+      return;
+    }
+    if (p.kind === "over") {
+      clearTimeout(voiceListen_.timer);
+      voice.stt.stop();
+      voiceListenKept();
       return;
     }
     voiceCaption(voiceDictHint());
@@ -3856,15 +3958,16 @@
     if (!voiceIsListening()) { L.routeQ = []; return; }
     if (!L.routing) voiceListenContinue();
   }
-  // "fix the bug over" → {kind: "over", text: "fix the bug"}; "… disregard"
-  // (or "disregard that") → {kind: "disregard"}; else {kind: "", text}. Case
-  // and punctuation do not matter ("Over." from iOS); only the LAST word
-  // counts — an "over" in the middle of a sentence is a word.
+  // "fix the bug over" → {kind: "over", text: "fix the bug"}; "… submit"
+  // → {kind: "submit", text}; "… disregard" (or "disregard that") →
+  // {kind: "disregard"}; else {kind: "", text}. Case and punctuation do not
+  // matter ("Over." from iOS); only the LAST word counts — an "over" in the
+  // middle of a sentence is a word.
   function voiceDictParse(text) {
     var t = String(text || "").trim();
-    var m = /^(.*?)[\s,.!?]*\b(over|disregard)(?:\s+(?:that|it|all|everything))?[.!?\s]*$/i.exec(t);
+    var m = /^(.*?)[\s,.!?]*\b(?:(over|submit)|(disregard)(?:\s+(?:that|it|all|everything))?)[.!?\s]*$/i.exec(t);
     if (!m) return { kind: "", text: t };
-    return { kind: m[2].toLowerCase(), text: m[1].trim() };
+    return { kind: (m[2] || m[3]).toLowerCase(), text: m[1].trim() };
   }
 
   // --- voice commands (matched on the WHOLE transcript, case- and
@@ -4680,8 +4783,9 @@
   // --- the gestures -------------------------------------------------------------------
   // click (a real activation on iOS and Android), never touchstart. Push to
   // talk, prefs.ptt: "toggle" — a tap starts listening, the next one (on the
-  // mic or the strip) sends; "hold" — pointerdown on the mic starts, letting
-  // go sends (voiceHoldStart / voiceHoldEnd), and the click that release
+  // mic or the strip) stops it, the words kept ("over"); "hold" —
+  // pointerdown on the mic starts, letting go stops (voiceHoldStart /
+  // voiceHoldEnd), and the click that release
   // fires is swallowed. The click still does everything a hold does not:
   // voice off → on, and a tap from a keyboard or a screen reader.
   var voiceHold = { on: false, swallowUntil: 0 };
@@ -4706,7 +4810,7 @@
     }
     // Hold to talk: the first tap turns voice on; the next press talks.
     if (s === "off") { voiceTurnOn(current, voice.prefs.ptt !== "hold"); return; }
-    if (voiceIsListening()) { voiceListenSend(); return; }
+    if (voiceIsListening()) { voiceListenOver(); return; }
     if (s === "sending") return;
     // idle, working or speaking: talk (speech is cut short)
     voiceListen("prompt", VOICE_TAP_MS);
@@ -4727,7 +4831,7 @@
     voiceHold.on = false;
     // pointerup is followed by a click that is not a tap; pointercancel is not.
     if (!ev || ev.type !== "pointercancel") voiceHold.swallowUntil = Date.now() + 1000;
-    if (voiceIsListening() && voiceListen_.held) voiceListenSend();
+    if (voiceIsListening() && voiceListen_.held) voiceListenOver();
   }
   // Cancel: while dictating the words go too; otherwise whatever is being
   // said or awaited stops.
@@ -4737,7 +4841,7 @@
     voiceAckStop();
     if (voiceIsListening()) { composeEl.value = ""; autosizeCompose(); voice.dictated = false; }
     voiceListen_.until = 0;
-    voiceListen_.sendAfter = false;
+    voiceListen_.overAfter = false;
     voiceListen_.gen++;   // a route answer on its way is for nobody now
     voiceIdle();
   }
@@ -4750,11 +4854,11 @@
   // A long press is a hold, not the phone's context menu.
   voiceBtn.addEventListener("contextmenu", function (ev) { if (voice.prefs.ptt === "hold") ev.preventDefault(); });
   voiceCancelBtn.addEventListener("click", voiceCancelTap);
-  // The strip is the mic's big twin: a tap there while listening sends too.
+  // The strip is the mic's big twin: a tap there while listening stops too.
   voiceStrip.addEventListener("click", function (ev) {
     if (ev.target === voiceStrip || ev.target === voiceStateEl || ev.target === voiceCaptionEl ||
         ev.target === voiceLevelEl || ev.target === voiceLevelBar) {
-      if (voiceIsListening()) voiceListenSend();
+      if (voiceIsListening()) voiceListenOver();
     }
   });
 
@@ -4953,6 +5057,10 @@
       "Recorder: " + (voiceAdapters.serverStt.available()
         ? "WAV 16 kHz (ScriptProcessor)" + (voice.rec.mime ? "" : ", no clip yet")
         : "not supported (no Web Audio or microphone)"),
+      "Resampler: " + (voice.rec.resampler ||
+        ((window.OfflineAudioContext || window.webkitOfflineAudioContext)
+          ? "OfflineAudioContext (the browser's), no clip yet" : "low-pass decimator (no OfflineAudioContext)")),
+      "Silence stop: " + VOICE_SILENCE_MS + " ms after speech (clip cap " + VOICE_CLIP_MAX_MS / 1000 + " s)",
       "AudioContext: " + (voice.audioCtx ? String(voice.audioCtx.state)
         : (window.AudioContext || window.webkitAudioContext) ? "not created — the server adapters make it on a tap" : "not supported"),
       "Last transcribe: " + voiceDiagLast(voice.rec.last),

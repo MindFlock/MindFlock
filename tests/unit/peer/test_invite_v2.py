@@ -201,14 +201,29 @@ def test_v2_fuzz_parse_is_strict(payload):
     assert len(info.invite_id) == 16
 
 
+# The parser's error sentences, read from its source: every ``raise
+# ValueError("…")`` literal (a bare ``raise ValueError`` is the empty message).
+# A message that interpolated the input would not be among them.
+import re as _re
+from pathlib import Path as _Path
+
+import backend.peer.invite as _invite_mod
+
+_FIXED_MESSAGES = set(
+    _re.findall(r'raise ValueError\("([^"]*)"', _Path(_invite_mod.__file__).read_text())
+) | {""}
+
+
 @settings(max_examples=500)
 @given(text=st.text(max_size=300))
 def test_parse_code_fuzz_text(text):
     try:
         parse_code(text)
     except ValueError as e:
-        if len(text) > 12:
-            assert text[5:] not in str(e) or not text[5:]
+        # Never a piece of the (secret-bearing) input: only a fixed sentence.
+        # Hypothesis once found text="00000expected", whose tail is a word of
+        # the generic sentence — a substring check cannot tell those apart.
+        assert str(e) in _FIXED_MESSAGES, str(e)
 
 
 # -- addresses -----------------------------------------------------------------------

@@ -1,41 +1,51 @@
 /** The desktop mic (components/TopBarMic.tsx): everything that is not DOM.
  *
- * The phone page (backend/web/static/mobile.js, its VOICE section) is the
- * behaviour this mirrors: phrases pile up in a draft, a trailing "over" sends,
- * "disregard" starts over, and the session's reply ends with a `Say:` line
- * that is read aloud. The desktop differs in three ways:
+ * The words are typed into the focused session AS YOU SPEAK: each recognised
+ * phrase goes straight into the session's input field (raw keys down its
+ * terminal, like typing), and three radio words end a phrase:
+ *  - "over" — stop listening; the words stay in the field, unsent;
+ *  - "submit" — stop listening and submit the draft (Enter, through
+ *    POST /api/instances/{title}/send {enter: true}, after the same dialog
+ *    checks as a send);
+ *  - "disregard" — take back what this dictation typed (one backspace per
+ *    character) and keep listening.
+ * The phone page (backend/web/static/mobile.js, its VOICE section) holds its
+ * draft and sends it whole instead; the desktop also differs in that
  *  - push to talk: a click (or a held button) starts and stops listening, and
- *    stopping SENDS what was heard — the mic is not on until you key it;
- *  - one phrase is first offered to the voice router (POST /api/voice/route),
- *    so "switch to the login fix" or "start a new session for…" act instead
- *    of being typed into the focused session;
+ *    stopping is "over" — the mic is not on until you key it;
+ *  - a dictation's first phrase is first offered to the voice router (POST
+ *    /api/voice/route), so "switch to the login fix" or "start a new session
+ *    for…" act instead of being typed into the focused session;
  *  - replies are read aloud only when you turn that on (off by default), only
- *    for prompts THIS app sent by voice, once per turn, and always prefixed
- *    with the session's name — several sessions may be talking.
+ *    for drafts THIS app submitted by voice, once per turn, and always
+ *    prefixed with the session's name — several sessions may be talking.
  *
- * Pieces: {@link parseRadio}, the prefs, {@link Dictation} (the push-to-talk
- * state machine), {@link ReplyTracker}, {@link SpeechQueue}, and the browser
- * adapters (Web Speech / a WAV clip → server, speechSynthesis / server
- * audio) that the component wires together. Which engine runs is
- * {@link sttEngine} / {@link ttsEngine}: in the desktop app (Electron) the
- * server's whenever it is ready, in a browser tab the browser's unless
- * Settings say "server". */
+ * Pieces: {@link parseRadio}, the prefs, {@link Dictation} (the pure
+ * state machine), {@link LiveDictation} (one dictation driving a target: the
+ * router, the dialog guard, the typing, the submit), {@link ReplyTracker},
+ * {@link SpeechQueue}, and the browser adapters (Web Speech / a WAV clip →
+ * server, speechSynthesis / server audio) that the component wires together.
+ * Which engine runs is {@link sttEngine} / {@link ttsEngine}: in the desktop
+ * app (Electron) the server's whenever it is ready, in a browser tab the
+ * browser's unless Settings say "server". */
 
-import { api, apiRaw } from "../api/client";
-import { startWavRecording, type WavRecording } from "./wavRecorder";
+import { ApiError, api, apiRaw, instApi } from "../api/client";
+import { peekTerm } from "./terminals";
+import { resamplerName, startWavRecording, type WavRecording } from "./wavRecorder";
 
 // --- the radio words -------------------------------------------------------- //
 
-export type RadioKind = "over" | "disregard" | "";
+export type RadioKind = "over" | "submit" | "disregard" | "";
 
-/** "fix the bug over" → {kind: "over", text: "fix the bug"}; "… disregard"
- * (or "disregard that") → {kind: "disregard"}; else {kind: "", text}. Case
- * and punctuation do not matter ("Over." from Safari); only the LAST word
- * counts — an "over" mid-sentence is a word, and "hangover" is not "over".
- * The regex is mobile.js `voiceDictParse`'s, so both surfaces hear alike. */
+/** "fix the bug over" → {kind: "over", text: "fix the bug"}; "… submit" →
+ * {kind: "submit"}; "… disregard" (or "disregard that") → {kind:
+ * "disregard"}; else {kind: "", text}. Case and punctuation do not matter
+ * ("Over." from Safari); only the LAST word counts — an "over" mid-sentence
+ * is a word, and "hangover" is not "over". The shape is mobile.js
+ * `voiceDictParse`'s, so both surfaces hear alike. */
 export function parseRadio(text: string): { kind: RadioKind; text: string } {
   const t = String(text || "").trim();
-  const m = /^(.*?)[\s,.!?]*\b(over|disregard)(?:\s+(?:that|it|all|everything))?[.!?\s]*$/i.exec(t);
+  const m = /^(.*?)[\s,.!?]*\b(over|submit|disregard)(?:\s+(?:that|it|all|everything))?[.!?\s]*$/i.exec(t);
   if (!m) return { kind: "", text: t };
   return { kind: m[2].toLowerCase() as RadioKind, text: m[1].trim() };
 }
@@ -83,56 +93,64 @@ export function saveVoicePrefs(p: VoicePrefs, kv: KV | null = storage()): void {
   }
 }
 
-// --- the push-to-talk state machine ----------------------------------------- //
+// --- the dictation state machine ------------------------------------------- //
 
-/** What a step of {@link Dictation} asks the component to do. */
+/** What a step of {@link Dictation} asks for. `text` to type is a phrase plus
+ * its trailing space; `text` to erase is everything this dictation typed. */
 export type DictOutcome =
-  /** Send `text`; `phrases` is how many phrases made it (one → try the router). */
-  | { kind: "send"; text: string; phrases: number }
-  /** "disregard": the draft is empty again, listening goes on. */
-  | { kind: "cleared" }
-  /** Keep listening (a phrase was added, or "over" with nothing to send). */
+  /** Type `text` now; listening goes on. */
+  | { kind: "type"; text: string }
+  /** "over": type `text` (if any), stop — the words stay in the field. */
+  | { kind: "over"; text: string }
+  /** "submit": type `text` (if any), stop, and submit the draft. */
+  | { kind: "submit"; text: string }
+  /** "disregard": take back `text`; listening goes on. */
+  | { kind: "erase"; text: string }
+  /** Escape: take back `text` and stop. */
+  | { kind: "dropped"; text: string }
+  /** Nothing to do (an empty phrase). */
   | { kind: "continue" }
-  /** Listening ended with nothing heard. */
-  | { kind: "stopped" }
-  /** Escape / "cancel": the words are dropped. */
-  | { kind: "dropped" }
-  /** Listening ended on silence: the words stay, unsent. */
-  | { kind: "kept"; text: string };
+  /** Not listening: nothing to do. */
+  | { kind: "stopped" };
 
-/** Two minutes without a word stops listening (the words are kept). */
+/** Two minutes without a word stops listening (the words stay in the field). */
 export const DICT_IDLE_MS = 120_000;
 /** A hold released mid-phrase waits this long for the phrase's final. */
 export const HOLD_FINAL_WAIT_MS = 1500;
-export const DICT_HINT = "Say “over” to send, “disregard” to start over";
+export const DICT_HINT = "Say over to leave it, submit to send, disregard to start over";
+/** The caption after "over" (and push to talk let go) on a session. */
+export const OVER_LINE = "In the field — say submit or press Enter";
 
-/** The draft and its life: begin → heard… → finish / cancel / expire. Pure,
- * so toggle, hold, "over", "disregard" and Escape are pinned by tests. The
- * gestures map onto it the same way in both modes — a toggle's second click
- * and a hold's release are both {@link finish}. */
+/** One dictation: begin → heard… → over / submit / cancel / expire, with a
+ * record of what it typed (in order) so "disregard" can take exactly that
+ * back. Pure, so the radio words, push to talk and Escape are pinned by
+ * tests; {@link LiveDictation} carries the outcomes out. A toggle's second
+ * click and a hold's release are both {@link finish}: "over". */
 export class Dictation {
   listening = false;
-  phrases: string[] = [];
   interim = "";
+  /** What this dictation typed so far — only what really went in
+   * ({@link wrote}), since a disregard takes it back character by character. */
+  typed = "";
 
-  /** Start listening. `keep`: the words a previous round left unsent. */
-  begin(keep = ""): void {
+  begin(): void {
     this.listening = true;
-    this.phrases = keep.trim() ? [keep.trim()] : [];
     this.interim = "";
+    this.typed = "";
   }
 
-  get text(): string {
-    return this.phrases.join(" ").trim();
-  }
-
-  /** The draft as the caption shows it: the phrases, then the words in flight. */
+  /** The caption: what is in the field, then the words in flight. */
   get shown(): string {
-    return [this.text, this.interim.trim()].filter(Boolean).join(" ");
+    return [this.typed.trim(), this.interim.trim()].filter(Boolean).join(" ");
   }
 
   hearing(t: string): void {
     if (this.listening) this.interim = t;
+  }
+
+  /** `text` went into the field. */
+  wrote(text: string): void {
+    this.typed += text;
   }
 
   /** One final phrase. */
@@ -140,54 +158,281 @@ export class Dictation {
     if (!this.listening) return { kind: "stopped" };
     this.interim = "";
     const p = parseRadio(phrase);
-    if (p.kind === "disregard") {
-      this.phrases = [];
-      return { kind: "cleared" };
+    const text = p.text ? p.text + " " : "";
+    switch (p.kind) {
+      case "disregard":
+        return { kind: "erase", text: this.erase() };
+      case "over":
+      case "submit":
+        this.listening = false;
+        return { kind: p.kind, text };
+      default:
+        return text ? { kind: "type", text } : { kind: "continue" };
     }
-    if (p.text) this.phrases.push(p.text);
-    if (p.kind === "over" && this.text) return this.sendNow();
-    return { kind: "continue" };
   }
 
-  /** The toggle's second click, the hold's release: send what was heard. A
-   * phrase still in flight (no final yet) counts — it was said. */
+  /** The toggle's second click, the hold's release: "over". A phrase still
+   * in flight (no final yet) counts — it was said. */
   finish(): DictOutcome {
     if (!this.listening) return { kind: "stopped" };
     const tail = this.interim.trim();
-    this.interim = "";
-    if (tail) {
-      const p = parseRadio(tail);
-      if (p.kind === "disregard") this.phrases = [];
-      else if (p.text) this.phrases.push(p.text);
-    }
-    if (!this.text) {
-      this.listening = false;
-      return { kind: "stopped" };
-    }
-    return this.sendNow();
-  }
-
-  /** Escape, "cancel": drop it all. */
-  cancel(): DictOutcome {
-    const had = this.listening || !!this.text;
+    const out = tail ? this.heard(tail) : { kind: "continue" as const };
     this.listening = false;
-    this.phrases = [];
-    this.interim = "";
-    return had ? { kind: "dropped" } : { kind: "stopped" };
-  }
-
-  /** {@link DICT_IDLE_MS} of silence: stop, keep the words, send nothing. */
-  expire(): DictOutcome {
-    this.listening = false;
-    this.interim = "";
-    return this.text ? { kind: "kept", text: this.text } : { kind: "stopped" };
-  }
-
-  private sendNow(): DictOutcome {
-    const out: DictOutcome = { kind: "send", text: this.text, phrases: this.phrases.length };
-    this.listening = false;
-    this.phrases = [];
+    if (out.kind === "type") return { kind: "over", text: out.text };
+    if (out.kind === "erase") return { kind: "dropped", text: out.text };
+    if (out.kind === "continue") return { kind: "over", text: "" };
     return out;
+  }
+
+  /** Escape: "disregard", and stop. */
+  cancel(): DictOutcome {
+    if (!this.listening) return { kind: "stopped" };
+    this.listening = false;
+    this.interim = "";
+    return { kind: "dropped", text: this.erase() };
+  }
+
+  /** {@link DICT_IDLE_MS} of silence, or the recognizer gave up: stop, the
+   * words stay where they are. */
+  expire(): DictOutcome {
+    if (!this.listening) return { kind: "stopped" };
+    this.listening = false;
+    this.interim = "";
+    return { kind: "over", text: "" };
+  }
+
+  /** Forget what was typed; returns it, for the target to take back. */
+  private erase(): string {
+    const text = this.typed;
+    this.typed = "";
+    this.interim = "";
+    return text;
+  }
+}
+
+/** The keys that take back `text` in a terminal: one DEL (what Backspace
+ * sends) per character — per code point, so "café" or an emoji is one key,
+ * not its UTF-16 or UTF-8 length. Never Escape: in Claude Code that also
+ * interrupts a running turn. */
+export function backspaces(text: string): string {
+  return "\x7f".repeat(Array.from(text).length);
+}
+
+/** A session's activity that means a dialog is on screen (a question, a
+ * permission prompt, a usage-limit menu): typed words would answer it. */
+export function dialogUp(activity: string): boolean {
+  return activity === "clarify" || activity === "limit";
+}
+
+/** Where a dictation's words go: a session's terminal, or a text box. */
+export interface DictTarget {
+  kind: "session" | "field";
+  /** The session's title ("" for a text box). */
+  title: string;
+  /** What captions call it. */
+  name: string;
+  /** Put characters in: false when they could not go (socket closed). */
+  type(text: string): boolean;
+  /** Take back `text`, the last characters put in. */
+  erase(text: string): boolean;
+}
+
+/** The focused session's agent terminal: keys down its socket, as typed. */
+export function sessionTarget(title: string, name: string): DictTarget {
+  const send = (data: string) => peekTerm(title, "agent")?.send(data) ?? false;
+  return {
+    kind: "session",
+    title,
+    name,
+    type: (text) => send(text),
+    erase: (text) => !text || send(backspaces(text)),
+  };
+}
+
+/** What {@link LiveDictation} needs from the page. */
+export interface LiveHooks {
+  /** The caption under the mic; `sticky` stays until replaced. */
+  caption(text: string, sticky?: boolean): void;
+  /** Listening is over: drop the recognizer (it reports nothing more). */
+  halt(): void;
+  /** A dictation's first phrase, for a session: true when the router acted
+   * on it (and said so) — then it is not typed. */
+  route(text: string): Promise<boolean>;
+  /** The session's live activity (the rows the app polls). */
+  activity(title: string): string;
+  /** `say` for a submit: the "Read replies aloud" pref. */
+  replies(): boolean;
+  /** A submit went through (`say` as sent): the reply tracker waits on it. */
+  submitted(title: string, say: boolean): void;
+}
+
+/** Typed keys travel the terminal's socket, the Enter a separate request:
+ * give the keys this long to land first (and to stop counting as one paste
+ * with the Enter, which a TUI would turn into a newline). */
+export const SUBMIT_SETTLE_MS = 250;
+
+/** POST /send {enter: true}: press Enter on the session's typed draft.
+ * Resolves to the caption; `ok` when it went. */
+export async function submitDraft(title: string, name: string, say: boolean): Promise<{ ok: boolean; line: string }> {
+  try {
+    const r = await instApi<{ queued?: boolean }>(title, "/send", { json: { enter: true, say } });
+    return { ok: true, line: r?.queued ? "Queued for " + name + "." : "Sent to " + name + "." };
+  } catch (err) {
+    const body = (err instanceof ApiError ? err.body : null) as
+      | { in_dialog?: boolean; waking?: boolean; paused?: boolean }
+      | null;
+    let line = "Couldn't submit: " + ((err as Error)?.message || "error") + " — the words are still in the field";
+    if (err instanceof ApiError && err.status === 409) {
+      if (body?.in_dialog) line = name + " is on a dialog — press Enter yourself when it is answered";
+      else if (body?.waking) line = name + " is waking up — say submit again in a moment";
+      else if (body?.paused) line = name + " is paused — resume it first";
+    }
+    return { ok: false, line };
+  }
+}
+
+/** One dictation into one target: phrases are carried out in order (the
+ * first may wait on the router), each typed as it comes. `target` null: no
+ * session is focused — the first phrase can still be a command. */
+export class LiveDictation {
+  readonly dict = new Dictation();
+  private chain: Promise<void> = Promise.resolve();
+  private done = false;
+
+  constructor(
+    private target: DictTarget | null,
+    private hooks: LiveHooks
+  ) {
+    this.dict.begin();
+  }
+
+  /** Still taking words (false once over / submit / Escape / an error). */
+  get active(): boolean {
+    return !this.done;
+  }
+
+  hearing(t: string): void {
+    if (this.done) return;
+    this.dict.hearing(t);
+    this.show();
+  }
+
+  heard(phrase: string): Promise<void> {
+    return this.step(() => this.dict.heard(phrase));
+  }
+
+  /** Push to talk let go: "over", after the phrases already heard. */
+  finish(): Promise<void> {
+    return this.step(() => this.dict.finish());
+  }
+
+  /** Escape: "disregard", and stop. */
+  cancel(): Promise<void> {
+    return this.step(() => this.dict.cancel());
+  }
+
+  /** Silence, or the recognizer went down: stop, the words stay. */
+  expire(): Promise<void> {
+    return this.step(() => this.dict.expire());
+  }
+
+  /** The recognizer failed: stop with `line`; the words stay. */
+  fail(line: string): void {
+    if (this.done) return;
+    this.dict.listening = false;
+    const kept = this.dict.typed.trim() && this.target?.kind === "session";
+    this.end(kept ? line + " — the words so far stay in the field" : line, true);
+  }
+
+  /** The running text, or what to say. */
+  show(): void {
+    if (this.done) return;
+    const field = this.target?.kind === "field";
+    this.hooks.caption(this.dict.shown || (field ? "Listening — the words go into the text box" : DICT_HINT), true);
+  }
+
+  private step(next: () => DictOutcome): Promise<void> {
+    this.chain = this.chain.then(() => (this.done ? undefined : this.apply(next()))).catch(() => {});
+    return this.chain;
+  }
+
+  private end(line: string | null, sticky = false): void {
+    if (this.done) return;
+    this.done = true;
+    this.dict.listening = false;
+    this.hooks.halt();
+    if (line !== null) this.hooks.caption(line, sticky);
+  }
+
+  private async apply(out: DictOutcome): Promise<void> {
+    const t = this.target;
+    switch (out.kind) {
+      case "continue":
+        this.show();
+        return;
+      case "stopped":
+        this.end("");
+        return;
+      case "type":
+        if (await this.put(out.text)) this.show();
+        return;
+      case "erase":
+        t?.erase(out.text);
+        this.hooks.caption("Disregarded — go on", true);
+        return;
+      case "dropped":
+        t?.erase(out.text);
+        this.end(out.text ? "Disregarded" : "");
+        return;
+      case "over":
+        if (out.text && !(await this.put(out.text))) return;
+        this.end(t?.kind === "session" && this.dict.typed ? OVER_LINE : "");
+        return;
+      case "submit": {
+        const typedNow = !!out.text;
+        if (out.text && !(await this.put(out.text))) return;
+        // A text box: Enter is never pressed for you there.
+        if (!t || t.kind === "field") {
+          this.end(t ? "" : "Click a session first");
+          return;
+        }
+        this.end("Submitting to " + t.name + "…", true);
+        if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
+        const say = this.hooks.replies();
+        const r = await submitDraft(t.title, t.name, say);
+        if (r.ok) this.hooks.submitted(t.title, say);
+        this.hooks.caption(r.line, !r.ok);
+        return;
+      }
+    }
+  }
+
+  /** Type `text`; a session's first phrase goes past the router and the
+   * dialog guard first. False when it did not go in (and listening ended). */
+  private async put(text: string): Promise<boolean> {
+    const t = this.target;
+    if (!this.dict.typed && t?.kind !== "field") {
+      const words = text.trim();
+      if (await this.hooks.route(words)) {
+        this.end(null);
+        return false;
+      }
+      if (this.done) return false;
+      if (!t) {
+        this.end("Click a session first — “" + words + "” not typed", true);
+        return false;
+      }
+      if (dialogUp(this.hooks.activity(t.title))) {
+        this.end(t.name + " is waiting on a dialog — answer it first", true);
+        return false;
+      }
+    }
+    if (!t || !t.type(text)) {
+      this.end("Couldn't type into " + (t?.name || "the session") + " — its terminal isn't connected", true);
+      return false;
+    }
+    this.dict.wrote(text);
+    return true;
   }
 }
 
@@ -254,13 +499,13 @@ interface Pending {
   working: boolean;
 }
 
-/** Which replies may be read aloud: the turns of prompts THIS app sent by
- * voice with `say: true` — never a prompt typed at the keyboard or sent from
- * the phone — and each turn once (idle and turn_ended both report it). */
+/** Which replies may be read aloud: the turns of drafts THIS app submitted
+ * by voice with `say: true` — never a prompt typed at the keyboard or sent
+ * from the phone — and each turn once (idle and turn_ended both report it). */
 export class ReplyTracker {
   private pending = new Map<string, Pending>();
 
-  /** A voice prompt went to `title`. `say` is what /send was told. */
+  /** A voice draft was submitted to `title`. `say` is what /send was told. */
   sent(title: string, say: boolean, now = Date.now()): void {
     if (!say) {
       this.pending.delete(title);
@@ -767,7 +1012,9 @@ export function browserRecognizer(): Recognizer {
   return self;
 }
 
-const SILENCE_MS = 1800; // quiet after speech that ends a clip
+/** Quiet after speech that ends a clip: short, so each phrase is typed
+ * soon after it is said. */
+export const SILENCE_MS = 1100;
 const CLIP_MAX_MS = 12_000; // the hard cap on one clip
 const RMS_SPEECH = 0.02; // RMS (0..1) above which a clip has speech
 const UPLOAD_TIMEOUT_MS = 45_000;
@@ -1082,6 +1329,12 @@ function serverEngineName(backend: string | undefined, system: VoiceSystem): str
   return id ? "server (" + id + ")" : "server";
 }
 
+/** How the server's recognizer is fed: the clip's rate, the resampler that
+ * makes it, and the quiet that ends a phrase. */
+function clipsLine(): string {
+  return " — 16 kHz clips, " + resamplerName() + ", a phrase ends after " + SILENCE_MS / 1000 + " s of quiet";
+}
+
 /** The options' Diagnostics line: the engines actually in use (`stt` /
  * `tts` as the page resolved them, "none" when it has none), and why the
  * server's recognizer isn't, when this page would use it. */
@@ -1094,7 +1347,7 @@ export function engineDiagnostics(
   const ready = cfg.server_ready;
   let rec =
     stt === "server"
-      ? serverEngineName(ready.stt_backend, cfg.system)
+      ? serverEngineName(ready.stt_backend, cfg.system) + clipsLine()
       : stt === "browser"
         ? "this browser"
         : electron

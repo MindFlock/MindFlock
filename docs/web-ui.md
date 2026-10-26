@@ -127,39 +127,56 @@ now).
 
 **The mic** (`#mic-btn`, a monochrome glyph like the bell's) talks to the
 **focused session** — the tooltip names it (*Talk to Login fix — click to talk,
-right-click for options*). With no session focused, the words wait with *Click
-a session first*.
+right-click for options*). The words are **typed into the session's input
+field as you speak**: each phrase, the moment it is recognised, goes down the
+session's agent terminal as keys (with a trailing space), exactly as if you had
+typed it; the caption under the mic shows the running text. Nothing is
+submitted until you say so. With no session focused, nothing is typed (*Click
+a session first*).
 
+- **Radio words**, the last word of a phrase (any case or punctuation):
+  **“over”** stops listening and leaves the words in the field (*In the field —
+  say submit or press Enter*); **“submit”** types the phrase before it, stops,
+  and submits the draft — `POST /api/instances/{title}/send` with `{"enter":
+  true, "say": …}`, which presses Enter after the same dialog checks as a send
+  (a session that turned out to be on a dialog answers 409 and the draft stays:
+  *Login fix is on a dialog — press Enter yourself when it is answered*);
+  **“disregard”** (or “disregard that”) takes back everything this dictation
+  typed — one backspace per character, never Escape, which in Claude Code would
+  also interrupt a running turn — and keeps listening. **Esc** is “disregard”
+  and stop.
 - **Push to talk.** *Click to talk* (the default): a click starts listening
-  (the button turns red and pulses), a second click stops and **sends** what
-  was heard — nothing heard, nothing sent. *Hold to talk*: hold the button (or
-  Space / Enter on it) while you speak; releasing sends, after waiting up to
-  1.5 s for the phrase still being recognised.
-- **Radio words**, in both modes: a phrase that *ends* in “over” sends at once,
-  one that ends in “disregard” (or “disregard that”) empties the draft and keeps
-  listening, and **Esc** drops it all. Two minutes without a word stops
-  listening and keeps the words, unsent (*Not sent — click the mic to
-  continue*: the next click carries on from them). What was heard shows in a
-  small caption under the mic.
+  (the button turns red and pulses), a second click is “over”. *Hold to talk*:
+  hold the button (or Space / Enter on it) while you speak; releasing is
+  “over”, after waiting up to 1.5 s for the phrase still being recognised (it
+  is typed like the rest). Two minutes without a word stops listening; the
+  words stay where they are.
+- **A dialog on screen.** Before a dictation's first phrase is typed, the
+  session's live activity is checked (the rows the app already polls): on a
+  question, permission prompt or usage-limit menu (`clarify` / `limit`) nothing
+  is typed — words would answer it — the caption says *Login fix is waiting on
+  a dialog — answer it first* and listening ends.
 - **A text box focused** (Send a message, a dialog field…): the words go into
-  the box at the cursor and nothing is sent — dictation, not a prompt.
-- **Routing.** When you said one phrase, it is first offered to the voice
+  the box at the cursor, “disregard” removes them while they still sit before
+  the cursor, and “over” and “submit” both just stop — Enter is never pressed
+  in a text box.
+- **Routing.** A dictation's first phrase is first offered to the voice
   router: “switch to the login fix” selects that session (and the conversation
   stays there — later words go to it), “start a new session for the billing
-  page” starts one and selects it, “what needs me” / “status” answer out loud
-  without sending anything. Everything else — and everything when the router
-  can't be reached — is a prompt for the focused session (`POST
-  /api/instances/{title}/send` with `dialog_safe`, so a session on a permission
-  prompt queues it: *Queued for …*).
+  page” starts one and selects it, “what needs me” / “status” answer out loud —
+  none of them is typed. Everything else — and everything when the router
+  can't be reached — is typed into the focused session.
 - **Replies read aloud** are **off** by default here (the phone is the
-  hands-free surface). Turned on, a prompt the mic sends asks the session for a
-  closing `Say:` line, and when that turn ends the line is read once, prefixed
-  with the session's name (*“Login fix: Fixed the login bug. Should I push
-  it?”*) — only for prompts this mic sent, never for ones typed or sent from the
-  phone. Nothing is read while the mic listens; queued lines wait.
+  hands-free surface). Turned on, a draft the mic submits asks the session for
+  a closing `Say:` line, and when that turn ends the line is read once,
+  prefixed with the session's name (*“Login fix: Fixed the login bug. Should I
+  push it?”*) — only for drafts this mic submitted, never for prompts typed or
+  sent from the phone. Nothing is read while the mic listens; queued lines
+  wait.
 - **Options**: right-click or Shift+click the mic for *Read replies aloud*,
   *Click to talk* / *Hold to talk*, a diagnostics line naming the engines in
-  use (*Recognition: server, built in (Windows via WSL) · Voice: server
+  use (*Recognition: server, built in (Windows via WSL) — 16 kHz clips,
+  browser resampler, a phrase ends after 1.1 s of quiet · Voice: server
   (piper)*, *Recognition: this browser · Voice: this browser*, and why the
   server's recogniser isn't ready when it would be used), and a link to the
   speech engines in **Settings → Voice**. The choice is kept per browser
@@ -182,10 +199,14 @@ save.
 
 **The server's recogniser** records each phrase as **16 kHz 16-bit mono WAV**
 (`lib/wavRecorder.ts`, through the page's one AudioContext, made inside the
-click) — the built-in recognisers take nothing but PCM — ends a clip after
-1.8 s of quiet following speech or at 12 s, and uploads it as `audio/wav` to
-`POST /api/voice/transcribe`; a clip the level meter heard no speech in is not
-sent. How the `Say:` line is produced and which engines exist: [Voice: talking
+click) — the built-in recognisers take nothing but PCM. The microphone's rate
+(usually 48 kHz) is brought down by the browser's own band-limited resampler
+(an `OfflineAudioContext` at 16 kHz rendering the clip), or, where there is
+none, a Blackman-windowed sinc — never plain interpolation, whose aliasing
+folds everything above 8 kHz back into the speech band. A clip ends after
+1.1 s of quiet following speech (short, so typing keeps up with you) or at
+12 s, and is uploaded as `audio/wav` to `POST /api/voice/transcribe`; a clip
+the level meter heard no speech in is not sent. How the `Say:` line is produced and which engines exist: [Voice: talking
 to a session](#voice-talking-to-a-session).
 
 **Sidebar** — session list with drag-to-reorder, stage chips, and a
@@ -5423,6 +5444,30 @@ labels above the inputs.
     *Server voice not ready: …*): with the built-in engine picked its own
     sentence is the detail (the Linux one, macOS' permission one); a server
     too old to report `system` says it has no built-in engine yet.
+  - **The local-models installer** (`#voice-install`, under Recognition).
+    Windows' built-in recognizer is the old desktop (SAPI) one —
+    `system.stt_quality: "basic"` (macOS' is `"good"`), or a built-in
+    readiness detail ending *basic accuracy — install local models for
+    better recognition* — so while it is the engine picked, the block
+    recommends *Windows' built-in recognizer is basic. Local models
+    (faster-whisper) recognise far better and stay on this computer.* with
+    an **Install local models (about 300 MB)** button. The same button
+    sits by the readiness line whenever *Local models* is picked but not
+    ready, on every platform. It `POST`s `/api/voice/install-local`
+    (faster-whisper and piper into the server's own environment, then the
+    whisper model — `voice.stt_model`, default `small` — and the piper
+    voice), then polls `GET /api/voice/install-local` every 2 s while it is
+    `running`: the button reads *Installing…* beside a `<progress>` (the
+    server reports no percentage), the step and the install's last log
+    line. *done* → *Installed — recognition now uses local models.* (the
+    server switched `voice.stt_backend` to `local` itself; the screen
+    re-reads the settings and `GET /api/voice`); *failed* → the error and
+    **Try again**; a 409 → *Already installing* and that install is
+    followed. Reopening the screen mid-install resumes following it. The
+    button is gone once local models recognise, and on a server without the
+    installer (its `GET` fails). A viewer who may not change the server
+    (`configure_allowed: false` in `GET /api/voice`, or the POST's 403)
+    gets it disabled with the reason.
   - **On the phone page**: where recognition and the voice run for the
     phone (`voice.stt` / `voice.tts`: *The phone* · *This computer*), with
     *The desktop app always uses this computer.*
@@ -5656,18 +5701,23 @@ its toolbar counts it again. See
 
 ## Voice input
 
-The mic in the top bar, beside the bell, talks to the **focused session**:
-click (or hold) to talk, a phrase ending in "over" sends, one ending in
-"disregard" starts over, a lone phrase is offered to the voice router first
-("switch to …", "new session …", "what needs me", "what sessions do I have"),
-and the reply is read aloud only while *Read replies aloud* is on (off by
-default; right-click the mic) — see [The mic](#layout) in the top bar section.
-Words said while a text box has focus are typed there instead and never
-submitted. In the desktop app the words and the voice go through the
-server's engines whenever one is ready (Settings → Voice) — the app's own
-Web Speech can't recognise — and in a browser tab through the browser's unless Settings say
-*server*; the server's recogniser is sent each phrase as a WAV clip. The phone page's mic is the hands-free version of the same
-conversation, with spoken replies on by default — see
+The mic in the top bar, beside the bell, talks to the **focused session** and
+types as you speak: click (or hold) to talk, and each recognised phrase lands
+in the session's input field at once. A phrase ending in "over" stops and
+leaves the words there, one ending in "submit" submits them (Enter, after the
+server's dialog checks), one ending in "disregard" takes back what was typed
+and keeps listening, Esc takes it back and stops. Nothing is typed into a
+session showing a dialog. A dictation's first phrase is offered to the voice
+router first ("switch to …", "new session …", "what needs me", "what sessions
+do I have"), and the reply is read aloud only while *Read replies aloud* is on
+(off by default; right-click the mic) — see [The mic](#layout) in the top bar
+section. Words said while a text box has focus are typed there instead and
+never submitted. In the desktop app the words and the voice go through the
+server's engines whenever one is ready (Settings → Voice) — the app's own Web
+Speech can't recognise — and in a browser tab through the browser's unless
+Settings say *server*; the server's recogniser is sent each phrase as a 16 kHz
+WAV clip, resampled without aliasing. The phone page's mic is the hands-free
+version of the same conversation, with spoken replies on by default — see
 [Voice: talking to a session](#voice-talking-to-a-session) under the Mobile UI.
 
 ## Mobile UI (`/m`)
@@ -5851,8 +5901,9 @@ you then press and hold the mic to talk. A **voice
 strip** appears above the composer with the state word
 (*Your turn* · *Listening…* · *Sending…* · *Working…* · *Speaking…* ·
 *Waiting on you*), a caption (what it hears, the line being spoken, the
-dialog question, how to send — *Tap again or say "over" to send* /
-*Release or say "over" to send*), **Cancel** and **⚙**. Voice follows the
+dialog question, the radio words — *Say "over" to keep it, "submit" to
+send, "disregard" to start over* / *Release to keep it; say "submit" to
+send*), **Cancel** and **⚙**. Voice follows the
 **selected** session: picking another session in the Sessions sheet (or
 saying "switch to <name>") moves the conversation there; the flag of the
 session you left stays on. **On iPhone, open `/m` in a Safari tab.** iOS has speech
@@ -5875,12 +5926,20 @@ page pulls the samples off its one `AudioContext` (made inside the tap): the
 mic stream → a `ScriptProcessorNode(4096, 1, 1)` → a muted gain → the
 destination (Chrome does not run a processor that reaches nothing). Each
 block's first channel is kept; when the clip ends they are joined, resampled
-to 16 kHz by linear interpolation, clamped and written behind the 44-byte
-RIFF header — the desktop app's recorder (`lib/wavRecorder.ts`) does the
-same. The RMS of those blocks drives the level meter and the silence
-detector: 1.8 s of quiet after speech ends the clip (a tap ends it at once,
-12 s or the listening window is the cap, and a clip that heard no speech is
-dropped).
+to 16 kHz, clamped and written behind the 44-byte RIFF header — the same
+clip as the desktop app's recorder (`lib/wavRecorder.ts`). The resampling is
+anti-aliased: the browser's own resampler first (an
+`OfflineAudioContext(1, n × 16000 / rate, 16000)` rendering the clip through
+a buffer source), and where that is missing, refuses the rate, fails or
+takes over 5 s, a low-pass decimator in the page — each output sample is a
+windowed-sinc (Blackman) weighted average of the input samples around it,
+cut off at 0.45 of 16 kHz — so sound above the clip's 8 kHz Nyquist is
+filtered out instead of folding back into the speech band as noise (plain
+interpolation, the old way, let it fold back at full level). Speech up to
+about 6 kHz keeps its level. The RMS of those blocks drives the level meter
+and the silence detector: 1.1 s of quiet after speech ends the clip, so a
+phrase arrives sooner (a tap ends it at once, 12 s or the listening window
+is the cap, and a clip that heard no speech is dropped).
 A Chromium browser that does not ship Google's speech key — Arc, Brave,
 Vivaldi, Opera — has the recognizer but every start fails with a `network`
 error and nothing is heard: the first is retried, the second in a listening
@@ -5895,27 +5954,33 @@ lands in the compose box, and the mic stays open across pauses. How it ends
 is the ⚙ sheet's **Push to talk** (a per-phone setting):
 
 - **Tap to talk** (the default) — a tap on the mic starts listening; the
-  next tap on the mic (or on the strip) stops and **sends** the box. A
-  second tap with nothing in the box only stops.
+  next tap on the mic (or on the strip) means **"over"**: listening stops
+  and the words stay in the box, unsent.
 - **Hold to talk** — press and hold the mic to talk; letting go (or the
-  phone cancelling the touch) stops and sends. A release that heard nothing
-  only stops. The first tap of a session still just turns voice on, and a
-  plain click (a keyboard, a screen reader) starts a tap-style listen.
+  phone cancelling the touch) means "over" too. The first tap of a session
+  still just turns voice on, and a plain click (a keyboard, a screen
+  reader) starts a tap-style listen.
 
-Either way the words still on their way are waited for before the box goes:
-the phone's last phrase (at most 1.5 s), a server clip being transcribed,
-a route answer (below). The radio words work in both modes: end a phrase
-with **"over"** and the box is sent; end it with **"disregard"** and the
-box is emptied and listening goes on. **Cancel** stops and drops the words,
-**Send** sends whatever is in the box at once, and two minutes without a
-word stops with the words kept, unsent (*Kept, not sent — Send sends it, or
-tap the mic to go on*). The last word of a phrase is what counts — an
-"over" in the middle of a sentence is a word — and case and punctuation do
-not matter (*Over.*, *Disregard that.*). Commands ("switch to…", "new
+Either way the words still on their way are waited for before listening
+stops: the phone's last phrase (at most 1.5 s), a server clip being
+transcribed, a route answer (below). The radio words work in both modes:
+end a phrase with **"over"** and listening stops with the words in the box,
+nothing sent (*In the box — say "submit", or tap Send*); end it with
+**"submit"** and the box (with that phrase's words) is **sent**; end it
+with **"disregard"** (or *disregard that*) and the box is emptied and
+listening goes on. **"submit" and the Send button are the only ways to
+send** — the push-to-talk gesture never does. A "submit" with nothing in
+the box says *Nothing to send yet* and listens on. **Cancel** stops and
+drops the words, **Send** sends whatever is in the box at once, and two
+minutes without a word stops with the words kept, unsent (*Kept, not sent —
+Send sends it, or tap the mic to go on*). The last word of a phrase is what
+counts — an "over" in the middle of a sentence is a word, and so is
+"submitted" — and case and punctuation do not matter (*Over.*, *Submit!*,
+*Disregard that.*). Commands ("switch to…", "new
 session…", "what needs me", "voice off"…) are commands only while the box
 is empty; mid-message they are words (see **Voice commands** below). Then
 *Sent to <name>.* (or *Queued for <name> — it is on a prompt.*: while voice
-is on, Send, "over" and push to talk go through `POST /send {dialog_safe:
+is on, Send and "submit" go through `POST /send {dialog_safe:
 true, say}`, so a prompt is queued
 rather than typed into a dialog; a waking session says *<name> is waking up,
 try again in a moment.*, a paused one *<name> is paused. Resume it first.*,
@@ -6032,7 +6097,10 @@ server's when Settings say server and `GET /api/voice` reports it ready),
 *Built-in engine* (*<platform> — <detail>*, from the `system` object of
 `GET /api/voice`; left out when an older server sends none), *Recorder*
 (*WAV 16 kHz (ScriptProcessor)*, or *not supported* without Web Audio or a
-microphone), *AudioContext* (its state), *Last transcribe* / *Last speak*
+microphone), *Resampler* (which one made the last clip — *OfflineAudioContext
+(the browser's)*, or *low-pass decimator* and why — or which one will),
+*Silence stop* (*1100 ms after speech*, and the clip cap), *AudioContext*
+(its state), *Last transcribe* / *Last speak*
 (how long the server took and which backend, or why it failed), *Primed*
 (whether a tap has unlocked speech output yet), *Push to talk* (tap or
 hold), *Replies* (on or off), *Last prompt* (dictated or typed, and whether
@@ -6065,7 +6133,8 @@ the page is hidden it stops listening and speaking, closes its socket and
 releases the wake lock; on return it re-locks, reconnects and asks for a
 line that arrived meanwhile. Nothing speaks while the phone is locked except
 the OS reading a push. Dictation is for intent, not code — the explicit
-"over" and the editable box are the mitigation for misheard identifiers. iOS speaks
+"submit" (after "over" leaves the words to read) and the editable box are
+the mitigation for misheard identifiers. iOS speaks
 only through its compact voices and cuts long utterances, so lines are
 chunked by sentence with a timeout behind each chunk. Phone recognition
 sends audio to Google on Android and to Apple on iOS when no on-device model

@@ -11672,7 +11672,7 @@ function isPlainObject(o) {
 function hasObjectPrototype(o) {
 	return Object.prototype.toString.call(o) === "[object Object]";
 }
-function sleep(timeout) {
+function sleep$1(timeout) {
 	return new Promise((resolve) => {
 		timeoutManager.setTimeout(resolve, timeout);
 	});
@@ -11993,7 +11993,7 @@ function createRetryer(config) {
 			}
 			failureCount++;
 			config.onFail?.(failureCount, error);
-			sleep(delay).then(() => {
+			sleep$1(delay).then(() => {
 				return canContinue() ? void 0 : pause();
 			}).then(() => {
 				if (isRetryCancelled) reject(error);
@@ -36956,20 +36956,58 @@ function encodeWav(samples, sampleRate) {
 	}
 	return new Blob([buf], { type: "audio/wav" });
 }
+var SINC_HALF_ZC = 16;
+var SINC_ROLLOFF = .9;
 function resample(samples, fromRate, toRate) {
 	if (fromRate === toRate || samples.length === 0) return samples;
 	const n = samples.length;
 	const outLen = Math.floor(n * toRate / fromRate);
 	const out = new Float32Array(outLen);
 	const step = fromRate / toRate;
+	const ratio = Math.min(1, toRate / fromRate);
+	const fc = .5 * ratio * SINC_ROLLOFF;
+	const half = SINC_HALF_ZC / ratio;
 	for (let i = 0; i < outLen; i++) {
-		const pos = i * step;
-		const i0 = Math.floor(pos);
-		const i1 = i0 + 1 < n ? i0 + 1 : n - 1;
-		const frac = pos - i0;
-		out[i] = samples[i0] + (samples[i1] - samples[i0]) * frac;
+		const t = i * step;
+		const lo = Math.max(0, Math.ceil(t - half));
+		const hi = Math.min(n - 1, Math.floor(t + half));
+		let acc = 0;
+		let wsum = 0;
+		for (let j = lo; j <= hi; j++) {
+			const x = j - t;
+			const u = x / half;
+			const win = .42 + .5 * Math.cos(Math.PI * u) + .08 * Math.cos(2 * Math.PI * u);
+			const arg = 2 * fc * x;
+			const w = (arg === 0 ? 1 : Math.sin(Math.PI * arg) / (Math.PI * arg)) * win;
+			acc += samples[j] * w;
+			wsum += w;
+		}
+		out[i] = wsum ? acc / wsum : 0;
 	}
 	return out;
+}
+function offlineCtor() {
+	const g = globalThis;
+	return g.OfflineAudioContext || g.webkitOfflineAudioContext || null;
+}
+function resamplerName() {
+	return offlineCtor() ? "browser resampler" : "windowed-sinc resampler";
+}
+async function resampleTo(samples, fromRate, toRate) {
+	const OAC = offlineCtor();
+	if (!OAC || fromRate === toRate || samples.length === 0) return resample(samples, fromRate, toRate);
+	try {
+		const off = new OAC(1, Math.ceil(samples.length * toRate / fromRate), toRate);
+		const buf = off.createBuffer(1, samples.length, fromRate);
+		buf.getChannelData(0).set(samples);
+		const src = off.createBufferSource();
+		src.buffer = buf;
+		src.connect(off.destination);
+		src.start(0);
+		return (await off.startRendering()).getChannelData(0).slice();
+	} catch {
+		return resample(samples, fromRate, toRate);
+	}
 }
 function startWavRecording(stream, ctx, opts = {}) {
 	const targetRate = opts.targetRate ?? DEFAULT_TARGET_RATE;
@@ -37018,7 +37056,7 @@ function startWavRecording(stream, ctx, opts = {}) {
 				at += b.length;
 			}
 			blocks = [];
-			result = Promise.resolve(encodeWav(resample(all, ctx.sampleRate, targetRate), targetRate));
+			result = resampleTo(all, ctx.sampleRate, targetRate).then((pcm) => encodeWav(pcm, targetRate));
 			return result;
 		},
 		cancel() {
@@ -37034,7 +37072,7 @@ function startWavRecording(stream, ctx, opts = {}) {
 //#region src/lib/voiceDesktop.ts
 function parseRadio(text) {
 	const t = String(text || "").trim();
-	const m = /^(.*?)[\s,.!?]*\b(over|disregard)(?:\s+(?:that|it|all|everything))?[.!?\s]*$/i.exec(t);
+	const m = /^(.*?)[\s,.!?]*\b(over|submit|disregard)(?:\s+(?:that|it|all|everything))?[.!?\s]*$/i.exec(t);
 	if (!m) return {
 		kind: "",
 		text: t
@@ -37076,76 +37114,251 @@ function saveVoicePrefs(p, kv = storage()) {
 }
 var DICT_IDLE_MS = 12e4;
 var HOLD_FINAL_WAIT_MS = 1500;
-var DICT_HINT = "Say “over” to send, “disregard” to start over";
+var DICT_HINT = "Say over to leave it, submit to send, disregard to start over";
+var OVER_LINE = "In the field — say submit or press Enter";
 var Dictation = class {
 	listening = false;
-	phrases = [];
 	interim = "";
-	begin(keep = "") {
+	typed = "";
+	begin() {
 		this.listening = true;
-		this.phrases = keep.trim() ? [keep.trim()] : [];
 		this.interim = "";
-	}
-	get text() {
-		return this.phrases.join(" ").trim();
+		this.typed = "";
 	}
 	get shown() {
-		return [this.text, this.interim.trim()].filter(Boolean).join(" ");
+		return [this.typed.trim(), this.interim.trim()].filter(Boolean).join(" ");
 	}
 	hearing(t) {
 		if (this.listening) this.interim = t;
+	}
+	wrote(text) {
+		this.typed += text;
 	}
 	heard(phrase) {
 		if (!this.listening) return { kind: "stopped" };
 		this.interim = "";
 		const p = parseRadio(phrase);
-		if (p.kind === "disregard") {
-			this.phrases = [];
-			return { kind: "cleared" };
+		const text = p.text ? p.text + " " : "";
+		switch (p.kind) {
+			case "disregard": return {
+				kind: "erase",
+				text: this.erase()
+			};
+			case "over":
+			case "submit":
+				this.listening = false;
+				return {
+					kind: p.kind,
+					text
+				};
+			default: return text ? {
+				kind: "type",
+				text
+			} : { kind: "continue" };
 		}
-		if (p.text) this.phrases.push(p.text);
-		if (p.kind === "over" && this.text) return this.sendNow();
-		return { kind: "continue" };
 	}
 	finish() {
 		if (!this.listening) return { kind: "stopped" };
 		const tail = this.interim.trim();
-		this.interim = "";
-		if (tail) {
-			const p = parseRadio(tail);
-			if (p.kind === "disregard") this.phrases = [];
-			else if (p.text) this.phrases.push(p.text);
-		}
-		if (!this.text) {
-			this.listening = false;
-			return { kind: "stopped" };
-		}
-		return this.sendNow();
+		const out = tail ? this.heard(tail) : { kind: "continue" };
+		this.listening = false;
+		if (out.kind === "type") return {
+			kind: "over",
+			text: out.text
+		};
+		if (out.kind === "erase") return {
+			kind: "dropped",
+			text: out.text
+		};
+		if (out.kind === "continue") return {
+			kind: "over",
+			text: ""
+		};
+		return out;
 	}
 	cancel() {
-		const had = this.listening || !!this.text;
+		if (!this.listening) return { kind: "stopped" };
 		this.listening = false;
-		this.phrases = [];
 		this.interim = "";
-		return had ? { kind: "dropped" } : { kind: "stopped" };
+		return {
+			kind: "dropped",
+			text: this.erase()
+		};
 	}
 	expire() {
+		if (!this.listening) return { kind: "stopped" };
 		this.listening = false;
 		this.interim = "";
-		return this.text ? {
-			kind: "kept",
-			text: this.text
-		} : { kind: "stopped" };
-	}
-	sendNow() {
-		const out = {
-			kind: "send",
-			text: this.text,
-			phrases: this.phrases.length
+		return {
+			kind: "over",
+			text: ""
 		};
-		this.listening = false;
-		this.phrases = [];
-		return out;
+	}
+	erase() {
+		const text = this.typed;
+		this.typed = "";
+		this.interim = "";
+		return text;
+	}
+};
+function backspaces(text) {
+	return "".repeat(Array.from(text).length);
+}
+function dialogUp(activity) {
+	return activity === "clarify" || activity === "limit";
+}
+function sessionTarget(title, name) {
+	const send = (data) => peekTerm(title, "agent")?.send(data) ?? false;
+	return {
+		kind: "session",
+		title,
+		name,
+		type: (text) => send(text),
+		erase: (text) => !text || send(backspaces(text))
+	};
+}
+var SUBMIT_SETTLE_MS = 250;
+async function submitDraft(title, name, say) {
+	try {
+		return {
+			ok: true,
+			line: (await instApi(title, "/send", { json: {
+				enter: true,
+				say
+			} }))?.queued ? "Queued for " + name + "." : "Sent to " + name + "."
+		};
+	} catch (err) {
+		const body = err instanceof ApiError ? err.body : null;
+		let line = "Couldn't submit: " + (err?.message || "error") + " — the words are still in the field";
+		if (err instanceof ApiError && err.status === 409) {
+			if (body?.in_dialog) line = name + " is on a dialog — press Enter yourself when it is answered";
+			else if (body?.waking) line = name + " is waking up — say submit again in a moment";
+			else if (body?.paused) line = name + " is paused — resume it first";
+		}
+		return {
+			ok: false,
+			line
+		};
+	}
+}
+var LiveDictation = class {
+	target;
+	hooks;
+	dict = new Dictation();
+	chain = Promise.resolve();
+	done = false;
+	constructor(target, hooks) {
+		this.target = target;
+		this.hooks = hooks;
+		this.dict.begin();
+	}
+	get active() {
+		return !this.done;
+	}
+	hearing(t) {
+		if (this.done) return;
+		this.dict.hearing(t);
+		this.show();
+	}
+	heard(phrase) {
+		return this.step(() => this.dict.heard(phrase));
+	}
+	finish() {
+		return this.step(() => this.dict.finish());
+	}
+	cancel() {
+		return this.step(() => this.dict.cancel());
+	}
+	expire() {
+		return this.step(() => this.dict.expire());
+	}
+	fail(line) {
+		if (this.done) return;
+		this.dict.listening = false;
+		const kept = this.dict.typed.trim() && this.target?.kind === "session";
+		this.end(kept ? line + " — the words so far stay in the field" : line, true);
+	}
+	show() {
+		if (this.done) return;
+		const field = this.target?.kind === "field";
+		this.hooks.caption(this.dict.shown || (field ? "Listening — the words go into the text box" : DICT_HINT), true);
+	}
+	step(next) {
+		this.chain = this.chain.then(() => this.done ? void 0 : this.apply(next())).catch(() => {});
+		return this.chain;
+	}
+	end(line, sticky = false) {
+		if (this.done) return;
+		this.done = true;
+		this.dict.listening = false;
+		this.hooks.halt();
+		if (line !== null) this.hooks.caption(line, sticky);
+	}
+	async apply(out) {
+		const t = this.target;
+		switch (out.kind) {
+			case "continue":
+				this.show();
+				return;
+			case "stopped":
+				this.end("");
+				return;
+			case "type":
+				if (await this.put(out.text)) this.show();
+				return;
+			case "erase":
+				t?.erase(out.text);
+				this.hooks.caption("Disregarded — go on", true);
+				return;
+			case "dropped":
+				t?.erase(out.text);
+				this.end(out.text ? "Disregarded" : "");
+				return;
+			case "over":
+				if (out.text && !await this.put(out.text)) return;
+				this.end(t?.kind === "session" && this.dict.typed ? OVER_LINE : "");
+				return;
+			case "submit": {
+				const typedNow = !!out.text;
+				if (out.text && !await this.put(out.text)) return;
+				if (!t || t.kind === "field") {
+					this.end(t ? "" : "Click a session first");
+					return;
+				}
+				this.end("Submitting to " + t.name + "…", true);
+				if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
+				const say = this.hooks.replies();
+				const r = await submitDraft(t.title, t.name, say);
+				if (r.ok) this.hooks.submitted(t.title, say);
+				this.hooks.caption(r.line, !r.ok);
+				return;
+			}
+		}
+	}
+	async put(text) {
+		const t = this.target;
+		if (!this.dict.typed && t?.kind !== "field") {
+			const words = text.trim();
+			if (await this.hooks.route(words)) {
+				this.end(null);
+				return false;
+			}
+			if (this.done) return false;
+			if (!t) {
+				this.end("Click a session first — “" + words + "” not typed", true);
+				return false;
+			}
+			if (dialogUp(this.hooks.activity(t.title))) {
+				this.end(t.name + " is waiting on a dialog — answer it first", true);
+				return false;
+			}
+		}
+		if (!t || !t.type(text)) {
+			this.end("Couldn't type into " + (t?.name || "the session") + " — its terminal isn't connected", true);
+			return false;
+		}
+		this.dict.wrote(text);
+		return true;
 	}
 };
 var ROUTE_KINDS = /* @__PURE__ */ new Set([
@@ -37573,7 +37786,7 @@ function browserRecognizer() {
 	};
 	return self;
 }
-var SILENCE_MS = 1800;
+var SILENCE_MS = 1100;
 var CLIP_MAX_MS = 12e3;
 var RMS_SPEECH = .02;
 var UPLOAD_TIMEOUT_MS = 45e3;
@@ -37809,9 +38022,12 @@ function serverEngineName(backend, system) {
 	}
 	return id ? "server (" + id + ")" : "server";
 }
+function clipsLine() {
+	return " — 16 kHz clips, " + resamplerName() + ", a phrase ends after 1.1 s of quiet";
+}
 function engineDiagnostics(cfg, stt, tts, electron = isElectron()) {
 	const ready = cfg.server_ready;
-	let rec = stt === "server" ? serverEngineName(ready.stt_backend, cfg.system) : stt === "browser" ? "this browser" : electron ? "none" : "none in this browser";
+	let rec = stt === "server" ? serverEngineName(ready.stt_backend, cfg.system) + clipsLine() : stt === "browser" ? "this browser" : electron ? "none" : "none in this browser";
 	if (stt !== "server" && !ready.stt && (electron || cfg.stt === "server")) rec += " (server recognition isn't ready" + (ready.stt_detail ? ": " + ready.stt_detail : "") + ")";
 	const voice = tts === "server" ? serverEngineName(ready.tts_backend, cfg.system) : tts === "browser" ? "this browser" : "none";
 	return "Recognition: " + rec + " · Voice: " + voice;
@@ -37861,6 +38077,30 @@ function insertIntoField(el, text) {
 	} catch {}
 	el.dispatchEvent(new Event("input", { bubbles: true }));
 }
+function fieldTarget(el) {
+	return {
+		kind: "field",
+		title: "",
+		name: "the text box",
+		type: (text) => {
+			insertIntoField(el, text);
+			return true;
+		},
+		erase: (text) => {
+			const at = el.selectionStart != null ? el.selectionStart : el.value.length;
+			if (!text || el.value.slice(Math.max(0, at - text.length), at) !== text) return false;
+			el.value = el.value.slice(0, at - text.length) + el.value.slice(at);
+			try {
+				el.selectionStart = el.selectionEnd = at - text.length;
+			} catch {}
+			el.dispatchEvent(new Event("input", { bubbles: true }));
+			return true;
+		}
+	};
+}
+function liveActivity(title) {
+	return effectiveActivity((queryClient.getQueryData(["instances"]) || []).find((i) => i.title === title) || { title });
+}
 function MicGlyph() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 		viewBox: "0 0 24 24",
@@ -37894,11 +38134,9 @@ function TopBarMic() {
 	const focusedName = useUi((s) => s.focused ? s.aliases[s.focused] || s.focused : "");
 	const btnRef = (0, import_react.useRef)(null);
 	const menuRef = (0, import_react.useRef)(null);
-	const dict = (0, import_react.useRef)(new Dictation()).current;
 	const rec = (0, import_react.useRef)(null);
-	const field = (0, import_react.useRef)(null);
+	const live = (0, import_react.useRef)(null);
 	const pressedField = (0, import_react.useRef)(null);
-	const kept = (0, import_react.useRef)("");
 	const deciding = (0, import_react.useRef)(null);
 	const idleTimer = (0, import_react.useRef)(void 0);
 	const captionTimer = (0, import_react.useRef)(void 0);
@@ -37979,55 +38217,24 @@ function TopBarMic() {
 	const supported = sttNow !== "none";
 	const armIdle = () => {
 		clearTimeout(idleTimer.current);
-		idleTimer.current = setTimeout(() => {
-			if (!dict.listening && !field.current) return;
-			halt();
-			if (field.current) {
-				field.current = null;
-				say("");
-				return;
-			}
-			outcome(dict.expire());
-		}, DICT_IDLE_MS);
+		idleTimer.current = setTimeout(() => void live.current?.expire(), DICT_IDLE_MS);
 	};
 	const halt = () => {
 		clearTimeout(idleTimer.current);
 		deciding.current = null;
+		live.current = null;
 		rec.current?.stop();
 		rec.current = null;
 		setListening(false);
 		queue.release();
 	};
-	const outcome = (out) => {
-		switch (out.kind) {
-			case "send":
-				halt();
-				dispatch(out.text, out.phrases);
-				return;
-			case "cleared":
-				say("Disregarded — go on", true);
-				return;
-			case "continue":
-				say(dict.shown || DICT_HINT, true);
-				return;
-			case "stopped":
-				halt();
-				say("");
-				return;
-			case "dropped":
-				halt();
-				kept.current = "";
-				say("Dropped");
-				return;
-			case "kept":
-				halt();
-				kept.current = out.text;
-				say("“" + out.text + "” — Not sent — click the mic to continue", true);
-				return;
-		}
+	const target = (into) => {
+		if (into) return fieldTarget(into);
+		const title = useUi.getState().focused;
+		return title ? sessionTarget(title, displayName(title)) : null;
 	};
 	const start = (into) => {
-		if (dict.listening || field.current) return;
+		if (live.current) return;
 		const c = cfgNow;
 		const engine = recEngine(c);
 		if (engine === "none") {
@@ -38038,116 +38245,79 @@ function TopBarMic() {
 		const r = engine === "server" ? serverRec : browserRec;
 		if (r === serverRec || ttsEngine(c) === "server") voiceAudioCtx();
 		queue.hold();
-		field.current = into;
-		if (!into) dict.begin(kept.current);
-		kept.current = "";
+		const d = new LiveDictation(target(into), {
+			caption: say,
+			halt: () => {
+				if (live.current === d) halt();
+			},
+			route: async (text) => {
+				const reply = await routePhrase(text, useUi.getState().focused || "");
+				if (reply.kind === "prompt") return false;
+				routed(reply, text);
+				return true;
+			},
+			activity: liveActivity,
+			replies: () => prefsRef.current.replies,
+			submitted: (title, wantSay) => tracker.sent(title, wantSay)
+		});
+		live.current = d;
 		rec.current = r;
 		setListening(true);
-		say(into ? "Listening — the words go into the text box" : dict.shown || DICT_HINT, true);
+		d.show();
 		armIdle();
 		const ok = r.start({
 			onInterim: (t) => {
-				if (rec.current !== r) return;
+				if (live.current !== d) return;
 				armIdle();
-				if (field.current) {
-					say(t || "Listening…", true);
-					return;
-				}
-				dict.hearing(t);
-				say(dict.shown || DICT_HINT, true);
+				d.hearing(t);
 			},
 			onStatus: (t) => {
-				if (rec.current === r && !dict.shown && !field.current) say(t + " · " + DICT_HINT, true);
+				if (live.current === d && !d.dict.shown && !into) say(t + " · " + DICT_HINT, true);
 			},
 			onSpeech: () => {
-				if (rec.current !== r) return;
+				if (live.current !== d) return;
 				armIdle();
-				if (!dict.shown && !field.current) say("Hearing you… · " + DICT_HINT, true);
+				if (!d.dict.shown && !into) say("Hearing you… · " + DICT_HINT, true);
 			},
 			onFinal: (t) => {
-				if (rec.current !== r) return;
+				if (live.current !== d) return;
 				armIdle();
-				const box = field.current;
-				if (box) {
-					const p = parseRadio(t);
-					if (p.kind === "disregard") say("Disregarded", true);
-					else if (p.text) insertIntoField(box, p.text + " ");
-					if (p.kind === "over") {
-						field.current = null;
-						halt();
-						say("");
-					} else if (p.kind !== "disregard") say("Listening — the words go into the text box", true);
-					return;
-				}
-				if (deciding.current) {
-					dict.hearing("");
-					const p = parseRadio(t);
-					if (p.kind === "disregard") dict.phrases = [];
-					else if (p.text) dict.phrases.push(p.text);
-					return;
-				}
-				outcome(dict.heard(t));
+				d.heard(t);
 			},
 			onError: (code, detail) => {
-				if (rec.current !== r) return;
-				const line = recognizerErrorLine(code, detail);
-				const words = dict.text;
-				field.current = null;
-				dict.cancel();
-				halt();
-				kept.current = words;
-				say(words ? line + " — “" + words + "” not sent" : line, true);
+				if (live.current !== d) return;
+				d.fail(recognizerErrorLine(code, detail));
 			},
 			onEnd: () => {
-				if (rec.current !== r) return;
+				if (live.current !== d) return;
 				if (deciding.current) {
 					deciding.current();
 					return;
 				}
-				field.current = null;
-				outcome(dict.expire());
+				d.expire();
 			}
 		});
 		refreshCfg();
 		if (!ok) {
-			rec.current = null;
-			field.current = null;
-			dict.cancel();
-			setListening(false);
-			queue.release();
+			halt();
 			say("Speech recognition did not start");
 		}
 	};
 	const finish = () => {
 		const r = rec.current;
-		if (!r) return;
-		if (field.current) {
-			field.current = null;
-			halt();
-			say("");
-			return;
-		}
-		if (deciding.current) return;
+		const d = live.current;
+		if (!r || !d || deciding.current) return;
 		let done = false;
 		const decide = () => {
 			if (done) return;
 			done = true;
 			clearTimeout(timer);
 			deciding.current = null;
-			outcome(dict.finish());
+			d.finish();
 		};
 		deciding.current = decide;
 		const timer = setTimeout(decide, r.name === "server" ? 45e3 : HOLD_FINAL_WAIT_MS);
 		r.finish();
-	};
-	const cancel = () => {
-		if (field.current) {
-			field.current = null;
-			halt();
-			say("");
-			return;
-		}
-		outcome(dict.cancel());
 	};
 	(0, import_react.useEffect)(() => {
 		if (!listening) return;
@@ -38155,7 +38325,7 @@ function TopBarMic() {
 			if (e.key !== "Escape") return;
 			e.stopPropagation();
 			e.preventDefault();
-			cancel();
+			live.current?.cancel();
 		};
 		document.addEventListener("keydown", onKey, true);
 		return () => document.removeEventListener("keydown", onKey, true);
@@ -38164,18 +38334,6 @@ function TopBarMic() {
 		if (!line) return;
 		say(line);
 		if (prefsRef.current.replies) queue.say(line);
-	};
-	const dispatch = async (text, phrases) => {
-		const session = useUi.getState().focused || "";
-		if (phrases === 1) {
-			say("“" + text + "”…", true);
-			const r = await routePhrase(text, session);
-			if (r.kind !== "prompt") {
-				routed(r, text);
-				return;
-			}
-		}
-		await sendPrompt(text);
 	};
 	const routed = (r, text) => {
 		switch (r.kind) {
@@ -38209,40 +38367,7 @@ function TopBarMic() {
 				return;
 			default:
 				announce(r.say || "");
-				if (!r.say) {
-					kept.current = text;
-					say("“" + text + "” — Not sent — click the mic to continue", true);
-				}
-		}
-	};
-	const sendPrompt = async (text) => {
-		const title = useUi.getState().focused;
-		if (!title) {
-			kept.current = text;
-			say("Click a session first — “" + text + "” not sent", true);
-			return;
-		}
-		const name = displayName(title);
-		const wantSay = prefsRef.current.replies;
-		say("Sending to " + name + "…", true);
-		try {
-			const r = await instApi(title, "/send", { json: {
-				text,
-				dialog_safe: true,
-				say: wantSay
-			} });
-			tracker.sent(title, wantSay);
-			say(r?.queued ? "Queued for " + name + "." : "Sent to " + name + ".");
-		} catch (err) {
-			kept.current = text;
-			const body = err instanceof ApiError ? err.body : null;
-			let line = "Couldn't send: " + (err?.message || "error");
-			if (err instanceof ApiError && err.status === 409) {
-				if (body?.waking) line = name + " is waking up — click the mic to send again in a moment";
-				else if (body?.paused) line = name + " is paused — resume it first";
-				else if (body?.queued) line = "Queued for " + name + ".";
-			}
-			say(line + " · “" + text + "”", true);
+				if (!r.say) say("“" + text + "” — not typed", true);
 		}
 	};
 	const hold = prefs.ptt === "hold";
@@ -38271,7 +38396,7 @@ function TopBarMic() {
 		};
 	}, [menuOpen]);
 	const who = focusedName || "a session";
-	const title = !supported ? noRecognizerLine() + " — right-click for options" : listening ? hold ? "Listening — release to send" : "Listening — click to send, Esc to drop" : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") + ", right-click for options";
+	const title = !supported ? noRecognizerLine() + " — right-click for options" : listening ? hold ? "Listening — release to stop (the words stay), Esc to take them back" : "Listening — click to stop (the words stay), Esc to take them back" : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") + ", right-click for options";
 	const rect = menuOpen ? btnRef.current?.getBoundingClientRect() : void 0;
 	const popStyle = rect ? {
 		top: rect.bottom + 6 + "px",
@@ -38291,7 +38416,7 @@ function TopBarMic() {
 			type: "button",
 			className: "tb-item" + (listening ? " listening" : "") + (speaking && !listening ? " speaking" : "") + (!supported ? " unsupported" : ""),
 			title,
-			"aria-label": listening ? "Listening — stop and send" : "Talk to " + who,
+			"aria-label": listening ? "Listening — stop" : "Talk to " + who,
 			"aria-pressed": listening,
 			"aria-haspopup": "menu",
 			"aria-expanded": menuOpen,
@@ -38321,7 +38446,7 @@ function TopBarMic() {
 					return;
 				}
 				if (hold) return;
-				if (dict.listening || field.current) finish();
+				if (live.current) finish();
 				else start(pressedField.current);
 				pressedField.current = null;
 			},
@@ -38402,7 +38527,11 @@ function TopBarMic() {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "mic-hint",
-					children: [DICT_HINT, ". Esc drops it."]
+					children: [
+						"The words are typed into the session as you speak. ",
+						DICT_HINT,
+						"; Esc takes them back."
+					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "mic-diag",
@@ -86744,6 +86873,7 @@ function Voice(p) {
 function VoiceSection({ active }) {
 	const model = useSettings();
 	const [view, setView] = (0, import_react.useState)(null);
+	const [reread, setReread] = (0, import_react.useState)(0);
 	const doc = model.settings;
 	(0, import_react.useEffect)(() => {
 		if (!active) return;
@@ -86761,7 +86891,55 @@ function VoiceSection({ active }) {
 		return () => {
 			live = false;
 		};
-	}, [active, doc]);
+	}, [
+		active,
+		doc,
+		reread
+	]);
+	const [installSupported, setInstallSupported] = (0, import_react.useState)(false);
+	const [installStatus, setInstallStatus] = (0, import_react.useState)({ state: "idle" });
+	const [installTouched, setInstallTouched] = (0, import_react.useState)(false);
+	const following = (0, import_react.useRef)(false);
+	const mounted = (0, import_react.useRef)(true);
+	(0, import_react.useEffect)(() => {
+		mounted.current = true;
+		return () => {
+			mounted.current = false;
+		};
+	}, []);
+	const alive = () => mounted.current;
+	const settle = async (s) => {
+		following.current = false;
+		if (s.state === "done" && mounted.current) {
+			await model.reload();
+			setReread((n) => n + 1);
+		}
+	};
+	(0, import_react.useEffect)(() => {
+		if (!active) return;
+		api("/api/voice/install-local").then((s) => {
+			if (!mounted.current) return;
+			setInstallSupported(true);
+			if (s?.state === "running" && !following.current) {
+				following.current = true;
+				setInstallTouched(true);
+				setInstallStatus(s);
+				pollInstall(setInstallStatus, { alive }).then(settle);
+			} else if (s?.state === "failed" && !following.current) setInstallStatus(s);
+		}).catch(() => {});
+	}, [active]);
+	const onInstall = () => {
+		if (following.current) return;
+		following.current = true;
+		setInstallTouched(true);
+		installLocalModels(setInstallStatus, { alive }).then(settle);
+	};
+	const install = {
+		supported: installSupported,
+		status: installStatus,
+		touched: installTouched,
+		onInstall
+	};
 	const clearKey = async (kind) => {
 		try {
 			await api("/api/voice/clear-key", { json: { kind } });
@@ -86775,10 +86953,11 @@ function VoiceSection({ active }) {
 		model,
 		view,
 		onClearKey: clearKey,
+		install,
 		tryRow: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TryRow, { view })
 	});
 }
-function VoiceSectionView({ model, view, onClearKey, tryRow }) {
+function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
 	const approve = model.get("voice", "approve_dialogs") !== false;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "voice-section",
@@ -86800,7 +86979,8 @@ function VoiceSectionView({ model, view, onClearKey, tryRow }) {
 					title: "Recognition",
 					model,
 					view,
-					onClearKey
+					onClearKey,
+					install
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceKindBlock, {
 					kind: "tts",
 					title: "Voice",
@@ -86910,13 +87090,15 @@ function PhoneWhere({ kind, title }) {
 		]
 	});
 }
-function VoiceKindBlock({ kind, title, model, view, onClearKey }) {
+function VoiceKindBlock({ kind, title, model, view, onClearKey, install }) {
 	const backend = effectiveBackend(kind, String(model.get("voice", kind + "_backend") || ""), view);
 	const f = voiceFields(kind, "server", backend);
 	const line = readinessLine(kind, view, "server", backend);
 	const keySaved = model.get("voice", kind + "_api_key") === SECRET_MASK;
 	const local = backend === "local";
 	const voices = view?.system?.voices || [];
+	const offer = kind === "stt" ? installOffer(backend, view) : null;
+	const showInstall = kind === "stt" && !!install?.supported && (!!offer || install.status.state === "running" || install.touched);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "voice-kind",
 		"data-kind": kind,
@@ -87041,6 +87223,11 @@ function VoiceKindBlock({ kind, title, model, view, onClearKey }) {
 					"aria-hidden": "true",
 					children: line.ok ? "✓" : "✗"
 				}), line.text]
+			}),
+			showInstall && install && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallRow, {
+				offer,
+				install,
+				allowed: view?.configure_allowed !== false
 			})
 		]
 	});
@@ -87059,6 +87246,169 @@ function systemVoiceOptions(voices, saved) {
 		label: s + " (not on this computer)"
 	});
 	return out;
+}
+var INSTALL_LABEL = "Install local models (about 300 MB)";
+var INSTALL_BASIC_LINE = "Windows' built-in recognizer is basic. Local models (faster-whisper) recognise far better and stay on this computer.";
+var INSTALL_REFUSED = "Only the owner can install models: do it on that computer itself.";
+var INSTALL_POLL_MS = 2e3;
+function basicRecognizer(view) {
+	if (view?.system?.stt_quality) return view.system.stt_quality === "basic";
+	const sr = view?.server_ready;
+	return sr?.stt_backend === "system" && /basic accuracy/i.test(sr.stt_detail || "");
+}
+function installOffer(backend, view) {
+	if (!view) return null;
+	const sr = view.server_ready || {};
+	if (sr.stt_backend === "local" && sr.stt) return null;
+	if (backend === "local") return "local";
+	if (backend === "system" && basicRecognizer(view)) return "basic";
+	return null;
+}
+function installView(st, allowed) {
+	const last = st.state === "running" ? (st.log || []).filter(Boolean).slice(-1)[0] || "" : "";
+	if (st.state === "running") {
+		const head = st.already ? "Already installing" : "Installing";
+		return {
+			button: "busy",
+			disabled: true,
+			text: st.step ? `${head}: ${noDot(st.step)}` : head,
+			last
+		};
+	}
+	if (st.state === "done") return {
+		button: null,
+		disabled: true,
+		text: "Installed — recognition now uses local models.",
+		last
+	};
+	if (st.refused) return {
+		button: "install",
+		disabled: true,
+		text: noDot(st.error || INSTALL_REFUSED) + ".",
+		last
+	};
+	if (!allowed) return {
+		button: "install",
+		disabled: true,
+		text: INSTALL_REFUSED,
+		last
+	};
+	if (st.state === "failed") return {
+		button: "retry",
+		disabled: false,
+		text: "Couldn't install: " + noDot(st.error || "the server gave no reason") + ".",
+		last
+	};
+	return {
+		button: "install",
+		disabled: false,
+		text: "",
+		last
+	};
+}
+var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function pollInstall(onStatus, { call = api, wait = sleep, every = INSTALL_POLL_MS, alive = () => true, already = false } = {}) {
+	let misses = 0;
+	for (;;) {
+		await wait(every);
+		if (!alive()) return {
+			state: "running",
+			already
+		};
+		let s;
+		try {
+			s = {
+				...await call("/api/voice/install-local"),
+				already
+			};
+			misses = 0;
+		} catch (err) {
+			if (++misses < 3) continue;
+			s = {
+				state: "failed",
+				error: "lost track of the install: " + (err?.message || "no answer")
+			};
+		}
+		if (!alive()) return s;
+		onStatus(s);
+		if (s.state !== "running") return s;
+	}
+}
+async function installLocalModels(onStatus, opts = {}) {
+	const call = opts.call || api;
+	let already = false;
+	try {
+		await call("/api/voice/install-local", { method: "POST" });
+		onStatus({
+			state: "running",
+			step: "Starting"
+		});
+	} catch (err) {
+		const status = err?.status;
+		const error = err?.message || "no answer";
+		if (status === 409) {
+			already = true;
+			onStatus({
+				state: "running",
+				already
+			});
+		} else {
+			const s = {
+				state: "failed",
+				error,
+				refused: status === 403
+			};
+			onStatus(s);
+			return s;
+		}
+	}
+	return pollInstall(onStatus, {
+		...opts,
+		call,
+		already
+	});
+}
+function InstallRow({ offer, install, allowed }) {
+	const v = installView(install.status, allowed);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "voice-install",
+		id: "voice-install",
+		"data-offer": offer || "",
+		children: [offer === "basic" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			id: "voice-install-why",
+			children: INSTALL_BASIC_LINE
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "voice-install-row",
+			children: [
+				v.button && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "voice-install-btn",
+					disabled: v.disabled,
+					title: !allowed || install.status.refused ? v.text : void 0,
+					onClick: install.onInstall,
+					children: v.button === "retry" ? "Try again" : v.button === "busy" ? "Installing…" : INSTALL_LABEL
+				}),
+				v.button === "busy" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("progress", {
+					className: "voice-install-progress",
+					"aria-label": "Installing local models"
+				}),
+				v.text && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint voice-install-status" + (install.status.state === "done" ? " st-ok" : install.status.state === "failed" ? " st-fail" : ""),
+					id: "voice-install-status",
+					role: "status",
+					children: v.text
+				}),
+				v.last && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint voice-install-log",
+					id: "voice-install-log",
+					title: v.last,
+					children: v.last
+				})
+			]
+		})]
+	});
 }
 var canRecord = () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
 function TryButtons({ view, busy = "", left = 0, result = null, onSay, onHear }) {

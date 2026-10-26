@@ -23,6 +23,8 @@ Status codes, in the order they are checked:
 * ``speak`` — 400 no text; 413 over :data:`MAX_SPEAK_CHARS`; 409 / 502 as
   above; 200 the audio bytes (``audio/mpeg`` or ``audio/wav``) with
   ``X-Voice-Backend``.
+* ``install-local`` — ``POST`` 403 not the owner; 409 already running; 200
+  the status (``core.speech_install``). ``GET`` the status, for anyone.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ from fastapi.responses import JSONResponse
 
 from backend.web.core import auth as _auth
 from backend.web.core import speech as _speech
+from backend.web.core import speech_install as _install
 
 router = APIRouter()
 
@@ -80,7 +83,7 @@ def _failed(err: BaseException) -> JSONResponse:
 
 
 @router.get("/api/voice")
-def voice_get() -> JSONResponse:
+def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
     """Where speech runs and what the server offers::
 
         {"stt": "phone"|"server", "tts": "phone"|"server",
@@ -88,18 +91,24 @@ def voice_get() -> JSONResponse:
          "backends": {"stt": [ids], "tts": [ids]},
          "server_ready": {"stt": bool, "tts": bool, "detail": str, …},
          "system": {"available": bool, "platform": str, "detail": str,
-                    "voices": [names], "recognizers": [culture tags]}}
+                    "voices": [names], "recognizers": [culture tags],
+                    "stt_quality": "basic"|"good"|"none"},
+         "configure_allowed": bool}
 
     Readable by any signed-in client (the phone page and the desktop app
-    read it on load) — no owner check. ``server_ready`` and ``system`` are
-    :func:`core.speech.describe`'s offline verdict on the saved fields (no
-    network, no model load; the built-in engine is probed once per process)."""
+    read it on load) — no owner check. ``configure_allowed`` only REPORTS
+    whether this caller may use the owner-only routes (``install-local``,
+    ``clear-key``), so the page can disable those buttons. ``server_ready``
+    and ``system`` are :func:`core.speech.describe`'s offline verdict on the
+    saved fields (no network, no model load; the built-in engine is probed
+    once per process)."""
     s = _settings()
     body = {
         "stt": s.voice.stt,
         "tts": s.voice.tts,
         "approve_dialogs": bool(s.voice.approve_dialogs),
         "agent_words": bool(s.notifications.ntfy_agent_words),
+        "configure_allowed": bool(allowed),
     }
     body.update(_speech.describe())
     return JSONResponse(body)
@@ -219,3 +228,36 @@ def voice_clear_key(
     except Exception as err:  # noqa: BLE001 — an unreadable settings file
         return JSONResponse({"error": str(err)}, status_code=500)
     return JSONResponse({"ok": True, "kind": kind})
+
+
+@router.get("/api/voice/install-local")
+def voice_install_local_status() -> JSONResponse:
+    """The one-click local-models install (``core.speech_install``)::
+
+        {"state": "idle"|"running"|"done"|"failed",
+         "step": "installing packages"|"downloading recognition model (small)"
+                 |"downloading voice (en_US-lessac-medium)"|"done"|"",
+         "log": [the last 20 output lines], "started": epoch|null,
+         "finished": epoch|null, "error": str}
+
+    Readable by any signed-in client (the Settings screen polls it)."""
+    return JSONResponse(_install.status())
+
+
+@router.post("/api/voice/install-local")
+def voice_install_local(
+    allowed: bool = Depends(_auth.configure_allowed),
+) -> JSONResponse:
+    """Start the one-click install of the local models: faster-whisper and
+    piper into the server's own interpreter, then the recognition model and
+    the voice; on success ``voice.stt_backend`` becomes ``"local"``. Runs
+    in the background — poll ``GET`` for the progress. Owner only (403);
+    409 while one is already running; 200 the status (``state:
+    "running"``)."""
+    if not allowed:
+        return _auth.configure_refused()
+    if not _install.start():
+        body = _install.status()
+        body["error"] = body.get("error") or "the install is already running"
+        return JSONResponse(body, status_code=409)
+    return JSONResponse(_install.status())
