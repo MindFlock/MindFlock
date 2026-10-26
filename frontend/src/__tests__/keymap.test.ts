@@ -28,6 +28,9 @@ describe("comboLabel", () => {
     expect(comboLabel({ key: "n", alt: true })).toBe("Alt+N");
     expect(comboLabel({ key: "PageDown", mod: "ctrl" })).toBe("Ctrl+PgDn");
     expect(comboLabel({ key: "Tab", mod: "ctrl", shift: true })).toBe("Ctrl+Shift+Tab");
+    // Space, and macOS's Option+Space (which reports a non-breaking space).
+    expect(comboLabel({ key: " ", alt: true })).toBe("Alt+Space");
+    expect(comboLabel({ key: "\u00a0", alt: true })).toBe("Alt+Space");
   });
 });
 
@@ -79,6 +82,22 @@ describe("effBindings", () => {
     const eff = effBindings(pairFor("cycle"));
     expect(eff).toHaveLength(1);
     expect(eff[0]).toMatchObject({ key: "F4", mod: true, shift: true });
+  });
+});
+
+describe("the talk hotkey (push-to-talk)", () => {
+  it("defaults to Alt+Space, holdable, unguarded so it works from a terminal", () => {
+    const talk = byId("talk");
+    expect(sameCombo(talk, { key: " ", alt: true })).toBe(true);
+    expect(talk.holdable).toBe(true);
+    expect(talk.when).toBeUndefined();
+    // The only holdable action today.
+    expect(KEYMAP.filter((e) => e.holdable).map((e) => e.id)).toEqual(["talk"]);
+  });
+
+  it("a rebind replaces it like any other action", () => {
+    setKeyCombos("talk", [{ key: "F9" }]);
+    expect(effBindings(byId("talk"))).toEqual([{ key: "F9" }]);
   });
 });
 
