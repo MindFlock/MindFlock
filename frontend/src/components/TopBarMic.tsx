@@ -1,36 +1,44 @@
 /** The top bar's mic, next to the bell: talk to the focused session.
  *
- * Push to talk — a click starts listening and a second click sends (or, in
- * "Hold to talk", the button is held while you speak). Radio words work in
- * both: a phrase ending in "over" sends now, "disregard" empties the draft and
- * keeps listening, Escape drops it. One phrase is first offered to the voice
- * router (lib/voiceDesktop routePhrase), so "switch to the login fix" selects
- * that session and "start a new session for…" starts one, instead of being
- * typed at whoever has focus. With a text box focused, the words go into the
- * box at the cursor and nothing is sent (the old dictation button's job).
+ * The words are typed into the session's input field as you speak — each
+ * phrase the moment it is recognised — and the radio words end it: "over"
+ * stops listening and leaves the words in the field, "submit" submits them
+ * (Enter, after the server's dialog checks), "disregard" takes back what this
+ * dictation typed and keeps listening, Escape does that and stops. Push to
+ * talk — a click starts listening and a second click is "over" (or, in "Hold
+ * to talk", the button is held while you speak; letting go is "over"). A
+ * dictation's first phrase is first offered to the voice router
+ * (lib/voiceDesktop routePhrase), so "switch to the login fix" selects that
+ * session and "start a new session for…" starts one, instead of being typed
+ * at whoever has focus; and it is not typed at all while the session shows a
+ * dialog (typed words would answer it). With a text box focused, the words go
+ * into the box at the cursor and Enter is never pressed (the old dictation
+ * button's job).
  *
  * Replies are read aloud only when "Read replies aloud" is on (off by
- * default), for the prompts this mic sent, prefixed with the session's name.
- * Right-click or Shift+click opens those options. In the desktop app the
- * words and the voice go through the server's engines (its Web Speech fails
- * there); in a browser tab, through the browser's unless Settings → Voice
- * says "server" (lib/voiceDesktop sttEngine). The logic that isn't DOM —
- * the radio parser, the push-to-talk machine, the reply tracker, the speech
- * queue and the engines — lives in lib/voiceDesktop.ts. */
+ * default), for the drafts this mic submitted, prefixed with the session's
+ * name. Right-click or Shift+click opens those options. In the desktop app
+ * the words and the voice go through the server's engines (its Web Speech
+ * fails there); in a browser tab, through the browser's unless Settings →
+ * Voice says "server" (lib/voiceDesktop sttEngine). The logic that isn't DOM
+ * — the radio parser, the dictation machine and its live driver, the reply
+ * tracker, the speech queue and the engines — lives in lib/voiceDesktop.ts. */
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ApiError, instApi } from "../api/client";
+import { instApi } from "../api/client";
 import { displayName, useUi } from "../state/store";
 import { queryClient, refreshInstances, type EventEnvelope } from "../state/queries";
+import type { Instance } from "../api/types";
+import { effectiveActivity } from "../lib/sessionState";
 import { selectSession } from "../lib/sessionActions";
 import { openSettings, type SettingsScreen } from "../lib/openSettings";
 import {
   DICT_HINT,
   DICT_IDLE_MS,
   DEFAULT_VOICE_CFG,
-  Dictation,
   HOLD_FINAL_WAIT_MS,
+  LiveDictation,
   ReplyTracker,
   SpeechQueue,
   browserRecognizer,
@@ -39,16 +47,16 @@ import {
   loadVoiceCfg,
   loadVoicePrefs,
   noRecognizerLine,
-  parseRadio,
   recognizerErrorLine,
   routePhrase,
   saveVoicePrefs,
   serverRecognizer,
   serverSpeaker,
+  sessionTarget,
   sttEngine,
   ttsEngine,
   voiceAudioCtx,
-  type DictOutcome,
+  type DictTarget,
   type Recognizer,
   type RouteReply,
   type SttEngine,
@@ -105,6 +113,39 @@ function insertIntoField(el: HTMLInputElement | HTMLTextAreaElement, text: strin
   el.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+/** A text box as a dictation's target: insert at the cursor; a disregard
+ * removes the words only while they still sit right before the cursor (the
+ * person may have edited the box since). */
+function fieldTarget(el: HTMLInputElement | HTMLTextAreaElement): DictTarget {
+  return {
+    kind: "field",
+    title: "",
+    name: "the text box",
+    type: (text) => {
+      insertIntoField(el, text);
+      return true;
+    },
+    erase: (text) => {
+      const at = el.selectionStart != null ? el.selectionStart : el.value.length;
+      if (!text || el.value.slice(Math.max(0, at - text.length), at) !== text) return false;
+      el.value = el.value.slice(0, at - text.length) + el.value.slice(at);
+      try {
+        el.selectionStart = el.selectionEnd = at - text.length;
+      } catch {
+        /* readonly */
+      }
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    },
+  };
+}
+
+/** The session's live activity, from the rows the app already polls. */
+function liveActivity(title: string): string {
+  const inst = (queryClient.getQueryData<Instance[]>(["instances"]) || []).find((i) => i.title === title);
+  return effectiveActivity(inst || { title });
+}
+
 /** Monochrome mic (currentColor), never the 🎤 emoji — see the bell's
  * BellGlyph: an emoji paints its own colours and vanishes on an amber bar. */
 function MicGlyph() {
@@ -129,12 +170,10 @@ export function TopBarMic() {
 
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const dict = useRef(new Dictation()).current;
   const rec = useRef<Recognizer | null>(null);
-  const field = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
+  /** The dictation under way (null when not listening). */
+  const live = useRef<LiveDictation | null>(null);
   const pressedField = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
-  /** Words a round left unsent; the next click continues from them. */
-  const kept = useRef("");
   const deciding = useRef<(() => void) | null>(null);
   const idleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const captionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -237,59 +276,30 @@ export function TopBarMic() {
 
   const armIdle = () => {
     clearTimeout(idleTimer.current);
-    idleTimer.current = setTimeout(() => {
-      if (!dict.listening && !field.current) return;
-      halt();
-      if (field.current) {
-        field.current = null;
-        say("");
-        return;
-      }
-      outcome(dict.expire());
-    }, DICT_IDLE_MS);
+    idleTimer.current = setTimeout(() => void live.current?.expire(), DICT_IDLE_MS);
   };
 
   /** The recognizer down, nothing reported; the queue may talk again. */
   const halt = () => {
     clearTimeout(idleTimer.current);
     deciding.current = null;
+    live.current = null;
     rec.current?.stop();
     rec.current = null;
     setListening(false);
     queue.release();
   };
 
-  const outcome = (out: DictOutcome) => {
-    switch (out.kind) {
-      case "send":
-        halt();
-        void dispatch(out.text, out.phrases);
-        return;
-      case "cleared":
-        say("Disregarded — go on", true);
-        return;
-      case "continue":
-        say(dict.shown || DICT_HINT, true);
-        return;
-      case "stopped":
-        halt();
-        say("");
-        return;
-      case "dropped":
-        halt();
-        kept.current = "";
-        say("Dropped");
-        return;
-      case "kept":
-        halt();
-        kept.current = out.text;
-        say("“" + out.text + "” — Not sent — click the mic to continue", true);
-        return;
-    }
+  /** The phrases' target: the text box, else the focused session's agent
+   * terminal (null: none focused — a first phrase may still be a command). */
+  const target = (into: HTMLInputElement | HTMLTextAreaElement | null): DictTarget | null => {
+    if (into) return fieldTarget(into);
+    const title = useUi.getState().focused;
+    return title ? sessionTarget(title, displayName(title)) : null;
   };
 
   const start = (into: HTMLInputElement | HTMLTextAreaElement | null) => {
-    if (dict.listening || field.current) return;
+    if (live.current) return;
     const c = cfgNow;
     const engine = recEngine(c);
     if (engine === "none") {
@@ -302,158 +312,107 @@ export function TopBarMic() {
     // server recognizer's recording need it running).
     if (r === serverRec || ttsEngine(c) === "server") voiceAudioCtx();
     queue.hold();
-    field.current = into;
-    if (!into) dict.begin(kept.current);
-    kept.current = "";
+    const d = new LiveDictation(target(into), {
+      caption: say,
+      halt: () => {
+        if (live.current === d) halt();
+      },
+      route: async (text) => {
+        const reply = await routePhrase(text, useUi.getState().focused || "");
+        if (reply.kind === "prompt") return false;
+        routed(reply, text);
+        return true;
+      },
+      activity: liveActivity,
+      replies: () => prefsRef.current.replies,
+      submitted: (title, wantSay) => tracker.sent(title, wantSay),
+    });
+    live.current = d;
     rec.current = r;
     setListening(true);
-    say(into ? "Listening — the words go into the text box" : dict.shown || DICT_HINT, true);
+    d.show();
     armIdle();
     const ok = r.start({
       onInterim: (t) => {
-        if (rec.current !== r) return;
+        if (live.current !== d) return;
         armIdle();
-        if (field.current) {
-          say(t || "Listening…", true);
-          return;
-        }
-        dict.hearing(t);
-        say(dict.shown || DICT_HINT, true);
+        d.hearing(t);
       },
       onStatus: (t) => {
-        if (rec.current === r && !dict.shown && !field.current) say(t + " · " + DICT_HINT, true);
+        if (live.current === d && !d.dict.shown && !into) say(t + " · " + DICT_HINT, true);
       },
       onSpeech: () => {
-        if (rec.current !== r) return;
+        if (live.current !== d) return;
         armIdle();
-        if (!dict.shown && !field.current) say("Hearing you… · " + DICT_HINT, true);
+        if (!d.dict.shown && !into) say("Hearing you… · " + DICT_HINT, true);
       },
+      // Each phrase is typed as it arrives — also the tail while finishing.
       onFinal: (t) => {
-        if (rec.current !== r) return;
+        if (live.current !== d) return;
         armIdle();
-        const box = field.current;
-        if (box) {
-          const p = parseRadio(t);
-          if (p.kind === "disregard") say("Disregarded", true);
-          else if (p.text) insertIntoField(box, p.text + " ");
-          if (p.kind === "over") {
-            field.current = null;
-            halt();
-            say("");
-          } else if (p.kind !== "disregard") say("Listening — the words go into the text box", true);
-          return;
-        }
-        // While finishing, the tail lands in the draft; the decision follows.
-        if (deciding.current) {
-          dict.hearing("");
-          const p = parseRadio(t);
-          if (p.kind === "disregard") dict.phrases = [];
-          else if (p.text) dict.phrases.push(p.text);
-          return;
-        }
-        outcome(dict.heard(t));
+        void d.heard(t);
       },
       onError: (code, detail) => {
-        if (rec.current !== r) return;
-        const line = recognizerErrorLine(code, detail);
-        const words = dict.text;
-        field.current = null;
-        dict.cancel();
-        halt();
-        kept.current = words;
-        say(words ? line + " — “" + words + "” not sent" : line, true);
+        if (live.current !== d) return;
+        d.fail(recognizerErrorLine(code, detail));
       },
       onEnd: () => {
-        if (rec.current !== r) return;
+        if (live.current !== d) return;
         if (deciding.current) {
           deciding.current();
           return;
         }
-        // Down without being asked: keep what was said.
-        field.current = null;
-        outcome(dict.expire());
+        // Down without being asked: the words stay where they are.
+        void d.expire();
       },
     });
     // Settings may have moved the engines since: the next round knows.
     void refreshCfg();
     if (!ok) {
-      rec.current = null;
-      field.current = null;
-      dict.cancel();
-      setListening(false);
-      queue.release();
+      halt();
       say("Speech recognition did not start");
     }
   };
 
-  /** The toggle's second click / the hold's release: let the recognizer
-   * deliver the phrase in flight (up to HOLD_FINAL_WAIT_MS; a server clip
-   * until its transcript is back), then send what was heard. */
+  /** The toggle's second click / the hold's release: "over" — once the
+   * recognizer has delivered the phrase in flight (up to HOLD_FINAL_WAIT_MS;
+   * a server clip until its transcript is back), which is typed like the rest. */
   const finish = () => {
     const r = rec.current;
-    if (!r) return;
-    if (field.current) {
-      field.current = null;
-      halt();
-      say("");
-      return;
-    }
-    if (deciding.current) return;
+    const d = live.current;
+    if (!r || !d || deciding.current) return;
     let done = false;
     const decide = () => {
       if (done) return;
       done = true;
       clearTimeout(timer);
       deciding.current = null;
-      outcome(dict.finish());
+      void d.finish();
     };
     deciding.current = decide;
     const timer = setTimeout(decide, r.name === "server" ? 45_000 : HOLD_FINAL_WAIT_MS);
     r.finish();
   };
 
-  const cancel = () => {
-    if (field.current) {
-      field.current = null;
-      halt();
-      say("");
-      return;
-    }
-    outcome(dict.cancel());
-  };
-
-  // Escape drops what is being said — the mic's Escape, not a dialog's below.
+  // Escape on the mic: "disregard", and stop — the mic's Escape, not a
+  // dialog's below.
   useEffect(() => {
     if (!listening) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.stopPropagation();
       e.preventDefault();
-      cancel();
+      void live.current?.cancel();
     };
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [listening]);
 
-  // --- what was said: the router, then a prompt -------------------------- //
+  // --- the router's answers ------------------------------------------------ //
   const announce = (line: string) => {
     if (!line) return;
     say(line);
     if (prefsRef.current.replies) queue.say(line);
-  };
-
-  const dispatch = async (text: string, phrases: number) => {
-    const session = useUi.getState().focused || "";
-    if (phrases === 1) {
-      say("“" + text + "”…", true);
-      const r = await routePhrase(text, session);
-      if (r.kind !== "prompt") {
-        routed(r, text);
-        return;
-      }
-    }
-    await sendPrompt(text);
   };
 
   const routed = (r: RouteReply, text: string) => {
@@ -488,44 +447,9 @@ export function TopBarMic() {
         return;
       default:
         // ambiguous / no-session / new-failed / list / needs / status:
-        // the router's words, nothing sent.
+        // the router's words, nothing typed.
         announce(r.say || "");
-        if (!r.say) {
-          kept.current = text;
-          say("“" + text + "” — Not sent — click the mic to continue", true);
-        }
-    }
-  };
-
-  const sendPrompt = async (text: string) => {
-    const title = useUi.getState().focused;
-    if (!title) {
-      kept.current = text;
-      say("Click a session first — “" + text + "” not sent", true);
-      return;
-    }
-    const name = displayName(title);
-    const wantSay = prefsRef.current.replies;
-    say("Sending to " + name + "…", true);
-    try {
-      const r = await instApi<{ queued?: boolean }>(title, "/send", {
-        json: { text, dialog_safe: true, say: wantSay },
-      });
-      tracker.sent(title, wantSay);
-      say(r?.queued ? "Queued for " + name + "." : "Sent to " + name + ".");
-    } catch (err) {
-      // The words stay: the next click continues from them.
-      kept.current = text;
-      const body = (err instanceof ApiError ? err.body : null) as
-        | { waking?: boolean; paused?: boolean; queued?: boolean }
-        | null;
-      let line = "Couldn't send: " + ((err as Error)?.message || "error");
-      if (err instanceof ApiError && err.status === 409) {
-        if (body?.waking) line = name + " is waking up — click the mic to send again in a moment";
-        else if (body?.paused) line = name + " is paused — resume it first";
-        else if (body?.queued) line = "Queued for " + name + ".";
-      }
-      say(line + " · “" + text + "”", true);
+        if (!r.say) say("“" + text + "” — not typed", true);
     }
   };
 
@@ -563,8 +487,8 @@ export function TopBarMic() {
     ? noRecognizerLine() + " — right-click for options"
     : listening
       ? hold
-        ? "Listening — release to send"
-        : "Listening — click to send, Esc to drop"
+        ? "Listening — release to stop (the words stay), Esc to take them back"
+        : "Listening — click to stop (the words stay), Esc to take them back"
       : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") + ", right-click for options";
 
   const rect = menuOpen ? btnRef.current?.getBoundingClientRect() : undefined;
@@ -589,7 +513,7 @@ export function TopBarMic() {
           "tb-item" + (listening ? " listening" : "") + (speaking && !listening ? " speaking" : "") + (!supported ? " unsupported" : "")
         }
         title={title}
-        aria-label={listening ? "Listening — stop and send" : "Talk to " + who}
+        aria-label={listening ? "Listening — stop" : "Talk to " + who}
         aria-pressed={listening}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
@@ -623,7 +547,7 @@ export function TopBarMic() {
             return;
           }
           if (hold) return; // the pointer (or the key) did it
-          if (dict.listening || field.current) finish();
+          if (live.current) finish();
           else start(pressedField.current);
           pressedField.current = null;
         }}
@@ -686,7 +610,9 @@ export function TopBarMic() {
               />
               <span>Hold to talk</span>
             </label>
-            <div className="mic-hint">{DICT_HINT}. Esc drops it.</div>
+            <div className="mic-hint">
+              The words are typed into the session as you speak. {DICT_HINT}; Esc takes them back.
+            </div>
             <div className="mic-diag">{diagnostics}</div>
             <button
               type="button"

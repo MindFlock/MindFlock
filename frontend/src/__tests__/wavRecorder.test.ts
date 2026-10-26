@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { encodeWav, resample, startWavRecording } from "../lib/wavRecorder";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { encodeWav, resample, resampleTo, resamplerName, startWavRecording } from "../lib/wavRecorder";
+import { code } from "./sourceText";
 
 async function view(blob: Blob): Promise<DataView> {
   return new DataView(await blob.arrayBuffer());
@@ -64,7 +65,7 @@ describe("resample", () => {
     for (const x of out) expect(x).toBeCloseTo(0.25, 6);
   });
 
-  it("keeps a linear ramp monotonic", () => {
+  it("keeps a linear ramp monotonic away from the clip's edges, and spans it end to end", () => {
     const ramp = Float32Array.from({ length: 4800 }, (_, i) => i / 4800);
     for (const [from, to] of [
       [48000, 16000],
@@ -72,10 +73,130 @@ describe("resample", () => {
       [8000, 16000],
     ]) {
       const out = resample(ramp, from, to);
-      // Non-decreasing: upsampling holds the last input sample at the edge.
-      for (let i = 1; i < out.length; i++) expect(out[i]).toBeGreaterThanOrEqual(out[i - 1]);
+      // The filter reaches 16 output samples each way; past that the ramp is
+      // reproduced (at the edges the taps run off the clip).
+      for (let i = 17; i < out.length - 17; i++) expect(out[i]).toBeGreaterThanOrEqual(out[i - 1]);
       expect(out[out.length - 1]).toBeGreaterThan(out[0] + 0.99);
     }
+  });
+
+  /** RMS of the middle of a clip (the edges carry the filter's run-in). */
+  const rms = (x: Float32Array) => {
+    const a = Math.floor(x.length / 4);
+    const b = Math.floor((x.length * 3) / 4);
+    let s = 0;
+    for (let i = a; i < b; i++) s += x[i] * x[i];
+    return Math.sqrt(s / (b - a));
+  };
+  const tone = (hz: number, rate: number, n: number) =>
+    Float32Array.from({ length: n }, (_, i) => 0.5 * Math.sin((2 * Math.PI * hz * i) / rate));
+  const dB = (after: number, before: number) => 20 * Math.log10(after / before);
+
+  it.each([10_000, 12_000, 15_000])(
+    "filters out a %i Hz tone (above the new 8 kHz Nyquist) instead of folding it into the speech band",
+    (hz) => {
+      const x = tone(hz, 48000, 48000);
+      const y = resample(x, 48000, 16000);
+      // Linear interpolation keeps most of it, aliased to |16k − f|.
+      expect(dB(rms(y), rms(x))).toBeLessThan(-20);
+    }
+  );
+
+  it("keeps a 300 Hz tone (speech) at full strength", () => {
+    const x = tone(300, 48000, 48000);
+    const y = resample(x, 48000, 16000);
+    expect(Math.abs(dB(rms(y), rms(x)))).toBeLessThan(0.5);
+    // …and in phase: sample i of the output is input sample 3i.
+    for (const i of [4000, 6000, 9000]) expect(y[i]).toBeCloseTo(x[i * 3], 2);
+  });
+
+  it("keeps a 7 kHz tone — under the new Nyquist, it is speech band, not alias", () => {
+    const x = tone(7000, 48000, 48000);
+    expect(dB(rms(resample(x, 48000, 16000)), rms(x))).toBeGreaterThan(-6);
+  });
+
+  it("is a windowed sinc, never linear interpolation", () => {
+    expect(code("lib/wavRecorder.ts")).not.toMatch(/Linear-interpolation|\(samples\[i1\] - samples\[i0\]\) \* frac/);
+    expect(code("lib/wavRecorder.ts")).toContain("Math.sin(Math.PI * arg) / (Math.PI * arg)");
+  });
+});
+
+describe("resampleTo: the browser's own resampler first", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** An OfflineAudioContext that records what it was asked and renders a
+   * marker, so the test can tell its output from the fallback's. */
+  function fakeOffline(fail = false) {
+    const made: Array<{ channels: number; length: number; rate: number; buffer?: { rate: number; data: Float32Array }; started: boolean }> = [];
+    class FakeOffline {
+      destination = { name: "destination" };
+      rec: (typeof made)[number];
+      constructor(channels: number, length: number, rate: number) {
+        if (fail) throw new Error("NotSupportedError: sample rate");
+        this.rec = { channels, length, rate, started: false };
+        made.push(this.rec);
+      }
+      createBuffer(_ch: number, n: number, rate: number) {
+        const data = new Float32Array(n);
+        this.rec.buffer = { rate, data };
+        return { getChannelData: () => data };
+      }
+      createBufferSource() {
+        const rec = this.rec;
+        return {
+          buffer: null as unknown,
+          connect() {},
+          start() {
+            rec.started = true;
+          },
+        };
+      }
+      startRendering() {
+        const out = new Float32Array(this.rec.length).fill(0.125);
+        return Promise.resolve({ getChannelData: () => out });
+      }
+    }
+    vi.stubGlobal("OfflineAudioContext", FakeOffline);
+    return made;
+  }
+
+  it("renders the clip through an OfflineAudioContext(1, ⌈n·16000/rate⌉, 16000)", async () => {
+    const made = fakeOffline();
+    expect(resamplerName()).toBe("browser resampler");
+    const clip = new Float32Array(4097).fill(0.3);
+    const out = await resampleTo(clip, 48000, 16000);
+    expect(made).toHaveLength(1);
+    expect(made[0].channels).toBe(1);
+    expect(made[0].rate).toBe(16000);
+    expect(made[0].length).toBe(Math.ceil((4097 * 16000) / 48000));
+    expect(made[0].buffer!.rate).toBe(48000);
+    expect(made[0].buffer!.data[4096]).toBeCloseTo(0.3, 6);
+    expect(made[0].started).toBe(true);
+    expect(out.length).toBe(made[0].length);
+    expect(out[0]).toBe(0.125);
+  });
+
+  it("falls back to the windowed sinc where the context refuses the rate, or there is none", async () => {
+    fakeOffline(true);
+    const clip = new Float32Array(4800).fill(0.25);
+    const out = await resampleTo(clip, 48000, 16000);
+    expect(out.length).toBe(1600);
+    expect(out[800]).toBeCloseTo(0.25, 6);
+    vi.unstubAllGlobals();
+    expect(resamplerName()).toBe("windowed-sinc resampler");
+    expect((await resampleTo(clip, 48000, 16000)).length).toBe(1600);
+  });
+
+  it("the recorder's stop() goes through it", async () => {
+    const made = fakeOffline();
+    const g = fakeGraph(48000);
+    const rec = startWavRecording(STREAM, g.ctx);
+    g.fire(new Float32Array(4096).fill(0.5));
+    const v = await view(await rec.stop());
+    expect(made).toHaveLength(1);
+    const n = Math.ceil((4096 * 16000) / 48000);
+    expect(v.getUint32(40, true)).toBe(n * 2);
+    expect(v.getInt16(44, true)).toBe(Math.round(0.125 * 32767));
   });
 });
 
