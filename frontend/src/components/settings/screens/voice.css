@@ -48,6 +48,46 @@
   margin-right: 6px;
 }
 
+/* Under Recognition: the local-models installer — the recommendation, then
+   one row of button, progress, step and the install's last log line. */
+.voice-install {
+  display: grid;
+  gap: 6px;
+}
+
+.voice-install p {
+  margin: 0;
+}
+
+.voice-install-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.voice-install-progress {
+  width: 96px;
+  height: 6px;
+}
+
+.voice-install-status {
+  margin: 0;
+}
+
+/* The pip / download output is long and changes every poll: one line, cut. */
+.voice-install-log {
+  flex: 1 1 160px;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+
 .voice-try {
   display: grid;
   gap: 8px;

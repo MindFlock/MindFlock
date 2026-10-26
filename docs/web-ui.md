@@ -5423,6 +5423,30 @@ labels above the inputs.
     *Server voice not ready: …*): with the built-in engine picked its own
     sentence is the detail (the Linux one, macOS' permission one); a server
     too old to report `system` says it has no built-in engine yet.
+  - **The local-models installer** (`#voice-install`, under Recognition).
+    Windows' built-in recognizer is the old desktop (SAPI) one —
+    `system.stt_quality: "basic"` (macOS' is `"good"`), or a built-in
+    readiness detail ending *basic accuracy — install local models for
+    better recognition* — so while it is the engine picked, the block
+    recommends *Windows' built-in recognizer is basic. Local models
+    (faster-whisper) recognise far better and stay on this computer.* with
+    an **Install local models (about 300 MB)** button. The same button
+    sits by the readiness line whenever *Local models* is picked but not
+    ready, on every platform. It `POST`s `/api/voice/install-local`
+    (faster-whisper and piper into the server's own environment, then the
+    whisper model — `voice.stt_model`, default `small` — and the piper
+    voice), then polls `GET /api/voice/install-local` every 2 s while it is
+    `running`: the button reads *Installing…* beside a `<progress>` (the
+    server reports no percentage), the step and the install's last log
+    line. *done* → *Installed — recognition now uses local models.* (the
+    server switched `voice.stt_backend` to `local` itself; the screen
+    re-reads the settings and `GET /api/voice`); *failed* → the error and
+    **Try again**; a 409 → *Already installing* and that install is
+    followed. Reopening the screen mid-install resumes following it. The
+    button is gone once local models recognise, and on a server without the
+    installer (its `GET` fails). A viewer who may not change the server
+    (`configure_allowed: false` in `GET /api/voice`, or the POST's 403)
+    gets it disabled with the reason.
   - **On the phone page**: where recognition and the voice run for the
     phone (`voice.stt` / `voice.tts`: *The phone* · *This computer*), with
     *The desktop app always uses this computer.*
