@@ -36926,6 +36926,111 @@ function NotificationsBell() {
 	}), document.body)] });
 }
 //#endregion
+//#region src/lib/wavRecorder.ts
+var DEFAULT_TARGET_RATE = 16e3;
+var BLOCK_FRAMES = 4096;
+function encodeWav(samples, sampleRate) {
+	const dataSize = samples.length * 2;
+	const buf = new ArrayBuffer(44 + dataSize);
+	const v = new DataView(buf);
+	const ascii = (at, s) => {
+		for (let i = 0; i < s.length; i++) v.setUint8(at + i, s.charCodeAt(i));
+	};
+	ascii(0, "RIFF");
+	v.setUint32(4, 36 + dataSize, true);
+	ascii(8, "WAVE");
+	ascii(12, "fmt ");
+	v.setUint32(16, 16, true);
+	v.setUint16(20, 1, true);
+	v.setUint16(22, 1, true);
+	v.setUint32(24, sampleRate, true);
+	v.setUint32(28, sampleRate * 2, true);
+	v.setUint16(32, 2, true);
+	v.setUint16(34, 16, true);
+	ascii(36, "data");
+	v.setUint32(40, dataSize, true);
+	for (let i = 0, at = 44; i < samples.length; i++, at += 2) {
+		const s = samples[i];
+		const c = s > 1 ? 1 : s < -1 ? -1 : s === s ? s : 0;
+		v.setInt16(at, c < 0 ? Math.round(c * 32768) : Math.round(c * 32767), true);
+	}
+	return new Blob([buf], { type: "audio/wav" });
+}
+function resample(samples, fromRate, toRate) {
+	if (fromRate === toRate || samples.length === 0) return samples;
+	const n = samples.length;
+	const outLen = Math.floor(n * toRate / fromRate);
+	const out = new Float32Array(outLen);
+	const step = fromRate / toRate;
+	for (let i = 0; i < outLen; i++) {
+		const pos = i * step;
+		const i0 = Math.floor(pos);
+		const i1 = i0 + 1 < n ? i0 + 1 : n - 1;
+		const frac = pos - i0;
+		out[i] = samples[i0] + (samples[i1] - samples[i0]) * frac;
+	}
+	return out;
+}
+function startWavRecording(stream, ctx, opts = {}) {
+	const targetRate = opts.targetRate ?? DEFAULT_TARGET_RATE;
+	const onLevel = opts.onLevel;
+	const source = ctx.createMediaStreamSource(stream);
+	const processor = ctx.createScriptProcessor(BLOCK_FRAMES, 1, 1);
+	const mute = ctx.createGain();
+	mute.gain.value = 0;
+	let blocks = [];
+	let frames = 0;
+	let done = false;
+	let result = null;
+	processor.onaudioprocess = (e) => {
+		if (done) return;
+		const block = e.inputBuffer.getChannelData(0).slice();
+		blocks.push(block);
+		frames += block.length;
+		if (onLevel && block.length) {
+			let sum = 0;
+			for (let i = 0; i < block.length; i++) sum += block[i] * block[i];
+			onLevel(Math.min(1, Math.sqrt(sum / block.length)));
+		}
+	};
+	source.connect(processor);
+	processor.connect(mute);
+	mute.connect(ctx.destination);
+	const teardown = () => {
+		done = true;
+		processor.onaudioprocess = null;
+		for (const node of [
+			source,
+			processor,
+			mute
+		]) try {
+			node.disconnect();
+		} catch {}
+	};
+	return {
+		stop() {
+			if (result) return result;
+			teardown();
+			const all = new Float32Array(blocks.reduce((n, b) => n + b.length, 0));
+			let at = 0;
+			for (const b of blocks) {
+				all.set(b, at);
+				at += b.length;
+			}
+			blocks = [];
+			result = Promise.resolve(encodeWav(resample(all, ctx.sampleRate, targetRate), targetRate));
+			return result;
+		},
+		cancel() {
+			teardown();
+			blocks = [];
+		},
+		seconds() {
+			return frames / ctx.sampleRate;
+		}
+	};
+}
+//#endregion
 //#region src/lib/voiceDesktop.ts
 function parseRadio(text) {
 	const t = String(text || "").trim();
@@ -37248,9 +37353,12 @@ function browserSpeaker() {
 		}
 	};
 }
+function audioCtxCtor() {
+	return typeof window === "undefined" ? void 0 : window.AudioContext || window.webkitAudioContext;
+}
 var audioCtx = null;
 function voiceAudioCtx() {
-	const AC = typeof window === "undefined" ? void 0 : window.AudioContext || window.webkitAudioContext;
+	const AC = audioCtxCtor();
 	if (!AC) return null;
 	if (!audioCtx) try {
 		audioCtx = new AC();
@@ -37465,36 +37573,21 @@ function browserRecognizer() {
 	};
 	return self;
 }
-var SERVER_MIMES = [
-	"audio/webm;codecs=opus",
-	"audio/webm",
-	"audio/mp4",
-	"audio/ogg;codecs=opus"
-];
 var SILENCE_MS = 1800;
 var CLIP_MAX_MS = 12e3;
-var LEVEL_MS = 100;
 var RMS_SPEECH = .02;
 var UPLOAD_TIMEOUT_MS = 45e3;
+var CLIP_RATE = 16e3;
 function serverRecognizer() {
 	let stream = null;
 	let h = null;
 	let want = false;
 	let finishing = false;
 	let token = null;
-	let rec = null;
+	let cur = null;
 	let uploads = 0;
-	let source = null;
-	let meterTimer;
 	let capTimer;
 	const aborters = /* @__PURE__ */ new Set();
-	const pickMime = () => {
-		if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported) return "";
-		for (const m of SERVER_MIMES) try {
-			if (MediaRecorder.isTypeSupported(m)) return m;
-		} catch {}
-		return "";
-	};
 	const getStream = async () => {
 		if (stream && stream.active !== false) return stream;
 		stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -37506,21 +37599,19 @@ function serverRecognizer() {
 		if (n === "NotFoundError" || n === "DevicesNotFoundError" || n === "OverconstrainedError") return "audio-capture";
 		return "start-failed";
 	};
-	const meterStop = () => {
-		clearInterval(meterTimer);
-		meterTimer = void 0;
-		try {
-			source?.disconnect();
-		} catch {}
-		source = null;
-	};
 	const maybeEnd = () => {
 		if (!want && !token && uploads === 0 && h) {
 			finishing = false;
 			h.onEnd();
 		}
 	};
-	const upload = async (blob, mime) => {
+	const failed = (code, detail) => {
+		token = null;
+		want = false;
+		h?.onError(code, detail);
+		maybeEnd();
+	};
+	const upload = async (blob) => {
 		const hh = h;
 		uploads++;
 		const ac = new AbortController();
@@ -37530,7 +37621,7 @@ function serverRecognizer() {
 		try {
 			const r = await apiRaw("/api/voice/transcribe?lang=" + encodeURIComponent(lang), {
 				method: "POST",
-				headers: { "Content-Type": mime },
+				headers: { "Content-Type": "audio/wav" },
 				body: blob,
 				signal: ac.signal
 			});
@@ -37543,7 +37634,7 @@ function serverRecognizer() {
 			} else {
 				self.lastError = String(j.error || "HTTP " + r.status);
 				want = false;
-				hh.onError("server", r.status === 409 ? "Server recognition is off: Settings → Your phone → Voice" : "Couldn't transcribe: " + self.lastError);
+				hh.onError("server", r.status === 409 ? "Server recognition isn't ready: Settings → Voice" : "Couldn't transcribe: " + self.lastError);
 			}
 		} catch (err) {
 			if (h !== hh || !hh) return;
@@ -37559,16 +37650,22 @@ function serverRecognizer() {
 		if (h === hh) maybeEnd();
 	};
 	const endClip = () => {
-		const r = rec;
-		rec = null;
+		const c = cur;
+		cur = null;
 		clearTimeout(capTimer);
-		meterStop();
-		if (!r) return;
-		try {
-			r.stop();
-		} catch {
+		if (!c?.rec) return;
+		const mine = token;
+		c.rec.stop().then((blob) => {
+			if (token !== mine) return;
 			token = null;
-		}
+			if (c.heard && blob.size) upload(blob);
+			if (want && !finishing) clip();
+			else maybeEnd();
+		}, () => {
+			if (token !== mine) return;
+			token = null;
+			maybeEnd();
+		});
 	};
 	const clip = async () => {
 		const mine = {};
@@ -37577,95 +37674,53 @@ function serverRecognizer() {
 		try {
 			s = await getStream();
 		} catch (err) {
-			if (token !== mine) return;
-			token = null;
-			want = false;
-			h?.onError(errCode(err));
-			maybeEnd();
+			if (token === mine) failed(errCode(err));
 			return;
 		}
 		if (token !== mine) return;
-		const mt = pickMime();
-		let r;
-		try {
-			r = mt ? new MediaRecorder(s, { mimeType: mt }) : new MediaRecorder(s);
-		} catch {
-			token = null;
-			want = false;
-			h?.onError("start-failed");
-			maybeEnd();
-			return;
-		}
-		const mime = r.mimeType || mt || "audio/webm";
-		const chunks = [];
-		let heard = false;
-		let live = false;
-		r.ondataavailable = (ev) => {
-			if (ev.data && ev.data.size) chunks.push(ev.data);
-		};
-		r.onstop = () => {
-			if (token !== mine) return;
-			token = null;
-			const blob = new Blob(chunks, { type: mime });
-			if (blob.size && (heard || !live)) upload(blob, mime);
-			if (want && !finishing) clip();
-			else maybeEnd();
-		};
-		rec = r;
-		try {
-			r.start();
-		} catch {
-			token = null;
-			rec = null;
-			want = false;
-			h?.onError("start-failed");
-			maybeEnd();
-			return;
-		}
-		h?.onStatus?.("Listening…");
 		const ctx = voiceAudioCtx();
-		let analyser = null;
-		if (ctx && ctx.state === "running") try {
-			source = ctx.createMediaStreamSource(s);
-			analyser = ctx.createAnalyser();
-			analyser.fftSize = 1024;
-			source.connect(analyser);
-			live = true;
+		if (ctx && ctx.state === "suspended") await ctx.resume().catch(() => {});
+		if (token !== mine) return;
+		if (!ctx || ctx.state !== "running") {
+			failed("start-failed", "The audio engine isn't running — click the mic again");
+			return;
+		}
+		const c = {
+			rec: null,
+			heard: false
+		};
+		let floor = 0;
+		let lastLoud = 0;
+		const onLevel = (rms) => {
+			if (cur !== c) return;
+			floor = floor === 0 ? rms : Math.min(rms, floor * 1.05 + .001);
+			const now = Date.now();
+			if (rms > Math.max(RMS_SPEECH, floor * 3)) {
+				if (!c.heard) h?.onSpeech?.();
+				c.heard = true;
+				lastLoud = now;
+			}
+			if (c.heard && now - lastLoud > SILENCE_MS) endClip();
+		};
+		try {
+			c.rec = startWavRecording(s, ctx, {
+				targetRate: CLIP_RATE,
+				onLevel
+			});
 		} catch {
-			source = null;
-			analyser = null;
+			failed("start-failed");
+			return;
 		}
-		if (analyser) {
-			const buf = new Uint8Array(analyser.fftSize);
-			let floor = 0;
-			let lastLoud = 0;
-			meterTimer = setInterval(() => {
-				if (token !== mine || !analyser) return;
-				analyser.getByteTimeDomainData(buf);
-				let sum = 0;
-				for (let i = 0; i < buf.length; i++) {
-					const d = (buf[i] - 128) / 128;
-					sum += d * d;
-				}
-				const rms = Math.sqrt(sum / buf.length);
-				floor = floor === 0 ? rms : Math.min(rms, floor * 1.05 + .001);
-				const now = Date.now();
-				if (rms > Math.max(RMS_SPEECH, floor * 3)) {
-					if (!heard) h?.onSpeech?.();
-					heard = true;
-					lastLoud = now;
-				}
-				if (heard && now - lastLoud > SILENCE_MS) endClip();
-			}, LEVEL_MS);
-		}
+		cur = c;
+		h?.onStatus?.("Listening…");
 		capTimer = setTimeout(() => {
-			if (token === mine) endClip();
+			if (cur === c) endClip();
 		}, CLIP_MAX_MS);
 	};
 	const self = {
 		name: "server",
 		lastError: "",
-		available: () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== "undefined",
+		available: () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia && !!audioCtxCtor(),
 		start(handlers) {
 			self.stop();
 			if (!self.available()) return false;
@@ -37678,7 +37733,7 @@ function serverRecognizer() {
 		finish() {
 			want = false;
 			finishing = true;
-			if (rec) {
+			if (cur) {
 				h?.onStatus?.("Transcribing…");
 				endClip();
 			} else maybeEnd();
@@ -37689,14 +37744,9 @@ function serverRecognizer() {
 			h = null;
 			token = null;
 			clearTimeout(capTimer);
-			meterStop();
-			const r = rec;
-			rec = null;
-			if (r) try {
-				r.ondataavailable = null;
-				r.onstop = null;
-				if (r.state !== "inactive") r.stop();
-			} catch {}
+			const c = cur;
+			cur = null;
+			c?.rec?.cancel();
 			aborters.forEach((a) => a.abort());
 			aborters.clear();
 		},
@@ -37712,7 +37762,8 @@ function serverRecognizer() {
 var DEFAULT_VOICE_CFG = {
 	stt: "phone",
 	tts: "phone",
-	server_ready: {}
+	server_ready: {},
+	system: {}
 };
 async function loadVoiceCfg(prev) {
 	try {
@@ -37720,19 +37771,53 @@ async function loadVoiceCfg(prev) {
 		if (j && typeof j === "object") return {
 			stt: j.stt === "server" ? "server" : "phone",
 			tts: j.tts === "server" ? "server" : "phone",
-			server_ready: j.server_ready && typeof j.server_ready === "object" ? j.server_ready : {}
+			server_ready: j.server_ready && typeof j.server_ready === "object" ? j.server_ready : {},
+			system: j.system && typeof j.system === "object" ? j.system : {}
 		};
 	} catch {}
 	return prev || DEFAULT_VOICE_CFG;
 }
-function sttEngine(cfg, serverOk) {
-	return cfg.stt === "server" && !!cfg.server_ready.stt && serverOk ? "server" : "browser";
+function isElectron() {
+	if (typeof window !== "undefined" && window.mfapp) return true;
+	return typeof navigator !== "undefined" && String(navigator.userAgent || "").includes("Electron");
 }
-function ttsEngine(cfg) {
-	return cfg.tts === "server" && !!cfg.server_ready.tts ? "server" : "browser";
+function sttEngine(cfg, serverOk, electron = isElectron()) {
+	const ready = !!cfg.server_ready.stt && serverOk;
+	if (electron) return ready ? "server" : "none";
+	return cfg.stt === "server" && ready ? "server" : "browser";
+}
+function ttsEngine(cfg, electron = isElectron()) {
+	if (!cfg.server_ready.tts) return "browser";
+	return electron || cfg.tts === "server" ? "server" : "browser";
+}
+function noRecognizerLine(electron = isElectron()) {
+	return electron ? "Speech needs the server's engine here: Settings → Voice" : "Voice input needs Chrome, Edge or Safari — or server recognition (Settings → Voice)";
+}
+var PLATFORM_WORDS = {
+	wsl: "Windows via WSL",
+	windows: "Windows",
+	win32: "Windows",
+	macos: "macOS",
+	darwin: "macOS"
+};
+function serverEngineName(backend, system) {
+	const id = String(backend || "");
+	if (id === "system") {
+		const p = String(system.platform || "");
+		const where = PLATFORM_WORDS[p.toLowerCase()] || p;
+		return "server, built in" + (where ? " (" + where + ")" : "");
+	}
+	return id ? "server (" + id + ")" : "server";
+}
+function engineDiagnostics(cfg, stt, tts, electron = isElectron()) {
+	const ready = cfg.server_ready;
+	let rec = stt === "server" ? serverEngineName(ready.stt_backend, cfg.system) : stt === "browser" ? "this browser" : electron ? "none" : "none in this browser";
+	if (stt !== "server" && !ready.stt && (electron || cfg.stt === "server")) rec += " (server recognition isn't ready" + (ready.stt_detail ? ": " + ready.stt_detail : "") + ")";
+	const voice = tts === "server" ? serverEngineName(ready.tts_backend, cfg.system) : tts === "browser" ? "this browser" : "none";
+	return "Recognition: " + rec + " · Voice: " + voice;
 }
 function recognizerErrorLine(code, detail) {
-	if (code === "network") return "Speech recognition failed (network): use Chrome, Edge or Safari, or turn on server recognition in Settings → Your phone → Voice";
+	if (code === "network") return "Speech recognition failed (network): use Chrome, Edge or Safari, or turn on server recognition in Settings → Voice";
 	if (code === "not-allowed" || code === "service-not-allowed") return "Microphone permission denied";
 	if (code === "audio-capture") return "No microphone found";
 	if (detail) return detail;
@@ -37749,6 +37834,11 @@ var tracker = new ReplyTracker();
 var cfgNow = DEFAULT_VOICE_CFG;
 var speakingListeners = /* @__PURE__ */ new Set();
 var queue = new SpeechQueue(() => ttsEngine(cfgNow) === "server" ? serverSp : browserSp, (on) => speakingListeners.forEach((l) => l(on)));
+function recEngine(c) {
+	const e = sttEngine(c, serverRec.available());
+	return e === "browser" && !browserRec.available() ? "none" : e;
+}
+var VOICE_SCREEN = "voice";
 function textField(el) {
 	if (!el || el.classList.contains("xterm-helper-textarea")) return null;
 	if (el instanceof HTMLTextAreaElement) return el.readOnly || el.disabled ? null : el;
@@ -37832,8 +37922,16 @@ function TopBarMic() {
 		refreshCfg();
 		const l = (on) => setSpeaking(on);
 		speakingListeners.add(l);
+		const onFocus = () => void refreshCfg();
+		window.addEventListener("focus", onFocus);
+		const unsubSettings = queryClient.getQueryCache().subscribe((event) => {
+			if (event.query.queryKey[0] !== "settings" || event.type !== "updated") return;
+			if (event.action?.type === "success") refreshCfg();
+		});
 		return () => {
 			speakingListeners.delete(l);
+			window.removeEventListener("focus", onFocus);
+			unsubSettings();
 			clearTimeout(idleTimer.current);
 			clearTimeout(captionTimer.current);
 			rec.current?.stop();
@@ -37877,7 +37975,8 @@ function TopBarMic() {
 			unsubs.forEach((u) => u());
 		};
 	}, []);
-	const supported = browserRec.available() || !!cfg && sttEngine(cfg, serverRec.available()) === "server";
+	const sttNow = recEngine(cfg || cfgNow);
+	const supported = sttNow !== "none";
 	const armIdle = () => {
 		clearTimeout(idleTimer.current);
 		idleTimer.current = setTimeout(() => {
@@ -37929,12 +38028,14 @@ function TopBarMic() {
 	};
 	const start = (into) => {
 		if (dict.listening || field.current) return;
-		if (!supported) {
-			say("Voice input needs Chrome, Edge or Safari — or server recognition (Settings → Your phone → Voice)");
+		const c = cfgNow;
+		const engine = recEngine(c);
+		if (engine === "none") {
+			say(noRecognizerLine());
+			refreshCfg();
 			return;
 		}
-		const c = cfgNow;
-		const r = sttEngine(c, serverRec.available()) === "server" ? serverRec : browserRec;
+		const r = engine === "server" ? serverRec : browserRec;
 		if (r === serverRec || ttsEngine(c) === "server") voiceAudioCtx();
 		queue.hold();
 		field.current = into;
@@ -38170,7 +38271,7 @@ function TopBarMic() {
 		};
 	}, [menuOpen]);
 	const who = focusedName || "a session";
-	const title = !supported ? "Voice input needs Chrome, Edge or Safari, or server recognition — right-click for options" : listening ? hold ? "Listening — release to send" : "Listening — click to send, Esc to drop" : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") + ", right-click for options";
+	const title = !supported ? noRecognizerLine() + " — right-click for options" : listening ? hold ? "Listening — release to send" : "Listening — click to send, Esc to drop" : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") + ", right-click for options";
 	const rect = menuOpen ? btnRef.current?.getBoundingClientRect() : void 0;
 	const popStyle = rect ? {
 		top: rect.bottom + 6 + "px",
@@ -38181,9 +38282,8 @@ function TopBarMic() {
 		top: capRect.bottom + 6 + "px",
 		left: Math.max(8, Math.min(capRect.left, window.innerWidth - 348)) + "px"
 	} : void 0;
-	const sttName = !supported ? "none in this browser" : cfg && sttEngine(cfg, serverRec.available()) === "server" ? "the server" : "this browser (Web Speech)";
-	const ttsName = cfg && ttsEngine(cfg) === "server" ? "the server" : browserSp.available() ? "this browser" : "none";
-	const sttNotReady = cfg?.stt === "server" && !cfg.server_ready.stt;
+	const ttsNow = ttsEngine(cfg || cfgNow) === "server" ? "server" : browserSp.available() ? "browser" : "none";
+	const diagnostics = engineDiagnostics(cfg || cfgNow, sttNow, ttsNow);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			id: "mic-btn",
@@ -38304,26 +38404,18 @@ function TopBarMic() {
 					className: "mic-hint",
 					children: [DICT_HINT, ". Esc drops it."]
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "mic-diag",
-					children: [
-						"Recognition: ",
-						sttName,
-						sttNotReady ? " (server recognition isn't ready" + (cfg?.server_ready.stt_detail ? ": " + cfg.server_ready.stt_detail : "") + ")" : "",
-						" · ",
-						"Replies voice: ",
-						ttsName
-					]
+					children: diagnostics
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "linklike mic-link",
 					onClick: () => {
 						setMenuOpen(false);
-						openSettings("mobile");
-						setTimeout(() => document.getElementById("mobile-voice")?.scrollIntoView({ block: "start" }), 300);
+						openSettings(VOICE_SCREEN);
 					},
-					children: "Speech engines: Settings → Your phone → Voice"
+					children: "Speech engines: Settings → Voice"
 				})
 			]
 		}), document.body)
@@ -72165,6 +72257,27 @@ var SETTINGS_SEARCH = [
 		]
 	},
 	{
+		key: "voice",
+		label: "Voice",
+		sub: "Speech engines for talking to sessions: built in, local models or a host",
+		terms: [
+			"voice",
+			"speech",
+			"microphone",
+			"mic",
+			"dictation",
+			"recognition",
+			"whisper",
+			"piper",
+			"text to speech",
+			"tts",
+			"stt",
+			"talk",
+			"spoken replies",
+			"approve dialogs by voice"
+		]
+	},
+	{
 		key: "peer",
 		label: "People",
 		sub: "Invite someone and share one folder with their agent",
@@ -85539,6 +85652,9 @@ var LEGACY_SCREEN_KEYS = {
 	"your-devices": "devices",
 	"your-phone": "mobile",
 	phone: "mobile",
+	"mobile-voice": "voice",
+	speech: "voice",
+	microphone: "voice",
 	people: "peer",
 	"peer-links": "peer",
 	peers: "peer",
@@ -86360,7 +86476,22 @@ function Mobile(p) {
 				})
 			]
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceSection, { active: p.active })
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint voice-moved",
+			id: "mobile-voice",
+			children: [
+				"Voice settings moved to",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					"data-goto-screen": "voice",
+					onClick: () => p.gotoScreen("voice"),
+					children: "Settings → Voice"
+				}),
+				"."
+			]
+		})
 	] });
 }
 function PhoneAppRow({ app }) {
@@ -86411,14 +86542,16 @@ function UrlList({ urls }) {
 		}, u.url))
 	});
 }
+//#endregion
+//#region src/components/settings/screens/Voice.tsx
 var KIND_WORD = {
 	stt: "recognition",
 	tts: "voice"
 };
 var VOICE_BACKENDS = [
 	{
-		value: "",
-		label: "Whichever is ready"
+		value: "system",
+		label: "This computer (built in)"
 	},
 	{
 		value: "openai",
@@ -86426,9 +86559,14 @@ var VOICE_BACKENDS = [
 	},
 	{
 		value: "local",
-		label: "Local models on this computer"
+		label: "Local models (faster-whisper / piper)"
 	}
 ];
+function effectiveBackend(kind, saved, view) {
+	if (saved) return saved;
+	const id = (kind === "stt" ? view?.server_ready?.stt_backend : view?.server_ready?.tts_backend) || "";
+	return VOICE_BACKENDS.some((o) => o.value === id) ? id : "system";
+}
 function voiceFields(kind, where, backend) {
 	if (where !== "server") return {
 		backend: false,
@@ -86436,6 +86574,13 @@ function voiceFields(kind, where, backend) {
 		key: false,
 		model: false,
 		voice: false
+	};
+	if (backend === "system") return {
+		backend: true,
+		url: false,
+		key: false,
+		model: false,
+		voice: kind === "tts"
 	};
 	const host = backend !== "local";
 	return {
@@ -86446,7 +86591,8 @@ function voiceFields(kind, where, backend) {
 		voice: kind === "tts"
 	};
 }
-function readinessLine(kind, view, where) {
+var noDot = (s) => s.replace(/\.\s*$/, "");
+function readinessLine(kind, view, where, backend = "") {
 	if (where !== "server") return {
 		ok: false,
 		text: ""
@@ -86459,7 +86605,12 @@ function readinessLine(kind, view, where) {
 	const sr = view.server_ready || {};
 	const ok = !!(kind === "stt" ? sr.stt : sr.tts);
 	const id = (kind === "stt" ? sr.stt_backend : sr.tts_backend) || "";
-	const detail = (kind === "stt" ? sr.stt_detail : sr.tts_detail) || "";
+	let detail = (kind === "stt" ? sr.stt_detail : sr.tts_detail) || "";
+	if (backend === "system" || !backend && id === "system") {
+		if (view.system?.detail) detail = view.system.detail;
+		else if (!view.system && !ok) detail = detail || "this server has no built-in engine yet — update MindFlock";
+	}
+	detail = noDot(detail);
 	if (ok) return {
 		ok,
 		text: `Server ${word} ready (${id || "server"})${detail ? ": " + detail : ""}.`
@@ -86469,15 +86620,133 @@ function readinessLine(kind, view, where) {
 		text: `Server ${word} not ready${detail ? ": " + detail : ""}.`
 	};
 }
+function tryState(view, canRecord) {
+	if (!view) {
+		const why = "Checking the server…";
+		return {
+			say: {
+				ok: false,
+				why
+			},
+			hear: {
+				ok: false,
+				why
+			}
+		};
+	}
+	const sr = view.server_ready || {};
+	return {
+		say: sr.tts ? {
+			ok: true,
+			why: ""
+		} : {
+			ok: false,
+			why: "No voice is ready on the server" + (sr.tts_detail ? ": " + noDot(sr.tts_detail) : "") + "."
+		},
+		hear: !sr.stt ? {
+			ok: false,
+			why: "No recognition is ready on the server" + (sr.stt_detail ? ": " + noDot(sr.stt_detail) : "") + "."
+		} : !canRecord ? {
+			ok: false,
+			why: "This browser can't record from a microphone."
+		} : {
+			ok: true,
+			why: ""
+		}
+	};
+}
+var TEST_SENTENCE = "This is MindFlock speaking.";
+var LISTEN_SECONDS = 3;
+async function errorOf(r) {
+	const j = await r.json().catch(() => ({}));
+	return j.error || j.detail || "HTTP " + r.status;
+}
+async function speakTest(ctx, backend, now = () => Date.now()) {
+	if (!ctx) return {
+		ok: false,
+		text: "This browser can't play audio from the server."
+	};
+	const t0 = now();
+	try {
+		const r = await apiRaw("/api/voice/speak", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ text: TEST_SENTENCE })
+		});
+		if (!r.ok) return {
+			ok: false,
+			text: "Couldn't speak: " + await errorOf(r) + "."
+		};
+		const bytes = await r.arrayBuffer();
+		const ms = now() - t0;
+		const audio = await ctx.decodeAudioData(bytes);
+		const src = ctx.createBufferSource();
+		src.buffer = audio;
+		src.connect(ctx.destination);
+		src.start(0);
+		return {
+			ok: true,
+			text: `Spoke with ${backend || "the server"} in ${ms} ms.`
+		};
+	} catch (err) {
+		return {
+			ok: false,
+			text: "Couldn't speak: " + noDot(String(err?.message || err)) + "."
+		};
+	}
+}
+async function transcribeTest(wav, lang) {
+	try {
+		const r = await apiRaw("/api/voice/transcribe?lang=" + encodeURIComponent(lang), {
+			method: "POST",
+			headers: { "Content-Type": "audio/wav" },
+			body: wav
+		});
+		if (!r.ok) return {
+			ok: false,
+			text: "Couldn't transcribe: " + await errorOf(r) + "."
+		};
+		const j = await r.json().catch(() => ({}));
+		const how = `(${j.backend || "server"}${typeof j.ms === "number" ? ", " + Math.round(j.ms) + " ms" : ""})`;
+		const text = String(j.text || "").trim();
+		return text ? {
+			ok: true,
+			text: `Heard: “${text}” ${how}`
+		} : {
+			ok: false,
+			text: `Heard nothing ${how}. Speak up, or try again.`
+		};
+	} catch (err) {
+		return {
+			ok: false,
+			text: "Couldn't reach the server: " + noDot(String(err?.message || err)) + "."
+		};
+	}
+}
+function micErrorText(err) {
+	const name = err?.name || "";
+	if (name === "NotAllowedError" || name === "SecurityError") return "MindFlock may not use the microphone. Allow it for this page (and in your computer's privacy settings), then try again.";
+	if (name === "NotFoundError" || name === "OverconstrainedError") return "No microphone was found.";
+	return "Couldn't open the microphone: " + noDot(String(err?.message || err)) + ".";
+}
+function newAudioCtx() {
+	const AC = typeof window === "undefined" ? void 0 : window.AudioContext || window.webkitAudioContext;
+	if (!AC) return null;
+	try {
+		return new AC();
+	} catch {
+		return null;
+	}
+}
+function Voice(p) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceSection, { active: p.active });
+}
 function VoiceSection({ active }) {
 	const model = useSettings();
 	const [view, setView] = (0, import_react.useState)(null);
-	const stt = String(model.get("voice", "stt") || "phone");
-	const tts = String(model.get("voice", "tts") || "phone");
-	const wantServer = stt === "server" || tts === "server";
 	const doc = model.settings;
 	(0, import_react.useEffect)(() => {
-		if (!active || !wantServer) return;
+		if (!active) return;
 		let live = true;
 		api("/api/voice").then((v) => live && setView(v)).catch((err) => {
 			if (!live) return;
@@ -86492,11 +86761,7 @@ function VoiceSection({ active }) {
 		return () => {
 			live = false;
 		};
-	}, [
-		active,
-		wantServer,
-		doc
-	]);
+	}, [active, doc]);
 	const clearKey = async (kind) => {
 		try {
 			await api("/api/voice/clear-key", { json: { kind } });
@@ -86509,14 +86774,15 @@ function VoiceSection({ active }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceSectionView, {
 		model,
 		view,
-		onClearKey: clearKey
+		onClearKey: clearKey,
+		tryRow: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TryRow, { view })
 	});
 }
-function VoiceSectionView({ model, view, onClearKey }) {
+function VoiceSectionView({ model, view, onClearKey, tryRow }) {
 	const approve = model.get("voice", "approve_dialogs") !== false;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "voice-section",
-		id: "mobile-voice",
+		id: "voice-screen",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 				className: "set-section-title",
@@ -86525,21 +86791,46 @@ function VoiceSectionView({ model, view, onClearKey }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "set-hint set-block-hint",
 				id: "voice-intro",
-				children: "Talk to a session from the phone page: tap the mic on /m. Speech runs on the phone by default."
+				children: "Talk to your sessions and hear them answer. The desktop app's mic (in the top bar) always uses this computer's engines; the phone page uses the phone's own unless you choose otherwise below. Out of the box this computer uses its built-in engine, so there is nothing to download; pick local models or a hosted service only if you want them."
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceKindBlock, {
-				kind: "stt",
-				title: "Recognition",
-				model,
-				view,
-				onClearKey
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				id: "voice-engines",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceKindBlock, {
+					kind: "stt",
+					title: "Recognition",
+					model,
+					view,
+					onClearKey
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceKindBlock, {
+					kind: "tts",
+					title: "Voice",
+					model,
+					view,
+					onClearKey
+				})]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceKindBlock, {
-				kind: "tts",
-				title: "Voice",
-				model,
-				view,
-				onClearKey
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "voice-kind",
+				id: "voice-phone",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+						className: "voice-sub",
+						children: "On the phone page"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PhoneWhere, {
+						kind: "stt",
+						title: "Recognition runs on"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PhoneWhere, {
+						kind: "tts",
+						title: "The voice runs on"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "set-hint",
+						id: "voice-phone-hint",
+						children: "The phone's own engine needs nothing set up. The desktop app always uses this computer."
+					})
+				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "set-row set-switch-row",
@@ -86567,70 +86858,95 @@ function VoiceSectionView({ model, view, onClearKey }) {
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 				})]
 			}),
+			tryRow ?? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TryButtons, { view }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "voice-notes",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "set-hint",
-					id: "voice-privacy",
-					children: "Phone recognition sends audio to Google on Android and to Apple on iOS when no on-device model exists."
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "set-hint",
-					id: "voice-iphone",
-					children: "On iPhone, voice needs a Safari tab: the home-screen icon cannot hear you. Server recognition fixes that."
-				})]
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "set-hint",
+						id: "voice-privacy-local",
+						children: "The built-in engines (Windows' and Apple's on-device speech) and local models keep your audio on this computer. An OpenAI-compatible host receives what you send it."
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "set-hint",
+						id: "voice-privacy",
+						children: "The phone's own recognition sends audio to Google on Android and to Apple on iOS when no on-device model exists."
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "set-hint",
+						id: "voice-iphone",
+						children: "On iPhone, voice needs a Safari tab: the home-screen icon cannot hear you. Recognition on this computer fixes that."
+					})
+				]
 			})
 		]
 	});
 }
-function VoiceKindBlock({ kind, title, model, view, onClearKey }) {
+function PhoneWhere({ kind, title }) {
+	const model = useSettings();
 	const where = String(model.get("voice", kind) || "phone");
-	const backend = String(model.get("voice", kind + "_backend") || "");
-	const f = voiceFields(kind, where, backend);
-	const line = readinessLine(kind, view, where);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "voice-field-row",
+		"data-phone-kind": kind,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: title
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+				"data-group": "voice",
+				"data-field": kind,
+				value: where,
+				onChange: (e) => model.saveField("voice", kind, e.target.value),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: "phone",
+					children: "The phone"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: "server",
+					children: "This computer"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {})
+		]
+	});
+}
+function VoiceKindBlock({ kind, title, model, view, onClearKey }) {
+	const backend = effectiveBackend(kind, String(model.get("voice", kind + "_backend") || ""), view);
+	const f = voiceFields(kind, "server", backend);
+	const line = readinessLine(kind, view, "server", backend);
 	const keySaved = model.get("voice", kind + "_api_key") === SECRET_MASK;
 	const local = backend === "local";
+	const voices = view?.system?.voices || [];
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "voice-kind",
 		"data-kind": kind,
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "voice-field-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: title
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-						group: "voice",
-						field: kind,
-						options: [{
-							value: "phone",
-							label: "Phone"
-						}, {
-							value: "server",
-							label: "Server"
-						}]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-hint",
-						children: kind === "stt" ? "Where your words become text." : "Where the agent's words become speech."
-					})
-				]
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+				className: "voice-sub",
+				children: title
 			}),
 			f.backend && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "voice-field-row",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-label",
-						children: "Backend"
+						children: "Engine"
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-						group: "voice",
-						field: kind + "_backend",
-						options: VOICE_BACKENDS
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+						"data-group": "voice",
+						"data-field": kind + "_backend",
+						value: backend,
+						onChange: (e) => model.saveField("voice", kind + "_backend", e.target.value),
+						children: VOICE_BACKENDS.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: o.value,
+							children: o.label
+						}, o.value))
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {})
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: kind === "stt" ? "What turns your words into text." : "What reads the agent's words aloud."
+					})
 				]
 			}),
 			f.url && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -86705,10 +87021,14 @@ function VoiceKindBlock({ kind, title, model, view, onClearKey }) {
 						className: "set-label",
 						children: "Voice name"
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+					backend === "system" && voices.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
 						group: "voice",
 						field: "tts_voice",
-						placeholder: local ? "en_US-lessac-medium" : "alloy"
+						options: systemVoiceOptions(voices, model.get("voice", "tts_voice"))
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+						group: "voice",
+						field: "tts_voice",
+						placeholder: backend === "system" ? "the system's default" : local ? "en_US-lessac-medium" : "alloy"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {})
 				]
@@ -86723,6 +87043,150 @@ function VoiceKindBlock({ kind, title, model, view, onClearKey }) {
 				}), line.text]
 			})
 		]
+	});
+}
+function systemVoiceOptions(voices, saved) {
+	const out = [{
+		value: "",
+		label: "The system's default"
+	}, ...voices.map((v) => ({
+		value: v,
+		label: v
+	}))];
+	const s = saved == null ? "" : String(saved);
+	if (s && !voices.includes(s)) out.push({
+		value: s,
+		label: s + " (not on this computer)"
+	});
+	return out;
+}
+var canRecord = () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
+function TryButtons({ view, busy = "", left = 0, result = null, onSay, onHear }) {
+	const st = tryState(view, canRecord());
+	const why = [st.say.ok ? "" : st.say.why, st.hear.ok ? "" : st.hear.why].filter(Boolean);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "voice-try",
+		id: "voice-try",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+				className: "voice-sub",
+				children: "Try it"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "voice-try-buttons",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "voice-try-say",
+					disabled: !st.say.ok || !!busy,
+					title: st.say.why || void 0,
+					onClick: onSay,
+					children: busy === "say" ? "Speaking…" : "Say a test sentence"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "voice-try-hear",
+					disabled: !st.hear.ok || !!busy,
+					title: st.hear.why || void 0,
+					onClick: onHear,
+					children: busy === "hear" ? left > 0 ? `Listening… ${left}` : "Recognizing…" : "Try recognition"
+				})]
+			}),
+			result ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint voice-try-result st-" + (result.ok ? "ok" : "fail"),
+				id: "voice-try-result",
+				role: "status",
+				children: result.text
+			}) : why.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				id: "voice-try-why",
+				children: [...new Set(why)].join(" ")
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				id: "voice-try-hint",
+				children: [
+					"Recognition listens for ",
+					LISTEN_SECONDS,
+					" seconds: say a short sentence."
+				]
+			})
+		]
+	});
+}
+function TryRow({ view }) {
+	const ctxRef = (0, import_react.useRef)(null);
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [left, setLeft] = (0, import_react.useState)(0);
+	const [result, setResult] = (0, import_react.useState)(null);
+	(0, import_react.useEffect)(() => () => {
+		ctxRef.current?.close().catch(() => {});
+		ctxRef.current = null;
+	}, []);
+	const ctx = () => {
+		if (!ctxRef.current) ctxRef.current = newAudioCtx();
+		const c = ctxRef.current;
+		if (c && c.state === "suspended") c.resume().catch(() => {});
+		return c;
+	};
+	const onSay = async () => {
+		const c = ctx();
+		setBusy("say");
+		setResult(null);
+		setResult(await speakTest(c, view?.server_ready?.tts_backend || ""));
+		setBusy("");
+	};
+	const onHear = async () => {
+		const c = ctx();
+		setBusy("hear");
+		setResult(null);
+		if (!c) {
+			setResult({
+				ok: false,
+				text: "This browser can't record audio."
+			});
+			setBusy("");
+			return;
+		}
+		let stream;
+		try {
+			stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+		} catch (err) {
+			setResult({
+				ok: false,
+				text: micErrorText(err)
+			});
+			setBusy("");
+			return;
+		}
+		try {
+			const rec = startWavRecording(stream, c);
+			for (let s = LISTEN_SECONDS; s > 0; s--) {
+				setLeft(s);
+				await new Promise((r) => setTimeout(r, 1e3));
+			}
+			setLeft(0);
+			const wav = await rec.stop();
+			stream.getTracks().forEach((t) => t.stop());
+			const lang = String(navigator.language || "en").split(";")[0];
+			setResult(await transcribeTest(wav, lang));
+		} catch (err) {
+			stream.getTracks().forEach((t) => t.stop());
+			setResult({
+				ok: false,
+				text: "Couldn't record: " + noDot(String(err?.message || err)) + "."
+			});
+		} finally {
+			setLeft(0);
+			setBusy("");
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TryButtons, {
+		view,
+		busy,
+		left,
+		result,
+		onSay: () => void onSay(),
+		onHear: () => void onHear()
 	});
 }
 //#endregion
@@ -96174,6 +96638,12 @@ var SCREENS = [
 		group: "Devices and people",
 		advanced: true,
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Mobile, { ...p })
+	},
+	{
+		key: "voice",
+		label: "Voice",
+		group: "Devices and people",
+		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Voice, { ...p })
 	},
 	{
 		key: "peer",
