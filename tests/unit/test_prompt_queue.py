@@ -95,6 +95,44 @@ def test_enqueue_at_index(qfile):
     assert [i["text"] for i in pq.list_queue("s")] == ["front", "a", "b", "c", "back"]
 
 
+def test_say_rides_the_item_and_survives_edits_moves_and_loops(qfile):
+    pq.enqueue("s", "typed")
+    pq.enqueue("s", "spoken", say=True)
+    typed, spoken = pq.list_queue("s")
+    # Written only when true, so a typed item keeps the old {id, text, added}.
+    assert set(typed) == {"id", "text", "added"}
+    assert spoken["say"] is True
+    pq.update_item("s", spoken["id"], "spoken, edited")
+    pq.move_item_to("s", spoken["id"], 0)
+    assert pq.list_queue("s")[0] == {**spoken, "text": "spoken, edited"}
+    # A looping queue re-appends the item WITH its say.
+    pq.set_flags("s", loop=True)
+    pq.record_sent("s", spoken["id"])
+    assert [(i["text"], i.get("say", False)) for i in pq.list_queue("s")] == [
+        ("typed", False),
+        ("spoken, edited", True),
+    ]
+
+
+def test_say_reads_false_on_older_and_odd_entries(qfile):
+    import json
+
+    qfile.write_text(
+        json.dumps(
+            {
+                "s": {
+                    "items": [
+                        {"id": "a", "text": "from before say", "added": 1},
+                        {"id": "b", "text": "odd", "added": 2, "say": "yes"},
+                        {"id": "c", "text": "spoken", "added": 3, "say": True},
+                    ]
+                }
+            }
+        )
+    )
+    assert [i.get("say", False) for i in pq.list_queue("s")] == [False, False, True]
+
+
 def test_enqueue_many(qfile):
     pq.enqueue("s", "existing")
     entry, added, skipped = pq.enqueue_many("s", ["a", "  ", "b", None, "c"])

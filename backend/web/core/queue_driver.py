@@ -317,12 +317,18 @@ def _send_queued_item(title: str, name: str, nxt: dict, rec: dict, now: float) -
     if inst is not None and _dialog_on_screen(inst, name):
         rec["idle_since"] = None
         return False
-    if not srv._send_to_agent(name, nxt["text"], submit=True):
+    # A ``say`` item asks for its spoken reply only now, as it goes in
+    # (server._voice_say); a send that does not land takes the request back.
+    say = inst is not None and nxt.get("say") is True
+    typed = srv._voice_say(inst, title, nxt["text"]) if say else nxt["text"]
+    if not srv._send_to_agent(name, typed, submit=True):
+        if say:
+            srv._voice_say_cancel(title)
         return False
     entry = _prompt_queue.record_sent(title, nxt["id"])
     rec["armed"] = False
     rec["sent_at"] = now
-    rec["sent_text"] = nxt["text"]
+    rec["sent_text"] = typed
     _events.BUS.emit(
         "session.prompt_sent",
         session=title,
