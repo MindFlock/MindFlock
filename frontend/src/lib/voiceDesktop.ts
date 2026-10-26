@@ -15,10 +15,14 @@
  *
  * Pieces: {@link parseRadio}, the prefs, {@link Dictation} (the push-to-talk
  * state machine), {@link ReplyTracker}, {@link SpeechQueue}, and the browser
- * adapters (Web Speech / MediaRecorder → server, speechSynthesis / server
- * audio) that the component wires together. */
+ * adapters (Web Speech / a WAV clip → server, speechSynthesis / server
+ * audio) that the component wires together. Which engine runs is
+ * {@link sttEngine} / {@link ttsEngine}: in the desktop app (Electron) the
+ * server's whenever it is ready, in a browser tab the browser's unless
+ * Settings say "server". */
 
 import { api, apiRaw } from "../api/client";
+import { startWavRecording, type WavRecording } from "./wavRecorder";
 
 // --- the radio words -------------------------------------------------------- //
 
@@ -466,14 +470,18 @@ export function browserSpeaker(): Speaker & { available(): boolean } {
   };
 }
 
-/** The page's one AudioContext (server playback). Made on first use, which is
- * inside the mic's click — a context made outside a gesture stays suspended. */
+function audioCtxCtor(): typeof AudioContext | undefined {
+  return typeof window === "undefined"
+    ? undefined
+    : window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+}
+
+/** The page's one AudioContext (server playback and the server recognizer's
+ * recording). Made on first use, which is inside the mic's click — a context
+ * made outside a gesture stays suspended. */
 let audioCtx: AudioContext | null = null;
 export function voiceAudioCtx(): AudioContext | null {
-  const AC =
-    typeof window === "undefined"
-      ? undefined
-      : window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  const AC = audioCtxCtor();
   if (!AC) return null;
   if (!audioCtx) {
     try {
@@ -759,17 +767,17 @@ export function browserRecognizer(): Recognizer {
   return self;
 }
 
-const SERVER_MIMES = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
 const SILENCE_MS = 1800; // quiet after speech that ends a clip
 const CLIP_MAX_MS = 12_000; // the hard cap on one clip
-const LEVEL_MS = 100; // silence sampling period
 const RMS_SPEECH = 0.02; // RMS (0..1) above which a clip has speech
 const UPLOAD_TIMEOUT_MS = 45_000;
+const CLIP_RATE = 16_000; // the built-in recognizers' rate; whisper's too
 
-/** MediaRecorder → POST /api/voice/transcribe (mobile.js ServerSTT): one
- * clip per phrase, ended by {@link SILENCE_MS} of quiet after speech or the
- * cap, uploaded whole (no timeslice: short slices come back empty on Safari)
- * with its mime as the Content-Type; the response's `{text}` is the phrase.
+/** A WAV clip → POST /api/voice/transcribe (mobile.js ServerSTT): one clip
+ * per phrase, recorded as 16 kHz PCM by lib/wavRecorder through the page's
+ * one AudioContext (the built-in Windows / macOS recognizers take nothing
+ * but PCM), ended by {@link SILENCE_MS} of quiet after speech or the cap,
+ * and uploaded whole as `audio/wav`; the response's `{text}` is the phrase.
  * While listening is wanted the next clip starts as soon as one is sent, so
  * phrases arrive one by one like Chrome's finals. The mic stream is kept
  * until {@link Recognizer.release}. */
@@ -779,24 +787,11 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
   let want = false;
   let finishing = false;
   let token: object | null = null; // one per clip; null = no clip
-  let rec: MediaRecorder | null = null;
+  let cur: { rec: WavRecording | null; heard: boolean } | null = null;
   let uploads = 0;
-  let source: MediaStreamAudioSourceNode | null = null;
-  let meterTimer: ReturnType<typeof setInterval> | undefined;
   let capTimer: ReturnType<typeof setTimeout> | undefined;
   const aborters = new Set<AbortController>();
 
-  const pickMime = () => {
-    if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported) return "";
-    for (const m of SERVER_MIMES) {
-      try {
-        if (MediaRecorder.isTypeSupported(m)) return m;
-      } catch {
-        /* next */
-      }
-    }
-    return "";
-  };
   const getStream = async () => {
     if (stream && stream.active !== false) return stream;
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -808,16 +803,6 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
     if (n === "NotFoundError" || n === "DevicesNotFoundError" || n === "OverconstrainedError") return "audio-capture";
     return "start-failed";
   };
-  const meterStop = () => {
-    clearInterval(meterTimer);
-    meterTimer = undefined;
-    try {
-      source?.disconnect();
-    } catch {
-      /* gone */
-    }
-    source = null;
-  };
   /** The recognizer is done when nothing is wanted, recording or uploading. */
   const maybeEnd = () => {
     if (!want && !token && uploads === 0 && h) {
@@ -826,8 +811,15 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
       hh.onEnd();
     }
   };
+  /** A clip that could not start: report it, and end. */
+  const failed = (code: string, detail?: string) => {
+    token = null;
+    want = false;
+    h?.onError(code, detail);
+    maybeEnd();
+  };
 
-  const upload = async (blob: Blob, mime: string) => {
+  const upload = async (blob: Blob) => {
     const hh = h;
     uploads++;
     const ac = new AbortController();
@@ -837,7 +829,7 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
     try {
       const r = await apiRaw("/api/voice/transcribe?lang=" + encodeURIComponent(lang), {
         method: "POST",
-        headers: { "Content-Type": mime },
+        headers: { "Content-Type": "audio/wav" },
         body: blob,
         signal: ac.signal,
       });
@@ -853,7 +845,7 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
         hh.onError(
           "server",
           r.status === 409
-            ? "Server recognition is off: Settings → Your phone → Voice"
+            ? "Server recognition isn't ready: Settings → Voice"
             : "Couldn't transcribe: " + self.lastError
         );
       }
@@ -873,16 +865,26 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
 
   /** End the current clip and send it. */
   const endClip = () => {
-    const r = rec;
-    rec = null;
+    const c = cur;
+    cur = null;
     clearTimeout(capTimer);
-    meterStop();
-    if (!r) return;
-    try {
-      r.stop();
-    } catch {
-      token = null;
-    }
+    if (!c?.rec) return;
+    const mine = token;
+    c.rec.stop().then(
+      (blob) => {
+        if (token !== mine) return; // stop(): the clip is discarded
+        token = null;
+        // A clip the detector heard nothing in has no words to send.
+        if (c.heard && blob.size) void upload(blob);
+        if (want && !finishing) void clip();
+        else maybeEnd();
+      },
+      () => {
+        if (token !== mine) return;
+        token = null;
+        maybeEnd();
+      }
+    );
   };
 
   const clip = async () => {
@@ -892,104 +894,52 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
     try {
       s = await getStream();
     } catch (err) {
-      if (token !== mine) return;
-      token = null;
-      want = false;
-      h?.onError(errCode(err));
-      maybeEnd();
+      if (token === mine) failed(errCode(err));
       return;
     }
     if (token !== mine) return;
-    const mt = pickMime();
-    let r: MediaRecorder;
-    try {
-      r = mt ? new MediaRecorder(s, { mimeType: mt }) : new MediaRecorder(s);
-    } catch {
-      token = null;
-      want = false;
-      h?.onError("start-failed");
-      maybeEnd();
-      return;
-    }
-    const mime = r.mimeType || mt || "audio/webm";
-    const chunks: Blob[] = [];
-    let heard = false;
-    let live = false;
-    r.ondataavailable = (ev) => {
-      if (ev.data && ev.data.size) chunks.push(ev.data);
-    };
-    r.onstop = () => {
-      if (token !== mine) return; // stop(): the clip is discarded
-      token = null;
-      const blob = new Blob(chunks, { type: mime });
-      // A clip the detector heard nothing in has no words to send.
-      if (blob.size && (heard || !live)) void upload(blob, mime);
-      if (want && !finishing) void clip();
-      else maybeEnd();
-    };
-    rec = r;
-    try {
-      r.start();
-    } catch {
-      token = null;
-      rec = null;
-      want = false;
-      h?.onError("start-failed");
-      maybeEnd();
-      return;
-    }
-    h?.onStatus?.("Listening…");
-    // The silence detector: RMS of the time-domain signal every LEVEL_MS
-    // against a noise floor that follows the quiet moments.
+    // The context the mic's click made and resumed (voiceAudioCtx): the
+    // resume may still be in flight.
     const ctx = voiceAudioCtx();
-    let analyser: AnalyserNode | null = null;
-    if (ctx && ctx.state === "running") {
-      try {
-        source = ctx.createMediaStreamSource(s);
-        analyser = ctx.createAnalyser();
-        analyser.fftSize = 1024;
-        source.connect(analyser);
-        live = true;
-      } catch {
-        source = null;
-        analyser = null;
+    if (ctx && ctx.state === "suspended") await ctx.resume().catch(() => {});
+    if (token !== mine) return;
+    if (!ctx || ctx.state !== "running") {
+      failed("start-failed", "The audio engine isn't running — click the mic again");
+      return;
+    }
+    const c: { rec: WavRecording | null; heard: boolean } = { rec: null, heard: false };
+    // The silence detector: the recorder's RMS per block against a noise
+    // floor that follows the quiet moments.
+    let floor = 0;
+    let lastLoud = 0;
+    const onLevel = (rms: number) => {
+      if (cur !== c) return;
+      floor = floor === 0 ? rms : Math.min(rms, floor * 1.05 + 0.001);
+      const now = Date.now();
+      if (rms > Math.max(RMS_SPEECH, floor * 3)) {
+        if (!c.heard) h?.onSpeech?.();
+        c.heard = true;
+        lastLoud = now;
       }
+      if (c.heard && now - lastLoud > SILENCE_MS) endClip();
+    };
+    try {
+      c.rec = startWavRecording(s, ctx, { targetRate: CLIP_RATE, onLevel });
+    } catch {
+      failed("start-failed");
+      return;
     }
-    if (analyser) {
-      const buf = new Uint8Array(analyser.fftSize);
-      let floor = 0;
-      let lastLoud = 0;
-      meterTimer = setInterval(() => {
-        if (token !== mine || !analyser) return;
-        analyser.getByteTimeDomainData(buf);
-        let sum = 0;
-        for (let i = 0; i < buf.length; i++) {
-          const d = (buf[i] - 128) / 128;
-          sum += d * d;
-        }
-        const rms = Math.sqrt(sum / buf.length);
-        floor = floor === 0 ? rms : Math.min(rms, floor * 1.05 + 0.001);
-        const now = Date.now();
-        if (rms > Math.max(RMS_SPEECH, floor * 3)) {
-          if (!heard) h?.onSpeech?.();
-          heard = true;
-          lastLoud = now;
-        }
-        if (heard && now - lastLoud > SILENCE_MS) endClip();
-      }, LEVEL_MS);
-    }
+    cur = c;
+    h?.onStatus?.("Listening…");
     capTimer = setTimeout(() => {
-      if (token === mine) endClip();
+      if (cur === c) endClip();
     }, CLIP_MAX_MS);
   };
 
   const self = {
     name: "server" as const,
     lastError: "",
-    available: () =>
-      typeof navigator !== "undefined" &&
-      !!navigator.mediaDevices?.getUserMedia &&
-      typeof MediaRecorder !== "undefined",
+    available: () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia && !!audioCtxCtor(),
     start(handlers: RecognizerHandlers) {
       self.stop();
       if (!self.available()) return false;
@@ -1002,7 +952,7 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
     finish() {
       want = false;
       finishing = true;
-      if (rec) {
+      if (cur) {
         h?.onStatus?.("Transcribing…");
         endClip();
       } else maybeEnd();
@@ -1013,18 +963,9 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
       h = null;
       token = null;
       clearTimeout(capTimer);
-      meterStop();
-      const r = rec;
-      rec = null;
-      if (r) {
-        try {
-          r.ondataavailable = null;
-          r.onstop = null;
-          if (r.state !== "inactive") r.stop();
-        } catch {
-          /* gone */
-        }
-      }
+      const c = cur;
+      cur = null;
+      c?.rec?.cancel();
       aborters.forEach((a) => a.abort());
       aborters.clear();
     },
@@ -1040,15 +981,36 @@ export function serverRecognizer(): Recognizer & { lastError: string } {
 
 // --- GET /api/voice -------------------------------------------------------------- //
 
+/** GET /api/voice's `system`: the operating system's own speech on the
+ * server's machine (Windows System.Speech — from WSL too — or the macOS
+ * Speech framework). */
+export interface VoiceSystem {
+  available?: boolean;
+  platform?: string;
+  detail?: string;
+  voices?: unknown[];
+  recognizers?: unknown[];
+}
+
 export interface VoiceCfg {
+  /** The phone page's preference; the desktop app goes by `server_ready`. */
   stt: "phone" | "server";
   tts: "phone" | "server";
-  server_ready: { stt?: boolean; tts?: boolean; detail?: string; stt_detail?: string };
+  server_ready: {
+    stt?: boolean;
+    tts?: boolean;
+    detail?: string;
+    stt_backend?: string;
+    stt_detail?: string;
+    tts_backend?: string;
+    tts_detail?: string;
+  };
+  system: VoiceSystem;
 }
-export const DEFAULT_VOICE_CFG: VoiceCfg = { stt: "phone", tts: "phone", server_ready: {} };
+export const DEFAULT_VOICE_CFG: VoiceCfg = { stt: "phone", tts: "phone", server_ready: {}, system: {} };
 
-/** Where speech runs (Settings → Your phone → Voice). Unreachable / older
- * server: `prev` (a blink must not swap engines), else the browser's own. */
+/** Where speech runs (Settings → Voice). Unreachable / older server: `prev`
+ * (a blink must not swap engines), else the browser's own. */
 export async function loadVoiceCfg(prev: VoiceCfg | null): Promise<VoiceCfg> {
   try {
     const j = await api<Partial<VoiceCfg>>("/api/voice");
@@ -1057,6 +1019,7 @@ export async function loadVoiceCfg(prev: VoiceCfg | null): Promise<VoiceCfg> {
         stt: j.stt === "server" ? "server" : "phone",
         tts: j.tts === "server" ? "server" : "phone",
         server_ready: j.server_ready && typeof j.server_ready === "object" ? j.server_ready : {},
+        system: j.system && typeof j.system === "object" ? j.system : {},
       };
     }
   } catch {
@@ -1065,19 +1028,89 @@ export async function loadVoiceCfg(prev: VoiceCfg | null): Promise<VoiceCfg> {
   return prev || DEFAULT_VOICE_CFG;
 }
 
-/** The recognizer to use: the server's when Settings say so AND it is ready
- * (and this browser can record), else the browser's. */
-export function sttEngine(cfg: VoiceCfg, serverOk: boolean): "server" | "browser" {
-  return cfg.stt === "server" && !!cfg.server_ready.stt && serverOk ? "server" : "browser";
+/** The desktop app: the preload's `mfapp` bridge, or Electron's user agent.
+ * Its Chromium has no Google speech key, so Web Speech recognition fails with
+ * `network` on every start there. */
+export function isElectron(): boolean {
+  if (typeof window !== "undefined" && (window as unknown as { mfapp?: unknown }).mfapp) return true;
+  return typeof navigator !== "undefined" && String(navigator.userAgent || "").includes("Electron");
 }
-export function ttsEngine(cfg: VoiceCfg): "server" | "browser" {
-  return cfg.tts === "server" && !!cfg.server_ready.tts ? "server" : "browser";
+
+export type SttEngine = "server" | "browser" | "none";
+
+/** The recognizer to use (`serverOk`: this page can record for the server).
+ * In the desktop app, the server's whenever it is ready — `voice.stt` is the
+ * phone page's preference — else none: never Web Speech, which fails there.
+ * In a browser tab, the server's when Settings say "server" AND it is ready,
+ * else the browser's (the phone page's rule). */
+export function sttEngine(cfg: VoiceCfg, serverOk: boolean, electron = isElectron()): SttEngine {
+  const ready = !!cfg.server_ready.stt && serverOk;
+  if (electron) return ready ? "server" : "none";
+  return cfg.stt === "server" && ready ? "server" : "browser";
+}
+
+/** The voice: the server's when ready (in the desktop app) or when Settings
+ * also say "server" (in a tab), else speechSynthesis, which works in both. */
+export function ttsEngine(cfg: VoiceCfg, electron = isElectron()): "server" | "browser" {
+  if (!cfg.server_ready.tts) return "browser";
+  return electron || cfg.tts === "server" ? "server" : "browser";
+}
+
+/** The caption when this page has no recognizer. */
+export function noRecognizerLine(electron = isElectron()): string {
+  return electron
+    ? "Speech needs the server's engine here: Settings → Voice"
+    : "Voice input needs Chrome, Edge or Safari — or server recognition (Settings → Voice)";
+}
+
+const PLATFORM_WORDS: Record<string, string> = {
+  wsl: "Windows via WSL",
+  windows: "Windows",
+  win32: "Windows",
+  macos: "macOS",
+  darwin: "macOS",
+};
+
+/** "server (piper)", "server, built in (Windows via WSL)", or "server". */
+function serverEngineName(backend: string | undefined, system: VoiceSystem): string {
+  const id = String(backend || "");
+  if (id === "system") {
+    const p = String(system.platform || "");
+    const where = PLATFORM_WORDS[p.toLowerCase()] || p;
+    return "server, built in" + (where ? " (" + where + ")" : "");
+  }
+  return id ? "server (" + id + ")" : "server";
+}
+
+/** The options' Diagnostics line: the engines actually in use (`stt` /
+ * `tts` as the page resolved them, "none" when it has none), and why the
+ * server's recognizer isn't, when this page would use it. */
+export function engineDiagnostics(
+  cfg: VoiceCfg,
+  stt: SttEngine,
+  tts: "server" | "browser" | "none",
+  electron = isElectron()
+): string {
+  const ready = cfg.server_ready;
+  let rec =
+    stt === "server"
+      ? serverEngineName(ready.stt_backend, cfg.system)
+      : stt === "browser"
+        ? "this browser"
+        : electron
+          ? "none"
+          : "none in this browser";
+  if (stt !== "server" && !ready.stt && (electron || cfg.stt === "server"))
+    rec += " (server recognition isn't ready" + (ready.stt_detail ? ": " + ready.stt_detail : "") + ")";
+  const voice =
+    tts === "server" ? serverEngineName(ready.tts_backend, cfg.system) : tts === "browser" ? "this browser" : "none";
+  return "Recognition: " + rec + " · Voice: " + voice;
 }
 
 /** The caption for a recognizer error, or "" for one that needs no words. */
 export function recognizerErrorLine(code: string, detail?: string): string {
   if (code === "network")
-    return "Speech recognition failed (network): use Chrome, Edge or Safari, or turn on server recognition in Settings → Your phone → Voice";
+    return "Speech recognition failed (network): use Chrome, Edge or Safari, or turn on server recognition in Settings → Voice";
   if (code === "not-allowed" || code === "service-not-allowed") return "Microphone permission denied";
   if (code === "audio-capture") return "No microphone found";
   if (detail) return detail;
