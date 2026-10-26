@@ -2756,14 +2756,18 @@
   //
   // Adapters, reachable as window.mfVoice.stt / .tts, all with one surface:
   //   stt {name, available(), start({onInterim, onFinal, onError, onEnd,
-  //        onLevel?, onStatus?, until?}), stop(), active(), release()} —
+  //        onLevel?, onStatus?, until?, whole?}), stop(), active(), release()} —
   //        onFinal fires once per PHRASE (one start may deliver several);
   //        onStatus carries a caption that is not words ("Transcribing…").
   //        PhoneSTT over webkitSpeechRecognition (continuous), adding end()
   //        (stop gracefully: what was heard still arrives); ServerSTT
   //        records a clip (WAV, off the AudioContext) per phrase — its silence detector
   //        ends the clip — and POSTs it to /api/voice/transcribe, adding
-  //        finish() (end the clip now: the tap) and pending() (on its way)
+  //        finish() (end the clip now: the tap) and pending() (on its way);
+  //        on a server that streams it sends the phrase in chunks and
+  //        onFinal fires with each run of settled words as they come, unless
+  //        whole() says the phrase must arrive in one piece (it may be a
+  //        command, or a dialog's answer)
   //   tts {name, available(), prime(), speak(text) → Promise, cancel(),
   //        voices()} — PhoneTTS over speechSynthesis; ServerTTS POSTs
   //        /api/voice/speak and plays the audio through one AudioContext,
@@ -2992,9 +2996,32 @@
   // waits instead of expiring. Errors reach onError with PhoneSTT's codes
   // plus "server" (detail = the line to show; a 409 is the one-line hint to
   // turn recognition on) and "nothing-recorded".
+  //
+  // Streaming (GET /api/voice → server_ready.stt_stream: the local whisper
+  // backend): the words appear WHILE the phrase is spoken. start() opens a
+  // stream (POST /api/voice/stream {lang} → {id}); whenever the previous
+  // request has returned and VOICE_STREAM_CHUNK_MS of new audio is in, the
+  // samples since the last cut go out as one more 16 kHz WAV (POST
+  // …/chunk → {committed, partial}) — one request at a time, so a slow
+  // server gets fewer, longer chunks instead of a queue. `committed` words
+  // never change: they reach onFinal (into the box) as they come — all but
+  // the last, and never a run ending in a radio word (voiceStreamSplit), so
+  // "over" / "submit" / "disregard" act only as the phrase's real end.
+  // `partial`, the unstable tail, is the caption (onInterim). While whole()
+  // says so (an empty box: the router decides what the phrase is; a
+  // dialog's answer), nothing reaches onFinal before the end — the caption
+  // shows the words. The phrase ends as a clip does (silence, the tap, the
+  // cap): the unsent audio, then POST …/end → {committed} → onFinal of the
+  // rest, and the state machine's restart opens the next phrase's stream.
+  // stop() DELETEs the stream. A 409 on the open (the server does not
+  // stream after all: clip per phrase until GET /api/voice says otherwise)
+  // or any failed chunk turns the phrase into a clip: the words so far
+  // stay, the audio not yet answered is transcribed in one piece.
   var VOICE_WAV_RATE = 16000;            // the rate of the uploaded clip
   var VOICE_SILENCE_MS = 1100;           // quiet after speech that ends the clip
   var VOICE_CLIP_MAX_MS = 12000;         // the hard cap on one clip
+  var VOICE_STREAM_CHUNK_MS = 300;       // the least new audio a stream chunk carries (the server's minimum)
+  var VOICE_STREAM_MAX_MS = 30000;       // a streamed phrase's cap (its words arrive as it goes)
   var VOICE_LEVEL_MS = 100;              // the caption clock's period
   var VOICE_RMS_SPEECH = 0.02;           // RMS (0..1) above which the clip has speech
   var VOICE_UPLOAD_TIMEOUT_MS = 45000;   // the transcribe request's own cap
@@ -3115,12 +3142,30 @@
     }
     return buf;
   }
+  // A stream's settled words, split: what may go into the box now, and what
+  // waits for the next words or the flush — the last word (it may be the
+  // radio word that ends the phrase) and, with it, any words that would make
+  // the run END in a radio word ("go over the" → "go" now, "over the"
+  // waits: an "over" mid-sentence is a word, but "go over" alone would stop
+  // listening). [now, held].
+  function voiceStreamSplit(text) {
+    var words = String(text || "").trim().split(/\s+/).filter(Boolean);
+    var held = words.length ? [words.pop()] : [];
+    while (words.length && voiceDictParse(words.join(" ")).kind) held.unshift(words.pop());
+    return [words.join(" "), held.join(" ")];
+  }
+  function voiceJoin(a, b) {
+    a = String(a || "").trim();
+    b = String(b || "").trim();
+    return a && b ? a + " " + b : a || b;
+  }
   function ServerSTT() {
     var stream = null;        // the microphone, kept across turns
     var token = null;         // one object per start(); null = not active
     var rec = null;           // the recording of the current clip (recStart)
-    var uploading = false;    // the clip is on its way to the server
+    var uploading = false;    // the clip (or the stream's rest) is on its way to the server
     var aborter = null;       // AbortController of that upload
+    var live = null;          // the streamed phrase (recStart's g) until its words are in
     var clockTimer = null, capTimer = null;
     function available() {
       return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia &&
@@ -3137,6 +3182,9 @@
       if (n === "NotFoundError" || n === "DevicesNotFoundError" || n === "OverconstrainedError") return "audio-capture";
       return "start-failed";
     }
+    function lang() { return String(navigator.language || "en").split(";")[0]; }
+    // The server streams (GET /api/voice: the local whisper backend).
+    function streams() { return !!(voice.cfg.server_ready && voice.cfg.server_ready.stt_stream); }
     // The recording graph of one clip, and its silence detector: the RMS of
     // every block drives the level meter and ends the clip after a phrase.
     // A context that is not running (made outside a tap) delivers no blocks:
@@ -3146,7 +3194,14 @@
       if (!ctx || !ctx.createScriptProcessor || !ctx.createMediaStreamSource) return null;
       var g = { ctx: ctx, rate: ctx.sampleRate, blocks: [], frames: 0,
                 source: null, proc: null, mute: null,
-                heard: false, lastLoud: 0, floor: 0, t0: Date.now() };
+                heard: false, lastLoud: 0, floor: 0, t0: Date.now(),
+                // The stream: mode "clip" (none, or it broke) / "opening" /
+                // "stream"; blocks + queued = the audio it has not answered
+                // yet; busy = a request in flight (never two); pend = settled
+                // words not in the box yet; lead = the words before a clip
+                // that took over; words = the caption shows words.
+                mode: "clip", sid: "", queued: 0, loudQueued: false, busy: false, opening: false,
+                req: null, ending: false, dead: false, pend: "", partial: "", lead: "", words: false };
       try {
         g.source = ctx.createMediaStreamSource(s);
         g.proc = ctx.createScriptProcessor(4096, 1, 1);
@@ -3163,6 +3218,7 @@
         if (!block.length) return;
         g.blocks.push(block);
         g.frames += block.length;
+        g.queued += block.length;
         var sum = 0;
         for (var i = 0; i < block.length; i++) sum += block[i] * block[i];
         var rms = Math.sqrt(sum / block.length), now = Date.now();
@@ -3170,9 +3226,10 @@
         // speech is well above it.
         g.floor = g.floor === 0 ? rms : Math.min(rms, g.floor * 1.05 + 0.001);
         var loud = rms > Math.max(VOICE_RMS_SPEECH, g.floor * 3);
-        if (loud) { g.heard = true; g.lastLoud = now; }
+        if (loud) { g.heard = true; g.lastLoud = now; g.loudQueued = true; }
         if (h.onLevel) h.onLevel(Math.min(1, rms * 4));
         if (g.heard && now - g.lastLoud > VOICE_SILENCE_MS) finish();
+        else if (g.mode === "stream") streamPump(g, mine);
       };
       return g;
     }
@@ -3195,23 +3252,25 @@
         setTimeout(function () { if (token === mine) { token = null; if (h.onEnd) h.onEnd(); } }, Math.max(0, remaining));
         return true;
       }
-      var capMs = Math.min(VOICE_CLIP_MAX_MS, remaining);
+      var capMs = Math.min(streams() ? VOICE_STREAM_MAX_MS : VOICE_CLIP_MAX_MS, remaining);
       getStream().then(function (s) {
         if (token !== mine) return;
         var g = recStart(s, mine, h);
         if (!g) { token = null; if (h.onError) h.onError("start-failed"); return; }
         rec = g;
         voice.rec.mime = "audio/wav";
+        if (streams()) streamOpen(g, mine);
         if (h.onStatus) h.onStatus("Listening…");
         clockTimer = setInterval(function () {
           if (token !== mine || rec !== g) { clearInterval(clockTimer); return; }
-          if (h.onStatus) h.onStatus("Listening… " + Math.round((Date.now() - g.t0) / 1000) + " s");
+          // Once the stream shows words, the caption is theirs.
+          if (h.onStatus && !g.words) h.onStatus("Listening… " + Math.round((Date.now() - g.t0) / 1000) + " s");
         }, VOICE_LEVEL_MS);
         capTimer = setTimeout(function () {
           if (token !== mine) return;
           // A detector that heard nothing has no words to send (the window
-          // may listen again).
-          if (g.frames && !g.heard) { discard(); if (h.onEnd) h.onEnd(); return; }
+          // may listen again) — unless the stream has shown some.
+          if (g.frames && !g.heard && !g.words) { discard(); if (h.onEnd) h.onEnd(); return; }
           finish();
         }, capMs);
       }).catch(function (err) {
@@ -3223,7 +3282,8 @@
     }
     // End the clip and send it: the silence detector after a phrase, the tap
     // on the mic or the strip, the cap. The words (or the error) reach
-    // start()'s handlers.
+    // start()'s handlers. A streamed phrase sends its rest and ends the
+    // stream instead (streamPump).
     function finish() {
       var g = rec, mine = token;
       if (!g || !mine) return false;
@@ -3233,33 +3293,42 @@
       if (mine.h.onLevel) mine.h.onLevel(null);
       if (!g.frames) {
         token = null;
+        streamDrop(g);
         if (mine.h.onError) {
           mine.h.onError("nothing-recorded", g.ctx.state === "running" ? "Nothing recorded"
             : "Nothing recorded: AudioContext " + g.ctx.state + " — tap the mic once");
         }
         return true;
       }
-      if (mine.h.onStatus) mine.h.onStatus("Transcribing…");
-      var all = new Float32Array(g.frames), at = 0;
+      uploading = true;   // on its way from here: the resample and the upload, or the stream's rest
+      g.ending = true;
+      if (g.mode === "clip") clipSend(g, mine);
+      else streamPump(g, mine);   // once the open / the chunk in flight is back
+      return true;
+    }
+    // The phrase as one clip — or, after a stream broke, the audio it had not
+    // answered, behind the words it had (g.lead).
+    function clipSend(g, mine) {
+      if (!g.queued) { streamDone(g, mine, g.lead); return; }
+      if (mine.h.onStatus && !g.words) mine.h.onStatus("Transcribing…");
+      var all = new Float32Array(g.queued), at = 0;
       g.blocks.forEach(function (b) { all.set(b, at); at += b.length; });
       g.blocks = [];
-      uploading = true;   // on its way from here: the resample, then the upload
+      g.queued = 0;
       voiceResampleClip(all, g.rate).then(function (pcm) {
         if (token !== mine) return;   // stopped meanwhile (discard() cleared uploading)
         var wav = voiceWavEncode(pcm, VOICE_WAV_RATE);
-        upload(new Blob([wav], { type: "audio/wav" }), "audio/wav", mine);
+        upload(new Blob([wav], { type: "audio/wav" }), "audio/wav", mine, g.lead);
       });
-      return true;
     }
-    function upload(blob, mime, mine) {
+    function upload(blob, mime, mine, lead) {
       var h = mine.h;
       uploading = true;
       aborter = window.AbortController ? new AbortController() : null;
       var t0 = Date.now();
-      var lang = String(navigator.language || "en").split(";")[0];
       var timer = aborter ? setTimeout(function () { try { aborter.abort(); } catch (e) {} }, VOICE_UPLOAD_TIMEOUT_MS) : null;
       function settle() { token = null; uploading = false; aborter = null; clearTimeout(timer); }
-      fetch("/api/voice/transcribe?lang=" + encodeURIComponent(lang), {
+      fetch("/api/voice/transcribe?lang=" + encodeURIComponent(lang()), {
         method: "POST",
         headers: { "Content-Type": mime },
         body: blob,
@@ -3271,7 +3340,7 @@
         settle();
         if (x.r.ok) {
           voice.rec.last = { ms: Number(x.j.ms) || (Date.now() - t0), backend: String(x.j.backend || "server"), error: "", at: Date.now() };
-          var text = String(x.j.text || "").trim();
+          var text = voiceJoin(lead, x.j.text);
           if (text) { if (h.onFinal) h.onFinal(text); }
           else if (h.onEnd) h.onEnd();     // a clip with no words: the window decides
           return;
@@ -3291,16 +3360,172 @@
         if (h.onError) h.onError("server", "Couldn't reach the server: " + why);
       });
     }
+    // --- the stream (see "Streaming" above) ---
+    // One request of g's stream, cancellable by streamDrop: {r, j} (j = the
+    // JSON body, {} when there is none).
+    function streamReq(g, url, opts) {
+      var a = window.AbortController ? new AbortController() : null;
+      var timer = a ? setTimeout(function () { try { a.abort(); } catch (e) {} }, VOICE_UPLOAD_TIMEOUT_MS) : null;
+      g.req = a;
+      if (a) opts.signal = a.signal;
+      return fetch(url, opts).then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) { return { r: r, j: j || {} }; });
+      }).then(function (x) { clearTimeout(timer); g.req = null; return x; },
+              function (err) { clearTimeout(timer); g.req = null; throw err; });
+    }
+    function streamWhy(x, err) {
+      if (x) return String(x.j.error || ("HTTP " + x.r.status));
+      return err && err.name === "AbortError" ? "the server took too long" : String((err && err.message) || err);
+    }
+    function streamUrl(sid, tail) { return "/api/voice/stream/" + encodeURIComponent(sid) + (tail ? "/" + tail : ""); }
+    function streamDelete(sid) {
+      if (!sid) return;
+      try { fetch(streamUrl(sid, ""), { method: "DELETE" }).catch(function () {}); } catch (e) {}
+    }
+    function streamOpen(g, mine) {
+      live = g;
+      g.mode = "opening";
+      g.busy = g.opening = true;
+      streamReq(g, "/api/voice/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lang: lang() }),
+      }).then(function (x) {
+        g.busy = g.opening = false;
+        var id = x.r.ok && x.j.id ? String(x.j.id) : "";
+        if (g.dead) { streamDelete(id); return; }
+        if (id) { g.sid = id; g.mode = "stream"; streamPump(g, mine); return; }
+        // 409: this server does not stream after all — a clip per phrase
+        // until GET /api/voice says otherwise.
+        if (x.r.status === 409 && voice.cfg.server_ready) voice.cfg.server_ready.stt_stream = false;
+        streamFail(g, mine, streamWhy(x));
+      }, function (err) {
+        g.busy = g.opening = false;
+        if (!g.dead) streamFail(g, mine, streamWhy(null, err));
+      });
+    }
+    // The next request, when one is due and none is in flight: a chunk once
+    // VOICE_STREAM_CHUNK_MS of new audio is in; once the phrase has ended,
+    // the rest (when it holds speech — after the silence stop it is the
+    // quiet), then /end.
+    function streamPump(g, mine) {
+      if (g.dead || token !== mine || g.mode !== "stream" || g.busy) return;
+      if (g.ending) {
+        if (g.queued && g.loudQueued) streamChunk(g, mine); else streamEnd(g, mine);
+        return;
+      }
+      if (g.queued * 1000 >= g.rate * VOICE_STREAM_CHUNK_MS) streamChunk(g, mine);
+    }
+    // The samples since the last cut, as a 16 kHz WAV (resampled as a clip
+    // is; a rest shorter than the server's minimum padded with silence).
+    function streamChunk(g, mine) {
+      var n = g.blocks.length, frames = g.queued, all = new Float32Array(frames), at = 0, t0 = Date.now();
+      for (var i = 0; i < n; i++) { all.set(g.blocks[i], at); at += g.blocks[i].length; }
+      g.busy = true;
+      g.loudQueued = false;
+      voiceResampleClip(all, g.rate).then(function (pcm) {
+        if (g.dead) return null;
+        var min = Math.ceil((VOICE_WAV_RATE * VOICE_STREAM_CHUNK_MS) / 1000);
+        if (pcm.length < min) { var pad = new Float32Array(min); pad.set(pcm); pcm = pad; }
+        return streamReq(g, streamUrl(g.sid, "chunk"), {
+          method: "POST",
+          headers: { "Content-Type": "audio/wav" },
+          body: new Blob([voiceWavEncode(pcm, VOICE_WAV_RATE)], { type: "audio/wav" }),
+        });
+      }).then(function (x) {
+        if (!x || g.dead) return;
+        g.busy = false;
+        if (!x.r.ok) { streamFail(g, mine, streamWhy(x)); return; }
+        g.blocks.splice(0, n);
+        g.queued -= frames;
+        voice.rec.chunk = { ms: Number(x.j.ms) || (Date.now() - t0), audio: Number(x.j.audio_s) || 0, error: "", at: Date.now() };
+        streamWords(g, mine, x.j.committed, x.j.partial);
+        streamPump(g, mine);
+      }, function (err) {
+        if (g.dead) return;
+        g.busy = false;
+        streamFail(g, mine, streamWhy(null, err));
+      });
+    }
+    // A chunk's words: the settled ones into the box as they come (unless
+    // the phrase must arrive whole), all but the held-back end
+    // (voiceStreamSplit); what is held and the unstable tail, the caption.
+    function streamWords(g, mine, committed, partial) {
+      var h = mine.h;
+      g.pend = voiceJoin(g.pend, committed);
+      g.partial = String(partial || "").trim();
+      if (!(h.whole && h.whole())) {
+        var cut = voiceStreamSplit(g.pend);
+        if (cut[0]) {
+          g.pend = cut[1];
+          if (h.onFinal) h.onFinal(cut[0]);
+          if (g.dead || token !== mine) return;
+        }
+      }
+      var shown = voiceJoin(g.pend, g.partial);
+      if (shown) { g.words = true; if (h.onInterim) h.onInterim(shown); }
+    }
+    // The phrase is over: /end flushes the words the stream still holds.
+    function streamEnd(g, mine) {
+      var t0 = Date.now();
+      g.busy = true;
+      streamReq(g, streamUrl(g.sid, "end"), { method: "POST" }).then(function (x) {
+        if (g.dead) return;
+        g.busy = false;
+        if (!x.r.ok) { streamFail(g, mine, streamWhy(x)); return; }
+        g.sid = "";   // ended: nothing to DELETE
+        voice.rec.last = { ms: Number(x.j.ms) || (Date.now() - t0), backend: String(x.j.backend || "stream"), error: "", at: Date.now() };
+        streamDone(g, mine, voiceJoin(g.pend, x.j.committed));
+      }, function (err) {
+        if (g.dead) return;
+        g.busy = false;
+        streamFail(g, mine, streamWhy(null, err));
+      });
+    }
+    // The stream broke (or never opened): the phrase goes on as a clip. The
+    // words it settled stay (in the box, or g.lead with the unstable tail);
+    // the audio it had not answered is the clip.
+    function streamFail(g, mine, why) {
+      voice.rec.chunk = { ms: 0, audio: 0, error: why, at: Date.now() };
+      var sid = g.sid;
+      g.sid = "";
+      g.mode = "clip";
+      streamDelete(sid);
+      g.lead = voiceJoin(g.pend, g.partial);
+      g.pend = g.partial = "";
+      if (g.ending && token === mine) clipSend(g, mine);
+    }
+    // The phrase's last words (none: the window decides, as for a clip).
+    function streamDone(g, mine, text) {
+      if (token !== mine) return;
+      var h = mine.h;
+      live = null;
+      token = null;
+      uploading = false;
+      if (text) { if (h.onFinal) h.onFinal(text); }
+      else if (h.onEnd) h.onEnd();
+    }
+    // Abandoned (stop()): DELETE the stream — an open still on its way
+    // deletes the id it gets — and drop the request in flight.
+    function streamDrop(g) {
+      if (!g || g.dead) return;
+      g.dead = true;
+      if (g.req && !g.opening) { try { g.req.abort(); } catch (e) {} }
+      streamDelete(g.sid);
+      g.sid = "";
+    }
     function discard() {
       token = null;
       clearTimeout(capTimer);
       var g = rec;
       rec = null;
       recStop(g);
+      streamDrop(live);
+      live = null;
       if (uploading) { uploading = false; if (aborter) { try { aborter.abort(); } catch (e) {} } aborter = null; }
     }
-    // stop(): drop whatever is going on — the clip, the upload — and report
-    // nothing. The microphone stays for the next turn.
+    // stop(): drop whatever is going on — the clip, the upload, the stream —
+    // and report nothing. The microphone stays for the next turn.
     function stop() { discard(); }
     // release(): stop() and give the microphone back (voice off, page hidden).
     function release() {
@@ -3525,7 +3750,7 @@
     cfg: { stt: "phone", tts: "phone", approve_dialogs: true, loaded: false,
            server_ready: {}, backends: { stt: [], tts: [] }, system: null },
     audioCtx: null,              // the page's one AudioContext (voiceAudioCtx)
-    rec: { mime: "", last: null, lastSpeak: null, resampler: "" },   // Diagnostics: recorder type, last transcribe / speak, resampler
+    rec: { mime: "", last: null, lastSpeak: null, resampler: "", chunk: null },   // Diagnostics: recorder type, last transcribe / speak, resampler, last stream chunk
     sttHinted: false,            // "server recognition isn't ready" said once
     saved: null,                 // {session, on} from localStorage, for "Tap to resume voice"
     lastSay: { text: "", ts: 0 }, // never speak the same say twice
@@ -3782,6 +4007,10 @@
     voiceListen_.startedAt = Date.now();
     voice.stt.start({
       until: voiceListen_.until,
+      // A streamed phrase arrives whole while it may be a command (the box
+      // is empty: the router decides) or a dialog's answer; else its words
+      // go into the box as they settle.
+      whole: function () { return mode === "dialog" || !composeEl.value.trim(); },
       onInterim: function (t) { if (voiceIsListening()) { voiceHeardSome(); voiceCaption(t || voiceDictHint()); } },
       onStatus: function (t) { if (voiceIsListening()) voiceCaption(mode === "dialog" ? t : t + " · " + voiceDictHint()); },
       onLevel: function (v) { voiceLevel(voiceIsListening() ? v : null); },
@@ -5061,6 +5290,7 @@
         ((window.OfflineAudioContext || window.webkitOfflineAudioContext)
           ? "OfflineAudioContext (the browser's), no clip yet" : "low-pass decimator (no OfflineAudioContext)")),
       "Silence stop: " + VOICE_SILENCE_MS + " ms after speech (clip cap " + VOICE_CLIP_MAX_MS / 1000 + " s)",
+      voice.cfg.stt === "server" ? "Recognition stream: " + voiceDiagStream() : "",
       "AudioContext: " + (voice.audioCtx ? String(voice.audioCtx.state)
         : (window.AudioContext || window.webkitAudioContext) ? "not created — the server adapters make it on a tap" : "not supported"),
       "Last transcribe: " + voiceDiagLast(voice.rec.last),
@@ -5083,6 +5313,14 @@
     if (where !== "server") return where;
     return ready[kind] ? "server (ready: " + (ready[kind + "_backend"] || "?") + ")"
                        : "server (not ready: " + (ready[kind + "_detail"] || ready.detail || "?") + ")";
+  }
+  // "words as you speak (last chunk 180 ms, 0.6 s of audio)" / "one clip per phrase"
+  function voiceDiagStream() {
+    var ready = voice.cfg.server_ready || {}, c = voice.rec.chunk;
+    var last = !c ? "no chunk yet"
+      : c.error ? "last chunk failed — " + c.error
+      : "last chunk " + c.ms + " ms" + (c.audio ? ", " + c.audio.toFixed(1) + " s of audio" : "");
+    return ready.stt_stream ? "words as you speak (" + last + ")" : "one clip per phrase" + (c ? " (" + last + ")" : "");
   }
   function voiceDiagLast(x) {
     if (!x) return "none yet";

@@ -5940,6 +5940,27 @@ about 6 kHz keeps its level. The RMS of those blocks drives the level meter
 and the silence detector: 1.1 s of quiet after speech ends the clip, so a
 phrase arrives sooner (a tap ends it at once, 12 s or the listening window
 is the cap, and a clip that heard no speech is dropped).
+When the server streams (`GET /api/voice` → `server_ready.stt_stream: true`,
+the local whisper backend) the words appear **while you speak**: the tap
+opens a stream (`POST /api/voice/stream {lang}` → `{id}`), and whenever the
+previous request is back and 300 ms of new audio is in, the samples since the
+last cut go out as one more 16 kHz WAV (`POST /api/voice/stream/{id}/chunk`
+→ `{committed, partial}`) — one request at a time, so a slow server gets
+fewer, longer chunks rather than a queue. `committed` words never change and
+go into the box as they come, all but the last (it may be the radio word
+that ends the phrase) and never a run that would *end* in a radio word
+(*go over the code* reaches the box as *go*, then *over the code*), so
+*over*, *submit* and *disregard* still act only as the phrase's real end;
+the held words and `partial`, the unstable tail, are the caption. A phrase
+said into an empty box (it may be a command — the router decides) or a
+dialog's answer arrives whole at its end, the caption showing it as it
+comes. The phrase ends as a clip does (silence, the tap, the cap — 30 s
+here); the unsent rest goes out, `POST …/end` → `{committed}` flushes the
+last words, and the next phrase opens a new stream; Cancel or voice off
+`DELETE`s it. A 409 on the open (the server does not stream after all: a
+clip per phrase until `GET /api/voice` says otherwise) or any failed request
+turns the phrase into a clip — the words so far stay, the audio the stream
+had not answered is transcribed in one piece.
 A Chromium browser that does not ship Google's speech key — Arc, Brave,
 Vivaldi, Opera — has the recognizer but every start fails with a `network`
 error and nothing is heard: the first is retried, the second in a listening
@@ -6099,7 +6120,9 @@ server's when Settings say server and `GET /api/voice` reports it ready),
 (*WAV 16 kHz (ScriptProcessor)*, or *not supported* without Web Audio or a
 microphone), *Resampler* (which one made the last clip — *OfflineAudioContext
 (the browser's)*, or *low-pass decimator* and why — or which one will),
-*Silence stop* (*1100 ms after speech*, and the clip cap), *AudioContext*
+*Silence stop* (*1100 ms after speech*, and the clip cap), *Recognition
+stream* with server recognition (*words as you speak* or *one clip per
+phrase*, and the last chunk's time or why it failed), *AudioContext*
 (its state), *Last transcribe* / *Last speak*
 (how long the server took and which backend, or why it failed), *Primed*
 (whether a tap has unlocked speech output yet), *Push to talk* (tap or

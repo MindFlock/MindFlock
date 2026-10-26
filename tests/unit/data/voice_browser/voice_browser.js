@@ -28,6 +28,18 @@ const state = {
   routeDelay: 0,      // ms before /api/voice/route answers (past 2 s the page stops waiting)
   transcribes: [],    // POST /api/voice/transcribe: {ctype, head, len, rate}
   transcribeReply: { text: "", backend: "builtin", ms: 90 },
+  // The streaming recognizer (POST /api/voice/stream …): ids s1, s2… in open order.
+  streamOpens: [],        // the open's JSON bodies
+  streamOpenStatus: 0,    // non-zero → the open answers that status (409: no streaming)
+  streamChunks: [],       // {id, ctype, head, rate, len}
+  streamScript: {},       // id → [{committed, partial}…], one per chunk in order (then empty words)
+  streamEndReply: {},     // id → {committed}
+  streamEnds: [],
+  streamDeletes: [],
+  streamInflight: 0,
+  streamMaxInflight: 0,
+  chunkDelay: 120,        // ms each chunk takes to answer
+  streamFailChunk: {},    // id → n: that stream's nth chunk answers 500
 };
 
 // A small stand-in for the server's router (POST /api/voice/route): the
@@ -77,6 +89,36 @@ async function mock(route) {
       dataSize: buf.length >= 44 ? buf.readUInt32LE(40) : 0,
     });
     return json(route, state.transcribeReply);
+  }
+  let sm;
+  if (p === "/api/voice/stream" && m === "POST") {
+    let b = {};
+    try { b = JSON.parse(req.postData() || "{}"); } catch (e) {}
+    state.streamOpens.push(b);
+    if (state.streamOpenStatus) return json(route, { error: "this backend does not stream" }, state.streamOpenStatus);
+    return json(route, { id: "s" + state.streamOpens.length });
+  }
+  if ((sm = /^\/api\/voice\/stream\/([^/]+)\/chunk$/.exec(p)) && m === "POST") {
+    const buf = req.postDataBuffer() || Buffer.alloc(0);
+    state.streamInflight++;
+    state.streamMaxInflight = Math.max(state.streamMaxInflight, state.streamInflight);
+    state.streamChunks.push({
+      id: sm[1], ctype: req.headers()["content-type"] || "", head: buf.slice(0, 4).toString("latin1"),
+      rate: buf.length >= 28 ? buf.readUInt32LE(24) : 0, len: buf.length,
+    });
+    await sleep(state.chunkDelay);
+    state.streamInflight--;
+    if (state.streamChunks.filter((c) => c.id === sm[1]).length === state.streamFailChunk[sm[1]]) return json(route, { error: "decoder fell over" }, 500);
+    const q = state.streamScript[sm[1]] || [];
+    return json(route, Object.assign({ committed: "", partial: "", ms: 42, audio_s: 0.4 }, q.shift() || {}));
+  }
+  if ((sm = /^\/api\/voice\/stream\/([^/]+)\/end$/.exec(p)) && m === "POST") {
+    state.streamEnds.push(sm[1]);
+    return json(route, Object.assign({ committed: "", ms: 30 }, state.streamEndReply[sm[1]] || {}));
+  }
+  if ((sm = /^\/api\/voice\/stream\/([^/]+)$/.exec(p)) && m === "DELETE") {
+    state.streamDeletes.push(sm[1]);
+    return json(route, { ok: true });
   }
   if (m === "POST") { try { body = JSON.parse(req.postData() || "{}"); } catch (e) { body = {}; } state.posts.push({ path: p, body }); }
   if (p === "/api/instances" && m === "GET") return json(route, state.rows);
@@ -690,6 +732,141 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     check("diagnostics: the WAV recorder and the server's built-in engine", /Recorder: WAV 16 kHz \(ScriptProcessor\)/.test(diag3) && /Built-in engine: Windows — System\.Speech \(en-US\)/.test(diag3) && /Last transcribe: 90 ms via builtin/.test(diag3), diag3.replace(/\n/g, " | "));
     check("diagnostics: the clip went through the browser's resampler; the silence stop is 1100 ms", /Resampler: OfflineAudioContext \(the browser's\)$/m.test(diag3) && /Silence stop: 1100 ms after speech/.test(diag3), diag3.replace(/\n/g, " | "));
     await page3.close();
+
+    // ---- streaming recognition: the words appear while the phrase is spoken
+    state.voiceCfg = {
+      stt: "server", tts: "phone", approve_dialogs: true,
+      server_ready: { stt: true, tts: false, stt_backend: "whisper", stt_stream: true },
+      backends: { stt: ["whisper"], tts: [] },
+    };
+    state.voiceGet = { on: false, say: null, has_question: false, source: "none", ts: null };
+    state.transcribes = [];
+    // Phrase 1 into the empty box (it may be a command: it arrives whole);
+    // phrase 2 streams into the box and ends in "submit".
+    state.streamScript = {
+      s1: [{ committed: "", partial: "fix the" }, { committed: "fix the", partial: "parser" }, { committed: "parser", partial: "" }],
+      s2: [{ committed: "and add", partial: "a" }, { committed: "a test", partial: "submit" }],
+    };
+    state.streamEndReply = { s2: { committed: "submit" } };
+    const sends4 = posts("/send").length;
+    const page4 = await ctx.newPage();
+    page4.on("pageerror", (e) => errors.push(String(e)));
+    await page4.addInitScript(() => {
+      navigator.mediaDevices.getUserMedia = function () {
+        const ac = new AudioContext();
+        const osc = ac.createOscillator();
+        const gain = ac.createGain();
+        const dst = ac.createMediaStreamDestination();
+        gain.gain.value = 0.002;
+        osc.frequency.value = 440;
+        osc.connect(gain); gain.connect(dst); osc.start();
+        window.__tone = (g) => { gain.gain.value = g; };
+        return Promise.resolve(dst.stream);
+      };
+      // Every value the box and the caption take, in order.
+      window.__boxes = []; window.__caps = [];
+      setInterval(() => {
+        const b = document.getElementById("compose"), c = document.getElementById("voice-caption");
+        if (b && b.value !== window.__lastBox) { window.__lastBox = b.value; window.__boxes.push(b.value); }
+        if (c && c.textContent !== window.__lastCap) { window.__lastCap = c.textContent; window.__caps.push(c.textContent); }
+      }, 15);
+    });
+    await page4.route("**/api/**", mock);
+    await page4.evaluate(() => { try { localStorage.removeItem("cs_voice"); } catch (e) {} }).catch(() => {});
+    await page4.goto(`http://127.0.0.1:${PORT}/mobile.html?s=invoice-parser`, { waitUntil: "load" });
+    await waitFor(page4, () => window.mfVoice && window.mfVoice.cfg.loaded && document.getElementById("picker-title").textContent === "Invoice parser", 5000, "stream page loaded");
+    await page4.click("#voice-btn");
+    await waitFor(page4, () => window.mfVoice.state === "listening" && window.mfVoice.stt.name === "server" && window.__tone, 4000, "stream listening");
+    let t4 = Date.now();
+    while (!state.streamOpens.length && Date.now() - t4 < 3000) await sleep(30);
+    check("streaming: the tap opened a stream with the page's language", state.streamOpens.length === 1 && !!state.streamOpens[0].lang, JSON.stringify(state.streamOpens));
+    await sleep(400);   // the noise floor first, as a voice would
+    await page4.evaluate(() => window.__tone(0.4));
+    await sleep(1300);
+    await page4.evaluate(() => window.__tone(0.002));
+    t4 = Date.now();
+    while (state.streamOpens.length < 2 && Date.now() - t4 < 6000) await sleep(30);
+    const box1 = await page4.evaluate(() => window.__boxes.filter(Boolean));
+    const caps1 = await page4.evaluate(() => window.__caps.slice());
+    check("…phrase 1 into an empty box (maybe a command) showed in the caption as it came", caps1.indexOf("fix the") >= 0 && caps1.indexOf("fix the parser") >= 0, JSON.stringify(caps1));
+    check("…and reached the box whole, after the silence stop's /end", box1[0] === "fix the parser" && state.streamEnds[0] === "s1", JSON.stringify([box1, state.streamEnds]));
+    check("…the router had the whole phrase", state.posts.some((x) => x.path === "/api/voice/route" && x.body.text === "fix the parser"));
+    check("…the next phrase opened a new stream", state.streamOpens.length === 2);
+    await sleep(300);
+    await page4.evaluate(() => window.__tone(0.4));
+    await sleep(1300);
+    await page4.evaluate(() => window.__tone(0.002));
+    await waitFor(page4, () => window.mfVoice.state === "working" || window.mfVoice.state === "sending", 6000, "stream words sent");
+    const boxes4 = await page4.evaluate(() => window.__boxes.slice());
+    const caps4 = await page4.evaluate(() => window.__caps.slice());
+    const i1 = boxes4.indexOf("fix the parser and"), i2 = boxes4.indexOf("fix the parser and add a");
+    check("phrase 2's settled words landed in the box progressively, the last word held back", i1 >= 0 && i2 > i1, JSON.stringify(boxes4));
+    check("…the held word + the partial showed in the caption", caps4.indexOf("add a") >= 0 && caps4.indexOf("test submit") >= 0, JSON.stringify(caps4));
+    check("…'submit' never reached the box", !boxes4.some((b) => /submit/i.test(b)), JSON.stringify(boxes4));
+    const sent4 = posts("/send").slice(sends4);
+    check("…the flush ending in 'submit' sent the box without the word", sent4.length === 1 && sent4[0].body.text === "fix the parser and add a test", JSON.stringify(sent4));
+    check("chunks went one at a time (never two in flight)", state.streamChunks.length >= 4 && state.streamMaxInflight === 1, state.streamChunks.length + " chunks, max in flight " + state.streamMaxInflight);
+    check("…each a 16 kHz WAV of at least 300 ms", state.streamChunks.every((c) => c.ctype === "audio/wav" && c.head === "RIFF" && c.rate === 16000 && c.len >= 44 + 9600), JSON.stringify(state.streamChunks.slice(0, 3)));
+    check("…and no clip went to /transcribe", state.transcribes.length === 0);
+    // Cancel mid-phrase: the stream is DELETEd.
+    await sleep(300);
+    if (!["listening", "awaiting"].includes(await vstate(page4))) await page4.click("#voice-btn");
+    const opens5 = state.streamOpens.length;
+    t4 = Date.now();
+    while (state.streamOpens.length === opens5 && Date.now() - t4 < 4000) await sleep(30);
+    await sleep(500);
+    await page4.click("#voice-cancel");
+    const sid5 = "s" + state.streamOpens.length;
+    t4 = Date.now();
+    while (state.streamDeletes.indexOf(sid5) < 0 && Date.now() - t4 < 3000) await sleep(30);
+    check("Cancel mid-phrase DELETEs the stream", state.streamDeletes.indexOf(sid5) >= 0 && state.streamEnds.indexOf(sid5) < 0, JSON.stringify([sid5, state.streamDeletes, state.streamEnds]));
+    await page4.click("#voice-gear");
+    await sleep(200);
+    const diag4 = await page4.evaluate(() => document.getElementById("voice-diag").textContent);
+    check("diagnostics: words as you speak, the last chunk's time", /Recognition stream: words as you speak \(last chunk 42 ms, 0\.4 s of audio\)/.test(diag4), diag4.replace(/\n/g, " | "));
+    await page4.click("#voice-done");
+    // A 409 on the open: the phrase is a clip, and the page stops asking.
+    state.streamOpenStatus = 409;
+    state.transcribeReply = { text: "check the logs over", backend: "whisper", ms: 80 };
+    await page4.evaluate(() => { document.getElementById("compose").value = ""; });
+    await page4.click("#voice-btn");
+    await waitFor(page4, () => window.mfVoice.state === "listening", 3000, "listening for the clip");
+    await sleep(300);
+    await page4.evaluate(() => window.__tone(0.4));
+    await sleep(900);
+    await page4.evaluate(() => window.__tone(0.002));
+    t4 = Date.now();
+    while (!state.transcribes.length && Date.now() - t4 < 6000) await sleep(50);
+    await waitFor(page4, () => window.mfVoice.state === "idle", 4000, "clip kept");
+    check("a 409 on /stream → the clip path: one POST /api/voice/transcribe", state.transcribes.length === 1 && state.transcribes[0].rate === 16000, JSON.stringify(state.transcribes));
+    check("…its words went through the radio rules: kept", (await page4.evaluate(() => document.getElementById("compose").value)) === "check the logs" && (await vstate(page4)) === "idle");
+    check("…and the page stops asking to stream", (await page4.evaluate(() => window.mfVoice.cfg.server_ready.stt_stream)) === false);
+    await page4.click("#voice-gear");
+    await sleep(200);
+    const diag5 = await page4.evaluate(() => document.getElementById("voice-diag").textContent);
+    check("diagnostics: one clip per phrase", /Recognition stream: one clip per phrase \(last chunk failed — this backend does not stream\)/.test(diag5), diag5.replace(/\n/g, " | "));
+    await page4.click("#voice-done");
+    // A chunk failing mid-phrase: the words so far stay, the audio the
+    // stream had not answered goes as a clip behind them.
+    state.streamOpenStatus = 0;
+    const sidF = "s" + (state.streamOpens.length + 1);
+    state.streamScript[sidF] = [{ committed: "check the", partial: "build" }];
+    state.streamFailChunk[sidF] = 2;
+    state.transcribeReply = { text: "logs over", backend: "whisper", ms: 70 };
+    const deletesF = state.streamDeletes.length;
+    await page4.evaluate(() => { document.getElementById("compose").value = ""; window.mfVoice.cfg.server_ready.stt_stream = true; });
+    await page4.click("#voice-btn");
+    await waitFor(page4, () => window.mfVoice.state === "listening", 3000, "listening for the failing stream");
+    await sleep(400);
+    await page4.evaluate(() => window.__tone(0.4));
+    await sleep(1200);
+    await page4.evaluate(() => window.__tone(0.002));
+    t4 = Date.now();
+    while (state.transcribes.length < 2 && Date.now() - t4 < 6000) await sleep(50);
+    await waitFor(page4, () => window.mfVoice.state === "idle", 4000, "failed stream kept");
+    check("a chunk failing mid-phrase → the rest as a clip, behind the words so far", state.transcribes.length === 2 && (await page4.evaluate(() => document.getElementById("compose").value)) === "check the build logs", JSON.stringify([state.transcribes.length, await page4.evaluate(() => document.getElementById("compose").value)]));
+    check("…the broken stream was DELETEd, never ended", state.streamDeletes.slice(deletesF).indexOf(sidF) >= 0 && state.streamEnds.indexOf(sidF) < 0, JSON.stringify([sidF, state.streamDeletes, state.streamEnds]));
+    await page4.close();
     state.voiceCfg = null;
   } catch (e) {
     console.log("HARNESS ERROR", e && e.stack || e);
