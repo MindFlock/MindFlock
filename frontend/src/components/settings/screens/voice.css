@@ -1,130 +1,32 @@
-/* Settings → Voice (screens/Voice.tsx): the server's engine for recognition
-   and the voice with the fields each needs, where the phone page runs them,
-   and the Try-it row. Same grid as the ntfy form: label | control | side
-   button, hint under the control. */
+/* Settings → Voice (screens/Voice.tsx). The screen is built from the shared
+   Settings pieces (.set-section, .set-row, .set-switch-row, General's
+   .onboarding-action rows), which do all its spacing; only what they have no
+   equivalent for lives here. */
 
-.voice-sub {
-  margin: 0 0 2px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.voice-kind {
-  display: grid;
-  gap: 8px 16px;
-  margin: 0 0 18px;
-}
-
-.voice-field-row {
-  display: grid;
-  grid-template-columns: 140px 1fr auto;
-  align-items: center;
-  gap: 6px 16px;
-  margin: 0;
-}
-
-.voice-field-row .set-label {
-  min-width: 0;
-}
-
-.voice-field-row input,
-.voice-field-row select {
-  min-width: 0; /* shrink inside the grid track instead of overflowing */
-  width: 100%;
-}
-
-/* The hint under a field spans the whole row, aligned under the control. */
-.voice-field-row .set-hint {
-  grid-column: 2 / -1;
-  margin: 0;
-}
-
-/* The server's verdict on the saved fields: ✓ ready (backend) / ✗ why not. */
-.voice-ready {
-  margin: 0;
-}
-
-.voice-ready .mobile-row-glyph {
-  margin-right: 6px;
-}
-
-/* Under Recognition: the local-models installer — the recommendation, then
-   one row of button, progress, step and the install's last log line. */
-.voice-install {
-  display: grid;
-  gap: 6px;
-}
-
-.voice-install p {
-  margin: 0;
-}
-
-.voice-install-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
+/* The local-models installer's text column holds a progress bar and a log
+   line that must cut, not push the button off the row: it takes the free
+   width and may shrink. */
+#voice-install .onboarding-action-text {
+  flex: 1;
   min-width: 0;
 }
 
 .voice-install-progress {
-  width: 96px;
+  width: 100%;
+  max-width: 240px;
   height: 6px;
-}
-
-.voice-install-status {
-  margin: 0;
+  accent-color: var(--accent);
 }
 
 /* The pip / download output is long and changes every poll: one line, cut. */
 .voice-install-log {
-  flex: 1 1 160px;
-  min-width: 0;
-  margin: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   font-family: var(--mono, ui-monospace, monospace);
-  font-size: 11px;
-}
-
-.voice-try {
-  display: grid;
-  gap: 8px;
-  margin: 18px 0 0;
-}
-
-.voice-try-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.voice-try p {
-  margin: 0;
 }
 
 /* Your phone's pointer to this screen (Mobile.tsx #mobile-voice). */
 .voice-moved {
   margin-top: 24px;
-}
-
-.voice-notes {
-  margin-top: 14px;
-}
-
-.voice-notes p {
-  margin: 6px 0 0;
-}
-
-@media (max-width: 560px) {
-  .voice-field-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .voice-field-row .set-label,
-  .voice-field-row .set-hint,
-  .voice-field-row > :is(input, select):not(:has(+ button)) {
-    grid-column: 1 / -1;
-  }
 }

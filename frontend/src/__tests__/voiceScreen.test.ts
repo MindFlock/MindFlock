@@ -16,12 +16,17 @@
  * its recommendation line and button only under a basic built-in recognizer
  * or picked-but-missing local models, gone once they are ready or on a
  * server without the installer; the POST, the 2 s polling and the
- * done / failed / 409 / 403 texts; a non-owner's button disabled with why. */
+ * done / failed / 409 / 403 texts; a non-owner's button disabled with why.
+ * The layout: only the shared Settings pieces — the section titles in order,
+ * every field a .set-row, the switch a .set-switch-row, the installer and the
+ * Try-it buttons General's action rows — and none of the old one-off grid. */
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import mobileSrc from "../components/settings/screens/Mobile.tsx?raw";
+import voiceSrc from "../components/settings/screens/Voice.tsx?raw";
+import voiceCss from "../components/settings/screens/voice.css?raw";
 
 // apiRaw records the call; `raw` answers it. (A vi.fn returning a rejected
 // promise fails the test under vitest 5 even when the caller catches it.)
@@ -387,6 +392,73 @@ describe("VoiceSectionView", () => {
 
   it("the switch reflects the setting", () => {
     expect(render({ approve_dialogs: false }, BUILTIN)).not.toMatch(/id="voice-approve"[^>]*checked=""/);
+  });
+});
+
+describe("the layout is the shared Settings one", () => {
+  const titles = (html: string) =>
+    [...html.matchAll(/<h3 class="set-section-title"[^>]*>([^<]*)<\/h3>/g)].map((m) => m[1]);
+
+  it("one titled section per concern, in order", () => {
+    expect(titles(render({}, BUILTIN))).toEqual([
+      "Recognition",
+      "Voice",
+      "On the phone page",
+      "Permission dialogs",
+      "Try it",
+      "Privacy",
+    ]);
+    // The screen's name is the nav's: no "Voice" title above the intro.
+    expect(render({}, BUILTIN)).toMatch(/^<section id="voice-screen"><p class="set-hint set-block-hint" id="voice-intro">/);
+  });
+
+  it("the anchors are shared .set-section blocks around their titles", () => {
+    const html = render({}, BUILTIN);
+    expect(html).toMatch(/<div class="set-section" id="voice-engines"><h3 class="set-section-title" data-kind="stt">Recognition</);
+    expect(html).toMatch(/<div class="set-section" id="voice-phone"><h3 class="set-section-title">On the phone page</);
+    expect(html).toMatch(/<div class="set-section" id="voice-try"><h3 class="set-section-title">Try it</);
+  });
+
+  it("no one-off grid is left, in the markup, the source or the stylesheet", () => {
+    const old = ["voice-field-row", "voice-kind", "voice-sub", "voice-notes", "voice-try-buttons", "voice-install-row", "voice-ready"];
+    const html = render({ stt_backend: "openai", tts_backend: "local", stt_api_key: SECRET_MASK }, VIEW);
+    for (const c of old) {
+      expect(html, c).not.toContain(c + '"');
+      expect(html, c).not.toContain(c + " ");
+      expect(voiceSrc, c).not.toMatch(new RegExp(`className="[^"]*\\b${c}\\b`));
+      expect(voiceCss, c).not.toMatch(new RegExp(`\\.${c}\\b`));
+    }
+    expect(voiceCss).not.toContain("grid-template-columns");
+  });
+
+  it("every field is a stacked .set-row: label, control, hint", () => {
+    const html = render({ stt_backend: "openai", tts_backend: "local", stt_api_key: SECRET_MASK }, VIEW);
+    for (const f of ["stt_backend", "stt_url", "stt_api_key", "stt_model", "tts_backend", "tts_voice", "stt", "tts"])
+      expect(html, f).toMatch(new RegExp(`class="set-row"[^>]*><span class="set-label">[^<]+</span><(select|input)[^>]*data-field="${f}"`));
+    // A saved key's Clear sits in the hint line, the shared test-row.
+    expect(html).toMatch(/data-field="stt_api_key"[^>]*\/><span class="test-row"><button[^>]*id="voice-clear-stt"/);
+  });
+
+  it("the switch is the standard switch row", () => {
+    expect(render({}, BUILTIN)).toMatch(
+      /<div class="set-row set-switch-row" id="voice-approve-row"><span class="notif-rule-text"><span class="set-label" id="voice-approve-label">[\s\S]*?<label class="ca-switch"><input type="checkbox" id="voice-approve"/
+    );
+  });
+
+  it("the installer and the Try-it buttons are General's action rows, their status in the hint", () => {
+    const BASIC: VoiceView = { ...BUILTIN, system: { ...SYSTEM, stt_quality: "basic" } };
+    const html = render({}, BASIC, { supported: true, status: { state: "failed", error: "pip exited 1" }, touched: true, onInstall: () => {} });
+    expect(html).toMatch(
+      /<div class="set-row onboarding-action" id="voice-install" data-offer="basic"><div class="onboarding-action-text"><span class="set-label">Local models<\/span><span class="set-hint" id="voice-install-why">/
+    );
+    expect(html).toMatch(/<span class="set-hint" id="voice-install-status" role="status"><span class="mobile-row-glyph st-fail"[^>]*>✗ <\/span>Couldn/);
+    expect(html).toMatch(/<\/div><button type="button" class="test-btn" id="voice-install-btn"/);
+    for (const k of ["say", "hear"])
+      expect(html, k).toMatch(
+        new RegExp(`<div class="set-row onboarding-action" data-try="${k}"><div class="onboarding-action-text"><span class="set-label">[^<]+</span><span class="set-hint" id="voice-try-${k}-hint">[^<]+</span></div><button[^>]*id="voice-try-${k}"`)
+      );
+    // The readiness lines carry the same glyph.
+    expect(html).toMatch(/<p class="set-hint" id="voice-ready-stt"><span class="mobile-row-glyph st-ok" aria-hidden="true">✓ <\/span>Server recognition ready/);
   });
 });
 

@@ -11,9 +11,16 @@
  * each, with the server's readiness line under it — `#voice-engines`, where
  * the mic and the phone page deep-link — and, under Recognition, the
  * one-click local-models installer when the built-in recognizer is basic or
- * local models are picked but missing); where the phone page runs each
- * (`voice.stt` / `voice.tts`, phone | server); **Approve dialogs by voice**;
- * **Try it** (speak a sentence, hear three seconds back); the privacy notes.
+ * local models are picked but missing); **On the phone page**, where the
+ * phone page runs each (`voice.stt` / `voice.tts`, phone | server);
+ * **Permission dialogs** (the approve-by-voice switch); **Try it** (speak a
+ * sentence, hear three seconds back); **Privacy**.
+ *
+ * Built only from the shared Settings pieces, like every other screen: a
+ * `.set-section` per concern under a `.set-section-title`, each field a
+ * `.set-row` (label, control, hint), the switch a `.set-switch-row`, and the
+ * installer and the Try-it buttons General's action rows (`.onboarding-action`:
+ * label and hint left, button right), their progress and results in the hint.
  *
  * The fields save through the regular settings model (POST /api/settings
  * {voice}); GET /api/voice — the server's offline verdict on the saved
@@ -346,27 +353,30 @@ export function VoiceSectionView({
   tryRow?: ReactNode;
 }) {
   const approve = model.get("voice", "approve_dialogs") !== false;
+  // Flat, like every screen: the section's titles and rows are its direct
+  // children (screens.css spaces those), and a concern that needs an anchor
+  // is a shared .set-section, which spaces its own the same way.
   return (
-    <section className="voice-section" id="voice-screen">
-      <h3 className="set-section-title">Voice</h3>
+    <section id="voice-screen">
       <p className="set-hint set-block-hint" id="voice-intro">
         Talk to your sessions and hear them answer. The desktop app's mic (in the top bar) always uses this
         computer's engines; the phone page uses the phone's own unless you choose otherwise below. Out of the
         box this computer uses its built-in engine, so there is nothing to download; pick local models or a
         hosted service only if you want them.
       </p>
-      <div id="voice-engines">
+      <div className="set-section" id="voice-engines">
         <VoiceKindBlock kind="stt" title="Recognition" model={model} view={view} onClearKey={onClearKey} install={install} />
         <VoiceKindBlock kind="tts" title="Voice" model={model} view={view} onClearKey={onClearKey} />
       </div>
-      <div className="voice-kind" id="voice-phone">
-        <h4 className="voice-sub">On the phone page</h4>
-        <PhoneWhere kind="stt" title="Recognition runs on" />
-        <PhoneWhere kind="tts" title="The voice runs on" />
+      <div className="set-section" id="voice-phone">
+        <h3 className="set-section-title">On the phone page</h3>
         <p className="set-hint" id="voice-phone-hint">
           The phone's own engine needs nothing set up. The desktop app always uses this computer.
         </p>
+        <PhoneWhere kind="stt" title="Recognition runs on" />
+        <PhoneWhere kind="tts" title="The voice runs on" />
       </div>
+      <h3 className="set-section-title">Permission dialogs</h3>
       <div className="set-row set-switch-row" id="voice-approve-row">
         <span className="notif-rule-text">
           <span className="set-label" id="voice-approve-label">
@@ -392,7 +402,9 @@ export function VoiceSectionView({
         </label>
       </div>
       {tryRow ?? <TryButtons view={view} />}
-      <div className="voice-notes">
+      <h3 className="set-section-title">Privacy</h3>
+      {/* One stack of notes, at the in-field gap: they are one thought. */}
+      <div className="set-row" id="voice-privacy-notes">
         <p className="set-hint" id="voice-privacy-local">
           The built-in engines (Windows' and Apple's on-device speech) and local models keep your audio on
           this computer. An OpenAI-compatible host receives what you send it.
@@ -416,19 +428,33 @@ function PhoneWhere({ kind, title }: { kind: VoiceKind; title: string }) {
   const model = useSettings();
   const where = String(model.get("voice", kind) || "phone");
   return (
-    <div className="voice-field-row" data-phone-kind={kind}>
+    <label className="set-row" data-phone-kind={kind}>
       <span className="set-label">{title}</span>
       <select data-group="voice" data-field={kind} value={where} onChange={(e) => model.saveField("voice", kind, e.target.value)}>
         <option value="phone">The phone</option>
         <option value="server">This computer</option>
       </select>
-      <span />
-    </div>
+    </label>
   );
 }
 
-/** One kind — recognition or the voice: the server's backend, the fields that
- * apply to it, then the server's verdict. */
+/** A ✓ / ✗ status line in a hint (the readiness verdict, an install's end, a
+ * Try-it result): the glyph in the colours the phone-setup checklist uses
+ * (`.mobile-row-glyph`). */
+function StatusText({ ok, text }: { ok: boolean; text: string }) {
+  return (
+    <>
+      <span className={"mobile-row-glyph st-" + (ok ? "ok" : "fail")} aria-hidden="true">
+        {ok ? "✓ " : "✗ "}
+      </span>
+      {text}
+    </>
+  );
+}
+
+/** One kind — recognition or the voice: its title, the server's backend, the
+ * fields that apply to it, then the server's verdict. Rendered flat into
+ * `#voice-engines` (a .set-section), the title carrying `data-kind`. */
 function VoiceKindBlock({
   kind,
   title,
@@ -457,10 +483,12 @@ function VoiceKindBlock({
   const showInstall =
     kind === "stt" && !!install?.supported && (!!offer || install.status.state === "running" || install.touched);
   return (
-    <div className="voice-kind" data-kind={kind}>
-      <h4 className="voice-sub">{title}</h4>
+    <>
+      <h3 className="set-section-title" data-kind={kind}>
+        {title}
+      </h3>
       {f.backend && (
-        <div className="voice-field-row">
+        <label className="set-row">
           <span className="set-label">Engine</span>
           <select
             data-group="voice"
@@ -474,60 +502,61 @@ function VoiceKindBlock({
               </option>
             ))}
           </select>
-          <span />
           <span className="set-hint">
             {kind === "stt" ? "What turns your words into text." : "What reads the agent's words aloud."}
           </span>
-        </div>
+        </label>
       )}
       {f.url && (
-        <div className="voice-field-row">
+        <label className="set-row">
           <span className="set-label">URL</span>
           <SettingField group="voice" field={kind + "_url"} placeholder="https://api.openai.com/v1" />
-          <span />
           <span className="set-hint">
             The host's base URL; blank means OpenAI. Groq: https://api.groq.com/openai/v1.
           </span>
-        </div>
+        </label>
       )}
       {f.key && (
-        <div className="voice-field-row">
+        // A <div>, not a <label>: Clear sits in the hint line, and a button
+        // inside a label would also focus the field.
+        <div className="set-row">
           <span className="set-label">API key</span>
           <SettingField group="voice" field={kind + "_api_key"} type="password" placeholder="paste the host's key" />
           {keySaved ? (
-            <button
-              type="button"
-              className="test-btn"
-              id={"voice-clear-" + kind}
-              title="Forget the saved key"
-              onClick={() => onClearKey(kind)}
-            >
-              Clear
-            </button>
+            <span className="test-row">
+              <button
+                type="button"
+                className="test-btn"
+                id={"voice-clear-" + kind}
+                title="Forget the saved key"
+                onClick={() => onClearKey(kind)}
+              >
+                Clear
+              </button>
+              <span className="set-hint">A key is saved. Leave blank to keep it.</span>
+            </span>
           ) : (
-            <span />
+            <span className="set-hint">Leave blank to keep the saved one.</span>
           )}
-          <span className="set-hint">Leave blank to keep the saved one.</span>
         </div>
       )}
       {f.model && (
-        <div className="voice-field-row">
+        <label className="set-row">
           <span className="set-label">Model</span>
           <SettingField
             group="voice"
             field={kind + "_model"}
             placeholder={local ? "small" : kind === "stt" ? "gpt-transcribe" : "gpt-4o-mini-tts"}
           />
-          <span />
           <span className="set-hint">
             {local
               ? "A faster-whisper size: tiny, base, small or medium."
               : "The host's model name (Groq: whisper-large-v3-turbo)."}
           </span>
-        </div>
+        </label>
       )}
       {f.voice && (
-        <div className="voice-field-row">
+        <label className="set-row">
           <span className="set-label">Voice name</span>
           {backend === "system" && voices.length ? (
             <SettingField group="voice" field="tts_voice" options={systemVoiceOptions(voices, model.get("voice", "tts_voice"))} />
@@ -538,19 +567,15 @@ function VoiceKindBlock({
               placeholder={backend === "system" ? "the system's default" : local ? "en_US-lessac-medium" : "alloy"}
             />
           )}
-          <span />
-        </div>
+        </label>
       )}
       {line.text && (
-        <p className={"set-hint voice-ready st-" + (line.ok ? "ok" : "fail")} id={"voice-ready-" + kind}>
-          <span className={"mobile-row-glyph st-" + (line.ok ? "ok" : "fail")} aria-hidden="true">
-            {line.ok ? "✓" : "✗"}
-          </span>
-          {line.text}
+        <p className="set-hint" id={"voice-ready-" + kind}>
+          <StatusText ok={line.ok} text={line.text} />
         </p>
       )}
       {showInstall && install && <InstallRow offer={offer} install={install} allowed={view?.configure_allowed !== false} />}
-    </div>
+    </>
   );
 }
 
@@ -697,55 +722,63 @@ export async function installLocalModels(
   return pollInstall(onStatus, { ...opts, call, already });
 }
 
-/** The installer row under Recognition: the recommendation (for a basic
- * recognizer), then the button with the step and the last log line beside
- * it while it runs. */
+/** The installer row under Recognition, one of General's action rows: the
+ * label and, in the hint position, the recommendation (for a basic
+ * recognizer), the step with a progress bar and the install's last log line
+ * while it runs, or how it ended; the button on the right. */
 function InstallRow({ offer, install, allowed }: { offer: "basic" | "local" | null; install: InstallProps; allowed: boolean }) {
   const v = installView(install.status, allowed);
+  const state = install.status.state;
   return (
-    <div className="voice-install" id="voice-install" data-offer={offer || ""}>
-      {offer === "basic" && (
-        <p className="set-hint" id="voice-install-why">
-          {INSTALL_BASIC_LINE}
-        </p>
-      )}
-      <div className="voice-install-row">
-        {v.button && (
-          <button
-            type="button"
-            className="test-btn"
-            id="voice-install-btn"
-            disabled={v.disabled}
-            title={!allowed || install.status.refused ? v.text : undefined}
-            onClick={install.onInstall}
-          >
-            {v.button === "retry" ? "Try again" : v.button === "busy" ? "Installing…" : INSTALL_LABEL}
-          </button>
-        )}
-        {v.button === "busy" && <progress className="voice-install-progress" aria-label="Installing local models" />}
-        {v.text && (
-          <span
-            className={"set-hint voice-install-status" + (install.status.state === "done" ? " st-ok" : install.status.state === "failed" ? " st-fail" : "")}
-            id="voice-install-status"
-            role="status"
-          >
-            {v.text}
+    <div className="set-row onboarding-action" id="voice-install" data-offer={offer || ""}>
+      <div className="onboarding-action-text">
+        <span className="set-label">Local models</span>
+        {offer === "basic" && (
+          <span className="set-hint" id="voice-install-why">
+            {INSTALL_BASIC_LINE}
           </span>
         )}
+        {v.text ? (
+          <span className="set-hint" id="voice-install-status" role="status">
+            {state === "done" || state === "failed" ? <StatusText ok={state === "done"} text={v.text} /> : v.text}
+          </span>
+        ) : (
+          offer !== "basic" && (
+            <span className="set-hint">Downloads faster-whisper and a piper voice; both run on this computer.</span>
+          )
+        )}
+        {v.button === "busy" && <progress className="voice-install-progress" aria-label="Installing local models" />}
         {v.last && (
           <span className="set-hint voice-install-log" id="voice-install-log" title={v.last}>
             {v.last}
           </span>
         )}
       </div>
+      {v.button && (
+        <button
+          type="button"
+          className="test-btn"
+          id="voice-install-btn"
+          disabled={v.disabled}
+          title={!allowed || install.status.refused ? v.text : undefined}
+          onClick={install.onInstall}
+        >
+          {v.button === "retry" ? "Try again" : v.button === "busy" ? "Installing…" : INSTALL_LABEL}
+        </button>
+      )}
     </div>
   );
 }
 
 const canRecord = () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
 
-/** The Try-it row's buttons and result line (stateless: the live handlers and
- * their state come from TryRow). */
+/** A Try-it result, and which button it answers. */
+type TryOutcome = TryResult & { kind: "say" | "hear" };
+
+/** Try it: one action row per button, the way General lists its tours — the
+ * label and, in the hint position, the button's last result, else why it
+ * can't run, else what it does (stateless: the live handlers and their state
+ * come from TryRow). */
 function TryButtons({
   view,
   busy = "",
@@ -757,16 +790,29 @@ function TryButtons({
   view: VoiceView | null;
   busy?: "" | "say" | "hear";
   left?: number;
-  result?: TryResult | null;
+  result?: TryOutcome | null;
   onSay?(): void;
   onHear?(): void;
 }) {
   const st = tryState(view, canRecord());
-  const why = [st.say.ok ? "" : st.say.why, st.hear.ok ? "" : st.hear.why].filter(Boolean);
+  const hint = (kind: "say" | "hear", why: string, idle: string) =>
+    result?.kind === kind ? (
+      <span className="set-hint" id="voice-try-result" role="status">
+        <StatusText ok={result.ok} text={result.text} />
+      </span>
+    ) : (
+      <span className="set-hint" id={`voice-try-${kind}-hint`}>
+        {why || idle}
+      </span>
+    );
   return (
-    <div className="voice-try" id="voice-try">
-      <h4 className="voice-sub">Try it</h4>
-      <div className="voice-try-buttons">
+    <div className="set-section" id="voice-try">
+      <h3 className="set-section-title">Try it</h3>
+      <div className="set-row onboarding-action" data-try="say">
+        <div className="onboarding-action-text">
+          <span className="set-label">The voice</span>
+          {hint("say", st.say.why, `Speaks “${TEST_SENTENCE}” through this computer's speakers.`)}
+        </div>
         <button
           type="button"
           className="test-btn"
@@ -777,6 +823,12 @@ function TryButtons({
         >
           {busy === "say" ? "Speaking…" : "Say a test sentence"}
         </button>
+      </div>
+      <div className="set-row onboarding-action" data-try="hear">
+        <div className="onboarding-action-text">
+          <span className="set-label">Recognition</span>
+          {hint("hear", st.hear.why, `Listens for ${LISTEN_SECONDS} seconds: say a short sentence.`)}
+        </div>
         <button
           type="button"
           className="test-btn"
@@ -788,19 +840,6 @@ function TryButtons({
           {busy === "hear" ? (left > 0 ? `Listening… ${left}` : "Recognizing…") : "Try recognition"}
         </button>
       </div>
-      {result ? (
-        <p className={"set-hint voice-try-result st-" + (result.ok ? "ok" : "fail")} id="voice-try-result" role="status">
-          {result.text}
-        </p>
-      ) : why.length ? (
-        <p className="set-hint" id="voice-try-why">
-          {[...new Set(why)].join(" ")}
-        </p>
-      ) : (
-        <p className="set-hint" id="voice-try-hint">
-          Recognition listens for {LISTEN_SECONDS} seconds: say a short sentence.
-        </p>
-      )}
     </div>
   );
 }
@@ -811,7 +850,7 @@ function TryRow({ view }: { view: VoiceView | null }) {
   const ctxRef = useRef<AudioContext | null>(null);
   const [busy, setBusy] = useState<"" | "say" | "hear">("");
   const [left, setLeft] = useState(0);
-  const [result, setResult] = useState<TryResult | null>(null);
+  const [result, setResult] = useState<TryOutcome | null>(null);
   useEffect(
     () => () => {
       void ctxRef.current?.close().catch(() => {});
@@ -830,7 +869,7 @@ function TryRow({ view }: { view: VoiceView | null }) {
     const c = ctx();
     setBusy("say");
     setResult(null);
-    setResult(await speakTest(c, view?.server_ready?.tts_backend || ""));
+    setResult({ kind: "say", ...(await speakTest(c, view?.server_ready?.tts_backend || "")) });
     setBusy("");
   };
 
@@ -838,8 +877,9 @@ function TryRow({ view }: { view: VoiceView | null }) {
     const c = ctx();
     setBusy("hear");
     setResult(null);
+    const heard = (r: TryResult) => setResult({ kind: "hear", ...r });
     if (!c) {
-      setResult({ ok: false, text: "This browser can't record audio." });
+      heard({ ok: false, text: "This browser can't record audio." });
       setBusy("");
       return;
     }
@@ -847,7 +887,7 @@ function TryRow({ view }: { view: VoiceView | null }) {
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
-      setResult({ ok: false, text: micErrorText(err) });
+      heard({ ok: false, text: micErrorText(err) });
       setBusy("");
       return;
     }
@@ -861,10 +901,10 @@ function TryRow({ view }: { view: VoiceView | null }) {
       const wav = await rec.stop();
       stream.getTracks().forEach((t) => t.stop());
       const lang = String(navigator.language || "en").split(";")[0];
-      setResult(await transcribeTest(wav, lang));
+      heard(await transcribeTest(wav, lang));
     } catch (err) {
       stream.getTracks().forEach((t) => t.stop());
-      setResult({ ok: false, text: "Couldn't record: " + noDot(String((err as Error)?.message || err)) + "." });
+      heard({ ok: false, text: "Couldn't record: " + noDot(String((err as Error)?.message || err)) + "." });
     } finally {
       setLeft(0);
       setBusy("");

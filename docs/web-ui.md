@@ -5422,14 +5422,22 @@ labels above the inputs.
   phone page. A **basic** screen, right after Your phone, so a fresh user
   finds it. Its settings are `voice.*`
   ([configuration.md](configuration.md#web-exposed-settings)); the screen
-  re-reads `GET /api/voice` after every save. In order:
+  re-reads `GET /api/voice` after every save. It is laid out like every
+  other screen, from the shared Settings pieces only: one uppercase
+  `.set-section-title` per concern, each field a stacked `.set-row` (label,
+  control, hint under it — the same selects and inputs as General), the
+  switch a standard `.set-switch-row`, and the installer and the Try-it
+  buttons General's action rows (label and hint on the left, the button on
+  the right, progress and results in the hint). Status lines carry Your
+  phone's ✓ / ✗ glyph. `voice.css` keeps only the installer's progress bar
+  and its cut-to-one-line log. In order:
   - The intro says what runs where: the desktop app's mic always uses this
     computer's engines, the phone page uses the phone's own unless told
     otherwise, and out of the box this computer uses its **built-in engine**
     (Windows' System.Speech — also from WSL — or macOS' Speech framework),
     so a fresh install talks with nothing to download.
   - **Recognition** and **Voice** (`#voice-engines`, where the mic and the
-    phone page deep-link): each an **Engine** picker — *This computer (built
+    phone page deep-link; two titled sections): each an **Engine** picker — *This computer (built
     in)* · *OpenAI-compatible host* · *Local models (faster-whisper /
     piper)*, built in first; a saved `""` shows whichever engine the server
     resolved it to, the built-in one wherever it exists. The built-in engine
@@ -5443,8 +5451,10 @@ labels above the inputs.
     (system): Windows via WSL — recognizer en-US, voices David, Zira.* /
     *Server voice not ready: …*): with the built-in engine picked its own
     sentence is the detail (the Linux one, macOS' permission one); a server
-    too old to report `system` says it has no built-in engine yet.
-  - **The local-models installer** (`#voice-install`, under Recognition).
+    too old to report `system` says it has no built-in engine yet. A saved
+    key's **Clear** sits in the key's hint line.
+  - **The local-models installer** (`#voice-install`, under Recognition: a
+    *Local models* action row, its status in the hint).
     Windows' built-in recognizer is the old desktop (SAPI) one —
     `system.stt_quality: "basic"` (macOS' is `"good"`), or a built-in
     readiness detail ending *basic accuracy — install local models for
@@ -5457,9 +5467,9 @@ labels above the inputs.
     (faster-whisper and piper into the server's own environment, then the
     whisper model — `voice.stt_model`, default `small` — and the piper
     voice), then polls `GET /api/voice/install-local` every 2 s while it is
-    `running`: the button reads *Installing…* beside a `<progress>` (the
-    server reports no percentage), the step and the install's last log
-    line. *done* → *Installed — recognition now uses local models.* (the
+    `running`: the button reads *Installing…*, and the hint shows the step,
+    a `<progress>` (the server reports no percentage) and the install's
+    last log line. *done* → *Installed — recognition now uses local models.* (the
     server switched `voice.stt_backend` to `local` itself; the screen
     re-reads the settings and `GET /api/voice`); *failed* → the error and
     **Try again**; a 409 → *Already installing* and that install is
@@ -5468,22 +5478,24 @@ labels above the inputs.
     installer (its `GET` fails). A viewer who may not change the server
     (`configure_allowed: false` in `GET /api/voice`, or the POST's 403)
     gets it disabled with the reason.
-  - **On the phone page**: where recognition and the voice run for the
-    phone (`voice.stt` / `voice.tts`: *The phone* · *This computer*), with
-    *The desktop app always uses this computer.*
-  - **Approve dialogs by voice** (*A spoken yes or no answers a permission
-    dialog after its command is read aloud. 'Always' is only accepted when
-    you say the word.*).
-  - **Try it**: **Say a test sentence** (`POST /api/voice/speak` *This is
+  - **On the phone page** (`#voice-phone`): *The desktop app always uses
+    this computer.* under the title, then where recognition and the voice
+    run for the phone (`voice.stt` / `voice.tts`: *The phone* · *This
+    computer*), two rows.
+  - **Permission dialogs**: the **Approve dialogs by voice** switch (*A
+    spoken yes or no answers a permission dialog after its command is read
+    aloud. 'Always' is only accepted when you say the word.*).
+  - **Try it** (`#voice-try`), one action row per button: **Say a test sentence** (`POST /api/voice/speak` *This is
     MindFlock speaking.*, played through an AudioContext made in the click;
     then *Spoke with system in 240 ms.* or the error) and **Try recognition**
     (asks for the microphone, records three seconds as WAV with a countdown
     on the button — `lib/wavRecorder.ts` — and sends it to
     `POST /api/voice/transcribe`; then *Heard: “…” (system, 412 ms)*, *Heard
     nothing…* or the error; a refused microphone gets a plain sentence).
-    Each button is disabled, with the reason under the row, until the
-    server has that engine ready (or while the browser cannot record).
-  - Privacy notes: the built-in engines (Windows' and Apple's on-device
+    Each row's hint says what its button does, its last result, or — with
+    the button disabled — why, until the server has that engine ready (or
+    while the browser cannot record).
+  - **Privacy**: the built-in engines (Windows' and Apple's on-device
     speech) and local models keep audio on this computer, a host receives
     what you send it; the phone's own recognition sends audio to Google on
     Android and to Apple on iOS when no on-device model exists; on iPhone,
