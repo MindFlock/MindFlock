@@ -34,10 +34,13 @@ Files the local backend keeps, under ``~/.mindflock/voice/`` (or
 
 * ``whisper/`` — faster-whisper's ``download_root``: the CTranslate2 model,
   ``small`` run as int8 on the CPU unless ``voice.stt_model`` names another
-  size (``base``, ``medium`` …). Downloaded from Hugging Face on first use.
+  size (``base``, ``medium`` …; a name that is not a faster-whisper size,
+  like the ``whisper-1`` a host wants, reads as ``small``). Downloaded from
+  Hugging Face on first use, or ahead of time by the one-click install
+  (``core.speech_install``, which puts the packages in too).
 * ``piper/<voice>.onnx`` + ``<voice>.onnx.json`` — piper voices, downloaded
   from Hugging Face on first use (:data:`PIPER_VOICE` unless
-  ``voice.tts_voice`` names another; ~60 MB each).
+  ``voice.tts_voice`` names a piper voice; ~60 MB each).
 
 faster-whisper decodes webm/mp4 clips through its bundled PyAV, so a system
 ``ffmpeg`` is not required; ``ready()`` still says when it is missing because
@@ -58,6 +61,7 @@ import importlib
 import importlib.util
 import io
 import json
+import re
 import os
 import shutil
 import tempfile
@@ -465,13 +469,73 @@ class OpenAITTS(_OpenAI):
         return data, (rtype if rtype.startswith("audio/") else "audio/mpeg")
 
 
+#: faster-whisper's own size names; anything else in the shared
+#: ``voice.stt_model`` (``whisper-1``, a host's model) is not for ``local``.
+WHISPER_SIZES = frozenset(
+    "tiny tiny.en base base.en small small.en distil-small.en medium medium.en"
+    " distil-medium.en large-v1 large-v2 large-v3 large distil-large-v2"
+    " distil-large-v3 distil-large-v3.5 large-v3-turbo turbo".split()
+)
+#: A piper voice name (``en_US-lessac-medium``) — not a Windows / macOS /
+#: OpenAI voice from the shared ``voice.tts_voice``.
+_PIPER_NAME = re.compile(r"^[a-z]{2,3}_[A-Z]{2}-[A-Za-z0-9_]+-(x_low|low|medium|high)$")
+
+
+def whisper_model(raw: str = "") -> str:
+    """The faster-whisper model for ``raw`` (``voice.stt_model``): a size
+    name or a Hugging Face ``org/repo`` id, else :data:`WHISPER_MODEL`."""
+    name = (raw or "").strip()
+    return name if name in WHISPER_SIZES or "/" in name else WHISPER_MODEL
+
+
+def piper_voice(raw: str = "") -> str:
+    """The piper voice for ``raw`` (``voice.tts_voice``, or a per-call
+    voice), else :data:`PIPER_VOICE`."""
+    name = (raw or "").strip()
+    return name if _PIPER_NAME.match(name) else PIPER_VOICE
+
+
+def fetch_whisper_model(name: str) -> str:
+    """Download faster-whisper ``name`` into ``voice_dir()/whisper`` — the
+    same cache :class:`LocalSTT` loads from (its ``download_root``), so a
+    pre-download is what the first phrase finds → the model's folder."""
+    root = voice_dir() / "whisper"
+    root.mkdir(parents=True, exist_ok=True)
+    fw = _import("faster_whisper")
+    return str(fw.download_model(name, cache_dir=str(root)))
+
+
+def fetch_piper_voice(name: str) -> Path:
+    """``voice_dir()/piper/<name>.onnx``, downloaded first when missing (the
+    one place :class:`LocalTTS` and the installer fetch a voice)."""
+    folder = voice_dir() / "piper"
+    folder.mkdir(parents=True, exist_ok=True)
+    onnx = folder / (name + ".onnx")
+    if not onnx.is_file():
+        try:
+            _import("piper.download_voices").download_voice(name, folder)
+        except Exception as err:  # noqa: BLE001 — offline, unknown voice
+            raise SpeechError(
+                "could not download piper voice %s: %s (by hand: python -m "
+                "piper.download_voices %s --data-dir %s)" % (name, err, name, folder)
+            ) from err
+    return onnx
+
+
+def invalidate() -> None:
+    """Forget what this process believes about the local runtimes — after
+    the one-click install put them into the running interpreter's
+    environment, so ``ready()`` sees them without a restart."""
+    importlib.invalidate_caches()
+
+
 class LocalSTT(Backend):
     id = "local"
     kind = "stt"
     label = "faster-whisper on this computer"
 
     def _model_name(self) -> str:
-        return _voice().stt_model or WHISPER_MODEL
+        return whisper_model(_voice().stt_model)
 
     def ready(self) -> Tuple[bool, str]:
         if not _installed("faster_whisper"):
@@ -532,7 +596,7 @@ class LocalTTS(Backend):
     label = "piper on this computer"
 
     def _voice_name(self, voice: str = "") -> str:
-        return voice or _voice().tts_voice or PIPER_VOICE
+        return piper_voice(voice or _voice().tts_voice)
 
     def ready(self) -> Tuple[bool, str]:
         if not _installed("piper"):
@@ -548,18 +612,7 @@ class LocalTTS(Backend):
         )
 
     def _load(self, name: str):
-        folder = voice_dir() / "piper"
-        folder.mkdir(parents=True, exist_ok=True)
-        onnx = folder / (name + ".onnx")
-        if not onnx.is_file():
-            try:
-                _import("piper.download_voices").download_voice(name, folder)
-            except Exception as err:  # noqa: BLE001 — offline, unknown voice
-                raise SpeechError(
-                    "could not download piper voice %s: %s (by hand: python -m "
-                    "piper.download_voices %s --data-dir %s)"
-                    % (name, err, name, folder)
-                ) from err
+        onnx = fetch_piper_voice(name)
         return _import("piper.voice").PiperVoice.load(str(onnx))
 
     def speak(self, text: str, voice: str = "") -> Tuple[bytes, str]:
@@ -671,7 +724,8 @@ def describe() -> dict:
          "system": {"available": bool,
                     "platform": "windows"|"wsl"|"mac"|"none",
                     "detail": str, "voices": [names],
-                    "recognizers": [culture tags]}}
+                    "recognizers": [culture tags],
+                    "stt_quality": "basic"|"good"|"none"}}
 
     ``detail`` is the one-paragraph summary; the per-kind keys are what the
     Settings screen prints under each row; ``system`` is the built-in

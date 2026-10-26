@@ -5762,6 +5762,56 @@ def _deliver_to_agent(
     return "sent", None
 
 
+#: ``_enter_on_agent``'s reason for a sleeping session: an Enter has no text
+#: to queue, and the draft it would submit was typed into a CLI that is gone.
+_ENTER_ASLEEP = "It is asleep — open it, then dictate again"
+_ENTER_NOT_RUNNING = "the agent isn't running — open the session to start it"
+
+
+def _enter_on_agent(inst, title: str, *, say: bool = False):
+    """Press Enter on whatever is in ``title``'s input field → ``(told,
+    reason)`` like :func:`_deliver_to_agent` (``told`` is ``"sent"`` or
+    False). ``/send``'s ``{"enter": true}`` form: the desktop app types live
+    dictation straight into the terminal over its own websocket, so the
+    server never sees the draft — only the closing "submit".
+
+    The checks of a ``dialog_safe`` send, minus everything that needs text:
+    paused → :data:`PAUSED_REFUSED`; asleep or not running → refused, never
+    queued nor booted (there is nothing to queue, and a fresh CLI has no
+    draft); a dialog or the usage-limit menu on screen (or an unreadable
+    activity) → :data:`_SEND_IN_DIALOG` with nothing pressed — an Enter
+    there would answer it. ``say`` arms the one-shot ``Say:`` request
+    (:func:`_voice_say` on an empty text: Claude's ``.next``, or the
+    instruction typed after the draft for a hook-less CLI) right before the
+    keystroke; the Enter is :func:`_send_to_agent`'s own, so a TUI sees a
+    real Enter a beat after the last key. Blocking — call via
+    ``asyncio.to_thread``."""
+    if getattr(inst, "Status", None) == Paused:
+        return False, PAUSED_REFUSED
+    if _sleep.is_sleeping(title):
+        return False, _ENTER_ASLEEP
+    name = _live_session_name(tmux.to_mindflock_tmux_name(title))
+    if name is None:
+        return False, _ENTER_NOT_RUNNING
+    try:
+        activity = _agent_activity(inst, title)
+    except Exception:  # noqa: BLE001 — unknown reads as "don't press blind"
+        activity = "unknown"
+    if (
+        activity in _PB_DIALOG_ACTIVITIES
+        or activity == "unknown"
+        or _dialog_on_screen(inst, name)
+    ):
+        return False, _SEND_IN_DIALOG
+    _note_human_input(title)
+    typed = _voice_say(inst, title, "") if say else ""
+    if not _send_to_agent(name, typed, True):
+        if say:
+            _voice_say_cancel(title)
+        return False, _SEND_FAILED
+    return "sent", None
+
+
 def _driven_elsewhere(request, title: str, payload) -> Optional[JSONResponse]:
     """409 ``{"error": "driven by <name>", "driver"}`` when another person
     holds ``title``'s keyboard (core.ownership) — the gate on every route that
@@ -5903,14 +5953,30 @@ async def instance_send(
     prompt hook gets a one-shot request armed right before the keystrokes,
     any other CLI the instruction typed after the text (:func:`_voice_say`).
     A queued message keeps it in its queue entry and is armed when the
-    drain types it. Absent/false, or ``submit=false``: never asked for."""
+    drain types it. Absent/false, or ``submit=false``: never asked for.
+
+    ``{"enter": true}`` with NO (or empty) ``text``: press Enter on what is
+    already in the input field — the desktop app types live dictation into
+    the terminal itself, then submits through here so ``say`` is armed the
+    same way (:func:`_enter_on_agent`). Always dialog-safe: a dialog or the
+    usage-limit menu on screen is 409 ``{"in_dialog": true}`` with nothing
+    pressed; asleep or not running is 409 (never queued, never booted);
+    paused, over budget and driven-elsewhere as above. → ``{"sent": true,
+    "submitted": true, "entered": true}``. ``enter`` with text, or with
+    ``submit: false``, is 400."""
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
-    text = str((payload or {}).get("text", ""))
-    if not text.strip():
-        return JSONResponse({"error": "empty message"}, status_code=400)
+    text = str((payload or {}).get("text", "") or "")
+    enter = (payload or {}).get("enter") is True
     submit = bool((payload or {}).get("submit", True))
+    if enter and (text.strip() or not submit):
+        return JSONResponse(
+            {"error": "enter presses Enter on the draft: no text, submit not false"},
+            status_code=400,
+        )
+    if not enter and not text.strip():
+        return JSONResponse({"error": "empty message"}, status_code=400)
     dialog_safe = bool((payload or {}).get("dialog_safe", False))
     say = submit and (payload or {}).get("say") is True
     busy = _driven_elsewhere(request, title, payload)
@@ -5925,17 +5991,22 @@ async def instance_send(
             status_code=409,
         )
     asleep = _sleep.is_sleeping(title)
-    told, reason = await asyncio.to_thread(
-        lambda: _deliver_to_agent(
-            inst,
-            title,
-            text,
-            boot=True,
-            submit=submit,
-            dialog_safe=dialog_safe,
-            say=say,
+    if enter:
+        told, reason = await asyncio.to_thread(
+            lambda: _enter_on_agent(inst, title, say=say)
         )
-    )
+    else:
+        told, reason = await asyncio.to_thread(
+            lambda: _deliver_to_agent(
+                inst,
+                title,
+                text,
+                boot=True,
+                submit=submit,
+                dialog_safe=dialog_safe,
+                say=say,
+            )
+        )
     if told is False:
         body = {"error": reason}
         if reason == _SEND_IN_DIALOG:
@@ -5950,6 +6021,8 @@ async def instance_send(
         if asleep:
             body["woke"] = True  # it was asleep: it goes in once the agent is back
         return JSONResponse(body)
+    if enter:
+        return JSONResponse({"sent": True, "submitted": True, "entered": True})
     return JSONResponse({"sent": True, "submitted": submit})
 
 
