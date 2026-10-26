@@ -23,7 +23,11 @@
  * Voice says "server" (lib/voiceDesktop sttEngine). The server's recognizer
  * streams when it can (`server_ready.stt_stream`): the words are typed while
  * you speak, the last one held back in case it is a radio word, and the
- * unsure tail shows muted in the caption. The logic that isn't DOM
+ * unsure tail shows muted in the caption. "Stop recording" stops at any
+ * point; "focus three" / "next session" move by the rail's numbers; "yes" /
+ * "no" / "always" answer the focused session's dialog or question; the Talk
+ * hotkey (`mindflock:voice-talk`) is push to talk from anywhere; and with
+ * replies on, a dialog or a question is read out and answered hands-free. The logic that isn't DOM
  * — the radio parser, the dictation machine and its live driver, the reply
  * tracker, the speech queue and the engines — lives in lib/voiceDesktop.ts. */
 
@@ -36,30 +40,40 @@ import type { Instance } from "../api/types";
 import { effectiveActivity } from "../lib/sessionState";
 import { selectSession } from "../lib/sessionActions";
 import { openSettings, type SettingsScreen } from "../lib/openSettings";
+import { fetchDialog } from "../lib/flockActions";
+import { KEYMAP, shortcutLabels } from "../lib/keymap";
+import type { Dialog } from "../api/types";
 import {
   DICT_HINT,
   DICT_IDLE_MS,
   DEFAULT_VOICE_CFG,
   HOLD_FINAL_WAIT_MS,
+  HandsFree,
   LiveDictation,
   ReplyTracker,
   SpeechQueue,
+  TALK_EVENT,
   browserRecognizer,
   browserSpeaker,
   engineDiagnostics,
   loadVoiceCfg,
   loadVoicePrefs,
   noRecognizerLine,
+  pendingDiagnostics,
   recognizerErrorLine,
   routePhrase,
+  runVoiceCommand,
   saveVoicePrefs,
   serverRecognizer,
   serverSpeaker,
   sessionTarget,
   sttEngine,
+  talkKeyAction,
   ttsEngine,
   voiceAudioCtx,
+  type DictEnd,
   type DictTarget,
+  type TalkPhase,
   type Recognizer,
   type RouteReply,
   type SttEngine,
@@ -80,6 +94,28 @@ const queue = new SpeechQueue(
   () => (ttsEngine(cfgNow) === "server" ? serverSp : browserSp),
   (on) => speakingListeners.forEach((l) => l(on))
 );
+
+/** The question each session's last Say line asks (GET /voice
+ * `has_question`), while it waits: a lone "yes" / "two" answers it. */
+const questions = new Map<string, string>();
+
+/** Re-read `title`'s last Say line: its question waits until it works again. */
+function refreshQuestion(title: string) {
+  if (!title) return;
+  void instApi<{ say?: string; has_question?: boolean }>(title, "/voice")
+    .then((j) => {
+      if (j?.has_question && liveActivity(title) !== "working") questions.set(title, String(j.say || ""));
+      else questions.delete(title);
+    })
+    .catch(() => {});
+}
+
+/** The push-to-talk hotkey as the keymap shows it (the entry whose help says
+ * "talk"), else where to find it. */
+function talkShortcut(): string {
+  const e = KEYMAP.find((b) => !b.aliasOf && /\btalk\b/i.test(String(b.help?.[2] || "")));
+  return (e?.id && shortcutLabels(e.id)[0]) || "the Talk shortcut in Keyboard shortcuts";
+}
 
 /** The recognizer this page has under `c`: "none" when it has none. */
 function recEngine(c: VoiceCfg): SttEngine {
@@ -182,6 +218,12 @@ export function TopBarMic() {
   const idleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const captionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const holding = useRef(false);
+  /** The hotkey's own press is under way (a blur's `up` ends only that). */
+  const keyHeld = useRef(false);
+  /** Reading a dialog or a question out and listening for the answer. */
+  const hands = useRef<HandsFree | null>(null);
+  /** The options' Diagnostics line for what waits on the focused session. */
+  const [pendingLine, setPendingLine] = useState("");
 
   /** The caption under the mic. `sticky`: stays until replaced (listening, or
    * words waiting to be continued); otherwise it fades after a few seconds.
@@ -235,19 +277,29 @@ export function TopBarMic() {
     let unsubs: Array<() => void> = [];
     let retry: ReturnType<typeof setTimeout> | undefined;
     const ended = (title: string, data: Record<string, unknown>, ts: number) => {
+      if (title === useUi.getState().focused) refreshQuestion(title);
       if (!tracker.waiting(title)) return;
-      const speak = (line: string | null) => {
+      // A reply that asks something: once it has been read out, the mic
+      // opens for the answer (hands-free, with replies on).
+      const speak = (line: string | null, ask = "") => {
         if (!line) return;
         say(line);
-        if (prefsRef.current.replies) queue.say(line);
+        if (!prefsRef.current.replies) return;
+        if (ask) questions.set(title, ask);
+        void queue.say(line).then(() => {
+          if (ask) void hands.current?.question(title, ask);
+        });
       };
       const inline = String(data.say || "").trim();
       if (inline) {
-        speak(tracker.take(title, displayName(title), inline, ts));
+        speak(tracker.take(title, displayName(title), inline, ts), data.has_question ? inline : "");
         return;
       }
-      void instApi<{ say?: string; ts?: number }>(title, "/voice")
-        .then((j) => speak(tracker.take(title, displayName(title), String(j?.say || ""), Number(j?.ts) || null)))
+      void instApi<{ say?: string; ts?: number; has_question?: boolean }>(title, "/voice")
+        .then((j) => {
+          const said = String(j?.say || "");
+          speak(tracker.take(title, displayName(title), said, Number(j?.ts) || null), j?.has_question ? said : "");
+        })
         .catch(() => speak(tracker.take(title, displayName(title), "", null)));
     };
     const attach = () => {
@@ -260,8 +312,12 @@ export function TopBarMic() {
       unsubs = [
         ev.subscribe("session.activity_changed", (env) => {
           if (replay(env)) return;
-          if (env.new === "working") tracker.working(env.session);
-          else if (env.new === "idle") ended(env.session, env.data || {}, Number(env.ts) || 0);
+          if (env.new === "working") {
+            tracker.working(env.session);
+            questions.delete(env.session);
+          } else if (env.new === "idle") ended(env.session, env.data || {}, Number(env.ts) || 0);
+          // A dialog came up: read out (focused session, replies on).
+          else if (env.new === "clarify") void hands.current?.dialog(env.session);
         }),
         ev.subscribe("session.turn_ended", (env) => {
           if (!replay(env)) ended(env.session, env.data || {}, Number(env.ts) || 0);
@@ -269,9 +325,15 @@ export function TopBarMic() {
       ];
     };
     attach();
+    // The focused session's question, read when focus moves to it.
+    refreshQuestion(useUi.getState().focused || "");
+    const unsubFocus = useUi.subscribe((s, prev) => {
+      if (s.focused !== prev.focused) refreshQuestion(s.focused || "");
+    });
     return () => {
       clearTimeout(retry);
       unsubs.forEach((u) => u());
+      unsubFocus();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -298,41 +360,56 @@ export function TopBarMic() {
 
   /** The phrases' target: the text box, else the focused session's agent
    * terminal (null: none focused — a first phrase may still be a command). */
-  const target = (into: HTMLInputElement | HTMLTextAreaElement | null): DictTarget | null => {
+  const target = (into: HTMLInputElement | HTMLTextAreaElement | null, session = ""): DictTarget | null => {
     if (into) return fieldTarget(into);
-    const title = useUi.getState().focused;
+    const title = session || useUi.getState().focused;
     return title ? sessionTarget(title, displayName(title)) : null;
   };
 
-  const start = (into: HTMLInputElement | HTMLTextAreaElement | null) => {
-    if (live.current) return;
+  /** Start listening into `into` (a text box), else `opts.title` (hands-free:
+   * the session read out), else the focused session. Null: it didn't start. */
+  const start = (
+    into: HTMLInputElement | HTMLTextAreaElement | null,
+    opts: { title?: string; hint?: string; done?: (how: DictEnd) => void } = {}
+  ): LiveDictation | null => {
+    if (live.current) return null;
     const c = cfgNow;
     const engine = recEngine(c);
     if (engine === "none") {
       say(noRecognizerLine());
       void refreshCfg();
-      return;
+      return null;
     }
     const r = engine === "server" ? serverRec : browserRec;
     // Inside the gesture: a context made here runs (server playback and the
     // server recognizer's recording need it running).
     if (r === serverRec || ttsEngine(c) === "server") voiceAudioCtx();
     queue.hold();
-    const d = new LiveDictation(target(into), {
-      caption: say,
-      halt: () => {
-        if (live.current === d) halt();
+    const d = new LiveDictation(
+      target(into, opts.title),
+      {
+        caption: say,
+        halt: () => {
+          if (live.current === d) halt();
+        },
+        route: async (text) => {
+          const session = opts.title || useUi.getState().focused || "";
+          const reply = await routePhrase(text, session);
+          if (reply.kind === "prompt") return false;
+          await routed(reply, text, session);
+          return true;
+        },
+        activity: liveActivity,
+        replies: () => prefsRef.current.replies,
+        submitted: (title, wantSay) => {
+          tracker.sent(title, wantSay);
+          questions.delete(title);
+        },
+        pending: (title) => liveActivity(title) === "clarify" || questions.has(title),
+        done: (how) => opts.done?.(how),
       },
-      route: async (text) => {
-        const reply = await routePhrase(text, useUi.getState().focused || "");
-        if (reply.kind === "prompt") return false;
-        routed(reply, text);
-        return true;
-      },
-      activity: liveActivity,
-      replies: () => prefsRef.current.replies,
-      submitted: (title, wantSay) => tracker.sent(title, wantSay),
-    });
+      { hint: opts.hint }
+    );
     live.current = d;
     rec.current = r;
     setListening(true);
@@ -395,8 +472,28 @@ export function TopBarMic() {
     if (!ok) {
       halt();
       say("Speech recognition did not start");
+      return null;
     }
+    return d;
   };
+
+  /** Hands-free: the mic on `title` for `ms`; nothing said by then is a miss. */
+  const listenFor = (title: string, hint: string, ms: number) =>
+    new Promise<DictEnd>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const d = start(null, {
+        title,
+        hint,
+        done: (how) => {
+          clearTimeout(timer);
+          resolve(how);
+        },
+      });
+      if (!d) return resolve("stopped");
+      timer = setTimeout(() => {
+        if (live.current === d && !d.heardAnything) d.drop();
+      }, ms);
+    });
 
   /** The toggle's second click / the hold's release: "over" — once the
    * recognizer has delivered the phrase in flight (up to HOLD_FINAL_WAIT_MS;
@@ -439,7 +536,27 @@ export function TopBarMic() {
     if (prefsRef.current.replies) queue.say(line);
   };
 
-  const routed = (r: RouteReply, text: string) => {
+  /** `session`: the one the phrase was routed for (the focused one, or the
+   * one hands-free listening read out) — an answer without a title is its. */
+  const routed = async (r: RouteReply, text: string, session: string) => {
+    // Numbered sessions, answers and questions (lib/voiceDesktop).
+    const handled = await runVoiceCommand(r, text, {
+      railOrder: () => useUi.getState().railOrder,
+      focused: () => session,
+      select: (title) => selectSession(title, { noKeyboard: true }),
+      name: displayName,
+      caption: say,
+      announce,
+      route: routePhrase,
+      approveDialogs: () => refreshCfg().then((c) => !!c.approve_dialogs),
+      activity: liveActivity,
+      replies: () => prefsRef.current.replies,
+      submitted: (title, wantSay) => {
+        tracker.sent(title, wantSay);
+        questions.delete(title);
+      },
+    });
+    if (handled) return;
     switch (r.kind) {
       case "switch":
       case "new":
@@ -477,13 +594,64 @@ export function TopBarMic() {
     }
   };
 
+  // --- hands-free: a dialog or a question read out, the mic opened -------- //
+  // This render's functions, for the one HandsFree the mic keeps.
+  const latest = useRef({ listenFor, refreshCfg });
+  latest.current = { listenFor, refreshCfg };
+  if (!hands.current)
+    hands.current = new HandsFree({
+      replies: () => prefsRef.current.replies,
+      focused: () => useUi.getState().focused || "",
+      name: displayName,
+      busy: () => !!live.current,
+      fetchDialog: (title) => fetchDialog(title),
+      approveDialogs: () => latest.current.refreshCfg().then((c) => !!c.approve_dialogs),
+      speak: (line) => {
+        say(line, true);
+        return queue.say(line);
+      },
+      caption: say,
+      listen: (title, hint, ms) => latest.current.listenFor(title, hint, ms),
+    });
+
   // --- the gestures -------------------------------------------------------- //
   const hold = prefs.ptt === "hold";
 
   const openMenu = () => {
     setMenuOpen(true);
     void refreshCfg();
+    void readPending();
   };
+
+  /** Diagnostics: the focused session's dialog or question, read now. */
+  const readPending = async () => {
+    const title = useUi.getState().focused || "";
+    const up = !!title && liveActivity(title) === "clarify";
+    let d: Dialog | null = null;
+    if (up) d = await fetchDialog(title).catch(() => null);
+    setPendingLine(pendingDiagnostics(title ? displayName(title) : "", d, up, questions.get(title) || ""));
+  };
+
+  // The push-to-talk hotkey (the keymap's Talk action): works wherever the
+  // focus is — a terminal pane too — and its keydown is the gesture that
+  // lets start() make the AudioContext.
+  const keyRef = useRef({ hold, start, finish });
+  keyRef.current = { hold, start, finish };
+  useEffect(() => {
+    const onTalk = (e: Event) => {
+      const phase = (e as CustomEvent<{ phase?: TalkPhase }>).detail?.phase;
+      if (phase !== "down" && phase !== "up") return;
+      const k = keyRef.current;
+      const act = talkKeyAction(phase, k.hold, !!live.current, keyHeld.current);
+      if (phase === "up") keyHeld.current = false;
+      if (act === "start") {
+        setMenuOpen(false);
+        if (k.start(textField(document.activeElement)) && k.hold) keyHeld.current = true;
+      } else if (act === "finish") k.finish();
+    };
+    window.addEventListener(TALK_EVENT, onTalk);
+    return () => window.removeEventListener(TALK_EVENT, onTalk);
+  }, []);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -659,8 +827,15 @@ export function TopBarMic() {
             </label>
             <div className="mic-hint">
               The words are typed into the session as you speak. {DICT_HINT}; Esc takes them back.
+              Say “stop recording” to stop, “focus 3” or “next session” to switch, and “yes”, “no”,
+              “always” or a number to answer a dialog. Hotkey: {talkShortcut()}.
+            </div>
+            <div className="mic-hint" id="mic-handsfree">
+              With Read replies aloud on, a dialog on the focused session — or a question in a reply
+              to what you sent — is read out and the mic listens 12 s for your answer.
             </div>
             <div className="mic-diag">{diagnostics}</div>
+            {pendingLine && <div className="mic-diag mic-pending">{pendingLine}</div>}
             <button
               type="button"
               className="linklike mic-link"

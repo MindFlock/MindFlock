@@ -19,6 +19,11 @@
  *  - replies are read aloud only when you turn that on (off by default), only
  *    for drafts THIS app submitted by voice, once per turn, and always
  *    prefixed with the session's name — several sessions may be talking.
+ * And at any point "stop recording" (the stop family, {@link stopTail})
+ * stops; the router's numbered sessions, answers and questions are carried
+ * out by {@link runVoiceCommand}; with replies on, {@link HandsFree} reads a
+ * dialog or a question out and listens for the answer; and the keymap's Talk
+ * hotkey ({@link TALK_EVENT}) is push to talk from anywhere.
  *
  * Pieces: {@link parseRadio}, the prefs, {@link Dictation} (the pure
  * state machine), {@link LiveDictation} (one dictation driving a target: the
@@ -31,6 +36,7 @@
  * browser's unless Settings say "server". */
 
 import { ApiError, api, apiRaw, instApi } from "../api/client";
+import type { Dialog } from "../api/types";
 import { peekTerm } from "./terminals";
 import { resamplerName, startWavRecording, type WavRecording } from "./wavRecorder";
 
@@ -63,6 +69,13 @@ function routerWords(text: string): string[] {
     .filter(Boolean);
 }
 
+/** A number as it is spoken or recognised (a slot: "one|first|1|…"). */
+const NUMS = [
+  "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+  "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth",
+  "1", "2", "3", "4", "5", "6", "7", "8", "9",
+].join("|");
+
 /** The router's commands as word patterns (backend/web/core/voice_router.py
  * `_CMDS` and `_NEW_RE`): each slot lists the words it takes, and a final "*"
  * takes the rest of the phrase. Every command matches the WHOLE phrase. */
@@ -78,7 +91,17 @@ const COMMANDS: string[][][] = [
   "summarize|summarise", "summarize|summarise that|it", "what did it say", "summary",
   "say that again", "repeat", "repeat that",
   "voice off", "turn voice off", "turn off voice",
-  "stop listening", "stop",
+  "stop listening|recording", "stop", "mic|microphone off", "turn mic|microphone off",
+  "that's|thats all", "that is all",
+  // Focus by name or by the rail's number, or the next / previous row.
+  "focus|open|show|select *",
+  "next|previous session|one", `session|number|row ${NUMS} *`,
+  // Answers to a dialog or a question ("session three yes" targets one).
+  "yes|yeah|yep|yup|sure|ok|okay|allow|approve|no|nope|deny|reject|always",
+  "yes|yeah always", "always allow *", "don't|dont ask again", "do not ask again",
+  "go ahead", "do it", `option|choice ${NUMS}`, NUMS, `the ${NUMS} one`,
+  "answer|tell|reply *",
+  "what is|what's|whats it asking", "what's|whats|what is the question", "what does it want",
   "new session *", "a|another new session *",
   "start|open|create|make new session *", "start|open|create|make a|another new session *",
   "spin up new session *", "spin up a|another new session *",
@@ -104,20 +127,74 @@ export function mayBeCommand(text: string): boolean {
   });
 }
 
-const RADIO_WORD = /^(?:over|submit|disregard)$/;
-const RADIO_TAIL = /^(?:that|it|all|everything)$/;
 const bareWord = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, "");
 
+/** "Stop recording" and its kin: said at the end of any committed words they
+ * stop listening at once, never typed, and the words before them stay. */
+const STOP_PHRASES = [
+  "stop recording", "stop listening", "mic off", "microphone off", "turn mic off",
+  "turn microphone off", "that's all", "thats all", "that is all",
+].map((p) => p.split(" "));
+/** Every phrase the hold-back keeps whole while it may still be said: the
+ * stop family and the radio words with their tails ("submit it"). */
+const CONTROL_PHRASES = [
+  ...STOP_PHRASES,
+  ...["over", "submit", "disregard"].flatMap((w) =>
+    [[w], ...["that", "it", "all", "everything"].map((tail) => [w, tail])]
+  ),
+];
+/** The longest control phrase, in words: what the hold-back may keep. */
+export const CONTROL_MAX_WORDS = Math.max(...CONTROL_PHRASES.map((p) => p.length));
+
+/** The indexes of `ws`'s real words (a bare "." is not one). */
+const wordIndexes = (ws: string[]) => ws.flatMap((w, i) => (bareWord(w) ? [i] : []));
+
 /** Streamed words → what may be typed now and what waits: the last word
- * (it may be a radio word — never typed), with "submit it" / "disregard
- * that" held whole and a bare punctuation token kept with its word. */
+ * (it may be a radio word — never typed), and before it as many words (up to
+ * {@link CONTROL_MAX_WORDS} in all) as could still be the start of a control
+ * phrase — "submit it", "stop recording", "that is all" — with a bare
+ * punctuation token kept with its word. */
 export function holdBack(text: string): { type: string; held: string } {
   const ws = String(text || "").trim().split(/\s+/).filter(Boolean);
   if (!ws.length) return { type: "", held: "" };
-  let n = ws.length - 1;
-  while (n > 0 && !bareWord(ws[n])) n--;
-  if (n > 0 && RADIO_TAIL.test(bareWord(ws[n])) && RADIO_WORD.test(bareWord(ws[n - 1]))) n--;
+  const idx = wordIndexes(ws);
+  let n = idx.length ? idx[idx.length - 1] : 0;
+  for (let k = 2; k <= Math.min(CONTROL_MAX_WORDS, idx.length); k++) {
+    const tail = idx.slice(-k).map((i) => bareWord(ws[i]));
+    if (CONTROL_PHRASES.some((p) => p.length >= k && tail.every((w, j) => p[j] === w))) n = idx[idx.length - k];
+  }
   return { type: ws.slice(0, n).join(" "), held: ws.slice(n).join(" ") };
+}
+
+/** `text` ends with a stop phrase: the words before it (maybe ""), else null.
+ * "fix the bug, stop recording." → "fix the bug,". */
+export function stopTail(text: string): string | null {
+  const ws = String(text || "").trim().split(/\s+/).filter(Boolean);
+  const idx = wordIndexes(ws);
+  for (const p of STOP_PHRASES) {
+    if (idx.length < p.length) continue;
+    const tail = idx.slice(-p.length);
+    if (tail.every((i, j) => bareWord(ws[i]) === p[j])) return ws.slice(0, tail[0]).join(" ").replace(/[\s,;:]+$/, "");
+  }
+  return null;
+}
+
+const ANSWER_RE = new RegExp(
+  "^(?:(?:um|uh|er|so) )?(?:" +
+    [
+      "yes|yeah|yep|yup|sure|ok|okay|allow|allow it|approve|go ahead|do it",
+      "no|nope|deny|reject|don'?t",
+      "always|yes always|yeah always|always allow(?: it| that| this| all)?|(?:don'?t|do not) ask(?: me)? again",
+      "(?:option |choice |number |the )?(?:" + NUMS + ")(?: one)?",
+    ].join("|") +
+    ")(?: please)?$"
+);
+
+/** A whole answer to a dialog or a question: yes / no / always / a number,
+ * as the router hears them. Only ever the WHOLE dictation counts — "the
+ * answer is no, but…" is a prompt. */
+export function isAnswerPhrase(text: string): boolean {
+  return ANSWER_RE.test(routerWords(text).join(" "));
 }
 
 const joinWords = (a: string, b: string) => [a.trim(), b.trim()].filter(Boolean).join(" ");
@@ -165,6 +242,29 @@ export function saveVoicePrefs(p: VoicePrefs, kv: KV | null = storage()): void {
   }
 }
 
+// --- the push-to-talk hotkey ------------------------------------------------- //
+
+/** The keymap's Talk action (default Alt+Space, rebindable) dispatches this
+ * on window: `down` once per physical press, `up` on release — and an `up`
+ * when the window loses focus. */
+export const TALK_EVENT = "mindflock:voice-talk";
+export type TalkPhase = "down" | "up";
+
+/** What a hotkey phase does, as the button does it: in "Hold to talk", down
+ * starts and up (only after a down that the KEY pressed — a blur's stray up
+ * never ends a held button) is "over"; in "Click to talk", each down starts
+ * or ends ("over") and up is nothing. */
+export function talkKeyAction(
+  phase: TalkPhase,
+  hold: boolean,
+  listening: boolean,
+  keyHeld: boolean
+): "start" | "finish" | null {
+  if (!hold) return phase === "down" ? (listening ? "finish" : "start") : null;
+  if (phase === "down") return listening ? null : "start";
+  return keyHeld && listening ? "finish" : null;
+}
+
 // --- the dictation state machine ------------------------------------------- //
 
 /** What a step of {@link Dictation} asks for. `text` to type is a phrase plus
@@ -173,8 +273,9 @@ export type DictOutcome =
   /** Type `text` now; listening goes on. `route: false`: it can't be a
    * router command (a streamed phrase's first words), so it goes straight in. */
   | { kind: "type"; text: string; route?: boolean }
-  /** "over": type `text` (if any), stop — the words stay in the field. */
-  | { kind: "over"; text: string }
+  /** "over": type `text` (if any), stop — the words stay in the field.
+   * `stop`: it was a stop phrase ("stop recording"), not the radio word. */
+  | { kind: "over"; text: string; stop?: boolean }
   /** "submit": type `text` (if any), stop, and submit the draft. */
   | { kind: "submit"; text: string }
   /** "disregard": take back `text`; listening goes on. */
@@ -193,6 +294,8 @@ export const HOLD_FINAL_WAIT_MS = 1500;
 export const DICT_HINT = "Say over to leave it, submit to send, disregard to start over";
 /** The caption after "over" (and push to talk let go) on a session. */
 export const OVER_LINE = "In the field — say submit or press Enter";
+/** The caption after a stop phrase with nothing typed. */
+export const STOPPED_LINE = "Stopped listening";
 
 /** One dictation: begin → heard… → over / submit / cancel / expire, with a
  * record of what it typed (in order) so "disregard" can take exactly that
@@ -216,6 +319,9 @@ export class Dictation {
   partial = "";
   /** A first phrase goes past the router (false in a text box). */
   routes = true;
+  /** A dialog or a question waits on the session: an answer said as the
+   * whole dictation goes to the router at once (set before each step). */
+  answering = false;
 
   begin(): void {
     this.listening = true;
@@ -245,6 +351,8 @@ export class Dictation {
   words(w: string): DictOutcome {
     if (!this.listening) return { kind: "stopped" };
     const all = joinWords(this.held, w);
+    const ctl = this.control(all);
+    if (ctl) return ctl;
     if (this.routes && !this.typed && mayBeCommand(all)) {
       this.held = all;
       return { kind: "continue" };
@@ -273,6 +381,8 @@ export class Dictation {
   heard(phrase: string): DictOutcome {
     if (!this.listening) return { kind: "stopped" };
     this.interim = "";
+    const ctl = this.control(phrase);
+    if (ctl) return ctl;
     const p = parseRadio(phrase);
     const text = p.text ? p.text + " " : "";
     switch (p.kind) {
@@ -320,6 +430,27 @@ export class Dictation {
     this.held = "";
     this.partial = "";
     return { kind: "over", text: rest ? rest + " " : "" };
+  }
+
+  /** The control phrases any committed words can end with: the stop family
+   * (stop now; the words before it go in) and, while {@link answering}, an
+   * answer said as the whole dictation (to the router at once, without
+   * waiting for the phrase's end). Else null. */
+  private control(all: string): DictOutcome | null {
+    const before = stopTail(all);
+    if (before !== null) {
+      this.listening = false;
+      this.interim = "";
+      this.held = "";
+      this.partial = "";
+      return { kind: "over", text: before ? before + " " : "", stop: true };
+    }
+    if (this.answering && this.routes && !this.typed && isAnswerPhrase(all)) {
+      this.held = "";
+      this.partial = "";
+      return { kind: "type", text: all.trim() + " " };
+    }
+    return null;
   }
 
   /** Forget what was typed; returns it, for the target to take back. */
@@ -388,7 +519,17 @@ export interface LiveHooks {
   replies(): boolean;
   /** A submit went through (`say` as sent): the reply tracker waits on it. */
   submitted(title: string, say: boolean): void;
+  /** A dialog or a question waits on the session: a lone answer phrase
+   * ("yes", "always", "two") goes to the router at once. */
+  pending?(title: string): boolean;
+  /** The dictation is over, and how (hands-free listening retries a miss). */
+  done?(how: DictEnd): void;
 }
+
+/** How a dictation ended: `acted` — words went in, or the router acted on
+ * them; `missed` — nothing usable was said; `stopped` — the person stopped
+ * it (Escape, a stop phrase) or the recognizer failed. */
+export type DictEnd = "acted" | "missed" | "stopped";
 
 /** Typed keys travel the terminal's socket, the Enter a separate request:
  * give the keys this long to land first (and to stop counting as one paste
@@ -422,10 +563,16 @@ export class LiveDictation {
   readonly dict = new Dictation();
   private chain: Promise<void> = Promise.resolve();
   private done = false;
+  /** The router acted on a phrase, or a draft was submitted. */
+  private acted = false;
+  /** Any words came in (interim, committed, final, unsure). */
+  heardAnything = false;
 
   constructor(
     private target: DictTarget | null,
-    private hooks: LiveHooks
+    private hooks: LiveHooks,
+    /** `hint`: the caption before a word (hands-free: what to answer). */
+    private opts: { hint?: string } = {}
   ) {
     this.dict.begin();
     this.dict.routes = target?.kind !== "field";
@@ -438,27 +585,32 @@ export class LiveDictation {
 
   hearing(t: string): void {
     if (this.done) return;
+    if (t) this.heardAnything = true;
     this.dict.hearing(t);
     this.show();
   }
 
   heard(phrase: string): Promise<void> {
+    if (phrase.trim()) this.heardAnything = true;
     return this.step(() => this.dict.heard(phrase));
   }
 
   /** Streaming: committed words, typed as they come (the last held back). */
   words(w: string): Promise<void> {
+    if (w.trim()) this.heardAnything = true;
     return this.step(() => this.dict.words(w));
   }
 
   /** Streaming: a phrase's end and its last words. */
   flush(w: string): Promise<void> {
+    if (w.trim()) this.heardAnything = true;
     return this.step(() => this.dict.flush(w));
   }
 
   /** Streaming: the unstable tail, for the caption only. */
   unsure(t: string): void {
     if (this.done) return;
+    if (t) this.heardAnything = true;
     this.dict.unsure(t);
     this.show();
   }
@@ -488,28 +640,42 @@ export class LiveDictation {
     if (this.done) return;
     this.dict.listening = false;
     const kept = this.dict.typed.trim() && this.target?.kind === "session";
-    this.end(kept ? line + " — the words so far stay in the field" : line, true);
+    this.end(kept ? line + " — the words so far stay in the field" : line, true, "stopped");
+  }
+
+  /** Hands-free listening ran out with nothing said: stop quietly, a miss. */
+  drop(): void {
+    this.end("", false, "missed");
   }
 
   /** The running text, or what to say. */
   show(): void {
     if (this.done) return;
     const field = this.target?.kind === "field";
-    const shown = this.dict.shown || (field ? "Listening — the words go into the text box" : DICT_HINT);
+    const shown =
+      this.dict.shown || this.opts.hint || (field ? "Listening — the words go into the text box" : DICT_HINT);
     this.hooks.caption(shown, true, this.dict.partial);
   }
 
   private step(next: () => DictOutcome): Promise<void> {
-    this.chain = this.chain.then(() => (this.done ? undefined : this.apply(next()))).catch(() => {});
+    this.chain = this.chain
+      .then(() => {
+        if (this.done) return;
+        const t = this.target;
+        this.dict.answering = t?.kind === "session" && !!this.hooks.pending?.(t.title);
+        return this.apply(next());
+      })
+      .catch(() => {});
     return this.chain;
   }
 
-  private end(line: string | null, sticky = false): void {
+  private end(line: string | null, sticky = false, how?: DictEnd): void {
     if (this.done) return;
     this.done = true;
     this.dict.listening = false;
     this.hooks.halt();
     if (line !== null) this.hooks.caption(line, sticky);
+    this.hooks.done?.(how || (this.acted || this.dict.typed ? "acted" : "missed"));
   }
 
   private async apply(out: DictOutcome): Promise<void> {
@@ -530,11 +696,15 @@ export class LiveDictation {
         return;
       case "dropped":
         t?.erase(out.text);
-        this.end(out.text ? "Disregarded" : "");
+        this.end(out.text ? "Disregarded" : "", false, "stopped");
         return;
       case "over":
         if (out.text && !(await this.put(out.text))) return;
-        this.end(t?.kind === "session" && this.dict.typed ? OVER_LINE : "");
+        this.end(
+          t?.kind === "session" && this.dict.typed ? OVER_LINE : out.stop ? STOPPED_LINE : "",
+          false,
+          out.stop ? "stopped" : undefined
+        );
         return;
       case "submit": {
         const typedNow = !!out.text;
@@ -544,6 +714,7 @@ export class LiveDictation {
           this.end(t ? "" : "Click a session first");
           return;
         }
+        this.acted = true;
         this.end("Submitting to " + t.name + "…", true);
         if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
         const say = this.hooks.replies();
@@ -563,6 +734,7 @@ export class LiveDictation {
     if (!this.dict.typed && t?.kind !== "field") {
       const words = text.trim();
       if (route && (await this.hooks.route(words))) {
+        this.acted = true;
         this.end(null);
         return false;
       }
@@ -604,15 +776,32 @@ export interface RouteReply {
     | "stop"
     | "off"
     | "repeat"
-    | "condense";
+    | "condense"
+    | "switch_index"
+    | "switch_rel"
+    | "answer"
+    | "question";
   title?: string;
   name?: string;
   say?: string;
+  /** switch_index / answer: the rail's row number, 1-based. */
+  index?: number;
+  /** switch_rel: +1 the next row, -1 the previous. */
+  delta?: number;
+  /** answer: what was said. "always" comes only from the router. */
+  choice?: "yes" | "no" | "always" | "number";
+  number?: number;
+  /** answer: the server resolved the dialog — `keys` are ready for /answer. */
+  dialog_id?: string;
+  keys?: string[];
+  /** answer: the session has no dialog up (`say` says so). */
+  no_dialog?: boolean;
 }
 
 const ROUTE_KINDS = new Set<string>([
   "prompt", "switch", "new", "ambiguous", "no-session", "new-failed", "list",
   "needs", "status", "cancel", "stop", "off", "repeat", "condense",
+  "switch_index", "switch_rel", "answer", "question",
 ]);
 
 /** Ask the router what one phrase means. Anything but a well-formed 200 —
@@ -626,6 +815,161 @@ export async function routePhrase(text: string, session: string): Promise<RouteR
     /* fall through */
   }
   return { kind: "prompt" };
+}
+
+// --- numbered sessions, answers, questions --------------------------------------- //
+
+/** Window rows ride in the rail's order as sentinels. */
+const isWindowRow = (key: string) => key.startsWith("\u0000");
+
+/** Row `n` (1-based) of the rail exactly as its badges number it — railOrder,
+ * the one numbering authority, windows included — or null past the end. */
+export function railRow(order: string[], n: number): string | null {
+  const i = Math.trunc(Number(n)) - 1;
+  return i >= 0 && i < order.length ? order[i] : null;
+}
+
+/** The session `delta` rows from `from` on the rail (windows skipped,
+ * wrapping like Ctrl+Tab); from no row, the first / the last. Null: no
+ * other session. */
+export function railStep(order: string[], from: string, delta: number): string | null {
+  const sessions = order.filter((k) => !isWindowRow(k));
+  if (!sessions.length) return null;
+  const i = sessions.indexOf(from);
+  const step = delta < 0 ? -1 : 1;
+  if (i < 0) return step > 0 ? sessions[0] : sessions[sessions.length - 1];
+  const next = sessions[(i + step + sessions.length) % sessions.length];
+  return next === from ? null : next;
+}
+
+export const APPROVE_OFF_LINE = "Approving by voice is off: Settings → Voice";
+
+/** What a router answer needs from the page (TopBarMic wires the store). */
+export interface CommandDeps {
+  /** useUi railOrder: the rail's rows as numbered. */
+  railOrder(): string[];
+  focused(): string;
+  /** Focus a session (selectSession). */
+  select(title: string): void;
+  name(title: string): string;
+  /** The caption; `announce` also speaks it when replies are on. */
+  caption(line: string, sticky?: boolean): void;
+  announce(line: string): void;
+  /** POST /api/voice/route for `session`. */
+  route(text: string, session: string): Promise<RouteReply>;
+  /** GET /api/voice's `approve_dialogs`, read now. */
+  approveDialogs(): Promise<boolean>;
+  /** The session's live activity (the rows the app polls). */
+  activity(title: string): string;
+  replies(): boolean;
+  submitted(title: string, say: boolean): void;
+}
+
+/** The session's last Say line asks a question (GET /instances/{t}/voice
+ * `has_question`) and it is not already working on something else. */
+export async function questionPending(title: string, activity: string): Promise<boolean> {
+  if (activity === "working") return false;
+  try {
+    const j = await instApi<{ has_question?: boolean }>(title, "/voice");
+    return !!j?.has_question;
+  } catch {
+    return false;
+  }
+}
+
+/** The words that answer a question as a prompt. */
+function answerWords(r: RouteReply, text: string): string {
+  if (r.choice === "number" && r.number) return String(r.number);
+  return r.choice || text.trim();
+}
+
+/** Carry out the router's numbered-session, answer and question replies.
+ * True when `r` was one of them; anything else is the caller's. */
+export async function runVoiceCommand(r: RouteReply, text: string, deps: CommandDeps): Promise<boolean> {
+  switch (r.kind) {
+    case "switch_index": {
+      const n = Math.trunc(Number(r.index));
+      const key = railRow(deps.railOrder(), n);
+      if (!key) deps.announce("There is no session " + n);
+      else if (isWindowRow(key)) deps.announce("Row " + n + " is a window, not a session");
+      else {
+        deps.select(key);
+        deps.announce(r.say || "Now talking to " + deps.name(key) + ".");
+      }
+      return true;
+    }
+    case "switch_rel": {
+      const key = railStep(deps.railOrder(), deps.focused(), Number(r.delta) || 1);
+      if (!key) deps.announce("There is no other session");
+      else {
+        deps.select(key);
+        deps.announce(r.say || "Now talking to " + deps.name(key) + ".");
+      }
+      return true;
+    }
+    case "answer":
+      await answer(r, text, deps, false);
+      return true;
+    case "question":
+      deps.announce(r.say || "Nothing is being asked.");
+      return true;
+    default:
+      return false;
+  }
+}
+
+/** An answer: into the dialog the server resolved (only with approving by
+ * voice on), else to the question the session asked (as a prompt, through
+ * the submit path), else the router's sentence. A row number alone is
+ * mapped to its title and asked again, once. Focus never moves. */
+async function answer(r: RouteReply, text: string, deps: CommandDeps, again: boolean): Promise<void> {
+  if (!r.title && r.index != null && !again) {
+    const key = railRow(deps.railOrder(), Number(r.index));
+    if (!key || isWindowRow(key)) {
+      deps.announce("There is no session " + Math.trunc(Number(r.index)));
+      return;
+    }
+    const next = await deps.route(text, key);
+    if (next.kind === "answer") await answer({ ...next, title: next.title || key, index: undefined }, text, deps, true);
+    else deps.announce(next.say || deps.name(key) + " isn't asking anything.");
+    return;
+  }
+  const title = r.title || deps.focused();
+  if (!title) {
+    deps.caption("Click a session first");
+    return;
+  }
+  const name = deps.name(title);
+  if (r.dialog_id && r.keys?.length) {
+    if (!(await deps.approveDialogs())) {
+      deps.announce(APPROVE_OFF_LINE);
+      return;
+    }
+    try {
+      await instApi(title, "/answer", { json: { keys: r.keys, dialog_id: r.dialog_id, by: "user" } });
+      deps.announce(r.say || "Answered " + (r.choice === "number" ? String(r.number || "") : r.choice || "") + ".");
+    } catch (err) {
+      const body = (err instanceof ApiError ? err.body : null) as { dialog_changed?: boolean; dialog_answered?: boolean } | null;
+      if (body?.dialog_changed) deps.announce("The prompt on " + name + " changed — say it again.");
+      else if (body?.dialog_answered) deps.announce("Already answered.");
+      else deps.caption("Couldn't answer " + name + ": " + ((err as Error)?.message || "error"), true);
+    }
+    return;
+  }
+  if (await questionPending(title, deps.activity(title))) {
+    const words = answerWords(r, text);
+    if (!sessionTarget(title, name).type(words + " ")) {
+      deps.caption("Couldn't type into " + name + " — its terminal isn't connected", true);
+      return;
+    }
+    await new Promise((res) => setTimeout(res, SUBMIT_SETTLE_MS));
+    const say = deps.replies();
+    const sent = await submitDraft(title, name, say);
+    if (sent.ok) deps.submitted(title, say);
+    deps.caption(sent.line, !sent.ok);
+    return;
+  }
+  deps.announce(r.say || name + " isn't asking anything.");
 }
 
 // --- spoken replies ------------------------------------------------------------ //
@@ -702,6 +1046,143 @@ export class ReplyTracker {
   }
 }
 
+// --- hands-free: a dialog or a question read out, the mic opened ---------------- //
+
+/** How long the mic listens for an answer after reading one out (mobile.js
+ * VOICE_DIALOG_MS / VOICE_ANSWER_MS). */
+export const ANSWER_LISTEN_MS = 12_000;
+
+const ORD = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
+
+/** Markdown read aloud as plain words (links keep their text). */
+function plain(text: string): string {
+  return String(text || "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[*_`#>]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** What to say to answer `d` (mobile.js voiceDialogChoices): a permission
+ * prompt takes words, any other dialog the numbers of its options. */
+export function dialogChoices(d: Pick<Dialog, "options">): string {
+  const kinds = new Set(d.options.map((o) => o.kind));
+  if (kinds.has("yes") || kinds.has("no")) return kinds.has("always") ? "Say yes, no, or always." : "Say yes or no.";
+  const opts = d.options.slice(0, ORD.length);
+  const nums = opts.map((_, i) => ORD[i]);
+  const list =
+    nums.length === 1
+      ? nums[0]
+      : nums.length === 2
+        ? nums[0] + " or " + nums[1]
+        : nums.slice(0, -1).join(", ") + ", or " + nums[nums.length - 1];
+  return opts.map((o, i) => ORD[i] + ": " + plain(o.label)).join(". ") + ". Say " + list + ".";
+}
+
+/** A dialog read aloud, name first (mobile.js voiceDialogSpeech):
+ * "Login fix: Allow git push? Say yes, no, or always." */
+export function dialogSpeech(name: string, d: Dialog): string {
+  const parts = [spokenLine(name, plain(d.question) || "a permission prompt")];
+  if (d.command) parts.push("It wants to run: " + String(d.command).slice(0, 200) + ".");
+  parts.push(dialogChoices(d));
+  return parts.join(" ");
+}
+
+/** The one retry after a miss: "I didn't catch that: say yes, no, or always." */
+export function dialogRetryLine(d: Pick<Dialog, "options">): string {
+  return "I didn't catch that: " + dialogChoices(d).replace(/^.*\bSay /, "say ");
+}
+
+/** What {@link HandsFree} needs from the page. */
+export interface HandsFreeDeps {
+  /** "Read replies aloud": hands-free is that pref, nothing else. */
+  replies(): boolean;
+  focused(): string;
+  name(title: string): string;
+  /** The mic is listening already (a dictation the person started). */
+  busy(): boolean;
+  fetchDialog(title: string): Promise<Dialog | null>;
+  approveDialogs(): Promise<boolean>;
+  /** Caption the line and say it; resolves once it has been said. */
+  speak(line: string): Promise<void>;
+  caption(line: string, sticky?: boolean): void;
+  /** Open the mic on `title` for `ms` (the caption `hint` until a word):
+   * resolves with how that dictation ended. */
+  listen(title: string, hint: string, ms: number): Promise<DictEnd>;
+}
+
+/** With "Read replies aloud" on: a dialog that comes up on the focused
+ * session, or a question in a reply to a prompt this app sent, is read out
+ * name first and the mic opens {@link ANSWER_LISTEN_MS} for the answer; a
+ * miss gets ONE retry ("I didn't catch that: …"), then it goes quiet. */
+export class HandsFree {
+  private seen = "";
+  private running = false;
+
+  constructor(private deps: HandsFreeDeps) {}
+
+  /** A dialog came up on `title` (its activity went to clarify). */
+  async dialog(title: string): Promise<void> {
+    const x = this.deps;
+    if (!this.ready(title) || title !== x.focused()) return;
+    this.running = true;
+    try {
+      const d = await x.fetchDialog(title).catch(() => null);
+      if (!d || !d.parsed || !d.options.length || d.id === this.seen) return;
+      if (!x.replies() || x.busy() || title !== x.focused()) return;
+      this.seen = d.id;
+      const name = x.name(title);
+      await x.speak(dialogSpeech(name, d));
+      if (!(await x.approveDialogs())) {
+        await x.speak("Answer it on the screen.");
+        return;
+      }
+      await this.listen(title, dialogRetryLine(d), name + ": " + dialogChoices(d));
+    } finally {
+      this.running = false;
+    }
+  }
+
+  /** `title`'s reply (already read out) asks `say`, a question. */
+  async question(title: string, say: string): Promise<void> {
+    if (!this.ready(title)) return;
+    this.running = true;
+    try {
+      const name = this.deps.name(title);
+      await this.listen(title, "Still there? " + spokenLine(name, say), "Answer " + name + " — say submit to send");
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private ready(title: string): boolean {
+    return !!title && !this.running && this.deps.replies() && !this.deps.busy();
+  }
+
+  private async listen(title: string, retry: string, hint: string): Promise<void> {
+    const x = this.deps;
+    for (let tries = 0; ; tries++) {
+      if (!x.replies() || x.busy()) return;
+      const how = await x.listen(title, hint, ANSWER_LISTEN_MS);
+      if (how !== "missed") return;
+      if (tries >= 1) {
+        x.caption(x.name(title) + " is waiting on you");
+        return;
+      }
+      await x.speak(retry);
+    }
+  }
+}
+
+/** The options' Diagnostics line for what waits on the focused session. */
+export function pendingDiagnostics(name: string, dialog: Dialog | null, dialogUp: boolean, question: string): string {
+  if (!name) return "Pending: no session focused";
+  if (dialog) return "Pending: " + name + " shows a dialog — " + (plain(dialog.question) || "unparsed");
+  if (dialogUp) return "Pending: " + name + " shows a dialog";
+  if (question) return "Pending: " + name + " asked — " + plain(question);
+  return "Pending: nothing on " + name;
+}
+
 // --- speaking ------------------------------------------------------------------- //
 
 /** One engine: speak() resolves when the text has been said (or given up on). */
@@ -714,7 +1195,7 @@ export interface Speaker {
  * mic listens (the app must not talk into its own recognizer, and a line
  * is not cut off by the next one). */
 export class SpeechQueue {
-  private lines: string[] = [];
+  private lines: Array<{ text: string; done: () => void }> = [];
   private speaking = false;
   private held = false;
   last = "";
@@ -724,11 +1205,14 @@ export class SpeechQueue {
     private onSpeaking: (on: boolean) => void = () => {}
   ) {}
 
-  say(line: string): void {
+  /** Queue a line; resolves once it has been said (or cut off, or dropped). */
+  say(line: string): Promise<void> {
     const t = String(line || "").trim();
-    if (!t) return;
-    this.lines.push(t);
-    this.pump();
+    if (!t) return Promise.resolve();
+    return new Promise<void>((done) => {
+      this.lines.push({ text: t, done });
+      this.pump();
+    });
   }
 
   get busy(): boolean {
@@ -752,22 +1236,25 @@ export class SpeechQueue {
 
   /** Stop and forget everything queued. */
   cancel(): void {
+    const dropped = this.lines;
     this.lines = [];
+    dropped.forEach((l) => l.done());
     if (this.speaking) this.engine().cancel();
   }
 
   private pump(): void {
     if (this.speaking || this.held || !this.lines.length) return;
     const line = this.lines.shift()!;
-    this.last = line;
+    this.last = line.text;
     this.speaking = true;
     this.onSpeaking(true);
     const done = () => {
       this.speaking = false;
       this.onSpeaking(false);
+      line.done();
       this.pump();
     };
-    this.engine().speak(line).then(done, done);
+    this.engine().speak(line.text).then(done, done);
   }
 }
 
@@ -1636,6 +2123,8 @@ export interface VoiceCfg {
   /** The phone page's preference; the desktop app goes by `server_ready`. */
   stt: "phone" | "server";
   tts: "phone" | "server";
+  /** Settings → Voice "Approve dialogs by voice": unknown reads as off. */
+  approve_dialogs?: boolean;
   server_ready: {
     stt?: boolean;
     tts?: boolean;
@@ -1660,6 +2149,7 @@ export async function loadVoiceCfg(prev: VoiceCfg | null): Promise<VoiceCfg> {
       return {
         stt: j.stt === "server" ? "server" : "phone",
         tts: j.tts === "server" ? "server" : "phone",
+        approve_dialogs: j.approve_dialogs === true,
         server_ready: j.server_ready && typeof j.server_ready === "object" ? j.server_ready : {},
         system: j.system && typeof j.system === "object" ? j.system : {},
       };
