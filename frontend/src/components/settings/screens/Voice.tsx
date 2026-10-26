@@ -9,7 +9,9 @@
  *
  * In order: the intro; **Recognition** and **Voice** (the server's engine for
  * each, with the server's readiness line under it — `#voice-engines`, where
- * the mic and the phone page deep-link); where the phone page runs each
+ * the mic and the phone page deep-link — and, under Recognition, the
+ * one-click local-models installer when the built-in recognizer is basic or
+ * local models are picked but missing); where the phone page runs each
  * (`voice.stt` / `voice.tts`, phone | server); **Approve dialogs by voice**;
  * **Try it** (speak a sentence, hear three seconds back); the privacy notes.
  *
@@ -52,7 +54,14 @@ export interface VoiceView {
     detail?: string;
     voices?: string[];
     recognizers?: string[];
+    /** How well its recognizer hears: "basic" (Windows' desktop SAPI one,
+     * also from WSL) or "good" (macOS'); absent on an older server. */
+    stt_quality?: "basic" | "good" | string;
   };
+  /** Whether this viewer may change the server (auth.may_configure). Absent
+   * means the server didn't say: assume yes — an owner-only POST answers a
+   * refusal with its own 403 sentence anyway. */
+  configure_allowed?: boolean;
 }
 
 export type VoiceKind = "stt" | "tts";
@@ -232,6 +241,9 @@ export function Voice(p: ScreenProps) {
 export function VoiceSection({ active }: { active: boolean }) {
   const model = useSettings();
   const [view, setView] = useState<VoiceView | null>(null);
+  // Bumped after an install finishes: re-read the verdict even when the
+  // settings doc came back unchanged.
+  const [reread, setReread] = useState(0);
   const doc = model.settings;
   useEffect(() => {
     if (!active) return;
@@ -248,7 +260,56 @@ export function VoiceSection({ active }: { active: boolean }) {
     };
     // `doc` changes identity on every save, which is exactly when the verdict
     // may change.
-  }, [active, doc]);
+  }, [active, doc, reread]);
+
+  const [installSupported, setInstallSupported] = useState(false);
+  const [installStatus, setInstallStatus] = useState<InstallStatus>({ state: "idle" });
+  const [installTouched, setInstallTouched] = useState(false);
+  const following = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const alive = () => mounted.current;
+  const settle = async (s: InstallStatus) => {
+    following.current = false;
+    // On success the server switched voice.stt_backend to "local" itself:
+    // re-read the settings and the verdict, the way a save does.
+    if (s.state === "done" && mounted.current) {
+      await model.reload();
+      setReread((n) => n + 1);
+    }
+  };
+  // What the installer is doing now (an older server has none: 404, no
+  // button); one already running — reopened mid-install — is followed.
+  useEffect(() => {
+    if (!active) return;
+    api<InstallStatus>("/api/voice/install-local")
+      .then((s) => {
+        if (!mounted.current) return;
+        setInstallSupported(true);
+        if (s?.state === "running" && !following.current) {
+          following.current = true;
+          setInstallTouched(true);
+          setInstallStatus(s);
+          void pollInstall(setInstallStatus, { alive }).then(settle);
+        } else if (s?.state === "failed" && !following.current) setInstallStatus(s);
+      })
+      .catch(() => {});
+    // `model` is read inside `settle` only; re-running on its identity would
+    // re-ask the server on every save.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
+  const onInstall = () => {
+    if (following.current) return;
+    following.current = true;
+    setInstallTouched(true);
+    void installLocalModels(setInstallStatus, { alive }).then(settle);
+  };
+  const install: InstallProps = { supported: installSupported, status: installStatus, touched: installTouched, onInstall };
 
   const clearKey = async (kind: VoiceKind) => {
     // POST /api/settings keeps a secret sent blank (the app-wide convention),
@@ -262,7 +323,9 @@ export function VoiceSection({ active }: { active: boolean }) {
     }
   };
 
-  return <VoiceSectionView model={model} view={view} onClearKey={clearKey} tryRow={<TryRow view={view} />} />;
+  return (
+    <VoiceSectionView model={model} view={view} onClearKey={clearKey} install={install} tryRow={<TryRow view={view} />} />
+  );
 }
 
 /** The screen's markup, given the model and the server's verdict (so a test
@@ -272,11 +335,14 @@ export function VoiceSectionView({
   model,
   view,
   onClearKey,
+  install,
   tryRow,
 }: {
   model: SettingsModel;
   view: VoiceView | null;
   onClearKey(kind: VoiceKind): void;
+  /** The local-models installer; none (a test, an older server) draws no button. */
+  install?: InstallProps;
   tryRow?: ReactNode;
 }) {
   const approve = model.get("voice", "approve_dialogs") !== false;
@@ -290,7 +356,7 @@ export function VoiceSectionView({
         hosted service only if you want them.
       </p>
       <div id="voice-engines">
-        <VoiceKindBlock kind="stt" title="Recognition" model={model} view={view} onClearKey={onClearKey} />
+        <VoiceKindBlock kind="stt" title="Recognition" model={model} view={view} onClearKey={onClearKey} install={install} />
         <VoiceKindBlock kind="tts" title="Voice" model={model} view={view} onClearKey={onClearKey} />
       </div>
       <div className="voice-kind" id="voice-phone">
@@ -369,12 +435,14 @@ function VoiceKindBlock({
   model,
   view,
   onClearKey,
+  install,
 }: {
   kind: VoiceKind;
   title: string;
   model: SettingsModel;
   view: VoiceView | null;
   onClearKey(kind: VoiceKind): void;
+  install?: InstallProps;
 }) {
   const saved = String(model.get("voice", kind + "_backend") || "");
   const backend = effectiveBackend(kind, saved, view);
@@ -383,6 +451,11 @@ function VoiceKindBlock({
   const keySaved = model.get("voice", kind + "_api_key") === SECRET_MASK;
   const local = backend === "local";
   const voices = view?.system?.voices || [];
+  const offer = kind === "stt" ? installOffer(backend, view) : null;
+  // Shown while it runs, and after this page ran it (its outcome), even once
+  // local models are ready and the offer is gone.
+  const showInstall =
+    kind === "stt" && !!install?.supported && (!!offer || install.status.state === "running" || install.touched);
   return (
     <div className="voice-kind" data-kind={kind}>
       <h4 className="voice-sub">{title}</h4>
@@ -476,6 +549,7 @@ function VoiceKindBlock({
           {line.text}
         </p>
       )}
+      {showInstall && install && <InstallRow offer={offer} install={install} allowed={view?.configure_allowed !== false} />}
     </div>
   );
 }
@@ -488,6 +562,184 @@ export function systemVoiceOptions(voices: string[], saved: unknown): Array<{ va
   const s = saved == null ? "" : String(saved);
   if (s && !voices.includes(s)) out.push({ value: s, label: s + " (not on this computer)" });
   return out;
+}
+
+/** GET /api/voice/install-local: the one-click local-models install (the
+ * packages into the server's own environment, then the whisper model and the
+ * piper voice). `already` and `refused` are this page's own: the POST got a
+ * 409 (someone else's install is running) or a 403 (not the owner). */
+export interface InstallStatus {
+  state: "idle" | "running" | "done" | "failed" | string;
+  step?: string;
+  log?: string[];
+  started?: number | string | null;
+  finished?: number | string | null;
+  error?: string | null;
+  already?: boolean;
+  refused?: boolean;
+}
+
+/** The installer's live state, as the screen hands it to the markup:
+ * `supported` once GET /api/voice/install-local answered (an older server has
+ * no installer, so no button), `touched` once this page started or resumed
+ * one (a "done" from before it opened says nothing about now). */
+export interface InstallProps {
+  supported: boolean;
+  status: InstallStatus;
+  touched: boolean;
+  onInstall(): void;
+}
+
+export const INSTALL_LABEL = "Install local models (about 300 MB)";
+export const INSTALL_BASIC_LINE =
+  "Windows' built-in recognizer is basic. Local models (faster-whisper) recognise far better and stay on this computer.";
+export const INSTALL_DONE = "Installed — recognition now uses local models";
+export const INSTALL_REFUSED = "Only the owner can install models: do it on that computer itself.";
+export const INSTALL_POLL_MS = 2000;
+
+/** Whether the built-in recognizer is the basic one: the server says so in
+ * `system.stt_quality`, or (a server between the two) in the built-in
+ * engine's readiness detail. */
+export function basicRecognizer(view: VoiceView | null | undefined): boolean {
+  if (view?.system?.stt_quality) return view.system.stt_quality === "basic";
+  const sr = view?.server_ready;
+  return sr?.stt_backend === "system" && /basic accuracy/i.test(sr.stt_detail || "");
+}
+
+/** Why the installer shows under Recognition: "basic" (the built-in engine
+ * is picked and hears poorly — with the recommendation line) or "local"
+ * (local models are picked but not ready); null when local models already
+ * recognise or there is nothing to recommend. */
+export function installOffer(backend: string, view: VoiceView | null | undefined): "basic" | "local" | null {
+  if (!view) return null;
+  const sr = view.server_ready || {};
+  if (sr.stt_backend === "local" && sr.stt) return null;
+  if (backend === "local") return "local";
+  if (backend === "system" && basicRecognizer(view)) return "basic";
+  return null;
+}
+
+/** The installer row's button and line for a status (`allowed` false: the
+ * viewer may not change the server). */
+export function installView(
+  st: InstallStatus,
+  allowed: boolean
+): { button: "install" | "retry" | "busy" | null; disabled: boolean; text: string; last: string } {
+  const last = st.state === "running" ? (st.log || []).filter(Boolean).slice(-1)[0] || "" : "";
+  if (st.state === "running") {
+    const head = st.already ? "Already installing" : "Installing";
+    return { button: "busy", disabled: true, text: st.step ? `${head}: ${noDot(st.step)}` : head, last };
+  }
+  if (st.state === "done") return { button: null, disabled: true, text: INSTALL_DONE + ".", last };
+  if (st.refused) return { button: "install", disabled: true, text: noDot(st.error || INSTALL_REFUSED) + ".", last };
+  if (!allowed) return { button: "install", disabled: true, text: INSTALL_REFUSED, last };
+  if (st.state === "failed")
+    return { button: "retry", disabled: false, text: "Couldn't install: " + noDot(st.error || "the server gave no reason") + ".", last };
+  return { button: "install", disabled: false, text: "", last };
+}
+
+type Call = <T = unknown>(path: string, opts?: RequestInit & { json?: unknown }) => Promise<T>;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Follow a running install: GET every `every` ms until it isn't running,
+ * reporting each read. Three failed reads in a row end it as failed. */
+export async function pollInstall(
+  onStatus: (s: InstallStatus) => void,
+  {
+    call = api as Call,
+    wait = sleep,
+    every = INSTALL_POLL_MS,
+    alive = (): boolean => true,
+    already = false,
+  }: { call?: Call; wait?: (ms: number) => Promise<void>; every?: number; alive?: () => boolean; already?: boolean } = {}
+): Promise<InstallStatus> {
+  let misses = 0;
+  for (;;) {
+    await wait(every);
+    if (!alive()) return { state: "running", already };
+    let s: InstallStatus;
+    try {
+      s = { ...(await call<InstallStatus>("/api/voice/install-local")), already };
+      misses = 0;
+    } catch (err) {
+      if (++misses < 3) continue;
+      s = { state: "failed", error: "lost track of the install: " + ((err as Error)?.message || "no answer") };
+    }
+    if (!alive()) return s;
+    onStatus(s);
+    if (s.state !== "running") return s;
+  }
+}
+
+/** The button: POST /api/voice/install-local, then follow it. A 409 means an
+ * install is already running — follow that one; a 403 is the owner check. */
+export async function installLocalModels(
+  onStatus: (s: InstallStatus) => void,
+  opts: { call?: Call; wait?: (ms: number) => Promise<void>; every?: number; alive?: () => boolean } = {}
+): Promise<InstallStatus> {
+  const call = opts.call || (api as Call);
+  let already = false;
+  try {
+    await call("/api/voice/install-local", { method: "POST" });
+    onStatus({ state: "running", step: "Starting" });
+  } catch (err) {
+    const status = (err as { status?: number })?.status;
+    const error = (err as Error)?.message || "no answer";
+    if (status === 409) {
+      already = true;
+      onStatus({ state: "running", already });
+    } else {
+      const s: InstallStatus = { state: "failed", error, refused: status === 403 };
+      onStatus(s);
+      return s;
+    }
+  }
+  return pollInstall(onStatus, { ...opts, call, already });
+}
+
+/** The installer row under Recognition: the recommendation (for a basic
+ * recognizer), then the button with the step and the last log line beside
+ * it while it runs. */
+function InstallRow({ offer, install, allowed }: { offer: "basic" | "local" | null; install: InstallProps; allowed: boolean }) {
+  const v = installView(install.status, allowed);
+  return (
+    <div className="voice-install" id="voice-install" data-offer={offer || ""}>
+      {offer === "basic" && (
+        <p className="set-hint" id="voice-install-why">
+          {INSTALL_BASIC_LINE}
+        </p>
+      )}
+      <div className="voice-install-row">
+        {v.button && (
+          <button
+            type="button"
+            className="test-btn"
+            id="voice-install-btn"
+            disabled={v.disabled}
+            title={!allowed || install.status.refused ? v.text : undefined}
+            onClick={install.onInstall}
+          >
+            {v.button === "retry" ? "Try again" : v.button === "busy" ? "Installing…" : INSTALL_LABEL}
+          </button>
+        )}
+        {v.button === "busy" && <progress className="voice-install-progress" aria-label="Installing local models" />}
+        {v.text && (
+          <span
+            className={"set-hint voice-install-status" + (install.status.state === "done" ? " st-ok" : install.status.state === "failed" ? " st-fail" : "")}
+            id="voice-install-status"
+            role="status"
+          >
+            {v.text}
+          </span>
+        )}
+        {v.last && (
+          <span className="set-hint voice-install-log" id="voice-install-log" title={v.last}>
+            {v.last}
+          </span>
+        )}
+      </div>
+    </div>
+  );
 }
 
 const canRecord = () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
