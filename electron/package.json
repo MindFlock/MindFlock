@@ -45,7 +45,8 @@
     },
     "mac": {
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "MindFlock listens only while you click or hold the mic to talk to a session."
+        "NSMicrophoneUsageDescription": "MindFlock listens only while you click or hold the mic to talk to a session.",
+        "NSSpeechRecognitionUsageDescription": "MindFlock turns what you say to a session into text with macOS speech recognition."
       },
       "target": [
         {
