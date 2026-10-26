@@ -2295,6 +2295,7 @@ built-in alias.
 | `Alt+I` | Intake — tickets, PRs and issues waiting to become sessions |
 | `Alt+V` | Verify — pushed changes nobody has checked |
 | `Alt+S` | Schedule — templates that start sessions on their own |
+| `Alt+Space` | Talk to the focused session through the top-bar mic — hold it (hold-to-talk) or press once to start and again to stop (click-to-talk), following the mic's push-to-talk mode. Works while a terminal has focus; the keystroke never reaches the terminal (or, on a Mac, types a non-breaking space). Key-repeat while held is ignored, and letting go of either key — or switching away from the window — ends a hold. The keymap only reports the key: it fires a `mindflock:voice-talk` window event with `detail.phase` `"down"` / `"up"`, and the mic decides what that means. Rebindable like the rest; a rebind applies to the release as well as the press |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` (also `Ctrl+PgDn` / `Ctrl+PgUp`) | Next / previous window — sessions and open windows (assistant, logs, extension panes), one list |
 | `Ctrl+1…9` / `Alt+1…9` | Focus the Nth sidebar row — a session or a window, matching the number badges |
 | `/` | Focus the sidebar session filter (when it's showing) |

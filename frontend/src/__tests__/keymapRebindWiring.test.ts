@@ -37,7 +37,7 @@ describe("the overrides store", () => {
 describe("keymap entries carry rebind ids", () => {
   it("primary bindings are addressable for overrides", () => {
     const ids = new Set(KEYMAP.map((e) => e.id));
-    for (const id of ["palette", "sidebar", "new", "cycle", "close", "reopen", "reload"]) {
+    for (const id of ["palette", "sidebar", "new", "cycle", "close", "reopen", "reload", "talk"]) {
       expect(ids.has(id), id).toBe(true);
     }
   });
