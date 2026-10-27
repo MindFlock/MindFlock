@@ -1102,7 +1102,9 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   secret-scanning hooks are always refused). `fasttrack_failure_notes`
   (Advanced → **Tell the agent when fast-track stops**, default on) leaves
   the agent a `[MindFlock note …]` saying what failed when a run stops on
-  something it can fix, then waits for the fix and carries on from it (twice
+  something it can fix — a failed pre-commit hook's own output included, and
+  the steps fast-track will still take by itself — typed at once when the
+  agent is idle, then waits for the fix and carries on from it (twice
   per run at most; see [team-runs.md](team-runs.md)). Off, such a stop halts
   the run (see [web-ui.md](web-ui.md)). Only `false` is
   written, and anything other than an explicit `false` reads as on.
