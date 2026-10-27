@@ -213,7 +213,12 @@ a session first*).
   hotkey again, letting go, the idle stop, a refused send — a falling, softer
   one (880 → 660 Hz, 140 ms; `chime(ctx, "stop")` in `lib/wakeWord.ts`).
   “Over” (sent, still listening) plays none — *Sent.* is the cue. A chime
-  never plays over a line being said: it waits for that line's end.
+  never plays over words: it goes through the speech queue
+  (`SpeechQueue.cue`) after the line being said and the confirmations
+  waiting, ~120 ms after their end, before any reply — so a stop's own
+  *Stopped.* / *Over and out.* plays whole, then the chime. Nothing on the
+  stop path cancels or skips the queue; a per-session cancel never drops a
+  confirmation.
 - **Stop at any moment**: **“stop recording”**, “stop listening”, “mic off”
   or “that's all” at the end of any committed words — mid-phrase too, not only
   as the last word of a phrase — stops listening at once; the phrase is never

@@ -2021,6 +2021,10 @@ export const SPEECH_STALE_MS = 60_000;
 /** A confirmation ("Sent.") older than this when its turn comes is dropped:
  * late, it would only confuse. */
 export const CONFIRM_STALE_MS = 5_000;
+/** The quiet between a line's end and a sound queued behind it
+ * ({@link SpeechQueue.cue}): an engine reports its words over a moment
+ * before the speakers are done with them. */
+export const CUE_GAP_MS = 120;
 /** A line held back by the queue's gate is tried again this often. */
 export const GATE_RETRY_MS = 50;
 /** Words this recent in the phrase under way: the person is mid-sentence
@@ -2046,6 +2050,8 @@ interface Queued {
   confirm?: boolean;
   /** Called as its engine starts on it (a confirmation mutes the mic). */
   start?: () => void;
+  /** A sound ({@link SpeechQueue.cue}), not words: this plays it. */
+  sound?: Speaker;
   /** When it was queued (ms). */
   at: number;
   /** The session it is about ("" for the app's own words): {@link
@@ -2070,7 +2076,9 @@ interface Queued {
  *  - a {@link confirm}ation ("Sent.") goes to the front, after the other
  *    confirmations waiting — never behind a reply — is said even while held
  *    (the mic is muted for it), and is dropped once {@link CONFIRM_STALE_MS}
- *    old. */
+ *    old; a per-session {@link cancel} never drops one;
+ *  - a {@link cue} (the mic's chime) takes a confirmation's place: never over
+ *    words — a stop's chime follows its "Stopped." whole. */
 export class SpeechQueue {
   private lines: Queued[] = [];
   /** The engine saying the current line (cancel THAT one, even if the
@@ -2122,6 +2130,23 @@ export class SpeechQueue {
     });
   }
 
+  /** A short sound (the mic's chime) in the queue's order: never over words —
+   * after the line being said and the confirmations waiting (a stop phrase's
+   * "Stopped." plays whole, then the chime), before any reply; played even
+   * while held or gated, {@link CUE_GAP_MS} of quiet first when it follows a
+   * line. `play` starts it, `ms` is its length. Not words: no onSpeaking,
+   * never {@link last}; a {@link hold} (the mic keyed again) drops it
+   * unplayed. Resolves once it has played (or was dropped). */
+  cue(play: () => void, ms: number): Promise<void> {
+    const lead = this.speaking || this.lines.length ? CUE_GAP_MS : 0;
+    return new Promise<void>((done) => {
+      let at = 0;
+      while (at < this.lines.length && this.lines[at].confirm) at++;
+      this.lines.splice(at, 0, { line: "", at: this.now(), title: "", done, confirm: true, sound: soundSpeaker(play, ms, lead) });
+      this.pump();
+    });
+  }
+
   /** Continuous listening: instead of a hold, a line (not a confirmation)
    * starts only when `ok` says so — not while the person is mid-sentence —
    * checked again every {@link GATE_RETRY_MS} while one waits. Null: no gate. */
@@ -2163,6 +2188,10 @@ export class SpeechQueue {
   hold(): void {
     this.held = true;
     this.cut();
+    // A sound still waiting belongs to the moment just over (a stop's chime).
+    const sounds = this.lines.filter((l) => l.sound);
+    this.lines = this.lines.filter((l) => !l.sound);
+    sounds.forEach((l) => l.done());
   }
 
   release(): void {
@@ -2172,12 +2201,14 @@ export class SpeechQueue {
 
   /** Stop and forget everything queued — or, with `title`, only that
    * session's lines (the one being said, if it is one of them): the others
-   * play on. */
+   * play on, and so do the confirmations and sounds (about the person's own
+   * action, never a session's). */
   cancel(title?: string): void {
-    const drop = title === undefined ? this.lines : this.lines.filter((l) => l.title === title);
-    this.lines = title === undefined ? [] : this.lines.filter((l) => l.title !== title);
+    const mine = (l: Queued) => title === undefined || (l.title === title && !l.confirm);
+    const drop = this.lines.filter(mine);
+    this.lines = this.lines.filter((l) => !mine(l));
     drop.forEach((l) => l.done());
-    if (this.current && (title === undefined || this.current.title === title)) this.cut();
+    if (this.current && mine(this.current)) this.cut();
     if (this.held) this.settle();
     else this.pump();
   }
@@ -2193,7 +2224,7 @@ export class SpeechQueue {
     this.current = null;
     this.turn++;
     sp.cancel();
-    this.onSpeaking(false);
+    if (!cur?.sound) this.onSpeaking(false);
     cur?.done();
   }
 
@@ -2222,30 +2253,31 @@ export class SpeechQueue {
       if (!next) return this.settle();
       const stale = next.confirm ? CONFIRM_STALE_MS : this.opts.staleMs ?? SPEECH_STALE_MS;
       const age = this.now() - next.at;
-      const text = String((typeof next.line === "function" ? next.line() : next.line) || "").trim();
+      const text = next.sound ? "" : String((typeof next.line === "function" ? next.line() : next.line) || "").trim();
       if (age > stale) {
-        (this.opts.log ?? ((m: string) => console.debug(m)))(
-          "[voice] dropped a line " + Math.round(age / 1000) + " s old: " + text.slice(0, 80)
-        );
+        if (!next.sound)
+          (this.opts.log ?? ((m: string) => console.debug(m)))(
+            "[voice] dropped a line " + Math.round(age / 1000) + " s old: " + text.slice(0, 80)
+          );
         next.done();
         continue;
       }
-      if (!text) {
+      if (!text && !next.sound) {
         next.done();
         continue;
       }
-      const sp = this.engine();
+      const sp = next.sound || this.engine();
       const turn = ++this.turn;
-      this.last = text;
+      if (!next.sound) this.last = text;
       this.speaking = sp;
       this.current = next;
-      this.onSpeaking(true);
+      if (!next.sound) this.onSpeaking(true);
       next.start?.();
       const done = () => {
         if (this.turn !== turn || !this.speaking) return;
         this.speaking = null;
         this.current = null;
-        this.onSpeaking(false);
+        if (!next.sound) this.onSpeaking(false);
         next.done();
         this.pump();
       };
@@ -2253,6 +2285,30 @@ export class SpeechQueue {
       return;
     }
   }
+}
+
+/** A {@link SpeechQueue.cue}'s player: `lead` ms of quiet, then `play`, done
+ * `ms` later; cancel() ends it (a sound already started rings out — it is
+ * short). */
+function soundSpeaker(play: () => void, ms: number, lead: number): Speaker {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let end = () => {};
+  return {
+    speak: () =>
+      new Promise<void>((resolve) => {
+        end = resolve;
+        const go = () => {
+          play();
+          timer = setTimeout(resolve, ms);
+        };
+        if (lead > 0) timer = setTimeout(go, lead);
+        else go();
+      }),
+    cancel: () => {
+      clearTimeout(timer);
+      end();
+    },
+  };
 }
 
 /** The first audio after the app's own voice was cut is not the person (the

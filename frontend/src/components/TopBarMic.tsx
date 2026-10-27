@@ -146,6 +146,7 @@ import {
 } from "../lib/voiceMic";
 import {
   CHIME_MS,
+  STOP_CHIME_MS,
   WAKE_HINT,
   WAKE_LISTEN_MS,
   WakeStandby,
@@ -651,17 +652,12 @@ export function TopBarMic() {
   /** Continuous listening: the replies play in the person's pauses (the
    * queue's gate, not its hold), the recorder muted while a line plays. */
   const gated = useRef(false);
-  /** The mic's chime (Settings → Voice "Sounds"): never over a line being
-   * said — it waits for that line's end. */
+  /** The mic's chime (Settings → Voice "Sounds"), in the speech queue's
+   * order (lib/voiceDesktop SpeechQueue.cue): never over words — a stop's
+   * chime follows its "Stopped." whole, then the replies go. */
   const sound = (kind: "start" | "stop") => {
     if (prefsRef.current.sounds === false) return;
-    if (!queue.busy) return chime(voiceAudioCtx(), kind);
-    const after = (on: boolean) => {
-      if (on) return;
-      speakingListeners.delete(after);
-      chime(voiceAudioCtx(), kind);
-    };
-    speakingListeners.add(after);
+    void queue.cue(() => chime(voiceAudioCtx(), kind), kind === "stop" ? STOP_CHIME_MS : CHIME_MS);
   };
 
   const halt = () => {
@@ -669,7 +665,9 @@ export function TopBarMic() {
     queue.setGate(null);
     if (chimed.current) {
       chimed.current = false;
-      // Before the queue lets the replies go: the stop comes first.
+      // Queued behind the stop's own confirmation ("Stopped.", "Over and
+      // out."), before the replies the release lets go — and nothing here
+      // cancels or skips the queue: the confirmation plays whole.
       sound("stop");
     }
     clearTimeout(idleTimer.current);
