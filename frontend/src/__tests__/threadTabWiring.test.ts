@@ -190,9 +190,11 @@ describe("the composer", () => {
     // routes. Send now is dialog_safe: the SERVER re-checks the agent and
     // queues instead of typing into a prompt (review 2026-10-05).
     expect(TAB).toContain(
-      '...plannedNow.map((t) => instApi<{ queued?: boolean }>(t, "/send", { json: { text, dialog_safe: true } })), ' +
+      '...plannedNow.map((t) => instApi<{ queued?: boolean }>(t, "/send", { json: body })), ' +
         '...plannedLater.map((t) => instApi(t, "/queue", { json: { text } }))'
     );
+    // `say` only with Read replies aloud on Everything (lib/voiceDesktop sayOnSend).
+    expect(TAB).toContain("const body = sayOnSend(false) ? { text, dialog_safe: true, say: true } : { text, dialog_safe: true };");
     expect(TAB).toMatch(/!!\(r\.value as \{ queued\?: boolean \} \| null\)\?\.queued/);
     // Never the agents' mailbox.
     expect(TAB).not.toContain("/message");

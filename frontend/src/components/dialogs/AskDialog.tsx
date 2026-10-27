@@ -1,20 +1,28 @@
 /** "A session is asking you something" — the pop-up in the middle of the
  * screen (lib/ask.ts holds the rules; this is the surface).
  *
- * It opens BY ITSELF when a session starts asking — a dialog on its screen
- * (activity clarify) or a reply that ended with a question in plain words
- * (the row's `asking`, or `session.question` before the rows catch up) —
- * while Settings → Notifications' "Pop up a session's question" is on, and
- * never for an ask you already dealt with, one you are typing to in its
- * pane, or on top of another dialog (`askSuppressed`). It waits for the
- * keyboard to go quiet and an idle frame, so a word being typed elsewhere is
- * not cut in half. Several asking: ONE pop-up, "1 of N", oldest first.
+ * It opens BY ITSELF when a session shows a dialog — a permission or choice
+ * prompt, Claude's question prompt included (activity clarify) — while
+ * Settings → Notifications' "Pop up a session's permission and choice prompts" is on, and never
+ * for an ask you already dealt with, one you are typing to in its pane, or
+ * on top of another dialog (`askSuppressed`). A reply that ended with a
+ * question in plain words never opens it by itself: its Reply does. It
+ * waits for the keyboard to go quiet and an idle frame, so a word being
+ * typed elsewhere is not cut in half. Several asking: ONE pop-up, "1 of N",
+ * oldest first (`cardQueue`: the dialogs, and a question you opened).
  *
  * What it shows, per ask:
  *  - a parsed dialog: its question, its command and its own options — the
  *    AnswerStrip's machinery (`useAnswerStrip`: the fresh-read rule, the 409
  *    re-read, the answered latch), 1–9 and Y / N / A pick, Enter presses the
  *    highlighted option ("Always" is never the highlighted one);
+ *  - Claude's question prompt (kind "select", lib/askSelect): its tabs, the
+ *    question, then the options with their descriptions — one press picks
+ *    and moves on; a multi-select ticks boxes and Next sends them; "Type
+ *    something" / "Chat about this" open a field; the review lists the
+ *    answers with Submit. Each step is read again and shown in place: the
+ *    pop-up stays open on the session while the dialog id changes step by
+ *    step (`selectFlows`);
  *  - an unparsed dialog: its question and "Open the pane ↗" — there is
  *    nothing it can safely press;
  *  - a question in plain words: an answer box (Enter sends with /send
@@ -41,6 +49,7 @@ import {
   askMemory,
   askQueue,
   askSuppressed,
+  cardQueue,
   dismissQuestion,
   nextAfter,
   sendAnswer,
@@ -51,7 +60,21 @@ import {
   type EventAsk,
 } from "../../lib/ask";
 import { askMic, askVoice, clearAskVoice, getMicState, setAskVoice, subscribeMicState, type AskVoice } from "../../lib/askVoice";
-import { dialogChoices, TALK_EVENT } from "../../lib/voiceDesktop";
+import { dialogChoices, sayOnSend, TALK_EVENT } from "../../lib/voiceDesktop";
+import {
+  answerSelect,
+  fieldPhrase,
+  isBox,
+  isSelect,
+  selectFlows,
+  selectKey,
+  selectStage,
+  SELECT_POLL_MS,
+  takesWords,
+  type SelectAct,
+  type SelectFlow,
+} from "../../lib/askSelect";
+import { fetchDialog } from "../../lib/flockActions";
 import { meterRef } from "../../lib/voiceMic";
 import { forceActivity } from "../../lib/sessionState";
 import { overlayOpen } from "../../lib/keymap";
@@ -188,14 +211,18 @@ export function AskDialog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [instances, outbox, tick]
   );
+  // A select flow's step posted or read: re-render (it holds the pop-up open).
+  useSyncExternalStore(selectFlows.subscribe, () => selectFlows.get(target || ""), () => null);
   // Not memoized: the memory changes outside React (a Reply forgets, an
   // answer remembers); the effects below key on `queueKey`.
-  const queue = all.filter((i) => !askMemory.handled(i));
+  const queue = cardQueue(all, askMemory);
   const queueKey = queue.map((q) => q.title + "|" + q.key).join("\n");
   const queueRef = useRef(queue);
   queueRef.current = queue;
   useEffect(() => {
-    askMemory.prune(new Set(all.map((i) => i.title)));
+    const asking = new Set(all.map((i) => i.title));
+    askMemory.prune(asking);
+    selectFlows.prune(asking);
   }, [all]);
 
   // --- opening by itself ------------------------------------------------- //
@@ -248,7 +275,10 @@ export function AskDialog() {
 
   // --- open: follow the queue ---------------------------------------------- //
   const shown = useRef<string[]>([]);
-  const current = open && target ? queue.find((q) => q.title === target) || null : null;
+  // Between two steps of Claude's question prompt the rows may say it is
+  // not asking for a moment: the flow keeps the pop-up on it.
+  const flowing = !!target && selectFlows.active(target);
+  const current = open && target ? queue.find((q) => q.title === target) || (flowing ? flowItem(target) : null) : null;
   if (current) shown.current = queue.map((q) => q.title);
   const currentKey = current?.key || "";
   useEffect(() => {
@@ -261,6 +291,7 @@ export function AskDialog() {
 
   if (!open || !current) return null;
 
+  // A flow between steps (not in the queue this render): no stepper.
   const at = queue.findIndex((q) => q.title === current.title);
   const done = (how: "answered" | "later" | "pane", dialogId?: string | null) => {
     askMemory.handle(current, how, dialogId);
@@ -281,8 +312,8 @@ export function AskDialog() {
       <AskPanel
         key={current.title + "|" + current.key}
         item={current}
-        index={at}
-        count={queue.length}
+        index={Math.max(0, at)}
+        count={at < 0 ? 1 : queue.length}
         onStep={(delta) => {
           const t = stepAsk(queue, current.title, delta);
           if (t) useUi.getState().openDialogFor("ask", t);
@@ -292,6 +323,13 @@ export function AskDialog() {
       />
     </Modal>
   );
+}
+
+/** A session walking through Claude's question prompt while its row is a
+ * poll behind (see `selectFlows.active`). */
+function flowItem(title: string): AskItem {
+  const f = selectFlows.get(title);
+  return { title, kind: "dialog", text: f?.dialog.question || "", ts: 0, dialogId: f?.dialog.id || null, key: "sel:" + title };
 }
 
 /** The panel's Later, for the modal's Escape. */
@@ -324,8 +362,48 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
       }
     },
   });
-  const d = isDialog ? strip.state.dialog : null;
+  const stripD = isDialog ? strip.state.dialog : null;
+  // Claude's question prompt: the flow (lib/askSelect) holds the step shown,
+  // across re-mounts; the strip's read starts it or moves it on.
+  const flow = useSyncExternalStore(
+    selectFlows.subscribe,
+    () => selectFlows.get(title),
+    () => null
+  );
+  useEffect(() => {
+    if (stripD && isSelect(stripD)) selectFlows.offer(title, stripD, strip.state.loadedAt || Date.now());
+  }, [stripD, title, strip.state.loadedAt]);
+  const sel = flow && flow.ended !== "handoff" ? flow : null;
+  // A hand-off reads the strip again: until then its select read is stale.
+  const handingOff = flow?.ended === "handoff" && isSelect(stripD);
+  const d = sel ? sel.dialog : handingOff ? null : stripD;
+  const ended = flow?.ended || "";
+  useEffect(() => {
+    if (ended === "done") onDone("answered", selectFlows.get(title)?.dialog.id);
+    else if (ended === "handoff") strip.reload(selectFlows.get(title)?.note || undefined);
+    // Once per ending: `strip` and `onDone` are new every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ended, title]);
+  // While a step is shown, read it again now and then (a voice answer, the
+  // pane, a redraw moved it).
+  const polling = !!flow && !flow.ended && !flow.busy;
+  useEffect(() => {
+    if (!polling) return;
+    const ctl = new AbortController();
+    const timer = window.setInterval(() => {
+      const at = Date.now();
+      fetchDialog(title, ctl.signal).then(
+        (fresh) => !ctl.signal.aborted && selectFlows.polled(title, fresh, at),
+        () => {}
+      );
+    }, SELECT_POLL_MS);
+    return () => {
+      ctl.abort();
+      clearInterval(timer);
+    };
+  }, [polling, title]);
   const field = useRef<HTMLTextAreaElement | null>(null);
+  const selField = useRef<HTMLTextAreaElement | null>(null);
   const [hasText, setHasText] = useState(false);
   const [sending, setSending] = useState(false);
   const [note, setNote] = useState("");
@@ -352,7 +430,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
       setSending(true);
       setNote("");
       try {
-        const r = await sendAnswer(title, text, say);
+        const r = await sendAnswer(title, text, say || sayOnSend(false));
         const line = (r?.queued ? "Queued for " : "Sent to ") + name + ".";
         toast(line);
         onDone("answered");
@@ -373,10 +451,37 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
     [title, name, onDone]
   );
 
+  /** One answer to Claude's question prompt (lib/askSelect's sequences);
+   * `say` for the words of "Chat about this" sent by voice. */
+  const act = useCallback(
+    (a: SelectAct, say?: boolean) =>
+      selectFlows.act(title, a, {
+        answer: (keys, id, text) => answerSelect(title, keys, id, text),
+        send: (text) => sendAnswer(title, text, say ?? sayOnSend(false)),
+        fetch: () => fetchDialog(title),
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      }),
+    [title]
+  );
+  /** The open field's words go: "Type something" or "Chat about this". */
+  const sendField = useCallback(
+    async (say?: boolean): Promise<{ ok: boolean; line: string }> => {
+      const f = selectFlows.get(title);
+      const opt = f?.dialog.options.find((o) => o.key === f.field);
+      const text = (f?.text || "").trim();
+      if (!f || !opt || !text) return { ok: false, line: "Nothing to send yet" };
+      await act({ type: opt.kind === "chat" ? "chat" : "text", key: opt.key, text }, say);
+      const after = selectFlows.get(title);
+      if (after?.note && !after.ended) return { ok: false, line: after.note };
+      return { ok: true, line: (opt.kind === "chat" ? "Sent to " : "Answered ") + name + "." };
+    },
+    [title, name, act]
+  );
+
   // The mic answers THIS session while the panel is up.
   const hint = d?.parsed ? name + ": " + dialogChoices(d) : isDialog ? "Answer " + name + " on the screen" : "Answer " + name + " — say submit to send";
   const sendRef = useRef(send);
-  sendRef.current = send;
+  sendRef.current = sel?.field ? sendField : send;
   const hintRef = useRef(hint);
   hintRef.current = hint;
   useEffect(() => {
@@ -384,8 +489,17 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
       title,
       kind: isDialog ? "dialog" : "question",
       hint: () => hintRef.current,
-      field: () => field.current,
+      field: () => field.current || selField.current,
       submit: (say) => sendRef.current(say),
+      // "Type something" / "Chat about this" said: open that field.
+      phrase: (text) => {
+        const want = fieldPhrase(text);
+        const f = selectFlows.get(title);
+        const opt = want && f && !f.ended ? f.dialog.options.find((o) => o.kind === want) : undefined;
+        if (!opt) return false;
+        selectFlows.openField(title, opt.key);
+        return true;
+      },
     };
     setAskVoice(voice);
     return () => {
@@ -398,13 +512,15 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
     };
   }, [title, isDialog]);
 
-  // Read it out once (only with "Read replies aloud" on — the mic decides).
-  const dialogReady = !!d && strip.state.phase === "ready";
+  // Read it out once (only with "Read replies aloud" on — the mic decides);
+  // each step of Claude's question prompt once.
+  const dialogReady = !!d && (sel ? !sel.busy : strip.state.phase === "ready");
+  const readKey = sel && d ? "sel:" + title + "|" + (d.step ?? 0) + "|" + d.question : item.key;
   useEffect(() => {
-    if (readOut.has(item.key)) return;
+    if (readOut.has(readKey)) return;
     if (item.kind === "dialog") {
       if (!dialogReady || !d) return;
-      readOut.add(item.key);
+      readOut.add(readKey);
       askMic()?.handsFree(title, { dialog: d });
     } else {
       readOut.add(item.key);
@@ -412,7 +528,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
     }
     // d is read through dialogReady's render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.key, item.kind, dialogReady, title]);
+  }, [readKey, item.kind, dialogReady, title]);
 
   // Keys: 1–9 and Y / N / A pick an option.
   const pickRef = useRef(strip.pick);
@@ -422,6 +538,17 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
     const onKey = (e: KeyboardEvent) => {
       const el = document.activeElement;
       const typing = !!el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT");
+      if (isSelect(d)) {
+        // Claude's question prompt: a digit presses, ticks, or opens a field.
+        const k = selectKey(d, e, typing);
+        if (!k) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (k.type === "toggle") selectFlows.toggle(title, k.key);
+        else if (k.type === "field") selectFlows.openField(title, k.key);
+        else void act({ type: "pick", key: k.key });
+        return;
+      }
       const key = askKeyPick(d, e, typing);
       if (!key) return;
       e.preventDefault();
@@ -430,7 +557,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [d]);
+  }, [d, title, act]);
 
   // The keyboard lands on the highlighted option (never "Always"), or the
   // answer box.
@@ -441,10 +568,15 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
   useEffect(() => {
     if (!isDialog) setTimeout(() => field.current?.focus({ preventScroll: true }), 0);
   }, [isDialog]);
+  // A select option's field opened (a click, its digit, the mic): type there.
+  const openField = sel?.field || "";
+  useEffect(() => {
+    if (openField) setTimeout(() => selField.current?.focus({ preventScroll: true }), 0);
+  }, [openField]);
 
   const kind = askKindLabel(item.kind, d);
   // Before the first read lands (the fetch starts after the first paint).
-  const loading = isDialog && !d && strip.state.phase !== "ready";
+  const loading = isDialog && !d && (strip.state.phase !== "ready" || handingOff);
   const question = isDialog
     ? (d ? questionText(d, "thread") : "") || item.text
     : item.text || "It asked you a question in its reply";
@@ -489,7 +621,20 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
       )}
       {d?.command && <pre className="ask-cmd">{d.command}</pre>}
 
-      {d?.parsed && (
+      {sel && d && isSelect(d) && (
+        <SelectView
+          flow={sel.ended ? { ...sel, busy: true } : sel}
+          primaryRef={primaryBtn}
+          fieldRef={selField}
+          onAct={(a) => void act(a)}
+          onToggle={(k) => selectFlows.toggle(title, k)}
+          onField={(k) => selectFlows.openField(title, k)}
+          onText={(t) => selectFlows.setText(title, t)}
+          onCloseField={() => selectFlows.closeField(title)}
+          onSendField={() => void sendField()}
+        />
+      )}
+      {d?.parsed && !isSelect(d) && (
         <div className="ask-opts" role="group" aria-label="Answers">
           {(strip.state.phase === "answered" ? d.options.filter((o) => o.key === strip.state.picked) : d.options).map((o, i) => (
             <button
@@ -533,9 +678,9 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
         />
       )}
 
-      {(strip.state.note || note) && (
+      {(strip.state.note || note || sel?.note) && (
         <div className="ask-note" role="status">
-          {note || strip.state.note}
+          {note || sel?.note || strip.state.note}
         </div>
       )}
 
@@ -543,7 +688,13 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
 
       <div className="modal-actions">
         <span className="ask-keys">
-          {d?.parsed ? "1–9 or Y / N / A · Enter · Esc later" : !isDialog ? "Enter sends · Shift+Enter new line · Esc later" : "Esc later"}
+          {d && isSelect(d)
+            ? SELECT_KEYS[selectStage(d)]
+            : d?.parsed
+              ? "1–9 or Y / N / A · Enter · Esc later"
+              : !isDialog
+                ? "Enter sends · Shift+Enter new line · Esc later"
+                : "Esc later"}
         </span>
         <button type="button" id="ask-open" onClick={openPane}>
           Open the pane ↗
@@ -556,6 +707,151 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
             {sending ? "Sending…" : "Send"}
           </button>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** The keys line under Claude's question prompt, by stage. */
+export const SELECT_KEYS: Record<ReturnType<typeof selectStage>, string> = {
+  single: "1–9 picks · Esc later",
+  multi: "1–9 ticks · Enter next · Esc later",
+  review: "Enter submits · Esc later",
+};
+
+export interface SelectViewProps {
+  flow: Pick<SelectFlow, "dialog" | "checked" | "field" | "text" | "busy">;
+  primaryRef?: { current: HTMLButtonElement | null };
+  fieldRef?: { current: HTMLTextAreaElement | null };
+  onAct(a: SelectAct): void;
+  onToggle(key: string): void;
+  onField(key: string): void;
+  onText(text: string): void;
+  onCloseField(): void;
+  onSendField(): void;
+}
+
+/** Claude's question prompt, one step: its tabs (done ✓, the shown one
+ * lit, Submit last), the review's answers, the options with their
+ * descriptions — a press (single), a box (multi), a field ("Type
+ * something", "Chat about this") — then Back / Next and the small "Cancel
+ * the question". Pure: the panel owns the flow. */
+export function SelectView({ flow, primaryRef, fieldRef, onAct, onToggle, onField, onText, onCloseField, onSendField }: SelectViewProps) {
+  const d = flow.dialog;
+  const stage = selectStage(d);
+  const steps = d.steps || [];
+  const step = d.step ?? 0;
+  const busy = flow.busy;
+  const words = flow.field ? d.options.find((o) => o.key === flow.field) : undefined;
+  // The one the keyboard lands on: Next (multi), Submit (review), else the
+  // first option that is a press.
+  const prim =
+    stage === "multi"
+      ? ""
+      : (stage === "review" ? d.options.find((o) => o.kind === "yes") : d.options.find((o) => !takesWords(o)))?.key || "";
+  const label = (o: DialogOption) => (
+    <span className="ask-opt-text">
+      <span className="ask-opt-label">{o.label}</span>
+      {o.desc && <span className="ask-opt-desc">{o.desc}</span>}
+    </span>
+  );
+  return (
+    <div className="ask-select" data-stage={stage} aria-busy={busy || undefined}>
+      {steps.length > 1 && (
+        <ol className="ask-tabs" aria-label="Questions">
+          {steps.map((s, i) => (
+            <li
+              key={i}
+              className={"ask-tab" + (i === step ? " active" : "") + (s.done ? " done" : "")}
+              aria-current={i === step ? "step" : undefined}
+            >
+              {s.done && i !== step ? "✓ " : ""}
+              {s.label || (s.submit ? "Submit" : "Question " + (i + 1))}
+            </li>
+          ))}
+        </ol>
+      )}
+      {stage === "review" && !!d.review?.length && (
+        <dl className="ask-review">
+          {d.review.map((r, i) => (
+            <div key={i} style={{ display: "contents" }}>
+              <dt>{r.question}</dt>
+              <dd>{r.answer || "—"}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      <div className="ask-opts" role="group" aria-label="Answers">
+        {d.options.map((o) => {
+          const box = stage === "multi" && isBox(o) && !takesWords(o);
+          const on = !!flow.checked[o.key];
+          return (
+            <button
+              key={o.key}
+              ref={o.key === prim ? primaryRef : undefined}
+              type="button"
+              role={box ? "checkbox" : undefined}
+              aria-checked={box ? on : undefined}
+              className={"ask-opt" + (o.key === prim ? " primary" : "") + (flow.field === o.key ? " picked" : "")}
+              data-key={o.key}
+              data-kind={o.kind}
+              disabled={busy}
+              title={"Press " + o.key + ": " + o.label}
+              onClick={() => (takesWords(o) ? onField(o.key) : box ? onToggle(o.key) : onAct({ type: "pick", key: o.key }))}
+            >
+              <span className="k">{o.key}</span>
+              {box && <span className="ask-box" aria-hidden="true" />}
+              {label(o)}
+            </button>
+          );
+        })}
+      </div>
+      {words && (
+        <div className="ask-sel-field">
+          <textarea
+            ref={fieldRef}
+            id="ask-select-field"
+            className="ask-answer"
+            rows={2}
+            placeholder={words.kind === "chat" ? "What to talk about — it goes to the session…" : "Your answer…"}
+            aria-label={words.label}
+            spellCheck
+            disabled={busy}
+            value={flow.text}
+            onChange={(e) => onText(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && !flow.text) {
+                e.preventDefault();
+                e.stopPropagation();
+                onCloseField();
+                return;
+              }
+              if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+              e.preventDefault();
+              onSendField();
+            }}
+          />
+          <button type="button" id="ask-select-send" disabled={busy || !flow.text.trim()} onClick={onSendField}>
+            {words.kind === "chat" ? "Send" : "Answer"}
+          </button>
+        </div>
+      )}
+      <div className="ask-sel-nav">
+        {step > 0 && (
+          <button type="button" className="ghost" id="ask-select-back" disabled={busy} onClick={() => onAct({ type: "prev" })}>
+            ‹ Back
+          </button>
+        )}
+        {stage === "multi" && (
+          <button type="button" className="primary" id="ask-select-next" ref={primaryRef} disabled={busy} onClick={() => onAct({ type: "next" })}>
+            {d.button || "Next"} ›
+          </button>
+        )}
+        {busy && <span className="ask-state">sending…</span>}
+        <span className="ask-sel-sp" />
+        <button type="button" className="linklike ask-cancel-q" disabled={busy} onClick={() => onAct({ type: "cancel" })}>
+          Cancel the question
+        </button>
       </div>
     </div>
   );

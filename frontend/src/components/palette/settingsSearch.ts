@@ -79,7 +79,7 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
   {
     key: "notifications",
     label: "Notifications → Question pop-up",
-    sub: "Pop up a session's question in the middle of the screen",
+    sub: "Pop up a session's permission and choice prompts in the middle of the screen",
     terms: ["question", "questions", "pop up", "popup", "pop-up", "ask", "asking", "dialog", "permission", "answer"],
     anchor: "#notif-ask-row",
   },

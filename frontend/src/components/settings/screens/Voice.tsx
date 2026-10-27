@@ -32,7 +32,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, apiRaw } from "../../../api/client";
 import { toast } from "../../../lib/toast";
 import { startWavRecording } from "../../../lib/wavRecorder";
-import { loadVoicePrefs, onVoicePrefs, saveVoicePrefs, type VoicePrefs } from "../../../lib/voiceDesktop";
+import { loadVoicePrefs, onVoicePrefs, saveVoicePrefs, REPLIES_CHOICES, type VoicePrefs } from "../../../lib/voiceDesktop";
 import type { ScreenProps } from "../SettingsDialog";
 import { SECRET_MASK, SettingField, useSettings, type SettingsModel } from "../useSettings";
 import "./voice.css";
@@ -425,8 +425,9 @@ export function VoiceSectionView({
 }
 
 /** This computer's mic, as the top-bar mic's popover sets it (the same
- * per-browser prefs, lib/voiceDesktop loadVoicePrefs): Read replies aloud,
- * off by default on the desktop, and the push-to-talk mode. Both surfaces
+ * per-browser prefs, lib/voiceDesktop loadVoicePrefs): Read replies aloud —
+ * Off (the desktop's default), replies to what you said by voice, or
+ * everything every session says — and the push-to-talk mode. Both surfaces
  * follow each other through VOICE_PREFS_EVENT. */
 export function MicPrefs() {
   const [prefs, setPrefs] = useState<VoicePrefs>(loadVoicePrefs);
@@ -441,26 +442,31 @@ export function MicPrefs() {
       <p className="set-hint" id="voice-mic-hint">
         The mic in the top bar; the same choices are in its popover. These are per browser.
       </p>
-      <div className="set-row set-switch-row" id="voice-replies-row">
+      <div className="set-row" id="voice-replies-row">
         <span className="notif-rule-text">
           <span className="set-label" id="voice-replies-label">
             Read replies aloud
           </span>
           <span className="set-hint notif-rule-desc">
-            Off by default here. On, a reply to a prompt you sent by voice is spoken, name first, and a
-            session's question is read out and the mic listens for your answer.
+            Off by default here. A line from a session other than the one in front of you starts with its
+            name; lines from several sessions play one at a time, never over each other. A question read
+            out opens the mic for your answer.
           </span>
         </span>
-        <label className="ca-switch">
-          <input
-            type="checkbox"
-            id="voice-replies"
-            aria-labelledby="voice-replies-label"
-            checked={prefs.replies}
-            onChange={(e) => save({ ...prefs, replies: e.target.checked })}
-          />
-          <span className="ca-slider" />
-        </label>
+        <div className="voice-ptt-choices" id="voice-replies" role="radiogroup" aria-labelledby="voice-replies-label">
+          {REPLIES_CHOICES.map((c) => (
+            <label className="voice-ptt-choice" key={c.value}>
+              <input
+                type="radio"
+                name="voice-replies"
+                value={c.value}
+                checked={prefs.replies === c.value}
+                onChange={() => save({ ...prefs, replies: c.value })}
+              />
+              <span>{c.label}</span>
+            </label>
+          ))}
+        </div>
       </div>
       <div className="set-row" id="voice-ptt-row">
         <span className="set-label">Push to talk</span>
