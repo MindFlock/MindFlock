@@ -7,6 +7,10 @@ import tempfile
 import warnings
 from pathlib import Path
 
+# No boot-time model warm-up under the suite: a daemon thread left by one
+# app's lifespan would load a model into a later test's cache.
+os.environ.setdefault("MINDFLOCK_VOICE_WARM", "0")
+
 import pytest
 
 # Make the unified ``backend`` package (at the repo root, not pip-installed)

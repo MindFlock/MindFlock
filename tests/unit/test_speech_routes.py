@@ -133,6 +133,7 @@ class TestGet:
         assert calls == ["stt", "tts"]
 
     def test_boot_warms_both_kinds(self, fakes, monkeypatch):
+        monkeypatch.setenv("MINDFLOCK_VOICE_WARM", "1")  # the suite turns it off
         calls: list = []
         monkeypatch.setattr(
             speech,
@@ -142,6 +143,16 @@ class TestGet:
         with TestClient(server.app):
             pass
         assert calls == [("stt", 3.0), ("tts", 6.0)]
+
+    def test_the_suite_skips_the_boot_warm(self, fakes, monkeypatch):
+        monkeypatch.setenv("MINDFLOCK_VOICE_WARM", "0")
+        calls: list = []
+        monkeypatch.setattr(
+            speech, "warm_in_background", lambda kind, delay_s=0.0: calls.append(kind)
+        )
+        with TestClient(server.app):
+            pass
+        assert calls == []
 
     def test_system_block(self, fakes, monkeypatch):
         from backend.web.core import speech_system

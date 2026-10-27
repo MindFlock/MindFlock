@@ -726,13 +726,16 @@ async def lifespan(app: FastAPI):
     # few seconds after boot, and the voice a few after that (daemon threads;
     # each a no-op when there is nothing to warm), so the first press of the
     # mic — or the first line read aloud — after a restart is not a wait.
-    try:
-        from backend.web.core import speech as _speech_warm
+    # MINDFLOCK_VOICE_WARM=0 skips it (the test suite: a warm-up thread left
+    # by one app's lifespan would otherwise load a model into the next test).
+    if os.environ.get("MINDFLOCK_VOICE_WARM", "1") != "0":
+        try:
+            from backend.web.core import speech as _speech_warm
 
-        _speech_warm.warm_in_background("stt", delay_s=3.0)
-        _speech_warm.warm_in_background("tts", delay_s=6.0)
-    except Exception:  # noqa: BLE001 — warming is best effort
-        pass
+            _speech_warm.warm_in_background("stt", delay_s=3.0)
+            _speech_warm.warm_in_background("tts", delay_s=6.0)
+        except Exception:  # noqa: BLE001 — warming is best effort
+            pass
     # "Read everything" survived the restart: the live sessions' hooks must
     # know the marker (a session launched by an older build does not).
     try:

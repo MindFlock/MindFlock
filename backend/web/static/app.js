@@ -28997,7 +28997,7 @@ function adoptAccent(name) {
 	} catch {}
 	rethemeAll();
 }
-function current$1(dim) {
+function current$2(dim) {
 	return document.documentElement.getAttribute(dim.attr) || "";
 }
 function apply$1(dim, name) {
@@ -29012,8 +29012,8 @@ function apply$1(dim, name) {
 }
 function Appearance(_) {
 	const themeLight = useUi((s) => s.themeLight);
-	const [accent, setAccent] = (0, import_react.useState)(() => current$1(DIMS.accent));
-	const [surface, setSurface] = (0, import_react.useState)(() => current$1(DIMS.surface));
+	const [accent, setAccent] = (0, import_react.useState)(() => current$2(DIMS.accent));
+	const [surface, setSurface] = (0, import_react.useState)(() => current$2(DIMS.surface));
 	const surfaceSwatch = ([name, label, ...tones]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 		type: "button",
 		className: "accent-swatch surface-swatch" + (surface === name ? " active" : ""),
@@ -33993,20 +33993,20 @@ var HOST_API_VERSION = 1;
 var records = /* @__PURE__ */ new Map();
 var known = /* @__PURE__ */ new Map();
 var epochCounter = 0;
-var version = 0;
-var listeners$3 = /* @__PURE__ */ new Set();
+var version$1 = 0;
+var listeners$4 = /* @__PURE__ */ new Set();
 function subscribeHost(cb) {
-	listeners$3.add(cb);
+	listeners$4.add(cb);
 	return () => {
-		listeners$3.delete(cb);
+		listeners$4.delete(cb);
 	};
 }
 function hostVersion() {
-	return version;
+	return version$1;
 }
 function bump() {
-	version++;
-	for (const cb of listeners$3) cb();
+	version$1++;
+	for (const cb of listeners$4) cb();
 }
 function buildTarget(extId, surfaceId, ref) {
 	return extId + ":" + surfaceId + (ref ? ":" + ref : "");
@@ -37730,7 +37730,7 @@ var micState = {
 	caption: "",
 	unsure: ""
 };
-var listeners$2 = /* @__PURE__ */ new Set();
+var listeners$3 = /* @__PURE__ */ new Set();
 function publishMicState(patch) {
 	const next = {
 		...micState,
@@ -37738,15 +37738,15 @@ function publishMicState(patch) {
 	};
 	if (next.listening === micState.listening && next.title === micState.title && next.caption === micState.caption && next.unsure === micState.unsure) return;
 	micState = next;
-	listeners$2.forEach((l) => l());
+	listeners$3.forEach((l) => l());
 }
 function getMicState() {
 	return micState;
 }
 function subscribeMicState(cb) {
-	listeners$2.add(cb);
+	listeners$3.add(cb);
 	return () => {
-		listeners$2.delete(cb);
+		listeners$3.delete(cb);
 	};
 }
 //#endregion
@@ -38201,16 +38201,161 @@ function voicePass(ms) {
 	if (debugOn()) console.debug("[voice] pass " + Math.round(ms) + " ms");
 }
 //#endregion
+//#region src/lib/voiceWords.ts
+var PHRASE_KINDS = [
+	"send",
+	"end",
+	"clear",
+	"stop",
+	"hush"
+];
+var BUILTIN_VOICE_WORDS = {
+	send: ["over"],
+	end: ["over and out", "over, out"],
+	clear: ["disregard"],
+	stop: [
+		"stop",
+		"stop listening",
+		"mic off",
+		"pause listening",
+		"that's all",
+		"done talking"
+	],
+	hush: [
+		"stop talking",
+		"be quiet",
+		"quiet",
+		"hush",
+		"shut up",
+		"enough"
+	],
+	wake: "mindflock"
+};
+var PHRASE_KIN = {
+	stop: {
+		"stop listening": [
+			"stop recording",
+			"stop dictating",
+			"stop the mic",
+			"stop the microphone"
+		],
+		"mic off": [
+			"microphone off",
+			"turn mic off",
+			"turn microphone off",
+			"turn off the mic",
+			"turn off the microphone",
+			"turn the mic off"
+		],
+		"that's all": ["that is all"],
+		"done talking": ["i'm done talking", "i am done talking"]
+	},
+	hush: {
+		"stop talking": [
+			"stop speaking",
+			"stop reading",
+			"stop saying that",
+			"ok stop",
+			"okay stop"
+		],
+		enough: [
+			"that's enough",
+			"that is enough",
+			"enough talking",
+			"enough of that"
+		]
+	}
+};
+function withKin(w, k) {
+	return [...new Set(w[k].flatMap((p) => [p, ...PHRASE_KIN[k]?.[p] || []]))];
+}
+var WORDS_MAX = 6;
+var PHRASE_MAX_CHARS = 40;
+var WAKE_MAX_WORDS = 2;
+var WAKE_MIN_CHARS = 3;
+var WAKE_MAX_CHARS = 20;
+function normPhrase(p) {
+	return String(p || "").toLowerCase().replace(/[’`]/g, "'").replace(/\s+/g, " ").trim();
+}
+function phraseWords(p) {
+	return normPhrase(p).replace(/[^\p{L}\p{N}' ]+/gu, " ").split(" ").filter((w) => w.replace(/'/g, ""));
+}
+var wordKey = (w) => w.replace(/'/g, "");
+function wordsFrom(raw, fallback) {
+	const r = raw && typeof raw === "object" ? raw : {};
+	const out = { ...fallback };
+	for (const k of PHRASE_KINDS) {
+		const v = r[k];
+		if (!Array.isArray(v)) continue;
+		const list = [...new Set(v.map((p) => normPhrase(String(p))).filter((p) => phraseWords(p).length))];
+		if (list.length) out[k] = list;
+	}
+	const wake = typeof r.wake === "string" ? normPhrase(r.wake) : "";
+	const n = phraseWords(wake).length;
+	if (n >= 1 && n <= WAKE_MAX_WORDS) out.wake = wake;
+	return out;
+}
+var defaults = BUILTIN_VOICE_WORDS;
+var current$1 = BUILTIN_VOICE_WORDS;
+var version = 0;
+var listeners$2 = /* @__PURE__ */ new Set();
+function voiceWords() {
+	return current$1;
+}
+function voiceWordsVersion() {
+	return version;
+}
+function setVoiceWords(words, wordsDefault) {
+	const d = wordsDefault === void 0 ? defaults : wordsFrom(wordsDefault, BUILTIN_VOICE_WORDS);
+	const w = wordsFrom(words, d);
+	if (JSON.stringify(w) === JSON.stringify(current$1) && JSON.stringify(d) === JSON.stringify(defaults)) return;
+	defaults = d;
+	current$1 = w;
+	version++;
+	for (const fn of [...listeners$2]) fn(w);
+}
+function onVoiceWords(fn) {
+	listeners$2.add(fn);
+	return () => void listeners$2.delete(fn);
+}
+function applyVoiceView(j) {
+	const v = j && typeof j === "object" ? j : {};
+	if (v.words && typeof v.words === "object") setVoiceWords(v.words, v.words_default);
+}
+var quoted = (p) => "“" + p + "”";
+function wakeName(w = current$1) {
+	if (w.wake === "mindflock") return "MindFlock";
+	return w.wake.replace(/(^|\s)(\p{L})/gu, (_, a, b) => a + b.toUpperCase());
+}
+function phraseError(phrase, list) {
+	const p = normPhrase(phrase);
+	if (!phraseWords(p).length) return "Type a word or a phrase.";
+	if (/[^a-z0-9 ',]/.test(p)) return "Letters, digits, spaces, apostrophes and commas only.";
+	if (p.length > PHRASE_MAX_CHARS) return "At most 40 characters.";
+	if (list.includes(p)) return "Already in the list.";
+	if (list.length >= WORDS_MAX) return "At most 6 phrases — remove one first.";
+	return "";
+}
+function wakeError(wake) {
+	const p = normPhrase(wake);
+	if (!p) return "";
+	if (/[^a-z ]/.test(p)) return "Letters only — one or two words.";
+	if (phraseWords(p).length > WAKE_MAX_WORDS) return "One or two words — a sentence never wakes it.";
+	if (p.length < WAKE_MIN_CHARS || p.length > WAKE_MAX_CHARS) return "3–20 characters.";
+	return "";
+}
+//#endregion
 //#region src/lib/voiceDesktop.ts
 function parseRadio(text) {
 	const t = String(text || "").trim();
-	const m = /^(.*?)[\s,.!?]*\b(?:(over[\s,.!?]+(?:and[\s,.!?]+)?out)|(over|disregard)(?:\s+(?:that|it|all|everything))?)[.!?\s]*$/i.exec(t);
+	const M = matchers();
+	const m = M.radio.exec(t);
 	if (!m) return {
 		kind: "",
 		text: t
 	};
 	return {
-		kind: m[2] ? "out" : m[3].toLowerCase(),
+		kind: M.radioKinds.find(([rx]) => rx.test(m[2]))?.[1] || "",
 		text: m[1].trim()
 	};
 }
@@ -38325,11 +38470,12 @@ function mayBeCommand(text) {
 	if (w.length > 1 && ROUTER_LEADS.has(w[0])) w = w.slice(1);
 	if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
 	if (!w.length) return true;
-	return COMMANDS.some((p) => {
+	const keys = w.map(wordKey);
+	return COMMANDS.concat(matchers().commands).some((p) => {
 		for (let i = 0; i < w.length; i++) {
 			if (i >= p.length) return false;
 			if (p[i][0] === "*") return true;
-			if (!p[i].includes(w[i])) return false;
+			if (!p[i].includes(w[i]) && !p[i].includes(keys[i])) return false;
 		}
 		return true;
 	});
@@ -38346,51 +38492,78 @@ function isSwitchCommand(text) {
 	if (/^(?:next|previous)$/.test(w[0] || "")) return w.length === 2 && /^(?:session|one)$/.test(w[1]);
 	return w.length >= 2 && /^(?:session|number|row)$/.test(w[0]) && new RegExp("^(?:" + NUMS + ")$").test(w[1]);
 }
-var bareWord = (w) => w.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, "");
-var STOP_PHRASES = [
-	"stop recording",
-	"stop listening",
-	"mic off",
-	"microphone off",
-	"turn mic off",
-	"turn microphone off",
-	"that's all",
-	"thats all",
-	"that is all"
-].map((p) => p.split(" "));
-var HUSH_PHRASES = [
-	"stop talking",
-	"stop speaking",
-	"stop reading",
-	"be quiet",
-	"quiet",
-	"shut up",
-	"hush",
-	"enough",
-	"that's enough",
-	"thats enough",
-	"ok stop",
-	"okay stop"
-].map((p) => p.split(" "));
-var CONTROL_PHRASES = [
-	...STOP_PHRASES,
-	...HUSH_PHRASES,
-	...["over", "disregard"].flatMap((w) => [[w], ...[
-		"that",
-		"it",
-		"all",
-		"everything"
-	].map((tail) => [w, tail])]),
-	["over", "out"],
-	...["that's", "thats"].map((w) => [
-		"over",
-		"and",
-		"out",
-		w,
-		"all"
-	])
+var bareWord = (w) => w.toLowerCase().replace(/[’`]/g, "'").replace(/[^\p{L}\p{N}']+/gu, "");
+var RADIO_TAILS = [
+	"that",
+	"it",
+	"all",
+	"everything"
 ];
-var CONTROL_MAX_WORDS = Math.max(...CONTROL_PHRASES.map((p) => p.length));
+var HUSH_LEADS = [
+	"ok",
+	"okay",
+	"hey",
+	"please"
+];
+var HUSH_ENDS = ["please", "now"];
+var esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var phraseRx = (p) => phraseWords(p).map((w) => esc(w).replace(/'/g, "['’`]?")).join("[\\s,.!?]+");
+var longestFirst = (a, b) => phraseWords(b).length - phraseWords(a).length || b.length - a.length;
+var keysOf = (p) => phraseWords(p).map(wordKey);
+function buildMatchers(w, v = -1) {
+	const tails = "(?:[\\s,]+(?:" + RADIO_TAILS.join("|") + "))?";
+	const entries = [
+		...w.end.map((p) => ({
+			p,
+			kind: "out",
+			rx: phraseRx(p)
+		})),
+		...w.send.map((p) => ({
+			p,
+			kind: "over",
+			rx: phraseRx(p) + tails
+		})),
+		...w.clear.map((p) => ({
+			p,
+			kind: "disregard",
+			rx: phraseRx(p) + tails
+		}))
+	].filter((e) => e.rx).sort((a, b) => longestFirst(a.p, b.p));
+	const radio = entries.length ? new RegExp("^(.*?)[\\s,.!?]*(?<![\\p{L}\\p{N}'])(" + entries.map((e) => "(?:" + e.rx + ")").join("|") + ")[.!?\\s]*$", "iu") : /(?!)/;
+	const radioKinds = entries.map((e) => [new RegExp("^(?:" + e.rx + ")$", "iu"), e.kind]);
+	const stops = withKin(w, "stop");
+	const hushes = withKin(w, "hush");
+	const stopAll = [...stops].sort(longestFirst).map(keysOf);
+	const stop = stopAll.filter((p) => p.length > 1);
+	const hushKeys = [...hushes].sort(longestFirst).map((p) => keysOf(p).join(" "));
+	const hush = new RegExp("^(?:(?:" + HUSH_LEADS.join("|") + ") )?(?:" + (hushKeys.map(esc).join("|") || "(?!)") + ")(?: (?:" + HUSH_ENDS.join("|") + "))?$", "u");
+	const radioPhrases = (ps) => ps.map(keysOf).flatMap((k) => [k, ...RADIO_TAILS.map((t) => [...k, t])]);
+	const control = [
+		...stopAll,
+		...hushes.map(keysOf),
+		...radioPhrases(w.send),
+		...radioPhrases(w.clear),
+		...w.end.map(keysOf),
+		...w.end.map(keysOf).flatMap((e) => stop.map((s) => [...e, ...s]))
+	].filter((p) => p.length);
+	const commands = [...stops, ...hushes].map((p) => phraseWords(p).map((x) => [x, wordKey(x)]));
+	return {
+		v,
+		radio,
+		radioKinds,
+		stop,
+		hush,
+		control,
+		maxWords: Math.max(1, ...control.map((p) => p.length)),
+		commands
+	};
+}
+var built = null;
+function matchers() {
+	const v = voiceWordsVersion();
+	if (!built || built.v !== v) built = buildMatchers(voiceWords(), v);
+	return built;
+}
 var wordIndexes = (ws) => ws.flatMap((w, i) => bareWord(w) ? [i] : []);
 function holdBack(text) {
 	const ws = String(text || "").trim().split(/\s+/).filter(Boolean);
@@ -38398,11 +38571,12 @@ function holdBack(text) {
 		type: "",
 		held: ""
 	};
+	const M = matchers();
 	const idx = wordIndexes(ws);
 	let n = ws.length;
-	for (let k = 1; k <= Math.min(CONTROL_MAX_WORDS, idx.length); k++) {
-		const tail = idx.slice(-k).map((i) => bareWord(ws[i]));
-		if (CONTROL_PHRASES.some((p) => p.length >= k && tail.every((w, j) => p[j] === w))) n = idx[idx.length - k];
+	for (let k = 1; k <= Math.min(M.maxWords, idx.length); k++) {
+		const tail = idx.slice(-k).map((i) => wordKey(bareWord(ws[i])));
+		if (M.control.some((p) => p.length >= k && tail.every((w, j) => p[j] === w))) n = idx[idx.length - k];
 	}
 	return {
 		type: ws.slice(0, n).join(" "),
@@ -38412,10 +38586,10 @@ function holdBack(text) {
 function stopTail(text) {
 	const ws = String(text || "").trim().split(/\s+/).filter(Boolean);
 	const idx = wordIndexes(ws);
-	for (const p of STOP_PHRASES) {
+	for (const p of matchers().stop) {
 		if (idx.length < p.length) continue;
 		const tail = idx.slice(-p.length);
-		if (tail.every((i, j) => bareWord(ws[i]) === p[j])) return ws.slice(0, tail[0]).join(" ").replace(/[\s,;:]+$/, "");
+		if (tail.every((i, j) => wordKey(bareWord(ws[i])) === p[j])) return ws.slice(0, tail[0]).join(" ").replace(/[\s,;:]+$/, "");
 	}
 	return null;
 }
@@ -38425,9 +38599,8 @@ var ANSWER_RE = new RegExp("^(?:(?:um|uh|er|so) )?(?:" + [
 	"always|yes always|yeah always|always allow(?: it| that| this| all)?|(?:don'?t|do not) ask(?: me)? again",
 	"(?:option |choice |number |the )?(?:" + NUMS + ")(?: one)?"
 ].join("|") + ")(?: please)?$");
-var HUSH_RE = new RegExp("^(?:(?:ok|okay|hey|please) )?(?:" + HUSH_PHRASES.map((p) => p.join(" ")).join("|") + ")(?: please| now)?$");
 function isHushPhrase(text) {
-	return HUSH_RE.test(routerWords(text).join(" "));
+	return matchers().hush.test(phraseWords(text).map(wordKey).join(" "));
 }
 function isAnswerPhrase(text) {
 	return ANSWER_RE.test(routerWords(text).join(" "));
@@ -38536,8 +38709,12 @@ function talkKeyAction(phase, hold, listening, keyHeld) {
 }
 var DICT_IDLE_MS = 12e4;
 var HOLD_FINAL_WAIT_MS = 1500;
-var DICT_HINT = "Say “over” to send, “over and out” to stop, “disregard” to start over";
-var answerHint = (name) => "Answer " + name + " — say “over” to send, “over and out” to stop, “disregard” to start over";
+var radioLine = (w) => "say " + quoted(w.send[0]) + " to send, " + quoted(w.end[0]) + " to stop, " + quoted(w.clear[0]) + " to start over";
+var dictHint = (w = voiceWords()) => {
+	const line = radioLine(w);
+	return line[0].toUpperCase() + line.slice(1);
+};
+var answerHint = (name, w = voiceWords()) => "Answer " + name + " — " + radioLine(w);
 var LEFT_LINE = "In the field — press Enter to send";
 var STOPPED_LINE = "Stopped listening";
 var HUSH_LINE = "Quiet.";
@@ -38990,7 +39167,7 @@ var LiveDictation = class {
 			return;
 		}
 		const field = this.target?.kind === "field";
-		const base = this.opts.hint || (field ? "the words go into the text box" : DICT_HINT);
+		const base = this.opts.hint || (field ? "the words go into the text box" : dictHint());
 		const lead = pickupLine(this.recording, this.hearingNow);
 		this.hooks.caption(lead ? lead + " · " + base : field ? "Listening — " + base : base, true);
 	}
@@ -40606,6 +40783,7 @@ var DEFAULT_VOICE_CFG = {
 async function loadVoiceCfg(prev) {
 	try {
 		const j = await api("/api/voice");
+		applyVoiceView(j);
 		if (j && typeof j === "object") return {
 			stt: j.stt === "server" ? "server" : "phone",
 			tts: j.tts === "server" ? "server" : "phone",
@@ -40778,7 +40956,8 @@ async function postWake(clip, lang = langTag()) {
 		clearTimeout(timer);
 	}
 }
-var WAKE_SWITCH_HINT = "Say “MindFlock” on its own — not inside a sentence — and the mic listens, as if you clicked it. The mic stays open while this is on, so the browser's mic light stays on; only a lone word is sent to the server to check.";
+var wakeSwitchLabel = (w = voiceWords()) => "Listen for " + quoted(wakeName(w));
+var wakeSwitchHint = (w = voiceWords()) => "Say " + quoted(wakeName(w)) + " on its own — not inside a sentence — and the mic listens, as if you clicked it. The mic stays open while this is on, so the browser's mic light stays on; only a lone word is sent to the server to check.";
 var WAKE_NO_RECOGNIZER_LINE = "Standby stopped: server recognition isn't ready — Settings → Voice";
 var WAKE_DENIED_LINE = "Standby stopped: the microphone was refused";
 var WAKE_NO_MIC_LINE = "Standby stopped: no microphone";
@@ -41018,6 +41197,502 @@ function chime(ctx, kind = "start") {
 	} catch {}
 }
 //#endregion
+//#region src/lib/useVoiceWords.ts
+function useVoiceWords() {
+	return (0, import_react.useSyncExternalStore)(onVoiceWords, voiceWords, voiceWords);
+}
+//#endregion
+//#region src/lib/tours/voice.ts
+var talkKey = () => "";
+function setTalkKeyLabel(fn) {
+	talkKey = fn;
+}
+var MIC_POP_SCREEN = "mic-pop";
+function voiceTourSteps(w = voiceWords(), key = talkKey()) {
+	return [
+		{
+			target: "[data-tour=\"voice-mic\"], #mic-btn",
+			title: "Press or hold to talk",
+			body: "Click the mic" + (key ? " or press " + key : "") + " and talk to the session in front of you — with Hold to talk, hold it while you speak."
+		},
+		{
+			target: ".pane.focused .agent-term, .pane.focused, #grid",
+			title: "Your words go in as you speak",
+			body: "They are typed into the session as you say them, and corrected when the accurate pass hears one otherwise."
+		},
+		{
+			target: "#mic-pill, [data-tour=\"voice-mic\"], #mic-btn",
+			title: "Say " + quoted(w.send[0]) + " to send",
+			body: "End a sentence with " + quoted(w.send[0]) + " to send it — listening stays on, so the next sentence is the next message."
+		},
+		{
+			target: "[data-tour=\"voice-mic\"], #mic-btn",
+			title: "Stop, or start over",
+			body: "Say " + quoted(w.end[0]) + " to send what is left and stop, or " + quoted(w.clear[0]) + " to take back the message and start it over."
+		},
+		{
+			target: "[data-tour=\"session-row\"], li.inst, #sidebar",
+			title: "Switch sessions by voice",
+			body: "Say “session three”, “next session” or “switch to” and a session's name — the numbers are the sidebar's."
+		},
+		{
+			target: "#ask-mic, #notif-btn",
+			title: "Answer a question",
+			body: "When a session asks you something, answer with its card's mic or say “yes”, “no” or a number — the bell keeps it for later."
+		},
+		{
+			target: "#mic-wake-row",
+			screen: MIC_POP_SCREEN,
+			title: "The wake word",
+			body: "Turn this on, then say " + quoted(wakeName(w)) + " on its own — not inside a sentence — to open the mic without a click."
+		},
+		{
+			target: "#mic-replies-row",
+			screen: MIC_POP_SCREEN,
+			title: "Replies read aloud",
+			body: "Off by default: Mine reads the replies to what you sent by voice, Everything every session's, and " + quoted(w.hush[0]) + " cuts it short."
+		}
+	];
+}
+var VOICE_TOUR = {
+	id: "voice",
+	title: "Voice",
+	get steps() {
+		return voiceTourSteps();
+	}
+};
+//#endregion
+//#region src/lib/tours/welcome.ts
+var WELCOME_TOUR = {
+	id: "welcome",
+	title: "Welcome",
+	steps: [
+		{
+			target: "[data-tour=\"setup-next\"], .setup-progress",
+			title: "Three steps to your first agent",
+			body: "This line always says what to do next; each step ticks itself once it is really done."
+		},
+		{
+			target: "[data-tour=\"setup-step-tools\"], .setup-step[data-step=\"tools\"]",
+			title: "① Install your agent",
+			body: "MindFlock drives a coding agent for you; one click installs it in about a minute."
+		},
+		{
+			target: "[data-tour=\"setup-step-agent_login\"], .setup-step[data-step=\"agent_login\"]",
+			title: "② Sign in to your agent",
+			body: "Sign in once in the window that opens, with that agent's own account."
+		},
+		{
+			target: "[data-tour=\"setup-step-repo\"], .setup-step[data-step=\"repo\"]",
+			title: "③ Start your first session",
+			body: "Pick your repo and say what to do; the agent works on its own branch, so your checkout is untouched."
+		},
+		{
+			target: "[data-tour=\"session-row\"], li.inst",
+			title: "Your sessions live here",
+			body: "Each session is a row: Working means the agent is busy, Idle means it is your turn — click it to watch."
+		}
+	]
+};
+//#endregion
+//#region src/lib/tours/new.ts
+var NEW_TOUR = {
+	id: "new",
+	title: "New",
+	steps: [
+		{
+			target: "[data-tour=\"new-task\"], #new-describe-text",
+			title: "Say what to work on",
+			body: "Describe one task in plain words — the agent starts on exactly this."
+		},
+		{
+			target: "[data-tour=\"new-folder\"], #new-describe-folder",
+			title: "Where it works",
+			body: "This is the repo it works in; each session gets its own branch, so your checkout is never touched."
+		},
+		{
+			target: "[data-tour=\"new-start\"], #new-describe-start, #new-create",
+			title: "Start it",
+			body: "Start begins the session now — watch, steer or stop it from its pane."
+		},
+		{
+			target: "[data-tour=\"pane-tabs\"], [data-tour=\"pane-menu\"]",
+			title: "Then, in its pane",
+			body: "Diff shows what changed; when the agent stops, ⋯ → Push or Open PR ships it, and ✕ closes it (reopen it from Recently closed)."
+		}
+	]
+};
+//#endregion
+//#region src/lib/tours/intake.ts
+var INTAKE_TOUR = {
+	id: "intake",
+	title: "Intake",
+	steps: [
+		{
+			target: "[data-tour=\"intake-tiles\"], #intake-panel:not(:has([data-tour=\"intake-tiles\"])) #intake-add-source",
+			title: "Pick where your work lives",
+			body: "Intake turns tickets, pull requests and issues into sessions — start by picking your tracker, or Repository for a GitHub repo."
+		},
+		{
+			target: "[data-tour=\"intake-token\"]",
+			title: "Paste a token",
+			body: "Create a token ↗ opens the tracker's page for one; Test & continue checks it, and nothing is saved until Finish."
+		},
+		{
+			target: "[data-tour=\"intake-repo\"]",
+			title: "Name the repo",
+			body: "Each ticket starts as a session on its own branch of this repo — the one thing Finish needs."
+		},
+		{
+			target: "[data-tour=\"intake-start\"]",
+			title: "Start one by hand first",
+			body: "Start opens a ticket as a session in the sidebar, and Open session › takes you to it."
+		},
+		{
+			target: "[data-tour=\"intake-autostart\"], #intake-panel:not(:has([data-tour=\"intake-autostart\"])) #intake-tab-autostart",
+			title: "Auto-start, when you trust it",
+			body: "Switches for tickets, PR review comments and new issues live here, with how often each checks and Pause all auto-start."
+		}
+	]
+};
+//#endregion
+//#region src/lib/tours/verify.ts
+var VERIFY_TOUR = {
+	id: "verify",
+	title: "Verify",
+	steps: [
+		{
+			target: "[data-tour=\"verify-chip\"], #verify-title",
+			title: "Does the change work?",
+			body: "This chip is a session's checklist: the steps that prove its change works — click it to open Verify on that branch."
+		},
+		{
+			target: "[data-tour=\"verify-badges\"]",
+			title: "You or the agent",
+			body: "The agent checks the AGENT steps from a shell; the YOU steps need your eyes."
+		},
+		{
+			target: "[data-tour=\"verify-answer\"]",
+			title: "Answer a step",
+			body: "Pass, Fail or Can't check — only Pass counts as working, and pressing it again takes it back."
+		},
+		{
+			target: "[data-tour=\"verify-check\"], .vf-fix",
+			title: "Check now, or fix it",
+			body: "Check now has an agent run the steps on the branch; if one fails, Fix starts a session with the failure attached."
+		},
+		{
+			target: "[data-tour=\"verify-merge\"]",
+			title: "Then merge",
+			body: "The verdict shows beside Open PR, and after merge the checklist comes back to be checked on the live branch."
+		}
+	]
+};
+//#endregion
+//#region src/lib/tours/index.ts
+var TOURS = {
+	welcome: WELCOME_TOUR,
+	new: NEW_TOUR,
+	intake: INTAKE_TOUR,
+	verify: VERIFY_TOUR,
+	schedule: {
+		id: "schedule",
+		title: "Schedule",
+		steps: [
+			{
+				target: "#schedule-btn, #more-btn, [data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
+				title: "Sessions you'll want again",
+				body: "Schedule keeps templates — a folder, an agent and a task — so a session starts with one click, or by itself."
+			},
+			{
+				target: "[data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
+				title: "Create a template",
+				body: "Start with a job you repeat, like a nightly test run or a dependency bump."
+			},
+			{
+				target: "[data-tour=\"schedule-name\"], [data-tour=\"schedule-folder\"]",
+				title: "Name it and pick the repo",
+				body: "The folder is what makes a template runnable — every session from it works there."
+			},
+			{
+				target: "[data-tour=\"schedule-task\"]",
+				title: "Say what to do",
+				body: "Every session from this template is told this task first."
+			},
+			{
+				target: "[data-tour=\"schedule-when\"]",
+				title: "Let it start by itself",
+				body: "Tick Run on a schedule — the line below it shows exactly when it runs next."
+			},
+			{
+				target: "[data-tour=\"schedule-run\"]",
+				title: "Try it once now",
+				body: "▶ Run now starts a new session in the sidebar, and the card logs it under Last run."
+			}
+		]
+	},
+	settings: {
+		id: "settings",
+		title: "Settings",
+		steps: [
+			{
+				target: "[data-tour=\"settings-status\"]",
+				screen: "connections",
+				title: "Your status page",
+				body: "Connections lists everything MindFlock talks to: what is connected and what needs you."
+			},
+			{
+				target: "[data-tour=\"settings-github\"]",
+				screen: "connections",
+				title: "Connect GitHub when you need PRs",
+				body: "Agents need GitHub to open pull requests; pushing already works without it."
+			},
+			{
+				target: "#settings-search",
+				screen: "connections",
+				title: "Search finds any setting",
+				body: "Type a word like dark, phone or parallel and jump straight to it."
+			},
+			{
+				target: "[data-tour=\"settings-default-agent\"], #default-provider-select",
+				screen: "coding",
+				title: "Pick your default agent",
+				body: "New sessions start with this agent; you can still pick another one when you start a session."
+			},
+			{
+				target: "[data-tour=\"settings-worktrees\"], #workspace-paths",
+				screen: "workspace",
+				title: "Where your worktrees live",
+				body: "Each session gets a separate worktree, its own branch and copy of your repo, kept in these folders."
+			},
+			{
+				target: "[data-tour=\"settings-advanced\"], #settings-advanced-toggle",
+				title: "The rest waits here",
+				body: "Phones, other computers, local models and troubleshooting live behind Show advanced settings."
+			},
+			{
+				target: "[data-tour=\"settings-tours\"], #general-tours",
+				screen: "general",
+				title: "Replay any tour",
+				body: "Every tour lives here under Help, next to the switch for hints."
+			}
+		]
+	},
+	people: {
+		id: "people",
+		title: "People",
+		steps: [
+			{
+				target: "[data-tour=\"people-invite\"]",
+				title: "Invite someone",
+				body: "Create invite makes a one-time code — send it to the person you want to work with."
+			},
+			{
+				target: "[data-tour=\"people-join\"]",
+				title: "Or join them",
+				body: "Got an invite instead? Paste the whole message here and press Join."
+			},
+			{
+				target: "[data-tour=\"people-safety\"]",
+				title: "Check the safety number",
+				body: "Read it to each other: if it matches press It matches, if it differs unlink."
+			},
+			{
+				target: "[data-tour=\"people-share\"]",
+				title: "Share a folder",
+				body: "An agent works in one shared folder inside a sandbox and talks to their agent."
+			},
+			{
+				target: "[data-tour=\"people-joint\"]",
+				title: "Build one feature together",
+				body: "Start a joint task to agree a contract, then watch their session and mirror their work into your repo."
+			}
+		]
+	},
+	voice: VOICE_TOUR
+};
+var TOUR_IDS = [
+	"welcome",
+	"new",
+	"intake",
+	"verify",
+	"schedule",
+	"settings",
+	"people",
+	"voice"
+];
+//#endregion
+//#region src/components/setup/useSetup.ts
+var SETUP_KEY = ["setup"];
+function useSetup(enabled = true) {
+	return useQuery({
+		queryKey: SETUP_KEY,
+		queryFn: () => api("/api/setup"),
+		staleTime: 3e4,
+		enabled
+	});
+}
+async function refreshSetup(reprobe = false) {
+	if (!reprobe) {
+		await queryClient.invalidateQueries({ queryKey: SETUP_KEY });
+		return;
+	}
+	try {
+		const d = await api("/api/setup?refresh=1");
+		queryClient.setQueryData(SETUP_KEY, d);
+	} catch {
+		await queryClient.invalidateQueries({ queryKey: SETUP_KEY });
+	}
+}
+async function skipSetupStep(step, undo = false) {
+	const r = await api("/api/setup/" + encodeURIComponent(step) + (undo ? "/unskip" : "/skip"), { method: "POST" });
+	queryClient.setQueryData(SETUP_KEY, (old) => old ? {
+		...old,
+		steps: r.steps,
+		summary: r.summary
+	} : old);
+}
+//#endregion
+//#region src/lib/calm.ts
+var NEWCOMER_DAYS = 7;
+var CALM_MAX_SESSIONS = 3;
+function isNewcomer(status, onboarded, now = Date.now()) {
+	if (!status) return onboarded === false ? true : null;
+	const repo = (status.steps || []).find((s) => s.id === "repo");
+	if (!repo) return null;
+	if (!repo.done) return true;
+	const at = repo.at ? Date.parse(repo.at) : NaN;
+	if (!isFinite(at)) return false;
+	return now - at < NEWCOMER_DAYS * 864e5;
+}
+function calmDecision(opts) {
+	if (opts.sessions >= CALM_MAX_SESSIONS) return false;
+	return isNewcomer(opts.status, opts.onboarded, opts.now);
+}
+function undecidedCalm(hint) {
+	return hint ?? true;
+}
+var CALM_HINT_KEY = "mf_calm_hint";
+function readCalmHint() {
+	try {
+		const v = localStorage.getItem(CALM_HINT_KEY);
+		return v === "1" ? true : v === "0" ? false : null;
+	} catch {
+		return null;
+	}
+}
+function writeCalmHint(calm) {
+	try {
+		if (localStorage.getItem(CALM_HINT_KEY) !== (calm ? "1" : "0")) localStorage.setItem(CALM_HINT_KEY, calm ? "1" : "0");
+	} catch {}
+}
+var CALM_HIDDEN_BARS = ["usage", "assistant"];
+function calmHidesBar(key) {
+	return CALM_HIDDEN_BARS.includes(key) || key.startsWith("ext:");
+}
+function topBarShows(o) {
+	return {
+		verify: !o.calm || o.checklists > 0,
+		schedule: !o.calm || o.templates > 0
+	};
+}
+function firstLaunchTour(opts) {
+	if (opts.seen || opts.sessions !== 0) return false;
+	if (!opts.status) return opts.onboarded === false;
+	const repo = (opts.status.steps || []).find((s) => s.id === "repo");
+	return !!repo && !repo.done;
+}
+//#endregion
+//#region src/components/onboarding/useAutoTour.ts
+var AUTO_TOUR_DELAY_MS = 400;
+var RETRY_MS = 500;
+var RETRIES = 10;
+function autoTourDue(o) {
+	return o.open && o.pulled && o.calm === true && o.hints && !o.busy && !o.seen.includes(o.id);
+}
+var pulled = false;
+firstPrefsPull.then(() => {
+	pulled = true;
+});
+function calmNow() {
+	const instances = queryClient.getQueryData(["instances"]);
+	if (!instances) return null;
+	const sessions = instances.filter((i) => !i.device && !isVerifySession(i)).length;
+	return calmDecision({
+		sessions,
+		status: queryClient.getQueryData(SETUP_KEY),
+		onboarded: queryClient.getQueryData(["config"])?.onboarded
+	});
+}
+function useAutoTour(id, open) {
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		let tries = 0;
+		let t = 0;
+		const look = () => {
+			const ui = useUi.getState();
+			const calm = calmNow();
+			if (autoTourDue({
+				open: true,
+				calm,
+				seen: ui.toursSeen,
+				id,
+				pulled,
+				hints: ui.hintsEnabled,
+				busy: ui.coachTour !== null || ui.tourOpen
+			})) ui.openCoachTour(id);
+			else if ((calm === null || !pulled) && ++tries < RETRIES) t = window.setTimeout(look, RETRY_MS);
+		};
+		t = window.setTimeout(look, AUTO_TOUR_DELAY_MS);
+		return () => window.clearTimeout(t);
+	}, [open, id]);
+	const wasOpen = (0, import_react.useRef)(open);
+	(0, import_react.useEffect)(() => {
+		if (wasOpen.current && !open && useUi.getState().coachTour?.id === id) useUi.getState().closeCoachTour();
+		wasOpen.current = open;
+	}, [open, id]);
+}
+function firstUseTourDue(o) {
+	return o.pulled && o.hints && !o.busy && !o.seen.includes(o.id);
+}
+function openTourOnFirstUse(id) {
+	const ui = useUi.getState();
+	if (!firstUseTourDue({
+		seen: ui.toursSeen,
+		id,
+		pulled,
+		hints: ui.hintsEnabled,
+		busy: ui.coachTour !== null || ui.tourOpen
+	})) return false;
+	window.setTimeout(() => {
+		const now = useUi.getState();
+		if (!now.coachTour && !now.tourOpen && !now.toursSeen.includes(id)) now.openCoachTour(id);
+	}, AUTO_TOUR_DELAY_MS);
+	return true;
+}
+//#endregion
+//#region src/components/onboarding/replayTour.ts
+var SURFACE = {
+	new: "new-session",
+	intake: "intake",
+	verify: "verify",
+	schedule: "schedule"
+};
+function replayTour(id) {
+	const ui = useUi.getState();
+	if (ui.coachTour) ui.closeCoachTour();
+	if (id === "welcome") {
+		ui.closeDialog();
+		ui.openTour();
+		return;
+	}
+	if (id === "settings") openSettings("connections");
+	else if (id === "people") openSettings("peer");
+	else if (id === "voice") ui.closeDialog();
+	else ui.openDialogFor(SURFACE[id]);
+	useUi.getState().openCoachTour(id);
+}
+//#endregion
 //#region src/components/TopBarMic.tsx
 var browserRec = browserRecognizer();
 var cfgNow = DEFAULT_VOICE_CFG;
@@ -41108,6 +41783,7 @@ function talkHotkey() {
 	const e = KEYMAP.find((b) => !b.aliasOf && /\btalk\b/i.test(String(b.help?.[2] || "")));
 	return e?.id && shortcutLabels(e.id)[0] || "";
 }
+setTalkKeyLabel(talkHotkey);
 function recEngine(c) {
 	const e = sttEngine(c, serverRec.available());
 	return e === "browser" && !browserRec.available() ? "none" : e;
@@ -41209,6 +41885,18 @@ function TopBarMic() {
 	const [caption, setCaptionState] = (0, import_react.useState)("");
 	const [quiet, setQuiet] = (0, import_react.useState)(false);
 	const [menuOpen, setMenuOpen] = (0, import_react.useState)(false);
+	const words = useVoiceWords();
+	const tourPop = useUi((s) => s.coachTour?.id === "voice" && TOURS.voice.steps[s.coachTour.step]?.screen === MIC_POP_SCREEN);
+	const tourOpened = (0, import_react.useRef)(false);
+	(0, import_react.useEffect)(() => {
+		if (tourPop && !menuOpen) {
+			tourOpened.current = true;
+			setMenuOpen(true);
+		} else if (!tourPop && tourOpened.current) {
+			tourOpened.current = false;
+			setMenuOpen(false);
+		}
+	}, [tourPop]);
 	const [, setViewport] = (0, import_react.useState)("");
 	const focusedName = useUi((s) => s.focused ? s.aliases[s.focused] || s.focused : "");
 	const btnRef = (0, import_react.useRef)(null);
@@ -41525,7 +42213,7 @@ function TopBarMic() {
 				d.hearing(t);
 			},
 			onStatus: (t) => {
-				if (live.current === d && !d.dict.shown && !into) say(t + " · " + DICT_HINT, true);
+				if (live.current === d && !d.dict.shown && !into) say(t + " · " + dictHint(), true);
 			},
 			onReady: () => {
 				if (live.current !== d) return;
@@ -41842,6 +42530,11 @@ function TopBarMic() {
 		if (wake.line && prefsRef.current.wake && !live.current) say(wake.line);
 	}, [wake.line]);
 	const hold = prefs.ptt === "hold";
+	const userStart = (into) => {
+		const d = start(into);
+		if (d) openTourOnFirstUse("voice");
+		return d;
+	};
 	const openMenu = () => {
 		setMenuOpen(true);
 		warmMic(true);
@@ -41849,12 +42542,12 @@ function TopBarMic() {
 	};
 	const keyRef = (0, import_react.useRef)({
 		hold,
-		start,
+		start: userStart,
 		finish
 	});
 	keyRef.current = {
 		hold,
-		start,
+		start: userStart,
 		finish
 	};
 	(0, import_react.useEffect)(() => {
@@ -41875,7 +42568,8 @@ function TopBarMic() {
 		if (!menuOpen) return;
 		const onDown = (e) => {
 			const t = e.target;
-			if (!menuRef.current?.contains(t) && !btnRef.current?.contains(t)) setMenuOpen(false);
+			const el = t instanceof Element ? t : t.parentElement;
+			if (!menuRef.current?.contains(t) && !btnRef.current?.contains(t) && !el?.closest(".coach-card")) setMenuOpen(false);
 		};
 		const onKey = (e) => {
 			if (e.key !== "Escape") return;
@@ -41895,7 +42589,7 @@ function TopBarMic() {
 		};
 	}, [menuOpen]);
 	const who = focusedName || "a session";
-	const base = !supported ? noRecognizerLine() + " — right-click for options" : listening ? hold ? "Listening — release to stop (the words stay), Esc to take them back" : "Listening — click to stop (the words stay), Esc to take them back" : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") + (wake.on ? ", or say “MindFlock”" : "") + ", right-click for options";
+	const base = !supported ? noRecognizerLine() + " — right-click for options" : listening ? hold ? "Listening — release to stop (the words stay), Esc to take them back" : "Listening — click to stop (the words stay), Esc to take them back" : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") + (wake.on ? ", or say " + quoted(wakeName(words)) : "") + ", right-click for options";
 	const title = caption && !listening ? base + "\n" + caption : base;
 	const pill = micPill({
 		listening,
@@ -41915,6 +42609,7 @@ function TopBarMic() {
 		className: "mic-wrap",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			id: "mic-btn",
+			"data-tour": "voice-mic",
 			ref: btnRef,
 			type: "button",
 			className: [
@@ -41938,7 +42633,7 @@ function TopBarMic() {
 				try {
 					e.currentTarget.setPointerCapture(e.pointerId);
 				} catch {}
-				start(pressedField.current);
+				userStart(pressedField.current);
 			},
 			onPointerUp: () => {
 				if (!holding.current) return;
@@ -41962,7 +42657,7 @@ function TopBarMic() {
 				}
 				if (hold) return;
 				if (live.current) finish();
-				else start(pressedField.current);
+				else userStart(pressedField.current);
 				pressedField.current = null;
 			},
 			onContextMenu: (e) => {
@@ -41974,7 +42669,7 @@ function TopBarMic() {
 				e.preventDefault();
 				if (e.repeat || holding.current) return;
 				holding.current = true;
-				start(null);
+				userStart(null);
 			},
 			onKeyUp: (e) => {
 				if (!hold || e.key !== " " && e.key !== "Enter") return;
@@ -41992,7 +42687,7 @@ function TopBarMic() {
 			children: pill
 		})]
 	}), menuOpen && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "mic-pop",
+		className: "mic-pop" + (tourPop ? " in-tour" : ""),
 		id: "mic-pop",
 		ref: menuRef,
 		style: popStyle,
@@ -42001,9 +42696,21 @@ function TopBarMic() {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "mic-pop-head",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "mic-pop-title",
-					children: "Voice"
+					children: ["Voice", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "tour-btn mic-pop-help",
+						id: "mic-pop-help",
+						"aria-label": "Show me how",
+						title: "Show me how — the Voice tour",
+						"data-tour-id": "voice",
+						onClick: () => {
+							setMenuOpen(false);
+							replayTour("voice");
+						},
+						children: "?"
+					})]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "mic-pop-close",
@@ -42090,7 +42797,7 @@ function TopBarMic() {
 				title: prefs.wake && wake.line || "",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "mic-pop-label",
-					children: "Listen for “MindFlock”"
+					children: wakeSwitchLabel(words)
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 					type: "checkbox",
 					id: "mic-wake",
@@ -43417,87 +44124,6 @@ function useScheduleStatus() {
 		templates,
 		status
 	};
-}
-//#endregion
-//#region src/components/setup/useSetup.ts
-var SETUP_KEY = ["setup"];
-function useSetup(enabled = true) {
-	return useQuery({
-		queryKey: SETUP_KEY,
-		queryFn: () => api("/api/setup"),
-		staleTime: 3e4,
-		enabled
-	});
-}
-async function refreshSetup(reprobe = false) {
-	if (!reprobe) {
-		await queryClient.invalidateQueries({ queryKey: SETUP_KEY });
-		return;
-	}
-	try {
-		const d = await api("/api/setup?refresh=1");
-		queryClient.setQueryData(SETUP_KEY, d);
-	} catch {
-		await queryClient.invalidateQueries({ queryKey: SETUP_KEY });
-	}
-}
-async function skipSetupStep(step, undo = false) {
-	const r = await api("/api/setup/" + encodeURIComponent(step) + (undo ? "/unskip" : "/skip"), { method: "POST" });
-	queryClient.setQueryData(SETUP_KEY, (old) => old ? {
-		...old,
-		steps: r.steps,
-		summary: r.summary
-	} : old);
-}
-//#endregion
-//#region src/lib/calm.ts
-var NEWCOMER_DAYS = 7;
-var CALM_MAX_SESSIONS = 3;
-function isNewcomer(status, onboarded, now = Date.now()) {
-	if (!status) return onboarded === false ? true : null;
-	const repo = (status.steps || []).find((s) => s.id === "repo");
-	if (!repo) return null;
-	if (!repo.done) return true;
-	const at = repo.at ? Date.parse(repo.at) : NaN;
-	if (!isFinite(at)) return false;
-	return now - at < NEWCOMER_DAYS * 864e5;
-}
-function calmDecision(opts) {
-	if (opts.sessions >= CALM_MAX_SESSIONS) return false;
-	return isNewcomer(opts.status, opts.onboarded, opts.now);
-}
-function undecidedCalm(hint) {
-	return hint ?? true;
-}
-var CALM_HINT_KEY = "mf_calm_hint";
-function readCalmHint() {
-	try {
-		const v = localStorage.getItem(CALM_HINT_KEY);
-		return v === "1" ? true : v === "0" ? false : null;
-	} catch {
-		return null;
-	}
-}
-function writeCalmHint(calm) {
-	try {
-		if (localStorage.getItem(CALM_HINT_KEY) !== (calm ? "1" : "0")) localStorage.setItem(CALM_HINT_KEY, calm ? "1" : "0");
-	} catch {}
-}
-var CALM_HIDDEN_BARS = ["usage", "assistant"];
-function calmHidesBar(key) {
-	return CALM_HIDDEN_BARS.includes(key) || key.startsWith("ext:");
-}
-function topBarShows(o) {
-	return {
-		verify: !o.calm || o.checklists > 0,
-		schedule: !o.calm || o.templates > 0
-	};
-}
-function firstLaunchTour(opts) {
-	if (opts.seen || opts.sessions !== 0) return false;
-	if (!opts.status) return opts.onboarded === false;
-	const repo = (opts.status.steps || []).find((s) => s.id === "repo");
-	return !!repo && !repo.done;
 }
 //#endregion
 //#region src/lib/useCalm.ts
@@ -70908,264 +71534,6 @@ function SessionPanel({ m, a }) {
 	] });
 }
 //#endregion
-//#region src/lib/tours/welcome.ts
-var WELCOME_TOUR = {
-	id: "welcome",
-	title: "Welcome",
-	steps: [
-		{
-			target: "[data-tour=\"setup-next\"], .setup-progress",
-			title: "Three steps to your first agent",
-			body: "This line always says what to do next; each step ticks itself once it is really done."
-		},
-		{
-			target: "[data-tour=\"setup-step-tools\"], .setup-step[data-step=\"tools\"]",
-			title: "① Install your agent",
-			body: "MindFlock drives a coding agent for you; one click installs it in about a minute."
-		},
-		{
-			target: "[data-tour=\"setup-step-agent_login\"], .setup-step[data-step=\"agent_login\"]",
-			title: "② Sign in to your agent",
-			body: "Sign in once in the window that opens, with that agent's own account."
-		},
-		{
-			target: "[data-tour=\"setup-step-repo\"], .setup-step[data-step=\"repo\"]",
-			title: "③ Start your first session",
-			body: "Pick your repo and say what to do; the agent works on its own branch, so your checkout is untouched."
-		},
-		{
-			target: "[data-tour=\"session-row\"], li.inst",
-			title: "Your sessions live here",
-			body: "Each session is a row: Working means the agent is busy, Idle means it is your turn — click it to watch."
-		}
-	]
-};
-//#endregion
-//#region src/lib/tours/new.ts
-var NEW_TOUR = {
-	id: "new",
-	title: "New",
-	steps: [
-		{
-			target: "[data-tour=\"new-task\"], #new-describe-text",
-			title: "Say what to work on",
-			body: "Describe one task in plain words — the agent starts on exactly this."
-		},
-		{
-			target: "[data-tour=\"new-folder\"], #new-describe-folder",
-			title: "Where it works",
-			body: "This is the repo it works in; each session gets its own branch, so your checkout is never touched."
-		},
-		{
-			target: "[data-tour=\"new-start\"], #new-describe-start, #new-create",
-			title: "Start it",
-			body: "Start begins the session now — watch, steer or stop it from its pane."
-		},
-		{
-			target: "[data-tour=\"pane-tabs\"], [data-tour=\"pane-menu\"]",
-			title: "Then, in its pane",
-			body: "Diff shows what changed; when the agent stops, ⋯ → Push or Open PR ships it, and ✕ closes it (reopen it from Recently closed)."
-		}
-	]
-};
-//#endregion
-//#region src/lib/tours/intake.ts
-var INTAKE_TOUR = {
-	id: "intake",
-	title: "Intake",
-	steps: [
-		{
-			target: "[data-tour=\"intake-tiles\"], #intake-panel:not(:has([data-tour=\"intake-tiles\"])) #intake-add-source",
-			title: "Pick where your work lives",
-			body: "Intake turns tickets, pull requests and issues into sessions — start by picking your tracker, or Repository for a GitHub repo."
-		},
-		{
-			target: "[data-tour=\"intake-token\"]",
-			title: "Paste a token",
-			body: "Create a token ↗ opens the tracker's page for one; Test & continue checks it, and nothing is saved until Finish."
-		},
-		{
-			target: "[data-tour=\"intake-repo\"]",
-			title: "Name the repo",
-			body: "Each ticket starts as a session on its own branch of this repo — the one thing Finish needs."
-		},
-		{
-			target: "[data-tour=\"intake-start\"]",
-			title: "Start one by hand first",
-			body: "Start opens a ticket as a session in the sidebar, and Open session › takes you to it."
-		},
-		{
-			target: "[data-tour=\"intake-autostart\"], #intake-panel:not(:has([data-tour=\"intake-autostart\"])) #intake-tab-autostart",
-			title: "Auto-start, when you trust it",
-			body: "Switches for tickets, PR review comments and new issues live here, with how often each checks and Pause all auto-start."
-		}
-	]
-};
-//#endregion
-//#region src/lib/tours/verify.ts
-var VERIFY_TOUR = {
-	id: "verify",
-	title: "Verify",
-	steps: [
-		{
-			target: "[data-tour=\"verify-chip\"], #verify-title",
-			title: "Does the change work?",
-			body: "This chip is a session's checklist: the steps that prove its change works — click it to open Verify on that branch."
-		},
-		{
-			target: "[data-tour=\"verify-badges\"]",
-			title: "You or the agent",
-			body: "The agent checks the AGENT steps from a shell; the YOU steps need your eyes."
-		},
-		{
-			target: "[data-tour=\"verify-answer\"]",
-			title: "Answer a step",
-			body: "Pass, Fail or Can't check — only Pass counts as working, and pressing it again takes it back."
-		},
-		{
-			target: "[data-tour=\"verify-check\"], .vf-fix",
-			title: "Check now, or fix it",
-			body: "Check now has an agent run the steps on the branch; if one fails, Fix starts a session with the failure attached."
-		},
-		{
-			target: "[data-tour=\"verify-merge\"]",
-			title: "Then merge",
-			body: "The verdict shows beside Open PR, and after merge the checklist comes back to be checked on the live branch."
-		}
-	]
-};
-//#endregion
-//#region src/lib/tours/index.ts
-var TOURS = {
-	welcome: WELCOME_TOUR,
-	new: NEW_TOUR,
-	intake: INTAKE_TOUR,
-	verify: VERIFY_TOUR,
-	schedule: {
-		id: "schedule",
-		title: "Schedule",
-		steps: [
-			{
-				target: "#schedule-btn, #more-btn, [data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
-				title: "Sessions you'll want again",
-				body: "Schedule keeps templates — a folder, an agent and a task — so a session starts with one click, or by itself."
-			},
-			{
-				target: "[data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
-				title: "Create a template",
-				body: "Start with a job you repeat, like a nightly test run or a dependency bump."
-			},
-			{
-				target: "[data-tour=\"schedule-name\"], [data-tour=\"schedule-folder\"]",
-				title: "Name it and pick the repo",
-				body: "The folder is what makes a template runnable — every session from it works there."
-			},
-			{
-				target: "[data-tour=\"schedule-task\"]",
-				title: "Say what to do",
-				body: "Every session from this template is told this task first."
-			},
-			{
-				target: "[data-tour=\"schedule-when\"]",
-				title: "Let it start by itself",
-				body: "Tick Run on a schedule — the line below it shows exactly when it runs next."
-			},
-			{
-				target: "[data-tour=\"schedule-run\"]",
-				title: "Try it once now",
-				body: "▶ Run now starts a new session in the sidebar, and the card logs it under Last run."
-			}
-		]
-	},
-	settings: {
-		id: "settings",
-		title: "Settings",
-		steps: [
-			{
-				target: "[data-tour=\"settings-status\"]",
-				screen: "connections",
-				title: "Your status page",
-				body: "Connections lists everything MindFlock talks to: what is connected and what needs you."
-			},
-			{
-				target: "[data-tour=\"settings-github\"]",
-				screen: "connections",
-				title: "Connect GitHub when you need PRs",
-				body: "Agents need GitHub to open pull requests; pushing already works without it."
-			},
-			{
-				target: "#settings-search",
-				screen: "connections",
-				title: "Search finds any setting",
-				body: "Type a word like dark, phone or parallel and jump straight to it."
-			},
-			{
-				target: "[data-tour=\"settings-default-agent\"], #default-provider-select",
-				screen: "coding",
-				title: "Pick your default agent",
-				body: "New sessions start with this agent; you can still pick another one when you start a session."
-			},
-			{
-				target: "[data-tour=\"settings-worktrees\"], #workspace-paths",
-				screen: "workspace",
-				title: "Where your worktrees live",
-				body: "Each session gets a separate worktree, its own branch and copy of your repo, kept in these folders."
-			},
-			{
-				target: "[data-tour=\"settings-advanced\"], #settings-advanced-toggle",
-				title: "The rest waits here",
-				body: "Phones, other computers, local models and troubleshooting live behind Show advanced settings."
-			},
-			{
-				target: "[data-tour=\"settings-tours\"], #general-tours",
-				screen: "general",
-				title: "Replay any tour",
-				body: "Every tour lives here under Help, next to the switch for hints."
-			}
-		]
-	},
-	people: {
-		id: "people",
-		title: "People",
-		steps: [
-			{
-				target: "[data-tour=\"people-invite\"]",
-				title: "Invite someone",
-				body: "Create invite makes a one-time code — send it to the person you want to work with."
-			},
-			{
-				target: "[data-tour=\"people-join\"]",
-				title: "Or join them",
-				body: "Got an invite instead? Paste the whole message here and press Join."
-			},
-			{
-				target: "[data-tour=\"people-safety\"]",
-				title: "Check the safety number",
-				body: "Read it to each other: if it matches press It matches, if it differs unlink."
-			},
-			{
-				target: "[data-tour=\"people-share\"]",
-				title: "Share a folder",
-				body: "An agent works in one shared folder inside a sandbox and talks to their agent."
-			},
-			{
-				target: "[data-tour=\"people-joint\"]",
-				title: "Build one feature together",
-				body: "Start a joint task to agree a contract, then watch their session and mirror their work into your repo."
-			}
-		]
-	}
-};
-var TOUR_IDS = [
-	"welcome",
-	"new",
-	"intake",
-	"verify",
-	"schedule",
-	"settings",
-	"people"
-];
-//#endregion
 //#region src/components/onboarding/CoachTour.tsx
 var CARD_W$1 = 320;
 var GAP$1 = 12;
@@ -76053,6 +76421,22 @@ var SETTINGS_SEARCH = [
 		]
 	},
 	{
+		key: "voice",
+		label: "Voice → Voice words",
+		sub: "The words that send, stop and start over, and the wake word",
+		terms: [
+			"keywords",
+			"voice words",
+			"over",
+			"over and out",
+			"disregard",
+			"wake word",
+			"radio words",
+			"stop words"
+		],
+		anchor: "#voice-words"
+	},
+	{
 		key: "peer",
 		label: "People",
 		sub: "Invite someone and share one folder with their agent",
@@ -76173,27 +76557,6 @@ function settingsActions(query) {
 			if (e.anchor) revealInSettings(e.anchor);
 		}
 	}));
-}
-//#endregion
-//#region src/components/onboarding/replayTour.ts
-var SURFACE = {
-	new: "new-session",
-	intake: "intake",
-	verify: "verify",
-	schedule: "schedule"
-};
-function replayTour(id) {
-	const ui = useUi.getState();
-	if (ui.coachTour) ui.closeCoachTour();
-	if (id === "welcome") {
-		ui.closeDialog();
-		ui.openTour();
-		return;
-	}
-	if (id === "settings") openSettings("connections");
-	else if (id === "people") openSettings("peer");
-	else ui.openDialogFor(SURFACE[id]);
-	useUi.getState().openCoachTour(id);
 }
 //#endregion
 //#region src/components/settings/screens/peer/replayPeopleTour.ts
@@ -78893,56 +79256,6 @@ function TourButton({ tour }) {
 		onClick: () => openCoachTour(tour),
 		children: "?"
 	});
-}
-//#endregion
-//#region src/components/onboarding/useAutoTour.ts
-var AUTO_TOUR_DELAY_MS = 400;
-var RETRY_MS = 500;
-var RETRIES = 10;
-function autoTourDue(o) {
-	return o.open && o.pulled && o.calm === true && o.hints && !o.busy && !o.seen.includes(o.id);
-}
-var pulled = false;
-firstPrefsPull.then(() => {
-	pulled = true;
-});
-function calmNow() {
-	const instances = queryClient.getQueryData(["instances"]);
-	if (!instances) return null;
-	const sessions = instances.filter((i) => !i.device && !isVerifySession(i)).length;
-	return calmDecision({
-		sessions,
-		status: queryClient.getQueryData(SETUP_KEY),
-		onboarded: queryClient.getQueryData(["config"])?.onboarded
-	});
-}
-function useAutoTour(id, open) {
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		let tries = 0;
-		let t = 0;
-		const look = () => {
-			const ui = useUi.getState();
-			const calm = calmNow();
-			if (autoTourDue({
-				open: true,
-				calm,
-				seen: ui.toursSeen,
-				id,
-				pulled,
-				hints: ui.hintsEnabled,
-				busy: ui.coachTour !== null || ui.tourOpen
-			})) ui.openCoachTour(id);
-			else if ((calm === null || !pulled) && ++tries < RETRIES) t = window.setTimeout(look, RETRY_MS);
-		};
-		t = window.setTimeout(look, AUTO_TOUR_DELAY_MS);
-		return () => window.clearTimeout(t);
-	}, [open, id]);
-	const wasOpen = (0, import_react.useRef)(open);
-	(0, import_react.useEffect)(() => {
-		if (wasOpen.current && !open && useUi.getState().coachTour?.id === id) useUi.getState().closeCoachTour();
-		wasOpen.current = open;
-	}, [open, id]);
 }
 //#endregion
 //#region src/components/dialogs/TemplatesDialog.tsx
@@ -89752,7 +90065,8 @@ var TOUR_HINT = {
 	verify: "Checking that a change actually works.",
 	schedule: "Templates, and sessions that start by themselves.",
 	settings: "Where your connections and every setting live.",
-	people: "Working with another person: invite, share a folder, a joint task."
+	people: "Working with another person: invite, share a folder, a joint task.",
+	voice: "Talking to sessions: the mic, the words that send and stop, the wake word."
 };
 function ScrollSpeedRow() {
 	const [pos, setPos] = (0, import_react.useState)(3);
@@ -90330,6 +90644,261 @@ function UrlList({ urls }) {
 	});
 }
 //#endregion
+//#region src/components/settings/screens/VoiceWords.tsx
+var WORD_ROWS = [
+	{
+		kind: "send",
+		label: "Send",
+		hint: "Sends the message; listening stays on."
+	},
+	{
+		kind: "end",
+		label: "End (send and stop)",
+		hint: "Sends what is left and stops listening."
+	},
+	{
+		kind: "clear",
+		label: "Start over",
+		hint: "Takes back the message you are saying."
+	},
+	{
+		kind: "stop",
+		label: "Stop listening",
+		hint: "Stops, the words left unsent. A one-word phrase counts only said on its own."
+	},
+	{
+		kind: "hush",
+		label: "Stop talking",
+		hint: "The app stops reading aloud; listening goes on."
+	}
+];
+function savedWords(raw) {
+	const r = raw && typeof raw === "object" ? raw : {};
+	const out = {};
+	for (const k of PHRASE_KINDS) {
+		const v = r[k];
+		if (Array.isArray(v) && v.length) out[k] = v.map((p) => normPhrase(String(p))).filter(Boolean);
+	}
+	if (typeof r.wake === "string" && normPhrase(r.wake)) out.wake = normPhrase(r.wake);
+	return out;
+}
+function withWord(saved, k, v, defaults) {
+	const next = { ...saved };
+	const empty = Array.isArray(v) ? !v.length : !v;
+	const same = JSON.stringify(v) === JSON.stringify(defaults[k]);
+	if (empty || same) delete next[k];
+	else next[k] = v;
+	return next;
+}
+var sameJson = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+function VoiceWordsBlock({ model, view }) {
+	const saved = savedWords(model.get("voice", "words"));
+	const defaults = wordsFrom(view?.words_default, BUILTIN_VOICE_WORDS);
+	const locked = view?.configure_allowed === false;
+	const [sent, setSent] = (0, import_react.useState)(null);
+	const save = async (k, v) => {
+		const next = withWord(saved, k, v, defaults);
+		setSent({
+			k,
+			v: next[k],
+			doc: model.settings
+		});
+		await model.saveField("voice", "words", next);
+	};
+	const kept = (k) => sent?.k === k && sent.doc !== model.settings && !sameJson(sent.v, saved[k]) ? saved[k] ?? (k === "wake" ? "" : []) : void 0;
+	const custom = PHRASE_KINDS.some((k) => saved[k]) || !!saved.wake;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-section",
+		id: "voice-words",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+				className: "set-section-title",
+				children: "Voice words"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				id: "voice-words-hint",
+				children: ["The words the mic listens for — they work everywhere: this computer's mic, the phone page and the wake word. Phrases you add to a row replace its defaults (shown faded).", custom && !locked && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					id: "voice-words-reset",
+					onClick: () => {
+						setSent(null);
+						model.saveField("voice", "words", {});
+					},
+					children: "Reset to defaults"
+				})] })]
+			}),
+			locked && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				id: "voice-words-locked",
+				children: "Only the owner of this computer can change them."
+			}),
+			WORD_ROWS.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PhraseRow, {
+				kind: r.kind,
+				label: r.label,
+				hint: r.hint,
+				list: saved[r.kind] || [],
+				defaults: defaults[r.kind],
+				kept: kept(r.kind),
+				disabled: locked,
+				onChange: (v) => void save(r.kind, v)
+			}, r.kind)),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WakeRow, {
+				value: saved.wake || "",
+				fallback: defaults.wake,
+				kept: kept("wake"),
+				disabled: locked,
+				onChange: (v) => void save("wake", v)
+			})
+		]
+	});
+}
+function PhraseRow(p) {
+	const [draft, setDraft] = (0, import_react.useState)("");
+	const [error, setError] = (0, import_react.useState)("");
+	const id = "voice-words-" + p.kind;
+	const add = () => {
+		if (!draft.trim()) return;
+		const why = phraseError(draft, p.list);
+		setError(why);
+		if (why) return;
+		p.onChange([...p.list, normPhrase(draft)]);
+		setDraft("");
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row voice-words-row",
+		"data-words-kind": p.kind,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+				className: "set-label",
+				htmlFor: id,
+				children: p.label
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "voice-chips",
+				role: "list",
+				"aria-label": p.label,
+				children: [
+					p.list.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "voice-chip",
+						role: "listitem",
+						children: [w, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "voice-chip-x",
+							"aria-label": "Remove " + w,
+							title: "Remove",
+							disabled: p.disabled,
+							onClick: () => p.onChange(p.list.filter((x) => x !== w)),
+							children: "×"
+						})]
+					}, w)),
+					!p.list.length && p.defaults.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "voice-chip is-default",
+						role: "listitem",
+						title: "A default — add your own to replace it",
+						children: w
+					}, w)),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						id,
+						type: "text",
+						className: "voice-chip-input",
+						autoComplete: "off",
+						spellCheck: false,
+						maxLength: 60,
+						disabled: p.disabled,
+						placeholder: p.list.length ? "Add a phrase…" : "Add your own…",
+						"aria-invalid": error ? true : void 0,
+						value: draft,
+						onChange: (e) => {
+							setDraft(e.target.value);
+							if (error) setError("");
+						},
+						onKeyDown: (e) => {
+							if (e.key === "Enter") {
+								e.preventDefault();
+								add();
+							} else if (e.key === "Backspace" && !draft && p.list.length) p.onChange(p.list.slice(0, -1));
+						}
+					})
+				]
+			}),
+			error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-field-error",
+				role: "alert",
+				children: error
+			}),
+			p.kept && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint voice-words-kept",
+				children: ["Saved as: ", p.kept.length ? p.kept.join(", ") : "the defaults"]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: p.hint
+			})
+		]
+	});
+}
+function WakeRow(p) {
+	const [draft, setDraft] = (0, import_react.useState)(null);
+	const [error, setError] = (0, import_react.useState)("");
+	const shown = draft ?? p.value;
+	const commit = () => {
+		if (draft === null) return;
+		const why = wakeError(draft);
+		setError(why);
+		if (why) return;
+		setDraft(null);
+		if (normPhrase(draft) !== p.value) p.onChange(normPhrase(draft));
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row voice-words-row",
+		"data-words-kind": "wake",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+				className: "set-label",
+				htmlFor: "voice-words-wake",
+				children: "Wake word"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				id: "voice-words-wake",
+				type: "text",
+				autoComplete: "off",
+				spellCheck: false,
+				maxLength: 60,
+				disabled: p.disabled,
+				placeholder: wakeName({
+					...BUILTIN_VOICE_WORDS,
+					wake: p.fallback
+				}),
+				"aria-invalid": error ? true : void 0,
+				value: shown,
+				onChange: (e) => {
+					setDraft(e.target.value);
+					if (error) setError("");
+				},
+				onBlur: commit,
+				onKeyDown: (e) => {
+					if (e.key === "Enter") e.target.blur();
+				}
+			}),
+			error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-field-error",
+				role: "alert",
+				children: error
+			}),
+			p.kept !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint voice-words-kept",
+				children: ["Saved as: ", p.kept || "the default"]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: "Said on its own, it opens the mic from standby (Listen for it, above). One or two words; empty is the default."
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/settings/screens/Voice.tsx
 var KIND_WORD = {
 	stt: "recognition",
@@ -90536,7 +91105,10 @@ function VoiceSection({ active }) {
 	(0, import_react.useEffect)(() => {
 		if (!active) return;
 		let live = true;
-		api("/api/voice").then((v) => live && setView(v)).catch((err) => {
+		api("/api/voice").then((v) => {
+			applyVoiceView(v);
+			if (live) setView(v);
+		}).catch((err) => {
 			if (!live) return;
 			const why = "could not ask the server: " + (err.message || "no answer");
 			setView({ server_ready: {
@@ -90677,6 +91249,10 @@ function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
 				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MicPrefs, {}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceWordsBlock, {
+				model,
+				view
+			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 				className: "set-section-title",
 				children: "Permission dialogs"
@@ -90741,6 +91317,7 @@ function MicPrefs() {
 	(0, import_react.useEffect)(() => onVoicePrefs(setPrefs), []);
 	const [wakeLine, setWakeLine] = (0, import_react.useState)(() => wakeStatus().line);
 	(0, import_react.useEffect)(() => onWakeStatus((s) => setWakeLine(s.line)), []);
+	const words = useVoiceWords();
 	const save = (p) => {
 		setPrefs(p);
 		saveVoicePrefs(p);
@@ -90750,10 +91327,21 @@ function MicPrefs() {
 			className: "set-section-title",
 			children: "This computer's mic"
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint",
 			id: "voice-mic-hint",
-			children: "The mic in the top bar; the same choices are in its popover. These are per browser."
+			children: [
+				"The mic in the top bar; the same choices are in its popover. These are per browser.",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					id: "voice-tour-link",
+					"data-tour-id": "voice",
+					onClick: () => replayTour("voice"),
+					children: "Show me how"
+				})
+			]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "set-row",
@@ -90808,7 +91396,11 @@ function MicPrefs() {
 							...prefs,
 							ptt: "toggle"
 						})
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Click to talk — press to start; it listens until you say “over and out” or press again" })]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+						"Click to talk — press to start; it listens until you say ",
+						quoted(words.end[0]),
+						" or press again"
+					] })]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "voice-ptt-choice",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -90832,12 +91424,12 @@ function MicPrefs() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-label",
 						id: "voice-wake-label",
-						children: "Listen for “MindFlock”"
+						children: wakeSwitchLabel(words)
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-hint notif-rule-desc",
 						id: "voice-wake-hint",
-						children: WAKE_SWITCH_HINT
+						children: wakeSwitchHint(words)
 					}),
 					prefs.wake && wakeLine && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-hint notif-rule-desc",
@@ -90933,8 +91525,12 @@ function MicPrefs() {
 					id: "voice-mic-typing",
 					children: [
 						"The words are typed into the session as you speak, and corrected when the accurate pass hears a phrase otherwise. ",
-						DICT_HINT,
-						"; Esc takes them back. A click keeps the mic on across messages until “over and out”. Say “stop recording” to stop, “focus 3” or “next session” to switch, and “yes”, “no”, “always” or a number to answer a dialog. Hotkey:",
+						dictHint(words),
+						"; Esc takes them back. A click keeps the mic on across messages until",
+						" " + quoted(words.end[0]),
+						". Say ",
+						quoted(words.stop.find((p) => p.includes(" ")) || words.stop[0]),
+						" to stop, “focus 3” or “next session” to switch, and “yes”, “no”, “always” or a number to answer a dialog. Hotkey:",
 						" ",
 						talkHotkey() || "the Talk shortcut in Keyboard shortcuts",
 						"."
