@@ -116,7 +116,7 @@ PHRASE_MAX_SECONDS = 60.0
 #: :data:`SILENCE_RMS`) skips the accurate pass: nothing to gain.
 FINAL_MIN_SECONDS = 0.6
 #: The accurate pass's deadline; past it the fast text stands.
-FINAL_TIMEOUT_S = 6.0
+FINAL_TIMEOUT_S = 2.0
 #: The frame the speech in a chunk is counted in (100 ms).
 _FRAME = RATE // 10
 

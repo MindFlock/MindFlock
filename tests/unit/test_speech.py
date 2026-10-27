@@ -585,7 +585,7 @@ class TestLocalFinal:
         assert audio == ("np", "float32", [0.0, 0.5])
         assert kw == {
             "language": "en",
-            "beam_size": 2,
+            "beam_size": 1,
             "condition_on_previous_text": False,
             "vad_filter": True,
         }
