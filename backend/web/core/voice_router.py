@@ -63,7 +63,7 @@ __all__ = [
 ]
 
 #: Commands the client carries out itself: the answer has no ``say``.
-LOCAL_KINDS = ("cancel", "stop", "off", "repeat", "condense")
+LOCAL_KINDS = ("cancel", "stop", "hush", "off", "repeat", "condense")
 #: At most this many names in a "Which one" / "No session called" sentence.
 MAX_NAMES = 6
 #: At most this many sessions read out by "what needs me".
@@ -128,6 +128,16 @@ _CMDS = [
     ),
     ("repeat", re.compile(r"^(?:say that again|repeat(?: that)?)$")),
     ("off", re.compile(r"^(?:voice off|turn voice off|turn off voice)$")),
+    # "Stop talking": the client cuts what is being said and drops the queue,
+    # and keeps listening if it was — unlike "stop", which stops the mic.
+    (
+        "hush",
+        re.compile(
+            r"^(?:stop (?:talking|speaking|reading|saying that)"
+            r"|be quiet|quiet|hush|shut up|(?:that'?s |that is )?enough"
+            r"|enough (?:talking|of that))$"
+        ),
+    ),
     (
         "stop",
         re.compile(
