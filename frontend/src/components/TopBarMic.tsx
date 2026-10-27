@@ -23,10 +23,13 @@
  * queue, one line at a time (lib/voiceDesktop SpeechQueue). Right-click or Shift+click opens those options. In the desktop app
  * the words and the voice go through the server's engines (its Web Speech
  * fails there); in a browser tab, through the browser's unless Settings →
- * Voice says "server" (lib/voiceDesktop sttEngine). The server's recognizer
- * streams when it can (`server_ready.stt_stream`): the words are typed while
- * you speak, the last one held back in case it is a radio word, and the
- * unsure tail shows muted in the caption. "Stop recording" stops at any
+ * Voice says "server" (lib/voiceDesktop sttEngine). The words are typed as
+ * you speak, like a phone keyboard: the server's recognizer streams when it
+ * can (`server_ready.stt_stream`) and Web Speech has interim words — either
+ * way the phrase so far is typed as a guess and corrected (backspaces, then
+ * the new end) as the recognizer changes its mind, the unsure words muted in
+ * the caption until they commit; a trailing radio word or stop phrase is
+ * never typed, not even as a guess. "Stop recording" stops at any
  * point; "focus three" / "next session" move by the rail's numbers; "yes" /
  * "no" / "always" answer the focused session's dialog or question; the Talk
  * hotkey (`mindflock:voice-talk`) is push to talk from anywhere; and with
@@ -39,8 +42,9 @@
  * appearing) and kept warm KEEP_STREAM_MS after a dictation, and the server's
  * stream opens while the mic gets ready. While listening, a ring on the button
  * follows the level, the caption says "Hearing you…" once the level says
- * speech, and the unsure words show greyed as soon as the first chunk is back
- * (never typed).
+ * speech, and the first words are typed (and shown greyed) as soon as the
+ * first chunk is back — sent after 150 ms of speech, later chunks paced by
+ * the server's pass time (lib/voiceDesktop chunkMinS).
  *
  * The wake word (lib/wakeWord): with "Listen for “MindFlock”" on, the mic
  * stays open in standby (a faint ring and a dot on the button; the ring still
@@ -81,6 +85,7 @@ import {
   browserRecognizer,
   browserSpeaker,
   engineDiagnostics,
+  passLine,
   loadVoiceCfg,
   loadVoicePrefs,
   noRecognizerLine,
@@ -112,6 +117,7 @@ import {
 } from "../lib/voiceDesktop";
 import {
   liveTail,
+  liveUnsure,
   meterFeed,
   meterPoll,
   meterRef,
@@ -291,6 +297,20 @@ function fieldTarget(el: HTMLInputElement | HTMLTextAreaElement): DictTarget {
       el.value = el.value.slice(0, at - text.length) + el.value.slice(at);
       try {
         el.selectionStart = el.selectionEnd = at - text.length;
+      } catch {
+        /* readonly */
+      }
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    },
+    // A correction sets the value once: `old` before the cursor becomes
+    // `text` (edited since — the cursor moved off it — `text` just goes in).
+    replace: (old, text) => {
+      const at = el.selectionStart != null ? el.selectionStart : el.value.length;
+      const from = old && el.value.slice(Math.max(0, at - old.length), at) === old ? at - old.length : at;
+      el.value = el.value.slice(0, from) + text + el.value.slice(at);
+      try {
+        el.selectionStart = el.selectionEnd = from + text.length;
       } catch {
         /* readonly */
       }
@@ -629,11 +649,12 @@ export function TopBarMic() {
     meterStart();
     const ok = r.start(
       {
+        // Web Speech's interim words: typed as a guess, corrected as they change.
         onInterim: (t) => {
           if (live.current !== d) return;
           armIdle();
           if (t) voiceMark("partial");
-          d.hearing(t);
+          void d.hearing(t);
         },
         onStatus: (t) => {
           if (live.current === d && !d.dict.shown && !into) say(t + " · " + DICT_HINT, true);
@@ -655,24 +676,21 @@ export function TopBarMic() {
           voiceMark("commit");
           void d.heard(t);
         },
-        // Streaming: committed words as they come, a phrase's end, the unsure
-        // tail (never typed), and the one line when it falls back to clips.
-        onWords: (t) => {
+        // Streaming: each chunk's committed words and unsure tail, typed as
+        // you speak and corrected once per answer; a phrase's end; the tail
+        // cleared (a stream's end); the one line when it falls back to clips.
+        onStream: (w, p) => {
           if (live.current !== d) return;
-          armIdle();
-          voiceMark("commit");
-          void d.words(t);
+          if (w || p) armIdle();
+          if (p) voiceMark("partial");
+          if (w) voiceMark("commit");
+          void d.stream(w, p);
         },
         onFlush: (t) => {
           if (live.current === d) void d.flush(t);
         },
         onPartial: (t) => {
-          if (live.current !== d) return;
-          if (t) {
-            armIdle();
-            voiceMark("partial");
-          }
-          d.unsure(t);
+          if (live.current === d) d.unsure(t);
         },
         onNotice: (t) => {
           if (live.current === d) d.notice(t);
@@ -1069,7 +1087,8 @@ export function TopBarMic() {
     : undefined;
 
   const ttsNow = ttsEngine(cfg || cfgNow) === "server" ? "server" : browserSp.available() ? "browser" : "none";
-  const diagnostics = engineDiagnostics(cfg || cfgNow, sttNow, ttsNow);
+  const pass = sttNow === "server" ? passLine((cfg || cfgNow).server_ready.stt_backend, serverRec.passMs) : "";
+  const diagnostics = engineDiagnostics(cfg || cfgNow, sttNow, ttsNow) + (pass ? " · " + pass : "");
 
   return (
     <>
@@ -1157,8 +1176,8 @@ export function TopBarMic() {
       {showCaption &&
         createPortal(
           <div id="mic-caption" className={listening ? "live" : ""} role="status" aria-live="polite" style={capStyle}>
-            {listening ? liveTail(caption, unsure) : caption}
-            {unsure && <span className="mic-unsure"> {unsure}</span>}
+            {listening ? liveTail(caption, liveUnsure(unsure)) : caption}
+            {unsure && <span className="mic-unsure"> {listening ? liveUnsure(unsure) : unsure}</span>}
           </div>,
           document.body
         )}

@@ -42,7 +42,7 @@ import type { Dialog } from "../api/types";
 import { peekTerm } from "./terminals";
 import { toast } from "./toast";
 import { resamplerName, startWavRecording, type WavRecording } from "./wavRecorder";
-import { MicKeeper, isLoud, noiseFloor, pickupLine, voiceMark } from "./voiceMic";
+import { MicKeeper, isLoud, noiseFloor, pickupLine, voiceMark, voicePass } from "./voiceMic";
 
 // --- the radio words -------------------------------------------------------- //
 
@@ -161,17 +161,18 @@ export const CONTROL_MAX_WORDS = Math.max(...CONTROL_PHRASES.map((p) => p.length
 /** The indexes of `ws`'s real words (a bare "." is not one). */
 const wordIndexes = (ws: string[]) => ws.flatMap((w, i) => (bareWord(w) ? [i] : []));
 
-/** Streamed words → what may be typed now and what waits: the last word
- * (it may be a radio word — never typed), and before it as many words (up to
- * {@link CONTROL_MAX_WORDS} in all) as could still be the start of a control
- * phrase — "submit it", "stop recording", "that is all" — with a bare
- * punctuation token kept with its word. */
+/** A phrase in flight → what may be typed now and what waits: the last words
+ * (up to {@link CONTROL_MAX_WORDS}) while they are, or could still become, a
+ * control phrase — "over", "submit it", "stop" (…recording), "that is"
+ * (…all) — with a bare punctuation token kept with its word. Any other last
+ * word is typed at once; a held one goes in once the next word rules the
+ * control phrase out ("stop the server"), or the phrase ends on less than one. */
 export function holdBack(text: string): { type: string; held: string } {
   const ws = String(text || "").trim().split(/\s+/).filter(Boolean);
   if (!ws.length) return { type: "", held: "" };
   const idx = wordIndexes(ws);
-  let n = idx.length ? idx[idx.length - 1] : 0;
-  for (let k = 2; k <= Math.min(CONTROL_MAX_WORDS, idx.length); k++) {
+  let n = ws.length;
+  for (let k = 1; k <= Math.min(CONTROL_MAX_WORDS, idx.length); k++) {
     const tail = idx.slice(-k).map((i) => bareWord(ws[i]));
     if (CONTROL_PHRASES.some((p) => p.length >= k && tail.every((w, j) => p[j] === w))) n = idx[idx.length - k];
   }
@@ -407,24 +408,31 @@ export function talkKeyAction(
 
 // --- the dictation state machine ------------------------------------------- //
 
-/** What a step of {@link Dictation} asks for. `text` to type is a phrase plus
- * its trailing space; `text` to erase is everything this dictation typed. */
+/** What a step of {@link Dictation} asks for. `text` to type ends a phrase
+ * with its trailing space (a phrase still being said has none: its last word
+ * may change); `erase`, when set, goes first — the end of the phrase under
+ * way as typed so far, which the recognizer has since heard otherwise (never
+ * more than that phrase). `text` to erase or drop is everything this
+ * dictation typed. */
 export type DictOutcome =
-  /** Type `text` now; listening goes on. `route: false`: it can't be a
-   * router command (a streamed phrase's first words), so it goes straight in. */
-  | { kind: "type"; text: string; route?: boolean }
+  /** Type `text` (after `erase`); listening goes on. `route: false`: it
+   * can't be a router command, so it goes straight in. `guess`: the phrase
+   * is not over — typed only where it can go now, never past the router, a
+   * dialog on screen or a missing session (the phrase's end decides then). */
+  | { kind: "type"; text: string; erase?: string; route?: boolean; guess?: boolean }
   /** "over": type `text` (if any), stop — the words stay in the field.
    * `stop`: it was a stop phrase ("stop recording"), not the radio word. */
-  | { kind: "over"; text: string; stop?: boolean }
+  | { kind: "over"; text: string; erase?: string; stop?: boolean }
   /** "submit": type `text` (if any), stop, and submit the draft. */
-  | { kind: "submit"; text: string }
+  | { kind: "submit"; text: string; erase?: string }
   /** "disregard": take back `text`; listening goes on. */
   | { kind: "erase"; text: string }
   /** Escape: take back `text` and stop. */
   | { kind: "dropped"; text: string }
   /** "Stop talking" (a whole phrase): the app's voice stops, nothing is
-   * typed; listening goes on unless `end` (said as push to talk let go). */
-  | { kind: "hush"; end?: boolean }
+   * typed (`erase` takes the phrase's guess back); listening goes on unless
+   * `end` (said as push to talk let go). */
+  | { kind: "hush"; end?: boolean; erase?: string }
   /** Nothing to do (an empty phrase). */
   | { kind: "continue" }
   /** Not listening: nothing to do. */
@@ -443,88 +451,119 @@ export const STOPPED_LINE = "Stopped listening";
 export const HUSH_LINE = "Quiet.";
 export const HUSH_CAPTION_MS = 1000;
 
+/** The keys that turn `before` (typed) into `after`: `erase` — the tail of
+ * `before` past the start they share, taken back one backspace per
+ * character — then `type`, the tail of `after`. By code point, so "café" or
+ * an emoji is one key. "fix the bu" → "fix the bag": erase "u", type "ag". */
+export function retype(before: string, after: string): { erase: string; type: string } {
+  const a = Array.from(before);
+  const b = Array.from(after);
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return { erase: a.slice(i).join(""), type: b.slice(i).join("") };
+}
+
+/** `o` with `erase` only when there is one (outcomes stay minimal). */
+const withErase = <T extends object>(o: T, erase: string): T & { erase?: string } => (erase ? { ...o, erase } : o);
+
 /** One dictation: begin → heard… → over / submit / cancel / expire, with a
  * record of what it typed (in order) so "disregard" can take exactly that
  * back. Pure, so the radio words, push to talk and Escape are pinned by
  * tests; {@link LiveDictation} carries the outcomes out. A toggle's second
  * click and a hold's release are both {@link finish}: "over".
  *
- * A streaming recognizer delivers a phrase as it is said: {@link words} as
- * they are committed, then {@link flush} at its end, which is that phrase's
- * {@link heard} — so the radio words, read off the whole phrase, work alike. */
+ * Words are typed as they are heard, like a phone's keyboard: the phrase
+ * under way — a streaming recognizer's committed words and its unstable
+ * tail ({@link stream}), or Web Speech's interim words ({@link hearing}) —
+ * is typed as a guess, and every new answer corrects it from where it
+ * differs ({@link retype}). Its end — {@link flush}, or a final
+ * ({@link heard}) — settles it: the radio words, read off the whole phrase,
+ * work alike for every engine. What is never typed, not even as a guess: a
+ * trailing control phrase or its start ({@link holdBack}: "over", "submit
+ * it", "stop", "that is"…, until the next word says it isn't one), and a
+ * first phrase that may be a router command (it waits whole for the router). */
 export class Dictation {
   listening = false;
-  interim = "";
   /** What this dictation typed so far — only what really went in
-   * ({@link wrote}), since a disregard takes it back character by character. */
+   * ({@link wrote}, {@link unwrote}): the phrases it settled, then the guess
+   * at the phrase under way. A disregard takes it back character by character. */
   typed = "";
-  /** Streaming: committed words not typed yet — the last one (it may be a
-   * radio word), or a first phrase whole while it may be a router command. */
+  /** Streaming: the phrase's committed words so far (final; the caption
+   * shows them settled). */
   held = "";
-  /** Streaming: the recognizer's unstable tail — shown, never typed. */
+  /** The words the recognizer may still change: the stream's unstable tail,
+   * or Web Speech's interim phrase — muted in the caption, typed as a guess. */
   partial = "";
   /** A first phrase goes past the router (false in a text box). */
   routes = true;
   /** A dialog or a question waits on the session: an answer said as the
    * whole dictation goes to the router at once (set before each step). */
   answering = false;
-  /** Streaming: {@link typed}'s length when the phrase under way began (-1:
-   * between phrases) — a phrase is whole only while none of it is typed. */
+  /** {@link typed}'s length when the phrase under way began (-1: between
+   * phrases): what came before it is never corrected. */
   private phraseAt = -1;
 
   begin(): void {
     this.listening = true;
-    this.interim = "";
     this.typed = "";
     this.held = "";
     this.partial = "";
     this.phraseAt = -1;
   }
 
-  /** The caption: what is in the field, then the words in flight (the
-   * streamed {@link partial} is shown apart, muted). */
+  /** The caption's settled words: the phrases typed, then the phrase's
+   * committed words ({@link partial} is shown apart, muted). */
   get shown(): string {
-    return [this.typed.trim(), this.held.trim(), this.interim.trim()].filter(Boolean).join(" ");
+    return [this.before.trim(), this.held.trim()].filter(Boolean).join(" ");
   }
 
-  hearing(t: string): void {
-    if (this.listening) this.interim = t;
+  /** What was typed before the phrase under way. */
+  private get before(): string {
+    return this.phraseAt < 0 ? this.typed : this.typed.slice(0, this.phraseAt);
   }
 
-  /** Streaming: the tail the recognizer may still change. */
+  /** The phrase under way as typed so far (its guess). */
+  get guessed(): string {
+    return this.phraseAt < 0 ? "" : this.typed.slice(this.phraseAt);
+  }
+
+  /** Web Speech's interim words: the phrase so far, typed as a guess. */
+  hearing(t: string): DictOutcome {
+    if (!this.listening) return { kind: "stopped" };
+    this.partial = String(t || "").trim();
+    return this.guess();
+  }
+
+  /** Streaming: the unstable tail, for the caption only (a stream's end or
+   * fall-back clears it; {@link stream} types it). */
   unsure(t: string): void {
     if (this.listening) this.partial = t;
   }
 
-  /** Streaming: words committed in the phrase under way. All but the last
-   * are typed now; a first phrase that may be a command waits whole. */
-  words(w: string): DictOutcome {
+  /** Streaming: one answer from the recognizer — words `w` committed since
+   * the last one, and the unstable tail `p` after them. A stop phrase (or,
+   * while {@link answering}, a lone answer) in the committed words acts now;
+   * else the phrase so far is typed as a guess: one correction per answer. */
+  stream(w: string, p: string): DictOutcome {
     if (!this.listening) return { kind: "stopped" };
-    if (this.phraseAt < 0) this.phraseAt = this.typed.length;
-    const all = joinWords(this.held, w);
-    // "Stop talking" waits for the phrase's end ("quiet mode…" is a prompt):
-    // the hold-back keeps it whole until {@link flush}.
-    const ctl = this.control(all, false);
+    this.held = joinWords(this.held, w);
+    this.partial = String(p || "").trim();
+    // "Stop talking" waits for the phrase's end ("quiet mode…" is a prompt).
+    const ctl = this.control(this.held, false);
     if (ctl) return ctl;
-    if (this.routes && !this.typed && mayBeCommand(all)) {
-      this.held = all;
-      return { kind: "continue" };
-    }
-    const cut = holdBack(all);
-    this.held = cut.held;
-    return cut.type ? { kind: "type", text: cut.type + " ", route: false } : { kind: "continue" };
+    return this.guess();
+  }
+
+  /** Streaming: committed words and no unstable tail. */
+  words(w: string): DictOutcome {
+    return this.stream(w, "");
   }
 
   /** Streaming: the phrase ended with its last committed words — with the
    * held ones, the phrase's final ({@link heard}: radio words and all). */
   flush(w: string): DictOutcome {
     if (!this.listening) return { kind: "stopped" };
-    const whole = this.phraseAt < 0 || this.typed.length === this.phraseAt;
-    this.phraseAt = -1;
-    const all = joinWords(this.held, w);
-    this.held = "";
-    this.partial = "";
-    return this.heard(all, whole);
+    return this.heard(joinWords(this.held, w));
   }
 
   /** `text` went into the field. */
@@ -532,40 +571,43 @@ export class Dictation {
     this.typed += text;
   }
 
-  /** One final phrase (`whole` false: a streamed phrase's tail — its start
-   * is typed already). */
-  heard(phrase: string, whole = true): DictOutcome {
+  /** `text`, the end of what was typed, was taken back. */
+  unwrote(text: string): void {
+    if (text && this.typed.endsWith(text)) this.typed = this.typed.slice(0, this.typed.length - text.length);
+  }
+
+  /** One final phrase: the phrase under way ends as `phrase` (its guess
+   * corrected to it, or taken back for a control word). */
+  heard(phrase: string): DictOutcome {
     if (!this.listening) return { kind: "stopped" };
-    this.interim = "";
-    const ctl = this.control(phrase, whole);
+    const ctl = this.control(phrase, true);
     if (ctl) return ctl;
     const p = parseRadio(phrase);
-    const text = p.text ? p.text + " " : "";
     switch (p.kind) {
       case "disregard":
         return { kind: "erase", text: this.erase() };
       case "over":
       case "submit":
         this.listening = false;
-        return { kind: p.kind, text };
-      default:
-        return text ? { kind: "type", text } : { kind: "continue" };
+        return { kind: p.kind, ...this.settle(p.text ? p.text + " " : "") };
+      default: {
+        const s = this.settle(p.text ? p.text + " " : "");
+        return s.text || s.erase ? { kind: "type", ...s } : { kind: "continue" };
+      }
     }
   }
 
   /** The toggle's second click, the hold's release: "over". A phrase still
-   * in flight (no final yet) counts — it was said. */
+   * in flight (no final yet) counts — it was said, and its guess is in. */
   finish(): DictOutcome {
     if (!this.listening) return { kind: "stopped" };
-    const tail = joinWords(this.held, this.interim);
-    this.held = "";
-    this.partial = "";
-    const out = tail ? this.heard(tail) : { kind: "continue" as const };
+    const tail = joinWords(this.held, this.partial);
+    const out = tail || this.phraseAt >= 0 ? this.heard(tail) : ({ kind: "continue" } as const);
     this.listening = false;
-    if (out.kind === "type") return { kind: "over", text: out.text };
+    if (out.kind === "type") return withErase({ kind: "over" as const, text: out.text }, out.erase || "");
     if (out.kind === "erase") return { kind: "dropped", text: out.text };
     if (out.kind === "continue") return { kind: "over", text: "" };
-    if (out.kind === "hush") return { kind: "hush", end: true };
+    if (out.kind === "hush") return withErase({ kind: "hush" as const, end: true }, out.erase || "");
     return out;
   }
 
@@ -581,44 +623,51 @@ export class Dictation {
   expire(): DictOutcome {
     if (!this.listening) return { kind: "stopped" };
     this.listening = false;
-    this.interim = "";
-    if (isHushPhrase(this.held)) {
-      this.held = "";
-      this.partial = "";
-      return { kind: "hush", end: true };
-    }
-    // Streamed words held back go in (a radio word among them does nothing).
-    const rest = parseRadio(this.held).text;
+    const all = joinWords(this.held, this.partial);
+    if (isHushPhrase(all)) return withErase({ kind: "hush" as const, end: true }, this.settle("").erase || "");
+    // The phrase in flight goes in (a radio word among it does nothing).
+    const rest = parseRadio(all).text;
+    return { kind: "over", ...this.settle(rest ? rest + " " : "") };
+  }
+
+  /** The phrase under way, typed as far as it may be now. */
+  private guess(): DictOutcome {
+    if (this.phraseAt < 0) this.phraseAt = this.typed.length;
+    const all = joinWords(this.held, this.partial);
+    // A first phrase that may be a command waits whole for the router.
+    const want = this.routes && !this.before && mayBeCommand(all) ? "" : holdBack(all).type;
+    const fix = retype(this.guessed, want);
+    if (!fix.erase && !fix.type) return { kind: "continue" };
+    return withErase({ kind: "type" as const, text: fix.type, route: false, guess: true }, fix.erase);
+  }
+
+  /** The phrase under way ends as `text`: the keys from its guess to that.
+   * A first phrase the router may take is taken back whole first, so the
+   * router reads it before any of it is in the field. */
+  private settle(text: string): { text: string; erase?: string } {
+    const guessed = this.guessed;
+    const whole = this.routes && !this.before && mayBeCommand(text);
+    this.phraseAt = -1;
     this.held = "";
     this.partial = "";
-    return { kind: "over", text: rest ? rest + " " : "" };
+    const fix = whole ? { erase: guessed, type: text } : retype(guessed, text);
+    return withErase({ text: fix.type }, fix.erase);
   }
 
   /** The control phrases: "stop talking" said as a whole phrase (`whole`:
-   * nothing of the phrase is typed yet), the stop family any committed words
-   * can end with (stop now; the words before it go in) and, while
-   * {@link answering}, an answer said as the whole dictation (to the router
-   * at once, without waiting for the phrase's end). Else null. */
+   * the phrase is over), the stop family any committed words can end with
+   * (stop now; the words before it go in) and, while {@link answering}, an
+   * answer said as the whole dictation (to the router at once, without
+   * waiting for the phrase's end). Else null. */
   private control(all: string, whole: boolean): DictOutcome | null {
-    if (whole && isHushPhrase(all)) {
-      this.interim = "";
-      this.held = "";
-      this.partial = "";
-      return { kind: "hush" };
-    }
+    if (whole && isHushPhrase(all)) return withErase({ kind: "hush" as const }, this.settle("").erase || "");
     const before = stopTail(all);
     if (before !== null) {
       this.listening = false;
-      this.interim = "";
-      this.held = "";
-      this.partial = "";
-      return { kind: "over", text: before ? before + " " : "", stop: true };
+      return { kind: "over", ...this.settle(before ? before + " " : ""), stop: true };
     }
-    if (this.answering && this.routes && !this.typed && isAnswerPhrase(all)) {
-      this.held = "";
-      this.partial = "";
-      return { kind: "type", text: all.trim() + " " };
-    }
+    if (this.answering && this.routes && !this.before && isAnswerPhrase(all))
+      return { kind: "type", ...this.settle(all.trim() + " ") };
     return null;
   }
 
@@ -626,9 +675,9 @@ export class Dictation {
   private erase(): string {
     const text = this.typed;
     this.typed = "";
-    this.interim = "";
     this.held = "";
     this.partial = "";
+    this.phraseAt = -1;
     return text;
   }
 }
@@ -658,6 +707,9 @@ export interface DictTarget {
   type(text: string): boolean;
   /** Take back `text`, the last characters put in. */
   erase(text: string): boolean;
+  /** A correction in one go: `old`, the last characters put in, becomes
+   * `text` (a text box sets its value once; without it, erase then type). */
+  replace?(old: string, text: string): boolean;
   /** A text box that sends itself (the ask pop-up's answer field): "submit"
    * calls this instead of leaving the words in the box. `say`: the "Read
    * replies aloud" pref. */
@@ -763,11 +815,10 @@ export class LiveDictation {
     return !this.done;
   }
 
-  hearing(t: string): void {
-    if (this.done) return;
+  /** Web Speech's interim words: typed as a guess, corrected as they change. */
+  hearing(t: string): Promise<void> {
     if (t) this.heardAnything = true;
-    this.dict.hearing(t);
-    this.show();
+    return this.step(() => this.dict.hearing(t));
   }
 
   heard(phrase: string): Promise<void> {
@@ -775,10 +826,16 @@ export class LiveDictation {
     return this.step(() => this.dict.heard(phrase));
   }
 
-  /** Streaming: committed words, typed as they come (the last held back). */
+  /** Streaming: one answer — committed words `w` and the unstable tail `p`,
+   * typed as you speak and corrected as the recognizer changes its mind. */
+  stream(w: string, p: string): Promise<void> {
+    if (w.trim() || p.trim()) this.heardAnything = true;
+    return this.step(() => this.dict.stream(w, p));
+  }
+
+  /** Streaming: committed words with no unstable tail. */
   words(w: string): Promise<void> {
-    if (w.trim()) this.heardAnything = true;
-    return this.step(() => this.dict.words(w));
+    return this.stream(w, "");
   }
 
   /** Streaming: a phrase's end and its last words. */
@@ -787,7 +844,8 @@ export class LiveDictation {
     return this.step(() => this.dict.flush(w));
   }
 
-  /** Streaming: the unstable tail, for the caption only. */
+  /** Streaming: the unstable tail, for the caption only ({@link stream}
+   * types it). */
   unsure(t: string): void {
     if (this.done) return;
     if (t) this.heardAnything = true;
@@ -888,13 +946,14 @@ export class LiveDictation {
         this.end("");
         return;
       case "type":
-        if (await this.put(out.text, out.route !== false)) this.show();
+        if (await this.put(out.text, out.route !== false, out.erase, out.guess)) this.show();
         return;
       case "erase":
         t?.erase(out.text);
         this.hooks.caption("Disregarded — go on", true);
         return;
       case "hush":
+        if (out.erase && t && !this.keys(t, out.erase, "")) return;
         this.hushed();
         return;
       case "dropped":
@@ -902,7 +961,7 @@ export class LiveDictation {
         this.end(out.text ? "Disregarded" : "", false, "stopped");
         return;
       case "over":
-        if (out.text && !(await this.put(out.text))) return;
+        if ((out.text || out.erase) && !(await this.put(out.text, true, out.erase))) return;
         this.end(
           t?.kind === "session" && this.dict.typed ? OVER_LINE : out.stop ? STOPPED_LINE : "",
           false,
@@ -910,8 +969,8 @@ export class LiveDictation {
         );
         return;
       case "submit": {
-        const typedNow = !!out.text;
-        if (out.text && !(await this.put(out.text))) return;
+        const typedNow = !!(out.text || out.erase);
+        if (typedNow && !(await this.put(out.text, true, out.erase))) return;
         // A box that sends itself (the ask pop-up's answer): its own send.
         if (t?.kind === "field" && t.submit) {
           this.acted = true;
@@ -953,12 +1012,24 @@ export class LiveDictation {
     setTimeout(() => this.show(), HUSH_CAPTION_MS);
   }
 
-  /** Type `text`; a session's first phrase goes past the router (unless it
-   * can't be a command: `route` false) and the dialog guard first. False when
-   * it did not go in (and listening ended). */
-  private async put(text: string, route = true): Promise<boolean> {
+  /** Take back `erase` (the end of the phrase's guess), then type `text`; a
+   * session's first phrase goes past the router (unless it can't be a
+   * command: `route` false) and the dialog guard first. A `guess` (the phrase
+   * isn't over) goes in only where it can now: with no session or a dialog
+   * up it waits for the phrase's end, which decides. False when it did not
+   * go in (and listening ended). */
+  private async put(text: string, route = true, erase = "", guess = false): Promise<boolean> {
     const t = this.target;
-    if (!this.dict.typed && t?.kind !== "field") {
+    if (guess) {
+      if (!t || (!this.dict.typed && t.kind !== "field" && dialogUp(this.hooks.activity(t.title)))) return true;
+      return this.keys(t, erase, text);
+    }
+    // What stays typed once the guess is corrected: nothing — the router and
+    // the dialog guard come first, with the guess already taken back.
+    if (this.dict.typed.length === erase.length && t?.kind !== "field") {
+      if (erase && t && !this.keys(t, erase, "")) return false;
+      erase = "";
+      if (!text) return true;
       const words = text.trim();
       const routed = route ? await this.hooks.route(words) : false;
       if (routed === "hush") {
@@ -980,11 +1051,29 @@ export class LiveDictation {
         return false;
       }
     }
-    if (!t || !t.type(text)) {
-      this.end("Couldn't type into " + (t?.name || "the session") + " — its terminal isn't connected", true);
+    if (!t) {
+      this.end("Couldn't type into the session — its terminal isn't connected", true);
       return false;
     }
-    this.dict.wrote(text);
+    return this.keys(t, erase, text);
+  }
+
+  /** The keys themselves: `erase` taken back, then `text` typed — into a
+   * terminal as one DEL per character and then the characters (two sends,
+   * like the Backspace key and then typing), into a text box as one value.
+   * False — and listening over — when they could not go. */
+  private keys(t: DictTarget, erase: string, text: string): boolean {
+    if (!erase && !text) return true;
+    const ok = t.replace ? t.replace(erase, text) : (!erase || t.erase(erase)) && (!text || t.type(text));
+    if (!ok) {
+      this.end("Couldn't type into " + t.name + " — its terminal isn't connected", true);
+      return false;
+    }
+    this.dict.unwrote(erase);
+    if (text) {
+      this.dict.wrote(text);
+      voiceMark("typed");
+    }
     return true;
   }
 }
@@ -1961,8 +2050,13 @@ export interface RecognizerHandlers {
   /** Streaming (the server's, when it can): words committed — final, typed
    * as they come. */
   onWords?(text: string): void;
-  /** Streaming: the unstable tail after them — shown, never typed. */
+  /** Streaming: the unstable tail after them — for the caption (a stream's
+   * end and a fall-back clear it with ""). */
   onPartial?(text: string): void;
+  /** Streaming: one chunk's answer whole — the words committed by it and the
+   * unstable tail after them — so the typing corrects once per answer. When
+   * set, a chunk's answer comes here instead of onWords + onPartial. */
+  onStream?(committed: string, partial: string): void;
   /** Streaming: a phrase ended (a pause, or finish()); its last words. */
   onFlush?(text: string): void;
   /** A passing line for the caption (streaming fell back to clips). */
@@ -2153,6 +2247,22 @@ const UPLOAD_TIMEOUT_MS = 45_000;
 const CLIP_RATE = 16_000; // the built-in recognizers' rate; whisper's too
 /** A let-go phrase's last bit of audio under this many bytes (~50 ms) isn't sent. */
 const TAIL_MIN_BYTES = 44 + 1600;
+/** A phrase's first chunk goes once this much speech is recorded (the
+ * lead-in before it rides along): the first words show up after one pass. */
+export const FIRST_CHUNK_S = 0.15;
+/** Later chunks, before the server has said how long a pass takes. */
+const LATER_CHUNK_S = 0.3;
+
+/** The least new audio for a phrase's next chunk: about as long as the last
+ * pass took (`passMs`, the server's `ms`) × 0.8, held to 150–600 ms — a fast
+ * server is fed small chunks often, a slow one no slivers ({@link
+ * LATER_CHUNK_S} while unknown). One chunk is in flight at a time; audio that
+ * comes meanwhile is sent together when it is back. */
+export function chunkMinS(passMs: number | null): number {
+  if (passMs == null || !(passMs > 0)) return LATER_CHUNK_S;
+  return Math.min(600, Math.max(150, passMs * 0.8)) / 1000;
+}
+
 /** A stream opened at a phrase's start and still unused this long is opened
  * again at the first word: the server forgets one 60 s after its last chunk
  * (speech_stream.EXPIRE_SECONDS). */
@@ -2161,7 +2271,8 @@ export const STREAM_FRESH_MS = 40_000;
 /** One phrase being recorded. `stream`: it streams (else it is a clip — clip
  * mode, or streaming fell back); `sid` the stream once open (`opened` when);
  * `busy` the one request in flight (the open, or a chunk); `fresh`: speech
- * not sent yet. */
+ * not sent yet; `sent`: a chunk went; `trimS` / `speechS`: the recording's
+ * time at the last lead-in trim and where speech began. */
 interface Phrase {
   rec: WavRecording | null;
   heard: boolean;
@@ -2171,6 +2282,9 @@ interface Phrase {
   busy: Promise<void> | null;
   fresh: boolean;
   ending: boolean;
+  sent: boolean;
+  trimS: number;
+  speechS: number;
 }
 
 /** A response's words (the server joins them with spaces). */
@@ -2188,10 +2302,11 @@ const langTag = () => String(navigator.language || "en").split(";")[0];
  *    stream as the phrase starts — the first one in parallel with the
  *    microphone, so its round trip is over before the first word — and from
  *    the phrase's first speech on (the quiet before it is never sent),
- *    whenever the previous request is back and 300 ms (wavRecorder
- *    TAKE_MIN_S) of new audio exists, the recorder's take() goes to
- *    /stream/{id}/chunk — its `committed` words (final) go to onWords as they
- *    come, its `partial` (unstable) to onPartial. The same quiet ends the
+ *    whenever the previous request is back and enough new audio exists
+ *    ({@link FIRST_CHUNK_S} of speech for the first, then {@link chunkMinS}
+ *    from the server's pass time), the recorder's take() goes to
+ *    /stream/{id}/chunk — its `committed` words (final) and its `partial`
+ *    (unstable) go to onStream together (else onWords, onPartial). The same quiet ends the
  *    phrase: /end flushes its last words to onFlush, and the next phrase
  *    opens a new stream (a phrase that heard nothing DELETEs its). No cap. A
  *    409 on the open, or any failed request, falls back to clips for the rest
@@ -2202,7 +2317,7 @@ const langTag = () => String(navigator.language || "en").split(";")[0];
  * given back by {@link Recognizer.release}. */
 export function serverRecognizer(
   opts: { stream?: () => boolean; mic?: MicKeeper } = {}
-): Recognizer & { lastError: string; mic: MicKeeper } {
+): Recognizer & { lastError: string; mic: MicKeeper; passMs: number | null } {
   const mic = opts.mic || new MicKeeper();
   /** This dictation holds the microphone (one {@link MicKeeper.hold}). */
   let holding = false;
@@ -2404,19 +2519,31 @@ export function serverRecognizer(
       if (h !== hh || !hh || !c.stream) return;
       if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
       self.lastError = "";
+      const ms = Number(r.j.ms);
+      if (ms > 0) {
+        self.passMs = ms;
+        voicePass(ms);
+      }
       const w = wordsOf(r.j.committed);
-      if (w) hh.onWords?.(w);
-      hh.onPartial?.(wordsOf(r.j.partial));
+      const p = wordsOf(r.j.partial);
+      if (hh.onStream) hh.onStream(w, p);
+      else {
+        if (w) hh.onWords?.(w);
+        hh.onPartial?.(p);
+      }
     } catch (err) {
       if (h === hh) streamFailed(c, err);
     }
   };
 
-  /** The next chunk, when speech was heard, nothing is in flight and enough is new. */
+  /** The next chunk, when speech was heard, nothing is in flight and enough
+   * is new: the first {@link FIRST_CHUNK_S} of speech, then {@link chunkMinS}. */
   const pump = (c: Phrase) => {
     if (!c.stream || !c.sid || !c.heard || c.busy || c.ending || !c.rec || h === null) return;
-    const blob = c.rec.take();
+    const min = c.sent ? chunkMinS(self.passMs) : Math.max(0, c.speechS - c.trimS) + FIRST_CHUNK_S;
+    const blob = c.rec.take(min);
     if (!blob) return;
+    c.sent = true;
     c.fresh = false;
     const hh = h;
     run(c, () => sendChunk(c, blob, hh));
@@ -2518,7 +2645,19 @@ export function serverRecognizer(
   const clip = async () => {
     const mine = {};
     token = mine;
-    const c: Phrase = { rec: null, heard: false, stream: streaming, sid: null, opened: 0, busy: null, fresh: false, ending: false };
+    const c: Phrase = {
+      rec: null,
+      heard: false,
+      stream: streaming,
+      sid: null,
+      opened: 0,
+      busy: null,
+      fresh: false,
+      ending: false,
+      sent: false,
+      trimS: 0,
+      speechS: 0,
+    };
     // Its stream opens while the microphone and the audio engine get ready.
     if (c.stream) openStream(c);
     let s: MediaStream;
@@ -2551,13 +2690,17 @@ export function serverRecognizer(
     // floor that follows the quiet moments.
     let floor = 0;
     let lastLoud = 0;
+    let blockAt = 0; // the recording's time before this block
     const onLevel = (rms: number) => {
       if (cur !== c) return;
+      const at = blockAt;
+      blockAt = c.rec?.seconds() ?? 0;
       h?.onLevel?.(rms);
       floor = noiseFloor(floor, rms);
       const now = Date.now();
       if (isLoud(rms, floor)) {
         if (!c.heard) {
+          c.speechS = at;
           h?.onSpeech?.();
           // Opened so long ago the server may have forgotten it: a new one.
           if (c.stream && c.sid && now - c.opened > STREAM_FRESH_MS) {
@@ -2570,9 +2713,9 @@ export function serverRecognizer(
         c.fresh = true;
         lastLoud = now;
       } else if (!c.heard && c.stream) {
-        // Before the first word, keep only a lead-in (under TAKE_MIN_S):
-        // the stream is not sent the quiet before it.
-        c.rec?.take();
+        // Before the first word, keep only a lead-in (under 300 ms): the
+        // stream is not sent the quiet before it.
+        if (c.rec?.take()) c.trimS = blockAt;
       }
       if (c.heard && now - lastLoud > SILENCE_MS) endClip();
       else pump(c);
@@ -2597,6 +2740,8 @@ export function serverRecognizer(
   const self = {
     name: "server" as const,
     lastError: "",
+    /** The server's last streaming pass, in ms (null before one). */
+    passMs: null as number | null,
     mic,
     available: () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia && !!audioCtxCtor(),
     start(handlers: RecognizerHandlers, o: { skipMs?: number } = {}) {
@@ -2788,6 +2933,14 @@ export function engineDiagnostics(
   const voice =
     tts === "server" ? serverEngineName(ready.tts_backend, cfg.system) : tts === "browser" ? "this browser" : "none";
   return "Recognition: " + rec + " · Voice: " + voice;
+}
+
+/** The diagnostics' pass time: how long the server's last streaming pass
+ * took — "whisper ~0.4 s/pass" ("" before one). */
+export function passLine(backend: string | undefined, passMs: number | null): string {
+  if (passMs == null || !(passMs > 0)) return "";
+  const id = String(backend || "");
+  return (!id || id === "local" ? "whisper" : id) + " ~" + (passMs / 1000).toFixed(1) + " s/pass";
 }
 
 /** The caption for a recognizer error, or "" for one that needs no words. */
