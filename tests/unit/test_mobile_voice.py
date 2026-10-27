@@ -336,7 +336,7 @@ def test_mobile_js_push_to_talk_toggle_and_hold():
         assert gone not in v, gone
     # The sheet's choice, and the default.
     assert (
-        'prefs: { rate: 1, voiceName: "", handsFree: false, ptt: "toggle", replies: true }'
+        'prefs: { rate: 1, voiceName: "", handsFree: false, ptt: "toggle", replies: "mine" }'
         in v
     )
     sel = html.split('<select id="voice-ptt"')[1].split("</select>")[0]
@@ -414,25 +414,31 @@ def test_mobile_js_push_to_talk_toggle_and_hold():
 
 
 def test_mobile_js_spoken_replies_say_per_prompt():
-    """Spoken replies (prefs.replies, on by default): POST /send asks for the
-    Say line only for a prompt that was dictated while it is on — a typed
-    prompt costs no Say tokens — and a reply to a say:false prompt is never
-    read out, only "Your turn". "Sent to X." and the ack are spoken only with
-    Spoken replies on."""
+    """Spoken replies (prefs.replies: off | mine, the default | all): POST
+    /send asks for the Say line for a dictated prompt with "mine" — a typed
+    prompt costs no Say tokens — and for every prompt with "all"
+    (Everything); a reply to a say:false prompt is never read out, only
+    "Your turn". "Sent to X." and the ack are spoken unless it is off."""
     js = _js()
     html = _html()
     assert 'id="voice-replies"' in html and "Spoken replies" in html
+    sel = html.split('<select id="voice-replies"')[1].split("</select>")[0]
+    assert re.findall(r'<option value="(\w+)"', sel) == ["off", "mine", "all"]
+    assert "Replies to what I said by voice" in sel and "Everything" in sel
     send = _fn(js, "voiceSend")
     assert "var dictated = !!voice.dictated;" in send
-    assert "var say = !!(voice.prefs.replies && dictated);" in send
-    assert "voice.expectSay = say;" in send and "voice.dictated = false;" in send
     assert (
-        "if (base !== null && voice.prefs.replies) voiceAckStart(title, base);" in send
-    )
-    assert (
-        "if (voice.prefs.replies) speakLine(sent, true); else voiceCaption(sent);"
+        'var say = voice.prefs.replies === "all" || (voice.prefs.replies === "mine" && dictated);'
         in send
     )
+    assert "voice.expectSay = say;" in send and "voice.dictated = false;" in send
+    assert 'var talk = voice.prefs.replies !== "off";' in send
+    assert "if (base !== null && talk) voiceAckStart(title, base);" in send
+    assert "if (talk) speakLine(sent, true); else voiceCaption(sent);" in send
+    # Everything with voice off: a typed prompt goes through /send too, say:true.
+    every = _fn(js, "everythingTakesSend")
+    assert "body: JSON.stringify({ text: text, dialog_safe: true, say: true })" in every
+    assert "if (everythingTakesSend()) return;" in _fn(js, "sendCompose")
     # Dictated words set the flag; emptying the box clears it.
     assert "voiceAppend(p.text);" in _fn(js, "voiceHeardWords")
     assert "voice.dictated = true;" in _fn(js, "voiceAppend")
@@ -450,7 +456,10 @@ def test_mobile_js_spoken_replies_say_per_prompt():
     assert "voice.expectSay = null;" in _fn(js, "voiceTurnOn")
     assert "voice.expectSay = null;" in _fn(js, "voiceMoveTo")
     diag = _fn(js, "voiceDiag")
-    assert '"Replies: " + (voice.prefs.replies ? "on" : "off")' in diag
+    assert (
+        '"Replies: " + ({ off: "off", mine: "to what you said by voice", all: "everything" })[voice.prefs.replies]'
+        in diag
+    )
     assert '"Push to talk: " + (voice.prefs.ptt === "hold" ? "hold" : "tap")' in diag
     assert (
         '"Last prompt: "' in diag
@@ -459,18 +468,23 @@ def test_mobile_js_spoken_replies_say_per_prompt():
     )
 
 
-def test_mobile_js_reply_lines_start_with_the_session_name():
-    """Every spoken reply line opens with the session's display name, so a
-    voice is never anonymous: the Say line, the ack, "<name> finished.", the
-    poll fallback (which goes through voiceReply) and the dialog read-out."""
+def test_mobile_js_reply_lines_name_another_session_only():
+    """A spoken line carries the session it is about (speakLine's title);
+    the queue names it first only when the phone is on another session
+    (voiceLineText, run under node in test_mobile_speech_queue): the Say
+    line, the ack and the dialog read-out pass their session and no name of
+    their own."""
     js = _js()
     reply = _fn(js, "voiceReply")
-    assert 'speakLine(name + ": " + say)' in reply
+    assert "speakLine(say, false, voice.session)" in reply
     assert 'speakLine(name + " finished.")' in reply
-    assert "var name = nameOf(voice.session);" in reply
-    assert 'speakLine(nameOf(title) + ": " + line, true)' in _fn(js, "voiceAckTick")
-    assert 'nameOf(voice.session) + ": " + stripMarkdown(d.question' in _fn(
-        js, "voiceDialogSpeech"
+    assert "speakLine(line, true, title)" in _fn(js, "voiceAckTick")
+    assert "var parts = [stripMarkdown(d.question" in _fn(js, "voiceDialogSpeech")
+    assert "speakLine(voiceDialogSpeech(d), false, voice.session)" in _fn(
+        js, "voiceReadDialog"
+    )
+    assert "var said = voiceLineText(line, current, nameOf);" in _fn(
+        js, "voiceSpeechPump"
     )
     assert "voiceReply({" in _fn(js, "voiceOnPoll")
 
@@ -709,7 +723,10 @@ def test_mobile_js_voice_requests_have_the_contract_shape():
     )
     ans = _fn(js, "voiceAnswerPost")
     assert '"/api/instances/" + encodeURIComponent(title) + "/answer"' in ans
-    assert 'JSON.stringify({ keys: keys, dialog_id: dialogId, by: "user" })' in ans
+    assert 'var body = { keys: keys, dialog_id: dialogId, by: "user" };' in ans
+    # A select question's free-text answer from the router carries its words.
+    assert "if (text) body.text = String(text);" in ans
+    assert "JSON.stringify(body)" in ans
     assert "j.dialog_changed" in ans and "j.dialog_answered" in ans
     assert '"Already answered."' in ans
     # The dialog itself, quietly (204 when there is none).
@@ -832,7 +849,8 @@ def test_mobile_js_reply_loop_rules():
     # Never the same say twice; a question → listen; hands-free → listen.
     assert "voiceSaidAlready(say" in reply
     after = _fn(js, "voiceAfterReply")
-    assert 'voiceListen("answer", VOICE_ANSWER_MS)' in after
+    # ...once the speech queue has drained.
+    assert 'voiceListenAfter("answer", VOICE_ANSWER_MS)' in after
     assert "voice.prefs.handsFree" in after
     assert "var VOICE_ANSWER_MS = 12000;" in v and "var VOICE_HANDSFREE_MS = 8000;" in v
     assert '"Still there? "' in _fn(js, "voiceListenExpired")
@@ -846,8 +864,11 @@ def test_mobile_js_reply_loop_rules():
     # The Send button sends a dictated draft at once, through /send.
     assert "if (voiceTakesSend()) return;" in _fn(js, "sendCompose")
     # Speaking pauses recognition so the phone does not hear itself.
-    speak = _fn(js, "speakLine")
-    assert "voice.stt.stop();" in speak and "voice.tts.cancel();" in speak
+    # Speaking pauses recognition so the phone does not hear itself; lines
+    # are queued, never cut by the next one (test_mobile_speech_queue).
+    assert "voice.stt.stop();" in _fn(js, "speakLine")
+    assert "voice.stt.stop();" in _fn(js, "voiceSpeechPump")
+    assert "voice.tts.cancel();" not in _fn(js, "speakLine")
     # Android: a short buzz when listening starts.
     assert "navigator.vibrate(30)" in _fn(js, "voiceListen")
     # Deep link ?voice=1 → the one big button; nothing speaks before a tap.
@@ -870,7 +891,7 @@ def test_mobile_js_reply_loop_rules():
     assert persist.lstrip().startswith("try {")
     load = _fn(js, "voiceLoadPrefs")
     assert 'voice.prefs.ptt = j.ptt === "hold" ? "hold" : "toggle";' in load
-    assert "voice.prefs.replies = j.replies !== false;" in load
+    assert "voice.prefs.replies = voiceRepliesPref(j.replies);" in load
 
 
 def test_mobile_js_voice_ios_rules():

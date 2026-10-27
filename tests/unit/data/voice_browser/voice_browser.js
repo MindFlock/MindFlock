@@ -70,6 +70,11 @@ function routeAnswer(text, session) {
     return { kind: "question", say: (row ? row.name : session) + ": Should I deploy it?" };
   }
   if (t === "is it a newer kind") return { kind: "summon_the_flock" };
+  // The router answering a select question's step ("the second one").
+  if (t === "the second one" && state.dialogsBy[session] && state.dialogsBy[session].kind === "select") {
+    const d = state.dialogsBy[session];
+    return { kind: "answer", choice: "number", number: 2, title: session, dialog_id: d.id, keys: ["2"] };
+  }
   if ((m = /^switch to (.+)$/.exec(t))) {
     const row = state.rows.find((r) => r.name.toLowerCase() === m[1]);
     if (!row) return { kind: "no-session", say: "No session called " + m[1] + "." };
@@ -161,7 +166,11 @@ async function mock(route) {
     if (!d) return route.fulfill({ status: 204, body: "" });
     return json(route, d);
   }
-  if ((mm = /^\/api\/instances\/([^/]+)\/answer$/.exec(p))) return json(route, state.answerReply || { ok: true }, state.answerStatus || 200);
+  if ((mm = /^\/api\/instances\/([^/]+)\/answer$/.exec(p))) {
+    // A select question moves on with the answer (state.onAnswer), as the screen would.
+    if (!state.answerStatus && state.onAnswer) state.onAnswer(decodeURIComponent(mm[1]), body);
+    return json(route, state.answerReply || { ok: true }, state.answerStatus || 200);
+  }
   if (p === "/api/voice/route" && state.routeDelay) await sleep(state.routeDelay);
   if (p === "/api/voice/route") return state.routeStatus ? json(route, { error: "no route" }, state.routeStatus) : json(route, routeAnswer(body.text, body.session));
   if (p === "/api/voice") return state.voiceCfg ? json(route, state.voiceCfg) : json(route, { error: "nope" }, 404);
@@ -179,7 +188,7 @@ const INIT = `
   window.__recs = []; window.__spoken = []; window.__cancels = 0; window.__wake = 0; window.__vibes = 0;
   class FakeRec {
     constructor() { this.started = false; window.__recs.push(this); window.__rec = this; }
-    start() { this.started = true; window.__recStarts = (window.__recStarts || 0) + 1; }
+    start() { this.started = true; window.__recStarts = (window.__recStarts || 0) + 1; window.__recStartAt = Date.now(); }
     stop() {
       this.started = false;
       // __onStopFinal: the phrase a recognizer still hands over after a graceful stop, late.
@@ -205,7 +214,13 @@ const INIT = `
   const synth = {
     speaking: false, pending: false,
     _voices: [{ name: "Samantha", lang: "en-US" }, { name: "Daniel", lang: "en-GB" }, { name: "Anna", lang: "de-DE" }],
-    speak(u) { window.__spoken.push(u.text); setTimeout(() => { if (u.onend) u.onend({}); }, 15); },
+    speak(u) {
+      window.__spoken.push(u.text);
+      // __speakMs: a slower voice, to see lines queue; __speakLog: when each started and ended.
+      const ms = window.__speakMs || 15, rec = { t: u.text, start: Date.now(), end: 0 };
+      (window.__speakLog = window.__speakLog || []).push(rec);
+      setTimeout(() => { rec.end = Date.now(); if (u.onend) u.onend({}); }, ms);
+    },
     cancel() { window.__cancels++; },
     getVoices() { return this._voices; },
     addEventListener() {},
@@ -228,9 +243,11 @@ const saidAll = (page) => page.evaluate(() => window.__spoken.join(" "));
 const said = async (page, text) => (await saidAll(page)).indexOf(text) >= 0;
 const vstate = (page) => page.evaluate(() => window.mfVoice.state);
 const posts = (p) => state.posts.filter((x) => x.path.endsWith(p));
-// Every reply line starts with the session's name: "Login fix: …" (the
-// voice says it sentence by sentence, so the name opens the first chunk).
+// A line about ANOTHER session than the one the phone is on starts with its
+// name: "Login fix: …" (the voice says it sentence by sentence, so the name
+// opens the first chunk); a line about the phone's own session is bare.
 const spokeAs = async (page, name, text) => said(page, name + ": " + text);
+const spokeBare = async (page, name, text) => (await said(page, text)) && !(await said(page, name + ": " + text));
 
 (async () => {
   const srv = spawn("python3", ["-m", "http.server", String(PORT), "--directory", STATIC, "--bind", "127.0.0.1"], { stdio: "ignore" });
@@ -302,12 +319,12 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     // the ack: last_reply changes from the baseline
     state.lastReply = "I'll look at the **login handler** first. Then I'll check `auth.py`.";
     await waitFor(page, () => window.__spoken.some((t) => t.indexOf("login handler") >= 0), 7000, "ack sentence");
-    check("spoke the first sentence of the new reply, markdown stripped, name first", (await spoken(page)).includes("Login fix: I'll look at the login handler first."));
+    check("spoke the first sentence of the new reply, markdown stripped, bare (the phone's own session)", (await spoken(page)).includes("I'll look at the login handler first.") && !(await said(page, "Login fix: I'll")));
     // the reply event with a question
     await page.evaluate(() => window.mfVoice.onEvent({ seq: 5, event: "session.activity_changed", session: "login-fix", old: "working", new: "idle", ts: Date.now() / 1000, data: { say: "Fixed the login bug. Should I push it?", has_question: true, source: "hook" } }));
     await waitFor(page, () => window.mfVoice.state === "awaiting", 3000, "awaiting");
     check("idle event: spoke the say line", await said(page, "Fixed the login bug. Should I push it?"));
-    check("…as 'Login fix: <say>' (name first)", await spokeAs(page, "Login fix", "Fixed the login bug. Should I push it?"));
+    check("…bare: the phone is on Login fix", await spokeBare(page, "Login fix", "Fixed the login bug. Should I push it?"));
     check("has_question → awaiting (listening for the answer)", (await vstate(page)) === "awaiting");
     const nBefore = (await spoken(page)).length;
     await page.evaluate(() => window.mfVoice.onEvent({ seq: 6, event: "session.turn_ended", session: "login-fix", old: null, new: null, ts: Date.now() / 1000, data: { say: "Fixed the login bug. Should I push it?", has_question: true, source: "hook", idle_for: 12 } }));
@@ -331,7 +348,7 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     state.voiceGet = { on: true, say: "Pushed. All done here.", has_question: false, source: "hook", ts: Date.now() / 1000 };
     await waitFor(page, () => window.__spoken.join(" ").indexOf("Pushed. All done here.") >= 0, 9000, "poll fallback say");
     check("4 s poll fallback spoke the new last_say", await said(page, "Pushed. All done here."));
-    check("…name first", await spokeAs(page, "Login fix", "Pushed. All done here."));
+    check("…bare (its own session)", await spokeBare(page, "Login fix", "Pushed. All done here."));
     await waitFor(page, () => window.mfVoice.state === "idle", 3000, "idle after plain reply");
     check("no question + no hands-free → idle", (await vstate(page)) === "idle");
     check("strip says Your turn", (await page.evaluate(() => document.getElementById("voice-state").textContent)) === "Your turn");
@@ -343,7 +360,7 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     await page.evaluate(() => window.mfVoice.onEvent({ seq: 7, event: "session.activity_changed", session: "login-fix", old: "working", new: "clarify", ts: Date.now() / 1000, data: {} }));
     await waitFor(page, () => window.mfVoice.state === "dialog" && window.__rec && window.__rec.started, 4000, "dialog listening");
     const dline = await saidAll(page);
-    check("spoke the dialog question", dline.indexOf("Login fix: Allow git push?") >= 0, dline.slice(-200));
+    check("spoke the dialog question, bare", dline.indexOf("Allow git push?") >= 0 && dline.indexOf("Login fix: Allow") < 0, dline.slice(-200));
     check("…then the command", dline.indexOf("It wants to run: git push origin main.") > 0);
     check("…then 'Say yes, no, or always.'", dline.indexOf("Say yes, no, or always.") > 0);
     check("dialog state, listening", (await vstate(page)) === "dialog");
@@ -398,7 +415,7 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     await page.evaluate(() => window.mfVoice.onEvent({ seq: 11, event: "session.activity_changed", session: "login-fix", old: "working", new: "clarify", ts: Date.now() / 1000, data: {} }));
     await waitFor(page, () => window.mfVoice.state === "dialog" && window.__rec && window.__rec.started, 4000, "dialog 5");
     const d5 = await saidAll(page);
-    check("other-only options are numbered: 'Say one, two, or three.'", d5.indexOf("Login fix: Which branch? one: main. two: develop. three: release. Say one, two, or three.") > 0, d5.slice(-200));
+    check("other-only options are numbered: 'Say one, two, or three.'", d5.indexOf("Which branch? one: main. two: develop. three: release. Say one, two, or three.") > 0, d5.slice(-200));
     await page.evaluate(() => window.__hear("option two"));
     await waitFor(page, () => window.mfVoice.state === "working", 3000, "answered 5");
     ans = posts("/answer");
@@ -543,7 +560,7 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     check("…then the Send button sends it (dictated: say:true)", posts("/send").length === nSends + 1 && lastSend().body.text === "rebuild the docs index" && lastSend().body.say === true, JSON.stringify(lastSend().body));
     await idleEvent("Index rebuilt.", 15);
     await waitFor(page, () => window.mfVoice.state === "idle", 3000, "idle after index");
-    check("…its reply is spoken, name first", (await spoken(page)).includes("API docs: Index rebuilt."));
+    check("…its reply is spoken, bare (the phone is on API docs)", (await spoken(page)).includes("Index rebuilt.") && !(await said(page, "API docs: Index")));
     // ...a tap with an empty box only stops; the strip is the mic's twin
     nSends = posts("/send").length;
     await page.click("#voice-btn");
@@ -563,7 +580,7 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     check("…its reply is NOT spoken", !(await said(page, "Lint is clean.")));
     check("…the strip says 'Your turn'", (await page.evaluate(() => document.getElementById("voice-caption").textContent)) === "Your turn");
     // ---- Spoken replies off: dictated prompts ask for no Say line either, and the phone stays quiet
-    await page.evaluate(() => { const el = document.getElementById("voice-replies"); el.checked = false; el.dispatchEvent(new Event("change")); });
+    await page.evaluate(() => { const el = document.getElementById("voice-replies"); el.value = "off"; el.dispatchEvent(new Event("change")); });
     const sentLines = (await spoken(page)).filter((t) => t === "Sent to API docs.").length;
     await page.click("#voice-btn");
     await waitFor(page, () => window.mfVoice.state === "listening", 3000, "listening");
@@ -576,7 +593,7 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     await waitFor(page, () => window.mfVoice.state === "idle", 3000, "idle after replies off");
     await sleep(200);
     check("…and the reply is not spoken", !(await said(page, "Build is green.")));
-    await page.evaluate(() => { const el = document.getElementById("voice-replies"); el.checked = true; el.dispatchEvent(new Event("change")); });
+    await page.evaluate(() => { const el = document.getElementById("voice-replies"); el.value = "mine"; el.dispatchEvent(new Event("change")); });
     state.sendStatus = 409; state.sendReply = { error: "session is waking up", waking: true };
     await page.click("#voice-btn");
     await waitFor(page, () => window.mfVoice.state === "listening", 3000, "listening");
@@ -628,7 +645,7 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     check("…the Send button sends it (say:true)", posts("/send").length === nSends + 1 && lastSend().body.text === "deploy the docs and tag it" && lastSend().body.say === true, JSON.stringify(lastSend().body));
     await idleEvent("Deployed and tagged.", 18);
     await waitFor(page, () => window.mfVoice.state === "idle", 3000, "idle after hold");
-    check("…its reply is spoken, name first", (await spoken(page)).includes("API docs: Deployed and tagged."));
+    check("…its reply is spoken, bare", (await spoken(page)).includes("Deployed and tagged.") && !(await said(page, "API docs: Deployed")));
     nSends = posts("/send").length;
     await page.mouse.down();
     await waitFor(page, () => window.mfVoice.state === "listening", 3000, "hold listening 2");
@@ -664,7 +681,7 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     check("'voice off' → off + POST /voice {on:false}", (await vstate(page)) === "off" && posts("/voice").some((x) => x.path.includes("api-docs") && x.body.on === false));
     check("strip hidden again", await page.evaluate(() => document.getElementById("voice-strip").classList.contains("hidden")));
     const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("cs_voice")));
-    check("localStorage holds session/on/rate/voiceName/handsFree/ptt/replies only", stored && Object.keys(stored).sort().join(",") === "handsFree,on,ptt,rate,replies,session,voiceName" && stored.on === false && stored.ptt === "toggle" && stored.replies === true, JSON.stringify(stored));
+    check("localStorage holds session/on/rate/voiceName/handsFree/ptt/replies only", stored && Object.keys(stored).sort().join(",") === "handsFree,on,ptt,rate,replies,session,voiceName" && stored.on === false && stored.ptt === "toggle" && stored.replies === "mine", JSON.stringify(stored));
 
     // ---- the sheet: diagnostics + voices
     await page.evaluate(() => document.getElementById("voice-btn").click());
@@ -673,7 +690,7 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     await sleep(200);
     const diag = await page.evaluate(() => document.getElementById("voice-diag").textContent);
     check("diagnostics name recognition / speech / mode / wake lock / socket", /Recognition: available/.test(diag) && /Speech: available, 3 voices/.test(diag) && /Mode: browser tab, Android/.test(diag) && /Wake lock: (held|supported)/.test(diag) && /Events socket: /.test(diag), diag.replace(/\n/g, " | "));
-    check("diagnostics: Replies / Push to talk / Last prompt", /Replies: on/.test(diag) && /Push to talk: tap/.test(diag) && /Last prompt: dictated, say yes/.test(diag), diag.replace(/\n/g, " | "));
+    check("diagnostics: Replies / Push to talk / Last prompt", /Replies: to what you said by voice/.test(diag) && /Push to talk: tap/.test(diag) && /Last prompt: dictated, say yes/.test(diag), diag.replace(/\n/g, " | "));
     const opts = await page.evaluate(() => Array.from(document.querySelectorAll("#voice-voice option")).map((o) => o.textContent));
     check("voice picker lists voices, this language first", opts[0] === "Default voice" && opts[1] === "Samantha (en-US)" && opts.length === 4, JSON.stringify(opts));
     check("approve line read-only text", /Approve dialogs by voice: (on|off) \(Settings → Your phone\)/.test(await page.evaluate(() => document.getElementById("voice-approve-line").textContent)));
@@ -692,7 +709,7 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     await page2.click("#voice-hear");
     await waitFor(page2, () => window.mfVoice.state === "awaiting", 5000, "deep link spoke + awaiting");
     check("tap primes (empty utterance first) then speaks the say", (await page2.evaluate(() => window.__spoken[0] === "" && window.__spoken.join(" ").indexOf("Docs rebuilt. Anything else?") >= 0)));
-    check("…name first", await spokeAs(page2, "API docs", "Docs rebuilt. Anything else?"));
+    check("…bare (the session the link opened)", await spokeBare(page2, "API docs", "Docs rebuilt. Anything else?"));
     check("question → listening for the answer", (await page2.evaluate(() => window.mfVoice.state)) === "awaiting");
     await page2.close();
 
@@ -1198,14 +1215,27 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     const kick6 = (t, text, ts) => page6.evaluate((a) => window.mfVoice.onEvent({ seq: 0, event: "session.question", session: a[0], ts: Date.now() / 1000, data: { title: a[0], text: a[1], ts: a[2], kind: "question" } }), [t, text, ts]);
     const waitOpen6 = (label, ms) => waitFor(page6, () => !document.getElementById("asking-sheet").classList.contains("hidden"), ms || 6000, label);
     const waitShut6 = (label) => waitFor(page6, () => document.getElementById("asking-sheet").classList.contains("hidden"), 4000, label);
+    // The explicit open: the Sessions sheet, then the session's row.
+    const openRow6 = async (t) => {
+      await page6.click("#picker");
+      await waitFor(page6, () => !document.getElementById("sessions-sheet").classList.contains("hidden"), 2000, "sessions sheet");
+      await page6.click('#session-list .sess-row[data-title="' + t + '"] .sess-main');
+      await waitOpen6("sheet from the " + t + " row", 3000);
+    };
     check("ask: nobody asking → no sheet, plain title", !(await open6()) && (await page6.title()) === "MindFlock — Mobile", await page6.title());
 
-    // A prose question on a row → the sheet opens by itself.
+    // A prose question on a row: never the pop-up (a reply saying "question"
+    // is not a prompt) — its row and its notification open it.
     const vib0 = await page6.evaluate(() => window.__vibes);
     const q1 = { kind: "question", text: "Should I add tests for the parser?", ts: now6(), dialog_id: null, parsed: false, source: "" };
     state.rows[1].asking = q1;
-    await waitOpen6("sheet on a prose question");
-    check("ask: a row's asking (question) opens the sheet by itself", await open6());
+    await waitFor(page6, () => document.title.indexOf("(1)") === 0, 6000, "the poll saw the question");
+    await sleep(300);
+    check("ask: a row's prose question does NOT open the sheet by itself", !(await open6()));
+    const row0 = await page6.evaluate(() => { const r = document.querySelector('#session-list .sess-row[data-title="invoice-parser"]'); return r ? r.querySelector(".sess-state").textContent : null; });
+    check("ask: …it keeps its Question chip", row0 === "Question", String(row0));
+    await openRow6("invoice-parser");
+    check("ask: …a tap on its row opens it (explicit)", await open6());
     check("ask: …centred (the sheet-center overlay)", await page6.evaluate(() => getComputedStyle(document.getElementById("asking-sheet")).alignItems === "center"));
     check("ask: name, the Sessions number, kind Question, the question", (await txt6("asking-name")) === "Invoice parser" && (await txt6("asking-num")) === "1" && (await txt6("asking-kind")) === "Question" && (await txt6("asking-question")) === q1.text,
       [await txt6("asking-num"), await txt6("asking-name"), await txt6("asking-kind"), await txt6("asking-question")].join(" | "));
@@ -1230,8 +1260,10 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     const q2 = { kind: "question", text: "Run the docs build?", ts: now6(), dialog_id: null, parsed: false, source: "" };
     state.rows[2].asking = q2;
     await kick6("api-docs", q2.text, q2.ts);
-    await waitOpen6("sheet on API docs", 2000);
-    check("ask: a session.question event opens it at once (no 4 s wait)", (await open6()) && (await txt6("asking-name")) === "API docs");
+    await sleep(1500);
+    check("ask: a session.question event does not pop the sheet either", !(await open6()));
+    await openRow6("api-docs");
+    check("ask: …its row opens it", (await open6()) && (await txt6("asking-name")) === "API docs");
     state.sendStatus = 409; state.sendReply = { in_dialog: true, error: "a dialog is up" };
     state.dialogsBy["api-docs"] = PERM("dx");
     await page6.fill("#asking-text", "go ahead");
@@ -1248,33 +1280,35 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     delete state.dialogsBy["api-docs"];
     await sleep(300);
 
-    // Two asking: dialogs first, "1 of 2", next/prev; Later → dismiss / snooze.
+    // Two dialogs (and a prose question): one sheet, "1 of 2", the oldest
+    // first, the question not in it; next/prev; Later snoozes a dialog.
     const t3 = now6();
-    state.rows[2].asking = { kind: "question", text: "Which docs theme?", ts: t3 - 30, dialog_id: null, parsed: false, source: "" };
+    state.rows[1].asking = { kind: "question", text: "Which docs theme?", ts: t3 - 60, dialog_id: null, parsed: false, source: "" };
     state.rows[0].activity = "clarify";
-    state.rows[0].asking = { kind: "dialog", text: "Allow git push?", ts: t3, dialog_id: "d9", parsed: true, source: "" };
+    state.rows[0].asking = { kind: "dialog", text: "Allow git push?", ts: t3 - 30, dialog_id: "d9", parsed: true, source: "" };
     state.dialogsBy["login-fix"] = PERM("d9");
-    await kick6("api-docs", "Which docs theme?", t3 - 30);
+    state.rows[2].asking = { kind: "dialog", text: "Allow npm publish?", ts: t3, dialog_id: "da", parsed: true, source: "" };
+    state.dialogsBy["api-docs"] = Object.assign(PERM("da"), { question: "Allow npm publish?", command: "npm publish" });
     await waitFor(page6, () => !document.getElementById("asking-sheet").classList.contains("hidden") && document.getElementById("asking-step").textContent === "1 of 2", 6000, "two asks");
-    check("ask: two asking → one sheet, '1 of 2', the dialog first (though newer)", (await txt6("asking-step")) === "1 of 2" && (await txt6("asking-name")) === "Login fix" && (await shown6("asking-nav")), (await txt6("asking-step")) + " " + (await txt6("asking-name")));
-    check("ask: title (2)", (await page6.title()) === "(2) MindFlock — Mobile", await page6.title());
+    check("ask: two dialogs → one sheet, '1 of 2', the oldest first, the prose question not in it", (await txt6("asking-step")) === "1 of 2" && (await txt6("asking-name")) === "Login fix" && (await shown6("asking-nav")), (await txt6("asking-step")) + " " + (await txt6("asking-name")));
+    check("ask: title counts every asking session (3)", (await page6.title()) === "(3) MindFlock — Mobile", await page6.title());
     await waitFor(page6, () => document.querySelectorAll(".asking-opt").length === 3, 3000, "d9 options");
     check("ask: a parsed dialog shows its options and the mic", (await page6.evaluate(() => document.querySelectorAll(".asking-opt").length)) === 3 && (await shown6("asking-mic")) && !(await shown6("asking-reply")));
     await page6.click("#asking-next");
-    check("ask: › steps to the question, '2 of 2'", (await txt6("asking-name")) === "API docs" && (await txt6("asking-step")) === "2 of 2");
+    check("ask: › steps to the other dialog, '2 of 2'", (await txt6("asking-name")) === "API docs" && (await txt6("asking-step")) === "2 of 2");
     await page6.click("#asking-prev");
     check("ask: ‹ steps back", (await txt6("asking-name")) === "Login fix");
     await page6.click("#asking-next");
     const dis0 = posts6("/asking/dismiss").length;
     await page6.click("#asking-later");
     await sleep(200);
-    const dis = posts6("/asking/dismiss");
-    check("ask: Later on a question → POST /asking/dismiss {} for it", dis.length === dis0 + 1 && dis[dis.length - 1].path === "/api/instances/api-docs/asking/dismiss" && JSON.stringify(dis[dis.length - 1].body) === "{}", JSON.stringify(dis.slice(-1)));
+    check("ask: Later on a dialog → snoozed here, no /asking/dismiss", posts6("/asking/dismiss").length === dis0);
     check("ask: …and the sheet moves to the one left, no stepper", (await open6()) && (await txt6("asking-name")) === "Login fix" && !(await shown6("asking-nav")));
-    state.rows[2].asking = null;   // the server dismissed it
+    state.rows[2].asking = null;
+    delete state.dialogsBy["api-docs"];
     await page6.click("#asking-later");
     await waitShut6("closed after Later on the dialog");
-    check("ask: Later on a dialog snoozes it here (no server call), the sheet closes", !(await open6()) && posts6("/asking/dismiss").length === dis0 + 1);
+    check("ask: Later on a dialog snoozes it here (no server call), the sheet closes", !(await open6()) && posts6("/asking/dismiss").length === dis0);
     await sleep(4500);
     check("ask: a snoozed dialog does not pop up again", !(await open6()));
     // A tap on its row opens it anyway.
@@ -1309,6 +1343,15 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     await page6.mouse.click(8, 8);   // the dimmed backdrop
     await waitShut6("backdrop closed it");
     check("ask: a tap outside closes it", !(await open6()));
+    // The prose question opened by hand: Later dismisses it on the server.
+    await openRow6("invoice-parser");
+    check("ask: the prose question opens alone from its row (the snoozed dialog not with it)", (await txt6("asking-name")) === "Invoice parser" && !(await shown6("asking-nav")));
+    const dis1 = posts6("/asking/dismiss").length;
+    await page6.click("#asking-later");
+    await waitShut6("closed after Later on the question");
+    const disq = posts6("/asking/dismiss");
+    check("ask: Later on a question → POST /asking/dismiss {} for it", disq.length === dis1 + 1 && disq[disq.length - 1].path === "/api/instances/invoice-parser/asking/dismiss" && JSON.stringify(disq[disq.length - 1].body) === "{}", JSON.stringify(disq.slice(-1)));
+    state.rows[1].asking = null;
 
     // The mic on a dialog: the voice dialog mode → /answer.
     state.rows[0].asking = { kind: "dialog", text: "Allow git push?", ts: now6(), dialog_id: "d13", parsed: true, source: "" };
@@ -1330,13 +1373,15 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     await waitFor(page6, () => window.mfVoice.state === "working", 3000, "working after the voice answer");
 
     // Voice on, another session asks: read name first; the mic dictates into the field.
-    await page6.evaluate(() => { window.mfVoice.prefs.replies = true; });
+    await page6.evaluate(() => { window.mfVoice.prefs.replies = "mine"; });
     const q5 = { kind: "question", text: "Want me to rename the module?", ts: now6(), dialog_id: null, parsed: false, source: "" };
     state.rows[1].asking = q5;
     await kick6("invoice-parser", q5.text, q5.ts);
-    await waitOpen6("q5 pops", 3000);
     await waitFor(page6, () => window.__spoken.indexOf("Invoice parser asks: Want me to rename the module?") >= 0, 3000, "read aloud");
     check("ask: voice on + spoken replies → another session's question read aloud, name first", await said(page6, "Invoice parser asks: Want me to rename the module?"));
+    check("ask: …without popping the sheet", !(await open6()));
+    await openRow6("invoice-parser");
+    check("ask: …read once (the row's open does not read it again)", (await spoken(page6)).filter((t) => t === "Invoice parser asks: Want me to rename the module?").length === 1);
     const sendsQ5 = posts6("/send").length;
     await page6.click("#asking-mic");
     await waitFor(page6, () => window.mfVoice.state === "listening" && window.__rec && window.__rec.started, 4000, "dictating into the sheet");
@@ -1388,7 +1433,8 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     await page6.evaluate(() => { const c = document.getElementById("compose"); c.focus(); c.value = "half a thought"; });
     const cur6 = await page6.evaluate(() => document.getElementById("picker-title").textContent);
     const curT = cur6 === "Invoice parser" ? 1 : cur6 === "API docs" ? 2 : 0;
-    state.rows[curT].asking = { kind: "question", text: "Keep the old name?", ts: now6(), dialog_id: null, parsed: false, source: "" };
+    state.rows[curT].asking = { kind: "dialog", text: "Allow rm -rf build?", ts: now6(), dialog_id: "dk", parsed: true, source: "" };
+    state.dialogsBy[state.rows[curT].title] = PERM("dk");
     await sleep(4600);
     check("ask: not while you type into that session's compose box", !(await open6()));
     await page6.evaluate(() => { const c = document.getElementById("compose"); c.value = ""; c.blur(); });
@@ -1396,20 +1442,22 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     check("ask: …it opens once you stop", await open6());
     await page6.click("#asking-later");
     state.rows[curT].asking = null;
+    delete state.dialogsBy[state.rows[curT].title];
     await page6.close();
 
     // ---- the push's deep link: /m?s=<title>&voice=1 opens THAT session's sheet
     state.ntfy = { ask_popup: false, active: true };   // the link opens it even with the pop-up off
     const q7 = { kind: "question", text: "Should I bump the version?", ts: now6(), dialog_id: null, parsed: false, source: "" };
     state.rows[1].asking = q7;
-    state.rows[2].asking = { kind: "question", text: "Another thing?", ts: now6(), dialog_id: null, parsed: false, source: "" };
+    state.rows[2].asking = { kind: "dialog", text: "Allow npm publish?", ts: now6(), dialog_id: "dp", parsed: true, source: "" };
+    state.dialogsBy["api-docs"] = Object.assign(PERM("dp"), { question: "Allow npm publish?" });
     const page7 = await ctx.newPage();
     page7.on("pageerror", (e) => errors.push(String(e)));
     await page7.route("**/api/**", mock);
     await page7.goto(`http://127.0.0.1:${PORT}/mobile.html?s=invoice-parser&voice=1`, { waitUntil: "load" });
     await waitFor(page7, () => window.mfAsk && !document.getElementById("asking-sheet").classList.contains("hidden"), 6000, "deep link sheet");
     check("ask: the push link opens that session's sheet (pop-up setting off)", await page7.evaluate(() => !document.getElementById("asking-sheet").classList.contains("hidden") && document.getElementById("asking-name").textContent === "Invoice parser"));
-    check("ask: …the other asking session queued behind it: '1 of 2'", (await page7.evaluate(() => document.getElementById("asking-step").textContent)) === "1 of 2");
+    check("ask: …the other session's dialog queued behind it: '1 of 2'", (await page7.evaluate(() => document.getElementById("asking-step").textContent)) === "1 of 2");
     check("ask: …with 'Hear it and answer by voice' (the page cannot speak before a tap)", await page7.evaluate(() => !document.getElementById("asking-hear").classList.contains("hidden")));
     check("ask: …and the strip keeps its 'Tap to hear' (voice=1 as before)", await page7.evaluate(() => /Tap to hear/.test(document.getElementById("voice-hear").textContent)));
     await page7.click("#asking-hear");
@@ -1426,13 +1474,259 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     await page7.click("#asking-later");
     await waitFor(page7, () => document.getElementById("asking-sheet").classList.contains("hidden"), 3000, "closed");
     state.rows[2].asking = null;
-    state.rows[0].asking = { kind: "question", text: "And this one?", ts: now6(), dialog_id: null, parsed: false, source: "" };
+    delete state.dialogsBy["api-docs"];
+    state.rows[0].asking = { kind: "dialog", text: "Allow git push?", ts: now6(), dialog_id: "dq", parsed: true, source: "" };
+    state.dialogsBy["login-fix"] = PERM("dq");
     await sleep(4600);
-    check("ask: pop-up off → a new ask does not open the sheet by itself", await page7.evaluate(() => document.getElementById("asking-sheet").classList.contains("hidden")));
+    check("ask: pop-up off → a new dialog does not open the sheet by itself", await page7.evaluate(() => document.getElementById("asking-sheet").classList.contains("hidden")));
     check("ask: …but the title still counts it", (await page7.title()) === "(1) MindFlock — Mobile", await page7.title());
     state.rows[0].asking = null;
+    delete state.dialogsBy["login-fix"];
     await page7.close();
     state.rows[1].asking = null; state.rows[2].asking = null;
+    state.ntfy = { ask_popup: false, active: false };
+    state.voiceCfg = null;
+
+    // ---- Claude's select questions in the ask sheet ---------------------------
+    // GET /dialog kind "select": a step at a time in the same sheet; the mock
+    // moves the question on with each /answer (state.onAnswer), like the screen.
+    state.ntfy = { ask_popup: true, active: false };
+    state.voiceCfg = { stt: "phone", tts: "phone", approve_dialogs: true };
+    state.dialogsBy = {};
+    state.answerStatus = 0; state.answerReply = null;
+    state.sendStatus = 0; state.sendReply = null;
+    state.rows.forEach((r) => { r.asking = null; r.activity = "idle"; });
+    const STEPS = (at) => [{ label: "Database", done: at > 0 }, { label: "Features", done: at > 1 }, { label: "Submit", done: false, submit: true }];
+    const NAV = { next: ["Right"], prev: ["Left"], submit: ["Enter"] };
+    const Q1 = (id) => ({ id, kind: "select", parsed: true, heading: "Database", question: "Which database?", multi: false, steps: STEPS(0), step: 0, nav: NAV,
+      options: [{ key: "1", label: "Postgres", desc: "The server one", kind: "other", checked: null, keys: ["1"] },
+                { key: "2", label: "SQLite", desc: "A file", kind: "other", checked: null, keys: ["2"] },
+                { key: "3", label: "Type something", desc: null, kind: "text", checked: null, keys: ["3"] }] });
+    const Q2 = (id, checked) => ({ id, kind: "select", parsed: true, heading: "Features", question: "Which features?", multi: true, steps: STEPS(1), step: 1, nav: NAV,
+      options: [{ key: "1", label: "Auth", desc: null, kind: "other", checked: !!(checked && checked[1]), keys: ["1"] },
+                { key: "2", label: "Billing", desc: null, kind: "other", checked: !!(checked && checked[2]), keys: ["2"] },
+                { key: "3", label: "Search", desc: "Full text", kind: "other", checked: !!(checked && checked[3]), keys: ["3"] },
+                { key: "4", label: "Chat about this", desc: null, kind: "chat", checked: null, keys: ["4"] }] });
+    const REVIEW = (id, answers) => ({ id, kind: "select", parsed: true, heading: "Submit", question: "Review your answers", multi: false, steps: STEPS(2), step: 2, nav: NAV,
+      review: answers, options: [{ key: "1", label: "Submit answers", desc: null, kind: "yes", checked: null, keys: ["1"] }, { key: "2", label: "Cancel", desc: null, kind: "no", checked: null, keys: ["2"] }] });
+    const page8 = await ctx.newPage();
+    page8.on("pageerror", (e) => errors.push(String(e)));
+    page8.on("console", (msg) => { if (msg.type() === "error" && !/WebSocket|ws:\/\/|404|409/.test(msg.text())) errors.push(msg.text()); });
+    await page8.route("**/api/**", mock);
+    await page8.goto(`http://127.0.0.1:${PORT}/mobile.html?s=login-fix`, { waitUntil: "load" });
+    await waitFor(page8, () => window.mfAsk && window.mfAsk.polls >= 1, 6000, "select page loaded");
+    const open8 = () => page8.evaluate(() => !document.getElementById("asking-sheet").classList.contains("hidden"));
+    const txt8 = (id) => page8.evaluate((i) => document.getElementById(i).textContent, id);
+    const shown8 = (id) => page8.evaluate((i) => !document.getElementById(i).classList.contains("hidden"), id);
+    const opts8 = () => page8.evaluate(() => Array.from(document.querySelectorAll(".asking-opt")).map((b) => ({ key: b.dataset.key, kind: b.dataset.kind, role: b.getAttribute("role") || "", checked: b.getAttribute("aria-checked"), label: (b.querySelector(".asking-opt-label") || {}).textContent, desc: (b.querySelector(".asking-opt-desc") || {}).textContent || "" })));
+    const answers8 = () => posts("/answer").filter((x) => x.path.indexOf("/api/instances/login-fix/") === 0 || x.path.indexOf("/api/instances/api-docs/") === 0);
+    const ask8 = (title, id) => { const r = state.rows.find((x) => x.title === title); r.asking = { kind: "dialog", text: "", ts: Date.now() / 1000, dialog_id: id, parsed: true, source: "" }; };
+
+    // Flow A: single pick → multi (ticked here) + Next → review → Submit answers.
+    let flowA = [];
+    state.onAnswer = (title, body) => {
+      flowA.push(body);
+      const d = state.dialogsBy[title];
+      if (!d) return;
+      if (d.id === "s1") { state.dialogsBy[title] = Q2("s2", { 3: true }); ask8(title, "s2"); }
+      else if (d.id === "s2") { state.dialogsBy[title] = REVIEW("s3", [{ question: "Which database?", answer: "Postgres" }, { question: "Which features?", answer: "Auth" }]); ask8(title, "s3"); }
+      else if (d.id === "s3") { delete state.dialogsBy[title]; state.rows.find((x) => x.title === title).asking = null; }
+    };
+    state.dialogsBy["login-fix"] = Q1("s1");
+    ask8("login-fix", "s1");
+    await waitFor(page8, () => document.querySelectorAll(".asking-opt").length === 3, 6000, "select Q1 pops up");
+    check("select: a select dialog pops the sheet (kind Question)", (await open8()) && (await txt8("asking-kind")) === "Question", await txt8("asking-kind"));
+    const tabs8 = () => page8.evaluate(() => Array.from(document.querySelectorAll(".asking-step-tab")).map((t) => t.textContent + (t.classList.contains("active") ? "*" : "") + (t.classList.contains("done") ? "+" : "")));
+    check("select: the step row like Claude's tabs, the first active, Submit last", JSON.stringify(await tabs8()) === JSON.stringify(["Database*", "Features", "Submit"]), JSON.stringify(await tabs8()));
+    const o1 = await opts8();
+    check("select: single-select → option buttons with their descriptions, no checkboxes", o1[0].label === "Postgres" && o1[0].desc === "The server one" && o1.every((o) => o.role === ""), JSON.stringify(o1));
+    check("select: …no Next or Back on the first single-select step", !(await shown8("asking-sel")));
+    await page8.click('.asking-opt[data-key="1"]');
+    await waitFor(page8, () => document.getElementById("asking-question").textContent === "Which features?", 5000, "Q2 in the same sheet");
+    check("select: a tap → POST /answer {keys:['1'], dialog_id:'s1', by:'user'}", JSON.stringify(flowA[0]) === JSON.stringify({ keys: ["1"], dialog_id: "s1", by: "user" }), JSON.stringify(flowA));
+    check("select: …the next step shows in the SAME sheet (it never closed)", (await open8()) && JSON.stringify(await tabs8()) === JSON.stringify(["Database+", "Features*", "Submit"]), JSON.stringify(await tabs8()));
+    const o2 = await opts8();
+    check("select: multi-select → checkboxes (the server's checked shown), the chat option a plain button", o2.filter((o) => o.role === "checkbox").length === 3 && o2[2].checked === "true" && o2[0].checked === "false" && o2[3].kind === "chat" && o2[3].role === "", JSON.stringify(o2));
+    check("select: …Next and Back shown", (await shown8("asking-sel-next")) && (await shown8("asking-sel-prev")));
+    const nA = flowA.length;
+    await page8.click('.asking-opt[data-key="1"]');
+    await page8.click('.asking-opt[data-key="3"]');
+    const o2b = await opts8();
+    check("select: a tap toggles the box HERE (nothing posted)", flowA.length === nA && o2b[0].checked === "true" && o2b[2].checked === "false", JSON.stringify(o2b));
+    await page8.click("#asking-sel-next");
+    await waitFor(page8, () => document.getElementById("asking-question").textContent === "Review your answers", 5000, "the review step");
+    check("select: Next → ONE /answer: the digits that differ from the server's, then nav.next", JSON.stringify(flowA[nA]) === JSON.stringify({ keys: ["1", "3", "Right"], dialog_id: "s2", by: "user" }), JSON.stringify(flowA.slice(nA)));
+    const rv = await page8.evaluate(() => Array.from(document.querySelectorAll("#asking-review dt, #asking-review dd")).map((x) => x.textContent));
+    check("select: the review lists the answers", JSON.stringify(rv) === JSON.stringify(["Which database?", "Postgres", "Which features?", "Auth"]) && (await shown8("asking-review")), JSON.stringify(rv));
+    check("select: …with Submit answers / Cancel, Submit the active tab", JSON.stringify((await opts8()).map((o) => o.label)) === JSON.stringify(["Submit answers", "Cancel"]) && (await tabs8())[2] === "Submit*");
+    await page8.click('.asking-opt[data-kind="yes"]');
+    await waitFor(page8, () => document.getElementById("asking-sheet").classList.contains("hidden"), 5000, "closed after Submit");
+    check("select: Submit answers → its digit pinned to the review, then the sheet closes (204: answered)", JSON.stringify(flowA[flowA.length - 1]) === JSON.stringify({ keys: ["1"], dialog_id: "s3", by: "user" }) && !(await open8()), JSON.stringify(flowA.slice(-1)));
+    await sleep(4500);
+    check("select: …and it does not pop up again while the row lags", !(await open8()));
+
+    // Flow B: "Type something" (digit, then {text, keys:[Enter]}), Back, a
+    // dialog_changed that is just the next step, "Chat about this" (digit, then /send).
+    let flowB = [];
+    state.onAnswer = (title, body) => {
+      flowB.push(body);
+      const d = state.dialogsBy[title];
+      if (!d) return;
+      if (d.id === "t1" && body.text === "MariaDB") { state.dialogsBy[title] = Q2("t2"); ask8(title, "t2"); }
+      else if (d.id === "t2" && body.keys && body.keys[0] === "Left") { state.dialogsBy[title] = Q1("t1b"); ask8(title, "t1b"); }
+      else if (d.id === "t2b" && body.keys && body.keys[0] === "4") { delete state.dialogsBy[title]; state.rows.find((x) => x.title === title).asking = null; }
+    };
+    state.dialogsBy["api-docs"] = Q1("t1");
+    ask8("api-docs", "t1");
+    await waitFor(page8, () => document.getElementById("asking-name").textContent === "API docs" && document.querySelectorAll(".asking-opt").length === 3, 6000, "flow B pops");
+    await page8.click('.asking-opt[data-kind="text"]');
+    check("select: 'Type something' opens the field (nothing posted yet)", (await shown8("asking-reply")) && flowB.length === 0);
+    await page8.fill("#asking-text", "MariaDB");
+    await page8.click("#asking-send");
+    await waitFor(page8, () => document.getElementById("asking-question").textContent === "Which features?", 5000, "Q2 after typing");
+    check("select: Send → its keys, then {text, keys:['Enter']}, both pinned to the same id", flowB.length === 2 && JSON.stringify(flowB[0]) === JSON.stringify({ keys: ["3"], dialog_id: "t1", by: "user" }) && JSON.stringify(flowB[1]) === JSON.stringify({ text: "MariaDB", keys: ["Enter"], dialog_id: "t1", by: "user" }), JSON.stringify(flowB));
+    check("select: …the field closed and emptied on the next step", !(await shown8("asking-reply")) && (await page8.evaluate(() => document.getElementById("asking-text").value)) === "");
+    await page8.click("#asking-sel-prev");
+    await waitFor(page8, () => document.getElementById("asking-question").textContent === "Which database?", 5000, "back to Q1");
+    check("select: Back → nav.prev pinned to the step", JSON.stringify(flowB[2]) === JSON.stringify({ keys: ["Left"], dialog_id: "t2", by: "user" }), JSON.stringify(flowB[2]));
+    state.answerStatus = 409; state.answerReply = { dialog_changed: true, error: "the prompt changed" };
+    state.dialogsBy["api-docs"] = Q2("t2b"); ask8("api-docs", "t2b");
+    await page8.click('.asking-opt[data-key="2"]');
+    await waitFor(page8, () => document.getElementById("asking-question").textContent === "Which features?", 5000, "dialog_changed → the step shown now");
+    state.answerStatus = 0; state.answerReply = null;
+    check("select: 409 dialog_changed inside the flow → the step on screen, no error, no note", (await open8()) && !(await shown8("asking-error")) && !(await shown8("asking-note")));
+    const sendsB = posts("/send").length, postsB = state.posts.length;
+    await page8.click('.asking-opt[data-kind="chat"]');
+    check("select: 'Chat about this' opens the field", (await shown8("asking-reply")) && (await page8.evaluate(() => document.getElementById("asking-text").placeholder)) === "What to tell it");
+    await page8.fill("#asking-text", "let's talk about search first");
+    await page8.click("#asking-send");
+    await waitFor(page8, () => document.getElementById("asking-sheet").classList.contains("hidden"), 5000, "closed after chat");
+    const after = state.posts.slice(postsB).map((x) => x.path.replace("/api/instances/api-docs", "") + " " + JSON.stringify(x.body));
+    check("select: Chat → its digit, then /send {text, dialog_safe:true}, then the sheet closes", after.length === 2 && after[0] === '/answer {"keys":["4"],"dialog_id":"t2b","by":"user"}' && after[1] === '/send {"text":"let\'s talk about search first","dialog_safe":true}' && posts("/send").length === sendsB + 1, JSON.stringify(after));
+
+    // Flow C: by voice — the sheet's mic; the router names a step's option,
+    // a number ticks a box here, "next" moves on, "submit" on the review submits.
+    let flowC = [];
+    state.onAnswer = (title, body) => {
+      flowC.push(body);
+      const d = state.dialogsBy[title];
+      if (!d) return;
+      if (d.id === "v1") { state.dialogsBy[title] = Q2("v2"); ask8(title, "v2"); }
+      else if (d.id === "v2") { state.dialogsBy[title] = REVIEW("v3", [{ question: "Which database?", answer: "SQLite" }, { question: "Which features?", answer: "Billing" }]); ask8(title, "v3"); }
+      else if (d.id === "v3") { delete state.dialogsBy[title]; state.rows.find((x) => x.title === title).asking = null; }
+    };
+    state.dialogsBy["login-fix"] = Q1("v1");
+    ask8("login-fix", "v1");
+    await waitFor(page8, () => document.getElementById("asking-name").textContent === "Login fix" && document.getElementById("asking-question").textContent === "Which database?" && !document.getElementById("asking-sheet").classList.contains("hidden"), 6000, "flow C pops");
+    await page8.click("#asking-mic");
+    await waitFor(page8, () => window.mfVoice.state === "dialog" && window.__rec && window.__rec.started, 4000, "listening on the select");
+    check("select by voice: the sheet's mic listens in the dialog mode", (await vstate(page8)) === "dialog");
+    await page8.evaluate(() => window.__hear("the second one"));
+    await waitFor(page8, () => window.mfVoice.state === "dialog" && document.getElementById("asking-question").textContent === "Which features?" && window.__rec && window.__rec.started, 6000, "Q2 read and listened for");
+    check("select by voice: the router's pick → its digit pinned to the step", JSON.stringify(flowC[0]) === JSON.stringify({ keys: ["2"], dialog_id: "v1", by: "user" }), JSON.stringify(flowC));
+    const q2line = await saidAll(page8);
+    check("select by voice: the next step is read (bare: the phone is on it), multi → 'Pick any, then say next.'", q2line.indexOf("Which features? one: Auth. two: Billing. three: Search. four: Chat about this. Say one, two, three, or four. Pick any, then say next.") >= 0 && q2line.indexOf("Login fix: Which features") < 0, q2line.slice(-260));
+    await page8.evaluate(() => window.__hear("two"));
+    await waitFor(page8, () => window.__spoken.indexOf("Ticked Billing.") >= 0 && window.mfVoice.state === "dialog", 5000, "ticked by voice");
+    check("select by voice: a number on a multi-select ticks the box here and says so", (await opts8())[1].checked === "true" && flowC.length === 1);
+    await page8.evaluate(() => window.__hear("next"));
+    await waitFor(page8, () => document.getElementById("asking-question").textContent === "Review your answers" && window.mfVoice.state === "dialog", 6000, "review by voice");
+    check("select by voice: 'next' → the ticked digit + nav.next in one /answer", JSON.stringify(flowC[1]) === JSON.stringify({ keys: ["2", "Right"], dialog_id: "v2", by: "user" }), JSON.stringify(flowC[1]));
+    check("select by voice: the review is read: 'Say yes or no.'", (await saidAll(page8)).indexOf("Review your answers Say yes or no.") >= 0);
+    await page8.evaluate(() => window.__hear("submit"));
+    await waitFor(page8, () => document.getElementById("asking-sheet").classList.contains("hidden") && window.mfVoice.state === "working", 6000, "submitted by voice");
+    check("select by voice: 'submit' on the review → Submit answers' digit, 'Answered.', working", JSON.stringify(flowC[2]) === JSON.stringify({ keys: ["1"], dialog_id: "v3", by: "user" }) && (await said(page8, "Answered.")) && (await vstate(page8)) === "working", JSON.stringify(flowC[2]));
+    state.onAnswer = null;
+    await page8.close();
+    state.dialogsBy = {};
+    state.rows.forEach((r) => { r.asking = null; });
+
+    // ---- Everything + one voice at a time ---------------------------------------
+    // Spoken replies "all": every session's finished turn is read (voice on
+    // or off), once, named unless the phone is on it; typed prompts ask for a
+    // Say line; one queue says it all, in order, never two at once.
+    state.ntfy = { ask_popup: false, active: false };
+    const page9 = await ctx.newPage();
+    page9.on("pageerror", (e) => errors.push(String(e)));
+    page9.on("console", (msg) => { if (msg.type() === "error" && !/WebSocket|ws:\/\/|404|409/.test(msg.text())) errors.push(msg.text()); });
+    await page9.route("**/api/**", mock);
+    await page9.addInitScript(() => { try { localStorage.setItem("cs_voice", JSON.stringify({ replies: "all" })); } catch (e) {} });
+    await page9.goto(`http://127.0.0.1:${PORT}/mobile.html?s=login-fix`, { waitUntil: "load" });
+    await waitFor(page9, () => window.mfVoice && document.getElementById("picker-title").textContent === "Login fix", 6000, "everything page loaded");
+    check("everything: the pref loads, voice off, the events socket wanted anyway", (await page9.evaluate(() => window.mfVoice.prefs.replies)) === "all" && (await vstate(page9)) === "off" && (await page9.evaluate(() => window.mfVoice.eventsState)) !== "off", await page9.evaluate(() => window.mfVoice.eventsState));
+    await page9.mouse.click(200, 300);
+    check("everything: the first tap anywhere primes speech", await page9.evaluate(() => window.mfVoice.primed === true));
+    const turn9 = (t, say, ev, ts) => page9.evaluate((a) => window.mfVoice.onEvent({ seq: 0, event: a[2] || "session.activity_changed", session: a[0], old: "working", new: "idle", ts: a[3] || Date.now() / 1000, data: { title: a[0], say: a[1] } }), [t, say, ev, ts]);
+    await turn9("invoice-parser", "Parsed all twelve files.");
+    await waitFor(page9, () => window.__spoken.indexOf("Invoice parser: Parsed all twelve files.") >= 0, 3000, "another session's turn");
+    check("everything: another session's finished turn is read, its name first (voice off)", await said(page9, "Invoice parser: Parsed all twelve files."));
+    await turn9("invoice-parser", "Parsed all twelve files.", "session.turn_ended");
+    await sleep(300);
+    check("everything: …once (turn_ended with the same line is not read again)", (await spoken(page9)).filter((t) => t === "Invoice parser: Parsed all twelve files.").length === 1);
+    await turn9("login-fix", "Login works again.");
+    await waitFor(page9, () => window.__spoken.indexOf("Login works again.") >= 0, 3000, "own turn");
+    check("everything: the phone's own session is read bare", (await said(page9, "Login works again.")) && !(await said(page9, "Login fix: Login works again.")));
+    await page9.evaluate(() => window.mfVoice.onEvent({ seq: 0, event: "session.activity_changed", session: "invoice-parser", old: "idle", new: "working", ts: Date.now() / 1000, data: {} }));
+    await turn9("invoice-parser", "Parsed all twelve files.");
+    await waitFor(page9, () => window.__spoken.filter((t) => t === "Invoice parser: Parsed all twelve files.").length === 2, 3000, "a new turn, same words");
+    check("everything: a new turn with the same words is read again", (await spoken(page9)).filter((t) => t === "Invoice parser: Parsed all twelve files.").length === 2);
+    // A turn whose frame is two minutes old (a reconnect's replay): dropped, not said late.
+    await page9.evaluate(() => { window.mfVoice.serverSkew = 0; });
+    await turn9("api-docs", "Old news from before.", "session.turn_ended", Date.now() / 1000 - 120);
+    await sleep(400);
+    check("everything: a line over a minute old when its turn comes is dropped", !(await said(page9, "Old news from before.")));
+    // One at a time: a slow voice, three sessions at once.
+    await page9.evaluate(() => { window.__speakMs = 250; window.__speakLog = []; });
+    await turn9("invoice-parser", "Tests pass.");
+    await turn9("api-docs", "Docs are built.");
+    await turn9("login-fix", "Pushed the fix.");
+    await waitFor(page9, () => window.__speakLog.length >= 3 && window.__speakLog.every((x) => x.end), 5000, "three lines said");
+    const log9 = await page9.evaluate(() => window.__speakLog.map((x) => [x.t, x.start, x.end]));
+    const overlap = log9.some((x, i) => i > 0 && x[1] < log9[i - 1][2]);
+    check("queue: three sessions' lines said one at a time, in arrival order, never over each other", JSON.stringify(log9.map((x) => x[0])) === JSON.stringify(["Invoice parser: Tests pass.", "API docs: Docs are built.", "Pushed the fix."]) && !overlap, JSON.stringify(log9));
+    // Typed prompts ask for a Say line with Everything — voice off: through /send.
+    const sends9 = posts("/send").length;
+    await page9.fill("#compose", "list the files");
+    await page9.dispatchEvent("#send", "pointerdown");
+    await waitFor(page9, () => document.getElementById("compose").value === "", 3000, "typed send");
+    await sleep(300);
+    const ts9 = posts("/send").slice(sends9);
+    check("everything: a typed prompt with voice off → POST /send {text, dialog_safe, say:true}", ts9.length === 1 && ts9[0].path === "/api/instances/login-fix/send" && ts9[0].body.text === "list the files" && ts9[0].body.say === true && ts9[0].body.dialog_safe === true, JSON.stringify(ts9));
+    // Voice on: the queue holds while the mic listens, and a listen after a
+    // read-out starts only once the queue has drained.
+    await page9.evaluate(() => { window.__speakMs = 15; });
+    await page9.click("#voice-btn");
+    await waitFor(page9, () => window.mfVoice.state === "listening", 3000, "listening (everything)");
+    await turn9("api-docs", "Deployed to staging.");
+    await sleep(500);
+    check("queue: holds while the mic listens", !(await said(page9, "API docs: Deployed to staging.")) && (await page9.evaluate(() => window.mfVoice.speech.q.length)) === 1);
+    await page9.evaluate(() => window.__hear("hello over"));
+    await waitFor(page9, () => window.__spoken.indexOf("API docs: Deployed to staging.") >= 0, 3000, "said after listening");
+    check("queue: …and says it once listening stops", await said(page9, "API docs: Deployed to staging."));
+    await page9.evaluate(() => { document.getElementById("compose").value = ""; });
+    await waitFor(page9, () => window.mfVoice.state === "idle", 3000, "idle again");
+    await page9.evaluate(() => { window.__speakMs = 300; window.__speakLog = []; });
+    await turn9("invoice-parser", "Coverage is ninety percent.");
+    await page9.evaluate(() => window.mfVoice.onEvent({ seq: 0, event: "session.turn_ended", session: "login-fix", ts: Date.now() / 1000, data: { title: "login-fix", say: "Should I push it?", has_question: true } }));
+    await turn9("api-docs", "Index rebuilt again.");
+    await waitFor(page9, () => window.mfVoice.state === "awaiting" && window.__rec && window.__rec.started, 6000, "awaiting after the queue drained");
+    const log9b = await page9.evaluate(() => window.__speakLog.map((x) => [x.t, x.end]));
+    const recAt = await page9.evaluate(() => window.__recStartAt);
+    check("queue: the answer-listen after a read-out starts only once the queue has drained", JSON.stringify(log9b.map((x) => x[0])) === JSON.stringify(["Invoice parser: Coverage is ninety percent.", "Should I push it?", "API docs: Index rebuilt again."]) && recAt >= Math.max.apply(null, log9b.map((x) => x[1])), JSON.stringify(log9b) + " rec " + recAt);
+    await page9.evaluate(() => { window.__speakMs = 15; document.getElementById("voice-cancel").click(); });
+    await sleep(200);
+    // Typed with voice on, Everything → say:true; Mine → other sessions' turns stay quiet.
+    const sends9b = posts("/send").length;
+    await page9.fill("#compose", "run it");
+    await page9.dispatchEvent("#send", "pointerdown");
+    await waitFor(page9, () => window.mfVoice.state === "working", 3000, "typed send, voice on");
+    check("everything: a typed prompt with voice on asks for a Say line too", posts("/send").slice(sends9b).some((x) => x.body.text === "run it" && x.body.say === true), JSON.stringify(posts("/send").slice(sends9b)));
+    await page9.evaluate(() => { const el = document.getElementById("voice-replies"); el.value = "mine"; el.dispatchEvent(new Event("change")); });
+    await turn9("api-docs", "Nobody asked for this.");
+    await sleep(400);
+    check("mine: another session's turn is not read", !(await said(page9, "Nobody asked for this.")));
+    check("mine: the choice is stored as 'mine'", (await page9.evaluate(() => JSON.parse(localStorage.getItem("cs_voice")).replies)) === "mine");
+    await page9.close();
     state.ntfy = { ask_popup: false, active: false };
     state.voiceCfg = null;
   } catch (e) {

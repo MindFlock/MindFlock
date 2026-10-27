@@ -6140,9 +6140,14 @@ poll tick, when its row actually appears in the list.
 
 When a session waits on you — a permission prompt or other dialog, or a reply
 that ended with a question in plain prose that nobody has typed to since (the
-server's `asking` on each `GET /api/instances` row) — the phone opens the
-**ask sheet** by itself, in the middle of the screen, over whatever else is
-open. It shows the session's number (the Sessions sheet's, so "session two" by
+server's `asking` on each `GET /api/instances` row) — the phone has an **ask
+sheet** in the middle of the screen, over whatever else is open. It opens
+**by itself only for a real dialog** (a prompt drawn on the screen: a
+permission, a plan approval, Claude's select questions). A question in prose
+never pops up on its own — a reply that merely says "question" is not a
+prompt: it keeps its **Question** chip on the row, its notification and its
+ntfy push, and its sheet opens when you tap the row or the notification. It
+shows the session's number (the Sessions sheet's, so "session two" by
 voice is the same one) and name, the kind of ask (**Permission**, **Question**,
 **Plan approval**, plus *from &lt;agent&gt;* for a background sub-agent's
 prompt), the question, and the command in monospace. Then the way to answer it
@@ -6153,10 +6158,46 @@ right there:
   a dialog that changed meanwhile (409 `dialog_changed`) is re-read and the new
   prompt shown with a note; one answered elsewhere (409 `dialog_answered`)
   says *Already answered*.
+- **Claude's select questions** (AskUserQuestion; `GET /dialog` says
+  `kind: "select"`) — answered step by step in the same sheet, which never
+  closes mid-way. A row of steps like Claude's tabs (done ✓, the active one
+  outlined, Submit last), the question, then:
+  - *single-select*: the options with their descriptions as buttons; a tap
+    posts the option's digit (`POST /answer {keys, dialog_id, by: "user"}`)
+    and the next step is read into the sheet (the same id still on screen a
+    moment later is waited out; a lone question is submitted at once);
+  - *multi-select*: checkboxes ticked on the phone, then **Next ›** posts the
+    digits whose state differs from the server's `checked` followed by
+    `nav.next`, in one `/answer`;
+  - **‹ Back** (`nav.prev`) from the second step on;
+  - the *review* step: your answers listed, **Submit answers** / **Cancel**
+    (their digits);
+  - *Type something*: a tap opens the field; **Send** posts its keys, then
+    `{text, keys: ["Enter"]}`, both pinned to the same `dialog_id` (it holds
+    while the row is typed into). Options are always posted with their own
+    `keys` (with Claude's cursor on the text row they read `["Up", "1"]`);
+  - *Chat about this*: the field too; **Send** posts its digit, then the words
+    go as a prompt (`POST /send {text, dialog_safe: true}`, a dialog still up
+    for a moment waited out).
+
+  A 409 `dialog_changed` inside the flow is just the next step, never an
+  error; no dialog any more (204) is the question answered, and the sheet
+  moves on. By voice (the sheet's 🎙, or voice reading the question — which
+  shows it here even with the pop-up off): a number or an option's own words
+  answer the shown step through the router (`POST /api/voice/route`; the
+  number, *yes* / *no*, or the label when it cannot say; a free-text answer
+  the router makes carries its `text`), on a multi-select they tick the box
+  and say so; *next* and *back* are the buttons; *submit* / *done* before the
+  review run **Next** up to it; *submit* / *yes* on the review submits,
+  *cancel* / *no* cancels; *type something* /
+  *chat about this* open the field and dictate into it — *submit* sends it.
+  After each spoken step the next one is read and listened for; the end is
+  *Answered.*
 - **A dialog it could not parse** — **Open the session**, and a line saying the
   prompt needs the terminal.
-- **A question in prose** — a field and **Send** (`POST /send {text,
-  dialog_safe: true}`), plus **Open the session**. If a dialog came up in the
+- **A question in prose** (opened by its row or notification) — a field and
+  **Send** (`POST /send {text, dialog_safe: true}`, plus `say: true` with
+  Spoken replies on *Everything*), plus **Open the session**. If a dialog came up in the
   meantime (409 `in_dialog`) the sheet shows that dialog instead and keeps your
   words in the field.
 
@@ -6164,12 +6205,13 @@ right there:
 (`POST /asking/dismiss`, so it stops being "asking" everywhere), a dialog is
 snoozed on this phone by its id (a new dialog from the same session still pops
 up). A tap outside the sheet, the phone's Back and Esc do the same. Several
-sessions asking → one sheet with **1 of N** and ‹ › — dialogs first, then the
-oldest; answering one moves on to the next. The sheet does not open for an ask
-you put off or already answered, nor while you are typing into that session's
-compose box (it opens once you stop), and not by itself at all with the
-ask pop-up setting off (`notifications.ask_popup`, read from
-`GET /api/notify/ntfy`; on when absent). Whatever that setting says, an asking
+sessions on a dialog → one sheet with **1 of N** and ‹ › — the oldest first;
+answering one moves on to the next (a prose question is in that count only
+while it is the one shown). The sheet does not open for a dialog you put off
+or already answered, nor while you are typing into that session's compose box
+(it opens once you stop), and not by itself at all with the ask pop-up
+setting off (`notifications.ask_popup`, read from `GET /api/notify/ntfy`; on
+when absent) — that setting is the switch for dialogs. Whatever that setting says, an asking
 row in the Sessions sheet reads **Question** with the question under it (a
 prose question no longer reads *Idle*), tapping it opens the session with its
 ask sheet on top, and the tab's title counts the asking sessions
@@ -6190,9 +6232,11 @@ is mirrored on the sheet while it is open. A push's tap (`/m?s=<title>&voice=1`)
 opens that session's sheet — even with the pop-up off — with **Hear it and
 answer by voice**: one tap reads the question name first and listens (12 s, one
 *Still there?* retry), replacing the strip's *Tap to hear*. With voice already
-on and Spoken replies on, another session's new ask is read aloud once, name
-first, without listening (that would change what "yes" means mid-conversation);
-the voice session's own ask is read by its own loop, never twice.
+on and Spoken replies on (or on *Everything*, voice on or off), another
+session's new ask is read aloud once, name first, in the one speech queue,
+without listening (that would change what "yes" means mid-conversation); the
+voice session's own ask is read by its own loop, never twice, and on
+*Everything* a prose question is its turn's spoken line, read already.
 
 **Notifications while the page is open.** The Sessions sheet has **Notify me
 when a session asks**: it asks the browser for permission, then a new ask on a
@@ -6386,21 +6430,53 @@ opens with "I'll …"); nothing else is narrated unless you ask. A Codex
 session gets no such sentence (its screen fallback is skipped), only the line
 at the end. When the turn ends — `session.activity_changed` → `idle` over
 `WS /api/events`, with the page's 4 s session poll as the fallback — the
-page speaks the session's **`Say:` line**. Every reply line starts with the
-session's name — *Login fix: Fixed the login bug. Should I push it?*, *Login
-fix: I'll look at the handler first.*, *Login fix finished.* — so a voice is
-never anonymous when you switch between sessions. If that line asks a question the
+page speaks the session's **`Say:` line**. A line about the session the
+phone is on is spoken bare — *Fixed the login bug. Should I push it?*; a line
+about any other session starts with its name — *Invoice parser: Parsed all
+twelve files.* — so a voice from elsewhere is never a surprise (the name is
+decided when the line is said, so after a switch the new session is the bare
+one). If that line asks a question the
 mic reopens — 12 s for a first word, then the same radio rules (one *Still
 there? <line>* re-prompt when nothing was said, then idle); otherwise it goes
 quiet — or, with **Hands-free** on, listens 8 s for a first word after every
 reply. A turn that ends with no line at all says *<name> finished.*
 
-**Spoken replies** (the ⚙ sheet, per phone, on by default) decide whether
-anything is read out for a prompt: *Sent to <name>.*, the first-sentence
-confirmation and the `Say:` line are spoken only while it is on (off, *Sent
-to <name>.* shows on the strip and the phone stays quiet). A **typed**
-prompt asks for no `Say:` line even with it on, so its reply is not read
-out either: the strip just says *Your turn* when the turn ends. A line
+**Spoken replies** (the ⚙ sheet, per phone) has three settings:
+
+- **Off** — nothing is read out for a prompt: *Sent to <name>.* shows on the
+  strip and the phone stays quiet.
+- **Replies to what I said by voice** (the default; an older page's "on"
+  loads as this, its "off" as Off) — *Sent to <name>.*, the first-sentence
+  confirmation and the `Say:` line are spoken for a **dictated** prompt. A
+  **typed** prompt asks for no `Say:` line, so its reply is not read out
+  either: the strip just says *Your turn* when the turn ends.
+- **Everything** — every session's finished turn is read: the spoken line
+  the `session.activity_changed` (`new: "idle"`) / `session.turn_ended`
+  frame carries, from any session, once per reply (the two frames carry the
+  same line; a new turn clears it), name first unless the phone is on that
+  session. It works with voice **off** too: the events socket stays open
+  while the page is visible (one connection, push — cheaper than polling
+  every session's `GET /voice`; a turn replayed after a reconnect is as old
+  as its frame, so the one-minute rule below drops the stale ones), and the
+  first tap anywhere on the page unlocks speech. Every prompt the phone
+  sends asks for a `Say:` line — typed ones too: with voice off a typed
+  prompt goes through `POST /send {text, dialog_safe: true, say: true}`
+  (a dialog on screen, or a failed send, types it into the terminal as
+  before), and so do the ask sheet's answers.
+
+**One voice at a time.** Everything the phone says — replies, the
+first-sentence confirmation, dialog read-outs, *what is it asking*, the
+router's lines, another session's ask or turn — goes through **one speech
+queue**: strictly one line at a time, in the order they arrived, so two
+sessions never talk over each other. The queue holds while the mic is
+listening and goes on when it stops; a listen that follows a read-out (an
+answer to a question, a dialog, hands-free) starts only once the queue has
+drained. A tap on the mic cuts the line being said (a line from another
+session waits for its turn again; the conversation's own queued lines are
+dropped, as it moved on); Cancel, voice off and hiding the page drop them
+all. A line still waiting a minute after it arrived is dropped rather than
+said late (logged to the console). *Repeat* / *say that again* re-speaks the
+last line said. A line
 that arrives mid-dictation waits until the page is idle and is dropped once a
 new prompt is sent; a line you have already heard is never repeated (the
 events compare by text, `GET /voice` by its stamp, and the line on screen
@@ -6516,7 +6592,8 @@ is still read out, followed by *Answer it on the screen.*, and nothing
 listens. The ⚙ sheet shows that setting read-only.
 
 **The ⚙ sheet** — *Voice mode for <session>* on/off, **Push to talk**
-(*Tap to talk* / *Hold to talk*), **Spoken replies** (on by default),
+(*Tap to talk* / *Hold to talk*), **Spoken replies** (*Off* / *Replies to
+what I said by voice*, the default / *Everything*),
 **Hands-free** (listen
 after every reply, not only after questions; off by default), **Speech rate**
 0.7–1.6×, a **Voice** picker (the phone's `speechSynthesis` voices, this

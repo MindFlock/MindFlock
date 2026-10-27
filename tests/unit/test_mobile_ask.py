@@ -99,7 +99,10 @@ def test_ask_sheet_speaks_the_server_contract():
         in _fn(a, "askOptKeys")
     )
     send = _fn(a, "askSend")
-    assert "body: JSON.stringify({ text: text, dialog_safe: true })" in send
+    assert "body: JSON.stringify(askSendBody(text))" in send
+    body = _fn(a, "askSendBody")
+    assert "var body = { text: text, dialog_safe: true };" in body
+    assert 'if (voice.prefs.replies === "all") body.say = true;' in body
     assert "j.in_dialog" in send and "askInDialog(e.title)" in send
     later = _fn(a, "askLater")
     assert '"/asking/dismiss"' in later and 'body: "{}"' in later
@@ -114,9 +117,11 @@ def test_ask_sheet_open_rules_and_notifications():
     refresh = _fn(a, "askRefresh")
     # Never one put off, answered, already shown, or while typing into it.
     assert (
-        "!ask.answered[e.key] && !ask.later[e.key] && !ask.seen[e.key] && !askTypingInto(e.title)"
+        'e.kind === "dialog" && !ask.answered[e.key] && !ask.later[e.key] && !ask.seen[e.key] && !askTypingInto(e.title)'
         in refresh
     )
+    # A prose question is in the stepper only while it is the one shown.
+    assert '(e.kind === "dialog" || shown)' in _fn(a, "askList")
     assert "if (!ask.popup) return;" in refresh
     # The push's deep link opens before (and regardless of) the pop-up setting.
     assert refresh.index("askDeepLink()") < refresh.index("if (!ask.popup) return;")
@@ -182,3 +187,57 @@ def test_docs_describe_the_phone_ask_sheet():
         "1 of N",
     ):
         assert words in sec, words
+
+
+def test_ask_sheet_answers_claude_select_questions():
+    """GET /dialog's kind "select" (AskUserQuestion) is answered a step at a
+    time in the same sheet: a pick posts the option's own keys pinned to
+    the step; multi-select boxes are ticked here and Next posts the ones
+    that differ from the server's ``checked``, then ``nav.next``, in ONE
+    /answer; "Type something" posts its keys then ``{text, keys: ["Enter"]}``
+    pinned to the same id; "Chat about this" its keys then /send; 204 after
+    a move is the question answered; a 409 dialog_changed is the next
+    step."""
+    a = _ask_section()
+    assert 'd.kind === "select"' in _fn(a, "askIsSelect")
+    assert "return !!(st && st.submit);" in _fn(a, "askSelReview")
+    tap = _fn(a, "askSelTap")
+    assert "ask.sel.checked[opt.key] = !ask.sel.checked[opt.key];" in tap
+    assert "askSelPost(askOptKeys(opt));" in tap
+    nxt = _fn(a, "askSelNext")
+    assert "!!ask.sel.checked[o.key] !== o.checked" in nxt
+    assert "keys = keys.concat(askOptKeys(o));" in nxt and "nav.next" in nxt
+    post = _fn(a, "askSelPost")
+    assert 'var body = { keys: keys, dialog_id: String(d.id), by: "user" };' in post
+    assert "x.j.dialog_changed || x.j.dialog_answered" in post
+    refetch = _fn(a, "askSelRefetch")
+    assert '"/dialog?quiet=1"' in refetch
+    assert 'askSelDone(e, "answered")' in refetch
+    text = _fn(a, "askSelSendText")
+    assert (
+        '{ text: text, keys: ["Enter"], dialog_id: String(d.id), by: "user" }' in text
+    )
+    assert 'if (opt.kind === "chat") { askSelChat(e, text, 0); return; }' in text
+    assert "JSON.stringify(askSendBody(text))" in _fn(a, "askSelChat")
+    # Every step it went through counts as answered (the rows lag a poll).
+    assert 'ask.answered["d:" + e.title + ":" + id] = true;' in _fn(a, "askSelDone")
+    # Voice: the router's free-text answer carries its words; "submit" before
+    # the review runs nav.next up to it.
+    voice = _fn(a, "askSelVoice")
+    assert "askSelPost(res.keys.map(String), res.text);" in voice
+    assert 'askSelNext(t === "submit" || t === "done");' in voice
+    html = (STATIC / "mobile.html").read_text()
+    for el in ("asking-steps", "asking-review", "asking-sel-prev", "asking-sel-next"):
+        assert 'id="' + el + '"' in html, el
+
+
+def test_prose_questions_never_pop_up():
+    """Only a dialog opens the sheet by itself; a prose question opens on its
+    row or notification (askOpenFor), and its notification still goes out."""
+    a = _ask_section()
+    refresh = _fn(a, "askRefresh")
+    fresh = refresh.split("var fresh = all.filter(")[1].split("});")[0]
+    assert 'e.kind === "dialog"' in fresh
+    # Announced (buzz / notification) whatever its kind.
+    assert "askAnnounce(e);" in refresh
+    assert "askOpenFor(e.title" in a
