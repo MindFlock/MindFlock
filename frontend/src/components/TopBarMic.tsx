@@ -112,6 +112,7 @@ import {
   syncSayAll,
   onVoicePrefs,
   serverRecognizer,
+  sentLine,
   serverSpeaker,
   sessionTarget,
   spokenLine,
@@ -132,6 +133,7 @@ import {
   type VoicePrefs,
 } from "../lib/voiceDesktop";
 import {
+  lastLoudAt,
   meterFeed,
   meterPoll,
   meterRef,
@@ -178,6 +180,8 @@ let standbyMeter = false;
 let wakeFrom: { d: LiveDictation; at: number } | null = null;
 /** The last wake's latency (ms), the word's end → listening — diagnostics. */
 let lastWakeMs: number | null = null;
+/** The last "over" → Enter (ms): the word's end → the send — diagnostics. */
+let lastSentMs: number | null = null;
 /** `d` listens now: a wake's latency, once. */
 function listened(d: LiveDictation) {
   if (wakeFrom?.d !== d) return;
@@ -276,7 +280,7 @@ export function micDiagnostics(): string {
   const tts = ttsEngine(c) === "server" ? "server" : browserSp.available() ? "browser" : "none";
   const pass =
     stt === "server" ? [passLine(c.server_ready.stt_backend, serverRec.passMs), finalLine(serverRec.finalMs)] : [];
-  return [engineDiagnostics(c, stt, tts), ...pass, wakeLine(lastWakeMs)].filter(Boolean).join(" · ");
+  return [engineDiagnostics(c, stt, tts), ...pass, wakeLine(lastWakeMs), sentLine(lastSentMs)].filter(Boolean).join(" · ");
 }
 
 /** The push-to-talk hotkey as the keymap shows it (the entry whose help says
@@ -611,7 +615,27 @@ export function TopBarMic() {
   };
 
   /** The recognizer down, nothing reported; the queue may talk again. */
+  /** A dictation that chimed its start: its end chimes too. */
+  const chimed = useRef(false);
+  /** The mic's chime (Settings → Voice "Sounds"): never over a line being
+   * said — it waits for that line's end. */
+  const sound = (kind: "start" | "stop") => {
+    if (prefsRef.current.sounds === false) return;
+    if (!queue.busy) return chime(voiceAudioCtx(), kind);
+    const after = (on: boolean) => {
+      if (on) return;
+      speakingListeners.delete(after);
+      chime(voiceAudioCtx(), kind);
+    };
+    speakingListeners.add(after);
+  };
+
   const halt = () => {
+    if (chimed.current) {
+      chimed.current = false;
+      // Before the queue lets the replies go: the stop comes first.
+      sound("stop");
+    }
     clearTimeout(idleTimer.current);
     deciding.current = null;
     live.current = null;
@@ -683,6 +707,8 @@ export function TopBarMic() {
     // ask being read drops the rest of its read-out — and the first moment
     // of audio (its voice dying away) is skipped.
     const skipMs = Math.max(bargeIn(queue, ask && opts.title === ask.title ? ask.title : ""), opts.skipMs || 0);
+    // The start chime is not the person: skipped like the app's own voice.
+    const chimeSkip = prefsRef.current.sounds !== false ? CHIME_MS + 30 : 0;
     const continuous = opts.continuous !== false;
     idles.current = opts.idle ?? (!continuous || prefsRef.current.ptt === "hold");
     const d = new LiveDictation(
@@ -732,6 +758,16 @@ export function TopBarMic() {
         pending: (title) => liveActivity(title) === "clarify" || questions.has(title),
         done: (how) => opts.done?.(how),
         confirm: (kind) => void confirmer.current?.say(kind),
+        // A control word at the end of the guess acts after a moment's quiet
+        // (lib/voiceDesktop CONTROL_TAIL_MS), the phrase ended at once.
+        quietMs: () => {
+          const at = lastLoudAt();
+          return at ? Date.now() - at : Infinity;
+        },
+        endPhrase: () => {
+          if (live.current === d) rec.current?.endPhrase?.();
+        },
+        sentIn: (ms) => void (lastSentMs = ms),
       },
       { hint: opts.hint, continuous }
     );
@@ -808,7 +844,7 @@ export function TopBarMic() {
           void d.expire();
         },
       },
-      { skipMs }
+      { skipMs: Math.max(skipMs, chimeSkip) }
     );
     // Settings may have moved the engines since: the next round knows.
     void refreshCfg();
@@ -817,6 +853,9 @@ export function TopBarMic() {
       say("Speech recognition did not start");
       return null;
     }
+    // Every start chimes (a click, the hotkey, the wake word, the ask card's mic).
+    sound("start");
+    chimed.current = true;
     // Web Speech listens from here, and reports no level: tap one.
     if (r === browserRec) {
       d.ready();
@@ -1057,14 +1096,13 @@ export function TopBarMic() {
   // --- the wake word: standby, and a wake starting listening -------------- //
   /** A lone "MindFlock": listening at once, as a click starts it (a text box
    * with the keyboard gets the words) — the microphone is already open, so
-   * the recognizer's stream opens now — and the chime in the same moment
-   * (its sound skipped from the recording). Nothing heard within
+   * the recognizer's stream opens now — and start()'s chime in the same
+   * moment (its sound skipped from the recording). Nothing heard within
    * WAKE_LISTEN_MS is a quiet miss. `soundEnd`: the word's end (latency). */
   const woken = (soundEnd: number) => {
     if (live.current) return;
-    const d = start(textField(document.activeElement), { hint: WAKE_HINT, skipMs: CHIME_MS + 30, idle: false });
+    const d = start(textField(document.activeElement), { hint: WAKE_HINT, idle: false });
     if (!d) return;
-    chime(voiceAudioCtx());
     wakeFrom = { d, at: soundEnd };
     setTimeout(() => {
       if (live.current === d && !d.heardAnything) d.drop();

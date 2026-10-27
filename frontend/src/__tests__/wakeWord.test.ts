@@ -38,6 +38,7 @@ const {
   WAKE_TAIL_MS,
   WakeStandby,
   chime,
+  STOP_CHIME_MS,
   postWake,
   wakeGate,
   wakeLine,
@@ -474,7 +475,7 @@ describe("POST /api/voice/wake", () => {
 });
 
 describe("the chime", () => {
-  it("two rising tones through the page's context, ~CHIME_MS, quiet", () => {
+  it("two rising tones through the page's context, ~CHIME_MS, quiet — and a falling, softer stop", () => {
     const freq: number[] = [];
     const ramps: number[] = [];
     let stopAt = 0;
@@ -495,6 +496,13 @@ describe("the chime", () => {
     expect(Math.max(...ramps)).toBeLessThanOrEqual(0.15);
     expect(stopAt - 10).toBeGreaterThan(CHIME_MS / 1000 - 0.001);
     expect(stopAt - 10).toBeLessThan(CHIME_MS / 1000 + 0.05);
+    freq.length = 0;
+    ramps.length = 0;
+    chime(ctx, "stop");
+    expect(freq.slice(0, 2)).toEqual([880, 660]);
+    expect(Math.max(...ramps)).toBeLessThan(0.12);
+    expect(stopAt - 10).toBeGreaterThan(STOP_CHIME_MS / 1000 - 0.001);
+    expect(stopAt - 10).toBeLessThan(STOP_CHIME_MS / 1000 + 0.05);
   });
   it("no engine, a suspended one or a throwing one: silent, never a throw", () => {
     expect(() => chime(null)).not.toThrow();
@@ -509,10 +517,11 @@ describe("the mic's wiring (components/TopBarMic.tsx)", () => {
   it("a wake starts listening at once, as a click does, the chime in the same moment (skipped), a quiet miss after WAKE_LISTEN_MS", () => {
     // start() first — no delay before it — then the chime, synchronously.
     expect(MIC).toMatch(
-      /const woken = \(soundEnd: number\) => \{\s*if \(live\.current\) return;\s*const d = start\(textField\(document\.activeElement\), \{ hint: WAKE_HINT, skipMs: CHIME_MS \+ 30, idle: false \}\);\s*if \(!d\) return;\s*chime\(voiceAudioCtx\(\)\);\s*wakeFrom = \{ d, at: soundEnd \};/
+      /const woken = \(soundEnd: number\) => \{\s*if \(live\.current\) return;\s*const d = start\(textField\(document\.activeElement\), \{ hint: WAKE_HINT, idle: false \}\);\s*if \(!d\) return;\s*wakeFrom = \{ d, at: soundEnd \};/
     );
-    const woken = MIC.slice(MIC.indexOf("const woken = "), MIC.indexOf("const latestWake"));
-    expect(woken.indexOf("setTimeout")).toBeGreaterThan(woken.indexOf("chime(")); // only the miss timer
+    // start() chimes (every start does), its sound skipped from the recording.
+    expect(MIC).toMatch(/sound\("start"\);\s*chimed\.current = true;/);
+    expect(MIC).toMatch(/const chimeSkip = prefsRef\.current\.sounds !== false \? CHIME_MS \+ 30 : 0;/);
     expect(MIC).toContain("onWake: (soundEnd) => latestWake.current(soundEnd),");
     expect(MIC).toMatch(/if \(live\.current === d && !d\.heardAnything\) d\.drop\(\);\s*\}, WAKE_LISTEN_MS\);/);
     // start() honours the extra skip next to the barge-in's.

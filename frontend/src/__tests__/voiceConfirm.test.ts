@@ -7,12 +7,19 @@
  *    "Cleared.", "Stopped.", a switch's line): the queue's front, said while
  *    the mic listens (held), stale after 5 s, the recorder muted for them,
  *    their audio cached per voice and made ahead only for a local voice;
+ *  - snappy control words: one at the end of the GUESS acts after
+ *    CONTROL_TAIL_MS of quiet (the phrase ended at the recognizer at once);
+ *    "over" waits for /end's accurate final up to OVER_FINAL_WAIT_MS;
  *  - the wiring in TopBarMic and Settings → Voice, and the copy. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CONFIRM_LINES,
   CONFIRM_STALE_MS,
+  CONTROL_TAIL_MS,
+  OVER_FINAL_WAIT_MS,
+  isSwitchCommand,
+  sentLine,
   Confirmer,
   DICT_HINT,
   LiveDictation,
@@ -429,7 +436,7 @@ describe("the wiring and the copy", () => {
     expect(MIC).toMatch(/idles\.current = opts\.idle \?\? \(!continuous \|\| prefsRef\.current\.ptt === "hold"\);/);
     expect(MIC).toMatch(/if \(idles\.current\) idleTimer\.current = setTimeout/);
     expect(MIC).toMatch(/title,\s*hint,\s*continuous: false,/); // listenFor
-    expect(MIC).toMatch(/\{ hint: WAKE_HINT, skipMs: CHIME_MS \+ 30, idle: false \}/);
+    expect(MIC).toMatch(/\{ hint: WAKE_HINT, idle: false \}/);
     expect(MIC).toMatch(/\{ hint: opts\.hint, continuous \}/);
   });
 
@@ -463,5 +470,193 @@ describe("the wiring and the copy", () => {
     }
     // The router's own word on Claude's question prompt's review step.
     expect(hits.filter((h) => !/Say submit, or cancel\./.test(h))).toEqual([]);
+  });
+});
+
+describe("snappy control words: acted on from the guess after a moment's quiet", () => {
+  let quiet = 0;
+  let ends = 0;
+  const sentIn: number[] = [];
+  beforeEach(() => {
+    vi.useFakeTimers();
+    quiet = 0;
+    ends = 0;
+    sentIn.length = 0;
+    mocks.instApi.mockResolvedValue({ ok: true });
+  });
+  const fast = (over: Partial<LiveHooks> = {}) =>
+    hooks({ quietMs: () => quiet, endPhrase: () => void ends++, sentIn: (ms) => void sentIn.push(ms), ...over });
+
+  it("“disregard” at the end of the guess: nothing until 250 ms of quiet, then at once — its late end ignored", async () => {
+    expect(CONTROL_TAIL_MS).toBe(250);
+    const t = session();
+    const k = fast();
+    const d = new LiveDictation(t, k.h, { continuous: true });
+    await d.heard("keep this");
+    await d.stream("", "oops disregard");
+    expect(t.keys).toEqual(["keep this ", "oops"]); // the radio word is held back
+    quiet = 100;
+    await vi.advanceTimersByTimeAsync(200);
+    expect(t.keys).toHaveLength(2);
+    expect(ends).toBe(0);
+    quiet = CONTROL_TAIL_MS;
+    await vi.advanceTimersByTimeAsync(50);
+    expect(ends).toBe(1); // the recognizer's phrase ended at once
+    expect(t.keys.at(-1)).toBe("⌫keep this oops");
+    expect(k.said).toEqual(["cleared"]);
+    // The recognizer's own end of that phrase changes nothing.
+    await d.flush("oops disregard");
+    expect(t.keys).toHaveLength(3);
+    expect(d.active).toBe(true);
+    // The next phrase is heard as usual.
+    await d.flush("fresh start");
+    expect(t.keys.at(-1)).toBe("fresh start ");
+  });
+
+  it("a stop phrase in the guess stops at once; nothing is sent", async () => {
+    const t = session();
+    const k = fast();
+    const d = new LiveDictation(t, k.h, { continuous: true });
+    await d.stream("", "half a thought stop recording");
+    quiet = 300;
+    await vi.advanceTimersByTimeAsync(50);
+    expect(d.active).toBe(false);
+    expect(ends).toBe(1);
+    expect(mocks.instApi).not.toHaveBeenCalled();
+    expect(k.said).toEqual(["stopped"]);
+  });
+
+  it("a held word the next word rules out goes in, and nothing fires", async () => {
+    const t = session();
+    const d = new LiveDictation(t, fast().h, { continuous: true });
+    await d.stream("", "move it over");
+    expect(t.keys).toEqual(["move it"]);
+    await d.stream("", "move it over here");
+    expect(t.keys).toEqual(["move it", " over here"]);
+    quiet = 1000;
+    await vi.advanceTimersByTimeAsync(500);
+    expect(ends).toBe(0);
+    expect(mocks.instApi).not.toHaveBeenCalled();
+  });
+
+  it("“over”: the phrase ends at once and Enter goes as /end answers — its accurate final retyped first", async () => {
+    const t = session();
+    const k = fast();
+    const d = new LiveDictation(t, k.h, { continuous: true });
+    await d.stream("", "run the test over");
+    quiet = 300;
+    await vi.advanceTimersByTimeAsync(50);
+    expect(ends).toBe(1);
+    expect(mocks.instApi).not.toHaveBeenCalled(); // waiting for /end
+    await vi.advanceTimersByTimeAsync(600);
+    const flushed = d.flush("", "run the tests over");
+    await vi.advanceTimersByTimeAsync(300); // the keys settle before Enter
+    await flushed;
+    expect(t.keys).toEqual(["run the test", "s "]); // the final's "tests": the guess corrected
+    expect(mocks.instApi).toHaveBeenCalledTimes(1);
+    expect(k.said).toEqual(["sent"]);
+    expect(sentIn).toHaveLength(1);
+    expect(sentIn[0]).toBeGreaterThanOrEqual(900);
+    expect(d.active).toBe(true);
+    // No second send when the timer would have run out.
+    await vi.advanceTimersByTimeAsync(OVER_FINAL_WAIT_MS);
+    expect(mocks.instApi).toHaveBeenCalledTimes(1);
+  });
+
+  it("“over”: no /end within 2.5 s — the fast words go, and the late final is ignored", async () => {
+    expect(OVER_FINAL_WAIT_MS).toBe(2500);
+    const t = session();
+    const k = fast();
+    const d = new LiveDictation(t, k.h, { continuous: true });
+    await d.stream("", "ship it over");
+    quiet = 300;
+    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(OVER_FINAL_WAIT_MS - 100);
+    expect(mocks.instApi).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(mocks.instApi).toHaveBeenCalledTimes(1);
+    expect(t.keys).toEqual(["ship it", " "]);
+    await d.flush("", "ship it over and over");
+    expect(t.keys).toHaveLength(2);
+    expect(mocks.instApi).toHaveBeenCalledTimes(1);
+  });
+
+  it("a switch command as a message's first phrase goes to the router from the guess", async () => {
+    const routed: string[] = [];
+    const k = fast({ route: async (t) => (routed.push(t), true) });
+    const d = new LiveDictation(session(), k.h, { continuous: true });
+    await d.stream("", "switch to billing");
+    expect(routed).toEqual([]);
+    quiet = 300;
+    await vi.advanceTimersByTimeAsync(50);
+    expect(routed).toEqual(["switch to billing"]);
+    expect(d.active).toBe(true);
+    expect(isSwitchCommand("switch to the login fix")).toBe(true);
+    expect(isSwitchCommand("focus 3")).toBe(true);
+    expect(isSwitchCommand("next session")).toBe(true);
+    expect(isSwitchCommand("session three")).toBe(true);
+    expect(isSwitchCommand("switch to")).toBe(false);
+    expect(isSwitchCommand("switch the flag")).toBe(false);
+    expect(isSwitchCommand("go ahead")).toBe(false);
+  });
+
+  it("without a quiet clock (hands-free tests, Web Speech without a level) nothing acts from the guess", async () => {
+    const t = session();
+    const d = new LiveDictation(t, hooks().h, { continuous: true });
+    await d.stream("", "oops disregard");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(t.keys).toEqual(["oops"]);
+  });
+
+  it("diagnostics: “over → sent 0.9 s”", () => {
+    expect(sentLine(900)).toBe("over → sent 0.9 s");
+    expect(sentLine(null)).toBe("");
+    const mic = code("components/TopBarMic.tsx");
+    expect(mic).toMatch(/wakeLine\(lastWakeMs\), sentLine\(lastSentMs\)/);
+    expect(mic).toMatch(/endPhrase: \(\) => \{\s*if \(live\.current === d\) rec\.current\?\.endPhrase\?\.\(\);/);
+    expect(mic).toMatch(/quietMs: \(\) => \{\s*const at = lastLoudAt\(\);/);
+  });
+});
+
+describe("the mic's chimes: rising at every start, falling at every stop", () => {
+  const MIC = code("components/TopBarMic.tsx");
+  const fnBody = (name: string, until: string) => MIC.slice(MIC.indexOf(name), MIC.indexOf(until, MIC.indexOf(name)));
+
+  it("every start chimes: start() itself, after the recognizer started (a click, the hotkey, the wake, the ask card's mic all go through it)", () => {
+    const start = fnBody("const start = (", "const listenFor");
+    expect(start).toMatch(/if \(!ok\) \{\s*halt\(\);[^}]*\}\s*sound\("start"\);\s*chimed\.current = true;/);
+    // The only chime() calls are the helper's: no path plays its own.
+    expect(MIC.match(/\bchime\(/g)).toHaveLength(2);
+    expect(fnBody("const woken = ", "const latestWake")).not.toMatch(/chime|sound\(/);
+    // Its sound is skipped from the recording.
+    expect(start).toMatch(/\{ skipMs: Math\.max\(skipMs, chimeSkip\) \}/);
+  });
+
+  it("every stop chimes: halt() — where over and out, a stop phrase, Esc, the button, letting go, the idle stop and a refused send all end — only after a start chimed", () => {
+    expect(MIC).toMatch(/const halt = \(\) => \{\s*if \(chimed\.current\) \{\s*chimed\.current = false;[^}]*sound\("stop"\);\s*\}/);
+    // Before the queue releases the replies.
+    const halt = fnBody("const halt = () => {", "const target = (");
+    expect(halt.indexOf('sound("stop")')).toBeLessThan(halt.indexOf("queue.release()"));
+  });
+
+  it("“over” (send, keep listening) never ends the dictation, so no chime", async () => {
+    mocks.instApi.mockResolvedValue({ ok: true });
+    const k = hooks();
+    const d = new LiveDictation(session(), k.h, { continuous: true });
+    await d.heard("ship it over");
+    expect(k.halts()).toBe(0);
+    expect(d.active).toBe(true);
+  });
+
+  it("never over a line being said (it waits for that line's end); the Sounds switch off: none", () => {
+    const sound = fnBody("const sound = (", "const halt = ");
+    expect(sound).toMatch(/if \(prefsRef\.current\.sounds === false\) return;/);
+    expect(sound).toMatch(/if \(!queue\.busy\) return chime\(voiceAudioCtx\(\), kind\);/);
+    expect(sound).toMatch(/speakingListeners\.add\(after\)/);
+    expect(MIC).toMatch(/const chimeSkip = prefsRef\.current\.sounds !== false \? CHIME_MS \+ 30 : 0;/);
+    const voice = code("components/settings/screens/Voice.tsx");
+    expect(voice).toContain('id="voice-sounds"');
+    expect(voice).toMatch(/checked=\{prefs\.sounds !== false\}/);
+    expect(voice).toMatch(/save\(\{ \.\.\.prefs, sounds: e\.target\.checked \}\)/);
   });
 });

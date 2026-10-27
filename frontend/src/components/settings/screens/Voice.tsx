@@ -547,6 +547,29 @@ export function MicPrefs() {
           <span className="ca-slider" />
         </label>
       </div>
+      <div className="set-row set-switch-row" id="voice-sounds-row">
+        <span className="notif-rule-text">
+          <span className="set-label" id="voice-sounds-label">
+            Sounds
+          </span>
+          <span className="set-hint notif-rule-desc" id="voice-sounds-hint">
+            A rising chime when the mic starts listening, a falling one when it stops.
+          </span>
+        </span>
+        <label className="ca-switch">
+          <input
+            type="checkbox"
+            id="voice-sounds"
+            aria-labelledby="voice-sounds-label"
+            checked={prefs.sounds !== false}
+            onChange={(e) => {
+              if (e.target.checked) voiceAudioCtx();
+              save({ ...prefs, sounds: e.target.checked });
+            }}
+          />
+          <span className="ca-slider" />
+        </label>
+      </div>
       {/* What the top-bar mic's options no longer explain (they are controls
           only): how dictation and hands-free answers work, and its diagnostics. */}
       <div className="set-row" id="voice-mic-howto">

@@ -181,6 +181,28 @@ a session first*).
   ahead once — on the first press, when `/api/voice` says the voice is local
   (`tts_backend` `local` / `system`, or a host at a local address in
   `tts_detail`), else only after a line was first said without an error.
+- **Control words act fast.** A control phrase at the end of the **guess** —
+  “over”, “over and out”, “disregard”, a stop phrase, “stop talking”, or a
+  switch command as a message's first phrase (“switch to billing”, “focus 3”,
+  “next session”) — acts once the level meter has heard nothing for 250 ms
+  (`CONTROL_TAIL_MS`), not after the recogniser's 1.1 s pause: the phrase is
+  ended at the recogniser at once (`Recognizer.endPhrase`, its `/end`), and
+  “disregard”, a stop, “stop talking” and a switch act on the guess right
+  away (that phrase's late words and end are ignored). “Over” waits for
+  `/end` — its accurate final retyped first — up to 2.5 s
+  (`OVER_FINAL_WAIT_MS`), then sends the fast words and ignores a later
+  final. The time from the word's end to Enter is the Diagnostics line's
+  *over → sent 0.9 s* (and `window.__mfVoiceSent`, the debug trace's line).
+  A control word the next word rules out (“move it over here”) goes in as
+  before.
+- **Sounds** (Settings → Voice → *Sounds*, on by default, per browser):
+  every start of listening — a click, the hotkey, the wake word, the ask
+  card's mic — plays a rising two-tone chime (skipped from the recording),
+  and every end of it — “over and out”, a stop phrase, Esc, the button or
+  hotkey again, letting go, the idle stop, a refused send — a falling, softer
+  one (880 → 660 Hz, 140 ms; `chime(ctx, "stop")` in `lib/wakeWord.ts`).
+  “Over” (sent, still listening) plays none — *Sent.* is the cue. A chime
+  never plays over a line being said: it waits for that line's end.
 - **Stop at any moment**: **“stop recording”**, “stop listening”, “mic off”
   or “that's all” at the end of any committed words — mid-phrase too, not only
   as the last word of a phrase — stops listening at once; the phrase is never

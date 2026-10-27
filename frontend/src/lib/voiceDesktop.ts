@@ -48,7 +48,7 @@ import type { Dialog } from "../api/types";
 import { peekTerm } from "./terminals";
 import { toast } from "./toast";
 import { resamplerName, startWavRecording, type WavRecording } from "./wavRecorder";
-import { MicKeeper, isLoud, noiseFloor, pickupLine, voiceMark, voicePass } from "./voiceMic";
+import { MicKeeper, isLoud, noiseFloor, pickupLine, voiceMark, voicePass, voiceSent } from "./voiceMic";
 
 // --- the radio words -------------------------------------------------------- //
 
@@ -138,6 +138,22 @@ export function mayBeCommand(text: string): boolean {
     }
     return true;
   });
+}
+
+/** A whole session-switch command ("switch to the login fix", "focus 3",
+ * "next session"): the router can act on it from the guess, before the
+ * phrase's end. */
+export function isSwitchCommand(text: string): boolean {
+  let w = routerWords(text);
+  if (w.length > 1 && ROUTER_LEADS.has(w[0])) w = w.slice(1);
+  if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
+  if (/^(?:switch|go|change|jump)$/.test(w[0] || "")) {
+    const at = w[1] === "over" ? 2 : 1;
+    return w[at] === "to" && w.length > at + 1;
+  }
+  if (/^(?:focus|select)$/.test(w[0] || "")) return w.length > 1;
+  if (/^(?:next|previous)$/.test(w[0] || "")) return w.length === 2 && /^(?:session|one)$/.test(w[1]);
+  return w.length >= 2 && /^(?:session|number|row)$/.test(w[0]) && new RegExp("^(?:" + NUMS + ")$").test(w[1]);
 }
 
 const bareWord = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, "");
@@ -253,9 +269,12 @@ export interface VoicePrefs {
    * {@link CONFIRM_LINES}. On by default, whatever `replies` says; absent
    * reads as on. */
   confirm?: boolean;
+  /** The mic's chimes (lib/wakeWord chime): rising as listening starts,
+   * falling as it stops. On by default; absent reads as on. */
+  sounds?: boolean;
 }
 export const VOICE_PREFS_KEY = "cs_voice_desktop";
-export const DEFAULT_VOICE_PREFS: VoicePrefs = { ptt: "toggle", replies: "off", wake: false, confirm: true };
+export const DEFAULT_VOICE_PREFS: VoicePrefs = { ptt: "toggle", replies: "off", wake: false, confirm: true, sounds: true };
 
 /** The three choices as the mic's popover and Settings → Voice show them. */
 export const REPLIES_CHOICES: ReadonlyArray<{ value: RepliesMode; label: string }> = [
@@ -278,6 +297,7 @@ function normPrefs(v: unknown): VoicePrefs {
     replies: repliesMode(o.replies),
     wake: o.wake === true,
     confirm: o.confirm !== false,
+    sounds: o.sounds !== false,
   };
 }
 
@@ -502,6 +522,23 @@ export function retype(before: string, after: string): { erase: string; type: st
   return { erase: a.slice(i).join(""), type: b.slice(i).join("") };
 }
 
+/** What a phrase's guess can end in ({@link Dictation.tail}). */
+export type TailKind = "over" | "out" | "disregard" | "stop" | "hush" | "route";
+
+/** A control phrase at the end of the guess acts once the voice has been
+ * quiet this long after it — not the recognizer's {@link SILENCE_MS} and its
+ * accurate pass. */
+export const CONTROL_TAIL_MS = 250;
+/** How often the guess's tail is checked against the quiet. */
+export const CONTROL_POLL_MS = 50;
+/** "Over" from the guess ends the phrase and waits this long for its /end
+ * (the accurate final, retyped first); then the fast words are sent and a
+ * later final is ignored. */
+export const OVER_FINAL_WAIT_MS = 2500;
+/** A phrase taken from its guess: its own late words and end are ignored —
+ * for at most this long (a phrase whose end never comes). */
+export const SWALLOW_MAX_MS = 5000;
+
 /** `o` with `erase` only when there is one (outcomes stay minimal). */
 const withErase = <T extends object>(o: T, erase: string): T & { erase?: string } => (erase ? { ...o, erase } : o);
 
@@ -551,6 +588,23 @@ export class Dictation {
     this.held = "";
     this.partial = "";
     this.phraseAt = -1;
+  }
+
+  /** The phrase under way — its committed words and its guess — ends in a
+   * control phrase: which, and the whole phrase, else null. "over and out,
+   * that's all" is an "out"; a switch command counts only as a message's
+   * first phrase (it goes to the router). */
+  tail(): { kind: TailKind; text: string } | null {
+    if (!this.listening) return null;
+    const all = joinWords(this.held, this.partial);
+    if (!all) return null;
+    if (isHushPhrase(all)) return { kind: "hush", text: all };
+    const before = stopTail(all);
+    if (before !== null) return { kind: parseRadio(before).kind === "out" ? "out" : "stop", text: all };
+    const r = parseRadio(all).kind;
+    if (r) return { kind: r, text: all };
+    if (this.routes && !this.before && isSwitchCommand(all)) return { kind: "route", text: all };
+    return null;
   }
 
   /** A message was sent and listening goes on: the next words start a new
@@ -823,6 +877,14 @@ export interface LiveHooks {
   done?(how: DictEnd): void;
   /** Say what your words did, out loud ({@link CONFIRM_LINES}). */
   confirm?(kind: ConfirmKind): void;
+  /** How long (ms) the voice has been quiet: a control phrase at the end of
+   * the guess acts after {@link CONTROL_TAIL_MS}. Absent: only at the
+   * phrase's end. */
+  quietMs?(): number;
+  /** End the phrase under way at the recognizer now (its /end, its final). */
+  endPhrase?(): void;
+  /** A send went through `ms` after the word's end ("over → sent"). */
+  sentIn?(ms: number): void;
 }
 
 /** The spoken confirmations of the dictation's actions — about what YOU did,
@@ -887,6 +949,16 @@ export class LiveDictation {
   private recording = false;
   /** The level says speech (the caption says "Hearing you…" until a word). */
   private hearingNow = false;
+  /** Checking the guess's control tail against the quiet. */
+  private tailTimer: ReturnType<typeof setInterval> | undefined;
+  /** "Over" from the guess: waiting for the phrase's /end (then the fast
+   * words go, {@link OVER_FINAL_WAIT_MS}). */
+  private sendWait: ReturnType<typeof setTimeout> | undefined;
+  /** The phrase was taken from its guess: its late words and end are not
+   * heard (until its end, or {@link SWALLOW_MAX_MS}). */
+  private swallowing: ReturnType<typeof setTimeout> | undefined;
+  /** When the control word ended (ms), for "over → sent". */
+  private wordEnd = 0;
 
   constructor(
     private target: DictTarget | null,
@@ -909,11 +981,13 @@ export class LiveDictation {
   /** Web Speech's interim words: typed as a guess, corrected as they change. */
   hearing(t: string): Promise<void> {
     if (t) this.heardAnything = true;
+    if (this.swallowing) return this.chain;
     return this.step(() => this.dict.hearing(t));
   }
 
   heard(phrase: string): Promise<void> {
     if (phrase.trim()) this.heardAnything = true;
+    if (this.phraseEnded()) return this.chain;
     return this.step(() => this.dict.heard(phrase));
   }
 
@@ -921,6 +995,7 @@ export class LiveDictation {
    * typed as you speak and corrected as the recognizer changes its mind. */
   stream(w: string, p: string): Promise<void> {
     if (w.trim() || p.trim()) this.heardAnything = true;
+    if (this.swallowing) return this.chain;
     return this.step(() => this.dict.stream(w, p));
   }
 
@@ -933,7 +1008,66 @@ export class LiveDictation {
    * re-transcription, when it differs — see {@link Dictation.flush}). */
   flush(w: string, final?: string): Promise<void> {
     if (w.trim() || final?.trim()) this.heardAnything = true;
+    if (this.phraseEnded()) return this.chain;
     return this.step(() => this.dict.flush(w, final));
+  }
+
+  /** A phrase's end arrived: true when it is one taken from its guess
+   * already (ignored); a send waiting on it goes with it. */
+  private phraseEnded(): boolean {
+    clearTimeout(this.sendWait);
+    this.sendWait = undefined;
+    if (!this.swallowing) return false;
+    clearTimeout(this.swallowing);
+    this.swallowing = undefined;
+    return true;
+  }
+
+  /** The phrase is taken from its guess: ignore what the recognizer still
+   * says of it. */
+  private swallow(): void {
+    clearTimeout(this.swallowing);
+    this.swallowing = setTimeout(() => (this.swallowing = undefined), SWALLOW_MAX_MS);
+  }
+
+  /** After each step: a control phrase at the end of the guess acts once
+   * the voice has been quiet {@link CONTROL_TAIL_MS} — checked every
+   * {@link CONTROL_POLL_MS} while the guess ends in one. */
+  private watchTail(): void {
+    if (!this.hooks.quietMs || this.done || this.sendWait || this.swallowing || !this.dict.tail()) {
+      clearInterval(this.tailTimer);
+      this.tailTimer = undefined;
+      return;
+    }
+    if (!this.tailTimer) this.tailTimer = setInterval(() => this.checkTail(), CONTROL_POLL_MS);
+    this.checkTail();
+  }
+
+  private checkTail(): void {
+    const t = this.done || this.sendWait || this.swallowing ? null : this.dict.tail();
+    if (!t) {
+      clearInterval(this.tailTimer);
+      this.tailTimer = undefined;
+      return;
+    }
+    const quiet = this.hooks.quietMs?.() ?? 0;
+    if (quiet < CONTROL_TAIL_MS) return;
+    clearInterval(this.tailTimer);
+    this.tailTimer = undefined;
+    this.wordEnd = Date.now() - Math.min(quiet, 60_000);
+    this.hooks.endPhrase?.();
+    if (t.kind === "over" || t.kind === "out") {
+      // The accurate final, if /end brings it in time; else the fast words.
+      this.sendWait = setTimeout(() => {
+        this.sendWait = undefined;
+        this.swallow();
+        void this.step(() => this.dict.heard(t.text));
+      }, OVER_FINAL_WAIT_MS);
+      return;
+    }
+    // "Disregard", a stop, "stop talking", a switch: no accurate text needed.
+    this.swallow();
+    void this.step(() => this.dict.heard(t.text));
   }
 
   /** Streaming: the unstable tail, for the caption only ({@link stream}
@@ -1015,13 +1149,17 @@ export class LiveDictation {
         this.dict.answering = t?.kind === "session" && !!this.hooks.pending?.(t.title);
         return this.apply(next());
       })
-      .catch(() => {});
+      .catch(() => {})
+      .then(() => this.watchTail());
     return this.chain;
   }
 
   private end(line: string | null, sticky = false, how?: DictEnd): void {
     if (this.done) return;
     this.done = true;
+    clearInterval(this.tailTimer);
+    clearTimeout(this.sendWait);
+    clearTimeout(this.swallowing);
     this.dict.listening = false;
     this.hooks.halt();
     if (line !== null) this.hooks.caption(line, sticky);
@@ -1063,6 +1201,10 @@ export class LiveDictation {
         );
         return;
       case "send": {
+        // The word's end: from the guess's tail, else the quiet before now.
+        const quiet = this.hooks.quietMs?.();
+        const from = this.wordEnd || (quiet != null && quiet < 60_000 ? Date.now() - quiet : 0);
+        this.wordEnd = 0;
         const typedNow = !!(out.text || out.erase);
         if (typedNow && !(await this.put(out.text, true, out.erase))) return;
         if (this.done) return;
@@ -1079,7 +1221,7 @@ export class LiveDictation {
           const say = this.hooks.replies();
           const r = await t.submit(say);
           if (r.ok && t.title) this.hooks.submitted(t.title, say);
-          this.sent(r, out);
+          this.sent(r, out, from);
           return;
         }
         // A text box: Enter is never pressed for you there.
@@ -1094,7 +1236,7 @@ export class LiveDictation {
         const say = this.hooks.replies();
         const r = await submitDraft(t.title, t.name, say);
         if (r.ok) this.hooks.submitted(t.title, say);
-        this.sent(r, out);
+        this.sent(r, out, from);
         return;
       }
     }
@@ -1106,8 +1248,13 @@ export class LiveDictation {
    * dictation goes on with the next message — unless the send failed (the
    * words are still in the field: listening ends, so nothing is typed after
    * them). The next words wait their turn while a send is under way. */
-  private sent(r: { ok: boolean; line: string }, how: { end?: boolean; out?: boolean }): void {
+  private sent(r: { ok: boolean; line: string }, how: { end?: boolean; out?: boolean }, from = 0): void {
     if (r.ok) this.hooks.confirm?.(how.out ? "out" : "sent");
+    if (r.ok && from) {
+      const ms = Date.now() - from;
+      voiceSent(ms);
+      this.hooks.sentIn?.(ms);
+    }
     if (how.end) this.end(r.line, !r.ok);
     else if (!r.ok) this.end(r.line, true, "stopped");
     else this.next(r.line);
@@ -2479,6 +2626,10 @@ export interface Recognizer {
    * dropped (the server's recognizer) or its words ignored (Web Speech) until
    * off, and {@link BARGE_SKIP_MS} after. The phrase and the listen go on. */
   mute?(on: boolean): void;
+  /** End the phrase under way now, as its silence would (its words — and
+   * the server's accurate final — follow); listening goes on. Web Speech
+   * can't: its final comes when it decides. */
+  endPhrase?(): void;
 }
 
 type SpeechRecCtor = new () => {
@@ -3170,6 +3321,9 @@ export function serverRecognizer(
       muted = on;
       cur?.rec?.mute?.(on, BARGE_SKIP_MS / 1000);
     },
+    endPhrase() {
+      if (cur?.heard && want) endClip();
+    },
     start(handlers: RecognizerHandlers, o: { skipMs?: number } = {}) {
       self.stop();
       if (!self.available()) return false;
@@ -3374,6 +3528,12 @@ export function passLine(backend: string | undefined, passMs: number | null): st
  * (/end `final_ms`) took — "final 1.2 s" ("" before one). */
 export function finalLine(finalMs: number | null): string {
   return finalMs != null && finalMs > 0 ? "final " + (finalMs / 1000).toFixed(1) + " s" : "";
+}
+
+/** The diagnostics' "over" latency: the word's end to Enter for the last
+ * send — "over → sent 0.9 s" ("" before one). */
+export function sentLine(ms: number | null): string {
+  return ms != null && ms >= 0 ? "over → sent " + (ms / 1000).toFixed(1) + " s" : "";
 }
 
 /** The caption for a recognizer error, or "" for one that needs no words. */
