@@ -406,6 +406,7 @@ describe("the layout is the shared Settings one", () => {
       "Voice",
       "On the phone page",
       "This computer&#x27;s mic",
+      "Voice words",
       "Permission dialogs",
       "Try it",
       "Privacy",

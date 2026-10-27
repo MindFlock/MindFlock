@@ -95,3 +95,24 @@ export function useAutoTour(id: TourId, open: boolean): void {
     wasOpen.current = open;
   }, [open, id]);
 }
+
+/** Whether a tour that opens on a control's FIRST USE (the mic: Voice) may
+ * open now: unlike a dialog's, in any hour — the control was just used, so
+ * it is the moment — but still only once (not in `tours_seen`), after the
+ * first prefs pull, with hints on and nothing else touring. (Pure.) */
+export function firstUseTourDue(o: { seen: readonly string[]; id: TourId; pulled: boolean; hints: boolean; busy: boolean }): boolean {
+  return o.pulled && o.hints && !o.busy && !o.seen.includes(o.id);
+}
+
+/** The control behind tour `id` was just used: open the tour once it has
+ * painted, if {@link firstUseTourDue}. True when it is on its way. */
+export function openTourOnFirstUse(id: TourId): boolean {
+  const ui = useUi.getState();
+  const due = firstUseTourDue({ seen: ui.toursSeen, id, pulled, hints: ui.hintsEnabled, busy: ui.coachTour !== null || ui.tourOpen });
+  if (!due) return false;
+  window.setTimeout(() => {
+    const now = useUi.getState();
+    if (!now.coachTour && !now.tourOpen && !now.toursSeen.includes(id)) now.openCoachTour(id);
+  }, AUTO_TOUR_DELAY_MS);
+  return true;
+}
