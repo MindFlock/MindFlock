@@ -5695,7 +5695,12 @@ labels above the inputs.
     *Off* (the default), *Replies to what I said by voice*, *Everything,
     every session* (an older saved switch loads as *Off* / *Replies to what
     I said by voice*) — with the name-first and one-at-a-time rules under it;
-    and **Push to talk** (*Click to talk* · *Hold to talk*).
+    **Push to talk** (*Click to talk* · *Hold to talk*); and the **Listen
+    for “MindFlock”** switch (`#voice-wake`, pref `wake`, off by default;
+    see [the wake word](#voice-input)), with its hint that the mic stays
+    open and the browser's mic light stays on, and — when standby has
+    stopped — why (*server recognition isn't ready*, *the microphone was
+    refused*).
   - **Permission dialogs**: the **Approve dialogs by voice** switch (*A
     spoken yes or no answers a permission dialog after its command is read
     aloud. 'Always' is only accepted when you say the word.*).
@@ -6009,6 +6014,29 @@ bar), and only the settled words are typed. With localStorage `cs_voice_debug`
 set to `1` the console logs the start's timings (also in
 `window.__mfVoiceTiming`): press, mic ready, stream open, first speech, first
 greyed words, first typed word.
+
+**The wake word.** With **Listen for “MindFlock”** on (the mic's options or
+Settings → Voice → This computer's mic; per browser, off by default), saying
+"MindFlock" **on its own** starts listening as a click on the mic would: a
+short two-tone chime, the caption *Yes?*, then one dictation like any other
+(the radio words, the router; a text box with the keyboard gets the words;
+nothing said within 8 s ends it quietly). A sentence never wakes it —
+"MindFlock is great", or the word in the middle of talking: the mic stays in
+**standby** (`lib/wakeWord.ts`), watching only the level of what it hears,
+and a candidate is speech that starts after at least 350 ms of quiet, lasts
+250 ms–1.6 s and is followed by 350 ms of quiet. Only that clip (with 150 ms
+of lead-in) is sent, to `POST /api/voice/wake`, which recognises it with the
+word as the hint and answers whether it was the word alone. At most one check
+every 1.5 s, one at a time; none while a dictation records, while the app is
+talking or for 500 ms after it stops (its own voice never wakes it), and none
+while the page is hidden — standby pauses there and the microphone is given
+back after 10 s, reopened on return. While standby is on the microphone stays
+open, so **the browser's mic light stays on**; the mic button shows it with a
+faint ring that follows the level and a small red dot. Standby stops — with
+the reason in the options and Settings — when the server has no recogniser
+ready (409), when the microphone is refused, and on "mic off" (which also
+turns the switch off). After a reload it starts again by itself when the mic
+permission is already granted, else at your next click in the app.
 
 ## Mobile UI (`/m`)
 

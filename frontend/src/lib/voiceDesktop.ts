@@ -234,9 +234,12 @@ export interface VoicePrefs {
   ptt: PttMode;
   /** Off by default on the desktop: the phone is the hands-free one. */
   replies: RepliesMode;
+  /** Standby for the wake word (lib/wakeWord): the mic stays open and a lone
+   * "MindFlock" starts listening. Off by default; absent reads as off. */
+  wake?: boolean;
 }
 export const VOICE_PREFS_KEY = "cs_voice_desktop";
-export const DEFAULT_VOICE_PREFS: VoicePrefs = { ptt: "toggle", replies: "off" };
+export const DEFAULT_VOICE_PREFS: VoicePrefs = { ptt: "toggle", replies: "off", wake: false };
 
 /** The three choices as the mic's popover and Settings → Voice show them. */
 export const REPLIES_CHOICES: ReadonlyArray<{ value: RepliesMode; label: string }> = [
@@ -254,7 +257,7 @@ export function repliesMode(v: unknown): RepliesMode {
 
 function normPrefs(v: unknown): VoicePrefs {
   const o = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
-  return { ptt: o.ptt === "hold" ? "hold" : "toggle", replies: repliesMode(o.replies) };
+  return { ptt: o.ptt === "hold" ? "hold" : "toggle", replies: repliesMode(o.replies), wake: o.wake === true };
 }
 
 /** `say: true` on a send from this app (the agent writes a Say line for

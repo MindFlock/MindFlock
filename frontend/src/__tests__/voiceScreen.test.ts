@@ -674,6 +674,23 @@ describe("the local-models installer", () => {
 
 
 describe("this computer's mic (the popover's prefs, in Settings too)", () => {
+  it("has the Listen for “MindFlock” switch with its hint — off by default, on when the pref says so", async () => {
+    const html = render({}, BUILTIN);
+    const row = /<div class="set-row set-switch-row" id="voice-wake-row">[\s\S]*?<\/label><\/div>/.exec(html)?.[0] || "";
+    expect(row).toContain('<span class="set-label" id="voice-wake-label">Listen for “MindFlock”</span>');
+    expect(row).toContain("the browser&#x27;s mic light stays on");
+    expect(row).toMatch(/<input type="checkbox" id="voice-wake" aria-labelledby="voice-wake-label"\/>/);
+    expect(html.indexOf('id="voice-ptt-row"')).toBeLessThan(html.indexOf('id="voice-wake-row"'));
+    expect(html.indexOf('id="voice-wake-row"')).toBeLessThan(html.indexOf("Permission dialogs"));
+    const { VOICE_PREFS_KEY } = await import("../lib/voiceDesktop");
+    vi.stubGlobal("localStorage", { getItem: (k: string) => (k === VOICE_PREFS_KEY ? '{"wake":true}' : null), setItem: () => {} });
+    try {
+      expect(render({}, BUILTIN)).toMatch(/<input type="checkbox" id="voice-wake" aria-labelledby="voice-wake-label" checked=""\/>/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("shows Read replies aloud (Off by default, three ways) and the push-to-talk choice before Permission dialogs", () => {
     const html = render({}, BUILTIN);
     expect(html).toContain('<h3 class="set-section-title">This computer&#x27;s mic</h3>');
