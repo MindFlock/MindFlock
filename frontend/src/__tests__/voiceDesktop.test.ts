@@ -1072,16 +1072,19 @@ describe("serverRecognizer: streaming, words as you speak", () => {
     };
   }
 
-  it("opens a stream at the first speech when the server can stream — never a clip upload", async () => {
+  it("opens a stream as it starts when the server can stream — chunks only from speech, never a clip upload", async () => {
     const t = setup(server());
     const r = serverRecognizer({ stream: () => true });
     r.start(t.h);
-    await vi.waitFor(() => expect(t.clips.length).toBe(1));
-    t.block(0, false);
-    expect(t.calls).toEqual([]); // nothing before a word is heard
-    expect(t.clips[0].take).toHaveBeenCalled(); // the quiet before it is dropped
-    t.block(0, true);
     await vi.waitFor(() => expect(t.calls).toEqual([["POST", "/api/voice/stream"]]));
+    await vi.waitFor(() => expect(t.clips.length).toBe(1));
+    t.clips[0].feed();
+    t.block(0, false);
+    expect(t.chunks()).toBe(0); // nothing sent before a word is heard
+    expect(t.clips[0].take).toHaveBeenCalled(); // the quiet before it is dropped
+    t.clips[0].feed();
+    t.block(0, true);
+    await vi.waitFor(() => expect(t.chunks()).toBe(1));
     const init = mocks.apiRaw.mock.calls[0][1];
     expect(JSON.parse(init.body)).toEqual({ lang: "en-US" });
     expect(init.headers["Content-Type"]).toBe("application/json");
