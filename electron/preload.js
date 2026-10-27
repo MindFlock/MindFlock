@@ -123,8 +123,9 @@ contextBridge.exposeInMainWorld('mfengine', {
 
 // OS notifications (frontend/src/lib/desktopNotify.ts): show() raises one
 // from the main process (only while the window isn't focused); onClick()
-// hears which screen a clicked one is about — main has already brought the
-// window forward. Returns an unsubscribe.
+// hears which screen a clicked one is about ("devices" | "peer" | "update" |
+// "session:<title>", a session asking you something) — main has already
+// brought the window forward. Returns an unsubscribe.
 contextBridge.exposeInMainWorld('mfnotify', {
   show: (o) =>
     ipcRenderer.invoke('notify:show', {

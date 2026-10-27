@@ -2,7 +2,7 @@
  * sections 9's ordered()/_matchesFilter()/attentionItems()). */
 
 import type { Instance } from "../../api/types";
-import { attentionPriority, attentionReason, deriveSessionState } from "../../lib/sessionState";
+import { attentionPriority, attentionReason, deriveSessionState, effectiveActivity } from "../../lib/sessionState";
 import { laneOf } from "../../lib/agentMessages";
 
 /** Arrange `keys` by the saved drag order: known keys in saved order first,
@@ -352,6 +352,17 @@ export interface AttentionItem {
   title: string;
   reason: string;
   snippet?: unknown;
+  /** Set (possibly "") when the session asks in plain words rather than on a
+   * dialog (lib/ask.ts): the bell's strip shows it with Reply, no buttons. */
+  question?: string;
+}
+
+/** The question `inst`'s agent asked in plain words, or undefined when it is
+ * not asking one (a dialog on screen wins: that is what waits). */
+export function askedQuestion(inst: Partial<Instance>): string | undefined {
+  const a = inst.asking;
+  if (!a || a.kind !== "question" || effectiveActivity(inst) === "clarify") return undefined;
+  return String(a.text || "");
 }
 
 /** O1: the prioritized "which session needs me" list (bell popover + mobile).
@@ -373,7 +384,11 @@ export function attentionItems(instances: Instance[]): AttentionItem[] {
         p: attentionPriority(ss),
         title: inst.title,
         reason: attentionReason(ss) + (step ? " at " + step : ""),
-        snippet: ss.reason === "question" || ss.reason === "stuck" ? inst.last_turn || "" : undefined,
+        snippet:
+          ss.reason === "question" || ss.reason === "stuck"
+            ? (askedQuestion(inst) ?? (inst.last_turn || ""))
+            : undefined,
+        question: ss.reason === "question" ? askedQuestion(inst) : undefined,
       });
     } else if (ss.state === "idle" && inst.stage === "pushed") {
       // A session whose lane STOPS at push is finished there, by your own

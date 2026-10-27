@@ -490,6 +490,10 @@ export interface DictTarget {
   type(text: string): boolean;
   /** Take back `text`, the last characters put in. */
   erase(text: string): boolean;
+  /** A text box that sends itself (the ask pop-up's answer field): "submit"
+   * calls this instead of leaving the words in the box. `say`: the "Read
+   * replies aloud" pref. */
+  submit?(say: boolean): Promise<{ ok: boolean; line: string }>;
 }
 
 /** The focused session's agent terminal: keys down its socket, as typed. */
@@ -710,6 +714,16 @@ export class LiveDictation {
       case "submit": {
         const typedNow = !!out.text;
         if (out.text && !(await this.put(out.text))) return;
+        // A box that sends itself (the ask pop-up's answer): its own send.
+        if (t?.kind === "field" && t.submit) {
+          this.acted = true;
+          this.end("Sending to " + t.name + "…", true);
+          const say = this.hooks.replies();
+          const r = await t.submit(say);
+          if (r.ok && t.title) this.hooks.submitted(t.title, say);
+          this.hooks.caption(r.line, !r.ok);
+          return;
+        }
         // A text box: Enter is never pressed for you there.
         if (!t || t.kind === "field") {
           this.end(t ? "" : "Click a session first");
@@ -1115,10 +1129,17 @@ export interface HandsFreeDeps {
 /** With "Read replies aloud" on: a dialog that comes up on the focused
  * session, or a question in a reply to a prompt this app sent, is read out
  * name first and the mic opens {@link ANSWER_LISTEN_MS} for the answer; a
- * miss gets ONE retry ("I didn't catch that: …"), then it goes quiet. */
+ * miss gets ONE retry ("I didn't catch that: …"), then it goes quiet.
+ *
+ * With the ask pop-up on (lib/ask.ts) the pop-up is the one hands-free
+ * entry: it calls {@link ask} for the session it shows — focused or not —
+ * and TopBarMic leaves `dialog` / `question` alone, so nothing is read out
+ * twice. */
 export class HandsFree {
   private seen = "";
   private running = false;
+  /** {@link stop}ped: listening for this title ends, no retry. */
+  private stopped = "";
 
   constructor(private deps: HandsFreeDeps) {}
 
@@ -1156,6 +1177,48 @@ export class HandsFree {
     }
   }
 
+  /** The ask pop-up shows `title` asking: a parsed `dialog` is read out name
+   * first ("Login fix: Allow git push? Say yes, no, or always.") and, with
+   * approving by voice on, the mic listens for the answer; a `question` is
+   * read out (unless `said` — the reply that asked it is being read already:
+   * wait for that instead) and the mic listens for the reply. Nothing at all
+   * unless "Read replies aloud" is on. */
+  async ask(title: string, a: { dialog?: Dialog | null; question?: string; said?: Promise<void> | null }): Promise<void> {
+    const x = this.deps;
+    if (!this.ready(title)) return;
+    this.running = true;
+    this.stopped = "";
+    try {
+      const name = x.name(title);
+      const d = a.dialog;
+      if (d) {
+        if (!d.parsed || !d.options.length || d.id === this.seen) return;
+        this.seen = d.id;
+        await x.speak(dialogSpeech(name, d));
+        if (this.stopped === title) return;
+        if (!(await x.approveDialogs())) {
+          await x.speak("Answer it on the screen.");
+          return;
+        }
+        await this.listen(title, dialogRetryLine(d), name + ": " + dialogChoices(d));
+        return;
+      }
+      const q = String(a.question || "").trim();
+      if (!q) return;
+      if (a.said) await a.said;
+      else await x.speak(spokenLine(name, plain(q)));
+      if (this.stopped === title) return;
+      await this.listen(title, "Still there? " + spokenLine(name, plain(q)), "Answer " + name + " — say submit to send");
+    } finally {
+      this.running = false;
+    }
+  }
+
+  /** The pop-up moved on from `title`: no more listening (or retry) for it. */
+  stop(title: string): void {
+    this.stopped = title;
+  }
+
   private ready(title: string): boolean {
     return !!title && !this.running && this.deps.replies() && !this.deps.busy();
   }
@@ -1163,9 +1226,9 @@ export class HandsFree {
   private async listen(title: string, retry: string, hint: string): Promise<void> {
     const x = this.deps;
     for (let tries = 0; ; tries++) {
-      if (!x.replies() || x.busy()) return;
+      if (!x.replies() || x.busy() || this.stopped === title) return;
       const how = await x.listen(title, hint, ANSWER_LISTEN_MS);
-      if (how !== "missed") return;
+      if (how !== "missed" || this.stopped === title) return;
       if (tries >= 1) {
         x.caption(x.name(title) + " is waiting on you");
         return;

@@ -13,8 +13,10 @@
  *   state      tone       who acts   in bell   label
  *   starting   muted      nobody     no        Starting
  *   working    working    the agent  no        Working
- *   needs_you  attention  you        yes       the reason: Question · Pre-commit
- *                                              failed · Checks failing · Setup failed
+ *   needs_you  attention  you        yes       the reason: Question (a dialog, or
+ *                                              a reply that asks in plain words) ·
+ *                                              Pre-commit failed · Checks failing ·
+ *                                              Setup failed
  *   idle       neutral    nobody     no        Idle (the ship-stage chip shows
  *                                              beside it)
  *   idle       attention  you        yes       Idle 25m — 20 min on uncommitted
@@ -187,6 +189,13 @@ function uncommittedWork(inst: Partial<Instance>): boolean {
   return (Number(un?.additions) || 0) + (Number(un?.deletions) || 0) > 0;
 }
 
+/** The row says its agent asked a question in plain words (`asking.kind`
+ * "question"). Read here rather than through lib/ask (which reads this file). */
+function askedInWords(inst: Partial<Instance>): boolean {
+  const a = (inst as { asking?: { kind?: unknown } | null }).asking;
+  return !!a && typeof a === "object" && a.kind === "question";
+}
+
 function needsYou(reason: SessionReason, hint?: string): SessionState {
   return { state: "needs_you", reason, label: REASON_LABEL[reason], tone: "attention", inBell: true, restartable: false, hint };
 }
@@ -268,6 +277,11 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
       hint: revive?.reason || "The agent's terminal is gone — Restart relaunches it (resuming the conversation)",
     };
   }
+  // The agent's reply ended with a question in plain words and nobody has
+  // typed to it since (the row's `asking`, lib/ask.ts): the same Question as
+  // a dialog — the chip, the toast and the bell all read this one state.
+  if (askedInWords(inst))
+    return needsYou("question", "The agent asked you a question in its reply — answer it from the pop-up, the bell or its pane");
   if (inst.stage === "interrupt") {
     const step = (inst.failed_step || "").trim();
     return needsYou("precommit_failed", step ? "Pre-commit failed at: " + step : "Pre-commit failed");

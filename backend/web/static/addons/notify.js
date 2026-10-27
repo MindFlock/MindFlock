@@ -151,7 +151,12 @@ window.mindflockAddons.notify = {
       return;
     }
 
-    const DESKTOP_OWNED = new Set(["device.join_requested", "peer.link_added", "update.available"]);
+    const DESKTOP_OWNED = new Set(["device.join_requested", "peer.link_added", "update.available", "session.question"]);
+    // The desktop app owns a session's ask too: a dialog (activity → clarify)
+    // and a question in a reply (lib/desktopNotify.ts, "[3] name needs you").
+    // Only the clarify move of activity_changed — usage_limit rides it too.
+    const desktopOwned = (env) =>
+      DESKTOP_OWNED.has(env.event) || (env.event === "session.activity_changed" && env.new === "clarify");
     const lastShown = new Map(); // "session|event" -> ts of last notification
     let rules = [];
     let subscribed = false;
@@ -166,7 +171,7 @@ window.mindflockAddons.notify = {
       if (ctx.events && typeof ctx.events.isReplay === "function" && ctx.events.isReplay(env)) return;
       // The desktop app raises its own OS notification for these
       // (frontend/src/lib/desktopNotify.ts) — don't pop a second one.
-      if (window.mfnotify && DESKTOP_OWNED.has(env.event)) return;
+      if (window.mfnotify && desktopOwned(env)) return;
       for (const rule of rules) {
         if (rule.enabled === false) continue;  // user muted this rule
         if (!ruleMatches(rule, env)) continue;

@@ -13,7 +13,7 @@ import {
   type ReactElement,
 } from "react";
 import { rowDndProps } from "./rowDnd";
-import type { NestInfo } from "./ordering";
+import { askedQuestion, type NestInfo } from "./ordering";
 import type { BackgroundJob, Instance } from "../../api/types";
 import { queryClient, useConfig } from "../../state/queries";
 import { useUi } from "../../state/store";
@@ -384,6 +384,9 @@ export const SidebarRow = memo(function SidebarRow({
   // the ROW has focus.
   const answering =
     (inFamily(inst, isWorker, kids.length) || shipLane || !onScreen) && activity === "clarify" && !missing && !paused;
+  // A question asked in plain words (lib/ask.ts), with its pane off screen:
+  // the strip shows it with Reply (the ask pop-up) — nothing to press.
+  const askedWords = !answering && !onScreen && !missing && !paused ? askedQuestion(inst) : undefined;
   // What the session was asked to do, under its name — its task headline, a
   // short verb phrase of the newest meaningful prompt (TaskLine) — when
   // nothing more pressing (a ship line, a family line) has the slot.
@@ -1012,6 +1015,9 @@ export const SidebarRow = memo(function SidebarRow({
                 </button>
               </span>
             </div>
+          )}
+          {askedWords !== undefined && (
+            <AnswerStrip title={title} activity={activity} question={askedWords} variant="rail" onOpen={() => selectSession(title)} />
           )}
           {answering && (
             <AnswerStrip

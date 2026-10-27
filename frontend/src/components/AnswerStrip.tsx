@@ -22,7 +22,13 @@
  * An unparsed dialog shows its question and ↗ only: there is nothing it can
  * safely press. Nothing is fetched while the row's activity isn't
  * "clarify", and "not waiting" reads as no dialog, quietly (`?quiet=1`). Keys 1–9 are the HOST's job (only while its row is focused),
- * through the `answerKey` handle on `ref`. */
+ * through the `answerKey` handle on `ref`.
+ *
+ * A question the agent asked in plain words (`question`, lib/ask.ts) has no
+ * key to press: the strip shows it with Reply, which opens the ask pop-up
+ * (AskDialog) — the one place a typed or spoken answer is written. The
+ * fetching and the answered latch live in `useAnswerStrip`, which the
+ * pop-up shares. */
 
 import { useEffect, useImperativeHandle, useReducer, useRef, type ReactNode, type Ref } from "react";
 import type { Dialog, DialogOption } from "../api/types";
@@ -30,14 +36,22 @@ import { useInstances } from "../state/queries";
 import { displayName } from "../state/store";
 import { errMsg } from "../lib/format";
 import { answerFresh, fetchDialog } from "../lib/flockActions";
+import { openAsk } from "../lib/ask";
 
 export type AnswerVariant = "rail" | "bell" | "thread";
 
 export interface AnswerStripProps {
   title: string;
-  /** The session's live activity; the strip only exists while it is "clarify". */
+  /** The session's live activity; the strip only exists while it is
+   * "clarify" — or while `question` is set. */
   activity: string;
   variant: AnswerVariant;
+  /** The question the agent asked in plain words (lib/ask.ts), when that is
+   * what waits: the strip shows it with Reply (the ask pop-up), no buttons
+   * to press. A dialog on screen (clarify) wins over it. */
+  question?: string;
+  /** Reply — default: open the ask pop-up on this session. */
+  onReply?: () => void;
   /** ↗ — open the session's pane. */
   onOpen?: () => void;
   /** Called after a "No…" (kind "no") answer went through: the agent now
@@ -272,6 +286,48 @@ export function AnswerStripView({ state, rootRef, variant, hint, onPick, onOpen,
   );
 }
 
+/** The strip for a question asked in plain words: the question and Reply
+ * (the ask pop-up, where it is answered by typing or by voice) — there is
+ * no key to press. */
+export function AskedInWordsView({
+  question,
+  variant,
+  onReply,
+  onOpen,
+}: {
+  question?: string;
+  variant: AnswerVariant;
+  onReply(): void;
+  onOpen?: () => void;
+}) {
+  const q = (question || "").trim();
+  return (
+    <div
+      className={"flock-answer fa-" + variant + " is-question"}
+      data-asking="question"
+      onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      <div className="fa-q" title={q || "It asked you a question in its reply"}>
+        {q || "It asked you a question in its reply"}
+      </div>
+      <div className="fa-box">
+        <div className="fa-btns">
+          <button type="button" className="fa-opt fa-reply primary" title="Answer it — type or say the reply" onClick={() => onReply()}>
+            Reply
+          </button>
+          {variant === "thread" && <span className="fa-sp" />}
+          {onOpen && (
+            <button type="button" className="fa-open ghost" title="Open its pane" onClick={() => onOpen()}>
+              {variant === "thread" ? "Open ↗" : "↗"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --- Keys -------------------------------------------------------------------
 
 /** Every mounted strip, by session: what `answerKey` presses through. */
@@ -289,15 +345,32 @@ export function answerKey(title: string, key: string): boolean {
 
 // --- Container --------------------------------------------------------------
 
-export function AnswerStrip({ title, activity, variant, onOpen, onRedirect, children, ref }: AnswerStripProps) {
+/** The strip's whole life — fetch while `waiting`, the answered latch and
+ * the re-checks, the resize re-read, the click — for any host that draws the
+ * dialog its own way (the strip below; the ask pop-up, AskDialog). `pick`
+ * presses option `key`; false when it can't right now. */
+export function useAnswerStrip(
+  title: string,
+  waiting: boolean,
+  opts: {
+    /** Re-run the load when this changes (the row's activity string). */
+    activity?: string;
+    /** After a "No…" answer went through. */
+    onRedirect?: () => void;
+    /** After any answer went through (or someone else's did): the key and
+     * the option's kind. */
+    onAnswered?: (key: string, kind: string) => void;
+  } = {}
+) {
+  const { activity = "", onRedirect, onAnswered } = opts;
   const [state, dispatch] = useReducer(stripReducer, STRIP_INITIAL);
   const live = useRef(state);
   live.current = state;
   // The newest callbacks, read at answer time (the answer outlives renders).
   const redirect = useRef(onRedirect);
   redirect.current = onRedirect;
-  const { data: instances } = useInstances();
-  const waiting = activity === "clarify";
+  const answeredCb = useRef(onAnswered);
+  answeredCb.current = onAnswered;
 
   // (Re)load whenever the session or its activity changes; anything else
   // clears the strip — including the "answered" latch, which is exactly what
@@ -379,10 +452,12 @@ export function AnswerStrip({ title, activity, variant, onOpen, onRedirect, chil
       if (out.kind === "answered") {
         dispatch({ type: "answered", dialog: out.dialog });
         if (opt.kind === "no") redirect.current?.();
+        answeredCb.current?.(key, opt.kind);
       } else if (out.kind === "already") {
         // Someone got there first (the bell's strip, the orchestrator):
         // the prompt has its answer — this one is answered too.
         dispatch({ type: "answered" });
+        answeredCb.current?.(key, "already");
       } else if (out.kind === "changed") {
         // Never re-send into a prompt nobody has read: show the new one.
         dispatch({
@@ -397,6 +472,22 @@ export function AnswerStrip({ title, activity, variant, onOpen, onRedirect, chil
     return true;
   };
 
+  /** Read the dialog again now (a 409 elsewhere said it changed). */
+  const reload = () => {
+    fetchDialog(title).then(
+      (dialog) => dispatch({ type: "loaded", dialog }),
+      () => {}
+    );
+  };
+  return { state, pick, root, reload };
+}
+
+export function AnswerStrip({ title, activity, variant, question, onOpen, onReply, onRedirect, children, ref }: AnswerStripProps) {
+  const { data: instances } = useInstances();
+  // A question in plain words waits on a reply, not a key: nothing to fetch.
+  const asksInWords = question !== undefined && activity !== "clarify";
+  const waiting = activity === "clarify";
+  const { state, pick, root } = useAnswerStrip(title, waiting, { activity, onRedirect });
   useImperativeHandle(ref, () => ({ answerKey: pick }));
   // The registry holds one stable handle per mount; it reads the newest
   // `pick` (and through it the newest state) at press time.
@@ -413,6 +504,16 @@ export function AnswerStrip({ title, activity, variant, onOpen, onRedirect, chil
     };
   }, [title]);
 
+  if (asksInWords) {
+    return (
+      <AskedInWordsView
+        question={question}
+        variant={variant}
+        onReply={onReply ?? (() => openAsk(title))}
+        onOpen={onOpen}
+      />
+    );
+  }
   if (!waiting) return null;
   let hint: string | undefined;
   if (variant === "bell") {

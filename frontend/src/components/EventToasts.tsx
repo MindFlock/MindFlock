@@ -22,6 +22,7 @@ import { toast, type ToastOpts } from "../lib/toast";
 import { messageToastText, type MessageEventData } from "../lib/agentMessages";
 import { runNote } from "../lib/runs";
 import { openThread } from "../lib/flockActions";
+import { openAsk } from "../lib/ask";
 import { ruleOn, runLookups } from "../state/runs";
 import { showGroup } from "../lib/showGroup";
 import { PEER_NEWS_EVENTS, PEER_SCREEN, isPeerSender, noteSasChanged, peerEventNote } from "../lib/peer";
@@ -72,6 +73,18 @@ function notifyOnce(session: string, state: string, msg: string, opts?: ToastOpt
 function namedSlot(session: string): string {
   const n = slotNumber(session);
   return (n ? "[" + n + "] " : "") + displayName(session);
+}
+
+/** A question's words in a toast: one line, short. */
+function clipSnippet(text: string, max = 120): string {
+  const t = text.replace(/\s+/g, " ").trim();
+  return t.length > max ? t.slice(0, max - 1).trimEnd() + "…" : t;
+}
+
+/** A Question toast's click: the session, and the ask pop-up on it. */
+function openAskFromToast(title: string) {
+  selectSession(title, { noKeyboard: true });
+  openAsk(title);
 }
 
 function instByTitle(title: string): Instance | null {
@@ -155,8 +168,11 @@ export function EventToasts() {
         if (env.new === "clarify" && inst) {
           const ss = deriveSessionState(inst, { activity: "clarify" });
           if (!ruleOn(notifyRuleFor(ss))) return;
-          notifyOnce(env.session, "clarify", attentionToast(namedSlot(env.session), ss, inst.last_turn), {
-            onClick: () => selectSession(env.session),
+          // The OS notification while the desktop app is in the background;
+          // its click opens the ask pop-up, like the toast's.
+          desktopNotify(env.event, { ...env.data, question: inst.asking?.text || "" }, env);
+          notifyOnce(env.session, "clarify", attentionToast(namedSlot(env.session), ss, inst.asking?.text || inst.last_turn), {
+            onClick: () => openAskFromToast(env.session),
           });
         } else if (env.new === "offline" && inst) {
           const ss = deriveSessionState(inst, { activity: "offline" });
@@ -166,6 +182,24 @@ export function EventToasts() {
             duration: 8000,
           });
         }
+      })
+    );
+    unsubs.push(
+      // Its reply ended with a question in plain words (lib/ask.ts): the same
+      // Question as a dialog, behind the same switch; the click opens the ask
+      // pop-up on it. One per reply (the server says it once).
+      ev.subscribe("session.question", (env) => {
+        refreshInstances();
+        updateTitleBadge();
+        if (isReplay(env) || !env.session) return;
+        const ss = deriveSessionState({ title: env.session, asking: { kind: "question", text: null, ts: 0, dialog_id: null, parsed: false, source: null } });
+        if (!ruleOn(notifyRuleFor(ss))) return;
+        desktopNotify(env.event, env.data, env);
+        const text = String(env.data?.text || "").trim();
+        notifyOnce(env.session, "question", attentionToast(namedSlot(env.session), ss, text ? clipSnippet(text) : null), {
+          onClick: () => openAskFromToast(env.session),
+          duration: 8000,
+        });
       })
     );
     unsubs.push(

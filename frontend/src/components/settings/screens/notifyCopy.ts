@@ -73,6 +73,21 @@ export function groupRules<T extends RuleLike>(
   return { groups, more };
 }
 
+/* --------------------------------------------------------------------------
+ * The ask pop-up (notifications.ask_popup, saved through the ntfy view like
+ * the fields there): a session asking you something — a dialog on its screen
+ * or a question at the end of its reply — opens a card in the middle of the
+ * screen (components/dialogs/AskDialog).
+ * ------------------------------------------------------------------------ */
+
+export const ASK_POPUP_LABEL = "Pop up a session's question in the middle of the screen";
+
+export const ASK_POPUP_HINT =
+  "When a session asks you something — a dialog, or a question at the end of its reply — answer it right there, typed or by voice. Later puts it off; the bell keeps it.";
+
+/** Under the "needs input" rule: what it covers now. */
+export const NEEDS_INPUT_EXTRA = "Also covers a question the agent asks in plain words at the end of its reply.";
+
 /** The plain one-liner under "Where alerts go" when nothing but the bell is
  * on — the reason the switches below seem to do nothing. */
 export const ONLY_BELL_HINT =

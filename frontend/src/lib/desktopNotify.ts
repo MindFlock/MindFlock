@@ -9,10 +9,19 @@
  * window and reports the notification's `target` back here, which opens the
  * right screen. In a plain browser there is no bridge and nothing happens —
  * the in-window toast and the bell already cover a tab that is open. Only
- * shown while the window isn't focused: a focused one has the toast. */
+ * shown while the window isn't focused: a focused one has the toast.
+ *
+ * A session asking you something — a dialog on its screen (activity →
+ * clarify) or a question in its reply (`session.question`) — gets one too,
+ * "[3] name needs you: Question" with the question as the body; its click
+ * (`session:<title>`) selects the session and opens the ask pop-up on it.
+ * The browser addon (static/addons/notify.js) leaves these to the shell. */
 
 import { baseName, PEER_SCREEN } from "./peer";
 import { openSettings } from "./openSettings";
+import { slotNumber, windowName } from "./windowName";
+import { selectSession } from "./sessionActions";
+import { openAsk } from "./ask";
 
 interface MfNotify {
   show(o: { title: string; body: string; target: string; version?: string }): Promise<unknown> | void;
@@ -25,14 +34,54 @@ function bridge(): MfNotify | null {
   return w.mfnotify && typeof w.mfnotify.show === "function" ? w.mfnotify : null;
 }
 
+/** The click target of a session's notification. */
+export const SESSION_TARGET = "session:";
+
+/** "[3] name" — the session's rail slot and name, as every notification
+ * leads (docs/web-ui.md). */
+function slotted(title: string): string {
+  const n = slotNumber(title);
+  return (n ? "[" + n + "] " : "") + windowName(title);
+}
+
+function clip(text: string, max = 200): string {
+  const t = text.replace(/\s+/g, " ").trim();
+  return t.length > max ? t.slice(0, max - 1).trimEnd() + "…" : t;
+}
+
 /** The notification for an event, or null when it doesn't get one. `target`
- * names the screen the click opens ("devices", "peer", "update"). */
+ * names the screen the click opens ("devices", "peer", "update", or
+ * "session:<title>"). `env`: the envelope's session and new value, for the
+ * session events. */
 export function desktopNoteFor(
   event: string,
-  data: Record<string, unknown> | null | undefined
+  data: Record<string, unknown> | null | undefined,
+  env?: { session?: string; new?: string | null }
 ): { title: string; body: string; target: string; version?: string } | null {
   const d = data || {};
   switch (event) {
+    case "session.activity_changed": {
+      // A dialog came up (the activity's other moves are not news here).
+      const title = String(env?.session || "");
+      if (env?.new !== "clarify" || !title) return null;
+      const text = String(d.question || d.text || "").trim();
+      return {
+        title: slotted(title) + " needs you: Question",
+        body: text ? clip(text) : "It's waiting on a dialog — answer it in MindFlock",
+        target: SESSION_TARGET + title,
+      };
+    }
+    case "session.question": {
+      // Its reply ended with a question in plain words.
+      const title = String(env?.session || d.title || "");
+      if (!title) return null;
+      const text = String(d.text || "").trim();
+      return {
+        title: slotted(title) + " needs you: Question",
+        body: text ? clip(text) : "It asked you a question in its reply",
+        target: SESSION_TARGET + title,
+      };
+    }
     case "device.join_requested": {
       const host = String(d.host || d.device || "A computer");
       const via = d.via ? " (asked " + String(d.via_host || d.via) + ")" : "";
@@ -99,15 +148,29 @@ export function desktopNoteFor(
   }
 }
 
+/** One notification per session per SESSION_NOTE_GAP_MS: a dialog and the
+ * question that follows it, or a redraw re-announcing it, is one ping. */
+export const SESSION_NOTE_GAP_MS = 30_000;
+const sessionNotedAt = new Map<string, number>();
+
 /** Raise the OS notification for an event — only in the desktop app, and
  * only while its window isn't the one you're looking at. Returns whether
  * one was shown. */
-export function desktopNotify(event: string, data: Record<string, unknown> | null | undefined): boolean {
+export function desktopNotify(
+  event: string,
+  data: Record<string, unknown> | null | undefined,
+  env?: { session?: string; new?: string | null }
+): boolean {
   const b = bridge();
   if (!b) return false;
   if (typeof document !== "undefined" && document.hasFocus()) return false;
-  const n = desktopNoteFor(event, data);
+  const n = desktopNoteFor(event, data, env);
   if (!n) return false;
+  if (n.target.startsWith(SESSION_TARGET)) {
+    const now = Date.now();
+    if (now - (sessionNotedAt.get(n.target) || 0) < SESSION_NOTE_GAP_MS) return false;
+    sessionNotedAt.set(n.target, now);
+  }
   try {
     void b.show(n);
     return true;
@@ -118,7 +181,12 @@ export function desktopNotify(event: string, data: Record<string, unknown> | nul
 
 /** Open what a clicked notification is about. */
 export function openNotifyTarget(target: string): void {
-  if (target === "devices") openSettings("devices");
+  if (target.startsWith(SESSION_TARGET)) {
+    const title = target.slice(SESSION_TARGET.length);
+    if (!title) return;
+    selectSession(title, { noKeyboard: true });
+    openAsk(title);
+  } else if (target === "devices") openSettings("devices");
   else if (target === "peer") openSettings(PEER_SCREEN);
   else if (target === "update") openSettings("advanced");
 }

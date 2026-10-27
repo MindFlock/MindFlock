@@ -135,7 +135,8 @@ describe("the answer strip", () => {
     expect(
       has(
         fn("lib/flockActions.ts", "answerDialog"),
-        'instApi(title, "/answer", { json: { keys: [key], dialog_id: dialogId, by: "user" } })'
+        // The option's own tmux keys when it carries them, else its key.
+        'instApi(title, "/answer", { json: { keys: keys?.length ? keys : [key], dialog_id: dialogId, by: "user" } })'
       )
     ).toBe(true);
     // A 409 "the prompt changed" refetches instead of answering blind.

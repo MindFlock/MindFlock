@@ -1779,7 +1779,8 @@ describe("hands-free answering (Read replies aloud)", () => {
 
   it("the mic wires it: a clarify reading reads the dialog, a reply's question opens the mic, and the hint names it", () => {
     const MIC = code("components/TopBarMic.tsx");
-    expect(MIC).toContain('else if (env.new === "clarify") void hands.current?.dialog(env.session)');
+    // With the ask pop-up on, the pop-up reads it out instead (askPopup.test).
+    expect(MIC).toContain('else if (env.new === "clarify" && !askPopupOn()) void hands.current?.dialog(env.session)');
     expect(MIC).toContain("if (ask) void hands.current?.question(title, ask)");
     expect(MIC).toContain('pending: (title) => liveActivity(title) === "clarify" || questions.has(title)');
     expect(MIC).toContain("runVoiceCommand(r, text, {");

@@ -27,7 +27,10 @@ function normOption(v: unknown): DialogOption | null {
   const key = str(o.key).trim();
   // A key is what /answer sends; an option without one can't be pressed.
   if (!/^[1-9]$/.test(key)) return null;
-  return { key, label: str(o.label).trim() || key, kind: str(o.kind, "other") };
+  const keys = Array.isArray(o.keys) ? o.keys.map((k) => str(k).trim()).filter(Boolean) : [];
+  const opt: DialogOption = { key, label: str(o.label).trim() || key, kind: str(o.kind, "other") };
+  if (keys.length) opt.keys = keys;
+  return opt;
 }
 
 /** Normalize a /dialog body. An unparsed dialog keeps its question but never
@@ -37,7 +40,18 @@ export function normDialog(v: unknown): Dialog {
   const parsed = o.parsed === true;
   const command = o.command == null ? null : str(o.command).trim() || null;
   const options = parsed && Array.isArray(o.options) ? o.options.map(normOption).filter((x): x is DialogOption => !!x) : [];
-  return { id: str(o.id), parsed: parsed && options.length > 0, question: str(o.question).trim(), command, options };
+  const d: Dialog = { id: str(o.id), parsed: parsed && options.length > 0, question: str(o.question).trim(), command, options };
+  // A prose question (lib/ask.ts) rides the same route: no options, ever.
+  if (o.kind === "question" || o.kind === "dialog") d.kind = o.kind;
+  if (d.kind === "question") {
+    d.parsed = false;
+    d.options = [];
+  }
+  const heading = str(o.heading).trim();
+  if (heading) d.heading = heading;
+  const source = str(o.source).trim();
+  if (source) d.source = source;
+  return d;
 }
 
 /** The dialog `title`'s agent is waiting on, or null when it isn't on one.
@@ -127,7 +141,7 @@ export async function answerFresh(
   }
   for (let attempt = 0; ; attempt++) {
     try {
-      await answerDialog(title, key, target.id);
+      await answerDialog(title, key, target.id, target.options.find((o) => o.key === key)?.keys);
       return { kind: "answered", dialog: target };
     } catch (err) {
       if (isDialogAnswered(err)) return { kind: "already" };
@@ -139,11 +153,12 @@ export async function answerFresh(
   }
 }
 
-/** Press `key` in the dialog `dialogId` names, as the user. The server
+/** Press `key` in the dialog `dialogId` names, as the user — or the
+ * option's own `keys` when it carries them (an arrow-key picker). The server
  * answers 409 `{dialog_changed: true}` when the prompt on screen is no longer
  * that one — the caller refetches instead of answering a question nobody saw. */
-export function answerDialog(title: string, key: string, dialogId: string) {
-  return instApi(title, "/answer", { json: { keys: [key], dialog_id: dialogId, by: "user" } });
+export function answerDialog(title: string, key: string, dialogId: string, keys?: string[]) {
+  return instApi(title, "/answer", { json: { keys: keys?.length ? keys : [key], dialog_id: dialogId, by: "user" } });
 }
 
 /** Did an /answer fail because that very prompt was just answered (a second

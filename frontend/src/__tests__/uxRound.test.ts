@@ -289,7 +289,9 @@ describe("queue panel, hidden sessions, keyed sidebar, polling", () => {
 
   it("binds a terminal's onData once, writing to the CURRENT socket", () => {
     expect(
-      has(TERMINALS, "term.onData((data) => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(data); });")
+      // (It also notes when you last typed there — the ask pop-up's "you are
+      // already answering it" rule, lib/ask.ts.)
+      has(TERMINALS, "term.onData((data) => { typedAt.set(title, Date.now()); if (ws && ws.readyState === WebSocket.OPEN) ws.send(data); });")
     ).toBe(true);
   });
 

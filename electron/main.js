@@ -2567,9 +2567,35 @@ ipcMain.handle('win:is-fullscreen', () => !!(win && win.isFullScreen()))
 // asks only while its window isn't focused, for the few things that need the
 // person while MindFlock is minimized: a computer asking to join their
 // devices (it expires in ten minutes), someone arriving on a peer link, an
-// update. Clicking one brings the window back and tells the page which
-// screen to open (`target`: "devices" | "peer" | "update").
+// update, a session asking you something. Clicking one brings the window back
+// and tells the page which screen to open (`target`: "devices" | "peer" |
+// "update" | "session:<title>" — that session's ask pop-up).
 const NOTIFY_TARGETS = new Set(['devices', 'peer', 'update'])
+const SESSION_TARGET = /^session:[^\n]{1,512}$/
+
+// A notify target the page may name: one of the screens, or a session.
+function notifyTarget(t) {
+  const s = typeof t === 'string' ? t : ''
+  return NOTIFY_TARGETS.has(s) || SESSION_TARGET.test(s) ? s : ''
+}
+
+// A session asking: the taskbar button flashes (Windows / Linux) or the dock
+// icon bounces once (macOS) until the window is looked at.
+function drawAttention() {
+  if (!win || win.isDestroyed() || win.isFocused()) return
+  try {
+    if (process.platform === 'darwin') {
+      if (app.dock) app.dock.bounce('informational')
+    } else {
+      win.flashFrame(true)
+      win.once('focus', () => {
+        if (win && !win.isDestroyed()) win.flashFrame(false)
+      })
+    }
+  } catch (_) {
+    /* a platform without either: the notification alone */
+  }
+}
 // Kept referenced until closed: a Notification that is garbage-collected
 // stops delivering its click on some platforms.
 const liveNotifications = new Set()
@@ -2600,9 +2626,10 @@ function showNotification(title, body, target) {
 
 ipcMain.handle('notify:show', (_e, o) => {
   const opts = o && typeof o === 'object' ? o : {}
-  const target = NOTIFY_TARGETS.has(opts.target) ? opts.target : ''
+  const target = notifyTarget(opts.target)
   // The page only asks while unfocused; re-check here (it can race a focus).
   if (win && !win.isDestroyed() && win.isFocused()) return { ok: false }
+  if (target.startsWith('session:')) drawAttention()
   // An update (the engine's update.available, from the page): one notice per
   // release — none when this shell already announced that version (its own
   // update toast, or its own notification below).

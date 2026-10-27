@@ -153,7 +153,10 @@ export type DialogName =
   | "extension"
   // A peer's shared session, watched from here (PeerSessionViewer); the
   // link id rides in dialogTarget.
-  | "peer-session";
+  | "peer-session"
+  // "A session is asking you something" (AskDialog): opens by itself when a
+  // session asks; dialogTarget = the asking session's title.
+  | "ask";
 
 interface UiState {
   /** Logically focused session title (keyboard target, MRU head). */

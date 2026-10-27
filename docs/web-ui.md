@@ -1974,7 +1974,10 @@ of row offers:
 
 - **An agent's question.** Every session on a dialog gets the same answer
   strip its rail row has — the prompt's own buttons, **↗** to open the pane —
-  not only an orchestrator's workers.
+  not only an orchestrator's workers. A question the agent asked **in plain
+  words** at the end of its reply (the row's `asking`, or an outbox `question`
+  row) shows the question and **Reply**, which opens the
+  [ask pop-up](#when-a-session-asks-you-something) — there is no key to press.
 - **An ask-first approval.** The exact commit message and PR title, plus where
   its fast-track stops, *before* anything leaves the machine: **Diff** /
   **Commit** (or **Open the PR**), via `POST /api/instances/{title}/ship-now`. A
@@ -2225,6 +2228,77 @@ session it was reporting on.** The event that triggered it has already been
 emitted, the websocket clients and shell hooks have already seen it, and the
 browser channel fires independently. A wrong token or an unreachable ntfy server
 costs you the phone alert and nothing else.
+
+### When a session asks you something
+
+A session asks in one of two ways, and both read as the same **Question** —
+its chip, its toast, its bell row and the tab badge: a **dialog** on its
+screen (a permission prompt, a plan approval, a choice — activity `clarify`),
+or a reply that **ended with a question in plain words** that nobody has
+answered yet (the row's `asking.kind: "question"`, `session.question`). A
+question in words keeps the session in the bell instead of Idle; the 20-minute
+*Idle* rule is for sessions that are truly idle.
+
+**The pop-up.** When a session starts asking, a small card opens in the
+**middle of the screen** by itself (`AskDialog`): the session's rail slot and
+name, the kind (*Permission*, *Plan approval* or *Question*), the question and
+the command it wants to run in a monospace box. Then:
+
+- a dialog MindFlock could read: **its own options**, the answer strip's
+  buttons with full labels — **1–9** pick by number, **Y / N / A** pick yes /
+  no / always, **Enter** presses the highlighted one, and *always* is never the
+  highlighted one. The answer goes through the same checks as the strip (the
+  dialog's id; a changed prompt is shown instead of answered; *Already
+  answered* when someone beat you to it). **No…** puts the keyboard in the
+  session's pane, where the agent waits to hear what to do instead;
+- a dialog it couldn't read: the question and **Open the pane ↗** — the prompt
+  needs the terminal;
+- a question in words: an **answer box** — **Enter** sends it
+  (`POST /api/instances/{title}/send {text, enter: true}`), **Shift+Enter** is a
+  new line — and **Open the pane ↗**. If a dialog came up meanwhile the send is
+  refused and the pop-up shows the dialog.
+
+**Later** (**Esc**) puts it off: a question is dismissed on the server
+(`POST …/asking/dismiss`), a dialog is snoozed until its prompt changes; the
+bell keeps either. After an answer the card steps to the next session still
+asking, or closes. Several asking at once share **one** card with a **1 of N**
+stepper (‹ ›), the longest-waiting first; `Ctrl+K N` still walks everything
+that needs you.
+
+It does **not** open by itself for an ask you already answered, put off or
+opened in its pane; for the focused session when you typed into it in the last
+10 seconds (you are already answering it there); or over another dialog (it
+waits for that one to close). It waits for the keyboard to be quiet for a
+moment first, so a word you are typing elsewhere isn't cut in half. The bell's
+**Reply**, a Question toast and the OS notification open it on demand — even
+for one you put off.
+
+**Answering by voice.** The card has a mic button with the Talk hotkey beside
+it (*Hotkey: Ctrl+T*). While the card is up, that button, the hotkey and the
+top-bar mic all listen for **this** session's answer: for a dialog, say "yes",
+"no", "always" or a number (pressed only with *Approve dialogs by voice* on in
+Settings → Voice — otherwise it says "Approving by voice is off"); for a
+question, the words are typed into the answer box as you speak, **submit**
+sends them, **disregard** clears what was said, **over** stops and leaves the
+text. With *Read replies aloud* on, the card reads the ask out as it opens —
+*"sitecheck-bot7: Allow git push? Say yes, no, or always."* — and listens for
+12 seconds, with one retry; nothing is ever spoken with it off. The card is the
+one hands-free entry: the top-bar mic no longer reads dialogs out by itself
+while the pop-up is on, so nothing is read twice.
+
+**When MindFlock is in the background.** The desktop app raises an OS
+notification — *[3] sitecheck-bot7 needs you: Question*, with the question as
+the body — at most one per session per 30 seconds, and flashes the taskbar
+button (bounces the dock icon on macOS). Clicking it brings the window
+forward, selects the session and opens the pop-up on it. The browser
+notification addon leaves these two to the desktop app, so nothing pops twice.
+In the window, the **Question** toast does the same on click. Both follow the
+*needs input* rule.
+
+**The switch.** Settings → Notifications → *Pop up a session's question in the
+middle of the screen* (`notifications.ask_popup`, on by default, saved through
+the notification settings view). Off, asks stay in the bell, the rail and the
+toasts.
 
 ## Diff → instruction
 
@@ -5804,9 +5878,14 @@ question the session asked as a prompt. A dictation's first phrase is offered
 to the voice router first ("switch to …", "focus three", "next session", "new
 session …", "what needs me", "what sessions do I have", "session three yes"),
 and the reply is read aloud only while *Read replies aloud* is on (off by
-default; right-click the mic) — with it on, a dialog on the focused session or
-a question in a reply is read out and the mic listens 12 s for the answer —
-see [The mic](#layout) in the top bar section. Words said while a text box has focus are typed there instead and
+default; right-click the mic) — with it on, a dialog or a question in a reply
+is read out and the mic listens 12 s for the answer. With the
+[ask pop-up](#when-a-session-asks-you-something) on (the default), the pop-up
+does that for any session that asks, focused or not, and while it is up the
+mic, the Talk hotkey and the pop-up's own mic button answer **that** session —
+a dialog by "yes" / "no" / "always" / a number, a question by dictating into
+its answer box ("submit" sends it); with the pop-up off, only the focused
+session's dialog is read out — see [The mic](#layout) in the top bar section. Words said while a text box has focus are typed there instead and
 never submitted. In the desktop app the words and the voice go through the
 server's engines whenever one is ready (Settings → Voice) — the app's own Web
 Speech can't recognise — and in a browser tab through the browser's unless
