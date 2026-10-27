@@ -8,8 +8,9 @@
  * the page until a candidate comes in:
  *  - {@link LoneUtterance}: speech that starts after quiet, lasts between
  *    {@link WAKE_MIN_MS} and {@link WAKE_MAX_MS} (a word or two — longer is a
- *    sentence, never a wake), and is followed by {@link WAKE_QUIET_MS} of
- *    quiet. Pure: a level sequence in, candidate windows out.
+ *    sentence, never a wake), after {@link WAKE_QUIET_MS} of quiet and
+ *    followed by {@link WAKE_TAIL_MS} of it — the clip goes the block that
+ *    tail is reached. Pure: a level sequence in, candidate windows out.
  *  - {@link wakeGate}: a candidate is checked only while the page is visible,
  *    no dictation records, the app is not talking (nor stopped less than
  *    {@link WAKE_AFTER_SPEECH_MS} before the clip began — its own voice must
@@ -18,8 +19,11 @@
  *  - the check: the clip (with {@link WAKE_LEAD_MS} of lead-in) goes to
  *    POST /api/voice/wake, which recognises it with the word as the hint and
  *    says whether it is the word alone (backend/web/core/wake.py). `wake:
- *    true` → {@link chime} and listening; false → nothing; 409 (no
- *    recognizer ready) → standby stops and says why.
+ *    true` → listening at once (the microphone is already open) with the
+ *    {@link chime} at the same moment — its audio skipped from the
+ *    recording; false → nothing; 409 (no recognizer ready) → standby stops
+ *    and says why. How long it took, from the word's end to listening, is
+ *    {@link wakeLine} in the mic's diagnostics.
  *
  * {@link WakeStandby} is the lifecycle around that: it runs while wanted, the
  * page is visible and nothing records; it holds the microphone while it runs
@@ -31,16 +35,20 @@ import { apiRaw } from "../api/client";
 import { startWavRecording, type WavRecorderOptions, type WavRecording } from "./wavRecorder";
 import { isLoud, noiseFloor, type MicKeeper } from "./voiceMic";
 
-/** Quiet after the utterance that ends it (and before it, that starts one):
- * the gap around a word said on its own; a breath inside a sentence is
- * shorter. */
+/** Quiet before an utterance that starts one: the gap before a word said on
+ * its own; a breath inside a sentence is shorter. */
 export const WAKE_QUIET_MS = 350;
+/** Quiet after it that ends it — shorter than the lead, so the check goes
+ * as soon as the word is plainly over (a sentence that carries on is the
+ * server's to reject: it hears the word not alone, or the next onset comes
+ * without {@link WAKE_QUIET_MS} before it). */
+export const WAKE_TAIL_MS = 200;
 /** Shorter speech is a click, a cough, a "hm" — not two syllables. */
 export const WAKE_MIN_MS = 250;
 /** Longer speech is a sentence: never a wake, however it starts. */
 export const WAKE_MAX_MS = 1600;
 /** Audio before the onset sent with the clip (the first consonant's attack). */
-export const WAKE_LEAD_MS = 150;
+export const WAKE_LEAD_MS = 100;
 /** At most one check this often… */
 export const WAKE_CHECK_GAP_MS = 1500;
 /** …and none for a clip that began less than this after the app stopped talking. */
@@ -59,10 +67,12 @@ const CLIP_RATE = 16_000;
 
 /** One candidate: `loudMs` from the onset to the last loud block, `clipMs`
  * the audio to send — the lead-in, the utterance and its quiet tail (the
- * last `clipMs` of what was heard, ending now). */
+ * last `clipMs` of what was heard, ending now); `tailMs` how long ago the
+ * sound ended (the wake latency's start). */
 export interface WakeCandidate {
   loudMs: number;
   clipMs: number;
+  tailMs: number;
 }
 
 /** A stretch of speech this long lets the noise floor learn again (a fan
@@ -116,13 +126,13 @@ export class LoneUtterance {
       return null;
     }
     const gap = this.t - this.lastLoud;
-    if (gap < WAKE_QUIET_MS) return null;
+    if (gap < WAKE_TAIL_MS) return null;
     const loudMs = this.lastLoud - this.start;
     const clipMs = WAKE_LEAD_MS + (this.t - this.start);
     const long = this.long;
     this.start = -1;
     this.quiet = gap;
-    return long || loudMs < WAKE_MIN_MS ? null : { loudMs, clipMs };
+    return long || loudMs < WAKE_MIN_MS ? null : { loudMs, clipMs, tailMs: gap };
   }
 }
 
@@ -230,8 +240,9 @@ export interface StandbyDeps {
   speaking(): boolean;
   /** A dictation is live (it has the microphone). */
   recording(): boolean;
-  /** A wake: the chime, the caption, listening. */
-  onWake(): void;
+  /** A wake: listening and the chime. `soundEnd`: when the word ended
+   * ({@link now}'s clock) — the wake latency is measured from it. */
+  onWake(soundEnd: number): void;
   /** Each block's RMS while standby runs (the button's ring). */
   onLevel?(rms: number): void;
   /** Standby turned on/off or stopped with a line (also {@link wakeStatus}). */
@@ -424,10 +435,10 @@ export class WakeStandby {
     });
     if (gate !== "ok") return;
     this.lastCheck = now;
-    void this.check(g, rec, cand);
+    void this.check(g, rec, cand, now - cand.tailMs);
   }
 
-  private async check(g: number, rec: WavRecording, cand: WakeCandidate): Promise<void> {
+  private async check(g: number, rec: WavRecording, cand: WakeCandidate, soundEnd: number): Promise<void> {
     this.inFlight = true;
     let v: WakeVerdict | null = null;
     try {
@@ -440,7 +451,7 @@ export class WakeStandby {
     if (v.status === 409) return this.stop(WAKE_NO_RECOGNIZER_LINE);
     // A wake while something else started recording meanwhile: that one wins.
     if (v.wake && !this.deps.recording()) {
-      this.deps.onWake();
+      this.deps.onWake(soundEnd);
       this.sync();
     }
   }
@@ -458,6 +469,12 @@ export class WakeStandby {
       this.deps.mic.done();
     }
   }
+}
+
+/** The diagnostics' wake latency: the word's end to listening — "wake 0.6 s"
+ * ("" before one). */
+export function wakeLine(ms: number | null): string {
+  return ms != null && ms >= 0 ? "wake " + (ms / 1000).toFixed(1) + " s" : "";
 }
 
 /** The wake's chime: two short rising tones (~{@link CHIME_MS}) through the

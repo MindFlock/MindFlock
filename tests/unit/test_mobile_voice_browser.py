@@ -12,9 +12,12 @@ asking: opens by itself, options → /answer, prose → /send, in_dialog, Later,
 the stepper, the mic on both kinds, notifications only while hidden, the
 title count, the push's deep link); and the fast start (the stream opened
 at the tap, no quiet uploaded, the first chunk on the first word, the warm
-microphone reused and given back after its grace, "Hearing you…" /
-"Listening…", the ring's level, the greyed partial, one tick per phrase).
-Every scenario prints one
+microphone reused and given back after its grace, the still ring's
+three steps, one tick per phrase); the strip's one word (never the words
+heard or the line said); the accurate final typed over the phrase; the
+wake word's immediate start and its measured latency; and the server's
+voice sentence by sentence (the first sound after sentence 1's fetch, one
+ahead, back to back, cancel drops the rest). Every scenario prints one
 ``PASS``/``FAIL`` line; this test runs the script and fails on any ``FAIL``.
 
 Skipped — never failed — where the harness cannot run: no ``node``, no

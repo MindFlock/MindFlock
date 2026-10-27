@@ -105,14 +105,16 @@
          until it has been tapped once. -->
     <div id="voice-strip" class="hidden" role="status" aria-live="polite">
       <div id="voice-strip-row">
-        <span id="voice-state"></span>
+        <!-- One word and nothing else: Listening… / Speaking… / Quiet.
+             (mobile.js voiceStripWord) — never the words heard or said. -->
         <span id="voice-caption"></span>
         <button type="button" id="voice-hush" class="hidden">Stop talking</button>
         <button type="button" id="voice-cancel" class="hidden">Cancel</button>
         <button type="button" id="voice-gear" aria-label="Voice settings">⚙</button>
       </div>
       <!-- The level meter while the server adapter records (the mic's ring
-           follows the same level); mobile.js voiceLevel. -->
+           follows the same level); mobile.js voiceLevel. It lies along the
+           strip's top edge: showing it never makes the strip taller. -->
       <div id="voice-level" class="hidden" aria-hidden="true"><div id="voice-level-bar"></div></div>
       <button type="button" id="voice-hear" class="hidden"></button>
       <div id="voice-error" class="hidden" aria-live="polite"></div>

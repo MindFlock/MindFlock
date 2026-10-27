@@ -119,7 +119,7 @@ class TestCommit:
         st = ss.Stream(fake)
         st.feed(_secs(1))
         st.feed(_secs(1))
-        assert st.finish() == "how are you?"
+        assert st.finish() == {"committed": "how are you?", "partial": ""}
         assert st.text == "Hello world how are you?"
         assert st.held_seconds == 0
 
@@ -143,7 +143,7 @@ class TestCommit:
         fake = Script()
         st = ss.Stream(fake)
         assert st.feed(array("f")) == ("", "")
-        assert st.finish() == ""
+        assert st.finish() == {"committed": "", "partial": ""}
         assert fake.calls == []
 
     def test_a_failed_pass_keeps_the_chunk(self):
@@ -254,7 +254,7 @@ class TestWindow:
         st = ss.Stream(fake)
         with pytest.raises(speech.SpeechError):
             st.feed(_secs(9))
-        assert st.finish() == "late"
+        assert st.finish()["committed"] == "late"
         assert fake.calls[1][0] == 8 * RATE
 
 
@@ -324,6 +324,157 @@ class TestDecodeWav:
             ss.decode_wav(b"\x1aE\xdf\xa3webm")
         with pytest.raises(ValueError):
             ss.decode_wav(b"")
+
+
+class Accurate:
+    """An accurate pass that answers ``text`` (or raises it, or waits for
+    ``gate``) and records the audio lengths it was given."""
+
+    def __init__(self, text="", gate=None):
+        self.text, self.gate = text, gate
+        self.calls: list = []
+
+    def __call__(self, audio):
+        self.calls.append(len(audio))
+        if self.gate is not None:
+            self.gate.wait(5)
+        if isinstance(self.text, BaseException):
+            raise self.text
+        return self.text
+
+
+def _spoken(fast, accurate, chunks=2, secs=1.0):
+    """A stream that heard ``chunks`` loud chunks: the fast tier commits
+    ``fast`` (two agreeing passes, then the flush)."""
+    st = ss.Stream(Script(*([_words(fast)] * (chunks + 1))), accurate)
+    for _ in range(chunks):
+        st.feed(_secs(secs))
+    return st
+
+
+class TestFinal:
+    """The second tier: the accurate pass over the whole phrase at the end."""
+
+    def test_finish_returns_the_accurate_text(self):
+        acc = Accurate(" run the tests ")
+        st = _spoken("run the tick", acc)
+        out = st.finish()
+        assert out["committed"] == "" and out["partial"] == ""
+        assert out["final"] == "run the tests"
+        assert out["same"] is False
+        assert isinstance(out["final_ms"], int) and out["final_ms"] >= 0
+        assert set(out) == {"committed", "partial", "final", "final_ms", "same"}
+        # The whole phrase, not the pruned window.
+        assert acc.calls == [2 * RATE]
+        assert st.final_ms == out["final_ms"] and st.phrase_seconds == 0
+
+    def test_the_phrase_outlives_the_window(self):
+        acc = Accurate("all of it")
+        st = _spoken("a b c", acc, chunks=12)
+        assert st.held_seconds <= ss.WINDOW_SECONDS
+        assert st.phrase_seconds == 12
+        st.finish()
+        assert acc.calls == [12 * RATE]
+
+    def test_same_when_only_case_and_punctuation_differ(self):
+        out = _spoken("hello world", Accurate("Hello, world.")).finish()
+        assert out["final"] == "Hello, world." and out["same"] is True
+
+    @pytest.mark.parametrize(
+        "a,b,same",
+        [
+            ("Hello, world.", "hello world", True),
+            ("  run   the tests ", "Run the tests!", True),
+            ("don't stop", "Dont stop", True),
+            ("run the tests", "run the tick", False),
+            ("one two", "one two three", False),
+            ("", "", True),
+        ],
+    )
+    def test_same_text(self, a, b, same):
+        assert ss.same_text(a, b) is same
+
+    def test_a_failed_accurate_pass_leaves_the_fast_text(self, caplog):
+        st = _spoken("hello there", Accurate(speech.SpeechError("boom")))
+        with caplog.at_level("WARNING", logger=ss.__name__):
+            assert st.finish() == {"committed": "", "partial": ""}
+        assert "accurate pass failed (boom)" in caplog.text
+        assert st.text == "hello there"
+
+    def test_an_accurate_pass_that_hears_nothing_leaves_the_fast_text(self):
+        assert _spoken("hello", Accurate("  ")).finish() == {
+            "committed": "",
+            "partial": "",
+        }
+
+    def test_the_timeout_leaves_the_fast_text(self, monkeypatch, caplog):
+        import threading
+
+        monkeypatch.setattr(ss, "FINAL_TIMEOUT_S", 0.05)
+        gate = threading.Event()
+        acc = Accurate("too late", gate=gate)
+        st = _spoken("hello there", acc)
+        with caplog.at_level("WARNING", logger=ss.__name__):
+            out = st.finish()
+        gate.set()
+        assert out == {"committed": "", "partial": ""}
+        assert caplog.text.count("took over 0.1s") == 1
+        assert acc.calls == [2 * RATE]  # it ran; its late result is dropped
+
+    def test_a_short_phrase_skips_the_accurate_pass(self):
+        acc = Accurate("hi")
+        st = ss.Stream(Script(_words("hi"), _words("hi")), acc)
+        st.feed(_secs(0.5))
+        assert st.voiced_s == 0.5 < ss.FINAL_MIN_SECONDS
+        assert st.finish() == {"committed": "hi", "partial": ""}
+        assert acc.calls == []
+
+    def test_silence_does_not_count_as_speech(self):
+        acc = Accurate("hi")
+        st = ss.Stream(Script(_words("hi"), _words("hi"), []), acc)
+        st.feed(_secs(0.4))
+        st.feed(_secs(3, level=0.0))  # 3.4 s of audio, 0.4 s of it speech
+        assert st.voiced_s == pytest.approx(0.4)
+        st.finish()
+        assert acc.calls == []
+
+    def test_speech_is_counted_in_frames(self):
+        chunk = array("f", [0.0] * RATE)
+        chunk[: RATE // 4] = array("f", [0.1] * (RATE // 4))  # 250 ms loud
+        assert ss._voiced(chunk) == pytest.approx(0.3)  # three 100 ms frames
+        assert ss._voiced(array("f")) == 0
+
+    def test_the_phrase_buffer_is_capped(self, monkeypatch, caplog):
+        monkeypatch.setattr(ss, "PHRASE_MAX_SECONDS", 3.0)
+        acc = Accurate("never")
+        st = ss.Stream(Script(*([[]] * 5)), acc)
+        with caplog.at_level("INFO", logger=ss.__name__):
+            for _ in range(4):
+                st.feed(_secs(1))
+        assert st.phrase_seconds == 3.0 and st.phrase_trimmed is True
+        assert caplog.text.count("phrase over 3s") == 1  # noted once
+        assert st.finish() == {"committed": "", "partial": ""}
+        assert acc.calls == []  # it would not cover the typed phrase
+
+    def test_without_an_accurate_pass_no_phrase_is_kept(self):
+        st = ss.Stream(Script([], []))
+        st.feed(_secs(2))
+        assert st.phrase_seconds == 0
+        assert st.finish() == {"committed": "", "partial": ""}
+
+    def test_a_failed_fast_flush_still_raises(self):
+        acc = Accurate("x")
+        st = ss.Stream(Script([], speech.SpeechError("boom")), acc)
+        st.feed(_secs(1))
+        with pytest.raises(speech.SpeechError):
+            st.finish()
+
+    def test_open_stream_passes_the_accurate_pass_on(self):
+        acc = Accurate("ok then")
+        sid = ss.open_stream(Script(*([_words("ok")] * 3)), acc)
+        stream = ss.get_stream(sid)
+        stream.feed(_secs(1))
+        assert ss.close_stream(sid).finish()["final"] == "ok then"
 
 
 class TestRegistry:

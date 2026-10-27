@@ -1857,6 +1857,11 @@ class VoiceSettings:
       English, ``base`` for any other language — about five times faster
       than the one-shot ``stt_model`` (``small``), which a phrase sent whole
       still uses.
+    * ``stt_final`` — the model the ACCURATE pass at the end of each live
+      phrase runs (``POST …/stream/{id}/end`` → ``final``): ``""`` = the
+      one-shot ``stt_model``, ``"off"`` = no accurate pass (speed only), any
+      other value = that faster-whisper model. The live words come from the
+      fast model and are corrected once to this pass's text.
     * ``stt_api_key`` / ``tts_api_key`` — SECRETS (masked on read, keep-on-empty
       on write by the settings addon).
 
@@ -1872,6 +1877,7 @@ class VoiceSettings:
     stt_api_key: str = ""  # SECRET
     stt_model: str = ""
     stt_stream_model: str = ""
+    stt_final: str = ""
     tts_backend: str = ""
     tts_url: str = ""
     tts_api_key: str = ""  # SECRET
@@ -1884,6 +1890,7 @@ class VoiceSettings:
         "stt_api_key",
         "stt_model",
         "stt_stream_model",
+        "stt_final",
         "tts_backend",
         "tts_url",
         "tts_api_key",

@@ -40,6 +40,22 @@ def _set(**voice):
     S.invalidate()
 
 
+class _WithFinal:
+    """The voice settings with ``stt_final`` — read with a default by the
+    code, so it works before the settings model has the field."""
+
+    def __init__(self, voice, final):
+        self._voice, self.stt_final = voice, final
+
+    def __getattr__(self, name):
+        return getattr(self._voice, name)
+
+
+def _set_final(monkeypatch, value):
+    real = speech._voice
+    monkeypatch.setattr(speech, "_voice", lambda: _WithFinal(real(), value))
+
+
 class _Http:
     """A recording stand-in for ``speech._http``."""
 
@@ -357,6 +373,38 @@ class TestLocalSTT:
         assert len(whisper.loads) == 1  # cached
         assert whisper.calls[1][1]["language"] is None
 
+    def test_the_wake_clip_uses_the_fast_model(self, whisper):
+        stt = speech.LocalSTT()
+        assert stt.wake_transcribe(b"RIFF", "audio/wav", "en-US", "MindFlock") == (
+            "Hello there."
+        )
+        assert whisper.loads[0][0] == "base.en"
+        assert whisper.calls[0][1] == {
+            "language": "en",
+            "beam_size": 1,
+            "vad_filter": False,
+            "initial_prompt": "MindFlock",
+        }
+        path = whisper.seen_paths[0][0]
+        assert path.endswith(".wav") and not os.path.exists(path)
+        stt.wake_transcribe(b"RIFF", "audio/wav", "de", "MindFlock")
+        assert whisper.loads[1][0] == "base"  # the stream model for German
+        # A phrase sent whole keeps the accurate model.
+        stt.transcribe(b"RIFF", "audio/wav", "en")
+        assert whisper.loads[2][0] == "small"
+        assert whisper.calls[2][1]["beam_size"] == 5
+
+    def test_the_base_wake_path_is_transcribe(self):
+        seen: list = []
+
+        class _B(speech.Backend):
+            def transcribe(self, audio, mime, lang="", prompt=""):
+                seen.append((audio, mime, lang, prompt))
+                return "ok"
+
+        assert _B().wake_transcribe(b"a", "audio/wav", "en", "MindFlock") == "ok"
+        assert seen == [(b"a", "audio/wav", "en", "MindFlock")]
+
     def test_configured_model_size(self, whisper):
         _set(stt_model="medium")
         speech.LocalSTT().transcribe(b"x", "audio/mp4", "")
@@ -518,6 +566,112 @@ class TestLocalStream:
         assert speech.OpenAISTT().streams is False
         with pytest.raises(speech.SpeechError, match="does not stream"):
             speech.OpenAISTT().stream_transcriber("en")
+        assert speech.OpenAISTT().final_transcriber("en") is None
+
+
+class TestLocalFinal:
+    """``LocalSTT.final_transcriber``: the accurate pass over the whole
+    phrase at a stream's end, on the one-shot model by default."""
+
+    model = TestLocalStream.model
+
+    def test_the_accurate_pass(self, model):
+        from array import array
+
+        run = speech.LocalSTT().final_transcriber("en-US")
+        # The fake's segments carry words, no text: nothing heard.
+        assert run(array("f", [0.0, 0.5])) == ""
+        audio, kw = model["calls"][0]
+        assert audio == ("np", "float32", [0.0, 0.5])
+        assert kw == {
+            "language": "en",
+            "beam_size": 2,
+            "condition_on_previous_text": False,
+            "vad_filter": True,
+        }
+        assert "initial_prompt" not in kw  # the fast words may be wrong
+        assert model["names"] == ["small"]
+        assert speech.loaded() == ["whisper:small"]
+
+    def test_the_text_of_its_segments(self, model, monkeypatch):
+        from array import array
+
+        class _Model:
+            def __init__(self, name, **kw):
+                pass
+
+            def transcribe(self, audio, **kw):
+                segs = [
+                    SimpleNamespace(text=" Run the"),
+                    SimpleNamespace(text=" tests. "),
+                ]
+                return iter(segs + [SimpleNamespace(text="")]), None
+
+        fw = SimpleNamespace(WhisperModel=_Model)
+        np = SimpleNamespace(float32="float32", frombuffer=lambda raw, dtype: raw)
+        monkeypatch.setattr(
+            speech, "_import", lambda name: {"faster_whisper": fw, "numpy": np}[name]
+        )
+        run = speech.LocalSTT().final_transcriber("")
+        assert run(array("f", [0.1])) == "Run the tests."
+
+    def test_a_failure_is_a_speech_error(self, model, monkeypatch):
+        from array import array
+
+        class _Model:
+            def __init__(self, name, **kw):
+                pass
+
+            def transcribe(self, audio, **kw):
+                raise RuntimeError("bad audio")
+
+        fw = SimpleNamespace(WhisperModel=_Model)
+        np = SimpleNamespace(float32="float32", frombuffer=lambda raw, dtype: raw)
+        monkeypatch.setattr(
+            speech, "_import", lambda name: {"faster_whisper": fw, "numpy": np}[name]
+        )
+        with pytest.raises(speech.SpeechError, match="faster-whisper failed: bad"):
+            speech.LocalSTT().final_transcriber("")(array("f", [0.1]))
+
+    @pytest.mark.parametrize(
+        "final,stt_model,name",
+        [
+            ("", "", "small"),
+            ("", "medium", "medium"),
+            ("", "whisper-1", "small"),  # a host's name is not a size
+            ("off", "medium", ""),
+            ("OFF", "", ""),
+            ("medium.en", "", "medium.en"),
+            ("large-v3-turbo", "tiny", "large-v3-turbo"),
+            ("org/whisper-x", "", "org/whisper-x"),
+            ("nonsense", "base", "base"),
+        ],
+    )
+    def test_final_whisper_model(self, final, stt_model, name):
+        assert speech.final_whisper_model(final, stt_model) == name
+
+    def test_the_setting_picks_the_model(self, model, monkeypatch):
+        from array import array
+
+        _set_final(monkeypatch, "medium.en")
+        stt = speech.LocalSTT()
+        assert stt.final_model_name() == "medium.en"
+        stt.final_transcriber("en")(array("f", [0.0]))
+        assert model["names"] == ["medium.en"]
+
+    def test_off_means_no_accurate_pass(self, model, monkeypatch):
+        _set_final(monkeypatch, "off")
+        stt = speech.LocalSTT()
+        assert stt.final_model_name() == ""
+        assert stt.final_transcriber("en") is None
+        assert "whisper:" not in stt.warm_keys()
+        assert stt.warm_keys() == ["whisper:base.en", "whisper:small"]
+
+    def test_unset_is_the_one_shot_model(self, model):
+        # Also with a settings model that has no stt_final field yet.
+        assert speech.LocalSTT().final_model_name() == "small"
+        _set(stt_model="medium")
+        assert speech.LocalSTT().final_model_name() == "medium"
 
 
 class _FakePiper:
@@ -868,6 +1022,23 @@ class TestWarm:
         assert speech.warm("stt") == "loaded"
         assert speech.loaded() == ["whisper:base.en", "whisper:small"]
         assert len(local.loads) == 2
+
+    def test_a_third_final_model_is_warmed_too(self, local, monkeypatch):
+        _set_final(monkeypatch, "medium.en")
+        assert speech.LocalSTT().warm_keys() == [
+            "whisper:base.en",
+            "whisper:medium.en",
+            "whisper:small",
+        ]
+        assert speech.warm("stt") == "loaded"
+        assert speech.loaded() == [
+            "whisper:base.en",
+            "whisper:medium.en",
+            "whisper:small",
+        ]
+        assert len(local.loads) == 3
+        # Resident while local recognition is configured, like the others.
+        assert "whisper:medium.en" in speech.LocalSTT().resident_keys()
 
     def test_one_model_for_both_loads_once(self, local):
         _set(stt_backend="local", stt_model="base.en")

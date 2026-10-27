@@ -870,41 +870,33 @@ html, body {
   position: relative;   /* the ring (::after) is placed round it */
 }
 #voice-btn:active, #asking-mic:active { background: var(--border); }
-/* The live ring while it listens: mobile.js voiceRingPaint sets --lvl (0..1,
-   the voice's smoothed level, floor-relative) and the ring grows and firms
-   with it — transform and opacity only, no layout. data-hearing (a voice is
-   coming in) stops the "waiting for you" pulse so the ring is what moves. */
+/* Still, never bouncing: while it records, a constant thin red ring round
+   the mic; mobile.js voiceRingPaint sets --pick (0 / 0.5 / 1: quiet,
+   hearing you, loud — the voice's level smoothed over ~400 ms) and only the
+   ring's opacity eases between those steps. No scale, no pulse, no halo. */
 #voice-btn::after, #asking-mic::after {
   content: "";
   position: absolute;
-  inset: -4px;
-  border: 3px solid var(--accent);
-  border-radius: 11px;
+  inset: -3px;
+  border: 2px solid var(--tone-broken);
+  border-radius: 10px;
   opacity: 0;
-  transform: scale(1);
+  transition: opacity 400ms ease;
   pointer-events: none;
 }
 #voice-btn[data-state="listening"]::after, #asking-mic[data-state="listening"]::after {
-  opacity: calc(0.15 + var(--lvl, 0) * 0.85);
-  transform: scale(calc(1 + var(--lvl, 0) * 0.3));
+  opacity: calc(0.4 + var(--pick, 0) * 0.6);
 }
-#voice-btn[data-state="listening"][data-hearing], #asking-mic[data-state="listening"][data-hearing] { animation: none; }
 #voice-btn[data-state="idle"], #asking-mic[data-state="idle"] { border-color: var(--accent); color: var(--accent); }
 #voice-btn[data-state="listening"], #asking-mic[data-state="listening"] {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-  animation: dot-pulse 1.2s ease-in-out infinite;
+  color: var(--tone-broken);
+  border-color: var(--tone-broken);
 }
 #voice-btn[data-state="speaking"], #asking-mic[data-state="speaking"] { border-color: var(--tone-waiting); color: var(--tone-waiting); }
-/* The wake word's standby (mobile.js voiceWakeSync): the mic is open, so it
-   shows — a faint ring that still moves with the room's level, and a dot. */
-#voice-btn[data-standby]:not([data-state="listening"])::after {
-  opacity: calc(0.22 + var(--lvl, 0) * 0.6);
-  transform: scale(calc(1 + var(--lvl, 0) * 0.15));
-  border-width: 2px;
-}
-#voice-btn[data-standby]:not([data-state="listening"])::before {
+/* A still dot in the corner: grey while the wake word's standby has the mic
+   open (mobile.js voiceWakeSync), the accent while a line is said. */
+#voice-btn[data-standby]:not([data-state="listening"])::before,
+#voice-btn[data-state="speaking"]::before, #asking-mic[data-state="speaking"]::before {
   content: "";
   position: absolute;
   top: 4px;
@@ -912,12 +904,14 @@ html, body {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--muted);
   pointer-events: none;
 }
+#voice-btn[data-state="speaking"]::before, #asking-mic[data-state="speaking"]::before { background: var(--accent); }
 #voice-btn[data-state="working"], #asking-mic[data-state="working"] { border-color: var(--tone-working); color: var(--tone-working); }
 
 #voice-strip {
+  position: relative;   /* #voice-level lies along its top edge */
   flex: 0 0 auto;
   padding: 6px 8px;
   background: var(--panel);
@@ -930,18 +924,18 @@ html, body {
   gap: 8px;
   min-height: 28px;
 }
-#voice-state { flex: 0 0 auto; font-weight: 600; color: var(--accent); }
+/* One word (Listening… / Speaking… / Quiet.), one line: the strip never
+   grows with what is heard or said — those words are in the box. */
 #voice-caption {
   flex: 1 1 auto;
   min-width: 0;
-  color: var(--text);
-  overflow-wrap: anywhere;
-  max-height: 3.9em;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
   line-height: 1.3;
 }
-/* A stream's words still settling: greyed after the settled ones. */
-#voice-caption .voice-partial { color: var(--muted); }
 #voice-hush, #voice-cancel, #voice-gear {
   flex: 0 0 auto;
   background: var(--panel-2);
@@ -955,16 +949,19 @@ html, body {
 #voice-gear { font-size: 16px; padding: 3px 9px; }
 #voice-hush:active, #voice-cancel:active, #voice-gear:active { background: var(--border); }
 #voice-hush { border-color: var(--tone-waiting); color: var(--tone-waiting); }
-/* The level meter while the server adapter records: --lvl (set on
-   #voice-level by mobile.js, inherited) scales the bar. */
+/* The level meter, only while the ⚙ sheet is open: --pick (set on
+   #voice-level by mobile.js, inherited) scales the bar by its step. */
 #voice-level {
-  height: 4px;
-  margin-top: 6px;
+  position: absolute;   /* over the strip's top border: no row of its own */
+  left: 0;
+  right: 0;
+  top: -1px;
+  height: 3px;
   background: var(--border);
-  border-radius: 2px;
   overflow: hidden;
+  pointer-events: none;
 }
-#voice-level-bar { height: 100%; width: 100%; background: var(--tone-working); transform: scaleX(var(--lvl, 0)); transform-origin: left center; }
+#voice-level-bar { height: 100%; width: 100%; background: var(--tone-working); transform: scaleX(var(--pick, 0)); transform-origin: left center; transition: transform 400ms ease; }
 #voice-hear {
   display: block;
   width: 100%;

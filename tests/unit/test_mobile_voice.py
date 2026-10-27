@@ -69,11 +69,12 @@ def test_mobile_html_has_the_voice_controls():
     composer = html.split('<div id="composer">')[1].split("</div>")[0]
     assert 'id="send"' in composer and 'id="voice-btn"' in composer
     assert 'data-state="off"' in composer
-    # The strip above the composer: state word, caption, Cancel, the gear,
-    # the one big "Tap to hear" button, an error line.
+    # The strip above the composer: its one word (the caption), Cancel, the
+    # gear, the one big "Tap to hear" button, an error line. No second
+    # "state word" beside the caption: the strip says one word.
+    assert 'id="voice-state"' not in html
     for el in (
         'id="voice-strip"',
-        'id="voice-state"',
         'id="voice-caption"',
         'id="voice-cancel"',
         'id="voice-gear"',
@@ -1002,10 +1003,10 @@ def test_mobile_js_server_recognizer_streams_words_as_you_speak():
     the phrase goes out in chunks while it is spoken: one stream per phrase,
     the first chunk after 150 ms of speech, later ones paced by the last
     pass's time and only once the previous request is back; the phrase so
-    far typed into the box as a guess and corrected by every answer (the
-    unstable tail greyed in the caption), the whole phrase through the radio
-    rules at its end (/end), DELETE on stop. A 409 on the open or any failed
-    request turns the phrase into a clip."""
+    far typed into the box as a guess and corrected by every answer, the
+    whole phrase through the radio rules at its end (/end — the accurate
+    model's ``final`` when it differs), DELETE on stop. A 409 on the open or
+    any failed request turns the phrase into a clip."""
     js = _js()
     v = _voice_section(js)
     stt = _fn(js, "ServerSTT")
@@ -1052,9 +1053,10 @@ def test_mobile_js_server_recognizer_streams_words_as_you_speak():
     # The cap drops a phrase the detector missed only when the stream
     # showed no words either.
     assert "if (g.frames && !g.heard && !g.words) { discard();" in stt
-    # The phrase so far — committed words + the unstable tail — goes to the
-    # caption (the tail greyed) and into the box as a guess (onGuess, the
-    # "typed" mark); onFinal only at the end (or for a stop phrase).
+    # The phrase so far — committed words + the unstable tail — goes into
+    # the box as a guess (onGuess, the "typed" mark) and to onInterim (the
+    # ask sheet's mirror; the strip shows none of it); onFinal only at the
+    # end (or for a stop phrase).
     words = stt.split("function streamWords(g, mine, committed, partial) {")[1]
     words = words.split("\n    }\n")[0]
     assert "var shown = voiceJoin(g.pend, g.partial);" in words
@@ -1095,9 +1097,11 @@ def test_mobile_js_server_recognizer_streams_words_as_you_speak():
     assert "if (!voiceIsListening()) { voiceLevel(null); voiceGuessKeep(); }" in _fn(
         js, "voiceSetState"
     )
-    # The end: the rest, then /end, its words through onFinal.
+    # The end: the rest, then /end, its words through onFinal — the
+    # accurate final (when it differs) typed over the phrase first.
     end = stt.split("function streamEnd(g, mine) {")[1].split("\n    }\n")[0]
-    assert "streamDone(g, mine, voiceJoin(g.pend, x.j.committed));" in end
+    assert "fin = voiceStreamFinal(text, x.j);" in end
+    assert "streamDone(g, mine, fin.text);" in end
     fin = stt.split("function finish() {")[1].split("\n    function clipSend(")[0]
     assert 'if (g.mode === "clip") clipSend(g, mine);' in fin
     assert "else streamPump(g, mine);" in fin
@@ -1187,15 +1191,32 @@ def test_mobile_js_server_recognizer_starts_fast_and_shows_it_hears():
     st = stt.split("function recStatus(g, h) {")[1].split("\n    }\n")[0]
     assert "if (!h.onStatus || g.words) return;" in st
     assert '"Hearing you…"' in st and '"Listening… "' in st
-    # The ring: one CSS variable from a rAF loop, transforms only.
+    # The ring: still — one step (quiet / hearing / loud) from a rAF loop
+    # over a ~400 ms smoothed level, written only when it changes; the CSS
+    # eases the ring's OPACITY between the steps. No scale, no pulse.
     assert "requestAnimationFrame(voiceRingFrame)" in _fn(js, "voiceLevel")
     paint = _fn(js, "voiceRingPaint")
-    assert 'el.style.setProperty("--lvl", s)' in paint
+    assert 'step = voicePickup(v), s = ["0", "0.5", "1"][step]' in paint
+    assert 'el.style.setProperty("--pick", s)' in paint and "--lvl" not in js
     assert "[voiceBtn, voiceLevelEl, askMicBtn]" in paint
-    assert "#voice-btn::after, #asking-mic::after {" in css
-    assert "transform: scale(calc(1 + var(--lvl, 0) * 0.3));" in css
-    assert "transform: scaleX(var(--lvl, 0));" in css
-    assert "#voice-caption .voice-partial { color: var(--muted); }" in css
+    assert "var VOICE_RING_SMOOTH_MS = 400;" in v
+    assert "Math.exp(-dt / VOICE_RING_SMOOTH_MS)" in _fn(js, "voiceLevelStep")
+    assert "return v < 0.1 ? 0 : v < 0.5 ? 1 : 2;" in _fn(js, "voicePickup")
+    ring = css.split("#voice-btn::after, #asking-mic::after {")[1].split("}")[0]
+    assert "transition: opacity 400ms ease;" in ring and "transform" not in ring
+    assert "border: 2px solid var(--tone-broken);" in ring
+    mic = css[css.index("#voice-btn, #asking-mic {") : css.index("#voice-strip {")]
+    assert "scale(" not in mic and "animation" not in mic
+    assert "opacity: calc(0.4 + var(--pick, 0) * 0.6);" in mic
+    # The meter: only while the ⚙ sheet is open.
+    assert (
+        'voiceLevelEl.classList.contains("hidden") && !voiceSheet.classList.contains("hidden")'
+        in _fn(js, "voiceLevel")
+    )
+    assert 'voiceLevelEl.classList.add("hidden");' in _fn(js, "voiceSheetClose")
+    assert "transform: scaleX(var(--pick, 0));" in css
+    # No greyed partial anywhere on the strip: the words are in the box.
+    assert "voice-partial" not in css and "voice-partial" not in js
     # The tick: once per phrase, never on top of the listening buzz.
     tick = _fn(js, "voiceSpeechTick")
     assert "Date.now() - voice.buzzAt < VOICE_TICK_GAP_MS" in tick

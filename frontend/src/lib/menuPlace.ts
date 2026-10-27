@@ -68,3 +68,22 @@ export function refitMenu(
     maxHeight,
   };
 }
+
+/** A popover hung under a top-bar button (the mic's options): its left edge
+ * under the button's, flipped to end at the button's right edge when it
+ * would cross the window's right side, then kept `m` from both sides; its
+ * top just under the button and its height capped to what is left of the
+ * window (it scrolls inside). `w`: the popover's width. */
+export function placeUnder(
+  btn: { left: number; right: number; bottom: number },
+  w: number,
+  vw: number,
+  vh: number,
+  m = 8
+): MenuPlacement {
+  let left = btn.left;
+  if (left + w > vw - m) left = btn.right - w;
+  left = Math.max(m, Math.min(left, vw - m - w));
+  const top = btn.bottom + 6;
+  return { left: Math.round(left), top: Math.round(top), maxHeight: Math.max(0, Math.round(vh - top - 2 * m)) };
+}

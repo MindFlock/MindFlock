@@ -670,7 +670,7 @@
   text-decoration: underline;
 }
 
-/* Matches the shape of the existing mic-pulse ring, accent-tokenised, at the
+/* A soft expanding ring (the shape the mic used to pulse), accent-tokenised, at the
    house 1.4s ease-in-out cadence (see cs-pulse). */
 @keyframes step-ping {
   0%,

@@ -68,12 +68,14 @@ def _detector(js: str) -> str:
 @pytest.mark.skipif(_node() is None, reason="needs node")
 def test_wake_detector_takes_only_a_lone_utterance():
     """Level sequences of 40 ms blocks (quiet 0.002, loud 0.2): a word of
-    250..1600 ms with 350 ms of quiet before and after is a clip — its
-    lead-in 150 ms before the first loud block, its end where the quiet tail
-    reached 350 ms; shorter is "short", longer "long" (never a clip, however
-    it ends); a dip shorter than the quiet tail is inside the word; sound
-    with no quiet before it is part of something longer; a steady hum above
-    the absolute threshold is the floor, not a word."""
+    250..1600 ms with 350 ms of quiet before and 200 ms after is a clip —
+    its lead-in 100 ms before the first loud block, its end the block the
+    quiet tail reached 200 ms (the clip goes then, ``end`` = the sound's
+    end); shorter is "short", longer "long" (never a clip, however it ends);
+    a dip shorter than the tail is inside the word; sound with no quiet
+    before it (the start, or less than 350 ms after a clip) is part of
+    something longer; a steady hum above the absolute threshold is the
+    floor, not a word."""
     script = (
         _detector(_js()) + "\n"
         "function run(seq) {\n"
@@ -86,8 +88,9 @@ def test_wake_detector_takes_only_a_lone_utterance():
         "out.right = run([[Q, 20], [L, 15], [Q, 12]]);\n"
         "out.short = run([[Q, 20], [L, 5], [Q, 12]]);\n"
         "out.long = run([[Q, 20], [L, 45], [Q, 20]]);\n"
-        "out.dip = run([[Q, 20], [L, 10], [Q, 5], [L, 10], [Q, 12]]);\n"
-        "out.openTail = run([[Q, 20], [L, 15], [Q, 8]]);\n"
+        "out.dip = run([[Q, 20], [L, 10], [Q, 4], [L, 10], [Q, 12]]);\n"
+        "out.openTail = run([[Q, 20], [L, 15], [Q, 4]]);\n"
+        "out.followOn = run([[Q, 20], [L, 10], [Q, 6], [L, 10], [Q, 12]]);\n"
         "out.noQuietBefore = run([[L, 10], [Q, 12]]);\n"
         "out.afterSentence = run([[Q, 20], [L, 45], [Q, 9], [L, 10], [Q, 12]]);\n"
         "out.shortGap = run([[Q, 20], [L, 10], [Q, 12], [L, 5], [Q, 4], [L, 10], [Q, 12]]);\n"
@@ -100,23 +103,27 @@ def test_wake_detector_takes_only_a_lone_utterance():
         "out.slice = { len: s.length, first: s[0], last: s[s.length - 1] };\n"
         "out.sliceAll = voiceWakeSlice(blocks, 0, 1000, 16000).length;\n"
         "out.sliceNone = voiceWakeSlice(blocks, 500, 900, 16000).length;\n"
-        "out.k = [VOICE_WAKE_QUIET_MS, VOICE_WAKE_MIN_MS, VOICE_WAKE_MAX_MS, VOICE_WAKE_LEAD_MS, VOICE_WAKE_BLOCK];\n"
+        "out.k = [VOICE_WAKE_QUIET_MS, VOICE_WAKE_TAIL_MS, VOICE_WAKE_MIN_MS, VOICE_WAKE_MAX_MS, VOICE_WAKE_LEAD_MS, VOICE_WAKE_BLOCK];\n"
         "console.log(JSON.stringify(out));\n"
     )
     out = _run(script)
-    assert out["k"] == [350, 250, 1600, 150, 2048]
-    # The right length: one clip, the lead-in before its first loud block
-    # (800 ms), the quiet tail's 350 ms (9 blocks: 360) after its last (1400).
+    assert out["k"] == [350, 200, 250, 1600, 100, 2048]
+    # The right length: one clip, the lead-in 100 ms before its first loud
+    # block (800 ms), out the block the tail reaches 200 ms (5 blocks) after
+    # its last (1400) — 160 ms sooner than the old 350 ms tail.
     assert out["right"] == [
-        {"kind": "clip", "from": 650, "to": 1760, "ms": 600, "at": 1760}
+        {"kind": "clip", "from": 700, "to": 1600, "ms": 600, "end": 1400, "at": 1600}
     ]
-    assert out["short"] == [{"kind": "short", "ms": 200, "at": 1360}]
+    assert out["short"] == [{"kind": "short", "ms": 200, "at": 1200}]
     # A sentence: "long" the block it passes 1600 ms, and never a clip after.
     assert [r["kind"] for r in out["long"]] == ["long"]
-    # The stop inside the word (200 ms < 350): one clip over both halves.
-    assert [(r["kind"], r["ms"]) for r in out["dip"]] == [("clip", 1000)]
-    # The quiet tail not yet 350 ms: nothing yet.
+    # The stop inside the word (160 ms < 200): one clip over both halves.
+    assert [(r["kind"], r["ms"]) for r in out["dip"]] == [("clip", 960)]
+    # The quiet tail not yet 200 ms: nothing yet.
     assert out["openTail"] == []
+    # Sound 240 ms after a clip went had no 350 ms of quiet before it: the
+    # first was the start of something longer, the second is never a clip.
+    assert [r["kind"] for r in out["followOn"]] == ["clip"]
     # Sound from the first block on had no quiet before it.
     assert out["noQuietBefore"] == []
     # Right after a sentence, a word with only 360 ms of quiet between is
@@ -220,8 +227,39 @@ def test_wake_request_shape_and_answers():
     woke = _fn(js, "voiceWoke")
     assert "voiceWakeChime();" in woke and 'voiceCaption("Yes?");' in woke
     assert "navigator.vibrate(12)" in woke
-    # Exactly a tap in toggle mode.
+    # Exactly a tap in toggle mode — at once, the chime in the same moment
+    # (no timer before listening), the chime's audio skipped by the recorder.
     assert 'voiceListen("prompt", VOICE_TAP_MS);' in woke and "voiceBargeIn();" in woke
+    assert "setTimeout" not in woke
+    assert woke.index("voiceWakeChime();") < woke.index(
+        'voiceListen("prompt", VOICE_TAP_MS);'
+    )
+    assert (
+        "voiceListen_.woke = { skipUntil: now + VOICE_WAKE_CHIME_MS + VOICE_WAKE_SKIP_PAD_MS, wakeMs: W.wakeMs };"
+        in woke
+    )
+    assert "W.wakeMs = Math.max(0, now - (W.endAt || now));" in woke
+    rs = _fn(js, "voiceRecStart")
+    assert (
+        "skipUntil: woke ? woke.skipUntil : 0," in rs
+        and "wakeMs: woke ? woke.wakeMs : -1," in rs
+    )
+    stt = js[js.index("  function ServerSTT(") : js.index("  // --- ServerTTS")]
+    assert "if (h.skipUntil && Date.now() < h.skipUntil) return;" in stt
+    assert "g.trace.wake = h.wakeMs;" in stt
+    # The clip goes in the block its tail ends: the synchronous decimator,
+    # never the browser's async render; the word's end on the wall clock.
+    sb = stt.split("function standbyBlock(w, data) {")[1].split("\n    }\n")[0]
+    assert "voiceResampleClip" not in sb
+    assert (
+        "var pcm = voiceResample(voiceWakeSlice(w.blocks, r.from, r.to, w.rate), w.rate, VOICE_WAV_RATE);"
+        in sb
+    )
+    assert "r.endAt = Math.round(Date.now() - (r.to - r.end));" in sb
+    assert "W.endAt = r && r.endAt ? r.endAt : Date.now();" in check
+    # Diagnostics: "wake 0.6 s" (the word's end → listening).
+    assert '", wake " + (W.wakeMs / 1000).toFixed(1) + " s' in _fn(js, "voiceDiagWake")
+    assert '"wake " + (t.wake / 1000).toFixed(1) + " s' in _fn(js, "voiceDiagTrace")
     chime = _fn(js, "voiceWakeChime")
     assert "voice.audioCtx" in chime and "createOscillator" in chime
     assert "var VOICE_WAKE_GAP_MS = 1500;" in js
@@ -259,14 +297,15 @@ def test_wake_lifecycle_wiring():
         in stt
     )
     # The meter stays hidden: the standby moves the ring only.
-    assert 'if (!ring && voiceLevelEl.classList.contains("hidden"))' in js
+    assert 'if (!ring && voiceLevelEl.classList.contains("hidden") &&' in js
 
 
 def test_wake_standby_look():
     css = _css()
-    assert '#voice-btn[data-standby]:not([data-state="listening"])::after' in css
-    assert '#voice-btn[data-standby]:not([data-state="listening"])::before' in css
-    rule = css.split('#voice-btn[data-standby]:not([data-state="listening"])::after {')[
-        1
-    ].split("}")[0]
-    assert "var(--lvl, 0)" in rule  # the ring still moves with the room
+    # The standby is a small grey dot, still: no ring, nothing that moves.
+    assert '#voice-btn[data-standby]:not([data-state="listening"])::after' not in css
+    sel = '#voice-btn[data-standby]:not([data-state="listening"])::before,'
+    assert sel in css
+    rule = css.split(sel)[1].split("}")[0]
+    assert "background: var(--muted);" in rule
+    assert "animation" not in rule and "transform" not in rule
