@@ -1245,6 +1245,12 @@ class SystemTTS(_speech.Backend):
         found = probe()
         return found.tts_ok, found.tts_detail
 
+    def warm(self, prime: bool = True) -> str:  # noqa: ARG002 — no model here
+        """``core.speech.warm("tts")``: the probe is this engine's one cold
+        cost (cached per process after it)."""
+        found = probe()
+        return "loaded" if found.tts_ok else "skipped: " + found.tts_detail
+
     def speak(self, text: str, voice: str = "") -> Tuple[bytes, str]:
         found = probe()
         if not found.tts_ok:

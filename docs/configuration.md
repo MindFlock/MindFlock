@@ -641,7 +641,8 @@ server merges on save so multiple processes can share it.
 - `voice/` — the optional local speech backend's model files
   (`backend/web/core/speech.py`, `voice.stt_backend` / `tts_backend` =
   `"local"`; the built-in `system` engine keeps nothing here): `whisper/` (faster-whisper's download root — the CTranslate2
-  model, `small` unless `voice.stt_model` names another size) and
+  models: `small` unless `voice.stt_model` names another size, and the live
+  transcript's `base.en` unless `voice.stt_stream_model` names one) and
   `piper/<voice>.onnx` + `.onnx.json` (~60 MB each). Downloaded from Hugging
   Face on first use or by the one-click install (Settings → Voice, `POST
   /api/voice/install-local`), never at server start. Override with
@@ -1206,9 +1207,16 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     host (OpenAI, Groq, a self-hosted server); `"local"` = faster-whisper /
     piper on this machine — the optional upgrade (models under
     `~/.mindflock/voice/` or `$MINDFLOCK_VOICE_DIR`, refused while memory is
-    low, unloaded after 30 idle minutes — and loaded ahead of the first press:
-    at boot and whenever a voice client fetches `GET /api/voice`, so a mic
-    press never waits for the model). Only `local` recognition **streams**
+    low). With `stt_backend = "local"` both whisper models (`stt_model` for a
+    phrase sent whole, `stt_stream_model` for the live transcript) are
+    **resident**: loaded 3 s after boot and whenever a voice client fetches
+    `GET /api/voice`, and never idle-unloaded while `local` stays configured,
+    so a mic press never waits for a model; a piper voice is unloaded after
+    30 idle minutes. **The voice warms at boot** (6 s after start, and again
+    on `GET /api/voice`): a `local` piper voice is loaded, an `openai` host
+    on this machine or network (Voice Lab at `http://127.0.0.1:8770/v1`) is
+    asked to say one word with `tts_voice` so it loads its model — a remote,
+    paid host never is — and the `system` engine is probed. Only `local` recognition **streams**
     (words appear while the person speaks: `POST /api/voice/stream`,
     `GET /api/voice`'s `server_ready.stt_stream`); with `system` or
     `openai` the mic sends one clip per phrase. The built-in Windows recognizer is
@@ -1218,8 +1226,8 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     Voice → *Install local models* (`POST /api/voice/install-local`, owner
     only) installs `faster-whisper` and `piper-tts` into the interpreter the
     server runs (`uv pip install --python <it>`, or its own pip without
-    `uv`), downloads the recognition model (`stt_model`, default `small`)
-    into `<voice dir>/whisper/` and the voice (`tts_voice`, default
+    `uv`), downloads the recognition models (`stt_model`, default `small`,
+    and `stt_stream_model`, default `base.en`) into `<voice dir>/whisper/` and the voice (`tts_voice`, default
     `en_US-lessac-medium`) into `<voice dir>/piper/`, then sets
     `stt_backend` to `"local"` (the voice backend is left alone). The
     manual equivalent, from a source checkout, is `uv sync --group voice`
@@ -1231,7 +1239,11 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     default `small`, and the piper voice, default `en_US-lessac-medium` —
     the fields are shared, so a name that is not a faster-whisper size or a
     piper voice (`whisper-1`, `Microsoft Zira Desktop`) reads as the default
-    there; for
+    there; `stt_stream_model` — the live transcript's faster-whisper model
+    on `local` (blank = `base.en` for English, `base` for any other
+    language: ~5× faster than `small` on a CPU at a small accuracy cost; a
+    non-size name reads as the default too); this machine's, never synced;
+    for
     `system`, `tts_voice` is the OS voice name — `Microsoft Zira Desktop` on
     Windows, `Samantha` on macOS — and a name the OS does not have falls back
     to its default voice).

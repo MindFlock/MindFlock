@@ -722,13 +722,15 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(_person.ensure_id)
     except Exception:  # noqa: BLE001 — never block startup on a label
         pass
-    # Voice: a local whisper model configured for recognition is loaded a few
-    # seconds after boot (daemon thread, no-op unless voice.stt_backend is
-    # local), so the first press of the mic after a restart is not a 7 s wait.
+    # Voice: the local whisper models configured for recognition are loaded a
+    # few seconds after boot, and the voice a few after that (daemon threads;
+    # each a no-op when there is nothing to warm), so the first press of the
+    # mic — or the first line read aloud — after a restart is not a wait.
     try:
         from backend.web.core import speech as _speech_warm
 
         _speech_warm.warm_in_background("stt", delay_s=3.0)
+        _speech_warm.warm_in_background("tts", delay_s=6.0)
     except Exception:  # noqa: BLE001 — warming is best effort
         pass
     # "Read everything" survived the restart: the live sessions' hooks must

@@ -12,13 +12,19 @@ committed words — a terminal cannot be corrected — so a committed word is
 never revisited: the next pass drops what it re-hears of them (by timestamp,
 then by matching up to five trailing committed words).
 
-Bounded work: once the window holds more than :data:`PRUNE_SECONDS`, the
-audio before the last committed word's end (less :data:`MARGIN_SECONDS`) is
-dropped — never audio under an uncommitted word. A window with no words in
-it at all keeps only its last second. The one forced commit: a window still
-over :data:`MAX_HELD_SECONDS` after that (a tail that never settles) commits
-the current pass's words that ended :data:`PRUNE_SECONDS` before the end of
-the audio, so inference time cannot grow without limit.
+Bounded work, because a pass's cost grows with the audio it decodes: once
+the window holds more than :data:`PRUNE_SECONDS`, the audio before the last
+committed word's end (less :data:`MARGIN_SECONDS`) is dropped — never audio
+under an uncommitted word. A window with no words in it at all keeps only
+its last second. And a pass never decodes more than :data:`WINDOW_SECONDS`:
+the one forced commit is at that edge — before a pass, the tail words that
+start before the last :data:`WINDOW_SECONDS` of audio (a tail that never
+settled) are committed as they leave, and the audio before the edge goes.
+
+Silence costs nothing: a chunk whose RMS is under :data:`SILENCE_RMS`,
+appended to a window with no uncommitted tail, runs no pass (``last_ms`` is
+0) — there is nothing for a pass to settle and nothing new to hear. The
+audio is kept, so a soft start of speech is decoded with the next chunk.
 
 Pure: a stream is built on a ``transcribe(audio, prompt)`` callable
 (``core.speech.LocalSTT.stream_transcriber`` in the server, a scripted fake
@@ -49,7 +55,9 @@ __all__ = [
     "EXPIRE_SECONDS",
     "MAX_STREAMS",
     "RATE",
+    "SILENCE_RMS",
     "Stream",
+    "WINDOW_SECONDS",
     "clear",
     "close_stream",
     "decode_wav",
@@ -61,13 +69,19 @@ __all__ = [
 #: The sample rate of everything a stream holds (Whisper's).
 RATE = 16000
 #: Prune the held audio once it is longer than this.
-PRUNE_SECONDS = 10.0
+PRUNE_SECONDS = 4.0
 #: Audio kept before the end of the last committed word when pruning.
 MARGIN_SECONDS = 0.3
 #: A window with no words in it keeps only this much audio.
 SILENT_KEEP_SECONDS = 1.0
-#: Over this after a prune, the settled part of the tail is committed anyway.
-MAX_HELD_SECONDS = 30.0
+#: The most audio one pass decodes; older uncommitted words are committed
+#: as they leave it (the forced commit).
+WINDOW_SECONDS = 8.0
+#: The old name of the forced-commit limit: it is the window now.
+MAX_HELD_SECONDS = WINDOW_SECONDS
+#: A chunk quieter than this (RMS, samples in [-1, 1); about -40 dBFS) is
+#: silence: with no uncommitted tail it runs no pass.
+SILENCE_RMS = 0.01
 #: The ``initial_prompt``: this much of the committed text, from its end.
 PROMPT_CHARS = 200
 #: A re-heard word starting this long before the last committed end is old.
@@ -99,6 +113,15 @@ def _join(words: Sequence[Word]) -> str:
     return " ".join(w[0] for w in words)
 
 
+def _quiet(samples: Sequence[float]) -> bool:
+    """Whether a chunk is silence: its RMS is under :data:`SILENCE_RMS` (an
+    empty chunk is quiet)."""
+    n = len(samples)
+    if not n:
+        return True
+    return sum(x * x for x in samples) / n < SILENCE_RMS * SILENCE_RMS
+
+
 class Stream:
     """One live recognition: see the module doc for the policy. Thread-safe —
     one pass at a time (a chunk that arrives during a pass waits, then gets
@@ -111,7 +134,10 @@ class Stream:
         self._offset = 0.0  # stream seconds before _audio[0]
         self._committed: List[Word] = []  # stream-absolute times
         self._tail: List[Word] = []  # the last pass's uncommitted words
+        self._owed: List[Word] = []  # committed, not yet returned (a pass failed)
         self.last_ms = 0
+        #: Seconds of audio the last feed's pass decoded (0 when it ran none).
+        self.last_window_s = 0.0
         self.touched = _now()
 
     @property
@@ -131,13 +157,19 @@ class Stream:
     def feed(self, samples: Sequence[float]) -> Tuple[str, str]:
         """Append ``samples`` (float32 at 16 kHz) and run one pass →
         ``(newly committed words, the current unstable tail)``; either may
-        be ``""``. A :class:`core.speech.SpeechError` from the transcriber
+        be ``""``. No pass for silence with nothing pending (see the module
+        doc). A :class:`core.speech.SpeechError` from the transcriber
         propagates, with the chunk kept for the next pass."""
         with self._lock:
             self.touched = _now()
+            quiet = _quiet(samples)
             self._audio.extend(samples)
+            self.last_ms, self.last_window_s = 0, 0.0
             if not self._audio:
                 return "", ""
+            self._cap()
+            if quiet and not self._tail:
+                return self._pay([]), ""
             hyp = self._pass()
             n = 0
             while (
@@ -149,21 +181,22 @@ class Stream:
             new = hyp[:n]
             self._committed.extend(new)
             self._tail = hyp[n:]
-            new = new + self._prune()
+            self._prune()
             self.touched = _now()
-            return _join(new), _join(self._tail)
+            return self._pay(new), _join(self._tail)
 
     def finish(self) -> str:
         """One last pass over what the window holds, all of it committed →
         the words not committed before (``""`` when there is no audio)."""
         with self._lock:
             self.touched = _now()
+            self._cap()
             rest = self._pass() if self._audio else []
             self._committed.extend(rest)
             self._tail = []
             self._offset += self.held_seconds
             self._audio = array("f")
-            return _join(rest)
+            return self._pay(rest)
 
     # -- internals (called under the lock) -------------------------------- #
     def _prompt(self) -> str:
@@ -178,6 +211,7 @@ class Stream:
         """Transcribe the window → its words beyond what is committed, in
         stream-absolute seconds."""
         started = time.monotonic()
+        self.last_window_s = self.held_seconds
         try:
             raw = self._transcribe(self._audio, self._prompt())
         finally:
@@ -202,22 +236,33 @@ class Stream:
                     break
         return hyp
 
-    def _prune(self) -> List[Word]:
+    def _pay(self, new: List[Word]) -> str:
+        """The words to return as newly committed: any still owed, then
+        ``new``."""
+        out, self._owed = self._owed + new, []
+        return _join(out)
+
+    def _cap(self) -> None:
+        """Hold at most :data:`WINDOW_SECONDS` before a pass: the tail words
+        starting before the edge are committed (forced, see the module doc;
+        owed to the caller until a feed returns) and the audio before the
+        edge is dropped."""
+        drop = len(self._audio) - int(WINDOW_SECONDS * RATE)
+        if drop <= 0:
+            return
+        edge = self._offset + drop / RATE
+        while self._tail and self._tail[0][1] < edge:
+            word = self._tail.pop(0)
+            self._committed.append(word)
+            self._owed.append(word)
+        del self._audio[:drop]
+        self._offset = edge
+
+    def _prune(self) -> None:
         """Drop audio no uncommitted word needs once the window is over
-        :data:`PRUNE_SECONDS`; returns the words force-committed (see the
-        module doc), usually none."""
-        if self.held_seconds <= PRUNE_SECONDS:
-            return []
-        self._cut()
-        forced: List[Word] = []
-        if self.held_seconds > MAX_HELD_SECONDS:
-            settled = self._offset + self.held_seconds - PRUNE_SECONDS
-            while self._tail and self._tail[0][2] <= settled:
-                forced.append(self._tail.pop(0))
-            self._committed.extend(forced)
-            if forced:
-                self._cut()
-        return forced
+        :data:`PRUNE_SECONDS`."""
+        if self.held_seconds > PRUNE_SECONDS:
+            self._cut()
 
     def _cut(self) -> None:
         end = self._offset + self.held_seconds

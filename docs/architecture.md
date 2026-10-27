@@ -157,8 +157,11 @@ FastAPI app `backend.web.server:app`. Key pieces:
   speech (`GET /api/voice`, `POST /api/voice/transcribe`, `…/speak`,
   `…/clear-key`): an `openai`-compatible host or lazily imported local
   models (faster-whisper, piper; `uv sync --group voice`) behind the memory
-  guard, unloaded after 30 idle minutes and warmed back at boot and whenever
-  a voice client fetches `GET /api/voice` (`speech.warm_in_background`). See
+  guard — local recognition's two whisper models (one-shot `small`, a faster
+  streaming `base.en`) resident while configured, a piper voice unloaded
+  after 30 idle minutes — and both kinds warmed at boot and whenever a voice
+  client fetches `GET /api/voice` (`speech.warm_in_background`; a local
+  OpenAI-compatible voice host gets one throwaway synthesis). See
   [web-api.md](web-api.md#voice-talking-to-a-session-from-the-phone) and
   [providers.md](providers.md#activity-signal-activity_markerspy).
 - **`core/auth.py`** — shared bearer-token ASGI middleware gating HTTP + websockets
