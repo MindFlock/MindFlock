@@ -2848,7 +2848,6 @@
   // loses a reply (voiceOnPoll).
   var voiceBtn = document.getElementById("voice-btn");
   var voiceStrip = document.getElementById("voice-strip");
-  var voiceStateEl = document.getElementById("voice-state");
   var voiceCaptionEl = document.getElementById("voice-caption");
   var voiceCancelBtn = document.getElementById("voice-cancel");
   var voiceHushBtn = document.getElementById("voice-hush");
@@ -3112,8 +3111,7 @@
   var VOICE_KEEP_HIDDEN_MS = 15000;      // ...but only this long once the page is hidden
   var VOICE_LEAD_MS = 300;               // a stream's audio kept from before the first loud block (the soft start of the word)
   var VOICE_HEARING_MS = 400;            // "Hearing you…" holds this long after the last loud block
-  var VOICE_RING_ATTACK_MS = 30;         // the mic's ring: how fast it rises to the voice's level
-  var VOICE_RING_DECAY_MS = 150;         // ...and its fall's time constant
+  var VOICE_RING_SMOOTH_MS = 400;        // the mic's ring: the level's smoothing time constant (both ways)
   var VOICE_UPLOAD_TIMEOUT_MS = 45000;   // the transcribe request's own cap
   var VOICE_RESAMPLE_TIMEOUT_MS = 5000;  // OfflineAudioContext's render; past it, voiceResample
   var VOICE_SINC_HALF = 16;              // voiceResample's kernel half-width, in output samples
@@ -3271,6 +3269,18 @@
     if (!(ms > 0)) return VOICE_STREAM_CHUNK_MS;
     return Math.min(VOICE_CHUNK_MAX_MS, Math.max(VOICE_CHUNK_MIN_MS, ms * 0.8));
   }
+  // The phrase an /end answer leaves → {text, fixed, ms}: its `final` (the
+  // accurate model's, the whole phrase) when it sent one and `same` is not
+  // true — `fixed` then says the typed words change — else the fast words.
+  // ms: the final pass's time (`final_ms`), 0 when there was none.
+  function voiceStreamFinal(fast, j) {
+    j = j || {};
+    var fin = typeof j.final === "string" ? j.final.trim() : "";
+    var ms = typeof j.final === "string" ? Number(j.final_ms) || 0 : 0;
+    fast = String(fast || "").trim();
+    if (!fin || j.same === true || fin === fast) return { text: fast, fixed: false, ms: ms };
+    return { text: fin, fixed: true, ms: ms };
+  }
   function voiceJoin(a, b) {
     a = String(a || "").trim();
     b = String(b || "").trim();
@@ -3283,13 +3293,18 @@
     var over = (Number(rms) || 0) - Math.max((Number(floor) || 0) * 2, 0.003);
     return over > 0 ? Math.min(1, Math.sqrt(over * 8)) : 0;
   }
-  // One step (dtMs later) of the shown level toward the latest block's:
-  // it rises within VOICE_RING_ATTACK_MS and falls with a
-  // VOICE_RING_DECAY_MS time constant. Pure: the rAF loop calls it per frame.
+  // One step (dtMs later) of the shown level toward the latest block's,
+  // smoothed with a VOICE_RING_SMOOTH_MS time constant both ways — no
+  // per-block jitter. Pure: the rAF loop calls it per frame.
   function voiceLevelStep(shown, target, dtMs) {
     var dt = Math.max(0, Number(dtMs) || 0);
-    if (target >= shown) return shown + (target - shown) * Math.min(1, dt / VOICE_RING_ATTACK_MS);
-    return target + (shown - target) * Math.exp(-dt / VOICE_RING_DECAY_MS);
+    return target + (shown - target) * Math.exp(-dt / VOICE_RING_SMOOTH_MS);
+  }
+  // The smoothed level as one of three steps the ring shows: 0 quiet,
+  // 1 hearing you, 2 loud. Pure.
+  function voicePickup(v) {
+    v = Number(v) || 0;
+    return v < 0.1 ? 0 : v < 0.5 ? 1 : 2;
   }
   // The start-up trace of a phrase: ms from start() (for the first phrase,
   // the tap itself) to the microphone ready, the stream open, the first loud
@@ -3311,22 +3326,26 @@
   // "the wake word" in the state machine): the RMS of each block and its
   // length in ms. A wake is a word or two ON ITS OWN — VOICE_WAKE_QUIET_MS
   // of quiet before it, VOICE_WAKE_MIN_MS..VOICE_WAKE_MAX_MS from its first
-  // loud block to its last, VOICE_WAKE_QUIET_MS of quiet after (dips shorter
-  // than that, the stop in "mind·flock", are inside the word). Shorter is a
+  // loud block to its last, VOICE_WAKE_TAIL_MS of quiet after (dips shorter
+  // than that, the stop in "mind·flock", are inside the word) — short, so
+  // the clip goes the moment the word is over; after it the detector waits
+  // for VOICE_WAKE_QUIET_MS of quiet again. Shorter is a
   // click or a cough, longer a sentence: both dropped, nothing sent. The
   // noise floor and "loud" are the recorder's (scaled to the block's length:
   // its rule is per 85 ms block).
   var VOICE_WAKE_BLOCK = 2048;           // the standby's ScriptProcessor block (~43 ms at 48 kHz)
-  var VOICE_WAKE_QUIET_MS = 350;         // quiet that ends a lone utterance, and that must come before it
+  var VOICE_WAKE_QUIET_MS = 350;         // quiet that must come before a lone utterance
+  var VOICE_WAKE_TAIL_MS = 200;          // quiet after it that ends it (the clip goes then)
   var VOICE_WAKE_MIN_MS = 250;           // its sound lasts at least this long...
   var VOICE_WAKE_MAX_MS = 1600;          // ...and at most this (longer is a sentence: never a wake)
-  var VOICE_WAKE_LEAD_MS = 150;          // audio kept from before its first loud block (the word's soft start)
+  var VOICE_WAKE_LEAD_MS = 100;          // audio kept from before its first loud block (the word's soft start)
   function voiceWakeNew() {
     return { t: 0, floor: 0, phase: "wait", quiet: 0, from: 0, last: 0, tail: 0 };
   }
   // One block: d's clock moves on by ms. → null, or what just ended:
-  // {kind: "clip", from, to, ms} — from..to on d's clock (ms), the lead-in
-  // and the quiet tail included; ms = the sound's length — or {kind:
+  // {kind: "clip", from, to, ms, end} — from..to on d's clock (ms), the
+  // lead-in and the quiet tail included; ms = the sound's length, end = its
+  // last loud block's end (to - end: how long ago the word ended) — or {kind:
   // "short" | "long"}. phase: "wait" (no quiet before yet: the start, or
   // speech that went on), "ready" (quiet enough), "word" (sounding).
   function voiceWakeStep(d, rms, ms) {
@@ -3343,12 +3362,13 @@
         return null;
       }
       d.tail += ms;
-      if (d.tail < VOICE_WAKE_QUIET_MS) return null;
-      d.phase = "ready";   // its quiet tail is the quiet before the next one
+      if (d.tail < VOICE_WAKE_TAIL_MS) return null;
+      // Its quiet tail counts toward the quiet before the next one.
+      d.phase = d.tail >= VOICE_WAKE_QUIET_MS ? "ready" : "wait";
       d.quiet = d.tail;
       var span = d.last - d.from;
       if (span < VOICE_WAKE_MIN_MS) return { kind: "short", ms: span };
-      return { kind: "clip", from: Math.max(0, d.from - VOICE_WAKE_LEAD_MS), to: d.t, ms: span };
+      return { kind: "clip", from: Math.max(0, d.from - VOICE_WAKE_LEAD_MS), to: d.t, ms: span, end: d.last };
     }
     if (loud) {
       if (d.phase === "ready") { d.phase = "word"; d.from = at; d.last = d.t; d.tail = 0; }
@@ -3491,6 +3511,8 @@
       } catch (e) { recStop(g); return false; }
       g.proc.onaudioprocess = function (ev) {
         if (token !== mine || rec !== g) return;
+        // h.skipUntil: the wake word's chime is playing — not recorded.
+        if (h.skipUntil && Date.now() < h.skipUntil) return;
         // The engine reuses the input buffer between callbacks: copy it.
         var block = new Float32Array(ev.inputBuffer.getChannelData(0));
         if (!block.length) return;
@@ -3550,6 +3572,13 @@
       // The stream opens now, alongside getUserMedia: its round trip
       // overlaps the microphone's start-up and the first syllable.
       var g = recNew();
+      // Woken by the word: how long from its end to this start (the trace
+      // and Diagnostics: "wake 0.6 s").
+      if (h.wakeMs >= 0) {
+        g.trace.wake = h.wakeMs;
+        voice.rec.trace = g.trace;
+        if (g.debug) { try { console.log("[voice] wake: the word's end → listening " + h.wakeMs + " ms"); } catch (e) {} }
+      }
       if (streams()) streamOpen(g, mine);
       getStream().then(function (s) {
         if (token !== mine) { if (!token) keep(); return; }   // stopped while the mic came up: its grace starts now
@@ -3794,7 +3823,13 @@
       if (g.dead || token !== mine) return;
       if (h.onGuess && h.onGuess(shown)) voiceTraceMark(g, "typed");
     }
-    // The phrase is over: /end flushes the words the stream still holds.
+    // The phrase is over: /end flushes the words the stream still holds —
+    // and, from a server that has an accurate model besides the fast one,
+    // `final`: the whole phrase transcribed again (`same`: no different).
+    // A different final replaces the phrase typed so far in the box (onGuess
+    // with the whole of it: the guess is the phrase, bounded at its start)
+    // BEFORE onFinal, so the radio words, the router and a dialog's answer
+    // all read the accurate words. No `final`: the fast words stand.
     function streamEnd(g, mine) {
       var t0 = Date.now();
       g.busy = true;
@@ -3803,8 +3838,11 @@
         g.busy = false;
         if (!x.r.ok) { streamFail(g, mine, streamWhy(x)); return; }
         g.sid = "";   // ended: nothing to DELETE
-        voice.rec.last = { ms: Number(x.j.ms) || (Date.now() - t0), backend: String(x.j.backend || "stream"), error: "", at: Date.now() };
-        streamDone(g, mine, voiceJoin(g.pend, x.j.committed));
+        var text = voiceJoin(g.pend, x.j.committed), fin = voiceStreamFinal(text, x.j);
+        voice.rec.last = { ms: Number(x.j.ms) || (Date.now() - t0), backend: String(x.j.backend || "stream"), error: "", at: Date.now(),
+                           finalMs: fin.ms, fixed: fin.fixed };
+        if (fin.fixed && token === mine && mine.h.onGuess) mine.h.onGuess(fin.text);
+        streamDone(g, mine, fin.text);
       }, function (err) {
         if (g.dead) return;
         g.busy = false;
@@ -3917,14 +3955,16 @@
       var rms = Math.sqrt(sum / block.length), h = w.h;
       w.blocks.push({ at: w.d.t, x: block });
       var r = voiceWakeStep(w.d, rms, (block.length * 1000) / w.rate);
-      var reach = VOICE_WAKE_MAX_MS + VOICE_WAKE_QUIET_MS + VOICE_WAKE_LEAD_MS + 500;
+      var reach = VOICE_WAKE_MAX_MS + VOICE_WAKE_TAIL_MS + VOICE_WAKE_LEAD_MS + 500;
       while (w.blocks.length && w.blocks[0].at < w.d.t - reach) w.blocks.shift();
       if (h.onLevel) h.onLevel(voiceLevelOf(rms, w.d.floor));
       if (!r || r.kind !== "clip" || (h.wanted && !h.wanted())) return;
-      voiceResampleClip(voiceWakeSlice(w.blocks, r.from, r.to, w.rate), w.rate).then(function (pcm) {
-        if (standing !== w) return;
-        if (w.h.onClip) w.h.onClip(new Blob([voiceWavEncode(pcm, VOICE_WAV_RATE)], { type: "audio/wav" }), r);
-      });
+      // Out in this very block: the page's own decimator (synchronous — no
+      // render to wait for; a second of audio takes a few ms), then onClip.
+      // r.endAt: when the word's sound ended, on the wall clock.
+      r.endAt = Math.round(Date.now() - (r.to - r.end));
+      var pcm = voiceResample(voiceWakeSlice(w.blocks, r.from, r.to, w.rate), w.rate, VOICE_WAV_RATE);
+      if (h.onClip) h.onClip(new Blob([voiceWavEncode(pcm, VOICE_WAV_RATE)], { type: "audio/wav" }), r);
     }
     function standbyDrop(w) {
       if (w.proc) w.proc.onaudioprocess = null;
@@ -3961,11 +4001,16 @@
   // the tap (iOS and Chrome keep a context made outside a gesture suspended)
   // and primes the phone's voice too: it is the fallback for every utterance
   // the server cannot say (409/502, network, a suspended context), and what
-  // went wrong shows in Diagnostics. Text goes in sentence groups of at most
-  // VOICE_SPEAK_MAX_CHARS (the route's cap); each resolves on `ended` or the
-  // clip's own duration plus a grace, like PhoneTTS; cancel() stops the
-  // current source and drops the queue.
-  var VOICE_SPEAK_MAX_CHARS = 1200;
+  // went wrong shows in Diagnostics. A line goes sentence by sentence
+  // (voiceSpeakSentences): a slow voice (the owner's own, ~8 s for a 5 s
+  // line on a CPU) starts after the first sentence is made, not the whole
+  // line — sentence 1 is asked for at once and plays as it arrives; the
+  // next is asked for as one starts playing (one ahead, so a busy server
+  // makes one at a time) and plays the moment the one before ends. Each
+  // clip resolves on `ended` or its own duration plus a grace, like
+  // PhoneTTS; speak() resolves once the whole line is said, so the
+  // speaking state spans it. cancel() stops the current clip, drops the
+  // rest and aborts the request on its way.
   // The one AudioContext of the page, made (or resumed) inside a gesture:
   // the server adapters play and meter through it. Synchronous on purpose.
   function voiceAudioCtx() {
@@ -3974,17 +4019,6 @@
     if (!voice.audioCtx) { try { voice.audioCtx = new AC(); } catch (e) { return null; } }
     if (voice.audioCtx.state === "suspended") { try { voice.audioCtx.resume(); } catch (e) {} }
     return voice.audioCtx;
-  }
-  // Sentences packed into groups of at most `max` characters, in order.
-  function sentenceGroups(text, max) {
-    var out = [], cur = "";
-    sentenceChunks(text).forEach(function (s) {
-      if (cur && (cur + " " + s).length > max) { out.push(cur); cur = s; }
-      else cur = cur ? cur + " " + s : s;
-      while (cur.length > max) { out.push(cur.slice(0, max)); cur = cur.slice(max).trim(); }
-    });
-    if (cur) out.push(cur);
-    return out;
   }
   function ServerTTS(phone) {
     var gen = 0;          // cancel() bumps it: an older speak()'s chain stops
@@ -4025,20 +4059,21 @@
         try { src.start(0); } catch (e) { finish(); }
       });
     }
-    function note(ms, backend, error) {
-      voice.rec.lastSpeak = { ms: ms, backend: backend || "", error: error || "", at: Date.now() };
+    function note(ms, backend, error, extra) {
+      voice.rec.lastSpeak = Object.assign({ ms: ms, backend: backend || "", error: error || "", at: Date.now() }, extra || {});
     }
-    function sayOne(part, g) {
-      var ctx = voiceAudioCtx();
-      if (!ctx || ctx.state !== "running") {
-        note(0, "", "AudioContext " + (ctx ? ctx.state : "missing") + " — tap the mic once; the phone's voice spoke");
-        return phone.speak(part);
-      }
+    var aborts = [];      // the requests on their way (cancel() aborts them)
+    // One sentence's clip → {audio, backend, ms} or {error}; never rejects.
+    function fetchClip(ctx, part) {
       var t0 = Date.now(), backend = "server";
+      var a = window.AbortController ? new AbortController() : null;
+      if (a) aborts.push(a);
+      function done(x) { var i = aborts.indexOf(a); if (i >= 0) aborts.splice(i, 1); x.ms = Date.now() - t0; return x; }
       return fetch("/api/voice/speak", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: part }),
+        signal: a ? a.signal : undefined,
       }).then(function (r) {
         if (!r.ok) {
           return r.json().catch(function () { return {}; }).then(function (j) {
@@ -4050,31 +4085,42 @@
       }).then(function (buf) {
         return decode(ctx, buf);
       }).then(function (audio) {
-        note(Date.now() - t0, backend, "");
-        if (g !== gen) return;
-        return play(ctx, audio);
-      }).catch(function (err) {
-        // 409 (turned off meanwhile), 502 (the backend), the network, a clip
-        // that would not decode: the phone's voice says this one.
-        note(Date.now() - t0, "", String((err && err.message) || err));
-        if (g !== gen) return;
-        return phone.speak(part);
+        return done({ audio: audio, backend: backend });
+      }, function (err) {
+        return done({ error: String((err && err.message) || err) });
       });
     }
     function speak(text) {
-      var parts = sentenceGroups(text, VOICE_SPEAK_MAX_CHARS);
+      var parts = voiceSpeakSentences(text);
       if (!available() || !parts.length) return Promise.resolve();
-      var g = gen, i = 0;
+      var ctx = voiceAudioCtx();
+      if (!ctx || ctx.state !== "running") {
+        note(0, "", "AudioContext " + (ctx ? ctx.state : "missing") + " — tap the mic once; the phone's voice spoke");
+        return phone.speak(text);
+      }
+      var g = gen, i = 0, t0 = Date.now(), first = 0, ahead = fetchClip(ctx, parts[0]);
       return new Promise(function (resolve) {
         function next() {
           if (g !== gen || i >= parts.length) { resolve(); return; }
-          sayOne(parts[i++], g).then(next, next);
+          var part = parts[i++], got = ahead;
+          ahead = null;
+          got.then(function (x) {
+            if (g !== gen) { resolve(); return; }
+            // One ahead: the next sentence is made while this one plays.
+            if (i < parts.length) ahead = fetchClip(ctx, parts[i]);
+            if (!first) first = Date.now() - t0;
+            // 409 (turned off meanwhile), 502 (the backend), the network, a
+            // clip that would not decode: the phone's voice says this one.
+            note(x.ms, x.backend, x.error, { first: first, parts: parts.length });
+            (x.audio ? play(ctx, x.audio) : phone.speak(part)).then(next, next);
+          });
         }
         next();
       });
     }
     function cancel() {
       gen++;
+      aborts.splice(0).forEach(function (a) { try { a.abort(); } catch (e) {} });
       var s = playing;
       playing = null;
       if (s) { try { s.onended = null; s.stop(0); } catch (e) {} }
@@ -4100,18 +4146,57 @@
       if (j >= s.length || s.charAt(j) === " ") { pieces.push(s.slice(start, j)); start = j; i = j - 1; }
     }
     if (start < s.length) pieces.push(s.slice(start));
-    pieces.forEach(function (sent) {
-      sent = sent.trim();
-      if (!sent) return;
-      while (sent.length > 180) {
-        var cut = Math.max(sent.lastIndexOf(", ", 180), sent.lastIndexOf("; ", 180));
-        if (cut < 40) cut = sent.lastIndexOf(" ", 180);
-        if (cut < 40) cut = 180;
-        out.push(sent.slice(0, cut + 1).trim());
-        sent = sent.slice(cut + 1).trim();
-      }
-      if (sent) out.push(sent);
+    pieces.forEach(function (sent) { sentenceCut(sent, out); });
+    return out;
+  }
+  // One sentence onto `out`, cut at a comma (else a space) past 180 chars.
+  function sentenceCut(sent, out) {
+    sent = String(sent || "").trim();
+    while (sent.length > 180) {
+      var cut = Math.max(sent.lastIndexOf(", ", 180), sent.lastIndexOf("; ", 180));
+      if (cut < 40) cut = sent.lastIndexOf(" ", 180);
+      if (cut < 40) cut = 180;
+      out.push(sent.slice(0, cut + 1).trim());
+      sent = sent.slice(cut + 1).trim();
+    }
+    if (sent) out.push(sent);
+  }
+  // Split for the server's voice, one request per piece so the first
+  // sentence plays while the rest are made (ServerTTS.speak): a sentence
+  // ends at . ? ! or ; (plus closing quotes) before a space or the end —
+  // never inside a token ("3.5", "note.txt") nor after an abbreviation
+  // ("e.g.", "i.e.", "U.S.", "Dr.", "etc."); a piece under
+  // VOICE_SPEAK_MIN_CHARS joins the next (the last one, the one before) —
+  // a two-word clip is all seams; one past 180 characters is cut at a
+  // comma as sentenceChunks cuts it.
+  var VOICE_SPEAK_MIN_CHARS = 12;
+  var VOICE_ABBREV = /^(?:(?:[a-z]\.){2,}|(?:mr|mrs|ms|dr|st|vs|etc|approx|cf|jr|sr|no|fig)\.)$/i;
+  function voiceSpeakSentences(text) {
+    var s = String(text || "").replace(/\s+/g, " ").trim();
+    if (!s) return [];
+    var pieces = [], start = 0;
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charAt(i);
+      if (".!?;".indexOf(c) < 0) continue;
+      var j = i + 1;
+      while (j < s.length && ".!?;\"')]".indexOf(s.charAt(j)) >= 0) j++;
+      if (j < s.length && s.charAt(j) !== " ") continue;
+      if (c === "." && VOICE_ABBREV.test(s.slice(s.lastIndexOf(" ", i) + 1, i + 1))) continue;
+      pieces.push(s.slice(start, j).trim());
+      start = j;
+      i = j - 1;
+    }
+    if (start < s.length) pieces.push(s.slice(start).trim());
+    var out = [], acc = "";
+    pieces.forEach(function (p) {
+      if (!p) return;
+      acc = acc ? acc + " " + p : p;
+      if (acc.length >= VOICE_SPEAK_MIN_CHARS) { sentenceCut(acc, out); acc = ""; }
     });
+    if (acc) {
+      if (out.length) { var last = out.pop(); sentenceCut(last + " " + acc, out); }
+      else out.push(acc);
+    }
     return out;
   }
   // Markdown → words a voice can say: no code, links, headings, bullets,
@@ -4175,6 +4260,9 @@
     lastLine: "",                // "say that again": the last line said, as said
     heard: {},                   // Everything: title → the Say line read for its last turn (voiceTurnLine)
     lastError: "",
+    caption: "",                 // the loop's caption (voiceCaption): the ask sheet's mirror and Diagnostics read it; the strip shows one word
+    quietUntil: 0,               // "Quiet." on the strip until then (voiceQuiet)
+    quietTimer: null,
     pendingSay: null,            // a reply that arrived mid-dictation, spoken when idle
     box: null,                   // where dictation goes: null = the compose box; the ask sheet's field while it listens (vbox)
     guess: { box: null, typed: "" },   // the streamed phrase's guess: the box it is in and the end of that box's value it is (voiceGuessShow)
@@ -4241,6 +4329,15 @@
   }
 
   // --- the strip, the mic, captions -----------------------------------------
+  // The strip says ONE word and nothing else (the owner: "Listening or
+  // Speaking and really nothing else"): "Listening…" while the mic listens,
+  // "Speaking…" while a line is said, "Quiet." for VOICE_QUIET_CAPTION_MS
+  // after a hush, else nothing (voiceStripWord). Never the words heard —
+  // they are in the box already — nor the line being said, so nothing on
+  // the strip grows or pops up as words are typed or a line plays. The
+  // caption the voice loop keeps (voiceCaption: hints, the words so far,
+  // the line) lives on in voice.caption for the ask sheet and Diagnostics.
+  // VOICE_WORDS names the states for the ask sheet's mirror.
   var VOICE_WORDS = {
     idle: "Your turn", listening: "Listening…", sending: "Sending…",
     working: "Working…", speaking: "Speaking…", awaiting: "Listening…", dialog: "Waiting on you",
@@ -4259,8 +4356,8 @@
       s === "off" ? "Talk to this session" : s === "dialog" ? "Stop listening"
       : voiceIsListening() ? (voiceListen_.held ? "Release to keep it" : "Tap to keep it") : voiceTalkHint());
     voiceStrip.classList.toggle("hidden", s === "off" && !voice.hearPending && !voiceSpeech.playing);
-    voiceStateEl.textContent = VOICE_WORDS[s] || "";
     if (caption !== undefined) voiceCaption(caption);
+    voiceStripPaint();
     if (!voiceIsListening()) { voiceLevel(null); voiceGuessKeep(); }
     voiceCancelBtn.classList.toggle("hidden", s === "off" || s === "idle");
     if (!voiceSheet.classList.contains("hidden")) voiceOnToggle.checked = s !== "off";
@@ -4273,21 +4370,32 @@
     }
     voiceWakeSync();   // the wake word's standby follows the state
   }
-  // tail: the end of text still settling (a stream's partial) — greyed
-  // after the settled words; the caption's text is the whole either way.
-  function voiceCaption(text, tail) {
-    text = text || "";
-    tail = tail ? String(tail) : "";
-    if (!tail || text.length < tail.length || text.slice(text.length - tail.length) !== tail) {
-      voiceCaptionEl.textContent = text;
-    } else {
-      voiceCaptionEl.textContent = text.slice(0, text.length - tail.length);
-      var span = document.createElement("span");
-      span.className = "voice-partial";
-      span.textContent = tail;
-      voiceCaptionEl.appendChild(span);
-    }
+  // The loop's caption (a hint, the words so far, the line being said):
+  // kept in voice.caption for the ask sheet's mirror and Diagnostics —
+  // never drawn on the strip (voiceStripPaint draws its one word).
+  function voiceCaption(text) {
+    voice.caption = String(text || "");
+    voiceStripPaint();
     askVoiceMirror();
+  }
+  // The strip's one word, pure: a hush's "Quiet." first, then "Speaking…"
+  // while a line is said, "Listening…" while the mic listens, else "".
+  function voiceStripWord(state, speaking, quiet) {
+    if (quiet) return "Quiet.";
+    if (speaking) return "Speaking…";
+    if (state === "listening" || state === "awaiting" || state === "dialog") return "Listening…";
+    return "";
+  }
+  function voiceStripPaint() {
+    var w = voiceStripWord(voice.state, !!voiceSpeech.playing || voice.state === "speaking", Date.now() < voice.quietUntil);
+    if (voiceCaptionEl.textContent !== w) voiceCaptionEl.textContent = w;
+  }
+  // "Quiet." on the strip for VOICE_QUIET_CAPTION_MS (a hush).
+  function voiceQuiet() {
+    voice.quietUntil = Date.now() + VOICE_QUIET_CAPTION_MS;
+    voiceCaption("Quiet.");
+    clearTimeout(voice.quietTimer);
+    voice.quietTimer = setTimeout(voiceStripPaint, VOICE_QUIET_CAPTION_MS + 20);
   }
   function voiceError(msg) {
     voice.lastError = msg || "";
@@ -4310,9 +4418,13 @@
   // sheet's too) while the server adapter records: v is the latest block's
   // level (voiceLevelOf, 0..1); null hides the meter and drops the ring.
   // A requestAnimationFrame loop eases the shown level toward it
-  // (voiceLevelStep) and writes one CSS variable, --lvl, which the CSS turns
-  // into transforms — no layout. It runs only while there is a level to show.
-  // ring: the ring alone, never the meter (the wake word's standby).
+  // (voiceLevelStep) and writes ONE value, --pick (voicePickup's step:
+  // 0 / 0.5 / 1), only when the step changes: the ring is still — a thin
+  // ring whose opacity alone eases between three steps (the CSS's 400 ms
+  // transition), never a scale or a halo that bounces with the voice. The
+  // meter shows only while the ⚙ sheet is open (Diagnostics). It runs only
+  // while there is a level to show. ring: the ring alone, never the meter
+  // (the wake word's standby).
   var voiceRing = { shown: 0, target: 0, at: 0, raf: 0, painted: "", hearing: false };
   function voiceLevel(v, ring) {
     var R = voiceRing;
@@ -4323,7 +4435,7 @@
       voiceRingPaint(0);
       return;
     }
-    if (!ring && voiceLevelEl.classList.contains("hidden")) { voiceLevelEl.classList.remove("hidden"); fitSoon(); }
+    if (!ring && voiceLevelEl.classList.contains("hidden") && !voiceSheet.classList.contains("hidden")) voiceLevelEl.classList.remove("hidden");
     R.target = Math.min(1, Math.max(0, Number(v) || 0));
     if (!R.raf && window.requestAnimationFrame) { R.at = Date.now(); R.raf = requestAnimationFrame(voiceRingFrame); }
   }
@@ -4336,14 +4448,14 @@
     voiceRingPaint(R.shown);
     if (R.shown > 0 || R.target > 0) R.raf = requestAnimationFrame(voiceRingFrame);
   }
-  // --lvl on the mic, the ask sheet's mic and the meter (the bar inherits
-  // it); data-hearing while the level shows a voice (the CSS stops the
-  // "waiting" pulse then). Written only when it changes.
+  // --pick on the mic, the ask sheet's mic and the meter (the bar inherits
+  // it); data-hearing while it hears a voice (step 1 or 2). Written only
+  // when the step changes.
   function voiceRingPaint(v) {
-    var R = voiceRing, s = v.toFixed(2), hearing = v >= 0.05;
+    var R = voiceRing, step = voicePickup(v), s = ["0", "0.5", "1"][step], hearing = step > 0;
     if (s !== R.painted) {
       R.painted = s;
-      [voiceBtn, voiceLevelEl, askMicBtn].forEach(function (el) { if (el) el.style.setProperty("--lvl", s); });
+      [voiceBtn, voiceLevelEl, askMicBtn].forEach(function (el) { if (el) el.style.setProperty("--pick", s); });
     }
     if (hearing !== R.hearing) {
       R.hearing = hearing;
@@ -4583,6 +4695,7 @@
   function voiceHushShow() {
     var on = !!voiceSpeech.playing;
     voiceWakeSpeaking(on);
+    voiceStripPaint();
     if (voiceHushBtn.classList.contains("hidden") === !on) return;
     voiceHushBtn.classList.toggle("hidden", !on);
     voiceStrip.classList.toggle("hidden", voice.state === "off" && !voice.hearPending && !on);
@@ -4596,14 +4709,8 @@
     voiceSpeechStop(true);
     voiceAckStop();
     if (voice.state === "off") return;
-    if (voice.state === "speaking") { voiceIdle("Quiet."); return; }
-    // Listening: its caption comes back (the hint, the dialog's question);
-    // else not the line just cut.
-    var was = voiceIsListening() ? String(voiceCaptionEl.textContent || "") : voice.state === "idle" ? voiceTalkHint() : "";
-    voiceCaption("Quiet.");
-    setTimeout(function () {
-      if (voice.state !== "off" && voiceCaptionEl.textContent === "Quiet.") voiceCaption(was);
-    }, VOICE_QUIET_CAPTION_MS);
+    if (voice.state === "speaking") voiceIdle();
+    voiceQuiet();
   }
   // Barge-in: the mic (or a hold) while a line is being said. The speaker
   // is cut BEFORE the mic opens, the lines about that line's session (or
@@ -4654,7 +4761,7 @@
   var voiceListen_ = { netErrs: 0, mode: "", until: 0, restarts: 0, timer: null, reprompted: false,
                        heard: false, startedAt: 0, rapid: 0, stopAfter: false, held: false,
                        overAfter: false, overBy: 0, routing: false, routeQ: [], draining: false, gen: 0,
-                       muteUntil: 0 };
+                       muteUntil: 0, woke: null };
   voice.listen = voiceListen_;   // tests age the window with it
   function voiceListen(mode, windowMs, held) {
     var L = voiceListen_;
@@ -4707,8 +4814,12 @@
     var mode = voiceListen_.mode;
     voiceListen_.startedAt = Date.now();
     voiceGuessKeep();   // a new phrase: an old guess is text now
+    var woke = voiceListen_.woke;   // the wake word opened this listen: {skipUntil, wakeMs}
+    voiceListen_.woke = null;
     voice.stt.start({
       until: voiceListen_.until,
+      skipUntil: woke ? woke.skipUntil : 0,
+      wakeMs: woke ? woke.wakeMs : -1,
       onInterim: function (t, tail) { if (voiceIsListening()) { voiceHeardSome(); voiceCaption(t || voiceDictHint(), t ? tail : ""); } },
       // A streamed phrase so far: into the box as a guess (voiceGuessShow).
       onGuess: function (t) { if (!voiceIsListening()) return false; voiceHeardSome(); return voiceGuessShow(t); },
@@ -6394,11 +6505,13 @@
   // back: that recognizer needs the mic to itself.
   var VOICE_WAKE_GAP_MS = 1500;           // one check per this long
   var VOICE_WAKE_AFTER_SPEECH_MS = 500;   // no standby while the page speaks and this long after
-  var VOICE_WAKE_CHIME_MS = 130;          // the chime's length: listening opens after it
+  var VOICE_WAKE_CHIME_MS = 130;          // the chime's length: the recorder skips it
+  var VOICE_WAKE_SKIP_PAD_MS = 100;       // ...and this much more (the audio engine's latency)
   var VOICE_WAKE_TIMEOUT_MS = 10000;      // a check's own cap
   var VOICE_WAKE_GESTURE_MS = 5000;       // a refused mic this long after a tap is a refusal, else "tap once"
   var voiceWake_ = { inflight: false, at: 0, speaking: false, spokeAt: 0, timer: null, needTap: false,
-                     tapArmed: false, gestureAt: 0, gen: 0, checks: 0, wakes: 0, chimes: 0, last: null, note: "" };
+                     tapArmed: false, gestureAt: 0, checks: 0, wakes: 0, chimes: 0, last: null, note: "",
+                     endAt: 0, wakeMs: -1 };   // the last word's end (wall clock), and its end → listening (ms)
   voice.wakeState = voiceWake_;   // tests read it
   // Any tap: a refused microphone right after one is the person's answer.
   document.addEventListener("click", function () { voiceWake_.gestureAt = Date.now(); }, true);
@@ -6458,7 +6571,7 @@
   var voiceWakeHandlers = {
     onLevel: function (v) { if (!voiceIsListening()) voiceLevel(v, true); },
     wanted: function () { return voiceWakeLive() === ""; },
-    onClip: function (blob) { voiceWakeCheck(blob); },
+    onClip: function (blob, r) { voiceWakeCheck(blob, r); },
     onReady: function (ctx) { voiceWakeCtxCheck(ctx); },
     onError: function (code) {
       // Refused right after a tap: refused. Long after (the page came back,
@@ -6515,9 +6628,10 @@
     W.speaking = on;
     voiceWakeSync();
   }
-  function voiceWakeCheck(blob) {
+  function voiceWakeCheck(blob, r) {
     var W = voiceWake_;
     if (voiceWakeLive()) return;   // something took over while the clip was encoded
+    W.endAt = r && r.endAt ? r.endAt : Date.now();
     W.inflight = true;
     W.at = Date.now();
     W.checks++;
@@ -6549,24 +6663,28 @@
       W.last = { error: err && err.name === "AbortError" ? "the server took too long" : String((err && err.message) || err), at: Date.now() };
     });
   }
-  // The word: the chime, "Yes?", a tick — then listening, as a tap in
-  // toggle mode (a line being said is cut first). A tap or a send that came
-  // first wins.
+  // The word: listening at once, as a tap in toggle mode (a line being
+  // said is cut first; the microphone is warm, so the dictation's stream
+  // opens now) — and the chime, "Yes?", a tick in the same moment. The
+  // recorder skips the audio while the chime plays (skipUntil: its length
+  // and one block of the engine's latency), so the chime is never
+  // transcribed. W.wakeMs: the word's end → listening (Diagnostics, the
+  // trace). A tap or a send that came first wins.
   function voiceWoke() {
     var W = voiceWake_;
     if (voice.state === "off" || voice.state === "sending" || voiceIsListening() || document.hidden) return;
     W.wakes++;
+    var now = Date.now();
+    W.wakeMs = Math.max(0, now - (W.endAt || now));
     voiceWakeChime();
-    voice.buzzAt = Date.now();
+    voice.buzzAt = now;
     if (navigator.vibrate) { try { navigator.vibrate(12); } catch (e) {} }
     voiceCaption("Yes?");
-    var gen = ++W.gen;
-    setTimeout(function () {
-      if (W.gen !== gen || voice.state === "off" || voice.state === "sending" || voiceIsListening()) return;
-      voiceBargeIn();
-      voice.box = null;
-      voiceListen("prompt", VOICE_TAP_MS);
-    }, VOICE_WAKE_CHIME_MS);
+    voiceBargeIn();
+    voice.box = null;
+    voiceListen_.woke = { skipUntil: now + VOICE_WAKE_CHIME_MS + VOICE_WAKE_SKIP_PAD_MS, wakeMs: W.wakeMs };
+    voiceListen("prompt", VOICE_TAP_MS);
+    voiceListen_.woke = null;   // a listen that did not start now (a barge-in's mute) is a plain one
   }
   // Two short rising tones (~120 ms) through the page's AudioContext — made
   // or resumed by the tap that turned voice / the standby on.
@@ -6687,7 +6805,7 @@
   // The strip is the mic's big twin: a tap there while listening stops
   // too; while it talks ("Speaking…", the line), it stops talking.
   voiceStrip.addEventListener("click", function (ev) {
-    if (ev.target === voiceStrip || ev.target === voiceStateEl || voiceCaptionEl.contains(ev.target) ||
+    if (ev.target === voiceStrip || voiceCaptionEl.contains(ev.target) ||
         ev.target === voiceLevelEl || ev.target === voiceLevelBar) {
       if (voiceIsListening()) voiceListenOver();
       else if (voiceSpeech.playing) voiceHush();
@@ -6835,6 +6953,7 @@
   function voiceSheetClose() {
     clearInterval(voice.diagTimer);
     voice.diagTimer = null;
+    voiceLevelEl.classList.add("hidden");   // the meter is the sheet's only
     closeSheet(voiceSheet);
   }
   function voiceSheetCfg() {
@@ -6953,7 +7072,9 @@
     var names = { mic: "mic", open: "stream open", speech: "speech", words: "words", typed: "typed", settled: "settled" };
     var parts = ["mic", "open", "speech", "words", "typed", "settled"].filter(function (k) { return k in t; })
       .map(function (k) { return names[k] + " " + t[k] + " ms"; });
-    return parts.length ? parts.join(", ") + " after the start" : "nothing yet";
+    var wake = "wake" in t ? "wake " + (t.wake / 1000).toFixed(1) + " s (the word's end → listening)" : "";
+    if (!parts.length) return wake || "nothing yet";
+    return (wake ? wake + "; " : "") + parts.join(", ") + " after the start";
   }
   // "standby, mic open (3 checks; last “Mindflock.” → wake, 240 ms)" / "off"
   function voiceDiagWake() {
@@ -6961,12 +7082,16 @@
     if (!voice.prefs.wake) return "off" + (W.note ? " — " + W.note : "");
     var now = voiceBtn.hasAttribute("data-standby") ? "standby, mic open" : W.needTap ? "waiting for a tap" : "paused";
     var last = !x ? "no check yet" : x.error ? "last check failed — " + x.error
-      : "last “" + x.text + "” → " + (x.wake ? "wake" : "not the word") + ", " + x.ms + " ms";
+      : "last “" + x.text + "” → " + (x.wake ? "wake" : "not the word") + ", " + x.ms + " ms" +
+        (x.wake && W.wakeMs >= 0 ? ", wake " + (W.wakeMs / 1000).toFixed(1) + " s (the word's end → listening)" : "");
     return now + " (" + W.checks + " check" + (W.checks === 1 ? "" : "s") + ", " + W.wakes + " wake" + (W.wakes === 1 ? "" : "s") + "; " + last + ")";
   }
   function voiceDiagLast(x) {
     if (!x) return "none yet";
-    return x.error ? "failed — " + x.error : x.ms + " ms via " + x.backend;
+    if (x.error) return "failed — " + x.error;
+    return x.ms + " ms via " + x.backend +
+      (x.finalMs ? ", final " + (x.finalMs / 1000).toFixed(1) + " s" + (x.fixed ? " (corrected)" : "") : "") +
+      (x.first ? ", first sound " + (x.first / 1000).toFixed(1) + " s" + (x.parts > 1 ? " (" + x.parts + " sentences)" : "") : "");
   }
   voiceGearBtn.addEventListener("click", voiceSheetOpen);
   voiceDoneBtn.addEventListener("click", voiceSheetClose);
@@ -8094,7 +8219,7 @@
     var st8 = mine ? voiceBtnState(voice.state) : "idle";
     askMicBtn.dataset.state = st8;
     askMicBtn.setAttribute("aria-label", mine && voiceIsListening() ? "Stop listening" : "Answer by voice");
-    var cap = mine ? String(voiceCaptionEl.textContent || "") : "";
+    var cap = mine ? String(voice.caption || "") : "";
     var word = mine ? VOICE_WORDS[voice.state] || "" : "";
     var show = mine && voice.state !== "idle" && (word || cap);
     askVoiceEl.innerHTML = "";
