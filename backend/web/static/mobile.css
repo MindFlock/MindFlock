@@ -867,8 +867,28 @@ html, body {
      scroll that cancels the pointer. */
   -webkit-touch-callout: none;
   touch-action: none;
+  position: relative;   /* the ring (::after) is placed round it */
 }
 #voice-btn:active, #asking-mic:active { background: var(--border); }
+/* The live ring while it listens: mobile.js voiceRingPaint sets --lvl (0..1,
+   the voice's smoothed level, floor-relative) and the ring grows and firms
+   with it — transform and opacity only, no layout. data-hearing (a voice is
+   coming in) stops the "waiting for you" pulse so the ring is what moves. */
+#voice-btn::after, #asking-mic::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border: 3px solid var(--accent);
+  border-radius: 11px;
+  opacity: 0;
+  transform: scale(1);
+  pointer-events: none;
+}
+#voice-btn[data-state="listening"]::after, #asking-mic[data-state="listening"]::after {
+  opacity: calc(0.15 + var(--lvl, 0) * 0.85);
+  transform: scale(calc(1 + var(--lvl, 0) * 0.3));
+}
+#voice-btn[data-state="listening"][data-hearing], #asking-mic[data-state="listening"][data-hearing] { animation: none; }
 #voice-btn[data-state="idle"], #asking-mic[data-state="idle"] { border-color: var(--accent); color: var(--accent); }
 #voice-btn[data-state="listening"], #asking-mic[data-state="listening"] {
   background: var(--accent);
@@ -902,6 +922,8 @@ html, body {
   overflow: hidden;
   line-height: 1.3;
 }
+/* A stream's words still settling: greyed after the settled ones. */
+#voice-caption .voice-partial { color: var(--muted); }
 #voice-cancel, #voice-gear {
   flex: 0 0 auto;
   background: var(--panel-2);
@@ -914,7 +936,8 @@ html, body {
 }
 #voice-gear { font-size: 16px; padding: 3px 9px; }
 #voice-cancel:active, #voice-gear:active { background: var(--border); }
-/* The level meter while the server adapter records (no interim words). */
+/* The level meter while the server adapter records: --lvl (set on
+   #voice-level by mobile.js, inherited) scales the bar. */
 #voice-level {
   height: 4px;
   margin-top: 6px;
@@ -922,7 +945,7 @@ html, body {
   border-radius: 2px;
   overflow: hidden;
 }
-#voice-level-bar { height: 100%; width: 0; background: var(--tone-working); transition: width 80ms linear; }
+#voice-level-bar { height: 100%; width: 100%; background: var(--tone-working); transform: scaleX(var(--lvl, 0)); transform-origin: left center; }
 #voice-hear {
   display: block;
   width: 100%;

@@ -6230,6 +6230,30 @@ last words, and the next phrase opens a new stream; Cancel or voice off
 clip per phrase until `GET /api/voice` says otherwise) or any failed request
 turns the phrase into a clip — the words so far stay, the audio the stream
 had not answered is transcribed in one piece.
+**Starting fast, and seeing it hear you** (server recognition). The stream
+opens *with* the tap, alongside the microphone's start-up, and nothing is
+uploaded before your first word: the page keeps only the last 300 ms before
+it (the word's soft start) and sends that with the first loud block at once,
+so the first grey words show about 0.2 s after you start talking instead of
+0.3–0.45 s (measured in the headless harness with a 120 ms recognizer; a
+real whisper pass adds its own time). The **microphone stays warm** for 90 s
+after a phrase (`VOICE_KEEP_STREAM_MS`), for as long as a reply is on its
+way back (the reply opens listening by itself), and 15 s after the page is
+hidden: a tap in that time starts listening at once, with no
+`getUserMedia`. The browser's mic-in-use indicator stays lit for that long;
+voice off gives the mic back at once. While you speak, a **ring round the
+mic** (and the ask sheet's mic) grows and firms with your voice — its level
+relative to the room's noise, so a quiet room sits at zero, rising in 30 ms
+and falling over ~150 ms — and the meter under the strip follows it; the
+caption says ***Hearing you…*** while your voice is coming in and nothing
+has come back yet, *Listening… n s* when it is quiet. The streamed words
+replace it as soon as the first chunk answers: the settled ones in the
+text colour, the still-settling tail **greyed**. Android ticks (12 ms) at
+each phrase's first word — but not when the 30 ms listening buzz has just
+gone. Diagnostics shows *Microphone: warm / not held* and *Last start: mic
+… ms, stream open … ms, speech … ms, words … ms, settled … ms after the
+start*; with `localStorage.cs_voice_debug = "1"` the console logs every
+mark too.
 A Chromium browser that does not ship Google's speech key — Arc, Brave,
 Vivaldi, Opera — has the recognizer but every start fails with a `network`
 error and nothing is heard: the first is retried, the second in a listening
