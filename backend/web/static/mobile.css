@@ -924,7 +924,7 @@ html, body {
 }
 /* A stream's words still settling: greyed after the settled ones. */
 #voice-caption .voice-partial { color: var(--muted); }
-#voice-cancel, #voice-gear {
+#voice-hush, #voice-cancel, #voice-gear {
   flex: 0 0 auto;
   background: var(--panel-2);
   color: var(--text);
@@ -935,7 +935,8 @@ html, body {
   font-family: inherit;
 }
 #voice-gear { font-size: 16px; padding: 3px 9px; }
-#voice-cancel:active, #voice-gear:active { background: var(--border); }
+#voice-hush:active, #voice-cancel:active, #voice-gear:active { background: var(--border); }
+#voice-hush { border-color: var(--tone-waiting); color: var(--tone-waiting); }
 /* The level meter while the server adapter records: --lvl (set on
    #voice-level by mobile.js, inherited) scales the bar. */
 #voice-level {
@@ -1183,10 +1184,14 @@ html, body {
 .asking-review { margin: 10px 0 0; font-size: 13px; line-height: 1.4; }
 .asking-review dt { color: var(--muted); }
 .asking-review dd { margin: 0 0 6px; overflow-wrap: anywhere; }
-.asking-sel { display: flex; gap: 8px; margin-top: 8px; }
+/* The step's own row, like a dialog's footer: Back on the left, the
+   primary move on the right (a multi-select's Next / Submit, the review's
+   Submit answers with a plain Cancel beside it) — the page's button
+   style, no digit badges. */
+.asking-sel { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
 .asking-sel button {
-  flex: 1 1 0;
-  padding: 10px;
+  flex: 0 0 auto;
+  padding: 10px 16px;
   border-radius: 7px;
   font-size: 14px;
   font-family: inherit;
@@ -1194,7 +1199,12 @@ html, body {
   color: var(--text);
   border: 1px solid var(--border);
 }
-#asking-sel-next { background: var(--accent); color: #fff; border-color: var(--accent); }
+.asking-sel button:active { background: var(--border); }
+.asking-sel-acts { display: flex; gap: 8px; margin-left: auto; min-width: 0; }
+.asking-sel-acts .asking-act-primary { flex: 1 1 auto; }
+#asking-sel-next { margin-left: auto; min-width: 96px; }
+#asking-sel-next, .asking-sel .asking-act-primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+#asking-sel-next:active, .asking-sel .asking-act-primary:active { background: rgba(var(--accent-rgb), 0.75); }
 .asking-sel button[disabled] { opacity: 0.5; }
 /* The answer field with Send beside it, like the compose row. */
 .asking-reply { display: flex; align-items: flex-end; gap: 8px; margin-top: 12px; }
