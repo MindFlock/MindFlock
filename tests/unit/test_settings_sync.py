@@ -233,7 +233,7 @@ def test_every_settings_field_is_classified():
 def test_the_voice_models_are_this_machines():
     """Which whisper models run is about THIS machine's CPU and RAM — the
     streaming model as much as the one-shot one."""
-    for name in ("stt_model", "stt_stream_model"):
+    for name in ("stt_model", "stt_stream_model", "stt_final"):
         assert name in settings_sync.LOCAL["voice"]
         assert name not in settings_sync.SYNCED["voice"]
     v = store.VoiceSettings.from_dict({"stt_stream_model": " tiny.en "})
