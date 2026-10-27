@@ -272,12 +272,12 @@ describe("keys while it is up", () => {
 // --- The server calls -------------------------------------------------------------- //
 
 describe("answering", () => {
-  it("a prose answer is typed and sent: /send {text, enter: true}, with say only when asked", async () => {
+  it("a prose answer is typed and sent: /send {text, dialog_safe: true} (never `enter` with text), with say only when asked", async () => {
     instApi.mockResolvedValue({});
     await ask.sendAnswer("s", "the second one");
-    expect(instApi).toHaveBeenLastCalledWith("s", "/send", { json: { text: "the second one", enter: true } });
+    expect(instApi).toHaveBeenLastCalledWith("s", "/send", { json: { text: "the second one", dialog_safe: true } });
     await ask.sendAnswer("s", "yes", true);
-    expect(instApi).toHaveBeenLastCalledWith("s", "/send", { json: { text: "yes", enter: true, say: true } });
+    expect(instApi).toHaveBeenLastCalledWith("s", "/send", { json: { text: "yes", dialog_safe: true, say: true } });
   });
 
   it("Later on a question: POST /asking/dismiss {}", async () => {

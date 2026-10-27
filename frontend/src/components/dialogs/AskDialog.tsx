@@ -18,7 +18,7 @@
  *  - an unparsed dialog: its question and "Open the pane ↗" — there is
  *    nothing it can safely press;
  *  - a question in plain words: an answer box (Enter sends with /send
- *    {text, enter: true}; Shift+Enter is a new line) and "Open the pane ↗".
+ *    {text, dialog_safe: true}; Shift+Enter is a new line) and "Open the pane ↗".
  * "Later" (Esc) puts it off: a question is dismissed on the server, a dialog
  * snoozed here until its id changes. After an answer it steps to the next
  * one still asking, or closes.

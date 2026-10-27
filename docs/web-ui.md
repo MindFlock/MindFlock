@@ -2254,7 +2254,8 @@ the command it wants to run in a monospace box. Then:
 - a dialog it couldn't read: the question and **Open the pane ↗** — the prompt
   needs the terminal;
 - a question in words: an **answer box** — **Enter** sends it
-  (`POST /api/instances/{title}/send {text, enter: true}`), **Shift+Enter** is a
+  (`POST /api/instances/{title}/send {text, dialog_safe: true}`, which types it
+  and submits it), **Shift+Enter** is a
   new line — and **Open the pane ↗**. If a dialog came up meanwhile the send is
   refused and the pop-up shows the dialog.
 

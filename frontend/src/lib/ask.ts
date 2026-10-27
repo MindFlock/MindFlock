@@ -301,10 +301,14 @@ export function dismissQuestion(title: string) {
   return instApi(title, "/asking/dismiss", { json: {} });
 }
 
-/** Answer a prose question by typing it: POST /send {text, enter: true},
+/** Answer a prose question by typing it: POST /send {text, dialog_safe: true}
+ * types the text AND submits it (`enter` is only for a draft already typed —
+ * the server refuses it with text),
  * dialog-safe on the server (409 `in_dialog` when a dialog came up). */
 export function sendAnswer(title: string, text: string, say = false) {
-  return instApi<{ queued?: boolean }>(title, "/send", { json: say ? { text, enter: true, say: true } : { text, enter: true } });
+  return instApi<{ queued?: boolean }>(title, "/send", {
+    json: say ? { text, dialog_safe: true, say: true } : { text, dialog_safe: true },
+  });
 }
 
 // --- The pop-up's door -------------------------------------------------------------- //
