@@ -37018,7 +37018,7 @@ function approvableRequest(event, data) {
 //#region src/lib/openSettings.ts
 var DEFAULT_SETTINGS_SCREEN = "connections";
 function openSettings(screen) {
-	useUi.getState().openDialogFor("settings", screen ?? DEFAULT_SETTINGS_SCREEN);
+	useUi.getState().openDialogFor("settings", screen ?? null);
 }
 //#endregion
 //#region src/lib/peerActions.ts
@@ -39704,6 +39704,7 @@ var HandsFree = class {
 };
 var SPEECH_STALE_MS = 6e4;
 var CONFIRM_STALE_MS = 5e3;
+var CUE_GAP_MS = 120;
 var GATE_RETRY_MS = 50;
 var MID_SENTENCE_MS = 1500;
 var confirmSentences = null;
@@ -39758,6 +39759,22 @@ var SpeechQueue = class {
 			this.pump();
 		});
 	}
+	cue(play, ms) {
+		const lead = this.speaking || this.lines.length ? CUE_GAP_MS : 0;
+		return new Promise((done) => {
+			let at = 0;
+			while (at < this.lines.length && this.lines[at].confirm) at++;
+			this.lines.splice(at, 0, {
+				line: "",
+				at: this.now(),
+				title: "",
+				done,
+				confirm: true,
+				sound: soundSpeaker(play, ms, lead)
+			});
+			this.pump();
+		});
+	}
 	setGate(ok) {
 		this.gate = ok;
 		clearTimeout(this.gateRetry);
@@ -39784,16 +39801,20 @@ var SpeechQueue = class {
 	hold() {
 		this.held = true;
 		this.cut();
+		const sounds = this.lines.filter((l) => l.sound);
+		this.lines = this.lines.filter((l) => !l.sound);
+		sounds.forEach((l) => l.done());
 	}
 	release() {
 		this.held = false;
 		this.pump();
 	}
 	cancel(title) {
-		const drop = title === void 0 ? this.lines : this.lines.filter((l) => l.title === title);
-		this.lines = title === void 0 ? [] : this.lines.filter((l) => l.title !== title);
+		const mine = (l) => title === void 0 || l.title === title && !l.confirm;
+		const drop = this.lines.filter(mine);
+		this.lines = this.lines.filter((l) => !mine(l));
 		drop.forEach((l) => l.done());
-		if (this.current && (title === void 0 || this.current.title === title)) this.cut();
+		if (this.current && mine(this.current)) this.cut();
 		if (this.held) this.settle();
 		else this.pump();
 	}
@@ -39805,7 +39826,7 @@ var SpeechQueue = class {
 		this.current = null;
 		this.turn++;
 		sp.cancel();
-		this.onSpeaking(false);
+		if (!cur?.sound) this.onSpeaking(false);
 		cur?.done();
 	}
 	settle() {
@@ -39829,28 +39850,28 @@ var SpeechQueue = class {
 			if (!next) return this.settle();
 			const stale = next.confirm ? CONFIRM_STALE_MS : this.opts.staleMs ?? SPEECH_STALE_MS;
 			const age = this.now() - next.at;
-			const text = String((typeof next.line === "function" ? next.line() : next.line) || "").trim();
+			const text = next.sound ? "" : String((typeof next.line === "function" ? next.line() : next.line) || "").trim();
 			if (age > stale) {
-				(this.opts.log ?? ((m) => console.debug(m)))("[voice] dropped a line " + Math.round(age / 1e3) + " s old: " + text.slice(0, 80));
+				if (!next.sound) (this.opts.log ?? ((m) => console.debug(m)))("[voice] dropped a line " + Math.round(age / 1e3) + " s old: " + text.slice(0, 80));
 				next.done();
 				continue;
 			}
-			if (!text) {
+			if (!text && !next.sound) {
 				next.done();
 				continue;
 			}
-			const sp = this.engine();
+			const sp = next.sound || this.engine();
 			const turn = ++this.turn;
-			this.last = text;
+			if (!next.sound) this.last = text;
 			this.speaking = sp;
 			this.current = next;
-			this.onSpeaking(true);
+			if (!next.sound) this.onSpeaking(true);
 			next.start?.();
 			const done = () => {
 				if (this.turn !== turn || !this.speaking) return;
 				this.speaking = null;
 				this.current = null;
-				this.onSpeaking(false);
+				if (!next.sound) this.onSpeaking(false);
 				next.done();
 				this.pump();
 			};
@@ -39859,6 +39880,25 @@ var SpeechQueue = class {
 		}
 	}
 };
+function soundSpeaker(play, ms, lead) {
+	let timer;
+	let end = () => {};
+	return {
+		speak: () => new Promise((resolve) => {
+			end = resolve;
+			const go = () => {
+				play();
+				timer = setTimeout(resolve, ms);
+			};
+			if (lead > 0) timer = setTimeout(go, lead);
+			else go();
+		}),
+		cancel: () => {
+			clearTimeout(timer);
+			end();
+		}
+	};
+}
 var BARGE_SKIP_MS = 150;
 function bargeIn(q, title) {
 	const talking = q.busy;
@@ -42068,13 +42108,7 @@ function TopBarMic() {
 	const gated = (0, import_react.useRef)(false);
 	const sound = (kind) => {
 		if (prefsRef.current.sounds === false) return;
-		if (!queue.busy) return chime(voiceAudioCtx(), kind);
-		const after = (on) => {
-			if (on) return;
-			speakingListeners.delete(after);
-			chime(voiceAudioCtx(), kind);
-		};
-		speakingListeners.add(after);
+		queue.cue(() => chime(voiceAudioCtx(), kind), kind === "stop" ? STOP_CHIME_MS : CHIME_MS);
 	};
 	const halt = () => {
 		gated.current = false;

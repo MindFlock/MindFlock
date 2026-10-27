@@ -34,3 +34,21 @@ describe("the screen Settings opens on", () => {
     expect(openingScreen(null, KEYS)).toBe(DEFAULT_SETTINGS_SCREEN);
   });
 });
+
+
+describe("the gear button opens Settings with no deep link", () => {
+  it("openSettings() passes no target, so the last screen is used", async () => {
+    const calls: unknown[] = [];
+    const { useUi } = await import("../state/store");
+    const prev = useUi.getState().openDialogFor;
+    useUi.setState({ openDialogFor: ((name: string, target?: string | null) => calls.push([name, target ?? null])) as never });
+    try {
+      const { openSettings } = await import("../lib/openSettings");
+      openSettings();
+      openSettings("voice");
+      expect(calls).toEqual([["settings", null], ["settings", "voice"]]);
+    } finally {
+      useUi.setState({ openDialogFor: prev });
+    }
+  });
+});

@@ -19,6 +19,7 @@ import {
   CONFIRM_LINES,
   CONFIRM_STALE_MS,
   CONTROL_TAIL_MS,
+  CUE_GAP_MS,
   OVER_FINAL_WAIT_MS,
   isSwitchCommand,
   sentLine,
@@ -35,6 +36,7 @@ import {
   type Speaker,
   type VoiceCfg,
 } from "../lib/voiceDesktop";
+import { CHIME_MS, STOP_CHIME_MS } from "../lib/wakeWord";
 import { SRC, code } from "./sourceText";
 
 const mocks = vi.hoisted(() => {
@@ -627,8 +629,8 @@ describe("the mic's chimes: rising at every start, falling at every stop", () =>
   it("every start chimes: start() itself, after the recognizer started (a click, the hotkey, the wake, the ask card's mic all go through it)", () => {
     const start = fnBody("const start = (", "const listenFor");
     expect(start).toMatch(/if \(!ok\) \{\s*halt\(\);[^}]*\}\s*sound\("start"\);\s*chimed\.current = true;/);
-    // The only chime() calls are the helper's: no path plays its own.
-    expect(MIC.match(/\bchime\(/g)).toHaveLength(2);
+    // The only chime() call is the helper's: no path plays its own.
+    expect(MIC.match(/\bchime\(/g)).toHaveLength(1);
     expect(fnBody("const woken = ", "const latestWake")).not.toMatch(/chime|sound\(/);
     // Its sound is skipped from the recording.
     expect(start).toMatch(/\{ skipMs: Math\.max\(skipMs, chimeSkip\) \}/);
@@ -650,11 +652,13 @@ describe("the mic's chimes: rising at every start, falling at every stop", () =>
     expect(d.active).toBe(true);
   });
 
-  it("never over a line being said (it waits for that line's end); the Sounds switch off: none", () => {
+  it("never over a line being said (in the speech queue's order, its own length); the Sounds switch off: none", () => {
     const sound = fnBody("const sound = (", "const halt = ");
     expect(sound).toMatch(/if \(prefsRef\.current\.sounds === false\) return;/);
-    expect(sound).toMatch(/if \(!queue\.busy\) return chime\(voiceAudioCtx\(\), kind\);/);
-    expect(sound).toMatch(/speakingListeners\.add\(after\)/);
+    expect(sound).toMatch(
+      /void queue\.cue\(\(\) => chime\(voiceAudioCtx\(\), kind\), kind === "stop" \? STOP_CHIME_MS : CHIME_MS\);/
+    );
+    expect(sound).not.toMatch(/speakingListeners/);
     expect(MIC).toMatch(/const chimeSkip = prefsRef\.current\.sounds !== false \? CHIME_MS \+ 30 : 0;/);
     const voice = code("components/settings/screens/Voice.tsx");
     expect(voice).toContain('id="voice-sounds"');
@@ -744,5 +748,209 @@ describe("continuous listening: replies play in the person's pauses, the recorde
     expect(MIC).toMatch(/if \(gated\.current && queue\.busy && prefsRef\.current\.ptt !== "hold"\) \{\s*queue\.skip\(\);\s*return;\s*\}/);
     // A hands-free answer is not continuous: the queue stays held for it.
     expect(MIC).toMatch(/title,\s*hint,\s*continuous: false,/);
+  });
+});
+
+describe("a stop's own confirmation plays whole: nothing cuts it, the chime comes after it", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.instApi.mockResolvedValue({ ok: true });
+  });
+
+  /** The desktop's wiring end to end: a real SpeechQueue, Confirmer and
+   * LiveDictation, start() and halt() as TopBarMic's (the barge-in's hold,
+   * the start chime, the gate; halt: the gate off, the stop chime queued by
+   * sound(), the release). The engine logs each line's start and whether it
+   * finished on its own (`end`) or was cancelled mid-line (`cut`). */
+  function rig() {
+    const events: string[] = [];
+    let current = "";
+    let finish: () => void = () => {};
+    const sp: Speaker = {
+      speak: (t) => {
+        current = t;
+        events.push("say " + t);
+        return new Promise<void>(
+          (r) =>
+            (finish = () => {
+              events.push("end " + current);
+              current = "";
+              r();
+            })
+        );
+      },
+      cancel: () => {
+        if (current) events.push("cut " + current);
+        current = "";
+      },
+    };
+    const q = new SpeechQueue(() => sp);
+    const mutes: boolean[] = [];
+    const confirmer = new Confirmer({
+      queue: q,
+      on: () => true,
+      mic: () => ({ mute: (b: boolean) => void mutes.push(b) }),
+      server: () => false,
+      local: () => false,
+      speaker: { lastError: "", prefetch: async () => {} },
+    });
+    const sound = (kind: "start" | "stop") =>
+      void q.cue(() => void events.push("chime " + kind), kind === "stop" ? STOP_CHIME_MS : CHIME_MS);
+    let halts = 0;
+    const k = hooks({
+      confirm: (kind) => void confirmer.say(kind),
+      halt: () => {
+        halts++;
+        q.setGate(null);
+        sound("stop");
+        q.release();
+      },
+      quietMs: () => 0,
+    });
+    const t = session();
+    q.hold();
+    const d = new LiveDictation(t, k.h, { continuous: true });
+    sound("start");
+    q.setGate(() => !d.midSentence());
+    q.release();
+    // From here on, nothing may cancel, skip or hold the queue.
+    const spies = (["cancel", "skip", "hold"] as const).map((m) => vi.spyOn(q, m));
+    return {
+      q,
+      d,
+      t,
+      events,
+      mutes,
+      halts: () => halts,
+      /** The engine finishes the line it is saying. */
+      end: async () => {
+        finish();
+        await vi.advanceTimersByTimeAsync(0);
+      },
+      queueCalls: () => spies.flatMap((s) => s.mock.calls.map(() => s.getMockName())),
+    };
+  }
+
+  /** `p`, with the clock running (a send waits SUBMIT_SETTLE_MS). */
+  const settle = async (p: Promise<void>) => {
+    let done = false;
+    void p.then(() => (done = true));
+    while (!done) await vi.advanceTimersByTimeAsync(10);
+  };
+
+  it("a stop phrase: “Stopped.” finishes on its own, then the falling chime — no cancel, skip or hold", async () => {
+    const r = rig();
+    expect(r.events).toEqual(["chime start"]); // the queue was idle: at once
+    await vi.advanceTimersByTimeAsync(CHIME_MS);
+    await r.d.heard("half a thought stop recording");
+    expect(r.d.active).toBe(false);
+    expect(r.halts()).toBe(1);
+    expect(r.events).toEqual(["chime start", "say Stopped."]);
+    expect(r.mutes).toEqual([true]);
+    // The stop's teardown and the release are done: the line plays on.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(r.events).toEqual(["chime start", "say Stopped."]);
+    await r.end();
+    // A breath after the words, never over them.
+    await vi.advanceTimersByTimeAsync(CUE_GAP_MS - 1);
+    expect(r.events.at(-1)).toBe("end Stopped.");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(r.events).toEqual(["chime start", "say Stopped.", "end Stopped.", "chime stop"]);
+    expect(r.events.some((e) => e.startsWith("cut"))).toBe(false);
+    expect(r.queueCalls()).toEqual([]);
+    expect(r.mutes).toEqual([true, false]);
+    await vi.advanceTimersByTimeAsync(STOP_CHIME_MS);
+    expect(r.q.idle).toBe(true);
+  });
+
+  it("“over and out”: “Over and out.” / “Sent. Over and out.” play whole, the chime after", async () => {
+    for (const [words, line] of [
+      ["over and out", CONFIRM_LINES.bye],
+      ["ship it over and out", CONFIRM_LINES.out],
+    ] as const) {
+      const r = rig();
+      await vi.advanceTimersByTimeAsync(CHIME_MS);
+      await settle(r.d.heard(words));
+      expect(r.d.active).toBe(false);
+      expect(r.events).toEqual(["chime start", "say " + line]);
+      await r.end();
+      await vi.advanceTimersByTimeAsync(CUE_GAP_MS);
+      expect(r.events).toEqual(["chime start", "say " + line, "end " + line, "chime stop"]);
+      expect(r.queueCalls()).toEqual([]);
+    }
+  });
+
+  it("the cut-off: a line still being said when the stop acts — the chime used to start with “Stopped.”; now it waits for its end", async () => {
+    const r = rig();
+    await vi.advanceTimersByTimeAsync(CHIME_MS);
+    await settle(r.d.heard("ship it over"));
+    expect(r.events.at(-1)).toBe("say Sent."); // still being said…
+    await r.d.heard("over and out"); // …when the stop phrase acts
+    expect(r.d.active).toBe(false);
+    await r.end();
+    // "Over and out." starts the moment "Sent." ends — alone.
+    expect(r.events.slice(-2)).toEqual(["end Sent.", "say Over and out."]);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(r.events.at(-1)).toBe("say Over and out.");
+    await r.end();
+    await vi.advanceTimersByTimeAsync(CUE_GAP_MS);
+    expect(r.events.slice(-3)).toEqual(["say Over and out.", "end Over and out.", "chime stop"]);
+    expect(r.events.some((e) => e.startsWith("cut"))).toBe(false);
+    expect(r.queueCalls()).toEqual([]);
+  });
+
+  it("“disregard”: “Cleared.” plays whole while listening goes on — the next phrase does not clip it, and no chime", async () => {
+    const r = rig();
+    await vi.advanceTimersByTimeAsync(CHIME_MS);
+    await r.d.heard("oops disregard");
+    expect(r.d.active).toBe(true);
+    expect(r.events).toEqual(["chime start", "say Cleared."]);
+    // The next phrase arrives while it is still being said.
+    await r.d.heard("fresh start");
+    expect(r.t.keys.at(-1)).toBe("fresh start ");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(r.events).toEqual(["chime start", "say Cleared."]);
+    await r.end();
+    await vi.advanceTimersByTimeAsync(CUE_GAP_MS + STOP_CHIME_MS);
+    expect(r.events).toEqual(["chime start", "say Cleared.", "end Cleared."]);
+    expect(r.queueCalls()).toEqual([]);
+  });
+
+  it("the queue: a session's cancel spares the confirmations and the chime; a hold drops a chime still waiting; a chime is not words", async () => {
+    const speaking: boolean[] = [];
+    const q = new SpeechQueue(
+      () => ({ speak: () => new Promise<void>(() => {}), cancel: () => {} }),
+      (on) => void speaking.push(on)
+    );
+    void q.say("Billing: done.", { title: "billing" });
+    void q.confirmLine("Stopped.");
+    let chimed = 0;
+    const cue = q.cue(() => void chimed++, STOP_CHIME_MS);
+    q.cancel("billing"); // cuts the reply being said
+    q.cancel(""); // never the person's own lines
+    expect(q.last).toBe("Stopped.");
+    expect(q.queued).toBe(1); // the chime, behind "Stopped."
+    q.hold(); // the mic keyed again: "Stopped." is cut (barge-in), the chime dropped
+    await cue;
+    expect(chimed).toBe(0);
+    expect(q.idle).toBe(true);
+    // An idle queue plays a chime at once (the start chime is skipped from
+    // the recording from this moment); no onSpeaking, never "repeat".
+    q.release();
+    speaking.length = 0;
+    void q.cue(() => void chimed++, CHIME_MS);
+    expect(chimed).toBe(1);
+    expect(q.busy).toBe(true);
+    await vi.advanceTimersByTimeAsync(CHIME_MS);
+    expect(q.idle).toBe(true);
+    expect(speaking).toEqual([]);
+    expect(q.last).toBe("Stopped.");
+  });
+
+  it("the wiring: halt() never cancels, skips or holds the queue; the stop chime is queued before the release", () => {
+    const MIC = code("components/TopBarMic.tsx");
+    const halt = MIC.slice(MIC.indexOf("const halt = () => {"), MIC.indexOf("const target = ("));
+    expect(halt).not.toMatch(/queue\.(cancel|skip|hold)\(|bargeIn\(|speechSynthesis/);
+    expect(halt.indexOf('sound("stop")')).toBeLessThan(halt.indexOf("queue.release()"));
   });
 });

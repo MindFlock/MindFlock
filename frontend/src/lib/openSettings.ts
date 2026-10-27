@@ -14,6 +14,10 @@ export type { SettingsScreen };
  * opens on budgets and sleep timers a new user can't use yet). */
 export const DEFAULT_SETTINGS_SCREEN: SettingsScreen = "connections";
 
+/** Open Settings on `screen`, or — with none named (the gear button,
+ * Ctrl+,) — on the screen you last had open this page life (lib/
+ * settingsLastScreen), else General. A named screen is a deep link and
+ * always wins. */
 export function openSettings(screen?: SettingsScreen): void {
-  useUi.getState().openDialogFor("settings", screen ?? DEFAULT_SETTINGS_SCREEN);
+  useUi.getState().openDialogFor("settings", screen ?? null);
 }
