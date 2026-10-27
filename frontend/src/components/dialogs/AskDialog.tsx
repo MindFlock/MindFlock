@@ -33,7 +33,10 @@
  *
  * The mic (lib/askVoice): its button — and the Talk hotkey, and the top-bar
  * mic — listen for THIS session's answer while the pop-up is up; with "Read
- * replies aloud" on, the pop-up reads the ask out and listens on its own. */
+ * replies aloud" on, the pop-up reads the ask out and listens on its own.
+ * A hand on the card (`byHand`) stops that: the ask's read-out and its
+ * hands-free listen end, and a step that comes up within HAND_QUIET_MS of a
+ * hand is not read out. */
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Dialog, DialogOption } from "../../api/types";
@@ -141,6 +144,34 @@ function onIdle(fn: () => void): () => void {
 
 /** Read the ask out (with "Read replies aloud" on) once per ask. */
 const readOut = new Set<string>();
+
+/** A step that comes up this soon after a hand on the card is not read out:
+ * a person clicking through is not narrated at; a voice-driven flow is. */
+export const HAND_QUIET_MS = 3000;
+/** When each session's card was last acted on by hand (ms). */
+const handAt = new Map<string, number>();
+
+/** Read this step out? Not within {@link HAND_QUIET_MS} of a hand on the card. */
+export function narrate(lastHand: number | undefined, now: number): boolean {
+  return !lastHand || now - lastHand >= HAND_QUIET_MS;
+}
+
+/** Keys that are no act on the card: moving focus, a lone modifier, a
+ * shortcut (the Talk hotkey), and Escape (it is "Later" — the pop-up moving
+ * on stops the read-out anyway). */
+export function handKey(e: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey">): boolean {
+  if (e.ctrlKey || e.metaKey || e.altKey) return false;
+  return !["Tab", "Shift", "Control", "Alt", "Meta", "CapsLock", "Escape"].includes(e.key);
+}
+
+/** A press on the card that answers it by hand: an option, a box, a nav
+ * button, a field — never the card's own mic (that is barge-in: the mic
+ * stops the speech itself and listens). */
+function handTarget(el: EventTarget | null): boolean {
+  const t = el as Element | null;
+  if (!t || typeof t.closest !== "function" || t.closest(".ask-voice")) return false;
+  return !!t.closest("button, textarea, input, [role=checkbox]");
+}
 
 /** No pop-up opens by itself before this (ms): after a "No…" the person is
  * telling that session what to do instead, in its pane. */
@@ -402,6 +433,13 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
       clearInterval(timer);
     };
   }, [polling, title]);
+  /** A hand on the card: the voice stops reading this ask (and its
+   * hands-free listen ends); the next step is read only if no hand came
+   * within {@link HAND_QUIET_MS}. */
+  const byHand = useCallback(() => {
+    handAt.set(title, Date.now());
+    askMic()?.quiet(title);
+  }, [title]);
   const field = useRef<HTMLTextAreaElement | null>(null);
   const selField = useRef<HTMLTextAreaElement | null>(null);
   const [hasText, setHasText] = useState(false);
@@ -518,6 +556,11 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
   const readKey = sel && d ? "sel:" + title + "|" + (d.step ?? 0) + "|" + d.question : item.key;
   useEffect(() => {
     if (readOut.has(readKey)) return;
+    if (!narrate(handAt.get(title), Date.now())) {
+      // Clicked through by hand: this step is not read out (ever).
+      if (item.kind === "question" || dialogReady) readOut.add(readKey);
+      return;
+    }
     if (item.kind === "dialog") {
       if (!dialogReady || !d) return;
       readOut.add(readKey);
@@ -544,6 +587,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
         if (!k) return;
         e.preventDefault();
         e.stopPropagation();
+        byHand();
         if (k.type === "toggle") selectFlows.toggle(title, k.key);
         else if (k.type === "field") selectFlows.openField(title, k.key);
         else void act({ type: "pick", key: k.key });
@@ -553,11 +597,12 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
       if (!key) return;
       e.preventDefault();
       e.stopPropagation();
+      byHand();
       pickRef.current(key);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [d, title, act]);
+  }, [d, title, act, byHand]);
 
   // The keyboard lands on the highlighted option (never "Always"), or the
   // answer box.
@@ -584,7 +629,17 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
   const prim = d ? primaryIndex(d.options) : -1;
 
   return (
-    <div className="ask-card" data-ask={item.kind} data-title={title}>
+    <div
+      className="ask-card"
+      data-ask={item.kind}
+      data-title={title}
+      onPointerDownCapture={(e) => {
+        if (handTarget(e.target)) byHand();
+      }}
+      onKeyDownCapture={(e) => {
+        if (handKey(e) && !(e.target as Element | null)?.closest?.(".ask-voice")) byHand();
+      }}
+    >
       <div className="ask-head">
         {slot && (
           <span className="ask-slot" title={"Row " + slot + " on the rail"}>
@@ -689,7 +744,9 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
       <div className="modal-actions">
         <span className="ask-keys">
           {d && isSelect(d)
-            ? SELECT_KEYS[selectStage(d)]
+            ? selectStage(d) === "multi" && /^submit$/i.test(String(d.button || "").trim())
+              ? "1–9 ticks · Enter submits · Esc later"
+              : SELECT_KEYS[selectStage(d)]
             : d?.parsed
               ? "1–9 or Y / N / A · Enter · Esc later"
               : !isDialog
@@ -731,11 +788,23 @@ export interface SelectViewProps {
   onSendField(): void;
 }
 
+/** The multi-select's primary, from the prompt's own button: "Next ›", or
+ * "Submit" on the last question (no arrow: nothing comes after it). */
+export function navLabel(button: string | null | undefined): string {
+  const b = String(button || "").trim() || "Next";
+  return /^submit$/i.test(b) ? b : b + " ›";
+}
+
 /** Claude's question prompt, one step: its tabs (done ✓, the shown one
  * lit, Submit last), the review's answers, the options with their
  * descriptions — a press (single), a box (multi), a field ("Type
- * something", "Chat about this") — then Back / Next and the small "Cancel
- * the question". Pure: the panel owns the flow. */
+ * something", "Chat about this") — then the nav row in the house
+ * `.modal-actions` style: Back on the left, and the step's ONE primary on the
+ * right — Next (or the prompt's own `button`, "Submit" on the last question)
+ * for a multi-select, "Submit answers" beside a plain Cancel on the review
+ * (a confirmation, not a list of options: no digit badges there, though 1 / 2
+ * still press them) — with the small "Cancel the question" elsewhere. Pure:
+ * the panel owns the flow. */
 export function SelectView({ flow, primaryRef, fieldRef, onAct, onToggle, onField, onText, onCloseField, onSendField }: SelectViewProps) {
   const d = flow.dialog;
   const stage = selectStage(d);
@@ -743,12 +812,14 @@ export function SelectView({ flow, primaryRef, fieldRef, onAct, onToggle, onFiel
   const step = d.step ?? 0;
   const busy = flow.busy;
   const words = flow.field ? d.options.find((o) => o.key === flow.field) : undefined;
-  // The one the keyboard lands on: Next (multi), Submit (review), else the
-  // first option that is a press.
-  const prim =
-    stage === "multi"
-      ? ""
-      : (stage === "review" ? d.options.find((o) => o.kind === "yes") : d.options.find((o) => !takesWords(o)))?.key || "";
+  // The review's two answers are its nav buttons; anything else it offers
+  // stays an option.
+  const submit = stage === "review" ? d.options.find((o) => o.kind === "yes") : undefined;
+  const cancel = stage === "review" ? d.options.find((o) => o.kind === "no") : undefined;
+  const opts = d.options.filter((o) => o !== submit && o !== cancel);
+  // The one the keyboard lands on: Next (multi), Submit answers (review),
+  // else the first option that is a press.
+  const prim = stage === "single" ? opts.find((o) => !takesWords(o))?.key || "" : "";
   const label = (o: DialogOption) => (
     <span className="ask-opt-text">
       <span className="ask-opt-label">{o.label}</span>
@@ -781,31 +852,33 @@ export function SelectView({ flow, primaryRef, fieldRef, onAct, onToggle, onFiel
           ))}
         </dl>
       )}
-      <div className="ask-opts" role="group" aria-label="Answers">
-        {d.options.map((o) => {
-          const box = stage === "multi" && isBox(o) && !takesWords(o);
-          const on = !!flow.checked[o.key];
-          return (
-            <button
-              key={o.key}
-              ref={o.key === prim ? primaryRef : undefined}
-              type="button"
-              role={box ? "checkbox" : undefined}
-              aria-checked={box ? on : undefined}
-              className={"ask-opt" + (o.key === prim ? " primary" : "") + (flow.field === o.key ? " picked" : "")}
-              data-key={o.key}
-              data-kind={o.kind}
-              disabled={busy}
-              title={"Press " + o.key + ": " + o.label}
-              onClick={() => (takesWords(o) ? onField(o.key) : box ? onToggle(o.key) : onAct({ type: "pick", key: o.key }))}
-            >
-              <span className="k">{o.key}</span>
-              {box && <span className="ask-box" aria-hidden="true" />}
-              {label(o)}
-            </button>
-          );
-        })}
-      </div>
+      {opts.length > 0 && (
+        <div className="ask-opts" role="group" aria-label="Answers">
+          {opts.map((o) => {
+            const box = stage === "multi" && isBox(o) && !takesWords(o);
+            const on = !!flow.checked[o.key];
+            return (
+              <button
+                key={o.key}
+                ref={o.key === prim ? primaryRef : undefined}
+                type="button"
+                role={box ? "checkbox" : undefined}
+                aria-checked={box ? on : undefined}
+                className={"ask-opt" + (o.key === prim ? " primary" : "") + (flow.field === o.key ? " picked" : "")}
+                data-key={o.key}
+                data-kind={o.kind}
+                disabled={busy}
+                title={"Press " + o.key + ": " + o.label}
+                onClick={() => (takesWords(o) ? onField(o.key) : box ? onToggle(o.key) : onAct({ type: "pick", key: o.key }))}
+              >
+                <span className="k">{o.key}</span>
+                {box && <span className="ask-box" aria-hidden="true" />}
+                {label(o)}
+              </button>
+            );
+          })}
+        </div>
+      )}
       {words && (
         <div className="ask-sel-field">
           <textarea
@@ -836,22 +909,41 @@ export function SelectView({ flow, primaryRef, fieldRef, onAct, onToggle, onFiel
           </button>
         </div>
       )}
-      <div className="ask-sel-nav">
+      <div className="ask-sel-nav modal-actions">
         {step > 0 && (
-          <button type="button" className="ghost" id="ask-select-back" disabled={busy} onClick={() => onAct({ type: "prev" })}>
+          <button type="button" id="ask-select-back" disabled={busy} onClick={() => onAct({ type: "prev" })}>
             ‹ Back
           </button>
         )}
-        {stage === "multi" && (
-          <button type="button" className="primary" id="ask-select-next" ref={primaryRef} disabled={busy} onClick={() => onAct({ type: "next" })}>
-            {d.button || "Next"} ›
+        {!cancel && (
+          <button type="button" className="linklike ask-cancel-q" disabled={busy} onClick={() => onAct({ type: "cancel" })}>
+            Cancel the question
           </button>
         )}
-        {busy && <span className="ask-state">sending…</span>}
         <span className="ask-sel-sp" />
-        <button type="button" className="linklike ask-cancel-q" disabled={busy} onClick={() => onAct({ type: "cancel" })}>
-          Cancel the question
-        </button>
+        {busy && <span className="ask-state">sending…</span>}
+        {cancel && (
+          <button type="button" id="ask-select-cancel" disabled={busy} title={"Press " + cancel.key} onClick={() => onAct({ type: "pick", key: cancel.key })}>
+            {cancel.label}
+          </button>
+        )}
+        {submit && (
+          <button
+            type="submit"
+            id="ask-select-submit"
+            ref={primaryRef}
+            disabled={busy}
+            title={"Enter, or press " + submit.key}
+            onClick={() => onAct({ type: "pick", key: submit.key })}
+          >
+            {submit.label}
+          </button>
+        )}
+        {stage === "multi" && (
+          <button type="submit" id="ask-select-next" ref={primaryRef} disabled={busy} onClick={() => onAct({ type: "next" })}>
+            {navLabel(d.button)}
+          </button>
+        )}
       </div>
     </div>
   );

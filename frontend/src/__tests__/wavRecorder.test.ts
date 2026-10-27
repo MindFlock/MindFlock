@@ -270,6 +270,21 @@ describe("startWavRecording", () => {
     expect(typeof g.processor.onaudioprocess).toBe("function");
   });
 
+  it("skipS drops the first audio unrecorded and unmetered (the app's own voice, cut at a barge-in)", () => {
+    const g = fakeGraph(48000);
+    const levels: number[] = [];
+    // 0.15 s at 48 kHz = 7200 frames: two 4096 blocks cover it.
+    const rec = startWavRecording(STREAM, g.ctx, { onLevel: (r) => levels.push(r), skipS: 0.15 });
+    g.fire(new Float32Array(4096).fill(0.9));
+    g.fire(new Float32Array(4096).fill(0.9));
+    expect(rec.seconds()).toBe(0);
+    expect(levels).toEqual([]);
+    g.fire(new Float32Array(4096).fill(0.25));
+    expect(rec.seconds()).toBeCloseTo(4096 / 48000, 9);
+    expect(levels).toHaveLength(1);
+    expect(levels[0]).toBeCloseTo(0.25, 6);
+  });
+
   it("accumulates blocks, reports level, and stops into one WAV at the target rate", async () => {
     const g = fakeGraph(48000);
     const levels: number[] = [];

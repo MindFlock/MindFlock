@@ -28,7 +28,7 @@ const { ApiError } = await import("../api/client");
 const { normDialog } = await import("../lib/flockActions");
 const sel = await import("../lib/askSelect");
 const { selectPosts, runSelect, selectKey, selectStage, fieldPhrase, SelectFlows, answerSelect, SELECT_GRACE_MS } = sel;
-const { SelectView, SELECT_KEYS } = await import("../components/dialogs/AskDialog");
+const { SelectView, SELECT_KEYS, navLabel } = await import("../components/dialogs/AskDialog");
 const { askKindLabel } = await import("../lib/ask");
 const { dialogChoices, dialogRetryLine, HandsFree } = await import("../lib/voiceDesktop");
 
@@ -475,10 +475,62 @@ describe("the view", () => {
     expect(html).not.toMatch(/role="checkbox"[^>]*data-key="4"/);
   });
 
-  it("the review: the answers listed, Submit answers highlighted", () => {
+  it("the review reads as a confirmation: the answers, then ONE primary Submit answers beside a plain Cancel — no badges", () => {
     const html = view(review());
     expect(html).toContain("<dt>Which suites?</dt><dd>Unit, E2E</dd>");
-    expect(html).toMatch(/class="ask-opt primary" data-key="1" data-kind="yes"/);
+    // No option rows (and so no digit badges) on the review.
+    expect(html).not.toContain("ask-opt");
+    expect(html).not.toContain('class="k"');
+    // The house .modal-actions row: Back, then Cancel, then the one primary.
+    expect(html).toContain('<div class="ask-sel-nav modal-actions">');
+    expect(html).toMatch(/id="ask-select-back".*id="ask-select-cancel"[^>]*>Cancel<\/button><button type="submit" id="ask-select-submit"[^>]*>Submit answers<\/button>/);
+    expect(html.match(/type="submit"/g)).toHaveLength(1);
+    // Its Cancel IS the question's cancel: no second "Cancel the question".
+    expect(html).not.toContain("Cancel the question");
+  });
+
+  it("the review's buttons press the prompt's own options (Enter lands on Submit answers)", () => {
+    const acts: unknown[] = [];
+    const primary = { current: null as HTMLButtonElement | null };
+    const el = SelectView({
+      flow: { dialog: review(), checked: {}, field: "", text: "", busy: false },
+      primaryRef: primary,
+      onAct: (a) => acts.push(a),
+      onToggle: () => {},
+      onField: () => {},
+      onText: () => {},
+      onCloseField: () => {},
+      onSendField: () => {},
+    });
+    const buttons: Array<{ props: Record<string, unknown> }> = [];
+    const walk = (n: unknown) => {
+      if (!n || typeof n !== "object") return;
+      if (Array.isArray(n)) return n.forEach(walk);
+      const e = n as { type?: unknown; props?: Record<string, unknown> };
+      if (e.type === "button" && e.props) buttons.push(e as { props: Record<string, unknown> });
+      walk(e.props?.children);
+    };
+    walk(el);
+    const byId = (id: string) => buttons.find((b) => b.props.id === id)!;
+    (byId("ask-select-submit").props.onClick as () => void)();
+    (byId("ask-select-cancel").props.onClick as () => void)();
+    expect(acts).toEqual([
+      { type: "pick", key: "1" },
+      { type: "pick", key: "2" },
+    ]);
+    expect(byId("ask-select-submit").props.ref).toBe(primary);
+  });
+
+  it("multi: the nav's primary is labelled from the prompt's button — Next ›, or Submit on the last question", () => {
+    expect(navLabel("Next")).toBe("Next ›");
+    expect(navLabel(null)).toBe("Next ›");
+    expect(navLabel("Submit")).toBe("Submit");
+    const next = view(multi());
+    expect(next).toMatch(/<button type="submit" id="ask-select-next"[^>]*>Next ›<\/button>/);
+    const last = view({ ...multi(), button: "Submit" });
+    expect(last).toMatch(/<button type="submit" id="ask-select-next"[^>]*>Submit<\/button>/);
+    // Back on the left, the primary last.
+    expect(last.indexOf("ask-select-back")).toBeLessThan(last.indexOf("ask-select-next"));
   });
 
   it("an open field: a text box with its words and a send", () => {
@@ -538,7 +590,7 @@ describe("the wiring around it", () => {
     expect(mic).toContain('if (mode === "all" && inline) {');
     expect(mic).toContain("if (!heard.fresh(title, inline, Number(data.ts) || null)) return;");
     // The name first only when that session isn't the focused one — decided at speak time.
-    expect(mic).toContain("queue.say(() => spokenLine(voiceName(title, useUi.getState().focused, displayName(title)), words))");
+    expect(mic).toContain("queue.say(() => spokenLine(voiceName(title, useUi.getState().focused, displayName(title)), words), { title })");
     // The mic listens for a question only on a prompt it sent ("mine").
     expect(mic).toContain("speak(inline, data.has_question ? inline : \"\", mine);");
     expect(mic).toContain("drained: () => queue.drained(),");
