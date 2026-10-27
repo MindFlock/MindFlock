@@ -86,13 +86,17 @@ describe("effBindings", () => {
 });
 
 describe("the talk hotkey (push-to-talk)", () => {
-  it("defaults to Alt+Space, holdable, unguarded so it works from a terminal", () => {
+  it("defaults to Ctrl+T (Alt+Space as the browser alias), holdable, unguarded so it works from a terminal", () => {
     const talk = byId("talk");
-    expect(sameCombo(talk, { key: " ", alt: true })).toBe(true);
+    expect(sameCombo(talk, { key: "t", mod: true })).toBe(true);
     expect(talk.holdable).toBe(true);
     expect(talk.when).toBeUndefined();
+    const alias = aliasFor("talk");
+    expect(sameCombo(alias, { key: " ", alt: true })).toBe(true);
+    expect(alias.holdable).toBe(true);
+    expect(alias.when).toBeUndefined();
     // The only holdable action today.
-    expect(KEYMAP.filter((e) => e.holdable).map((e) => e.id)).toEqual(["talk"]);
+    expect(KEYMAP.filter((e) => e.holdable).map((e) => e.id || e.aliasOf)).toEqual(["talk", "talk"]);
   });
 
   it("a rebind replaces it like any other action", () => {

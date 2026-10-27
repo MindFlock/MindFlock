@@ -162,7 +162,8 @@ a session first*).
   “over”, after waiting up to 1.5 s for the phrase still being recognised (it
   is typed like the rest). Two minutes without a word stops listening; the
   words stay where they are.
-- **The Talk hotkey** (the keymap's Talk action, default Alt+Space,
+- **The Talk hotkey** (the keymap's Talk action, default Ctrl+T — Alt+Space
+  stays as the browser-safe alias, since Chrome keeps Ctrl+T for a new tab —
   rebindable in Keyboard shortcuts) does the same from anywhere — a terminal
   pane included: the keymap dispatches `mindflock:voice-talk` on `window` with
   `{phase: "down" | "up"}`. In *Hold to talk* a press starts and the release
@@ -2341,7 +2342,7 @@ built-in alias.
 | `Alt+I` | Intake — tickets, PRs and issues waiting to become sessions |
 | `Alt+V` | Verify — pushed changes nobody has checked |
 | `Alt+S` | Schedule — templates that start sessions on their own |
-| `Alt+Space` | Talk to the focused session through the top-bar mic — hold it (hold-to-talk) or press once to start and again to stop (click-to-talk), following the mic's push-to-talk mode. Works while a terminal has focus; the keystroke never reaches the terminal (or, on a Mac, types a non-breaking space). Key-repeat while held is ignored, and letting go of either key — or switching away from the window — ends a hold. The keymap only reports the key: it fires a `mindflock:voice-talk` window event with `detail.phase` `"down"` / `"up"`, and the mic decides what that means. Rebindable like the rest; a rebind applies to the release as well as the press |
+| `Ctrl+T` (`Alt+Space` is the browser-safe alias: Chrome reserves Ctrl+T for a new tab) | Talk to the focused session through the top-bar mic — hold it (hold-to-talk) or press once to start and again to stop (click-to-talk), following the mic's push-to-talk mode. Works while a terminal has focus; the keystroke never reaches the terminal (no readline transpose; Option+Space on a Mac types no non-breaking space either). Key-repeat while held is ignored, and letting go of either key — or switching away from the window — ends a hold. The keymap only reports the key: it fires a `mindflock:voice-talk` window event with `detail.phase` `"down"` / `"up"`, and the mic decides what that means. Rebindable like the rest; a rebind applies to the release as well as the press |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` (also `Ctrl+PgDn` / `Ctrl+PgUp`) | Next / previous window — sessions and open windows (assistant, logs, extension panes), one list |
 | `Ctrl+1…9` / `Alt+1…9` | Focus the Nth sidebar row — a session or a window, matching the number badges |
 | `/` | Focus the sidebar session filter (when it's showing) |
@@ -5796,7 +5797,7 @@ leaves the words there, one ending in "submit" submits them (Enter, after the
 server's dialog checks), one ending in "disregard" takes back what was typed
 and keeps listening, Esc takes it back and stops; "stop recording" (or "that's
 all", "mic off") stops at any point, never typed. The Talk hotkey (default
-Alt+Space) works like the button from anywhere. Nothing is typed into a
+Ctrl+T, Alt+Space in a browser tab) works like the button from anywhere. Nothing is typed into a
 session showing a dialog — a lone "yes", "no", "always" or a number answers it
 instead (pressed only with *Approve dialogs by voice* on), and answers a
 question the session asked as a prompt. A dictation's first phrase is offered
