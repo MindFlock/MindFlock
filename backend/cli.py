@@ -1812,6 +1812,9 @@ def _cmd_templates(args: argparse.Namespace) -> int:
         nxt = _fmt_when(info.get("next_at"))
         if info.get("paused"):
             nxt = "paused"
+        elif info.get("once_done"):
+            # A spent one-off: its label already says how it went.
+            nxt = "done"
         elif info.get("skipping_at"):
             nxt += " (skipping %s)" % _fmt_when(info.get("skipping_at"))
         rows.append(

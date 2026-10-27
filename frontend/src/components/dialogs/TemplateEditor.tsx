@@ -36,6 +36,9 @@ import {
   fastTrackNeedsGitHub,
   hasSchedule,
   normalizeAt,
+  ONCE_PAST,
+  onceDate,
+  onceOf,
   schedulePreviewLine,
   zoneSuffix,
   type CronPreview,
@@ -77,11 +80,13 @@ export interface TemplateForm {
   mode: "worktree" | "in_place" | "provisioned";
   workspace_strategy: string;
   init_repo: boolean;
-  /** Run on a schedule: every day / weekdays at `at` (local "HH:MM"), or
-   * on the cron expression `cron` ("cron"). */
+  /** Run on a schedule: every day / weekdays at `at` (local "HH:MM"), once
+   * on `date` ("YYYY-MM-DD") at `at` ("once"), or on the cron expression
+   * `cron` ("cron"). */
   scheduled: boolean;
   at: string;
-  days: "daily" | "weekdays" | "cron";
+  days: "daily" | "weekdays" | "once" | "cron";
+  date: string;
   cron: string;
   /** How far each run carries its work on its own ("" = leave it). */
   autopilot: TemplateAutopilot | "";
@@ -95,9 +100,25 @@ export interface TemplateForm {
 }
 
 /** A schedule's cadence as one comparable string ("" = none). */
-function cadenceKey(s: { at?: string; days?: string; cron?: string } | null | undefined): string {
+function cadenceKey(s: { at?: string; days?: string; cron?: string; once?: string } | null | undefined): string {
   if (!s) return "";
+  if (s.once) return "once:" + s.once.trim();
   return s.cron ? "cron:" + s.cron.trim().replace(/\s+/g, " ") : s.at ? s.at + "/" + (s.days || "daily") : "";
+}
+
+/** "2026-10-28" — a local date as <input type="date"> and the once minute
+ * spell it. */
+function isoDate(d: Date): string {
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+
+/** The date a fresh one-off starts on: today while `at` is still ahead
+ * today, else tomorrow — never a minute that has already passed. */
+export function defaultOnceDate(at: string, now: Date = new Date()): string {
+  const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec((at || "").trim());
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), m ? Number(m[1]) : 23, m ? Number(m[2]) : 59);
+  if (today.getTime() > now.getTime()) return isoDate(today);
+  return isoDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1));
 }
 
 /** The folder a NEW template starts on: the most recent repo the folder
@@ -125,8 +146,9 @@ export function formFromTemplate(t: Template | null): TemplateForm {
     workspace_strategy: t?.workspace_strategy === "clone" ? "clone" : "worktree",
     init_repo: !!t?.init_repo,
     scheduled: !!t && hasSchedule(t),
-    at: t?.schedule?.at || "21:00",
-    days: t?.schedule?.cron ? "cron" : t?.schedule?.days === "weekdays" ? "weekdays" : "daily",
+    at: t?.schedule?.once ? t.schedule.once.slice(11) : t?.schedule?.at || "21:00",
+    days: t?.schedule?.once ? "once" : t?.schedule?.cron ? "cron" : t?.schedule?.days === "weekdays" ? "weekdays" : "daily",
+    date: t?.schedule?.once ? t.schedule.once.slice(0, 10) : "",
     cron: t?.schedule?.cron || "0 21 * * 1-5",
     autopilot: t?.autopilot || "",
     paused: !!t?.schedule?.paused,
@@ -143,7 +165,8 @@ export function templateBody(
   f: TemplateForm,
   installed: InstalledMap | null = null,
   existing: Array<{ name: string }> = [],
-  editing: string | null = null
+  editing: string | null = null,
+  now: Date = new Date()
 ): { body: Template } | { error: string } {
   const name = f.name.trim();
   if (!name) return { error: "A template needs a name." };
@@ -156,6 +179,16 @@ export function templateBody(
     if (f.days === "cron") {
       if (!cron) return { error: "Type a cron expression, like 0 21 * * 1-5 (weekdays at 21:00)." };
     } else if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(at)) return { error: "Pick a time for the schedule, like 21:00." };
+    if (f.days === "once") {
+      // One run, on a minute that is still to come: a NEW one-off behind the
+      // clock would be armed after its minute and never fire. The one the
+      // template already carries re-saves as it is (spent or not), so an
+      // edit of its task never trips this.
+      const minute = onceOf(f.date, at);
+      const when = onceDate(minute);
+      if (!when) return { error: "Pick a date for the run." };
+      if (when.getTime() <= now.getTime() && f.seeded !== "once:" + minute) return { error: ONCE_PAST };
+    }
     if (!f.repo_path.trim() && f.mode !== "provisioned")
       return { error: "A scheduled template needs a folder to start its session in." };
     if (!f.prompt.trim()) return { error: "A scheduled template needs a task — it's what the session is told to do." };
@@ -182,7 +215,11 @@ export function templateBody(
  * the same cadence, still ahead) Skip next. */
 function scheduleOf(f: TemplateForm, at: string, cron: string): NonNullable<Template["schedule"]> {
   const cadence: NonNullable<Template["schedule"]> =
-    f.days === "cron" ? { cron } : { at, days: f.days === "weekdays" ? "weekdays" : "daily" };
+    f.days === "cron"
+      ? { cron }
+      : f.days === "once"
+        ? { once: onceOf(f.date, at) }
+        : { at, days: f.days === "weekdays" ? "weekdays" : "daily" };
   const out = { ...cadence };
   if (f.paused) out.paused = true;
   const sameCadence = (f.seeded || "") === cadenceKey(cadence);
@@ -200,10 +237,18 @@ export function cronPreviewLine(pv: CronPreview | null | undefined, now: Date = 
  * days + time on screen ("30 7 * * *" for Every day 07:30) — it used to drop
  * them for a stock "0 21 * * 1-5" — and leaving it keeps a simple cron's
  * time. */
-export function daysPatch(f: Pick<TemplateForm, "days" | "at" | "cron">, raw: string): Partial<TemplateForm> {
-  const days: TemplateForm["days"] = raw === "weekdays" ? "weekdays" : raw === "cron" ? "cron" : "daily";
+export function daysPatch(
+  f: Pick<TemplateForm, "days" | "at" | "cron"> & { date?: string },
+  raw: string,
+  now: Date = new Date()
+): Partial<TemplateForm> {
+  const days: TemplateForm["days"] =
+    raw === "weekdays" ? "weekdays" : raw === "cron" ? "cron" : raw === "once" ? "once" : "daily";
   if (days === f.days) return {};
-  if (days === "cron") return { days, cron: cronOf(f.at, f.days) || f.cron };
+  // Once keeps the time on screen and starts on the first day it is still
+  // ahead (a date picked before is kept).
+  if (days === "once") return { days, date: f.date || defaultOnceDate(f.at, now) };
+  if (days === "cron") return { days, cron: cronOf(f.at, f.days === "weekdays" ? "weekdays" : "daily") || f.cron };
   if (f.days === "cron") {
     const back = atOfCron(f.cron);
     return back ? { days, at: back.at } : { days };
@@ -301,7 +346,11 @@ export function ScheduleWhen({
   const status = runs || { runs_here: true, runs_on: "" };
   const zone = zoneSuffix(tz || "", status);
   const elsewhere = !status.runs_here && status.runs_on;
-  const line = cronPreviewLine(cronPreview, new Date(), zone);
+  // A spent one-off's own minute is behind the clock, but it is the
+  // template's as saved: no red line for leaving it — just where to go.
+  const spentOnce =
+    form.days === "once" && !!form.seeded && form.seeded === "once:" + onceOf(form.date, form.at) && !!cronPreview && !cronPreview.ok;
+  const line = spentOnce ? "Already behind the clock — pick a new date to run it again." : cronPreviewLine(cronPreview, new Date(), zone);
   return (
     <>
       <div className="tpl-schedule-when">
@@ -313,8 +362,20 @@ export function ScheduleWhen({
         >
           <option value="daily">Every day</option>
           <option value="weekdays">Weekdays</option>
+          <option value="once">Once</option>
           <option value="cron">Custom (cron)</option>
         </select>
+        {form.days === "once" && (
+          // The day of a one-off: the browser's own date picker, in the
+          // same "YYYY-MM-DD" the schedule stores.
+          <input
+            id="tpl-date"
+            type="date"
+            aria-label="Date"
+            value={form.date}
+            onChange={(e) => onForm({ date: e.target.value })}
+          />
+        )}
         {form.days === "cron" ? (
           <input
             id="tpl-cron"
@@ -351,7 +412,7 @@ export function ScheduleWhen({
         )}
       </div>
       <p
-        className={"tpl-cron-preview" + (cronPreview && !cronPreview.ok ? " error" : " muted")}
+        className={"tpl-cron-preview" + (cronPreview && !cronPreview.ok && !spentOnce ? " error" : " muted")}
         id="tpl-cron-preview"
         aria-live="polite"
       >

@@ -77,7 +77,7 @@ export function scheduledRows(
       const skipping = !t.schedule?.paused && !info.paused ? info.skipping_at : 0;
       const row: ScheduledRow = {
         name: t.name,
-        when: (info.schedule_label || scheduleLabel(t.schedule)) + (tz && t.schedule?.at ? " " + tz : ""),
+        when: (info.schedule_label || scheduleLabel(t.schedule, now)) + (tz && (t.schedule?.at || t.schedule?.once) ? " " + tz : ""),
         next,
         problem: runProblem(t),
         line: templateScheduleLine(t, status, now),

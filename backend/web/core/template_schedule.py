@@ -9,8 +9,9 @@ New dialog live here:
   sent, through the very same ``core.session_create`` path the New dialog's
   ``POST /api/instances`` takes.
 * **A schedule** — a template may carry ``schedule: {"at": "HH:MM", "days":
-  "daily" | "weekdays"}`` or a full cron expression, ``schedule: {"cron":
-  "*/30 * * * *"}`` (both local time; the cron math is
+  "daily" | "weekdays"}``, a full cron expression, ``schedule: {"cron":
+  "*/30 * * * *"}``, or a one-off, ``schedule: {"once":
+  "YYYY-MM-DDTHH:MM"}`` (all local time; the cron math is
   :mod:`backend.web.core.cronspec`). :func:`run_loop` fires each due one.
 
 Either way a template may carry ``autopilot`` (``commit`` / ``push`` /
@@ -21,10 +22,16 @@ The rules a schedule keeps (all in the pure :func:`plan_tick`, tested with an
 injected clock):
 
 * A slot is identified by its LOCAL DATE (``{at, days}``) or local wall-clock
-  minute (``{cron}``), not an epoch, so a DST shift can neither skip nor
-  repeat one; the slot's epoch comes from ``mktime`` with ``isdst=-1`` (a
-  02:30 that doesn't exist on a spring-forward day lands an hour later, never
-  on another day).
+  minute (``{cron}``, ``{once}``), not an epoch, so a DST shift can neither
+  skip nor repeat one; the slot's epoch comes from ``mktime`` with
+  ``isdst=-1`` (a 02:30 that doesn't exist on a spring-forward day lands an
+  hour later, never on another day).
+* A one-off has exactly one slot, its ``once`` minute. Once ``last_slot`` is
+  that minute — fired, skipped, paused through, or advanced on a device that
+  isn't the automation one — the schedule is SPENT: no next run, and the
+  card says it ran (or was skipped) once on that date. The template keeps
+  its schedule (the loop never writes into the synced templates store);
+  spent-ness is read off this device's run record, like ``last_slot``.
 * Never double-fires: ``last_slot`` is persisted BEFORE the session is
   created, so a crash mid-create loses that run rather than repeating it.
 * After downtime only the most recent missed slot fires — never a backlog.
@@ -99,7 +106,13 @@ def normalize_schedule(raw) -> Optional[dict]:
     if raw in (None, "", {}, False):
         return None
     if not isinstance(raw, dict):
-        raise ValueError("schedule must be an object: {at: 'HH:MM', days} or {cron}")
+        raise ValueError(
+            "schedule must be an object: {at: 'HH:MM', days}, {cron} or {once}"
+        )
+    if "once" in raw:
+        if any(k in raw for k in ("at", "days", "cron")):
+            raise ValueError("schedule.once stands alone — not with at, days or cron")
+        return {"once": _once_text(raw.get("once")), **_flags(raw)}
     if "cron" in raw:
         cron = cronspec.parse(str(raw.get("cron") or ""))
         if cronspec.too_frequent(cron):
@@ -120,6 +133,26 @@ def normalize_schedule(raw) -> Optional[dict]:
         "days": days,
         **_flags(raw),
     }
+
+
+_ONCE_RE = re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})T([01]?\d|2[0-3]):([0-5]\d)$")
+
+
+def _once_text(raw) -> str:
+    """``raw`` as the stored one-off minute, ``"YYYY-MM-DDTHH:MM"`` (local
+    wall clock). Raises ``ValueError`` for anything else, a date that doesn't
+    exist included."""
+    m = _ONCE_RE.match(str(raw or "").strip())
+    if not m:
+        raise ValueError(
+            "schedule.once must be a local date and time like 2026-10-28T21:00"
+        )
+    y, mo, d, hh, mm = (int(g) for g in m.groups())
+    try:
+        _dt.datetime(y, mo, d, hh, mm)
+    except ValueError:
+        raise ValueError("schedule.once names a date that doesn't exist") from None
+    return "%04d-%02d-%02dT%02d:%02d" % (y, mo, d, hh, mm)
 
 
 def _flags(raw: dict) -> dict:
@@ -150,6 +183,8 @@ def schedule_or_none(raw) -> Optional[dict]:
 def signature(sched: Optional[dict]) -> str:
     if not sched:
         return ""
+    if "once" in sched:
+        return "once:" + sched["once"]
     if "cron" in sched:
         return "cron:" + sched["cron"]
     return "%s/%s" % (sched["at"], sched["days"])
@@ -166,15 +201,76 @@ def normalize_autopilot(raw) -> str:
     return v
 
 
-def describe(sched: Optional[dict]) -> str:
-    """The card's words for a schedule ("" for none)."""
+#: The card's words for a spent one-off, by how its one slot went.
+_ONCE_DONE = {
+    "ran": "Ran once on ",
+    "skipped": "Skipped once on ",
+    "failed": "Failed once on ",
+}
+
+
+def describe(sched: Optional[dict], done: str = "", now: Optional[float] = None) -> str:
+    """The card's words for a schedule ("" for none). A one-off says its
+    date ("Once on Tue 28 Oct at 21:00"; the year only when it isn't this
+    one) and, spent, how it went — ``done`` is ``"ran"`` / ``"skipped"`` /
+    ``"failed"`` ("Ran once on …")."""
     if not sched:
         return ""
+    if "once" in sched:
+        return _ONCE_DONE.get(done, "Once on ") + once_words(sched["once"], now)
     if "cron" in sched:
         return cronspec.describe(sched["cron"])
     return ("Weekdays at " if sched["days"] == "weekdays" else "Every day at ") + sched[
         "at"
     ]
+
+
+def once_words(once: str, now: Optional[float] = None) -> str:
+    """``"2026-10-28T21:00"`` as "Tue 28 Oct at 21:00" ("Tue 28 Oct 2027 at
+    21:00" in a year other than ``now``'s)."""
+    day = _dt.datetime.strptime(once, "%Y-%m-%dT%H:%M")
+    this_year = _dt.date.fromtimestamp(time.time() if now is None else now).year
+    year = "" if day.year == this_year else " %d" % day.year
+    return "%s %d %s%s at %s" % (
+        day.strftime("%a"),
+        day.day,
+        day.strftime("%b"),
+        year,
+        day.strftime("%H:%M"),
+    )
+
+
+def once_epoch(sched: dict) -> float:
+    """Local-time epoch of a one-off's minute (``isdst=-1``, as every slot)."""
+    day = _dt.datetime.strptime(sched["once"], "%Y-%m-%dT%H:%M")
+    return cronspec.slot_epoch(day.date(), day.hour, day.minute)
+
+
+def once_spent(sched: Optional[dict], rec: Optional[dict]) -> bool:
+    """Whether a one-off's single slot is behind it on this device (its
+    ``last_slot`` is that minute). Never true for another shape."""
+    return bool(
+        sched
+        and "once" in sched
+        and str((rec or {}).get("last_slot") or "") == sched["once"]
+    )
+
+
+def _once_outcome(rec: dict, here: bool) -> str:
+    """How a spent one-off's slot went, from the newest scheduled entry in
+    its history: ``"ran"`` / ``"skipped"`` / ``"failed"``. With none — the
+    slot was paused through on this device, or another device fired it —
+    "skipped" here, "ran" there."""
+    hist = rec.get("history") if isinstance(rec.get("history"), list) else []
+    for h in hist:
+        if not isinstance(h, dict) or h.get("trigger") != "schedule":
+            continue
+        if h.get("skipped"):
+            return "skipped"
+        if h.get("error") or h.get("status") == "failed":
+            return "failed"
+        return "ran"
+    return "skipped" if here else "ran"
 
 
 def runs_many_per_day(sched: Optional[dict]) -> bool:
@@ -206,7 +302,11 @@ def latest_due(
 ) -> Optional[Tuple[str, float]]:
     """The most recent slot at or before ``now``: ``(slot, epoch)`` — the slot
     a local date for ``{at, days}``, a local ``YYYY-MM-DDTHH:MM`` for
-    ``{cron}`` (both sort as strings). ``not_before`` only bounds the search."""
+    ``{cron}`` and ``{once}`` (all sort as strings). ``not_before`` only
+    bounds the search."""
+    if "once" in sched:
+        at = once_epoch(sched)
+        return (sched["once"], at) if at <= now else None
     if "cron" in sched:
         return cronspec.latest_due(cronspec.parse(sched["cron"]), now, not_before)
     today = _dt.date.fromtimestamp(now)
@@ -221,7 +321,11 @@ def latest_due(
 
 
 def next_due(now: float, sched: dict) -> Optional[float]:
-    """Epoch of the first slot strictly after ``now``."""
+    """Epoch of the first slot strictly after ``now`` (a one-off's one slot
+    while it is still ahead; None once it is behind)."""
+    if "once" in sched:
+        at = once_epoch(sched)
+        return at if at > now else None
     if "cron" in sched:
         return cronspec.next_due(cronspec.parse(sched["cron"]), now)
     today = _dt.date.fromtimestamp(now)
@@ -707,9 +811,12 @@ def status_for(templates_list: List[dict], now: Optional[float] = None) -> dict:
     last_error, paused?, skipping_at?}}, runs_here, runs_on}`` for ``GET
     /api/templates``. A paused schedule has no ``next_at``; one told to skip
     its next run names that slot (``skipping_at``) and ``next_at`` is the one
-    after it."""
+    after it. A spent one-off has none either, and says how its one slot
+    went (``once_done``: ran / skipped / failed) — its label reads "Ran once
+    on …"."""
     now = time.time() if now is None else now
     runs = load_runs()
+    here = automation_here()
     out: Dict[str, dict] = {}
     for tpl in templates_list:
         key = _key(tpl.get("name"))
@@ -726,15 +833,18 @@ def status_for(templates_list: List[dict], now: Optional[float] = None) -> dict:
             skipping = nxt
             nxt = next_due(until, sched)
         hist = rec.get("history") if isinstance(rec.get("history"), list) else []
+        done = _once_outcome(rec, here) if once_spent(sched, rec) else ""
         row = {
             "next_at": nxt,
             "last_at": rec.get("last_run_at"),
             "last_session": rec.get("last_session") or "",
             "last_trigger": rec.get("last_trigger") or "",
             "last_error": rec.get("last_error") or "",
-            "schedule_label": describe(sched),
+            "schedule_label": describe(sched, done, now),
             "history": [h for h in hist if isinstance(h, dict)],
         }
+        if done:
+            row["once_done"] = done
         # A skip newer than the last start/failure is what the card says.
         skip_at = float(rec.get("last_skip_at") or 0)
         if skip_at and skip_at >= max(
@@ -754,7 +864,7 @@ def status_for(templates_list: List[dict], now: Optional[float] = None) -> dict:
             out[key] = row
     return {
         "runs": out,
-        "runs_here": automation_here(),
+        "runs_here": here,
         "runs_on": automation_elsewhere(),
         "tz": time_zone(now),
     }
@@ -768,11 +878,32 @@ def time_zone(at: float) -> str:
         return ""
 
 
+#: The editor's words for a one-off that is already behind the clock.
+ONCE_PAST = "Pick a date and time that are still ahead."
+
+
 def preview(expr: str, now: Optional[float] = None, count: int = 3) -> dict:
     """What the editor shows under a cron field as you type: ``{ok, label,
     next: [epoch...]}`` or ``{ok: false, error}``. Applies the same rules a
-    save does (:func:`normalize_schedule`)."""
+    save does (:func:`normalize_schedule`). A one-off's minute
+    (``2026-10-28T21:00``) previews the same way — ``{ok, once, label, next:
+    [its epoch]}``, or why it can't be saved (behind the clock)."""
     now = time.time() if now is None else now
+    if _ONCE_RE.match(str(expr or "").strip()):
+        try:
+            sched = normalize_schedule({"once": expr})
+        except ValueError as err:
+            return {"ok": False, "error": str(err)}
+        assert sched is not None
+        at = once_epoch(sched)
+        if at <= now:
+            return {"ok": False, "error": ONCE_PAST}
+        return {
+            "ok": True,
+            "once": sched["once"],
+            "label": describe(sched, now=now),
+            "next": [at],
+        }
     try:
         sched = normalize_schedule({"cron": expr})
     except ValueError as err:

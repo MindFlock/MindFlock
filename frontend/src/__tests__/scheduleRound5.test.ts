@@ -133,7 +133,9 @@ describe("findings 2, 9, 10, 11 — cron seeding and previews", () => {
   });
 
   it("every mode asks for its next runs (days + time ask as their cron)", () => {
-    expect(DIALOG).toContain('const cronText = (form.days === "cron" ? form.cron : cronOf(form.at, form.days)).trim();');
+    expect(DIALOG).toContain(
+      'form.days === "cron" ? form.cron : form.days === "once" ? onceOf(form.date, form.at) : cronOf(form.at, form.days)'
+    );
     expect(DIALOG).toContain("(form.scheduled || !!ui.scheduleOnly)");
     const html = view({
       ui: { ...TEMPLATES_UI_INIT, editing: "nightly tests" },
@@ -331,5 +333,95 @@ describe("the Schedule tour", () => {
     const form = view({ ui: { ...TEMPLATES_UI_INIT, editing: "nightly tests" }, form: formFromTemplate(DAILY) });
     for (const hook of ["schedule-name", "schedule-folder", "schedule-task", "schedule-when"])
       expect(form).toContain(`data-tour="${hook}"`);
+  });
+});
+
+describe("one-offs — run once on a date at a time", () => {
+  const ONCE = { name: "release notes", repo_path: "/r", prompt: "write them", schedule: { once: "2026-10-28T21:00" } };
+
+  it("the form reads and writes {once}", () => {
+    const f = formFromTemplate(ONCE);
+    expect([f.scheduled, f.days, f.date, f.at, f.seeded]).toEqual([true, "once", "2026-10-28", "21:00", "once:2026-10-28T21:00"]);
+    const r = templateBody(f, null, [], null, NOW);
+    expect("body" in r && r.body.schedule).toEqual({ once: "2026-10-28T21:00" });
+    // A one-off is its own cadence: a skip set for it survives an edit, a
+    // moved date drops it.
+    const later = Date.now() / 1000 + 86400;
+    const kept = templateBody({ ...f, skip_until: later }, null, [], null, NOW);
+    expect("body" in kept && kept.body.schedule).toEqual({ once: "2026-10-28T21:00", skip_until: later });
+    const moved = templateBody({ ...f, date: "2026-10-29", skip_until: later }, null, [], null, NOW);
+    expect("body" in moved && moved.body.schedule).toEqual({ once: "2026-10-29T21:00" });
+  });
+
+  it("refuses a minute that isn't still ahead, or no date at all", () => {
+    const f = formFromTemplate(ONCE);
+    expect(templateBody({ ...f, date: "2026-10-15", at: "09:00" }, null, [], null, NOW)).toEqual({ error: T.ONCE_PAST });
+    expect(templateBody({ ...f, date: "2026-10-15", at: "09:01" }, null, [], null, NOW)).not.toHaveProperty("error");
+    // The one-off the template already carries re-saves as it is once spent
+    // (an edit of its task), and the editor says where to go, not "error".
+    const after = new Date(2026, 10, 1, 9, 0);
+    expect(templateBody(f, null, [], null, after)).not.toHaveProperty("error");
+    expect(templateBody({ ...f, at: "22:00" }, null, [], null, after)).toEqual({ error: T.ONCE_PAST });
+    const html = view({
+      ui: { ...TEMPLATES_UI_INIT, editing: "release notes" },
+      templates: [ONCE],
+      form: f,
+      cronPreview: { ok: false, error: T.ONCE_PAST },
+    });
+    expect(html).toMatch(/class="tpl-cron-preview muted" id="tpl-cron-preview"[^>]*>Already behind the clock — pick a new date to run it again\.</);
+    expect(templateBody({ ...f, date: "" }, null, [], null, NOW)).toEqual({ error: "Pick a date for the run." });
+    expect(templateBody({ ...f, date: "2026-02-30" }, null, [], null, NOW)).toEqual({ error: "Pick a date for the run." });
+    expect(templateBody({ ...f, at: "9pm" }, null, [], null, NOW)).toEqual({ error: "Pick a time for the schedule, like 21:00." });
+  });
+
+  it("picking Once keeps the time and starts on the first day it is still ahead", () => {
+    // NOW is Thu Oct 15 09:00: 07:30 has passed today, 21:00 hasn't.
+    expect(daysPatch({ days: "daily", at: "07:30", cron: "" }, "once", NOW)).toEqual({ days: "once", date: "2026-10-16" });
+    expect(daysPatch({ days: "weekdays", at: "21:00", cron: "" }, "once", NOW)).toEqual({ days: "once", date: "2026-10-15" });
+    expect(daysPatch({ days: "daily", at: "07:30", cron: "", date: "2026-12-24" }, "once", NOW)).toEqual({ days: "once", date: "2026-12-24" });
+    expect(daysPatch({ days: "once", at: "21:00", cron: "", date: "2026-10-28" }, "once", NOW)).toEqual({});
+    // Leaving Once: the time stays, Custom (cron) starts from it as daily.
+    expect(daysPatch({ days: "once", at: "21:00", cron: "", date: "2026-10-28" }, "weekdays", NOW)).toEqual({ days: "weekdays" });
+    expect(daysPatch({ days: "once", at: "21:00", cron: "", date: "2026-10-28" }, "cron", NOW)).toEqual({ days: "cron", cron: "0 21 * * *" });
+    expect(T.onceOf("2026-10-28", "9:05")).toBe("2026-10-28T09:05");
+    expect(T.onceOf("2026-10-28", "")).toBe("");
+    expect(T.onceOf("", "21:00")).toBe("");
+  });
+
+  it("the editor offers Once with a date beside the time", () => {
+    const html = view({ ui: { ...TEMPLATES_UI_INIT, editing: "release notes" }, templates: [ONCE], form: formFromTemplate(ONCE) });
+    expect(html).toMatch(/<option value="weekdays">Weekdays<\/option><option value="once" selected="">Once<\/option><option value="cron">/);
+    expect(html).toMatch(/<input id="tpl-date" type="date" aria-label="Date" value="2026-10-28"\/>/);
+    expect(html).toMatch(/<input id="tpl-at" type="text"[^>]*value="21:00"/);
+    // Not in the other modes.
+    expect(view({ ui: { ...TEMPLATES_UI_INIT, editing: "nightly tests" }, form: formFromTemplate(DAILY) })).not.toContain('id="tpl-date"');
+  });
+
+  it("the preview line says the one run, and after it ran the card says so", () => {
+    expect(T.scheduleLabel({ once: "2026-10-28T21:00" }, NOW)).toBe("Once on Wed 28 Oct at 21:00");
+    expect(T.scheduleLabel({ once: "2027-01-04T08:30" }, NOW)).toBe("Once on Mon 4 Jan 2027 at 08:30");
+    expect(
+      T.schedulePreviewLine({ ok: true, once: "2026-10-28T21:00", label: "Once on Wed 28 Oct at 21:00", next: [at(28, 21)] }, NOW, " EDT")
+    ).toBe("Once on Wed 28 Oct at 21:00 EDT — next Oct 28 21:00");
+    expect(T.schedulePreviewLine({ ok: false, error: T.ONCE_PAST }, NOW)).toBe(T.ONCE_PAST);
+    const spent = { runs: { "release notes": { schedule_label: "Ran once on Wed 28 Oct at 21:00", next_at: null, once_done: "ran" as const, last_status: "started", tz: "EDT" } }, runs_here: true, runs_on: "" };
+    expect(T.templateScheduleLine(ONCE, spent, NOW)).toBe("Ran once on Wed 28 Oct at 21:00 EDT");
+    expect(T.hasSchedule(ONCE)).toBe(true);
+    // The badge counts a spent one-off only when its run actually failed.
+    expect(T.failingSchedules([ONCE], spent)).toEqual([]);
+    expect(T.failingSchedules([ONCE], { runs: { "release notes": { once_done: "failed", last_status: "failed", last_error: "codex isn't installed" } } })).toEqual(["release notes"]);
+    expect(T.nextUp([ONCE], spent)).toBeNull();
+    // Its strip keeps Change schedule and drops Pause — nothing left to hold.
+    const html = view({ templates: [ONCE], runs: spent });
+    expect(html).toContain('<span class="sch-cadence">Ran once on Wed 28 Oct at 21:00 EDT</span>');
+    expect(html).toContain("Change schedule");
+    expect(html).not.toContain('class="sch-sw sch-pause"');
+    expect(html).not.toContain("Skip next");
+  });
+
+  it("the copy names it beside daily, weekdays and cron", () => {
+    expect(PALETTE).toContain('hint: "daily, weekdays, once or cron"');
+    expect(DIALOG).toContain("every day, weekdays, once or on a cron");
+    expect(TOURS.schedule.steps[4].body).toContain("daily, weekdays, once or on a cron");
   });
 });

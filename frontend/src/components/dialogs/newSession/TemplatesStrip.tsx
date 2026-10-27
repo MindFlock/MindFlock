@@ -177,7 +177,7 @@ export function TemplatesStrip({
                   title={
                     sched
                       ? line + " — change or stop it"
-                      : "Schedule… — start it by itself every day, weekdays or on a cron"
+                      : "Schedule… — start it by itself every day, weekdays, once or on a cron"
                   }
                   onClick={() => onSchedule(t)}
                 >

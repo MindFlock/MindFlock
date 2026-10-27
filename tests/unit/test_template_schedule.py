@@ -754,3 +754,200 @@ def test_a_scheduled_fire_with_a_missing_agent_records_a_failed_run(
         ("template.run_failed", "agent_missing")
     ]
     assert events[0][2]["detail"] == "Couldn't start pr-bot: codex isn't installed"
+
+
+# --------------------------------------------------------------------------- #
+# One-offs: {"once": "YYYY-MM-DDTHH:MM"} — one slot, then spent
+# --------------------------------------------------------------------------- #
+ONCE = {"once": "2026-10-28T21:00"}
+
+
+def test_normalize_once_schedule():
+    assert ts.normalize_schedule({"once": "2026-10-28T9:05"}) == {
+        "once": "2026-10-28T09:05"
+    }
+    assert ts.normalize_schedule({"once": " 2026-10-28T21:00 ", "paused": True}) == {
+        **ONCE,
+        "paused": True,
+    }
+    for bad in (
+        {"once": "2026-10-28"},
+        {"once": "2026-10-28 21:00"},
+        {"once": "2026-02-30T21:00"},
+        {"once": "2026-10-28T24:00"},
+        {"once": "2026-10-28T21:00", "at": "21:00"},
+        {"once": "2026-10-28T21:00", "cron": "0 21 * * *"},
+    ):
+        with pytest.raises(ValueError):
+            ts.normalize_schedule(bad)
+    assert ts.schedule_or_none({"once": "soon"}) is None
+    # Its own signature: changing the date or time re-arms it.
+    assert ts.signature(ONCE) == "once:2026-10-28T21:00"
+    assert ts.runs_many_per_day(ONCE) is False
+    assert ts.describe(ONCE, now=at(2026, 10, 1, 0)) == "Once on Wed 28 Oct at 21:00"
+    assert (
+        ts.describe(ONCE, "ran", at(2026, 10, 1, 0))
+        == "Ran once on Wed 28 Oct at 21:00"
+    )
+    assert (
+        ts.describe(ONCE, "skipped", at(2026, 10, 1, 0))
+        == "Skipped once on Wed 28 Oct at 21:00"
+    )
+    # Another year names it.
+    assert (
+        ts.describe({"once": "2027-01-04T08:30"}, now=at(2026, 10, 1, 0))
+        == "Once on Mon 4 Jan 2027 at 08:30"
+    )
+
+
+def test_once_due_math(ny_tz):
+    before = at(2026, 10, 28, 20, 59)
+    assert ts.latest_due(before, ONCE) is None
+    assert local(ts.next_due(before, ONCE)) == "2026-10-28 21:00"
+    on = at(2026, 10, 28, 21, 0)
+    assert ts.latest_due(on, ONCE) == ("2026-10-28T21:00", on)
+    assert ts.next_due(on, ONCE) is None
+    assert ts.latest_due(on + 7 * 86400, ONCE) == ("2026-10-28T21:00", on)
+
+
+def test_once_fires_once_then_is_spent(ny_tz):
+    saved_at = at(2026, 10, 27, 10, 0)
+    fire, runs = ts.plan_tick(saved_at, [tpl(schedule=ONCE)], {}, True)
+    assert fire == [] and runs["nightly"]["sig"] == "once:2026-10-28T21:00"
+    fire, runs = ts.plan_tick(
+        at(2026, 10, 28, 20, 59, 50), [tpl(schedule=ONCE)], runs, True
+    )
+    assert fire == []
+    fire, runs = ts.plan_tick(
+        at(2026, 10, 28, 21, 0, 20), [tpl(schedule=ONCE)], runs, True
+    )
+    assert [s for _t, s in fire] == ["2026-10-28T21:00"]
+    assert runs["nightly"]["last_slot"] == "2026-10-28T21:00"
+    assert ts.once_spent(ONCE, runs["nightly"]) is True
+    # Spent: never again, however long the loop keeps ticking.
+    for later in (
+        at(2026, 10, 28, 21, 1),
+        at(2026, 10, 29, 21, 0),
+        at(2026, 11, 28, 21, 0),
+    ):
+        fire, runs = ts.plan_tick(later, [tpl(schedule=ONCE)], runs, True)
+        assert fire == []
+    # A new date re-arms it: not spent, fires on its own minute.
+    moved = {"once": "2026-10-30T09:00"}
+    fire, runs = ts.plan_tick(
+        at(2026, 10, 29, 12, 0), [tpl(schedule=moved)], runs, True
+    )
+    assert fire == [] and ts.once_spent(moved, runs["nightly"]) is False
+    fire, runs = ts.plan_tick(
+        at(2026, 10, 30, 9, 0, 10), [tpl(schedule=moved)], runs, True
+    )
+    assert [s for _t, s in fire] == ["2026-10-30T09:00"]
+
+
+def test_once_saved_after_its_minute_never_fires(ny_tz):
+    saved_at = at(2026, 10, 28, 22, 0)
+    fire, runs = ts.plan_tick(saved_at, [tpl(schedule=ONCE)], {}, True)
+    assert fire == []
+    fire, runs = ts.plan_tick(saved_at + 60, [tpl(schedule=ONCE)], runs, True)
+    assert fire == [] and "last_slot" not in runs["nightly"]
+
+
+def test_once_missed_in_downtime_fires_late_and_records_the_real_time(
+    ny_tz, stores, fake_create
+):
+    from backend.web.addons import templates
+
+    templates.save_template(tpl(schedule=ONCE))
+    asyncio.run(ts.tick(now=at(2026, 10, 27, 10, 0), here=True))  # arm
+    # Down over 21:00; back at 23:30 the same night: it fires once, late.
+    back = at(2026, 10, 28, 23, 30)
+    assert asyncio.run(ts.tick(now=back, here=True)) == ["nightly"]
+    assert fake_create[0]["title"] == "nightly-oct28"
+    rec = ts.load_runs()["nightly"]
+    assert rec["last_slot"] == "2026-10-28T21:00"
+    assert rec["history"][0] == {
+        "at": back,
+        "trigger": "schedule",
+        "session": "nightly-oct28",
+    }
+    assert asyncio.run(ts.tick(now=back + 60, here=True)) == []
+    row = ts.status_for(templates.list_templates(), now=back + 60)["runs"]["nightly"]
+    assert row["next_at"] is None and row["once_done"] == "ran"
+    assert row["schedule_label"] == "Ran once on Wed 28 Oct at 21:00"
+
+
+def test_once_skipped_paused_or_elsewhere_is_spent_too(ny_tz, stores, fake_create):
+    from backend.web.addons import templates
+
+    # Skip next on a one-off: its only slot passes, and the card says so.
+    templates.save_template(
+        tpl(schedule={**ONCE, "skip_until": int(at(2026, 10, 28, 21, 0))})
+    )
+    asyncio.run(ts.tick(now=at(2026, 10, 27, 10, 0), here=True))
+    assert asyncio.run(ts.tick(now=at(2026, 10, 28, 21, 0, 10), here=True)) == []
+    assert fake_create == []
+    row = ts.status_for(templates.list_templates(), now=at(2026, 10, 28, 22, 0))[
+        "runs"
+    ]["nightly"]
+    assert row["once_done"] == "skipped" and row["next_at"] is None
+    assert row["schedule_label"] == "Skipped once on Wed 28 Oct at 21:00"
+    assert "skipping_at" not in row
+
+    # Paused through: spent, nothing started, no history on this device.
+    runs = {"held": {"sig": ts.signature(ONCE), "armed_at": at(2026, 10, 27, 0)}}
+    paused = tpl("held", schedule={**ONCE, "paused": True})
+    fire, runs = ts.plan_tick(at(2026, 10, 28, 21, 1), [paused], runs, True)
+    assert fire == [] and ts.once_spent(ONCE, runs["held"])
+    fire, runs = ts.plan_tick(
+        at(2026, 10, 28, 22, 0), [tpl("held", schedule=ONCE)], runs, True
+    )
+    assert fire == []
+    assert ts._once_outcome(runs["held"], here=True) == "skipped"
+    # Another device fired it: this one advanced the slot silently — "ran".
+    assert ts._once_outcome(runs["held"], here=False) == "ran"
+
+
+def test_once_route_round_trip_and_preview(ny_tz, stores, fake_create, monkeypatch):
+    now = at(2026, 10, 27, 10, 0)
+    monkeypatch.setattr(time, "time", lambda: now)
+    r = client.post("/api/templates", json=tpl(schedule={"once": "2026-10-28T9:00"}))
+    assert r.status_code == 200, r.text
+    assert r.json()["template"]["schedule"] == {"once": "2026-10-28T09:00"}
+    got = client.get("/api/templates").json()["runs"]["nightly"]
+    assert got["schedule_label"] == "Once on Wed 28 Oct at 09:00"
+    assert local(got["next_at"]) == "2026-10-28 09:00" and "once_done" not in got
+
+    bad = client.post("/api/templates", json=tpl(schedule={"once": "tomorrow"}))
+    assert bad.status_code == 400 and "2026-10-28T21:00" in bad.json()["error"]
+    past = client.post(
+        "/api/templates", json=tpl(schedule={"once": "2026-10-27T09:00"})
+    )
+    assert past.status_code == 400 and "already passed" in past.json()["error"]
+
+    # Once it ran, the SAME one-off re-saves (Pause / Resume, an edit of the
+    # task): it is the template's own, spent, never a new one in the past.
+    asyncio.run(ts.tick(now=now, here=True))
+    later = at(2026, 10, 28, 9, 0, 30)
+    monkeypatch.setattr(time, "time", lambda: later)
+    assert asyncio.run(ts.tick(now=later, here=True)) == ["nightly"]
+    r = client.post(
+        "/api/templates",
+        json=tpl(schedule={"once": "2026-10-28T09:00", "paused": True}),
+    )
+    assert r.status_code == 200, r.text
+    got = client.get("/api/templates").json()["runs"]["nightly"]
+    assert got["once_done"] == "ran" and got["next_at"] is None
+    assert got["schedule_label"] == "Ran once on Wed 28 Oct at 09:00"
+    assert got["last_status"] == "started"
+
+    # The editor's preview takes a one-off minute as it takes a cron.
+    pv = client.get(
+        "/api/templates/cron-preview", params={"expr": "2026-10-29T21:00"}
+    ).json()
+    assert pv["ok"] and pv["once"] == "2026-10-29T21:00"
+    assert pv["label"] == "Once on Thu 29 Oct at 21:00"
+    assert [local(e) for e in pv["next"]] == ["2026-10-29 21:00"]
+    pv = client.get(
+        "/api/templates/cron-preview", params={"expr": "2026-10-28T08:00"}
+    ).json()
+    assert pv == {"ok": False, "error": ts.ONCE_PAST}

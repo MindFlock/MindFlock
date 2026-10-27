@@ -35,7 +35,7 @@ export const SCHEDULE_TOUR: TourDef = {
     {
       target: '[data-tour="schedule-when"]',
       title: "Let it start by itself",
-      body: "Tick Run on a schedule — the line below it shows exactly when it runs next.",
+      body: "Tick Run on a schedule — daily, weekdays, once or on a cron — and the line below it shows exactly when it runs next.",
     },
     {
       target: '[data-tour="schedule-run"]',
