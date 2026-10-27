@@ -98,13 +98,16 @@
 
     <!-- Voice strip (mobile.js VOICE section): hidden until voice mode is on.
          The state word, the live caption (what the phone heard, the line
-         being spoken, the dialog's question, how to send), a Cancel, the ⚙ that opens the voice sheet, and the one big button a
+         being spoken, the dialog's question, how to send), Stop talking
+         while a line is being said (the queue goes, the mic keeps
+         listening), a Cancel, the ⚙ that opens the voice sheet, and the one big button a
          deep link (/m?s=…&voice=1) or a resume needs: a page cannot speak
          until it has been tapped once. -->
     <div id="voice-strip" class="hidden" role="status" aria-live="polite">
       <div id="voice-strip-row">
         <span id="voice-state"></span>
         <span id="voice-caption"></span>
+        <button type="button" id="voice-hush" class="hidden">Stop talking</button>
         <button type="button" id="voice-cancel" class="hidden">Cancel</button>
         <button type="button" id="voice-gear" aria-label="Voice settings">⚙</button>
       </div>
@@ -409,8 +412,8 @@
          notification). The session's number (the Sessions sheet's) and name,
          what kind of ask, the question and its command, then the way to
          answer it here: the dialog's options; Claude's select questions
-         step by step (the step row, checkboxes + Next, the review's Submit,
-         "Type something" in the field); a field + Send for a question; or
+         step by step (the step row, checkboxes + Next, the review's
+         Cancel / Submit answers, "Type something" in the field); a field + Send for a question; or
          "Open the session" for a prompt only the terminal can answer. The
          mic answers by voice. Later (or a tap outside, or Back) puts it off;
          several dialogs → "1 of N". Last in #app so it sits over any other
@@ -435,6 +438,7 @@
         <div id="asking-options" class="asking-options"></div>
         <div id="asking-sel" class="asking-sel hidden">
           <button type="button" id="asking-sel-prev">‹ Back</button>
+          <span id="asking-sel-acts" class="asking-sel-acts hidden"></span>
           <button type="button" id="asking-sel-next">Next ›</button>
         </div>
         <div id="asking-reply" class="asking-reply hidden">
