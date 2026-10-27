@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-27
+
+Local speech models install from the row that says they are missing and
+stay installed across releases, a session's question pops up only when
+there is a real prompt to answer, and a template can be scheduled once.
+
+### Added
+
+- **Schedule a template once.** Beside every day, weekdays and cron, a
+  template takes `schedule: {"once": "YYYY-MM-DDTHH:MM"}` (local time): one
+  slot, spent after it fires (or is skipped or paused through), then *Ran
+  once on Tue 28 Oct at 21:00* and no next run. The editor's cadence select
+  gains **Once** with a date field; a new one-off already behind the clock
+  is refused. The command palette, the Schedule tour, `mindflock templates`
+  and the docs follow.
+
+### Changed
+
+- **Install local models where recognition says they are missing.** Settings
+  → Voice's *Try it → Recognition* row showed a disabled *Try recognition*
+  button with a terminal command as its hint while the Install button sat in
+  another row. The row now carries the install itself — the step, a progress
+  bar and the last log line while it runs, *Try again* after a failure — and
+  the server's verdict reads *local models not installed: Settings → Voice
+  installs them*.
+- **Local models survive a release.** Every engine rebuild (an update, a
+  reinstall) rebuilt the server's venv from `mindflock[web]` alone and
+  dropped `faster-whisper` and `piper-tts`. A good install now records them
+  in `~/.mindflock/voice/packages.json`; the server's updater and
+  `mindflock update` carry them through the rebuild the way the Database
+  explorer's drivers ride (`--with` on the uv line, `pipx inject` after
+  pipx); a rebuild that dropped them anyway is healed at boot or on the next
+  `GET /api/voice` as a running install the Settings screen follows (the
+  packages only — the models on disk are untouched). A package gone from the
+  index drops the record. `mindflock doctor` lists the record as *Local
+  speech models*.
+- **The ask pop-up opens only for a prompt it can answer.** A dialog the
+  server could not parse — no options to answer on the card, and a misread
+  frame of a busy screen is the usual reason there is one — never opens the
+  pop-up by itself, on the desktop or the phone; it keeps its place in the
+  bell, the rail and the toasts.
+
+### Fixed
+
+- A `?` quoted as a character in a reply (*the "?" in its options*) no
+  longer reads as a question the session is asking.
+
 ## [0.10.0] - 2026-10-27
 
 Talk to your sessions. The phone page and the desktop app both have a mic:
@@ -4341,7 +4388,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.10.1
 [0.10.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.10.0
 [0.9.6]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.6
 [0.9.5]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.5
