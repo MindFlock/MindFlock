@@ -15,9 +15,12 @@
  * into the box at the cursor and Enter is never pressed (the old dictation
  * button's job).
  *
- * Replies are read aloud only when "Read replies aloud" is on (off by
- * default), for the drafts this mic submitted, prefixed with the session's
- * name. Right-click or Shift+click opens those options. In the desktop app
+ * Replies are read aloud only when "Read replies aloud" says so (off by
+ * default): "Replies to what I said by voice" — the drafts this mic
+ * submitted — or "Everything, every session" — every finished turn that
+ * carries words, once. A line leads with its session's name unless it is
+ * the focused one, and everything the desktop says goes through ONE speech
+ * queue, one line at a time (lib/voiceDesktop SpeechQueue). Right-click or Shift+click opens those options. In the desktop app
  * the words and the voice go through the server's engines (its Web Speech
  * fails there); in a browser tab, through the browser's unless Settings →
  * Voice says "server" (lib/voiceDesktop sttEngine). The server's recognizer
@@ -59,7 +62,9 @@ import {
   DEFAULT_VOICE_CFG,
   HOLD_FINAL_WAIT_MS,
   HandsFree,
+  HeardTurns,
   LiveDictation,
+  REPLIES_CHOICES,
   ReplyTracker,
   SpeechQueue,
   TALK_EVENT,
@@ -78,10 +83,12 @@ import {
   serverRecognizer,
   serverSpeaker,
   sessionTarget,
+  spokenLine,
   sttEngine,
   talkKeyAction,
   ttsEngine,
   voiceAudioCtx,
+  voiceName,
   type DictEnd,
   type DictTarget,
   type TalkPhase,
@@ -111,6 +118,8 @@ const serverRec = serverRecognizer({ stream: () => !!cfgNow.server_ready.stt_str
 const browserSp = browserSpeaker();
 const serverSp = serverSpeaker(browserSp);
 const tracker = new ReplyTracker();
+/** "Everything": the turns already read (idle and turn_ended both carry one). */
+const heard = new HeardTurns();
 const speakingListeners = new Set<(on: boolean) => void>();
 const queue = new SpeechQueue(
   () => (ttsEngine(cfgNow) === "server" ? serverSp : browserSp),
@@ -333,7 +342,7 @@ export function TopBarMic() {
   const setPrefs = (p: VoicePrefs) => {
     setPrefsState(p);
     saveVoicePrefs(p);
-    if (!p.replies) queue.cancel();
+    if (p.replies === "off") queue.cancel();
   };
 
   const refreshCfg = () =>
@@ -369,40 +378,49 @@ export function TopBarMic() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- replies: the turns of prompts this mic sent ------------------------ //
+  // --- replies: the turns of prompts this mic sent, or every turn --------- //
   useEffect(() => {
     let unsubs: Array<() => void> = [];
     let retry: ReturnType<typeof setTimeout> | undefined;
     const ended = (title: string, data: Record<string, unknown>, ts: number) => {
       if (title === useUi.getState().focused) refreshQuestion(title);
-      if (!tracker.waiting(title)) return;
-      // A reply that asks something: once it has been read out, the mic
-      // opens for the answer (hands-free, with replies on).
-      const speak = (line: string | null, ask = "") => {
-        if (!line) return;
-        say(line);
-        if (!prefsRef.current.replies) return;
-        if (ask) questions.set(title, ask);
-        const said = queue.say(line);
-        // With the ask pop-up on, it opens for this question and listens
-        // (waiting for this read-out first); otherwise the mic does.
-        if (ask && askPopupOn()) asksSaid.set(title, { done: said, at: Date.now() });
-        else
-          void said.then(() => {
-            if (ask) void hands.current?.question(title, ask);
-          });
-      };
+      const mode = prefsRef.current.replies;
       const inline = String(data.say || "").trim();
+      const ours = tracker.waiting(title);
+      // Into the one queue, worded when its turn comes: the name first
+      // unless it is the session you are looking at by then. A reply that
+      // asks something: once it (and whatever was queued before it) has been
+      // said, the mic opens for the answer — for a prompt this mic sent.
+      const speak = (words: string | null, ask = "", listen = true) => {
+        if (!words) return;
+        say(spokenLine(displayName(title), words));
+        if (mode === "off") return;
+        if (ask) questions.set(title, ask);
+        const said = queue.say(() => spokenLine(voiceName(title, useUi.getState().focused, displayName(title)), words));
+        if (!ask) return;
+        // Its Reply opens the ask pop-up, which waits for this read-out
+        // instead of reading the question a second time.
+        asksSaid.set(title, { done: said, at: Date.now() });
+        if (listen) void said.then(() => hands.current?.question(title, ask));
+      };
+      // "Everything": every session's turn that carries words, once.
+      if (mode === "all" && inline) {
+        if (!heard.fresh(title, inline, Number(data.ts) || null)) return;
+        const mine = ours && tracker.take(title, inline, ts) !== null;
+        speak(inline, data.has_question ? inline : "", mine);
+        return;
+      }
+      if (!ours) return;
       if (inline) {
-        speak(tracker.take(title, displayName(title), inline, ts), data.has_question ? inline : "");
+        speak(tracker.take(title, inline, ts), data.has_question ? inline : "");
         return;
       }
       void instApi<{ say?: string; ts?: number; has_question?: boolean }>(title, "/voice")
         .then((j) => {
           const said = String(j?.say || "");
-          speak(tracker.take(title, displayName(title), said, Number(j?.ts) || null), j?.has_question ? said : "");
+          speak(tracker.take(title, said, Number(j?.ts) || null), j?.has_question ? said : "");
         })
-        .catch(() => speak(tracker.take(title, displayName(title), "", null)));
+        .catch(() => speak(tracker.take(title, "", null)));
     };
     const attach = () => {
       const ev = window.mindflock?.events;
@@ -468,9 +486,10 @@ export function TopBarMic() {
    * terminal (null: none focused — a first phrase may still be a command). */
   const target = (into: HTMLInputElement | HTMLTextAreaElement | null, session = ""): DictTarget | null => {
     if (into) return fieldTarget(into);
-    // The ask pop-up's session: a question's words go into its answer field.
+    // The ask pop-up's session: the words go into its answer field (a
+    // question's, or the field "Type something" opened).
     const ask = askVoice();
-    if (ask && session === ask.title && ask.kind === "question") {
+    if (ask && session === ask.title) {
       const t = askTarget(ask);
       if (t) return t;
     }
@@ -514,13 +533,22 @@ export function TopBarMic() {
         },
         route: async (text) => {
           const session = opts.title || useUi.getState().focused || "";
+          // The pop-up's own words ("type something" on Claude's question
+          // prompt opens that field): listen again, into the field.
+          const ask = askVoice();
+          if (ask && ask.title === session && ask.phrase?.(text)) {
+            setTimeout(() => {
+              if (!live.current && askVoice()?.field()) start(null);
+            }, 150);
+            return true;
+          }
           const reply = await routePhrase(text, session);
           if (reply.kind === "prompt") return false;
           await routed(reply, text, session);
           return true;
         },
         activity: liveActivity,
-        replies: () => prefsRef.current.replies,
+        replies: () => prefsRef.current.replies !== "off",
         submitted: (title, wantSay) => {
           tracker.sent(title, wantSay);
           questions.delete(title);
@@ -681,7 +709,7 @@ export function TopBarMic() {
   const announce = (line: string) => {
     if (!line) return;
     say(line);
-    if (prefsRef.current.replies) queue.say(line);
+    if (prefsRef.current.replies !== "off") queue.say(line);
   };
 
   /** `session`: the one the phrase was routed for (the focused one, or the
@@ -698,7 +726,7 @@ export function TopBarMic() {
       route: routePhrase,
       approveDialogs: () => refreshCfg().then((c) => !!c.approve_dialogs),
       activity: liveActivity,
-      replies: () => prefsRef.current.replies,
+      replies: () => prefsRef.current.replies !== "off",
       submitted: (title, wantSay) => {
         tracker.sent(title, wantSay);
         questions.delete(title);
@@ -749,16 +777,18 @@ export function TopBarMic() {
   latest.current = { listenFor, refreshCfg };
   if (!hands.current)
     hands.current = new HandsFree({
-      replies: () => prefsRef.current.replies,
+      replies: () => prefsRef.current.replies !== "off",
       focused: () => useUi.getState().focused || "",
       name: displayName,
       busy: () => !!live.current,
       fetchDialog: (title) => fetchDialog(title),
       approveDialogs: () => latest.current.refreshCfg().then((c) => !!c.approve_dialogs),
+      voiceName: (title) => voiceName(title, useUi.getState().focused, displayName(title)),
       speak: (line) => {
         say(line, true);
         return queue.say(line);
       },
+      drained: () => queue.drained(),
       caption: say,
       listen: (title, hint, ms) => latest.current.listenFor(title, hint, ms),
     });
@@ -993,15 +1023,18 @@ export function TopBarMic() {
                 </div>
               </div>
             )}
-            <label className="mic-row">
-              <input
-                type="checkbox"
-                role="switch"
-                checked={prefs.replies}
-                onChange={(e) => setPrefs({ ...prefs, replies: e.target.checked })}
-              />
-              <span>Read replies aloud</span>
-            </label>
+            <div className="mic-sub">Read replies aloud</div>
+            {REPLIES_CHOICES.map((c) => (
+              <label className="mic-row" key={c.value}>
+                <input
+                  type="radio"
+                  name="mic-replies"
+                  checked={prefs.replies === c.value}
+                  onChange={() => setPrefs({ ...prefs, replies: c.value })}
+                />
+                <span>{c.label}</span>
+              </label>
+            ))}
             <div className="mic-sub">Push to talk</div>
             <label className="mic-row">
               <input
@@ -1028,7 +1061,8 @@ export function TopBarMic() {
             </div>
             <div className="mic-hint" id="mic-handsfree">
               With Read replies aloud on, a dialog on the focused session — or a question in a reply
-              to what you sent — is read out and the mic listens 12 s for your answer.
+              to what you sent — is read out and the mic listens 12 s for your answer. Every line
+              names its session unless it is the one in front of you, and only one plays at a time.
             </div>
             <div className="mic-diag">{diagnostics}</div>
             {pendingLine && <div className="mic-diag mic-pending">{pendingLine}</div>}

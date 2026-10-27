@@ -475,10 +475,24 @@ export interface PlaybooksResponse {
 export interface DialogOption {
   key: string;
   label: string;
-  kind: "yes" | "always" | "no" | "other" | string;
+  /** Claude's question prompt (Dialog kind "select") adds "text" (Type
+   * something), "chat" (Chat about this). */
+  kind: "yes" | "always" | "no" | "other" | "text" | "chat" | string;
   /** The tmux key names that pick it, when not just `key` (an arrow-key
    * picker): /answer is sent `keys ?? [key]`. */
   keys?: string[];
+  /** A select option's description line, when it has one. */
+  desc?: string | null;
+  /** A multi-select's checkbox: ticked or not; null/absent = no checkbox. */
+  checked?: boolean | null;
+}
+
+/** One tab of Claude's question prompt: a question, or the closing Submit. */
+export interface DialogStep {
+  label: string;
+  done: boolean;
+  /** The review step ("Submit"): `review` holds the answers. */
+  submit?: boolean;
 }
 
 /** `GET /api/instances/{t}/dialog`: the prompt a session in `clarify` is
@@ -495,10 +509,24 @@ export interface Dialog {
   /** "dialog" (a prompt on screen) or "question" (the agent's reply ended
    * with a question in plain words — id "q:<ts>", no options; answered by
    * typing, never /answer). Absent from an older server: a dialog. */
-  kind?: "dialog" | "question";
+  kind?: "dialog" | "question" | "select";
   /** The dialog's own heading ("Permission required", "Ready to code?"),
    * when the provider reads one. */
   heading?: string;
+  /** kind "select" (Claude's AskUserQuestion): several answers can be
+   * ticked — digits toggle, `nav.next` moves on. */
+  multi?: boolean;
+  /** kind "select": its tabs, the questions then Submit; `step` the shown one. */
+  steps?: DialogStep[];
+  step?: number;
+  /** kind "select", the review step: what was answered. */
+  review?: Array<{ question: string; answer: string }>;
+  /** kind "select": the keys that move between steps and submit. */
+  nav?: { next: string[]; prev: string[]; submit: string[] };
+  /** kind "select": the option key under Claude's cursor. */
+  cursor?: string | null;
+  /** kind "select", multi: the prompt's own button ("Next" / "Submit"). */
+  button?: string | null;
 }
 
 /** One member of a session's family as `GET …/thread` returns it. */

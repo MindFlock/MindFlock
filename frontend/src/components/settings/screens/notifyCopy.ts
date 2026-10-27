@@ -75,15 +75,15 @@ export function groupRules<T extends RuleLike>(
 
 /* --------------------------------------------------------------------------
  * The ask pop-up (notifications.ask_popup, saved through the ntfy view like
- * the fields there): a session asking you something — a dialog on its screen
- * or a question at the end of its reply — opens a card in the middle of the
- * screen (components/dialogs/AskDialog).
+ * the fields there): a session's permission or choice prompt opens a card in
+ * the middle of the screen (components/dialogs/AskDialog); a question at the
+ * end of its reply opens it only from its Reply.
  * ------------------------------------------------------------------------ */
 
-export const ASK_POPUP_LABEL = "Pop up a session's question in the middle of the screen";
+export const ASK_POPUP_LABEL = "Pop up a session's permission and choice prompts in the middle of the screen";
 
 export const ASK_POPUP_HINT =
-  "When a session asks you something — a dialog, or a question at the end of its reply — answer it right there, typed or by voice. Later puts it off; the bell keeps it.";
+  "When an agent asks for permission or shows a choice — Claude's own questions included — answer it right there, by click, keys or voice. A question asked in plain words at the end of a reply doesn't pop up: the bell, the rail and the notification show it, and its Reply opens it here. Later puts it off; the bell keeps it.";
 
 /** Under the "needs input" rule: what it covers now. */
 export const NEEDS_INPUT_EXTRA = "Also covers a question the agent asks in plain words at the end of its reply.";

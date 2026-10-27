@@ -16,9 +16,11 @@
  *  - a dictation's first phrase is first offered to the voice router (POST
  *    /api/voice/route), so "switch to the login fix" or "start a new session
  *    for…" act instead of being typed into the focused session;
- *  - replies are read aloud only when you turn that on (off by default), only
- *    for drafts THIS app submitted by voice, once per turn, and always
- *    prefixed with the session's name — several sessions may be talking.
+ *  - replies are read aloud only when you turn that on (off by default):
+ *    "mine" for drafts THIS app submitted by voice, "all" for every
+ *    session's finished turn — once per turn, one line at a time through
+ *    the one {@link SpeechQueue}, and prefixed with the session's name
+ *    unless it is the one you are looking at.
  * And at any point "stop recording" (the stop family, {@link stopTail})
  * stops; the router's numbered sessions, answers and questions are carried
  * out by {@link runVoiceCommand}; with replies on, {@link HandsFree} reads a
@@ -203,13 +205,41 @@ const joinWords = (a: string, b: string) => [a.trim(), b.trim()].filter(Boolean)
 // --- prefs (per browser: a hand's habit, not a synced setting) -------------- //
 
 export type PttMode = "toggle" | "hold";
+/** What is read aloud: nothing; the replies to prompts you sent by voice
+ * from this app ("mine"); or every session's finished turn ("all"). */
+export type RepliesMode = "off" | "mine" | "all";
 export interface VoicePrefs {
   ptt: PttMode;
-  /** Read replies aloud. Off on the desktop: the phone is the hands-free one. */
-  replies: boolean;
+  /** Off by default on the desktop: the phone is the hands-free one. */
+  replies: RepliesMode;
 }
 export const VOICE_PREFS_KEY = "cs_voice_desktop";
-export const DEFAULT_VOICE_PREFS: VoicePrefs = { ptt: "toggle", replies: false };
+export const DEFAULT_VOICE_PREFS: VoicePrefs = { ptt: "toggle", replies: "off" };
+
+/** The three choices as the mic's popover and Settings → Voice show them. */
+export const REPLIES_CHOICES: ReadonlyArray<{ value: RepliesMode; label: string }> = [
+  { value: "off", label: "Off" },
+  { value: "mine", label: "Replies to what I said by voice" },
+  { value: "all", label: "Everything, every session" },
+];
+
+/** A stored `replies`: one of the three words, or the old switch (true was
+ * today's "mine"). */
+export function repliesMode(v: unknown): RepliesMode {
+  if (v === "mine" || v === "all") return v;
+  return v === true ? "mine" : "off";
+}
+
+function normPrefs(v: unknown): VoicePrefs {
+  const o = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+  return { ptt: o.ptt === "hold" ? "hold" : "toggle", replies: repliesMode(o.replies) };
+}
+
+/** `say: true` on a send from this app (the agent writes a Say line for
+ * it): a voice send whenever replies are read, a typed one only in "all". */
+export function sayOnSend(byVoice: boolean, p: VoicePrefs = loadVoicePrefs()): boolean {
+  return p.replies === "all" || (byVoice && p.replies === "mine");
+}
 
 type KV = Pick<Storage, "getItem" | "setItem">;
 function storage(): KV | null {
@@ -228,11 +258,7 @@ export function loadVoicePrefs(kv: KV | null = storage()): VoicePrefs {
   } catch {
     raw = null;
   }
-  const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-  return {
-    ptt: o.ptt === "hold" ? "hold" : "toggle",
-    replies: o.replies === true,
-  };
+  return normPrefs(raw);
 }
 
 /** Fired on `window` whenever the prefs are saved (detail: the new prefs):
@@ -241,7 +267,7 @@ export function loadVoicePrefs(kv: KV | null = storage()): VoicePrefs {
 export const VOICE_PREFS_EVENT = "mindflock:voice-prefs";
 
 export function saveVoicePrefs(p: VoicePrefs, kv: KV | null = storage()): void {
-  const next: VoicePrefs = { ptt: p.ptt === "hold" ? "hold" : "toggle", replies: !!p.replies };
+  const next = normPrefs(p);
   try {
     kv?.setItem(VOICE_PREFS_KEY, JSON.stringify(next));
   } catch {
@@ -260,7 +286,7 @@ export function onVoicePrefs(fn: (p: VoicePrefs) => void): () => void {
   if (typeof window === "undefined") return () => {};
   const h = (e: Event) => {
     const d = (e as CustomEvent).detail as VoicePrefs | undefined;
-    fn(d && typeof d === "object" ? { ptt: d.ptt === "hold" ? "hold" : "toggle", replies: !!d.replies } : loadVoicePrefs());
+    fn(d && typeof d === "object" ? normPrefs(d) : loadVoicePrefs());
   };
   window.addEventListener(VOICE_PREFS_EVENT, h);
   return () => window.removeEventListener(VOICE_PREFS_EVENT, h);
@@ -857,6 +883,9 @@ export interface RouteReply {
   /** answer: the server resolved the dialog — `keys` are ready for /answer. */
   dialog_id?: string;
   keys?: string[];
+  /** answer, on Claude's question prompt: free words for its "Type
+   * something" row, typed with the keys. */
+  text?: string;
   /** answer: the session has no dialog up (`say` says so). */
   no_dialog?: boolean;
 }
@@ -1009,7 +1038,9 @@ async function answer(r: RouteReply, text: string, deps: CommandDeps, again: boo
       return;
     }
     try {
-      await instApi(title, "/answer", { json: { keys: r.keys, dialog_id: r.dialog_id, by: "user" } });
+      const json: Record<string, unknown> = { keys: r.keys, dialog_id: r.dialog_id, by: "user" };
+      if (r.text) json.text = r.text;
+      await instApi(title, "/answer", { json });
       deps.announce(r.say || "Answered " + (r.choice === "number" ? String(r.number || "") : r.choice || "") + ".");
     } catch (err) {
       const body = (err instanceof ApiError ? err.body : null) as { dialog_changed?: boolean; dialog_answered?: boolean } | null;
@@ -1037,11 +1068,45 @@ async function answer(r: RouteReply, text: string, deps: CommandDeps, again: boo
 
 // --- spoken replies ------------------------------------------------------------ //
 
-/** Every spoken reply names its session first: several may be talking. */
+/** A line named after its session: "Login fix: Fixed it." ("" = bare). */
 export function spokenLine(name: string, say: string): string {
   const s = String(say || "").trim();
   const n = String(name || "").trim();
   return n ? n + ": " + s : s;
+}
+
+/** The name a spoken line leads with: none for the session you are looking
+ * at (you know who is talking), its name for any other — several may be. */
+export function voiceName(title: string, focused: string | null | undefined, name: string): string {
+  return title && title === focused ? "" : name;
+}
+
+/** With "all", the same reply rides both "it finished" events (idle and
+ * turn_ended, seconds to a minute apart): this long, the same words from the
+ * same session are that one reply. */
+export const HEARD_DEDUPE_MS = 3 * 60_000;
+
+/** Which finished turns were already read (or queued): once per (session,
+ * stamp) — the Say line's own stamp when the event carries one, else the
+ * words themselves inside {@link HEARD_DEDUPE_MS}. */
+export class HeardTurns {
+  private seen = new Map<string, { key: string; at: number }>();
+
+  /** True the first time `title`'s turn with `say` (stamped `ts` seconds,
+   * when known) is seen; false for the second report of it. */
+  fresh(title: string, say: string, ts: number | null, now = Date.now()): boolean {
+    const words = String(say || "").replace(/\s+/g, " ").trim();
+    if (!title || !words) return false;
+    const key = ts ? "ts:" + ts : "say:" + words;
+    const last = this.seen.get(title);
+    if (last && last.key === key && (ts || now - last.at < HEARD_DEDUPE_MS)) return false;
+    this.seen.set(title, { key, at: now });
+    return true;
+  }
+
+  clear(): void {
+    this.seen.clear();
+  }
 }
 
 /** Server stamps and the browser clock may disagree a little (the server can
@@ -1083,23 +1148,24 @@ export class ReplyTracker {
   }
 
   /** A turn ended for `title` with `say` (stamped `ts` seconds when known —
-   * the Say line's own stamp, or the event's). The line to speak, or null:
-   * not ours, already spoken, or an idle that predates the prompt. */
-  take(title: string, name: string, say: string, ts: number | null, now = Date.now()): string | null {
+   * the Say line's own stamp, or the event's). The words to speak (the
+   * caller names the session, {@link voiceName}), or null: not ours,
+   * already spoken, or an idle that predates the prompt. */
+  take(title: string, say: string, ts: number | null, now = Date.now()): string | null {
     if (!this.waiting(title, now)) return null;
     const p = this.pending.get(title)!;
     const fresh = !ts || ts * 1000 >= p.sentAt - STAMP_SLACK_S * 1000;
     const s = String(say || "").trim();
     if (s && fresh) {
       this.pending.delete(title);
-      return spokenLine(name, s);
+      return s;
     }
     // No Say line this turn (or only the previous turn's): one word, so the
     // owner who asked to hear back is not left waiting — but only once the
     // session is known to have worked on it, or a stale idle would end it.
     if (p.working) {
       this.pending.delete(title);
-      return spokenLine(name, "Finished.");
+      return "Finished.";
     }
     return null;
   }
@@ -1127,10 +1193,15 @@ function plain(text: string): string {
 }
 
 /** What to say to answer `d` (mobile.js voiceDialogChoices): a permission
- * prompt takes words, any other dialog the numbers of its options. */
-export function dialogChoices(d: Pick<Dialog, "options">): string {
+ * prompt takes words, any other dialog the numbers of its options — Claude's
+ * question prompt (kind "select") its numbers, ticked then "next" when it
+ * takes several, and "submit" on its review step. */
+export function dialogChoices(d: Pick<Dialog, "options"> & Partial<Pick<Dialog, "kind" | "multi" | "steps" | "step">>): string {
+  const select = d.kind === "select";
+  if (select && d.steps?.[d.step ?? -1]?.submit) return "Say submit, or cancel.";
   const kinds = new Set(d.options.map((o) => o.kind));
-  if (kinds.has("yes") || kinds.has("no")) return kinds.has("always") ? "Say yes, no, or always." : "Say yes or no.";
+  if (!select && (kinds.has("yes") || kinds.has("no")))
+    return kinds.has("always") ? "Say yes, no, or always." : "Say yes or no.";
   const opts = d.options.slice(0, ORD.length);
   const nums = opts.map((_, i) => ORD[i]);
   const list =
@@ -1139,7 +1210,8 @@ export function dialogChoices(d: Pick<Dialog, "options">): string {
       : nums.length === 2
         ? nums[0] + " or " + nums[1]
         : nums.slice(0, -1).join(", ") + ", or " + nums[nums.length - 1];
-  return opts.map((o, i) => ORD[i] + ": " + plain(o.label)).join(". ") + ". Say " + list + ".";
+  const say = select && d.multi ? ". Say the numbers to tick, then next." : ". Say " + list + ".";
+  return opts.map((o, i) => ORD[i] + ": " + plain(o.label)).join(". ") + say;
 }
 
 /** A dialog read aloud, name first (mobile.js voiceDialogSpeech):
@@ -1152,7 +1224,7 @@ export function dialogSpeech(name: string, d: Dialog): string {
 }
 
 /** The one retry after a miss: "I didn't catch that: say yes, no, or always." */
-export function dialogRetryLine(d: Pick<Dialog, "options">): string {
+export function dialogRetryLine(d: Parameters<typeof dialogChoices>[0]): string {
   return "I didn't catch that: " + dialogChoices(d).replace(/^.*\bSay /, "say ");
 }
 
@@ -1166,8 +1238,14 @@ export interface HandsFreeDeps {
   busy(): boolean;
   fetchDialog(title: string): Promise<Dialog | null>;
   approveDialogs(): Promise<boolean>;
+  /** The name a spoken line leads with ({@link voiceName}: none for the
+   * session you are looking at); `name` when absent. */
+  voiceName?(title: string): string;
   /** Caption the line and say it; resolves once it has been said. */
   speak(line: string): Promise<void>;
+  /** Resolves once the speech queue has nothing left to say: the mic never
+   * opens while another session's line is still being read. */
+  drained?(): Promise<void>;
   caption(line: string, sticky?: boolean): void;
   /** Open the mic on `title` for `ms` (the caption `hint` until a word):
    * resolves with how that dictation ended. */
@@ -1180,9 +1258,10 @@ export interface HandsFreeDeps {
  * miss gets ONE retry ("I didn't catch that: …"), then it goes quiet.
  *
  * With the ask pop-up on (lib/ask.ts) the pop-up is the one hands-free
- * entry: it calls {@link ask} for the session it shows — focused or not —
- * and TopBarMic leaves `dialog` / `question` alone, so nothing is read out
- * twice. */
+ * entry for a dialog: it calls {@link ask} for the session it shows —
+ * focused or not — and TopBarMic leaves `dialog` alone, so nothing is read
+ * out twice. Every line goes through the page's one speech queue, and the
+ * mic opens only once that queue is quiet ({@link HandsFreeDeps.drained}). */
 export class HandsFree {
   private seen = "";
   private running = false;
@@ -1202,7 +1281,7 @@ export class HandsFree {
       if (!x.replies() || x.busy() || title !== x.focused()) return;
       this.seen = d.id;
       const name = x.name(title);
-      await x.speak(dialogSpeech(name, d));
+      await x.speak(dialogSpeech(this.spoken(title), d));
       if (!(await x.approveDialogs())) {
         await x.speak("Answer it on the screen.");
         return;
@@ -1219,7 +1298,7 @@ export class HandsFree {
     this.running = true;
     try {
       const name = this.deps.name(title);
-      await this.listen(title, "Still there? " + spokenLine(name, say), "Answer " + name + " — say submit to send");
+      await this.listen(title, "Still there? " + spokenLine(this.spoken(title), say), "Answer " + name + " — say submit to send");
     } finally {
       this.running = false;
     }
@@ -1242,7 +1321,7 @@ export class HandsFree {
       if (d) {
         if (!d.parsed || !d.options.length || d.id === this.seen) return;
         this.seen = d.id;
-        await x.speak(dialogSpeech(name, d));
+        await x.speak(dialogSpeech(this.spoken(title), d));
         if (this.stopped === title) return;
         if (!(await x.approveDialogs())) {
           await x.speak("Answer it on the screen.");
@@ -1254,9 +1333,9 @@ export class HandsFree {
       const q = String(a.question || "").trim();
       if (!q) return;
       if (a.said) await a.said;
-      else await x.speak(spokenLine(name, plain(q)));
+      else await x.speak(spokenLine(this.spoken(title), plain(q)));
       if (this.stopped === title) return;
-      await this.listen(title, "Still there? " + spokenLine(name, plain(q)), "Answer " + name + " — say submit to send");
+      await this.listen(title, "Still there? " + spokenLine(this.spoken(title), plain(q)), "Answer " + name + " — say submit to send");
     } finally {
       this.running = false;
     }
@@ -1267,6 +1346,10 @@ export class HandsFree {
     this.stopped = title;
   }
 
+  private spoken(title: string): string {
+    return this.deps.voiceName ? this.deps.voiceName(title) : this.deps.name(title);
+  }
+
   private ready(title: string): boolean {
     return !!title && !this.running && this.deps.replies() && !this.deps.busy();
   }
@@ -1274,6 +1357,7 @@ export class HandsFree {
   private async listen(title: string, retry: string, hint: string): Promise<void> {
     const x = this.deps;
     for (let tries = 0; ; tries++) {
+      if (x.drained) await x.drained();
       if (!x.replies() || x.busy() || this.stopped === title) return;
       const how = await x.listen(title, hint, ANSWER_LISTEN_MS);
       if (how !== "missed" || this.stopped === title) return;
@@ -1303,42 +1387,85 @@ export interface Speaker {
   cancel(): void;
 }
 
-/** Lines in order, one at a time; {@link hold} keeps them waiting while the
- * mic listens (the app must not talk into its own recognizer, and a line
- * is not cut off by the next one). */
+/** A queued line older than this when its turn comes is dropped, not said:
+ * a backlog never reads stale news. */
+export const SPEECH_STALE_MS = 60_000;
+
+/** A line's words, or a function that words it when its turn comes (whether
+ * to lead with the session's name depends on what is focused THEN). */
+export type SpeechLine = string | (() => string);
+
+interface Queued {
+  line: SpeechLine;
+  /** When it was queued (ms). */
+  at: number;
+  done: () => void;
+}
+
+/** Everything the desktop says, one line at a time — replies, ask
+ * read-outs, the router's answers: never two at once, never the browser's
+ * voice over the server's.
+ *  - in arrival order;
+ *  - {@link hold} (the mic is listening) stops the line being said and
+ *    starts no other until {@link release};
+ *  - a line queued more than {@link SPEECH_STALE_MS} before its turn is
+ *    dropped (a debug log, not aloud);
+ *  - {@link drained} resolves once nothing is left to say — a hands-free
+ *    listen waits for it;
+ *  - `last` is what was said last ("repeat"). */
 export class SpeechQueue {
-  private lines: Array<{ text: string; done: () => void }> = [];
-  private speaking = false;
+  private lines: Queued[] = [];
+  /** The engine saying the current line (cancel THAT one, even if the
+   * engine choice moved since). */
+  private speaking: Speaker | null = null;
   private held = false;
+  private turn = 0;
+  private waiters: Array<() => void> = [];
   last = "";
 
   constructor(
     private engine: () => Speaker,
-    private onSpeaking: (on: boolean) => void = () => {}
+    private onSpeaking: (on: boolean) => void = () => {},
+    private opts: { now?: () => number; staleMs?: number; log?: (msg: string) => void } = {}
   ) {}
 
-  /** Queue a line; resolves once it has been said (or cut off, or dropped). */
-  say(line: string): Promise<void> {
-    const t = String(line || "").trim();
-    if (!t) return Promise.resolve();
+  private now(): number {
+    return this.opts.now ? this.opts.now() : Date.now();
+  }
+
+  /** Queue a line; resolves once it has been said (or cut off, or dropped).
+   * `at`: when its news happened (ms), if earlier than now. */
+  say(line: SpeechLine, opts: { at?: number } = {}): Promise<void> {
+    if (typeof line === "string" && !line.trim()) return Promise.resolve();
     return new Promise<void>((done) => {
-      this.lines.push({ text: t, done });
+      this.lines.push({ line, at: opts.at ?? this.now(), done });
       this.pump();
     });
   }
 
   get busy(): boolean {
-    return this.speaking;
+    return !!this.speaking;
   }
 
   get queued(): number {
     return this.lines.length;
   }
 
+  /** Nothing being said and nothing waiting. */
+  get idle(): boolean {
+    return !this.speaking && !this.lines.length;
+  }
+
+  /** Resolves once the queue is {@link idle} (at once when it is). */
+  drained(): Promise<void> {
+    if (this.idle) return Promise.resolve();
+    return new Promise<void>((r) => this.waiters.push(r));
+  }
+
   /** Listening: stop talking now; what is queued waits for {@link release}. */
   hold(): void {
     this.held = true;
-    if (this.speaking) this.engine().cancel();
+    this.speaking?.cancel();
   }
 
   release(): void {
@@ -1351,22 +1478,51 @@ export class SpeechQueue {
     const dropped = this.lines;
     this.lines = [];
     dropped.forEach((l) => l.done());
-    if (this.speaking) this.engine().cancel();
+    if (this.speaking) this.speaking.cancel();
+    else this.settle();
+  }
+
+  private settle(): void {
+    if (!this.idle) return;
+    const w = this.waiters;
+    this.waiters = [];
+    w.forEach((r) => r());
   }
 
   private pump(): void {
-    if (this.speaking || this.held || !this.lines.length) return;
-    const line = this.lines.shift()!;
-    this.last = line.text;
-    this.speaking = true;
-    this.onSpeaking(true);
-    const done = () => {
-      this.speaking = false;
-      this.onSpeaking(false);
-      line.done();
-      this.pump();
-    };
-    this.engine().speak(line.text).then(done, done);
+    if (this.speaking || this.held) return;
+    const stale = this.opts.staleMs ?? SPEECH_STALE_MS;
+    for (;;) {
+      const next = this.lines.shift();
+      if (!next) return this.settle();
+      const age = this.now() - next.at;
+      const text = String((typeof next.line === "function" ? next.line() : next.line) || "").trim();
+      if (age > stale) {
+        (this.opts.log ?? ((m: string) => console.debug(m)))(
+          "[voice] dropped a line " + Math.round(age / 1000) + " s old: " + text.slice(0, 80)
+        );
+        next.done();
+        continue;
+      }
+      if (!text) {
+        next.done();
+        continue;
+      }
+      const sp = this.engine();
+      const turn = ++this.turn;
+      this.last = text;
+      this.speaking = sp;
+      this.onSpeaking(true);
+      const done = () => {
+        if (this.turn !== turn || !this.speaking) return;
+        this.speaking = null;
+        this.onSpeaking(false);
+        next.done();
+        this.pump();
+      };
+      sp.speak(text).then(done, done);
+      return;
+    }
   }
 }
 

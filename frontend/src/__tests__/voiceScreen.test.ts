@@ -27,6 +27,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import mobileSrc from "../components/settings/screens/Mobile.tsx?raw";
 import voiceSrc from "../components/settings/screens/Voice.tsx?raw";
 import voiceCss from "../components/settings/screens/voice.css?raw";
+import micSrc from "../components/TopBarMic.tsx?raw";
 
 // apiRaw records the call; `raw` answers it. (A vi.fn returning a rejected
 // promise fails the test under vitest 5 even when the caller catches it.)
@@ -673,19 +674,24 @@ describe("the local-models installer", () => {
 
 
 describe("this computer's mic (the popover's prefs, in Settings too)", () => {
-  it("shows Read replies aloud (off by default) and the push-to-talk choice before Permission dialogs", () => {
+  it("shows Read replies aloud (Off by default, three ways) and the push-to-talk choice before Permission dialogs", () => {
     const html = render({}, BUILTIN);
     expect(html).toContain('<h3 class="set-section-title">This computer&#x27;s mic</h3>');
     expect(html.indexOf("This computer&#x27;s mic")).toBeLessThan(html.indexOf("Permission dialogs"));
     expect(html).toMatch(
-      /<div class="set-row set-switch-row" id="voice-replies-row"><span class="notif-rule-text"><span class="set-label" id="voice-replies-label">Read replies aloud<\/span>/,
+      /<div class="set-row" id="voice-replies-row"><span class="notif-rule-text"><span class="set-label" id="voice-replies-label">Read replies aloud<\/span>/,
     );
-    expect(html).toContain('id="voice-replies"');
-    expect(html).not.toMatch(/id="voice-replies"[^>]*checked=""/);
+    expect(html).toMatch(/id="voice-replies" role="radiogroup" aria-labelledby="voice-replies-label"/);
+    const radios = html.match(/<input type="radio" name="voice-replies"[^>]*>/g) || [];
+    expect(radios.map((r) => /value="(\w+)"/.exec(r)?.[1])).toEqual(["off", "mine", "all"]);
+    expect(radios.map((r) => /checked=""/.test(r))).toEqual([true, false, false]);
+    expect(html).toContain("Replies to what I said by voice");
+    expect(html).toContain("Everything, every session");
     expect(html).toContain('id="voice-ptt-row"');
     expect(html).toContain("Click to talk");
     expect(html).toContain("Hold to talk");
-    // The popover and this screen read the same prefs module.
-    expect(voiceSrc).toContain("loadVoicePrefs, onVoicePrefs, saveVoicePrefs");
+    // The popover and this screen read the same prefs module (and choices).
+    expect(voiceSrc).toContain("loadVoicePrefs, onVoicePrefs, saveVoicePrefs, REPLIES_CHOICES");
+    expect(micSrc).toMatch(/REPLIES_CHOICES\.map\(\(c\) =>[\s\S]*?name="mic-replies"/);
   });
 });

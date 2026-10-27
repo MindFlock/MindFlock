@@ -35,6 +35,12 @@ import {
   talkKeyAction,
   OVER_LINE,
   ReplyTracker,
+  HeardTurns,
+  HEARD_DEDUPE_MS,
+  repliesMode,
+  sayOnSend,
+  voiceName,
+  SPEECH_STALE_MS,
   SpeechQueue,
   VOICE_PREFS_KEY,
   backspaces,
@@ -635,20 +641,36 @@ describe("streaming helpers", () => {
 
 describe("prefs: cs_voice_desktop", () => {
   it("defaults to click-to-talk with replies OFF", () => {
-    expect(DEFAULT_VOICE_PREFS).toEqual({ ptt: "toggle", replies: false });
-    expect(loadVoicePrefs(memKV())).toEqual({ ptt: "toggle", replies: false });
+    expect(DEFAULT_VOICE_PREFS).toEqual({ ptt: "toggle", replies: "off" });
+    expect(loadVoicePrefs(memKV())).toEqual({ ptt: "toggle", replies: "off" });
     expect(loadVoicePrefs(null)).toEqual(DEFAULT_VOICE_PREFS);
   });
 
-  it("round-trips, and garbage reads as the defaults", () => {
-    const kv = memKV();
-    saveVoicePrefs({ ptt: "hold", replies: true }, kv);
-    expect(JSON.parse(kv.m.get(VOICE_PREFS_KEY)!)).toEqual({ ptt: "hold", replies: true });
-    expect(loadVoicePrefs(kv)).toEqual({ ptt: "hold", replies: true });
+  it("round-trips the three-way choice, and garbage reads as the defaults", () => {
+    for (const replies of ["off", "mine", "all"] as const) {
+      const kv = memKV();
+      saveVoicePrefs({ ptt: "hold", replies }, kv);
+      expect(JSON.parse(kv.m.get(VOICE_PREFS_KEY)!)).toEqual({ ptt: "hold", replies });
+      expect(loadVoicePrefs(kv)).toEqual({ ptt: "hold", replies });
+    }
     expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: "{nope" }))).toEqual(DEFAULT_VOICE_PREFS);
     expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"ptt":"sideways","replies":"yes"}' }))).toEqual(
       DEFAULT_VOICE_PREFS
     );
+  });
+
+  it("the old switch loads as its meaning: true is 'mine' (replies to what you said), false 'off'", () => {
+    expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"ptt":"hold","replies":true}' }))).toEqual({ ptt: "hold", replies: "mine" });
+    expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"ptt":"toggle","replies":false}' }))).toEqual({ ptt: "toggle", replies: "off" });
+    expect(repliesMode(true)).toBe("mine");
+    expect(repliesMode("all")).toBe("all");
+    expect(repliesMode(undefined)).toBe("off");
+  });
+
+  it("say:true on a send: voice sends whenever replies are read, typed sends only with Everything", () => {
+    const p = (replies: "off" | "mine" | "all") => ({ ptt: "toggle" as const, replies });
+    expect([sayOnSend(true, p("off")), sayOnSend(true, p("mine")), sayOnSend(true, p("all"))]).toEqual([false, true, true]);
+    expect([sayOnSend(false, p("off")), sayOnSend(false, p("mine")), sayOnSend(false, p("all"))]).toEqual([false, false, true]);
   });
 
   it("a storage that throws never breaks the mic", () => {
@@ -661,7 +683,7 @@ describe("prefs: cs_voice_desktop", () => {
       },
     };
     expect(loadVoicePrefs(bad)).toEqual(DEFAULT_VOICE_PREFS);
-    expect(() => saveVoicePrefs({ ptt: "hold", replies: true }, bad)).not.toThrow();
+    expect(() => saveVoicePrefs({ ptt: "hold", replies: "all" }, bad)).not.toThrow();
   });
 
   it("every localStorage call in the lib is inside a try", () => {
@@ -676,42 +698,62 @@ describe("prefs: cs_voice_desktop", () => {
 });
 
 describe("spoken replies", () => {
-  it("name the session first", () => {
+  it("name the session first — unless it is the focused one", () => {
     expect(spokenLine("Login fix", "Fixed the login bug. Should I push it?")).toBe(
       "Login fix: Fixed the login bug. Should I push it?"
     );
+    expect(voiceName("t1", "t2", "Login fix")).toBe("Login fix");
+    expect(voiceName("t1", "t1", "Login fix")).toBe("");
+    expect(spokenLine(voiceName("t1", "t1", "Login fix"), "Done.")).toBe("Done.");
+    expect(voiceName("t1", null, "Login fix")).toBe("Login fix");
   });
 
   it("speak only replies to prompts this app sent with say:true", () => {
     const t = new ReplyTracker();
     // A prompt typed at the keyboard, or sent from the phone: never tracked.
-    expect(t.take("a", "A", "Done.", null, 1_000)).toBeNull();
+    expect(t.take("a", "Done.", null, 1_000)).toBeNull();
     // A voice prompt sent with say:false (replies off): not either.
     t.sent("a", false, 1_000);
-    expect(t.take("a", "A", "Done.", null, 2_000)).toBeNull();
+    expect(t.take("a", "Done.", null, 2_000)).toBeNull();
     t.sent("b", true, 1_000);
-    expect(t.take("b", "Login fix", "Done.", null, 2_000)).toBe("Login fix: Done.");
+    expect(t.take("b", "Done.", null, 2_000)).toBe("Done.");
   });
 
   it("once per turn: idle and turn_ended both report it, the second is silent", () => {
     const t = new ReplyTracker();
     t.sent("a", true, 10_000);
     t.working("a");
-    expect(t.take("a", "A", "All tests pass.", 11, 12_000)).toBe("A: All tests pass.");
-    expect(t.take("a", "A", "All tests pass.", 11, 12_500)).toBeNull();
+    expect(t.take("a", "All tests pass.", 11, 12_000)).toBe("All tests pass.");
+    expect(t.take("a", "All tests pass.", 11, 12_500)).toBeNull();
     // The next voice prompt's reply is news even when it repeats word for word.
     t.sent("a", true, 20_000);
-    expect(t.take("a", "A", "All tests pass.", 21, 22_000)).toBe("A: All tests pass.");
+    expect(t.take("a", "All tests pass.", 21, 22_000)).toBe("All tests pass.");
   });
 
   it("a Say line older than the prompt is the previous turn's: wait, unless the turn ran", () => {
     const t = new ReplyTracker();
     t.sent("a", true, 100_000);
-    expect(t.take("a", "A", "Old news.", 50, 101_000)).toBeNull();
+    expect(t.take("a", "Old news.", 50, 101_000)).toBeNull();
     expect(t.waiting("a", 101_000)).toBe(true);
     t.working("a");
-    expect(t.take("a", "A", "Old news.", 50, 102_000)).toBe("A: Finished.");
+    expect(t.take("a", "Old news.", 50, 102_000)).toBe("Finished.");
     expect(t.waiting("a", 102_000)).toBe(false);
+  });
+
+  it("Everything: every session's turn once — idle and turn_ended carry the same words", () => {
+    const h = new HeardTurns();
+    expect(h.fresh("a", "All tests pass.", null, 1_000)).toBe(true);
+    expect(h.fresh("a", "All  tests pass. ", null, 40_000)).toBe(false); // turn_ended, later
+    expect(h.fresh("b", "All tests pass.", null, 40_000)).toBe(true); // another session
+    // Not the same report any more: news again.
+    expect(h.fresh("a", "All tests pass.", null, 1_000 + HEARD_DEDUPE_MS + 1)).toBe(true);
+    expect(h.fresh("a", "Pushed.", null, 1_000 + HEARD_DEDUPE_MS + 2)).toBe(true);
+    // A stamp, when the event carries one, is the identity.
+    expect(h.fresh("c", "Done.", 7, 0)).toBe(true);
+    expect(h.fresh("c", "Done.", 7, 10 * HEARD_DEDUPE_MS)).toBe(false);
+    expect(h.fresh("c", "Done.", 8, 10 * HEARD_DEDUPE_MS)).toBe(true);
+    // No words: nothing to read.
+    expect(h.fresh("d", "  ", null, 0)).toBe(false);
   });
 });
 
@@ -746,6 +788,124 @@ describe("SpeechQueue", () => {
     expect(e.said).toEqual(["A: one.", "B: two."]);
     expect(q.last).toBe("B: two.");
     expect(states[0]).toBe(true);
+  });
+
+  const tick = async () => {
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+  };
+
+  it("a burst from several sessions plays in arrival order, never two at once", async () => {
+    const e = fakeEngine();
+    let at = 0;
+    let max = 0;
+    const live = { n: 0 };
+    const sp: Speaker = {
+      speak: (t) => {
+        live.n++;
+        max = Math.max(max, live.n);
+        return e.sp.speak(t).then(() => {
+          live.n--;
+        });
+      },
+      cancel: () => e.sp.cancel(),
+    };
+    const q = new SpeechQueue(() => sp, () => {}, { now: () => at });
+    const done: string[] = [];
+    for (const l of ["A: one.", "B: two.", "C: three."]) void q.say(l).then(() => done.push(l));
+    expect(e.said).toEqual(["A: one."]);
+    for (let i = 0; i < 3; i++) {
+      at += 1000;
+      e.finish();
+      await tick();
+    }
+    expect(e.said).toEqual(["A: one.", "B: two.", "C: three."]);
+    expect(done).toEqual(["A: one.", "B: two.", "C: three."]);
+    expect(max).toBe(1);
+  });
+
+  it("holds while the mic listens: nothing new starts, then it resumes where it was", async () => {
+    const e = fakeEngine();
+    const q = new SpeechQueue(() => e.sp);
+    q.hold(); // listening before anything is queued
+    void q.say("A: one.");
+    void q.say("B: two.");
+    await tick();
+    expect(e.said).toEqual([]);
+    expect(q.queued).toBe(2);
+    q.release();
+    expect(e.said).toEqual(["A: one."]);
+    e.finish();
+    await tick();
+    expect(e.said).toEqual(["A: one.", "B: two."]);
+  });
+
+  it("a line older than SPEECH_STALE_MS when its turn comes is dropped (logged, not said)", async () => {
+    const e = fakeEngine();
+    let at = 0;
+    const logs: string[] = [];
+    const q = new SpeechQueue(() => e.sp, () => {}, { now: () => at, log: (m) => logs.push(m) });
+    void q.say("A: a long one.");
+    const stale = q.say("B: old news.");
+    void q.say("C: fresh.", { at: SPEECH_STALE_MS + 5_000 });
+    at = SPEECH_STALE_MS + 10_000; // A took more than a minute
+    e.finish();
+    await stale; // resolves although never said
+    await tick();
+    expect(e.said).toEqual(["A: a long one.", "C: fresh."]);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/dropped a line \d+ s old: B: old news\./);
+    expect(q.last).toBe("C: fresh.");
+  });
+
+  it("drained() resolves once nothing is left — a hands-free listen waits for it", async () => {
+    const e = fakeEngine();
+    const q = new SpeechQueue(() => e.sp);
+    let drained = false;
+    await q.drained(); // idle: at once
+    void q.say("A: one.");
+    void q.say("B: two.");
+    void q.drained().then(() => (drained = true));
+    e.finish();
+    await tick();
+    expect(drained).toBe(false);
+    e.finish();
+    await tick();
+    expect(drained).toBe(true);
+    // cancel() drains too.
+    void q.say("C: three.");
+    let again = false;
+    void q.drained().then(() => (again = true));
+    q.cancel();
+    await tick();
+    expect(again).toBe(true);
+  });
+
+  it("a line can be worded when its turn comes (the name first only if that session isn't focused then)", async () => {
+    const e = fakeEngine();
+    let focused = "t1";
+    const q = new SpeechQueue(() => e.sp);
+    void q.say("X: first.");
+    void q.say(() => spokenLine(voiceName("t1", focused, "Login fix"), "Pushed."));
+    focused = "t2"; // you moved on while the first line played
+    e.finish();
+    await tick();
+    expect(e.said).toEqual(["X: first.", "Login fix: Pushed."]);
+    expect(q.last).toBe("Login fix: Pushed.");
+  });
+
+  it("cancels the engine that is speaking, even when the choice of engine moved since", async () => {
+    const a = fakeEngine();
+    const b = fakeEngine();
+    let useB = false;
+    const cancelled: string[] = [];
+    const wrap = (f: ReturnType<typeof fakeEngine>, n: string): Speaker => ({ speak: f.sp.speak, cancel: () => (cancelled.push(n), f.sp.cancel()) });
+    const sa = wrap(a, "a");
+    const sb = wrap(b, "b");
+    const q = new SpeechQueue(() => (useB ? sb : sa));
+    void q.say("one");
+    useB = true;
+    q.hold();
+    expect(cancelled).toEqual(["a"]);
   });
 });
 
@@ -1655,6 +1815,19 @@ describe("the router's new answers", () => {
     expect(mocks.instApi.mock.calls.some((c) => c[1] === "/answer")).toBe(false);
   });
 
+  it("a select dialog's free-text answer from the router rides with its keys (`text`)", async () => {
+    mocks.instApi.mockResolvedValue({ ok: true });
+    const { d } = deps({ approveDialogs: async () => true });
+    await runVoiceCommand(
+      { kind: "answer", choice: "number", number: 3, title: "t1", dialog_id: "q1", keys: ["3"], text: "SAML via Okta" },
+      "type something SAML via Okta",
+      d
+    );
+    expect(mocks.instApi).toHaveBeenLastCalledWith("t1", "/answer", {
+      json: { keys: ["3"], dialog_id: "q1", by: "user", text: "SAML via Okta" },
+    });
+  });
+
   it("a working session's old question is not answered", async () => {
     mocks.instApi.mockResolvedValue({ has_question: true });
     const { d, out } = deps({ activity: () => "working" });
@@ -1784,7 +1957,7 @@ describe("hands-free answering (Read replies aloud)", () => {
     const MIC = code("components/TopBarMic.tsx");
     // With the ask pop-up on, the pop-up reads it out instead (askPopup.test).
     expect(MIC).toContain('else if (env.new === "clarify" && !askPopupOn()) void hands.current?.dialog(env.session)');
-    expect(MIC).toContain("if (ask) void hands.current?.question(title, ask)");
+    expect(MIC).toContain("if (listen) void said.then(() => hands.current?.question(title, ask))");
     expect(MIC).toContain('pending: (title) => liveActivity(title) === "clarify" || questions.has(title)');
     expect(MIC).toContain("runVoiceCommand(r, text, {");
     expect(MIC).toContain("railOrder: () => useUi.getState().railOrder");
@@ -1836,11 +2009,11 @@ describe("voice prefs are shared between the popover and Settings → Voice", ()
       const seen: unknown[] = [];
       const off = mod.onVoicePrefs((p) => seen.push(p));
       const kv = { store: {} as Record<string, string>, getItem(k: string) { return this.store[k] ?? null; }, setItem(k: string, v: string) { this.store[k] = v; } };
-      mod.saveVoicePrefs({ ptt: "hold", replies: true }, kv);
-      expect(seen).toEqual([{ ptt: "hold", replies: true }]);
-      expect(JSON.parse(kv.store[mod.VOICE_PREFS_KEY])).toEqual({ ptt: "hold", replies: true });
+      mod.saveVoicePrefs({ ptt: "hold", replies: "all" }, kv);
+      expect(seen).toEqual([{ ptt: "hold", replies: "all" }]);
+      expect(JSON.parse(kv.store[mod.VOICE_PREFS_KEY])).toEqual({ ptt: "hold", replies: "all" });
       off();
-      mod.saveVoicePrefs({ ptt: "toggle", replies: false }, kv);
+      mod.saveVoicePrefs({ ptt: "toggle", replies: "off" }, kv);
       expect(seen).toHaveLength(1);
     } finally {
       if (hadWin) g.window = prev;

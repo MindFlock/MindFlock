@@ -52,6 +52,7 @@ import {
   type WorkerRow,
 } from "../../lib/thread";
 import { AnswerStrip } from "../AnswerStrip";
+import { sayOnSend } from "../../lib/voiceDesktop";
 import { useRun } from "../../state/runs";
 import { RunLeadPanel } from "./RunLeadPanel";
 import { OrderDiagram } from "./OrderDiagram";
@@ -257,11 +258,11 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
     // "Now" is the server's call, not this tab's: its view of each agent is
     // a poll behind, and Enter typed into a permission prompt approves it.
     // `dialog_safe` re-checks the agent live and QUEUES instead when it is
-    // on a prompt or at the usage limit.
+    // on a prompt or at the usage limit. With "Read replies aloud" on
+    // Everything, `say` has the agent write the line that is read.
+    const body = sayOnSend(false) ? { text, dialog_safe: true, say: true } : { text, dialog_safe: true };
     const results = await Promise.allSettled([
-      ...plannedNow.map((t) =>
-        instApi<{ queued?: boolean }>(t, "/send", { json: { text, dialog_safe: true } })
-      ),
+      ...plannedNow.map((t) => instApi<{ queued?: boolean }>(t, "/send", { json: body })),
       ...plannedLater.map((t) => instApi(t, "/queue", { json: { text } })),
     ]);
     if (!live.current) return;

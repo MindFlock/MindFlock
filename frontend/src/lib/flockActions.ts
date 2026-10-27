@@ -30,7 +30,33 @@ function normOption(v: unknown): DialogOption | null {
   const keys = Array.isArray(o.keys) ? o.keys.map((k) => str(k).trim()).filter(Boolean) : [];
   const opt: DialogOption = { key, label: str(o.label).trim() || key, kind: str(o.kind, "other") };
   if (keys.length) opt.keys = keys;
+  const desc = typeof o.desc === "string" ? o.desc.trim() : "";
+  if (desc) opt.desc = desc;
+  if (typeof o.checked === "boolean") opt.checked = o.checked;
   return opt;
+}
+
+const keyList = (v: unknown): string[] => (Array.isArray(v) ? v.map((k) => str(k).trim()).filter(Boolean) : []);
+
+/** The select-only fields (Claude's AskUserQuestion), onto `d`. */
+function normSelect(d: Dialog, o: Obj): void {
+  d.multi = o.multi === true;
+  d.steps = (Array.isArray(o.steps) ? o.steps : []).map((v) => {
+    const s = obj(v);
+    return s.submit === true ? { label: str(s.label).trim(), done: s.done === true, submit: true } : { label: str(s.label).trim(), done: s.done === true };
+  });
+  const step = Math.trunc(Number(o.step));
+  d.step = Number.isFinite(step) && step >= 0 && step < d.steps.length ? step : 0;
+  if (Array.isArray(o.review))
+    d.review = o.review.map((v) => ({ question: str(obj(v).question).trim(), answer: str(obj(v).answer).trim() }));
+  // Claude Code's own keys when a server leaves them out.
+  const nav = obj(o.nav);
+  const or = (keys: string[], dflt: string) => (keys.length ? keys : [dflt]);
+  d.nav = { next: or(keyList(nav.next), "Right"), prev: or(keyList(nav.prev), "Left"), submit: or(keyList(nav.submit), "Enter") };
+  const cursor = str(o.cursor).trim();
+  d.cursor = /^[1-9]$/.test(cursor) ? cursor : null;
+  const button = str(o.button).trim();
+  d.button = button || null;
 }
 
 /** Normalize a /dialog body. An unparsed dialog keeps its question but never
@@ -42,11 +68,12 @@ export function normDialog(v: unknown): Dialog {
   const options = parsed && Array.isArray(o.options) ? o.options.map(normOption).filter((x): x is DialogOption => !!x) : [];
   const d: Dialog = { id: str(o.id), parsed: parsed && options.length > 0, question: str(o.question).trim(), command, options };
   // A prose question (lib/ask.ts) rides the same route: no options, ever.
-  if (o.kind === "question" || o.kind === "dialog") d.kind = o.kind;
+  if (o.kind === "question" || o.kind === "dialog" || o.kind === "select") d.kind = o.kind;
   if (d.kind === "question") {
     d.parsed = false;
     d.options = [];
   }
+  if (d.kind === "select") normSelect(d, o);
   const heading = str(o.heading).trim();
   if (heading) d.heading = heading;
   const source = str(o.source).trim();

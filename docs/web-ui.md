@@ -2242,10 +2242,14 @@ answered yet (the row's `asking.kind: "question"`, `session.question`). A
 question in words keeps the session in the bell instead of Idle; the 20-minute
 *Idle* rule is for sessions that are truly idle.
 
-**The pop-up.** When a session starts asking, a small card opens in the
+**The pop-up.** When a session shows a **dialog** — a permission or choice
+prompt, Claude's own question prompt included — a small card opens in the
 **middle of the screen** by itself (`AskDialog`): the session's rail slot and
 name, the kind (*Permission*, *Plan approval* or *Question*), the question and
-the command it wants to run in a monospace box. Then:
+the command it wants to run in a monospace box. A question in plain words at
+the end of a reply never opens it by itself (a reply that merely says
+"question" is no prompt): it keeps its bell row, rail strip, toast and OS
+notification, and their **Reply** opens the card on it. Then:
 
 - a dialog MindFlock could read: **its own options**, the answer strip's
   buttons with full labels — **1–9** pick by number, **Y / N / A** pick yes /
@@ -2254,9 +2258,34 @@ the command it wants to run in a monospace box. Then:
   dialog's id; a changed prompt is shown instead of answered; *Already
   answered* when someone beat you to it). **No…** puts the keyboard in the
   session's pane, where the agent waits to hear what to do instead;
+- **Claude's question prompt** (its AskUserQuestion tool; `GET /dialog` kind
+  `select`): a row of **tabs** like Claude's — each question's label, ✓ once
+  answered, the shown one lit, *Submit* last — then the question and its
+  options, each with its description underneath. A **single-select**
+  question: a press (or its digit) picks it, and the card reads the prompt
+  again and shows the **next question in place** — it stays open while the
+  dialog id changes step by step (`lib/askSelect.ts` `selectFlows`), and a
+  409 `dialog_changed` there is just the next step (*The prompt changed* only
+  when a different kind of prompt came up). A **multi-select**: checkboxes —
+  a click or a digit ticks one on the card — and **Next ›** (or the
+  prompt's own *Submit*, `button`) sends the keys of the boxes ticked
+  differently from the server, in order, in one post, then Right
+  (`nav.next`). **‹ Back** is Left. **Type something** opens a text field:
+  Enter posts its digit, then `{text, keys: ["Enter"]}`; **Chat about this**
+  opens one whose words go to the session as a prompt (its digit, then
+  `/send {text, dialog_safe: true}`). The **review** step lists the answers
+  with **Submit answers** (its digit) and Cancel. Every post carries the
+  option's own `keys` (with Claude's cursor on the text row they read
+  `["Up", "1"]`, never a bare digit) and is pinned to the dialog id you saw
+  (`dialog_id` — it holds across ticks and while the text row is typed into);
+  a later post of the same answer refused as changed or just answered is sent
+  once more without the pin. A small **Cancel the
+  question** link presses Escape (the whole tool). Keys: *1–9 picks*, *1–9
+  ticks · Enter next*, *Enter submits*. The rail and bell strips send a
+  multi-select or a review to the card (**Reply**) instead of pressing a box;
 - a dialog it couldn't read: the question and **Open the pane ↗** — the prompt
   needs the terminal;
-- a question in words: an **answer box** — **Enter** sends it
+- a question in words (opened with Reply): an **answer box** — **Enter** sends it
   (`POST /api/instances/{title}/send {text, dialog_safe: true}`, which types it
   and submits it), **Shift+Enter** is a
   new line — and **Open the pane ↗**. If a dialog came up meanwhile the send is
@@ -2266,11 +2295,12 @@ the command it wants to run in a monospace box. Then:
 (`POST …/asking/dismiss`), a dialog is snoozed until its prompt changes; the
 bell keeps either. After an answer the card steps to the next session still
 asking, or closes. Several asking at once share **one** card with a **1 of N**
-stepper (‹ ›), the longest-waiting first; `Ctrl+K N` still walks everything
+stepper (‹ ›), the longest-waiting first — the dialogs, and a question in
+words only once you opened it with Reply; `Ctrl+K N` still walks everything
 that needs you.
 
-It does **not** open by itself for an ask you already answered, put off or
-opened in its pane; for the focused session when you typed into it in the last
+It does **not** open by itself for a question in words; for an ask you already
+answered, put off or opened in its pane; for the focused session when you typed into it in the last
 10 seconds (you are already answering it there); or over another dialog (it
 waits for that one to close). It waits for the keyboard to be quiet for a
 moment first, so a word you are typing elsewhere isn't cut in half. The bell's
@@ -2281,14 +2311,20 @@ for one you put off.
 it (*Hotkey: Ctrl+T*). While the card is up, that button, the hotkey and the
 top-bar mic all listen for **this** session's answer: for a dialog, say "yes",
 "no", "always" or a number (pressed only with *Approve dialogs by voice* on in
-Settings → Voice — otherwise it says "Approving by voice is off"); for a
-question, the words are typed into the answer box as you speak, **submit**
-sends them, **disregard** clears what was said, **over** stops and leaves the
-text. With *Read replies aloud* on, the card reads the ask out as it opens —
-*"sitecheck-bot7: Allow git push? Say yes, no, or always."* — and listens for
-12 seconds, with one retry; nothing is ever spoken with it off. The card is the
-one hands-free entry: the top-bar mic no longer reads dialogs out by itself
-while the pop-up is on, so nothing is read twice.
+Settings → Voice — otherwise it says "Approving by voice is off"); on
+Claude's question prompt, a number or an option's words answer the shown step,
+"next" and "submit" move on (the voice router answers it with the option's
+keys), and "type something" opens that field — the next words are dictated
+into it and **submit** sends them; for a question, the words are typed into the
+answer box as you speak, **submit** sends them, **disregard** clears what was
+said, **over** stops and leaves the text. The card reads its step again every
+2 s, so an answer said (or typed in the pane) shows at once. With *Read
+replies aloud* on (either choice), the card reads the ask out as it opens —
+*"sitecheck-bot7: Allow git push? Say yes, no, or always."*, each step of a
+question prompt once — and, once nothing else is waiting to be said, listens
+for 12 seconds, with one retry; nothing is ever spoken with it off. The card is
+the one hands-free entry for a dialog: the top-bar mic no longer reads dialogs
+out by itself while the pop-up is on, so nothing is read twice.
 
 **When MindFlock is in the background.** The desktop app raises an OS
 notification — *[3] sitecheck-bot7 needs you: Question*, with the question as
@@ -2299,10 +2335,10 @@ notification addon leaves these two to the desktop app, so nothing pops twice.
 In the window, the **Question** toast does the same on click. Both follow the
 *needs input* rule.
 
-**The switch.** Settings → Notifications → *Pop up a session's question in the
-middle of the screen* (`notifications.ask_popup`, on by default, saved through
-the notification settings view). Off, asks stay in the bell, the rail and the
-toasts.
+**The switch.** Settings → Notifications → *Pop up a session's permission and
+choice prompts in the middle of the screen* (`notifications.ask_popup`, on by
+default, saved through the notification settings view). Off, asks stay in the
+bell, the rail and the toasts (a Reply still opens the card).
 
 ## Diff → instruction
 
@@ -5636,6 +5672,13 @@ labels above the inputs.
     this computer.* under the title, then where recognition and the voice
     run for the phone (`voice.stt` / `voice.tts`: *The phone* · *This
     computer*), two rows.
+  - **This computer's mic** (the top-bar mic's own choices, per browser,
+    `cs_voice_desktop` — the same as its popover, each following the other
+    through `mindflock:voice-prefs`): **Read replies aloud** as three radios —
+    *Off* (the default), *Replies to what I said by voice*, *Everything,
+    every session* (an older saved switch loads as *Off* / *Replies to what
+    I said by voice*) — with the name-first and one-at-a-time rules under it;
+    and **Push to talk** (*Click to talk* · *Hold to talk*).
   - **Permission dialogs**: the **Approve dialogs by voice** switch (*A
     spoken yes or no answers a permission dialog after its command is read
     aloud. 'Always' is only accepted when you say the word.*).
@@ -5881,11 +5924,27 @@ instead (pressed only with *Approve dialogs by voice* on), and answers a
 question the session asked as a prompt. A dictation's first phrase is offered
 to the voice router first ("switch to …", "focus three", "next session", "new
 session …", "what needs me", "what sessions do I have", "session three yes"),
-and the reply is read aloud only while *Read replies aloud* is on (off by
-default; right-click the mic) — with it on, a dialog or a question in a reply
-is read out and the mic listens 12 s for the answer. With the
+and the reply is read aloud only while *Read replies aloud* says so (right-click
+the mic, or Settings → Voice → This computer's mic): **Off** (the default),
+**Replies to what I said by voice** (a draft this mic submitted asks the
+session for a `Say:` line, read once when that turn ends), or **Everything,
+every session** — every finished turn that carries a `Say:` line or a digest
+(`session.turn_ended` / `activity_changed new="idle"` `data.say`) is read
+once, deduplicated across the two events, and this app's typed sends (the ask
+card's answer box, the Thread composer) carry `say: true` too. A line leads
+with its session's name — *"vc-frontend: Pushed the fix."* — unless that
+session is the focused one when it is read, which is spoken bare. Everything
+the desktop says — replies, ask read-outs, the router's answers — goes
+through **one queue, one line at a time** (`SpeechQueue`): never two over each
+other, never the browser's voice and the server's at once; a burst from
+several sessions plays in arrival order; nothing new starts while the mic
+listens (it waits, then goes on); a line more than 60 s old when its turn
+comes is dropped (logged to the console, not said); "repeat" says the last
+line again. With either choice a dialog or a question in a reply to what you
+said is read out and, once the queue is quiet, the mic listens 12 s for the
+answer. With the
 [ask pop-up](#when-a-session-asks-you-something) on (the default), the pop-up
-does that for any session that asks, focused or not, and while it is up the
+does that for any session's dialog, focused or not, and while it is up the
 mic, the Talk hotkey and the pop-up's own mic button answer **that** session —
 a dialog by "yes" / "no" / "always" / a number, a question by dictating into
 its answer box ("submit" sends it); with the pop-up off, only the focused
