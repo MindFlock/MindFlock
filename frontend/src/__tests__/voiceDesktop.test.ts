@@ -640,9 +640,9 @@ describe("streaming helpers", () => {
 });
 
 describe("prefs: cs_voice_desktop", () => {
-  it("defaults to click-to-talk with replies OFF", () => {
-    expect(DEFAULT_VOICE_PREFS).toEqual({ ptt: "toggle", replies: "off" });
-    expect(loadVoicePrefs(memKV())).toEqual({ ptt: "toggle", replies: "off" });
+  it("defaults to click-to-talk with replies OFF and no wake-word standby", () => {
+    expect(DEFAULT_VOICE_PREFS).toEqual({ ptt: "toggle", replies: "off", wake: false });
+    expect(loadVoicePrefs(memKV())).toEqual({ ptt: "toggle", replies: "off", wake: false });
     expect(loadVoicePrefs(null)).toEqual(DEFAULT_VOICE_PREFS);
   });
 
@@ -650,8 +650,8 @@ describe("prefs: cs_voice_desktop", () => {
     for (const replies of ["off", "mine", "all"] as const) {
       const kv = memKV();
       saveVoicePrefs({ ptt: "hold", replies }, kv);
-      expect(JSON.parse(kv.m.get(VOICE_PREFS_KEY)!)).toEqual({ ptt: "hold", replies });
-      expect(loadVoicePrefs(kv)).toEqual({ ptt: "hold", replies });
+      expect(JSON.parse(kv.m.get(VOICE_PREFS_KEY)!)).toEqual({ ptt: "hold", replies, wake: false });
+      expect(loadVoicePrefs(kv)).toEqual({ ptt: "hold", replies, wake: false });
     }
     expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: "{nope" }))).toEqual(DEFAULT_VOICE_PREFS);
     expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"ptt":"sideways","replies":"yes"}' }))).toEqual(
@@ -660,8 +660,8 @@ describe("prefs: cs_voice_desktop", () => {
   });
 
   it("the old switch loads as its meaning: true is 'mine' (replies to what you said), false 'off'", () => {
-    expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"ptt":"hold","replies":true}' }))).toEqual({ ptt: "hold", replies: "mine" });
-    expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"ptt":"toggle","replies":false}' }))).toEqual({ ptt: "toggle", replies: "off" });
+    expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"ptt":"hold","replies":true}' }))).toEqual({ ptt: "hold", replies: "mine", wake: false });
+    expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"ptt":"toggle","replies":false}' }))).toEqual({ ptt: "toggle", replies: "off", wake: false });
     expect(repliesMode(true)).toBe("mine");
     expect(repliesMode("all")).toBe("all");
     expect(repliesMode(undefined)).toBe("off");
@@ -671,6 +671,17 @@ describe("prefs: cs_voice_desktop", () => {
     const p = (replies: "off" | "mine" | "all") => ({ ptt: "toggle" as const, replies });
     expect([sayOnSend(true, p("off")), sayOnSend(true, p("mine")), sayOnSend(true, p("all"))]).toEqual([false, true, true]);
     expect([sayOnSend(false, p("off")), sayOnSend(false, p("mine")), sayOnSend(false, p("all"))]).toEqual([false, false, true]);
+  });
+
+  it("the wake-word standby: on only when saved true, kept through a save, absent reads as off", () => {
+    const kv = memKV();
+    saveVoicePrefs({ ptt: "toggle", replies: "off", wake: true }, kv);
+    expect(JSON.parse(kv.m.get(VOICE_PREFS_KEY)!)).toEqual({ ptt: "toggle", replies: "off", wake: true });
+    expect(loadVoicePrefs(kv).wake).toBe(true);
+    saveVoicePrefs({ ...loadVoicePrefs(kv), replies: "mine" }, kv);
+    expect(loadVoicePrefs(kv)).toEqual({ ptt: "toggle", replies: "mine", wake: true });
+    for (const raw of ['{"wake":"yes"}', '{"wake":1}', '{"ptt":"hold"}'])
+      expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: raw })).wake).toBe(false);
   });
 
   it("a storage that throws never breaks the mic", () => {
@@ -2010,8 +2021,8 @@ describe("voice prefs are shared between the popover and Settings → Voice", ()
       const off = mod.onVoicePrefs((p) => seen.push(p));
       const kv = { store: {} as Record<string, string>, getItem(k: string) { return this.store[k] ?? null; }, setItem(k: string, v: string) { this.store[k] = v; } };
       mod.saveVoicePrefs({ ptt: "hold", replies: "all" }, kv);
-      expect(seen).toEqual([{ ptt: "hold", replies: "all" }]);
-      expect(JSON.parse(kv.store[mod.VOICE_PREFS_KEY])).toEqual({ ptt: "hold", replies: "all" });
+      expect(seen).toEqual([{ ptt: "hold", replies: "all", wake: false }]);
+      expect(JSON.parse(kv.store[mod.VOICE_PREFS_KEY])).toEqual({ ptt: "hold", replies: "all", wake: false });
       off();
       mod.saveVoicePrefs({ ptt: "toggle", replies: "off" }, kv);
       expect(seen).toHaveLength(1);

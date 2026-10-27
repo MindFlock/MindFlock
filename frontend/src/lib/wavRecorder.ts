@@ -137,6 +137,11 @@ export interface WavRecording {
   cancel(): void;
   /** Seconds recorded so far. */
   seconds(): number;
+  /** The WAV of the last `s` seconds heard (at most what is kept: see
+   * {@link WavRecorderOptions.keepS}), resampled by {@link resampleTo};
+   * recording goes on and nothing is drained. Null once stopped or before
+   * any audio — the wake word's standby sends a lone utterance this way. */
+  last(s: number): Promise<Blob | null>;
 }
 
 export interface WavRecorderOptions {
@@ -147,6 +152,10 @@ export interface WavRecorderOptions {
   /** Drop this much audio at the start (seconds), unrecorded and unmetered:
    * the app's own voice, cut just before the mic opened (barge-in). */
   skipS?: number;
+  /** Keep only the last this-many seconds (a rolling window — the wake
+   * word's standby records for as long as it is on; nothing else may grow
+   * without bound). Unset: everything until stop/take. */
+  keepS?: number;
 }
 
 /** Record a MediaStream through `ctx` (the caller's AudioContext, already running) with a
@@ -173,6 +182,7 @@ export function startWavRecording(
   let done = false;
   let result: Promise<Blob> | null = null;
   let skip = Math.max(0, Math.round((opts.skipS || 0) * ctx.sampleRate));
+  const keep = opts.keepS ? Math.max(1, Math.round(opts.keepS * ctx.sampleRate)) : 0;
 
   processor.onaudioprocess = (e: AudioProcessingEvent) => {
     if (done) return;
@@ -185,6 +195,8 @@ export function startWavRecording(
     blocks.push(block);
     frames += block.length;
     fresh += block.length;
+    // The rolling window: whole blocks off the front, never under `keep`.
+    while (keep && blocks.length > 1 && fresh - blocks[0].length >= keep) fresh -= blocks.shift()!.length;
     if (onLevel && block.length) {
       let sum = 0;
       for (let i = 0; i < block.length; i++) sum += block[i] * block[i];
@@ -241,6 +253,19 @@ export function startWavRecording(
     },
     seconds() {
       return frames / ctx.sampleRate;
+    },
+    async last(s: number) {
+      if (done || !fresh) return null;
+      let want = Math.min(fresh, Math.max(1, Math.round(s * ctx.sampleRate)));
+      const out = new Float32Array(want);
+      for (let i = blocks.length - 1; i >= 0 && want > 0; i--) {
+        const b = blocks[i];
+        const n = Math.min(want, b.length);
+        out.set(b.subarray(b.length - n), want - n);
+        want -= n;
+      }
+      const pcm = await resampleTo(out, ctx.sampleRate, targetRate);
+      return encodeWav(pcm, targetRate);
     },
   };
 }

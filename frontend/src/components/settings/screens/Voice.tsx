@@ -32,7 +32,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, apiRaw } from "../../../api/client";
 import { toast } from "../../../lib/toast";
 import { startWavRecording } from "../../../lib/wavRecorder";
-import { loadVoicePrefs, onVoicePrefs, saveVoicePrefs, REPLIES_CHOICES, type VoicePrefs } from "../../../lib/voiceDesktop";
+import { loadVoicePrefs, onVoicePrefs, saveVoicePrefs, REPLIES_CHOICES, voiceAudioCtx, type VoicePrefs } from "../../../lib/voiceDesktop";
+import { WAKE_SWITCH_HINT, onWakeStatus, wakeStatus } from "../../../lib/wakeWord";
 import type { ScreenProps } from "../SettingsDialog";
 import { SECRET_MASK, SettingField, useSettings, type SettingsModel } from "../useSettings";
 import "./voice.css";
@@ -432,6 +433,9 @@ export function VoiceSectionView({
 export function MicPrefs() {
   const [prefs, setPrefs] = useState<VoicePrefs>(loadVoicePrefs);
   useEffect(() => onVoicePrefs(setPrefs), []);
+  // Why standby stopped (the top-bar mic runs it: lib/wakeWord).
+  const [wakeLine, setWakeLine] = useState(() => wakeStatus().line);
+  useEffect(() => onWakeStatus((s) => setWakeLine(s.line)), []);
   const save = (p: VoicePrefs) => {
     setPrefs(p);
     saveVoicePrefs(p);
@@ -480,6 +484,36 @@ export function MicPrefs() {
             <span>Hold to talk — hold the mic or the Talk hotkey while you speak</span>
           </label>
         </div>
+      </div>
+      <div className="set-row set-switch-row" id="voice-wake-row">
+        <span className="notif-rule-text">
+          <span className="set-label" id="voice-wake-label">
+            Listen for “MindFlock”
+          </span>
+          <span className="set-hint notif-rule-desc" id="voice-wake-hint">
+            {WAKE_SWITCH_HINT}
+          </span>
+          {prefs.wake && wakeLine && (
+            <span className="set-hint notif-rule-desc" id="voice-wake-line">
+              {wakeLine}
+            </span>
+          )}
+        </span>
+        {/* label wraps only the switch, so clicking the row text never flips it */}
+        <label className="ca-switch">
+          <input
+            type="checkbox"
+            id="voice-wake"
+            aria-labelledby="voice-wake-label"
+            checked={!!prefs.wake}
+            onChange={(e) => {
+              // In the click: the audio engine starts here, so standby can.
+              if (e.target.checked) voiceAudioCtx();
+              save({ ...prefs, wake: e.target.checked });
+            }}
+          />
+          <span className="ca-slider" />
+        </label>
       </div>
     </>
   );
