@@ -34,6 +34,7 @@ TOML shape::
     idle_pattern = "(Y)es/(N)o"
     working_patterns = ["(?i)esc to interrupt"]   # status line of a LIVE turn
     waiting_patterns = ["Apply this change\\?"]   # paused-for-the-human prompts
+    dialog_layout = "aider"     # read its dialogs as one of the known CLIs'
     progress_pattern = "([\\d.,]+\\s*[kmKM]?)\\s*tokens"  # climbing turn counter
 """
 
@@ -80,6 +81,13 @@ class ProviderConfig:
     #: (permission prompt / plan approval / clarifying question). Feeds
     #: :meth:`BaseProvider.waiting_prompt_patterns` -> the UI's 'clarify' state.
     waiting_patterns: Tuple[str, ...] = ()
+    #: Which known CLI's dialogs this one draws — a key of
+    #: :data:`backend.providers.dialogs.LAYOUTS` ("aider", "opencode", "cline",
+    #: "goose", "antigravity"). Set, :meth:`GenericProvider.parse_dialog` reads
+    #: the dialog as data (the UI's answer buttons) and the activity layer
+    #: captures the screen on every probe; empty = no parser (the waiting
+    #: patterns alone flag ``clarify``).
+    dialog_layout: str = ""
     #: Regex with ONE capture group holding a climbing turn counter from the
     #: CLI's status line. Feeds :meth:`BaseProvider.progress_token_pattern`.
     progress_pattern: str = ""
@@ -565,6 +573,8 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
             r"Question \d+/\d+:",
             r"Navigate.+enter Select.+esc Skip",
         ),
+        # Its dialogs as data: the ">" numbered permission / question menus.
+        dialog_layout="antigravity",
         # Plan-based Google quota: each model group (Gemini / Claude+GPT)
         # shares a WEEKLY limit. Real numbers come from a running agy's local
         # language server via AntigravityProvider.usage_live(); the rolling
@@ -623,6 +633,8 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         # io.confirm_ask always renders " (Y)es/(N)o" (plus optional /(A)ll,
         # /(S)kip all, /(D)on't ask again suffixes) when paused on a question.
         waiting_patterns=(r"\(Y\)es/\(N\)o",),
+        # Its dialogs as data: the confirm_ask line, answered letter + Enter.
+        dialog_layout="aider",
         # Uses YOUR provider API key — the upstream model API's rate limits
         # apply; MindFlock has no plan-level window to anchor.
         usage_window_kind="",
@@ -659,12 +671,18 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         # at an idle prompt) — captured from a real 1.17.15 session.
         working_patterns=(r"(?i)esc\s+interrupt",),
         # Permission dialog title + options, from the TUI source bundled in
-        # the 1.17.15 binary.
+        # the 1.17.15 binary; the "Always allow" step "Allow always" opens
+        # (Confirm / Cancel), and the question tool's footer — both captured
+        # live from 1.17.15.
         waiting_patterns=(
             "Permission required",
             "Allow once",
             "Allow always",
+            "△ Always allow",
+            r"↑↓ select\s+enter \w+\s+esc dismiss",
         ),
+        # Its dialogs as data: the permission buttons and the question tool.
+        dialog_layout="opencode",
         # The footer shows a climbing context tally during a turn, e.g.
         # "10.2K (5%)" — any increase is proof of work.
         progress_pattern=r"([\d.,]+\s*[kKmM]?)\s*\(\d+%\)",
@@ -732,6 +750,8 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
             "Cline needs permission",
             "Cline is asking a question",
         ),
+        # Its dialogs as data: tool approval (y/n) and ask_question choices.
+        dialog_layout="cline",
         # The bare CLI (no -i) IS the one-shot mode — a positional prompt. Note
         # `-p` here is --plan, NOT print; auto-approve is on by default, so it is
         # turned OFF for a question that must not touch the tree.
@@ -787,6 +807,8 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
             r"do you allow\?",
             "Allow the tool call once",
         ),
+        # Its dialogs as data: the tool-confirmation radio list.
+        dialog_layout="goose",
         # `goose run -t <text>` executes one instruction and exits. NOT `goose
         # session run` — one-shot args hang off the executable, which is why they
         # are kept separate from `command`.
@@ -841,6 +863,20 @@ def _providers_dir() -> Path:
     return Path(home) / "providers"
 
 
+def validate_dialog_layout(value) -> str:
+    """A TOML ``[classify] dialog_layout`` → the layout name, ``""`` when
+    unset. Raises ``ValueError`` for a name no parser has (the file is then
+    listed as a red row, not silently left without its dialog buttons)."""
+    from .dialogs import LAYOUTS
+
+    name = str(value or "").strip().lower()
+    if name and name not in LAYOUTS:
+        raise ValueError(
+            "dialog_layout %r is not one of: %s" % (name, ", ".join(sorted(LAYOUTS)))
+        )
+    return name
+
+
 def _config_from_toml(raw: dict) -> ProviderConfig:
     """Assemble a :class:`ProviderConfig` from a parsed provider TOML dict.
 
@@ -851,8 +887,8 @@ def _config_from_toml(raw: dict) -> ProviderConfig:
     integration), and ``[connect]`` (install + login-detection hints). Missing
     tables and keys fall back to the dataclass defaults. Raises ``KeyError``
     when ``[provider].name`` is absent and ``ValueError`` on invalid launch
-    args — both caught by :func:`load_user_configs` so one bad file never
-    breaks startup.
+    args or an unknown ``dialog_layout`` — both caught by
+    :func:`load_user_configs` so one bad file never breaks startup.
     """
     prov = raw.get("provider", {}) or {}
     launch = raw.get("launch", {}) or {}
@@ -881,6 +917,7 @@ def _config_from_toml(raw: dict) -> ProviderConfig:
         idle_pattern=classify.get("idle_pattern", ""),
         working_patterns=tuple(classify.get("working_patterns", ()) or ()),
         waiting_patterns=tuple(classify.get("waiting_patterns", ()) or ()),
+        dialog_layout=validate_dialog_layout(classify.get("dialog_layout", "")),
         progress_pattern=classify.get("progress_pattern", ""),
         resume_id_flag=launch.get("resume_id_flag", ""),
         prompt_arg=launch.get("prompt_arg", ""),
