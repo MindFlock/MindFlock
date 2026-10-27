@@ -21348,6 +21348,13 @@ button.ct-chip:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* A one-off's date: the browser's date picker, as wide as its value. */
+.tpl-schedule-when #tpl-date {
+  width: auto;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Schedule… / Change schedule: the compact row inside the card. */
 .tpl-sched-row {
   padding: 10px 12px 8px;

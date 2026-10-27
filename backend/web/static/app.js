@@ -33428,7 +33428,7 @@ function readTemplatesTarget(target) {
 	};
 }
 function hasSchedule(t) {
-	return !!(t.schedule && (t.schedule.at || t.schedule.cron));
+	return !!(t.schedule && (t.schedule.at || t.schedule.cron || t.schedule.once));
 }
 function infoOf(t, status) {
 	return status.runs[(t.name || "").trim().toLowerCase()] || {};
@@ -33493,11 +33493,33 @@ function normalizeAt(raw) {
 	if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) return t;
 	return m[1].padStart(2, "0") + ":" + m[2];
 }
-function scheduleLabel(s) {
+function scheduleLabel(s, now = /* @__PURE__ */ new Date()) {
 	if (!s) return "";
+	if (s.once) return "Once on " + onceWords(s.once, now);
 	if (s.cron) return "Cron " + s.cron;
 	if (!s.at) return "";
 	return (s.days === "weekdays" ? "Weekdays at " : "Every day at ") + s.at;
+}
+var ONCE_PAST = "Pick a date and time that are still ahead.";
+function onceOf(date, at) {
+	const d = (date || "").trim();
+	const t = (at || "").trim();
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !/^([01]?\d|2[0-3]):[0-5]\d$/.test(t)) return "";
+	return d + "T" + t.padStart(5, "0");
+}
+function onceDate(once) {
+	const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec((once || "").trim());
+	if (!m) return null;
+	const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
+	return isNaN(d.getTime()) || d.getDate() !== Number(m[3]) ? null : d;
+}
+function onceWords(once, now = /* @__PURE__ */ new Date()) {
+	const d = onceDate(once);
+	if (!d) return once;
+	const wd = d.toLocaleDateString("en-US", { weekday: "short" });
+	const mon = d.toLocaleDateString("en-US", { month: "short" });
+	const year = d.getFullYear() === now.getFullYear() ? "" : " " + d.getFullYear();
+	return wd + " " + d.getDate() + " " + mon + year + " at " + hhmm(d);
 }
 async function cronPreview(expr) {
 	return api("/api/templates/cron-preview?expr=" + encodeURIComponent(expr));
@@ -41466,7 +41488,7 @@ var TOURS = {
 			{
 				target: "[data-tour=\"schedule-when\"]",
 				title: "Let it start by itself",
-				body: "Tick Run on a schedule — the line below it shows exactly when it runs next."
+				body: "Tick Run on a schedule — daily, weekdays, once or on a cron — and the line below it shows exactly when it runs next."
 			},
 			{
 				target: "[data-tour=\"schedule-run\"]",
@@ -76748,7 +76770,7 @@ function CommandPalette({ host }) {
 		});
 		acts.push({
 			label: "New scheduled template…",
-			hint: "daily, weekdays or cron",
+			hint: "daily, weekdays, once or cron",
 			keywords: "schedule a session recurring cron every day nightly weekly",
 			run: () => ui.openDialogFor("schedule", "schedule")
 		});
@@ -78726,7 +78748,17 @@ function GitOptions({ provision, setProvision, setInPlace, provisionOn, offerPro
 //#region src/components/dialogs/TemplateEditor.tsx
 function cadenceKey(s) {
 	if (!s) return "";
+	if (s.once) return "once:" + s.once.trim();
 	return s.cron ? "cron:" + s.cron.trim().replace(/\s+/g, " ") : s.at ? s.at + "/" + (s.days || "daily") : "";
+}
+function isoDate(d) {
+	return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function defaultOnceDate(at, now = /* @__PURE__ */ new Date()) {
+	const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec((at || "").trim());
+	const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), m ? Number(m[1]) : 23, m ? Number(m[2]) : 59);
+	if (today.getTime() > now.getTime()) return isoDate(today);
+	return isoDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1));
 }
 function defaultFolder(suggestions) {
 	const list = suggestions || [];
@@ -78746,8 +78778,9 @@ function formFromTemplate(t) {
 		workspace_strategy: t?.workspace_strategy === "clone" ? "clone" : "worktree",
 		init_repo: !!t?.init_repo,
 		scheduled: !!t && hasSchedule(t),
-		at: t?.schedule?.at || "21:00",
-		days: t?.schedule?.cron ? "cron" : t?.schedule?.days === "weekdays" ? "weekdays" : "daily",
+		at: t?.schedule?.once ? t.schedule.once.slice(11) : t?.schedule?.at || "21:00",
+		days: t?.schedule?.once ? "once" : t?.schedule?.cron ? "cron" : t?.schedule?.days === "weekdays" ? "weekdays" : "daily",
+		date: t?.schedule?.once ? t.schedule.once.slice(0, 10) : "",
 		cron: t?.schedule?.cron || "0 21 * * 1-5",
 		autopilot: t?.autopilot || "",
 		paused: !!t?.schedule?.paused,
@@ -78755,7 +78788,7 @@ function formFromTemplate(t) {
 		seeded: t && hasSchedule(t) ? cadenceKey(t.schedule) : ""
 	};
 }
-function templateBody(f, installed = null, existing = [], editing = null) {
+function templateBody(f, installed = null, existing = [], editing = null, now = /* @__PURE__ */ new Date()) {
 	const name = f.name.trim();
 	if (!name) return { error: "A template needs a name." };
 	if (name.length > 100) return { error: "Names are at most 100 characters." };
@@ -78767,6 +78800,12 @@ function templateBody(f, installed = null, existing = [], editing = null) {
 		if (f.days === "cron") {
 			if (!cron) return { error: "Type a cron expression, like 0 21 * * 1-5 (weekdays at 21:00)." };
 		} else if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(at)) return { error: "Pick a time for the schedule, like 21:00." };
+		if (f.days === "once") {
+			const minute = onceOf(f.date, at);
+			const when = onceDate(minute);
+			if (!when) return { error: "Pick a date for the run." };
+			if (when.getTime() <= now.getTime() && f.seeded !== "once:" + minute) return { error: ONCE_PAST };
+		}
 		if (!f.repo_path.trim() && f.mode !== "provisioned") return { error: "A scheduled template needs a folder to start its session in." };
 		if (!f.prompt.trim()) return { error: "A scheduled template needs a task — it's what the session is told to do." };
 		const missing = missingAgent(f.program, installed);
@@ -78786,7 +78825,7 @@ function templateBody(f, installed = null, existing = [], editing = null) {
 	} };
 }
 function scheduleOf(f, at, cron) {
-	const cadence = f.days === "cron" ? { cron } : {
+	const cadence = f.days === "cron" ? { cron } : f.days === "once" ? { once: onceOf(f.date, at) } : {
 		at,
 		days: f.days === "weekdays" ? "weekdays" : "daily"
 	};
@@ -78799,12 +78838,16 @@ function scheduleOf(f, at, cron) {
 function cronPreviewLine(pv, now = /* @__PURE__ */ new Date(), zone = "") {
 	return schedulePreviewLine(pv, now, zone);
 }
-function daysPatch(f, raw) {
-	const days = raw === "weekdays" ? "weekdays" : raw === "cron" ? "cron" : "daily";
+function daysPatch(f, raw, now = /* @__PURE__ */ new Date()) {
+	const days = raw === "weekdays" ? "weekdays" : raw === "cron" ? "cron" : raw === "once" ? "once" : "daily";
 	if (days === f.days) return {};
+	if (days === "once") return {
+		days,
+		date: f.date || defaultOnceDate(f.at, now)
+	};
 	if (days === "cron") return {
 		days,
-		cron: cronOf(f.at, f.days) || f.cron
+		cron: cronOf(f.at, f.days === "weekdays" ? "weekdays" : "daily") || f.cron
 	};
 	if (f.days === "cron") {
 		const back = atOfCron(f.cron);
@@ -78853,59 +78896,74 @@ function ScheduleWhen({ form, onForm, tz, cronPreview, runs, focusTime }) {
 	};
 	const zone = zoneSuffix(tz || "", status);
 	const elsewhere = !status.runs_here && status.runs_on;
-	const line = cronPreviewLine(cronPreview, /* @__PURE__ */ new Date(), zone);
+	const spentOnce = form.days === "once" && !!form.seeded && form.seeded === "once:" + onceOf(form.date, form.at) && !!cronPreview && !cronPreview.ok;
+	const line = spentOnce ? "Already behind the clock — pick a new date to run it again." : cronPreviewLine(cronPreview, /* @__PURE__ */ new Date(), zone);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "tpl-schedule-when",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-				id: "tpl-days",
-				"aria-label": "Which days",
-				value: form.days,
-				onChange: (e) => onForm(daysPatch(form, e.target.value)),
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-						value: "daily",
-						children: "Every day"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-						value: "weekdays",
-						children: "Weekdays"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-						value: "cron",
-						children: "Custom (cron)"
-					})
-				]
-			}), form.days === "cron" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				id: "tpl-cron",
-				"aria-label": "Cron expression",
-				autoComplete: "off",
-				spellCheck: false,
-				value: form.cron,
-				onChange: (e) => onForm({ cron: e.target.value }),
-				placeholder: "*/30 * * * *"
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "tpl-at",
-				children: "at"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				id: "tpl-at",
-				type: "text",
-				inputMode: "numeric",
-				"aria-label": "Time (24-hour)",
-				autoComplete: "off",
-				maxLength: 5,
-				placeholder: "21:00",
-				autoFocus: focusTime === true,
-				value: form.at,
-				onChange: (e) => onForm({ at: e.target.value }),
-				onBlur: (e) => {
-					const at = normalizeAt(e.target.value);
-					if (at !== form.at) onForm({ at });
-				}
-			})] })]
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+					id: "tpl-days",
+					"aria-label": "Which days",
+					value: form.days,
+					onChange: (e) => onForm(daysPatch(form, e.target.value)),
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: "daily",
+							children: "Every day"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: "weekdays",
+							children: "Weekdays"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: "once",
+							children: "Once"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: "cron",
+							children: "Custom (cron)"
+						})
+					]
+				}),
+				form.days === "once" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					id: "tpl-date",
+					type: "date",
+					"aria-label": "Date",
+					value: form.date,
+					onChange: (e) => onForm({ date: e.target.value })
+				}),
+				form.days === "cron" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					id: "tpl-cron",
+					"aria-label": "Cron expression",
+					autoComplete: "off",
+					spellCheck: false,
+					value: form.cron,
+					onChange: (e) => onForm({ cron: e.target.value }),
+					placeholder: "*/30 * * * *"
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "tpl-at",
+					children: "at"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					id: "tpl-at",
+					type: "text",
+					inputMode: "numeric",
+					"aria-label": "Time (24-hour)",
+					autoComplete: "off",
+					maxLength: 5,
+					placeholder: "21:00",
+					autoFocus: focusTime === true,
+					value: form.at,
+					onChange: (e) => onForm({ at: e.target.value }),
+					onBlur: (e) => {
+						const at = normalizeAt(e.target.value);
+						if (at !== form.at) onForm({ at });
+					}
+				})] })
+			]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "tpl-cron-preview" + (cronPreview && !cronPreview.ok ? " error" : " muted"),
+			className: "tpl-cron-preview" + (cronPreview && !cronPreview.ok && !spentOnce ? " error" : " muted"),
 			id: "tpl-cron-preview",
 			"aria-live": "polite",
 			children: line || (form.days === "cron" ? "minute hour day-of-month month weekday —" + (zone || " local time") : " ")
@@ -79538,7 +79596,7 @@ function TemplatesDialogView(p) {
 			!hasSchedule(t) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "tpl-btn tpl-sched",
-				title: "Start it by itself — every day, weekdays or on a cron",
+				title: "Start it by itself — every day, weekdays, once or on a cron",
 				onClick: () => p.dispatch({
 					t: "schedule",
 					name: t.name
@@ -79615,7 +79673,7 @@ function TemplatesDialogView(p) {
 						onClick: () => p.onSkip?.(t.name, Number(info.next_at)),
 						children: "Skip next"
 					})),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					(paused || !info.once_done) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "sch-sw sch-pause",
 						disabled: flagging,
@@ -79894,7 +79952,7 @@ function TemplatesDialogView(p) {
 									children: [
 										"Nothing runs by itself yet — ",
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Schedule…" }),
-										" on a template below starts it every day, weekday or on any cron."
+										" on a template below starts it every day, weekday, once or on any cron."
 									]
 								})]
 							}),
@@ -79985,7 +80043,7 @@ function TemplatesDialog() {
 		api("/api/fleet").then((f) => setOtherDevices(!!f?.in_fleet && (f.members || []).some((m) => !m.self))).catch(() => setOtherDevices(false));
 	}, [open, ui.confirming]);
 	const wantsPreview = open && ui.editing !== null && (form.scheduled || !!ui.scheduleOnly);
-	const cronText = (form.days === "cron" ? form.cron : cronOf(form.at, form.days)).trim();
+	const cronText = (form.days === "cron" ? form.cron : form.days === "once" ? onceOf(form.date, form.at) : cronOf(form.at, form.days)).trim();
 	(0, import_react.useEffect)(() => {
 		if (!wantsPreview || !cronText) {
 			setPreview(null);
@@ -82207,7 +82265,7 @@ function TemplatesStrip({ templates, activeTemplate, onPick, onRun, onSchedule, 
 							type: "button",
 							className: "nt-act nt-sched" + (sched ? " on" : ""),
 							"aria-label": sched ? "Change the schedule of “" + t.name + "”: " + line : "Schedule “" + t.name + "”",
-							title: sched ? line + " — change or stop it" : "Schedule… — start it by itself every day, weekdays or on a cron",
+							title: sched ? line + " — change or stop it" : "Schedule… — start it by itself every day, weekdays, once or on a cron",
 							onClick: () => onSchedule(t),
 							children: ["⏰", sched && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 								className: "nt-sched-at",
@@ -89003,7 +89061,7 @@ function scheduledRows(templates, status, now = /* @__PURE__ */ new Date()) {
 		const skipping = !t.schedule?.paused && !info.paused ? info.skipping_at : 0;
 		const row = {
 			name: t.name,
-			when: (info.schedule_label || scheduleLabel(t.schedule)) + (tz && t.schedule?.at ? " " + tz : ""),
+			when: (info.schedule_label || scheduleLabel(t.schedule, now)) + (tz && (t.schedule?.at || t.schedule?.once) ? " " + tz : ""),
 			next,
 			problem: runProblem(t),
 			line: templateScheduleLine(t, status, now)
