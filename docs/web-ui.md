@@ -5719,7 +5719,10 @@ labels above the inputs.
   phone** (*as <login>* when known, with *This QR gets the app*), **3 Make
   MindFlock reachable from your phone** (✗ while it only listens on this
   computer, with **Turn on Make reachable…**), and **4 Scan to open
-  MindFlock** — the QR and the `/m` URLs (`GET /api/mobile`), drawn ONLY once
+  MindFlock** — the QR and the `/m` URLs (`GET /api/mobile`; under a list
+  with a plain `http://` link: *Voice needs an https link: a phone browser
+  gives an http:// page no microphone* — neither recognizer can hear on
+  it, and the phone page says so itself), drawn ONLY once
   1 and 3 are ✓, so there is never a QR that opens a URL that hangs. No
   backticked shell in the prose: Tailscale issue lines drop the clause that
   quotes their own fix (`plainIssueMessage`). Nothing here is a knob. **Turn

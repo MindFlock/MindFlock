@@ -2898,6 +2898,7 @@
   function voiceNoSpeechService() { return VOICE_NO_SPEECH_SERVICE_RE.test(navigator.userAgent || ""); }
   var VOICE_NO_SERVICE_TEXT = "This browser has no speech recognition service (DuckDuckGo, Firefox and in-app browsers don't). Use recognition on this computer — Settings → Voice → On the phone page — or open this page in Chrome.";
   var VOICE_MIC_DENIED_TEXT = "Microphone permission denied — allow the mic for this site.";
+  var VOICE_INSECURE_TEXT = "The microphone needs an https page: open the phone page by its https link (Settings → Your phone), not an http:// address.";
   // What the phone recognizer's "not-allowed" means: the microphone — unless
   // it is already granted (navigator.permissions, read when voice turns on),
   // the code says the service, or this browser is known to have none.
@@ -2951,6 +2952,9 @@
     function start(h) {
       stop();
       if (!SpeechRec) { if (h.onError) h.onError("unavailable"); return false; }
+      // A plain-http page: the recognizer would fail "not-allowed" whatever
+      // the permission says — the same words as a refused microphone.
+      if (window.isSecureContext === false) { if (h.onError) h.onError("insecure"); return false; }
       var r;
       try { r = new SpeechRec(); } catch (e) { if (h.onError) h.onError("unavailable"); return false; }
       // continuous: Chrome keeps one session up across pauses and delivers
@@ -3469,6 +3473,13 @@
       if (asking) return asking;
       micStop(stream);
       stream = null;
+      // A plain-http page (the Local URL on a phone) has no getUserMedia at
+      // all: say that, instead of the TypeError it would throw.
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        var ins = new Error(window.isSecureContext === false ? "this page is not https" : "no getUserMedia in this browser");
+        ins.name = "InsecureContext";
+        return (asking = Promise.reject(ins).catch(function (e) { asking = null; throw e; }));
+      }
       asking = navigator.mediaDevices.getUserMedia({ audio: true }).then(
         function (s) { asking = null; stream = s; return s; },
         function (err) { asking = null; throw err; });
@@ -3500,9 +3511,17 @@
     }
     function errCode(err) {
       var n = (err && err.name) || "";
+      if (n === "InsecureContext") return "insecure";
       if (n === "NotAllowedError" || n === "SecurityError" || n === "PermissionDeniedError") return "not-allowed";
       if (n === "NotFoundError" || n === "DevicesNotFoundError" || n === "OverconstrainedError") return "audio-capture";
+      if (n === "NotReadableError" || n === "TrackStartError" || n === "AbortError") return "mic-busy";
       return "start-failed";
+    }
+    // The reason behind a code, for the strip: "NotReadableError: Could not start audio source".
+    function errDetail(err) {
+      if (!err) return "";
+      var n = err.name || "", m = String(err.message || err) || "";
+      return n && m && m !== n ? n + ": " + m : n || m;
     }
     function lang() { return String(navigator.language || "en").split(";")[0]; }
     // The server streams (GET /api/voice: the local whisper backend).
@@ -3644,7 +3663,7 @@
           token = null;
           streamDrop(g);
           live = null;
-          if (h.onError) h.onError("start-failed");
+          if (h.onError) h.onError("start-failed", "this browser's audio graph could not start (AudioContext)");
           return;
         }
         rec = g;
@@ -3666,7 +3685,7 @@
         token = null;
         streamDrop(g);
         live = null;
-        if (h.onError) h.onError(errCode(err));
+        if (h.onError) h.onError(errCode(err), errDetail(err));
       });
       return true;
     }
@@ -4034,7 +4053,7 @@
       }).catch(function (err) {
         if (standing !== w) return;
         standing = null;
-        if (w.h.onError) w.h.onError(errCode(err));
+        if (w.h.onError) w.h.onError(errCode(err), errDetail(err));
       });
       return true;
     }
@@ -5171,12 +5190,23 @@
           voiceError("No microphone found.");
           voiceListen_.until = 0;
           voiceIdle();
+        } else if (code === "insecure") {
+          // Neither recognizer can hear on a plain-http page; no fallback helps.
+          voiceError(VOICE_INSECURE_TEXT);
+          voiceListen_.until = 0;
+          voiceIdle();
+        } else if (code === "mic-busy") {
+          voiceError("The microphone is busy or unavailable — another app or tab is using it" + (detail ? " (" + detail + ")" : "") + ".");
+          voiceListen_.until = 0;
+          voiceIdle();
         } else if (code === "unavailable" || code === "start-failed") {
           if (voice.stt.name === "phone" && voiceSttFallbackToServer()) {
             voiceCaption("This browser has no recognizer — using recognition on this computer.");
             if (voiceIsListening() && !voice.stt.active()) voiceRecStart();
           } else {
-            voiceError(code === "unavailable" && voiceNoSpeechService() ? VOICE_NO_SERVICE_TEXT : "Speech recognition did not start (" + code + ").");
+            voiceError(voice.stt.name === "phone" && voiceNoSpeechService()
+              ? VOICE_NO_SERVICE_TEXT
+              : "Speech recognition did not start (" + code + (detail ? ": " + detail : "") + ").");
             voiceListen_.until = 0;
             voiceIdle();
           }
@@ -7628,6 +7658,7 @@
     // server sends no `system`, and then the line is left out.
     var sys = voice.cfg.system;
     var lines = [
+      "Page: " + (window.isSecureContext === false ? "http — the microphone needs https (the Local URL cannot hear you)" : location.protocol.replace(":", "") + " (secure)"),
       "Recognition: " + (voice.stt.available()
         ? "available (" + (window.SpeechRecognition ? "SpeechRecognition" : "webkitSpeechRecognition") + ")" + (voiceNoSpeechService() ? " — but this browser has no speech service behind it" : "")
         : "NOT available" + (IOS ? " — iOS has it only in a Safari tab" : "")),
