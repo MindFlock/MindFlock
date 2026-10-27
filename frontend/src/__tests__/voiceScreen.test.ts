@@ -66,6 +66,9 @@ const {
   installLocalModels,
   installOffer,
   installView,
+  localModelsMissing,
+  tryInstallFix,
+  TRY_INSTALL_LINE,
   VOICE_BACKENDS,
   effectiveBackend,
   micErrorText,
@@ -711,5 +714,84 @@ describe("this computer's mic (the popover's prefs, in Settings too)", () => {
     // The popover and this screen read the same prefs module (and choices).
     expect(voiceSrc).toContain("loadVoicePrefs, onVoicePrefs, saveVoicePrefs, REPLIES_CHOICES");
     expect(micSrc).toMatch(/REPLIES_CHOICES\.map\(\(c\) =>[\s\S]*?name="mic-replies"/);
+  });
+});
+
+describe("Try it → Recognition offers the install when missing local models are what stops it", () => {
+  const MISSING: VoiceView = {
+    ...BUILTIN,
+    server_ready: {
+      ...BUILTIN.server_ready,
+      stt: false,
+      stt_backend: "",
+      stt_detail: "local models not installed: Settings → Voice installs them",
+    },
+  };
+  const READY: VoiceView = {
+    ...BUILTIN,
+    server_ready: { ...BUILTIN.server_ready, stt: true, stt_backend: "local", stt_detail: "faster-whisper small" },
+  };
+  const inst = (status: InstallStatus = { state: "idle" }, more: Partial<InstallProps> = {}): InstallProps => ({
+    supported: true,
+    status,
+    touched: false,
+    onInstall: () => {},
+    ...more,
+  });
+  const hearRow = (html: string) => html.slice(html.indexOf('data-try="hear"'));
+  const esc = (t: string) => t.replace(/'/g, "&#x27;");
+
+  it("reads the server's verdict", () => {
+    expect(localModelsMissing(MISSING)).toBe(true);
+    expect(localModelsMissing(READY)).toBe(false);
+    expect(localModelsMissing(BUILTIN)).toBe(false);
+    expect(localModelsMissing(null)).toBe(false);
+    expect(tryInstallFix(MISSING, inst())).toBe(true);
+    expect(tryInstallFix(MISSING, inst({ state: "idle" }, { supported: false }))).toBe(false);
+    expect(tryInstallFix(MISSING, undefined)).toBe(false);
+    expect(tryInstallFix(READY, inst())).toBe(false);
+    // Running (a click here, or the server putting the packages back after an update): shown wherever it is.
+    expect(tryInstallFix(BUILTIN, inst({ state: "running", step: "x" }))).toBe(true);
+    // A failure this page saw stays in the row with Try again; a stale one from before does not.
+    expect(tryInstallFix({ ...BUILTIN, server_ready: { ...BUILTIN.server_ready, stt: false, stt_detail: "x" } }, inst({ state: "failed", error: "e" }, { touched: true }))).toBe(true);
+    expect(tryInstallFix({ ...BUILTIN, server_ready: { ...BUILTIN.server_ready, stt: false, stt_detail: "x" } }, inst({ state: "failed", error: "e" }))).toBe(false);
+  });
+
+  it("the Recognition row carries the install button, not a disabled Try button with a terminal command", () => {
+    const html = hearRow(render({ stt_backend: "local" }, MISSING, inst()));
+    expect(html).toContain('id="voice-try-install-btn"');
+    expect(tag(html, "voice-try-install-btn")).not.toContain("disabled");
+    expect(html).toContain(esc(INSTALL_LABEL));
+    expect(html).toContain(esc(TRY_INSTALL_LINE));
+    expect(html).not.toContain("Try recognition");
+    expect(html).not.toContain("No recognition is ready on the server");
+    expect(html).not.toContain("uv sync");
+  });
+
+  it("without the installer (an older server) the plain disabled Try button and the server's sentence", () => {
+    for (const html of [hearRow(render({ stt_backend: "local" }, MISSING)), hearRow(render({ stt_backend: "local" }, MISSING, inst({ state: "idle" }, { supported: false })))]) {
+      expect(html).not.toContain("voice-try-install");
+      expect(tag(html, "voice-try-hear")).toContain("disabled");
+      expect(html).toContain("No recognition is ready on the server: local models not installed: Settings → Voice installs them.");
+    }
+  });
+
+  it("running: the step, the progress bar and the busy button in that row; a non-owner's button disabled with why", () => {
+    const html = hearRow(render({ stt_backend: "local" }, MISSING, inst({ state: "running", step: "reinstalling the local models' packages after the update", log: ["Fetching…"] }, { touched: true })));
+    expect(tag(html, "voice-try-install-btn")).toContain("disabled");
+    expect(html).toContain("Installing: reinstalling the local models");
+    expect(html).toContain("voice-install-progress");
+    expect(html).toContain('id="voice-try-install-log"');
+    const other = hearRow(render({ stt_backend: "local" }, { ...MISSING, configure_allowed: false }, inst()));
+    expect(tag(other, "voice-try-install-btn")).toContain("disabled");
+    expect(other).toContain(esc(INSTALL_REFUSED));
+  });
+
+  it("once local models are ready the Try button is back", () => {
+    const html = hearRow(render({ stt_backend: "local" }, READY, inst({ state: "done" }, { touched: true })));
+    expect(html).not.toContain("voice-try-install");
+    expect(html).toContain('id="voice-try-hear"');
+    // (Disabled here only because node has no microphone.)
+    expect(tag(html, "voice-try-hear")).toContain("can&#x27;t record");
   });
 });

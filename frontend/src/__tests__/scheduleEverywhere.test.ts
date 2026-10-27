@@ -54,6 +54,18 @@ describe("scheduledRows", () => {
     ]);
   });
 
+  it("lists a one-off, and says it ran once it has", () => {
+    const once = { name: "Release notes", repo_path: "/r", prompt: "p", schedule: { once: "2026-10-28T21:00" } };
+    const ahead = scheduledRows([once], { runs: { "release notes": { next_at: at(21, 0, 14), tz: "EDT" } }, runs_here: true, runs_on: "" }, NOW);
+    expect(ahead.map((r) => [r.when, r.next])).toEqual([["Once on Wed 28 Oct at 21:00 EDT", "next Oct 28 21:00"]]);
+    const spent = scheduledRows(
+      [once],
+      { runs: { "release notes": { schedule_label: "Ran once on Wed 28 Oct at 21:00", next_at: null, once_done: "ran" } }, runs_here: true, runs_on: "" },
+      NOW
+    );
+    expect(spent.map((r) => [r.when, r.next, r.line])).toEqual([["Ran once on Wed 28 Oct at 21:00", "", "Ran once on Wed 28 Oct at 21:00"]]);
+  });
+
   it("says which device fires them when it isn't this one", () => {
     const rows = scheduledRows(list, { runs: {}, runs_here: false, runs_on: "mac-mini" }, NOW);
     expect(rows[0].next).toBe("starts on mac-mini");
@@ -73,7 +85,7 @@ describe("wiring", () => {
 
   it("the palette's New scheduled template… opens a new template with its schedule on", () => {
     expect(PALETTE).toContain('label: "New scheduled template…"');
-    expect(PALETTE).toContain('hint: "daily, weekdays or cron"');
+    expect(PALETTE).toContain('hint: "daily, weekdays, once or cron"');
     expect(PALETTE).toContain('ui.openDialogFor("schedule", "schedule")');
     // "schedule" = a new template; New's ⏰ on a chip names one (lib/templates'
     // readTemplatesTarget, pinned in newSessionDraft.test.ts).

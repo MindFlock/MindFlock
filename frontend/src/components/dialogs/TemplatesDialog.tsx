@@ -34,6 +34,7 @@ import {
   cadenceText,
   cronOf,
   cronPreview,
+  onceOf,
   deleteTemplate,
   fastTrackNeedsGitHub,
   hasSchedule,
@@ -459,7 +460,7 @@ export function TemplatesDialogView(p: ViewProps) {
         <button
           type="button"
           className="tpl-btn tpl-sched"
-          title="Start it by itself — every day, weekdays or on a cron"
+          title="Start it by itself — every day, weekdays, once or on a cron"
           onClick={() => p.dispatch({ t: "schedule", name: t.name })}
         >
           Schedule…
@@ -535,15 +536,19 @@ export function TemplatesDialogView(p: ViewProps) {
                 </button>
               )
             ))}
-          <button
-            type="button"
-            className="sch-sw sch-pause"
-            disabled={flagging}
-            title={paused ? "Start running on its schedule again" : "Keep the schedule, start nothing until you resume"}
-            onClick={() => p.onPause?.(t.name, !paused)}
-          >
-            {paused ? "Resume" : "Pause"}
-          </button>
+          {/* A spent one-off has nothing left to pause: Change schedule is
+              the way to run it again. */}
+          {(paused || !info.once_done) && (
+            <button
+              type="button"
+              className="sch-sw sch-pause"
+              disabled={flagging}
+              title={paused ? "Start running on its schedule again" : "Keep the schedule, start nothing until you resume"}
+              onClick={() => p.onPause?.(t.name, !paused)}
+            >
+              {paused ? "Resume" : "Pause"}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -791,7 +796,7 @@ export function TemplatesDialogView(p: ViewProps) {
                 ) : (
                   <p className="sch-none muted">
                     Nothing runs by itself yet — <strong>Schedule…</strong> on a template below starts it every day,
-                    weekday or on any cron.
+                    weekday, once or on any cron.
                   </p>
                 )}
               </section>
@@ -886,9 +891,11 @@ export function TemplatesDialog() {
   // What the schedule means, asked of the server as it is typed (debounced;
   // a stale answer never overwrites a newer one) — in EVERY mode: days +
   // time asks as its cron ("30 7 * * 1-5"), so Every day and Weekdays show
-  // their next runs too.
+  // their next runs too, and Once asks as its minute ("2026-10-28T21:00").
   const wantsPreview = open && ui.editing !== null && (form.scheduled || !!ui.scheduleOnly);
-  const cronText = (form.days === "cron" ? form.cron : cronOf(form.at, form.days)).trim();
+  const cronText = (
+    form.days === "cron" ? form.cron : form.days === "once" ? onceOf(form.date, form.at) : cronOf(form.at, form.days)
+  ).trim();
   useEffect(() => {
     if (!wantsPreview || !cronText) {
       setPreview(null);

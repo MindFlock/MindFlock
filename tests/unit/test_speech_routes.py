@@ -93,7 +93,7 @@ class TestGet:
         S.invalidate()
         fakes.tts.ok, fakes.tts.detail = (
             False,
-            "local models not installed: uv sync --group voice",
+            "local models not installed: Settings → Voice installs them",
         )
         body = client.get("/api/voice").json()
         assert body["stt"] == "server" and body["tts"] == "phone"
@@ -102,7 +102,10 @@ class TestGet:
         sr = body["server_ready"]
         assert sr["stt"] is True
         assert sr["tts"] is False
-        assert sr["tts_detail"] == "local models not installed: uv sync --group voice"
+        assert (
+            sr["tts_detail"]
+            == "local models not installed: Settings → Voice installs them"
+        )
 
     def test_serves_the_effective_words_and_ours(self, fakes):
         from backend.web.core import voice_words
@@ -291,18 +294,18 @@ class TestTranscribe:
         _voice(stt="server")
         fakes.stt.ok, fakes.stt.detail = (
             False,
-            "local models not installed: uv sync --group voice",
+            "local models not installed: Settings → Voice installs them",
         )
         r = _transcribe()
         assert r.status_code == 409
         assert r.json() == {
-            "error": "no recognition backend is ready (local models not installed: uv sync --group voice)"
+            "error": "no recognition backend is ready (local models not installed: Settings → Voice installs them)"
         }
         _voice(stt="server", stt_backend="fake")  # configured: its own detail, verbatim
         r = _transcribe()
         assert r.status_code == 409
         assert r.json() == {
-            "error": "local models not installed: uv sync --group voice"
+            "error": "local models not installed: Settings → Voice installs them"
         }
         assert fakes.stt.calls == []
 

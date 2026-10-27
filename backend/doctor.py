@@ -1407,6 +1407,24 @@ def check_db_drivers() -> Optional[Check]:
     )
 
 
+def check_voice_packages() -> Optional[Check]:
+    """Informational: the local speech models' packages Settings → Voice
+    installed, kept across engine updates (``~/.mindflock/voice/packages.json``).
+    ``None`` — no row — until they were installed."""
+    from backend.web.core import self_update
+
+    packages = self_update.recorded_voice_packages()
+    if not packages:
+        return None
+    return Check(
+        "voice-packages",
+        "Local speech models",
+        "info",
+        ", ".join(packages) + " — reinstalled automatically after updates",
+        group=GROUP_OPTIONAL,
+    )
+
+
 def check_builtin_speech() -> Check:
     """Informational, never a failure: the operating system's own speech
     engine the voice features use by default (:mod:`backend.web.core.
@@ -1463,6 +1481,7 @@ CHECKS_BY_ID: dict[str, Callable[[], "Optional[Check] | List[Check]"]] = {
     "state-schema": check_state_schema,
     "cache-seeds": check_cache_seeds,
     "db-drivers": check_db_drivers,
+    "voice-packages": check_voice_packages,
     "builtin-speech": check_builtin_speech,
 }
 

@@ -1252,7 +1252,14 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     `en_US-lessac-medium`) into `<voice dir>/piper/`, then sets
     `stt_backend` to `"local"` (the voice backend is left alone). The
     manual equivalent, from a source checkout, is `uv sync --group voice`
-    (the models then download on first use).
+    (the models then download on first use). The install **survives a
+    release**: the packages are recorded in `~/.mindflock/voice/packages.json`,
+    an engine update carries them through the venv rebuild (`--with` on the
+    uv line, `pipx inject` after pipx — the Database explorer's drivers ride
+    the same way), and a rebuild that dropped them is healed at the next boot
+    or `GET /api/voice` (the Settings screen shows that reinstall as a running
+    install). Settings → Voice offers the install right where recognition is
+    reported not ready, under *Try it*, as well as under *Recognition*.
   - `stt_url` / `tts_url` — base URL of a compatible host (blank =
     `https://api.openai.com/v1`); `stt_model` / `tts_model` / `tts_voice` —
     the model and voice names it wants (blank = `gpt-transcribe`,

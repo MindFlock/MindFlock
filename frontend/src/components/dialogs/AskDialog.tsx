@@ -360,7 +360,7 @@ export function AskDialog() {
  * poll behind (see `selectFlows.active`). */
 function flowItem(title: string): AskItem {
   const f = selectFlows.get(title);
-  return { title, kind: "dialog", text: f?.dialog.question || "", ts: 0, dialogId: f?.dialog.id || null, key: "sel:" + title };
+  return { title, kind: "dialog", text: f?.dialog.question || "", ts: 0, dialogId: f?.dialog.id || null, key: "sel:" + title, parsed: true };
 }
 
 /** The panel's Later, for the modal's Escape. */

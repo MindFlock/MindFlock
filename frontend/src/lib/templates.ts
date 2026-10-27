@@ -24,8 +24,8 @@ export interface Template {
   in_place?: boolean;
   init_repo?: boolean;
   /** Start a fresh session from this template on its own: daily (or
-   * weekdays) at a local "HH:MM", or on a cron expression. Absent = only by
-   * hand. */
+   * weekdays) at a local "HH:MM", on a cron expression, or once on a date
+   * and time. Absent = only by hand. */
   schedule?: TemplateSchedule;
   /** How far each run (Run now or scheduled) carries its work on its own
    * once the agent stops — its Fast-track. Absent = it stops where the agent
@@ -36,14 +36,17 @@ export interface Template {
   agent_installed?: boolean;
 }
 
-/** Either `{at, days}` or `{cron}` (5-field, local time), plus two
- * switches the Schedule surface flips per row: `paused` (keeps the cadence,
- * starts nothing) and `skip_until` (epoch seconds — every slot at or before
- * it passes without a session: "Skip next"). Both are stored only when set. */
+/** `{at, days}`, `{cron}` (5-field, local time) or `{once}` (a local
+ * "YYYY-MM-DDTHH:MM" — one run, then the schedule is spent and the card says
+ * it ran), plus two switches the Schedule surface flips per row: `paused`
+ * (keeps the cadence, starts nothing) and `skip_until` (epoch seconds —
+ * every slot at or before it passes without a session: "Skip next"). Both
+ * are stored only when set. */
 export interface TemplateSchedule {
   at?: string;
   days?: "daily" | "weekdays";
   cron?: string;
+  once?: string;
   paused?: boolean;
   skip_until?: number;
 }
@@ -108,6 +111,9 @@ export interface TemplateRunInfo {
   /** "Skip next" is set: the slot that will pass without a session
    * (`next_at` is then the one after it). */
   skipping_at?: number;
+  /** A one-off whose single slot is behind it on this device, and how it
+   * went (`schedule_label` then reads "Ran once on …"; no `next_at`). */
+  once_done?: "ran" | "skipped" | "failed";
 }
 
 export interface TemplateRunsStatus {
@@ -284,9 +290,10 @@ export function readTemplatesTarget(target: string | null | undefined): Template
   return { fromNew, schedule: null };
 }
 
-/** Whether a template starts itself. */
+/** Whether a template starts itself (a spent one-off still counts: its
+ * card says it ran). */
 export function hasSchedule(t: Template): boolean {
-  return !!(t.schedule && (t.schedule.at || t.schedule.cron));
+  return !!(t.schedule && (t.schedule.at || t.schedule.cron || t.schedule.once));
 }
 
 /** A scheduled template's run row (the server's, keyed by lowercased name). */
@@ -387,11 +394,45 @@ export function normalizeAt(raw: string): string {
 
 /** "Every day at 21:00" / "Weekdays at 21:00" / "Cron 0 9 1 * mon" (the
  * server's `schedule_label` says common cron shapes in words). */
-export function scheduleLabel(s: TemplateSchedule | undefined | null): string {
+export function scheduleLabel(s: TemplateSchedule | undefined | null, now: Date = new Date()): string {
   if (!s) return "";
+  if (s.once) return "Once on " + onceWords(s.once, now);
   if (s.cron) return "Cron " + s.cron;
   if (!s.at) return "";
   return (s.days === "weekdays" ? "Weekdays at " : "Every day at ") + s.at;
+}
+
+/** The editor's refusal of a one-off behind the clock (the server's own
+ * words: template_schedule.ONCE_PAST). */
+export const ONCE_PAST = "Pick a date and time that are still ahead.";
+
+/** A one-off's minute as the schedule stores it ("2026-10-28" + "21:00" →
+ * "2026-10-28T21:00"), "" when either half isn't one yet. What the preview
+ * asks the server about in Once mode, as days + time ask as their cron. */
+export function onceOf(date: string, at: string): string {
+  const d = (date || "").trim();
+  const t = (at || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !/^([01]?\d|2[0-3]):[0-5]\d$/.test(t)) return "";
+  return d + "T" + t.padStart(5, "0");
+}
+
+/** A one-off's minute as a local Date (null when it isn't one). */
+export function onceDate(once: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec((once || "").trim());
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
+  return isNaN(d.getTime()) || d.getDate() !== Number(m[3]) ? null : d;
+}
+
+/** "Tue 28 Oct at 21:00" ("Tue 28 Oct 2027 at 21:00" in another year) —
+ * the server's own words for a one-off (template_schedule.once_words). */
+export function onceWords(once: string, now: Date = new Date()): string {
+  const d = onceDate(once);
+  if (!d) return once;
+  const wd = d.toLocaleDateString("en-US", { weekday: "short" });
+  const mon = d.toLocaleDateString("en-US", { month: "short" });
+  const year = d.getFullYear() === now.getFullYear() ? "" : " " + d.getFullYear();
+  return wd + " " + d.getDate() + " " + mon + year + " at " + hhmm(d);
 }
 
 /** What a cron field means, from the server (the rules a save applies). */
@@ -400,6 +441,8 @@ export interface CronPreview {
   label?: string;
   next?: number[];
   error?: string;
+  /** Set when the field was a one-off's minute. */
+  once?: string;
 }
 
 export async function cronPreview(expr: string): Promise<CronPreview> {

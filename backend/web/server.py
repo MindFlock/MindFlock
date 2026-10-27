@@ -826,6 +826,15 @@ async def lifespan(app: FastAPI):
             await asyncio.to_thread(apply_scroll_speed)
         except Exception:  # noqa: BLE001
             pass
+        # The local speech models' packages, after an engine rebuild that
+        # dropped them (core.speech_install.start_self_heal: once per boot,
+        # nothing when they are there or were never installed).
+        try:
+            from backend.web.core import speech_install as _speech_install
+
+            await asyncio.to_thread(_speech_install.start_self_heal)
+        except Exception:  # noqa: BLE001
+            pass
         # Verify runs created before the `hidden_by` flag existed were kept off
         # the rail by their title alone; flag the ones a checklist still names
         # so upgrading does not list every old run as work (idempotent).

@@ -243,10 +243,10 @@ class TestLocalRefusals:
         )
         assert speech.LocalSTT().ready() == (False, speech.NOT_INSTALLED)
         assert speech.LocalTTS().ready() == (False, speech.NOT_INSTALLED)
-        assert "uv sync --group voice" in speech.NOT_INSTALLED
-        with pytest.raises(speech.SpeechError, match="uv sync --group voice"):
+        assert "Settings → Voice" in speech.NOT_INSTALLED
+        with pytest.raises(speech.SpeechError, match="Settings"):
             speech.LocalSTT().transcribe(b"x", "audio/wav", "")
-        with pytest.raises(speech.SpeechError, match="uv sync --group voice"):
+        with pytest.raises(speech.SpeechError, match="Settings"):
             speech.LocalTTS().speak("Hi", "")
         assert speech.loaded() == []
 

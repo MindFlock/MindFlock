@@ -146,7 +146,7 @@ WARM_TIMEOUT = 180.0
 #: A host or OS engine (no model cache to look in) is warmed again at most
 #: this often by :func:`warm_in_background`, unless its setup changed.
 REWARM_SECONDS = 600.0
-NOT_INSTALLED = "local models not installed: uv sync --group voice"
+NOT_INSTALLED = "local models not installed: Settings → Voice installs them"
 
 KIND_WORD = {"stt": "recognition", "tts": "voice"}
 

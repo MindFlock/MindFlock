@@ -349,3 +349,101 @@ class TestDownloadMain:
         with pytest.raises(SystemExit):
             si._download_main(["nope"])
         assert "usage" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- #
+# Surviving a release: the record, and the self-heal after a rebuild
+# --------------------------------------------------------------------------- #
+class TestSurvivesUpdates:
+    @pytest.fixture(autouse=True)
+    def _home(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MINDFLOCK_HOME", str(tmp_path / "home"))
+
+    def test_a_good_install_records_its_packages_for_the_updater(self, spawn):
+        from backend.web.core import self_update
+
+        assert self_update.recorded_voice_packages() == []
+        _run()
+        assert self_update.recorded_voice_packages() == list(si.PACKAGES)
+        # Folded into the engine's install line, like the database drivers.
+        argv = self_update.install_command("uv-tool", "a" * 40)
+        assert argv[6:10] == ["--with", "faster-whisper", "--with", "piper-tts"]
+        assert self_update.driver_carry_commands("pipx") == [
+            ["pipx", "inject", "mindflock", "faster-whisper", "piper-tts"]
+        ]
+
+    def test_a_failed_packages_step_records_nothing(self, spawn):
+        from backend.web.core import self_update
+
+        spawn.script["packages"] = (["boom"], 1)
+        assert _run()["state"] == "failed"
+        assert self_update.recorded_voice_packages() == []
+
+    def test_nothing_to_heal_without_a_record_or_while_installed(
+        self, spawn, monkeypatch
+    ):
+        from backend.web.core import self_update
+
+        assert si.start_self_heal() is False
+        si.reset()
+        self_update.record_voice_packages(si.PACKAGES)
+        monkeypatch.setattr(speech, "_installed", lambda name: True)
+        assert si.missing_recorded_packages() == []
+        assert si.start_self_heal() is False
+        assert spawn.calls == []
+
+    def test_the_heal_reinstalls_the_packages_only_once_per_boot(
+        self, spawn, monkeypatch
+    ):
+        from backend.web.core import self_update
+
+        self_update.record_voice_packages(si.PACKAGES)
+        monkeypatch.setattr(speech, "_installed", lambda name: False)
+        assert si.missing_recorded_packages() == list(si.PACKAGES)
+        assert si.start_self_heal() is True
+        si.wait(5)
+        st = si.status()
+        assert st["state"] == "done" and st["error"] == ""
+        assert [c[:3] for c in spawn.calls] == [["/usr/bin/uv", "pip", "install"]]
+        assert st["log"][-1] == "local models are back after the update"
+        assert spawn.invalidated >= 1
+        # Still recorded; and not tried again this boot.
+        assert self_update.recorded_voice_packages() == list(si.PACKAGES)
+        assert si.start_self_heal() is False
+        assert len(spawn.calls) == 1
+
+    def test_a_package_gone_from_the_index_drops_the_record(self, spawn, monkeypatch):
+        from backend.web.core import self_update
+
+        self_update.record_voice_packages(si.PACKAGES)
+        monkeypatch.setattr(speech, "_installed", lambda name: False)
+        spawn.script["packages"] = (
+            ["error: No matching distribution found for piper-tts"],
+            1,
+        )
+        assert si.start_self_heal() is True
+        si.wait(5)
+        assert si.status()["state"] == "failed"
+        assert self_update.recorded_voice_packages() == []
+
+    def test_an_ordinary_failure_keeps_the_record(self, spawn, monkeypatch):
+        from backend.web.core import self_update
+
+        self_update.record_voice_packages(si.PACKAGES)
+        monkeypatch.setattr(speech, "_installed", lambda name: False)
+        spawn.script["packages"] = (["network unreachable"], 1)
+        assert si.start_self_heal() is True
+        si.wait(5)
+        assert si.status()["state"] == "failed"
+        assert self_update.recorded_voice_packages() == list(si.PACKAGES)
+
+    def test_the_heal_waits_for_a_running_install(self, spawn, monkeypatch):
+        from backend.web.core import self_update
+
+        self_update.record_voice_packages(si.PACKAGES)
+        monkeypatch.setattr(speech, "_installed", lambda name: False)
+        spawn.gate = threading.Event()
+        assert si.start() is True
+        assert si.start_self_heal() is False
+        spawn.gate.set()
+        si.wait(5)

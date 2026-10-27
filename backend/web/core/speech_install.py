@@ -33,6 +33,19 @@ for accuracy; the voice backend stays whatever it was — and
 ``speech.invalidate()`` drops the import caches so ``GET /api/voice``
 reports ``local`` ready without a restart.
 
+**Surviving a release.** The packages go into the server's venv, and every
+engine rebuild (``uv tool install --force``, install.sh, the desktop app's
+one-click update) rebuilt that venv from ``mindflock[web]`` alone — each
+release cost the owner this install again. Two layers, the ones the Database
+explorer's drivers use (``self_update``): step 1's success is recorded
+(``self_update.record_voice_packages`` → ``~/.mindflock/voice/packages.json``)
+and the server's updater / ``mindflock update`` carry each recorded package
+as ``--with`` (``pipx inject`` after pipx); and :func:`start_self_heal` — at
+boot and on ``GET /api/voice`` — reinstalls the recorded packages when the
+venv lost them (step 1 only, as a ``running`` install the Settings screen
+follows; the models on disk are untouched). A heal whose package no longer
+exists on the index drops the record, so the next boot does not trip again.
+
 Nothing here runs for real under pytest: :func:`_spawn` (every subprocess)
 refuses there, and tests replace it.
 """
@@ -41,6 +54,7 @@ from __future__ import annotations
 
 import collections
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -51,7 +65,14 @@ from typing import Deque, List, Optional, Sequence
 
 from backend.web.core import speech as _speech
 
-__all__ = ["PACKAGES", "install_argv", "start", "status"]
+__all__ = [
+    "PACKAGES",
+    "install_argv",
+    "missing_recorded_packages",
+    "start",
+    "start_self_heal",
+    "status",
+]
 
 PACKAGES = ("faster-whisper", "piper-tts")
 #: How many output lines ``status()`` keeps.
@@ -60,6 +81,12 @@ LOG_LINES = 20
 STEP_TIMEOUT = 30 * 60.0
 
 STEP_PACKAGES = "installing packages"
+STEP_HEAL = "reinstalling the local models' packages after the update"
+#: The installer's "this package is gone from the index" (uv and pip).
+_NO_SUCH_PACKAGE = re.compile(
+    r"No matching distribution|not found in the package registry|No solution found",
+    re.I,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -100,6 +127,12 @@ def _settings():
     from backend.config import settings as settings_store
 
     return settings_store
+
+
+def _self_update():
+    from backend.web.core import self_update
+
+    return self_update
 
 
 # --------------------------------------------------------------------------- #
@@ -169,6 +202,8 @@ _STATE: dict = {
 }
 _LOG: Deque[str] = collections.deque(maxlen=LOG_LINES)
 _THREAD: Optional[threading.Thread] = None
+#: The self-heal ran (or found nothing to do) this boot.
+_HEAL_TRIED = False
 
 
 def status() -> dict:
@@ -191,26 +226,59 @@ def _log(line: str) -> None:
             _LOG.append(line[:400])
 
 
-def start() -> bool:
+def start(heal: bool = False) -> bool:
     """Start the install in a background thread → False when one is
-    already running (the route's 409)."""
+    already running (the route's 409). ``heal``: the packages step only
+    (:func:`start_self_heal`)."""
     global _THREAD
     with _LOCK:
         if _STATE["state"] == "running":
             return False
         _STATE.update(
             state="running",
-            step=STEP_PACKAGES,
+            step=STEP_HEAL if heal else STEP_PACKAGES,
             started=time.time(),
             finished=None,
             error="",
         )
         _LOG.clear()
         _THREAD = threading.Thread(
-            target=_install, daemon=True, name="voice-install-local"
+            target=_install,
+            args=(heal,),
+            daemon=True,
+            name="voice-install-local",
         )
         _THREAD.start()
     return True
+
+
+def missing_recorded_packages() -> List[str]:
+    """The packages the record says this venv had, when the venv has lost
+    them (an engine rebuild): ``[]`` with no record, or while both runtimes
+    still import."""
+    packages = _self_update().recorded_voice_packages()
+    if not packages:
+        return []
+    if _speech._installed("faster_whisper") and _speech._installed("piper"):
+        return []
+    return packages
+
+
+def start_self_heal() -> bool:
+    """Put the recorded packages back after a rebuild that dropped them —
+    once per boot (the lifespan's warm-ups and ``GET /api/voice`` both call
+    it; cheap when idle) → whether a heal started."""
+    global _HEAL_TRIED
+    with _LOCK:
+        if _HEAL_TRIED:
+            return False
+        _HEAL_TRIED = True
+    try:
+        if not missing_recorded_packages():
+            return False
+    except Exception:  # noqa: BLE001 — a probe must never fail a poll
+        return False
+    return start(heal=True)
 
 
 def wait(timeout: Optional[float] = None) -> None:
@@ -222,11 +290,13 @@ def wait(timeout: Optional[float] = None) -> None:
 
 def reset() -> None:
     """Back to idle (tests). Never while running."""
+    global _HEAL_TRIED
     with _LOCK:
         if _STATE["state"] == "running":
             return
         _STATE.update(state="idle", step="", started=None, finished=None, error="")
         _LOG.clear()
+        _HEAL_TRIED = False
 
 
 class _StepFailed(Exception):
@@ -276,13 +346,28 @@ def _run_step(step: str, argv: Sequence[str]) -> None:
         raise _StepFailed("%s failed: %s" % (step, last or "exit %d" % code))
 
 
-def _install() -> None:
+def _install(heal: bool = False) -> None:
     try:
+        if heal:
+            try:
+                _run_step(STEP_HEAL, install_argv())
+            except _StepFailed as err:
+                # Gone from the index: stop carrying it, or every boot and
+                # every update would trip over it again.
+                if _NO_SUCH_PACKAGE.search(str(err)):
+                    _self_update().forget_voice_packages()
+                raise
+            _speech.invalidate()
+            _log("local models are back after the update")
+            _set(state="done", step="done", finished=time.time())
+            return
         voice = _settings().load_settings().voice
         model = _speech.whisper_model(voice.stt_model)
         stream = _speech.stream_whisper_model(voice.stt_stream_model)
         piper = _speech.piper_voice(voice.tts_voice)
         _run_step(STEP_PACKAGES, install_argv())
+        # Remembered, so an engine rebuild carries them (or puts them back).
+        _self_update().record_voice_packages(PACKAGES)
         _speech.invalidate()
         _run_step(
             "downloading recognition model (%s)" % model,

@@ -358,14 +358,121 @@ def recorded_driver_packages() -> List[str]:
     return out
 
 
+# --------------------------------------------------------------------------- #
+# The local speech models' packages ride the same carry
+# --------------------------------------------------------------------------- #
+# Settings → Voice's one-click install (``core.speech_install``) puts
+# ``faster-whisper`` and ``piper-tts`` into THIS venv the way the explorer
+# puts a driver in, and every rebuild dropped them the same way: each release
+# left the owner reinstalling local models. The installer records them here
+# (``~/.mindflock/voice/packages.json``), :func:`carried_packages` folds them
+# into the install line, and ``speech_install.start_self_heal`` puts them back
+# after a rebuild that did not carry them (install.sh, a hand-run install).
+
+#: ``voice/packages.json``'s schema version.
+VOICE_RECORD_VERSION = 1
+
+
+def voice_record_path() -> Optional[Path]:
+    """``~/.mindflock/voice/packages.json`` — under ``MINDFLOCK_HOME`` when
+    set, like :func:`driver_record_path`; None with no home to use."""
+    home = os.environ.get("MINDFLOCK_HOME", "").strip()
+    if home:
+        return Path(os.path.expanduser(home)) / "voice" / "packages.json"
+    try:
+        return Path(_config.GetConfigDir()) / "voice" / "packages.json"
+    except Exception:  # noqa: BLE001 — the home guard refused the real home
+        return None
+
+
+def recorded_voice_packages() -> List[str]:
+    """The packages the voice installer recorded, in order, de-duplicated —
+    only names that pass :data:`_DRIVER_SPEC`; ``[]`` with no record or an
+    unreadable one."""
+    path = voice_record_path()
+    if path is None:
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    raw = data.get("packages") if isinstance(data, dict) else None
+    if not isinstance(raw, list):
+        return []
+    out: List[str] = []
+    for package in raw:
+        if (
+            isinstance(package, str)
+            and _DRIVER_SPEC.match(package)
+            and package not in out
+        ):
+            out.append(package)
+    return out
+
+
+def _write_voice_record(packages: List[str]) -> bool:
+    path = voice_record_path()
+    if path is None:
+        return False
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(
+            path,
+            {
+                "version": VOICE_RECORD_VERSION,
+                "packages": packages,
+                "installed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "python": "%d.%d" % sys.version_info[:2],
+            },
+            ensure_ascii=True,
+            mode=0o644,
+        )
+    except OSError:
+        return False
+    return True
+
+
+def record_voice_packages(packages) -> bool:
+    """Remember that the local speech models' ``packages`` were installed
+    into this venv. Best-effort, like :func:`record_driver`; a name that is
+    not a plain package is refused outright."""
+    names = [str(p) for p in (packages or [])]
+    if not names or not all(_DRIVER_SPEC.match(p) for p in names):
+        return False
+    return _write_voice_record(list(dict.fromkeys(names)))
+
+
+def forget_voice_packages() -> bool:
+    """Drop the record (the packages no longer exist on the index)."""
+    path = voice_record_path()
+    if path is None or not path.is_file():
+        return False
+    try:
+        path.unlink()
+    except OSError:
+        return False
+    return True
+
+
+def carried_packages() -> List[str]:
+    """Everything an engine rebuild must put back into the venv: the
+    recorded database drivers, then the voice installer's packages."""
+    out = recorded_driver_packages()
+    for package in recorded_voice_packages():
+        if package not in out:
+            out.append(package)
+    return out
+
+
 def driver_carry_commands(
     method: str, packages: Optional[List[str]] = None
 ) -> List[List[str]]:
     """What runs AFTER :func:`install_command` to put the recorded drivers
     back: ``pipx inject`` for pipx (``pipx install --force`` drops injected
     packages). Nothing for ``uv-tool`` — its install line carries them as
-    ``--with``. ``packages`` defaults to :func:`recorded_driver_packages`."""
-    packages = recorded_driver_packages() if packages is None else packages
+    ``--with``. ``packages`` defaults to :func:`carried_packages` (the
+    database drivers and the local speech models' packages)."""
+    packages = carried_packages() if packages is None else packages
     if method == "pipx" and packages:
         return [["pipx", "inject", "mindflock", *packages]]
     return []
@@ -450,13 +557,14 @@ def install_command(
     ``target`` is what gets installed: the resolved commit for ``uv-tool``
     (a tag moves, a commit doesn't) or a release tag for ``pipx``.
 
-    ``packages`` (default: :func:`recorded_driver_packages`) are the Database
-    explorer's drivers, carried as one ``--with`` each — uv keeps them in the
-    tool receipt, so a later plain ``uv tool upgrade`` keeps them too. pipx
-    has no such flag: :func:`driver_carry_commands` injects them afterwards.
+    ``packages`` (default: :func:`carried_packages`) are the Database
+    explorer's drivers and the local speech models' packages, carried as one
+    ``--with`` each — uv keeps them in the tool receipt, so a later plain
+    ``uv tool upgrade`` keeps them too. pipx has no such flag:
+    :func:`driver_carry_commands` injects them afterwards.
     """
     if method == "uv-tool":
-        packages = recorded_driver_packages() if packages is None else packages
+        packages = carried_packages() if packages is None else packages
         withs: List[str] = []
         for package in packages:
             withs += ["--with", package]

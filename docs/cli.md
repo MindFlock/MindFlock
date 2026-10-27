@@ -160,10 +160,13 @@ question), then:
   otherwise, so a release install is never written over your working tree.
 
 Database explorer drivers installed from the app (recorded in
-`~/.mindflock/dbclient/drivers.json`) ride along: one `--with <package>` each
-on the uv line (`--with 'psycopg[binary]' --with pymysql`), and `pipx inject
+`~/.mindflock/dbclient/drivers.json`) and the local speech models' packages
+Settings → Voice installed (`~/.mindflock/voice/packages.json`) ride along:
+one `--with <package>` each on the uv line (`--with 'psycopg[binary]' --with
+pymysql --with faster-whisper --with piper-tts`), and `pipx inject
 mindflock <packages…>` after a pipx install (a failed inject only warns — the
-server reinstalls a missing recorded driver when it starts). The rollback
+server reinstalls a missing recorded driver, and the speech packages, when it
+starts). The rollback
 carries them the same way. See
 [extensions.md](extensions.md#worked-example-the-database-client).
 
@@ -579,8 +582,10 @@ and exit 1.
 
 ### `mindflock templates [--json]`
 
-The templates with their schedule in words, the next run (*paused* for a
-paused schedule, *(skipping …)* when Skip next is set), the autopilot depth
+The templates with their schedule in words (*Every day at 21:00*, *Once on
+Wed 28 Oct at 21:00* — *Ran once on …* once that one run is behind it), the
+next run (*paused* for a paused schedule, *(skipping …)* when Skip next is
+set, *done* for a spent one-off), the autopilot depth
 and the last run (or why it failed / was skipped), plus which device fires
 schedules when it isn't this one. The same list, with Run now, Pause and Skip
 next, is the web UI's **Schedule** (top bar, `Alt+S`). `--json` prints `GET /api/templates` as is.

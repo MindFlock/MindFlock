@@ -160,6 +160,9 @@ def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
     every kind present, the person's own where they changed it — and every
     client builds its matchers from it (``voice_words.phrase_regex``'s
     contract); ``words_default`` is ours, for Settings' "reset"."""
+    # An engine rebuild that dropped the local models' packages: put them
+    # back (once per boot; nothing when they are there or never were).
+    _install.start_self_heal()
     s = _settings()
     body = {
         "stt": s.voice.stt,

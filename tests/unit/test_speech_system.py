@@ -174,7 +174,7 @@ class TestPlatformKind:
         _platform(monkeypatch, "linux", "Linux version 6.8.0-45-generic")
         assert ss.SystemSTT().ready() == (False, ss.LINUX_NONE)
         assert ss.SystemTTS().ready() == (False, ss.LINUX_NONE)
-        assert "uv sync --group voice" in ss.LINUX_NONE
+        assert "Settings → Voice" in ss.LINUX_NONE
 
     def test_nothing_is_spawned_under_pytest_by_default(self, monkeypatch):
         monkeypatch.delenv("MINDFLOCK_SPEECH_PROBE")
