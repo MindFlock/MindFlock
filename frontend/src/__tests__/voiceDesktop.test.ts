@@ -1823,3 +1823,28 @@ describe("the push-to-talk hotkey", () => {
     expect(src("components/TopBarMic.tsx")).toContain("Hotkey: {talkShortcut()}");
   });
 });
+
+
+describe("voice prefs are shared between the popover and Settings → Voice", () => {
+  it("saveVoicePrefs announces the new prefs on window and onVoicePrefs hears them", async () => {
+    const mod = await import("../lib/voiceDesktop");
+    const g = globalThis as Record<string, unknown>;
+    const hadWin = "window" in g;
+    const prev = g.window;
+    g.window = new EventTarget();
+    try {
+      const seen: unknown[] = [];
+      const off = mod.onVoicePrefs((p) => seen.push(p));
+      const kv = { store: {} as Record<string, string>, getItem(k: string) { return this.store[k] ?? null; }, setItem(k: string, v: string) { this.store[k] = v; } };
+      mod.saveVoicePrefs({ ptt: "hold", replies: true }, kv);
+      expect(seen).toEqual([{ ptt: "hold", replies: true }]);
+      expect(JSON.parse(kv.store[mod.VOICE_PREFS_KEY])).toEqual({ ptt: "hold", replies: true });
+      off();
+      mod.saveVoicePrefs({ ptt: "toggle", replies: false }, kv);
+      expect(seen).toHaveLength(1);
+    } finally {
+      if (hadWin) g.window = prev;
+      else delete g.window;
+    }
+  });
+});

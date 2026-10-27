@@ -74,6 +74,7 @@ import {
   routePhrase,
   runVoiceCommand,
   saveVoicePrefs,
+  onVoicePrefs,
   serverRecognizer,
   serverSpeaker,
   sessionTarget,
@@ -327,6 +328,8 @@ export function TopBarMic() {
     if (text && !sticky) captionTimer.current = setTimeout(() => setCaptionState(""), 6000);
   };
 
+  // Settings → Voice edits the same prefs: follow it.
+  useEffect(() => onVoicePrefs((p) => setPrefsState(p)), []);
   const setPrefs = (p: VoicePrefs) => {
     setPrefsState(p);
     saveVoicePrefs(p);

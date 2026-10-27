@@ -188,7 +188,7 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
     key: "voice",
     label: "Voice",
     sub: "Speech engines for talking to sessions: built in, local models or a host",
-    terms: ["voice", "speech", "microphone", "mic", "dictation", "recognition", "whisper", "piper", "text to speech", "tts", "stt", "talk", "spoken replies", "approve dialogs by voice"],
+    terms: ["voice", "speech", "microphone", "mic", "dictation", "recognition", "whisper", "piper", "text to speech", "tts", "stt", "talk", "spoken replies","read replies aloud","push to talk","hold to talk","click to talk", "approve dialogs by voice"],
   },
   {
     key: "peer",

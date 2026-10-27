@@ -32,6 +32,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, apiRaw } from "../../../api/client";
 import { toast } from "../../../lib/toast";
 import { startWavRecording } from "../../../lib/wavRecorder";
+import { loadVoicePrefs, onVoicePrefs, saveVoicePrefs, type VoicePrefs } from "../../../lib/voiceDesktop";
 import type { ScreenProps } from "../SettingsDialog";
 import { SECRET_MASK, SettingField, useSettings, type SettingsModel } from "../useSettings";
 import "./voice.css";
@@ -376,6 +377,7 @@ export function VoiceSectionView({
         <PhoneWhere kind="stt" title="Recognition runs on" />
         <PhoneWhere kind="tts" title="The voice runs on" />
       </div>
+      <MicPrefs />
       <h3 className="set-section-title">Permission dialogs</h3>
       <div className="set-row set-switch-row" id="voice-approve-row">
         <span className="notif-rule-text">
@@ -419,6 +421,61 @@ export function VoiceSectionView({
         </p>
       </div>
     </section>
+  );
+}
+
+/** This computer's mic, as the top-bar mic's popover sets it (the same
+ * per-browser prefs, lib/voiceDesktop loadVoicePrefs): Read replies aloud,
+ * off by default on the desktop, and the push-to-talk mode. Both surfaces
+ * follow each other through VOICE_PREFS_EVENT. */
+export function MicPrefs() {
+  const [prefs, setPrefs] = useState<VoicePrefs>(loadVoicePrefs);
+  useEffect(() => onVoicePrefs(setPrefs), []);
+  const save = (p: VoicePrefs) => {
+    setPrefs(p);
+    saveVoicePrefs(p);
+  };
+  return (
+    <>
+      <h3 className="set-section-title">This computer's mic</h3>
+      <p className="set-hint" id="voice-mic-hint">
+        The mic in the top bar; the same choices are in its popover. These are per browser.
+      </p>
+      <div className="set-row set-switch-row" id="voice-replies-row">
+        <span className="notif-rule-text">
+          <span className="set-label" id="voice-replies-label">
+            Read replies aloud
+          </span>
+          <span className="set-hint notif-rule-desc">
+            Off by default here. On, a reply to a prompt you sent by voice is spoken, name first, and a
+            session's question is read out and the mic listens for your answer.
+          </span>
+        </span>
+        <label className="ca-switch">
+          <input
+            type="checkbox"
+            id="voice-replies"
+            aria-labelledby="voice-replies-label"
+            checked={prefs.replies}
+            onChange={(e) => save({ ...prefs, replies: e.target.checked })}
+          />
+          <span className="ca-slider" />
+        </label>
+      </div>
+      <div className="set-row" id="voice-ptt-row">
+        <span className="set-label">Push to talk</span>
+        <div className="voice-ptt-choices" role="radiogroup" aria-label="Push to talk">
+          <label className="voice-ptt-choice">
+            <input type="radio" name="voice-ptt" checked={prefs.ptt !== "hold"} onChange={() => save({ ...prefs, ptt: "toggle" })} />
+            <span>Click to talk — press to start, press again to stop</span>
+          </label>
+          <label className="voice-ptt-choice">
+            <input type="radio" name="voice-ptt" checked={prefs.ptt === "hold"} onChange={() => save({ ...prefs, ptt: "hold" })} />
+            <span>Hold to talk — hold the mic or the Talk hotkey while you speak</span>
+          </label>
+        </div>
+      </div>
+    </>
   );
 }
 

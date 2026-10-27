@@ -1679,6 +1679,25 @@
 .voice-moved {
   margin-top: 24px;
 }
+
+/* Settings → Voice: the push-to-talk choice, stacked radios in the row's value column. */
+.voice-ptt-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.voice-ptt-choice {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.voice-ptt-choice input {
+  margin: 0;
+  accent-color: var(--accent);
+}
 /* Settings → People, round 6: the header's tour "?", the joint task on a link
    card (start form, proposal, active card with its two halves, the Contract
    panel, the Mirror row and the joint checklist). The older People rules
