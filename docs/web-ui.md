@@ -131,13 +131,14 @@ right-click for options*). The words are **typed into the session's input
 field as you speak**: each phrase, the moment it is recognised, goes down the
 session's agent terminal as keys (with a trailing space), exactly as if you had
 typed it; the caption under the mic shows the running text. When the server's
-recogniser streams (see below) the words go in **while you speak**, a few at a
-time as the recogniser commits them — the last word (and up to three when they
-could still become a control phrase: “submit it”, “stop recording”, “that is
-all”) always waits for the next ones or the end of the phrase, so a closing
-radio word or stop phrase is never typed — and the
-words it may still change show after them in the caption, muted and italic;
-they are never typed. Nothing is submitted until you say so. With no session focused, nothing is typed (*Click
+recogniser streams (see below), or Web Speech has interim words, the words go
+in **while you speak**, as soon as the recogniser first hears them, and are
+corrected (backspaces, then the new end) as it changes its mind — only a
+trailing word that is, or could still become, a control phrase (“submit
+it”, “stop recording”, “that is all”) waits for the next ones or the end of
+the phrase, so a closing radio word or stop phrase is never typed; the words
+it may still change show muted and italic in the caption until they commit
+(see [Voice input](#voice-input)). Nothing is submitted until you say so. With no session focused, nothing is typed (*Click
 a session first*).
 
 - **Radio words**, the last word of a phrase (any case or punctuation):
@@ -6013,8 +6014,7 @@ Speech can't recognise — and in a browser tab through the browser's unless
 Settings say *server*; the server's recogniser is sent each phrase as a 16 kHz
 WAV clip, resampled without aliasing — or, when it streams (the local whisper
 engine), short chunks while you speak, so the words appear as you say them
-(the last one held back until the next, so a radio word is never typed; the
-unsure tail shown muted in the caption, never typed). The phone page's mic is the hands-free
+and may be corrected (see *Words as you speak* below). The phone page's mic is the hands-free
 version of the same conversation, with spoken replies on by default — see
 [Voice: talking to a session](#voice-talking-to-a-session) under the Mobile UI.
 
@@ -6028,12 +6028,46 @@ say "mic off". The server's stream opens while the mic gets ready, so the
 first chunk goes the moment you speak (the quiet before it is never sent).
 While it listens, a ring around the mic button (and the ask pop-up's) follows
 your voice — room noise sits at zero — and the caption says *Listening…*,
-then *Hearing you…* once it hears speech; the words show greyed as soon as the
-recogniser has a guess (the options popover shows them too, over a level
-bar), and only the settled words are typed. With localStorage `cs_voice_debug`
-set to `1` the console logs the start's timings (also in
+then *Hearing you…* once it hears speech.
+
+**Words as you speak.** Like a phone keyboard, the words go into the field
+the moment the recogniser first hears them, and are corrected as it changes
+its mind: the phrase under way — the stream's committed words plus its
+unsure tail, or Web Speech's interim words (both engines behave alike) — is
+typed as a guess, and each new answer is compared with what is typed from
+the phrase's start: the end that differs is taken back with backspaces (DEL,
+`\x7f`, one per character — what the terminal's Backspace key sends; a text
+box has its value set once instead) and the new end typed. At most one
+correction per answer, never reaching before the phrase's start — earlier
+phrases and whatever was in the field before you spoke are untouched. A
+phrase being said carries no trailing space; its end (the pause, or letting
+go) settles it with one. Never typed, not even as a guess: a trailing radio
+word ("over", "submit", "disregard" and their tails like "submit it"), a stop
+phrase or "stop talking" — or the start of one ("stop" might become "stop
+recording", "that is" might become "that is all"; such a word goes in once
+the next word rules that out) — and a dictation's first phrase while it may
+still be a router command ("switch to…" waits whole for the router; a guess
+that turns into one is taken back). Nothing is guessed into a session
+showing a dialog or with no session focused; the phrase's end decides then.
+"Disregard" still takes the whole dictation out, guess and all. In the
+caption and the options popover (over a level bar) the committed words are
+solid and the unsure ones grey, turning solid as they commit; the top-bar
+caption shows the last ~60 characters.
+
+**Pacing** (`chunkMinS` in `lib/voiceDesktop.ts`): a phrase's first chunk
+goes as soon as 150 ms of speech is recorded (`FIRST_CHUNK_S`; the short
+lead-in before it rides along), so the first words show after one pass. One
+chunk is in flight at a time; audio that arrives while a pass runs is sent
+together the moment it returns, and each later chunk waits for at least the
+last pass's server time (`ms` in the chunk's answer) × 0.8, held to
+150–600 ms (300 ms until the server has reported one) — a fast server gets
+small chunks often, a slow one no slivers. The options' Diagnostics line ends
+with the last pass time, e.g. *whisper ~0.4 s/pass*. With localStorage
+`cs_voice_debug` set to `1` the console logs the start's timings (also in
 `window.__mfVoiceTiming`): press, mic ready, stream open, first speech, first
-greyed words, first typed word.
+greyed words, first characters typed (`typed`), first committed words — and
+each pass's server time (`[voice] pass 412 ms`; the last 20 in
+`window.__mfVoicePasses`).
 
 **The wake word.** With **Listen for “MindFlock”** on (the mic's options or
 Settings → Voice → This computer's mic; per browser, off by default), saying

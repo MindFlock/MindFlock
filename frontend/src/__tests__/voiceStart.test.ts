@@ -15,13 +15,16 @@ import {
   HEARING_HOLD_MS,
   KEEP_STREAM_MS,
   LEVEL_DECAY_MS,
+  LIVE_CAPTION_CHARS,
   MicKeeper,
   isLoud,
   levelTarget,
   liveTail,
+  liveUnsure,
   noiseFloor,
   pickupLine,
   smoothLevel,
+  voicePass,
 } from "../lib/voiceMic";
 import { code, cssRule, src } from "./sourceText";
 
@@ -345,13 +348,32 @@ describe("the level and the pickup line (pure)", () => {
     expect(HEARING_HOLD_MS).toBeGreaterThanOrEqual(300);
   });
 
-  it("the live caption keeps only the end of a long dictation, from a word's start", () => {
+  it("the live caption keeps only the last ~60 characters of a long dictation, from a word's start", () => {
+    expect(LIVE_CAPTION_CHARS).toBe(60);
     expect(liveTail("fix the bug")).toBe("fix the bug");
     const long = Array.from({ length: 40 }, (_, i) => "word" + i).join(" ");
     const tail = liveTail(long, "and");
     expect(tail.startsWith("…word")).toBe(true);
     expect(long.endsWith(tail.slice(1))).toBe(true);
-    expect(tail.length).toBeLessThanOrEqual(90);
+    expect(tail.length + " and".length).toBeLessThanOrEqual(62);
+    // A long unsure tail alone: its end, and the settled words keep a sliver.
+    expect(liveUnsure("short")).toBe("short");
+    const unsure = liveUnsure(long);
+    expect(unsure.startsWith("…word")).toBe(true);
+    expect(unsure.length).toBeLessThanOrEqual(61);
+    expect(code("components/TopBarMic.tsx")).toContain("liveTail(caption, liveUnsure(unsure))");
+  });
+
+  it("each streaming pass's server time is kept (the last 20) for the debug console", () => {
+    vi.stubGlobal("window", {});
+    try {
+      for (let i = 1; i <= 25; i++) voicePass(i * 10.4);
+      const w = (globalThis as unknown as { window: Window }).window;
+      expect(w.__mfVoicePasses).toHaveLength(20);
+      expect(w.__mfVoicePasses?.[19]).toBe(260);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -388,23 +410,23 @@ describe("the caption: what it hears before what it types", () => {
     expect(k.captions.length).toBe(n);
   });
 
-  it("the partial shows greyed before any commit, and is never typed", async () => {
+  it("the partial shows greyed before any commit, typed at once as a guess, and solid once committed", async () => {
     const typed: string[] = [];
     const k = hooks();
     const d = new LiveDictation(
-      { kind: "session", title: "t1", name: "Login fix", type: (x) => typed.push(x) > 0, erase: () => true },
+      { kind: "session", title: "t1", name: "Login fix", type: (x) => typed.push(x) > 0, erase: (x) => typed.push("⌫" + x) > 0 },
       k.h
     );
     d.ready();
     d.unsure("fix the log");
     // The caption is the unsure tail alone (shown muted), not the hint.
     expect(k.last()).toEqual(["", "fix the log"]);
-    d.unsure("fix the login bug");
-    expect(k.last()).toEqual(["", "fix the login bug"]);
-    expect(typed).toEqual([]);
-    await d.words("fix the login");
-    expect(typed).toEqual(["fix the "]); // committed words only, the last held back
-    expect(k.last()).toEqual(["fix the login", "fix the login bug"]);
+    expect(typed).toEqual([]); // unsure() alone is the caption's
+    await d.stream("", "fix the log");
+    expect(typed).toEqual(["fix the log"]); // the first pass's words, typed
+    await d.stream("fix the login", "bug");
+    expect(typed).toEqual(["fix the log", "in bug"]);
+    expect(k.last()).toEqual(["fix the login", "bug"]); // committed solid, the rest greyed
   });
 
   it("a text box says where the words go", () => {
@@ -458,6 +480,9 @@ describe("wiring: warm, measured, and off React's render path", () => {
     for (const m of ["start", "partial", "commit"]) expect(MIC).toContain('voiceMark("' + m + '")');
     expect(MIC).toContain('if (on) voiceMark("speech")');
     const lib = code("lib/voiceDesktop.ts");
+    // The first characters typed (a guess, usually), and each pass's server time.
+    expect(lib).toContain('voiceMark("typed")');
+    expect(lib).toContain("voicePass(ms)");
     expect(lib).toContain('voiceMark("stream")');
     expect(lib).toContain('voiceMark("mic")');
     expect(code("lib/voiceMic.ts")).toContain('localStorage.getItem("cs_voice_debug") === "1"');

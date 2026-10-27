@@ -11,7 +11,7 @@
 
 const DEFAULT_TARGET_RATE = 16000;
 const BLOCK_FRAMES = 4096;
-/** {@link WavRecording.take} returns nothing for less audio than this (s). */
+/** {@link WavRecording.take} returns nothing for less audio than this (s), unless told otherwise. */
 export const TAKE_MIN_S = 0.3;
 
 /** 16-bit PCM mono WAV (44-byte RIFF header, little-endian), type "audio/wav". */
@@ -129,10 +129,11 @@ export interface WavRecording {
   stop(): Promise<Blob>;
   /** The WAV of what was heard since the previous take() (or start), and
    * recording goes on — a streaming recognizer's next chunk. Null for less
-   * than {@link TAKE_MIN_S} (kept for the next take), or once stopped.
+   * than `minS` seconds (default {@link TAKE_MIN_S}; kept for the next
+   * take), or once stopped.
    * Synchronous, so it resamples with {@link resample}; {@link stop} then
    * returns only what came after the last take. */
-  take(): Blob | null;
+  take(minS?: number): Blob | null;
   /** Drop everything; no blob. */
   cancel(): void;
   /** Seconds recorded so far. */
@@ -242,8 +243,8 @@ export function startWavRecording(
       result = resampleTo(all, ctx.sampleRate, targetRate).then((pcm) => encodeWav(pcm, targetRate));
       return result;
     },
-    take() {
-      if (done || fresh < TAKE_MIN_S * ctx.sampleRate) return null;
+    take(minS = TAKE_MIN_S) {
+      if (done || !fresh || fresh < minS * ctx.sampleRate) return null;
       return encodeWav(resample(drain(), ctx.sampleRate, targetRate), targetRate);
     },
     cancel() {
