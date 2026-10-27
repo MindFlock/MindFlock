@@ -235,12 +235,35 @@ export function loadVoicePrefs(kv: KV | null = storage()): VoicePrefs {
   };
 }
 
+/** Fired on `window` whenever the prefs are saved (detail: the new prefs):
+ * the top-bar mic and Settings → Voice both edit them, and each follows the
+ * other's change without a reload. */
+export const VOICE_PREFS_EVENT = "mindflock:voice-prefs";
+
 export function saveVoicePrefs(p: VoicePrefs, kv: KV | null = storage()): void {
+  const next: VoicePrefs = { ptt: p.ptt === "hold" ? "hold" : "toggle", replies: !!p.replies };
   try {
-    kv?.setItem(VOICE_PREFS_KEY, JSON.stringify({ ptt: p.ptt, replies: !!p.replies }));
+    kv?.setItem(VOICE_PREFS_KEY, JSON.stringify(next));
   } catch {
     /* private window / quota: the choice lasts this page */
   }
+  try {
+    if (typeof window !== "undefined" && typeof CustomEvent !== "undefined")
+      window.dispatchEvent(new CustomEvent(VOICE_PREFS_EVENT, { detail: next }));
+  } catch {
+    /* no window (tests) */
+  }
+}
+
+/** Follow the prefs as any surface saves them; returns the unsubscribe. */
+export function onVoicePrefs(fn: (p: VoicePrefs) => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  const h = (e: Event) => {
+    const d = (e as CustomEvent).detail as VoicePrefs | undefined;
+    fn(d && typeof d === "object" ? { ptt: d.ptt === "hold" ? "hold" : "toggle", replies: !!d.replies } : loadVoicePrefs());
+  };
+  window.addEventListener(VOICE_PREFS_EVENT, h);
+  return () => window.removeEventListener(VOICE_PREFS_EVENT, h);
 }
 
 // --- the push-to-talk hotkey ------------------------------------------------- //

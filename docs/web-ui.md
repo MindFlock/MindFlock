@@ -233,7 +233,10 @@ a session first*).
   *Pending: Login fix asked — …*, *Pending: nothing on Login fix*), a hint
   naming the new words, the Talk hotkey and hands-free answering, and a link to the
   speech engines in **Settings → Voice**. The choice is kept per browser
-  (`cs_voice_desktop`).
+  (`cs_voice_desktop`), and **Settings → Voice → This computer's mic** shows
+  the same two choices — *Read replies aloud* and the push-to-talk mode — so
+  either place sets them (they follow each other through the
+  `mindflock:voice-prefs` window event).
 
 **Which engine.** In the **desktop app** (Electron — its Chromium has no
 Google speech key, so Web Speech fails there on every start) recognition and

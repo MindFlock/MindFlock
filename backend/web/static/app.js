@@ -37949,13 +37949,30 @@ function loadVoicePrefs(kv = storage()) {
 		replies: o.replies === true
 	};
 }
+var VOICE_PREFS_EVENT = "mindflock:voice-prefs";
 function saveVoicePrefs(p, kv = storage()) {
+	const next = {
+		ptt: p.ptt === "hold" ? "hold" : "toggle",
+		replies: !!p.replies
+	};
 	try {
-		kv?.setItem(VOICE_PREFS_KEY, JSON.stringify({
-			ptt: p.ptt,
-			replies: !!p.replies
-		}));
+		kv?.setItem(VOICE_PREFS_KEY, JSON.stringify(next));
 	} catch {}
+	try {
+		if (typeof window !== "undefined" && typeof CustomEvent !== "undefined") window.dispatchEvent(new CustomEvent(VOICE_PREFS_EVENT, { detail: next }));
+	} catch {}
+}
+function onVoicePrefs(fn) {
+	if (typeof window === "undefined") return () => {};
+	const h = (e) => {
+		const d = e.detail;
+		fn(d && typeof d === "object" ? {
+			ptt: d.ptt === "hold" ? "hold" : "toggle",
+			replies: !!d.replies
+		} : loadVoicePrefs());
+	};
+	window.addEventListener(VOICE_PREFS_EVENT, h);
+	return () => window.removeEventListener(VOICE_PREFS_EVENT, h);
 }
 var TALK_EVENT = "mindflock:voice-talk";
 function talkKeyAction(phase, hold, listening, keyHeld) {
@@ -39663,6 +39680,7 @@ function TopBarMic() {
 		clearTimeout(captionTimer.current);
 		if (text && !sticky) captionTimer.current = setTimeout(() => setCaptionState(""), 6e3);
 	};
+	(0, import_react.useEffect)(() => onVoicePrefs((p) => setPrefsState(p)), []);
 	const setPrefs = (p) => {
 		setPrefsState(p);
 		saveVoicePrefs(p);
@@ -74284,6 +74302,10 @@ var SETTINGS_SEARCH = [
 			"stt",
 			"talk",
 			"spoken replies",
+			"read replies aloud",
+			"push to talk",
+			"hold to talk",
+			"click to talk",
 			"approve dialogs by voice"
 		]
 	},
@@ -88889,6 +88911,7 @@ function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
 					})
 				]
 			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MicPrefs, {}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 				className: "set-section-title",
 				children: "Permission dialogs"
@@ -88947,6 +88970,87 @@ function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
 			})
 		]
 	});
+}
+function MicPrefs() {
+	const [prefs, setPrefs] = (0, import_react.useState)(loadVoicePrefs);
+	(0, import_react.useEffect)(() => onVoicePrefs(setPrefs), []);
+	const save = (p) => {
+		setPrefs(p);
+		saveVoicePrefs(p);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "This computer's mic"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			id: "voice-mic-hint",
+			children: "The mic in the top bar; the same choices are in its popover. These are per browser."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row set-switch-row",
+			id: "voice-replies-row",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "notif-rule-text",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					id: "voice-replies-label",
+					children: "Read replies aloud"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint notif-rule-desc",
+					children: "Off by default here. On, a reply to a prompt you sent by voice is spoken, name first, and a session's question is read out and the mic listens for your answer."
+				})]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "ca-switch",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					id: "voice-replies",
+					"aria-labelledby": "voice-replies-label",
+					checked: prefs.replies,
+					onChange: (e) => save({
+						...prefs,
+						replies: e.target.checked
+					})
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row",
+			id: "voice-ptt-row",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Push to talk"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "voice-ptt-choices",
+				role: "radiogroup",
+				"aria-label": "Push to talk",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "voice-ptt-choice",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "radio",
+						name: "voice-ptt",
+						checked: prefs.ptt !== "hold",
+						onChange: () => save({
+							...prefs,
+							ptt: "toggle"
+						})
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Click to talk — press to start, press again to stop" })]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "voice-ptt-choice",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "radio",
+						name: "voice-ptt",
+						checked: prefs.ptt === "hold",
+						onChange: () => save({
+							...prefs,
+							ptt: "hold"
+						})
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Hold to talk — hold the mic or the Talk hotkey while you speak" })]
+				})]
+			})]
+		})
+	] });
 }
 function PhoneWhere({ kind, title }) {
 	const model = useSettings();

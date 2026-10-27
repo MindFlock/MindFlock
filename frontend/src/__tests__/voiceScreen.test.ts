@@ -404,6 +404,7 @@ describe("the layout is the shared Settings one", () => {
       "Recognition",
       "Voice",
       "On the phone page",
+      "This computer&#x27;s mic",
       "Permission dialogs",
       "Try it",
       "Privacy",
@@ -667,5 +668,24 @@ describe("the local-models installer", () => {
       expect(stopped.state).toBe("running");
       expect(two.calls).toHaveLength(1);
     });
+  });
+});
+
+
+describe("this computer's mic (the popover's prefs, in Settings too)", () => {
+  it("shows Read replies aloud (off by default) and the push-to-talk choice before Permission dialogs", () => {
+    const html = render({}, BUILTIN);
+    expect(html).toContain('<h3 class="set-section-title">This computer&#x27;s mic</h3>');
+    expect(html.indexOf("This computer&#x27;s mic")).toBeLessThan(html.indexOf("Permission dialogs"));
+    expect(html).toMatch(
+      /<div class="set-row set-switch-row" id="voice-replies-row"><span class="notif-rule-text"><span class="set-label" id="voice-replies-label">Read replies aloud<\/span>/,
+    );
+    expect(html).toContain('id="voice-replies"');
+    expect(html).not.toMatch(/id="voice-replies"[^>]*checked=""/);
+    expect(html).toContain('id="voice-ptt-row"');
+    expect(html).toContain("Click to talk");
+    expect(html).toContain("Hold to talk");
+    // The popover and this screen read the same prefs module.
+    expect(voiceSrc).toContain("loadVoicePrefs, onVoicePrefs, saveVoicePrefs");
   });
 });
