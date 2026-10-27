@@ -287,6 +287,11 @@ const INIT = `
     addEventListener() {},
   };
   Object.defineProperty(window, "speechSynthesis", { value: synth, configurable: true });
+  // __oscAt: when each chime tone was made (a chime is two) — the order of chimes and lines.
+  if (window.AudioContext) {
+    const osc = AudioContext.prototype.createOscillator;
+    AudioContext.prototype.createOscillator = function () { (window.__oscAt = window.__oscAt || []).push(Date.now()); return osc.call(this); };
+  }
   window.SpeechSynthesisUtterance = class { constructor(t) { this.text = t; } };
   Object.defineProperty(navigator, "wakeLock", { value: { request() { window.__wake++; return Promise.resolve({ release() { return Promise.resolve(); }, addEventListener() {} }); } }, configurable: true });
   Object.defineProperty(navigator, "vibrate", { value: function () { window.__vibes++; return true; }, configurable: true });
@@ -2409,6 +2414,8 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await sleep(150);
     await C(() => window.__hear("over and out"));
     await waitFor(pageC, () => window.mfVoice.state === "working", 4000, "over and out sent");
+    // The chime comes once "Sent. Over and out." is over (never over it).
+    await pageC.waitForFunction((n) => ((window.mfVoice.chimes || {}).stop || 0) > n, ch0.stop, { timeout: 3000, polling: 50 }).catch(() => console.log("  timeout waiting for the stop chime"));
     check("chime: 'over and out' → the falling chime", (await chimes()).stop === ch0.stop + 1, JSON.stringify(await chimes()));
     await C(() => { window.mfVoice.state = "idle"; });
     await pageC.click("#voice-btn");
@@ -2454,6 +2461,102 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     check("nod: Spoken confirmations off → 'disregard' clears silently", !(await said(pageC, "Cleared.")) && (await C(() => JSON.parse(localStorage.getItem("cs_voice")).confirm)) === false);
     await pageC.click("#voice-cancel");
     await pageC.close();
+    state.voiceCfg = null;
+
+    // ---- a stop never cuts its own confirmation: "Stopped." (a stop phrase),
+    // "Over and out." (nothing to send), "Sent. Over and out." and "Cleared."
+    // are said whole — the speaker reports each line finished, nothing is
+    // cancelled, the falling chime comes after the line (never over it) and a
+    // reply that waited for the mic after both; "disregard" listens on, and
+    // the phone's recognizer, ended meanwhile (Android), restarts only once
+    // "Cleared." is over.
+    state.voiceCfg = { stt: "phone", tts: "phone", approve_dialogs: true };
+    const pageK = await ctx.newPage();
+    pageK.on("pageerror", (e) => errors.push(String(e)));
+    await pageK.addInitScript(() => { try { localStorage.removeItem("cs_voice"); } catch (e) {} });
+    await pageK.route("**/api/**", mock);
+    await pageK.goto(`http://127.0.0.1:${PORT}/mobile.html?s=login-fix`, { waitUntil: "load" });
+    await waitFor(pageK, () => window.mfVoice && document.getElementById("picker-title").textContent === "Login fix", 5000, "stop-nod page loaded");
+    const K = (fn, arg) => pageK.evaluate(fn, arg);
+    // The line's log entry, the cancels and the chime tones since `mark`.
+    const markK = () => K(() => ({ cancels: window.__cancels, osc: (window.__oscAt || []).length, log: (window.__speakLog || []).length, stops: (window.mfVoice.chimes || {}).stop || 0 }));
+    const sinceK = (m, text) => K(([m, text]) => {
+      const log = (window.__speakLog || []).slice(m.log);
+      return { line: log.find((x) => x.t === text) || null, lines: log.map((x) => x.t), cancels: window.__cancels - m.cancels,
+               osc: (window.__oscAt || []).slice(m.osc), stops: ((window.mfVoice.chimes || {}).stop || 0) - m.stops };
+    }, [m, text]);
+    // Whole, not cut, the chime after it: what each check asks of `r`.
+    const wholeK = (r) => !!r.line && r.line.end > 0 && r.cancels === 0 && r.stops === 1 && r.osc.length >= 1 && r.osc[0] >= r.line.end;
+    const listenK = async (label) => {
+      await K(() => { window.mfVoice.state = "idle"; });
+      await pageK.click("#voice-btn");
+      return waitFor(pageK, () => window.mfVoice.state === "listening", 3000, label);
+    };
+    // waitFor passes no argument: these take one.
+    const waitK = (fn, arg, ms, label) => pageK.waitForFunction(fn, arg, { timeout: ms, polling: 50 }).then(() => true, () => { console.log("  timeout waiting for " + label); return false; });
+    // Said and over, and the chime held for it played (or nothing more to come).
+    const saidK = (m, text) => waitK(([n, t]) => (window.__speakLog || []).slice(n).some((x) => x.t === t && x.end > 0) && !window.mfVoice.speech.playing && !window.mfVoice.chimeWait, [m, text], 4000, "said " + text);
+    await K(() => { window.__speakMs = 400; });
+
+    // A stop phrase, with a reply waiting for the mic.
+    await listenK("stop-nod listening");
+    await K(() => window.__hear("fix the docs"));
+    await sleep(150);
+    let mK = await markK();
+    await K(() => { window.mfVoice.pendingSay = { say: "Docs look fine.", ts: Date.now() / 1000 }; });
+    await K(() => window.__hear("that's all"));
+    await saidK(mK.log, "Stopped.");
+    await waitK((n) => (window.__speakLog || []).slice(n).some((x) => x.t === "Docs look fine." && x.end > 0), mK.log, 4000, "reply after the stop");
+    let rK = await sinceK(mK, "Stopped.");
+    check("stop-nod: a stop phrase → 'Stopped.' said whole (finished, nothing cancelled), the falling chime after it", wholeK(rK), JSON.stringify(rK));
+    const replyK = (await K((n) => (window.__speakLog || []).slice(n).find((x) => x.t === "Docs look fine."), mK.log)) || {};
+    check("stop-nod: …the reply that waited for the mic after both, the words kept in the box", rK.lines[0] === "Stopped." && replyK.start >= rK.osc[0] && (await K(() => document.getElementById("compose").value)) === "fix the docs", JSON.stringify([rK.lines, rK.osc, replyK]));
+    await K(() => { document.getElementById("compose").value = ""; });
+
+    // "over and out" with nothing to send.
+    await listenK("stop-nod listening 2");
+    mK = await markK();
+    await K(() => window.__hear("over and out"));
+    await saidK(mK.log, "Over and out.");
+    await sleep(150);
+    rK = await sinceK(mK, "Over and out.");
+    check("stop-nod: 'over and out', nothing to send → 'Over and out.' whole, the chime after it", wholeK(rK) && (await vstate(pageK)) === "idle", JSON.stringify(rK));
+
+    // "over and out" with words: "Sent. Over and out." whole, then the chime.
+    await listenK("stop-nod listening 3");
+    await K(() => window.__hear("fix the docs"));
+    await sleep(150);
+    mK = await markK();
+    await K(() => window.__hear("over and out"));
+    // The phone's voice says it sentence by sentence: the chime after the last.
+    await saidK(mK.log, "Over and out.");
+    await sleep(150);
+    rK = await sinceK(mK, "Over and out.");
+    check("stop-nod: 'over and out' with words → 'Sent. Over and out.' whole, the chime after it, sent", wholeK(rK) && rK.lines.slice(0, 2).join(" ") === "Sent. Over and out." && ["working", "idle", "speaking"].includes(await vstate(pageK)), JSON.stringify(rK));
+
+    // "disregard": "Cleared." over a listen that goes on — no chime, nothing
+    // cancelled; the recognizer that ended meanwhile restarts after the line.
+    await listenK("stop-nod listening 4");
+    await K(() => window.__hear("fix the docs"));
+    await sleep(150);
+    mK = await markK();
+    const startsK = await K(() => window.__recStarts || 0);
+    await K(() => window.__hear("disregard"));
+    await sleep(100);
+    await K(() => { const r = window.__rec; r.started = false; if (r.onend) r.onend(); });   // Android: it ends after every phrase
+    await saidK(mK.log, "Cleared.");
+    await waitK((n) => (window.__recStarts || 0) > n, startsK, 2000, "recognizer back");
+    rK = await sinceK(mK, "Cleared.");
+    const recK = await K(() => ({ at: window.__recStartAt, starts: window.__recStarts || 0 }));
+    check("stop-nod: 'disregard' → 'Cleared.' whole over the listen (no chime, nothing cancelled), still listening", !!rK.line && rK.line.end > 0 && rK.cancels === 0 && rK.stops === 0 && rK.osc.length === 0 && (await vstate(pageK)) === "listening", JSON.stringify(rK));
+    check("stop-nod: …the phone's recognizer, ended meanwhile, restarts only once 'Cleared.' is over", recK.starts > startsK && recK.at >= rK.line.end, JSON.stringify([recK, rK.line]));
+    await sleep(250);   // past the line's echo window (voiceEchoing)
+    await K(() => window.__hear("fix the tests"));
+    await sleep(150);
+    check("stop-nod: …and hears the next phrase", /fix the tests/.test(await K(() => document.getElementById("compose").value)) && (await vstate(pageK)) === "listening");
+    await K(() => { window.__speakMs = 15; });
+    await pageK.click("#voice-cancel");
+    await pageK.close();
     state.voiceCfg = null;
 
     // ---- control words act from the streamed guess: once the voice has been

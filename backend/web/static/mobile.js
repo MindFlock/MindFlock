@@ -2910,6 +2910,7 @@
   var VOICE_ACK_MAX_MS = 10 * 60 * 1000; // give up on the ack after this long
   var VOICE_WORD_MS = 400;               // onend fallback: per word...
   var VOICE_CHUNK_GRACE_MS = 1500;       // ...plus this per chunk
+  var VOICE_REC_WAIT_MS = 50;            // the phone's recognizer waiting for a line said over the listen: checked this often
   var VOICE_BARGE_MUTE_MS = 150;         // barge-in: the mic opens this long after the speaker is cut (its tail is not heard)
   var VOICE_QUIET_CAPTION_MS = 1500;     // "Quiet." stays on the strip this long
 
@@ -4460,8 +4461,14 @@
   }
   function voiceSetState(s, caption) {
     // Out of listening, however it ended (but "over", which listens on):
-    // the stop chime.
-    if (voiceIsListening() && s !== "listening" && s !== "awaiting" && s !== "dialog") voiceChime("stop");
+    // the stop chime. A line said over the listen (a stop's own
+    // confirmation, queued just before) is over none now: no recorder to
+    // deafen, no echo to take off the next listen's words.
+    if (voiceIsListening() && s !== "listening" && s !== "awaiting" && s !== "dialog") {
+      var p = voiceSpeech.playing;
+      if (p && p.over) { p.over = false; voice.nodEcho = null; }
+      voiceChime("stop");
+    }
     voice.state = s;
     voiceBtn.dataset.state = voiceBtnState(s);
     voiceBtn.setAttribute("aria-label",
@@ -4748,6 +4755,13 @@
       x.resolve(false);
     });
     var line = step.next;
+    // A chime held for the lines said (voiceChime): after the last
+    // confirmation in a row, and the next line waits for it to be over.
+    if (!S.playing && voice.chimeWait && !(line && line.nod) && voiceChimeFlush() && line) {
+      clearTimeout(S.timer);
+      S.timer = setTimeout(voiceSpeechPump, VOICE_CHIME_MS);
+      return;
+    }
     if (!line) {
       if (!S.playing && !S.q.length) voiceSpeechDrained();
       return;
@@ -4780,7 +4794,6 @@
     var S = voiceSpeech;
     if (S.playing !== line || line.tok !== tok) return;
     S.playing = null;
-    voiceChimeFlush();
     if (line.over) {
       voice.lineEndAt = Date.now();
       voice.micMuteUntil = Date.now() + VOICE_NOD_MUTE_MS;
@@ -4788,7 +4801,8 @@
     }
     voiceHushShow();
     line.resolve(true);
-    // After the caller's own next step (a listen, idle), which runs first.
+    // After the caller's own next step (a listen, idle), which runs first;
+    // a held chime goes then (voiceSpeechPump).
     clearTimeout(S.timer);
     S.timer = setTimeout(voiceSpeechPump, 0);
   }
@@ -4800,6 +4814,7 @@
     voiceSpeakSeq++;
     S.playing = null;
     S.drained = [];
+    voice.chimeWait = "";   // the line it waited for is cut: never a chime later, out of place
     voice.tts.cancel();
     var keep = [];
     S.q.forEach(function (x) { if (all || !x.bg) x.resolve(false); else keep.push(x); });
@@ -4864,6 +4879,7 @@
   function voiceBargeIn(title) {
     var p = voiceSpeech.playing;
     if (!p) return false;
+    voice.chimeWait = "";   // the mic opens next: its own chime, not a held stop's
     voiceSpeechStopFor(title || p.title || voice.session);
     if (voiceSpeech.playing === p) {   // a line about something else: cut too, not said again
       voiceSpeech.playing = null;
@@ -4878,7 +4894,10 @@
   // (on by default): "start" — two rising tones, ~120 ms — whenever the
   // mic starts listening; "stop" — two falling, ~140 ms, softer — whenever
   // it stops (voiceSetState). The recorder skips them (voiceMicMuted). A
-  // reply being said holds a chime until it is over (voiceSpeechEnd).
+  // reply being said holds a chime until it is over; the stop chime waits
+  // for a confirmation too ("Stopped." is queued first, the chime after it,
+  // never over it) — the queue plays it once the last one is said
+  // (voiceSpeechPump), the next line VOICE_CHIME_MS after it.
   var VOICE_CHIMES = {
     start: { tones: [[660, 0], [990, 0.06]], gain: 0.25, len: 0.06 },
     stop: { tones: [[880, 0], [660, 0.07]], gain: 0.16, len: 0.07 },
@@ -4888,7 +4907,7 @@
     var c = VOICE_CHIMES[kind];
     if (!c || voice.prefs.sounds === false) return false;
     var p = voiceSpeech.playing;
-    if (p && !p.nod) { voice.chimeWait = kind; return false; }
+    if (p && (!p.nod || kind === "stop")) { voice.chimeWait = kind; return false; }
     var ctx = voice.audioCtx;
     if (!ctx || ctx.state !== "running") return false;
     try {
@@ -4917,11 +4936,11 @@
   voice.micMuted = function () { return voiceMicMuted(); };
   voice.chime = function (k) { return voiceChime(k); };
   voice.speakLine = function (t) { return speakLine(t); };
-  // A chime held while a reply was said: now.
+  // A chime held while a line was said: now. True when it played.
   function voiceChimeFlush() {
     var k = voice.chimeWait;
     voice.chimeWait = "";
-    if (k) voiceChime(k);
+    return !!k && voiceChime(k);
   }
   // A nod: the spoken confirmation of what the owner just did by voice — "Sent.",
   // "Sent. Over and out.", "Cleared.", "Stopped." — under prefs.confirm
@@ -5075,6 +5094,18 @@
   }
   function voiceRecStart() {
     var mode = voiceListen_.mode;
+    // The phone's own recognizer is not started under a confirmation said
+    // over the listen ("Cleared." after "disregard"): on Android its start
+    // takes the audio and cuts the line, and all it would hear is the line
+    // (voiceEchoing). It starts the moment the line is over.
+    var p = voiceSpeech.playing;
+    if (voice.stt.name === "phone" && p && p.nod && p.over) {
+      var gen = voiceListen_.gen;
+      setTimeout(function () {
+        if (voiceListen_.gen === gen && voiceIsListening() && !voice.stt.active()) voiceRecStart();
+      }, VOICE_REC_WAIT_MS);
+      return;
+    }
     voiceListen_.startedAt = Date.now();
     voiceGuessKeep();   // a new phrase: an old guess is text now
     var woke = voiceListen_.woke;   // the wake word opened this listen: {skipUntil, wakeMs}
@@ -5346,15 +5377,19 @@
   }
   // A stop phrase: listening ends, the words said before it join the box,
   // kept — unless an "over" (and out) came first: "fix it over and out,
-  // that's all" sends "fix it", as "over and out" would.
+  // that's all" sends "fix it", as "over and out" would. The stop never
+  // cuts its own confirmation: "Stopped." is queued first (said over the
+  // listen's last moment, the recognizer already stopped), then listening
+  // ends — the stop chime waits for the line (voiceChime), and a reply that
+  // waited for the mic comes after both. Nothing queued is dropped.
   function voiceStopPhrase(before, mode) {
     var p = voiceDictParse(before);
     if (mode !== "dialog" && (p.kind === "over" || p.kind === "out")) { voiceHeardWords({ kind: "out", text: p.text }); return; }
     voiceStopForCommand();
     if (mode !== "dialog" && p.kind !== "disregard" && p.text) voiceAppend(p.text);
-    if (mode === "dialog") { voiceIdle(nameOf(voice.session) + " is waiting on you"); voiceNod("Stopped."); return; }
-    voiceListenKept();
     voiceNod("Stopped.");
+    if (mode === "dialog") { voiceIdle(nameOf(voice.session) + " is waiting on you"); return; }
+    voiceListenKept();
   }
   // The words of a phrase that is not a command: into the box, then
   // "over" sends it — listening on while the listen is continuous
@@ -5366,7 +5401,7 @@
     if (p.kind !== "over" && !out) { voiceCaption(voiceDictHint()); voiceListenContinue(); return; }
     if (out) voiceListen_.cont = false;
     if (!vbox().value.trim()) {
-      if (out) { voiceStopForCommand(); voiceListenKept(); voiceNod("Over and out."); return; }
+      if (out) { voiceStopForCommand(); voiceNod("Over and out."); voiceListenKept(); return; }   // the line first, as a stop phrase's
       voiceCaption("Nothing to send yet");
       voiceListenContinue();
       return;
@@ -6058,6 +6093,9 @@
     var box = vbox();            // the ask sheet's field, or the compose box
     clearTimeout(voiceListen_.timer);
     voice.stt.stop();
+    // The nod as Enter is pressed — queued before listening ends, so the
+    // stop chime comes after it ("Sent. Over and out." whole, then the chime).
+    if (nod) voiceNod(nod);
     voiceSetState("sending", text);
     voiceError("");
     // The baseline: what last_reply said BEFORE this prompt, so the ack poll
@@ -6065,7 +6103,6 @@
     voiceLastReply(title).then(function (base) {
       if (voice.state !== "sending") return;
       voiceCtlSent();
-      if (nod) voiceNod(nod);   // as Enter is pressed
       return fetch("/api/instances/" + encodeURIComponent(title) + "/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
