@@ -38,6 +38,11 @@ export interface AskMic {
   /** Read the ask out and listen (12 s, one retry) — only with "Read replies
    * aloud" on; nothing is said otherwise. */
   handsFree(title: string, ask: { dialog?: Dialog | null; question?: string }): void;
+  /** The person acted on the card by hand (a click, a tick, a key, typing):
+   * stop reading `title`'s ask — the line being said and everything queued
+   * for it (other sessions' lines play on) — and end the hands-free listen
+   * it opened. */
+  quiet(title: string): void;
   /** Stop listening / reading for `title` (the pop-up moved on). */
   stop(title: string): void;
   /** Take back what this dictation typed and stop (Escape while listening).

@@ -224,6 +224,37 @@ def _host(url: str) -> str:
     return urllib.parse.urlsplit(url).netloc or url
 
 
+def _local_host(url: str) -> bool:
+    """Whether ``url`` points at this machine or a private network — a local
+    model server (Voice Lab, Kokoro-FastAPI, openedai-speech, a whisper
+    server) that speaks the OpenAI shape and wants no key. Loopback,
+    ``.local``/``.ts.net`` names, RFC 1918 / link-local / ULA addresses, and
+    any plain ``http://`` host (a key over clear text would be the worse
+    choice anyway)."""
+    try:
+        from urllib.parse import urlsplit
+        import ipaddress
+
+        parts = urlsplit(url if "://" in url else "http://" + url)
+        host = (parts.hostname or "").lower()
+        if not host:
+            return False
+        if host in ("localhost", "0.0.0.0") or host.endswith(
+            (".local", ".localhost", ".ts.net")
+        ):
+            return True
+        try:
+            return (
+                ipaddress.ip_address(host).is_private
+                or ipaddress.ip_address(host).is_loopback
+            )
+        except ValueError:
+            pass
+        return parts.scheme == "http"
+    except Exception:  # noqa: BLE001 — an unreadable URL wants a key
+        return False
+
+
 def mime_of(raw: str) -> str:
     """The bare media type of a Content-Type (``audio/webm;codecs=opus`` → ``audio/webm``)."""
     return (raw or "").split(";", 1)[0].strip().lower()
@@ -384,7 +415,12 @@ class Backend:
     def ready(self) -> Tuple[bool, str]:
         raise NotImplementedError
 
-    def transcribe(self, audio: bytes, mime: str, lang: str = "") -> str:
+    def transcribe(
+        self, audio: bytes, mime: str, lang: str = "", prompt: str = ""
+    ) -> str:
+        """``prompt``: words the clip likely contains (whisper's
+        ``initial_prompt``; the wake-word check sends the word). Backends that
+        cannot bias the decoder ignore it."""
         raise SpeechError("%s does not do recognition" % self.label)
 
     def speak(self, text: str, voice: str = "") -> Tuple[bytes, str]:
@@ -431,13 +467,15 @@ class OpenAISTT(_OpenAI):
 
     def ready(self) -> Tuple[bool, str]:
         url, key, model = self._cfg()
-        if not key:
+        if not key and not _local_host(url):
             return False, "%s needs an API key for %s" % (self.label, _host(url))
         return True, "%s at %s" % (model, _host(url))
 
-    def transcribe(self, audio: bytes, mime: str, lang: str = "") -> str:
+    def transcribe(
+        self, audio: bytes, mime: str, lang: str = "", prompt: str = ""
+    ) -> str:
         url, key, model = self._cfg()
-        if not key:
+        if not key and not _local_host(url):
             raise SpeechError("%s needs an API key for %s" % (self.label, _host(url)))
         fields = {"model": model, "response_format": "json"}
         code = whisper_language(lang)
@@ -446,7 +484,9 @@ class OpenAISTT(_OpenAI):
         body, ctype = _multipart(
             fields, "file", "clip" + _ext(mime), mime_of(mime), audio
         )
-        headers = {"Authorization": "Bearer " + key, "Content-Type": ctype}
+        headers = {"Content-Type": ctype}
+        if key:
+            headers["Authorization"] = "Bearer " + key
         _rtype, data = self._call(
             url + "/audio/transcriptions", headers, body, STT_TIMEOUT
         )
@@ -472,13 +512,13 @@ class OpenAITTS(_OpenAI):
 
     def ready(self) -> Tuple[bool, str]:
         url, key, model, voice = self._cfg()
-        if not key:
+        if not key and not _local_host(url):
             return False, "%s needs an API key for %s" % (self.label, _host(url))
         return True, "%s (%s) at %s" % (model, voice, _host(url))
 
     def speak(self, text: str, voice: str = "") -> Tuple[bytes, str]:
         url, key, model, default_voice = self._cfg()
-        if not key:
+        if not key and not _local_host(url):
             raise SpeechError("%s needs an API key for %s" % (self.label, _host(url)))
         payload = {
             "model": model,
@@ -486,7 +526,9 @@ class OpenAITTS(_OpenAI):
             "voice": voice or default_voice,
             "response_format": "mp3",
         }
-        headers = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
+        if key:
+            headers["Authorization"] = "Bearer " + key
         body = json.dumps(payload).encode("utf-8")
         rtype, data = self._call(url + "/audio/speech", headers, body, TTS_TIMEOUT)
         if (
@@ -638,13 +680,16 @@ class LocalSTT(Backend):
                 "could not load faster-whisper %s: %s" % (name, err)
             ) from err
 
-    def transcribe(self, audio: bytes, mime: str, lang: str = "") -> str:
+    def transcribe(
+        self, audio: bytes, mime: str, lang: str = "", prompt: str = ""
+    ) -> str:
         model = self._model()
         path = _temp_clip(audio, mime)
+        kw = {"language": whisper_language(lang), "beam_size": 5}
+        if prompt:
+            kw["initial_prompt"] = prompt
         try:
-            segments, _info = model.transcribe(
-                path, language=whisper_language(lang), beam_size=5
-            )
+            segments, _info = model.transcribe(path, **kw)
             words = [str(getattr(s, "text", "") or "").strip() for s in segments]
         except Exception as err:  # noqa: BLE001
             raise SpeechError("faster-whisper failed: %s" % err) from err

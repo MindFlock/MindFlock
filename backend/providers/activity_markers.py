@@ -61,7 +61,8 @@ TOOL_HOOK_TAG_PREFIX = "# mindflock-activity tool-hook"
 # exact text the session just said, so the spoken line costs no transcript
 # scan), and ``UserPromptSubmit`` consumes ``<voice dir>/<session>.next`` —
 # the ONE-SHOT request the /send delivery arms right before a ``say: true``
-# prompt is typed: younger than :data:`VOICE_NEXT_MAX_AGE_S`, the hook prints
+# prompt is typed (or the standing ``<voice dir>/say-all`` marker, every
+# prompt while someone listens to everything): younger than :data:`VOICE_NEXT_MAX_AGE_S`, the hook prints
 # :data:`VOICE_INSTRUCTION` (Claude Code injects a prompt hook's stdout as
 # additional context, invisibly and with no relaunch); stale or not, it
 # deletes the file, so a prompt that never got submitted cannot attach its
@@ -87,6 +88,11 @@ VOICE_FLAG_DIR_ENV = "MINDFLOCK_VOICE_FLAG_DIR"
 VOICE_FLAG_SUBDIR = (".mindflock-assistant", ".voice")
 #: An armed ``.next`` older than this (seconds) is dropped unprinted.
 VOICE_NEXT_MAX_AGE_S = 120
+#: ``<voice dir>/say-all``: while it exists, EVERY prompt in every session
+#: is asked for the ``Say:`` line (a listener has "read everything" on) —
+#: prompts typed straight into the terminal included, which no ``.next`` can
+#: reach. ``core.voice.set_say_all`` owns it; the hook only looks.
+VOICE_SAY_ALL_FILE = "say-all"
 #: Cap on the reply text the Stop hook files (characters).
 REPLY_TEXT_MAX = 8000
 
@@ -403,6 +409,8 @@ def hook_command(
                 ",".join(json.dumps(x) for x in VOICE_FLAG_SUBDIR),
             ),
             "        np=os.path.join(vd,s+'.next')",
+            "        w=os.path.exists(os.path.join(vd,%s))"
+            % json.dumps(VOICE_SAY_ALL_FILE),
             "        if os.path.exists(np):",
             "            try:",
             "                t=float(open(np).read().strip() or 0)",
@@ -413,7 +421,9 @@ def hook_command(
             "            except Exception:",
             "                pass",
             "            if 0<=time.time()-t<%d:" % VOICE_NEXT_MAX_AGE_S,
-            "                print(%s)" % json.dumps(VOICE_INSTRUCTION),
+            "                w=True",
+            "        if w:",
+            "            print(%s)" % json.dumps(VOICE_INSTRUCTION),
             "    except Exception:",
             "        pass",
         ]

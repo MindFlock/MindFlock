@@ -1,0 +1,41 @@
+#! real capture 2026-10-27: Claude Code 2.1.311, 100x40 pane, tmux capture-pane -p; one of Claude Code's OWN command menus, never a dialog: typing /mo — the slash-command autocomplete ('❯ /model' rows)
+
+ ▐▛███▛█   Claude Code v2.1.311
+▝▜██████▀  Opus 5.5 with high effort · Claude Max
+ ▝▝   ▝▝   /tmp/aq-scratch
+
+
+❯ /model
+  ⎿  Kept model as Opus 5.5
+
+❯ /btw
+  ⎿  Usage: /btw <your question>
+
+❯ /effort
+  ⎿  Cancelled
+
+❯ /model
+  ⎿  Kept model as Opus 5.5
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ❯ /model                            Set the AI model for Claude Code (currently Opus 5.5)
+    /mobile                           Show QR code to download the Claude mobile app
+    /morning                          Render the user's morning brief as a styled HTML artifact,
+                                      or set it up as a recurring weekday task. Use only when the…
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ /mo
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)

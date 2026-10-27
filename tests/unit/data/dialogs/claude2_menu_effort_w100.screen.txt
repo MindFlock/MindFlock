@@ -1,0 +1,41 @@
+#! real capture 2026-10-27: Claude Code 2.1.311, 100x40 pane, tmux capture-pane -p; one of Claude Code's OWN command menus, never a dialog: /effort — the effort slider ('←/→ to adjust · Enter to confirm · s for this session only')
+
+ ▐▛███▛█   Claude Code v2.1.311
+▝▜██████▀  Opus 5.5 with high effort · Claude Max
+ ▝▝   ▝▝   /tmp/aq-scratch
+
+
+❯ /model
+  ⎿  Kept model as Opus 5.5
+
+❯ /btw
+  ⎿  Usage: /btw <your question>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Effort
+
+                   Faster                             Smarter
+                   ────────────────────▲─────────────────────      Ultracode  off
+                   low     medium     high     xhigh      max      Tab to toggle
+
+                          ~1.5x the estimated cost of medium (the default)
+
+
+   ←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel

@@ -1,0 +1,41 @@
+#! real capture 2026-10-27: Claude Code 2.1.311, 100x40 pane, tmux capture-pane -p; one of Claude Code's OWN command menus, never a dialog: /permissions — tabs, a search box, '1. Add a new rule…' without a cursor
+
+ ▐▛███▛█   Claude Code v2.1.311
+▝▜██████▀  Opus 5.5 with high effort · Claude Max
+ ▝▝   ▝▝   /tmp/aq-scratch
+
+
+❯ /model
+  ⎿  Kept model as Opus 5.5
+
+❯ /btw
+  ⎿  Usage: /btw <your question>
+
+❯ /effort
+  ⎿  Cancelled
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ● high · /effort ▔
+   Permissions  Recently denied   Allow   Ask   Deny   Auto mode   Workspace
+
+   Claude Code won't ask before using allowed tools.
+   ╭───────────────────────────────────────────────╮
+   │ ⌕ Search…                                     │
+   ╰───────────────────────────────────────────────╯
+
+     1. Add a new rule…
+
+   ←/→ to switch · ↓ to select · Esc to cancel

@@ -1192,6 +1192,8 @@ def parse_claude(screen: str) -> Optional[dict]:
     descriptions, checkboxes, the review screen) is :func:`_claude_ask`'s —
     a ``kind: "select"`` parse.
     """
+    if is_claude_menu(screen):
+        return None
     lines = normalize_lines(screen)
     widths = _drawn_widths(screen)
     ask = _claude_ask(lines, _raw_lines(screen), widths)
@@ -2124,6 +2126,32 @@ def screen_bottom(screen: str, n: int = SCREEN_BOTTOM_LINES) -> str:
     return "\n".join(lines[-n:])
 
 
+#: Claude Code's OWN command menus (/model, /effort, /config, /permissions,
+#: /usage, the slash autocomplete): the person opened them, nobody is asking
+#: them anything, and the /model picker even draws the same ``❯ 2.`` cursor
+#: list a dialog does. The footers (and the picker's heading) name them.
+CLAUDE_MENU_SIGNS = (
+    r"Enter to set as default",
+    r"\bs (?:to use|for) this session only",
+    r"Tab to toggle",
+    r"←/→ to (?:switch|adjust)",
+    r"Type to filter",
+    r"\br to retry\b",
+    r"^\s*Select model\s*$",
+    r"^\s*❯ /[a-z]",  # the slash-command autocomplete's cursor row
+)
+_CLAUDE_MENU_RX = re.compile("|".join("(?:%s)" % p for p in CLAUDE_MENU_SIGNS), re.M)
+#: The same, as the lookahead that keeps the cursor pattern in
+#: ``ClaudeProvider.waiting_prompt_patterns`` from matching those menus.
+CLAUDE_MENU_VETO = r"(?![\s\S]*(?:to set as default|this session only|Tab to toggle|←/→ to (?:switch|adjust)|Type to filter|\br to retry\b))"
+
+
+def is_claude_menu(screen: str) -> bool:
+    """Whether the visible screen is one of Claude Code's own command menus
+    (:data:`CLAUDE_MENU_SIGNS`) rather than a dialog the agent raised."""
+    return bool(screen) and _CLAUDE_MENU_RX.search(screen) is not None
+
+
 def dialog_on_screen(
     screen: str,
     parsed: Optional[dict],
@@ -2143,7 +2171,7 @@ def dialog_on_screen(
     if parsed is not None and parsed.get("options"):
         return True
     tail = screen_bottom(screen)
-    if not tail:
+    if not tail or is_claude_menu(tail):
         return False
     for pat in waiting or ():
         try:

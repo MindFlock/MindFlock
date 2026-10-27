@@ -1,0 +1,41 @@
+#! real capture 2026-10-27: Claude Code 2.1.311, 100x40 pane, tmux capture-pane -p; one of Claude Code's OWN command menus, never a dialog: /usage — the usage screen ('r to retry · Esc to cancel')
+
+  ⎿  Kept model as Opus 5.5
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ● high · /effort ▔
+   Settings  Status   Config   Usage   Stats
+
+   Session
+
+   Total cost:            $0.0000
+   Total duration (API):  0s
+   Total duration (wall): 34s
+   Total code changes:    0 lines added, 0 lines removed
+   Usage:                 0 input, 0 output, 0 cache read, 0 cache write
+
+
+   Plugin skill-listing footprint
+   What each plugin's skill descriptions add to the system prompt (cached input after the first
+   turn). Agents and MCP tools not yet counted.
+
+   ccc-skills                  6 skills · ~186 tok/turn
+   coderabbit                  1 skill · ~26 tok/turn
+
+   Total                       ~212 tok/turn
+
+   Current session
+   ███████████████████▌                               39% used
+   Resets 12:10pm (America/New_York)
+
+   Current week (all models)
+   █████████████████                                  34% used
+   Resets Nov 2, 1am (America/New_York)
+
+   What's contributing to your limits usage?
+   Approximate · sessions on this machine only
+
+   Scanning local sessions…
+
+   Per-model breakdown unavailable (rate limited until 9:50am)
+
+   r to retry · Esc to cancel
+

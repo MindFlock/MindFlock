@@ -44,6 +44,10 @@ const state = {
   // GET /api/notify/ntfy: the voice scenarios run with the ask pop-up off
   // (their clarify rows would open it over the mic); the ask scenarios turn it on.
   ntfy: { ask_popup: false, active: false },
+  // The say-all marker: GET /api/voice carries say_all unless null (an older
+  // server); POST /api/voice/say-all answers sayAllStatus when non-zero (403).
+  sayAll: null,
+  sayAllStatus: 0,
 };
 const NUMS = { one: 1, two: 2, three: 3, four: 4, nine: 9, "1": 1, "2": 2, "3": 3, "4": 4, "9": 9 };
 
@@ -89,6 +93,8 @@ function routeAnswer(text, session) {
   if (t === "what sessions do i have") return { kind: "list", say: "You have " + state.rows.length + " sessions: " + state.rows.map((r) => r.name).join(", ") + "." };
   if (t === "what needs me") return { kind: "needs", say: "" };
   if (t === "never mind") return { kind: "cancel" };
+  // A "stop talking" only the router knows.
+  if (t === "could you pipe down") return { kind: "hush", say: null };
   if (t === "say that again") return { kind: "repeat" };
   if (t === "voice off") return { kind: "off" };
   return { kind: "prompt" };
@@ -173,7 +179,12 @@ async function mock(route) {
   }
   if (p === "/api/voice/route" && state.routeDelay) await sleep(state.routeDelay);
   if (p === "/api/voice/route") return state.routeStatus ? json(route, { error: "no route" }, state.routeStatus) : json(route, routeAnswer(body.text, body.session));
-  if (p === "/api/voice") return state.voiceCfg ? json(route, state.voiceCfg) : json(route, { error: "nope" }, 404);
+  if (p === "/api/voice/say-all" && m === "POST") {
+    if (state.sayAllStatus) return json(route, { error: "owner only" }, state.sayAllStatus);
+    state.sayAll = !!body.on;
+    return json(route, { say_all: state.sayAll });
+  }
+  if (p === "/api/voice") return state.voiceCfg ? json(route, Object.assign({}, state.voiceCfg, state.sayAll === null ? {} : { say_all: state.sayAll })) : json(route, { error: "nope" }, 404);
   if (p === "/api/notify/ntfy") return json(route, state.ntfy);
   if (p === "/api/fleet") return json(route, { in_fleet: false, members: [], requests: [] });
   if (p === "/api/update/check") return json(route, {});
@@ -221,7 +232,7 @@ const INIT = `
       (window.__speakLog = window.__speakLog || []).push(rec);
       setTimeout(() => { rec.end = Date.now(); if (u.onend) u.onend({}); }, ms);
     },
-    cancel() { window.__cancels++; },
+    cancel() { window.__cancels++; window.__cancelAt = Date.now(); },
     getVoices() { return this._voices; },
     addEventListener() {},
   };
@@ -1502,7 +1513,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
       options: [{ key: "1", label: "Postgres", desc: "The server one", kind: "other", checked: null, keys: ["1"] },
                 { key: "2", label: "SQLite", desc: "A file", kind: "other", checked: null, keys: ["2"] },
                 { key: "3", label: "Type something", desc: null, kind: "text", checked: null, keys: ["3"] }] });
-    const Q2 = (id, checked) => ({ id, kind: "select", parsed: true, heading: "Features", question: "Which features?", multi: true, steps: STEPS(1), step: 1, nav: NAV,
+    const Q2 = (id, checked, button) => ({ id, kind: "select", parsed: true, heading: "Features", question: "Which features?", multi: true, button: button || null, steps: STEPS(1), step: 1, nav: NAV,
       options: [{ key: "1", label: "Auth", desc: null, kind: "other", checked: !!(checked && checked[1]), keys: ["1"] },
                 { key: "2", label: "Billing", desc: null, kind: "other", checked: !!(checked && checked[2]), keys: ["2"] },
                 { key: "3", label: "Search", desc: "Full text", kind: "other", checked: !!(checked && checked[3]), keys: ["3"] },
@@ -1548,6 +1559,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     const o2 = await opts8();
     check("select: multi-select → checkboxes (the server's checked shown), the chat option a plain button", o2.filter((o) => o.role === "checkbox").length === 3 && o2[2].checked === "true" && o2[0].checked === "false" && o2[3].kind === "chat" && o2[3].role === "", JSON.stringify(o2));
     check("select: …Next and Back shown", (await shown8("asking-sel-next")) && (await shown8("asking-sel-prev")));
+    check("select: the multi-select's primary is labelled from `button` (none → Next), Back says Back", (await txt8("asking-sel-next")) === "Next ›" && (await txt8("asking-sel-prev")) === "‹ Back", await txt8("asking-sel-next"));
     const nA = flowA.length;
     await page8.click('.asking-opt[data-key="1"]');
     await page8.click('.asking-opt[data-key="3"]');
@@ -1558,8 +1570,13 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     check("select: Next → ONE /answer: the digits that differ from the server's, then nav.next", JSON.stringify(flowA[nA]) === JSON.stringify({ keys: ["1", "3", "Right"], dialog_id: "s2", by: "user" }), JSON.stringify(flowA.slice(nA)));
     const rv = await page8.evaluate(() => Array.from(document.querySelectorAll("#asking-review dt, #asking-review dd")).map((x) => x.textContent));
     check("select: the review lists the answers", JSON.stringify(rv) === JSON.stringify(["Which database?", "Postgres", "Which features?", "Auth"]) && (await shown8("asking-review")), JSON.stringify(rv));
-    check("select: …with Submit answers / Cancel, Submit the active tab", JSON.stringify((await opts8()).map((o) => o.label)) === JSON.stringify(["Submit answers", "Cancel"]) && (await tabs8())[2] === "Submit*");
-    await page8.click('.asking-opt[data-kind="yes"]');
+    const acts8 = () => page8.evaluate(() => Array.from(document.querySelectorAll("#asking-sel-acts button")).map((b) => b.textContent + (b.classList.contains("asking-act-primary") ? "*" : "")));
+    check("select: …then Cancel and ONE primary Submit answers in the step's row, Submit the active tab", JSON.stringify(await acts8()) === JSON.stringify(["Cancel", "Submit answers*"]) && (await tabs8())[2] === "Submit*", JSON.stringify(await acts8()));
+    check("select: the review shows no numbered option rows, no digit badges", (await opts8()).length === 0 && (await page8.evaluate(() => document.querySelectorAll("#asking-sel .asking-opt-key").length)) === 0 && (await shown8("asking-sel")));
+    check("select: …Back is its arrow on the left of the row", (await txt8("asking-sel-prev")) === "‹" && (await shown8("asking-sel-prev")) && !(await shown8("asking-sel-next")));
+    check("select: the primary button looks primary (the accent, white text)", await page8.evaluate(() => { const b = document.querySelector("#asking-sel-acts .asking-act-primary"), c = document.querySelector("#asking-sel-acts button:not(.asking-act-primary)"); return getComputedStyle(b).color === "rgb(255, 255, 255)" && getComputedStyle(b).backgroundColor !== getComputedStyle(c).backgroundColor; }));
+    check("select: the review row fits a 390 px phone", await page8.evaluate(() => { const box = document.querySelector("#asking-sheet .sheet-box").getBoundingClientRect(); return Array.from(document.querySelectorAll("#asking-sel button")).every((b) => b.getBoundingClientRect().right <= box.right - 1); }));
+    await page8.click('.asking-act[data-kind="yes"]');
     await waitFor(page8, () => document.getElementById("asking-sheet").classList.contains("hidden"), 5000, "closed after Submit");
     check("select: Submit answers → its digit pinned to the review, then the sheet closes (204: answered)", JSON.stringify(flowA[flowA.length - 1]) === JSON.stringify({ keys: ["1"], dialog_id: "s3", by: "user" }) && !(await open8()), JSON.stringify(flowA.slice(-1)));
     await sleep(4500);
@@ -1590,11 +1607,12 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await waitFor(page8, () => document.getElementById("asking-question").textContent === "Which database?", 5000, "back to Q1");
     check("select: Back → nav.prev pinned to the step", JSON.stringify(flowB[2]) === JSON.stringify({ keys: ["Left"], dialog_id: "t2", by: "user" }), JSON.stringify(flowB[2]));
     state.answerStatus = 409; state.answerReply = { dialog_changed: true, error: "the prompt changed" };
-    state.dialogsBy["api-docs"] = Q2("t2b"); ask8("api-docs", "t2b");
+    state.dialogsBy["api-docs"] = Q2("t2b", null, "Submit"); ask8("api-docs", "t2b");
     await page8.click('.asking-opt[data-key="2"]');
     await waitFor(page8, () => document.getElementById("asking-question").textContent === "Which features?", 5000, "dialog_changed → the step shown now");
     state.answerStatus = 0; state.answerReply = null;
     check("select: 409 dialog_changed inside the flow → the step on screen, no error, no note", (await open8()) && !(await shown8("asking-error")) && !(await shown8("asking-note")));
+    check("select: a multi-select whose own row says Submit → the primary reads 'Submit ›'", (await txt8("asking-sel-next")) === "Submit ›", await txt8("asking-sel-next"));
     const sendsB = posts("/send").length, postsB = state.posts.length;
     await page8.click('.asking-opt[data-kind="chat"]');
     check("select: 'Chat about this' opens the field", (await shown8("asking-reply")) && (await page8.evaluate(() => document.getElementById("asking-text").placeholder)) === "What to tell it");
@@ -1653,6 +1671,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await page9.addInitScript(() => { try { localStorage.setItem("cs_voice", JSON.stringify({ replies: "all" })); } catch (e) {} });
     await page9.goto(`http://127.0.0.1:${PORT}/mobile.html?s=login-fix`, { waitUntil: "load" });
     await waitFor(page9, () => window.mfVoice && document.getElementById("picker-title").textContent === "Login fix", 6000, "everything page loaded");
+    check("say-all: an older server (no say_all in GET /api/voice) → nothing posted on load", posts("/voice/say-all").length === 0);
     check("everything: the pref loads, voice off, the events socket wanted anyway", (await page9.evaluate(() => window.mfVoice.prefs.replies)) === "all" && (await vstate(page9)) === "off" && (await page9.evaluate(() => window.mfVoice.eventsState)) !== "off", await page9.evaluate(() => window.mfVoice.eventsState));
     await page9.mouse.click(200, 300);
     check("everything: the first tap anywhere primes speech", await page9.evaluate(() => window.mfVoice.primed === true));
@@ -1727,6 +1746,164 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     check("mine: another session's turn is not read", !(await said(page9, "Nobody asked for this.")));
     check("mine: the choice is stored as 'mine'", (await page9.evaluate(() => JSON.parse(localStorage.getItem("cs_voice")).replies)) === "mine");
     await page9.close();
+    state.ntfy = { ask_popup: false, active: false };
+    state.voiceCfg = null;
+
+    // ---- Speech stops when you act; barge-in; "stop talking"; say-all -----------
+    // A hand on the ask sheet cuts what is read about that ask (other lines
+    // stay) and the step it moves to is not read; the mic while a line is
+    // said cuts it before listening (~150 ms later); "stop talking" (said,
+    // the router's hush, the strip's button) drops the queue and the mic
+    // listens on; Everything sets the server's say-all marker.
+    state.ntfy = { ask_popup: true, active: false };
+    state.voiceCfg = { stt: "phone", tts: "phone", approve_dialogs: true };
+    state.sayAll = false; state.sayAllStatus = 0;
+    state.dialogsBy = {};
+    state.rows.forEach((r) => { r.asking = null; r.activity = "idle"; });
+    const sa0 = posts("/voice/say-all").length;
+    const sa = () => posts("/voice/say-all").slice(sa0).map((x) => x.body.on);
+    const page10 = await ctx.newPage();
+    page10.on("pageerror", (e) => errors.push(String(e)));
+    page10.on("console", (msg) => { if (msg.type() === "error" && !/WebSocket|ws:\/\/|404|409|403/.test(msg.text())) errors.push(msg.text()); });
+    await page10.route("**/api/**", mock);
+    await page10.addInitScript(() => { try { localStorage.setItem("cs_voice", JSON.stringify({ replies: "all" })); } catch (e) {} });
+    await page10.goto(`http://127.0.0.1:${PORT}/mobile.html?s=login-fix`, { waitUntil: "load" });
+    await waitFor(page10, () => window.mfVoice && window.mfVoice.cfg.loaded && document.getElementById("picker-title").textContent === "Login fix", 6000, "hush page loaded");
+    await sleep(400);
+    check("say-all: Everything on load while the server's say_all is false → ONE POST {on:true}", JSON.stringify(sa()) === "[true]", JSON.stringify(sa()));
+    const turn10 = (t, say) => page10.evaluate((a) => window.mfVoice.onEvent({ seq: 0, event: "session.turn_ended", session: a[0], ts: Date.now() / 1000, data: { title: a[0], say: a[1] } }), [t, say]);
+    const q10 = () => page10.evaluate(() => window.mfVoice.speech.q.map((x) => x.text));
+    const listening10 = () => page10.evaluate(() => window.mfVoice.state === "listening" && !!window.__rec && window.__rec.started);
+    const compose10 = () => page10.evaluate(() => document.getElementById("compose").value);
+
+    // "stop talking" by voice, while listening: the queue goes, the mic stays.
+    await page10.click("#voice-btn");
+    await waitFor(page10, () => window.mfVoice.state === "listening" && window.__rec && window.__rec.started, 3000, "listening (hush)");
+    await turn10("invoice-parser", "Parsed the twelve files.");
+    await turn10("api-docs", "Docs are built.");
+    await sleep(200);
+    check("hush: lines queue while the mic listens", (await q10()).length === 2, JSON.stringify(await q10()));
+    const r10 = posts("/voice/route").length;
+    await page10.evaluate(() => window.__hear("stop talking"));
+    await sleep(150);
+    check("hush: 'stop talking' → every queued line goes", (await q10()).length === 0, JSON.stringify(await q10()));
+    check("hush: …the mic keeps listening", await listening10());
+    check("hush: …'Quiet.' on the strip, nothing typed, the router not asked", (await page10.evaluate(() => document.getElementById("voice-caption").textContent)) === "Quiet." && (await compose10()) === "" && posts("/voice/route").length === r10, await page10.evaluate(() => document.getElementById("voice-caption").textContent));
+    await sleep(500);
+    check("hush: …and those lines are never said", !(await said(page10, "Parsed the twelve files.")) && !(await said(page10, "Docs are built.")));
+    await turn10("invoice-parser", "Coverage is up.");
+    await sleep(100);
+    await page10.evaluate(() => window.__hear("could you pipe down"));
+    await waitFor(page10, () => window.mfVoice.speech.q.length === 0, 3000, "router hush");
+    await sleep(100);
+    check("hush: the router's kind hush → the queue goes, still listening, nothing typed", (await q10()).length === 0 && (await listening10()) && (await compose10()) === "" && posts("/voice/route").length === r10 + 1);
+    await turn10("api-docs", "Index rebuilt.");
+    await sleep(100);
+    await page10.evaluate(() => window.__hear("okay stop"));
+    await sleep(200);
+    check("hush: 'okay stop' is stop talking, not stop listening", (await q10()).length === 0 && (await listening10()));
+    await page10.evaluate(() => window.__hear("shut up"));
+    await sleep(100);
+    check("hush: 'shut up' → never typed", (await compose10()) === "" && (await listening10()));
+    await page10.click("#voice-cancel");
+    await waitFor(page10, () => window.mfVoice.state === "idle", 3000, "idle (hush)");
+
+    // The strip's Stop talking, and a tap on the line being said.
+    await page10.evaluate(() => { window.__speakMs = 2500; });
+    await turn10("invoice-parser", "First long line.");
+    await turn10("api-docs", "Second long line.");
+    await waitFor(page10, () => !document.getElementById("voice-hush").classList.contains("hidden"), 3000, "Stop talking shown");
+    check("hush: 'Stop talking' shows in the strip while a line is said", await page10.evaluate(() => !document.getElementById("voice-hush").classList.contains("hidden") && !!window.mfVoice.speech.playing));
+    let c10 = await page10.evaluate(() => window.__cancels);
+    await page10.click("#voice-hush");
+    await sleep(150);
+    check("hush: the strip's Stop talking → the speaker cut, the queue gone, the button hidden", (await page10.evaluate(() => window.__cancels)) > c10 && (await q10()).length === 0 && !(await page10.evaluate(() => window.mfVoice.speech.playing)) && (await page10.evaluate(() => document.getElementById("voice-hush").classList.contains("hidden"))));
+    await sleep(400);
+    check("hush: …the line after it is never said", !(await said(page10, "Second long line.")));
+    await turn10("invoice-parser", "Third long line.");
+    await turn10("api-docs", "Fourth long line.");
+    await waitFor(page10, () => window.__spoken.some((t) => /Third long line/.test(t)), 3000, "third line being said");
+    await page10.click("#voice-caption");
+    await sleep(150);
+    check("hush: a tap on the line being said (the strip) stops talking too", (await q10()).length === 0 && !(await page10.evaluate(() => window.mfVoice.speech.playing)));
+
+    // Barge-in: the mic while a line is said.
+    await page10.evaluate(() => { window.__cancelAt = 0; window.__recStartAt = 0; });
+    await turn10("invoice-parser", "Barge line one.");
+    await turn10("invoice-parser", "Barge line two.");
+    await turn10("api-docs", "Kept for later.");
+    await waitFor(page10, () => window.mfVoice.speech.playing && /Barge line one/.test(window.mfVoice.speech.playing.text) && window.__spoken.some((t) => /Barge line one/.test(t)), 3000, "barge line being said");
+    await page10.click("#voice-btn");
+    await waitFor(page10, () => window.mfVoice.state === "listening" && window.__rec && window.__rec.started, 3000, "barge listening");
+    const b10 = await page10.evaluate(() => ({ cancelAt: window.__cancelAt, recAt: window.__recStartAt, q: window.mfVoice.speech.q.map((x) => x.text), playing: !!window.mfVoice.speech.playing }));
+    check("barge-in: the mic while a line is said → the speaker is cut BEFORE the mic opens", b10.cancelAt > 0 && b10.recAt > 0 && b10.cancelAt <= b10.recAt, JSON.stringify(b10));
+    check("barge-in: …the mic opens ~150 ms after the cut (the phone's own voice unheard)", b10.recAt - b10.cancelAt >= 120 && b10.recAt - b10.cancelAt < 1000, String(b10.recAt - b10.cancelAt));
+    check("barge-in: …that session's next line dropped, another session's kept for after", b10.q.length === 1 && /Kept for later/.test(b10.q[0]) && !b10.playing, JSON.stringify(b10.q));
+    check("barge-in: …and the cut line is not said again", (await spoken(page10)).filter((t) => /Barge line/.test(t)).length === 1, JSON.stringify((await spoken(page10)).slice(-6)));
+    await page10.click("#voice-cancel");
+    await waitFor(page10, () => window.mfVoice.state === "idle", 3000, "idle (barge)");
+
+    // A hand on the sheet: the read-out of that ask stops, other lines stay,
+    // voice stops waiting on it, and the step it moves to is not read.
+    let flowH = [];
+    state.onAnswer = (title, body) => {
+      flowH.push(body);
+      const d = state.dialogsBy[title];
+      if (d && d.id === "h1") { state.dialogsBy[title] = Q2("h2"); ask8(title, "h2"); }
+    };
+    state.dialogsBy["login-fix"] = Q1("h1");
+    state.rows.find((x) => x.title === "login-fix").activity = "clarify";
+    ask8("login-fix", "h1");
+    await page10.evaluate(() => { window.__speakMs = 4000; });
+    await waitFor(page10, () => window.mfVoice.speech.playing && /Which database/.test(window.mfVoice.speech.playing.text) && window.__spoken.some((t) => /Which database/.test(t)), 9000, "the select read aloud");
+    await turn10("api-docs", "Other session line.");
+    await waitFor(page10, () => !document.getElementById("asking-sheet").classList.contains("hidden") && document.querySelectorAll(".asking-opt").length === 3, 4000, "the sheet shows it");
+    c10 = await page10.evaluate(() => window.__cancels);
+    await page10.click('.asking-opt[data-key="1"]');
+    await sleep(100);
+    const h10 = await page10.evaluate(() => ({ playing: window.mfVoice.speech.playing ? window.mfVoice.speech.playing.text : "", q: window.mfVoice.speech.q.map((x) => x.text), st: window.mfVoice.state }));
+    check("tap: a tap on an option cuts the read-out of that ask", (await page10.evaluate(() => window.__cancels)) > c10 && !/Which database/.test(h10.playing), JSON.stringify(h10));
+    check("tap: …another session's line stays (said next)", /Other session line/.test(h10.playing) || h10.q.some((t) => /Other session line/.test(t)), JSON.stringify(h10));
+    check("tap: …voice stops waiting on its answer (not the dialog listen)", h10.st !== "dialog" && h10.st !== "speaking" && h10.st !== "listening", h10.st);
+    check("tap: …and the tap is posted", JSON.stringify(flowH[0]) === JSON.stringify({ keys: ["1"], dialog_id: "h1", by: "user" }), JSON.stringify(flowH));
+    await waitFor(page10, () => document.getElementById("asking-question").textContent === "Which features?", 5000, "the next step by hand");
+    await page10.evaluate(() => { window.__speakMs = 15; });
+    await sleep(4800);   // a poll comes and goes
+    check("tap: the step a hand moved to is not read aloud (not even by the next poll)", !(await said(page10, "Which features?")) && (await vstate(page10)) !== "dialog", (await saidAll(page10)).slice(-200));
+    check("tap: …the other session's line was said", await said(page10, "Other session line."));
+    await page10.click('.asking-opt[data-key="2"]');
+    await sleep(150);
+    check("tap: a box toggled by hand reads nothing", !(await said(page10, "Ticked")));
+    await page10.click("#asking-later");
+    state.onAnswer = null;
+    state.dialogsBy = {};
+    state.rows.forEach((r) => { r.asking = null; r.activity = "idle"; });
+
+    // Say-all follows the Spoken replies choice.
+    const sel10 = (v) => page10.evaluate((x) => { const el = document.getElementById("voice-replies"); el.value = x; el.dispatchEvent(new Event("change")); }, v);
+    await sel10("mine"); await sleep(200);
+    await sel10("off"); await sleep(200);
+    await sel10("all"); await sleep(200);
+    check("say-all: away from Everything → {on:false}; mine → off posts nothing; back → {on:true}", JSON.stringify(sa()) === "[true,false,true]", JSON.stringify(sa()));
+    state.sayAllStatus = 403;
+    await sel10("mine"); await sleep(200);
+    const st10 = await page10.evaluate(() => document.getElementById("status").textContent);
+    await sel10("all"); await sleep(200);
+    check("say-all: a 403 → said once, the pref kept", /can't change/.test(st10) && (await page10.evaluate(() => window.mfVoice.sayAll.denied && window.mfVoice.prefs.replies === "all")), st10);
+    await page10.close();
+    state.sayAllStatus = 0;
+    state.sayAll = true;
+    const sa1 = posts("/voice/say-all").length;
+    const page11 = await ctx.newPage();
+    page11.on("pageerror", (e) => errors.push(String(e)));
+    await page11.route("**/api/**", mock);
+    await page11.addInitScript(() => { try { localStorage.setItem("cs_voice", JSON.stringify({ replies: "mine" })); } catch (e) {} });
+    await page11.goto(`http://127.0.0.1:${PORT}/mobile.html?s=login-fix`, { waitUntil: "load" });
+    await waitFor(page11, () => window.mfVoice && window.mfVoice.cfg.loaded, 6000, "say-all page loaded");
+    await sleep(400);
+    check("say-all: not Everything on load while the server's say_all is on → NOTHING posted (another device may be on Everything; off is only an explicit switch)", posts("/voice/say-all").length === sa1, JSON.stringify(posts("/voice/say-all").slice(sa1)));
+    await page11.close();
+    state.sayAll = null;
     state.ntfy = { ask_popup: false, active: false };
     state.voiceCfg = null;
   } catch (e) {

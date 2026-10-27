@@ -119,6 +119,36 @@ def disarm_next(session_name: str) -> None:
         pass
 
 
+def say_all_path() -> Path:
+    """``<flag dir>/say-all`` — the standing request (every prompt, every
+    session) the hook honours like a young ``.next``."""
+    return flag_dir() / _am.VOICE_SAY_ALL_FILE
+
+
+def say_all() -> bool:
+    """Whether every prompt is being asked for its ``Say:`` line."""
+    try:
+        return say_all_path().is_file()
+    except Exception:  # noqa: BLE001 — unreadable reads as off
+        return False
+
+
+def set_say_all(on: bool) -> bool:
+    """Ask every prompt in every session for the ``Say:`` line (a listener
+    has "read everything" on), or stop. Idempotent; an ``OSError``
+    propagates so the route can say why; the state reported is read back."""
+    path = say_all_path()
+    if on:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("%d\n" % int(time.time()), encoding="utf-8")
+    else:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+    return say_all()
+
+
 def forget(session_name: str) -> None:
     """Drop ``session_name``'s flags (session removal): a closed session
     leaves no flag behind, and a namesake does not inherit voice mode. Never

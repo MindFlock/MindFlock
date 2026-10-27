@@ -34,8 +34,8 @@ class _Fake(speech.Backend):
     def ready(self):
         return self.ok, self.detail
 
-    def transcribe(self, audio, mime, lang=""):
-        self.calls.append(("transcribe", audio, mime, lang))
+    def transcribe(self, audio, mime, lang="", prompt=""):
+        self.calls.append(("transcribe", audio, mime, lang, prompt))
         if self.fail:
             raise self.fail
         return self.text
@@ -157,6 +157,8 @@ class TestGet:
         r = client.post("/api/voice/install-local")
         assert r.status_code == 403
         assert client.get("/api/voice/install-local").status_code == 200
+        r = client.post("/api/voice/say-all", json={"on": True})
+        assert r.status_code == 403
 
     def test_configure_allowed_for_the_owner(self, fakes):
         assert client.get("/api/voice").json()["configure_allowed"] is True
@@ -176,7 +178,7 @@ class TestTranscribe:
         assert isinstance(body["ms"], int) and body["ms"] >= 0
         # The raw body reaches the backend with the bare media type and the hint.
         assert fakes.stt.calls == [
-            ("transcribe", b"\x1aE\xdf\xa3clip", "audio/webm", "en")
+            ("transcribe", b"\x1aE\xdf\xa3clip", "audio/webm", "en", "")
         ]
 
     def test_every_audio_type_passes_the_415_gate(self, fakes):
@@ -646,3 +648,72 @@ class TestInstallLocal:
         r = client.post("/api/voice/install-local")
         assert r.status_code == 403
         assert install.box["starts"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# POST /api/voice/say-all
+# --------------------------------------------------------------------------- #
+class TestSayAll:
+    def test_sets_and_clears_the_marker_and_the_get_reports_it(
+        self, fakes, monkeypatch, tmp_path
+    ):
+        from backend.web import server
+        from backend.web.core import voice
+
+        monkeypatch.setenv("MINDFLOCK_VOICE_FLAG_DIR", str(tmp_path / "flags"))
+        pins = []
+        monkeypatch.setattr(server, "repin_voice_hooks", lambda: pins.append(1) or 1)
+        assert client.get("/api/voice").json()["say_all"] is False
+        r = client.post("/api/voice/say-all", json={"on": True})
+        assert r.status_code == 200 and r.json() == {"say_all": True}
+        assert voice.say_all() is True and pins == [1]
+        assert client.get("/api/voice").json()["say_all"] is True
+        r = client.post("/api/voice/say-all", json={"on": False})
+        assert r.status_code == 200 and r.json() == {"say_all": False}
+        assert voice.say_all() is False and pins == [1]  # off needs no re-pin
+        assert client.post("/api/voice/say-all", json={"on": "yes"}).status_code == 400
+        assert client.post("/api/voice/say-all", json={}).status_code == 400
+
+
+# --------------------------------------------------------------------------- #
+# ?hint= and POST /api/voice/wake
+# --------------------------------------------------------------------------- #
+class TestWake:
+    def test_the_hint_reaches_the_backend_capped_and_printable(self, fakes):
+        assert _transcribe(query="?hint=MindFlock").status_code == 200
+        assert fakes.stt.calls[-1][4] == "MindFlock"
+        assert _transcribe(query="?hint=" + "x" * 200).status_code == 200
+        assert len(fakes.stt.calls[-1][4]) == 80
+        assert _transcribe(query="?hint=%01bad").status_code == 200
+        assert fakes.stt.calls[-1][4] == ""
+        assert _transcribe().status_code == 200
+        assert fakes.stt.calls[-1][4] == ""
+
+    def _wake(self, fakes, heard):
+        fakes.stt.text = heard
+        return client.post(
+            "/api/voice/wake?lang=en",
+            content=b"RIFFclip",
+            headers={"Content-Type": "audio/wav"},
+        )
+
+    def test_the_word_alone_wakes_a_sentence_does_not(self, fakes):
+        r = self._wake(fakes, "Mind flock.")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["wake"] is True and body["word"] == "mindflock"
+        assert body["text"] == "Mind flock." and body["backend"] == "fake"
+        # Recognised with the word as the decoder's hint, in the language asked.
+        assert fakes.stt.calls[-1][3:] == ("en", "MindFlock")
+        assert self._wake(fakes, "MindFlock is great").json()["wake"] is False
+        assert self._wake(fakes, "").json()["wake"] is False
+
+    def test_the_clip_rules_are_transcribes(self, fakes):
+        r = client.post(
+            "/api/voice/wake", content=b"x", headers={"Content-Type": "text/plain"}
+        )
+        assert r.status_code == 415
+        r = client.post(
+            "/api/voice/wake", content=b"", headers={"Content-Type": "audio/wav"}
+        )
+        assert r.status_code == 400

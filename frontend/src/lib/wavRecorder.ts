@@ -144,6 +144,9 @@ export interface WavRecorderOptions {
   targetRate?: number;
   /** Called ~every 100 ms with the RMS (0..1) of the latest block — for a level meter and silence detection. */
   onLevel?: (rms: number) => void;
+  /** Drop this much audio at the start (seconds), unrecorded and unmetered:
+   * the app's own voice, cut just before the mic opened (barge-in). */
+  skipS?: number;
 }
 
 /** Record a MediaStream through `ctx` (the caller's AudioContext, already running) with a
@@ -169,9 +172,14 @@ export function startWavRecording(
   let fresh = 0; // frames in `blocks`: since start or the last take()
   let done = false;
   let result: Promise<Blob> | null = null;
+  let skip = Math.max(0, Math.round((opts.skipS || 0) * ctx.sampleRate));
 
   processor.onaudioprocess = (e: AudioProcessingEvent) => {
     if (done) return;
+    if (skip > 0) {
+      skip -= e.inputBuffer.getChannelData(0).length;
+      return;
+    }
     // The engine reuses the input buffer between callbacks — copy it.
     const block = e.inputBuffer.getChannelData(0).slice();
     blocks.push(block);

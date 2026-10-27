@@ -221,7 +221,7 @@ a session first*).
   always.* / *Still there? …*), then it goes quiet (*Login fix is waiting on
   you*). With approving by voice off the dialog is read and *Answer it on the
   screen.* follows; the mic doesn't open.
-- **Options**: right-click or Shift+click the mic for *Read replies aloud* (Off / Replies to what I said by voice / Everything, every session — another window's line starts with its name, the focused one's does not; everything spoken goes through one queue, one line at a time),
+- **Options**: right-click or Shift+click the mic for *Read replies aloud* (Off / Replies to what I said by voice / Everything, every session — another window's line starts with its name, the focused one's does not; everything spoken goes through one queue, one line at a time; *Everything* also turns on the server's `say-all` marker, `POST /api/voice/say-all`, so every prompt in every session — typed into a terminal included — ends with a `Say:` line instead of a digest),
   *Click to talk* / *Hold to talk*, a diagnostics line naming the engines in
   use (*Recognition: server, built in (Windows via WSL) — one clip per phrase:
   16 kHz, browser resampler, a phrase ends after 1.1 s of quiet · Voice: server
@@ -2273,8 +2273,13 @@ notification, and their **Reply** opens the card on it. Then:
   (`nav.next`). **‹ Back** is Left. **Type something** opens a text field:
   Enter posts its digit, then `{text, keys: ["Enter"]}`; **Chat about this**
   opens one whose words go to the session as a prompt (its digit, then
-  `/send {text, dialog_safe: true}`). The **review** step lists the answers
-  with **Submit answers** (its digit) and Cancel. Every post carries the
+  `/send {text, dialog_safe: true}`). The **review** step reads as a
+  confirmation: the answers listed, then **one** primary **Submit answers**
+  beside a plain **Cancel** in the dialog-button row — no digit badges there
+  (1 / 2 still press them; Enter is Submit answers, Esc is Later). The step
+  buttons sit in that same row: **‹ Back** on the left, the step's one
+  primary on the right — **Next ›** on a multi-select, labelled from the
+  prompt's own `button` (**Submit**, no arrow, on the last question). Every post carries the
   option's own `keys` (with Claude's cursor on the text row they read
   `["Up", "1"]`, never a bare digit) and is pinned to the dialog id you saw
   (`dialog_id` — it holds across ticks and while the text row is typed into);
@@ -2322,7 +2327,17 @@ said, **over** stops and leaves the text. The card reads its step again every
 replies aloud* on (either choice), the card reads the ask out as it opens —
 *"sitecheck-bot7: Allow git push? Say yes, no, or always."*, each step of a
 question prompt once — and, once nothing else is waiting to be said, listens
-for 12 seconds, with one retry; nothing is ever spoken with it off. The card is
+for 12 seconds, with one retry; nothing is ever spoken with it off.
+**Speech stops when you act**: any hand on the card — a click on an option, a
+tick, Back / Next / Submit, typing in its field, a digit or Enter — cancels
+the read-out of **that** ask, the line being said and everything queued for
+it (other sessions' lines play on), and ends its 12-second listen. When the
+card steps to the next question the previous step's read-out is cancelled
+first, and the new step is read only if nothing on the card was touched by
+hand in the last 3 s — clicking through by hand is never narrated at; a
+voice-driven flow is. You can also answer **before it finishes speaking**:
+the card's mic, the Talk hotkey or the top-bar mic cut the speech and listen
+at once (see [Voice input](#voice-input)). The card is
 the one hands-free entry for a dialog: the top-bar mic no longer reads dialogs
 out by itself while the pop-up is on, so nothing is read twice.
 
@@ -4939,6 +4954,8 @@ is running it**.
 
 ## Settings (⚙)
 
+**It reopens where you were.** Settings comes back on the screen you last had open — people usually return to the setting they were on — for as long as the page lives (`lib/settingsLastScreen.ts`); a deep link to a screen still wins, a screen that no longer exists (the other mode, a retired key) falls back to General, and a reload or restart forgets it on purpose.
+
 **Set-and-forget configuration and diagnostics**, from the top bar's
 **Settings**. With no screen named (the top bar, the palette's **Open
 Settings**) it opens on **Connections** — the status of everything MindFlock
@@ -5940,7 +5957,23 @@ other, never the browser's voice and the server's at once; a burst from
 several sessions plays in arrival order; nothing new starts while the mic
 listens (it waits, then goes on); a line more than 60 s old when its turn
 comes is dropped (logged to the console, not said); "repeat" says the last
-line again. With either choice a dialog or a question in a reply to what you
+line again. **Barge in** any time: pressing the mic (or the Talk hotkey, or
+the ask card's mic) while a line is being read cuts it **before** the mic
+opens — that line is over, never resumed, and when you are answering the ask
+being read the rest of its read-out is dropped too — and the server's
+recogniser skips the first 150 ms of audio (the app's own voice dying away;
+`BARGE_SKIP_MS`), so it never hears itself. **"Stop talking"** — or "be
+quiet", "quiet", "shut up", "stop reading", "enough", "okay stop", said as a
+whole phrase (the router's kind `hush`, matched locally too) — silences
+everything queued, every session, never typed; the mic keeps listening if it
+was, and the caption says *Quiet.* for a second. **Esc** while something is
+being read (and no dialog or popover is taking Esc) does the same, and the
+mic's options show a **Stop talking** button while it speaks. Switching
+*Read replies aloud* to **Everything** also turns on the server's say-all
+marker (`POST /api/voice/say-all {on: true}`, off again when switched away;
+`GET /api/voice` `say_all`), so a prompt typed straight into a terminal asks
+for a `Say:` line too; on load the pref wins once if the two disagree, and a
+device that may not change it (403) says so once and keeps the pref. With either choice a dialog or a question in a reply to what you
 said is read out and, once the queue is quiet, the mic listens 12 s for the
 answer. With the
 [ask pop-up](#when-a-session-asks-you-something) on (the default), the pop-up
@@ -6166,12 +6199,15 @@ right there:
     posts the option's digit (`POST /answer {keys, dialog_id, by: "user"}`)
     and the next step is read into the sheet (the same id still on screen a
     moment later is waited out; a lone question is submitted at once);
-  - *multi-select*: checkboxes ticked on the phone, then **Next ›** posts the
-    digits whose state differs from the server's `checked` followed by
-    `nav.next`, in one `/answer`;
-  - **‹ Back** (`nav.prev`) from the second step on;
-  - the *review* step: your answers listed, **Submit answers** / **Cancel**
-    (their digits);
+  - *multi-select*: checkboxes ticked on the phone, then the step's primary
+    button — labelled from the dialog's `button`, **Next ›** or **Submit ›**
+    — posts the digits whose state differs from the server's `checked`
+    followed by `nav.next`, in one `/answer`;
+  - **‹ Back** (`nav.prev`) from the second step on, on the left of the
+    step's row;
+  - the *review* step: your answers listed, then one row — **‹** (Back), a
+    plain **Cancel** and one primary **Submit answers** (their digits; no
+    numbered rows, no digit badges);
   - *Type something*: a tap opens the field; **Send** posts its keys, then
     `{text, keys: ["Enter"]}`, both pinned to the same `dialog_id` (it holds
     while the row is typed into). Options are always posted with their own
@@ -6193,6 +6229,16 @@ right there:
   *chat about this* open the field and dictate into it — *submit* sends it.
   After each spoken step the next one is read and listened for; the end is
   *Answered.*
+
+  **Speech stops when you act.** Any tap on the sheet — an option, a box,
+  **Back** / **Next** / **Submit answers**, **Send**, **Later**, the ‹ ›
+  stepper — or a keystroke in its field cuts what is being read about the
+  ask shown and drops its queued lines (another session's lines keep their
+  place), and voice stops listening for its answer (words in the field
+  stay). For 3 s after a tap nothing new is read from the sheet: the step
+  it moves to is on the screen under your hand, and the poll never reads
+  that step later either. While the sheet reads, its 🎙 cuts the reading
+  and listens at once (barge-in, below).
 - **A dialog it could not parse** — **Open the session**, and a line saying the
   prompt needs the terminal.
 - **A question in prose** (opened by its row or notification) — a field and
@@ -6462,7 +6508,15 @@ reply. A turn that ends with no line at all says *<name> finished.*
   sends asks for a `Say:` line — typed ones too: with voice off a typed
   prompt goes through `POST /send {text, dialog_safe: true, say: true}`
   (a dialog on screen, or a failed send, types it into the terminal as
-  before), and so do the ask sheet's answers.
+  before), and so do the ask sheet's answers. Prompts typed anywhere else —
+  straight into a terminal, on the desktop — ask for it through the
+  server's **say-all** marker: switching *to* Everything posts
+  `POST /api/voice/say-all {on: true}`, switching away from it
+  `{on: false}` (Off ↔ Replies posts nothing); on load, a
+  `GET /api/voice` `say_all` that disagrees with this phone's choice is set
+  to it with one POST (an older server without `say_all` is left alone). A
+  403 (a device that is not the owner) is said once on the status line and
+  the choice stays.
 
 **One voice at a time.** Everything the phone says — replies, the
 first-sentence confirmation, dialog read-outs, *what is it asking*, the
@@ -6471,10 +6525,20 @@ queue**: strictly one line at a time, in the order they arrived, so two
 sessions never talk over each other. The queue holds while the mic is
 listening and goes on when it stops; a listen that follows a read-out (an
 answer to a question, a dialog, hands-free) starts only once the queue has
-drained. A tap on the mic cuts the line being said (a line from another
-session waits for its turn again; the conversation's own queued lines are
-dropped, as it moved on); Cancel, voice off and hiding the page drop them
-all. A line still waiting a minute after it arrived is dropped rather than
+drained. **Barge-in:** you can answer before it has finished speaking — a
+tap on the mic (or a hold, or the ask sheet's 🎙) while a line is being said
+cuts the speaker first, drops that session's remaining lines (another
+session's wait for their turn), and opens the mic ~150 ms later so the
+phone's own voice is not transcribed; the cut line is not said again.
+**Stop talking:** say *stop talking* (*be quiet*, *quiet*, *hush*, *shut
+up*, *stop reading*, *enough*, *okay stop*…; the router's `{kind: "hush"}`,
+the page's own table when it cannot answer) — or tap **Stop talking** in the
+voice strip, or the line on the strip, while it speaks (the strip shows for
+it even with voice off on *Everything*): what is being said stops, every
+queued line goes, nothing is said instead, the strip says *Quiet.* for a
+moment, and a mic that was listening goes on listening — never typed into the
+box, never a dialog's "no". Plain *stop* still means stop listening. Cancel,
+voice off and hiding the page drop every line too. A line still waiting a minute after it arrived is dropped rather than
 said late (logged to the console). *Repeat* / *say that again* re-speaks the
 last line said. A line
 that arrives mid-dictation waits until the page is idle and is dropped once a
@@ -6525,6 +6589,7 @@ or "please" in front:
 | *summarize that* · *summarize it* · *summarise* · *what did it say* · *summary* | one model call on the server (`POST /voice/condense`, 10–45 s): the newest reply in two sentences — *That took too long.* on a timeout, the route's own sentence on any other refusal |
 | *say that again* · *repeat (that)* | the last line again |
 | *voice off* · *turn voice off* · *turn off voice* | voice mode off (`POST /voice {on: false}`) |
+| *stop talking* · *stop speaking* · *stop reading* · *be quiet* · *quiet* · *hush* · *shut up* · *(that's) enough* · *okay stop* | stops talking: the queue goes, listening goes on (below) — matched in **any** mode, before everything else |
 | *stop listening* · *stop* | back to idle |
 | *session three yes* · *session 2, option one* · *tell <name> no* · *answer <name> always* | answers **that** session (below) — voice stays where it is |
 

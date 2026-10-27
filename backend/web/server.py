@@ -731,6 +731,13 @@ async def lifespan(app: FastAPI):
         _speech_warm.warm_in_background("stt", delay_s=3.0)
     except Exception:  # noqa: BLE001 — warming is best effort
         pass
+    # "Read everything" survived the restart: the live sessions' hooks must
+    # know the marker (a session launched by an older build does not).
+    try:
+        if _voice.say_all():
+            await asyncio.to_thread(repin_voice_hooks)
+    except Exception:  # noqa: BLE001 — enrichment
+        pass
     # Adopt loop: pull in instances written by other processes (TUI/pipeline).
     _register_task(_reload_loop())
     # Instances tick: the side effects that used to piggyback on the browser's
@@ -5901,6 +5908,28 @@ async def instance_owner(title: str, request: Request, payload: dict = None):
     return JSONResponse(_ownership.row_fields(title))
 
 
+def repin_voice_hooks() -> int:
+    """Re-pin the activity hooks of every live session whose CLI has a prompt
+    hook (Claude), so a session launched by an older build picks up the hook
+    that reads the standing ``say-all`` marker (Claude Code hot-reloads the
+    file). Idempotent and best-effort; returns how many were re-pinned. Run
+    when the marker is turned on, and at boot while it is on."""
+    done = 0
+    for title, inst in list(ENGINE.instances.items()):
+        try:
+            prov = providers.resolve(getattr(inst, "Program", "") or "")
+            if not prov.voice_prompt_hook():
+                continue
+            wt = inst.GetWorktreePath() or ""
+            if not wt:
+                continue
+            prov.install_activity_hooks(wt, tmux.to_mindflock_tmux_name(title))
+            done += 1
+        except Exception:  # noqa: BLE001 — one session's hooks never block the rest
+            continue
+    return done
+
+
 def _voice_suffix(text: str) -> str:
     """``text`` with the voice instruction typed after it — how a CLI without
     a prompt hook (Codex, the config-driven ones) is asked for a ``Say:``
@@ -6004,7 +6033,9 @@ async def instance_send(
     if not enter and not text.strip():
         return JSONResponse({"error": "empty message"}, status_code=400)
     dialog_safe = bool((payload or {}).get("dialog_safe", False))
-    say = submit and (payload or {}).get("say") is True
+    # "Read everything" on: every prompt asks for its Say line, not only the
+    # ones a client marks (core.voice.say_all).
+    say = submit and ((payload or {}).get("say") is True or _voice.say_all())
     busy = _driven_elsewhere(request, title, payload)
     if busy is not None:
         return busy
@@ -6253,7 +6284,7 @@ async def post_queue_send_now(
     if err is not None:
         return JSONResponse({"error": err}, status_code=409)
     _note_human_input(title)  # the user clicked Send now
-    say = it.get("say") is True
+    say = it.get("say") is True or _voice.say_all()
     typed = it["text"]
     if say:
         typed = await asyncio.to_thread(_voice_say, inst, title, typed)

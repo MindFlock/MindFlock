@@ -37807,8 +37807,13 @@ function startWavRecording(stream, ctx, opts = {}) {
 	let fresh = 0;
 	let done = false;
 	let result = null;
+	let skip = Math.max(0, Math.round((opts.skipS || 0) * ctx.sampleRate));
 	processor.onaudioprocess = (e) => {
 		if (done) return;
+		if (skip > 0) {
+			skip -= e.inputBuffer.getChannelData(0).length;
+			return;
+		}
 		const block = e.inputBuffer.getChannelData(0).slice();
 		blocks.push(block);
 		frames += block.length;
@@ -38186,6 +38191,13 @@ var COMMANDS = [
 	"stop",
 	"mic|microphone off",
 	"turn mic|microphone off",
+	"stop talking|speaking|reading",
+	"be quiet",
+	"quiet",
+	"shut up",
+	"hush",
+	"enough",
+	"that's|thats enough",
 	"that's|thats all",
 	"that is all",
 	"focus|open|show|select *",
@@ -38244,16 +38256,34 @@ var STOP_PHRASES = [
 	"thats all",
 	"that is all"
 ].map((p) => p.split(" "));
-var CONTROL_PHRASES = [...STOP_PHRASES, ...[
-	"over",
-	"submit",
-	"disregard"
-].flatMap((w) => [[w], ...[
-	"that",
-	"it",
-	"all",
-	"everything"
-].map((tail) => [w, tail])])];
+var HUSH_PHRASES = [
+	"stop talking",
+	"stop speaking",
+	"stop reading",
+	"be quiet",
+	"quiet",
+	"shut up",
+	"hush",
+	"enough",
+	"that's enough",
+	"thats enough",
+	"ok stop",
+	"okay stop"
+].map((p) => p.split(" "));
+var CONTROL_PHRASES = [
+	...STOP_PHRASES,
+	...HUSH_PHRASES,
+	...[
+		"over",
+		"submit",
+		"disregard"
+	].flatMap((w) => [[w], ...[
+		"that",
+		"it",
+		"all",
+		"everything"
+	].map((tail) => [w, tail])])
+];
 var CONTROL_MAX_WORDS = Math.max(...CONTROL_PHRASES.map((p) => p.length));
 var wordIndexes = (ws) => ws.flatMap((w, i) => bareWord(w) ? [i] : []);
 function holdBack(text) {
@@ -38289,6 +38319,10 @@ var ANSWER_RE = new RegExp("^(?:(?:um|uh|er|so) )?(?:" + [
 	"always|yes always|yeah always|always allow(?: it| that| this| all)?|(?:don'?t|do not) ask(?: me)? again",
 	"(?:option |choice |number |the )?(?:" + NUMS + ")(?: one)?"
 ].join("|") + ")(?: please)?$");
+var HUSH_RE = new RegExp("^(?:(?:ok|okay|hey|please) )?(?:" + HUSH_PHRASES.map((p) => p.join(" ")).join("|") + ")(?: please| now)?$");
+function isHushPhrase(text) {
+	return HUSH_RE.test(routerWords(text).join(" "));
+}
 function isAnswerPhrase(text) {
 	return ANSWER_RE.test(routerWords(text).join(" "));
 }
@@ -38340,14 +38374,41 @@ function loadVoicePrefs(kv = storage()) {
 	return normPrefs(raw);
 }
 var VOICE_PREFS_EVENT = "mindflock:voice-prefs";
-function saveVoicePrefs(p, kv = storage()) {
+function saveVoicePrefs(p, kv = storage(), sync = syncSayAll) {
 	const next = normPrefs(p);
+	const flip = sayAllFlip(loadVoicePrefs(kv).replies, next.replies);
 	try {
 		kv?.setItem(VOICE_PREFS_KEY, JSON.stringify(next));
 	} catch {}
+	if (flip !== null) sync(flip);
 	try {
 		if (typeof window !== "undefined" && typeof CustomEvent !== "undefined") window.dispatchEvent(new CustomEvent(VOICE_PREFS_EVENT, { detail: next }));
 	} catch {}
+}
+var SAY_ALL_FORBIDDEN_LINE = "Read replies aloud: only the server's owner can ask every prompt for a spoken line — replies sent from here still get one";
+function sayAllFlip(prev, next) {
+	return prev === "all" === (next === "all") ? null : next === "all";
+}
+function sayAllMismatch(pref, server) {
+	if (typeof server !== "boolean") return null;
+	return pref === "all" && !server ? true : null;
+}
+async function postSayAll(on) {
+	try {
+		await api("/api/voice/say-all", { json: { on } });
+		return "ok";
+	} catch (err) {
+		return err instanceof ApiError && err.status === 403 ? "forbidden" : "error";
+	}
+}
+var sayAllWarned = false;
+async function syncSayAll(on, post = postSayAll, warn = (l) => toast(l)) {
+	const r = await post(on);
+	if (r === "forbidden" && !sayAllWarned) {
+		sayAllWarned = true;
+		warn(SAY_ALL_FORBIDDEN_LINE);
+	}
+	return r;
 }
 function onVoicePrefs(fn) {
 	if (typeof window === "undefined") return () => {};
@@ -38369,6 +38430,8 @@ var HOLD_FINAL_WAIT_MS = 1500;
 var DICT_HINT = "Say over to leave it, submit to send, disregard to start over";
 var OVER_LINE = "In the field — say submit or press Enter";
 var STOPPED_LINE = "Stopped listening";
+var HUSH_LINE = "Quiet.";
+var HUSH_CAPTION_MS = 1e3;
 var Dictation = class {
 	listening = false;
 	interim = "";
@@ -38377,12 +38440,14 @@ var Dictation = class {
 	partial = "";
 	routes = true;
 	answering = false;
+	phraseAt = -1;
 	begin() {
 		this.listening = true;
 		this.interim = "";
 		this.typed = "";
 		this.held = "";
 		this.partial = "";
+		this.phraseAt = -1;
 	}
 	get shown() {
 		return [
@@ -38399,8 +38464,9 @@ var Dictation = class {
 	}
 	words(w) {
 		if (!this.listening) return { kind: "stopped" };
+		if (this.phraseAt < 0) this.phraseAt = this.typed.length;
 		const all = joinWords(this.held, w);
-		const ctl = this.control(all);
+		const ctl = this.control(all, false);
 		if (ctl) return ctl;
 		if (this.routes && !this.typed && mayBeCommand(all)) {
 			this.held = all;
@@ -38416,18 +38482,20 @@ var Dictation = class {
 	}
 	flush(w) {
 		if (!this.listening) return { kind: "stopped" };
+		const whole = this.phraseAt < 0 || this.typed.length === this.phraseAt;
+		this.phraseAt = -1;
 		const all = joinWords(this.held, w);
 		this.held = "";
 		this.partial = "";
-		return this.heard(all);
+		return this.heard(all, whole);
 	}
 	wrote(text) {
 		this.typed += text;
 	}
-	heard(phrase) {
+	heard(phrase, whole = true) {
 		if (!this.listening) return { kind: "stopped" };
 		this.interim = "";
-		const ctl = this.control(phrase);
+		const ctl = this.control(phrase, whole);
 		if (ctl) return ctl;
 		const p = parseRadio(phrase);
 		const text = p.text ? p.text + " " : "";
@@ -38468,6 +38536,10 @@ var Dictation = class {
 			kind: "over",
 			text: ""
 		};
+		if (out.kind === "hush") return {
+			kind: "hush",
+			end: true
+		};
 		return out;
 	}
 	cancel() {
@@ -38482,6 +38554,14 @@ var Dictation = class {
 		if (!this.listening) return { kind: "stopped" };
 		this.listening = false;
 		this.interim = "";
+		if (isHushPhrase(this.held)) {
+			this.held = "";
+			this.partial = "";
+			return {
+				kind: "hush",
+				end: true
+			};
+		}
 		const rest = parseRadio(this.held).text;
 		this.held = "";
 		this.partial = "";
@@ -38490,7 +38570,13 @@ var Dictation = class {
 			text: rest ? rest + " " : ""
 		};
 	}
-	control(all) {
+	control(all, whole) {
+		if (whole && isHushPhrase(all)) {
+			this.interim = "";
+			this.held = "";
+			this.partial = "";
+			return { kind: "hush" };
+		}
 		const before = stopTail(all);
 		if (before !== null) {
 			this.listening = false;
@@ -38682,6 +38768,9 @@ var LiveDictation = class {
 				t?.erase(out.text);
 				this.hooks.caption("Disregarded — go on", true);
 				return;
+			case "hush":
+				this.hushed();
+				return;
 			case "dropped":
 				t?.erase(out.text);
 				this.end(out.text ? "Disregarded" : "", false, "stopped");
@@ -38717,11 +38806,26 @@ var LiveDictation = class {
 			}
 		}
 	}
+	hushed() {
+		this.acted = true;
+		this.hooks.hush?.();
+		if (!this.dict.listening) {
+			this.end(HUSH_LINE);
+			return;
+		}
+		this.hooks.caption(HUSH_LINE, true);
+		setTimeout(() => this.show(), HUSH_CAPTION_MS);
+	}
 	async put(text, route = true) {
 		const t = this.target;
 		if (!this.dict.typed && t?.kind !== "field") {
 			const words = text.trim();
-			if (route && await this.hooks.route(words)) {
+			const routed = route ? await this.hooks.route(words) : false;
+			if (routed === "hush") {
+				this.hushed();
+				return false;
+			}
+			if (routed) {
 				this.acted = true;
 				this.end(null);
 				return false;
@@ -38756,6 +38860,7 @@ var ROUTE_KINDS = /* @__PURE__ */ new Set([
 	"status",
 	"cancel",
 	"stop",
+	"hush",
 	"off",
 	"repeat",
 	"condense",
@@ -38999,44 +39104,57 @@ var HandsFree = class {
 	deps;
 	seen = "";
 	running = false;
+	finished = Promise.resolve();
+	endRun = () => {};
 	stopped = "";
 	constructor(deps) {
 		this.deps = deps;
 	}
+	settled() {
+		return this.running ? this.finished : Promise.resolve();
+	}
+	begin() {
+		this.running = true;
+		this.finished = new Promise((r) => this.endRun = r);
+	}
+	over() {
+		this.running = false;
+		this.endRun();
+	}
 	async dialog(title) {
 		const x = this.deps;
 		if (!this.ready(title) || title !== x.focused()) return;
-		this.running = true;
+		this.begin();
 		try {
 			const d = await x.fetchDialog(title).catch(() => null);
 			if (!d || !d.parsed || !d.options.length || d.id === this.seen) return;
 			if (!x.replies() || x.busy() || title !== x.focused()) return;
 			this.seen = d.id;
 			const name = x.name(title);
-			await x.speak(dialogSpeech(this.spoken(title), d));
+			await x.speak(dialogSpeech(this.spoken(title), d), title);
 			if (!await x.approveDialogs()) {
-				await x.speak("Answer it on the screen.");
+				await x.speak("Answer it on the screen.", title);
 				return;
 			}
 			await this.listen(title, dialogRetryLine(d), name + ": " + dialogChoices(d));
 		} finally {
-			this.running = false;
+			this.over();
 		}
 	}
 	async question(title, say) {
 		if (!this.ready(title)) return;
-		this.running = true;
+		this.begin();
 		try {
 			const name = this.deps.name(title);
 			await this.listen(title, "Still there? " + spokenLine(this.spoken(title), say), "Answer " + name + " — say submit to send");
 		} finally {
-			this.running = false;
+			this.over();
 		}
 	}
 	async ask(title, a) {
 		const x = this.deps;
 		if (!this.ready(title)) return;
-		this.running = true;
+		this.begin();
 		this.stopped = "";
 		try {
 			const name = x.name(title);
@@ -39044,10 +39162,10 @@ var HandsFree = class {
 			if (d) {
 				if (!d.parsed || !d.options.length || d.id === this.seen) return;
 				this.seen = d.id;
-				await x.speak(dialogSpeech(this.spoken(title), d));
+				await x.speak(dialogSpeech(this.spoken(title), d), title);
 				if (this.stopped === title) return;
 				if (!await x.approveDialogs()) {
-					await x.speak("Answer it on the screen.");
+					await x.speak("Answer it on the screen.", title);
 					return;
 				}
 				await this.listen(title, dialogRetryLine(d), name + ": " + dialogChoices(d));
@@ -39056,11 +39174,11 @@ var HandsFree = class {
 			const q = String(a.question || "").trim();
 			if (!q) return;
 			if (a.said) await a.said;
-			else await x.speak(spokenLine(this.spoken(title), plain(q)));
+			else await x.speak(spokenLine(this.spoken(title), plain(q)), title);
 			if (this.stopped === title) return;
 			await this.listen(title, "Still there? " + spokenLine(this.spoken(title), plain(q)), "Answer " + name + " — say submit to send");
 		} finally {
-			this.running = false;
+			this.over();
 		}
 	}
 	stop(title) {
@@ -39082,7 +39200,7 @@ var HandsFree = class {
 				x.caption(x.name(title) + " is waiting on you");
 				return;
 			}
-			await x.speak(retry);
+			await x.speak(retry, title);
 		}
 	}
 };
@@ -39100,6 +39218,7 @@ var SpeechQueue = class {
 	opts;
 	lines = [];
 	speaking = null;
+	current = null;
 	held = false;
 	turn = 0;
 	waiters = [];
@@ -39118,6 +39237,7 @@ var SpeechQueue = class {
 			this.lines.push({
 				line,
 				at: opts.at ?? this.now(),
+				title: opts.title || "",
 				done
 			});
 			this.pump();
@@ -39138,18 +39258,30 @@ var SpeechQueue = class {
 	}
 	hold() {
 		this.held = true;
-		this.speaking?.cancel();
+		this.cut();
 	}
 	release() {
 		this.held = false;
 		this.pump();
 	}
-	cancel() {
-		const dropped = this.lines;
-		this.lines = [];
-		dropped.forEach((l) => l.done());
-		if (this.speaking) this.speaking.cancel();
-		else this.settle();
+	cancel(title) {
+		const drop = title === void 0 ? this.lines : this.lines.filter((l) => l.title === title);
+		this.lines = title === void 0 ? [] : this.lines.filter((l) => l.title !== title);
+		drop.forEach((l) => l.done());
+		if (this.current && (title === void 0 || this.current.title === title)) this.cut();
+		if (this.held) this.settle();
+		else this.pump();
+	}
+	cut() {
+		const sp = this.speaking;
+		const cur = this.current;
+		if (!sp) return;
+		this.speaking = null;
+		this.current = null;
+		this.turn++;
+		sp.cancel();
+		this.onSpeaking(false);
+		cur?.done();
 	}
 	settle() {
 		if (!this.idle) return;
@@ -39178,10 +39310,12 @@ var SpeechQueue = class {
 			const turn = ++this.turn;
 			this.last = text;
 			this.speaking = sp;
+			this.current = next;
 			this.onSpeaking(true);
 			const done = () => {
 				if (this.turn !== turn || !this.speaking) return;
 				this.speaking = null;
+				this.current = null;
 				this.onSpeaking(false);
 				next.done();
 				this.pump();
@@ -39191,6 +39325,13 @@ var SpeechQueue = class {
 		}
 	}
 };
+var BARGE_SKIP_MS = 150;
+function bargeIn(q, title) {
+	const talking = q.busy;
+	q.hold();
+	if (title) q.cancel(title);
+	return talking ? BARGE_SKIP_MS : 0;
+}
 function sentenceChunks(text) {
 	const s = String(text || "").replace(/\s+/g, " ").trim();
 	if (!s) return [];
@@ -39516,6 +39657,7 @@ function serverRecognizer(opts = {}) {
 	let streaming = false;
 	let lastEnd = Promise.resolve();
 	const open = /* @__PURE__ */ new Set();
+	let skipUntil = 0;
 	const unhold = () => {
 		if (!holding) return;
 		holding = false;
@@ -39825,9 +39967,11 @@ function serverRecognizer(opts = {}) {
 			else pump(c);
 		};
 		try {
+			const skip = Math.max(0, skipUntil - Date.now());
 			c.rec = startWavRecording(s, ctx, {
 				targetRate: CLIP_RATE,
-				onLevel
+				onLevel,
+				skipS: skip / 1e3
 			});
 		} catch {
 			discard(c);
@@ -39846,9 +39990,10 @@ function serverRecognizer(opts = {}) {
 		lastError: "",
 		mic,
 		available: () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia && !!audioCtxCtor(),
-		start(handlers) {
+		start(handlers, o = {}) {
 			self.stop();
 			if (!self.available()) return false;
+			skipUntil = Date.now() + Math.max(0, o.skipMs || 0);
 			h = handlers;
 			want = true;
 			finishing = false;
@@ -39901,6 +40046,7 @@ async function loadVoiceCfg(prev) {
 			stt: j.stt === "server" ? "server" : "phone",
 			tts: j.tts === "server" ? "server" : "phone",
 			approve_dialogs: j.approve_dialogs === true,
+			...typeof j.say_all === "boolean" ? { say_all: j.say_all } : {},
 			server_ready: j.server_ready && typeof j.server_ready === "object" ? j.server_ready : {},
 			system: j.system && typeof j.system === "object" ? j.system : {}
 		};
@@ -40007,6 +40153,8 @@ function warmMic(gesture) {
 var questions = /* @__PURE__ */ new Map();
 var asksSaid = /* @__PURE__ */ new Map();
 var SAID_FRESH_MS = 6e4;
+var sayAllChecked = false;
+var asksRead = /* @__PURE__ */ new Set();
 function refreshQuestion(title) {
 	if (!title) return;
 	instApi(title, "/voice").then((j) => {
@@ -40127,7 +40275,8 @@ function TopBarMic() {
 	const keyHeld = (0, import_react.useRef)(false);
 	const hands = (0, import_react.useRef)(null);
 	const [pendingLine, setPendingLine] = (0, import_react.useState)("");
-	const say = (text, sticky = false, tail = "") => {
+	const handsLive = (0, import_react.useRef)(null);
+	const say = (text, sticky = false, tail = "", ms = 6e3) => {
 		setCaptionState(text);
 		setUnsure(tail);
 		publishMicState({
@@ -40135,7 +40284,11 @@ function TopBarMic() {
 			unsure: tail
 		});
 		clearTimeout(captionTimer.current);
-		if (text && !sticky) captionTimer.current = setTimeout(() => setCaptionState(""), 6e3);
+		if (text && !sticky) captionTimer.current = setTimeout(() => setCaptionState(""), ms);
+	};
+	const hush = () => {
+		queue.cancel();
+		if (!live.current) say(HUSH_LINE, false, "", HUSH_CAPTION_MS);
 	};
 	(0, import_react.useEffect)(() => onVoicePrefs((p) => setPrefsState(p)), []);
 	const setPrefs = (p) => {
@@ -40149,7 +40302,12 @@ function TopBarMic() {
 		return c;
 	});
 	(0, import_react.useEffect)(() => {
-		refreshCfg();
+		refreshCfg().then((c) => {
+			if (sayAllChecked || typeof c.say_all !== "boolean") return;
+			sayAllChecked = true;
+			const want = sayAllMismatch(prefsRef.current.replies, c.say_all);
+			if (want !== null) syncSayAll(want);
+		});
 		const l = (on) => setSpeaking(on);
 		speakingListeners.add(l);
 		const onFocus = () => void refreshCfg();
@@ -40182,7 +40340,7 @@ function TopBarMic() {
 				say(spokenLine(displayName(title), words));
 				if (mode === "off") return;
 				if (ask) questions.set(title, ask);
-				const said = queue.say(() => spokenLine(voiceName(title, useUi.getState().focused, displayName(title)), words));
+				const said = queue.say(() => spokenLine(voiceName(title, useUi.getState().focused, displayName(title)), words), { title });
 				if (!ask) return;
 				asksSaid.set(title, {
 					done: said,
@@ -40286,7 +40444,7 @@ function TopBarMic() {
 		const r = engine === "server" ? serverRec : browserRec;
 		voiceMark("start");
 		const ctx = voiceAudioCtx();
-		queue.hold();
+		const skipMs = bargeIn(queue, ask && opts.title === ask.title ? ask.title : "");
 		const d = new LiveDictation(target(into, opts.title), {
 			caption: say,
 			halt: () => {
@@ -40303,9 +40461,11 @@ function TopBarMic() {
 				}
 				const reply = await routePhrase(text, session);
 				if (reply.kind === "prompt") return false;
+				if (reply.kind === "hush") return "hush";
 				await routed(reply, text, session);
 				return true;
 			},
+			hush: () => queue.cancel(),
 			activity: liveActivity,
 			replies: () => prefsRef.current.replies !== "off",
 			submitted: (title, wantSay) => {
@@ -40382,7 +40542,7 @@ function TopBarMic() {
 				}
 				d.expire();
 			}
-		});
+		}, { skipMs });
 		refreshCfg();
 		if (!ok) {
 			halt();
@@ -40410,6 +40570,7 @@ function TopBarMic() {
 			}
 		});
 		if (!d) return resolve("stopped");
+		handsLive.current = d;
 		timer = setTimeout(() => {
 			if (live.current === d && !d.heardAnything) d.drop();
 		}, ms);
@@ -40441,6 +40602,21 @@ function TopBarMic() {
 		document.addEventListener("keydown", onKey, true);
 		return () => document.removeEventListener("keydown", onKey, true);
 	}, [listening]);
+	(0, import_react.useEffect)(() => {
+		if (!speaking || listening || menuOpen) return;
+		const onKey = (e) => {
+			if (e.key !== "Escape" || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || overlayOpen()) return;
+			e.stopPropagation();
+			e.preventDefault();
+			hush();
+		};
+		document.addEventListener("keydown", onKey, true);
+		return () => document.removeEventListener("keydown", onKey, true);
+	}, [
+		speaking,
+		listening,
+		menuOpen
+	]);
 	const announce = (line) => {
 		if (!line) return;
 		say(line);
@@ -40479,6 +40655,9 @@ function TopBarMic() {
 			case "stop":
 				say("");
 				return;
+			case "hush":
+				hush();
+				return;
 			case "off":
 				queue.cancel();
 				untap?.();
@@ -40514,25 +40693,37 @@ function TopBarMic() {
 		fetchDialog: (title) => fetchDialog(title),
 		approveDialogs: () => latest.current.refreshCfg().then((c) => !!c.approve_dialogs),
 		voiceName: (title) => voiceName(title, useUi.getState().focused, displayName(title)),
-		speak: (line) => {
+		speak: (line, title) => {
 			say(line, true);
-			return queue.say(line);
+			return queue.say(line, { title });
 		},
 		drained: () => queue.drained(),
 		caption: say,
 		listen: (title, hint, ms) => latest.current.listenFor(title, hint, ms)
 	});
+	const quietAsk = (title) => {
+		queue.cancel(title);
+		hands.current?.stop(title);
+		const d = live.current;
+		if (d && d === handsLive.current && getMicState().title === title) d.expire();
+	};
 	(0, import_react.useEffect)(() => registerAskMic({
 		handsFree: (title, a) => {
 			const said = asksSaid.get(title);
 			asksSaid.delete(title);
 			const fresh = said && Date.now() - said.at < SAID_FRESH_MS ? said.done : null;
-			hands.current?.ask(title, {
+			if (asksRead.has(title)) quietAsk(title);
+			asksRead.add(title);
+			const h = hands.current;
+			h?.settled().then(() => h.ask(title, {
 				...a,
 				said: fresh
-			});
+			}));
 		},
+		quiet: (title) => quietAsk(title),
 		stop: (title) => {
+			asksRead.delete(title);
+			queue.cancel(title);
 			hands.current?.stop(title);
 			const d = live.current;
 			if (d && getMicState().title === title) d.expire();
@@ -40726,6 +40917,14 @@ function TopBarMic() {
 						},
 						children: "×"
 					})]
+				}),
+				speaking && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "mic-stop-talking",
+					id: "mic-stop-talking",
+					title: "Stop talking (Esc)",
+					onClick: hush,
+					children: "Stop talking"
 				}),
 				(listening || caption || unsure) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "mic-live",
@@ -81962,6 +82161,44 @@ function NewHead({ tab, tabs, onTab, onClose }) {
 	});
 }
 //#endregion
+//#region src/components/settings/screenKeys.ts
+var LEGACY_SCREEN_KEYS = {
+	"your-devices": "devices",
+	"your-phone": "mobile",
+	phone: "mobile",
+	"mobile-voice": "voice",
+	speech: "voice",
+	microphone: "voice",
+	people: "peer",
+	"peer-links": "peer",
+	peers: "peer",
+	"remote-control": "devices",
+	"tailnet-trust": "devices",
+	"trusted-accounts": "devices",
+	"pair-by-token": "devices",
+	"settings-sync": "devices",
+	"make-reachable": "devices",
+	"shared-link": "devices",
+	fleet: "devices"
+};
+function resolveScreenKey(name, known) {
+	if (!name) return "";
+	const key = LEGACY_SCREEN_KEYS[name] || name;
+	return known.includes(key) ? key : "";
+}
+//#endregion
+//#region src/lib/settingsLastScreen.ts
+var lastScreen = null;
+function rememberSettingsScreen(key) {
+	lastScreen = key || null;
+}
+function openingScreen(target, keys) {
+	const linked = target ? resolveScreenKey(target, keys) : null;
+	if (linked) return linked;
+	if (lastScreen && keys.includes(lastScreen)) return lastScreen;
+	return DEFAULT_SETTINGS_SCREEN;
+}
+//#endregion
 //#region src/components/intake/buckets.ts
 var NO_STATE_BUCKET = "No state";
 var BUCKETS_LS_KEY = "mf_ticket_buckets";
@@ -88159,32 +88396,6 @@ function IntakeDialog() {
 			})
 		})
 	});
-}
-//#endregion
-//#region src/components/settings/screenKeys.ts
-var LEGACY_SCREEN_KEYS = {
-	"your-devices": "devices",
-	"your-phone": "mobile",
-	phone: "mobile",
-	"mobile-voice": "voice",
-	speech: "voice",
-	microphone: "voice",
-	people: "peer",
-	"peer-links": "peer",
-	peers: "peer",
-	"remote-control": "devices",
-	"tailnet-trust": "devices",
-	"trusted-accounts": "devices",
-	"pair-by-token": "devices",
-	"settings-sync": "devices",
-	"make-reachable": "devices",
-	"shared-link": "devices",
-	fleet: "devices"
-};
-function resolveScreenKey(name, known) {
-	if (!name) return "";
-	const key = LEGACY_SCREEN_KEYS[name] || name;
-	return known.includes(key) ? key : "";
 }
 //#endregion
 //#region src/components/settings/SettingsSearch.tsx
@@ -99607,7 +99818,11 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 	const openDialogFor = useUi((s) => s.openDialogFor);
 	const screens = (0, import_react.useMemo)(() => SCREENS.filter((s) => s.key !== "traffic" || isDevShell()), []);
 	const keys = (0, import_react.useMemo)(() => screens.map((s) => s.key), [screens]);
-	const [screen, setScreen] = (0, import_react.useState)(() => resolveScreenKey(target, keys) || DEFAULT_SETTINGS_SCREEN);
+	const [screen, setScreenState] = (0, import_react.useState)(() => openingScreen(target, keys));
+	const setScreen = (key) => {
+		rememberSettingsScreen(key);
+		setScreenState(key);
+	};
 	const [advanced, setAdvanced] = (0, import_react.useState)(readAdvancedMode);
 	const changeMode = (on) => {
 		setAdvanced(on);
@@ -99625,7 +99840,7 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 			openDialogFor("intake", tab);
 			return;
 		}
-		setScreen(resolveScreenKey(target, keys) || DEFAULT_SETTINGS_SCREEN);
+		setScreenState(openingScreen(target, keys));
 		setAdvanced(readAdvancedMode());
 	}, [
 		open,
@@ -103765,6 +103980,28 @@ function onIdle(fn) {
 	return () => clearTimeout(id);
 }
 var readOut = /* @__PURE__ */ new Set();
+var HAND_QUIET_MS = 3e3;
+var handAt = /* @__PURE__ */ new Map();
+function narrate(lastHand, now) {
+	return !lastHand || now - lastHand >= HAND_QUIET_MS;
+}
+function handKey(e) {
+	if (e.ctrlKey || e.metaKey || e.altKey) return false;
+	return ![
+		"Tab",
+		"Shift",
+		"Control",
+		"Alt",
+		"Meta",
+		"CapsLock",
+		"Escape"
+	].includes(e.key);
+}
+function handTarget(el) {
+	const t = el;
+	if (!t || typeof t.closest !== "function" || t.closest(".ask-voice")) return false;
+	return !!t.closest("button, textarea, input, [role=checkbox]");
+}
 var autoOpenPausedUntil = 0;
 function AskDialog() {
 	const open = useUi((s) => s.openDialog === "ask");
@@ -103985,6 +104222,10 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 			clearInterval(timer);
 		};
 	}, [polling, title]);
+	const byHand = (0, import_react.useCallback)(() => {
+		handAt.set(title, Date.now());
+		askMic()?.quiet(title);
+	}, [title]);
 	const field = (0, import_react.useRef)(null);
 	const selField = (0, import_react.useRef)(null);
 	const [hasText, setHasText] = (0, import_react.useState)(false);
@@ -104106,6 +104347,10 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 	const readKey = sel && d ? "sel:" + title + "|" + (d.step ?? 0) + "|" + d.question : item.key;
 	(0, import_react.useEffect)(() => {
 		if (readOut.has(readKey)) return;
+		if (!narrate(handAt.get(title), Date.now())) {
+			if (item.kind === "question" || dialogReady) readOut.add(readKey);
+			return;
+		}
 		if (item.kind === "dialog") {
 			if (!dialogReady || !d) return;
 			readOut.add(readKey);
@@ -104132,6 +104377,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 				if (!k) return;
 				e.preventDefault();
 				e.stopPropagation();
+				byHand();
 				if (k.type === "toggle") selectFlows.toggle(title, k.key);
 				else if (k.type === "field") selectFlows.openField(title, k.key);
 				else act({
@@ -104144,6 +104390,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 			if (!key) return;
 			e.preventDefault();
 			e.stopPropagation();
+			byHand();
 			pickRef.current(key);
 		};
 		window.addEventListener("keydown", onKey, true);
@@ -104151,7 +104398,8 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 	}, [
 		d,
 		title,
-		act
+		act,
+		byHand
 	]);
 	const primaryBtn = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
@@ -104173,6 +104421,12 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 		className: "ask-card",
 		"data-ask": item.kind,
 		"data-title": title,
+		onPointerDownCapture: (e) => {
+			if (handTarget(e.target)) byHand();
+		},
+		onKeyDownCapture: (e) => {
+			if (handKey(e) && !e.target?.closest?.(".ask-voice")) byHand();
+		},
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ask-head",
@@ -104311,7 +104565,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "ask-keys",
-						children: d && isSelect(d) ? SELECT_KEYS[selectStage(d)] : d?.parsed ? "1–9 or Y / N / A · Enter · Esc later" : !isDialog ? "Enter sends · Shift+Enter new line · Esc later" : "Esc later"
+						children: d && isSelect(d) ? selectStage(d) === "multi" && /^submit$/i.test(String(d.button || "").trim()) ? "1–9 ticks · Enter submits · Esc later" : SELECT_KEYS[selectStage(d)] : d?.parsed ? "1–9 or Y / N / A · Enter · Esc later" : !isDialog ? "Enter sends · Shift+Enter new line · Esc later" : "Esc later"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -104343,6 +104597,10 @@ var SELECT_KEYS = {
 	multi: "1–9 ticks · Enter next · Esc later",
 	review: "Enter submits · Esc later"
 };
+function navLabel(button) {
+	const b = String(button || "").trim() || "Next";
+	return /^submit$/i.test(b) ? b : b + " ›";
+}
 function SelectView({ flow, primaryRef, fieldRef, onAct, onToggle, onField, onText, onCloseField, onSendField }) {
 	const d = flow.dialog;
 	const stage = selectStage(d);
@@ -104350,7 +104608,10 @@ function SelectView({ flow, primaryRef, fieldRef, onAct, onToggle, onField, onTe
 	const step = d.step ?? 0;
 	const busy = flow.busy;
 	const words = flow.field ? d.options.find((o) => o.key === flow.field) : void 0;
-	const prim = stage === "multi" ? "" : (stage === "review" ? d.options.find((o) => o.kind === "yes") : d.options.find((o) => !takesWords(o)))?.key || "";
+	const submit = stage === "review" ? d.options.find((o) => o.kind === "yes") : void 0;
+	const cancel = stage === "review" ? d.options.find((o) => o.kind === "no") : void 0;
+	const opts = d.options.filter((o) => o !== submit && o !== cancel);
+	const prim = stage === "single" ? opts.find((o) => !takesWords(o))?.key || "" : "";
 	const label = (o) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 		className: "ask-opt-text",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -104382,11 +104643,11 @@ function SelectView({ flow, primaryRef, fieldRef, onAct, onToggle, onField, onTe
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: r.question }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: r.answer || "—" })]
 				}, i))
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			opts.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "ask-opts",
 				role: "group",
 				"aria-label": "Answers",
-				children: d.options.map((o) => {
+				children: opts.map((o) => {
 					const box = stage === "multi" && isBox(o) && !takesWords(o);
 					const on = !!flow.checked[o.key];
 					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
@@ -104450,36 +104711,57 @@ function SelectView({ flow, primaryRef, fieldRef, onAct, onToggle, onField, onTe
 				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "ask-sel-nav",
+				className: "ask-sel-nav modal-actions",
 				children: [
 					step > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						className: "ghost",
 						id: "ask-select-back",
 						disabled: busy,
 						onClick: () => onAct({ type: "prev" }),
 						children: "‹ Back"
 					}),
-					stage === "multi" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-						type: "button",
-						className: "primary",
-						id: "ask-select-next",
-						ref: primaryRef,
-						disabled: busy,
-						onClick: () => onAct({ type: "next" }),
-						children: [d.button || "Next", " ›"]
-					}),
-					busy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "ask-state",
-						children: "sending…"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ask-sel-sp" }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					!cancel && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "linklike ask-cancel-q",
 						disabled: busy,
 						onClick: () => onAct({ type: "cancel" }),
 						children: "Cancel the question"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ask-sel-sp" }),
+					busy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ask-state",
+						children: "sending…"
+					}),
+					cancel && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "ask-select-cancel",
+						disabled: busy,
+						title: "Press " + cancel.key,
+						onClick: () => onAct({
+							type: "pick",
+							key: cancel.key
+						}),
+						children: cancel.label
+					}),
+					submit && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "submit",
+						id: "ask-select-submit",
+						ref: primaryRef,
+						disabled: busy,
+						title: "Enter, or press " + submit.key,
+						onClick: () => onAct({
+							type: "pick",
+							key: submit.key
+						}),
+						children: submit.label
+					}),
+					stage === "multi" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "submit",
+						id: "ask-select-next",
+						ref: primaryRef,
+						disabled: busy,
+						onClick: () => onAct({ type: "next" }),
+						children: navLabel(d.button)
 					})
 				]
 			})

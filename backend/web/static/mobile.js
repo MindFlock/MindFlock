@@ -2778,7 +2778,12 @@
   // (voice.expectSay). "all" (Everything) reads every session's finished
   // turn (voiceTurnLine), voice on or off — the events socket stays open
   // for it — and every prompt the phone sends, typed too, asks for a Say
-  // line. An older page's boolean loads as "mine" (true) / "off" (false).
+  // line. Prompts typed anywhere else ask for it through the server's
+  // say-all marker (POST /api/voice/say-all {on}): switching TO Everything
+  // turns it on, switching away turns it off; on load, a GET /api/voice
+  // `say_all` that disagrees with the pref is set to the pref, once; a 403
+  // (not the owner) is said once and the pref stays (voiceSayAll*). An
+  // older page's boolean loads as "mine" (true) / "off" (false).
   //
   // One voice at a time: everything the phone says — replies, dialog
   // read-outs, another session's ask or turn, router lines — goes through
@@ -2847,6 +2852,7 @@
   var voiceStateEl = document.getElementById("voice-state");
   var voiceCaptionEl = document.getElementById("voice-caption");
   var voiceCancelBtn = document.getElementById("voice-cancel");
+  var voiceHushBtn = document.getElementById("voice-hush");
   var voiceGearBtn = document.getElementById("voice-gear");
   var voiceLevelEl = document.getElementById("voice-level");
   var voiceLevelBar = document.getElementById("voice-level-bar");
@@ -2889,6 +2895,8 @@
   var VOICE_ACK_MAX_MS = 10 * 60 * 1000; // give up on the ack after this long
   var VOICE_WORD_MS = 400;               // onend fallback: per word...
   var VOICE_CHUNK_GRACE_MS = 1500;       // ...plus this per chunk
+  var VOICE_BARGE_MUTE_MS = 150;         // barge-in: the mic opens this long after the speaker is cut (its tail is not heard)
+  var VOICE_QUIET_CAPTION_MS = 1500;     // "Quiet." stays on the strip this long
 
   // --- PhoneSTT: SpeechRecognition / webkitSpeechRecognition ----------------
   // The state machine restarts it while its listening window is open; the
@@ -3964,7 +3972,8 @@
     lastPrompt: null,            // Diagnostics: {dictated, say} of that prompt
     lastRoute: "",               // Diagnostics: what /api/voice/route last said (or why it did not)
     cfg: { stt: "phone", tts: "phone", approve_dialogs: true, loaded: false,
-           server_ready: {}, backends: { stt: [], tts: [] }, system: null },
+           server_ready: {}, backends: { stt: [], tts: [] }, system: null, say_all: null },
+    sayAll: { synced: false, denied: false },   // the say-all marker: set from the pref once this load; a 403 said once
     audioCtx: null,              // the page's one AudioContext (voiceAudioCtx)
     rec: { mime: "", last: null, lastSpeak: null, resampler: "", chunk: null, trace: null },   // Diagnostics: recorder type, last transcribe / speak, resampler, last stream chunk, last start-up trace
     keepMs: VOICE_KEEP_STREAM_MS,   // how long the server recognizer keeps the microphone warm (tests shorten it)
@@ -4056,7 +4065,7 @@
     voiceBtn.setAttribute("aria-label",
       s === "off" ? "Talk to this session" : s === "dialog" ? "Stop listening"
       : voiceIsListening() ? (voiceListen_.held ? "Release to keep it" : "Tap to keep it") : voiceTalkHint());
-    voiceStrip.classList.toggle("hidden", s === "off" && !voice.hearPending);
+    voiceStrip.classList.toggle("hidden", s === "off" && !voice.hearPending && !voiceSpeech.playing);
     voiceStateEl.textContent = VOICE_WORDS[s] || "";
     if (caption !== undefined) voiceCaption(caption);
     if (!voiceIsListening()) voiceLevel(null);
@@ -4232,8 +4241,12 @@
   // caller does nothing): Cancel, voice off and the hidden page drop every
   // line (voiceSpeechStop(true)); a tap on the mic or a move to another
   // session stops the line being said and drops the conversation's queued
-  // lines, while the lines beside it wait (voiceSpeechStop(false)); a line
-  // older than VOICE_LINE_MAX_AGE_MS when its turn comes is dropped.
+  // lines, while the lines beside it wait (voiceSpeechStop(false)); a hand
+  // on the ask sheet drops the lines about the ask shown, others wait
+  // (voiceSpeechStopFor); the mic while a line is said cuts it before it
+  // listens (voiceBargeIn); "stop talking" drops them all, the mic going
+  // on (voiceHush); a line older than VOICE_LINE_MAX_AGE_MS when its turn
+  // comes is dropped.
   //   keepState  a line BESIDE the conversation ("Sent to X.", the ack,
   //              another session's ask or turn): the strip keeps its state
   //   title      the session the line is about: its name goes first when
@@ -4302,6 +4315,7 @@
     voiceSpeechTake(line);
     if (!line.bg && line.seq !== voiceSpeakSeq) { line.resolve(false); voiceSpeechPump(); return; }
     S.playing = line;
+    voiceHushShow();
     var tok = line.tok = (line.tok || 0) + 1;   // a line stopped and said again: the old play's end is not this one's
     var said = voiceLineText(line, current, nameOf);
     voice.lastLine = said;
@@ -4319,6 +4333,7 @@
     var S = voiceSpeech;
     if (S.playing !== line || line.tok !== tok) return;
     S.playing = null;
+    voiceHushShow();
     line.resolve(true);
     // After the caller's own next step (a listen, idle), which runs first.
     clearTimeout(S.timer);
@@ -4339,6 +4354,76 @@
     S.q = keep;
     clearTimeout(S.timer);
     if (keep.length) S.timer = setTimeout(voiceSpeechPump, 0);
+    voiceHushShow();
+  }
+  // Pure: is this queued line about `title`? Its own lines, and the
+  // conversation's (not beside it) while voice is on that session.
+  function voiceLineAbout(line, title, session) {
+    return !!title && (line.title === title || (!line.bg && session === title));
+  }
+  // The lines about one session go — the one being said stops, the queued
+  // ones are dropped; every other line keeps its place. True when a line
+  // was being said (and was cut).
+  function voiceSpeechStopFor(title) {
+    var S = voiceSpeech, p = S.playing, cut = false;
+    if (title && title === voice.session) voiceSpeakSeq++;   // a listen waiting on the queue is not this one's now
+    var keep = [];
+    S.q.forEach(function (x) { if (voiceLineAbout(x, title, voice.session)) x.resolve(false); else keep.push(x); });
+    S.q = keep;
+    if (p && voiceLineAbout(p, title, voice.session)) {
+      cut = true;
+      S.playing = null;
+      voice.tts.cancel();
+      p.resolve(false);
+      clearTimeout(S.timer);
+      S.timer = setTimeout(voiceSpeechPump, 0);
+    }
+    voiceHushShow();
+    return cut;
+  }
+  // "Stop talking" in the strip while a line is being said — with voice
+  // off too (Everything reads every session): then the strip shows for it.
+  function voiceHushShow() {
+    var on = !!voiceSpeech.playing;
+    if (voiceHushBtn.classList.contains("hidden") === !on) return;
+    voiceHushBtn.classList.toggle("hidden", !on);
+    voiceStrip.classList.toggle("hidden", voice.state === "off" && !voice.hearPending && !on);
+    fitSoon();
+  }
+  // "Stop talking" (said — the router's kind hush, or the local table — or
+  // the strip's button, or a tap on the strip while it talks): what is
+  // being said stops and every queued line goes, nothing is said instead,
+  // and a mic that is listening goes on listening. The ack waits no more.
+  function voiceHush() {
+    voiceSpeechStop(true);
+    voiceAckStop();
+    if (voice.state === "off") return;
+    if (voice.state === "speaking") { voiceIdle("Quiet."); return; }
+    // Listening: its caption comes back (the hint, the dialog's question);
+    // else not the line just cut.
+    var was = voiceIsListening() ? String(voiceCaptionEl.textContent || "") : voice.state === "idle" ? voiceTalkHint() : "";
+    voiceCaption("Quiet.");
+    setTimeout(function () {
+      if (voice.state !== "off" && voiceCaptionEl.textContent === "Quiet.") voiceCaption(was);
+    }, VOICE_QUIET_CAPTION_MS);
+  }
+  // Barge-in: the mic (or a hold) while a line is being said. The speaker
+  // is cut BEFORE the mic opens, the lines about that line's session (or
+  // `title`'s: the ask sheet's) go, and the listen that follows opens
+  // VOICE_BARGE_MUTE_MS later, so the phone does not hear its own voice's
+  // tail. False when nothing was being said.
+  function voiceBargeIn(title) {
+    var p = voiceSpeech.playing;
+    if (!p) return false;
+    voiceSpeechStopFor(title || p.title || voice.session);
+    if (voiceSpeech.playing === p) {   // a line about something else: cut too, not said again
+      voiceSpeech.playing = null;
+      voice.tts.cancel();
+      p.resolve(false);
+    }
+    voiceListen_.muteUntil = Date.now() + VOICE_BARGE_MUTE_MS;
+    voiceHushShow();
+    return true;
   }
   // fn once nothing is queued or being said (now, if so).
   function voiceSpeechDrain(fn) {
@@ -4370,7 +4455,8 @@
   // listen is dropped.
   var voiceListen_ = { netErrs: 0, mode: "", until: 0, restarts: 0, timer: null, reprompted: false,
                        heard: false, startedAt: 0, rapid: 0, stopAfter: false, held: false,
-                       overAfter: false, overBy: 0, routing: false, routeQ: [], draining: false, gen: 0 };
+                       overAfter: false, overBy: 0, routing: false, routeQ: [], draining: false, gen: 0,
+                       muteUntil: 0 };
   voice.listen = voiceListen_;   // tests age the window with it
   function voiceListen(mode, windowMs, held) {
     var L = voiceListen_;
@@ -4399,7 +4485,15 @@
       return;
     }
     if (ANDROID && navigator.vibrate) { voice.buzzAt = Date.now(); try { navigator.vibrate(30); } catch (e) {} }
-    voiceRecStart();
+    // A barge-in cut the speaker a moment ago: the mic opens once its
+    // tail has died away (a hold let go meanwhile has ended this listen).
+    var mute = L.muteUntil - Date.now(), gen = L.gen;
+    L.muteUntil = 0;
+    if (mute > 0) {
+      setTimeout(function () { if (voiceListen_.gen === gen && voiceIsListening() && !voice.stt.active()) voiceRecStart(); }, mute);
+    } else {
+      voiceRecStart();
+    }
     // A recognizer that never ends is still bound by the window — but a clip
     // on its way to the server is not expired: its words are coming. The
     // window moves out with every word, so the clock re-arms until it is due.
@@ -4541,6 +4635,9 @@
   function voiceHeard(text, mode) {
     var L = voiceListen_;
     if (L.routing) { L.routeQ.push([text, mode]); return; }   // after the phrase being routed
+    // "Stop talking", in any mode and into any box: the voice stops, the
+    // mic listens on — never typed, never a dialog's "no".
+    if (voiceIsHush(voiceDictParse(text).text || text)) { voiceHush(); voiceListenContinue(); return; }
     // A stop phrase at the end, in any mode (before a dialog's "no" can
     // read "stop" as a refusal): the words before it kept, listening over.
     var stop = voiceTail(text, false);
@@ -4775,7 +4872,9 @@
   // By number and by step before by name: "go to session two" is row two.
   // focus / open / show / select <name> switch only on a session whose
   // name starts so (voiceRouted) — "open the readme" stays a prompt.
+  // hush ("stop talking") is not "stop": it cuts the voice, the mic goes on.
   var VOICE_CMD = [
+    { kind: "hush",     re: /^(?:stop (?:talking|speaking|reading|saying that)|be quiet|quiet|hush|shut up|(?:that'?s |that is )?enough|enough (?:talking|of that))$/ },
     { kind: "cancel",   re: /^(?:cancel|never ?mind|scratch that|forget it)$/ },
     { kind: "switch_index", re: /^(?:(?:switch|go|change|jump|move) (?:over )?to |focus (?:on )?|open |show |select )?session (?:number )?(\S+)$/ },
     { kind: "switch_rel", re: /^(?:(?:switch|go|change|jump|move) (?:over )?to |focus (?:on )?|open |show |select )?(?:the )?(next|previous|prev) (?:session|one)$/ },
@@ -4790,15 +4889,24 @@
     { kind: "stop",     re: /^(?:stop listening|stop)$/ },
   ];
   function voiceCommand(text) {
-    var t = voiceNorm(text).replace(/^(?:ok|okay|hey|please) /, "").replace(/ please$/, "");
+    var n = voiceNorm(text);
+    if (/^(?:ok|okay) stop$/.test(n)) return { kind: "hush", arg: "" };   // before the "okay" goes: not "stop"
+    var t = n.replace(/^(?:ok|okay|hey|please) /, "").replace(/ please$/, "");
     for (var i = 0; i < VOICE_CMD.length; i++) {
       var m = VOICE_CMD[i].re.exec(t);
       if (m) return { kind: VOICE_CMD[i].kind, arg: (m[1] || "").trim() };
     }
     return null;
   }
+  // "Stop talking" is the one command matched here before the router: it
+  // must act in every mode (a dialog, the ask sheet's field) and never wait.
+  function voiceIsHush(text) {
+    var c = voiceCommand(text);
+    return !!c && c.kind === "hush";
+  }
   function voiceRunCommand(cmd) {
     switch (cmd.kind) {
+      case "hush": voiceHush(); return;
       case "cancel": voiceIdle("Dropped"); return;
       case "switch":
       case "focus": voiceSwitch(cmd.arg); return;
@@ -4833,7 +4941,7 @@
   // phrase is about (an answer by row number asks again with its title).
   var VOICE_ROUTE_KINDS = ["prompt", "switch", "new", "ambiguous", "no-session", "new-failed", "list",
                            "needs", "status", "cancel", "stop", "off", "repeat", "condense",
-                           "switch_index", "switch_rel", "answer", "question"];
+                           "switch_index", "switch_rel", "answer", "question", "hush"];
   function voiceRoute(text, session) {
     var aborter = window.AbortController ? new AbortController() : null;
     var timer = null;
@@ -4877,6 +4985,7 @@
   function voiceRouted(res, p) {
     if (!res) {
       var cmd = voiceCommand(p.text);
+      if (cmd && cmd.kind === "hush") { voiceHush(); return false; }   // the mic goes on, nothing typed
       // "open the readme" is a prompt: open / show / select / focus switch
       // only to a session named so.
       if (cmd && cmd.kind === "focus" && !voiceStrictMatch(cmd.arg)) cmd = null;
@@ -4888,6 +4997,7 @@
     var say = String(res.say || "").trim();
     switch (res.kind) {
       case "prompt": return voiceHeardRest(p);
+      case "hush": voiceHush(); return false;   // the mic goes on, nothing typed or said
       case "switch":
       case "new":
         voiceStopForCommand();
@@ -5488,6 +5598,9 @@
         if (key === "none" && Date.now() - (voice.answeredAt || 0) < VOICE_ANSWERED_GRACE_MS) return;
         if (key === voice.dialogKey) return;
         voice.dialogKey = key;
+        // The sheet moved to it under a hand a moment ago: it is on the
+        // screen, not read (askHandsOn).
+        if (ask.open && !askMayNarrate()) return;
         voiceAckStop();
         var name = nameOf(title);
         if (key === "none") {
@@ -5764,6 +5877,7 @@
           voice.cfg.server_ready = j.server_ready && typeof j.server_ready === "object" ? j.server_ready : {};
           voice.cfg.backends = j.backends && typeof j.backends === "object" ? j.backends : { stt: [], tts: [] };
           voice.cfg.system = j.system && typeof j.system === "object" ? j.system : null;
+          if (typeof j.say_all === "boolean") voiceSayAllSync(j.say_all);
         } else if (!voice.cfg.loaded) {
           voice.cfg.server_ready = {};
         }
@@ -5772,6 +5886,36 @@
         voiceSheetCfg();
         return voice.cfg;
       });
+  }
+  // The server's say-all marker against the Spoken replies pref: on load
+  // (the first GET that carries it) a phone on Everything turns the marker
+  // ON when it is off, once. It never turns it off on load — another
+  // device may be the one listening to everything; off is only ever an
+  // explicit switch away. An older server (no say_all) is left alone.
+  function voiceSayAllSync(serverOn) {
+    voice.cfg.say_all = serverOn;
+    if (voice.sayAll.synced) return;
+    voice.sayAll.synced = true;
+    if (voice.prefs.replies === "all" && !serverOn) voiceSayAllPost(true);
+  }
+  function voiceSayAllPost(on) {
+    voice.sayAll.synced = true;
+    return fetch("/api/voice/say-all", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ on: !!on }),
+    }).then(function (r) {
+      if (r.status === 403) {
+        if (!voice.sayAll.denied) {
+          voice.sayAll.denied = true;
+          flashStatus("This device can't change whether every prompt asks for a Say line — Everything still reads what this phone sends");
+        }
+        return null;
+      }
+      return r.ok ? r.json().catch(function () { return null; }) : null;
+    }).then(function (j) {
+      if (j && typeof j.say_all === "boolean") voice.cfg.say_all = j.say_all;
+    }).catch(function () {});
   }
   // Which adapter does what, from GET /api/voice: the server's when Settings
   // say "server" AND the server reports ready (and this browser can record /
@@ -5923,10 +6067,11 @@
       return;
     }
     // Hold to talk: the first tap turns voice on; the next press talks.
-    if (s === "off") { voice.box = null; voiceTurnOn(current, voice.prefs.ptt !== "hold"); return; }
+    if (s === "off") { voiceBargeIn(); voice.box = null; voiceTurnOn(current, voice.prefs.ptt !== "hold"); return; }
     if (voiceIsListening()) { voiceListenOver(); return; }
     if (s === "sending") return;
-    // idle, working or speaking: talk (speech is cut short)
+    // idle, working or speaking: talk — a line being said is cut first (barge-in)
+    voiceBargeIn();
     voice.box = null;
     voiceListen("prompt", VOICE_TAP_MS);
   }
@@ -5938,6 +6083,7 @@
     if (s === "off" || s === "sending" || voiceIsListening() || !current || !voice.stt.available()) return;   // the click handles these
     voiceHold.on = true;
     try { voiceBtn.setPointerCapture(ev.pointerId); } catch (e) {}   // the release lands here even off the button
+    voiceBargeIn();
     voice.box = null;
     voiceListen("prompt", VOICE_DICT_IDLE_MS, true);   // the finger says when it ends
   }
@@ -5969,11 +6115,14 @@
   // A long press is a hold, not the phone's context menu.
   voiceBtn.addEventListener("contextmenu", function (ev) { if (voice.prefs.ptt === "hold") ev.preventDefault(); });
   voiceCancelBtn.addEventListener("click", voiceCancelTap);
-  // The strip is the mic's big twin: a tap there while listening stops too.
+  voiceHushBtn.addEventListener("click", voiceHush);
+  // The strip is the mic's big twin: a tap there while listening stops
+  // too; while it talks ("Speaking…", the line), it stops talking.
   voiceStrip.addEventListener("click", function (ev) {
     if (ev.target === voiceStrip || ev.target === voiceStateEl || voiceCaptionEl.contains(ev.target) ||
         ev.target === voiceLevelEl || ev.target === voiceLevelBar) {
       if (voiceIsListening()) voiceListenOver();
+      else if (voiceSpeech.playing) voiceHush();
     }
   });
 
@@ -6252,8 +6401,11 @@
     if (voice.state === "idle") voiceSetState("idle", voiceTalkHint());
   });
   voiceRepliesEl.addEventListener("change", function () {
+    var was = voice.prefs.replies;
     voice.prefs.replies = voiceRepliesPref(voiceRepliesEl.value);
     voicePersist();
+    // Every prompt anywhere asks for a Say line while Everything is on.
+    if ((was === "all") !== (voice.prefs.replies === "all")) voiceSayAllPost(voice.prefs.replies === "all");
     // Everything listens to every session, voice on or off.
     if (voice.prefs.replies === "all") voiceEventsOpen();
     else if (voice.state === "off") voiceEventsClose();
@@ -6296,13 +6448,20 @@
   //                       something" (digit, then {text, keys: ["Enter"]})
   //                       and "Chat about this" (digit, then /send). The
   //                       question over (204) is answered; a 409
-  //                       dialog_changed is just the next step
+  //                       dialog_changed is just the next step. The
+  //                       review's Submit answers (primary) / Cancel and
+  //                       a multi-select's Next / Submit (its `button`)
+  //                       sit in the step's row, Back on the left
   //   an unparsed one   → "Open the session": only the terminal answers it
   //   a prose question  → a field + Send: POST /send {text, dialog_safe}
   //                       (409 in_dialog → the dialog it is showing now)
   // The mic answers the one shown: a dialog by the voice dialog mode
   // (words only, approve_dialogs respected), a question by dictating into
-  // the field with the radio words (vbox). Later — the button, a tap
+  // the field with the radio words (vbox); while it reads, the mic cuts
+  // the reading and listens (barge-in). A hand on the sheet (askHandsOn)
+  // stops what is being read about the ask shown and voice's listen for
+  // its answer, and for ASK_HAND_QUIET_MS the step it moves to is not read
+  // aloud. Later — the button, a tap
   // outside, Back, Esc — puts the one shown off: a question is dismissed
   // on the server (POST /asking/dismiss), a dialog snoozed here by its id.
   //
@@ -6337,6 +6496,7 @@
   var askSelEl = document.getElementById("asking-sel");
   var askSelPrevBtn = document.getElementById("asking-sel-prev");
   var askSelNextBtn = document.getElementById("asking-sel-next");
+  var askSelActsEl = document.getElementById("asking-sel-acts");
   var askReplyEl = document.getElementById("asking-reply");
   var askTextEl = document.getElementById("asking-text");
   var askVoiceEl = document.getElementById("asking-voice");
@@ -6355,6 +6515,7 @@
   var ASK_NOTIFY_STORE = "cs_ask_notify"; // localStorage: "off" mutes this page's notifications
   var ASK_SW = "/mobile-sw.js";          // the service worker Android Chrome needs to show one
   var ASK_BUZZ = [70, 60, 70];           // a new ask on a visible phone (the listening cue is one 30 ms tick)
+  var ASK_HAND_QUIET_MS = 3000;          // a step (or ask) the sheet moves to this soon after a tap is not read aloud
   var ask = {
     popup: true,         // notifications.ask_popup (GET /api/notify/ntfy)
     ntfyActive: false,   // ntfy pushes already reach a phone (said next to the notify button)
@@ -6373,6 +6534,7 @@
     sel: { id: "", checked: {}, input: null, ids: {}, voice: false },
     busy: false,
     note: "",
+    handAt: 0,           // the last tap / keystroke on the sheet (askHandsOn)
     hints: {},           // title → {text, ts, kind, at}: a session.question ahead of the rows
     later: {}, answered: {}, seen: {}, notified: {}, spoken: {},
     polls: 0,
@@ -6733,7 +6895,7 @@
         l.textContent = String(opt.label || opt.key || "");
         b.appendChild(k);
         b.appendChild(l);
-        b.addEventListener("click", function () { askAnswer(opt); });
+        b.addEventListener("click", function () { askHandsOn(); askAnswer(opt); });
         askOptionsEl.appendChild(b);
       });
     }
@@ -6755,8 +6917,8 @@
     askNotifyInline.classList.toggle("hidden", !(askNotifySupported() && Notification.permission === "default"));
     askVoiceMirror();
   }
-  askPrevBtn.addEventListener("click", function () { askStep(-1); });
-  askNextBtn.addEventListener("click", function () { askStep(1); });
+  askPrevBtn.addEventListener("click", function () { askHandsOn(); askStep(-1); });
+  askNextBtn.addEventListener("click", function () { askHandsOn(); askStep(1); });
 
   // --- Claude's select questions ---------------------------------------------------
   // GET /dialog's kind "select" (AskUserQuestion): {id, heading, question,
@@ -6808,7 +6970,12 @@
       askReviewEl.appendChild(dd);
     });
     askReviewEl.classList.toggle("hidden", !askReviewEl.firstChild);
-    d.options.forEach(function (opt, i) {
+    // The review: its answers, then ONE primary Submit answers with a
+    // plain Cancel beside it in the step's row — buttons, not numbered rows.
+    askSelActsEl.innerHTML = "";
+    if (review) askSelActs(d.options).forEach(function (b) { askSelActsEl.appendChild(b); });
+    askSelActsEl.classList.toggle("hidden", !review);
+    (review ? [] : d.options).forEach(function (opt, i) {
       var b = document.createElement("button");
       b.type = "button";
       b.className = "asking-opt";
@@ -6843,14 +7010,35 @@
       }
       b.appendChild(k);
       b.appendChild(body);
-      b.addEventListener("click", function () { askSelTap(opt); });
+      b.addEventListener("click", function () { askHandsOn(); askSelTap(opt); });
       askOptionsEl.appendChild(b);
     });
     var nav = d.nav || {};
     askSelPrevBtn.classList.toggle("hidden", !(at > 0 && (nav.prev || []).length));
     askSelNextBtn.classList.toggle("hidden", !multi);
+    // The multi-select's own row says what it does: "Next" or "Submit".
+    askSelNextBtn.textContent = String(d.button || "Next") + " ›";
+    // Beside Cancel + Submit answers, Back is just its arrow (a narrow phone fits all three).
+    askSelPrevBtn.textContent = review ? "‹" : "‹ Back";
+    askSelPrevBtn.setAttribute("aria-label", "Back");
     askSelPrevBtn.disabled = askSelNextBtn.disabled = ask.busy;
-    askSelEl.classList.toggle("hidden", askSelPrevBtn.classList.contains("hidden") && askSelNextBtn.classList.contains("hidden"));
+    askSelEl.classList.toggle("hidden", askSelPrevBtn.classList.contains("hidden") && askSelNextBtn.classList.contains("hidden") && !review);
+  }
+  // The review's options as the row's buttons: the yes one (Submit
+  // answers; else the first) primary and last, on the right.
+  function askSelActs(options) {
+    var primary = options.filter(function (o) { return o.kind === "yes"; })[0] || options[0];
+    return options.filter(function (o) { return o !== primary; }).concat(primary ? [primary] : []).map(function (opt) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "asking-act" + (opt === primary ? " asking-act-primary" : "");
+      b.dataset.kind = opt.kind || "other";
+      b.dataset.key = String(opt.key);
+      b.disabled = ask.busy;
+      b.textContent = stripMarkdown(String(opt.label || opt.key || ""));
+      b.addEventListener("click", function () { askHandsOn(); askSelTap(opt); });
+      return b;
+    });
   }
   // A tap: a free option opens the field (its words go with it); a
   // multi-select box toggles HERE (Next sends them); anything else — a
@@ -6897,8 +7085,8 @@
     var nav = d.nav || {};
     askSelPost((nav.prev || []).length ? nav.prev.map(String) : ["Left"]);
   }
-  askSelPrevBtn.addEventListener("click", askSelPrev);
-  askSelNextBtn.addEventListener("click", askSelNext);
+  askSelPrevBtn.addEventListener("click", function () { askHandsOn(); askSelPrev(); });
+  askSelNextBtn.addEventListener("click", function () { askHandsOn(); askSelNext(); });
   // POST /answer → {r, j}; the network failing reads as status 0.
   function askPostAnswer(title, body) {
     return fetch("/api/instances/" + encodeURIComponent(title) + "/answer", {
@@ -6972,6 +7160,8 @@
         ask.dialog = d;
         askSelSync();
         askRender();
+        // A step reached by hand is on the screen: the poll never reads it later.
+        if (!askMayNarrate() && voice.session === e.title) voice.dialogKey = String(d.id);
         if (askIsSelect(d)) askSelVoiceNext(e, d);
       });
     askRender();
@@ -7181,12 +7371,14 @@
     askClose();
     select(e.title);
   }
-  askLaterBtn.addEventListener("click", function () { askLater(false); });
+  askLaterBtn.addEventListener("click", function () { askHandsOn(); askLater(false); });
   askOpenBtn.addEventListener("click", askOpenSession);
-  askSendBtn.addEventListener("click", askSend);
+  askSendBtn.addEventListener("click", function () { askHandsOn(); askSend(); });
   askTextEl.addEventListener("keydown", function (ev) {
-    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); askSend(); }
+    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); askHandsOn(); askSend(); }
   });
+  // Typing is a hand on the sheet (the mic's words land without an input event).
+  askTextEl.addEventListener("input", askHandsOn);
   askEl.addEventListener("click", function (ev) { if (ev.target === askEl) askLater(true); });
   document.addEventListener("keydown", function (ev) { if (ask.open && ev.key === "Escape") askLater(true); });
   // Back = Later: opening pushes a history entry, Back pops it; closing any
@@ -7211,6 +7403,31 @@
   });
 
   // --- the voice side ---------------------------------------------------------------
+  // A hand on the sheet — an option, a box, Back / Next / Submit, Send,
+  // Later, the stepper, a keystroke in the field: what is being read about
+  // the ask shown stops and its queued lines go (other sessions' lines
+  // stay), and voice stops listening for its answer (words in the field
+  // stay). For ASK_HAND_QUIET_MS after it the sheet reads nothing new
+  // aloud: the step it moves to is on the screen, under the hand.
+  function askHandsOn() {
+    var e = ask.entry;
+    ask.handAt = Date.now();
+    ask.sel.voice = false;
+    if (!e) return;
+    voiceSpeechStopFor(e.title);
+    if (voice.state === "off" || voice.session !== e.title) return;
+    if (voice.state === "dialog" || voice.state === "awaiting" || voice.state === "speaking" ||
+        (voiceIsListening() && voice.box === askTextEl)) {
+      voiceStopForCommand();
+      voiceListen_.gen++;   // a route answer on its way is for nobody now
+      voiceIdle("");
+    }
+  }
+  // Pure: may the sheet read a step aloud now, `handAt` the last hand on it?
+  function askHandQuiet(handAt, now, quietMs) {
+    return !handAt || now - handAt >= quietMs;
+  }
+  function askMayNarrate() { return askHandQuiet(ask.handAt, Date.now(), ASK_HAND_QUIET_MS); }
   // The voice loop answered (or met) this session's dialog: the sheet follows.
   function askAnsweredByVoice(title, dialogId) {
     // A select question shown here: that was a step — the next one shows.
@@ -7247,7 +7464,7 @@
     if (voice.state === "off" || voice.session !== title) return;
     voice.dialog = null;
     voice.answeredAt = Date.now();
-    if (voiceIsListening() || voice.state === "speaking") {
+    if (voiceIsListening() || voice.state === "speaking" || voice.state === "idle") {
       voiceStopForCommand();
       voiceSpeechStop(false);
       voiceSetState("working", "");
@@ -7314,6 +7531,7 @@
     if (voice.state !== "off" && voice.session === e.title && voiceIsListening()) { voiceListenOver(); return; }
     if (voice.state === "sending") return;
     voiceHearHide();
+    voiceBargeIn(e.title);   // reading it (or anything): cut first, then the mic
     if (!askVoiceOn(e.title)) return;
     askListenFor(e, false);
   }
@@ -7378,7 +7596,8 @@
     if (voice.state !== "off" && e.title === voice.session) return;
     if (mode === "all" && e.kind === "question") return;
     ask.spoken[e.key] = true;
-    speakLine(nameOf(e.title) + " asks: " + askLineText(e), true);
+    if (!askMayNarrate()) return;   // the sheet moved under a hand: it is on the screen
+    speakLine(nameOf(e.title) + " asks: " + askLineText(e), true, e.title);
   }
 
   // --- a select question by voice ---------------------------------------------------
@@ -7510,7 +7729,7 @@
   function askSelVoiceNext(e, d) {
     if (!ask.sel.voice) return;
     ask.sel.voice = false;
-    if (voice.state === "off" || voice.session !== e.title) return;
+    if (voice.state === "off" || voice.session !== e.title || !askMayNarrate()) return;
     if (!d) {
       voice.dialog = null;
       voice.answeredAt = Date.now();

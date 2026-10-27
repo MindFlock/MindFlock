@@ -350,3 +350,31 @@ def test_merge_installs_voice_aware_hooks(tmp_path, dirs):
         codex, (("UserPromptSubmit", "working"),), "x", record_thread=False
     )
     assert "print(" not in codex.read_text()
+
+
+# --------------------------------------------------------------------------- #
+# The standing say-all marker: every prompt, every session
+# --------------------------------------------------------------------------- #
+def test_the_say_all_marker_prints_for_every_prompt_and_is_never_consumed(dirs):
+    from backend.web.core import voice
+
+    cmd = am.hook_command("working")
+    assert voice.say_all() is False
+    assert voice.set_say_all(True) is True
+    assert voice.say_all_path() == dirs["v"] / am.VOICE_SAY_ALL_FILE
+    # Printed once per prompt, prompt after prompt, for any session.
+    assert _fire(cmd, _PROMPT).stdout.strip() == am.VOICE_INSTRUCTION.encode()
+    assert _fire(cmd, _PROMPT).stdout.strip() == am.VOICE_INSTRUCTION.encode()
+    assert (
+        _fire(cmd, _PROMPT, session="mindflock_other").stdout.strip()
+        == am.VOICE_INSTRUCTION.encode()
+    )
+    assert voice.say_all() is True
+    # A one-shot .next beside it is still consumed, and the line prints once.
+    nxt = _arm(dirs)
+    out = _fire(cmd, _PROMPT).stdout
+    assert out.count(am.VOICE_INSTRUCTION.encode()) == 1
+    assert not nxt.exists()
+    assert voice.set_say_all(False) is False
+    assert voice.set_say_all(False) is False  # idempotent
+    assert _fire(cmd, _PROMPT).stdout == b""

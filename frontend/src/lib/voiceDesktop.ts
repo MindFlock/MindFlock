@@ -40,6 +40,7 @@
 import { ApiError, api, apiRaw, instApi } from "../api/client";
 import type { Dialog } from "../api/types";
 import { peekTerm } from "./terminals";
+import { toast } from "./toast";
 import { resamplerName, startWavRecording, type WavRecording } from "./wavRecorder";
 import { MicKeeper, isLoud, noiseFloor, pickupLine, voiceMark } from "./voiceMic";
 
@@ -95,6 +96,7 @@ const COMMANDS: string[][][] = [
   "say that again", "repeat", "repeat that",
   "voice off", "turn voice off", "turn off voice",
   "stop listening|recording", "stop", "mic|microphone off", "turn mic|microphone off",
+  "stop talking|speaking|reading", "be quiet", "quiet", "shut up", "hush", "enough", "that's|thats enough",
   "that's|thats all", "that is all",
   // Focus by name or by the rail's number, or the next / previous row.
   "focus|open|show|select *",
@@ -138,10 +140,17 @@ const STOP_PHRASES = [
   "stop recording", "stop listening", "mic off", "microphone off", "turn mic off",
   "turn microphone off", "that's all", "thats all", "that is all",
 ].map((p) => p.split(" "));
+/** "Stop talking" and its kin, as the hold-back keeps them whole. */
+const HUSH_PHRASES = [
+  "stop talking", "stop speaking", "stop reading", "be quiet", "quiet", "shut up", "hush", "enough",
+  "that's enough", "thats enough", "ok stop", "okay stop",
+].map((p) => p.split(" "));
 /** Every phrase the hold-back keeps whole while it may still be said: the
- * stop family and the radio words with their tails ("submit it"). */
+ * stop family, "stop talking" and its kin, and the radio words with their
+ * tails ("submit it"). */
 const CONTROL_PHRASES = [
   ...STOP_PHRASES,
+  ...HUSH_PHRASES,
   ...["over", "submit", "disregard"].flatMap((w) =>
     [[w], ...["that", "it", "all", "everything"].map((tail) => [w, tail])]
   ),
@@ -192,6 +201,19 @@ const ANSWER_RE = new RegExp(
     ].join("|") +
     ")(?: please)?$"
 );
+
+const HUSH_RE = new RegExp(
+  "^(?:(?:ok|okay|hey|please) )?(?:" + HUSH_PHRASES.map((p) => p.join(" ")).join("|") + ")(?: please| now)?$"
+);
+
+/** "Stop talking", "be quiet", "quiet", "shut up", "stop reading",
+ * "enough", "okay stop"…: the app's own voice stops — everything said and
+ * queued, every session — and listening goes on. Only ever a WHOLE phrase
+ * ("don't stop talking to me" is a prompt); never typed. The server's router
+ * answers the same words with kind `hush`. */
+export function isHushPhrase(text: string): boolean {
+  return HUSH_RE.test(routerWords(text).join(" "));
+}
 
 /** A whole answer to a dialog or a question: yes / no / always / a number,
  * as the router hears them. Only ever the WHOLE dictation counts — "the
@@ -266,19 +288,83 @@ export function loadVoicePrefs(kv: KV | null = storage()): VoicePrefs {
  * other's change without a reload. */
 export const VOICE_PREFS_EVENT = "mindflock:voice-prefs";
 
-export function saveVoicePrefs(p: VoicePrefs, kv: KV | null = storage()): void {
+/** Save the prefs; replies switched TO "Everything" (or away from it)
+ * tells the server too ({@link syncSayAll}) — only on a switch, never on a
+ * plain save. */
+export function saveVoicePrefs(
+  p: VoicePrefs,
+  kv: KV | null = storage(),
+  sync: (on: boolean) => unknown = syncSayAll
+): void {
   const next = normPrefs(p);
+  const flip = sayAllFlip(loadVoicePrefs(kv).replies, next.replies);
   try {
     kv?.setItem(VOICE_PREFS_KEY, JSON.stringify(next));
   } catch {
     /* private window / quota: the choice lasts this page */
   }
+  if (flip !== null) void sync(flip);
   try {
     if (typeof window !== "undefined" && typeof CustomEvent !== "undefined")
       window.dispatchEvent(new CustomEvent(VOICE_PREFS_EVENT, { detail: next }));
   } catch {
     /* no window (tests) */
   }
+}
+
+// --- "Everything": a Say line on every prompt ------------------------------- //
+//
+// A Say line is written for a prompt sent through /send with say:true; one
+// typed straight into a terminal never asks for it. The server's global
+// marker (POST /api/voice/say-all, GET /api/voice `say_all`) makes the prompt
+// hook ask EVERY prompt in every session for one — "Everything" turns it on.
+
+/** The caption when this device may not change the marker (a 403: only
+ * the owner can) — said once; the pref stays. */
+export const SAY_ALL_FORBIDDEN_LINE =
+  "Read replies aloud: only the server's owner can ask every prompt for a spoken line — replies sent from here still get one";
+
+/** The marker to post when replies move from `prev` to `next`: on when
+ * switched TO "all", off when switched away from it, else null. */
+export function sayAllFlip(prev: RepliesMode, next: RepliesMode): boolean | null {
+  return (prev === "all") === (next === "all") ? null : next === "all";
+}
+
+/** On load: a device on "all" turns the server's marker ON when it is off
+ * (true); it never turns it off — another device may be the one listening
+ * to everything, and off is only ever an explicit switch away
+ * (`sayAllFlip`). Null when nothing is to be posted (an older server sends
+ * no `say_all`). */
+export function sayAllMismatch(pref: RepliesMode, server: boolean | undefined): boolean | null {
+  if (typeof server !== "boolean") return null;
+  return pref === "all" && !server ? true : null;
+}
+
+/** POST /api/voice/say-all {on}: "forbidden" on a 403 (not the owner). */
+export async function postSayAll(on: boolean): Promise<"ok" | "forbidden" | "error"> {
+  try {
+    await api("/api/voice/say-all", { json: { on } });
+    return "ok";
+  } catch (err) {
+    return err instanceof ApiError && err.status === 403 ? "forbidden" : "error";
+  }
+}
+
+let sayAllWarned = false;
+
+/** Tell the server the marker; a 403 is "this device can't change it" — a
+ * toast once per page, the pref kept. */
+export async function syncSayAll(
+  on: boolean,
+  post: (on: boolean) => Promise<"ok" | "forbidden" | "error"> = postSayAll,
+  warn: (line: string) => void = (l) => toast(l)
+): Promise<"ok" | "forbidden" | "error"> {
+  const r = await post(on);
+  if (r === "forbidden" && !sayAllWarned) {
+    sayAllWarned = true;
+    warn(SAY_ALL_FORBIDDEN_LINE);
+  }
+  return r;
 }
 
 /** Follow the prefs as any surface saves them; returns the unsubscribe. */
@@ -333,6 +419,9 @@ export type DictOutcome =
   | { kind: "erase"; text: string }
   /** Escape: take back `text` and stop. */
   | { kind: "dropped"; text: string }
+  /** "Stop talking" (a whole phrase): the app's voice stops, nothing is
+   * typed; listening goes on unless `end` (said as push to talk let go). */
+  | { kind: "hush"; end?: boolean }
   /** Nothing to do (an empty phrase). */
   | { kind: "continue" }
   /** Not listening: nothing to do. */
@@ -347,6 +436,9 @@ export const DICT_HINT = "Say over to leave it, submit to send, disregard to sta
 export const OVER_LINE = "In the field — say submit or press Enter";
 /** The caption after a stop phrase with nothing typed. */
 export const STOPPED_LINE = "Stopped listening";
+/** The caption after "stop talking" — shown {@link HUSH_CAPTION_MS}. */
+export const HUSH_LINE = "Quiet.";
+export const HUSH_CAPTION_MS = 1000;
 
 /** One dictation: begin → heard… → over / submit / cancel / expire, with a
  * record of what it typed (in order) so "disregard" can take exactly that
@@ -373,6 +465,9 @@ export class Dictation {
   /** A dialog or a question waits on the session: an answer said as the
    * whole dictation goes to the router at once (set before each step). */
   answering = false;
+  /** Streaming: {@link typed}'s length when the phrase under way began (-1:
+   * between phrases) — a phrase is whole only while none of it is typed. */
+  private phraseAt = -1;
 
   begin(): void {
     this.listening = true;
@@ -380,6 +475,7 @@ export class Dictation {
     this.typed = "";
     this.held = "";
     this.partial = "";
+    this.phraseAt = -1;
   }
 
   /** The caption: what is in the field, then the words in flight (the
@@ -401,8 +497,11 @@ export class Dictation {
    * are typed now; a first phrase that may be a command waits whole. */
   words(w: string): DictOutcome {
     if (!this.listening) return { kind: "stopped" };
+    if (this.phraseAt < 0) this.phraseAt = this.typed.length;
     const all = joinWords(this.held, w);
-    const ctl = this.control(all);
+    // "Stop talking" waits for the phrase's end ("quiet mode…" is a prompt):
+    // the hold-back keeps it whole until {@link flush}.
+    const ctl = this.control(all, false);
     if (ctl) return ctl;
     if (this.routes && !this.typed && mayBeCommand(all)) {
       this.held = all;
@@ -417,10 +516,12 @@ export class Dictation {
    * held ones, the phrase's final ({@link heard}: radio words and all). */
   flush(w: string): DictOutcome {
     if (!this.listening) return { kind: "stopped" };
+    const whole = this.phraseAt < 0 || this.typed.length === this.phraseAt;
+    this.phraseAt = -1;
     const all = joinWords(this.held, w);
     this.held = "";
     this.partial = "";
-    return this.heard(all);
+    return this.heard(all, whole);
   }
 
   /** `text` went into the field. */
@@ -428,11 +529,12 @@ export class Dictation {
     this.typed += text;
   }
 
-  /** One final phrase. */
-  heard(phrase: string): DictOutcome {
+  /** One final phrase (`whole` false: a streamed phrase's tail — its start
+   * is typed already). */
+  heard(phrase: string, whole = true): DictOutcome {
     if (!this.listening) return { kind: "stopped" };
     this.interim = "";
-    const ctl = this.control(phrase);
+    const ctl = this.control(phrase, whole);
     if (ctl) return ctl;
     const p = parseRadio(phrase);
     const text = p.text ? p.text + " " : "";
@@ -460,6 +562,7 @@ export class Dictation {
     if (out.kind === "type") return { kind: "over", text: out.text };
     if (out.kind === "erase") return { kind: "dropped", text: out.text };
     if (out.kind === "continue") return { kind: "over", text: "" };
+    if (out.kind === "hush") return { kind: "hush", end: true };
     return out;
   }
 
@@ -476,6 +579,11 @@ export class Dictation {
     if (!this.listening) return { kind: "stopped" };
     this.listening = false;
     this.interim = "";
+    if (isHushPhrase(this.held)) {
+      this.held = "";
+      this.partial = "";
+      return { kind: "hush", end: true };
+    }
     // Streamed words held back go in (a radio word among them does nothing).
     const rest = parseRadio(this.held).text;
     this.held = "";
@@ -483,11 +591,18 @@ export class Dictation {
     return { kind: "over", text: rest ? rest + " " : "" };
   }
 
-  /** The control phrases any committed words can end with: the stop family
-   * (stop now; the words before it go in) and, while {@link answering}, an
-   * answer said as the whole dictation (to the router at once, without
-   * waiting for the phrase's end). Else null. */
-  private control(all: string): DictOutcome | null {
+  /** The control phrases: "stop talking" said as a whole phrase (`whole`:
+   * nothing of the phrase is typed yet), the stop family any committed words
+   * can end with (stop now; the words before it go in) and, while
+   * {@link answering}, an answer said as the whole dictation (to the router
+   * at once, without waiting for the phrase's end). Else null. */
+  private control(all: string, whole: boolean): DictOutcome | null {
+    if (whole && isHushPhrase(all)) {
+      this.interim = "";
+      this.held = "";
+      this.partial = "";
+      return { kind: "hush" };
+    }
     const before = stopTail(all);
     if (before !== null) {
       this.listening = false;
@@ -566,8 +681,11 @@ export interface LiveHooks {
   /** Listening is over: drop the recognizer (it reports nothing more). */
   halt(): void;
   /** A dictation's first phrase, for a session: true when the router acted
-   * on it (and said so) — then it is not typed. */
-  route(text: string): Promise<boolean>;
+   * on it (and said so) — then it is not typed; "hush" when it was "stop
+   * talking" in words only the router knows (listening goes on). */
+  route(text: string): Promise<boolean | "hush">;
+  /** "Stop talking": everything the app is saying or has queued, dropped. */
+  hush?(): void;
   /** The session's live activity (the rows the app polls). */
   activity(title: string): string;
   /** `say` for a submit: the "Read replies aloud" pref. */
@@ -773,6 +891,9 @@ export class LiveDictation {
         t?.erase(out.text);
         this.hooks.caption("Disregarded — go on", true);
         return;
+      case "hush":
+        this.hushed();
+        return;
       case "dropped":
         t?.erase(out.text);
         this.end(out.text ? "Disregarded" : "", false, "stopped");
@@ -815,6 +936,20 @@ export class LiveDictation {
     }
   }
 
+  /** "Stop talking": the app's voice stops; the caption says so for a
+   * second, then listening goes on (or ends, when the phrase came as push
+   * to talk let go). Nothing is typed. */
+  private hushed(): void {
+    this.acted = true;
+    this.hooks.hush?.();
+    if (!this.dict.listening) {
+      this.end(HUSH_LINE);
+      return;
+    }
+    this.hooks.caption(HUSH_LINE, true);
+    setTimeout(() => this.show(), HUSH_CAPTION_MS);
+  }
+
   /** Type `text`; a session's first phrase goes past the router (unless it
    * can't be a command: `route` false) and the dialog guard first. False when
    * it did not go in (and listening ended). */
@@ -822,7 +957,12 @@ export class LiveDictation {
     const t = this.target;
     if (!this.dict.typed && t?.kind !== "field") {
       const words = text.trim();
-      if (route && (await this.hooks.route(words))) {
+      const routed = route ? await this.hooks.route(words) : false;
+      if (routed === "hush") {
+        this.hushed();
+        return false;
+      }
+      if (routed) {
         this.acted = true;
         this.end(null);
         return false;
@@ -863,6 +1003,7 @@ export interface RouteReply {
     | "status"
     | "cancel"
     | "stop"
+    | "hush"
     | "off"
     | "repeat"
     | "condense"
@@ -892,7 +1033,7 @@ export interface RouteReply {
 
 const ROUTE_KINDS = new Set<string>([
   "prompt", "switch", "new", "ambiguous", "no-session", "new-failed", "list",
-  "needs", "status", "cancel", "stop", "off", "repeat", "condense",
+  "needs", "status", "cancel", "stop", "hush", "off", "repeat", "condense",
   "switch_index", "switch_rel", "answer", "question",
 ]);
 
@@ -1241,8 +1382,10 @@ export interface HandsFreeDeps {
   /** The name a spoken line leads with ({@link voiceName}: none for the
    * session you are looking at); `name` when absent. */
   voiceName?(title: string): string;
-  /** Caption the line and say it; resolves once it has been said. */
-  speak(line: string): Promise<void>;
+  /** Caption the line and say it (`title`: the session it is about — the
+   * queue can drop one ask's lines); resolves once it has been said, cut
+   * off, or dropped. */
+  speak(line: string, title: string): Promise<void>;
   /** Resolves once the speech queue has nothing left to say: the mic never
    * opens while another session's line is still being read. */
   drained?(): Promise<void>;
@@ -1265,42 +1408,61 @@ export interface HandsFreeDeps {
 export class HandsFree {
   private seen = "";
   private running = false;
+  /** Resolves when the run under way is over ({@link settled}). */
+  private finished: Promise<void> = Promise.resolve();
+  private endRun: () => void = () => {};
   /** {@link stop}ped: listening for this title ends, no retry. */
   private stopped = "";
 
   constructor(private deps: HandsFreeDeps) {}
 
+  /** Resolves once nothing is being read out or listened for here — the
+   * next step of an ask waits for the previous one's read-out to be over. */
+  settled(): Promise<void> {
+    return this.running ? this.finished : Promise.resolve();
+  }
+
+  private begin(): void {
+    this.running = true;
+    this.finished = new Promise<void>((r) => (this.endRun = r));
+  }
+
+  private over(): void {
+    this.running = false;
+    this.endRun();
+  }
+
   /** A dialog came up on `title` (its activity went to clarify). */
   async dialog(title: string): Promise<void> {
     const x = this.deps;
     if (!this.ready(title) || title !== x.focused()) return;
-    this.running = true;
+    this.begin();
     try {
       const d = await x.fetchDialog(title).catch(() => null);
       if (!d || !d.parsed || !d.options.length || d.id === this.seen) return;
       if (!x.replies() || x.busy() || title !== x.focused()) return;
       this.seen = d.id;
       const name = x.name(title);
-      await x.speak(dialogSpeech(this.spoken(title), d));
+      await x.speak(dialogSpeech(this.spoken(title), d), title);
       if (!(await x.approveDialogs())) {
-        await x.speak("Answer it on the screen.");
+        await x.speak("Answer it on the screen.", title);
         return;
       }
       await this.listen(title, dialogRetryLine(d), name + ": " + dialogChoices(d));
     } finally {
-      this.running = false;
+      this.over();
     }
   }
 
   /** `title`'s reply (already read out) asks `say`, a question. */
   async question(title: string, say: string): Promise<void> {
     if (!this.ready(title)) return;
-    this.running = true;
+    this.begin();
     try {
       const name = this.deps.name(title);
       await this.listen(title, "Still there? " + spokenLine(this.spoken(title), say), "Answer " + name + " — say submit to send");
     } finally {
-      this.running = false;
+      this.over();
     }
   }
 
@@ -1313,7 +1475,7 @@ export class HandsFree {
   async ask(title: string, a: { dialog?: Dialog | null; question?: string; said?: Promise<void> | null }): Promise<void> {
     const x = this.deps;
     if (!this.ready(title)) return;
-    this.running = true;
+    this.begin();
     this.stopped = "";
     try {
       const name = x.name(title);
@@ -1321,10 +1483,10 @@ export class HandsFree {
       if (d) {
         if (!d.parsed || !d.options.length || d.id === this.seen) return;
         this.seen = d.id;
-        await x.speak(dialogSpeech(this.spoken(title), d));
+        await x.speak(dialogSpeech(this.spoken(title), d), title);
         if (this.stopped === title) return;
         if (!(await x.approveDialogs())) {
-          await x.speak("Answer it on the screen.");
+          await x.speak("Answer it on the screen.", title);
           return;
         }
         await this.listen(title, dialogRetryLine(d), name + ": " + dialogChoices(d));
@@ -1333,11 +1495,11 @@ export class HandsFree {
       const q = String(a.question || "").trim();
       if (!q) return;
       if (a.said) await a.said;
-      else await x.speak(spokenLine(this.spoken(title), plain(q)));
+      else await x.speak(spokenLine(this.spoken(title), plain(q)), title);
       if (this.stopped === title) return;
       await this.listen(title, "Still there? " + spokenLine(this.spoken(title), plain(q)), "Answer " + name + " — say submit to send");
     } finally {
-      this.running = false;
+      this.over();
     }
   }
 
@@ -1365,7 +1527,7 @@ export class HandsFree {
         x.caption(x.name(title) + " is waiting on you");
         return;
       }
-      await x.speak(retry);
+      await x.speak(retry, title);
     }
   }
 }
@@ -1399,6 +1561,9 @@ interface Queued {
   line: SpeechLine;
   /** When it was queued (ms). */
   at: number;
+  /** The session it is about ("" for the app's own words): {@link
+   * SpeechQueue.cancel} can drop one session's lines and keep the rest. */
+  title: string;
   done: () => void;
 }
 
@@ -1406,8 +1571,10 @@ interface Queued {
  * read-outs, the router's answers: never two at once, never the browser's
  * voice over the server's.
  *  - in arrival order;
- *  - {@link hold} (the mic is listening) stops the line being said and
- *    starts no other until {@link release};
+ *  - {@link hold} (the mic is listening) cuts the line being said — it is
+ *    over, never resumed — and starts no other until {@link release};
+ *  - {@link cancel} drops everything, or one session's lines (the one being
+ *    said too) and keeps the others';
  *  - a line queued more than {@link SPEECH_STALE_MS} before its turn is
  *    dropped (a debug log, not aloud);
  *  - {@link drained} resolves once nothing is left to say — a hands-free
@@ -1418,6 +1585,8 @@ export class SpeechQueue {
   /** The engine saying the current line (cancel THAT one, even if the
    * engine choice moved since). */
   private speaking: Speaker | null = null;
+  /** The line being said. */
+  private current: Queued | null = null;
   private held = false;
   private turn = 0;
   private waiters: Array<() => void> = [];
@@ -1434,11 +1603,12 @@ export class SpeechQueue {
   }
 
   /** Queue a line; resolves once it has been said (or cut off, or dropped).
-   * `at`: when its news happened (ms), if earlier than now. */
-  say(line: SpeechLine, opts: { at?: number } = {}): Promise<void> {
+   * `at`: when its news happened (ms), if earlier than now; `title`: the
+   * session it is about. */
+  say(line: SpeechLine, opts: { at?: number; title?: string } = {}): Promise<void> {
     if (typeof line === "string" && !line.trim()) return Promise.resolve();
     return new Promise<void>((done) => {
-      this.lines.push({ line, at: opts.at ?? this.now(), done });
+      this.lines.push({ line, at: opts.at ?? this.now(), title: opts.title || "", done });
       this.pump();
     });
   }
@@ -1462,10 +1632,12 @@ export class SpeechQueue {
     return new Promise<void>((r) => this.waiters.push(r));
   }
 
-  /** Listening: stop talking now; what is queued waits for {@link release}. */
+  /** Listening: stop talking now (the line is over — its engine is
+   * cancelled before this returns); what is queued waits for
+   * {@link release}. */
   hold(): void {
     this.held = true;
-    this.speaking?.cancel();
+    this.cut();
   }
 
   release(): void {
@@ -1473,13 +1645,31 @@ export class SpeechQueue {
     this.pump();
   }
 
-  /** Stop and forget everything queued. */
-  cancel(): void {
-    const dropped = this.lines;
-    this.lines = [];
-    dropped.forEach((l) => l.done());
-    if (this.speaking) this.speaking.cancel();
-    else this.settle();
+  /** Stop and forget everything queued — or, with `title`, only that
+   * session's lines (the one being said, if it is one of them): the others
+   * play on. */
+  cancel(title?: string): void {
+    const drop = title === undefined ? this.lines : this.lines.filter((l) => l.title === title);
+    this.lines = title === undefined ? [] : this.lines.filter((l) => l.title !== title);
+    drop.forEach((l) => l.done());
+    if (this.current && (title === undefined || this.current.title === title)) this.cut();
+    if (this.held) this.settle();
+    else this.pump();
+  }
+
+  /** The line being said is over now: its engine cancelled (synchronously —
+   * both engines stop their audio inside cancel()), its promise resolved,
+   * whatever the engine's own late resolve does after. */
+  private cut(): void {
+    const sp = this.speaking;
+    const cur = this.current;
+    if (!sp) return;
+    this.speaking = null;
+    this.current = null;
+    this.turn++;
+    sp.cancel();
+    this.onSpeaking(false);
+    cur?.done();
   }
 
   private settle(): void {
@@ -1512,10 +1702,12 @@ export class SpeechQueue {
       const turn = ++this.turn;
       this.last = text;
       this.speaking = sp;
+      this.current = next;
       this.onSpeaking(true);
       const done = () => {
         if (this.turn !== turn || !this.speaking) return;
         this.speaking = null;
+        this.current = null;
         this.onSpeaking(false);
         next.done();
         this.pump();
@@ -1524,6 +1716,24 @@ export class SpeechQueue {
       return;
     }
   }
+}
+
+/** The first audio after the app's own voice was cut is not the person (the
+ * speaker's tail, the room): the server's recognizer drops this much. */
+export const BARGE_SKIP_MS = 150;
+
+/** The mic is keyed while the app may be talking (barge-in): stop talking
+ * BEFORE the mic opens — the line being said is cut (never resumed) and,
+ * when the person keyed it to answer an ask (`title`), every line still
+ * queued for that ask is dropped; other sessions' lines wait for the mic to
+ * be done. Returns how much of the first audio to skip (0 when nothing was
+ * being said). */
+export function bargeIn(q: SpeechQueue, title: string): number {
+  const talking = q.busy;
+  // Held first: dropping the ask's lines must not start another's.
+  q.hold();
+  if (title) q.cancel(title);
+  return talking ? BARGE_SKIP_MS : 0;
 }
 
 /** One chunk per sentence; long sentences cut at a comma past ~180 chars
@@ -1763,7 +1973,10 @@ export interface RecognizerHandlers {
 export interface Recognizer {
   readonly name: "browser" | "server";
   available(): boolean;
-  start(h: RecognizerHandlers): boolean;
+  /** `skipMs`: the first audio to drop — the app's own voice was cut just
+   * before (barge-in, {@link BARGE_SKIP_MS}); the server's recognizer
+   * honours it, Web Speech can't. */
+  start(h: RecognizerHandlers, opts?: { skipMs?: number }): boolean;
   /** End listening but deliver what was said (a final, or the clip's words)
    * before onEnd. */
   finish(): void;
@@ -2005,6 +2218,8 @@ export function serverRecognizer(
   let lastEnd: Promise<void> = Promise.resolve();
   /** Streams open now, abandoned by stop(). */
   const open = new Set<string>();
+  /** Barge-in: audio before this (ms) is the app's own voice dying away. */
+  let skipUntil = 0;
 
   const unhold = () => {
     if (!holding) return;
@@ -2360,7 +2575,8 @@ export function serverRecognizer(
       else pump(c);
     };
     try {
-      c.rec = startWavRecording(s, ctx, { targetRate: CLIP_RATE, onLevel });
+      const skip = Math.max(0, skipUntil - Date.now());
+      c.rec = startWavRecording(s, ctx, { targetRate: CLIP_RATE, onLevel, skipS: skip / 1000 });
     } catch {
       discard(c);
       failed("start-failed");
@@ -2380,9 +2596,10 @@ export function serverRecognizer(
     lastError: "",
     mic,
     available: () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia && !!audioCtxCtor(),
-    start(handlers: RecognizerHandlers) {
+    start(handlers: RecognizerHandlers, o: { skipMs?: number } = {}) {
       self.stop();
       if (!self.available()) return false;
+      skipUntil = Date.now() + Math.max(0, o.skipMs || 0);
       h = handlers;
       want = true;
       finishing = false;
@@ -2442,6 +2659,9 @@ export interface VoiceCfg {
   tts: "phone" | "server";
   /** Settings → Voice "Approve dialogs by voice": unknown reads as off. */
   approve_dialogs?: boolean;
+  /** The server asks every prompt for a Say line ("Everything" on some
+   * device); absent from an older server. */
+  say_all?: boolean;
   server_ready: {
     stt?: boolean;
     tts?: boolean;
@@ -2467,6 +2687,7 @@ export async function loadVoiceCfg(prev: VoiceCfg | null): Promise<VoiceCfg> {
         stt: j.stt === "server" ? "server" : "phone",
         tts: j.tts === "server" ? "server" : "phone",
         approve_dialogs: j.approve_dialogs === true,
+        ...(typeof j.say_all === "boolean" ? { say_all: j.say_all } : {}),
         server_ready: j.server_ready && typeof j.server_ready === "object" ? j.server_ready : {},
         system: j.system && typeof j.system === "object" ? j.system : {},
       };

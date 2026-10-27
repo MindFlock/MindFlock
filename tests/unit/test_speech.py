@@ -875,3 +875,75 @@ class TestWarm:
         gate.set()
         t.join(5)
         assert speech.loaded() == ["whisper:small"]
+
+
+def test_a_prompt_biases_the_local_decoder(whisper):
+    stt = speech.LocalSTT()
+    stt.transcribe(b"RIFF", "audio/wav", "en", prompt="MindFlock")
+    assert whisper.calls[-1][1] == {
+        "language": "en",
+        "beam_size": 5,
+        "initial_prompt": "MindFlock",
+    }
+    stt.transcribe(b"RIFF", "audio/wav", "en")
+    assert "initial_prompt" not in whisper.calls[-1][1]
+
+
+class TestLocalHostNeedsNoKey:
+    """A local model server that speaks the OpenAI shape (Voice Lab,
+    Kokoro-FastAPI, a whisper server) wants no key: loopback, private and
+    plain-http hosts are ready without one; a public https host still is not."""
+
+    @pytest.mark.parametrize(
+        "url,local",
+        [
+            ("http://127.0.0.1:8770/v1", True),
+            ("http://localhost:8880/v1", True),
+            ("http://192.168.1.20:8000/v1", True),
+            ("http://10.0.0.5/v1", True),
+            ("https://mac-mini.local/v1", True),
+            ("https://box.tail1234.ts.net/v1", True),
+            ("http://speech.example.com/v1", True),  # clear text: a key would not help
+            ("https://api.openai.com/v1", False),
+            ("https://api.groq.com/openai/v1", False),
+            ("", False),
+        ],
+    )
+    def test_local_host(self, url, local):
+        assert speech._local_host(url) is local
+
+    def test_tts_ready_and_speaks_without_a_key_on_a_local_host(self, monkeypatch):
+        _set(
+            tts_backend="openai",
+            tts_url="http://127.0.0.1:8770/v1",
+            tts_api_key="",
+            tts_voice="harvey",
+        )
+        http = _Http(ctype="audio/wav", body=b"RIFFwav")
+        monkeypatch.setattr(speech, "_http", http)
+        tts = speech.OpenAITTS()
+        ok, detail = tts.ready()
+        assert ok and "127.0.0.1" in detail
+        data, mime = tts.speak("Hello")
+        assert data == b"RIFFwav" and mime.startswith("audio/wav")
+        call = http.calls[0]
+        assert call.url == "http://127.0.0.1:8770/v1/audio/speech"
+        assert "Authorization" not in call.headers  # no bearer header without a key
+        assert json.loads(call.body)["voice"] == "harvey"
+
+    def test_a_public_host_still_needs_a_key(self):
+        _set(tts_backend="openai", tts_url="https://api.openai.com/v1", tts_api_key="")
+        ok, detail = speech.OpenAITTS().ready()
+        assert not ok and "needs an API key" in detail
+        with pytest.raises(speech.SpeechError):
+            speech.OpenAITTS().speak("Hello")
+
+    def test_stt_without_a_key_on_a_local_host(self, monkeypatch):
+        _set(stt_backend="openai", stt_url="http://localhost:9000/v1", stt_api_key="")
+        http = _Http()
+        monkeypatch.setattr(speech, "_http", http)
+        assert speech.OpenAISTT().ready()[0]
+        assert (
+            speech.OpenAISTT().transcribe(b"RIFF", "audio/wav", "en") == "hello there"
+        )
+        assert "Authorization" not in http.calls[0].headers

@@ -700,7 +700,16 @@ with the CLI's selection cursor on one of its lines; for the others their
 own equivalent (aider's `[Yes]:` input line, opencode's button row and
 hint, Cline's `[y] Approve` row with only its status lines below, goose's
 `◆` over a radio list). A numbered list the agent merely printed has none
-of them, so it never parses. Options get a `kind`
+of them, so it never parses. Nor do Claude Code's **own command menus**
+(`/model`, `/effort`, `/config`, `/permissions`, `/usage`, the slash
+autocomplete): the person opened them and nobody is asking anything, yet the
+`/model` picker draws the same `❯ 2.` cursor list a dialog does. Their
+footers and headings (`dialogs.CLAUDE_MENU_SIGNS`: *Enter to set as
+default*, *s to use this session only*, *Tab to toggle*, *←/→ to switch*,
+*Type to filter*, *r to retry*, *Select model*, a `❯ /command` row) veto
+`parse_claude`, `dialog_on_screen` and — as a lookahead on the cursor
+regex (`CLAUDE_MENU_VETO`) — the `waiting_patterns` clarify reading, pinned
+by the `claude2_menu_*` captures. Options get a `kind`
 from their label: `yes`, `always` ("don't ask again", "allow all edits
 during this session", "auto-accept", a label starting "Always"), `no` or
 `other` (aider's and opencode's buttons have fixed kinds, see above). Every
