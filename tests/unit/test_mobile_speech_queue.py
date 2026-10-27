@@ -276,10 +276,51 @@ def test_nod_and_listen_wiring():
     chime = _whole(js, "voiceChime")
     assert (
         "voice.prefs.sounds === false" in chime
-        and "if (p && !p.nod) { voice.chimeWait = kind; return false; }" in chime
+        and 'if (p && (!p.nod || kind === "stop")) { voice.chimeWait = kind; return false; }'
+        in chime
     )
     assert 'if (!voiceIsListening() && !L.woke) voiceChime("start");' in _whole(
         js, "voiceListen"
     )
     assert 'voiceChime("stop");' in _whole(js, "voiceSetState")
-    assert "voiceChimeFlush();" in _whole(js, "voiceSpeechEnd")
+    # A held chime goes once nothing is said and the next line is not a
+    # confirmation (after the last nod in a row), the next line after it.
+    assert (
+        "if (!S.playing && voice.chimeWait && !(line && line.nod) && voiceChimeFlush() && line) {"
+        in pump
+        and "S.timer = setTimeout(voiceSpeechPump, VOICE_CHIME_MS);" in pump
+    )
+    assert "voiceChimeFlush" not in end
+    # A cut line never leaves its chime for later.
+    assert 'voice.chimeWait = "";' in _whole(js, "voiceSpeechStop")
+    assert 'voice.chimeWait = "";' in _whole(js, "voiceBargeIn")
+
+
+def test_a_stop_never_cuts_its_own_confirmation():
+    """A stop phrase, "over and out" and a send's nod queue the confirmation
+    BEFORE listening ends — so the stop chime (held for a nod) comes after
+    the line, never over it — and cancel nothing; the phone's recognizer is
+    not restarted under a line said over the listen ("Cleared.")."""
+    js = _js()
+    stop = _whole(js, "voiceStopPhrase")
+    assert stop.index('voiceNod("Stopped.");') < stop.index("voiceListenKept();")
+    assert stop.index('voiceNod("Stopped.");') < stop.index("voiceIdle(")
+    assert "voiceSpeechStop" not in stop and "tts.cancel" not in stop
+    words = _whole(js, "voiceHeardWords")
+    assert (
+        'voiceStopForCommand(); voiceNod("Over and out."); voiceListenKept(); return; }'
+        in words
+    )
+    send = _whole(js, "voiceSend")
+    assert send.index("if (nod) voiceNod(nod);") < send.index(
+        'voiceSetState("sending", text);'
+    )
+    heard = _whole(js, "voiceHeard")
+    assert heard.index('voiceListenContinue();\n      voiceNod("Cleared.");') > 0
+    # Listening over, the line said over it is over none: no echo strip after.
+    assert "if (p && p.over) { p.over = false; voice.nodEcho = null; }" in _whole(
+        js, "voiceSetState"
+    )
+    rec = _whole(js, "voiceRecStart")
+    assert 'if (voice.stt.name === "phone" && p && p.nod && p.over) {' in rec
+    assert "}, VOICE_REC_WAIT_MS);" in rec

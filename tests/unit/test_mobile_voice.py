@@ -259,7 +259,7 @@ def test_mobile_js_radio_rules_over_and_disregard():
     assert 'var out = p.kind === "out";' in words
     assert 'voiceCaption("Nothing to send yet");' in words
     assert (
-        'if (out) { voiceStopForCommand(); voiceListenKept(); voiceNod("Over and out."); return; }'
+        'if (out) { voiceStopForCommand(); voiceNod("Over and out."); voiceListenKept(); return; }'
         in words
     )
     assert (

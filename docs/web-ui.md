@@ -6959,7 +6959,13 @@ this machine (`server_ready.tts_backend` `local` / `system`), and for any
 other host (it may cost per line) only once a line it made has played. The
 phone's own voice says them directly. A phrase heard right after a
 confirmation that starts with its words has them taken off (the phone
-recognizer's echo).
+recognizer's echo). A stop never cuts its own confirmation: *Stopped.*,
+*Over and out.* and *Sent. (Over and out.)* are queued before listening
+ends, so the order is the line, whole → the falling chime → whatever
+waited for the mic (a reply); nothing queued is dropped by a stop (only
+*stop talking* drops lines). After *disregard* the phone's own recognizer,
+if it ended with the phrase (Android), starts again only once *Cleared.*
+is over — its start would take the audio and cut the line.
 
 **Sounds** (the ⚙ sheet, per phone; on by default): a **rising** two-tone
 chime (~120 ms) whenever the mic starts listening — a tap, the wake word,
@@ -6969,7 +6975,9 @@ Cancel, the tap that ends it, a hold's release, the window running out, a
 refused or failed microphone. *Over* (send, listen on) plays none — *Sent.*
 is the cue. Both are made from the page's AudioContext (no asset); the
 recorder skips them; a chime due while a reply is being said waits for it
-to end.
+to end — the falling one for a confirmation too, after the last one in a
+row — and the next line waits for the chime; a line cut short (a tap, Cancel)
+takes its waiting chime with it.
 
 **Wake word: say "MindFlock".** **Listen for "MindFlock"** in the ⚙ sheet
 (under Spoken replies; off by default, stored with the phone's other voice
