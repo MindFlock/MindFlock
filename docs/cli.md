@@ -160,10 +160,13 @@ question), then:
   otherwise, so a release install is never written over your working tree.
 
 Database explorer drivers installed from the app (recorded in
-`~/.mindflock/dbclient/drivers.json`) ride along: one `--with <package>` each
-on the uv line (`--with 'psycopg[binary]' --with pymysql`), and `pipx inject
+`~/.mindflock/dbclient/drivers.json`) and the local speech models' packages
+Settings → Voice installed (`~/.mindflock/voice/packages.json`) ride along:
+one `--with <package>` each on the uv line (`--with 'psycopg[binary]' --with
+pymysql --with faster-whisper --with piper-tts`), and `pipx inject
 mindflock <packages…>` after a pipx install (a failed inject only warns — the
-server reinstalls a missing recorded driver when it starts). The rollback
+server reinstalls a missing recorded driver, and the speech packages, when it
+starts). The rollback
 carries them the same way. See
 [extensions.md](extensions.md#worked-example-the-database-client).
 

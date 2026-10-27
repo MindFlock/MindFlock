@@ -7785,6 +7785,9 @@
   // (it waits for you). A question in prose never opens it by itself (the
   // word "question" in a reply is not a prompt): it keeps its Question
   // chip and notification, and opens on its row's tap or notification.
+  // Nor does a dialog the server could not parse (no options to answer
+  // here — a misread frame of a busy screen is the usual reason there is
+  // one): it keeps its chip and notification the same way.
   // Several dialogs → one sheet, "1 of N", oldest first (a prose question
   // is in the stepper only while it is the one shown). Voice reading a
   // select question shows it here too. A push's tap (/m?s=<title>&voice=1) opens it
@@ -7885,7 +7888,7 @@
                key: "q:" + t + ":" + h.ts };
     if (!askHas(inst, "asking") && inst.activity === "clarify") {
       var since = Number(inst.activity_since) || 0;
-      return { title: t, kind: "dialog", text: "", ts: since, dialogId: "", parsed: true, source: "",
+      return { title: t, kind: "dialog", text: "", ts: since, dialogId: "", parsed: false, source: "",
                key: "c:" + t + ":" + since };
     }
     return null;
@@ -7956,7 +7959,7 @@
     if (!ask.deepDone) { askDeepLink(); if (ask.open) return; }
     if (!ask.popup) return;
     var fresh = all.filter(function (e) {
-      return e.kind === "dialog" && !ask.answered[e.key] && !ask.later[e.key] && !ask.seen[e.key] && !askTypingInto(e.title);
+      return e.kind === "dialog" && e.parsed && !ask.answered[e.key] && !ask.later[e.key] && !ask.seen[e.key] && !askTypingInto(e.title);
     });
     if (fresh.length) askShow(fresh[0], "auto");
   }

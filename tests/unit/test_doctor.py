@@ -1497,7 +1497,7 @@ class TestBuiltinSpeech:
         probe(platform="none")
         c = doctor.check_builtin_speech()
         assert c.status == "info" and c.detail == speech_system.LINUX_NONE
-        assert "uv sync --group voice" in c.detail
+        assert "Settings → Voice" in c.detail
 
     def test_registered_and_optional(self):
         assert doctor.CHECKS_BY_ID["builtin-speech"] is doctor.check_builtin_speech

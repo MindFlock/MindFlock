@@ -17,7 +17,11 @@
  *    its pane — one ask pops up once, never again after you dealt with it;
  *  - it is the focused session and you typed into it in the last
  *    TYPED_RECENTLY_MS — you are already handling it, in its pane;
- *  - another dialog is open (it waits for that one to close, never on top).
+ *  - another dialog is open (it waits for that one to close, never on top);
+ *  - the server could not parse the dialog (`parsed` false: no options to
+ *    answer here, the pop-up could only say "open the pane") — it stays in
+ *    the bell, the rail and the toasts. A misread frame of a busy screen
+ *    used to pop up this way, with a line of output as its "question".
  * A question in plain words never pops up by itself (the word "question" in
  * a reply is no prompt): its bell row, rail strip, toast and notification
  * stay, and their Reply opens the pop-up on it (`openAsk`).
@@ -56,6 +60,9 @@ export interface AskItem {
   dialogId: string | null;
   /** This ask's identity: a new ask on the same session has a new key. */
   key: string;
+  /** A dialog the server parsed (options to answer here); false for a prose
+   * question, an unparsed dialog and an ask only an event announced. */
+  parsed: boolean;
 }
 
 /** You typed into the focused pane this recently: you are handling it. */
@@ -110,7 +117,15 @@ export function askKey(kind: AskKind, ts: number, dialogId: string | null): stri
 }
 
 function itemOf(title: string, a: Asking): AskItem {
-  return { title, kind: a.kind, text: a.text || "", ts: a.ts, dialogId: a.dialog_id, key: askKey(a.kind, a.ts, a.dialog_id) };
+  return {
+    title,
+    kind: a.kind,
+    text: a.text || "",
+    ts: a.ts,
+    dialogId: a.dialog_id,
+    key: askKey(a.kind, a.ts, a.dialog_id),
+    parsed: a.kind === "dialog" && a.parsed,
+  };
 }
 
 /** An ask an event announced (`session.question`, activity → clarify) that
@@ -152,11 +167,19 @@ export function askQueue(
   for (const w of waiting || []) {
     if (w.kind !== "question" || !w.title || out.has(w.title) || movedOn(w.title)) continue;
     const ts = num(w.since);
-    out.set(w.title, { title: w.title, kind: "question", text: String(w.text || ""), ts, dialogId: null, key: askKey("question", ts, null) });
+    out.set(w.title, {
+      title: w.title,
+      kind: "question",
+      text: String(w.text || ""),
+      ts,
+      dialogId: null,
+      key: askKey("question", ts, null),
+      parsed: false,
+    });
   }
   for (const e of events || []) {
     if (out.has(e.title) || now - e.at > EVENT_ASK_GRACE_MS || movedOn(e.title)) continue;
-    out.set(e.title, { title: e.title, kind: e.kind, text: e.text, ts: e.ts, dialogId: null, key: askKey(e.kind, e.ts, null) });
+    out.set(e.title, { title: e.title, kind: e.kind, text: e.text, ts: e.ts, dialogId: null, key: askKey(e.kind, e.ts, null), parsed: false });
   }
   return [...out.values()].sort((a, b) => a.ts - b.ts || a.title.localeCompare(b.title));
 }
@@ -241,10 +264,13 @@ export function askSuppressed(
     otherDialog: boolean;
     now?: number;
   }
-): "" | "off" | "prose" | "handled" | "typing" | "other-dialog" {
+): "" | "off" | "prose" | "unparsed" | "handled" | "typing" | "other-dialog" {
   if (!ctx.popupOn) return "off";
   // A question in plain words waits in the bell, the rail and the toasts.
   if (item.kind === "question") return "prose";
+  // So does a dialog with nothing to answer here: the pop-up could only say
+  // "open the pane", and a misread frame is the usual reason there is one.
+  if (!item.parsed) return "unparsed";
   if (ctx.memory.handled(item)) return "handled";
   const now = ctx.now ?? Date.now();
   if (ctx.focused === item.title && ctx.typedAt && now - ctx.typedAt < TYPED_RECENTLY_MS) return "typing";

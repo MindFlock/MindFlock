@@ -118,6 +118,10 @@ def test_question_in_finds_the_question_the_reply_ends_with(text, want):
         "Ran it:\n\n```\nAre you sure? [y/N]\n```",
         # Inside inline code in the final paragraph.
         "I added a `maybe?` operator to the parser.",
+        # A "?" mentioned as a character (a real reply that popped up as a
+        # question).
+        'Wiring the tour into the top-bar mic now (first-use trigger, the "?" in its options).',
+        "Press the '?' key for help.",
         # No "?" and no question word: conservative, not a question.
         "Let me know which you prefer.",
         # A Say: line that does not ask decides too.

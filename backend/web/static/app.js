@@ -34899,7 +34899,8 @@ function itemOf(title, a) {
 		text: a.text || "",
 		ts: a.ts,
 		dialogId: a.dialog_id,
-		key: askKey(a.kind, a.ts, a.dialog_id)
+		key: askKey(a.kind, a.ts, a.dialog_id),
+		parsed: a.kind === "dialog" && a.parsed
 	};
 }
 function askQueue(instances, waiting, events, opts = {}) {
@@ -34925,7 +34926,8 @@ function askQueue(instances, waiting, events, opts = {}) {
 			text: String(w.text || ""),
 			ts,
 			dialogId: null,
-			key: askKey("question", ts, null)
+			key: askKey("question", ts, null),
+			parsed: false
 		});
 	}
 	for (const e of events || []) {
@@ -34936,7 +34938,8 @@ function askQueue(instances, waiting, events, opts = {}) {
 			text: e.text,
 			ts: e.ts,
 			dialogId: null,
-			key: askKey(e.kind, e.ts, null)
+			key: askKey(e.kind, e.ts, null),
+			parsed: false
 		});
 	}
 	return [...out.values()].sort((a, b) => a.ts - b.ts || a.title.localeCompare(b.title));
@@ -34981,6 +34984,7 @@ var askMemory = new AskMemory();
 function askSuppressed(item, ctx) {
 	if (!ctx.popupOn) return "off";
 	if (item.kind === "question") return "prose";
+	if (!item.parsed) return "unparsed";
 	if (ctx.memory.handled(item)) return "handled";
 	const now = ctx.now ?? Date.now();
 	if (ctx.focused === item.title && ctx.typedAt && now - ctx.typedAt < TYPED_RECENTLY_MS) return "typing";
@@ -91218,7 +91222,10 @@ function VoiceSection({ active }) {
 		view,
 		onClearKey: clearKey,
 		install,
-		tryRow: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TryRow, { view })
+		tryRow: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TryRow, {
+			view,
+			install
+		})
 	});
 }
 function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
@@ -91317,7 +91324,10 @@ function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 				})]
 			}),
-			tryRow ?? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TryButtons, { view }),
+			tryRow ?? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TryButtons, {
+				view,
+				install
+			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 				className: "set-section-title",
 				children: "Privacy"
@@ -91783,6 +91793,18 @@ function installOffer(backend, view) {
 	if (backend === "system" && basicRecognizer(view)) return "basic";
 	return null;
 }
+function localModelsMissing(view) {
+	const sr = view?.server_ready;
+	return !!sr && !sr.stt && /local models not installed/i.test(sr.stt_detail || "");
+}
+function tryInstallFix(view, install) {
+	if (!install?.supported) return false;
+	const st = install.status.state;
+	if (st === "running") return true;
+	if (view?.server_ready?.stt) return false;
+	return localModelsMissing(view) || st === "failed" && install.touched;
+}
+var TRY_INSTALL_LINE = "Local models aren't installed on the server yet. Install them here; they run on this computer.";
 function installView(st, allowed) {
 	const last = st.state === "running" ? (st.log || []).filter(Boolean).slice(-1)[0] || "" : "";
 	if (st.state === "running") {
@@ -91889,7 +91911,6 @@ async function installLocalModels(onStatus, opts = {}) {
 }
 function InstallRow({ offer, install, allowed }) {
 	const v = installView(install.status, allowed);
-	const state = install.status.state;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "set-row onboarding-action",
 		id: "voice-install",
@@ -91906,43 +91927,62 @@ function InstallRow({ offer, install, allowed }) {
 					id: "voice-install-why",
 					children: INSTALL_BASIC_LINE
 				}),
-				v.text ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint",
-					id: "voice-install-status",
-					role: "status",
-					children: state === "done" || state === "failed" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatusText, {
-						ok: state === "done",
-						text: v.text
-					}) : v.text
-				}) : offer !== "basic" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint",
-					children: "Downloads faster-whisper and a piper voice; both run on this computer."
-				}),
-				v.button === "busy" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("progress", {
-					className: "voice-install-progress",
-					"aria-label": "Installing local models"
-				}),
-				v.last && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint voice-install-log",
-					id: "voice-install-log",
-					title: v.last,
-					children: v.last
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallStatus, {
+					v,
+					state: install.status.state,
+					idle: offer === "basic" ? "" : "Downloads faster-whisper and a piper voice; both run on this computer.",
+					idPrefix: "voice-install"
 				})
 			]
-		}), v.button && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			className: "test-btn",
-			id: "voice-install-btn",
-			disabled: v.disabled,
-			title: !allowed || install.status.refused ? v.text : void 0,
-			onClick: install.onInstall,
-			children: v.button === "retry" ? "Try again" : v.button === "busy" ? "Installing…" : INSTALL_LABEL
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallButton, {
+			v,
+			install,
+			id: "voice-install-btn"
 		})]
 	});
 }
+function InstallStatus({ v, state, idle, idPrefix }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		v.text ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "set-hint",
+			id: idPrefix + "-status",
+			role: "status",
+			children: state === "done" || state === "failed" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatusText, {
+				ok: state === "done",
+				text: v.text
+			}) : v.text
+		}) : idle && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "set-hint",
+			children: idle
+		}),
+		v.button === "busy" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("progress", {
+			className: "voice-install-progress",
+			"aria-label": "Installing local models"
+		}),
+		v.last && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "set-hint voice-install-log",
+			id: idPrefix + "-log",
+			title: v.last,
+			children: v.last
+		})
+	] });
+}
+function InstallButton({ v, install, id }) {
+	if (!v.button) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "test-btn",
+		id,
+		disabled: v.disabled,
+		title: v.disabled && v.button === "install" ? v.text : void 0,
+		onClick: install.onInstall,
+		children: v.button === "retry" ? "Try again" : v.button === "busy" ? "Installing…" : INSTALL_LABEL
+	});
+}
 var canRecord = () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
-function TryButtons({ view, busy = "", left = 0, result = null, onSay, onHear }) {
+function TryButtons({ view, install, busy = "", left = 0, result = null, onSay, onHear }) {
 	const st = tryState(view, canRecord());
+	const fixV = tryInstallFix(view, install) && install ? installView(install.status, view?.configure_allowed !== false) : null;
 	const hint = (kind, why, idle) => result?.kind === kind ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "set-hint",
 		id: "voice-try-result",
@@ -91991,8 +92031,17 @@ function TryButtons({ view, busy = "", left = 0, result = null, onSay, onHear })
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-label",
 						children: "Recognition"
-					}), hint("hear", st.hear.why, `Listens for ${LISTEN_SECONDS} seconds: say a short sentence.`)]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					}), fixV && install ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallStatus, {
+						v: fixV,
+						state: install.status.state,
+						idle: TRY_INSTALL_LINE,
+						idPrefix: "voice-try-install"
+					}) : hint("hear", st.hear.why, `Listens for ${LISTEN_SECONDS} seconds: say a short sentence.`)]
+				}), fixV && install ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallButton, {
+					v: fixV,
+					install,
+					id: "voice-try-install-btn"
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "test-btn",
 					id: "voice-try-hear",
@@ -92005,7 +92054,7 @@ function TryButtons({ view, busy = "", left = 0, result = null, onSay, onHear })
 		]
 	});
 }
-function TryRow({ view }) {
+function TryRow({ view, install }) {
 	const ctxRef = (0, import_react.useRef)(null);
 	const [busy, setBusy] = (0, import_react.useState)("");
 	const [left, setLeft] = (0, import_react.useState)(0);
@@ -92081,6 +92130,7 @@ function TryRow({ view }) {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TryButtons, {
 		view,
+		install,
 		busy,
 		left,
 		result,
@@ -106005,7 +106055,8 @@ function flowItem(title) {
 		text: f?.dialog.question || "",
 		ts: 0,
 		dialogId: f?.dialog.id || null,
-		key: "sel:" + title
+		key: "sel:" + title,
+		parsed: true
 	};
 }
 var laterRef = { current: null };

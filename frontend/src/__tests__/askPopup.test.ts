@@ -130,7 +130,7 @@ describe("askQueue: one pop-up, oldest first", () => {
       { title: "w", kind: "question" as const, text: "dup", ts: 9, at: NOW },
     ];
     const out = askQueue(rows, waiting, events, { now: NOW, activity: act });
-    expect(out).toEqual([{ title: "w", kind: "question", text: "Ship it?", ts: 7, dialogId: null, key: "q:7" }]);
+    expect(out).toEqual([{ title: "w", kind: "question", text: "Ship it?", ts: 7, dialogId: null, key: "q:7", parsed: false }]);
   });
 
   it("an event's ask is trusted only for EVENT_ASK_GRACE_MS without a row behind it", () => {
@@ -190,6 +190,25 @@ describe("askSuppressed: the open / suppress rules", () => {
     // A prose ask is no dialog, even when the word "question" is all over it.
     const [word] = askQueue([q("w", 1, "Quick question: which one do you want?")], null, null, { activity: (i) => i.activity });
     expect(askSuppressed(word, base)).toBe("prose");
+  });
+
+  it("a dialog the server could not parse never opens it by itself — it stays in the bell", () => {
+    // No options to answer here (a misread frame of a busy screen is the
+    // usual reason): the pop-up could only say "open the pane".
+    const unparsed = askQueue(
+      [inst({ title: "u", activity: "clarify", asking: { kind: "dialog", text: "some output line", ts: 1, dialog_id: "d-u", parsed: false, source: null } })],
+      null,
+      null,
+      { activity: (i) => i.activity }
+    )[0];
+    expect(unparsed.parsed).toBe(false);
+    expect(askSuppressed(unparsed, base)).toBe("unparsed");
+    // An older server sends no `asking`: a clarify row's stand-in is unparsed too.
+    const standIn = askQueue([inst({ title: "o", activity: "clarify" })], null, null, { activity: (i) => i.activity })[0];
+    expect(askSuppressed(standIn, base)).toBe("unparsed");
+    // The parsed one still opens.
+    expect(item.parsed).toBe(true);
+    expect(askSuppressed(item, base)).toBe("");
   });
 
   it("…and counts in the '1 of N' only once you opened it (Reply, a toast, a notification)", () => {

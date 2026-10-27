@@ -111,8 +111,8 @@ WARM_CHECK = 30.0
 WIN_POWERSHELL = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
 NEEDS_WAV = "the built-in recognizer needs a WAV clip (audio/wav): reload the page"
 LINUX_NONE = (
-    "no built-in speech engine on Linux: local models (uv sync --group voice)"
-    " or an OpenAI-compatible host"
+    "no built-in speech engine on Linux: local models (Settings → Voice"
+    " installs them) or an OpenAI-compatible host"
 )
 MAC_PERMISSION = (
     "needs permission: System Settings → Privacy & Security → Speech Recognition"

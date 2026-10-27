@@ -211,3 +211,81 @@ def test_doctor_lists_the_recorded_drivers_as_optional_info(home):
     )
     assert row.detail.startswith("pymysql (mysql), psycopg (postgres)")
     assert not row.install and not row.cmd
+
+
+# --------------------------------------------------------------------------- #
+# The local speech models' packages ride the same carry
+# --------------------------------------------------------------------------- #
+def test_the_voice_record_lives_under_mindflock_home(home):
+    assert self_update.voice_record_path() == home / "voice" / "packages.json"
+    assert self_update.recorded_voice_packages() == []
+    assert self_update.record_voice_packages(["faster-whisper", "piper-tts"])
+    data = json.loads((home / "voice" / "packages.json").read_text("utf-8"))
+    assert data["version"] == 1
+    assert data["packages"] == ["faster-whisper", "piper-tts"]
+    assert data["installed_at"].endswith("Z") and data["python"].count(".") == 1
+    assert self_update.recorded_voice_packages() == ["faster-whisper", "piper-tts"]
+    assert self_update.forget_voice_packages()
+    assert self_update.recorded_voice_packages() == []
+    assert not self_update.forget_voice_packages()
+
+
+def test_a_voice_record_entry_that_is_not_a_plain_package_never_reaches_an_argv(home):
+    assert not self_update.record_voice_packages(["faster-whisper", "--index-url=x"])
+    assert not self_update.record_voice_packages([])
+    (home / "voice").mkdir()
+    (home / "voice" / "packages.json").write_text(
+        json.dumps(
+            {"version": 1, "packages": ["piper-tts", "git+https://x", 3, "piper-tts"]}
+        ),
+        encoding="utf-8",
+    )
+    assert self_update.recorded_voice_packages() == ["piper-tts"]
+    (home / "voice" / "packages.json").write_text("{nope", encoding="utf-8")
+    assert self_update.recorded_voice_packages() == []
+
+
+def test_the_install_line_carries_the_drivers_then_the_voice_packages(home):
+    _record(home, {"postgres": PG})
+    self_update.record_voice_packages(["faster-whisper", "piper-tts"])
+    assert self_update.carried_packages() == [
+        "psycopg[binary]",
+        "faster-whisper",
+        "piper-tts",
+    ]
+    argv = self_update.install_command("uv-tool", "a" * 40)
+    assert argv[6:12] == [
+        "--with",
+        "psycopg[binary]",
+        "--with",
+        "faster-whisper",
+        "--with",
+        "piper-tts",
+    ]
+    assert self_update.driver_carry_commands("pipx") == [
+        [
+            "pipx",
+            "inject",
+            "mindflock",
+            "psycopg[binary]",
+            "faster-whisper",
+            "piper-tts",
+        ]
+    ]
+    assert self_update.recorded_driver_packages() == ["psycopg[binary]"]
+
+
+def test_the_doctor_lists_the_voice_packages(home):
+    assert doctor.check_voice_packages() is None
+    assert doctor.CHECKS_BY_ID["voice-packages"] is doctor.check_voice_packages
+    self_update.record_voice_packages(["faster-whisper", "piper-tts"])
+    row = doctor.check_voice_packages()
+    assert (row.id, row.label, row.status) == (
+        "voice-packages",
+        "Local speech models",
+        "info",
+    )
+    assert (
+        row.detail
+        == "faster-whisper, piper-tts — reinstalled automatically after updates"
+    )

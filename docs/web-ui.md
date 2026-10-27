@@ -2408,7 +2408,10 @@ stepper (‹ ›), the longest-waiting first — the dialogs, and a question in
 words only once you opened it with Reply; `Ctrl+K N` still walks everything
 that needs you.
 
-It does **not** open by itself for a question in words; for an ask you already
+It does **not** open by itself for a question in words; for a dialog the
+server could not parse (no options to answer on the card — it could only say
+*open the pane* — and a misread frame of a busy screen is the usual reason
+there is one: that ask stays in the bell, the rail and the toasts); for an ask you already
 answered, put off or opened in its pane; for the focused session when you typed into it in the last
 10 seconds (you are already answering it there); or over another dialog (it
 waits for that one to close). It waits for the keyboard to be quiet for a
@@ -6489,8 +6492,9 @@ When a session waits on you — a permission prompt or other dialog, or a reply
 that ended with a question in plain prose that nobody has typed to since (the
 server's `asking` on each `GET /api/instances` row) — the phone has an **ask
 sheet** in the middle of the screen, over whatever else is open. It opens
-**by itself only for a real dialog** (a prompt drawn on the screen: a
-permission, a plan approval, Claude's select questions). A question in prose
+**by itself only for a real dialog** (a prompt drawn on the screen that the
+server parsed: a permission, a plan approval, Claude's select questions — not
+one it could not parse, which keeps its chip and notification). A question in prose
 never pops up on its own — a reply that merely says "question" is not a
 prompt: it keeps its **Question** chip on the row, its notification and its
 ntfy push, and its sheet opens when you tap the row or the notification. It

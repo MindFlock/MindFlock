@@ -347,7 +347,13 @@ export function VoiceSection({ active }: { active: boolean }) {
   };
 
   return (
-    <VoiceSectionView model={model} view={view} onClearKey={clearKey} install={install} tryRow={<TryRow view={view} />} />
+    <VoiceSectionView
+      model={model}
+      view={view}
+      onClearKey={clearKey}
+      install={install}
+      tryRow={<TryRow view={view} install={install} />}
+    />
   );
 }
 
@@ -426,7 +432,7 @@ export function VoiceSectionView({
           <span className="ca-slider" />
         </label>
       </div>
-      {tryRow ?? <TryButtons view={view} />}
+      {tryRow ?? <TryButtons view={view} install={install} />}
       <h3 className="set-section-title">Privacy</h3>
       {/* One stack of notes, at the in-field gap: they are one thought. */}
       <div className="set-row" id="voice-privacy-notes">
@@ -835,6 +841,30 @@ export function installOffer(backend: string, view: VoiceView | null | undefined
   return null;
 }
 
+/** Recognition is not ready because the local models are not installed
+ * (the server's own verdict, whichever engine the saved field names). */
+export function localModelsMissing(view: VoiceView | null | undefined): boolean {
+  const sr = view?.server_ready;
+  return !!sr && !sr.stt && /local models not installed/i.test(sr.stt_detail || "");
+}
+
+/** Whether the Try-it Recognition row offers the install instead of its
+ * disabled Try button: the installer exists, and either it is running (a
+ * click here, or the server putting the packages back after an update) or
+ * missing local models are what stops recognition — a terminal command in a
+ * hint is no fix. Once the install is done the server reloads as ready and
+ * the Try button is back. */
+export function tryInstallFix(view: VoiceView | null | undefined, install: InstallProps | null | undefined): boolean {
+  if (!install?.supported) return false;
+  const st = install.status.state;
+  if (st === "running") return true;
+  if (view?.server_ready?.stt) return false;
+  return localModelsMissing(view) || (st === "failed" && install.touched);
+}
+
+/** The Recognition row's line before the install is started from there. */
+export const TRY_INSTALL_LINE = "Local models aren't installed on the server yet. Install them here; they run on this computer.";
+
 /** The installer row's button and line for a status (`allowed` false: the
  * viewer may not change the server). */
 export function installView(
@@ -919,7 +949,6 @@ export async function installLocalModels(
  * while it runs, or how it ended; the button on the right. */
 function InstallRow({ offer, install, allowed }: { offer: "basic" | "local" | null; install: InstallProps; allowed: boolean }) {
   const v = installView(install.status, allowed);
-  const state = install.status.state;
   return (
     <div className="set-row onboarding-action" id="voice-install" data-offer={offer || ""}>
       <div className="onboarding-action-text">
@@ -929,35 +958,65 @@ function InstallRow({ offer, install, allowed }: { offer: "basic" | "local" | nu
             {INSTALL_BASIC_LINE}
           </span>
         )}
-        {v.text ? (
-          <span className="set-hint" id="voice-install-status" role="status">
-            {state === "done" || state === "failed" ? <StatusText ok={state === "done"} text={v.text} /> : v.text}
-          </span>
-        ) : (
-          offer !== "basic" && (
-            <span className="set-hint">Downloads faster-whisper and a piper voice; both run on this computer.</span>
-          )
-        )}
-        {v.button === "busy" && <progress className="voice-install-progress" aria-label="Installing local models" />}
-        {v.last && (
-          <span className="set-hint voice-install-log" id="voice-install-log" title={v.last}>
-            {v.last}
-          </span>
-        )}
+        <InstallStatus
+          v={v}
+          state={install.status.state}
+          idle={offer === "basic" ? "" : "Downloads faster-whisper and a piper voice; both run on this computer."}
+          idPrefix="voice-install"
+        />
       </div>
-      {v.button && (
-        <button
-          type="button"
-          className="test-btn"
-          id="voice-install-btn"
-          disabled={v.disabled}
-          title={!allowed || install.status.refused ? v.text : undefined}
-          onClick={install.onInstall}
-        >
-          {v.button === "retry" ? "Try again" : v.button === "busy" ? "Installing…" : INSTALL_LABEL}
-        </button>
-      )}
+      <InstallButton v={v} install={install} id="voice-install-btn" />
     </div>
+  );
+}
+
+/** The installer's lines in a row's hint position: how it ended (✓ / ✗),
+ * the step while it runs (with the progress bar and the last log line), or
+ * `idle` before it was started ("" draws nothing). */
+function InstallStatus({
+  v,
+  state,
+  idle,
+  idPrefix,
+}: {
+  v: ReturnType<typeof installView>;
+  state: InstallStatus["state"];
+  idle: string;
+  idPrefix: string;
+}) {
+  return (
+    <>
+      {v.text ? (
+        <span className="set-hint" id={idPrefix + "-status"} role="status">
+          {state === "done" || state === "failed" ? <StatusText ok={state === "done"} text={v.text} /> : v.text}
+        </span>
+      ) : (
+        idle && <span className="set-hint">{idle}</span>
+      )}
+      {v.button === "busy" && <progress className="voice-install-progress" aria-label="Installing local models" />}
+      {v.last && (
+        <span className="set-hint voice-install-log" id={idPrefix + "-log"} title={v.last}>
+          {v.last}
+        </span>
+      )}
+    </>
+  );
+}
+
+/** The installer's button for a status (none once it is done). */
+function InstallButton({ v, install, id }: { v: ReturnType<typeof installView>; install: InstallProps; id: string }) {
+  if (!v.button) return null;
+  return (
+    <button
+      type="button"
+      className="test-btn"
+      id={id}
+      disabled={v.disabled}
+      title={v.disabled && v.button === "install" ? v.text : undefined}
+      onClick={install.onInstall}
+    >
+      {v.button === "retry" ? "Try again" : v.button === "busy" ? "Installing…" : INSTALL_LABEL}
+    </button>
   );
 }
 
@@ -972,6 +1031,7 @@ type TryOutcome = TryResult & { kind: "say" | "hear" };
  * come from TryRow). */
 function TryButtons({
   view,
+  install,
   busy = "",
   left = 0,
   result = null,
@@ -979,6 +1039,10 @@ function TryButtons({
   onHear,
 }: {
   view: VoiceView | null;
+  /** The local-models installer: when missing local models are what stops
+   * recognition, the Recognition row offers the install instead of a
+   * disabled Try button and a terminal command. */
+  install?: InstallProps;
   busy?: "" | "say" | "hear";
   left?: number;
   result?: TryOutcome | null;
@@ -986,6 +1050,8 @@ function TryButtons({
   onHear?(): void;
 }) {
   const st = tryState(view, canRecord());
+  const fix = tryInstallFix(view, install);
+  const fixV = fix && install ? installView(install.status, view?.configure_allowed !== false) : null;
   const hint = (kind: "say" | "hear", why: string, idle: string) =>
     result?.kind === kind ? (
       <span className="set-hint" id="voice-try-result" role="status">
@@ -1018,18 +1084,26 @@ function TryButtons({
       <div className="set-row onboarding-action" data-try="hear">
         <div className="onboarding-action-text">
           <span className="set-label">Recognition</span>
-          {hint("hear", st.hear.why, `Listens for ${LISTEN_SECONDS} seconds: say a short sentence.`)}
+          {fixV && install ? (
+            <InstallStatus v={fixV} state={install.status.state} idle={TRY_INSTALL_LINE} idPrefix="voice-try-install" />
+          ) : (
+            hint("hear", st.hear.why, `Listens for ${LISTEN_SECONDS} seconds: say a short sentence.`)
+          )}
         </div>
-        <button
-          type="button"
-          className="test-btn"
-          id="voice-try-hear"
-          disabled={!st.hear.ok || !!busy}
-          title={st.hear.why || undefined}
-          onClick={onHear}
-        >
-          {busy === "hear" ? (left > 0 ? `Listening… ${left}` : "Recognizing…") : "Try recognition"}
-        </button>
+        {fixV && install ? (
+          <InstallButton v={fixV} install={install} id="voice-try-install-btn" />
+        ) : (
+          <button
+            type="button"
+            className="test-btn"
+            id="voice-try-hear"
+            disabled={!st.hear.ok || !!busy}
+            title={st.hear.why || undefined}
+            onClick={onHear}
+          >
+            {busy === "hear" ? (left > 0 ? `Listening… ${left}` : "Recognizing…") : "Try recognition"}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1037,7 +1111,7 @@ function TryButtons({
 
 /** Try it, live: one AudioContext made inside the first click (one made
  * outside a gesture stays suspended), the mic opened per try and released. */
-function TryRow({ view }: { view: VoiceView | null }) {
+function TryRow({ view, install }: { view: VoiceView | null; install?: InstallProps }) {
   const ctxRef = useRef<AudioContext | null>(null);
   const [busy, setBusy] = useState<"" | "say" | "hear">("");
   const [left, setLeft] = useState(0);
@@ -1105,6 +1179,7 @@ function TryRow({ view }: { view: VoiceView | null }) {
   return (
     <TryButtons
       view={view}
+      install={install}
       busy={busy}
       left={left}
       result={result}

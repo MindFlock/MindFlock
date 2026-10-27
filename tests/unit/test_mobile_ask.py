@@ -117,7 +117,7 @@ def test_ask_sheet_open_rules_and_notifications():
     refresh = _fn(a, "askRefresh")
     # Never one put off, answered, already shown, or while typing into it.
     assert (
-        'e.kind === "dialog" && !ask.answered[e.key] && !ask.later[e.key] && !ask.seen[e.key] && !askTypingInto(e.title)'
+        'e.kind === "dialog" && e.parsed && !ask.answered[e.key] && !ask.later[e.key] && !ask.seen[e.key] && !askTypingInto(e.title)'
         in refresh
     )
     # A prose question is in the stepper only while it is the one shown.
@@ -238,6 +238,13 @@ def test_prose_questions_never_pop_up():
     refresh = _fn(a, "askRefresh")
     fresh = refresh.split("var fresh = all.filter(")[1].split("});")[0]
     assert 'e.kind === "dialog"' in fresh
+    # Nor a dialog the server could not parse (nothing to answer on the sheet;
+    # a misread frame of a busy screen is the usual reason there is one).
+    assert "e.parsed &&" in fresh
+    entry = _fn(a, "askEntryOf")
+    assert "parsed: a.parsed !== false" in entry
+    # An older server's clarify stand-in is unparsed too (no `asking` at all).
+    assert 'kind: "dialog", text: "", ts: since, dialogId: "", parsed: false' in entry
     # Announced (buzz / notification) whatever its kind.
     assert "askAnnounce(e);" in refresh
     assert "askOpenFor(e.title" in a

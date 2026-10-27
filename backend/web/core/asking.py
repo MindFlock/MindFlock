@@ -71,8 +71,11 @@ _INLINE_CODE_RE = re.compile(r"`+([^`]*)`+")
 _LIST_LINE_RE = re.compile(r"^\s*(?:[-*+•]|\d+[.)]|[a-zA-Z][.)])\s+\S")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])[\"'”’)\]]*\s+")
 _ENDS_ASKING_RE = re.compile(r"\?[\"'”’)\]*_]*$")
-#: Stands in for a ``?`` inside inline code while sentences are judged, so
-#: ``foo?`` in backticks never makes a sentence a question.
+#: A ``?`` mentioned as a character — quoted on its own (``the "?" key``).
+_QUOTED_QMARK_RE = re.compile(r"([\"'“‘])\?([\"'”’])")
+#: Stands in for a ``?`` inside inline code (or quoted on its own) while
+#: sentences are judged, so ``foo?`` in backticks never makes a sentence a
+#: question.
 _CODE_QMARK = "\x00"
 
 
@@ -122,6 +125,9 @@ def _asking_sentences(lines: list) -> Optional[str]:
     you …" — :data:`spoken._QUESTION_START_RE`)."""
     joined = "\n".join(lines)
     masked = _INLINE_CODE_RE.sub(lambda m: m.group(0).replace("?", _CODE_QMARK), joined)
+    masked = _QUOTED_QMARK_RE.sub(
+        lambda m: m.group(1) + _CODE_QMARK + m.group(2), masked
+    )
     plain = _spoken.strip_markdown(masked)
     if not plain:
         return None
@@ -142,7 +148,8 @@ def question_in(text) -> Optional[str]:
       question: the line's question sentences when it asks, else None.
     * Otherwise the reply's FINAL paragraph (fenced code dropped, markdown
       stripped) must ask — a sentence ending in ``?`` (a ``?`` inside inline
-      code does not count), or an opening question word. One exception: a
+      code or quoted on its own, ``the "?" key``, does not count), or an
+      opening question word. One exception: a
       final paragraph that is only a list (the options) defers to the
       paragraph just above it, which must then END in ``?`` ("Which do you
       want?" then "1. A / 2. B").
