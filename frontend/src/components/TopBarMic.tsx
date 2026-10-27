@@ -27,9 +27,11 @@
  * you speak, like a phone keyboard: the server's recognizer streams when it
  * can (`server_ready.stt_stream`) and Web Speech has interim words — either
  * way the phrase so far is typed as a guess and corrected (backspaces, then
- * the new end) as the recognizer changes its mind, the unsure words muted in
- * the caption until they commit; a trailing radio word or stop phrase is
- * never typed, not even as a guess. "Stop recording" stops at any
+ * the new end) as the recognizer changes its mind, and at the phrase's end
+ * the server's accurate model re-hears the whole phrase and, when it heard it
+ * otherwise, the whole typed phrase is corrected to that (the radio words and
+ * the router read the corrected words); a trailing radio word or stop phrase
+ * is never typed, not even as a guess. "Stop recording" stops at any
  * point; "focus three" / "next session" move by the rail's numbers; "yes" /
  * "no" / "always" answer the focused session's dialog or question; the Talk
  * hotkey (`mindflock:voice-talk`) is push to talk from anywhere; and with
@@ -41,10 +43,17 @@
  * lands (the options opening, the button going down, the ask pop-up's mic
  * appearing) and kept warm KEEP_STREAM_MS after a dictation, and the server's
  * stream opens while the mic gets ready. While listening, a ring on the button
- * follows the level, the caption says "Hearing you…" once the level says
- * speech, and the first words are typed (and shown greyed) as soon as the
- * first chunk is back — sent after 150 ms of speech, later chunks paced by
- * the server's pass time (lib/voiceDesktop chunkMinS).
+ * stays still — only its opacity steps with the level (quiet / hearing you
+ * / loud), never its size — and the first words are typed as soon as the first
+ * chunk is back — sent after 150 ms of speech, later chunks paced by the
+ * server's pass time (lib/voiceDesktop chunkMinS).
+ *
+ * What the bar shows: one small pill beside the mic (lib/voiceDesktop
+ * micPill) — "Listening…", "Speaking…", "Quiet." for a second after "stop
+ * talking", else nothing. No transcript and no box appears on its own, while
+ * listening or while a line is read: the words are in the terminal already.
+ * The options (right-click / Shift+click only) keep the level, the words so
+ * far and the last line as diagnostics; the button's tooltip has that line.
  *
  * The wake word (lib/wakeWord): with "Listen for “MindFlock”" on, the mic
  * stays open in standby (a faint ring and a dot on the button; the ring still
@@ -61,12 +70,11 @@ import { queryClient, refreshInstances, type EventEnvelope } from "../state/quer
 import type { Instance } from "../api/types";
 import { effectiveActivity } from "../lib/sessionState";
 import { selectSession } from "../lib/sessionActions";
-import { openSettings, type SettingsScreen } from "../lib/openSettings";
 import { fetchDialog } from "../lib/flockActions";
 import { KEYMAP, overlayOpen, shortcutLabels } from "../lib/keymap";
 import { askPopupOn } from "../lib/ask";
+import { placeUnder } from "../lib/menuPlace";
 import { askVoice, getMicState, publishMicState, registerAskMic, type AskVoice } from "../lib/askVoice";
-import type { Dialog } from "../api/types";
 import {
   DICT_HINT,
   DICT_IDLE_MS,
@@ -74,6 +82,8 @@ import {
   HUSH_LINE,
   DEFAULT_VOICE_CFG,
   HOLD_FINAL_WAIT_MS,
+  finalLine,
+  micPill,
   HandsFree,
   HeardTurns,
   LiveDictation,
@@ -89,7 +99,6 @@ import {
   loadVoiceCfg,
   loadVoicePrefs,
   noRecognizerLine,
-  pendingDiagnostics,
   recognizerErrorLine,
   routePhrase,
   runVoiceCommand,
@@ -116,8 +125,6 @@ import {
   type VoicePrefs,
 } from "../lib/voiceDesktop";
 import {
-  liveTail,
-  liveUnsure,
   meterFeed,
   meterPoll,
   meterRef,
@@ -126,14 +133,15 @@ import {
   onHearing,
   rmsOf,
   voiceMark,
+  voiceWake,
 } from "../lib/voiceMic";
 import {
   CHIME_MS,
   WAKE_HINT,
   WAKE_LISTEN_MS,
-  WAKE_SWITCH_HINT,
   WakeStandby,
   chime,
+  wakeLine,
   wakeStatus,
   type WakeStatus,
 } from "../lib/wakeWord";
@@ -156,6 +164,18 @@ const queue = new SpeechQueue(
 
 /** Standby (the wake word) runs the level meter. */
 let standbyMeter = false;
+/** A wake's dictation and when its word ended: its latency is taken when it
+ * listens (the recognizer records). */
+let wakeFrom: { d: LiveDictation; at: number } | null = null;
+/** The last wake's latency (ms), the word's end → listening — diagnostics. */
+let lastWakeMs: number | null = null;
+/** `d` listens now: a wake's latency, once. */
+function listened(d: LiveDictation) {
+  if (wakeFrom?.d !== d) return;
+  lastWakeMs = Math.max(0, Date.now() - wakeFrom.at);
+  wakeFrom = null;
+  voiceWake(lastWakeMs);
+}
 
 /** The browser recognizer has no level of its own: an AnalyserNode on the
  * kept microphone stream gives the meter one. Its undo, while it runs. */
@@ -232,6 +252,24 @@ function refreshQuestion(title: string) {
     .catch(() => {});
 }
 
+/** The options' width (CSS .mic-pop), never wider than the window less 32 px. */
+const POP_W = 280;
+/** "Read replies aloud" in the options' few words (the full wording is the
+ * choice's tooltip and Settings → Voice's). */
+const REPLIES_SHORT: Record<VoicePrefs["replies"], string> = { off: "Off", mine: "Mine", all: "Everything" };
+
+/** The engines, the server's pass and final times and the last wake's
+ * latency, as one line — Settings → Voice (This computer's mic) shows it;
+ * the options stay controls only. */
+export function micDiagnostics(): string {
+  const c = cfgNow;
+  const stt = recEngine(c);
+  const tts = ttsEngine(c) === "server" ? "server" : browserSp.available() ? "browser" : "none";
+  const pass =
+    stt === "server" ? [passLine(c.server_ready.stt_backend, serverRec.passMs), finalLine(serverRec.finalMs)] : [];
+  return [engineDiagnostics(c, stt, tts), ...pass, wakeLine(lastWakeMs)].filter(Boolean).join(" · ");
+}
+
 /** The push-to-talk hotkey as the keymap shows it (the entry whose help says
  * "talk"); "" when it has none — the ask pop-up's "Hotkey: Ctrl+T" hint. */
 export function talkHotkey(): string {
@@ -239,10 +277,6 @@ export function talkHotkey(): string {
   return (e?.id && shortcutLabels(e.id)[0]) || "";
 }
 
-/** The Talk hotkey, else where to find it. */
-function talkShortcut(): string {
-  return talkHotkey() || "the Talk shortcut in Keyboard shortcuts";
-}
 
 /** The recognizer this page has under `c`: "none" when it has none. */
 function recEngine(c: VoiceCfg): SttEngine {
@@ -250,9 +284,6 @@ function recEngine(c: VoiceCfg): SttEngine {
   return e === "browser" && !browserRec.available() ? "none" : e;
 }
 
-// The Voice tab of Settings (SettingsDialog's SCREENS) lands with the
-// voice-settings-tab branch; until then the key falls back to the default screen.
-const VOICE_SCREEN = "voice" as SettingsScreen;
 
 /** A box the words can go into instead of a session (never the terminal's
  * hidden xterm textarea: that one IS the session). */
@@ -353,8 +384,11 @@ export function TopBarMic() {
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(queue.busy);
   const [caption, setCaptionState] = useState("");
-  const [unsure, setUnsure] = useState("");
+  /** "Quiet." in the pill, for a second after "stop talking". */
+  const [quiet, setQuiet] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  /** The window's size while the options are open (they re-fit to it). */
+  const [, setViewport] = useState("");
   const focusedName = useUi((s) => (s.focused ? s.aliases[s.focused] || s.focused : ""));
 
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -368,13 +402,12 @@ export function TopBarMic() {
   const deciding = useRef<(() => void) | null>(null);
   const idleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const captionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const quietTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const holding = useRef(false);
   /** The hotkey's own press is under way (a blur's `up` ends only that). */
   const keyHeld = useRef(false);
   /** Reading a dialog or a question out and listening for the answer. */
   const hands = useRef<HandsFree | null>(null);
-  /** The options' Diagnostics line for what waits on the focused session. */
-  const [pendingLine, setPendingLine] = useState("");
   /** The dictation hands-free listening opened (an ask read out). */
   const handsLive = useRef<LiveDictation | null>(null);
   /** Listening for the wake word (lib/wakeWord); its status for the button
@@ -382,12 +415,12 @@ export function TopBarMic() {
   const standby = useRef<WakeStandby | null>(null);
   const [wake, setWake] = useState<WakeStatus>(wakeStatus);
 
-  /** The caption under the mic. `sticky`: stays until replaced (listening, or
-   * words waiting to be continued); otherwise it fades after `ms`.
-   * `tail`: streamed words the recognizer may still change, shown muted. */
+  /** The mic's last line — never on the bar: the options' diagnostics, the
+   * tooltip and the ask pop-up (lib/askVoice) show it. `sticky`: stays until
+   * replaced (listening, or words waiting to be continued); otherwise it
+   * fades after `ms`. `tail`: streamed words the recognizer may still change. */
   const say = (text: string, sticky = false, tail = "", ms = 6000) => {
     setCaptionState(text);
-    setUnsure(tail);
     publishMicState({ caption: text, unsure: tail });
     clearTimeout(captionTimer.current);
     if (text && !sticky) captionTimer.current = setTimeout(() => setCaptionState(""), ms);
@@ -398,7 +431,15 @@ export function TopBarMic() {
    * listening if it was. */
   const hush = () => {
     queue.cancel();
+    quietPill();
     if (!live.current) say(HUSH_LINE, false, "", HUSH_CAPTION_MS);
+  };
+
+  /** The pill says "Quiet." for {@link HUSH_CAPTION_MS}. */
+  const quietPill = () => {
+    setQuiet(true);
+    clearTimeout(quietTimer.current);
+    quietTimer.current = setTimeout(() => setQuiet(false), HUSH_CAPTION_MS);
   };
 
   // Settings → Voice edits the same prefs: follow it.
@@ -447,6 +488,7 @@ export function TopBarMic() {
       unsubSettings();
       clearTimeout(idleTimer.current);
       clearTimeout(captionTimer.current);
+      clearTimeout(quietTimer.current);
       rec.current?.stop();
       untap?.();
       serverRec.mic.releaseIdle();
@@ -628,7 +670,10 @@ export function TopBarMic() {
           await routed(reply, text, session);
           return true;
         },
-        hush: () => queue.cancel(),
+        hush: () => {
+          queue.cancel();
+          quietPill();
+        },
         activity: liveActivity,
         replies: () => prefsRef.current.replies !== "off",
         submitted: (title, wantSay) => {
@@ -660,7 +705,9 @@ export function TopBarMic() {
           if (live.current === d && !d.dict.shown && !into) say(t + " · " + DICT_HINT, true);
         },
         onReady: () => {
-          if (live.current === d) d.ready();
+          if (live.current !== d) return;
+          d.ready();
+          listened(d);
         },
         // The ring, the level bar and "Hearing you…" (lib/voiceMic).
         onLevel: (rms) => {
@@ -686,8 +733,10 @@ export function TopBarMic() {
           if (w) voiceMark("commit");
           void d.stream(w, p);
         },
-        onFlush: (t) => {
-          if (live.current === d) void d.flush(t);
+        // A phrase's end: its last words, and the accurate final when the
+        // server heard the phrase otherwise (the whole phrase retyped to it).
+        onFlush: (t, final) => {
+          if (live.current === d) void d.flush(t, final);
         },
         onPartial: (t) => {
           if (live.current === d) d.unsure(t);
@@ -721,12 +770,14 @@ export function TopBarMic() {
     // Web Speech listens from here, and reports no level: tap one.
     if (r === browserRec) {
       d.ready();
+      listened(d);
       tapLevel(ctx);
     }
     return d;
   };
 
-  // Before the first word: "Hearing you…" while the level says speech.
+  // "Hearing you…" while the level says speech: the ring's opacity step
+  // (lib/voiceMic), never words on the bar.
   useEffect(
     () =>
       onHearing((on) => {
@@ -945,14 +996,17 @@ export function TopBarMic() {
   );
 
   // --- the wake word: standby, and a wake starting listening -------------- //
-  /** A lone "MindFlock": the chime, "Yes?", and listening as a click starts
-   * it (a text box with the keyboard gets the words); nothing heard within
-   * WAKE_LISTEN_MS is a quiet miss. */
-  const woken = () => {
+  /** A lone "MindFlock": listening at once, as a click starts it (a text box
+   * with the keyboard gets the words) — the microphone is already open, so
+   * the recognizer's stream opens now — and the chime in the same moment
+   * (its sound skipped from the recording). Nothing heard within
+   * WAKE_LISTEN_MS is a quiet miss. `soundEnd`: the word's end (latency). */
+  const woken = (soundEnd: number) => {
     if (live.current) return;
-    chime(voiceAudioCtx());
     const d = start(textField(document.activeElement), { hint: WAKE_HINT, skipMs: CHIME_MS + 30 });
     if (!d) return;
+    chime(voiceAudioCtx());
+    wakeFrom = { d, at: soundEnd };
     setTimeout(() => {
       if (live.current === d && !d.heardAnything) d.drop();
     }, WAKE_LISTEN_MS);
@@ -965,7 +1019,7 @@ export function TopBarMic() {
       ctx: voiceAudioCtx,
       speaking: () => queue.busy,
       recording: () => !!live.current,
-      onWake: () => latestWake.current(),
+      onWake: (soundEnd) => latestWake.current(soundEnd),
       onLevel: (rms) => {
         if (!live.current) meterFeed(rms);
       },
@@ -1009,16 +1063,6 @@ export function TopBarMic() {
     // The options are often the step before talking: ready the mic now.
     warmMic(true);
     void refreshCfg();
-    void readPending();
-  };
-
-  /** Diagnostics: the focused session's dialog or question, read now. */
-  const readPending = async () => {
-    const title = useUi.getState().focused || "";
-    const up = !!title && liveActivity(title) === "clarify";
-    let d: Dialog | null = null;
-    if (up) d = await fetchDialog(title).catch(() => null);
-    setPendingLine(pendingDiagnostics(title ? displayName(title) : "", d, up, questions.get(title) || ""));
   };
 
   // The push-to-talk hotkey (the keymap's Talk action): works wherever the
@@ -1055,18 +1099,21 @@ export function TopBarMic() {
       setMenuOpen(false);
       btnRef.current?.focus();
     };
+    const onResize = () => setViewport(window.innerWidth + "x" + window.innerHeight);
     // Capture phase: a click on a terminal pane must close it too, and xterm
     // keeps pointer events to itself once they reach it.
     document.addEventListener("pointerdown", onDown, true);
     document.addEventListener("keydown", onKey, true);
+    window.addEventListener("resize", onResize);
     return () => {
       document.removeEventListener("pointerdown", onDown, true);
       document.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("resize", onResize);
     };
   }, [menuOpen]);
 
   const who = focusedName || "a session";
-  const title = !supported
+  const base = !supported
     ? noRecognizerLine() + " — right-click for options"
     : listening
       ? hold
@@ -1074,113 +1121,109 @@ export function TopBarMic() {
         : "Listening — click to stop (the words stay), Esc to take them back"
       : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") +
         (wake.on ? ", or say “MindFlock”" : "") + ", right-click for options";
+  // The last line (an error, "Sent to…") is there on hover — never a box.
+  const title = caption && !listening ? base + "\n" + caption : base;
+  const pill = micPill({ listening, speaking, quiet });
 
+  // Under the mic, all of it inside the window (8 px from every edge; it
+  // scrolls inside when the window is short).
   const rect = menuOpen ? btnRef.current?.getBoundingClientRect() : undefined;
-  const popStyle = rect
-    ? { top: rect.bottom + 6 + "px", left: Math.max(8, Math.min(rect.left, window.innerWidth - 288)) + "px" }
+  const popW = Math.min(POP_W, window.innerWidth - 32);
+  const place = rect ? placeUnder(rect, popW, window.innerWidth, window.innerHeight) : null;
+  const popStyle = place
+    ? { top: place.top + "px", left: place.left + "px", width: popW + "px", maxHeight: place.maxHeight + "px" }
     : undefined;
-  // Under the options, the caption would sit behind them: they show it.
-  const showCaption = !!(caption || unsure) && !menuOpen;
-  const capRect = showCaption ? btnRef.current?.getBoundingClientRect() : undefined;
-  const capStyle = capRect
-    ? { top: capRect.bottom + 6 + "px", left: Math.max(8, Math.min(capRect.left, window.innerWidth - 348)) + "px" }
-    : undefined;
-
-  const ttsNow = ttsEngine(cfg || cfgNow) === "server" ? "server" : browserSp.available() ? "browser" : "none";
-  const pass = sttNow === "server" ? passLine((cfg || cfgNow).server_ready.stt_backend, serverRec.passMs) : "";
-  const diagnostics = engineDiagnostics(cfg || cfgNow, sttNow, ttsNow) + (pass ? " · " + pass : "");
 
   return (
     <>
-      <button
-        id="mic-btn"
-        ref={btnRef}
-        type="button"
-        className={[
-          "tb-item",
-          "mic-ring",
-          listening && "listening",
-          wake.on && !listening && "standby",
-          speaking && !listening && "speaking",
-          !supported && "unsupported",
-        ]
-          .filter(Boolean)
-          .join(" ")}
-        title={title}
-        aria-label={listening ? "Listening — stop" : "Talk to " + who}
-        aria-pressed={listening}
-        aria-haspopup="menu"
-        aria-expanded={menuOpen}
-        onPointerDown={(e) => {
-          // Before the click moves focus: a text box that had it gets the words.
-          pressedField.current = textField(document.activeElement);
-          // The click that starts listening comes at the release: the mic
-          // opens during the press.
-          if (!live.current) warmMic(true);
-          if (!hold || e.button !== 0 || e.shiftKey) return;
-          holding.current = true;
-          try {
-            e.currentTarget.setPointerCapture(e.pointerId);
-          } catch {
-            /* synthetic pointer */
-          }
-          start(pressedField.current);
-        }}
-        onPointerUp={() => {
-          if (!holding.current) return;
-          holding.current = false;
-          finish();
-        }}
-        onPointerCancel={() => {
-          if (!holding.current) return;
-          holding.current = false;
-          finish();
-        }}
-        // Keep the focus where it was (the terminal, the text box).
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={(e) => {
-          if (e.shiftKey) {
+      <span className="mic-wrap">
+        <button
+          id="mic-btn"
+          ref={btnRef}
+          type="button"
+          className={[
+            "tb-item",
+            "mic-ring",
+            listening && "listening",
+            wake.on && !listening && "standby",
+            speaking && !listening && "speaking",
+            !supported && "unsupported",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          title={title}
+          aria-label={listening ? "Listening — stop" : "Talk to " + who}
+          aria-pressed={listening}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onPointerDown={(e) => {
+            // Before the click moves focus: a text box that had it gets the words.
+            pressedField.current = textField(document.activeElement);
+            // The click that starts listening comes at the release: the mic
+            // opens during the press.
+            if (!live.current) warmMic(true);
+            if (!hold || e.button !== 0 || e.shiftKey) return;
+            holding.current = true;
+            try {
+              e.currentTarget.setPointerCapture(e.pointerId);
+            } catch {
+              /* synthetic pointer */
+            }
+            start(pressedField.current);
+          }}
+          onPointerUp={() => {
+            if (!holding.current) return;
+            holding.current = false;
+            finish();
+          }}
+          onPointerCancel={() => {
+            if (!holding.current) return;
+            holding.current = false;
+            finish();
+          }}
+          // Keep the focus where it was (the terminal, the text box).
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            if (e.shiftKey) {
+              menuOpen ? setMenuOpen(false) : openMenu();
+              return;
+            }
+            if (menuOpen) {
+              setMenuOpen(false); // a click on the mic closes the options, never talks
+              return;
+            }
+            if (hold) return; // the pointer (or the key) did it
+            if (live.current) finish();
+            else start(pressedField.current);
+            pressedField.current = null;
+          }}
+          onContextMenu={(e) => {
+            e.preventDefault();
             menuOpen ? setMenuOpen(false) : openMenu();
-            return;
-          }
-          if (menuOpen) {
-            setMenuOpen(false); // a click on the mic closes the options, never talks
-            return;
-          }
-          if (hold) return; // the pointer (or the key) did it
-          if (live.current) finish();
-          else start(pressedField.current);
-          pressedField.current = null;
-        }}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          menuOpen ? setMenuOpen(false) : openMenu();
-        }}
-        onKeyDown={(e) => {
-          if (!hold || (e.key !== " " && e.key !== "Enter")) return;
-          e.preventDefault();
-          if (e.repeat || holding.current) return;
-          holding.current = true;
-          start(null);
-        }}
-        onKeyUp={(e) => {
-          if (!hold || (e.key !== " " && e.key !== "Enter")) return;
-          e.preventDefault();
-          if (!holding.current) return;
-          holding.current = false;
-          finish();
-        }}
-      >
-        <MicGlyph />
-      </button>
-      {showCaption &&
-        createPortal(
-          <div id="mic-caption" className={listening ? "live" : ""} role="status" aria-live="polite" style={capStyle}>
-            {listening ? liveTail(caption, liveUnsure(unsure)) : caption}
-            {unsure && <span className="mic-unsure"> {listening ? liveUnsure(unsure) : unsure}</span>}
-          </div>,
-          document.body
-        )}
+          }}
+          onKeyDown={(e) => {
+            if (!hold || (e.key !== " " && e.key !== "Enter")) return;
+            e.preventDefault();
+            if (e.repeat || holding.current) return;
+            holding.current = true;
+            start(null);
+          }}
+          onKeyUp={(e) => {
+            if (!hold || (e.key !== " " && e.key !== "Enter")) return;
+            e.preventDefault();
+            if (!holding.current) return;
+            holding.current = false;
+            finish();
+          }}
+        >
+          <MicGlyph />
+        </button>
+        {/* The bar's only voice words: the state, never a transcript. Always
+            in the DOM (an aria-live region must exist before it speaks). */}
+        <span id="mic-pill" className={pill ? "on" : ""} role="status" aria-live="polite">
+          {pill}
+        </span>
+      </span>
       {menuOpen &&
         createPortal(
           <div className="mic-pop" id="mic-pop" ref={menuRef} style={popStyle} role="menu" aria-label="Voice options">
@@ -1200,90 +1243,51 @@ export function TopBarMic() {
                 ×
               </button>
             </div>
+            {/* Controls only (the owner: keep it simple) — the explainers and
+                the diagnostics are in Settings → Voice and the docs. */}
+            <div className="mic-pop-row" id="mic-replies-row">
+              <span className="mic-pop-label" id="mic-replies-label">
+                Read replies aloud
+              </span>
+              <div className="mic-seg" role="radiogroup" aria-labelledby="mic-replies-label">
+                {REPLIES_CHOICES.map((c) => (
+                  <label className="mic-seg-opt" key={c.value} title={c.label}>
+                    <input
+                      type="radio"
+                      name="mic-replies"
+                      checked={prefs.replies === c.value}
+                      onChange={() => setPrefs({ ...prefs, replies: c.value })}
+                    />
+                    <span>{REPLIES_SHORT[c.value]}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="mic-pop-row" id="mic-ptt-row">
+              <span className="mic-pop-label" id="mic-ptt-label">
+                Push to talk
+                {talkHotkey() && <span className="mic-pop-key"> {talkHotkey()}</span>}
+              </span>
+              <div className="mic-seg" role="radiogroup" aria-labelledby="mic-ptt-label">
+                <label className="mic-seg-opt" title="Click to start, click again to stop">
+                  <input type="radio" name="mic-ptt" checked={!hold} onChange={() => setPrefs({ ...prefs, ptt: "toggle" })} />
+                  <span>Click</span>
+                </label>
+                <label className="mic-seg-opt" title="Hold the mic (or the hotkey) while you speak">
+                  <input type="radio" name="mic-ptt" checked={hold} onChange={() => setPrefs({ ...prefs, ptt: "hold" })} />
+                  <span>Hold</span>
+                </label>
+              </div>
+            </div>
+            <label className="mic-pop-row mic-switch-row" id="mic-wake-row" title={(prefs.wake && wake.line) || ""}>
+              <span className="mic-pop-label">Listen for “MindFlock”</span>
+              <input type="checkbox" id="mic-wake" checked={!!prefs.wake} onChange={(e) => setWakePref(e.target.checked)} />
+            </label>
             {speaking && (
               <button type="button" className="mic-stop-talking" id="mic-stop-talking" title="Stop talking (Esc)" onClick={hush}>
                 Stop talking
               </button>
             )}
-            {(listening || caption || unsure) && (
-              <div className="mic-live" id="mic-live" role="status" aria-live="polite">
-                {listening && (
-                  <div className="mic-level" ref={meterRef}>
-                    <div className="mic-level-bar" />
-                  </div>
-                )}
-                <div className="mic-live-text">
-                  {caption}
-                  {unsure && <span className="mic-unsure"> {unsure}</span>}
-                </div>
-              </div>
-            )}
-            <div className="mic-sub">Read replies aloud</div>
-            {REPLIES_CHOICES.map((c) => (
-              <label className="mic-row" key={c.value}>
-                <input
-                  type="radio"
-                  name="mic-replies"
-                  checked={prefs.replies === c.value}
-                  onChange={() => setPrefs({ ...prefs, replies: c.value })}
-                />
-                <span>{c.label}</span>
-              </label>
-            ))}
-            <label className="mic-row" id="mic-wake-row">
-              <input
-                type="checkbox"
-                id="mic-wake"
-                checked={!!prefs.wake}
-                onChange={(e) => setWakePref(e.target.checked)}
-              />
-              <span>Listen for “MindFlock”</span>
-            </label>
-            <div className="mic-hint" id="mic-wake-hint">
-              {WAKE_SWITCH_HINT}
-              {prefs.wake && wake.line && <span className="mic-wake-line"> {wake.line}</span>}
-            </div>
-            <div className="mic-sub">Push to talk</div>
-            <label className="mic-row">
-              <input
-                type="radio"
-                name="mic-ptt"
-                checked={!hold}
-                onChange={() => setPrefs({ ...prefs, ptt: "toggle" })}
-              />
-              <span>Click to talk</span>
-            </label>
-            <label className="mic-row">
-              <input
-                type="radio"
-                name="mic-ptt"
-                checked={hold}
-                onChange={() => setPrefs({ ...prefs, ptt: "hold" })}
-              />
-              <span>Hold to talk</span>
-            </label>
-            <div className="mic-hint">
-              The words are typed into the session as you speak. {DICT_HINT}; Esc takes them back.
-              Say “stop recording” to stop, “focus 3” or “next session” to switch, and “yes”, “no”,
-              “always” or a number to answer a dialog. Hotkey: {talkShortcut()}.
-            </div>
-            <div className="mic-hint" id="mic-handsfree">
-              With Read replies aloud on, a dialog on the focused session — or a question in a reply
-              to what you sent — is read out and the mic listens 12 s for your answer. Every line
-              names its session unless it is the one in front of you, and only one plays at a time.
-            </div>
-            <div className="mic-diag">{diagnostics}</div>
-            {pendingLine && <div className="mic-diag mic-pending">{pendingLine}</div>}
-            <button
-              type="button"
-              className="linklike mic-link"
-              onClick={() => {
-                setMenuOpen(false);
-                openSettings(VOICE_SCREEN);
-              }}
-            >
-              Speech engines: Settings → Voice
-            </button>
           </div>,
           document.body
         )}

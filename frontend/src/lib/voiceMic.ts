@@ -11,11 +11,13 @@
  *  - The level meter: the recorder's RMS per audio block ({@link meterFeed};
  *    the browser recognizer has none, so an AnalyserNode is polled instead,
  *    {@link meterPoll}) smoothed against a noise floor — room noise sits near
- *    zero, speech fills it — and written once per animation frame as the
- *    `--mic-level` CSS variable (0..1) on the elements that draw it
- *    ({@link meterRef}): the top-bar mic's ring, the options' level bar, the
- *    ask pop-up's mic. No React render per block. Its "hearing" edge
- *    ({@link onHearing}) turns the caption's "Listening…" into "Hearing you…".
+ *    zero, speech fills it — then averaged over {@link LEVEL_SMOOTH_MS} and
+ *    stepped (quiet / hearing / loud, {@link levelStep}), and only a step
+ *    change is written, as the `--mic-step` CSS variable (an opacity) on the
+ *    elements that draw it ({@link meterRef}): the top-bar mic's ring, the
+ *    options' level bar, the ask pop-up's mic. Never a size, never per block;
+ *    no React render. Its "hearing" edge ({@link onHearing}) is the ask
+ *    pop-up's "Hearing you…".
  *  - Timing ({@link voiceMark}): the moments from the press to the first
  *    word typed and the first committed one, in `window.__mfVoiceTiming` (ms
  *    after the press), each streaming pass's server time ({@link voicePass},
@@ -160,6 +162,33 @@ export const RMS_SPEECH = 0.02;
 export const LEVEL_DECAY_MS = 150;
 /** RMS over the floor that fills the meter (a raised voice). */
 export const LEVEL_FULL_RMS = 0.12;
+/** The ring's level is smoothed over this long before it is stepped: a
+ * word's syllables never flicker it. */
+export const LEVEL_SMOOTH_MS = 400;
+/** The ring's three steps — quiet, hearing, loud — as its opacity: the only
+ * thing the meter changes on the mic (never its size; CSS eases each step
+ * over ≥300 ms). */
+export const STEP_OPACITY = [0.45, 0.75, 1] as const;
+export type LevelStep = 0 | 1 | 2;
+/** The smoothed level that enters "hearing" / "loud"; a step is left only
+ * {@link STEP_HYSTERESIS} below its threshold, so the edge never jitters. */
+const STEP_AT = [0.12, 0.55] as const;
+const STEP_HYSTERESIS = 0.05;
+
+/** The step for a smoothed level, from the step it is in (hysteresis). */
+export function levelStep(prev: LevelStep, smoothed: number): LevelStep {
+  const [hear, loud] = STEP_AT;
+  if (smoothed >= loud || (prev === 2 && smoothed >= loud - STEP_HYSTERESIS)) return 2;
+  if (smoothed >= hear || (prev >= 1 && smoothed >= hear - STEP_HYSTERESIS)) return 1;
+  return 0;
+}
+
+/** One frame of the slow average the step reads: `prev` moves toward
+ * `level` with a {@link LEVEL_SMOOTH_MS} time constant. */
+export function slowLevel(prev: number, level: number, dtMs: number): number {
+  return prev + (level - prev) * (1 - Math.exp(-Math.max(0, dtMs) / LEVEL_SMOOTH_MS));
+}
+
 /** "Hearing you…" stays this long after the last loud block (a word's gaps). */
 export const HEARING_HOLD_MS = 700;
 /** No block for this long (between phrases): the meter falls to zero. */
@@ -235,6 +264,8 @@ export function rmsOf(buf: Float32Array): number {
 const els = new Set<HTMLElement>();
 const hearingSubs = new Set<(on: boolean) => void>();
 let level = 0;
+let slow = 0;
+let step: LevelStep = 0;
 let target = 0;
 let floor = 0;
 let lastFeed = 0;
@@ -258,11 +289,12 @@ function setHearing(on: boolean) {
   hearingSubs.forEach((cb) => cb(on));
 }
 
+/** Write the step — only when it changes: an opacity, never a size. */
 function paint() {
-  const v = level.toFixed(3);
+  const v = String(STEP_OPACITY[step]);
   if (v === painted) return;
   painted = v;
-  els.forEach((el) => el.style.setProperty("--mic-level", v));
+  els.forEach((el) => el.style.setProperty("--mic-step", v));
 }
 
 function frame(t: number) {
@@ -274,8 +306,12 @@ function frame(t: number) {
   }
   if (now - lastFeed > STALE_MS) target = 0;
   if (hearing && now - lastLoud > HEARING_HOLD_MS) setHearing(false);
-  level = smoothLevel(level, target, frameAt ? t - frameAt : 16);
+  const dt = frameAt ? t - frameAt : 16;
+  level = smoothLevel(level, target, dt);
   if (target === 0 && level < 0.01) level = 0;
+  slow = slowLevel(slow, level, dt);
+  if (!active && level === 0) slow = 0;
+  step = levelStep(step, slow);
   frameAt = t;
   paint();
   if (active || level > 0) raf = schedule(frame);
@@ -333,12 +369,13 @@ export function onHearing(cb: (on: boolean) => void): () => void {
   };
 }
 
-/** A ref that draws the level on its element (`--mic-level`), as long as
- * it is mounted (React 19 runs the returned cleanup on detach). */
+/** A ref that draws the level's step on its element (`--mic-step`, an
+ * opacity), as long as it is mounted (React 19 runs the returned cleanup on
+ * detach). */
 export function meterRef(el: HTMLElement | null): (() => void) | undefined {
   if (!el) return undefined;
   els.add(el);
-  el.style.setProperty("--mic-level", level.toFixed(3));
+  el.style.setProperty("--mic-step", String(STEP_OPACITY[step]));
   return () => {
     els.delete(el);
   };
@@ -349,14 +386,16 @@ export function meterRef(el: HTMLElement | null): (() => void) | undefined {
 /** The moments of a start, in order: the press, the mic recording, the
  * server stream open, the first speech, the first unsure words, the first
  * characters typed (a guess, usually — "first partial typed"), the first
- * committed words. */
-export type VoiceMoment = "start" | "mic" | "stream" | "speech" | "partial" | "typed" | "commit";
+ * committed words, the first phrase's accurate final back (/end). */
+export type VoiceMoment = "start" | "mic" | "stream" | "speech" | "partial" | "typed" | "commit" | "final";
 
 declare global {
   interface Window {
     __mfVoiceTiming?: Partial<Record<VoiceMoment, number>>;
     /** The last {@link PASSES_KEPT} streaming passes' server times (ms). */
     __mfVoicePasses?: number[];
+    /** The last wake's latency (ms): the word's end → listening. */
+    __mfVoiceWake?: number;
   }
 }
 
@@ -384,6 +423,13 @@ export function voiceMark(m: VoiceMoment): void {
   marks[m] = Math.round(clock() - t0);
   if (typeof window !== "undefined") window.__mfVoiceTiming = { ...marks };
   if (debugOn()) console.debug("[voice] " + m + " +" + marks[m] + " ms");
+}
+
+/** A wake took `ms` from the word's end to listening (the debug trace's
+ * "wake N ms"; the mic's diagnostics show the last). */
+export function voiceWake(ms: number): void {
+  if (typeof window !== "undefined") window.__mfVoiceWake = Math.round(ms);
+  if (debugOn()) console.debug("[voice] wake " + Math.round(ms) + " ms (sound end → listening)");
 }
 
 /** A streaming pass took `ms` on the server (its chunk answer's `ms`). */

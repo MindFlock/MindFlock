@@ -451,6 +451,18 @@ export const STOPPED_LINE = "Stopped listening";
 export const HUSH_LINE = "Quiet.";
 export const HUSH_CAPTION_MS = 1000;
 
+/** The pill beside the top bar's mic — the one thing the bar says about
+ * voice, and only ever one of these: {@link HUSH_LINE} for
+ * {@link HUSH_CAPTION_MS} after "stop talking", "Listening…" while the mic
+ * is open, "Speaking…" while a line plays, else nothing. Never the words
+ * heard, typed or said (they are in the terminal; the options show them),
+ * and never "Hearing you…" in words — that is the ring's colour. */
+export function micPill(s: { listening: boolean; speaking: boolean; quiet: boolean }): string {
+  if (s.quiet) return HUSH_LINE;
+  if (s.listening) return "Listening…";
+  return s.speaking ? "Speaking…" : "";
+}
+
 /** The keys that turn `before` (typed) into `after`: `erase` — the tail of
  * `before` past the start they share, taken back one backspace per
  * character — then `type`, the tail of `after`. By code point, so "café" or
@@ -560,10 +572,14 @@ export class Dictation {
   }
 
   /** Streaming: the phrase ended with its last committed words — with the
-   * held ones, the phrase's final ({@link heard}: radio words and all). */
-  flush(w: string): DictOutcome {
+   * held ones, the phrase's final ({@link heard}: radio words and all).
+   * `final`: the whole phrase re-heard by the server's accurate model, when
+   * it differs from the fast words — the phrase ends as THAT (its whole
+   * guess corrected, never past the phrase's start) and the radio words, a
+   * stop phrase and the router read it, not the fast guess. */
+  flush(w: string, final?: string): DictOutcome {
     if (!this.listening) return { kind: "stopped" };
-    return this.heard(joinWords(this.held, w));
+    return this.heard(final?.trim() ? final.trim() : joinWords(this.held, w));
   }
 
   /** `text` went into the field. */
@@ -838,10 +854,11 @@ export class LiveDictation {
     return this.stream(w, "");
   }
 
-  /** Streaming: a phrase's end and its last words. */
-  flush(w: string): Promise<void> {
-    if (w.trim()) this.heardAnything = true;
-    return this.step(() => this.dict.flush(w));
+  /** Streaming: a phrase's end and its last words (`final`: the accurate
+   * re-transcription, when it differs — see {@link Dictation.flush}). */
+  flush(w: string, final?: string): Promise<void> {
+    if (w.trim() || final?.trim()) this.heardAnything = true;
+    return this.step(() => this.dict.flush(w, final));
   }
 
   /** Streaming: the unstable tail, for the caption only ({@link stream}
@@ -1861,6 +1878,69 @@ export function sentenceChunks(text: string): string[] {
   return out;
 }
 
+/** Words whose period never ends a sentence ("e.g." and "U.S." are caught
+ * as letter-dot runs). */
+const ABBREVIATIONS = new Set([
+  "mr", "mrs", "ms", "dr", "st", "jr", "sr", "vs", "etc", "approx", "cf", "no", "fig", "inc", "ltd", "dept", "est",
+]);
+/** A sentence shorter than this joins the next: a request per "OK." costs
+ * more than it saves. */
+export const SPEECH_SENTENCE_MIN = 12;
+/** A longer sentence is cut at a comma (sentenceChunks' rule) — well
+ * under POST /api/voice/speak's 1200-character cap. */
+const SPEECH_SENTENCE_MAX = 180;
+
+/** The server speaker's pieces: one per sentence, so the first can play
+ * while the next is synthesised. Ends at `.` `?` `!` `;` (with any closing
+ * quotes or brackets) before a space or the end — never inside "3.5", after
+ * "e.g." / "U.S." or a title like "Dr.". A sentence under
+ * {@link SPEECH_SENTENCE_MIN} characters joins the next; one over
+ * {@link SPEECH_SENTENCE_MAX} is cut at a comma. */
+export function speechSentences(text: string): string[] {
+  const s = String(text || "").replace(/\s+/g, " ").trim();
+  if (!s) return [];
+  const pieces: string[] = [];
+  let start = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charAt(i);
+    if (".!?;".indexOf(c) < 0) continue;
+    let j = i + 1;
+    while (j < s.length && ".!?\"')]”’".indexOf(s.charAt(j)) >= 0) j++;
+    if (j < s.length && s.charAt(j) !== " ") continue; // "3.5", "e.g.x"
+    if (c === ".") {
+      const word = s.slice(s.lastIndexOf(" ", i) + 1, i + 1).replace(/^[("'“‘[]+/, "");
+      if (/^(?:\p{L}\.){2,}$/u.test(word) || ABBREVIATIONS.has(word.slice(0, -1).toLowerCase())) continue;
+    }
+    pieces.push(s.slice(start, j).trim());
+    start = j;
+    i = j - 1;
+  }
+  if (start < s.length) pieces.push(s.slice(start).trim());
+  const joined: string[] = [];
+  let buf = "";
+  for (const p of pieces) {
+    if (!p) continue;
+    buf = buf ? buf + " " + p : p;
+    if (buf.length >= SPEECH_SENTENCE_MIN) {
+      joined.push(buf);
+      buf = "";
+    }
+  }
+  if (buf) joined.push(buf);
+  const out: string[] = [];
+  for (let sent of joined) {
+    while (sent.length > SPEECH_SENTENCE_MAX) {
+      let cut = sent.lastIndexOf(", ", SPEECH_SENTENCE_MAX);
+      if (cut < 40) cut = sent.lastIndexOf(" ", SPEECH_SENTENCE_MAX);
+      if (cut < 40) cut = SPEECH_SENTENCE_MAX;
+      out.push(sent.slice(0, cut + 1).trim());
+      sent = sent.slice(cut + 1).trim();
+    }
+    if (sent) out.push(sent);
+  }
+  return out;
+}
+
 const WORD_MS = 400; // onend fallback: per word…
 const CHUNK_GRACE_MS = 1500; // …plus this per chunk
 
@@ -1945,91 +2025,130 @@ export function voiceAudioCtx(): AudioContext | null {
   return audioCtx;
 }
 
-const SPEAK_MAX_CHARS = 1200; // POST /api/voice/speak's cap
-
 /** POST /api/voice/speak → audio bytes (Content-Type the backend's: mpeg for
- * a host, wav for piper) played through the one AudioContext. Any failure —
- * 409 (turned off), 502, the network, a clip that won't decode, a context
- * that isn't running — says that sentence group with `fallback` instead. */
+ * a host, wav for piper) played through the one AudioContext — one request
+ * per sentence ({@link speechSentences}), pipelined: the first sentence is
+ * asked for at once and plays the moment it is back, the next is asked for
+ * while it plays (one request in flight, never more — a CPU engine would
+ * only share itself out), and each is scheduled to start the instant the
+ * one before ends, so nothing waits on the whole line and there is no gap
+ * when the next is ready in time. speak() resolves when the last sentence
+ * has played; cancel() stops what plays, aborts the request and drops the
+ * rest. Any failure — 409 (turned off), 502, the network, a clip that won't
+ * decode, a context that isn't running — says the rest of the line with
+ * `fallback`, as one call. */
 export function serverSpeaker(fallback: Speaker): Speaker & { lastError: string } {
   let gen = 0;
-  let playing: AudioBufferSourceNode | null = null;
+  /** Sources started or scheduled (the one playing and the one queued
+   * after it), each with what ends its promise. */
+  const playing = new Map<AudioBufferSourceNode, () => void>();
+  let inflight: AbortController | null = null;
+
+  const fetchAudio = async (ctx: AudioContext, part: string, ac: AbortController): Promise<AudioBuffer> => {
+    const r = await apiRaw("/api/voice/speak", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: part }),
+      signal: ac.signal,
+    });
+    if (!r.ok) {
+      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      throw new Error(j.error || "HTTP " + r.status);
+    }
+    return ctx.decodeAudioData(await r.arrayBuffer());
+  };
+
   const self = {
     lastError: "",
-    speak(text: string): Promise<void> {
-      const groups: string[] = [];
-      let cur = "";
-      for (const s of sentenceChunks(text)) {
-        if (cur && (cur + " " + s).length > SPEAK_MAX_CHARS) {
-          groups.push(cur);
-          cur = s;
-        } else cur = cur ? cur + " " + s : s;
-      }
-      if (cur) groups.push(cur.slice(0, SPEAK_MAX_CHARS));
+    async speak(text: string): Promise<void> {
+      const parts = speechSentences(text);
+      if (!parts.length) return;
       const g = gen;
-      const one = async (part: string): Promise<void> => {
-        const ctx = voiceAudioCtx();
-        if (!ctx || ctx.state !== "running") {
-          self.lastError = "AudioContext " + (ctx ? ctx.state : "missing");
-          return fallback.speak(part);
-        }
-        try {
-          const r = await apiRaw("/api/voice/speak", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: part }),
-          });
-          if (!r.ok) {
-            const j = (await r.json().catch(() => ({}))) as { error?: string };
-            throw new Error(j.error || "HTTP " + r.status);
-          }
-          const audio = await ctx.decodeAudioData(await r.arrayBuffer());
-          self.lastError = "";
-          if (g !== gen) return;
-          await new Promise<void>((resolve) => {
-            const src = ctx.createBufferSource();
-            src.buffer = audio;
-            src.connect(ctx.destination);
-            let done = false;
-            const finish = () => {
-              if (done) return;
-              done = true;
-              clearTimeout(timer);
-              if (playing === src) playing = null;
-              resolve();
-            };
-            src.onended = finish;
-            const timer = setTimeout(finish, (audio.duration || 1) * 1000 + CHUNK_GRACE_MS);
-            playing = src;
-            try {
-              src.start(0);
-            } catch {
-              finish();
-            }
-          });
-        } catch (err) {
-          self.lastError = String((err as Error)?.message || err);
-          if (g !== gen) return;
-          return fallback.speak(part);
-        }
+      const ctx = voiceAudioCtx();
+      if (!ctx || ctx.state !== "running") {
+        self.lastError = "AudioContext " + (ctx ? ctx.state : "missing");
+        return fallback.speak(parts.join(" "));
+      }
+      /** Ask for sentence `i` (the one request in flight). */
+      const ask = (i: number): Promise<AudioBuffer> => {
+        const ac = new AbortController();
+        inflight = ac;
+        const p = fetchAudio(ctx, parts[i], ac);
+        const settled = () => {
+          if (inflight === ac) inflight = null;
+        };
+        p.then(settled, settled);
+        return p;
       };
-      return groups.reduce<Promise<void>>((p, part) => p.then(() => (g === gen ? one(part) : undefined)), Promise.resolve());
+      /** Where the last scheduled sentence ends (the context's clock). */
+      let endAt = 0;
+      let last: Promise<void> = Promise.resolve();
+      let next = ask(0);
+      for (let i = 0; i < parts.length; i++) {
+        let audio: AudioBuffer;
+        try {
+          audio = await next;
+        } catch (err) {
+          if (g !== gen) return;
+          self.lastError = String((err as Error)?.message || err);
+          // What is scheduled plays out first; the rest goes in one call.
+          await last;
+          if (g !== gen) return;
+          return fallback.speak(parts.slice(i).join(" "));
+        }
+        if (g !== gen) return;
+        self.lastError = "";
+        // Sentence i plays (or waits its turn) while i+1 is asked for.
+        if (i + 1 < parts.length) next = ask(i + 1);
+        const at = Math.max(ctx.currentTime, endAt);
+        endAt = at + (audio.duration || 0);
+        last = play(ctx, audio, at);
+      }
+      await last;
     },
     cancel() {
       gen++;
-      const s = playing;
-      playing = null;
-      if (s) {
+      inflight?.abort();
+      inflight = null;
+      const cut = [...playing];
+      playing.clear();
+      for (const [s, finish] of cut) {
         try {
           s.onended = null;
           s.stop(0);
         } catch {
           /* already stopped */
         }
+        finish();
       }
       fallback.cancel();
     },
   };
+
+  /** `audio` started at `at` (the context's clock); resolves when it ends. */
+  const play = (ctx: AudioContext, audio: AudioBuffer, at: number) =>
+    new Promise<void>((resolve) => {
+      const src = ctx.createBufferSource();
+      src.buffer = audio;
+      src.connect(ctx.destination);
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        playing.delete(src);
+        resolve();
+      };
+      src.onended = finish;
+      const wait = Math.max(0, at - ctx.currentTime) + (audio.duration || 1);
+      const timer = setTimeout(finish, wait * 1000 + CHUNK_GRACE_MS);
+      playing.set(src, finish);
+      try {
+        src.start(at);
+      } catch {
+        finish();
+      }
+    });
   return self;
 }
 
@@ -2057,8 +2176,10 @@ export interface RecognizerHandlers {
    * unstable tail after them — so the typing corrects once per answer. When
    * set, a chunk's answer comes here instead of onWords + onPartial. */
   onStream?(committed: string, partial: string): void;
-  /** Streaming: a phrase ended (a pause, or finish()); its last words. */
-  onFlush?(text: string): void;
+  /** Streaming: a phrase ended (a pause, or finish()); its last words.
+   * `final`: the whole phrase as the server's accurate model heard it — set
+   * only when it differs from the fast words (absent: they stand). */
+  onFlush?(text: string, final?: string): void;
   /** A passing line for the caption (streaming fell back to clips). */
   onNotice?(text: string): void;
   /** `code`: the Web Speech error names, plus "server" / "nothing-recorded"
@@ -2317,7 +2438,7 @@ const langTag = () => String(navigator.language || "en").split(";")[0];
  * given back by {@link Recognizer.release}. */
 export function serverRecognizer(
   opts: { stream?: () => boolean; mic?: MicKeeper } = {}
-): Recognizer & { lastError: string; mic: MicKeeper; passMs: number | null } {
+): Recognizer & { lastError: string; mic: MicKeeper; passMs: number | null; finalMs: number | null } {
   const mic = opts.mic || new MicKeeper();
   /** This dictation holds the microphone (one {@link MicKeeper.hold}). */
   let holding = false;
@@ -2588,8 +2709,16 @@ export function serverRecognizer(
         if (h !== hh) return;
         if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
         c.stream = false;
+        // The accurate pass over the whole phrase: only when it heard it
+        // otherwise (`same`: nothing to correct; absent: the fast words stand).
+        const fms = Number(r.j.final_ms);
+        if (fms > 0) {
+          self.finalMs = fms;
+          voiceMark("final");
+        }
+        const final = typeof r.j.final === "string" && r.j.same !== true ? wordsOf(r.j.final) : "";
         hh.onPartial?.("");
-        hh.onFlush?.(wordsOf(r.j.committed));
+        hh.onFlush?.(wordsOf(r.j.committed), final || undefined);
       } catch (err) {
         if (h !== hh) return;
         // Its held words still go in (fallBack flushes a phrase with a stream).
@@ -2742,6 +2871,8 @@ export function serverRecognizer(
     lastError: "",
     /** The server's last streaming pass, in ms (null before one). */
     passMs: null as number | null,
+    /** The last phrase's accurate re-transcription (/end `final_ms`), in ms. */
+    finalMs: null as number | null,
     mic,
     available: () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia && !!audioCtxCtor(),
     start(handlers: RecognizerHandlers, o: { skipMs?: number } = {}) {
@@ -2941,6 +3072,12 @@ export function passLine(backend: string | undefined, passMs: number | null): st
   if (passMs == null || !(passMs > 0)) return "";
   const id = String(backend || "");
   return (!id || id === "local" ? "whisper" : id) + " ~" + (passMs / 1000).toFixed(1) + " s/pass";
+}
+
+/** The diagnostics' accurate pass: how long the last phrase's re-hearing
+ * (/end `final_ms`) took — "final 1.2 s" ("" before one). */
+export function finalLine(finalMs: number | null): string {
+  return finalMs != null && finalMs > 0 ? "final " + (finalMs / 1000).toFixed(1) + " s" : "";
 }
 
 /** The caption for a recognizer error, or "" for one that needs no words. */

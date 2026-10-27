@@ -1706,9 +1706,9 @@ describe("wiring", () => {
     expect(ALL_CODE).not.toContain("VoiceInput");
     expect(src("components/sidebar/toolbars.css")).not.toContain("#mic-btn");
     expect(ALL_CSS).not.toMatch(/#mic-btn[^{]*\{[^}]*display:\s*none\s*!important/);
-    // The pulse moved with the button.
-    expect(src("components/TopBarMic.css")).toContain("@keyframes mic-pulse");
-    expect(cssRule(src("components/TopBarMic.css"), "#topbar #mic-btn.listening")).toContain("mic-pulse");
+    // Listening is red and still: no pulse anywhere any more.
+    expect(src("components/TopBarMic.css")).not.toContain("mic-pulse");
+    expect(cssRule(src("components/TopBarMic.css"), "#topbar #mic-btn.listening")).toContain("var(--red)");
   });
 
   it("types into the session's agent terminal, never a whole-prompt /send; submit is /send {enter: true}", () => {
@@ -1743,24 +1743,24 @@ describe("wiring", () => {
     expect(MIC).toContain("void live.current?.cancel()");
   });
 
-  it("opens its options on right-click and Shift+click, and deep-links the speech engines", () => {
+  it("opens its options on right-click and Shift+click: controls only, the rest in Settings → Voice", () => {
     expect(MIC).toContain("onContextMenu=");
     expect(MIC).toContain("e.shiftKey");
-    expect(MIC).toContain("openSettings(VOICE_SCREEN)");
-    expect(MIC).toContain('const VOICE_SCREEN = "voice" as SettingsScreen;');
-    expect(MIC).toContain("Speech engines: Settings → Voice");
     expect(MIC).toContain("Read replies aloud");
-    expect(MIC).toContain("Click to talk");
-    expect(MIC).toContain("Hold to talk");
+    expect(MIC).toContain("<span>Click</span>");
+    expect(MIC).toContain("<span>Hold</span>");
+    // The explainers and the diagnostics moved out of the popover.
+    expect(MIC).not.toContain("openSettings(");
+    expect(src("components/settings/screens/Voice.tsx")).toContain("{micDiagnostics()}");
   });
 
   it("streams when GET /api/voice says the server can: each answer typed as a guess, the unsure tail shown muted", () => {
     expect(MIC).toContain("serverRecognizer({ stream: () => !!cfgNow.server_ready.stt_stream })");
     expect(MIC).toContain("void d.stream(w, p)");
-    expect(MIC).toContain("void d.flush(t)");
+    expect(MIC).toContain("void d.flush(t, final)");
     expect(MIC).toContain("d.unsure(t)");
-    expect(MIC).toContain('<span className="mic-unsure">');
-    expect(cssRule(src("components/TopBarMic.css"), "#mic-caption .mic-unsure")).toContain("var(--muted)");
+    // The words are in the terminal: no transcript on the page (voicePolish.test).
+    expect(MIC).not.toContain("mic-unsure");
     const lib = code("lib/voiceDesktop.ts");
     expect(lib).toContain('call("/api/voice/stream", {');
     expect(lib).toContain('streamPath(c.sid!, "/chunk")');
@@ -1791,7 +1791,7 @@ describe("wiring", () => {
 describe("the voice options popover closes easily", () => {
   it("has a close button, closes on a mic click, and watches pointerdown in the capture phase", () => {
     expect(MIC_SRC).toContain('id="mic-pop-close"');
-    expect(MIC_SRC).toContain("if (menuOpen) {\n            setMenuOpen(false);");
+    expect(MIC_SRC).toContain("if (menuOpen) {\n              setMenuOpen(false);");
     expect(MIC_SRC).toContain('document.addEventListener("pointerdown", onDown, true)');
     expect(MIC_SRC).not.toContain('document.addEventListener("mousedown", onDown)');
   });
@@ -2212,7 +2212,7 @@ describe("hands-free answering (Read replies aloud)", () => {
     expect(MIC).toContain('pending: (title) => liveActivity(title) === "clarify" || questions.has(title)');
     expect(MIC).toContain("runVoiceCommand(r, text, {");
     expect(MIC).toContain("railOrder: () => useUi.getState().railOrder");
-    expect(src("components/TopBarMic.tsx")).toContain("With Read replies aloud on");
+    expect(src("components/settings/screens/Voice.tsx")).toContain("With Read replies aloud on");
   });
 });
 
@@ -2244,7 +2244,8 @@ describe("the push-to-talk hotkey", () => {
     expect(on).toContain("k.start(textField(document.activeElement))");
     expect(on).toContain("k.finish()");
     expect(blockFrom(MIC, "const start = (", "const finish = (")).toContain("voiceAudioCtx()");
-    expect(src("components/TopBarMic.tsx")).toContain("Hotkey: {talkShortcut()}");
+    expect(src("components/TopBarMic.tsx")).toContain('<span className="mic-pop-key"> {talkHotkey()}</span>');
+    expect(src("components/settings/screens/Voice.tsx")).toContain("Hotkey:");
   });
 });
 

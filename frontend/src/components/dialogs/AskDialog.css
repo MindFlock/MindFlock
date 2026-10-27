@@ -252,12 +252,11 @@
   color: var(--text);
 }
 
-/* Listening: red and pulsing, like the top-bar mic (TopBarMic.css). */
+/* Listening: red and still, like the top-bar mic (TopBarMic.css) — its
+   .mic-ring draws the thin ring whose opacity is the only thing that moves. */
 .ask-mic.listening {
-  border-color: var(--red);
-  color: #fff;
-  background: var(--red);
-  animation: mic-pulse 1.4s ease-in-out infinite;
+  border-color: transparent;
+  color: var(--red);
 }
 
 .ask-voice-text {

@@ -321,7 +321,7 @@ describe('"stop talking"', () => {
   it("TopBarMic: kind hush and the hook cancel the WHOLE queue; Esc while talking stops it; the options get Stop talking", () => {
     const MIC = code("components/TopBarMic.tsx");
     expect(MIC).toContain('if (reply.kind === "hush") return "hush";');
-    expect(MIC).toContain("hush: () => queue.cancel(),");
+    expect(MIC).toMatch(/hush: \(\) => \{\s*queue\.cancel\(\);\s*quietPill\(\);/);
     expect(MIC).toMatch(/case "hush":\s*hush\(\);\s*return;/);
     const hush = MIC.slice(MIC.indexOf("const hush = () => {"), MIC.indexOf("// Settings → Voice edits"));
     expect(hush).toContain("queue.cancel();");
