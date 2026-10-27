@@ -875,3 +875,15 @@ class TestWarm:
         gate.set()
         t.join(5)
         assert speech.loaded() == ["whisper:small"]
+
+
+def test_a_prompt_biases_the_local_decoder(whisper):
+    stt = speech.LocalSTT()
+    stt.transcribe(b"RIFF", "audio/wav", "en", prompt="MindFlock")
+    assert whisper.calls[-1][1] == {
+        "language": "en",
+        "beam_size": 5,
+        "initial_prompt": "MindFlock",
+    }
+    stt.transcribe(b"RIFF", "audio/wav", "en")
+    assert "initial_prompt" not in whisper.calls[-1][1]

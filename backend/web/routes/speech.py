@@ -52,6 +52,7 @@ from backend.web.core import speech as _speech
 from backend.web.core import speech_install as _install
 from backend.web.core import speech_stream as _stream
 from backend.web.core import voice as _voice
+from backend.web.core import wake as _wake
 
 router = APIRouter()
 
@@ -158,14 +159,58 @@ def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
 
 
 @router.post("/api/voice/transcribe")
-async def voice_transcribe(request: Request, lang: str = "") -> JSONResponse:
+async def voice_transcribe(
+    request: Request, lang: str = "", hint: str = ""
+) -> JSONResponse:
     """Recognise one recorded clip. The RAW audio is the body — not multipart,
     so no form parser is needed — and ``Content-Type`` names its format
     (``audio/wav`` from every page today; ``audio/webm``, ``audio/mp4``,
     ``audio/ogg``, ``audio/mpeg`` for the other backends; a ``;codecs=``
     suffix is fine). ``?lang=en`` is a hint for the backend (the built-in
-    recognizer maps it to an installed culture, ``en`` → ``en-US``). → ``{"text", "backend", "ms"}``; see the module doc for
-    the status codes."""
+    recognizer maps it to an installed culture, ``en`` → ``en-US``);
+    ``?hint=<words>`` (≤ 80 printable characters) names words the clip
+    likely contains, for a backend that can bias its decoder (local
+    faster-whisper's ``initial_prompt``; the others ignore it). →
+    ``{"text", "backend", "ms"}``; see the module doc for the status codes."""
+    got = await _clip(request)
+    if not isinstance(got, tuple):
+        return got
+    audio, mime, backend = got
+    started = time.monotonic()
+    try:
+        text = await asyncio.to_thread(
+            backend.transcribe, audio, mime, _lang_hint(lang), _words_hint(hint)
+        )
+    except Exception as err:  # noqa: BLE001 — every failure is the backend's
+        return _failed(err)
+    return JSONResponse(
+        {
+            "text": text,
+            "backend": backend.id,
+            "ms": int((time.monotonic() - started) * 1000),
+        }
+    )
+
+
+_HINT_MAX = 80
+
+
+def _lang_hint(lang: str) -> str:
+    hint = (lang or "").strip()
+    return hint if _LANG.match(hint) else ""
+
+
+def _words_hint(hint: str) -> str:
+    """``?hint=``: printable, trimmed, capped — or nothing."""
+    words = " ".join(str(hint or "").split())
+    if not words or not words.isprintable():
+        return ""
+    return words[:_HINT_MAX]
+
+
+async def _clip(request: Request):
+    """The raw audio body + its mime + the ready recognizer, or the error
+    response (415 not audio, 413 too big, 400 empty, 409/503 no backend)."""
     mime = _speech.mime_of(request.headers.get("content-type", ""))
     if not mime.startswith("audio/"):
         return JSONResponse(
@@ -183,16 +228,36 @@ async def voice_transcribe(request: Request, lang: str = "") -> JSONResponse:
     backend, refused = _refusal("stt")
     if refused is not None or backend is None:
         return refused or _failed(RuntimeError("no backend"))
-    hint = lang.strip()
-    hint = hint if _LANG.match(hint) else ""
+    return audio, mime, backend
+
+
+@router.post("/api/voice/wake")
+async def voice_wake(request: Request, lang: str = "") -> JSONResponse:
+    """Is this short clip the wake word ("MindFlock") on its own? The body
+    and ``Content-Type`` are exactly ``/transcribe``'s; the clip is
+    recognised with the word as the decoder's hint and judged by
+    ``core.wake.is_wake`` (the word alone, one or two tokens, two letters of
+    slack for how whisper hears a made-up word; a sentence never wakes). →
+    ``{"wake": bool, "text", "word", "backend", "ms"}``; the same status
+    codes as ``/transcribe``. The clients send only a short lone utterance
+    bounded by silence (their standby), so the model sees a second of audio
+    at a time, never the room."""
+    got = await _clip(request)
+    if not isinstance(got, tuple):
+        return got
+    audio, mime, backend = got
     started = time.monotonic()
     try:
-        text = await asyncio.to_thread(backend.transcribe, audio, mime, hint)
-    except Exception as err:  # noqa: BLE001 — every failure is the backend's
+        text = await asyncio.to_thread(
+            backend.transcribe, audio, mime, _lang_hint(lang), "MindFlock"
+        )
+    except Exception as err:  # noqa: BLE001
         return _failed(err)
     return JSONResponse(
         {
+            "wake": _wake.is_wake(text),
             "text": text,
+            "word": _wake.WAKE_WORD,
             "backend": backend.id,
             "ms": int((time.monotonic() - started) * 1000),
         }

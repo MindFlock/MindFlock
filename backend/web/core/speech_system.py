@@ -1214,7 +1214,9 @@ class SystemSTT(_speech.Backend):
             return True, "%s: %s" % (found.stt_detail, BASIC_ACCURACY)
         return found.stt_ok, found.stt_detail
 
-    def transcribe(self, audio: bytes, mime: str, lang: str = "") -> str:
+    def transcribe(
+        self, audio: bytes, mime: str, lang: str = "", prompt: str = ""
+    ) -> str:
         found = probe()
         if not found.stt_ok:
             raise _speech.SpeechError(found.stt_detail)

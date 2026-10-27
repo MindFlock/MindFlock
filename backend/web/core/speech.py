@@ -384,7 +384,12 @@ class Backend:
     def ready(self) -> Tuple[bool, str]:
         raise NotImplementedError
 
-    def transcribe(self, audio: bytes, mime: str, lang: str = "") -> str:
+    def transcribe(
+        self, audio: bytes, mime: str, lang: str = "", prompt: str = ""
+    ) -> str:
+        """``prompt``: words the clip likely contains (whisper's
+        ``initial_prompt``; the wake-word check sends the word). Backends that
+        cannot bias the decoder ignore it."""
         raise SpeechError("%s does not do recognition" % self.label)
 
     def speak(self, text: str, voice: str = "") -> Tuple[bytes, str]:
@@ -435,7 +440,9 @@ class OpenAISTT(_OpenAI):
             return False, "%s needs an API key for %s" % (self.label, _host(url))
         return True, "%s at %s" % (model, _host(url))
 
-    def transcribe(self, audio: bytes, mime: str, lang: str = "") -> str:
+    def transcribe(
+        self, audio: bytes, mime: str, lang: str = "", prompt: str = ""
+    ) -> str:
         url, key, model = self._cfg()
         if not key:
             raise SpeechError("%s needs an API key for %s" % (self.label, _host(url)))
@@ -638,13 +645,16 @@ class LocalSTT(Backend):
                 "could not load faster-whisper %s: %s" % (name, err)
             ) from err
 
-    def transcribe(self, audio: bytes, mime: str, lang: str = "") -> str:
+    def transcribe(
+        self, audio: bytes, mime: str, lang: str = "", prompt: str = ""
+    ) -> str:
         model = self._model()
         path = _temp_clip(audio, mime)
+        kw = {"language": whisper_language(lang), "beam_size": 5}
+        if prompt:
+            kw["initial_prompt"] = prompt
         try:
-            segments, _info = model.transcribe(
-                path, language=whisper_language(lang), beam_size=5
-            )
+            segments, _info = model.transcribe(path, **kw)
             words = [str(getattr(s, "text", "") or "").strip() for s in segments]
         except Exception as err:  # noqa: BLE001
             raise SpeechError("faster-whisper failed: %s" % err) from err
