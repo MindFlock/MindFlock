@@ -4954,6 +4954,8 @@ is running it**.
 
 ## Settings (⚙)
 
+**It reopens where you were.** Settings comes back on the screen you last had open — people usually return to the setting they were on — for as long as the page lives (`lib/settingsLastScreen.ts`); a deep link to a screen still wins, a screen that no longer exists (the other mode, a retired key) falls back to General, and a reload or restart forgets it on purpose.
+
 **Set-and-forget configuration and diagnostics**, from the top bar's
 **Settings**. With no screen named (the top bar, the palette's **Open
 Settings**) it opens on **Connections** — the status of everything MindFlock

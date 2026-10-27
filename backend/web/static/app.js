@@ -82161,6 +82161,44 @@ function NewHead({ tab, tabs, onTab, onClose }) {
 	});
 }
 //#endregion
+//#region src/components/settings/screenKeys.ts
+var LEGACY_SCREEN_KEYS = {
+	"your-devices": "devices",
+	"your-phone": "mobile",
+	phone: "mobile",
+	"mobile-voice": "voice",
+	speech: "voice",
+	microphone: "voice",
+	people: "peer",
+	"peer-links": "peer",
+	peers: "peer",
+	"remote-control": "devices",
+	"tailnet-trust": "devices",
+	"trusted-accounts": "devices",
+	"pair-by-token": "devices",
+	"settings-sync": "devices",
+	"make-reachable": "devices",
+	"shared-link": "devices",
+	fleet: "devices"
+};
+function resolveScreenKey(name, known) {
+	if (!name) return "";
+	const key = LEGACY_SCREEN_KEYS[name] || name;
+	return known.includes(key) ? key : "";
+}
+//#endregion
+//#region src/lib/settingsLastScreen.ts
+var lastScreen = null;
+function rememberSettingsScreen(key) {
+	lastScreen = key || null;
+}
+function openingScreen(target, keys) {
+	const linked = target ? resolveScreenKey(target, keys) : null;
+	if (linked) return linked;
+	if (lastScreen && keys.includes(lastScreen)) return lastScreen;
+	return DEFAULT_SETTINGS_SCREEN;
+}
+//#endregion
 //#region src/components/intake/buckets.ts
 var NO_STATE_BUCKET = "No state";
 var BUCKETS_LS_KEY = "mf_ticket_buckets";
@@ -88358,32 +88396,6 @@ function IntakeDialog() {
 			})
 		})
 	});
-}
-//#endregion
-//#region src/components/settings/screenKeys.ts
-var LEGACY_SCREEN_KEYS = {
-	"your-devices": "devices",
-	"your-phone": "mobile",
-	phone: "mobile",
-	"mobile-voice": "voice",
-	speech: "voice",
-	microphone: "voice",
-	people: "peer",
-	"peer-links": "peer",
-	peers: "peer",
-	"remote-control": "devices",
-	"tailnet-trust": "devices",
-	"trusted-accounts": "devices",
-	"pair-by-token": "devices",
-	"settings-sync": "devices",
-	"make-reachable": "devices",
-	"shared-link": "devices",
-	fleet: "devices"
-};
-function resolveScreenKey(name, known) {
-	if (!name) return "";
-	const key = LEGACY_SCREEN_KEYS[name] || name;
-	return known.includes(key) ? key : "";
 }
 //#endregion
 //#region src/components/settings/SettingsSearch.tsx
@@ -99806,7 +99818,11 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 	const openDialogFor = useUi((s) => s.openDialogFor);
 	const screens = (0, import_react.useMemo)(() => SCREENS.filter((s) => s.key !== "traffic" || isDevShell()), []);
 	const keys = (0, import_react.useMemo)(() => screens.map((s) => s.key), [screens]);
-	const [screen, setScreen] = (0, import_react.useState)(() => resolveScreenKey(target, keys) || DEFAULT_SETTINGS_SCREEN);
+	const [screen, setScreenState] = (0, import_react.useState)(() => openingScreen(target, keys));
+	const setScreen = (key) => {
+		rememberSettingsScreen(key);
+		setScreenState(key);
+	};
 	const [advanced, setAdvanced] = (0, import_react.useState)(readAdvancedMode);
 	const changeMode = (on) => {
 		setAdvanced(on);
@@ -99824,7 +99840,7 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 			openDialogFor("intake", tab);
 			return;
 		}
-		setScreen(resolveScreenKey(target, keys) || DEFAULT_SETTINGS_SCREEN);
+		setScreenState(openingScreen(target, keys));
 		setAdvanced(readAdvancedMode());
 	}, [
 		open,

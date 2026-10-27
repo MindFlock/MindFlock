@@ -42,6 +42,7 @@
  * links and the server's Connections rows use them. */
 
 import { DEFAULT_SETTINGS_SCREEN } from "../../lib/openSettings";
+import { openingScreen, rememberSettingsScreen } from "../../lib/settingsLastScreen";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useUi } from "../../state/store";
 import { Modal } from "../Modal";
@@ -166,7 +167,12 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
   const keys = useMemo(() => screens.map((s) => s.key), [screens]);
   // Seeded from the deep link too (not only the effect below), so the first
   // paint is already the linked screen rather than a flash of General.
-  const [screen, setScreen] = useState(() => resolveScreenKey(target, keys) || DEFAULT_SETTINGS_SCREEN);
+  const [screen, setScreenState] = useState(() => openingScreen(target, keys));
+  // Where you were is where you come back to (until the page reloads).
+  const setScreen = (key: string) => {
+    rememberSettingsScreen(key);
+    setScreenState(key);
+  };
   const [advanced, setAdvanced] = useState(readAdvancedMode);
   const changeMode = (on: boolean) => {
     setAdvanced(on);
@@ -186,7 +192,7 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
       openDialogFor("intake", tab);
       return;
     }
-    setScreen(resolveScreenKey(target, keys) || DEFAULT_SETTINGS_SCREEN);
+    setScreenState(openingScreen(target, keys));
     // Re-read on every open: a sync may have brought another device's choice.
     setAdvanced(readAdvancedMode());
   }, [open, target, openDialogFor, keys]);
