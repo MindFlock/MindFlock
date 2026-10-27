@@ -143,8 +143,9 @@ def test_parse_answer():
 
 
 def test_answer_key_allow_list_is_exact():
+    # a/s/d: aider's (A)ll, (S)kip all and (D)on't ask again, each + Enter.
     assert agent_io.ANSWER_KEYS == frozenset(
-        "Enter Escape Up Down Left Right Tab BTab Space 1 2 3 4 5 6 7 8 9 y n".split()
+        "Enter Escape Up Down Left Right Tab BTab Space 1 2 3 4 5 6 7 8 9 y n a s d".split()
     )
 
 

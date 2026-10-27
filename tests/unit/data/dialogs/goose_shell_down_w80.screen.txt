@@ -1,0 +1,40 @@
+#! real capture 2026-10-26: goose 1.41.0 (GOOSE_MODE=approve), tmux capture-pane -p -e -J (colour escapes kept); after Down: Always Allow selected (its hint moves with it), 80 columns
+  [37m  __( O)>[39m  [32m●[39m [2mnew session[0m [2m·[0m [2mopenai[0m [36mmock
+[39m  [37m \____)[39m  [2m [0m [2m20261027_1[0m [2m· /tmp/ask-dialogs-scratch
+[0m  [37m   L L[39m  [37m   goose is ready
+[39m  [2m[32m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌[0m [2m0%[0m [2m0/128k
+[0m> show me the recent commits
+
+[37mNetwork error: Could not connect to 127.0.0.1:18099 — check your network connection and try again.
+
+Please resend your message to try again.
+[2m[39m  ⏱ 7.63s
+[0m  [2m[32m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌[0m [2m0%[0m [2m0/128k
+[0m> show me the recent commits
+
+
+  [2m────────────────────────────────────────
+[0m  [2m▸[0m [2mshell
+[0m    [2mcommand[0m: [32mgit log --oneline -3 && ls -la
+
+[36m◆[39m  Goose would like to call the above tool, do you allow?
+[36m│[39m  [2m○[0m [2mAllow[0m 
+[36m│[39m  [32m●[39m Always Allow [2m(Always allow the tool call)
+[0m[36m│[39m  [2m○[0m [2mDeny[0m 
+[36m│[39m  [2m○[0m [2mCancel[0m 
+[36m└  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

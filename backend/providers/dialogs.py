@@ -10,17 +10,30 @@ Parsing is provider-owned (:meth:`BaseProvider.parse_dialog
 <backend.providers.base.BaseProvider.parse_dialog>`): each CLI draws its
 dialogs differently. This module holds the shared, pure pieces — screen
 normalization, the numbered option block, option kinds, the dialog id — and
-the two layouts known so far, Claude Code's (:func:`parse_claude`) and
-Codex's (:func:`parse_codex`). Both are pinned against golden screens under
+the layouts: Claude Code's (:func:`parse_claude`), Codex's
+(:func:`parse_codex`), and — read by :class:`GenericProvider
+<backend.providers.generic.GenericProvider>` through its config's
+``dialog_layout`` (:data:`LAYOUTS`) — aider's, opencode's, Cline's, goose's
+and Antigravity's. All are pinned against golden screens under
 ``tests/unit/data/dialogs/``.
 
-A parse is deliberately conservative. It needs a numbered option list with
-the CLI's selection cursor on one of its lines, at the bottom of the screen
-(only blank lines, rules and a key-hint footer below it): an agent PRINTING
-a numbered list never carries the cursor glyph, and a numbered prompt the
-user typed sits in the transcript, above the input box. Anything else
-returns None, and the UI falls back to the question line plus a button
+A parse is deliberately conservative. It needs the marks of a LIVE prompt
+at the bottom of the screen: a numbered option list with the CLI's selection
+cursor on one of its lines (only blank lines, rules and a key-hint footer
+below it), or the CLI's own equivalent — aider's ``[Yes]:`` input line as
+the last line, opencode's button row with its ``⇆ select`` hint, Cline's
+``[y] Approve  [n] Deny`` row, goose's ``●``/``○`` radio list under ``◆``.
+An agent PRINTING a numbered list never carries those marks, and a numbered
+prompt the user typed sits in the transcript, above the input box. Anything
+else returns None, and the UI falls back to the question line plus a button
 that opens the pane — a wrong button is worse than no button.
+
+The screen may carry the terminal's colour escapes (``capture-pane -e``:
+what ``/dialog`` reads, see ``agent_io.current_dialog``): every parser
+strips them (:func:`strip_ansi`), and opencode — whose selected button is
+marked by its background colour alone — reads its selection from them
+(:func:`_highlighted`). Without them a parse assumes the CLI's initial
+selection.
 
 A parsed dialog (``parse_*``'s return)::
 
@@ -29,6 +42,10 @@ A parsed dialog (``parse_*``'s return)::
      "command": str|None,   # what it asks about, when that is a command
      "detail": str|None,    # one line of context (a description, a path)
      "options": [{"key": "1", "label": "Yes", "kind": "yes"}, ...],
+                            # + "keys": ["Down", "Enter"] — the tmux keys
+                            # that pick it — where pressing ``key`` alone
+                            # is not how the CLI is answered (a cursor-
+                            # driven list, aider's "y" + Enter)
      "source": str|None,    # who asked, from a tab header ("general-purpose
                             # agent" for a background sub-agent's prompt)
      "region": str}         # what the id hashes: one line per component
@@ -55,6 +72,7 @@ exit / cancel) or ``other`` (anything else, e.g. a free-text choice).
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from typing import List, Optional, Sequence, Tuple
 
@@ -69,8 +87,15 @@ __all__ = [
     "fallback_question",
     "describe",
     "dialog_on_screen",
+    "strip_ansi",
     "parse_claude",
     "parse_codex",
+    "parse_aider",
+    "parse_opencode",
+    "parse_cline",
+    "parse_goose",
+    "parse_antigravity",
+    "LAYOUTS",
 ]
 
 #: Ceilings on the text fields a parse returns (the UI shows one line or two).
@@ -143,6 +168,15 @@ _ALWAYS_HINTS = (
 )
 _YES_WORDS = ("yes", "allow", "approve", "accept", "proceed", "continue", "trust")
 _NO_WORDS = ("no", "deny", "reject", "cancel", "exit", "quit", "decline")
+#: First words that are a standing approval by themselves ("Always allow",
+#: goose's "Always Allow").
+_ALWAYS_WORDS = ("always",)
+
+# A terminal escape sequence: CSI (colours, cursor moves), OSC (titles,
+# hyperlinks) or a two-byte escape. ``capture-pane -e`` emits SGR colours.
+_ANSI = re.compile(
+    r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]"
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -159,6 +193,102 @@ def _cap(text: Optional[str], limit: int) -> Optional[str]:
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
+
+
+def strip_ansi(text: str) -> str:
+    """``text`` without terminal escape sequences (``capture-pane -e``)."""
+    return _ANSI.sub("", text or "")
+
+
+def _raw_lines(screen: str) -> List[str]:
+    """The screen's lines as captured — escapes kept — index for index with
+    :func:`normalize_lines`."""
+    return (screen or "").replace("\r", "").split("\n")
+
+
+def _styled(raw: str) -> Tuple[str, List[Optional[str]]]:
+    """One captured line → ``(text, backgrounds)``: the text without its
+    escapes, and per character the background it was drawn on (an SGR
+    colour spec such as ``"5;215"``, the foreground's under reverse video,
+    None for the default)."""
+    text: List[str] = []
+    backs: List[Optional[str]] = []
+    fg = bg = None
+    rev = False
+    pos = 0
+    for m in _ANSI.finditer(raw or ""):
+        for ch in raw[pos : m.start()]:
+            text.append(ch)
+            backs.append(fg if rev else bg)
+        pos = m.end()
+        seq = m.group(0)
+        if not (seq.startswith("\x1b[") and seq.endswith("m")):
+            continue
+        params = seq[2:-1].replace(":", ";").split(";")
+        i = 0
+        while i < len(params):
+            p = params[i]
+            if p in ("", "0"):
+                fg = bg = None
+                rev = False
+            elif p == "7":
+                rev = True
+            elif p == "27":
+                rev = False
+            elif p in ("38", "48"):
+                if i + 1 < len(params) and params[i + 1] == "5":
+                    spec, i = ";".join(params[i + 1 : i + 3]), i + 2
+                elif i + 1 < len(params) and params[i + 1] == "2":
+                    spec, i = ";".join(params[i + 1 : i + 5]), i + 4
+                else:
+                    spec = None
+                if p == "38":
+                    fg = spec
+                else:
+                    bg = spec
+            elif p == "39":
+                fg = None
+            elif p == "49":
+                bg = None
+            elif p.isdigit() and (30 <= int(p) <= 37 or 90 <= int(p) <= 97):
+                fg = p
+            elif p.isdigit() and (40 <= int(p) <= 47 or 100 <= int(p) <= 107):
+                bg = p
+            i += 1
+    for ch in (raw or "")[pos:]:
+        text.append(ch)
+        backs.append(fg if rev else bg)
+    return "".join(text), backs
+
+
+def _highlighted(raw: str, labels: Sequence[str]) -> Optional[int]:
+    """Which of ``labels`` — buttons drawn side by side on the captured line
+    ``raw`` — is highlighted, by background colour alone, or None (no
+    colours captured, or no single answer).
+
+    A highlighted button's label sits on a background the cell two columns
+    to its left (the gap before its padding) does not have; when the theme
+    paints every button, the one whose background no other button shares."""
+    text, backs = _styled(raw)
+    starts: List[int] = []
+    pos = 0
+    for label in labels:
+        at = text.find(label, pos)
+        if at < 0:
+            return None
+        starts.append(at)
+        pos = at + len(label)
+    if not any(backs):
+        return None
+    own = [backs[s] for s in starts]
+    lit = [i for i, s in enumerate(starts) if s >= 2 and own[i] != backs[s - 2]]
+    if len(lit) == 1:
+        return lit[0]
+    if len(labels) >= 3:
+        unique = [i for i, b in enumerate(own) if own.count(b) == 1]
+        if len(unique) == 1:
+            return unique[0]
+    return None
 
 
 def _strip_side_panel(raws: List[str]) -> List[str]:
@@ -192,7 +322,7 @@ def normalize_lines(screen: str) -> List[str]:
 
     Right-trimmed only: indentation is meaningful (an option label wrapped
     onto the next line is indented under it)."""
-    raws = [raw.rstrip() for raw in (screen or "").replace("\r", "").split("\n")]
+    raws = [raw.rstrip() for raw in strip_ansi(screen).replace("\r", "").split("\n")]
     out = []
     for raw in _strip_side_panel(raws):
         line = _BORDER_RIGHT.sub("", _BORDER_LEFT.sub("", raw.rstrip()))
@@ -206,7 +336,7 @@ def _drawn_widths(screen: str) -> List[int]:
     """Each screen line's drawn width — borders included, a side panel cut
     away — index for index with :func:`normalize_lines`. Its maximum is the
     pane's width as far as the dialog is concerned: where a box wraps."""
-    raws = [raw.rstrip() for raw in (screen or "").replace("\r", "").split("\n")]
+    raws = [raw.rstrip() for raw in strip_ansi(screen).replace("\r", "").split("\n")]
     return [len(raw.rstrip()) for raw in _strip_side_panel(raws)]
 
 
@@ -217,7 +347,8 @@ def option_block(
     end_line, options)`` with ``options`` as ``[{"num", "label"}]``, or None.
 
     The list must number 1, 2, 3… with no gaps, hold at least two options,
-    and carry one of the CLI's ``cursors`` glyphs on an option line — what
+    and carry one of the CLI's ``cursors`` glyphs on an option line (the
+    option it is on gets ``"cursor": True``) — what
     tells a live selection menu from a numbered list the agent printed. A
     line indented past its option's number that matches no option is that
     option's label wrapping. Below the list only blank lines, rules and
@@ -280,7 +411,8 @@ def option_block(
             joint = _wrap_joint(prev, tail, cols) if prev else None
             label += (" " if joint is None else joint) + tail
             prev = (tail, widths[idx + k]) if cols else None
-        options.append({"num": m.group("num"), "label": label})
+        cursor = bool(m.group("cursor") and m.group("cursor").strip() in cursors)
+        options.append({"num": m.group("num"), "label": label, "cursor": cursor})
     return rows[0][0], last + 1, options
 
 
@@ -323,6 +455,8 @@ def option_kind(label: str) -> str:
     first = re.split(r"[\s,.:;]+", low, maxsplit=1)[0] if low else ""
     if first in _NO_WORDS:
         return "no"
+    if first in _ALWAYS_WORDS:
+        return "always"
     if first in _YES_WORDS:
         return "always" if any(h in low for h in _ALWAYS_HINTS) else "yes"
     return "other"
@@ -872,18 +1006,723 @@ def parse_codex(screen: str) -> Optional[dict]:
 
 
 # --------------------------------------------------------------------------- #
+# Cursor-driven and hotkey layouts (aider, opencode, Cline, goose, Antigravity)
+# --------------------------------------------------------------------------- #
+def _option(key: str, label: str, kind: str, keys: Sequence[str]) -> dict:
+    return {"key": key, "label": label, "kind": kind, "keys": list(keys)}
+
+
+def _move_keys(cursor: int, target: int, back: str, forward: str) -> List[str]:
+    """The keys that move a selection from ``cursor`` to ``target`` without
+    wrapping round the list's end, then press Enter."""
+    step = forward if target > cursor else back
+    return [step] * abs(target - cursor) + ["Enter"]
+
+
+def _keyed(raw: List[dict]) -> List[dict]:
+    """:func:`option_block` options as ``{"num", "label"}`` for
+    :func:`_id_key` (it hashes ``num:label``)."""
+    return [{"num": o["key"], "label": o["label"]} for o in raw]
+
+
+# --- aider ----------------------------------------------------------------- #
+#: aider's confirm prompt (``io.confirm_ask``, aider 0.86): the question, then
+#: `` (Y)es/(N)o`` with optional ``/(A)ll``, ``/(S)kip all`` and ``/(D)on't
+#: ask again``, then the default (`` [Yes]: ``) — an input line, so the
+#: prompt is the screen's LAST line while aider waits.
+_AIDER_PROMPT = re.compile(
+    r"^(?P<q>\S.*?)\s?(?P<opts>\(Y\)es/\(N\)o(?:/\([ASD]\)[^/\[]*?)*)"
+    r"\s?\[(?P<default>[^\]]*)\]:$"
+)
+#: Each choice's label and kind, by its letter. "(D)on't ask again" REFUSES
+#: and stops asking (``confirm_ask`` returns False and remembers the
+#: question); "(A)ll" says yes to the rest of the group; "(S)kip all" no.
+_AIDER_CHOICES = {
+    "Y": ("Yes", "yes"),
+    "N": ("No", "no"),
+    "A": ("All", "always"),
+    "S": ("Skip all", "no"),
+    "D": ("Don't ask again", "no"),
+}
+#: The questions aider asks about a SUBJECT it prints on the line(s) above
+#: (bold): a URL, a file, a path, the shell command(s).
+_AIDER_SUBJECT = re.compile(
+    r"^(?:Add (?:URL|file) to the chat|Create new file|Run shell commands?"
+    r"|Run pip install|Allow edits to file that has not been added to the chat"
+    r"|Open (?:documentation )?url for more info)\?$",
+    re.IGNORECASE,
+)
+_AIDER_COMMAND_SUBJECT = re.compile(r"^Run (?:shell commands?|pip install)\?$")
+#: A line that is no subject: an answered prompt, the user's input line.
+_AIDER_NOT_SUBJECT = re.compile(r"\(Y\)es/\(N\)o|\]:\s*\S{0,20}$|^\w*>\s")
+_AIDER_MAX_WRAP = 6
+_AIDER_MAX_SUBJECT = 12
+
+
+def _aider_join(lines: Sequence[str], width: int) -> str:
+    """Lines prompt_toolkit / rich folded at the pane's edge, joined back:
+    a fold cuts mid-word, so nothing goes in between — except the one
+    trailing blank a fold right after a space lost to the right-trim."""
+    out = ""
+    for i, ln in enumerate(lines):
+        if i and width and len(lines[i - 1]) == width - 1:
+            out += " "
+        out += ln
+    return out
+
+
+def parse_aider(screen: str) -> Optional[dict]:
+    """An aider confirm prompt (``Add URL to the chat? (Y)es/(N)o/(A)ll/(S)kip
+    all/(D)on't ask again [Yes]:`` as the screen's last line, the subject it
+    asks about on the line(s) above) → the parsed dict, or None.
+
+    The prompt wraps at the pane's edge without a line break tmux can join
+    (prompt_toolkit draws it), so the last lines are glued back until they
+    read as one prompt starting with a capital letter. Each option is
+    answered by its letter and Enter (``keys``: ``["y", "Enter"]``)."""
+    lines = normalize_lines(screen)
+    if not lines or not lines[-1].rstrip().endswith("]:"):
+        return None
+    width = max(_drawn_widths(screen), default=0)
+    bottom = len(lines) - 1
+    found = None
+    for k in range(1, _AIDER_MAX_WRAP + 1):
+        top = bottom - k + 1
+        if top < 0 or not lines[top].strip():
+            break
+        chunk = lines[top : bottom + 1]
+        if k > 2 and len({len(ln) for ln in chunk[:-1]}) != 1:
+            break  # folded lines are all as wide as the pane
+        m = _AIDER_PROMPT.match(_aider_join(chunk, width).strip())
+        if m and m.group("q")[:1].isupper():
+            found = (top, m)
+            break
+    if found is None:
+        return None
+    top, m = found
+    question = _squash(m.group("q"))
+    letters = re.findall(r"\(([A-Z])\)", m.group("opts"))
+    if letters[:2] != ["Y", "N"] or len(set(letters)) != len(letters):
+        return None
+    if any(ch not in _AIDER_CHOICES for ch in letters):
+        return None
+    options = [
+        _option(ch, _AIDER_CHOICES[ch][0], _AIDER_CHOICES[ch][1], [ch.lower(), "Enter"])
+        for ch in letters
+    ]
+    subject: List[str] = []
+    if _AIDER_SUBJECT.match(question):
+        i = top - 1
+        # A resize redraws the prompt under the copy it failed to erase.
+        while i >= 0 and lines[i] in lines[top:]:
+            i -= 1
+        while i >= 0 and len(subject) < _AIDER_MAX_SUBJECT:
+            text = lines[i]
+            if (
+                not text.strip()
+                or _ANY_RULE.match(text)
+                or _AIDER_NOT_SUBJECT.search(text)
+            ):
+                break
+            subject.insert(0, text.rstrip())
+            i -= 1
+    command = detail = None
+    if subject and _AIDER_COMMAND_SUBJECT.match(question):
+        # One command per line; a line as wide as the pane folds onto the next.
+        cmds: List[List[str]] = []
+        for ln in subject:
+            if cmds and width and len(cmds[-1][-1]) >= width - 1:
+                cmds[-1].append(ln)
+            else:
+                cmds.append([ln])
+        command = "\n".join(_aider_join(c, width).strip() for c in cmds)
+    elif subject:
+        # One item (a URL, a path): the last line, and the full-width lines
+        # above it it folded from.
+        keep = [subject[-1]]
+        for ln in reversed(subject[:-1]):
+            if not (width and len(ln) >= width - 1):
+                break
+            keep.insert(0, ln)
+        subject = keep
+        detail = _aider_join(keep, width).strip()
+    return {
+        "heading": None,
+        "question": _cap(question, MAX_QUESTION_CHARS),
+        "command": _cap(command, MAX_COMMAND_CHARS),
+        "detail": _cap(_squash(detail) if detail else None, MAX_DETAIL_CHARS),
+        "options": options,
+        "source": None,
+        "region": _id_key(subject + [""] + [question], _keyed(options)),
+    }
+
+
+# --- opencode -------------------------------------------------------------- #
+#: opencode's (1.17) permission prompt draws its options as a row of buttons
+#: — "Allow once   Allow always   Reject", and "Confirm   Cancel" on the
+#: "Always allow" step that follows "Allow always" — with the key hint
+#: ("⇆ select  enter confirm") at the row's end, or under it in a narrow pane.
+_OPENCODE_BUTTONS = (("Allow once", "Allow always", "Reject"), ("Confirm", "Cancel"))
+_OPENCODE_ROW = re.compile(
+    r"^\s*(?P<row>Allow once\s{2,}Allow always\s{2,}Reject|Confirm\s{2,}Cancel)"
+    r"(?:\s{2,}(?P<hint>\S.*))?$"
+)
+_OPENCODE_SELECT_HINT = re.compile(r"⇆\s*select")
+#: Each button's kind. "Confirm" commits an "Always allow" rule; "Cancel"
+#: only goes back to the permission prompt.
+_OPENCODE_KINDS = {
+    "Allow once": "yes",
+    "Allow always": "always",
+    "Reject": "no",
+    "Confirm": "always",
+    "Cancel": "other",
+}
+#: The button Esc presses (the prompt's ``escapeKey``) — whatever is selected.
+_OPENCODE_ESCAPE = ("Reject", "Cancel")
+_OPENCODE_HEADING = re.compile(r"^\s*△\s+(?P<title>\S.*?)\s*$")
+#: The question tool's footer (one question, one answer): digits pick.
+_OPENCODE_QUESTION_FOOTER = re.compile(
+    r"^\s*↑↓\s*select\s+enter\s+\w+\s+esc\s+dismiss\s*$"
+)
+_OPENCODE_QOPTION = re.compile(
+    r"^(?P<indent>\s*)(?P<num>[1-9])\.\s+(?P<label>\S.*?)\s*$"
+)
+_OPENCODE_MULTI = "(select all that apply)"
+
+
+def _opencode_permission(screen: str, lines: List[str]) -> Optional[dict]:
+    row_idx = None
+    for i in range(len(lines) - 1, -1, -1):
+        if _OPENCODE_ROW.match(lines[i]):
+            row_idx = i
+            break
+        if lines[i].strip() and not _OPENCODE_SELECT_HINT.search(lines[i]):
+            return None  # something else is under the row: no live prompt
+    if row_idx is None:
+        return None
+    m = _OPENCODE_ROW.match(lines[row_idx])
+    hinted = bool(m.group("hint") and _OPENCODE_SELECT_HINT.search(m.group("hint")))
+    hinted = hinted or any(
+        _OPENCODE_SELECT_HINT.search(t) for t in lines[row_idx + 1 :]
+    )
+    if not hinted:
+        return None
+    labels = next(b for b in _OPENCODE_BUTTONS if m.group("row").startswith(b[0]))
+    head_idx = None
+    for i in range(row_idx - 1, max(-1, row_idx - _REGION_LINES), -1):
+        if _OPENCODE_HEADING.match(lines[i]):
+            head_idx = i
+            break
+    if head_idx is None:
+        return None
+    heading = _OPENCODE_HEADING.match(lines[head_idx]).group("title")
+    body = [ln.strip() for ln in lines[head_idx + 1 : row_idx]]
+    command = detail = None
+    if labels[0] == "Confirm":
+        # "This will allow the following patterns …" over "- git log *" lines.
+        detail = next((t for t in body if t and not t.startswith("- ")), None)
+        patterns = [t[2:].strip() for t in body if t.startswith("- ")]
+        command = "\n".join(patterns) or None
+    else:
+        # The tool line ("# Shell command", "→ Edit notes/todo.md"): an icon
+        # glyph, then the title.
+        tool = next((t for t in body if t), "")
+        parts = tool.split(None, 1)
+        if len(parts) == 2 and len(parts[0]) == 1 and not parts[0].isalnum():
+            tool = parts[1]
+        detail = tool or None
+        cmd: List[str] = []
+        for t in body:
+            if t.startswith("$ ") and not cmd:
+                cmd.append(t[2:].strip())
+            elif cmd and t:
+                cmd.append(t)
+            elif cmd:
+                break
+        command = "\n".join(cmd) or None
+    sel = _highlighted(_raw_lines(screen)[row_idx], labels)
+    cursor = 0 if sel is None else sel
+    options = []
+    for j, label in enumerate(labels):
+        keys = (
+            ["Escape"]
+            if label in _OPENCODE_ESCAPE
+            else _move_keys(cursor, j, "Left", "Right")
+        )
+        options.append(_option(str(j + 1), label, _OPENCODE_KINDS[label], keys))
+    return {
+        "heading": _cap(heading, MAX_DETAIL_CHARS),
+        "question": "",
+        "command": _cap(command, MAX_COMMAND_CHARS),
+        "detail": _cap(_squash(detail) if detail else None, MAX_DETAIL_CHARS),
+        "options": options,
+        "source": None,
+        "region": _id_key(lines[head_idx:row_idx], _keyed(options)),
+    }
+
+
+def _opencode_question(lines: List[str]) -> Optional[dict]:
+    if not lines or not _OPENCODE_QUESTION_FOOTER.match(lines[-1]):
+        return None
+    # The block of lines over the footer: "1." … options at one indent, each
+    # with its description indented under it.
+    end = len(lines) - 1
+    while end and not lines[end - 1].strip():
+        end -= 1
+    i = end - 1
+    while i >= 0 and lines[i].strip():
+        i -= 1
+    block = lines[i + 1 : end]
+    first = _OPENCODE_QOPTION.match(block[0]) if block else None
+    if first is None:
+        return None
+    rows: List[Tuple[int, re.Match]] = []
+    for k, line in enumerate(block):
+        m = _OPENCODE_QOPTION.match(line)
+        if m and m.group("indent") == first.group("indent"):
+            rows.append((k, m))
+        elif _indent(line) <= len(first.group("indent")):
+            return None  # neither an option nor its description
+    nums = [int(m.group("num")) for _, m in rows]
+    if len(rows) < 2 or nums != list(range(1, len(rows) + 1)):
+        return None
+    if i < 0 or lines[i].strip():
+        return None  # the question paragraph sits a blank line above
+    while i >= 0 and not lines[i].strip():
+        i -= 1
+    q_lines: List[str] = []
+    while i >= 0 and lines[i].strip():
+        q_lines.insert(0, lines[i].strip())
+        i -= 1
+    question = _squash(" ".join(q_lines))
+    if not question or _OPENCODE_MULTI in question:
+        return None  # several answers toggle with the digits, then confirm
+    above = next((lines[k] for k in range(i, -1, -1) if lines[k].strip()), "")
+    if above.strip().endswith("Confirm"):
+        return None  # a tab row of several questions over a final Confirm
+    options = []
+    for _, m in rows:
+        label = clean_label(m.group("label"))
+        options.append(
+            _option(m.group("num"), label, option_kind(label), [m.group("num")])
+        )
+    return {
+        "heading": None,
+        "question": _cap(question, MAX_QUESTION_CHARS),
+        "command": None,
+        "detail": None,
+        "options": options,
+        "source": None,
+        "region": _id_key(q_lines, _keyed(options)),
+    }
+
+
+def parse_opencode(screen: str) -> Optional[dict]:
+    """An opencode prompt → the parsed dict, or None.
+
+    * The permission prompt ("△ Permission required", the tool line such as
+      "# Shell command" or "→ Edit notes/todo.md", a ``$ command`` or a diff,
+      then the "Allow once / Allow always / Reject" buttons with the ``⇆
+      select`` hint) and its "△ Always allow" step ("Confirm / Cancel", the
+      patterns it will allow as ``command``). The selected button is marked
+      by colour only: read from the escapes when the screen carries them
+      (:func:`_highlighted`), else the first (where opencode opens it).
+      ``keys`` move from it with Left/Right, then Enter; Reject / Cancel is
+      Esc, whatever is selected.
+    * The question tool ("1. …" options with their descriptions under them,
+      "↑↓ select  enter submit  esc dismiss" as the last line): a digit
+      picks and submits, so ``keys`` is the option's number. "Type your own
+      answer" opens opencode's text box (then type the answer and Enter).
+      Several questions, or several answers to tick, are not parsed."""
+    lines = normalize_lines(screen)
+    return _opencode_question(lines) or _opencode_permission(screen, lines)
+
+
+# --- Cline ----------------------------------------------------------------- #
+#: Cline's (3.0) tool approval: "Cline needs permission", "Approve tool
+#: call?", the tool, its arguments as JSON, and "[y] Approve   [n] Deny" — y
+#: and n answer at once. Its status lines (model and cost, the repo, the
+#: auto-approve mode) stay under the dialog.
+_CLINE_PERMISSION = "Cline needs permission"
+_CLINE_QUESTION = "Cline is asking a question"
+_CLINE_BUTTONS = re.compile(r"^\s*\[y\]\s+Approve\s{2,}\[n\]\s+Deny\s*$")
+_CLINE_STATUS_LINES = 4
+#: A question's choice row: ">" on the selected one, the text two columns in.
+_CLINE_ROW = re.compile(r"^  (?P<cursor>>| ) (?P<text>\S.*?)\s*$")
+_CLINE_JSON_STR = r'"((?:\\.|[^"\\])*)"'
+#: The tools whose ``command`` argument is a shell command (the editor's is
+#: its operation: "create", "str_replace").
+_CLINE_COMMAND_TOOL = re.compile(r"command|shell|bash|exec|terminal", re.IGNORECASE)
+
+
+def _json_str(text: str) -> str:
+    try:
+        return json.loads('"%s"' % text)
+    except ValueError:
+        return text
+
+
+def _cline_status_below(below: Sequence[str]) -> bool:
+    """Whether ``below`` is only Cline's status lines (the dialog replaced
+    the input box; an answered one has the box — a rule and "❯" — under
+    it)."""
+    rest = [t for t in below if t.strip()]
+    return len(rest) <= _CLINE_STATUS_LINES and not any(
+        _ANY_RULE.match(t) or t.strip().startswith(("❯", ">")) for t in rest
+    )
+
+
+def _cline_permission(lines: List[str]) -> Optional[dict]:
+    row = next(
+        (i for i in range(len(lines) - 1, -1, -1) if _CLINE_BUTTONS.match(lines[i])),
+        None,
+    )
+    if row is None or not _cline_status_below(lines[row + 1 :]):
+        return None
+    head = next(
+        (
+            i
+            for i in range(row - 1, max(-1, row - _REGION_LINES), -1)
+            if lines[i].strip() == _CLINE_PERMISSION
+        ),
+        None,
+    )
+    if head is None:
+        return None
+    body = [ln.strip() for ln in lines[head + 1 : row] if ln.strip()]
+    question = body[0] if body and body[0].endswith("?") else ""
+    rest = body[1:] if question else body
+    tool = rest[0] if rest and not rest[0].startswith(("{", '"')) else None
+    args = " ".join(rest[1:] if tool else rest)
+    command = None
+    if tool and _CLINE_COMMAND_TOOL.search(tool):
+        m = re.search(r'"commands?"\s*:\s*' + _CLINE_JSON_STR, args)
+        if m:
+            command = _json_str(m.group(1))
+        else:
+            m = re.search(r'"commands?"\s*:\s*\[(.*?)\]', args)
+            if m:
+                found = re.findall(_CLINE_JSON_STR, m.group(1))
+                command = "\n".join(_json_str(s) for s in found)
+    path = re.search(r'"(?:path|file_path|filePath)"\s*:\s*' + _CLINE_JSON_STR, args)
+    detail = " ".join(p for p in (tool, _json_str(path.group(1)) if path else "") if p)
+    options = [
+        _option("y", "Approve", "yes", ["y"]),
+        _option("n", "Deny", "no", ["n"]),
+    ]
+    return {
+        "heading": _CLINE_PERMISSION,
+        "question": _cap(question, MAX_QUESTION_CHARS),
+        "command": _cap(command or None, MAX_COMMAND_CHARS),
+        "detail": _cap(_squash(detail) or None, MAX_DETAIL_CHARS),
+        "options": options,
+        "source": None,
+        "region": _id_key(lines[head:row], _keyed(options)),
+    }
+
+
+def _cline_question(lines: List[str]) -> Optional[dict]:
+    head = next(
+        (
+            i
+            for i in range(len(lines) - 1, max(-1, len(lines) - _REGION_LINES), -1)
+            if lines[i].strip() == _CLINE_QUESTION
+        ),
+        None,
+    )
+    if head is None:
+        return None
+    # The title, the question and the choices, a blank line between each.
+    i = head + 1
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    q_lines: List[str] = []
+    while i < len(lines) and lines[i].strip() and not _CLINE_ROW.match(lines[i]):
+        q_lines.append(lines[i].strip())
+        i += 1
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    rows: List[re.Match] = []
+    while i < len(lines) and _CLINE_ROW.match(lines[i]):
+        rows.append(_CLINE_ROW.match(lines[i]))
+        i += 1
+    if not q_lines or len(rows) < 3 or not _cline_status_below(lines[i:]):
+        return None
+    cursors = [k for k, m in enumerate(rows) if m.group("cursor") == ">"]
+    if len(cursors) != 1:
+        return None
+    cursor = cursors[0]
+    # The last row is the free-text one ("Type a response...", or what is
+    # being typed): typing any text selects it, so it is no button.
+    choices = rows[:-1]
+    options = []
+    for k, m in enumerate(choices):
+        label = clean_label(m.group("text"))
+        keys = (
+            [str(k + 1)]
+            if cursor < len(choices) and k < 9
+            else (_move_keys(cursor, k, "Up", "Down"))
+        )
+        options.append(_option(str(k + 1), label, option_kind(label), keys))
+    question = _squash(" ".join(q_lines))
+    return {
+        "heading": None,
+        "question": _cap(question, MAX_QUESTION_CHARS),
+        "command": None,
+        "detail": None,
+        "options": options,
+        "source": None,
+        "region": _id_key([_CLINE_QUESTION, ""] + q_lines, _keyed(options)),
+    }
+
+
+def parse_cline(screen: str) -> Optional[dict]:
+    """A Cline dialog → the parsed dict, or None.
+
+    * Tool approval ("Cline needs permission" … "[y] Approve   [n] Deny"):
+      the tool is the detail (with the path it names), a ``command`` /
+      ``commands`` argument the command; ``keys`` ``["y"]`` / ``["n"]``.
+    * A question ("Cline is asking a question", the question, its choices
+      with ">" on the selected one, then the free-text row): a digit picks a
+      choice (arrows and Enter while the cursor is on the free-text row,
+      where a digit would be typed). The free-text row is no option — any
+      typed text lands in it, so a written answer is ``/answer`` text plus
+      Enter."""
+    lines = normalize_lines(screen)
+    return _cline_permission(lines) or _cline_question(lines)
+
+
+# --- goose ----------------------------------------------------------------- #
+#: goose's (1.41) tool confirmation: the tool call ("▸ shell" over its
+#: arguments) under a rule, "◆  Goose would like to call the above tool, do
+#: you allow?", and a radio list — "●" on the selected choice, which also
+#: shows its hint "(Allow the tool call once)" — closed by "└". Answered, the
+#: "◆" turns "◇" and the list collapses to the choice.
+_GOOSE_QUESTION = re.compile(r"^\s*◆\s+(?P<q>\S.*?)\s*$")
+_GOOSE_OPTION = re.compile(r"^\s*(?P<mark>[●○])\s+(?P<label>\S.*?)\s*$")
+_GOOSE_HINT = re.compile(r"\s*\([^()]*\)$")
+_GOOSE_TOOL = re.compile(r"^\s*▸\s+(?P<tool>\S.*?)\s*$")
+_GOOSE_ARG = re.compile(r"^\s*(?P<name>[A-Za-z_][\w-]*)(?::\s*|\s+)(?P<value>.*)$")
+
+
+def parse_goose(screen: str) -> Optional[dict]:
+    """A goose tool confirmation → the parsed dict, or None.
+
+    The tool is the heading, its ``command:`` argument the command, its
+    first other argument (``path …``) the detail. The selected choice's hint
+    is dropped from its label (it moves with the cursor). ``keys`` move from
+    the "●" with Up/Down, then Enter."""
+    lines = normalize_lines(screen)
+    end = len(lines)
+    while end and (not lines[end - 1].strip() or lines[end - 1].strip() == "└"):
+        end -= 1
+    rows: List[Tuple[int, re.Match]] = []
+    i = end - 1
+    while i >= 0 and _GOOSE_OPTION.match(lines[i]):
+        rows.insert(0, (i, _GOOSE_OPTION.match(lines[i])))
+        i -= 1
+    if len(rows) < 2 or i < 0:
+        return None
+    qm = _GOOSE_QUESTION.match(lines[i])
+    marks = [m.group("mark") for _, m in rows]
+    if qm is None or marks.count("●") != 1:
+        return None
+    cursor = marks.index("●")
+    labels = []
+    for k, (_, m) in enumerate(rows):
+        label = m.group("label")
+        if k == cursor:
+            label = _GOOSE_HINT.sub("", label)
+        labels.append(clean_label(label))
+    options = [
+        _option(
+            str(k + 1), label, option_kind(label), _move_keys(cursor, k, "Up", "Down")
+        )
+        for k, label in enumerate(labels)
+    ]
+    above = list(_region(lines, i) or ())
+    heading = command = detail = None
+    tool_at = next(
+        (k for k in range(len(above) - 1, -1, -1) if _GOOSE_TOOL.match(above[k])), None
+    )
+    block = above[tool_at:] if tool_at is not None else []
+    if block:
+        heading = _GOOSE_TOOL.match(block[0]).group("tool")
+        for ln in block[1:]:
+            am = _GOOSE_ARG.match(ln)
+            if not am:
+                continue
+            if am.group("name") == "command" and command is None:
+                command = am.group("value").strip() or None
+            elif detail is None and am.group("value").strip():
+                detail = ln.strip()
+    question = qm.group("q")
+    return {
+        "heading": _cap(heading, MAX_DETAIL_CHARS),
+        "question": _cap(_squash(question), MAX_QUESTION_CHARS),
+        "command": _cap(command, MAX_COMMAND_CHARS),
+        "detail": _cap(_squash(detail) if detail else None, MAX_DETAIL_CHARS),
+        "options": options,
+        "source": None,
+        "region": _id_key(
+            block + [""] + [question],
+            [{"num": o["key"], "label": o["label"]} for o in options],
+        ),
+    }
+
+
+# --- Antigravity ----------------------------------------------------------- #
+#: Antigravity's (agy 1.0) selection cursor on a numbered list.
+ANTIGRAVITY_CURSORS = ">"
+#: The lines that open an agy dialog: the permission prompt ("Requesting
+#: permission for:" over the command, "Do you want to proceed?"), a
+#: clarifying question ("Question 1/2: …", "↑/↓ Navigate · enter Select ·
+#: esc Skip" under its choices) and the trust gate.
+_AGY_OPENERS = re.compile(
+    r"^(?:Requesting permission for:|Question \d+/\d+:\s*\S.*|Do you want to .*\?"
+    r"|Do you trust the contents of this .*\?)"
+)
+_AGY_PERMISSION = "Requesting permission for:"
+_AGY_QUESTION = re.compile(r"^Question \d+/\d+:\s*(?P<q>\S.*)$")
+#: The hint under a question that takes a typed answer (no choices).
+_AGY_SKIP_HINT = re.compile(r"esc\s+Skip")
+
+
+def parse_antigravity(screen: str) -> Optional[dict]:
+    """An Antigravity (agy) dialog → the parsed dict, or None.
+
+    A numbered list with agy's ">" cursor under one of its openers
+    (:data:`_AGY_OPENERS` — ">" alone also starts agy's input line, so the
+    opener is required): "Requesting permission for:" gives the command
+    (the indented lines under it) and the question ("Do you want to
+    proceed?"); "Question 1/1: …" the question. ``keys`` move from the
+    cursor with Up/Down, then Enter. A "Question N/N:" with no choices
+    drawn (a typed answer) is returned without options — ``/dialog`` serves
+    it unparsed, with its question."""
+    lines = normalize_lines(screen)
+    block = option_block(lines, ANTIGRAVITY_CURSORS)
+    if block is None:
+        return _antigravity_free_text(lines)
+    first, _end, raw = block
+    region = [ln.strip() for ln in _region(lines, first) or ()]
+    start = next(
+        (i for i in range(len(region) - 1, -1, -1) if _AGY_OPENERS.match(region[i])),
+        None,
+    )
+    if start is None:
+        return None
+    # A permission prompt's opener sits ABOVE its question: start there.
+    for i in range(start - 1, -1, -1):
+        if region[i] == _AGY_PERMISSION:
+            start = i
+            break
+        if not region[i] and i < start - 1 and not region[i + 1]:
+            break
+    heading = command = None
+    body = region[start:]
+    if body[0] == _AGY_PERMISSION:
+        heading = "Requesting permission"
+        cmd: List[str] = []
+        k = 1
+        while k < len(body) and body[k] and "?" not in body[k]:
+            cmd.append(body[k])
+            k += 1
+        command = "\n".join(cmd) or None
+        q_line = next((t for t in body[k:] if "?" in t), "")
+        question = _first_question(q_line)
+    else:
+        qm = _AGY_QUESTION.match(body[0])
+        question = qm.group("q") if qm else _first_question(body[0])
+    cursor = next((k for k, o in enumerate(raw) if o.get("cursor")), 0)
+    options = []
+    for k, opt in enumerate(raw):
+        label = clean_label(opt["label"])
+        options.append(
+            _option(
+                opt["num"],
+                label,
+                option_kind(label),
+                _move_keys(cursor, k, "Up", "Down"),
+            )
+        )
+    return {
+        "heading": heading,
+        "question": _cap(_squash(question), MAX_QUESTION_CHARS),
+        "command": _cap(command, MAX_COMMAND_CHARS),
+        "detail": None,
+        "options": options,
+        "source": None,
+        "region": _id_key(body, raw),
+    }
+
+
+def _antigravity_free_text(lines: List[str]) -> Optional[dict]:
+    """A "Question N/N:" near the bottom with agy's "esc Skip" hint under it
+    and no choices: a question answered in free text."""
+    tail = [ln.strip() for ln in lines if ln.strip()][-6:]
+    q_at = next(
+        (k for k in range(len(tail) - 1, -1, -1) if _AGY_QUESTION.match(tail[k])), None
+    )
+    below = tail[q_at + 1 :] if q_at is not None else []
+    if not any(_AGY_SKIP_HINT.search(t) for t in below):
+        return None
+    if any(_OPTION.match(t) for t in below):
+        return None  # choices drawn (an unreadable menu is no free text)
+    question = _AGY_QUESTION.match(tail[q_at]).group("q")
+    return {
+        "heading": None,
+        "question": _cap(_squash(question), MAX_QUESTION_CHARS),
+        "command": None,
+        "detail": None,
+        "options": [],
+        "source": None,
+        "region": _id_key([tail[q_at]], []),
+    }
+
+
+#: ``ProviderConfig.dialog_layout`` → its parser (what
+#: :class:`GenericProvider <backend.providers.generic.GenericProvider>`
+#: dispatches on).
+LAYOUTS = {
+    "aider": parse_aider,
+    "opencode": parse_opencode,
+    "cline": parse_cline,
+    "goose": parse_goose,
+    "antigravity": parse_antigravity,
+}
+
+
+# --------------------------------------------------------------------------- #
 # The /dialog payload
 # --------------------------------------------------------------------------- #
+def _describe_option(opt: dict) -> dict:
+    out = {"key": str(opt["key"]), "label": str(opt["label"]), "kind": str(opt["kind"])}
+    if opt.get("keys"):
+        out["keys"] = [str(k) for k in opt["keys"]]
+    return out
+
+
 def describe(parsed: Optional[dict], screen: str) -> dict:
     """``GET /api/instances/{title}/dialog``'s body for one screen and the
     provider's parse of it (None when it had none).
 
     Parsed: the composed question line, the command and the dialog's own
-    options. Unparsed: ``parsed: false``, the best-effort question line and
-    no options — the UI then offers only "open the pane". The ``id`` is
+    options — each with the ``keys`` that pick it when the parse gave them
+    (a cursor-driven list; the UI posts ``keys`` when present, else
+    ``[key]``). Unparsed: ``parsed: false``, the best-effort question line
+    and no options — the UI then offers only "open the pane". A parse with a
+    question but no options (a question answered in free text: Antigravity's
+    write-in) is unparsed too, with ITS question line. The ``id`` is
     :func:`dialog_id` either way."""
     if parsed is not None and not parsed.get("options"):
-        parsed = None
+        question = compose_question(parsed) if parsed.get("question") else ""
+        return {
+            "id": dialog_id(parsed if parsed.get("region") else None, screen),
+            "parsed": False,
+            "question": question or fallback_question(screen),
+            "command": None,
+            "options": [],
+        }
     if parsed is None:
         return {
             "id": dialog_id(None, screen),
@@ -897,10 +1736,7 @@ def describe(parsed: Optional[dict], screen: str) -> dict:
         "parsed": True,
         "question": compose_question(parsed),
         "command": parsed.get("command") or None,
-        "options": [
-            {"key": str(o["key"]), "label": str(o["label"]), "kind": str(o["kind"])}
-            for o in parsed["options"]
-        ],
+        "options": [_describe_option(o) for o in parsed["options"]],
     }
     if parsed.get("source"):
         # Emitted only when set: who raised it ("general-purpose agent" — a

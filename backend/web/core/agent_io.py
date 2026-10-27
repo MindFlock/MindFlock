@@ -45,12 +45,13 @@ DEFAULT_MAX_CHARS = 6000
 MAX_MAX_CHARS = 50000
 
 #: Keys an answer may press, by tmux key name. Navigation, confirm/cancel and
-#: the single-character choices a CLI dialog offers — nothing that edits text
+#: the single-character choices a CLI dialog offers (y/n; aider's
+#: (A)ll / (S)kip all / (D)on't ask again letters) — nothing that edits text
 #: (no Backspace/C-u) or signals the process (no C-c/C-d/C-z).
 ANSWER_KEYS = frozenset(
     ["Enter", "Escape", "Up", "Down", "Left", "Right", "Tab", "BTab", "Space"]
     + [str(n) for n in range(1, 10)]
-    + ["y", "n"]
+    + ["y", "n", "a", "s", "d"]
 )
 MAX_ANSWER_TEXT = 2000
 MAX_ANSWER_KEYS = 20
@@ -114,14 +115,19 @@ def tail(text: str, max_chars: int) -> Tuple[str, bool]:
     return text[-max_chars:], True
 
 
-def capture_screen(name: str) -> Tuple[Optional[str], Optional[str]]:
+def capture_screen(
+    name: str, colors: bool = False
+) -> Tuple[Optional[str], Optional[str]]:
     """The visible screen of tmux session ``name`` → ``(text, error)``.
 
     ``capture-pane -p -J`` with no ``-S``: the current screen only (not the
     scrollback), wrapped lines joined. Trailing blank rows are dropped.
+    ``colors`` adds ``-e`` (the colour escapes): what a dialog parser needs
+    to see a selection drawn by colour alone (opencode's buttons).
     """
+    flags = ["-p", "-e", "-J"] if colors else ["-p", "-J"]
     out = _proc.run_capped(
-        ["tmux", "capture-pane", "-p", "-J", "-t", name],
+        ["tmux", "capture-pane", *flags, "-t", name],
         capture_output=True,
         text=True,
         timeout=_TMUX_TIMEOUT,
@@ -270,12 +276,14 @@ def current_dialog(name: str, program: str) -> Tuple[Optional[dict], Optional[st
     body (see :func:`backend.providers.dialogs.describe`) → ``(body, error)``.
 
     The session's provider parses it (:meth:`parse_dialog`); a provider with
-    no parser, or one that raises, gives the unparsed body. ``error`` is the
-    capture's failure (the pane is gone or tmux refused)."""
+    no parser, or one that raises, gives the unparsed body. The capture keeps
+    the colour escapes (the parsers strip them): an option list whose
+    selection is drawn by colour alone needs them for its ``keys``. ``error``
+    is the capture's failure (the pane is gone or tmux refused)."""
     from backend import providers
     from backend.providers import dialogs
 
-    screen, err = capture_screen(name)
+    screen, err = capture_screen(name, colors=True)
     if err is not None:
         return None, err
     try:
