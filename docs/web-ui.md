@@ -173,7 +173,7 @@ a session first*).
   *Stopped.* after a stop phrase, and the router's own line after a switch
   (*Now talking to Billing.*) — with *Read replies aloud* off too. They go to
   the front of the one speech queue (after other confirmations, never behind
-  a reply), are said even while the mic listens (the replies wait), are
+  a reply), are said even while the person is mid-sentence, are
   dropped when more than 5 s late, and the recorder drops its audio while one
   plays and 150 ms after (`Recognizer.mute`; Web Speech ignores its results
   then) without ending the phrase. The server voice's audio for them is kept
@@ -181,6 +181,17 @@ a session first*).
   ahead once — on the first press, when `/api/voice` says the voice is local
   (`tts_backend` `local` / `system`, or a host at a local address in
   `tts_detail`), else only after a line was first said without an error.
+- **Replies while listening.** In continuous listening the speech queue is
+  not held: a reply's `Say:` line, *Everything*'s lines, ask read-outs and
+  the router's lines play as soon as they are ready, in the person's pause —
+  the queue's gate (`SpeechQueue.setGate`) holds a line only while the phrase
+  under way has words from the last 1.5 s and no 250 ms pause yet
+  (`LiveDictation.midSentence`; also for 1.5 s after the mic is keyed). While
+  any line plays the recorder drops its audio, and 150 ms after
+  (`Recognizer.mute`) — the phrase under way is not ended — and listening
+  goes on after it. A click (or the Talk hotkey) while a line plays cuts that
+  line and keeps listening; the next one stops. A hands-free answer still
+  holds the queue for its 12 s listen.
 - **Control words act fast.** A control phrase at the end of the **guess** —
   “over”, “over and out”, “disregard”, a stop phrase, “stop talking”, or a
   switch command as a message's first phrase (“switch to billing”, “focus 3”,

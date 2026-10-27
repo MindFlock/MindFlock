@@ -495,7 +495,12 @@ export function TopBarMic() {
       const want = sayAllMismatch(prefsRef.current.replies, c.say_all);
       if (want !== null) void syncSayAll(want);
     });
-    const l = (on: boolean) => setSpeaking(on);
+    const l = (on: boolean) => {
+      setSpeaking(on);
+      // A line while listening goes on: not the person — its audio is dropped
+      // (and 150 ms after), the phrase under way is not ended.
+      if (gated.current) rec.current?.mute?.(on);
+    };
     speakingListeners.add(l);
     // Where speech runs moves with Settings (another window, an engine just
     // installed): re-read it when the window comes back, and after a settings
@@ -617,6 +622,9 @@ export function TopBarMic() {
   /** The recognizer down, nothing reported; the queue may talk again. */
   /** A dictation that chimed its start: its end chimes too. */
   const chimed = useRef(false);
+  /** Continuous listening: the replies play in the person's pauses (the
+   * queue's gate, not its hold), the recorder muted while a line plays. */
+  const gated = useRef(false);
   /** The mic's chime (Settings → Voice "Sounds"): never over a line being
    * said — it waits for that line's end. */
   const sound = (kind: "start" | "stop") => {
@@ -631,6 +639,8 @@ export function TopBarMic() {
   };
 
   const halt = () => {
+    gated.current = false;
+    queue.setGate(null);
     if (chimed.current) {
       chimed.current = false;
       // Before the queue lets the replies go: the stop comes first.
@@ -856,6 +866,14 @@ export function TopBarMic() {
     // Every start chimes (a click, the hotkey, the wake word, the ask card's mic).
     sound("start");
     chimed.current = true;
+    // Continuous: what is said (replies, read-outs, the router's lines) plays
+    // as soon as the person pauses, the recorder muted for it — never held
+    // until "over and out".
+    if (continuous) {
+      gated.current = true;
+      queue.setGate(() => !d.midSentence());
+      queue.release();
+    }
     // Web Speech listens from here, and reports no level: tap one.
     if (r === browserRec) {
       d.ready();
@@ -903,6 +921,12 @@ export function TopBarMic() {
     const r = rec.current;
     const d = live.current;
     if (!r || !d || deciding.current) return;
+    // Continuous, click to talk, a line being said: the press cuts the line
+    // (barge-in) and listening goes on; the next press stops.
+    if (gated.current && queue.busy && prefsRef.current.ptt !== "hold") {
+      queue.skip();
+      return;
+    }
     let done = false;
     const decide = () => {
       if (done) return;

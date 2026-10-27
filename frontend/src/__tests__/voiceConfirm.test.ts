@@ -14,6 +14,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  GATE_RETRY_MS,
+  MID_SENTENCE_MS,
   CONFIRM_LINES,
   CONFIRM_STALE_MS,
   CONTROL_TAIL_MS,
@@ -633,7 +635,7 @@ describe("the mic's chimes: rising at every start, falling at every stop", () =>
   });
 
   it("every stop chimes: halt() — where over and out, a stop phrase, Esc, the button, letting go, the idle stop and a refused send all end — only after a start chimed", () => {
-    expect(MIC).toMatch(/const halt = \(\) => \{\s*if \(chimed\.current\) \{\s*chimed\.current = false;[^}]*sound\("stop"\);\s*\}/);
+    expect(MIC).toMatch(/const halt = \(\) => \{[^}]*if \(chimed\.current\) \{\s*chimed\.current = false;[^}]*sound\("stop"\);\s*\}/);
     // Before the queue releases the replies.
     const halt = fnBody("const halt = () => {", "const target = (");
     expect(halt.indexOf('sound("stop")')).toBeLessThan(halt.indexOf("queue.release()"));
@@ -658,5 +660,89 @@ describe("the mic's chimes: rising at every start, falling at every stop", () =>
     expect(voice).toContain('id="voice-sounds"');
     expect(voice).toMatch(/checked=\{prefs\.sounds !== false\}/);
     expect(voice).toMatch(/save\(\{ \.\.\.prefs, sounds: e\.target\.checked \}\)/);
+  });
+});
+
+describe("continuous listening: replies play in the person's pauses, the recorder muted", () => {
+  let quiet = 0;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    quiet = 0;
+  });
+  function engine() {
+    const said: string[] = [];
+    let finish: (() => void) | null = null;
+    const sp: Speaker = {
+      speak: (t) => {
+        said.push(t);
+        return new Promise<void>((r) => (finish = r));
+      },
+      cancel: () => finish?.(),
+    };
+    return { sp, said, end: () => finish?.() };
+  }
+
+  it("a reply queued while listening plays in the quiet gap — not after “over and out” — and waits while the person is mid-sentence", async () => {
+    mocks.instApi.mockResolvedValue({ ok: true });
+    const e = engine();
+    const speaking: boolean[] = [];
+    const q = new SpeechQueue(() => e.sp, (on) => void speaking.push(on));
+    const k = hooks({ quietMs: () => quiet });
+    const d = new LiveDictation(session(), k.h, { continuous: true });
+    // As TopBarMic.start: the barge-in's hold, then the gate instead of it.
+    q.hold();
+    q.setGate(() => !d.midSentence());
+    q.release();
+    // Just keyed: a moment's grace before anything is said.
+    void q.say("Login fix: the tests pass.");
+    expect(e.said).toEqual([]);
+    await vi.advanceTimersByTimeAsync(MID_SENTENCE_MS + GATE_RETRY_MS);
+    expect(e.said).toEqual(["Login fix: the tests pass."]); // the mic still listening
+    expect(d.active).toBe(true);
+    e.end();
+    await vi.advanceTimersByTimeAsync(0);
+    // Mid-sentence: the next line waits for the 250 ms pause.
+    await d.stream("", "now please also");
+    void q.say("Billing: done.");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(e.said).toHaveLength(1);
+    quiet = 260;
+    await vi.advanceTimersByTimeAsync(GATE_RETRY_MS);
+    expect(e.said).toEqual(["Login fix: the tests pass.", "Billing: done."]);
+    expect(speaking).toEqual([true, false, true]);
+    // A confirmation never waits on the gate.
+    e.end();
+    await vi.advanceTimersByTimeAsync(0);
+    quiet = 0;
+    await d.stream("", "and the docs");
+    void q.confirmLine("Cleared.");
+    expect(e.said.at(-1)).toBe("Cleared.");
+  });
+
+  it("midSentence: the grace after keying, then only words in the last 1.5 s without a 250 ms pause", async () => {
+    const k = hooks({ quietMs: () => quiet });
+    const d = new LiveDictation(session(), k.h, { continuous: true });
+    expect(d.midSentence()).toBe(true);
+    await vi.advanceTimersByTimeAsync(MID_SENTENCE_MS);
+    expect(d.midSentence()).toBe(false);
+    await d.stream("", "fix the");
+    expect(d.midSentence()).toBe(true);
+    quiet = 300;
+    expect(d.midSentence()).toBe(false);
+    quiet = 0;
+    await vi.advanceTimersByTimeAsync(MID_SENTENCE_MS);
+    expect(d.midSentence()).toBe(false); // stale words
+    await d.flush("fix the bug");
+    expect(d.midSentence()).toBe(false); // the phrase is over
+  });
+
+  it("the wiring: the gate instead of the hold while continuous, the recorder muted during a line, a press cuts the line", () => {
+    const MIC = code("components/TopBarMic.tsx");
+    expect(MIC).toMatch(/if \(continuous\) \{\s*gated\.current = true;\s*queue\.setGate\(\(\) => !d\.midSentence\(\)\);\s*queue\.release\(\);\s*\}/);
+    expect(MIC).toMatch(/if \(gated\.current\) rec\.current\?\.mute\?\.\(on\);/);
+    expect(MIC).toMatch(/const halt = \(\) => \{\s*gated\.current = false;\s*queue\.setGate\(null\);/);
+    expect(MIC).toMatch(/if \(gated\.current && queue\.busy && prefsRef\.current\.ptt !== "hold"\) \{\s*queue\.skip\(\);\s*return;\s*\}/);
+    // A hands-free answer is not continuous: the queue stays held for it.
+    expect(MIC).toMatch(/title,\s*hint,\s*continuous: false,/);
   });
 });

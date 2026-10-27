@@ -959,6 +959,8 @@ export class LiveDictation {
   private swallowing: ReturnType<typeof setTimeout> | undefined;
   /** When the control word ended (ms), for "over → sent". */
   private wordEnd = 0;
+  /** When words last came in (ms) — or the mic was keyed. */
+  private wordsAt = Date.now();
 
   constructor(
     private target: DictTarget | null,
@@ -979,8 +981,21 @@ export class LiveDictation {
   }
 
   /** Web Speech's interim words: typed as a guess, corrected as they change. */
+  /** The person is mid-sentence: the phrase under way has words that came in
+   * the last {@link MID_SENTENCE_MS} and the voice has not paused
+   * {@link CONTROL_TAIL_MS} since — or the mic was keyed just now. A reply
+   * waits (the queue's gate) until this is false. */
+  midSentence(): boolean {
+    if (this.done) return false;
+    const recent = Date.now() - this.wordsAt < MID_SENTENCE_MS;
+    if (!this.heardAnything) return recent;
+    const quiet = this.hooks.quietMs?.() ?? 0;
+    return recent && !!(this.dict.held || this.dict.partial) && quiet < CONTROL_TAIL_MS;
+  }
+
   hearing(t: string): Promise<void> {
     if (t) this.heardAnything = true;
+    if (t) this.wordsAt = Date.now();
     if (this.swallowing) return this.chain;
     return this.step(() => this.dict.hearing(t));
   }
@@ -995,6 +1010,7 @@ export class LiveDictation {
    * typed as you speak and corrected as the recognizer changes its mind. */
   stream(w: string, p: string): Promise<void> {
     if (w.trim() || p.trim()) this.heardAnything = true;
+    if (w.trim() || p.trim()) this.wordsAt = Date.now();
     if (this.swallowing) return this.chain;
     return this.step(() => this.dict.stream(w, p));
   }
@@ -1927,6 +1943,11 @@ export const SPEECH_STALE_MS = 60_000;
 /** A confirmation ("Sent.") older than this when its turn comes is dropped:
  * late, it would only confuse. */
 export const CONFIRM_STALE_MS = 5_000;
+/** A line held back by the queue's gate is tried again this often. */
+export const GATE_RETRY_MS = 50;
+/** Words this recent in the phrase under way: the person is mid-sentence
+ * (a reply waits for their pause). Also the grace after the mic is keyed. */
+export const MID_SENTENCE_MS = 1500;
 /** The sentences of {@link CONFIRM_LINES}, as the server speaker asks for
  * them ({@link speechSentences}): the ones it keeps in memory (built on
  * first use — the sentence rules are declared further down). */
@@ -1982,6 +2003,9 @@ export class SpeechQueue {
   private held = false;
   private turn = 0;
   private waiters: Array<() => void> = [];
+  /** {@link setGate}: may a line (not a confirmation) start now? */
+  private gate: (() => boolean) | null = null;
+  private gateRetry: ReturnType<typeof setTimeout> | undefined;
   last = "";
 
   constructor(
@@ -2018,6 +2042,22 @@ export class SpeechQueue {
       this.lines.splice(at, 0, { line, at: this.now(), title: "", done, confirm: true, start: opts.start });
       this.pump();
     });
+  }
+
+  /** Continuous listening: instead of a hold, a line (not a confirmation)
+   * starts only when `ok` says so — not while the person is mid-sentence —
+   * checked again every {@link GATE_RETRY_MS} while one waits. Null: no gate. */
+  setGate(ok: (() => boolean) | null): void {
+    this.gate = ok;
+    clearTimeout(this.gateRetry);
+    this.gateRetry = undefined;
+    if (!ok) this.pump();
+  }
+
+  /** Cut the line being said (barge-in) and go on with the next. */
+  skip(): void {
+    this.cut();
+    this.pump();
   }
 
   get busy(): boolean {
@@ -2091,6 +2131,15 @@ export class SpeechQueue {
     for (;;) {
       // Held: only a confirmation (always at the front) may go.
       if (this.held && !this.lines[0]?.confirm) return;
+      // Gated (continuous listening): a line waits for the person's pause.
+      if (this.gate && this.lines[0] && !this.lines[0].confirm && !this.gate()) {
+        if (!this.gateRetry)
+          this.gateRetry = setTimeout(() => {
+            this.gateRetry = undefined;
+            this.pump();
+          }, GATE_RETRY_MS);
+        return;
+      }
       const next = this.lines.shift();
       if (!next) return this.settle();
       const stale = next.confirm ? CONFIRM_STALE_MS : this.opts.staleMs ?? SPEECH_STALE_MS;
