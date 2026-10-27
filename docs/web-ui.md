@@ -5678,8 +5678,13 @@ labels above the inputs.
     so a fresh install talks with nothing to download.
   - **Recognition** and **Voice** (`#voice-engines`, where the mic and the
     phone page deep-link; two titled sections): each an **Engine** picker — *This computer (built
-    in)* · *OpenAI-compatible host* · *Local models (faster-whisper /
-    piper)*, built in first; a saved `""` shows whichever engine the server
+    in)* · *Your own model server (OpenAI-compatible)* · *Local models
+    (faster-whisper / piper)*, built in first; a **Bring your own models**
+    note above the pickers says that any server speaking the OpenAI shape
+    (Voice Lab's cloned voices, Kokoro-FastAPI, openedai-speech, a local
+    whisper server, or a hosted service) plugs in with just its URL, that a
+    server on this computer or the network needs no API key, and that the
+    Model / Voice name fields swap models; a saved `""` shows whichever engine the server
     resolved it to, the built-in one wherever it exists. The built-in engine
     needs nothing filled in except, for the voice, **Voice name** — a select
     of the system's voices (`system.voices`, the system default first; free

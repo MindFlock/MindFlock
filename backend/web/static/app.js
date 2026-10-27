@@ -89923,7 +89923,7 @@ var VOICE_BACKENDS = [
 	},
 	{
 		value: "openai",
-		label: "OpenAI-compatible host"
+		label: "Your own model server (OpenAI-compatible)"
 	},
 	{
 		value: "local",
@@ -90205,6 +90205,16 @@ function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
 				className: "set-hint set-block-hint",
 				id: "voice-intro",
 				children: "Talk to your sessions and hear them answer. The desktop app's mic (in the top bar) always uses this computer's engines; the phone page uses the phone's own unless you choose otherwise below. Out of the box this computer uses its built-in engine, so there is nothing to download; pick local models or a hosted service only if you want them."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint set-block-hint",
+				id: "voice-own-models",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Bring your own models." }),
+					" Any model server that speaks the OpenAI shape plugs in as",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: " Your own model server" }),
+					" — your own cloned voices in Voice Lab, Kokoro-FastAPI or openedai-speech for the voice, a local whisper server for recognition, or a hosted service. Give it the server's URL; a server on this computer or your network needs no API key. Swap models any time by changing the Model and Voice name fields."
+				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "set-section",
@@ -90546,7 +90556,7 @@ function VoiceKindBlock({ kind, title, model, view, onClearKey, install }) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint",
-					children: "The host's base URL; blank means OpenAI. Groq: https://api.groq.com/openai/v1."
+					children: "The server's base URL. Your own server on this computer, e.g. http://127.0.0.1:8770/v1 for Voice Lab; blank means OpenAI; Groq: https://api.groq.com/openai/v1."
 				})
 			]
 		}),
@@ -90561,7 +90571,7 @@ function VoiceKindBlock({ kind, title, model, view, onClearKey, install }) {
 					group: "voice",
 					field: kind + "_api_key",
 					type: "password",
-					placeholder: "paste the host's key"
+					placeholder: "none needed for a server on this computer"
 				}),
 				keySaved ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "test-row",
@@ -90578,7 +90588,7 @@ function VoiceKindBlock({ kind, title, model, view, onClearKey, install }) {
 					})]
 				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint",
-					children: "Leave blank to keep the saved one."
+					children: "Only for a hosted service. A server on this computer or your network needs none."
 				})
 			]
 		}),

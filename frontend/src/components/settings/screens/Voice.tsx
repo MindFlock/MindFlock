@@ -82,7 +82,7 @@ const KIND_WORD: Record<VoiceKind, string> = { stt: "recognition", tts: "voice" 
  * ready one" — the built-in engine wherever it exists (effectiveBackend). */
 export const VOICE_BACKENDS = [
   { value: "system", label: "This computer (built in)" },
-  { value: "openai", label: "OpenAI-compatible host" },
+  { value: "openai", label: "Your own model server (OpenAI-compatible)" },
   { value: "local", label: "Local models (faster-whisper / piper)" },
 ];
 
@@ -367,6 +367,13 @@ export function VoiceSectionView({
         box this computer uses its built-in engine, so there is nothing to download; pick local models or a
         hosted service only if you want them.
       </p>
+      <p className="set-hint set-block-hint" id="voice-own-models">
+        <strong>Bring your own models.</strong> Any model server that speaks the OpenAI shape plugs in as
+        <em> Your own model server</em> — your own cloned voices in Voice Lab, Kokoro-FastAPI or
+        openedai-speech for the voice, a local whisper server for recognition, or a hosted service. Give it
+        the server's URL; a server on this computer or your network needs no API key. Swap models any time
+        by changing the Model and Voice name fields.
+      </p>
       <div className="set-section" id="voice-engines">
         <VoiceKindBlock kind="stt" title="Recognition" model={model} view={view} onClearKey={onClearKey} install={install} />
         <VoiceKindBlock kind="tts" title="Voice" model={model} view={view} onClearKey={onClearKey} />
@@ -627,7 +634,8 @@ function VoiceKindBlock({
           <span className="set-label">URL</span>
           <SettingField group="voice" field={kind + "_url"} placeholder="https://api.openai.com/v1" />
           <span className="set-hint">
-            The host's base URL; blank means OpenAI. Groq: https://api.groq.com/openai/v1.
+            The server's base URL. Your own server on this computer, e.g. http://127.0.0.1:8770/v1 for Voice
+            Lab; blank means OpenAI; Groq: https://api.groq.com/openai/v1.
           </span>
         </label>
       )}
@@ -636,7 +644,7 @@ function VoiceKindBlock({
         // inside a label would also focus the field.
         <div className="set-row">
           <span className="set-label">API key</span>
-          <SettingField group="voice" field={kind + "_api_key"} type="password" placeholder="paste the host's key" />
+          <SettingField group="voice" field={kind + "_api_key"} type="password" placeholder="none needed for a server on this computer" />
           {keySaved ? (
             <span className="test-row">
               <button
@@ -651,7 +659,9 @@ function VoiceKindBlock({
               <span className="set-hint">A key is saved. Leave blank to keep it.</span>
             </span>
           ) : (
-            <span className="set-hint">Leave blank to keep the saved one.</span>
+            <span className="set-hint">
+              Only for a hosted service. A server on this computer or your network needs none.
+            </span>
           )}
         </div>
       )}
