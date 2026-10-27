@@ -935,7 +935,8 @@ def test_mobile_js_server_recognizer_records_wav():
         "Math.min(streams() ? VOICE_STREAM_MAX_MS : VOICE_CLIP_MAX_MS, remaining)"
         in stt
     )
-    assert "h.onLevel(Math.min(1, rms * 4))" in stt
+    # The level is floor-relative (voiceLevelOf): a room's hum sits at zero.
+    assert "h.onLevel(voiceLevelOf(rms, g.floor))" in stt
     # finish(): join, resample to 16 kHz (anti-aliased, async), encode,
     # upload as audio/wav. pending() covers the resample too.
     assert "var VOICE_WAV_RATE = 16000;" in v
@@ -1023,7 +1024,8 @@ def test_mobile_js_server_recognizer_streams_words_as_you_speak():
     assert "if (!(h.whole && h.whole())) {" in words
     assert "var cut = voiceStreamSplit(g.pend, !!(h.answers && h.answers()));" in words
     assert "if (h.onFinal) h.onFinal(cut[0]);" in words
-    assert "if (h.onInterim) h.onInterim(shown);" in words
+    # The caption greys the partial: it is handed over as the tail.
+    assert "if (h.onInterim) h.onInterim(shown, g.partial);" in words
     split = _fn(js, "voiceStreamSplit")
     assert "var held = words.length ? [words.pop()] : [];" in split
     assert 'voiceDictParse(words.join(" ")).kind' in split
@@ -1066,6 +1068,86 @@ def test_mobile_js_server_recognizer_streams_words_as_you_speak():
     assert '"words as you speak (" + last + ")"' in ds
     assert '"one clip per phrase"' in ds
     assert '"last chunk " + c.ms + " ms"' in ds
+
+
+def test_mobile_js_server_recognizer_starts_fast_and_shows_it_hears():
+    """The phone mic starts at once and shows it is picking the voice up:
+    the microphone stays warm VOICE_KEEP_STREAM_MS after a phrase (reused
+    by the next start, released on expiry, on voice off, and soon after the
+    page hides); the stream opens alongside getUserMedia; nothing quiet is
+    uploaded before the first word (a VOICE_LEAD_MS lead-in, so the first
+    chunk goes as speech starts); "Hearing you…" while the detector hears a
+    voice; a floor-relative, rAF-smoothed ring round the mic (and the ask
+    sheet's); a tick on the first word; a start-up trace behind
+    cs_voice_debug."""
+    js = _js()
+    v = _voice_section(js)
+    css = _css()
+    stt = _fn(js, "ServerSTT")
+    assert "var VOICE_KEEP_STREAM_MS = 90000;" in v
+    assert "var VOICE_KEEP_HIDDEN_MS = 15000;" in v
+    assert "var VOICE_LEAD_MS = 300;" in v
+    # The warm microphone: reused when live, its grace re-armed by every
+    # way a phrase ends, cleared by the next start.
+    gs = stt.split("function getStream() {")[1].split("\n    }\n")[0]
+    assert gs.lstrip().startswith("clearTimeout(keepTimer);")
+    assert "if (micLive(stream)) return Promise.resolve(stream);" in gs
+    assert "micStop(stream);" in gs  # a dead one's tracks go before a new ask
+    keep = stt.split("function keep(ms, hidden) {")[1].split("\n    }\n")[0]
+    assert "}, ms || voice.keepMs);" in keep
+    assert "/^(sending|working|speaking)$/.test(voice.state)" in keep
+    assert "if (!document.hidden &&" in keep
+    for fn in ("function finish() {", "function discard() {"):
+        assert "keep();" in stt.split(fn)[1].split("\n    }\n")[0], fn
+    rel = stt.split("function release(ms) {")[1].split("\n    }\n")[0]
+    assert "if (ms > 0) { keep(ms, true); return; }" in rel
+    assert "micStop(s);" in rel
+    assert "keepMs: VOICE_KEEP_STREAM_MS," in v
+    # Voice off gives it back now; the page hiding, soon.
+    assert "voiceSttRelease();" in _fn(js, "voiceOff")
+    vis = v.split('document.addEventListener("visibilitychange"')[1].split("\n  });\n")[
+        0
+    ]
+    assert "voiceSttRelease(VOICE_KEEP_HIDDEN_MS);" in vis
+    # The stream opens before the microphone is there.
+    start = stt.split("function start(h) {")[1].split("\n    }\n")[0]
+    assert start.index("if (streams()) streamOpen(g, mine);") < start.index(
+        "getStream().then("
+    )
+    # Before the first word: only the lead-in is kept, nothing is sent.
+    assert "(g.queued - g.blocks[0].length) * 1000 >= g.rate * VOICE_LEAD_MS" in stt
+    pump = stt.split("function streamPump(g, mine) {")[1].split("\n    }\n")[0]
+    assert (
+        "if (g.heard && (!g.chunks || g.queued * 1000 >= g.rate * VOICE_STREAM_CHUNK_MS))"
+        in pump
+    )
+    # A short first chunk is padded before its audio (where the quiet was).
+    assert "pad.set(pcm, first ? min - pcm.length : 0);" in stt
+    # "Hearing you…" while a voice comes in and nothing came back yet.
+    st = stt.split("function recStatus(g, h) {")[1].split("\n    }\n")[0]
+    assert "if (!h.onStatus || g.words) return;" in st
+    assert '"Hearing you…"' in st and '"Listening… "' in st
+    # The ring: one CSS variable from a rAF loop, transforms only.
+    assert "requestAnimationFrame(voiceRingFrame)" in _fn(js, "voiceLevel")
+    paint = _fn(js, "voiceRingPaint")
+    assert 'el.style.setProperty("--lvl", s)' in paint
+    assert "[voiceBtn, voiceLevelEl, askMicBtn]" in paint
+    assert "#voice-btn::after, #asking-mic::after {" in css
+    assert "transform: scale(calc(1 + var(--lvl, 0) * 0.3));" in css
+    assert "transform: scaleX(var(--lvl, 0));" in css
+    assert "#voice-caption .voice-partial { color: var(--muted); }" in css
+    # The tick: once per phrase, never on top of the listening buzz.
+    tick = _fn(js, "voiceSpeechTick")
+    assert "Date.now() - voice.buzzAt < VOICE_TICK_GAP_MS" in tick
+    assert "voice.buzzAt = Date.now(); try { navigator.vibrate(30); }" in _fn(
+        js, "voiceListen"
+    )
+    assert "if (loud && !g.heard) {" in stt and "if (h.onSpeech) h.onSpeech();" in stt
+    # The trace, and its switch.
+    assert 'localStorage.getItem("cs_voice_debug")' in _fn(js, "voiceDebugOn")
+    for mark in ('"mic"', '"open"', '"speech"', '"words"', '"settled"'):
+        assert "voiceTraceMark(g, " + mark + ")" in stt, mark
+    assert '"Last start: " + voiceDiagTrace(voice.rec.trace)' in _fn(js, "voiceDiag")
 
 
 def test_mobile_js_diagnostics_recorder_and_built_in_engine():

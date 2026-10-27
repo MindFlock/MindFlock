@@ -149,6 +149,9 @@ def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
         "configure_allowed": bool(allowed),
     }
     body.update(_speech.describe())
+    # A voice client is here: have the local model resident before its first
+    # press (a no-op unless voice.stt_backend is local and the model is out).
+    _speech.warm_in_background("stt")
     return JSONResponse(body)
 
 

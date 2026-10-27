@@ -5898,6 +5898,23 @@ unsure tail shown muted in the caption, never typed). The phone page's mic is th
 version of the same conversation, with spoken replies on by default — see
 [Voice: talking to a session](#voice-talking-to-a-session) under the Mobile UI.
 
+The mic starts without a wait: the microphone is opened as soon as talking is
+likely — the mic's options opening, the button going down, the ask pop-up's
+mic appearing (only if the permission is already given) — and kept open
+90 s after a dictation (`KEEP_STREAM_MS` in `lib/voiceMic.ts`), so the next
+press records at once; the browser's "mic in use" light stays on for that
+grace, and it is given back at once when the page has been hidden 10 s or you
+say "mic off". The server's stream opens while the mic gets ready, so the
+first chunk goes the moment you speak (the quiet before it is never sent).
+While it listens, a ring around the mic button (and the ask pop-up's) follows
+your voice — room noise sits at zero — and the caption says *Listening…*,
+then *Hearing you…* once it hears speech; the words show greyed as soon as the
+recogniser has a guess (the options popover shows them too, over a level
+bar), and only the settled words are typed. With localStorage `cs_voice_debug`
+set to `1` the console logs the start's timings (also in
+`window.__mfVoiceTiming`): press, mic ready, stream open, first speech, first
+greyed words, first typed word.
+
 ## Mobile UI (`/m`)
 
 A single full-screen terminal for phones: session picker, state dot and chip,
@@ -6230,6 +6247,30 @@ last words, and the next phrase opens a new stream; Cancel or voice off
 clip per phrase until `GET /api/voice` says otherwise) or any failed request
 turns the phrase into a clip — the words so far stay, the audio the stream
 had not answered is transcribed in one piece.
+**Starting fast, and seeing it hear you** (server recognition). The stream
+opens *with* the tap, alongside the microphone's start-up, and nothing is
+uploaded before your first word: the page keeps only the last 300 ms before
+it (the word's soft start) and sends that with the first loud block at once,
+so the first grey words show about 0.2 s after you start talking instead of
+0.3–0.45 s (measured in the headless harness with a 120 ms recognizer; a
+real whisper pass adds its own time). The **microphone stays warm** for 90 s
+after a phrase (`VOICE_KEEP_STREAM_MS`), for as long as a reply is on its
+way back (the reply opens listening by itself), and 15 s after the page is
+hidden: a tap in that time starts listening at once, with no
+`getUserMedia`. The browser's mic-in-use indicator stays lit for that long;
+voice off gives the mic back at once. While you speak, a **ring round the
+mic** (and the ask sheet's mic) grows and firms with your voice — its level
+relative to the room's noise, so a quiet room sits at zero, rising in 30 ms
+and falling over ~150 ms — and the meter under the strip follows it; the
+caption says ***Hearing you…*** while your voice is coming in and nothing
+has come back yet, *Listening… n s* when it is quiet. The streamed words
+replace it as soon as the first chunk answers: the settled ones in the
+text colour, the still-settling tail **greyed**. Android ticks (12 ms) at
+each phrase's first word — but not when the 30 ms listening buzz has just
+gone. Diagnostics shows *Microphone: warm / not held* and *Last start: mic
+… ms, stream open … ms, speech … ms, words … ms, settled … ms after the
+start*; with `localStorage.cs_voice_debug = "1"` the console logs every
+mark too.
 A Chromium browser that does not ship Google's speech key — Arc, Brave,
 Vivaldi, Opera — has the recognizer but every start fails with a `network`
 error and nothing is heard: the first is retried, the second in a listening

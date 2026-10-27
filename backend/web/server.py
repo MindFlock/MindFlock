@@ -722,6 +722,15 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(_person.ensure_id)
     except Exception:  # noqa: BLE001 — never block startup on a label
         pass
+    # Voice: a local whisper model configured for recognition is loaded a few
+    # seconds after boot (daemon thread, no-op unless voice.stt_backend is
+    # local), so the first press of the mic after a restart is not a 7 s wait.
+    try:
+        from backend.web.core import speech as _speech_warm
+
+        _speech_warm.warm_in_background("stt", delay_s=3.0)
+    except Exception:  # noqa: BLE001 — warming is best effort
+        pass
     # Adopt loop: pull in instances written by other processes (TUI/pipeline).
     _register_task(_reload_loop())
     # Instances tick: the side effects that used to piggyback on the browser's

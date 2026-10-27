@@ -97,10 +97,16 @@ __all__ = [
     "sweep_idle",
     "unload_all",
     "voice_dir",
+    "warm",
+    "warm_in_background",
 ]
 
-#: A cached local model is dropped after this long without a call.
-IDLE_SECONDS = 600.0
+#: A cached local model is dropped after this long without a call. Half an
+#: hour: a model unloaded between two sentences costs the next press ~7 s
+#: (faster-whisper ``small`` loading), which read as "the mic is slow to
+#: start"; :func:`warm` reloads it ahead of use whenever a voice client shows
+#: up, and :func:`_memory_block` still refuses a load on a starved box.
+IDLE_SECONDS = 1800.0
 #: Where ``openai`` goes when ``voice.stt_url`` / ``voice.tts_url`` are blank.
 OPENAI_URL = "https://api.openai.com/v1"
 OPENAI_STT_MODEL = "gpt-transcribe"
@@ -685,6 +691,29 @@ class LocalSTT(Backend):
 
         return run
 
+    def warm(self, prime: bool = True) -> str:
+        """Load the model ahead of its first use and, when ``prime`` is set,
+        run one short silent pass through it (CTranslate2 allocates its
+        workspaces on the first call, another second or two). ``"loaded"``
+        when this call loaded it, ``"already"`` when it was resident."""
+        key = "whisper:" + self._model_name()
+        was = key in loaded()
+        model = self._model()
+        if prime and not was:
+            np = _import("numpy")
+            try:
+                segments, _info = model.transcribe(
+                    np.zeros(8000, dtype=np.float32),
+                    language="en",
+                    beam_size=1,
+                    vad_filter=False,
+                )
+                for _seg in segments:  # the generator does the work
+                    pass
+            except Exception:  # noqa: BLE001 — a warm-up may fail quietly
+                pass
+        return "already" if was else "loaded"
+
 
 class LocalTTS(Backend):
     id = "local"
@@ -808,6 +837,69 @@ def choose(kind: str) -> str:
         return want
     backend, _detail = select(kind)
     return backend.id if backend else ""
+
+
+_WARMING: Dict[str, threading.Thread] = {}
+
+
+def warm(kind: str = "stt", prime: bool = True) -> str:
+    """Load the configured LOCAL model of ``kind`` now, so the first press
+    of the mic does not pay for it. Only an explicitly configured ``local``
+    backend is warmed (an unset backend might pick a host, and nobody asked
+    for half a gigabyte of model in memory); returns ``"loaded"`` /
+    ``"already"``, or ``"skipped: <why>"`` (not local, not installed, memory
+    low, load failed). Never raises; blocking — see
+    :func:`warm_in_background`."""
+    if _configured(kind) != "local":
+        return "skipped: %s backend is not local" % kind
+    backend = get(kind, "local")
+    if backend is None or not hasattr(backend, "warm"):
+        return "skipped: no local %s backend" % kind
+    ok, detail = backend.ready()
+    if not ok:
+        return "skipped: " + detail
+    try:
+        return str(backend.warm(prime=prime))  # type: ignore[attr-defined]
+    except Exception as err:  # noqa: BLE001 — warming is best effort
+        return "skipped: %s" % err
+
+
+def warm_in_background(
+    kind: str = "stt", delay_s: float = 0.0
+) -> Optional[threading.Thread]:
+    """Run :func:`warm` on a daemon thread unless the model is resident or a
+    warm-up is already running: the server calls this at boot and whenever
+    a voice client fetches ``GET /api/voice`` (the mic UI mounting), so the
+    model is back before the next press after an idle unload. Returns the
+    thread it started, or None when there was nothing to do (not local, not
+    installed, already loaded or already warming)."""
+    if _configured(kind) != "local":
+        return None
+    backend = get(kind, "local")
+    if backend is None or not hasattr(backend, "warm") or not backend.ready()[0]:
+        return None
+    try:
+        key = "whisper:" + backend._model_name()  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        key = kind
+    with _LOCK:
+        if key in _CACHE:
+            return None
+        running = _WARMING.get(kind)
+        if running is not None and running.is_alive():
+            return None
+
+        def go() -> None:
+            if delay_s > 0:
+                time.sleep(delay_s)
+            warm(kind)
+
+        t = threading.Thread(
+            target=go, name="mindflock-voice-warm-" + kind, daemon=True
+        )
+        _WARMING[kind] = t
+        t.start()
+        return t
 
 
 def describe() -> dict:

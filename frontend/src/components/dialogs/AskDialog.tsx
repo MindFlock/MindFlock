@@ -52,6 +52,7 @@ import {
 } from "../../lib/ask";
 import { askMic, askVoice, clearAskVoice, getMicState, setAskVoice, subscribeMicState, type AskVoice } from "../../lib/askVoice";
 import { dialogChoices, TALK_EVENT } from "../../lib/voiceDesktop";
+import { meterRef } from "../../lib/voiceMic";
 import { forceActivity } from "../../lib/sessionState";
 import { overlayOpen } from "../../lib/keymap";
 import { lastTypedAt } from "../../lib/terminals";
@@ -565,6 +566,8 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
  * what it hears underneath. */
 function AskMicRow({ title }: { title: string }) {
   const st = useSyncExternalStore(subscribeMicState, getMicState, getMicState);
+  // An answer by voice is likely: the mic opens now, not at the press.
+  useEffect(() => askMic()?.warm?.(), [title]);
   const mic = askMic();
   if (!mic || !mic.supported()) return null;
   const mine = st.title === title;
@@ -576,7 +579,8 @@ function AskMicRow({ title }: { title: string }) {
       <button
         type="button"
         id="ask-mic"
-        className={"ask-mic tb-item" + (listening ? " listening" : "")}
+        ref={meterRef}
+        className={"ask-mic tb-item mic-ring" + (listening ? " listening" : "")}
         aria-pressed={listening}
         aria-label={listening ? "Listening — stop" : "Answer by voice"}
         title={listening ? "Listening — click to stop" : "Answer by voice" + (key ? " (" + key + ")" : "")}

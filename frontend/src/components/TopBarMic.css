@@ -23,6 +23,29 @@
   animation: mic-pulse 1.4s ease-in-out infinite;
 }
 
+/* The level ring (this mic and the ask pop-up's, both .mic-ring): a halo
+   that follows what the mic hears. lib/voiceMic writes --mic-level (0..1,
+   floor-relative: room noise sits at zero) on the button once a frame — a
+   style write, never a render. Drawn only while listening. */
+.mic-ring {
+  position: relative;
+}
+
+.mic-ring::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 8px;
+  border: 2px solid var(--red);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mic-ring.listening::after {
+  opacity: var(--mic-level, 0);
+  transform: scale(calc(1 + var(--mic-level, 0) * 0.22));
+}
+
 /* A reply being read aloud: the accent, still. */
 #mic-btn.speaking {
   color: var(--accent);
@@ -67,6 +90,47 @@
 
 /* Streamed words the recognizer may still change: shown, never typed. */
 #mic-caption .mic-unsure {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* While listening: the live transcript (TopBarMic keeps only its end). */
+#mic-caption.live {
+  font-size: 13px;
+}
+
+/* The options while listening: a slim level bar (the phone's #voice-level)
+   and the live words, the unsure ones greyed. */
+.mic-pop .mic-live {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mic-pop .mic-level {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.mic-pop .mic-level-bar {
+  height: 100%;
+  background: var(--red);
+  transform: scaleX(var(--mic-level, 0));
+  transform-origin: left;
+}
+
+.mic-pop .mic-live-text {
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.mic-pop .mic-live .mic-unsure {
   color: var(--muted);
   font-style: italic;
 }

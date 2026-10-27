@@ -37500,6 +37500,246 @@ function startWavRecording(stream, ctx, opts = {}) {
 	};
 }
 //#endregion
+//#region src/lib/voiceMic.ts
+var KEEP_STREAM_MS = 9e4;
+var HIDDEN_RELEASE_MS = 1e4;
+var stopTracks = (s) => s.getTracks().forEach((t) => t.stop());
+async function micGranted() {
+	try {
+		return (await navigator.permissions?.query({ name: "microphone" }))?.state === "granted";
+	} catch {
+		return false;
+	}
+}
+var MicKeeper = class {
+	keepMs;
+	open;
+	stream = null;
+	pending = null;
+	users = 0;
+	gen = 0;
+	timer;
+	hiddenTimer;
+	constructor(keepMs = KEEP_STREAM_MS, open = () => navigator.mediaDevices.getUserMedia({ audio: true })) {
+		this.keepMs = keepMs;
+		this.open = open;
+		if (typeof document === "undefined" || !document.addEventListener) return;
+		document.addEventListener("visibilitychange", () => {
+			clearTimeout(this.hiddenTimer);
+			if (document.visibilityState === "hidden") this.hiddenTimer = setTimeout(() => this.releaseIdle(), HIDDEN_RELEASE_MS);
+		});
+	}
+	get isWarm() {
+		return !!this.live();
+	}
+	live() {
+		const s = this.stream;
+		return s && s.active !== false ? s : null;
+	}
+	get() {
+		const s = this.live();
+		if (s) return Promise.resolve(s);
+		if (this.pending) return this.pending;
+		const g = this.gen;
+		const p = this.open().then((st) => {
+			if (g !== this.gen) {
+				stopTracks(st);
+				if (this.users) return this.get();
+				throw Object.assign(/* @__PURE__ */ new Error("the microphone was released"), { name: "AbortError" });
+			}
+			this.pending = null;
+			if (this.stream && this.stream !== st) stopTracks(this.stream);
+			this.stream = st;
+			if (!this.users) this.arm();
+			return st;
+		}, (err) => {
+			if (g === this.gen) this.pending = null;
+			throw err;
+		});
+		this.pending = p;
+		return p;
+	}
+	hold() {
+		this.users++;
+		clearTimeout(this.timer);
+	}
+	done() {
+		if (this.users > 0) this.users--;
+		if (!this.users) this.arm();
+	}
+	async warm(ifGranted = false) {
+		if (!this.live() && ifGranted && !await micGranted()) return false;
+		try {
+			await this.get();
+		} catch {
+			return false;
+		}
+		if (!this.users) this.arm();
+		return true;
+	}
+	release() {
+		this.gen++;
+		this.pending = null;
+		clearTimeout(this.timer);
+		const s = this.stream;
+		this.stream = null;
+		if (s) stopTracks(s);
+	}
+	releaseIdle() {
+		if (!this.users) this.release();
+	}
+	arm() {
+		clearTimeout(this.timer);
+		if (!this.stream) return;
+		this.timer = setTimeout(() => this.releaseIdle(), this.keepMs);
+	}
+};
+var RMS_SPEECH = .02;
+var LEVEL_DECAY_MS = 150;
+var LEVEL_FULL_RMS = .12;
+var HEARING_HOLD_MS = 700;
+var STALE_MS = 250;
+var POLL_MS$3 = 85;
+function noiseFloor(floor, rms) {
+	return floor === 0 ? rms : Math.min(rms, floor * 1.05 + .001);
+}
+function isLoud(rms, floor) {
+	return rms > Math.max(RMS_SPEECH, floor * 3);
+}
+function levelTarget(rms, floor) {
+	const over = rms - Math.max(floor * 2, .003);
+	return over <= 0 ? 0 : Math.min(1, Math.sqrt(over / LEVEL_FULL_RMS));
+}
+function smoothLevel(prev, target, dtMs) {
+	if (target >= prev) return target;
+	return Math.max(target, prev * Math.exp(-Math.max(0, dtMs) / LEVEL_DECAY_MS));
+}
+function pickupLine(ready, hearing) {
+	if (!ready) return "";
+	return hearing ? "Hearing you…" : "Listening…";
+}
+var LIVE_CAPTION_CHARS = 90;
+function liveTail(text, tail = "", max = LIVE_CAPTION_CHARS) {
+	const room = Math.max(24, max - tail.length);
+	if (text.length <= room) return text;
+	const cut = text.slice(text.length - room);
+	const sp = cut.indexOf(" ");
+	return "…" + (sp >= 0 && sp < cut.length - 1 ? cut.slice(sp + 1) : cut);
+}
+function rmsOf(buf) {
+	let sum = 0;
+	for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+	return buf.length ? Math.min(1, Math.sqrt(sum / buf.length)) : 0;
+}
+var els = /* @__PURE__ */ new Set();
+var hearingSubs = /* @__PURE__ */ new Set();
+var level = 0;
+var target = 0;
+var floor = 0;
+var lastFeed = 0;
+var lastLoud = 0;
+var hearing = false;
+var active = false;
+var painted = "";
+var frameAt = 0;
+var raf = 0;
+var poll = null;
+var lastPoll = 0;
+var schedule = (f) => typeof requestAnimationFrame === "function" ? requestAnimationFrame(f) : setTimeout(() => f(Date.now()), 16);
+function setHearing(on) {
+	if (on === hearing) return;
+	hearing = on;
+	hearingSubs.forEach((cb) => cb(on));
+}
+function paint$1() {
+	const v = level.toFixed(3);
+	if (v === painted) return;
+	painted = v;
+	els.forEach((el) => el.style.setProperty("--mic-level", v));
+}
+function frame(t) {
+	raf = 0;
+	const now = Date.now();
+	if (poll && now - lastPoll >= POLL_MS$3) {
+		lastPoll = now;
+		meterFeed(poll(), now);
+	}
+	if (now - lastFeed > STALE_MS) target = 0;
+	if (hearing && now - lastLoud > HEARING_HOLD_MS) setHearing(false);
+	level = smoothLevel(level, target, frameAt ? t - frameAt : 16);
+	if (target === 0 && level < .01) level = 0;
+	frameAt = t;
+	paint$1();
+	if (active || level > 0) raf = schedule(frame);
+	else frameAt = 0;
+}
+function kick() {
+	if (!raf) raf = schedule(frame);
+}
+function meterStart() {
+	active = true;
+	floor = 0;
+	target = 0;
+	lastLoud = 0;
+	setHearing(false);
+	kick();
+}
+function meterStop() {
+	active = false;
+	poll = null;
+	target = 0;
+	setHearing(false);
+	kick();
+}
+function meterFeed(rms, now = Date.now()) {
+	if (!active) return;
+	floor = noiseFloor(floor, rms);
+	target = levelTarget(rms, floor);
+	lastFeed = now;
+	if (isLoud(rms, floor)) {
+		lastLoud = now;
+		setHearing(true);
+	}
+}
+function meterPoll(read) {
+	poll = read;
+	lastPoll = 0;
+	if (read) kick();
+}
+function onHearing(cb) {
+	hearingSubs.add(cb);
+	return () => {
+		hearingSubs.delete(cb);
+	};
+}
+function meterRef(el) {
+	if (!el) return void 0;
+	els.add(el);
+	el.style.setProperty("--mic-level", level.toFixed(3));
+	return () => {
+		els.delete(el);
+	};
+}
+var t0 = 0;
+var marks = {};
+var clock = () => typeof performance !== "undefined" ? performance.now() : Date.now();
+function debugOn() {
+	try {
+		return typeof localStorage !== "undefined" && localStorage.getItem("cs_voice_debug") === "1";
+	} catch {
+		return false;
+	}
+}
+function voiceMark(m) {
+	if (m === "start") {
+		t0 = clock();
+		marks = {};
+	} else if (!t0 || m in marks) return;
+	marks[m] = Math.round(clock() - t0);
+	if (typeof window !== "undefined") window.__mfVoiceTiming = { ...marks };
+	if (debugOn()) console.debug("[voice] " + m + " +" + marks[m] + " ms");
+}
+//#endregion
 //#region src/lib/voiceDesktop.ts
 function parseRadio(text) {
 	const t = String(text || "").trim();
@@ -37930,6 +38170,8 @@ var LiveDictation = class {
 	done = false;
 	acted = false;
 	heardAnything = false;
+	recording = false;
+	hearingNow = false;
 	constructor(target, hooks, opts = {}) {
 		this.target = target;
 		this.hooks = hooks;
@@ -37964,6 +38206,16 @@ var LiveDictation = class {
 		this.dict.unsure(t);
 		this.show();
 	}
+	ready() {
+		if (this.done || this.recording) return;
+		this.recording = true;
+		this.show();
+	}
+	loud(on) {
+		if (this.done || this.hearingNow === on) return;
+		this.hearingNow = on;
+		if (!this.dict.shown && !this.dict.partial) this.show();
+	}
 	notice(line) {
 		if (!this.done) this.hooks.caption(line, true);
 	}
@@ -37987,9 +38239,14 @@ var LiveDictation = class {
 	}
 	show() {
 		if (this.done) return;
+		if (this.dict.shown || this.dict.partial) {
+			this.hooks.caption(this.dict.shown, true, this.dict.partial);
+			return;
+		}
 		const field = this.target?.kind === "field";
-		const shown = this.dict.shown || this.opts.hint || (field ? "Listening — the words go into the text box" : DICT_HINT);
-		this.hooks.caption(shown, true, this.dict.partial);
+		const base = this.opts.hint || (field ? "the words go into the text box" : DICT_HINT);
+		const lead = pickupLine(this.recording, this.hearingNow);
+		this.hooks.caption(lead ? lead + " · " + base : field ? "Listening — " + base : base, true);
 	}
 	step(next) {
 		this.chain = this.chain.then(() => {
@@ -38766,14 +39023,15 @@ function browserRecognizer() {
 }
 var SILENCE_MS = 1100;
 var CLIP_MAX_MS = 12e3;
-var RMS_SPEECH = .02;
 var UPLOAD_TIMEOUT_MS = 45e3;
 var CLIP_RATE = 16e3;
 var TAIL_MIN_BYTES = 1644;
+var STREAM_FRESH_MS = 4e4;
 var wordsOf = (v) => String((Array.isArray(v) ? v.join(" ") : v) || "").trim();
 var langTag = () => String(navigator.language || "en").split(";")[0];
 function serverRecognizer(opts = {}) {
-	let stream = null;
+	const mic = opts.mic || new MicKeeper();
+	let holding = false;
 	let h = null;
 	let want = false;
 	let finishing = false;
@@ -38785,10 +39043,10 @@ function serverRecognizer(opts = {}) {
 	let streaming = false;
 	let lastEnd = Promise.resolve();
 	const open = /* @__PURE__ */ new Set();
-	const getStream = async () => {
-		if (stream && stream.active !== false) return stream;
-		stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-		return stream;
+	const unhold = () => {
+		if (!holding) return;
+		holding = false;
+		mic.done();
 	};
 	const errCode = (err) => {
 		const n = err?.name || "";
@@ -38800,6 +39058,7 @@ function serverRecognizer(opts = {}) {
 	const maybeEnd = () => {
 		if (!want && !token && uploads === 0 && h) {
 			finishing = false;
+			unhold();
 			h.onEnd();
 		}
 	};
@@ -38921,7 +39180,9 @@ function serverRecognizer(opts = {}) {
 				}
 				if (r.ok && id) {
 					c.sid = id;
+					c.opened = Date.now();
 					open.add(id);
+					voiceMark("stream");
 				} else if (r.status === 409) {
 					self.lastError = String(r.j.error || "the server can't stream");
 					fallBack(c, "");
@@ -38949,7 +39210,7 @@ function serverRecognizer(opts = {}) {
 		}
 	};
 	const pump = (c) => {
-		if (!c.stream || !c.sid || c.busy || c.ending || !c.rec || h === null) return;
+		if (!c.stream || !c.sid || !c.heard || c.busy || c.ending || !c.rec || h === null) return;
 		const blob = c.rec.take();
 		if (!blob) return;
 		c.fresh = false;
@@ -38975,6 +39236,10 @@ function serverRecognizer(opts = {}) {
 				return;
 			}
 			if (!c.sid) return;
+			if (!c.heard) {
+				discard(c);
+				return;
+			}
 			if (tail && tail.size > TAIL_MIN_BYTES && c.fresh) await sendChunk(c, tail, hh);
 			if (h !== hh || !c.stream || !c.sid) return;
 			const sid = c.sid;
@@ -38997,6 +39262,12 @@ function serverRecognizer(opts = {}) {
 			uploads--;
 			if (h === hh) maybeEnd();
 		}
+	};
+	const discard = (c) => {
+		c.stream = false;
+		const sid = c.sid;
+		c.sid = null;
+		if (sid) abandon(sid);
 	};
 	const endClip = () => {
 		const c = cur;
@@ -39023,45 +39294,55 @@ function serverRecognizer(opts = {}) {
 	const clip = async () => {
 		const mine = {};
 		token = mine;
-		let s;
-		try {
-			s = await getStream();
-		} catch (err) {
-			if (token === mine) failed(errCode(err));
-			return;
-		}
-		if (token !== mine) return;
-		const ctx = voiceAudioCtx();
-		if (ctx && ctx.state === "suspended") await ctx.resume().catch(() => {});
-		if (token !== mine) return;
-		if (!want) {
-			token = null;
-			maybeEnd();
-			return;
-		}
-		if (!ctx || ctx.state !== "running") {
-			failed("start-failed", "The audio engine isn't running — click the mic again");
-			return;
-		}
 		const c = {
 			rec: null,
 			heard: false,
 			stream: streaming,
 			sid: null,
+			opened: 0,
 			busy: null,
 			fresh: false,
 			ending: false
 		};
+		if (c.stream) openStream(c);
+		let s;
+		try {
+			s = await mic.get();
+		} catch (err) {
+			discard(c);
+			if (token === mine) failed(errCode(err));
+			return;
+		}
+		if (token !== mine) return discard(c);
+		const ctx = voiceAudioCtx();
+		if (ctx && ctx.state === "suspended") await ctx.resume().catch(() => {});
+		if (token !== mine) return discard(c);
+		if (!want) {
+			discard(c);
+			token = null;
+			maybeEnd();
+			return;
+		}
+		if (!ctx || ctx.state !== "running") {
+			discard(c);
+			failed("start-failed", "The audio engine isn't running — click the mic again");
+			return;
+		}
 		let floor = 0;
 		let lastLoud = 0;
 		const onLevel = (rms) => {
 			if (cur !== c) return;
-			floor = floor === 0 ? rms : Math.min(rms, floor * 1.05 + .001);
+			h?.onLevel?.(rms);
+			floor = noiseFloor(floor, rms);
 			const now = Date.now();
-			if (rms > Math.max(RMS_SPEECH, floor * 3)) {
+			if (isLoud(rms, floor)) {
 				if (!c.heard) {
 					h?.onSpeech?.();
-					if (c.stream) openStream(c);
+					if (c.stream && c.sid && now - c.opened > STREAM_FRESH_MS) {
+						discard(c);
+						c.stream = true;
+						openStream(c);
+					}
 				}
 				c.heard = true;
 				c.fresh = true;
@@ -39076,11 +39357,13 @@ function serverRecognizer(opts = {}) {
 				onLevel
 			});
 		} catch {
+			discard(c);
 			failed("start-failed");
 			return;
 		}
 		cur = c;
-		h?.onStatus?.("Listening…");
+		voiceMark("mic");
+		h?.onReady?.();
 		if (!c.stream) capTimer = setTimeout(() => {
 			if (cur === c) endClip();
 		}, CLIP_MAX_MS);
@@ -39088,6 +39371,7 @@ function serverRecognizer(opts = {}) {
 	const self = {
 		name: "server",
 		lastError: "",
+		mic,
 		available: () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia && !!audioCtxCtor(),
 		start(handlers) {
 			self.stop();
@@ -39095,6 +39379,8 @@ function serverRecognizer(opts = {}) {
 			h = handlers;
 			want = true;
 			finishing = false;
+			holding = true;
+			mic.hold();
 			streaming = !!opts.stream?.();
 			lastEnd = Promise.resolve();
 			clip();
@@ -39120,12 +39406,11 @@ function serverRecognizer(opts = {}) {
 			aborters.forEach((a) => a.abort());
 			aborters.clear();
 			open.forEach(abandon);
+			unhold();
 		},
 		release() {
 			self.stop();
-			const s = stream;
-			stream = null;
-			s?.getTracks().forEach((t) => t.stop());
+			mic.release();
 		}
 	};
 	return self;
@@ -39209,6 +39494,42 @@ var serverSp = serverSpeaker(browserSp);
 var tracker = new ReplyTracker();
 var speakingListeners = /* @__PURE__ */ new Set();
 var queue = new SpeechQueue(() => ttsEngine(cfgNow) === "server" ? serverSp : browserSp, (on) => speakingListeners.forEach((l) => l(on)));
+var untap = null;
+function tapLevel(ctx) {
+	untap?.();
+	if (!ctx) return;
+	const mic = serverRec.mic;
+	let gone = false;
+	let src = null;
+	mic.hold();
+	untap = () => {
+		gone = true;
+		untap = null;
+		meterPoll(null);
+		try {
+			src?.disconnect();
+		} catch {}
+		mic.done();
+	};
+	mic.get().then((s) => {
+		if (gone) return;
+		voiceMark("mic");
+		src = ctx.createMediaStreamSource(s);
+		const an = ctx.createAnalyser();
+		an.fftSize = 2048;
+		src.connect(an);
+		const buf = new Float32Array(an.fftSize);
+		meterPoll(() => {
+			an.getFloatTimeDomainData(buf);
+			return rmsOf(buf);
+		});
+	}, () => {});
+}
+function warmMic(gesture) {
+	if (recEngine(cfgNow) === "none") return;
+	if (gesture) voiceAudioCtx();
+	serverRec.mic.warm(!gesture);
+}
 var questions = /* @__PURE__ */ new Map();
 var asksSaid = /* @__PURE__ */ new Map();
 var SAID_FRESH_MS = 6e4;
@@ -39321,6 +39642,7 @@ function TopBarMic() {
 	const focusedName = useUi((s) => s.focused ? s.aliases[s.focused] || s.focused : "");
 	const btnRef = (0, import_react.useRef)(null);
 	const menuRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => meterRef(btnRef.current), []);
 	const rec = (0, import_react.useRef)(null);
 	const live = (0, import_react.useRef)(null);
 	const pressedField = (0, import_react.useRef)(null);
@@ -39368,6 +39690,8 @@ function TopBarMic() {
 			clearTimeout(idleTimer.current);
 			clearTimeout(captionTimer.current);
 			rec.current?.stop();
+			untap?.();
+			serverRec.mic.releaseIdle();
 		};
 	}, []);
 	(0, import_react.useEffect)(() => {
@@ -39441,6 +39765,8 @@ function TopBarMic() {
 		live.current = null;
 		rec.current?.stop();
 		rec.current = null;
+		untap?.();
+		meterStop();
 		setListening(false);
 		publishMicState({
 			listening: false,
@@ -39469,15 +39795,15 @@ function TopBarMic() {
 				hint: opts.hint || ask.hint()
 			};
 		}
-		const c = cfgNow;
-		const engine = recEngine(c);
+		const engine = recEngine(cfgNow);
 		if (engine === "none") {
 			say(noRecognizerLine());
 			refreshCfg();
 			return null;
 		}
 		const r = engine === "server" ? serverRec : browserRec;
-		if (r === serverRec || ttsEngine(c) === "server") voiceAudioCtx();
+		voiceMark("start");
+		const ctx = voiceAudioCtx();
 		queue.hold();
 		const d = new LiveDictation(target(into, opts.title), {
 			caption: say,
@@ -39509,28 +39835,36 @@ function TopBarMic() {
 		});
 		d.show();
 		armIdle();
+		meterStart();
 		const ok = r.start({
 			onInterim: (t) => {
 				if (live.current !== d) return;
 				armIdle();
+				if (t) voiceMark("partial");
 				d.hearing(t);
 			},
 			onStatus: (t) => {
 				if (live.current === d && !d.dict.shown && !into) say(t + " · " + DICT_HINT, true);
 			},
+			onReady: () => {
+				if (live.current === d) d.ready();
+			},
+			onLevel: (rms) => {
+				if (live.current === d) meterFeed(rms);
+			},
 			onSpeech: () => {
-				if (live.current !== d) return;
-				armIdle();
-				if (!d.dict.shown && !into) say("Hearing you… · " + DICT_HINT, true);
+				if (live.current === d) armIdle();
 			},
 			onFinal: (t) => {
 				if (live.current !== d) return;
 				armIdle();
+				voiceMark("commit");
 				d.heard(t);
 			},
 			onWords: (t) => {
 				if (live.current !== d) return;
 				armIdle();
+				voiceMark("commit");
 				d.words(t);
 			},
 			onFlush: (t) => {
@@ -39538,7 +39872,10 @@ function TopBarMic() {
 			},
 			onPartial: (t) => {
 				if (live.current !== d) return;
-				if (t) armIdle();
+				if (t) {
+					armIdle();
+					voiceMark("partial");
+				}
 				d.unsure(t);
 			},
 			onNotice: (t) => {
@@ -39563,8 +39900,16 @@ function TopBarMic() {
 			say("Speech recognition did not start");
 			return null;
 		}
+		if (r === browserRec) {
+			d.ready();
+			tapLevel(ctx);
+		}
 		return d;
 	};
+	(0, import_react.useEffect)(() => onHearing((on) => {
+		if (on) voiceMark("speech");
+		live.current?.loud(on);
+	}), []);
 	const listenFor = (title, hint, ms) => new Promise((resolve) => {
 		let timer;
 		const d = start(null, {
@@ -39647,6 +39992,7 @@ function TopBarMic() {
 				return;
 			case "off":
 				queue.cancel();
+				untap?.();
 				browserRec.release();
 				serverRec.release();
 				say("Mic off");
@@ -39705,11 +40051,13 @@ function TopBarMic() {
 			live.current.cancel();
 			return true;
 		},
-		supported: () => recEngine(cfgNow) !== "none"
+		supported: () => recEngine(cfgNow) !== "none",
+		warm: () => warmMic(false)
 	}), []);
 	const hold = prefs.ptt === "hold";
 	const openMenu = () => {
 		setMenuOpen(true);
+		warmMic(true);
 		refreshCfg();
 		readPending();
 	};
@@ -39738,7 +40086,6 @@ function TopBarMic() {
 			const act = talkKeyAction(phase, k.hold, !!live.current, keyHeld.current);
 			if (phase === "up") keyHeld.current = false;
 			if (act === "start") {
-				setMenuOpen(false);
 				if (k.start(textField(document.activeElement)) && k.hold) keyHeld.current = true;
 			} else if (act === "finish") k.finish();
 		};
@@ -39772,7 +40119,8 @@ function TopBarMic() {
 		top: rect.bottom + 6 + "px",
 		left: Math.max(8, Math.min(rect.left, window.innerWidth - 288)) + "px"
 	} : void 0;
-	const capRect = caption ? btnRef.current?.getBoundingClientRect() : void 0;
+	const showCaption = !!(caption || unsure) && !menuOpen;
+	const capRect = showCaption ? btnRef.current?.getBoundingClientRect() : void 0;
 	const capStyle = capRect ? {
 		top: capRect.bottom + 6 + "px",
 		left: Math.max(8, Math.min(capRect.left, window.innerWidth - 348)) + "px"
@@ -39784,7 +40132,13 @@ function TopBarMic() {
 			id: "mic-btn",
 			ref: btnRef,
 			type: "button",
-			className: "tb-item" + (listening ? " listening" : "") + (speaking && !listening ? " speaking" : "") + (!supported ? " unsupported" : ""),
+			className: [
+				"tb-item",
+				"mic-ring",
+				listening && "listening",
+				speaking && !listening && "speaking",
+				!supported && "unsupported"
+			].filter(Boolean).join(" "),
 			title,
 			"aria-label": listening ? "Listening — stop" : "Talk to " + who,
 			"aria-pressed": listening,
@@ -39792,6 +40146,7 @@ function TopBarMic() {
 			"aria-expanded": menuOpen,
 			onPointerDown: (e) => {
 				pressedField.current = textField(document.activeElement);
+				if (!live.current) warmMic(true);
 				if (!hold || e.button !== 0 || e.shiftKey) return;
 				holding.current = true;
 				try {
@@ -39844,12 +40199,13 @@ function TopBarMic() {
 			},
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MicGlyph, {})
 		}),
-		caption && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		showCaption && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "mic-caption",
+			className: listening ? "live" : "",
 			role: "status",
 			"aria-live": "polite",
 			style: capStyle,
-			children: [caption, unsure && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			children: [listening ? liveTail(caption, unsure) : caption, unsure && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "mic-unsure",
 				children: [" ", unsure]
 			})]
@@ -39878,6 +40234,23 @@ function TopBarMic() {
 							btnRef.current?.focus();
 						},
 						children: "×"
+					})]
+				}),
+				(listening || caption || unsure) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "mic-live",
+					id: "mic-live",
+					role: "status",
+					"aria-live": "polite",
+					children: [listening && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "mic-level",
+						ref: meterRef,
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "mic-level-bar" })
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "mic-live-text",
+						children: [caption, unsure && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "mic-unsure",
+							children: [" ", unsure]
+						})]
 					})]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
@@ -103253,6 +103626,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 }
 function AskMicRow({ title }) {
 	const st = (0, import_react.useSyncExternalStore)(subscribeMicState, getMicState, getMicState);
+	(0, import_react.useEffect)(() => askMic()?.warm?.(), [title]);
 	const mic = askMic();
 	if (!mic || !mic.supported()) return null;
 	const mine = st.title === title;
@@ -103264,7 +103638,8 @@ function AskMicRow({ title }) {
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			type: "button",
 			id: "ask-mic",
-			className: "ask-mic tb-item" + (listening ? " listening" : ""),
+			ref: meterRef,
+			className: "ask-mic tb-item mic-ring" + (listening ? " listening" : ""),
 			"aria-pressed": listening,
 			"aria-label": listening ? "Listening — stop" : "Answer by voice",
 			title: listening ? "Listening — click to stop" : "Answer by voice" + (key ? " (" + key + ")" : ""),

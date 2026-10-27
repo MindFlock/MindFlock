@@ -787,3 +787,91 @@ def test_whisper_language_is_the_primary_subtag(tag, code):
     # but its own two/three-letter codes — the owner saw "'en-US' is not a
     # valid language code" on the first live clip.
     assert speech.whisper_language(tag) == code
+
+
+class _FakeNumpy:
+    float32 = "float32"
+
+    @staticmethod
+    def zeros(n, dtype=None):
+        return ("zeros", n, dtype)
+
+
+class TestWarm:
+    """warm() / warm_in_background(): the configured local model is loaded
+    (and primed with one silent pass) ahead of the first press."""
+
+    @pytest.fixture
+    def local(self, whisper, monkeypatch):
+        monkeypatch.setattr(
+            speech,
+            "_import",
+            lambda name: whisper if name == "faster_whisper" else _FakeNumpy,
+        )
+        _set(stt_backend="local")
+        return whisper
+
+    def test_warm_loads_and_primes_once(self, local):
+        assert speech.warm("stt") == "loaded"
+        assert speech.loaded() == ["whisper:small"]
+        assert len(local.loads) == 1
+        # The priming pass: a short silent array, greedy, no VAD.
+        ((path, kw),) = local.calls
+        assert path == ("zeros", 8000, "float32")
+        assert kw == {"language": "en", "beam_size": 1, "vad_filter": False}
+        # Resident already: nothing loaded, nothing primed.
+        assert speech.warm("stt") == "already"
+        assert len(local.loads) == 1 and len(local.calls) == 1
+
+    def test_warm_skips_unless_the_backend_is_local(self, whisper, monkeypatch):
+        monkeypatch.setattr(
+            speech,
+            "_import",
+            lambda name: whisper if name == "faster_whisper" else _FakeNumpy,
+        )
+        _set(stt_backend="")
+        assert speech.warm("stt").startswith("skipped: stt backend is not local")
+        _set(stt_backend="openai")
+        assert speech.warm("stt").startswith("skipped:")
+        assert speech.loaded() == [] and whisper.loads == []
+
+    def test_warm_skips_when_not_installed_or_memory_is_low(self, monkeypatch):
+        _set(stt_backend="local")
+        monkeypatch.setattr(speech, "_installed", lambda name: False)
+        assert speech.warm("stt").startswith("skipped:")
+        monkeypatch.setattr(speech, "_installed", lambda name: True)
+        monkeypatch.setattr(speech, "_memory_block", lambda: "memory is low")
+        assert "memory is low" in speech.warm("stt")
+        assert speech.loaded() == []
+
+    def test_warm_in_background_runs_once_and_is_a_no_op_when_resident(self, local):
+        t = speech.warm_in_background("stt")
+        assert t is not None
+        t.join(5)
+        assert not t.is_alive()
+        assert speech.loaded() == ["whisper:small"]
+        assert len(local.loads) == 1
+        # Resident: nothing to do.
+        assert speech.warm_in_background("stt") is None
+        speech.unload_all()
+        _set(stt_backend="")
+        assert speech.warm_in_background("stt") is None
+        assert speech.loaded() == []
+
+    def test_warm_in_background_dedupes_a_running_warm_up(self, local, monkeypatch):
+        import threading
+
+        gate = threading.Event()
+        real_warm = speech.warm
+
+        def slow_warm(kind="stt", prime=True):
+            gate.wait(5)
+            return real_warm(kind, prime)
+
+        monkeypatch.setattr(speech, "warm", slow_warm)
+        t = speech.warm_in_background("stt")
+        assert t is not None
+        assert speech.warm_in_background("stt") is None  # already warming
+        gate.set()
+        t.join(5)
+        assert speech.loaded() == ["whisper:small"]

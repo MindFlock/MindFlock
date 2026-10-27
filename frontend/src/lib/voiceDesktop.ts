@@ -39,6 +39,7 @@ import { ApiError, api, apiRaw, instApi } from "../api/client";
 import type { Dialog } from "../api/types";
 import { peekTerm } from "./terminals";
 import { resamplerName, startWavRecording, type WavRecording } from "./wavRecorder";
+import { MicKeeper, isLoud, noiseFloor, pickupLine, voiceMark } from "./voiceMic";
 
 // --- the radio words -------------------------------------------------------- //
 
@@ -572,6 +573,10 @@ export class LiveDictation {
   private acted = false;
   /** Any words came in (interim, committed, final, unsure). */
   heardAnything = false;
+  /** The mic records (the caption says "Listening…"). */
+  private recording = false;
+  /** The level says speech (the caption says "Hearing you…" until a word). */
+  private hearingNow = false;
 
   constructor(
     private target: DictTarget | null,
@@ -620,6 +625,21 @@ export class LiveDictation {
     this.show();
   }
 
+  /** The recognizer records now. */
+  ready(): void {
+    if (this.done || this.recording) return;
+    this.recording = true;
+    this.show();
+  }
+
+  /** The level meter heard speech start (`on`) or stop: before the first
+   * word, the caption says so. */
+  loud(on: boolean): void {
+    if (this.done || this.hearingNow === on) return;
+    this.hearingNow = on;
+    if (!this.dict.shown && !this.dict.partial) this.show();
+  }
+
   /** A passing line (streaming fell back to clips): the next words replace it. */
   notice(line: string): void {
     if (!this.done) this.hooks.caption(line, true);
@@ -653,13 +673,18 @@ export class LiveDictation {
     this.end("", false, "missed");
   }
 
-  /** The running text, or what to say. */
+  /** The running text — the words in, then the unsure tail (greyed) — or,
+   * before a word, whether the mic hears you and what to say. */
   show(): void {
     if (this.done) return;
+    if (this.dict.shown || this.dict.partial) {
+      this.hooks.caption(this.dict.shown, true, this.dict.partial);
+      return;
+    }
     const field = this.target?.kind === "field";
-    const shown =
-      this.dict.shown || this.opts.hint || (field ? "Listening — the words go into the text box" : DICT_HINT);
-    this.hooks.caption(shown, true, this.dict.partial);
+    const base = this.opts.hint || (field ? "the words go into the text box" : DICT_HINT);
+    const lead = pickupLine(this.recording, this.hearingNow);
+    this.hooks.caption(lead ? lead + " · " + base : field ? "Listening — " + base : base, true);
   }
 
   private step(next: () => DictOutcome): Promise<void> {
@@ -1537,6 +1562,10 @@ export interface RecognizerHandlers {
   onStatus?(text: string): void;
   /** The server recognizer's detector heard speech (it has no interim words). */
   onSpeech?(): void;
+  /** The microphone records (each phrase's recording started). */
+  onReady?(): void;
+  /** Each audio block's RMS (0..1) — the level meter's. */
+  onLevel?(rms: number): void;
   /** Streaming (the server's, when it can): words committed — final, typed
    * as they come. */
   onWords?(text: string): void;
@@ -1725,20 +1754,25 @@ export function browserRecognizer(): Recognizer {
  * soon after it is said. */
 export const SILENCE_MS = 1100;
 const CLIP_MAX_MS = 12_000; // the hard cap on one clip
-const RMS_SPEECH = 0.02; // RMS (0..1) above which a clip has speech
 const UPLOAD_TIMEOUT_MS = 45_000;
 const CLIP_RATE = 16_000; // the built-in recognizers' rate; whisper's too
 /** A let-go phrase's last bit of audio under this many bytes (~50 ms) isn't sent. */
 const TAIL_MIN_BYTES = 44 + 1600;
+/** A stream opened at a phrase's start and still unused this long is opened
+ * again at the first word: the server forgets one 60 s after its last chunk
+ * (speech_stream.EXPIRE_SECONDS). */
+export const STREAM_FRESH_MS = 40_000;
 
 /** One phrase being recorded. `stream`: it streams (else it is a clip — clip
- * mode, or streaming fell back); `sid` the stream once open; `busy` the one
- * request in flight (the open, or a chunk); `fresh`: speech not sent yet. */
+ * mode, or streaming fell back); `sid` the stream once open (`opened` when);
+ * `busy` the one request in flight (the open, or a chunk); `fresh`: speech
+ * not sent yet. */
 interface Phrase {
   rec: WavRecording | null;
   heard: boolean;
   stream: boolean;
   sid: string | null;
+  opened: number;
   busy: Promise<void> | null;
   fresh: boolean;
   ending: boolean;
@@ -1755,19 +1789,28 @@ const langTag = () => String(navigator.language || "en").split(";")[0];
  *    speech or the cap, uploaded whole as `audio/wav` to POST
  *    /api/voice/transcribe; the response's `{text}` is the phrase;
  *  - streaming, when `opts.stream()` says the server can (GET /api/voice
- *    `server_ready.stt_stream`): at the first speech of a phrase POST
- *    /api/voice/stream opens a stream, and whenever the previous request is
- *    back and 300 ms (wavRecorder TAKE_MIN_S) of new audio exists, the recorder's take()
- *    goes to /stream/{id}/chunk — its `committed` words (final) go to
- *    onWords as they come, its `partial` (unstable) to onPartial. The same
- *    quiet ends the phrase: /end flushes its last words to onFlush, and the
- *    next phrase opens a new stream. No cap. A 409 on the open, or any
- *    failed request, falls back to clips for the rest of the dictation.
+ *    `server_ready.stt_stream`): POST /api/voice/stream opens a phrase's
+ *    stream as the phrase starts — the first one in parallel with the
+ *    microphone, so its round trip is over before the first word — and from
+ *    the phrase's first speech on (the quiet before it is never sent),
+ *    whenever the previous request is back and 300 ms (wavRecorder
+ *    TAKE_MIN_S) of new audio exists, the recorder's take() goes to
+ *    /stream/{id}/chunk — its `committed` words (final) go to onWords as they
+ *    come, its `partial` (unstable) to onPartial. The same quiet ends the
+ *    phrase: /end flushes its last words to onFlush, and the next phrase
+ *    opens a new stream (a phrase that heard nothing DELETEs its). No cap. A
+ *    409 on the open, or any failed request, falls back to clips for the rest
+ *    of the dictation.
  * While listening is wanted the next phrase starts recording as soon as one
- * ends, so phrases arrive one by one like Chrome's finals. The mic stream is
- * kept until {@link Recognizer.release}. */
-export function serverRecognizer(opts: { stream?: () => boolean } = {}): Recognizer & { lastError: string } {
-  let stream: MediaStream | null = null;
+ * ends, so phrases arrive one by one like Chrome's finals. The microphone is
+ * `opts.mic`'s (lib/voiceMic): held while listening, kept warm a while after,
+ * given back by {@link Recognizer.release}. */
+export function serverRecognizer(
+  opts: { stream?: () => boolean; mic?: MicKeeper } = {}
+): Recognizer & { lastError: string; mic: MicKeeper } {
+  const mic = opts.mic || new MicKeeper();
+  /** This dictation holds the microphone (one {@link MicKeeper.hold}). */
+  let holding = false;
   let h: RecognizerHandlers | null = null;
   let want = false;
   let finishing = false;
@@ -1784,10 +1827,10 @@ export function serverRecognizer(opts: { stream?: () => boolean } = {}): Recogni
   /** Streams open now, abandoned by stop(). */
   const open = new Set<string>();
 
-  const getStream = async () => {
-    if (stream && stream.active !== false) return stream;
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    return stream;
+  const unhold = () => {
+    if (!holding) return;
+    holding = false;
+    mic.done();
   };
   const errCode = (err: unknown) => {
     const n = (err as { name?: string })?.name || "";
@@ -1801,6 +1844,7 @@ export function serverRecognizer(opts: { stream?: () => boolean } = {}): Recogni
   const maybeEnd = () => {
     if (!want && !token && uploads === 0 && h) {
       finishing = false;
+      unhold();
       const hh = h;
       hh.onEnd();
     }
@@ -1920,8 +1964,7 @@ export function serverRecognizer(opts: { stream?: () => boolean } = {}): Recogni
     });
   };
 
-  /** At the phrase's first speech: open its stream (after the previous
-   * phrase's /end). */
+  /** As the phrase starts: open its stream (after the previous phrase's /end). */
   const openStream = (c: Phrase) => {
     const hh = h;
     const before = lastEnd;
@@ -1941,7 +1984,9 @@ export function serverRecognizer(opts: { stream?: () => boolean } = {}): Recogni
         }
         if (r.ok && id) {
           c.sid = id;
+          c.opened = Date.now();
           open.add(id);
+          voiceMark("stream");
         } else if (r.status === 409) {
           self.lastError = String(r.j.error || "the server can't stream");
           fallBack(c, "");
@@ -1970,9 +2015,9 @@ export function serverRecognizer(opts: { stream?: () => boolean } = {}): Recogni
     }
   };
 
-  /** The next chunk, when nothing is in flight and enough is new. */
+  /** The next chunk, when speech was heard, nothing is in flight and enough is new. */
   const pump = (c: Phrase) => {
-    if (!c.stream || !c.sid || c.busy || c.ending || !c.rec || h === null) return;
+    if (!c.stream || !c.sid || !c.heard || c.busy || c.ending || !c.rec || h === null) return;
     const blob = c.rec.take();
     if (!blob) return;
     c.fresh = false;
@@ -2003,7 +2048,12 @@ export function serverRecognizer(opts: { stream?: () => boolean } = {}): Recogni
         if (c.heard && tail && tail.size > 44) void upload(tail);
         return;
       }
-      if (!c.sid) return; // no speech: no stream was opened
+      if (!c.sid) return; // its open failed (it fell back), or it was dropped
+      if (!c.heard) {
+        // Nothing said: the stream opened for it goes unused.
+        discard(c);
+        return;
+      }
       if (tail && tail.size > TAIL_MIN_BYTES && c.fresh) await sendChunk(c, tail, hh);
       if (h !== hh || !c.stream || !c.sid) return;
       const sid = c.sid;
@@ -2030,6 +2080,15 @@ export function serverRecognizer(opts: { stream?: () => boolean } = {}): Recogni
   };
 
   // --- the phrase ------------------------------------------------------------ //
+
+  /** A phrase that won't stream (it never recorded, or heard nothing): its
+   * stream — open, or still opening (the open DELETEs it then) — goes. */
+  const discard = (c: Phrase) => {
+    c.stream = false;
+    const sid = c.sid;
+    c.sid = null;
+    if (sid) abandon(sid);
+  };
 
   /** End the current phrase and send it. */
   const endClip = () => {
@@ -2062,42 +2121,53 @@ export function serverRecognizer(opts: { stream?: () => boolean } = {}): Recogni
   const clip = async () => {
     const mine = {};
     token = mine;
+    const c: Phrase = { rec: null, heard: false, stream: streaming, sid: null, opened: 0, busy: null, fresh: false, ending: false };
+    // Its stream opens while the microphone and the audio engine get ready.
+    if (c.stream) openStream(c);
     let s: MediaStream;
     try {
-      s = await getStream();
+      s = await mic.get();
     } catch (err) {
+      discard(c);
       if (token === mine) failed(errCode(err));
       return;
     }
-    if (token !== mine) return;
+    if (token !== mine) return discard(c);
     // The context the mic's click made and resumed (voiceAudioCtx): the
     // resume may still be in flight.
     const ctx = voiceAudioCtx();
     if (ctx && ctx.state === "suspended") await ctx.resume().catch(() => {});
-    if (token !== mine) return;
+    if (token !== mine) return discard(c);
     if (!want) {
       // finish() came between two phrases: nothing more to record.
+      discard(c);
       token = null;
       maybeEnd();
       return;
     }
     if (!ctx || ctx.state !== "running") {
+      discard(c);
       failed("start-failed", "The audio engine isn't running — click the mic again");
       return;
     }
-    const c: Phrase = { rec: null, heard: false, stream: streaming, sid: null, busy: null, fresh: false, ending: false };
     // The silence detector: the recorder's RMS per block against a noise
     // floor that follows the quiet moments.
     let floor = 0;
     let lastLoud = 0;
     const onLevel = (rms: number) => {
       if (cur !== c) return;
-      floor = floor === 0 ? rms : Math.min(rms, floor * 1.05 + 0.001);
+      h?.onLevel?.(rms);
+      floor = noiseFloor(floor, rms);
       const now = Date.now();
-      if (rms > Math.max(RMS_SPEECH, floor * 3)) {
+      if (isLoud(rms, floor)) {
         if (!c.heard) {
           h?.onSpeech?.();
-          if (c.stream) openStream(c);
+          // Opened so long ago the server may have forgotten it: a new one.
+          if (c.stream && c.sid && now - c.opened > STREAM_FRESH_MS) {
+            discard(c);
+            c.stream = true;
+            openStream(c);
+          }
         }
         c.heard = true;
         c.fresh = true;
@@ -2113,11 +2183,13 @@ export function serverRecognizer(opts: { stream?: () => boolean } = {}): Recogni
     try {
       c.rec = startWavRecording(s, ctx, { targetRate: CLIP_RATE, onLevel });
     } catch {
+      discard(c);
       failed("start-failed");
       return;
     }
     cur = c;
-    h?.onStatus?.("Listening…");
+    voiceMark("mic");
+    h?.onReady?.();
     if (!c.stream)
       capTimer = setTimeout(() => {
         if (cur === c) endClip();
@@ -2127,6 +2199,7 @@ export function serverRecognizer(opts: { stream?: () => boolean } = {}): Recogni
   const self = {
     name: "server" as const,
     lastError: "",
+    mic,
     available: () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia && !!audioCtxCtor(),
     start(handlers: RecognizerHandlers) {
       self.stop();
@@ -2134,6 +2207,8 @@ export function serverRecognizer(opts: { stream?: () => boolean } = {}): Recogni
       h = handlers;
       want = true;
       finishing = false;
+      holding = true;
+      mic.hold();
       streaming = !!opts.stream?.();
       lastEnd = Promise.resolve();
       void clip();
@@ -2159,12 +2234,11 @@ export function serverRecognizer(opts: { stream?: () => boolean } = {}): Recogni
       aborters.forEach((a) => a.abort());
       aborters.clear();
       open.forEach(abandon);
+      unhold();
     },
     release() {
       self.stop();
-      const s = stream;
-      stream = null;
-      s?.getTracks().forEach((t) => t.stop());
+      mic.release();
     },
   };
   return self;

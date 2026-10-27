@@ -29,7 +29,15 @@
  * hotkey (`mindflock:voice-talk`) is push to talk from anywhere; and with
  * replies on, a dialog or a question is read out and answered hands-free. The logic that isn't DOM
  * — the radio parser, the dictation machine and its live driver, the reply
- * tracker, the speech queue and the engines — lives in lib/voiceDesktop.ts. */
+ * tracker, the speech queue and the engines — lives in lib/voiceDesktop.ts.
+ *
+ * Seamless start (lib/voiceMic): the microphone is asked for before the press
+ * lands (the options opening, the button going down, the ask pop-up's mic
+ * appearing) and kept warm KEEP_STREAM_MS after a dictation, and the server's
+ * stream opens while the mic gets ready. While listening, a ring on the button
+ * follows the level, the caption says "Hearing you…" once the level says
+ * speech, and the unsure words show greyed as soon as the first chunk is back
+ * (never typed). */
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -82,6 +90,17 @@ import {
   type VoiceCfg,
   type VoicePrefs,
 } from "../lib/voiceDesktop";
+import {
+  liveTail,
+  meterFeed,
+  meterPoll,
+  meterRef,
+  meterStart,
+  meterStop,
+  onHearing,
+  rmsOf,
+  voiceMark,
+} from "../lib/voiceMic";
 
 // One of each for the page: the mic renders in one of two places (the mac
 // mirror), and what it sent must outlive a remount.
@@ -96,6 +115,55 @@ const queue = new SpeechQueue(
   () => (ttsEngine(cfgNow) === "server" ? serverSp : browserSp),
   (on) => speakingListeners.forEach((l) => l(on))
 );
+
+/** The browser recognizer has no level of its own: an AnalyserNode on the
+ * kept microphone stream gives the meter one. Its undo, while it runs. */
+let untap: (() => void) | null = null;
+function tapLevel(ctx: AudioContext | null) {
+  untap?.();
+  if (!ctx) return;
+  const mic = serverRec.mic;
+  let gone = false;
+  let src: MediaStreamAudioSourceNode | null = null;
+  mic.hold();
+  untap = () => {
+    gone = true;
+    untap = null;
+    meterPoll(null);
+    try {
+      src?.disconnect();
+    } catch {
+      /* already gone */
+    }
+    mic.done();
+  };
+  void mic.get().then(
+    (s) => {
+      if (gone) return;
+      voiceMark("mic");
+      src = ctx.createMediaStreamSource(s);
+      const an = ctx.createAnalyser();
+      an.fftSize = 2048;
+      src.connect(an);
+      const buf = new Float32Array(an.fftSize);
+      meterPoll(() => {
+        an.getFloatTimeDomainData(buf);
+        return rmsOf(buf);
+      });
+    },
+    () => {}
+  );
+}
+
+/** Ready the mic before the press lands: the audio engine (in a gesture — a
+ * context made outside one stays suspended) and the microphone, kept warm.
+ * Outside a gesture (the ask pop-up's mic appearing) only when the permission
+ * is already given: never a prompt nobody asked for. */
+function warmMic(gesture: boolean) {
+  if (recEngine(cfgNow) === "none") return;
+  if (gesture) voiceAudioCtx();
+  void serverRec.mic.warm(!gesture);
+}
 
 /** The question each session's last Say line asks (GET /voice
  * `has_question`), while it waits: a lone "yes" / "two" answers it. */
@@ -231,6 +299,8 @@ export function TopBarMic() {
 
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  // The ring follows the level (--mic-level, written by lib/voiceMic).
+  useEffect(() => meterRef(btnRef.current), []);
   const rec = useRef<Recognizer | null>(null);
   /** The dictation under way (null when not listening). */
   const live = useRef<LiveDictation | null>(null);
@@ -290,6 +360,8 @@ export function TopBarMic() {
       clearTimeout(idleTimer.current);
       clearTimeout(captionTimer.current);
       rec.current?.stop();
+      untap?.();
+      serverRec.mic.releaseIdle();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -382,6 +454,8 @@ export function TopBarMic() {
     live.current = null;
     rec.current?.stop();
     rec.current = null;
+    untap?.();
+    meterStop();
     setListening(false);
     publishMicState({ listening: false, title: "" });
     queue.release();
@@ -423,9 +497,10 @@ export function TopBarMic() {
       return null;
     }
     const r = engine === "server" ? serverRec : browserRec;
-    // Inside the gesture: a context made here runs (server playback and the
-    // server recognizer's recording need it running).
-    if (r === serverRec || ttsEngine(c) === "server") voiceAudioCtx();
+    voiceMark("start");
+    // Inside the gesture: a context made here runs (server playback, the
+    // server recognizer's recording and the browser one's level need it).
+    const ctx = voiceAudioCtx();
     queue.hold();
     const d = new LiveDictation(
       target(into, opts.title),
@@ -458,24 +533,32 @@ export function TopBarMic() {
     publishMicState({ listening: true, title: into ? "" : opts.title || useUi.getState().focused || "" });
     d.show();
     armIdle();
+    meterStart();
     const ok = r.start({
       onInterim: (t) => {
         if (live.current !== d) return;
         armIdle();
+        if (t) voiceMark("partial");
         d.hearing(t);
       },
       onStatus: (t) => {
         if (live.current === d && !d.dict.shown && !into) say(t + " · " + DICT_HINT, true);
       },
+      onReady: () => {
+        if (live.current === d) d.ready();
+      },
+      // The ring, the level bar and "Hearing you…" (lib/voiceMic).
+      onLevel: (rms) => {
+        if (live.current === d) meterFeed(rms);
+      },
       onSpeech: () => {
-        if (live.current !== d) return;
-        armIdle();
-        if (!d.dict.shown && !into) say("Hearing you… · " + DICT_HINT, true);
+        if (live.current === d) armIdle();
       },
       // Each phrase is typed as it arrives — also the tail while finishing.
       onFinal: (t) => {
         if (live.current !== d) return;
         armIdle();
+        voiceMark("commit");
         void d.heard(t);
       },
       // Streaming: committed words as they come, a phrase's end, the unsure
@@ -483,6 +566,7 @@ export function TopBarMic() {
       onWords: (t) => {
         if (live.current !== d) return;
         armIdle();
+        voiceMark("commit");
         void d.words(t);
       },
       onFlush: (t) => {
@@ -490,7 +574,10 @@ export function TopBarMic() {
       },
       onPartial: (t) => {
         if (live.current !== d) return;
-        if (t) armIdle();
+        if (t) {
+          armIdle();
+          voiceMark("partial");
+        }
         d.unsure(t);
       },
       onNotice: (t) => {
@@ -517,8 +604,23 @@ export function TopBarMic() {
       say("Speech recognition did not start");
       return null;
     }
+    // Web Speech listens from here, and reports no level: tap one.
+    if (r === browserRec) {
+      d.ready();
+      tapLevel(ctx);
+    }
     return d;
   };
+
+  // Before the first word: "Hearing you…" while the level says speech.
+  useEffect(
+    () =>
+      onHearing((on) => {
+        if (on) voiceMark("speech");
+        live.current?.loud(on);
+      }),
+    []
+  );
 
   /** Hands-free: the mic on `title` for `ms`; nothing said by then is a miss. */
   const listenFor = (title: string, hint: string, ms: number) =>
@@ -618,6 +720,7 @@ export function TopBarMic() {
         return;
       case "off":
         queue.cancel();
+        untap?.();
         browserRec.release();
         serverRec.release();
         say("Mic off");
@@ -679,6 +782,7 @@ export function TopBarMic() {
           return true;
         },
         supported: () => recEngine(cfgNow) !== "none",
+        warm: () => warmMic(false),
       }),
     []
   );
@@ -688,6 +792,8 @@ export function TopBarMic() {
 
   const openMenu = () => {
     setMenuOpen(true);
+    // The options are often the step before talking: ready the mic now.
+    warmMic(true);
     void refreshCfg();
     void readPending();
   };
@@ -713,8 +819,8 @@ export function TopBarMic() {
       const k = keyRef.current;
       const act = talkKeyAction(phase, k.hold, !!live.current, keyHeld.current);
       if (phase === "up") keyHeld.current = false;
+      // The options stay open: they show the level and the words too.
       if (act === "start") {
-        setMenuOpen(false);
         if (k.start(textField(document.activeElement)) && k.hold) keyHeld.current = true;
       } else if (act === "finish") k.finish();
     };
@@ -758,7 +864,9 @@ export function TopBarMic() {
   const popStyle = rect
     ? { top: rect.bottom + 6 + "px", left: Math.max(8, Math.min(rect.left, window.innerWidth - 288)) + "px" }
     : undefined;
-  const capRect = caption ? btnRef.current?.getBoundingClientRect() : undefined;
+  // Under the options, the caption would sit behind them: they show it.
+  const showCaption = !!(caption || unsure) && !menuOpen;
+  const capRect = showCaption ? btnRef.current?.getBoundingClientRect() : undefined;
   const capStyle = capRect
     ? { top: capRect.bottom + 6 + "px", left: Math.max(8, Math.min(capRect.left, window.innerWidth - 348)) + "px" }
     : undefined;
@@ -772,9 +880,9 @@ export function TopBarMic() {
         id="mic-btn"
         ref={btnRef}
         type="button"
-        className={
-          "tb-item" + (listening ? " listening" : "") + (speaking && !listening ? " speaking" : "") + (!supported ? " unsupported" : "")
-        }
+        className={["tb-item", "mic-ring", listening && "listening", speaking && !listening && "speaking", !supported && "unsupported"]
+          .filter(Boolean)
+          .join(" ")}
         title={title}
         aria-label={listening ? "Listening — stop" : "Talk to " + who}
         aria-pressed={listening}
@@ -783,6 +891,9 @@ export function TopBarMic() {
         onPointerDown={(e) => {
           // Before the click moves focus: a text box that had it gets the words.
           pressedField.current = textField(document.activeElement);
+          // The click that starts listening comes at the release: the mic
+          // opens during the press.
+          if (!live.current) warmMic(true);
           if (!hold || e.button !== 0 || e.shiftKey) return;
           holding.current = true;
           try {
@@ -839,10 +950,10 @@ export function TopBarMic() {
       >
         <MicGlyph />
       </button>
-      {caption &&
+      {showCaption &&
         createPortal(
-          <div id="mic-caption" role="status" aria-live="polite" style={capStyle}>
-            {caption}
+          <div id="mic-caption" className={listening ? "live" : ""} role="status" aria-live="polite" style={capStyle}>
+            {listening ? liveTail(caption, unsure) : caption}
             {unsure && <span className="mic-unsure"> {unsure}</span>}
           </div>,
           document.body
@@ -866,6 +977,19 @@ export function TopBarMic() {
                 ×
               </button>
             </div>
+            {(listening || caption || unsure) && (
+              <div className="mic-live" id="mic-live" role="status" aria-live="polite">
+                {listening && (
+                  <div className="mic-level" ref={meterRef}>
+                    <div className="mic-level-bar" />
+                  </div>
+                )}
+                <div className="mic-live-text">
+                  {caption}
+                  {unsure && <span className="mic-unsure"> {unsure}</span>}
+                </div>
+              </div>
+            )}
             <label className="mic-row">
               <input
                 type="checkbox"
