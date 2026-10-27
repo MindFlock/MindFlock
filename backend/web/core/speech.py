@@ -901,7 +901,7 @@ class LocalSTT(Backend):
                 segments, _info = model.transcribe(
                     samples,
                     language=language,
-                    beam_size=2,
+                    beam_size=1,
                     condition_on_previous_text=False,
                     vad_filter=True,
                 )
