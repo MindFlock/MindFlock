@@ -2228,7 +2228,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
         const rec = { at: Date.now(), dur: this.buffer ? this.buffer.duration : 0, stopped: 0 }, src = this;
         window.__plays.push(rec);
         this.__rec = rec;
-        setTimeout(() => { if (!rec.stopped && src.onended) src.onended({}); }, rec.dur * 1000);
+        setTimeout(() => { rec.endedAt = Date.now(); if (!rec.stopped && src.onended) src.onended({}); }, rec.dur * 1000);
       };
       AudioBufferSourceNode.prototype.stop = function () { if (this.__rec) this.__rec.stopped = Date.now(); };
       try { localStorage.setItem("cs_voice", JSON.stringify({ replies: "all" })); } catch (e) {}
@@ -2257,7 +2257,10 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     check("speak: the first sound starts once sentence 1 is made — not the whole line (" + firstSound + " ms; the whole line takes " + wholeMs + " ms to make)", playsS.length === 3 && firstSound >= SENTS[0].length * state.speakMsPerChar - 20 && firstSound < SENTS[0].length * state.speakMsPerChar + 250 && firstSound < wholeMs - 300, JSON.stringify({ firstSound, wholeMs, plays: playsS }));
     console.log("  speak: first sound " + firstSound + " ms after speak() (sentence 1 takes " + SENTS[0].length * state.speakMsPerChar + " ms to make, the whole line " + wholeMs + " ms)");
     check("speak: one ahead — sentence 2 asked for only as 1 starts playing, 3 as 2 does", sp.length === 3 && sp[1].at >= playsS[0].at - 60 && sp[2].at >= playsS[1].at - 60 && sp[1].at >= sp[0].done - 5, JSON.stringify({ sp, plays: playsS }));
-    const gaps = playsS.slice(1).map((x, i) => x.at - (playsS[i].at + playsS[i].dur * 1000));
+    // Against the moment the sink reported the clip ended (headless Chrome's
+    // timers can fire late or early; what matters is that the next clip
+    // waited for `ended`), never the nominal at + duration.
+    const gaps = playsS.slice(1).map((x, i) => x.at - (playsS[i].endedAt || (playsS[i].at + playsS[i].dur * 1000)));
     check("speak: back to back — each sentence starts as the one before ends (no overlap, gaps < 120 ms)", gaps.length === 2 && gaps.every((g) => g > -30 && g < 120), JSON.stringify(gaps));
     check("speak: speak() resolves once the whole line is said", (await S(() => window.__said)) >= playsS[2].at + playsS[2].dur * 1000 - 60);
     const diagS = await S(() => { window.mfVoice.diag && window.mfVoice.diag(); return window.mfVoice.rec.lastSpeak; });
