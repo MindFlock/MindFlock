@@ -5182,7 +5182,8 @@
             voiceCaption("This browser's recognizer isn't available — using recognition on this computer.");
             if (voiceIsListening() && !voice.stt.active()) voiceRecStart();
           } else {
-            voiceError(voiceSttDeniedText(code));
+            // The server recognizer's "not-allowed" IS the microphone.
+            voiceError(voice.stt.name === "phone" ? voiceSttDeniedText(code) : VOICE_MIC_DENIED_TEXT);
             voiceListen_.until = 0;
             voiceIdle();
           }

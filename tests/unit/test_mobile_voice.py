@@ -2039,7 +2039,10 @@ def test_a_browser_without_a_speech_service_is_told_so_and_falls_back_to_the_ser
         1
     ].split('} else if (code === "audio-capture")')[0]
     assert 'voice.stt.name === "phone" && voiceSttFallbackToServer()' in err
-    assert "voiceError(voiceSttDeniedText(code));" in err
+    assert (
+        'voiceError(voice.stt.name === "phone" ? voiceSttDeniedText(code) : VOICE_MIC_DENIED_TEXT);'
+        in err
+    )
     # "unavailable" (no constructor: iOS outside Safari) falls back the same way.
     un = js.split('} else if (code === "unavailable" || code === "start-failed") {')[
         1
