@@ -7,6 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-27
+
+Talk to your sessions. The phone page and the desktop app both have a mic:
+your words are typed into the session as you say them, "over" sends, the
+agent's reply is read back in your own voice, a session that asks you
+something pops up in the middle of the screen, and "MindFlock" said on its
+own wakes it up. Every agent CLI's dialogs can be answered by voice, and a
+failed pre-commit hands the agent its own failure and the steps left.
+
+### Added
+
+- **Voice, on the phone and the desktop.** A mic in the phone page and in
+  the desktop top bar (next to the bell; the Talk hotkey is `Ctrl+T`, hold or
+  click per the mic's push-to-talk mode). Words are typed into the focused
+  session as you speak, corrected in place as the recognizer refines them,
+  and the first pass's guess shows within half a second. Listening stays on
+  once you start: **"over"** sends the message and keeps listening,
+  **"over and out"** sends what is pending and stops, **"disregard"** takes
+  the phrase back, and the stop phrases ("stop recording", "that's all",
+  "mic off") stop without sending. A control word acts a quarter second
+  after you say it. Spoken confirmations in your voice ("Sent.", "Cleared.",
+  "Stopped."), a rising chime when listening starts and a falling one when
+  it stops, a still mic ring that brightens as it hears you, and a small
+  "Listening…" / "Speaking…" pill — nothing else pops up.
+- **A voice router.** "Session three", "next session", "switch to <name>",
+  "open a new session to fix the login bug", "what needs me", "what is it
+  asking", "yes" / "no" / "always" / "option two" to answer a dialog, and
+  "stop talking" to cut a reply short. The default is that your words stay
+  with the session you are in. Spoken replies lead with the window's name
+  when it is not the one you are in, and never talk over each other.
+- **Read replies aloud: Off / Replies to what I said by voice / Everything.**
+  In *Everything* every session's finished turn is spoken; the agent is
+  asked for a one-line `Say:` on every prompt (a standing marker the prompt
+  hook reads — typed-in-the-terminal prompts included), and only when a reply
+  will be spoken, so typed prompts cost no extra tokens otherwise.
+- **Speech engines that just work.** The OS's own engines on Windows and
+  macOS out of the box (Dictation on a Mac), a one-click install of local
+  models (faster-whisper + piper), or your own model server: any host that
+  speaks the OpenAI shape plugs in with just its URL — Voice Lab's cloned
+  voices, Kokoro-FastAPI, openedai-speech, a local whisper server — and a
+  server on this computer needs no API key. Recognition streams with a fast
+  model for the live words and re-transcribes each phrase once with the
+  accurate one; both stay resident, and the voice engine warms at boot.
+  **Settings → Voice** holds all of it, with a "Try it" row.
+- **The wake word.** "Listen for “MindFlock”" keeps the mic in a standby
+  that sends only a short lone utterance to be judged; the word on its own
+  chimes and starts listening. A sentence containing it never wakes it.
+- **When a session asks you something.** A permission or choice prompt —
+  Claude Code's multi-question select prompts included, with their tabs,
+  multi-select checkboxes, "Type something" and the review step — pops up
+  in the middle of the screen (desktop and phone), with the prompt's own
+  buttons, 1–9 / Y / N keys, a mic to answer by voice, and "Later". Several
+  asking at once step through one card. A question asked in plain words at
+  the end of a reply reads **Question** on the rail, the bell, the toasts and
+  the phone push, with a Reply button. The desktop app raises an OS
+  notification (and flashes the taskbar) when the window is in the
+  background; the phone page can notify through a service worker. Dialogs
+  are parsed for **every** agent CLI now — aider, opencode, cline, goose and
+  antigravity join Claude Code and Codex — so each gets answer buttons,
+  one-tap push buttons and voice answers. Claude Code's own menus (`/model`,
+  `/effort`, `/config`, `/permissions`, `/usage`, the slash autocomplete) are
+  never mistaken for a question.
+- **A voice tutorial and your own keywords.** A guided tour opens the first
+  time you use the mic (and from "Show me how" in Settings → Voice); the
+  phone shows a "How to talk" card. **Settings → Voice → Voice words** lets
+  you change the send / end / start-over / stop / stop-talking phrases and
+  the wake word, ours by default, synced to your devices, read by the
+  desktop, the phone, the router and the wake-word judge.
+- **Fast-track hands a failed pre-commit to the agent.** The hook's own
+  output and the exact steps left to the run's target are typed into the
+  session at once; a repeat failure gets a fresh note, never a duplicate.
+
+### Changed
+
+- The mic opens in a quarter of a second: the microphone stream stays warm
+  for 90 s after a phrase, the server stream opens on the press, and the
+  local recognition models never idle-unload while local recognition is on.
+- Settings reopens on the screen you last had open (for the page's life).
+- The mic's right-click menu is four controls; explainers live in Settings.
+
+### Fixed
+
+- A spoken "Stopped." is no longer cut off by its own stop chime.
+- Local recognition works with PyAV 15+; `en-US` is accepted as a language.
+
 ## [0.9.6] - 2026-10-22
 
 Connect GitHub once and git uses the sign-in too, the Map tab's Code Tree
@@ -4256,7 +4341,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.9.6...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.10.0
 [0.9.6]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.6
 [0.9.5]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.5
 [0.9.4]: https://github.com/MindFlock/MindFlock/releases/tag/v0.9.4
