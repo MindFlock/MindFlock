@@ -55,7 +55,16 @@ async function fetchRules(apiBase) {
 // A rule matches when the event name is equal and its old/new constraints
 // (null = any value) hold against the envelope.
 function ruleMatches(rule, env) {
-  if (rule.event !== env.event) return false;
+  if (matchesOne(rule, env)) return true;
+  // A rule may ALSO match other events (needs_input: session.question, a
+  // question asked in plain words) — the server's _matches honours the same
+  // list, exposed on GET /api/notify/config.
+  const also = Array.isArray(rule.also) ? rule.also : [];
+  return also.some((r) => matchesOne(r, env));
+}
+
+function matchesOne(rule, env) {
+  if (!rule || rule.event !== env.event) return false;
   if (rule.old != null && rule.old !== env.old) return false;
   if (rule.new != null && rule.new !== env.new) return false;
   return true;

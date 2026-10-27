@@ -92,6 +92,11 @@ EVENT_NAMES = (
     # merely booted to a bare prompt, and on any reading that settles to idle
     # out of offline. This is the one that is worth telling a human about.
     "session.turn_ended",
+    # A session's reply ENDED with a question in plain words (core.asking):
+    # once per distinct reply, after the same settle/boot gates as the idle
+    # announcement (data: {"title", "text", "ts", "kind": "question",
+    # "say"?}). A drawn dialog is still activity_changed new="clarify".
+    "session.question",
     # Verify (test plans): a session's branch genuinely REACHED origin — emitted
     # by the live_stage push watcher at the instant the remote branch head equals
     # the local one (data: {"branch": str, "sha": str, "wt": str}). This is not
@@ -219,8 +224,9 @@ EVENT_NAMES = (
     # An escalation the GROUP originated, once per (run, task, reason,
     # incarnation): stuck after two nudges, ship halted twice, a blocked
     # report, a conflict, the budget spent, a session gone after a restart.
-    # Never for a dialog — ``needs_input`` already covers that (data: {"run",
-    # "task", "title", "reason", "text", "detail"}).
+    # Never for a dialog — the needs_input rule (activity_changed new="clarify"
+    # and session.question) covers that (data: {"run", "task", "title",
+    # "reason", "text", "detail"}).
     "run.needs_you",
     # A member reached its lane (data: {"run", "task", "title", "pr_url",
     # "detail"}).
