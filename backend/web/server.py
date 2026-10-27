@@ -6364,6 +6364,7 @@ _MSG_HUMAN_TYPING = (
     "someone is typing in the recipient's pane — it is typed in once they stop"
 )
 _MSG_WHY_WAITING = {
+    "working": "the recipient is mid-turn",
     "clarify": "the recipient is waiting on a prompt",
     "limit": "the recipient is on a usage-limit screen",
     "offline": "the recipient's agent isn't running",
@@ -6388,14 +6389,15 @@ def _is_descendant(title: str, ancestor: str) -> bool:
     return False
 
 
-def _mail_deliver_now(inst, title: str, msg: dict):
+def _mail_deliver_now(inst, title: str, msg: dict, activities=_MSG_NOW_ACTIVITIES):
     """``delivery: "now"`` — type ``msg`` immediately when it is safe to →
     ``(result, detail)`` with result ``"delivered"`` or ``"pending"`` (left for
     the lane). Unlike the lane there is no idle settle (the sender asked for
     now, and a working agent just queues the text), but every safety gate
     still holds: no boot (nor typing inside the queue's boot grace), no
     clarify/limit, no typing over a long-poll, into a pane whose agent has
-    quit (a bare shell), or over a human mid-composition.
+    quit (a bare shell), or over a human mid-composition. ``activities``
+    narrows when "now" may type (Fast-track's failure note: ``("idle",)``).
     Blocking (tmux + an activity probe) — call it via ``asyncio.to_thread``."""
     if _typing_held(inst, title):
         return "pending", (
@@ -6428,7 +6430,7 @@ def _mail_deliver_now(inst, title: str, msg: dict):
         activity = _agent_activity(inst, title)
     except Exception:  # noqa: BLE001 — unknown reads as "don't type blind"
         activity = "unknown"
-    if activity not in _MSG_NOW_ACTIVITIES:
+    if activity not in activities:
         why = _MSG_WHY_WAITING.get(activity, "the recipient's state is unknown")
         return "pending", "%s — typed in once it is idle" % why
     if _tmux_client_input_recent(title, _HUMAN_HOLD_S):

@@ -469,7 +469,10 @@ async def _autopilot_step(title: str) -> None:
     if detail.get("fixed"):
         # The agent's fix turn is over: the ladder is back in charge, and a
         # failure from here on is a new stop (a new hand-off, while any are left).
-        rec = await asyncio.to_thread(_autopilot.update, title, fixing="") or rec
+        rec = (
+            await asyncio.to_thread(_autopilot.update, title, fixing="", fix_output="")
+            or rec
+        )
 
     if action == "wait":
         await asyncio.to_thread(_autopilot_wait, title, rec, snap, detail, now)
@@ -487,9 +490,21 @@ async def _autopilot_step(title: str) -> None:
                 _UNFIXED,
             )
             return
+        if detail.get("fix") == "precommit":
+            # The hook's own output, read NOW — the failed commit's lines are
+            # still the last thing in the shell pane — so the note can quote
+            # it and the row can show it.
+            output = await asyncio.to_thread(
+                _precommit_failure_output, title, detail.get("hook") or ""
+            )
+            detail = {**detail, "output": output}
+            rec = (
+                await asyncio.to_thread(_autopilot.update, title, fix_output=output)
+                or rec
+            )
         hand_off = bool(detail.get("fix")) and _autopilot.can_hand_off(rec)
         told = await asyncio.to_thread(
-            _autopilot_tell_agent, title, wt, rec, detail, hand_off
+            _autopilot_tell_agent, title, wt, rec, detail, hand_off, snap
         )
         if told and hand_off:
             # Not a halt: the run waits for the fix and carries on from it.
@@ -593,31 +608,87 @@ _TOLD_AGENT = "MindFlock told the agent what failed and asked it to fix it."
 _UNFIXED = "The agent was told what failed but changed nothing."
 
 
+def _precommit_failure_output(title: str, hook: str) -> str:
+    """The failed hook's section of the session's shell pane (where the commit
+    one-liner ran), shaped for the note — see :func:`autopilot.precommit_output`.
+    The same 2000-line window the hook-id parse reads. ``""`` on any failure."""
+    try:
+        pane = _server()._capture_shell_pane(title, 2000) or ""
+        return _autopilot.precommit_output(pane, hook)
+    except Exception:  # noqa: BLE001 — the note just goes without it
+        return ""
+
+
+def _failure_key(detail: dict) -> str:
+    """Which failure this is, for counting the SAME one coming back."""
+    fix = str((detail or {}).get("fix") or "")
+    if fix == "precommit":
+        return "precommit:" + str(detail.get("hook") or detail.get("step") or "")
+    return fix
+
+
+def _failure_id(rec: dict, detail: dict, snap) -> str:
+    """One OBSERVED failure: the key plus what a new attempt changes — the
+    driver's commit count (each re-commit is a fresh attempt) and HEAD (the
+    agent's own fix commit). The same failure seen again has the same id."""
+    return "%s|%d|%s" % (
+        _failure_key(detail),
+        int((rec or {}).get("commits") or 0),
+        str((snap or {}).get("head") or ""),
+    )
+
+
+def _autopilot_deliver_note(title: str, msg: dict) -> str:
+    """Type a just-posted failure note NOW — the agent is idle by construction
+    (the commit ran in the shell lane, after its turn had settled) — through
+    the agent-message lane's own ``delivery: "now"`` gates: never into a
+    dialog, never while a person is typing in the pane, never into a bare
+    shell, and here only into an IDLE agent. Anything else leaves the note
+    pending for the lane, which types it at the next settled idle.
+    → ``"delivered"`` or ``"pending"``. Never raises."""
+    try:
+        srv = _server()
+        inst = srv.ENGINE.instances.get(title)
+        if inst is None:
+            return "pending"
+        result, _detail = srv._mail_deliver_now(inst, title, msg, activities=("idle",))
+        return result
+    except Exception:  # noqa: BLE001 — the lane still delivers it
+        return "pending"
+
+
 def _autopilot_tell_agent(
-    title: str, wt: str, rec: dict, detail: dict, resumes: bool = False
+    title: str, wt: str, rec: dict, detail: dict, resumes: bool = False, snap=None
 ) -> bool:
     """A run that stopped on something the AGENT can fix (``detail["fix"]``: a
     failed pre-commit step or verification check, red CI, a conflicting PR)
     leaves that agent a short note saying what failed and to fix it — or to
     tell the user when it is a conflict that needs their call. Returns whether
-    a note was posted. Never raises.
+    the agent has been told (now, or already about this very failure). Never
+    raises.
 
-    The note rides the mailbox lane as a :data:`mailbox.NOTE_KIND`: typed once
-    the agent is settled idle, held while a person is typing in the pane, never
-    into a bare shell. Called just BEFORE the halt, which leaves the reason
-    exactly as it was (team runs parse it) and carries :data:`_TOLD_AGENT` as
-    its ``note`` when this returns True — one event, one toast. Off with
-    ``repository.fasttrack_failure_notes``. A team run's member is skipped —
-    its run already sends its own fix prompt. ``resumes``: the run will wait
-    for the fix and carry on (a hand-off), and the note says so."""
+    The note is a :data:`mailbox.NOTE_KIND` typed straight away when the agent
+    is idle (:func:`_autopilot_deliver_note`), else left to the mailbox lane:
+    typed once the agent is settled idle, held while a person is typing in
+    the pane, never into a bare shell. A pre-commit note quotes the failed
+    hook's output (``detail["output"]``). Called just BEFORE the halt, which
+    leaves the reason exactly as it was (team runs parse it) and carries
+    :data:`_TOLD_AGENT` as its ``note`` when this returns True — one event,
+    one toast. Off with ``repository.fasttrack_failure_notes``. A team run's
+    member is skipped — its run already sends its own fix prompt.
+    ``resumes``: the run will wait for the fix and carry on (a hand-off), and
+    the note names the steps it will then take by itself (``snap`` gives the
+    stage they start from). The same failure observed twice is told once; the
+    same hook failing again after a fix is a fresh note that says so."""
     if not (detail or {}).get("fix"):
         return False
+    rec = rec or {}
     try:
         from backend.config import settings as _settings
 
         if not _settings.load_settings().repository.fasttrack_failure_notes:
             return False
-        if (rec or {}).get("source") == "run" or _run_member(title) is not None:
+        if rec.get("source") == "run" or _run_member(title) is not None:
             return False
         cmd = ""
         if detail.get("fix") == "check" and wt:
@@ -625,10 +696,20 @@ def _autopilot_tell_agent(
                 cmd = _wt_setup.load_config(wt).check_command or ""
             except Exception:  # noqa: BLE001 — the note just omits the command
                 cmd = ""
-        text = _autopilot.failure_note(detail, cmd, resumes=resumes)
+        seen = _failure_id(rec, detail, snap)
+        if seen == rec.get("fix_sent"):
+            return True  # already told about exactly this failure
+        key = _failure_key(detail)
+        times = int(rec.get("fix_times") or 0) + 1 if rec.get("fix_key") == key else 1
+        remaining = _autopilot.remaining_steps(rec, snap) if resumes and snap else None
+        text = _autopilot.failure_note(
+            detail, cmd, resumes=resumes, remaining=remaining, attempt=times
+        )
         if not text:
             return False
-        _mailbox.post(title, text, kind=_mailbox.NOTE_KIND)
+        msg = _mailbox.post(title, text, kind=_mailbox.NOTE_KIND, delivery="now")
+        _autopilot.update(title, fix_key=key, fix_times=times, fix_sent=seen)
+        _autopilot_deliver_note(title, msg)
         return True
     except Exception:  # noqa: BLE001 — a note is never worth breaking a pass
         return False
