@@ -1153,6 +1153,28 @@ def _limit_on_pane(srv, name: str, provider, screen: Optional[str] = None) -> bo
         return False
 
 
+# The newest visible-screen capture each session's probe took, so readers
+# that need "what is on screen" between probes (core.asking: the dialog's
+# question on a row, the screen-fallback reply) reuse it instead of paying a
+# second capture per poll. title -> (epoch, text).
+_LAST_SCREEN: Dict[str, tuple] = {}
+
+
+def note_screen(title: str, text: Optional[str]) -> None:
+    """Remember the screen ``title``'s probe just captured."""
+    if title and isinstance(text, str):
+        _LAST_SCREEN[title] = (time.time(), text)
+
+
+def last_screen(title: str, max_age: float) -> Optional[str]:
+    """The newest screen ``title``'s probe captured, when it is at most
+    ``max_age`` seconds old; else None. No tmux call."""
+    hit = _LAST_SCREEN.get(title)
+    if not hit or time.time() - hit[0] > max_age:
+        return None
+    return hit[1]
+
+
 def _capture_visible(srv, name: str) -> Optional[str]:
     """The pane's visible screen, or None when the capture fails."""
     try:
@@ -1355,6 +1377,7 @@ def _pane_hash_activity(
         if cp.returncode != 0:
             return "offline"
         text = cp.stdout.decode("utf-8", "replace")
+        note_screen(title, text)
     # F2 safety net: a visible trust/MCP gate is auto-answered and shown
     # as clarify (pre-trust normally prevents it from appearing at all).
     if srv._dismiss_trust_prompt(inst, title, name, text):
@@ -1694,6 +1717,7 @@ def _agent_activity(inst, title: str) -> str:
         # 'limit' outranks 'clarify'). Not authoritative for the announce
         # path (source "screen"): a frame is a frame.
         screen = _capture_visible(srv, name) if _reads_dialogs(provider) else None
+        note_screen(title, screen)
         if (
             screen is not None
             and not is_limit_screen(screen)
@@ -1766,6 +1790,7 @@ def _agent_activity(inst, title: str) -> str:
                 # decides once the dialog is gone.
                 if screen is None:
                     screen = _capture_visible(srv, name)
+                    note_screen(title, screen)
                 if (
                     screen is not None
                     and not is_limit_screen(screen)

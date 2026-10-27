@@ -388,6 +388,7 @@ from backend.web.core import revive as _revive
 from backend.web.core import sleep as _sleep
 from backend.web.core import self_update as _self_update
 from backend.web.core import spoken as _spoken
+from backend.web.core import asking as _asking
 from backend.web.core import update_watch as _update_watch
 from backend.web.core import voice as _voice
 from backend.web.core.mobile_access import (
@@ -1328,6 +1329,15 @@ def _session_last_say_cached(inst) -> Optional[str]:
     return _probe_cached("last_say", inst, lambda: _session_last_say(inst))
 
 
+def _session_asking_cached(inst, activity: str) -> Optional[dict]:
+    """The row's ``asking`` (core.asking.current: the dialog on ``clarify``,
+    a prose question on ``idle``, else None), memoized per session. Cached
+    reads only — the probe's own screen, the reply file, the provider's
+    mtime-cached transcript — never a capture."""
+    title = getattr(inst, "Title", "") or ""
+    return _probe_cached("asking", inst, lambda: _asking.current(title, inst, activity))
+
+
 def _voice_on(title: str) -> bool:
     """Whether voice mode is on for ``title`` (``core.voice``; one stat)."""
     try:
@@ -1646,6 +1656,11 @@ def _session_snapshot(i, queues: dict) -> dict:
     # feeds never rendered once; ``agent_state.state_since`` is the real thing,
     # and every layer now writes it (see agent_state._verdict).
     d["activity_since"] = _agent_state.state_since(i.Title)
+    # "It is asking you something" (core.asking): ``{kind: "dialog" |
+    # "question", text, ts, dialog_id, parsed, source}`` or null — a dialog
+    # while the activity reads clarify, a question the newest reply ended
+    # on while it reads idle and nobody has answered.
+    d["asking"] = _session_asking_cached(i, d["activity"])
     # Jobs the agent backgrounded and left running after its turn ended: why
     # an idle session is not finished yet (waiting), or what is wedged (stuck).
     d["background"] = _background_jobs(i, i.Title)
@@ -1706,6 +1721,7 @@ _SNAPSHOT_PROBE_KEYS = (
     "budget",
     "activity",
     "activity_since",
+    "asking",
     "background",
     "last_turn",
     "last_say",
@@ -1748,6 +1764,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["budget"] = _budget_status_for(i.Title, 0.0)
     d["activity"] = "idle"
     d["activity_since"] = _agent_state.state_since(i.Title)
+    d["asking"] = None
     d["background"] = None
     d["last_turn"] = None
     d["last_say"] = None
@@ -11726,7 +11743,9 @@ async def instance_answer(
     → ``{"ok": true, "activity_before"}``; 404 unknown, 400 bad body, 409 not
     waiting / over budget / dialog changed / just answered / driven by
     another person (``{"take": true}`` takes the keyboard first), 502 when
-    tmux refused the keys.
+    tmux refused the keys. A ``dialog_id`` of a prose question (``q:…``, from
+    ``/dialog``'s ``kind: "question"``) is 409 ``{"error": "not a dialog",
+    "no_dialog": true}`` — answer it with ``/send``.
     """
     inst, err = _inst_or_404(title)
     if err is not None:
@@ -11737,6 +11756,12 @@ async def instance_answer(
     dialog_id, by, perr = _agent_io.parse_answer_meta(payload)
     if perr:
         return JSONResponse({"error": perr}, status_code=400)
+    if dialog_id is not None and dialog_id.startswith("q:"):
+        # A question asked in prose (GET /dialog's ``kind: "question"``):
+        # nothing on screen to press — the answer is a prompt, via /send.
+        return JSONResponse(
+            {"error": "not a dialog", "no_dialog": True}, status_code=409
+        )
     busy = _driven_elsewhere(request, title, payload)
     if busy is not None:
         return busy
@@ -11831,8 +11856,9 @@ async def instance_dialog(title: str, quiet: Optional[str] = None):
     """The dialog the session's agent is blocked on, as data — for the UI's
     in-place answer buttons (rail strip, bell, Thread tab).
 
-    → ``{"id", "parsed", "question", "command", "options": [{"key", "label",
-    "kind"}]}``. The session's provider parses its visible screen
+    → ``{"id", "kind": "dialog", "parsed", "question", "command",
+    "options": [{"key", "label", "kind"}]}``. The session's provider parses
+    its visible screen
     (``parse_dialog``; Claude Code and Codex so far): ``kind`` is ``yes`` /
     ``always`` / ``no`` / ``other``, ``key`` the digit that picks the option
     (post it to ``/answer`` with this ``id`` as ``dialog_id``). Unparsed →
@@ -11854,12 +11880,31 @@ async def instance_dialog(title: str, quiet: Optional[str] = None):
     **204** with no body instead of the 409 — an expected answer for a strip
     whose row reading is a poll behind, which a browser would otherwise log
     as a failed request every time.
+
+    A question asked in PROSE (activity idle, the row's ``asking.kind`` is
+    ``"question"`` — core.asking) is 200 ``{"id": "q:<ts>", "kind":
+    "question", "parsed": false, "question", "options": [], "ts"}``, so one
+    fetch covers both; it is answered with ``/send`` (``/answer`` on a
+    ``q:`` id is 409 ``no_dialog``).
     """
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
 
     def not_waiting(activity: str):
+        if activity == "idle":
+            got = _asking.current(title, inst, "idle")
+            if got and got.get("kind") == "question":
+                return JSONResponse(
+                    {
+                        "id": _asking.question_id(got["ts"]),
+                        "kind": "question",
+                        "parsed": False,
+                        "question": got.get("text"),
+                        "options": [],
+                        "ts": got["ts"],
+                    }
+                )
         if quiet in ("1", "true"):
             return Response(status_code=204)
         return JSONResponse(
@@ -11888,7 +11933,24 @@ async def instance_dialog(title: str, quiet: Optional[str] = None):
     if derr is not None:
         return JSONResponse({"error": derr}, status_code=500)
     _agent_io.note_dialog_seen(title, body.get("id"))
-    return JSONResponse(body)
+    return JSONResponse({**body, "kind": "dialog"})
+
+
+@app.post("/api/instances/{title}/asking/dismiss")
+async def instance_asking_dismiss(title: str, payload: Optional[dict] = None):
+    """Dismiss the question ``title``'s newest reply asks (core.asking): the
+    row's ``asking`` stops carrying it and no push repeats it; a NEWER reply
+    that asks shows again. ``{}`` → 200 ``{"ok": true, "dismissed": bool}``
+    (``dismissed`` false when nothing was asking); 404 unknown session. A
+    dialog (``kind: "dialog"``) is not dismissed — it blocks the agent until
+    it is answered."""
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    dismissed = await asyncio.to_thread(_asking.dismiss, title)
+    with _PROBE_CACHE_LOCK:  # the next row read sees it, not a 2.5s-old memo
+        _PROBE_CACHE.pop(("asking", title), None)
+    return JSONResponse({"ok": True, "dismissed": dismissed})
 
 
 @app.post("/api/instances/{title}/fence")

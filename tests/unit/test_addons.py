@@ -178,7 +178,9 @@ def test_notify_config_route_serves_rules():
         # Each rule now carries a stable id + human label + current enabled
         # state, on top of the matching/message fields. The internal
         # ``default_enabled`` flag is NOT exposed.
-        assert set(rule) == {
+        # ``also`` (optional): more event shapes the rule matches — the
+        # browser channel needs it to mirror the server's matching.
+        assert set(rule) - {"also"} == {
             "id",
             "label",
             "description",
@@ -190,6 +192,8 @@ def test_notify_config_route_serves_rules():
             "enabled",
         }
         assert isinstance(rule["enabled"], bool)
+    needs = next(r for r in rules if r["id"] == "needs_input")
+    assert needs["also"] == [{"event": "session.question", "old": None, "new": None}]
 
 
 def test_notify_default_on_and_opt_in_rules():

@@ -117,6 +117,22 @@ class CodexProvider(GenericProvider):
         except Exception:  # noqa: BLE001 — thread binding is enrichment only
             pass
 
+    # --- transcript ------------------------------------------------------- #
+    def last_assistant_text(
+        self,
+        session_name: str,
+        workdir: str,
+        contains=None,
+        transcript_path=None,
+    ):
+        """The newest assistant message of THIS window's codex conversation
+        (the rollout named after the thread id ``record_thread`` bound —
+        never the directory's newest rollout, which may be a sibling's),
+        optionally containing ``contains``. Cached on the file's (path,
+        mtime, size), so a poll costs a stat. None without a bound thread or
+        a readable rollout. Never raises."""
+        return _codex_last_assistant_text(session_name, contains, transcript_path)
+
     # --- telemetry -------------------------------------------------------- #
     def session_tokens(
         self,
@@ -139,3 +155,107 @@ class CodexProvider(GenericProvider):
         except Exception:  # noqa: BLE001 — telemetry is best-effort
             pass
         return super().session_tokens(workdir, since_ts, until_ts, shared_cwd)
+
+
+# --------------------------------------------------------------------------- #
+# The newest assistant message, from this window's rollout
+# --------------------------------------------------------------------------- #
+#: Bytes read off a rollout's tail when looking for its newest assistant
+#: message — a turn's own records, not the whole conversation.
+_TAIL_BYTES = 2 * 1024 * 1024
+_ROLLOUT_PATHS: dict = {}  # thread id -> rollout path
+_LAST_ASSISTANT_CACHE: dict = {}  # (path, mtime_ns, size, contains) -> text|None
+_CACHE_MAX = 256
+
+
+def _rollout_for(thread_id: str):
+    """The rollout file Codex named after ``thread_id``
+    (``rollout-<stamp>-<id>.jsonl`` under any config root's ``sessions``),
+    or None. The path is remembered per id; a vanished file is looked up
+    again."""
+    import os
+
+    hit = _ROLLOUT_PATHS.get(thread_id)
+    if hit is not None and os.path.isfile(hit):
+        return hit
+    from . import codex_usage_api
+
+    for root in codex_usage_api._sessions_dirs():
+        try:
+            for p in root.glob("*/*/*/rollout-*-%s.jsonl" % thread_id):
+                if p.is_file():
+                    if len(_ROLLOUT_PATHS) >= _CACHE_MAX:
+                        _ROLLOUT_PATHS.clear()
+                    _ROLLOUT_PATHS[thread_id] = str(p)
+                    return str(p)
+        except Exception:  # noqa: BLE001 — an unreadable root holds nothing
+            continue
+    return None
+
+
+def _message_text(doc) -> Optional[str]:
+    """The text of one rollout record when it is an assistant message
+    (``response_item`` / ``message`` / ``role: assistant``), else None."""
+    if not isinstance(doc, dict) or doc.get("type") != "response_item":
+        return None
+    payload = doc.get("payload")
+    if not isinstance(payload, dict) or payload.get("type") != "message":
+        return None
+    if payload.get("role") != "assistant":
+        return None
+    parts = [
+        str(c.get("text") or "")
+        for c in payload.get("content") or ()
+        if isinstance(c, dict) and c.get("type") in ("output_text", "text")
+    ]
+    text = "\n".join(p for p in parts if p)
+    return text if text.strip() else None
+
+
+def _codex_last_assistant_text(
+    session_name: str, contains=None, transcript_path=None
+) -> Optional[str]:
+    import json
+    import os
+
+    try:
+        path = None
+        if transcript_path and os.path.isfile(transcript_path):
+            path = transcript_path
+        else:
+            from . import thread_markers
+
+            tid = thread_markers.read(session_name) if session_name else ""
+            if tid:
+                path = _rollout_for(tid)
+        if not path:
+            return None
+        st = os.stat(path)
+        key = (path, st.st_mtime_ns, st.st_size, contains or "")
+        if key in _LAST_ASSISTANT_CACHE:
+            return _LAST_ASSISTANT_CACHE[key]
+        with open(path, "rb") as f:
+            if st.st_size > _TAIL_BYTES:
+                f.seek(st.st_size - _TAIL_BYTES)
+                f.readline()  # a partial first line
+            lines = f.read().decode("utf-8", "replace").splitlines()
+        result = None
+        for line in reversed(lines):
+            if '"assistant"' not in line:
+                continue
+            if contains and contains not in line:
+                continue
+            try:
+                text = _message_text(json.loads(line))
+            except ValueError:
+                continue
+            if text is None or (contains and contains not in text):
+                continue
+            result = text
+            break
+        if len(_LAST_ASSISTANT_CACHE) >= _CACHE_MAX:
+            _LAST_ASSISTANT_CACHE.clear()
+        _LAST_ASSISTANT_CACHE[key] = result
+        return result
+    except Exception:  # noqa: BLE001 — no transcript reads as no reply
+        return None

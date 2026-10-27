@@ -17,7 +17,8 @@ gathers those inputs from the live server and calls :func:`build`.
 Groups, in order:
 
 * ``waiting`` — answer or approve; nothing else needs you. A session on a
-  dialog (``prompt``), a lane parked by "ask me before it ships"
+  dialog (``prompt``), one whose turn ended on a question asked in prose
+  (``question``, the row's ``asking`` — answered with a prompt), a lane parked by "ask me before it ships"
   (``approve``, with the commit message and diff stat to approve), and a run's
   escalations (``stuck`` / ``blocked`` / ``ship_halted`` / ``restart`` /
   ``budget`` / ``failed``) with the next action for each.
@@ -47,6 +48,8 @@ __all__ = ["build", "outbox", "WAITING_ACTIONS"]
 #: The buttons each kind of waiting item offers.
 WAITING_ACTIONS = {
     "prompt": ["answer", "open"],
+    # Asked in prose (core.asking): the answer is a prompt; dismiss drops it.
+    "question": ["answer", "open", "dismiss"],
     "approve": ["ship", "diff", "edit_message"],
     "stuck": ["open", "retry", "skip"],
     "blocked": ["open", "retry", "skip"],
@@ -64,6 +67,8 @@ WAITING_ACTIONS = {
     # piece owns — yours to commit, discard or undo.
     "stray": ["open"],
 }
+#: Waiting kinds that are the agent stopped on your answer — listed first.
+_ANSWER_KINDS = frozenset({"prompt", "question"})
 #: The step the autopilot is on, as a ``shipping`` row names it.
 _STEP = {
     "commit": "commit",
@@ -175,6 +180,27 @@ def build(
                     "since": float(r.get("activity_since") or 0.0),
                     "preview": None,
                     "actions": list(WAITING_ACTIONS["prompt"]),
+                }
+            )
+            listed_wait.add(title)
+            continue
+        asking = r.get("asking") if isinstance(r.get("asking"), dict) else {}
+        if (
+            asking.get("kind") == "question"
+            and asking.get("text")
+            and str(r.get("activity") or "") == "idle"
+        ):
+            waiting.append(
+                {
+                    "key": key,
+                    "title": title,
+                    "run": _run_ref(run, task),
+                    "kind": "question",
+                    "reason": "its agent asked a question",
+                    "since": float(asking.get("ts") or 0.0),
+                    "text": str(asking["text"]),
+                    "preview": None,
+                    "actions": list(WAITING_ACTIONS["question"]),
                 }
             )
             listed_wait.add(title)
@@ -388,7 +414,14 @@ def build(
     for item in shipped:
         ds = (by_title.get(item["title"]) or {}).get("diff_stat")
         item["files"] = int(ds.get("files") or 0) if isinstance(ds, dict) else None
-    waiting.sort(key=lambda w: float(w.get("since") or 0.0))
+    # Answers first (a dialog or a prose question: the agent is stopped on
+    # you), then everything else; oldest first within each.
+    waiting.sort(
+        key=lambda w: (
+            0 if w.get("kind") in _ANSWER_KINDS else 1,
+            float(w.get("since") or 0.0),
+        )
+    )
     return {
         "counts": {
             "waiting": len(waiting),

@@ -26,6 +26,7 @@ from typing import Dict, Optional
 
 from backend.session import tmux
 from backend.web.core import agent_state as _agent_state
+from backend.web.core import asking as _asking
 from backend.web.core import autopilot as _autopilot
 from backend.web.core import events as _events
 from backend.web.core import ownership as _ownership
@@ -107,23 +108,47 @@ def _in_boot_quiet() -> bool:
 # the session wrote (core.spoken.spoken_for). The words ride the two "it
 # finished" events — ``session.activity_changed new="idle"`` (the chip, the
 # page's instant cue) and ``session.turn_ended`` (notification-grade; the push
-# body) — as ``data = {say, has_question, source}``. Each channel remembers
+# body) — as ``data = {say, has_question, source, question}``. Each channel remembers
 # the reply it last announced per session, and ``say`` is null when nothing
 # newer exists: a session that goes idle again without a new reply (a /clear,
 # a boot to a bare prompt, a wake, a non-Claude CLI that files no reply) must
 # not re-speak its last words. Memory is per CHANNEL because the two events
 # fire for the same turn, seconds to a minute apart, and both must carry it
 # once. Dropped with the session (session_removal → ``_forget_spoken``).
+# ``question`` is different: it is the question the session is asking RIGHT
+# NOW (core.asking — the newest reply ends with one and nothing answered it),
+# or null, on both channels whether or not ``say`` is.
 _SPOKEN_ANNOUNCED: Dict[str, Dict[str, tuple]] = {}
 _SPOKEN_ANNOUNCED_LOCK = threading.Lock()
 _SPOKEN_NONE = {"say": None, "has_question": False, "source": "none"}
 
 
 def _spoken_payload(title: str, channel: str) -> dict:
-    """``{say, has_question, source}`` for ``title``'s idle announcement on
-    ``channel`` (``"idle"`` for activity_changed, ``"turn"`` for turn_ended):
-    the spoken line when a reply this channel has not announced exists, else
-    ``say: null``. One small cached file read; never raises."""
+    """``{say, has_question, source, question}`` for ``title``'s idle
+    announcement on ``channel`` (``"idle"`` for activity_changed, ``"turn"``
+    for turn_ended): the spoken line when a reply this channel has not
+    announced exists, else ``say: null``; ``question`` per the block comment
+    above. One small cached file read; never raises."""
+    out = _spoken_line(title, channel)
+    out["question"] = _asking_question(title)
+    return out
+
+
+def _asking_question(title: str) -> Optional[str]:
+    """The prose question ``title`` is asking right now (core.asking), or
+    None. Never raises."""
+    try:
+        inst = _server().ENGINE.instances.get(title)
+        if inst is None:
+            return None
+        got = _asking.current(title, inst, "idle")
+    except Exception:  # noqa: BLE001 — enrichment, never a gate
+        return None
+    return got.get("text") if isinstance(got, dict) else None
+
+
+def _spoken_line(title: str, channel: str) -> dict:
+    """The ``{say, has_question, source}`` half of :func:`_spoken_payload`."""
     try:
         inst = _server().ENGINE.instances.get(title)
         if inst is None:
@@ -153,6 +178,7 @@ def _forget_spoken(title: str) -> None:
         _SPOKEN_ANNOUNCED.pop(title, None)
         _REPLY_SEEN.pop(title, None)
         _REPLY_WORK.pop(title, None)
+    _asking.forget(title)
 
 
 # ---- the turn the poll never saw ------------------------------------------ #
@@ -207,6 +233,50 @@ def _seed_reply_seen(title: str) -> None:
     with _SPOKEN_ANNOUNCED_LOCK:
         if title not in _REPLY_SEEN:
             _REPLY_SEEN[title] = _reply_stamp(title) or 0.0
+    # The question announcer's provenance, on the same first pass: whatever
+    # the newest reply asks when a session is first sighted is old news.
+    try:
+        inst = _server().ENGINE.instances.get(title)
+    except Exception:  # noqa: BLE001
+        inst = None
+    if inst is not None:
+        _asking.seed(title, inst)
+
+
+# ---- "it asked you something" --------------------------------------------- #
+# ``session.question``: the turn ended on a question asked in plain prose
+# (core.asking — a dialog is ``activity_changed new="clarify"``, unchanged).
+# Asked on every settled-idle pass, not only on the working→idle transition:
+# the reply file can land a tick after the idle that ended its turn, and a
+# turn the poll missed entirely (``_announce_missed_turn``) ends the same way.
+# ``asking.announce`` claims each reply once, so one push per distinct reply
+# however many passes see it; its first-sighting seed (``_seed_reply_seen``)
+# keeps a restart quiet. A person typing straight into tmux after the reply
+# (a raw attach, SSH — invisible to ``_note_human_input``) is already
+# answering: the claim is spent without a word.
+def _announce_question(title: str) -> None:
+    """Emit ``session.question`` for ``title``'s newest reply when it asks
+    and has not been announced. Never raises."""
+    try:
+        srv = _server()
+        inst = srv.ENGINE.instances.get(title)
+        if inst is None:
+            return
+        data = _asking.announce(title, inst)
+        if data is None:
+            return
+        since = time.time() - float(data.get("ts") or 0.0)
+        if since > 0 and srv._tmux_client_input_recent(title, since):
+            return
+        try:
+            sp = _spoken.spoken_for(title, inst)
+            if isinstance(sp, dict) and sp.get("say"):
+                data["say"] = sp["say"]
+        except Exception:  # noqa: BLE001 — the words are enrichment
+            pass
+        _events.BUS.emit("session.question", session=title, data=data)
+    except Exception:  # noqa: BLE001 — a notification never breaks the tick
+        pass
 
 
 def _announce_missed_turn(title: str, prev: dict, snap: dict, now: float) -> None:
@@ -379,6 +449,8 @@ def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> N
                 )
                 continue
             _events.BUS.emit(event, session=title, old=old, new=new)
+        if snap["activity"] == "idle":
+            _announce_question(title)
     # Verify — the SECOND of two triggers that write a test plan for freshly
     # pushed work. The first is the ``session.pushed`` subscriber below, fed by
     # the live_stage push watcher, which is the better signal (it knows the sha
@@ -489,6 +561,8 @@ def _note_human_input(title: str, person: str = "", device: str = "") -> None:
     for the session's ``viewers`` (core.ownership) when the caller knows
     who."""
     _server()._HUMAN_INPUT_AT[title] = time.time()
+    # Whatever the session's last reply asked is being answered.
+    _asking.note_input(title)
     if person:
         try:
             _ownership.note_input(title, person, device)

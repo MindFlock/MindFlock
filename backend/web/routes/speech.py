@@ -124,7 +124,7 @@ def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
     """Where speech runs and what the server offers::
 
         {"stt": "phone"|"server", "tts": "phone"|"server",
-         "approve_dialogs": bool, "agent_words": bool,
+         "approve_dialogs": bool, "agent_words": bool, "ask_popup": bool,
          "backends": {"stt": [ids], "tts": [ids]},
          "server_ready": {"stt": bool, "tts": bool, "detail": str, …},
          "system": {"available": bool, "platform": str, "detail": str,
@@ -145,6 +145,7 @@ def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
         "tts": s.voice.tts,
         "approve_dialogs": bool(s.voice.approve_dialogs),
         "agent_words": bool(s.notifications.ntfy_agent_words),
+        "ask_popup": bool(s.notifications.ask_popup),
         "configure_allowed": bool(allowed),
     }
     body.update(_speech.describe())
