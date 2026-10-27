@@ -547,15 +547,25 @@ export const KEYMAP: KeymapEntry[] = [
   {
     // Talk to the focused session through the top-bar mic. Unlike Alt+I / V /
     // S it has NO editing guard: the point is to focus a terminal and talk,
-    // and xterm's helper textarea is an editing target. Option+Space would
-    // type a non-breaking space on macOS, but the dispatcher prevents the
-    // default, so neither a terminal nor a text field ever sees the keystroke
-    // (and the mic can type the words into a focused field itself).
-    key: " ",
-    alt: true,
+    // and xterm's helper textarea is an editing target. The dispatcher
+    // prevents the default, so neither a terminal (where Ctrl+T is readline's
+    // transpose-chars) nor a text field ever sees the keystroke — the mic
+    // types the words into a focused field itself.
+    key: "t",
+    mod: true,
     id: "talk",
     holdable: true,
-    help: ["Navigation", "Alt+Space", "Talk to the focused session — hold or press, per the mic's push-to-talk mode"],
+    help: ["Navigation", "Ctrl+T", "Talk to the focused session — hold or press, per the mic's push-to-talk mode"],
+    run: (_e, phase) => voiceTalk(phase || "down"),
+  },
+  {
+    // Browser-safe alias: Chrome won't let a page intercept Ctrl+T (new tab).
+    // Option+Space would type a non-breaking space on macOS, but the default
+    // is prevented here too. Retires, like every alias, once Talk is rebound.
+    key: " ",
+    alt: true,
+    aliasOf: "talk",
+    holdable: true,
     run: (_e, phase) => voiceTalk(phase || "down"),
   },
   {

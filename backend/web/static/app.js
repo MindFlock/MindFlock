@@ -32971,15 +32971,22 @@ var KEYMAP = [
 		run: () => useUi.getState().openDialogFor("schedule")
 	},
 	{
-		key: " ",
-		alt: true,
+		key: "t",
+		mod: true,
 		id: "talk",
 		holdable: true,
 		help: [
 			"Navigation",
-			"Alt+Space",
+			"Ctrl+T",
 			"Talk to the focused session — hold or press, per the mic's push-to-talk mode"
 		],
+		run: (_e, phase) => voiceTalk(phase || "down")
+	},
+	{
+		key: " ",
+		alt: true,
+		aliasOf: "talk",
+		holdable: true,
 		run: (_e, phase) => voiceTalk(phase || "down")
 	},
 	{

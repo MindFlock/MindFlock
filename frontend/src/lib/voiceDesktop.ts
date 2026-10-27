@@ -244,7 +244,8 @@ export function saveVoicePrefs(p: VoicePrefs, kv: KV | null = storage()): void {
 
 // --- the push-to-talk hotkey ------------------------------------------------- //
 
-/** The keymap's Talk action (default Alt+Space, rebindable) dispatches this
+/** The keymap's Talk action (default Ctrl+T, Alt+Space in a browser tab,
+ * rebindable) dispatches this
  * on window: `down` once per physical press, `up` on release — and an `up`
  * when the window loses focus. */
 export const TALK_EVENT = "mindflock:voice-talk";

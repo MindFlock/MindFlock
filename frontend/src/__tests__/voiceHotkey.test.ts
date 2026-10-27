@@ -1,4 +1,5 @@
-/** The talk hotkey (Alt+Space): push-to-talk for the top-bar mic.
+/** The talk hotkey (Ctrl+T; Alt+Space as the browser-safe alias): push-to-talk
+ * for the top-bar mic.
  *
  * The keymap only reports the key — `mindflock:voice-talk` on window with
  * detail.phase "down" / "up" — and the mic reads it through its own
@@ -99,6 +100,7 @@ function fire(type: "keydown" | "keyup", key: string, mods: Partial<KeyboardEven
 }
 
 const ALT = { altKey: true };
+const CTRL = { ctrlKey: true };
 
 beforeEach(() => install());
 
@@ -112,17 +114,40 @@ afterEach(() => {
 });
 
 describe("the talk action", () => {
-  it("is a rebindable, holdable Navigation row bound to Alt+Space", () => {
+  it("is a rebindable, holdable Navigation row bound to Ctrl+T, with Alt+Space as the browser-safe alias", () => {
     const talk = KEYMAP.find((e) => e.id === "talk")!;
     expect(talk).toBeTruthy();
     expect(talk.holdable).toBe(true);
     expect(talk.help?.[0]).toBe("Navigation");
-    expect(talk.help?.[1]).toBe("Alt+Space");
+    expect(talk.help?.[1]).toBe("Ctrl+T");
     expect(talk.help?.[2]).toMatch(/^Talk to the focused session/);
-    expect(defaultCombosFor("talk")).toEqual([{ key: " ", mod: undefined, shift: undefined, alt: true }]);
-    expect(shortcutLabels("talk")).toEqual(["Alt+Space"]);
-    // Nothing else already claims it.
+    const alias = KEYMAP.find((e) => e.aliasOf === "talk")!;
+    expect(alias.holdable).toBe(true);
+    expect(alias.help).toBeUndefined();
+    expect(defaultCombosFor("talk")).toEqual([
+      { key: "t", mod: true, shift: undefined, alt: undefined },
+      { key: " ", mod: undefined, shift: undefined, alt: true },
+    ]);
+    expect(shortcutLabels("talk")).toEqual(["Ctrl+T", "Alt+Space"]);
+    // Nothing else already claims either — and Ctrl+Shift+T (reopen) is distinct.
+    expect(comboProblem({ key: "t", mod: true }, "palette")).toMatch(/already Talk to the focused session/);
     expect(comboProblem({ key: " ", alt: true }, "palette")).toMatch(/already Talk to the focused session/);
+    expect(comboProblem({ key: "t", mod: true, shift: true }, "palette")).toMatch(/already Reopen/);
+  });
+
+  it("Ctrl+T presses and releases like the alias, and ⌘T on a Mac is the same key", () => {
+    fire("keydown", "t", CTRL);
+    fire("keydown", "t", { ...CTRL, repeat: true });
+    fire("keyup", "t", CTRL);
+    expect(phases).toEqual(["down", "up"]);
+    fire("keydown", "t", { metaKey: true });
+    fire("keyup", "Meta");
+    expect(phases).toEqual(["down", "up", "down", "up"]);
+    // Ctrl+Shift+T stays Reopen, plain t types.
+    const plain = fire("keydown", "t");
+    fire("keydown", "T", { ...CTRL, shiftKey: true });
+    expect(phases).toHaveLength(4);
+    expect(plain.defaultPrevented).toBe(false);
   });
 
   it("macOS's Option+Space (a non-breaking space) is the same key as Space", () => {
@@ -207,9 +232,10 @@ describe("window blur", () => {
 });
 
 describe("a rebound talk key", () => {
-  it("drives both the press and the release — from a terminal too — and Alt+Space retires", () => {
+  it("drives both the press and the release — from a terminal too — and Ctrl+T and Alt+Space retire", () => {
     setKeyCombos("talk", [{ key: "F9", mod: false, shift: false, alt: false }]);
     fire("keydown", " ", ALT);
+    fire("keydown", "t", CTRL);
     expect(phases).toEqual([]);
     fire("keydown", "F9");
     fire("keydown", "F9", { repeat: true });
