@@ -41,6 +41,9 @@ const state = {
   chunkDelay: 120,        // ms each chunk takes to answer
   streamFailChunk: {},    // id → n: that stream's nth chunk answers 500
   dialogsBy: {},          // title → its dialog (GET /dialog and the router's answers); else `dialog`
+  // GET /api/notify/ntfy: the voice scenarios run with the ask pop-up off
+  // (their clarify rows would open it over the mic); the ask scenarios turn it on.
+  ntfy: { ask_popup: false, active: false },
 };
 const NUMS = { one: 1, two: 2, three: 3, four: 4, nine: 9, "1": 1, "2": 2, "3": 3, "4": 4, "9": 9 };
 
@@ -162,6 +165,7 @@ async function mock(route) {
   if (p === "/api/voice/route" && state.routeDelay) await sleep(state.routeDelay);
   if (p === "/api/voice/route") return state.routeStatus ? json(route, { error: "no route" }, state.routeStatus) : json(route, routeAnswer(body.text, body.session));
   if (p === "/api/voice") return state.voiceCfg ? json(route, state.voiceCfg) : json(route, { error: "nope" }, 404);
+  if (p === "/api/notify/ntfy") return json(route, state.ntfy);
   if (p === "/api/fleet") return json(route, { in_fleet: false, members: [], requests: [] });
   if (p === "/api/update/check") return json(route, {});
   if (p === "/api/settings") return json(route, { ui: {} });
@@ -1075,6 +1079,289 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     check("diagnostics: the last route kind", /Router: summon_the_flock \(unknown here: a prompt\)/.test(diag6), diag6.replace(/\n/g, " | "));
     await page5.click("#voice-done");
     await page5.close();
+    state.voiceCfg = null;
+
+    // ---- a session is asking you something: the ask sheet ------------------
+    // Rows carry `asking` (the newer server); the pop-up is on; Notification
+    // is stubbed "granted" and visibility is switchable, so a notification
+    // can be told apart from a buzz.
+    state.ntfy = { ask_popup: true, active: false };
+    state.voiceCfg = { stt: "phone", tts: "phone", approve_dialogs: true };
+    state.dialog = null;
+    state.dialogsBy = {};
+    state.sendStatus = 0; state.sendReply = null;
+    state.answerStatus = 0; state.answerReply = null;
+    const now6 = () => Date.now() / 1000;
+    state.rows = [
+      { title: "login-fix", name: "Login fix", activity: "working", status: "running", last_turn: "", last_say: null, voice: false, asking: null },
+      { title: "invoice-parser", name: "Invoice parser", activity: "idle", status: "running", last_turn: "", last_say: null, voice: false, asking: null },
+      { title: "api-docs", name: "API docs", activity: "idle", status: "running", last_turn: "", last_say: null, voice: false, asking: null },
+    ];
+    const PERM = (id) => ({ id, parsed: true, kind: "dialog", heading: "Bash command", question: "Allow git push?", command: "git push origin main",
+      options: [{ key: "1", label: "Yes", kind: "yes", keys: ["1"] }, { key: "2", label: "Yes, and don't ask again", kind: "always", keys: ["2"] }, { key: "3", label: "No", kind: "no", keys: ["Escape"] }] });
+    const page6 = await ctx.newPage();
+    page6.on("pageerror", (e) => errors.push(String(e)));
+    page6.on("console", (msg) => { if (msg.type() === "error" && !/WebSocket|ws:\/\/|404|409|no worker/.test(msg.text())) errors.push(msg.text()); });
+    await page6.route("**/api/**", mock);
+    await page6.addInitScript(() => {
+      window.__notes = [];
+      class FakeNote { constructor(t, o) { this.title = t; this.opts = o || {}; window.__notes.push(this); } close() { this.closed = true; } }
+      FakeNote.permission = "granted";
+      FakeNote.requestPermission = () => Promise.resolve("granted");
+      window.Notification = FakeNote;
+      if (navigator.serviceWorker) {
+        navigator.serviceWorker.register = () => Promise.reject(new Error("no worker in the harness"));
+        navigator.serviceWorker.getRegistration = () => Promise.resolve(undefined);
+      }
+      window.__hidden = false;
+      Object.defineProperty(document, "visibilityState", { get() { return window.__hidden ? "hidden" : "visible"; }, configurable: true });
+    });
+    await page6.goto(`http://127.0.0.1:${PORT}/mobile.html?s=login-fix`, { waitUntil: "load" });
+    await waitFor(page6, () => window.mfAsk && window.mfAsk.polls >= 1 && document.getElementById("picker-title").textContent === "Login fix", 6000, "ask page loaded");
+    const open6 = () => page6.evaluate(() => !document.getElementById("asking-sheet").classList.contains("hidden"));
+    const txt6 = (id) => page6.evaluate((i) => document.getElementById(i).textContent, id);
+    const shown6 = (id) => page6.evaluate((i) => !document.getElementById(i).classList.contains("hidden"), id);
+    const posts6 = (p) => state.posts.filter((x) => x.path.endsWith(p));
+    // An ask event fetches the rows now (not at the next 4 s tick).
+    const kick6 = (t, text, ts) => page6.evaluate((a) => window.mfVoice.onEvent({ seq: 0, event: "session.question", session: a[0], ts: Date.now() / 1000, data: { title: a[0], text: a[1], ts: a[2], kind: "question" } }), [t, text, ts]);
+    const waitOpen6 = (label, ms) => waitFor(page6, () => !document.getElementById("asking-sheet").classList.contains("hidden"), ms || 6000, label);
+    const waitShut6 = (label) => waitFor(page6, () => document.getElementById("asking-sheet").classList.contains("hidden"), 4000, label);
+    check("ask: nobody asking → no sheet, plain title", !(await open6()) && (await page6.title()) === "MindFlock — Mobile", await page6.title());
+
+    // A prose question on a row → the sheet opens by itself.
+    const vib0 = await page6.evaluate(() => window.__vibes);
+    const q1 = { kind: "question", text: "Should I add tests for the parser?", ts: now6(), dialog_id: null, parsed: false, source: "" };
+    state.rows[1].asking = q1;
+    await waitOpen6("sheet on a prose question");
+    check("ask: a row's asking (question) opens the sheet by itself", await open6());
+    check("ask: …centred (the sheet-center overlay)", await page6.evaluate(() => getComputedStyle(document.getElementById("asking-sheet")).alignItems === "center"));
+    check("ask: name, the Sessions number, kind Question, the question", (await txt6("asking-name")) === "Invoice parser" && (await txt6("asking-num")) === "1" && (await txt6("asking-kind")) === "Question" && (await txt6("asking-question")) === q1.text,
+      [await txt6("asking-num"), await txt6("asking-name"), await txt6("asking-kind"), await txt6("asking-question")].join(" | "));
+    check("ask: prose → a field + Send + Open the session, no options, no stepper", (await shown6("asking-reply")) && (await shown6("asking-open")) && (await page6.evaluate(() => document.querySelectorAll(".asking-opt").length)) === 0 && !(await shown6("asking-nav")));
+    check("ask: the tab title counts the asking sessions: (1)", (await page6.title()) === "(1) MindFlock — Mobile", await page6.title());
+    check("ask: a new ask on a visible page buzzes", (await page6.evaluate(() => window.__vibes)) > vib0);
+    check("ask: …and raises no notification while visible", (await page6.evaluate(() => window.__notes.length)) === 0);
+    const row1 = await page6.evaluate(() => { const r = document.querySelector('#session-list .sess-row[data-title="invoice-parser"]'); return r ? [r.querySelector(".sess-state").textContent, (r.querySelector(".sess-ask") || {}).textContent || ""] : null; });
+    check("ask: the list row says Question (not Idle) with the question under it", row1 && row1[0] === "Question" && row1[1] === q1.text, JSON.stringify(row1));
+    // The answer: typed, Send → /send {text, dialog_safe}.
+    await page6.fill("#asking-text", "yes, add them");
+    await page6.click("#asking-send");
+    await waitShut6("sheet closed after Send");
+    const s6 = posts6("/send").slice(-1)[0];
+    check("ask: Send → POST /send {text, dialog_safe:true} to that session", s6 && s6.path === "/api/instances/invoice-parser/send" && s6.body.text === "yes, add them" && s6.body.dialog_safe === true && !s6.body.say, JSON.stringify(s6));
+    check("ask: …and the sheet closes (nothing else asking)", !(await open6()));
+    await sleep(4500);
+    check("ask: an answered ask does not reopen while the row lags", !(await open6()));
+    state.rows[1].asking = null;
+
+    // /send 409 in_dialog → the dialog it shows now; a tap → /answer with keys.
+    const q2 = { kind: "question", text: "Run the docs build?", ts: now6(), dialog_id: null, parsed: false, source: "" };
+    state.rows[2].asking = q2;
+    await kick6("api-docs", q2.text, q2.ts);
+    await waitOpen6("sheet on API docs", 2000);
+    check("ask: a session.question event opens it at once (no 4 s wait)", (await open6()) && (await txt6("asking-name")) === "API docs");
+    state.sendStatus = 409; state.sendReply = { in_dialog: true, error: "a dialog is up" };
+    state.dialogsBy["api-docs"] = PERM("dx");
+    await page6.fill("#asking-text", "go ahead");
+    await page6.click("#asking-send");
+    await waitFor(page6, () => document.querySelectorAll(".asking-opt").length === 3, 4000, "the dialog after in_dialog");
+    state.sendStatus = 0; state.sendReply = null;
+    check("ask: /send 409 in_dialog → the dialog's options instead", (await page6.evaluate(() => document.querySelectorAll(".asking-opt").length)) === 3 && (await txt6("asking-kind")) === "Permission");
+    check("ask: …the command in monospace, the words kept, a note why", (await txt6("asking-command")) === "git push origin main" && (await page6.evaluate(() => getComputedStyle(document.getElementById("asking-command")).fontFamily)).indexOf("mono") >= 0 && (await page6.evaluate(() => document.getElementById("asking-text").value)) === "go ahead" && /showing a prompt/.test(await txt6("asking-note")), await txt6("asking-note"));
+    await page6.click('.asking-opt[data-kind="no"]');
+    await waitShut6("sheet closed after the option");
+    const a6 = posts6("/answer").slice(-1)[0];
+    check("ask: an option tap → POST /answer {keys: opt.keys, dialog_id, by:'user'}", a6 && a6.path === "/api/instances/api-docs/answer" && JSON.stringify(a6.body) === JSON.stringify({ keys: ["Escape"], dialog_id: "dx", by: "user" }), JSON.stringify(a6));
+    state.rows[2].asking = null;
+    delete state.dialogsBy["api-docs"];
+    await sleep(300);
+
+    // Two asking: dialogs first, "1 of 2", next/prev; Later → dismiss / snooze.
+    const t3 = now6();
+    state.rows[2].asking = { kind: "question", text: "Which docs theme?", ts: t3 - 30, dialog_id: null, parsed: false, source: "" };
+    state.rows[0].activity = "clarify";
+    state.rows[0].asking = { kind: "dialog", text: "Allow git push?", ts: t3, dialog_id: "d9", parsed: true, source: "" };
+    state.dialogsBy["login-fix"] = PERM("d9");
+    await kick6("api-docs", "Which docs theme?", t3 - 30);
+    await waitFor(page6, () => !document.getElementById("asking-sheet").classList.contains("hidden") && document.getElementById("asking-step").textContent === "1 of 2", 6000, "two asks");
+    check("ask: two asking → one sheet, '1 of 2', the dialog first (though newer)", (await txt6("asking-step")) === "1 of 2" && (await txt6("asking-name")) === "Login fix" && (await shown6("asking-nav")), (await txt6("asking-step")) + " " + (await txt6("asking-name")));
+    check("ask: title (2)", (await page6.title()) === "(2) MindFlock — Mobile", await page6.title());
+    await waitFor(page6, () => document.querySelectorAll(".asking-opt").length === 3, 3000, "d9 options");
+    check("ask: a parsed dialog shows its options and the mic", (await page6.evaluate(() => document.querySelectorAll(".asking-opt").length)) === 3 && (await shown6("asking-mic")) && !(await shown6("asking-reply")));
+    await page6.click("#asking-next");
+    check("ask: › steps to the question, '2 of 2'", (await txt6("asking-name")) === "API docs" && (await txt6("asking-step")) === "2 of 2");
+    await page6.click("#asking-prev");
+    check("ask: ‹ steps back", (await txt6("asking-name")) === "Login fix");
+    await page6.click("#asking-next");
+    const dis0 = posts6("/asking/dismiss").length;
+    await page6.click("#asking-later");
+    await sleep(200);
+    const dis = posts6("/asking/dismiss");
+    check("ask: Later on a question → POST /asking/dismiss {} for it", dis.length === dis0 + 1 && dis[dis.length - 1].path === "/api/instances/api-docs/asking/dismiss" && JSON.stringify(dis[dis.length - 1].body) === "{}", JSON.stringify(dis.slice(-1)));
+    check("ask: …and the sheet moves to the one left, no stepper", (await open6()) && (await txt6("asking-name")) === "Login fix" && !(await shown6("asking-nav")));
+    state.rows[2].asking = null;   // the server dismissed it
+    await page6.click("#asking-later");
+    await waitShut6("closed after Later on the dialog");
+    check("ask: Later on a dialog snoozes it here (no server call), the sheet closes", !(await open6()) && posts6("/asking/dismiss").length === dis0 + 1);
+    await sleep(4500);
+    check("ask: a snoozed dialog does not pop up again", !(await open6()));
+    // A tap on its row opens it anyway.
+    await page6.click("#picker");
+    await waitFor(page6, () => !document.getElementById("sessions-sheet").classList.contains("hidden"), 2000, "sessions sheet");
+    check("ask: the Sessions sheet offers 'Notify me…' state (granted → a toggle)", /Notifications on/.test(await txt6("ask-notify-btn")), await txt6("ask-notify-btn"));
+    await page6.click('#session-list .sess-row[data-title="login-fix"] .sess-main');
+    await waitOpen6("sheet from the row", 3000);
+    check("ask: tapping an asking row opens its sheet (even snoozed)", (await open6()) && (await txt6("asking-name")) === "Login fix");
+    // 409 dialog_changed → the new prompt; Back = Later.
+    await waitFor(page6, () => document.querySelectorAll(".asking-opt").length === 3, 3000, "d9 options again");
+    state.answerStatus = 409; state.answerReply = { dialog_changed: true };
+    state.dialogsBy["login-fix"] = Object.assign(PERM("d10"), { question: "Allow git push --force?", command: "git push --force" });
+    await page6.click('.asking-opt[data-kind="yes"]');
+    await waitFor(page6, () => document.getElementById("asking-command").textContent === "git push --force", 3000, "the changed prompt");
+    check("ask: 409 dialog_changed → re-read, the new prompt shown with a note", (await txt6("asking-question")) === "Allow git push --force?" && /changed/.test(await txt6("asking-note")), await txt6("asking-note"));
+    state.answerStatus = 0; state.answerReply = null;
+    await page6.evaluate(() => history.back());
+    await waitShut6("Back closed it");
+    check("ask: Back = Later (closes it)", !(await open6()));
+    // A new dialog id pops again; 409 dialog_answered → "Already answered".
+    state.rows[0].asking = { kind: "dialog", text: "Allow git push?", ts: now6(), dialog_id: "d12", parsed: true, source: "" };
+    state.dialogsBy["login-fix"] = PERM("d12");
+    await waitOpen6("a new dialog id pops up");
+    check("ask: a NEW dialog (new id) on a snoozed session pops up", await open6());
+    await waitFor(page6, () => document.querySelectorAll(".asking-opt").length === 3, 3000, "d12 options");
+    state.answerStatus = 409; state.answerReply = { dialog_answered: true };
+    await page6.click('.asking-opt[data-kind="yes"]');
+    await waitFor(page6, () => /Already answered/.test(document.getElementById("asking-note").textContent), 3000, "already answered");
+    check("ask: 409 dialog_answered → 'Already answered', no options", /Already answered/.test(await txt6("asking-note")) && (await page6.evaluate(() => document.querySelectorAll(".asking-opt").length)) === 0);
+    state.answerStatus = 0; state.answerReply = null;
+    await page6.mouse.click(8, 8);   // the dimmed backdrop
+    await waitShut6("backdrop closed it");
+    check("ask: a tap outside closes it", !(await open6()));
+
+    // The mic on a dialog: the voice dialog mode → /answer.
+    state.rows[0].asking = { kind: "dialog", text: "Allow git push?", ts: now6(), dialog_id: "d13", parsed: true, source: "" };
+    state.dialogsBy["login-fix"] = PERM("d13");
+    await waitOpen6("d13 pops");
+    await waitFor(page6, () => document.querySelectorAll(".asking-opt").length === 3, 3000, "d13 options");
+    const ans0 = posts6("/answer").length;
+    await page6.click("#asking-mic");
+    await waitFor(page6, () => window.mfVoice.state === "dialog" && window.__rec && window.__rec.started, 4000, "dialog listening from the sheet");
+    check("ask: the sheet's mic → voice on, the dialog mode listening", (await page6.evaluate(() => window.mfVoice.state)) === "dialog" && (await page6.evaluate(() => document.getElementById("asking-mic").dataset.state)) === "listening");
+    check("ask: …the strip's state mirrored on the sheet", /Waiting on you/.test(await txt6("asking-voice")), await txt6("asking-voice"));
+    await page6.evaluate(() => window.__hear("yes"));
+    await waitShut6("answered by voice");
+    const av = posts6("/answer").slice(ans0);
+    check("ask: 'yes' by voice → POST /answer {keys:['1'], dialog_id:'d13', by:'user'}", av.length === 1 && JSON.stringify(av[0].body) === JSON.stringify({ keys: ["1"], dialog_id: "d13", by: "user" }), JSON.stringify(av));
+    check("ask: …and the sheet closes", !(await open6()));
+    state.rows[0].asking = null; state.rows[0].activity = "working";
+    delete state.dialogsBy["login-fix"];
+    await waitFor(page6, () => window.mfVoice.state === "working", 3000, "working after the voice answer");
+
+    // Voice on, another session asks: read name first; the mic dictates into the field.
+    await page6.evaluate(() => { window.mfVoice.prefs.replies = true; });
+    const q5 = { kind: "question", text: "Want me to rename the module?", ts: now6(), dialog_id: null, parsed: false, source: "" };
+    state.rows[1].asking = q5;
+    await kick6("invoice-parser", q5.text, q5.ts);
+    await waitOpen6("q5 pops", 3000);
+    await waitFor(page6, () => window.__spoken.indexOf("Invoice parser asks: Want me to rename the module?") >= 0, 3000, "read aloud");
+    check("ask: voice on + spoken replies → another session's question read aloud, name first", await said(page6, "Invoice parser asks: Want me to rename the module?"));
+    const sendsQ5 = posts6("/send").length;
+    await page6.click("#asking-mic");
+    await waitFor(page6, () => window.mfVoice.state === "listening" && window.__rec && window.__rec.started, 4000, "dictating into the sheet");
+    check("ask: the mic on a question → listening, voice moved to that session", (await page6.evaluate(() => window.mfVoice.session)) === "invoice-parser" && (await page6.evaluate(() => window.mfVoice.box === document.getElementById("asking-text"))));
+    await page6.evaluate(() => window.__hear("rename it to parse"));
+    await sleep(150);
+    const fld = () => page6.evaluate(() => document.getElementById("asking-text").value);
+    check("ask: dictation lands in the sheet's field, not the compose box", (await fld()) === "rename it to parse" && (await page6.evaluate(() => document.getElementById("compose").value)) === "");
+    check("ask: …no router for it (every phrase is the answer)", !posts6("/voice/route").some((x) => x.body.text === "rename it to parse"));
+    await page6.evaluate(() => window.__hear("disregard"));
+    await sleep(150);
+    check("ask: 'disregard' clears the field, still listening", (await fld()) === "" && (await page6.evaluate(() => window.mfVoice.state)) === "listening");
+    await page6.evaluate(() => window.__hear("call it parser two"));
+    await page6.evaluate(() => window.__hear("over"));
+    await sleep(300);
+    check("ask: 'over' stops, the words stay in the field, unsent", (await fld()) === "call it parser two" && (await page6.evaluate(() => window.mfVoice.state)) === "idle" && posts6("/send").length === sendsQ5 && (await open6()));
+    await page6.click("#asking-mic");
+    await waitFor(page6, () => window.mfVoice.state === "listening" && window.__rec && window.__rec.started, 4000, "listening again");
+    await page6.evaluate(() => window.__hear("submit"));
+    await waitShut6("sent by voice");
+    const sv = posts6("/send").slice(sendsQ5);
+    check("ask: 'submit' → POST /send {text, dialog_safe, say:true} to the asking session", sv.length === 1 && sv[0].path === "/api/instances/invoice-parser/send" && sv[0].body.text === "call it parser two" && sv[0].body.say === true && sv[0].body.dialog_safe === true, JSON.stringify(sv));
+    check("ask: …the sheet closes, the field emptied, the compose box untouched", !(await open6()) && (await fld()) === "" && (await page6.evaluate(() => document.getElementById("compose").value)) === "");
+    state.rows[1].asking = null;
+    await page6.evaluate(() => { document.getElementById("voice-cancel").click(); });
+    await sleep(200);
+
+    // Hidden page: a notification (once), its tap opens the sheet.
+    await page6.evaluate(() => { window.__hidden = true; });
+    const q6 = { kind: "question", text: "Publish the docs now?", ts: now6(), dialog_id: null, parsed: false, source: "" };
+    state.rows[2].asking = q6;
+    await waitFor(page6, () => window.__notes.length === 1, 6000, "a notification");
+    const n6 = await page6.evaluate(() => window.__notes.map((n) => ({ t: n.title, b: n.opts.body, tag: n.opts.tag })));
+    check("ask: hidden → a Notification for the new ask (name, question, per-session tag)", n6.length === 1 && n6[0].t === "API docs asked you a question" && n6[0].b === q6.text && n6[0].tag === "mf-ask-api-docs", JSON.stringify(n6));
+    await sleep(4500);
+    check("ask: …once (deduped by the ask)", (await page6.evaluate(() => window.__notes.length)) === 1);
+    await page6.evaluate(() => { window.__hidden = false; });
+    await page6.mouse.click(8, 8);
+    await waitShut6("closed before the tap");
+    await page6.evaluate(() => window.__notes[0].onclick());
+    await waitOpen6("the notification's tap", 2000);
+    check("ask: tapping the notification opens that session's sheet", (await open6()) && (await txt6("asking-name")) === "API docs");
+    await page6.click("#asking-later");
+    state.rows[2].asking = null;
+    await waitShut6("closed");
+
+    // Typing into that session's compose box: its ask waits for you.
+    await page6.click("#voice-btn").catch(() => {});
+    await page6.evaluate(() => { const c = document.getElementById("compose"); c.focus(); c.value = "half a thought"; });
+    const cur6 = await page6.evaluate(() => document.getElementById("picker-title").textContent);
+    const curT = cur6 === "Invoice parser" ? 1 : cur6 === "API docs" ? 2 : 0;
+    state.rows[curT].asking = { kind: "question", text: "Keep the old name?", ts: now6(), dialog_id: null, parsed: false, source: "" };
+    await sleep(4600);
+    check("ask: not while you type into that session's compose box", !(await open6()));
+    await page6.evaluate(() => { const c = document.getElementById("compose"); c.value = ""; c.blur(); });
+    await waitOpen6("opens once you stop typing");
+    check("ask: …it opens once you stop", await open6());
+    await page6.click("#asking-later");
+    state.rows[curT].asking = null;
+    await page6.close();
+
+    // ---- the push's deep link: /m?s=<title>&voice=1 opens THAT session's sheet
+    state.ntfy = { ask_popup: false, active: true };   // the link opens it even with the pop-up off
+    const q7 = { kind: "question", text: "Should I bump the version?", ts: now6(), dialog_id: null, parsed: false, source: "" };
+    state.rows[1].asking = q7;
+    state.rows[2].asking = { kind: "question", text: "Another thing?", ts: now6(), dialog_id: null, parsed: false, source: "" };
+    const page7 = await ctx.newPage();
+    page7.on("pageerror", (e) => errors.push(String(e)));
+    await page7.route("**/api/**", mock);
+    await page7.goto(`http://127.0.0.1:${PORT}/mobile.html?s=invoice-parser&voice=1`, { waitUntil: "load" });
+    await waitFor(page7, () => window.mfAsk && !document.getElementById("asking-sheet").classList.contains("hidden"), 6000, "deep link sheet");
+    check("ask: the push link opens that session's sheet (pop-up setting off)", await page7.evaluate(() => !document.getElementById("asking-sheet").classList.contains("hidden") && document.getElementById("asking-name").textContent === "Invoice parser"));
+    check("ask: …the other asking session queued behind it: '1 of 2'", (await page7.evaluate(() => document.getElementById("asking-step").textContent)) === "1 of 2");
+    check("ask: …with 'Hear it and answer by voice' (the page cannot speak before a tap)", await page7.evaluate(() => !document.getElementById("asking-hear").classList.contains("hidden")));
+    check("ask: …and the strip keeps its 'Tap to hear' (voice=1 as before)", await page7.evaluate(() => /Tap to hear/.test(document.getElementById("voice-hear").textContent)));
+    await page7.click("#asking-hear");
+    await waitFor(page7, () => window.mfVoice.state === "listening" && window.__rec && window.__rec.started, 5000, "listening after hear");
+    check("ask: Hear → read aloud name first, then listening for the answer", (await page7.evaluate(() => window.__spoken.join(" "))).indexOf("Invoice parser asks: Should I bump the version?") >= 0);
+    check("ask: …the strip's 'Tap to hear' gone (one tap, not two)", await page7.evaluate(() => document.getElementById("voice-hear").classList.contains("hidden")));
+    const sendsQ7 = posts("/send").length;
+    await page7.evaluate(() => window.__hear("yes bump it submit"));
+    await waitFor(page7, () => document.getElementById("asking-name").textContent === "API docs", 4000, "deep link answered");
+    const s7 = posts("/send").slice(sendsQ7);
+    check("ask: the spoken answer → /send to that session, say:true", s7.length === 1 && s7[0].path === "/api/instances/invoice-parser/send" && s7[0].body.text === "yes bump it" && s7[0].body.say === true, JSON.stringify(s7));
+    check("ask: …then the sheet moves on to the next ask in it", await page7.evaluate(() => !document.getElementById("asking-sheet").classList.contains("hidden") && document.getElementById("asking-name").textContent === "API docs" && document.getElementById("asking-nav").classList.contains("hidden")));
+    state.rows[1].asking = null;
+    await page7.click("#asking-later");
+    await waitFor(page7, () => document.getElementById("asking-sheet").classList.contains("hidden"), 3000, "closed");
+    state.rows[2].asking = null;
+    state.rows[0].asking = { kind: "question", text: "And this one?", ts: now6(), dialog_id: null, parsed: false, source: "" };
+    await sleep(4600);
+    check("ask: pop-up off → a new ask does not open the sheet by itself", await page7.evaluate(() => document.getElementById("asking-sheet").classList.contains("hidden")));
+    check("ask: …but the title still counts it", (await page7.title()) === "(1) MindFlock — Mobile", await page7.title());
+    state.rows[0].asking = null;
+    await page7.close();
+    state.rows[1].asking = null; state.rows[2].asking = null;
+    state.ntfy = { ask_popup: false, active: false };
     state.voiceCfg = null;
   } catch (e) {
     console.log("HARNESS ERROR", e && e.stack || e);

@@ -7,7 +7,10 @@ the conversation: dictate → countdown → ``/send`` → the "what it is doing"
 sentence → the Say: line → the answer; dialogs by voice (yes / always only
 when said / a refusal containing "always" / a number on a permission prompt
 / other-only numbering / approval off); switching; the poll fallback; a
-repeated Say: line across two turns; the sheet. Every scenario prints one
+repeated Say: line across two turns; the sheet; and the ask sheet (a session
+asking: opens by itself, options → /answer, prose → /send, in_dialog, Later,
+the stepper, the mic on both kinds, notifications only while hidden, the
+title count, the push's deep link). Every scenario prints one
 ``PASS``/``FAIL`` line; this test runs the script and fails on any ``FAIL``.
 
 Skipped — never failed — where the harness cannot run: no ``node``, no
@@ -55,7 +58,7 @@ def test_voice_loop_in_headless_chrome():
         ["node", str(HARNESS)],
         capture_output=True,
         text=True,
-        timeout=240,
+        timeout=420,
         env=env,
         cwd=str(ROOT),
     )
@@ -68,7 +71,7 @@ def test_voice_loop_in_headless_chrome():
         res.stderr[-2000:],
     )
     assert not failed, "\n".join(failed)
-    assert len(passed) >= 60, "only %d checks ran:\n%s" % (
+    assert len(passed) >= 200, "only %d checks ran:\n%s" % (
         len(passed),
         res.stdout[-2000:],
     )

@@ -1,0 +1,29 @@
+#! real capture 2026-10-26: aider 0.86.2, tmux capture-pane -p -J; the w120 prompt after the pane shrank to 60 columns: prompt_toolkit redraws it under a copy it could not erase
+Git repo: .git with 1 files
+Repo-map: using 4096 tokens, auto refresh
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> compare https://example.com/a and https://example.org/b please                                                        
+
+
+https://example.com/a
+Add URL to the chat? (Y)es/(N)o/(A)ll/(S)kip all/(D)on't ask
+Add URL to the chat? (Y)es/(N)o/(A)ll/(S)kip all/(D)on't ask
+ again [Yes]:                                               
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                            

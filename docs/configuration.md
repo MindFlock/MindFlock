@@ -1134,6 +1134,14 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   non-empty keeps the "off" that absence from `enabled_rules` meant, and its
   toggle then records on in `enabled_rules` and off in `muted_rules`. Every
   rule also carries a one-line `description` for the Settings screen.
+  `needs_input` (**A session asks you a question**) covers both ways an agent
+  waits on you: a dialog (`session.activity_changed` → `clarify`) and a
+  question it asked in plain prose at the end of its turn
+  (`session.question` — the rule's `also` list). Its phone push is deduped on
+  *what* is asked — one push per dialog id, or per question, for 5 minutes —
+  so a second, different dialog right after the first still pushes while the
+  same one re-read does not; and a turn that ends on a question pushes only
+  the question, not *has finished* as well (while `needs_input` is on).
 - **ntfy push** (`notifications.ntfy_enabled` / `_server` / `_topic` / `_token` /
   `_click_url`, Settings → Notifications) — the optional server-side push channel
   that reaches a phone with no browser tab open (see
@@ -1152,9 +1160,18 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   notifications aloud (iOS Announce Notifications) says something useful. Off
   keeps every body generic — the words would otherwise travel through the
   ntfy server. The two pushes' click URL (`/m?s=<title>&voice=1`) and the
-  dialog push's one-tap Yes / No buttons do not depend on it. See
+  dialog push's one-tap Yes / No buttons do not depend on it. With it on, a
+  dialog no parser recognizes still says its best-effort question line, and a
+  question asked in prose is the body itself. See
   [web-ui.md](web-ui.md#voice-talking-to-a-session) and
   [web-api.md](web-api.md#addon-routes).
+- **Question pop-up** (`notifications.ask_popup`, default **on**, Settings →
+  Notifications) — whether a session's question (a dialog, or a question its
+  turn ended on: the instance rows' `asking`) pops up in the middle of the
+  screen. The desktop app and the phone page both follow it; it is read off
+  `GET /api/notify/ntfy` (and `GET /api/voice` for the phone) and saved with
+  `POST /api/notify/ntfy {"ask_popup": false}` or `POST /api/settings`
+  (owner only). Written to `settings.json` only when off.
 - **Voice** (`voice.*`, Settings → Voice) — talking to a session from the
   phone page and the desktop app's mic
   ([web-ui.md](web-ui.md#voice-talking-to-a-session)). The phone page uses its
@@ -1236,7 +1253,8 @@ The whole `notifications` group as it lands in `settings.json`:
   "ntfy_topic": "mindflock-xTPq…",       // on a public server this IS the credential
   "ntfy_token": "tk_…",                  // secret: masked on read as "•••set"
   "ntfy_click_url": "https://box.tailnet.ts.net/m",
-  "ntfy_agent_words": false              // only written when OFF (pocket mode is the default)
+  "ntfy_agent_words": false,             // only written when OFF (pocket mode is the default)
+  "ask_popup": false                     // only written when OFF (the question pop-up is the default)
 }
 ```
 

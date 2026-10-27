@@ -2609,6 +2609,300 @@
 .devices-advanced #pair-by-token input {
   min-width: 240px;
 }
+/* The ask pop-up (AskDialog.tsx): a small card in the middle of the screen
+   — the plain centred `.modal`, never `.top-dialog` — gold-edged like every
+   "needs your answer" surface (the answer strip, the bell's Needs you). */
+.ask-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--tone-attention);
+  border-radius: 12px;
+  padding: 18px 22px 20px;
+  width: 520px;
+  max-width: 92vw;
+  max-height: 86vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+}
+
+.ask-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ask-head h2 {
+  margin: 0;
+  font-size: 16px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The rail slot — the number on the row you'd look for. */
+.ask-slot {
+  flex: none;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.ask-kind {
+  flex: none;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--tone-attention);
+  color: var(--tone-attention-ink);
+  font-weight: 600;
+}
+
+.ask-step {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ask-step button {
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.ask-step button:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.ask-source {
+  margin-top: -6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ask-q {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ask-q.muted {
+  color: var(--muted);
+}
+
+/* The command, monospace — what the agent wants to run. */
+.ask-cmd {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 7px;
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow: auto;
+  background: rgba(255, 215, 0, 0.06);
+  border: 1px solid rgba(255, 215, 0, 0.28);
+}
+
+.ask-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ask-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.ask-opt:hover:not(:disabled) {
+  border-color: rgba(var(--accent-rgb), 0.7);
+}
+
+.ask-opt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ask-opt.primary {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.16);
+}
+
+.ask-opt.picked {
+  border-color: var(--green);
+}
+
+.ask-opt:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.ask-opt .k {
+  flex: none;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.ask-opt-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ask-state,
+.ask-unparsed,
+.ask-keys {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ask-unparsed {
+  margin: 0;
+}
+
+.ask-answer {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 64px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.ask-answer:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.ask-note {
+  font-size: 12px;
+  color: var(--gold);
+}
+
+/* The mic row: the button (the top-bar mic's look) and what it hears. */
+.ask-voice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+  font-size: 12px;
+}
+
+.ask-mic {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.ask-mic svg {
+  display: block;
+}
+
+.ask-mic:hover {
+  color: var(--text);
+}
+
+/* Listening: red and pulsing, like the top-bar mic (TopBarMic.css). */
+.ask-mic.listening {
+  border-color: var(--red);
+  color: #fff;
+  background: var(--red);
+  animation: mic-pulse 1.4s ease-in-out infinite;
+}
+
+.ask-voice-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ask-voice-text .muted {
+  color: var(--muted);
+}
+
+.ask-unsure {
+  color: var(--muted);
+}
+
+.ask-card .modal-actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* The key hint takes the slack, pushing the buttons right. */
+.ask-card .modal-actions .ask-keys {
+  margin-right: auto;
+}
+
+@media (max-width: 480px) {
+  .ask-card {
+    padding: 14px 14px 16px;
+  }
+
+  .ask-card .modal-actions .ask-keys {
+    flex-basis: 100%;
+  }
+}
 /* Connect GitHub's numbered token steps (components/dialogs/ConnectGitHub.tsx):
    1 make a token → 2 paste it → 3 Save & test, the answer under step 3. The
    dialog's card and the rest of its rows are styled in SetupDialog.css. */

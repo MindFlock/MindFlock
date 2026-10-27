@@ -26,6 +26,7 @@ import { attentionItems } from "./sidebar/ordering";
 import { slotNumber, windowName } from "../lib/windowName";
 import { childrenByParent, inFamily, messageNotif, workerOf, type MessageEventData } from "../lib/agentMessages";
 import { openThread } from "../lib/flockActions";
+import { openAsk } from "../lib/ask";
 import { AnswerStrip } from "./AnswerStrip";
 import { runNote } from "../lib/runs";
 import { ruleOn, runLookups, useNotifyConfig, useOutbox, useRuns } from "../state/runs";
@@ -614,9 +615,16 @@ export function NotificationsBell() {
                       {a.p === 0 ? (
                         <AnswerStrip
                           title={it.title}
-                          activity="clarify"
+                          // A question asked in plain words: the question and
+                          // Reply (the ask pop-up) — no buttons to press.
+                          activity={a.question !== undefined ? "idle" : "clarify"}
+                          question={a.question}
                           variant="bell"
                           onOpen={() => jump(it.title)}
+                          onReply={() => {
+                            setOpen(false);
+                            openAsk(it.title);
+                          }}
                           onRedirect={
                             fam
                               ? () => {

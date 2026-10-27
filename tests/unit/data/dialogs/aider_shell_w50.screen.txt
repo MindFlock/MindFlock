@@ -1,0 +1,24 @@
+#! real capture 2026-10-26: aider 0.86.2 --edit-format diff, tmux capture-pane -p -J; the same prompt in a 50-column pane — model replies from a local mock OpenAI-compatible server
+                                                                      
+                                                                                                                        
+
+
+Tokens: 2.3k sent, 27 received.
+
+git log --oneline -3 -- services/search/limits.py
+Run shell command? (Y)es/(N)o/(D)on't ask again [Yes]: n                                                                
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+diff> and again please                            
+
+To see the recent history, run:                   
+
+                                                  
+git log --oneline -3 -- services/search/limits.py 
+                                                  
+
+
+Tokens: 2.4k sent, 27 received.
+
+git log --oneline -3 -- services/search/limits.py
+Run shell command? (Y)es/(N)o/(D)on't ask again [Y
+es]:                                              

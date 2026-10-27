@@ -1402,4 +1402,16 @@ def test_parses_dialogs_is_the_parser_capability():
     assert ClaudeProvider().parses_dialogs() is True
     assert _codex().parses_dialogs() is True
     assert BaseProvider().parses_dialogs() is False
-    assert providers.resolve("aider").parses_dialogs() is False
+    # Every built-in CLI now has a layout (providers/dialogs.py); only a plain
+    # custom provider without `dialog_layout` keeps the no-parser default.
+    for name in ("aider", "opencode", "cline", "goose", "antigravity"):
+        assert providers.resolve(name).parses_dialogs() is True, name
+    from backend.providers.config import ProviderConfig
+    from backend.providers.generic import GenericProvider
+
+    assert (
+        GenericProvider(
+            ProviderConfig(name="plain-custom", program_aliases=("plain-custom",))
+        ).parses_dialogs()
+        is False
+    )

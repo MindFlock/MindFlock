@@ -373,6 +373,7 @@ trust_patterns = ["Do you trust"]  # pane substrings that mean a trust prompt
 trust_keystroke = "enter"          # enter | d_enter | y_enter
 idle_pattern = "What next?"        # pane substring meaning "waiting, idle"
 working_patterns = ["(?i)esc to interrupt"]  # status line of a LIVE turn
+dialog_layout = "goose"            # optional: it draws a known CLI's dialogs
 
 [activity]                         # opt-in: activity via the CLI's own hooks
 hooks_file = ".mycli/hooks.json"   # repo-local hooks config, merged into at launch
@@ -613,7 +614,7 @@ servers — the user's, or one planted in the shared folder — from loading.
 `BaseProvider.parse_dialog(screen_text)` turns the visible screen of an agent
 blocked in `clarify` into data for the UI's answer buttons, or returns
 `None`. The default is `None` (the UI shows the question line and a button
-that opens the pane). The shared pieces and both layouts live in
+that opens the pane). The shared pieces and every layout live in
 `providers/dialogs.py`:
 
 - **`claude`** reads Claude Code's dialogs: a top rule, the heading (`Bash
@@ -624,14 +625,90 @@ that opens the pane). The shared pieces and both layouts live in
   following command?` / `…make the following edits?`, an optional `Reason:`,
   the `$ command`) and the trust screen, with `› 1.` options.
 
-A parse requires a numbered option list, numbered from 1 without gaps, with
-the CLI's selection cursor on one of its lines. A numbered list the agent
-merely printed never has the cursor, so it never parses. Options get a `kind`
+The other bundled CLIs are config providers: `GenericProvider.parse_dialog`
+dispatches on `ProviderConfig.dialog_layout` (a key of `dialogs.LAYOUTS`),
+set for each of them. Their menus are cursor-driven or answered by hotkey,
+so every option carries **`keys`** — the tmux keys that pick it, computed
+from where the selection is now — next to `key`, which stays a short label
+for the button ("1", "Y", "y"):
+
+- **`aider`** (0.86) reads `io.confirm_ask`: the screen's LAST line must be
+  the prompt ending in `[Yes]:` / `[No]:` (an input line — a half-typed
+  answer or an answered prompt is no parse). The prompt is glued back across
+  the pane's edge (prompt_toolkit wraps it without a joinable break; a resize
+  leaves a stale copy above it, which is skipped). Options from the
+  `(Y)es/(N)o/(A)ll/(S)kip all/(D)on't ask again` string, each answered by
+  its letter and Enter (`["y", "Enter"]`). Kinds: Yes `yes`, All `always`,
+  No / Skip all `no` — and **Don't ask again is `no`**: aider returns False
+  and stops asking (it is not a standing approval). For the questions that
+  name a subject (Add URL / file to the chat, Create new file, Run shell
+  command(s), Run pip install, Allow edits to file…) the line(s) above are
+  the `command` (shell / pip) or the `detail` (URL, path).
+- **`opencode`** (1.17) reads the permission prompt — `△ Permission
+  required`, the tool line (`# Shell command`, `→ Edit notes/todo.md`) as
+  `detail`, a `$ command`, then the `Allow once   Allow always   Reject`
+  button row with its `⇆ select` hint — and the `△ Always allow` step that
+  Allow always opens (`Confirm   Cancel`, the patterns as `command`). The
+  selected button is drawn **by colour only**, so `/dialog` captures with
+  `capture-pane -e` (see below) and the parser reads the highlighted button
+  from the escapes; keys move from it with Left/Right then Enter, and
+  Reject / Cancel is `["Escape"]` whatever is selected. Without colours (a
+  plain capture) it assumes the first button, where opencode opens the
+  prompt. The question tool (`1.` options with descriptions under them,
+  `↑↓ select  enter submit  esc dismiss` as the last line) is answered by
+  digit (`["2"]`); its `Type your own answer` option opens opencode's text
+  box. Several questions or tick-all-that-apply questions are not parsed.
+- **`cline`** (3.0) reads `Cline needs permission` / `Approve tool call?` /
+  the tool / its JSON arguments / `[y] Approve   [n] Deny` (keys `["y"]`,
+  `["n"]`; a `command(s)` argument of a command tool is the `command`, a
+  `path` joins the tool in `detail`), and `Cline is asking a question` with
+  its choices (`>` on the selected one): a digit picks (arrows + Enter while
+  the cursor is on the free-text row, where a digit would be typed). The
+  free-text row is not an option — any typed text lands in it, so a written
+  answer is `/answer` `text` plus `["Enter"]`. Cline's status lines stay
+  under the dialog; an input box (a rule, `❯`) under it means answered.
+- **`goose`** (1.41) reads the tool confirmation: the tool call under a rule
+  (`▸ shell` → `heading`, its `command:` argument → `command`, another
+  argument such as `path …` → `detail`), `◆  Goose would like to call the
+  above tool, do you allow?`, and the `●`/`○` radio list (exactly one `●`)
+  closed by `└`. The selected choice's hint (`(Allow the tool call once)`)
+  moves with the cursor and is cut from its label. Keys: Up/Down from the
+  `●`, then Enter. Answered, the `◆` turns `◇` — no parse.
+- **`antigravity`** (agy 1.0) reads a `> 1.` numbered list under one of its
+  openers (`>` alone also starts agy's input line, so the opener is
+  required): `Requesting permission for:` (the indented lines under it are
+  the `command`, `Do you want to proceed?` the question), `Question N/N: …`,
+  `Do you trust the contents of this …?`. Keys: Up/Down from the cursor,
+  then Enter. A `Question N/N:` with no choices drawn and agy's `esc Skip`
+  hint under it is a free-text question: the parse has no options, and
+  `/dialog` serves it **unparsed with that question** (`parsed: false`) —
+  the UI offers a text field. These goldens are reconstructed from the
+  live-captured snippets in `config.py`, not a fresh capture (running agy
+  writes into the user's conversation store).
+
+A TOML provider whose CLI draws one of these layouts (a wrapper around
+goose, a fork of opencode) sets `dialog_layout` under `[classify]`; an
+unknown name is a load error (a red row), not a silently missing parser.
+Without it a config provider keeps today's behaviour: no parser, no
+per-probe capture, its `waiting_patterns` alone flag `clarify`.
+
+A parse requires the marks of a live prompt at the bottom of the screen: for
+Claude, Codex and agy a numbered option list, numbered from 1 without gaps,
+with the CLI's selection cursor on one of its lines; for the others their
+own equivalent (aider's `[Yes]:` input line, opencode's button row and
+hint, Cline's `[y] Approve` row with only its status lines below, goose's
+`◆` over a radio list). A numbered list the agent merely printed has none
+of them, so it never parses. Options get a `kind`
 from their label: `yes`, `always` ("don't ask again", "allow all edits
-during this session", "auto-accept"), `no` or `other`. Both parsers are
-pinned against golden screens in `tests/unit/data/dialogs/`, which are
-checked against the same provider's `waiting_prompt_patterns` and trust
-patterns so the fixtures can't drift from what the classifier knows. The
+during this session", "auto-accept", a label starting "Always"), `no` or
+`other` (aider's and opencode's buttons have fixed kinds, see above). Every
+parser is pinned against golden screens in `tests/unit/data/dialogs/`,
+which are checked against the same provider's `waiting_prompt_patterns` and
+trust patterns so the fixtures can't drift from what the classifier knows
+(the five config-provider layouts in `tests/unit/test_dialogs_cli.py`: each
+fixture's first line is a `#!` header saying how it was captured — real
+aider / opencode / Cline / goose screens, two widths each, the tool prompts
+reached through a local mock model server; agy's reconstructed). The
 `claude2_*` screens are real Claude Code 2.1.289 captures: the 2.x Bash
 dialog puts the description under the heading and the command in a dashed
 box (`command` is the command, the description goes to the question); an MCP
@@ -651,9 +728,22 @@ columns (`claude2_stop_session_w*`, `claude2_spawn_w*`, plus synthetic
 re-wraps checked line for line against those captures). The 2-option variant
 Claude draws at ≤ 80 columns has different keys, so a different id.
 
+**The `/dialog` body.** `GET /api/instances/{title}/dialog` serves
+`dialogs.describe()`: `id`, `parsed`, `question` (composed), `command`,
+`options` as `{"key", "label", "kind"}` plus **`"keys": [...]`** when the
+parser gave them, and `source` when set. The UI posts `opt.keys ?? [opt.key]`
+to `/answer` with the `id` as `dialog_id`. `current_dialog` captures the pane
+with `capture-pane -e -J`: every parser strips the escapes (`strip_ansi`;
+Claude and Codex read a coloured capture exactly as a plain one), and
+opencode needs them for its selection. `/answer`'s key allow-list
+(`agent_io.ANSWER_KEYS`) adds `a`, `s`, `d` for aider's letters; `y`/`n`,
+the digits, the arrows, Enter and Escape were already there.
+
 Two capabilities sit on top of the parser:
 
-- **`parses_dialogs()`** — True when the provider overrides `parse_dialog`.
+- **`parses_dialogs()`** — True when the provider overrides `parse_dialog`
+  (for a config provider: when it has a `dialog_layout`, or is a subclass
+  with its own parser, like Codex).
   The activity layer then captures the screen once per probe and reads a
   parsed dialog as `clarify` **whatever the hook marker says** (Claude's
   background sub-agents rewrite it while one of them has a prompt up).

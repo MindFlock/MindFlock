@@ -150,6 +150,26 @@ class GenericProvider(BaseProvider):
     def waiting_prompt_patterns(self) -> tuple:
         return tuple(self.cfg.waiting_patterns)
 
+    # --- dialogs ----------------------------------------------------------- #
+    def parse_dialog(self, screen_text: str) -> Optional[dict]:
+        """The dialog on screen, read by the parser the config's
+        ``dialog_layout`` names (:data:`backend.providers.dialogs.LAYOUTS`);
+        None without one."""
+        from . import dialogs
+
+        parse = dialogs.LAYOUTS.get(self.cfg.dialog_layout or "")
+        return parse(screen_text) if parse else None
+
+    def parses_dialogs(self) -> bool:
+        """True with a ``dialog_layout``, or a subclass that reads its own
+        dialogs (Codex); a plain config provider keeps the waiting patterns
+        alone, and no per-probe screen capture."""
+        from . import dialogs
+
+        if type(self).parse_dialog is not GenericProvider.parse_dialog:
+            return True
+        return (self.cfg.dialog_layout or "") in dialogs.LAYOUTS
+
     def working_pane_patterns(self) -> tuple:
         return tuple(self.cfg.working_patterns)
 

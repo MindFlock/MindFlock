@@ -134,7 +134,18 @@ FastAPI app `backend.web.server:app`. Key pieces:
   one-shot `.next` a `say: true` prompt arms — **files** under
   `~/.mindflock-assistant/.voice/<tmux session>` because the CLI's own
   `UserPromptSubmit` hook must see the request at fire time with no server
-  round trip (it deletes `.next` once read). **`routes/voice.py`** turns
+  round trip (it deletes `.next` once read). **`core/asking.py`** is the
+  first-class "it is asking you something" signal: the instance rows'
+  `asking` (`{kind: "dialog"|"question", text, ts, dialog_id, parsed,
+  source}`) — a dialog off the screen the activity probe already captured
+  (`agent_state.last_screen`), or a question the newest reply ENDS with
+  (`question_in`: the reply file, else the provider's `last_assistant_text`,
+  else the paragraph above the input prompt), cleared by any input and by
+  `POST /asking/dismiss`. `state_events` emits `session.question` once per
+  such reply (seeded on first sighting, so a restart stays quiet) and adds
+  `question` to the idle / turn-end data; `GET /dialog` serves it as
+  `kind: "question"`, the outbox lists it, the voice router reads it, and the
+  notify addon's `needs_input` rule pushes it. **`routes/voice.py`** turns
   them into `GET/POST /api/instances/{title}/voice`, `…/voice/condense`
   (the one headless model call, only when a listener asks) and the view;
   `server._voice_suffix` types the instruction after a prompt for CLIs whose

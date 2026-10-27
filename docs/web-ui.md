@@ -1974,7 +1974,10 @@ of row offers:
 
 - **An agent's question.** Every session on a dialog gets the same answer
   strip its rail row has — the prompt's own buttons, **↗** to open the pane —
-  not only an orchestrator's workers.
+  not only an orchestrator's workers. A question the agent asked **in plain
+  words** at the end of its reply (the row's `asking`, or an outbox `question`
+  row) shows the question and **Reply**, which opens the
+  [ask pop-up](#when-a-session-asks-you-something) — there is no key to press.
 - **An ask-first approval.** The exact commit message and PR title, plus where
   its fast-track stops, *before* anything leaves the machine: **Diff** /
   **Commit** (or **Open the PR**), via `POST /api/instances/{title}/ship-now`. A
@@ -2225,6 +2228,78 @@ session it was reporting on.** The event that triggered it has already been
 emitted, the websocket clients and shell hooks have already seen it, and the
 browser channel fires independently. A wrong token or an unreachable ntfy server
 costs you the phone alert and nothing else.
+
+### When a session asks you something
+
+A session asks in one of two ways, and both read as the same **Question** —
+its chip, its toast, its bell row and the tab badge: a **dialog** on its
+screen (a permission prompt, a plan approval, a choice — activity `clarify`),
+or a reply that **ended with a question in plain words** that nobody has
+answered yet (the row's `asking.kind: "question"`, `session.question`). A
+question in words keeps the session in the bell instead of Idle; the 20-minute
+*Idle* rule is for sessions that are truly idle.
+
+**The pop-up.** When a session starts asking, a small card opens in the
+**middle of the screen** by itself (`AskDialog`): the session's rail slot and
+name, the kind (*Permission*, *Plan approval* or *Question*), the question and
+the command it wants to run in a monospace box. Then:
+
+- a dialog MindFlock could read: **its own options**, the answer strip's
+  buttons with full labels — **1–9** pick by number, **Y / N / A** pick yes /
+  no / always, **Enter** presses the highlighted one, and *always* is never the
+  highlighted one. The answer goes through the same checks as the strip (the
+  dialog's id; a changed prompt is shown instead of answered; *Already
+  answered* when someone beat you to it). **No…** puts the keyboard in the
+  session's pane, where the agent waits to hear what to do instead;
+- a dialog it couldn't read: the question and **Open the pane ↗** — the prompt
+  needs the terminal;
+- a question in words: an **answer box** — **Enter** sends it
+  (`POST /api/instances/{title}/send {text, dialog_safe: true}`, which types it
+  and submits it), **Shift+Enter** is a
+  new line — and **Open the pane ↗**. If a dialog came up meanwhile the send is
+  refused and the pop-up shows the dialog.
+
+**Later** (**Esc**) puts it off: a question is dismissed on the server
+(`POST …/asking/dismiss`), a dialog is snoozed until its prompt changes; the
+bell keeps either. After an answer the card steps to the next session still
+asking, or closes. Several asking at once share **one** card with a **1 of N**
+stepper (‹ ›), the longest-waiting first; `Ctrl+K N` still walks everything
+that needs you.
+
+It does **not** open by itself for an ask you already answered, put off or
+opened in its pane; for the focused session when you typed into it in the last
+10 seconds (you are already answering it there); or over another dialog (it
+waits for that one to close). It waits for the keyboard to be quiet for a
+moment first, so a word you are typing elsewhere isn't cut in half. The bell's
+**Reply**, a Question toast and the OS notification open it on demand — even
+for one you put off.
+
+**Answering by voice.** The card has a mic button with the Talk hotkey beside
+it (*Hotkey: Ctrl+T*). While the card is up, that button, the hotkey and the
+top-bar mic all listen for **this** session's answer: for a dialog, say "yes",
+"no", "always" or a number (pressed only with *Approve dialogs by voice* on in
+Settings → Voice — otherwise it says "Approving by voice is off"); for a
+question, the words are typed into the answer box as you speak, **submit**
+sends them, **disregard** clears what was said, **over** stops and leaves the
+text. With *Read replies aloud* on, the card reads the ask out as it opens —
+*"sitecheck-bot7: Allow git push? Say yes, no, or always."* — and listens for
+12 seconds, with one retry; nothing is ever spoken with it off. The card is the
+one hands-free entry: the top-bar mic no longer reads dialogs out by itself
+while the pop-up is on, so nothing is read twice.
+
+**When MindFlock is in the background.** The desktop app raises an OS
+notification — *[3] sitecheck-bot7 needs you: Question*, with the question as
+the body — at most one per session per 30 seconds, and flashes the taskbar
+button (bounces the dock icon on macOS). Clicking it brings the window
+forward, selects the session and opens the pop-up on it. The browser
+notification addon leaves these two to the desktop app, so nothing pops twice.
+In the window, the **Question** toast does the same on click. Both follow the
+*needs input* rule.
+
+**The switch.** Settings → Notifications → *Pop up a session's question in the
+middle of the screen* (`notifications.ask_popup`, on by default, saved through
+the notification settings view). Off, asks stay in the bell, the rail and the
+toasts.
 
 ## Diff → instruction
 
@@ -5804,9 +5879,14 @@ question the session asked as a prompt. A dictation's first phrase is offered
 to the voice router first ("switch to …", "focus three", "next session", "new
 session …", "what needs me", "what sessions do I have", "session three yes"),
 and the reply is read aloud only while *Read replies aloud* is on (off by
-default; right-click the mic) — with it on, a dialog on the focused session or
-a question in a reply is read out and the mic listens 12 s for the answer —
-see [The mic](#layout) in the top bar section. Words said while a text box has focus are typed there instead and
+default; right-click the mic) — with it on, a dialog or a question in a reply
+is read out and the mic listens 12 s for the answer. With the
+[ask pop-up](#when-a-session-asks-you-something) on (the default), the pop-up
+does that for any session that asks, focused or not, and while it is up the
+mic, the Talk hotkey and the pop-up's own mic button answer **that** session —
+a dialog by "yes" / "no" / "always" / a number, a question by dictating into
+its answer box ("submit" sends it); with the pop-up off, only the focused
+session's dialog is read out — see [The mic](#layout) in the top bar section. Words said while a text box has focus are typed there instead and
 never submitted. In the desktop app the words and the voice go through the
 server's engines whenever one is ready (Settings → Voice) — the app's own Web
 Speech can't recognise — and in a browser tab through the browser's unless
@@ -5976,6 +6056,87 @@ menu the server built by walking the filesystem — it never writes a path) or a
 row of `/api/repos/suggest`, and Start refuses anything that isn't absolute
 anyway. The create answers **202**, so the new session is selected from the next
 poll tick, when its row actually appears in the list.
+
+### A session is asking you something
+
+When a session waits on you — a permission prompt or other dialog, or a reply
+that ended with a question in plain prose that nobody has typed to since (the
+server's `asking` on each `GET /api/instances` row) — the phone opens the
+**ask sheet** by itself, in the middle of the screen, over whatever else is
+open. It shows the session's number (the Sessions sheet's, so "session two" by
+voice is the same one) and name, the kind of ask (**Permission**, **Question**,
+**Plan approval**, plus *from &lt;agent&gt;* for a background sub-agent's
+prompt), the question, and the command in monospace. Then the way to answer it
+right there:
+
+- **A dialog the server parsed** — its options as buttons. A tap posts
+  `POST /answer {keys, dialog_id, by: "user"}` pinned to the dialog it read;
+  a dialog that changed meanwhile (409 `dialog_changed`) is re-read and the new
+  prompt shown with a note; one answered elsewhere (409 `dialog_answered`)
+  says *Already answered*.
+- **A dialog it could not parse** — **Open the session**, and a line saying the
+  prompt needs the terminal.
+- **A question in prose** — a field and **Send** (`POST /send {text,
+  dialog_safe: true}`), plus **Open the session**. If a dialog came up in the
+  meantime (409 `in_dialog`) the sheet shows that dialog instead and keeps your
+  words in the field.
+
+**Later** puts the ask off: a prose question is dismissed on the server
+(`POST /asking/dismiss`, so it stops being "asking" everywhere), a dialog is
+snoozed on this phone by its id (a new dialog from the same session still pops
+up). A tap outside the sheet, the phone's Back and Esc do the same. Several
+sessions asking → one sheet with **1 of N** and ‹ › — dialogs first, then the
+oldest; answering one moves on to the next. The sheet does not open for an ask
+you put off or already answered, nor while you are typing into that session's
+compose box (it opens once you stop), and not by itself at all with the
+ask pop-up setting off (`notifications.ask_popup`, read from
+`GET /api/notify/ntfy`; on when absent). Whatever that setting says, an asking
+row in the Sessions sheet reads **Question** with the question under it (a
+prose question no longer reads *Idle*), tapping it opens the session with its
+ask sheet on top, and the tab's title counts the asking sessions
+(`(2) MindFlock — Mobile`). Asks arrive with the 4 s session poll; while voice
+is on, the events socket's `session.question` / clarify frames bring them at
+once.
+
+**Answering by voice.** The sheet's 🎙 listens for the answer to the ask shown
+(it selects that session first — voice follows the selection). A dialog goes
+through the voice dialog mode: *yes* / *no* / *always* (said, never implied) /
+an option's number when the options are not a permission, under **Approve
+dialogs by voice** (off → *tap an answer*). A prose question is dictated into
+the sheet's field with the radio words — *submit* sends it (a dictated answer
+asks for a spoken reply, like any dictated prompt with Spoken replies on),
+*disregard* clears it, *over* stops and leaves the words for Send; inside the
+sheet every phrase is the answer's words, never a command. The strip's state
+is mirrored on the sheet while it is open. A push's tap (`/m?s=<title>&voice=1`)
+opens that session's sheet — even with the pop-up off — with **Hear it and
+answer by voice**: one tap reads the question name first and listens (12 s, one
+*Still there?* retry), replacing the strip's *Tap to hear*. With voice already
+on and Spoken replies on, another session's new ask is read aloud once, name
+first, without listening (that would change what "yes" means mid-conversation);
+the voice session's own ask is read by its own loop, never twice.
+
+**Notifications while the page is open.** The Sessions sheet has **Notify me
+when a session asks**: it asks the browser for permission, then a new ask on a
+hidden page raises a notification (once per ask, tagged per session), and
+tapping it focuses the page with that ask's sheet open; once granted the same
+row turns them off and on for this browser. A visible page buzzes instead
+(`navigator.vibrate`, not while the mic is listening). What the phone can do
+is said under the button:
+
+- **Android Chrome** shows page notifications only through a service worker;
+  the page registers `/mobile-sw.js` (scope `/m`) when notifications are
+  allowed and shows them through it, falling back to `new Notification` (which
+  desktop browsers and Firefox accept). A backgrounded tab is polled every 10 s
+  while notifications are on, and Android freezes a long-hidden tab — a
+  closed or frozen page notifies nobody.
+- **iPhone / iPad**: only a web app added to the Home Screen (Share → Add to
+  Home Screen, iOS 16.4+) can notify at all, and even then only through a
+  service worker; a Safari tab cannot. The page says so instead of offering
+  the button.
+- Everywhere, the server's **ntfy** pushes (rule *needs input*, now also for
+  prose questions with the question as the body, tap → the deep link above)
+  are what reach a phone whose page is closed; when ntfy is active the row
+  notes that both would arrive.
 
 ### Voice: talking to a session
 

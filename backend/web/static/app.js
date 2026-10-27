@@ -25093,6 +25093,10 @@ function uncommittedWork(inst) {
 	const un = inst.diff_stat?.uncommitted;
 	return (Number(un?.additions) || 0) + (Number(un?.deletions) || 0) > 0;
 }
+function askedInWords(inst) {
+	const a = inst.asking;
+	return !!a && typeof a === "object" && a.kind === "question";
+}
 function needsYou(reason, hint) {
 	return {
 		state: "needs_you",
@@ -25193,6 +25197,7 @@ function deriveSessionState(inst, extras) {
 			hint: revive?.reason || "The agent's terminal is gone — Restart relaunches it (resuming the conversation)"
 		};
 	}
+	if (askedInWords(inst)) return needsYou("question", "The agent asked you a question in its reply — answer it from the pop-up, the bell or its pane");
 	if (inst.stage === "interrupt") {
 		const step = (inst.failed_step || "").trim();
 		return needsYou("precommit_failed", step ? "Pre-commit failed at: " + step : "Pre-commit failed");
@@ -25952,6 +25957,11 @@ function matchesFilter(inst, filter, aliases) {
 		inst.branch
 	].filter(Boolean).join(" ").toLowerCase().indexOf(filter) >= 0;
 }
+function askedQuestion(inst) {
+	const a = inst.asking;
+	if (!a || a.kind !== "question" || effectiveActivity(inst) === "clarify") return void 0;
+	return String(a.text || "");
+}
 function attentionItems(instances) {
 	const items = [];
 	for (const inst of instances || []) {
@@ -25963,7 +25973,8 @@ function attentionItems(instances) {
 				p: attentionPriority(ss),
 				title: inst.title,
 				reason: attentionReason(ss) + (step ? " at " + step : ""),
-				snippet: ss.reason === "question" || ss.reason === "stuck" ? inst.last_turn || "" : void 0
+				snippet: ss.reason === "question" || ss.reason === "stuck" ? askedQuestion(inst) ?? (inst.last_turn || "") : void 0,
+				question: ss.reason === "question" ? askedQuestion(inst) : void 0
 			});
 		} else if (ss.state === "idle" && inst.stage === "pushed") {
 			if (laneOf(inst)?.target !== "push") items.push({
@@ -28199,6 +28210,10 @@ function attachDragHistoryGesture(host, fire) {
 		window.addEventListener("mouseup", cleanup, true);
 	});
 }
+var typedAt = /* @__PURE__ */ new Map();
+function lastTypedAt(title) {
+	return typedAt.get(title) || 0;
+}
 function makeTerm(title, wsPath, interactive) {
 	const container = document.createElement("div");
 	container.className = "term-container";
@@ -28387,6 +28402,7 @@ function makeTerm(title, wsPath, interactive) {
 	};
 	if (interactive) {
 		term.onData((data) => {
+			typedAt.set(title, Date.now());
 			if (ws && ws.readyState === WebSocket.OPEN) ws.send(data);
 		});
 		attachWheelScroll(container, term, () => ws);
@@ -29532,7 +29548,7 @@ var LEAD_ASKS = {
 	lead_gone: "its lead is gone — nothing can merge or ship",
 	stray: "changes no piece owns in the lead's folder — commit or discard them yourself"
 };
-var num$4 = (v) => Number(v) || 0;
+var num$5 = (v) => Number(v) || 0;
 var str$4 = (v) => v == null ? "" : String(v);
 function runNote(event, data, info = {}) {
 	const d = data || {};
@@ -29574,8 +29590,8 @@ function runNote(event, data, info = {}) {
 			};
 		}
 		case "run.finished": {
-			const shipped = num$4(d.shipped);
-			const failed = num$4(d.failed);
+			const shipped = num$5(d.shipped);
+			const failed = num$5(d.failed);
 			const lane = info.lane?.(run) || "";
 			const word = lane === "pr" || lane === "merge" ? shipped === 1 ? " PR" : " PRs" : " " + laneDoneWord(lane);
 			const what = str$4(d.outcome) || shipped + word;
@@ -30384,7 +30400,7 @@ function planStatusOf(plan, liveBranch = "") {
 	const failed = failCount(plan);
 	if (failed) {
 		const first = steps.findIndex((s) => run.results?.[s.id]?.result === "fail");
-		const text = first >= 0 ? clip$4(steps[first].text, 80) : "";
+		const text = first >= 0 ? clip$5(steps[first].text, 80) : "";
 		return at("bad", (first >= 0 ? "Failed: step " + (first + 1) + (text ? " — " + text : "") : "Failed") + (failed > 1 ? " (+" + (failed - 1) + " more)" : "") + "." + (open.length ? " " + open.length + (open.length === 1 ? " step still needs" : " steps still need") + " you." : ""), "answer", "See what failed");
 	}
 	if (open.length) return at("you", open.length === 1 ? "1 step needs your eyes — an agent can't judge it." : open.length + " steps need your eyes — an agent can't judge them.", "answer", "Answer " + open.length + (open.length === 1 ? " step" : " steps"));
@@ -30403,7 +30419,7 @@ function planStatusOf(plan, liveBranch = "") {
 	if (unshipped) return at("ok", "Every step passed on the branch — it comes back to be checked again after merge.", "answer", "See the answers");
 	return at("ok", "Every step passed.", "answer", "See the answers");
 }
-function clip$4(text, max) {
+function clip$5(text, max) {
 	const t = String(text || "").trim().replace(/\s+/g, " ");
 	if (t.length <= max) return t.replace(/[.]$/, "");
 	const cut = t.slice(0, max);
@@ -32591,6 +32607,24 @@ function needsAttention(attn, waiting) {
 		attn: a
 	});
 	for (const w of dedupe(waiting).filter((x) => x.kind !== "prompt")) {
+		if (w.kind === "question" && w.title) {
+			if (!rows.has(w.title) || rows.get(w.title).rank > 0) {
+				const text = String(w.text || "");
+				rows.set(w.title, {
+					key: w.title,
+					title: w.title,
+					rank: 0,
+					attn: {
+						p: 0,
+						title: w.title,
+						reason: "Question",
+						snippet: text,
+						question: text
+					}
+				});
+			}
+			continue;
+		}
 		if (w.title) {
 			const had = rows.get(w.title);
 			if (had && (had.rank === 0 || had.waiting)) continue;
@@ -33960,11 +33994,11 @@ var records = /* @__PURE__ */ new Map();
 var known = /* @__PURE__ */ new Map();
 var epochCounter = 0;
 var version = 0;
-var listeners$2 = /* @__PURE__ */ new Set();
+var listeners$3 = /* @__PURE__ */ new Set();
 function subscribeHost(cb) {
-	listeners$2.add(cb);
+	listeners$3.add(cb);
 	return () => {
-		listeners$2.delete(cb);
+		listeners$3.delete(cb);
 	};
 }
 function hostVersion() {
@@ -33972,7 +34006,7 @@ function hostVersion() {
 }
 function bump() {
 	version++;
-	for (const cb of listeners$2) cb();
+	for (const cb of listeners$3) cb();
 }
 function buildTarget(extId, surfaceId, ref) {
 	return extId + ":" + surfaceId + (ref ? ":" + ref : "");
@@ -34655,24 +34689,37 @@ function normOption(v) {
 	const o = obj$3(v);
 	const key = str$3(o.key).trim();
 	if (!/^[1-9]$/.test(key)) return null;
-	return {
+	const keys = Array.isArray(o.keys) ? o.keys.map((k) => str$3(k).trim()).filter(Boolean) : [];
+	const opt = {
 		key,
 		label: str$3(o.label).trim() || key,
 		kind: str$3(o.kind, "other")
 	};
+	if (keys.length) opt.keys = keys;
+	return opt;
 }
 function normDialog(v) {
 	const o = obj$3(v);
 	const parsed = o.parsed === true;
 	const command = o.command == null ? null : str$3(o.command).trim() || null;
 	const options = parsed && Array.isArray(o.options) ? o.options.map(normOption).filter((x) => !!x) : [];
-	return {
+	const d = {
 		id: str$3(o.id),
 		parsed: parsed && options.length > 0,
 		question: str$3(o.question).trim(),
 		command,
 		options
 	};
+	if (o.kind === "question" || o.kind === "dialog") d.kind = o.kind;
+	if (d.kind === "question") {
+		d.parsed = false;
+		d.options = [];
+	}
+	const heading = str$3(o.heading).trim();
+	if (heading) d.heading = heading;
+	const source = str$3(o.source).trim();
+	if (source) d.source = source;
+	return d;
 }
 async function fetchDialog(title, signal) {
 	try {
@@ -34720,7 +34767,7 @@ async function answerFresh(title, key, shown, fetchedAt, now = Date.now()) {
 		}
 	}
 	for (let attempt = 0;; attempt++) try {
-		await answerDialog(title, key, target.id);
+		await answerDialog(title, key, target.id, target.options.find((o) => o.key === key)?.keys);
 		return {
 			kind: "answered",
 			dialog: target
@@ -34739,9 +34786,9 @@ async function answerFresh(title, key, shown, fetchedAt, now = Date.now()) {
 		target = fresh;
 	}
 }
-function answerDialog(title, key, dialogId) {
+function answerDialog(title, key, dialogId, keys) {
 	return instApi(title, "/answer", { json: {
-		keys: [key],
+		keys: keys?.length ? keys : [key],
 		dialog_id: dialogId,
 		by: "user"
 	} });
@@ -34769,6 +34816,194 @@ async function pasteWrapup(title) {
 }
 function openThread(title, composeTo) {
 	useUi.getState().threadOpen(title, composeTo ? { composeTo } : void 0);
+}
+//#endregion
+//#region src/lib/ask.ts
+var TYPED_RECENTLY_MS = 1e4;
+var EVENT_ASK_GRACE_MS = 8e3;
+var num$4 = (v) => typeof v === "number" && Number.isFinite(v) ? v : Number(v) || 0;
+var strOrNull$1 = (v) => typeof v === "string" && v.trim() ? v.trim() : null;
+function normAsking(v) {
+	if (!v || typeof v !== "object") return null;
+	const o = v;
+	const kind = o.kind === "dialog" || o.kind === "question" ? o.kind : null;
+	if (!kind) return null;
+	return {
+		kind,
+		text: strOrNull$1(o.text),
+		ts: num$4(o.ts),
+		dialog_id: strOrNull$1(o.dialog_id),
+		parsed: o.parsed === true,
+		source: strOrNull$1(o.source)
+	};
+}
+function askingOf(inst, activity = effectiveActivity(inst)) {
+	if (!inst || inst.workspace_missing || inst.status === "paused" || inst.hidden_by) return null;
+	const a = normAsking(inst.asking);
+	if (activity === "clarify") {
+		if (a && a.kind === "dialog") return a;
+		return {
+			kind: "dialog",
+			text: null,
+			ts: num$4(inst.activity_since),
+			dialog_id: null,
+			parsed: false,
+			source: null
+		};
+	}
+	if (a && a.kind === "question" && activity !== "working" && activity !== "offline" && activity !== "limit") return a;
+	return null;
+}
+function askKey(kind, ts, dialogId) {
+	return kind === "question" ? "q:" + ts : "d:" + (dialogId || "") + "@" + ts;
+}
+function itemOf(title, a) {
+	return {
+		title,
+		kind: a.kind,
+		text: a.text || "",
+		ts: a.ts,
+		dialogId: a.dialog_id,
+		key: askKey(a.kind, a.ts, a.dialog_id)
+	};
+}
+function askQueue(instances, waiting, events, opts = {}) {
+	const now = opts.now ?? Date.now();
+	const act = opts.activity ?? ((i) => effectiveActivity(i));
+	const out = /* @__PURE__ */ new Map();
+	const rows = /* @__PURE__ */ new Map();
+	for (const inst of instances || []) {
+		rows.set(inst.title, inst);
+		const a = askingOf(inst, act(inst));
+		if (a) out.set(inst.title, itemOf(inst.title, a));
+	}
+	const movedOn = (title) => {
+		const r = rows.get(title);
+		return !r || act(r) === "working" || !!r.workspace_missing || r.status === "paused" || !!r.hidden_by;
+	};
+	for (const w of waiting || []) {
+		if (w.kind !== "question" || !w.title || out.has(w.title) || movedOn(w.title)) continue;
+		const ts = num$4(w.since);
+		out.set(w.title, {
+			title: w.title,
+			kind: "question",
+			text: String(w.text || ""),
+			ts,
+			dialogId: null,
+			key: askKey("question", ts, null)
+		});
+	}
+	for (const e of events || []) {
+		if (out.has(e.title) || now - e.at > EVENT_ASK_GRACE_MS || movedOn(e.title)) continue;
+		out.set(e.title, {
+			title: e.title,
+			kind: e.kind,
+			text: e.text,
+			ts: e.ts,
+			dialogId: null,
+			key: askKey(e.kind, e.ts, null)
+		});
+	}
+	return [...out.values()].sort((a, b) => a.ts - b.ts || a.title.localeCompare(b.title));
+}
+var AskMemory = class {
+	done = /* @__PURE__ */ new Map();
+	snoozedDialog = /* @__PURE__ */ new Map();
+	handle(item, _how = "answered", dialogId) {
+		let s = this.done.get(item.title);
+		if (!s) this.done.set(item.title, s = /* @__PURE__ */ new Set());
+		s.add(item.key);
+		const id = dialogId || item.dialogId;
+		if (_how === "later" && item.kind === "dialog" && id) this.snoozedDialog.set(item.title, id);
+	}
+	handled(item) {
+		if (this.done.get(item.title)?.has(item.key)) return true;
+		const snoozed = this.snoozedDialog.get(item.title);
+		return item.kind === "dialog" && !!snoozed && !!item.dialogId && snoozed === item.dialogId;
+	}
+	forget(title) {
+		this.done.delete(title);
+		this.snoozedDialog.delete(title);
+	}
+	prune(asking) {
+		for (const t of [...this.done.keys()]) if (!asking.has(t)) this.done.delete(t);
+		for (const t of [...this.snoozedDialog.keys()]) if (!asking.has(t)) this.snoozedDialog.delete(t);
+	}
+};
+var askMemory = new AskMemory();
+function askSuppressed(item, ctx) {
+	if (!ctx.popupOn) return "off";
+	if (ctx.memory.handled(item)) return "handled";
+	const now = ctx.now ?? Date.now();
+	if (ctx.focused === item.title && ctx.typedAt && now - ctx.typedAt < TYPED_RECENTLY_MS) return "typing";
+	if (ctx.otherDialog) return "other-dialog";
+	return "";
+}
+function stepAsk(queue, current, delta) {
+	if (!queue.length) return null;
+	const at = current ? queue.findIndex((q) => q.title === current) : -1;
+	if (at < 0) return queue[0].title;
+	return queue[(at + (delta < 0 ? -1 : 1) + queue.length) % queue.length].title;
+}
+function nextAfter(queue, current, before) {
+	if (!queue.length) return null;
+	const at = before.indexOf(current);
+	for (let i = 1; at >= 0 && i < before.length; i++) {
+		const t = before[(at + i) % before.length];
+		if (t !== current && queue.some((q) => q.title === t)) return t;
+	}
+	const other = queue.find((q) => q.title !== current);
+	return other ? other.title : null;
+}
+function askKindLabel(kind, d) {
+	if (kind === "question") return "Question";
+	if (!d) return "Permission";
+	const heading = String(d.heading || "");
+	const words = [
+		heading,
+		d.question,
+		...d.options.map((o) => o.label)
+	].join(" ");
+	if (/\bplan\b/i.test(words)) return "Plan approval";
+	if (/permission/i.test(heading)) return "Permission";
+	if (d.command || d.options.some((o) => o.kind === "yes" || o.kind === "always")) return "Permission";
+	return "Question";
+}
+var NOTIFY_VIEW_KEY = ["notify-view"];
+function useAskPopup() {
+	return useQuery({
+		queryKey: NOTIFY_VIEW_KEY,
+		queryFn: () => api("/api/notify/ntfy"),
+		staleTime: 6e4,
+		refetchInterval: 3e5,
+		retry: false
+	}).data?.ask_popup !== false;
+}
+function askPopupOn() {
+	return queryClient.getQueryData(NOTIFY_VIEW_KEY)?.ask_popup !== false;
+}
+async function saveAskPopup(on) {
+	const v = await api("/api/notify/ntfy", { json: { ask_popup: on } });
+	queryClient.setQueryData(NOTIFY_VIEW_KEY, v);
+	return v?.ask_popup !== false;
+}
+function dismissQuestion(title) {
+	return instApi(title, "/asking/dismiss", { json: {} });
+}
+function sendAnswer(title, text, say = false) {
+	return instApi(title, "/send", { json: say ? {
+		text,
+		dialog_safe: true,
+		say: true
+	} : {
+		text,
+		dialog_safe: true
+	} });
+}
+function openAsk(title) {
+	if (!title) return;
+	askMemory.forget(title);
+	useUi.getState().openDialogFor("ask", title);
 }
 //#endregion
 //#region src/components/AnswerStrip.tsx
@@ -34931,15 +35166,52 @@ function AnswerStripView({ state, rootRef, variant, hint, onPick, onOpen, childr
 		})]
 	});
 }
+function AskedInWordsView({ question, variant, onReply, onOpen }) {
+	const q = (question || "").trim();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "flock-answer fa-" + variant + " is-question",
+		"data-asking": "question",
+		onClick: (e) => e.stopPropagation(),
+		onDoubleClick: (e) => e.stopPropagation(),
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "fa-q",
+			title: q || "It asked you a question in its reply",
+			children: q || "It asked you a question in its reply"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "fa-box",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fa-btns",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "fa-opt fa-reply primary",
+						title: "Answer it — type or say the reply",
+						onClick: () => onReply(),
+						children: "Reply"
+					}),
+					variant === "thread" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "fa-sp" }),
+					onOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "fa-open ghost",
+						title: "Open its pane",
+						onClick: () => onOpen(),
+						children: variant === "thread" ? "Open ↗" : "↗"
+					})
+				]
+			})
+		})]
+	});
+}
 var mounted = /* @__PURE__ */ new Map();
-function AnswerStrip({ title, activity, variant, onOpen, onRedirect, children, ref }) {
+function useAnswerStrip(title, waiting, opts = {}) {
+	const { activity = "", onRedirect, onAnswered } = opts;
 	const [state, dispatch] = (0, import_react.useReducer)(stripReducer, STRIP_INITIAL);
 	const live = (0, import_react.useRef)(state);
 	live.current = state;
 	const redirect = (0, import_react.useRef)(onRedirect);
 	redirect.current = onRedirect;
-	const { data: instances } = useInstances();
-	const waiting = activity === "clarify";
+	const answeredCb = (0, import_react.useRef)(onAnswered);
+	answeredCb.current = onAnswered;
 	(0, import_react.useEffect)(() => {
 		dispatch({ type: "reset" });
 		if (!waiting) return;
@@ -35027,8 +35299,11 @@ function AnswerStrip({ title, activity, variant, onOpen, onRedirect, children, r
 					dialog: out.dialog
 				});
 				if (opt.kind === "no") redirect.current?.();
-			} else if (out.kind === "already") dispatch({ type: "answered" });
-			else if (out.kind === "changed") dispatch({
+				answeredCb.current?.(key, opt.kind);
+			} else if (out.kind === "already") {
+				dispatch({ type: "answered" });
+				answeredCb.current?.(key, "already");
+			} else if (out.kind === "changed") dispatch({
 				type: "loaded",
 				dialog: out.dialog,
 				note: out.dialog ? "The prompt changed — this is the new one" : ""
@@ -35040,6 +35315,27 @@ function AnswerStrip({ title, activity, variant, onOpen, onRedirect, children, r
 		});
 		return true;
 	};
+	const reload = () => {
+		fetchDialog(title).then((dialog) => dispatch({
+			type: "loaded",
+			dialog
+		}), () => {});
+	};
+	return {
+		state,
+		pick,
+		root,
+		reload
+	};
+}
+function AnswerStrip({ title, activity, variant, question, onOpen, onReply, onRedirect, children, ref }) {
+	const { data: instances } = useInstances();
+	const asksInWords = question !== void 0 && activity !== "clarify";
+	const waiting = activity === "clarify";
+	const { state, pick, root } = useAnswerStrip(title, waiting, {
+		activity,
+		onRedirect
+	});
 	(0, import_react.useImperativeHandle)(ref, () => ({ answerKey: pick }));
 	const pickNow = (0, import_react.useRef)(pick);
 	pickNow.current = pick;
@@ -35053,6 +35349,12 @@ function AnswerStrip({ title, activity, variant, onOpen, onRedirect, children, r
 			if (!set.size && mounted.get(title) === set) mounted.delete(title);
 		};
 	}, [title]);
+	if (asksInWords) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AskedInWordsView, {
+		question,
+		variant,
+		onReply: onReply ?? (() => openAsk(title)),
+		onOpen
+	});
 	if (!waiting) return null;
 	let hint;
 	if (variant === "bell") {
@@ -35519,7 +35821,7 @@ function peerEventNote(event, data) {
 		}
 		case "peer.message": {
 			const text = d.stored === false ? name + " sent a message (your shared agent has it too)" : name + " sent you a message";
-			const preview = clip$3(String(d.text_head || d.text || "").replace(/\s+/g, " ").trim(), 200);
+			const preview = clip$4(String(d.text_head || d.text || "").replace(/\s+/g, " ").trim(), 200);
 			return {
 				text: preview ? text + ": " + preview : text,
 				cls: "n-info",
@@ -35539,7 +35841,7 @@ function peerEventNote(event, data) {
 			const text = name + " proposes a joint task — accept in People";
 			const brief = String(d.brief || "").trim();
 			return {
-				text: brief ? text + ": " + clip$3(brief, 80) : text,
+				text: brief ? text + ": " + clip$4(brief, 80) : text,
 				cls: "n-info",
 				toast: text
 			};
@@ -35599,7 +35901,7 @@ function peerEventNote(event, data) {
 		default: return null;
 	}
 }
-function clip$3(s, n) {
+function clip$4(s, n) {
 	return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s;
 }
 function baseName$1(path) {
@@ -36881,9 +37183,14 @@ function NotificationsBell() {
 								}),
 								a.p === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerStrip, {
 									title: it.title,
-									activity: "clarify",
+									activity: a.question !== void 0 ? "idle" : "clarify",
+									question: a.question,
 									variant: "bell",
 									onOpen: () => jump(it.title),
+									onReply: () => {
+										setOpen(false);
+										openAsk(it.title);
+									},
 									onRedirect: fam ? () => {
 										setOpen(false);
 										openThread(fam.parent || it.title, it.title);
@@ -36989,6 +37296,53 @@ function NotificationsBell() {
 			}) : null
 		]
 	}), document.body)] });
+}
+//#endregion
+//#region src/lib/askVoice.ts
+var ask = null;
+var mic = null;
+function setAskVoice(a) {
+	ask = a;
+}
+function clearAskVoice(a) {
+	if (ask === a) ask = null;
+}
+function askVoice() {
+	return ask;
+}
+function registerAskMic(m) {
+	mic = m;
+	return () => {
+		if (mic === m) mic = null;
+	};
+}
+function askMic() {
+	return mic;
+}
+var micState = {
+	listening: false,
+	title: "",
+	caption: "",
+	unsure: ""
+};
+var listeners$2 = /* @__PURE__ */ new Set();
+function publishMicState(patch) {
+	const next = {
+		...micState,
+		...patch
+	};
+	if (next.listening === micState.listening && next.title === micState.title && next.caption === micState.caption && next.unsure === micState.unsure) return;
+	micState = next;
+	listeners$2.forEach((l) => l());
+}
+function getMicState() {
+	return micState;
+}
+function subscribeMicState(cb) {
+	listeners$2.add(cb);
+	return () => {
+		listeners$2.delete(cb);
+	};
 }
 //#endregion
 //#region src/lib/wavRecorder.ts
@@ -37681,6 +38035,15 @@ var LiveDictation = class {
 			case "submit": {
 				const typedNow = !!out.text;
 				if (out.text && !await this.put(out.text)) return;
+				if (t?.kind === "field" && t.submit) {
+					this.acted = true;
+					this.end("Sending to " + t.name + "…", true);
+					const say = this.hooks.replies();
+					const r = await t.submit(say);
+					if (r.ok && t.title) this.hooks.submitted(t.title, say);
+					this.hooks.caption(r.line, !r.ok);
+					return;
+				}
 				if (!t || t.kind === "field") {
 					this.end(t ? "" : "Click a session first");
 					return;
@@ -37951,6 +38314,7 @@ var HandsFree = class {
 	deps;
 	seen = "";
 	running = false;
+	stopped = "";
 	constructor(deps) {
 		this.deps = deps;
 	}
@@ -37984,14 +38348,47 @@ var HandsFree = class {
 			this.running = false;
 		}
 	}
+	async ask(title, a) {
+		const x = this.deps;
+		if (!this.ready(title)) return;
+		this.running = true;
+		this.stopped = "";
+		try {
+			const name = x.name(title);
+			const d = a.dialog;
+			if (d) {
+				if (!d.parsed || !d.options.length || d.id === this.seen) return;
+				this.seen = d.id;
+				await x.speak(dialogSpeech(name, d));
+				if (this.stopped === title) return;
+				if (!await x.approveDialogs()) {
+					await x.speak("Answer it on the screen.");
+					return;
+				}
+				await this.listen(title, dialogRetryLine(d), name + ": " + dialogChoices(d));
+				return;
+			}
+			const q = String(a.question || "").trim();
+			if (!q) return;
+			if (a.said) await a.said;
+			else await x.speak(spokenLine(name, plain(q)));
+			if (this.stopped === title) return;
+			await this.listen(title, "Still there? " + spokenLine(name, plain(q)), "Answer " + name + " — say submit to send");
+		} finally {
+			this.running = false;
+		}
+	}
+	stop(title) {
+		this.stopped = title;
+	}
 	ready(title) {
 		return !!title && !this.running && this.deps.replies() && !this.deps.busy();
 	}
 	async listen(title, retry, hint) {
 		const x = this.deps;
 		for (let tries = 0;; tries++) {
-			if (!x.replies() || x.busy()) return;
-			if (await x.listen(title, hint, ANSWER_LISTEN_MS) !== "missed") return;
+			if (!x.replies() || x.busy() || this.stopped === title) return;
+			if (await x.listen(title, hint, ANSWER_LISTEN_MS) !== "missed" || this.stopped === title) return;
 			if (tries >= 1) {
 				x.caption(x.name(title) + " is waiting on you");
 				return;
@@ -38813,6 +39210,8 @@ var tracker = new ReplyTracker();
 var speakingListeners = /* @__PURE__ */ new Set();
 var queue = new SpeechQueue(() => ttsEngine(cfgNow) === "server" ? serverSp : browserSp, (on) => speakingListeners.forEach((l) => l(on)));
 var questions = /* @__PURE__ */ new Map();
+var asksSaid = /* @__PURE__ */ new Map();
+var SAID_FRESH_MS = 6e4;
 function refreshQuestion(title) {
 	if (!title) return;
 	instApi(title, "/voice").then((j) => {
@@ -38820,9 +39219,12 @@ function refreshQuestion(title) {
 		else questions.delete(title);
 	}).catch(() => {});
 }
-function talkShortcut() {
+function talkHotkey() {
 	const e = KEYMAP.find((b) => !b.aliasOf && /\btalk\b/i.test(String(b.help?.[2] || "")));
-	return e?.id && shortcutLabels(e.id)[0] || "the Talk shortcut in Keyboard shortcuts";
+	return e?.id && shortcutLabels(e.id)[0] || "";
+}
+function talkShortcut() {
+	return talkHotkey() || "the Talk shortcut in Keyboard shortcuts";
 }
 function recEngine(c) {
 	const e = sttEngine(c, serverRec.available());
@@ -38875,6 +39277,16 @@ function fieldTarget(el) {
 function liveActivity(title) {
 	return effectiveActivity((queryClient.getQueryData(["instances"]) || []).find((i) => i.title === title) || { title });
 }
+function askTarget(ask) {
+	const el = ask.field();
+	if (!el) return null;
+	return {
+		...fieldTarget(el),
+		title: ask.title,
+		name: displayName(ask.title),
+		submit: (say) => ask.submit(say)
+	};
+}
 function MicGlyph() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 		viewBox: "0 0 24 24",
@@ -38922,6 +39334,10 @@ function TopBarMic() {
 	const say = (text, sticky = false, tail = "") => {
 		setCaptionState(text);
 		setUnsure(tail);
+		publishMicState({
+			caption: text,
+			unsure: tail
+		});
 		clearTimeout(captionTimer.current);
 		if (text && !sticky) captionTimer.current = setTimeout(() => setCaptionState(""), 6e3);
 	};
@@ -38965,7 +39381,12 @@ function TopBarMic() {
 				say(line);
 				if (!prefsRef.current.replies) return;
 				if (ask) questions.set(title, ask);
-				queue.say(line).then(() => {
+				const said = queue.say(line);
+				if (ask && askPopupOn()) asksSaid.set(title, {
+					done: said,
+					at: Date.now()
+				});
+				else said.then(() => {
 					if (ask) hands.current?.question(title, ask);
 				});
 			};
@@ -38992,7 +39413,7 @@ function TopBarMic() {
 					tracker.working(env.session);
 					questions.delete(env.session);
 				} else if (env.new === "idle") ended(env.session, env.data || {}, Number(env.ts) || 0);
-				else if (env.new === "clarify") hands.current?.dialog(env.session);
+				else if (env.new === "clarify" && !askPopupOn()) hands.current?.dialog(env.session);
 			}), ev.subscribe("session.turn_ended", (env) => {
 				if (!replay(env)) ended(env.session, env.data || {}, Number(env.ts) || 0);
 			})];
@@ -39021,15 +39442,33 @@ function TopBarMic() {
 		rec.current?.stop();
 		rec.current = null;
 		setListening(false);
+		publishMicState({
+			listening: false,
+			title: ""
+		});
 		queue.release();
 	};
 	const target = (into, session = "") => {
 		if (into) return fieldTarget(into);
+		const ask = askVoice();
+		if (ask && session === ask.title && ask.kind === "question") {
+			const t = askTarget(ask);
+			if (t) return t;
+		}
 		const title = session || useUi.getState().focused;
 		return title ? sessionTarget(title, displayName(title)) : null;
 	};
 	const start = (into, opts = {}) => {
 		if (live.current) return null;
+		const ask = askVoice();
+		if (ask && !opts.title && (!into || into === ask.field())) {
+			into = null;
+			opts = {
+				...opts,
+				title: ask.title,
+				hint: opts.hint || ask.hint()
+			};
+		}
 		const c = cfgNow;
 		const engine = recEngine(c);
 		if (engine === "none") {
@@ -39064,6 +39503,10 @@ function TopBarMic() {
 		live.current = d;
 		rec.current = r;
 		setListening(true);
+		publishMicState({
+			listening: true,
+			title: into ? "" : opts.title || useUi.getState().focused || ""
+		});
 		d.show();
 		armIdle();
 		const ok = r.start({
@@ -39242,6 +39685,28 @@ function TopBarMic() {
 		caption: say,
 		listen: (title, hint, ms) => latest.current.listenFor(title, hint, ms)
 	});
+	(0, import_react.useEffect)(() => registerAskMic({
+		handsFree: (title, a) => {
+			const said = asksSaid.get(title);
+			asksSaid.delete(title);
+			const fresh = said && Date.now() - said.at < SAID_FRESH_MS ? said.done : null;
+			hands.current?.ask(title, {
+				...a,
+				said: fresh
+			});
+		},
+		stop: (title) => {
+			hands.current?.stop(title);
+			const d = live.current;
+			if (d && getMicState().title === title) d.expire();
+		},
+		cancel: () => {
+			if (!live.current) return false;
+			live.current.cancel();
+			return true;
+		},
+		supported: () => recEngine(cfgNow) !== "none"
+	}), []);
 	const hold = prefs.ptt === "hold";
 	const openMenu = () => {
 		setMenuOpen(true);
@@ -39498,9 +39963,38 @@ function bridge$1() {
 	const w = window;
 	return w.mfnotify && typeof w.mfnotify.show === "function" ? w.mfnotify : null;
 }
-function desktopNoteFor(event, data) {
+var SESSION_TARGET = "session:";
+function slotted(title) {
+	const n = slotNumber(title);
+	return (n ? "[" + n + "] " : "") + windowName(title);
+}
+function clip$3(text, max = 200) {
+	const t = text.replace(/\s+/g, " ").trim();
+	return t.length > max ? t.slice(0, max - 1).trimEnd() + "…" : t;
+}
+function desktopNoteFor(event, data, env) {
 	const d = data || {};
 	switch (event) {
+		case "session.activity_changed": {
+			const title = String(env?.session || "");
+			if (env?.new !== "clarify" || !title) return null;
+			const text = String(d.question || d.text || "").trim();
+			return {
+				title: slotted(title) + " needs you: Question",
+				body: text ? clip$3(text) : "It's waiting on a dialog — answer it in MindFlock",
+				target: SESSION_TARGET + title
+			};
+		}
+		case "session.question": {
+			const title = String(env?.session || d.title || "");
+			if (!title) return null;
+			const text = String(d.text || "").trim();
+			return {
+				title: slotted(title) + " needs you: Question",
+				body: text ? clip$3(text) : "It asked you a question in its reply",
+				target: SESSION_TARGET + title
+			};
+		}
 		case "device.join_requested": {
 			const host = String(d.host || d.device || "A computer");
 			const via = d.via ? " (asked " + String(d.via_host || d.via) + ")" : "";
@@ -39556,12 +40050,19 @@ function desktopNoteFor(event, data) {
 		default: return null;
 	}
 }
-function desktopNotify(event, data) {
+var SESSION_NOTE_GAP_MS = 3e4;
+var sessionNotedAt = /* @__PURE__ */ new Map();
+function desktopNotify(event, data, env) {
 	const b = bridge$1();
 	if (!b) return false;
 	if (typeof document !== "undefined" && document.hasFocus()) return false;
-	const n = desktopNoteFor(event, data);
+	const n = desktopNoteFor(event, data, env);
 	if (!n) return false;
+	if (n.target.startsWith(SESSION_TARGET)) {
+		const now = Date.now();
+		if (now - (sessionNotedAt.get(n.target) || 0) < SESSION_NOTE_GAP_MS) return false;
+		sessionNotedAt.set(n.target, now);
+	}
 	try {
 		b.show(n);
 		return true;
@@ -39570,7 +40071,12 @@ function desktopNotify(event, data) {
 	}
 }
 function openNotifyTarget(target) {
-	if (target === "devices") openSettings("devices");
+	if (target.startsWith(SESSION_TARGET)) {
+		const title = target.slice(8);
+		if (!title) return;
+		selectSession(title, { noKeyboard: true });
+		openAsk(title);
+	} else if (target === "devices") openSettings("devices");
 	else if (target === "peer") openSettings(PEER_SCREEN);
 	else if (target === "update") openSettings("advanced");
 }
@@ -40054,6 +40560,14 @@ function namedSlot(session) {
 	const n = slotNumber(session);
 	return (n ? "[" + n + "] " : "") + displayName(session);
 }
+function clipSnippet(text, max = 120) {
+	const t = text.replace(/\s+/g, " ").trim();
+	return t.length > max ? t.slice(0, max - 1).trimEnd() + "…" : t;
+}
+function openAskFromToast(title) {
+	selectSession(title, { noKeyboard: true });
+	openAsk(title);
+}
 function instByTitle(title) {
 	return instances().find((i) => i.title === title) || null;
 }
@@ -40112,7 +40626,11 @@ function EventToasts() {
 			if (env.new === "clarify" && inst) {
 				const ss = deriveSessionState(inst, { activity: "clarify" });
 				if (!ruleOn(notifyRuleFor(ss))) return;
-				notifyOnce(env.session, "clarify", attentionToast(namedSlot(env.session), ss, inst.last_turn), { onClick: () => selectSession(env.session) });
+				desktopNotify(env.event, {
+					...env.data,
+					question: inst.asking?.text || ""
+				}, env);
+				notifyOnce(env.session, "clarify", attentionToast(namedSlot(env.session), ss, inst.asking?.text || inst.last_turn), { onClick: () => openAskFromToast(env.session) });
 			} else if (env.new === "offline" && inst) {
 				const ss = deriveSessionState(inst, { activity: "offline" });
 				if (!ss.inBell || !ruleOn(notifyRuleFor(ss))) return;
@@ -40121,6 +40639,29 @@ function EventToasts() {
 					duration: 8e3
 				});
 			}
+		}));
+		unsubs.push(ev.subscribe("session.question", (env) => {
+			refreshInstances();
+			updateTitleBadge();
+			if (isReplay(env) || !env.session) return;
+			const ss = deriveSessionState({
+				title: env.session,
+				asking: {
+					kind: "question",
+					text: null,
+					ts: 0,
+					dialog_id: null,
+					parsed: false,
+					source: null
+				}
+			});
+			if (!ruleOn(notifyRuleFor(ss))) return;
+			desktopNotify(env.event, env.data, env);
+			const text = String(env.data?.text || "").trim();
+			notifyOnce(env.session, "question", attentionToast(namedSlot(env.session), ss, text ? clipSnippet(text) : null), {
+				onClick: () => openAskFromToast(env.session),
+				duration: 8e3
+			});
 		}));
 		unsubs.push(ev.subscribe("session.setup_finished", (env) => {
 			if (isReplay(env) || env.new === "ok") return;
@@ -44977,6 +45518,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 		useUi.getState().setLastTab(title, "shell");
 	};
 	const answering = (inFamily(inst, isWorker, kids.length) || shipLane || !onScreen) && activity === "clarify" && !missing && !paused;
+	const askedWords = !answering && !onScreen && !missing && !paused ? askedQuestion(inst) : void 0;
 	const task = taskLineOf(inst).text;
 	const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !!task;
 	const subline = !editing && (ship || wline || roll || lline || lineage || taskLine || !!noAgent);
@@ -45480,6 +46022,13 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 								children: "Cancel"
 							})]
 						})]
+					}),
+					askedWords !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerStrip, {
+						title,
+						activity,
+						question: askedWords,
+						variant: "rail",
+						onOpen: () => selectSession(title)
 					}),
 					answering && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerStrip, {
 						ref: strip,
@@ -73087,6 +73636,24 @@ var SETTINGS_SEARCH = [
 	},
 	{
 		key: "notifications",
+		label: "Notifications → Question pop-up",
+		sub: "Pop up a session's question in the middle of the screen",
+		terms: [
+			"question",
+			"questions",
+			"pop up",
+			"popup",
+			"pop-up",
+			"ask",
+			"asking",
+			"dialog",
+			"permission",
+			"answer"
+		],
+		anchor: "#notif-ask-row"
+	},
+	{
+		key: "notifications",
 		label: "Notifications → Phone alerts",
 		sub: "Push notifications to your phone (ntfy)",
 		terms: [
@@ -91013,6 +91580,9 @@ function groupRules(rules) {
 		more: rules.filter((r) => ruleGroup(r.id) === MORE_GROUP)
 	};
 }
+var ASK_POPUP_LABEL = "Pop up a session's question in the middle of the screen";
+var ASK_POPUP_HINT = "When a session asks you something — a dialog, or a question at the end of its reply — answer it right there, typed or by voice. Later puts it off; the bell keeps it.";
+var NEEDS_INPUT_EXTRA = "Also covers a question the agent asks in plain words at the end of its reply.";
 var ONLY_BELL_HINT = "Right now alerts only show in the bell. Turn on desktop or phone alerts to hear about them when you're away.";
 var AGENT_WORDS_LABEL = "Include the agent's words in pushes";
 var AGENT_WORDS_HINT = "The spoken summary of a finished turn and the question of a dialog travel through your ntfy server.";
@@ -91097,6 +91667,7 @@ function Notifications({ gotoScreen }) {
 						children: "On"
 					})]
 				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AskPopupRow, {}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "notif-channel set-switch-row",
 					id: "notif-browser-row",
@@ -91550,6 +92121,49 @@ function Ntfy({ onChange, setup = 0 } = {}) {
 		})
 	] });
 }
+function AskPopupRow() {
+	const on = useAskPopup();
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "notif-channel set-switch-row",
+		id: "notif-ask-row",
+		"data-channel": "popup",
+		title: "A session asking you something opens a card in the middle of the screen",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "notif-rule-text",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				id: "notif-ask-label",
+				children: ASK_POPUP_LABEL
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint notif-rule-desc",
+				children: ASK_POPUP_HINT
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "ca-switch",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				id: "notif-ask-popup",
+				"aria-labelledby": "notif-ask-label",
+				checked: on,
+				disabled: busy,
+				onChange: async (e) => {
+					const want = e.target.checked;
+					const row = e.currentTarget;
+					setBusy(true);
+					try {
+						await saveAskPopup(want);
+						if (!flashSaved(row)) toast(want ? "Questions pop up" : "Questions stay in the bell");
+					} catch {
+						toast("Save failed: the question pop-up");
+					} finally {
+						setBusy(false);
+					}
+				}
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+		})]
+	});
+}
 function RuleRow({ rule }) {
 	const [on, setOn] = (0, import_react.useState)(rule.enabled !== false);
 	const { label, desc } = ruleCopy(rule);
@@ -91559,14 +92173,22 @@ function RuleRow({ rule }) {
 		"data-rule": rule.id,
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			className: "notif-rule-text",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				id: labelId,
-				children: label
-			}), desc && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-hint notif-rule-desc",
-				children: desc
-			})]
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					id: labelId,
+					children: label
+				}),
+				desc && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint notif-rule-desc",
+					children: desc
+				}),
+				rule.id === "needs_input" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint notif-rule-desc notif-rule-extra",
+					id: "notif-needs-input-extra",
+					children: NEEDS_INPUT_EXTRA
+				})
+			]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 			className: "ca-switch",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -102129,6 +102751,549 @@ function MakePrDialog() {
 	});
 }
 //#endregion
+//#region src/components/dialogs/AskDialog.tsx
+var KEYS_QUIET_MS = 1200;
+var RECHECK_MS = 1500;
+function letterOption(options, key) {
+	const k = key.toLowerCase();
+	const kind = k === "y" ? "yes" : k === "n" ? "no" : k === "a" ? "always" : "";
+	return kind && options.find((o) => o.kind === kind) || null;
+}
+function askKeyPick(d, e, typing) {
+	if (!d || !d.parsed || typing || e.ctrlKey || e.metaKey || e.altKey) return null;
+	if (/^[1-9]$/.test(e.key)) return d.options.some((o) => o.key === e.key) ? e.key : null;
+	return letterOption(d.options, e.key)?.key ?? null;
+}
+function sendFailure(err, name) {
+	const body = err instanceof ApiError ? err.body : err?.body;
+	const status = err?.status;
+	if (status === 409 && body?.in_dialog) return {
+		line: name + " is showing a dialog now — answer that first",
+		inDialog: true
+	};
+	if (status === 409 && body?.waking) return {
+		line: name + " is waking up — send it again in a moment",
+		inDialog: false
+	};
+	if (status === 409 && body?.paused) return {
+		line: name + " is paused — resume it first",
+		inDialog: false
+	};
+	return {
+		line: "Couldn't send: " + errMsg(err),
+		inDialog: false
+	};
+}
+function slotName(title) {
+	return {
+		slot: slotNumber(title),
+		name: windowName(title)
+	};
+}
+function onIdle(fn) {
+	const w = window;
+	if (typeof w.requestIdleCallback === "function") {
+		const id = w.requestIdleCallback(fn, { timeout: 600 });
+		return () => w.cancelIdleCallback?.(id);
+	}
+	const id = window.setTimeout(fn, 0);
+	return () => clearTimeout(id);
+}
+var readOut = /* @__PURE__ */ new Set();
+var autoOpenPausedUntil = 0;
+function AskDialog() {
+	const open = useUi((s) => s.openDialog === "ask");
+	const target = useUi((s) => s.openDialog === "ask" ? s.dialogTarget : null);
+	const focused = useUi((s) => s.focused);
+	const popupOn = useAskPopup();
+	const { data: instances } = useInstances();
+	const { data: outbox } = useOutbox();
+	const events = (0, import_react.useRef)([]);
+	const [tick, setTick] = (0, import_react.useState)(0);
+	const bump = (0, import_react.useCallback)(() => setTick((n) => n + 1), []);
+	const lastKey = (0, import_react.useRef)(0);
+	(0, import_react.useEffect)(() => {
+		const onKey = () => {
+			lastKey.current = Date.now();
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
+	}, []);
+	(0, import_react.useEffect)(() => {
+		let unsubs = [];
+		let retry;
+		const attach = () => {
+			const ev = window.mindflock?.events;
+			if (!ev) {
+				retry = setTimeout(attach, 1e3);
+				return;
+			}
+			const replay = (env) => typeof ev.isReplay === "function" && ev.isReplay(env);
+			unsubs = [ev.subscribe("session.question", (env) => {
+				if (replay(env) || !env.session) return;
+				const d = env.data || {};
+				events.current = events.current.filter((e) => e.title !== env.session);
+				events.current.push({
+					title: env.session,
+					kind: "question",
+					text: String(d.text || ""),
+					ts: Number(d.ts) || Number(env.ts) || 0,
+					at: Date.now()
+				});
+				bump();
+			}), ev.subscribe("session.activity_changed", (env) => {
+				if (env.new === "working") events.current = events.current.filter((e) => e.title !== env.session);
+				bump();
+			})];
+		};
+		attach();
+		return () => {
+			clearTimeout(retry);
+			unsubs.forEach((u) => u());
+		};
+	}, [bump]);
+	const all = (0, import_react.useMemo)(() => askQueue(instances || [], outbox?.groups?.waiting, events.current), [
+		instances,
+		outbox,
+		tick
+	]);
+	const queue = all.filter((i) => !askMemory.handled(i));
+	const queueKey = queue.map((q) => q.title + "|" + q.key).join("\n");
+	const queueRef = (0, import_react.useRef)(queue);
+	queueRef.current = queue;
+	(0, import_react.useEffect)(() => {
+		askMemory.prune(new Set(all.map((i) => i.title)));
+	}, [all]);
+	(0, import_react.useEffect)(() => {
+		if (open || !popupOn) return;
+		let cancelIdle = null;
+		let timer;
+		const pick = () => {
+			const now = Date.now();
+			const other = overlayOpen();
+			if (now < autoOpenPausedUntil) return null;
+			let found = null;
+			for (const item of queueRef.current) {
+				const why = askSuppressed(item, {
+					popupOn,
+					memory: askMemory,
+					focused: useUi.getState().focused,
+					typedAt: lastTypedAt(item.title),
+					otherDialog: other,
+					now
+				});
+				if (why === "typing") askMemory.handle(item, "typing");
+				else if (!why && !found) found = item;
+			}
+			return found;
+		};
+		const attempt = () => {
+			if (!pick()) return;
+			const wait = lastKey.current + KEYS_QUIET_MS - Date.now();
+			if (wait > 0) {
+				timer = setTimeout(attempt, wait);
+				return;
+			}
+			cancelIdle = onIdle(() => {
+				const item = pick();
+				if (!item || useUi.getState().openDialog) return;
+				useUi.getState().openDialogFor("ask", item.title);
+			});
+		};
+		attempt();
+		const again = queueKey ? setInterval(bump, RECHECK_MS) : void 0;
+		return () => {
+			clearTimeout(timer);
+			clearInterval(again);
+			cancelIdle?.();
+		};
+	}, [
+		open,
+		popupOn,
+		queueKey,
+		focused,
+		bump
+	]);
+	const shown = (0, import_react.useRef)([]);
+	const current = open && target ? queue.find((q) => q.title === target) || null : null;
+	if (current) shown.current = queue.map((q) => q.title);
+	const currentKey = current?.key || "";
+	(0, import_react.useEffect)(() => {
+		if (!open || !target || currentKey) return;
+		const next = nextAfter(queueRef.current, target, shown.current);
+		if (next) useUi.getState().openDialogFor("ask", next);
+		else useUi.getState().closeDialog();
+	}, [
+		open,
+		target,
+		currentKey,
+		queueKey
+	]);
+	if (!open || !current) return null;
+	const at = queue.findIndex((q) => q.title === current.title);
+	const done = (how, dialogId) => {
+		askMemory.handle(current, how, dialogId);
+		bump();
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "ask-dialog",
+		className: "ask-modal",
+		role: "dialog",
+		"aria-modal": "true",
+		"aria-labelledby": "ask-title",
+		escapeCapture: true,
+		closeOnBackdrop: false,
+		onEscape: () => askMic()?.cancel() === true,
+		onClose: () => laterRef.current?.(),
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AskPanel, {
+			item: current,
+			index: at,
+			count: queue.length,
+			onStep: (delta) => {
+				const t = stepAsk(queue, current.title, delta);
+				if (t) useUi.getState().openDialogFor("ask", t);
+			},
+			onDone: done,
+			laterRef
+		}, current.title + "|" + current.key)
+	});
+}
+var laterRef = { current: null };
+function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
+	const { title } = item;
+	const { slot, name } = slotName(title);
+	const isDialog = item.kind === "dialog";
+	const strip = useAnswerStrip(title, isDialog, {
+		activity: item.key,
+		onAnswered: (_key, kind) => {
+			if (kind === "already") toast("Already answered — " + name);
+			onDone("answered", strip.state.dialog?.id);
+			if (kind === "no") {
+				autoOpenPausedUntil = Date.now() + TYPED_RECENTLY_MS;
+				selectSession(title);
+				useUi.getState().closeDialog();
+			}
+		}
+	});
+	const d = isDialog ? strip.state.dialog : null;
+	const field = (0, import_react.useRef)(null);
+	const [hasText, setHasText] = (0, import_react.useState)(false);
+	const [sending, setSending] = (0, import_react.useState)(false);
+	const [note, setNote] = (0, import_react.useState)("");
+	const later = (0, import_react.useCallback)(() => {
+		if (item.kind === "question") dismissQuestion(title).catch((err) => toast("Couldn't put it off: " + errMsg(err)));
+		onDone("later", d?.id);
+	}, [
+		item.kind,
+		title,
+		onDone,
+		d?.id
+	]);
+	laterRef.current = later;
+	const openPane = () => {
+		onDone("pane", d?.id);
+		selectSession(title);
+		useUi.getState().closeDialog();
+	};
+	const send = (0, import_react.useCallback)(async (say = false) => {
+		const text = (field.current?.value || "").trim();
+		if (!text) return {
+			ok: false,
+			line: "Nothing to send yet"
+		};
+		setSending(true);
+		setNote("");
+		try {
+			const line = ((await sendAnswer(title, text, say))?.queued ? "Queued for " : "Sent to ") + name + ".";
+			toast(line);
+			onDone("answered");
+			return {
+				ok: true,
+				line
+			};
+		} catch (err) {
+			const f = sendFailure(err, name);
+			setNote(f.line);
+			if (f.inDialog) {
+				forceActivity(title, "clarify");
+				refreshInstances();
+			}
+			return {
+				ok: false,
+				line: f.line
+			};
+		} finally {
+			setSending(false);
+		}
+	}, [
+		title,
+		name,
+		onDone
+	]);
+	const hint = d?.parsed ? name + ": " + dialogChoices(d) : isDialog ? "Answer " + name + " on the screen" : "Answer " + name + " — say submit to send";
+	const sendRef = (0, import_react.useRef)(send);
+	sendRef.current = send;
+	const hintRef = (0, import_react.useRef)(hint);
+	hintRef.current = hint;
+	(0, import_react.useEffect)(() => {
+		const voice = {
+			title,
+			kind: isDialog ? "dialog" : "question",
+			hint: () => hintRef.current,
+			field: () => field.current,
+			submit: (say) => sendRef.current(say)
+		};
+		setAskVoice(voice);
+		return () => {
+			clearAskVoice(voice);
+			setTimeout(() => {
+				if (askVoice()?.title !== title) askMic()?.stop(title);
+			}, 0);
+		};
+	}, [title, isDialog]);
+	const dialogReady = !!d && strip.state.phase === "ready";
+	(0, import_react.useEffect)(() => {
+		if (readOut.has(item.key)) return;
+		if (item.kind === "dialog") {
+			if (!dialogReady || !d) return;
+			readOut.add(item.key);
+			askMic()?.handsFree(title, { dialog: d });
+		} else {
+			readOut.add(item.key);
+			askMic()?.handsFree(title, { question: item.text });
+		}
+	}, [
+		item.key,
+		item.kind,
+		dialogReady,
+		title
+	]);
+	const pickRef = (0, import_react.useRef)(strip.pick);
+	pickRef.current = strip.pick;
+	(0, import_react.useEffect)(() => {
+		if (!d?.parsed) return;
+		const onKey = (e) => {
+			const el = document.activeElement;
+			const typing = !!el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT");
+			const key = askKeyPick(d, e, typing);
+			if (!key) return;
+			e.preventDefault();
+			e.stopPropagation();
+			pickRef.current(key);
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
+	}, [d]);
+	const primaryBtn = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		if (d?.parsed) primaryBtn.current?.focus({ preventScroll: true });
+	}, [d?.id, d?.parsed]);
+	(0, import_react.useEffect)(() => {
+		if (!isDialog) setTimeout(() => field.current?.focus({ preventScroll: true }), 0);
+	}, [isDialog]);
+	const kind = askKindLabel(item.kind, d);
+	const loading = isDialog && !d && strip.state.phase !== "ready";
+	const question = isDialog ? (d ? questionText(d, "thread") : "") || item.text : item.text || "It asked you a question in its reply";
+	const busy = strip.state.phase === "sending" || strip.state.phase === "answered";
+	const prim = d ? primaryIndex(d.options) : -1;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ask-card",
+		"data-ask": item.kind,
+		"data-title": title,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ask-head",
+				children: [
+					slot && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ask-slot",
+						title: "Row " + slot + " on the rail",
+						children: slot
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+						id: "ask-title",
+						title,
+						children: name
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ask-kind",
+						"data-kind": kind.toLowerCase().replace(/\s+/g, "-"),
+						children: kind
+					}),
+					count > 1 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "ask-step",
+						"aria-label": "Ask " + (index + 1) + " of " + count,
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "ghost",
+								"aria-label": "Previous",
+								title: "Previous",
+								onClick: () => onStep(-1),
+								children: "‹"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "ask-step-n",
+								children: [
+									index + 1,
+									" of ",
+									count
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "ghost",
+								"aria-label": "Next",
+								title: "Next",
+								onClick: () => onStep(1),
+								children: "›"
+							})
+						]
+					})
+				]
+			}),
+			d?.source && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ask-source",
+				children: ["Asked by the ", d.source]
+			}),
+			loading && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ask-q muted",
+				children: "Reading the prompt…"
+			}),
+			question && !loading && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ask-q",
+				id: "ask-question",
+				children: question
+			}),
+			d?.command && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+				className: "ask-cmd",
+				children: d.command
+			}),
+			d?.parsed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ask-opts",
+				role: "group",
+				"aria-label": "Answers",
+				children: [(strip.state.phase === "answered" ? d.options.filter((o) => o.key === strip.state.picked) : d.options).map((o, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					ref: i === prim ? primaryBtn : void 0,
+					type: "button",
+					className: "ask-opt" + (i === prim ? " primary" : "") + (strip.state.picked === o.key ? " picked" : ""),
+					"data-key": o.key,
+					"data-kind": o.kind,
+					disabled: busy,
+					title: "Press " + o.key + ": " + o.label,
+					onClick: () => strip.pick(o.key),
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "k",
+						children: o.key
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ask-opt-label",
+						children: optionLabel(o, "thread")
+					})]
+				}, o.key)), strip.state.phase === "sending" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ask-state",
+					children: "sending…"
+				})]
+			}),
+			isDialog && !d?.parsed && !loading && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ask-unparsed",
+				children: "This prompt needs the terminal — open the pane to answer it."
+			}),
+			!isDialog && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+				ref: field,
+				id: "ask-answer",
+				className: "ask-answer",
+				rows: 3,
+				placeholder: "Your answer…",
+				"aria-labelledby": "ask-question",
+				spellCheck: true,
+				disabled: sending,
+				onInput: (e) => setHasText(!!e.currentTarget.value.trim()),
+				onKeyDown: (e) => {
+					if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+					e.preventDefault();
+					send(false);
+				}
+			}),
+			(strip.state.note || note) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ask-note",
+				role: "status",
+				children: note || strip.state.note
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AskMicRow, { title }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "modal-actions",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ask-keys",
+						children: d?.parsed ? "1–9 or Y / N / A · Enter · Esc later" : !isDialog ? "Enter sends · Shift+Enter new line · Esc later" : "Esc later"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "ask-open",
+						onClick: openPane,
+						children: "Open the pane ↗"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "ask-later",
+						onClick: later,
+						title: "Put it off — the bell keeps it",
+						children: "Later"
+					}),
+					!isDialog && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "submit",
+						id: "ask-send",
+						disabled: !hasText || sending,
+						onClick: () => void send(false),
+						children: sending ? "Sending…" : "Send"
+					})
+				]
+			})
+		]
+	});
+}
+function AskMicRow({ title }) {
+	const st = (0, import_react.useSyncExternalStore)(subscribeMicState, getMicState, getMicState);
+	const mic = askMic();
+	if (!mic || !mic.supported()) return null;
+	const mine = st.title === title;
+	const listening = st.listening && mine;
+	const key = talkHotkey();
+	const talk = (phase) => window.dispatchEvent(new CustomEvent(TALK_EVENT, { detail: { phase } }));
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ask-voice",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			id: "ask-mic",
+			className: "ask-mic tb-item" + (listening ? " listening" : ""),
+			"aria-pressed": listening,
+			"aria-label": listening ? "Listening — stop" : "Answer by voice",
+			title: listening ? "Listening — click to stop" : "Answer by voice" + (key ? " (" + key + ")" : ""),
+			onPointerDown: (e) => {
+				if (e.button !== 0) return;
+				e.preventDefault();
+				try {
+					e.currentTarget.setPointerCapture(e.pointerId);
+				} catch {}
+				talk("down");
+			},
+			onPointerUp: () => talk("up"),
+			onClick: (e) => {
+				if (e.detail === 0) talk("down");
+			},
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MicGlyph, {})
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "ask-voice-text",
+			children: listening || mine && st.caption ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [st.caption, st.unsure && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "ask-unsure",
+				children: [" ", st.unsure]
+			})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "muted",
+				children: key ? "Hotkey: " + key : "Answer by voice"
+			})
+		})]
+	});
+}
+//#endregion
 //#region src/components/dialogs/RenameDialog.tsx
 function RenameDialog() {
 	const open = useUi((s) => s.openDialog === "rename");
@@ -105535,6 +106700,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssistantAgentDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RedZonesDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExtensionDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AskDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommandPalette, { host }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShortcutsSheet, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WelcomeTour, {}),

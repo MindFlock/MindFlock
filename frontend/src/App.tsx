@@ -32,6 +32,7 @@ import { VerifyDialog } from "./components/dialogs/VerifyDialog";
 import { CommitDialog } from "./components/dialogs/CommitDialog";
 import { PeerSessionViewer } from "./components/PeerSessionViewer";
 import { MakePrDialog } from "./components/dialogs/MakePrDialog";
+import { AskDialog } from "./components/dialogs/AskDialog";
 import { RenameDialog } from "./components/dialogs/RenameDialog";
 import { RecentDialog } from "./components/dialogs/RecentDialog";
 import { SetupDialog, useDoctorAutoShow } from "./components/dialogs/SetupDialog";
@@ -317,6 +318,8 @@ export default function App() {
       <AssistantAgentDialog />
       <RedZonesDialog />
       <ExtensionDialog />
+      {/* A session asking you something: opens by itself (lib/ask.ts). */}
+      <AskDialog />
       <CommandPalette host={host} />
       <ShortcutsSheet />
       <WelcomeTour />

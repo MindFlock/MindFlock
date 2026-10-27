@@ -55,7 +55,16 @@ async function fetchRules(apiBase) {
 // A rule matches when the event name is equal and its old/new constraints
 // (null = any value) hold against the envelope.
 function ruleMatches(rule, env) {
-  if (rule.event !== env.event) return false;
+  if (matchesOne(rule, env)) return true;
+  // A rule may ALSO match other events (needs_input: session.question, a
+  // question asked in plain words) — the server's _matches honours the same
+  // list, exposed on GET /api/notify/config.
+  const also = Array.isArray(rule.also) ? rule.also : [];
+  return also.some((r) => matchesOne(r, env));
+}
+
+function matchesOne(rule, env) {
+  if (!rule || rule.event !== env.event) return false;
   if (rule.old != null && rule.old !== env.old) return false;
   if (rule.new != null && rule.new !== env.new) return false;
   return true;
@@ -151,7 +160,12 @@ window.mindflockAddons.notify = {
       return;
     }
 
-    const DESKTOP_OWNED = new Set(["device.join_requested", "peer.link_added", "update.available"]);
+    const DESKTOP_OWNED = new Set(["device.join_requested", "peer.link_added", "update.available", "session.question"]);
+    // The desktop app owns a session's ask too: a dialog (activity → clarify)
+    // and a question in a reply (lib/desktopNotify.ts, "[3] name needs you").
+    // Only the clarify move of activity_changed — usage_limit rides it too.
+    const desktopOwned = (env) =>
+      DESKTOP_OWNED.has(env.event) || (env.event === "session.activity_changed" && env.new === "clarify");
     const lastShown = new Map(); // "session|event" -> ts of last notification
     let rules = [];
     let subscribed = false;
@@ -166,7 +180,7 @@ window.mindflockAddons.notify = {
       if (ctx.events && typeof ctx.events.isReplay === "function" && ctx.events.isReplay(env)) return;
       // The desktop app raises its own OS notification for these
       // (frontend/src/lib/desktopNotify.ts) — don't pop a second one.
-      if (window.mfnotify && DESKTOP_OWNED.has(env.event)) return;
+      if (window.mfnotify && desktopOwned(env)) return;
       for (const rule of rules) {
         if (rule.enabled === false) continue;  // user muted this rule
         if (!ruleMatches(rule, env)) continue;

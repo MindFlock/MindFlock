@@ -1,0 +1,8 @@
+#! RECONSTRUCTED, not a live capture: agy 1.0.16's layout from the live-captured snippets recorded in config.py (antigravity waiting_patterns) and tests/unit/test_provider_activity_patterns.py — agy could not be run here without writing into the owner's ~/.gemini conversation store; NOT a dialog: the agent PRINTED the options and asked in prose
+● Do you want to proceed? I can go one of three ways:
+  1. Yes
+  2. Yes, and always allow in this conversation
+  3. No
+
+>
+? for shortcuts                                            Gemini 3.5 Flash (Medium)

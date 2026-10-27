@@ -109,7 +109,8 @@ def test_dialog_parsed_claude_bash(env):
     screen = _screen("claude_bash")
     want = dialogs.dialog_id(dialogs.parse_claude(screen), screen)
     assert body["id"] == want
-    assert set(body) == {"id", "parsed", "question", "command", "options"}
+    assert set(body) == {"id", "kind", "parsed", "question", "command", "options"}
+    assert body["kind"] == "dialog"
 
 
 def test_dialog_codex_uses_the_codex_parser(env):
@@ -124,6 +125,7 @@ def test_dialog_unparsed_falls_back_to_the_question_line(env):
     body = _dialog("aid").json()
     assert body == {
         "id": dialogs.dialog_id(None, env.tm.screen),
+        "kind": "dialog",
         "parsed": False,
         "question": "Overwrite config.yaml? [y/N]",
         "command": None,

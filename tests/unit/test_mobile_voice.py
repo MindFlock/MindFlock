@@ -250,19 +250,17 @@ def test_mobile_js_radio_rules_over_submit_and_disregard():
     v = _voice_section(js)
     heard = _fn(js, "voiceHeard")
     assert "var p = voiceDictParse(text);" in heard
-    assert 'p.kind === "disregard"' in heard and 'composeEl.value = "";' in heard
+    assert 'p.kind === "disregard"' in heard and 'vbox().value = "";' in heard
     words = _fn(js, "voiceHeardWords")
     # "submit" sends (an empty box: says so and listens on); "over" keeps.
     submit = words.split('if (p.kind === "submit") {')[1].split("\n    }\n")[0]
-    assert (
-        "if (composeEl.value.trim()) { voiceSend(composeEl.value); return; }" in submit
-    )
+    assert "if (vbox().value.trim()) { voiceSend(vbox().value); return; }" in submit
     assert 'voiceCaption("Nothing to send yet");' in submit
     over = words.split('if (p.kind === "over") {')[1].split("\n    }\n")[0]
     assert "voiceListenKept();" in over and "voiceSend" not in over
     assert words.count("voiceSend(") == 1
     kept = _fn(js, "voiceListenKept")
-    assert "voiceIdle(composeEl.value.trim() ? VOICE_KEPT : undefined);" in kept
+    assert "voiceIdle(vbox().value.trim() ? VOICE_KEPT : undefined);" in kept
     assert "voiceSend" not in kept
     assert 'var VOICE_KEPT = "In the box — say “submit”, or tap Send";' in v
     assert (
@@ -285,7 +283,7 @@ def test_mobile_js_radio_rules_over_submit_and_disregard():
     )
     expired = _fn(js, "voiceListenExpired")
     assert (
-        'if (mode !== "dialog" && composeEl.value.trim()) { voiceListenStop(); return; }'
+        'if (mode !== "dialog" && vbox().value.trim()) { voiceListenStop(); return; }'
         in expired
     )
     assert '"Kept, not sent — Send sends it, or tap the mic to go on"' in _fn(
@@ -304,7 +302,7 @@ def test_mobile_js_radio_rules_over_submit_and_disregard():
     assert "VOICE_DICT_HINT" not in v
     # Cancel while dictating drops the words.
     assert (
-        'if (voiceIsListening()) { composeEl.value = ""; autosizeCompose(); voice.dictated = false; }'
+        'if (voiceIsListening()) { vbox().value = ""; vboxSized(); voice.dictated = false; }'
         in _fn(js, "voiceCancelTap")
     )
     # No countdown left anywhere.
@@ -404,7 +402,7 @@ def test_mobile_js_push_to_talk_toggle_and_hold():
     assert 'voiceTurnOn(current, voice.prefs.ptt !== "hold")' in tap
     assert "L.held = !!held;" in _fn(js, "voiceListen")
     # A long press is a press on the phone, not a callout or a scroll.
-    btn = _css().split("#voice-btn {")[1].split("}")[0]
+    btn = _css().split("#voice-btn, #asking-mic {")[1].split("}")[0]
     assert "touch-action: none;" in btn and "-webkit-touch-callout: none;" in btn
     # The idle caption names the gesture.
     assert (
@@ -604,8 +602,9 @@ def test_mobile_js_wider_vocabulary_numbers_stops_and_answers():
     assert 'if (tail && tail.kind === "stop") {' in words
     assert "var VOICE_HOLD_MAX = 3;" in v
     assert "Math.min(VOICE_HOLD_MAX, all.length)" in _fn(js, "voiceStreamSplit")
-    assert "answers: function () { return !!voiceAsks(voice.session); }," in _fn(
-        js, "voiceRecStart"
+    assert (
+        "answers: function () { return !voice.box && !!voiceAsks(voice.session); },"
+        in _fn(js, "voiceRecStart")
     )
     # Answers only while the session is asking.
     rest = _fn(js, "voiceHeardRest")
@@ -705,7 +704,7 @@ def test_mobile_js_voice_requests_have_the_contract_shape():
     assert "firstSentence(text)" in _fn(js, "voiceAckTick")
     # The answer: pinned to the dialog it was read from, by the person.
     assert (
-        'voiceAnswerPost(voice.session, d.id, [String(opt.key)], voiceKindWord(opt), "");'
+        'voiceAnswerPost(voice.session, d.id, askOptKeys(opt), voiceKindWord(opt), "");'
         in _fn(js, "voiceDialogAnswer")
     )
     ans = _fn(js, "voiceAnswerPost")
@@ -1030,7 +1029,7 @@ def test_mobile_js_server_recognizer_streams_words_as_you_speak():
     assert 'voiceDictParse(words.join(" ")).kind' in split
     rs = _fn(js, "voiceRecStart")
     assert (
-        'whole: function () { return mode === "dialog" || !composeEl.value.trim(); },'
+        'whole: function () { return mode === "dialog" || (!voice.box && !composeEl.value.trim()); },'
         in rs
     )
     # The end: the rest, then /end, its words through onFinal.

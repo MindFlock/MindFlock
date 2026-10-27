@@ -104,6 +104,7 @@ def test_event_names_vocabulary_is_complete():
         "session.queue_changed",
         "session.usage_restored",
         "session.turn_ended",
+        "session.question",
         "session.autopilot_changed",
         "session.pushed",
         "session.push_failed",

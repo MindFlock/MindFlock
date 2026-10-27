@@ -1,0 +1,40 @@
+#! real capture 2026-10-26: goose 1.41.0 (GOOSE_MODE=approve), tmux capture-pane -p -e -J (colour escapes kept); NOT paused: answered Deny (the list collapsed under a hollow diamond)
+  [37m  __( O)>[39m  [32m●[39m [2mnew session[0m [2m·[0m [2mopenai[0m [36mmock
+[39m  [37m \____)[39m  [2m [0m [2m20261027_1[0m [2m· /tmp/ask-dialogs-scratch
+[0m  [37m   L L[39m  [37m   goose is ready
+[39m  [2m[32m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌[0m [2m0%[0m [2m0/128k
+[0m> show me the recent commits
+
+[37mNetwork error: Could not connect to 127.0.0.1:18099 — check your network connection and try again.
+
+Please resend your message to try again.
+[2m[39m  ⏱ 7.63s
+[0m  [2m[32m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌[0m [2m0%[0m [2m0/128k
+[0m> show me the recent commits
+
+
+  [2m────────────────────────────────────────
+[0m  [2m▸[0m [2mshell
+[0m    [2mcommand[0m: [32mgit log --oneline -3 && ls -la
+
+◇[39m  Goose would like to call the above tool, do you allow?
+[38;5;8m│[39m  [2mDeny[0m 
+[38;5;8m│
+[37mDone.
+[2m[39m  ⏱ 52.55s
+[0m  [2m[32m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌[0m [2m0%[0m [2m15/128k
+[0m> [2mEnter to send · Ctrl+J newline
+
+
+
+
+
+
+
+
+
+
+
+
+
+

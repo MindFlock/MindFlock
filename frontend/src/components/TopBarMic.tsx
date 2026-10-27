@@ -42,6 +42,8 @@ import { selectSession } from "../lib/sessionActions";
 import { openSettings, type SettingsScreen } from "../lib/openSettings";
 import { fetchDialog } from "../lib/flockActions";
 import { KEYMAP, shortcutLabels } from "../lib/keymap";
+import { askPopupOn } from "../lib/ask";
+import { askVoice, getMicState, publishMicState, registerAskMic, type AskVoice } from "../lib/askVoice";
 import type { Dialog } from "../api/types";
 import {
   DICT_HINT,
@@ -99,6 +101,12 @@ const queue = new SpeechQueue(
  * `has_question`), while it waits: a lone "yes" / "two" answers it. */
 const questions = new Map<string, string>();
 
+/** A reply that asks something, being read out (resolves when said): the
+ * ask pop-up waits for it instead of reading the question a second time. */
+const asksSaid = new Map<string, { done: Promise<void>; at: number }>();
+/** How long a reply's read-out stands in for the pop-up's. */
+const SAID_FRESH_MS = 60_000;
+
 /** Re-read `title`'s last Say line: its question waits until it works again. */
 function refreshQuestion(title: string) {
   if (!title) return;
@@ -111,10 +119,15 @@ function refreshQuestion(title: string) {
 }
 
 /** The push-to-talk hotkey as the keymap shows it (the entry whose help says
- * "talk"), else where to find it. */
-function talkShortcut(): string {
+ * "talk"); "" when it has none — the ask pop-up's "Hotkey: Ctrl+T" hint. */
+export function talkHotkey(): string {
   const e = KEYMAP.find((b) => !b.aliasOf && /\btalk\b/i.test(String(b.help?.[2] || "")));
-  return (e?.id && shortcutLabels(e.id)[0]) || "the Talk shortcut in Keyboard shortcuts";
+  return (e?.id && shortcutLabels(e.id)[0]) || "";
+}
+
+/** The Talk hotkey, else where to find it. */
+function talkShortcut(): string {
+  return talkHotkey() || "the Talk shortcut in Keyboard shortcuts";
 }
 
 /** The recognizer this page has under `c`: "none" when it has none. */
@@ -185,9 +198,17 @@ function liveActivity(title: string): string {
   return effectiveActivity(inst || { title });
 }
 
+/** The ask pop-up's answer field as a dictation's target: the words go in at
+ * the cursor like any text box, and "submit" sends them (`ask.submit`). */
+function askTarget(ask: AskVoice): DictTarget | null {
+  const el = ask.field();
+  if (!el) return null;
+  return { ...fieldTarget(el), title: ask.title, name: displayName(ask.title), submit: (say) => ask.submit(say) };
+}
+
 /** Monochrome mic (currentColor), never the 🎤 emoji — see the bell's
  * BellGlyph: an emoji paints its own colours and vanishes on an amber bar. */
-function MicGlyph() {
+export function MicGlyph() {
   return (
     <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
       <rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor" stroke="none" />
@@ -231,6 +252,7 @@ export function TopBarMic() {
   const say = (text: string, sticky = false, tail = "") => {
     setCaptionState(text);
     setUnsure(tail);
+    publishMicState({ caption: text, unsure: tail });
     clearTimeout(captionTimer.current);
     if (text && !sticky) captionTimer.current = setTimeout(() => setCaptionState(""), 6000);
   };
@@ -286,9 +308,14 @@ export function TopBarMic() {
         say(line);
         if (!prefsRef.current.replies) return;
         if (ask) questions.set(title, ask);
-        void queue.say(line).then(() => {
-          if (ask) void hands.current?.question(title, ask);
-        });
+        const said = queue.say(line);
+        // With the ask pop-up on, it opens for this question and listens
+        // (waiting for this read-out first); otherwise the mic does.
+        if (ask && askPopupOn()) asksSaid.set(title, { done: said, at: Date.now() });
+        else
+          void said.then(() => {
+            if (ask) void hands.current?.question(title, ask);
+          });
       };
       const inline = String(data.say || "").trim();
       if (inline) {
@@ -316,8 +343,9 @@ export function TopBarMic() {
             tracker.working(env.session);
             questions.delete(env.session);
           } else if (env.new === "idle") ended(env.session, env.data || {}, Number(env.ts) || 0);
-          // A dialog came up: read out (focused session, replies on).
-          else if (env.new === "clarify") void hands.current?.dialog(env.session);
+          // A dialog came up: read out (focused session, replies on) — by
+          // the ask pop-up instead when it is on (it reads any session's).
+          else if (env.new === "clarify" && !askPopupOn()) void hands.current?.dialog(env.session);
         }),
         ev.subscribe("session.turn_ended", (env) => {
           if (!replay(env)) ended(env.session, env.data || {}, Number(env.ts) || 0);
@@ -355,6 +383,7 @@ export function TopBarMic() {
     rec.current?.stop();
     rec.current = null;
     setListening(false);
+    publishMicState({ listening: false, title: "" });
     queue.release();
   };
 
@@ -362,6 +391,12 @@ export function TopBarMic() {
    * terminal (null: none focused — a first phrase may still be a command). */
   const target = (into: HTMLInputElement | HTMLTextAreaElement | null, session = ""): DictTarget | null => {
     if (into) return fieldTarget(into);
+    // The ask pop-up's session: a question's words go into its answer field.
+    const ask = askVoice();
+    if (ask && session === ask.title && ask.kind === "question") {
+      const t = askTarget(ask);
+      if (t) return t;
+    }
     const title = session || useUi.getState().focused;
     return title ? sessionTarget(title, displayName(title)) : null;
   };
@@ -373,6 +408,13 @@ export function TopBarMic() {
     opts: { title?: string; hint?: string; done?: (how: DictEnd) => void } = {}
   ): LiveDictation | null => {
     if (live.current) return null;
+    // The ask pop-up is up: the mic answers THAT session — unless a box other
+    // than its answer field has the keyboard (that one gets the words).
+    const ask = askVoice();
+    if (ask && !opts.title && (!into || into === ask.field())) {
+      into = null;
+      opts = { ...opts, title: ask.title, hint: opts.hint || ask.hint() };
+    }
     const c = cfgNow;
     const engine = recEngine(c);
     if (engine === "none") {
@@ -413,6 +455,7 @@ export function TopBarMic() {
     live.current = d;
     rec.current = r;
     setListening(true);
+    publishMicState({ listening: true, title: into ? "" : opts.title || useUi.getState().focused || "" });
     d.show();
     armIdle();
     const ok = r.start({
@@ -613,6 +656,32 @@ export function TopBarMic() {
       caption: say,
       listen: (title, hint, ms) => latest.current.listenFor(title, hint, ms),
     });
+
+  // The ask pop-up's side of the mic (lib/askVoice): read its ask out and
+  // listen hands-free, stop for a session it moved on from, Escape.
+  useEffect(
+    () =>
+      registerAskMic({
+        handsFree: (title, a) => {
+          const said = asksSaid.get(title);
+          asksSaid.delete(title);
+          const fresh = said && Date.now() - said.at < SAID_FRESH_MS ? said.done : null;
+          void hands.current?.ask(title, { ...a, said: fresh });
+        },
+        stop: (title) => {
+          hands.current?.stop(title);
+          const d = live.current;
+          if (d && getMicState().title === title) void d.expire();
+        },
+        cancel: () => {
+          if (!live.current) return false;
+          void live.current.cancel();
+          return true;
+        },
+        supported: () => recEngine(cfgNow) !== "none",
+      }),
+    []
+  );
 
   // --- the gestures -------------------------------------------------------- //
   const hold = prefs.ptt === "hold";

@@ -77,9 +77,10 @@ describe("O1: needs-attention, surfaced via the notification bell", () => {
     const ss = deriveSessionState(inst("a", { activity: "clarify" }), { activity: "clarify" });
     expect(attentionToast("1 a", ss, "which db?")).toBe("1 a: Question — “which db?”");
     expect(attentionToast("1 a", ss)).toBe("1 a: Question");
-    expect(has(normCode("components/EventToasts.tsx"), "attentionToast(namedSlot(env.session), ss, inst.last_turn)")).toBe(
-      true
-    );
+    // The ask's own question when the row has one (lib/ask.ts), else the last turn.
+    expect(
+      has(normCode("components/EventToasts.tsx"), "attentionToast(namedSlot(env.session), ss, inst.asking?.text || inst.last_turn)")
+    ).toBe(true);
   });
 
   it("the attention styles", () => {

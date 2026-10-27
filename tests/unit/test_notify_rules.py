@@ -415,9 +415,10 @@ def test_no_token_ever_travels_in_a_button(pushes, monkeypatch):
     mobile_announce.remember_url(None)
 
 
-def test_unparsed_or_missing_dialog_keeps_the_generic_body(pushes, phone, monkeypatch):
+def test_unreadable_dialog_keeps_the_generic_body(pushes, phone, monkeypatch):
     _ntfy_on()
     monkeypatch.setattr(notify_addon, "_read_dialog", lambda title: None)
+    monkeypatch.setattr(notify_addon, "_read_unparsed_dialog", lambda title: None)
     notify_addon.NotifyAddon()._on_event(_clarify())
     (push,) = pushes
     assert push["message"] == (
