@@ -9134,6 +9134,28 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   transform: scale(calc(1 + var(--mic-level, 0) * 0.22));
 }
 
+/* Standby (the wake word, lib/wakeWord): the mic is open, so it shows — a
+   faint ring that still follows the level, and a small dot in the corner —
+   but quiet next to listening's red. */
+.mic-ring.standby::after {
+  border-color: var(--muted);
+  opacity: max(0.3, var(--mic-level, 0));
+  transform: scale(calc(1 + var(--mic-level, 0) * 0.22));
+}
+
+#mic-btn.standby::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--red);
+  opacity: 0.8;
+  pointer-events: none;
+}
+
 /* A reply being read aloud: the accent, still. */
 #mic-btn.speaking {
   color: var(--accent);
@@ -9263,6 +9285,11 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.4;
+}
+
+/* Why standby stopped (no recognizer, a refused mic). */
+.mic-pop .mic-wake-line {
+  color: var(--text);
 }
 
 .mic-pop .mic-link {
