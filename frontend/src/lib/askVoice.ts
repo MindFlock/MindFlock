@@ -5,7 +5,7 @@
  * (`setAskVoice`): the Talk hotkey, the top-bar mic and the pop-up's own mic
  * button then listen for THAT session's answer — a dialog's words go to the
  * voice router for that session (`answer` → /answer), a question's words are
- * typed into the pop-up's answer field and "submit" sends them; on Claude's
+ * typed into the pop-up's answer field and "over" sends them; on Claude's
  * question prompt "type something" opens that option's field and the words
  * after it go there. The mic
  * (TopBarMic, which owns the recognizer and the speech queue) registers its

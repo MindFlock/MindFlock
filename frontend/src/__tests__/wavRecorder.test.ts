@@ -285,6 +285,31 @@ describe("startWavRecording", () => {
     expect(levels[0]).toBeCloseTo(0.25, 6);
   });
 
+  it("mute drops the audio while on (a confirmation plays), then its tail; recording goes on", () => {
+    const g = fakeGraph(48000);
+    const levels: number[] = [];
+    const rec = startWavRecording(STREAM, g.ctx, { onLevel: (r) => levels.push(r) });
+    g.fire(new Float32Array(4096).fill(0.25));
+    rec.mute!(true);
+    g.fire(new Float32Array(4096).fill(0.9)); // "Sent." in the speakers
+    g.fire(new Float32Array(4096).fill(0.9));
+    expect(rec.seconds()).toBeCloseTo(4096 / 48000, 9);
+    expect(levels).toHaveLength(1);
+    // Off: 0.15 s more (7200 frames — two blocks) is the voice dying away.
+    rec.mute!(false, 0.15);
+    g.fire(new Float32Array(4096).fill(0.9));
+    g.fire(new Float32Array(4096).fill(0.9));
+    expect(rec.seconds()).toBeCloseTo(4096 / 48000, 9);
+    g.fire(new Float32Array(4096).fill(0.3));
+    expect(rec.seconds()).toBeCloseTo(8192 / 48000, 9);
+    expect(levels).toHaveLength(2);
+    expect(levels[1]).toBeCloseTo(0.3, 6);
+    // A second "off" without an "on" adds no skip.
+    rec.mute!(false, 0.15);
+    g.fire(new Float32Array(4096).fill(0.3));
+    expect(rec.seconds()).toBeCloseTo(12288 / 48000, 9);
+  });
+
   it("accumulates blocks, reports level, and stops into one WAV at the target rate", async () => {
     const g = fakeGraph(48000);
     const levels: number[] = [];

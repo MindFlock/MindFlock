@@ -190,12 +190,12 @@ describe("the accurate final retypes the whole phrase", () => {
   });
 
   it("the control phrases are decided on the final, not the fast guess", () => {
-    // Fast "…submarine" is no radio word; the accurate "…submit." is.
+    // Fast "…overalls" is no radio word; the accurate "…over." is.
     const a = new Dictation();
     a.begin();
     a.routes = false;
-    a.stream("ship it", "submarine");
-    expect(a.flush("", "Ship it, submit.").kind).toBe("submit");
+    a.stream("ship it", "overalls");
+    expect(a.flush("", "Ship it, over.").kind).toBe("send");
     // And the other way: fast "over" held back, the final says "overall".
     const b = new Dictation();
     b.begin();

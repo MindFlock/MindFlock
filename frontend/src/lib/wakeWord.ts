@@ -61,6 +61,8 @@ export const WAKE_LISTEN_MS = 8000;
 export const WAKE_HINT = "Yes?";
 /** The chime's length; the dictation skips this much of its first audio. */
 export const CHIME_MS = 120;
+/** The stop chime's length (listening is over: nothing to skip). */
+export const STOP_CHIME_MS = 140;
 /** A wake check gives up after this (the next utterance tries again). */
 const CHECK_TIMEOUT_MS = 10_000;
 const CLIP_RATE = 16_000;
@@ -477,21 +479,26 @@ export function wakeLine(ms: number | null): string {
   return ms != null && ms >= 0 ? "wake " + (ms / 1000).toFixed(1) + " s" : "";
 }
 
-/** The wake's chime: two short rising tones (~{@link CHIME_MS}) through the
- * page's AudioContext, quiet — no asset. Never throws. */
-export function chime(ctx: AudioContext | null): void {
+/** The mic's chimes through the page's AudioContext — no asset, never a
+ * throw: "start" (listening begins: two short rising tones, ~{@link
+ * CHIME_MS}) and "stop" (listening is over: two falling tones, ~{@link
+ * STOP_CHIME_MS}, a little softer). */
+export function chime(ctx: AudioContext | null, kind: "start" | "stop" = "start"): void {
   if (!ctx || ctx.state !== "running") return;
   try {
+    const stop = kind === "stop";
+    const ms = stop ? STOP_CHIME_MS : CHIME_MS;
+    const peak = stop ? 0.09 : 0.12;
     const t = ctx.currentTime;
-    const end = t + CHIME_MS / 1000;
+    const end = t + ms / 1000;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "sine";
-    osc.frequency.setValueAtTime(660, t);
-    osc.frequency.setValueAtTime(990, t + CHIME_MS / 2000);
+    osc.frequency.setValueAtTime(stop ? 880 : 660, t);
+    osc.frequency.setValueAtTime(stop ? 660 : 990, t + ms / 2000);
     gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.exponentialRampToValueAtTime(0.12, t + 0.01);
-    gain.gain.setValueAtTime(0.12, end - 0.03);
+    gain.gain.exponentialRampToValueAtTime(peak, t + 0.01);
+    gain.gain.setValueAtTime(peak, end - 0.03);
     gain.gain.exponentialRampToValueAtTime(0.0001, end);
     osc.connect(gain);
     gain.connect(ctx.destination);

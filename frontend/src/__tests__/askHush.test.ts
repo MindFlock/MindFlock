@@ -191,7 +191,7 @@ describe("barge-in: answer before it is done speaking", () => {
     const barge = start.indexOf("const skipMs = Math.max(bargeIn(queue, ask && opts.title === ask.title ? ask.title : \"\"), opts.skipMs || 0)");
     expect(barge).toBeGreaterThan(-1);
     expect(start.indexOf("r.start(")).toBeGreaterThan(barge);
-    expect(start).toContain("{ skipMs }");
+    expect(start).toContain("{ skipMs: Math.max(skipMs, chimeSkip) }");
     // The old bare hold is gone (bargeIn holds).
     expect(start).not.toContain("queue.hold()");
   });

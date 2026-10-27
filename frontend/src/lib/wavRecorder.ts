@@ -136,6 +136,10 @@ export interface WavRecording {
   take(minS?: number): Blob | null;
   /** Drop everything; no blob. */
   cancel(): void;
+  /** `on`: drop the audio from now, unrecorded and unmetered (the app is
+   * saying a confirmation); off again: recording goes on after `tailS` more
+   * seconds are dropped (the voice dying away). Nothing ends. */
+  mute?(on: boolean, tailS?: number): void;
   /** Seconds recorded so far. */
   seconds(): number;
   /** The WAV of the last `s` seconds heard (at most what is kept: see
@@ -183,10 +187,11 @@ export function startWavRecording(
   let done = false;
   let result: Promise<Blob> | null = null;
   let skip = Math.max(0, Math.round((opts.skipS || 0) * ctx.sampleRate));
+  let muted = false;
   const keep = opts.keepS ? Math.max(1, Math.round(opts.keepS * ctx.sampleRate)) : 0;
 
   processor.onaudioprocess = (e: AudioProcessingEvent) => {
-    if (done) return;
+    if (done || muted) return;
     if (skip > 0) {
       skip -= e.inputBuffer.getChannelData(0).length;
       return;
@@ -251,6 +256,10 @@ export function startWavRecording(
       teardown();
       blocks = [];
       fresh = 0;
+    },
+    mute(on: boolean, tailS = 0) {
+      if (!on && muted) skip = Math.max(skip, Math.round(tailS * ctx.sampleRate));
+      muted = on;
     },
     seconds() {
       return frames / ctx.sampleRate;

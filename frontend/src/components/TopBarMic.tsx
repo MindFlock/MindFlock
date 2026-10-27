@@ -2,11 +2,15 @@
  *
  * The words are typed into the session's input field as you speak — each
  * phrase the moment it is recognised — and the radio words end it: "over"
- * stops listening and leaves the words in the field, "submit" submits them
- * (Enter, after the server's dialog checks), "disregard" takes back what this
- * dictation typed and keeps listening, Escape does that and stops. Push to
- * talk — a click starts listening and a second click is "over" (or, in "Hold
- * to talk", the button is held while you speak; letting go is "over"). A
+ * sends them (Enter, after the server's dialog checks) and listening goes on
+ * for the next message, "over and out" sends what is pending and stops,
+ * "disregard" takes back what this message typed and keeps listening,
+ * Escape does that and stops; each is confirmed out loud ("Sent.",
+ * "Cleared." — Settings → Voice "Spoken confirmations"). Push to talk — a
+ * click starts listening and it stays on (no idle timeout) until "over and
+ * out", a stop phrase or a second click, which stops with the words left
+ * in the field unsent (or, in "Hold to talk", the button is held while you
+ * speak; letting go stops). A
  * dictation's first phrase is first offered to the voice router
  * (lib/voiceDesktop routePhrase), so "switch to the login fix" selects that
  * session and "start a new session for…" starts one, instead of being typed
@@ -76,6 +80,7 @@ import { askPopupOn } from "../lib/ask";
 import { placeUnder } from "../lib/menuPlace";
 import { askVoice, getMicState, publishMicState, registerAskMic, type AskVoice } from "../lib/askVoice";
 import {
+  Confirmer,
   DICT_HINT,
   DICT_IDLE_MS,
   HUSH_CAPTION_MS,
@@ -107,12 +112,15 @@ import {
   syncSayAll,
   onVoicePrefs,
   serverRecognizer,
+  sentLine,
   serverSpeaker,
   sessionTarget,
   spokenLine,
   sttEngine,
   talkKeyAction,
   ttsEngine,
+  ttsVoiceKey,
+  localVoice,
   voiceAudioCtx,
   voiceName,
   type DictEnd,
@@ -125,6 +133,7 @@ import {
   type VoicePrefs,
 } from "../lib/voiceDesktop";
 import {
+  lastLoudAt,
   meterFeed,
   meterPoll,
   meterRef,
@@ -152,7 +161,9 @@ const browserRec = browserRecognizer();
 let cfgNow: VoiceCfg = DEFAULT_VOICE_CFG;
 const serverRec = serverRecognizer({ stream: () => !!cfgNow.server_ready.stt_stream });
 const browserSp = browserSpeaker();
-const serverSp = serverSpeaker(browserSp);
+// Confirmations keep their audio per voice (a slow local voice must not
+// make "Sent." wait seconds).
+const serverSp = serverSpeaker(browserSp, { voiceKey: () => ttsVoiceKey(cfgNow) });
 const tracker = new ReplyTracker();
 /** "Everything": the turns already read (idle and turn_ended both carry one). */
 const heard = new HeardTurns();
@@ -169,6 +180,8 @@ let standbyMeter = false;
 let wakeFrom: { d: LiveDictation; at: number } | null = null;
 /** The last wake's latency (ms), the word's end → listening — diagnostics. */
 let lastWakeMs: number | null = null;
+/** The last "over" → Enter (ms): the word's end → the send — diagnostics. */
+let lastSentMs: number | null = null;
 /** `d` listens now: a wake's latency, once. */
 function listened(d: LiveDictation) {
   if (wakeFrom?.d !== d) return;
@@ -267,7 +280,7 @@ export function micDiagnostics(): string {
   const tts = ttsEngine(c) === "server" ? "server" : browserSp.available() ? "browser" : "none";
   const pass =
     stt === "server" ? [passLine(c.server_ready.stt_backend, serverRec.passMs), finalLine(serverRec.finalMs)] : [];
-  return [engineDiagnostics(c, stt, tts), ...pass, wakeLine(lastWakeMs)].filter(Boolean).join(" · ");
+  return [engineDiagnostics(c, stt, tts), ...pass, wakeLine(lastWakeMs), sentLine(lastSentMs)].filter(Boolean).join(" · ");
 }
 
 /** The push-to-talk hotkey as the keymap shows it (the entry whose help says
@@ -358,7 +371,7 @@ function liveActivity(title: string): string {
 }
 
 /** The ask pop-up's answer field as a dictation's target: the words go in at
- * the cursor like any text box, and "submit" sends them (`ask.submit`). */
+ * the cursor like any text box, and "over" sends them (`ask.submit`). */
 function askTarget(ask: AskVoice): DictTarget | null {
   const el = ask.field();
   if (!el) return null;
@@ -396,6 +409,17 @@ export function TopBarMic() {
   // The ring follows the level (--mic-level, written by lib/voiceMic).
   useEffect(() => meterRef(btnRef.current), []);
   const rec = useRef<Recognizer | null>(null);
+  /** "Sent.", "Cleared.", a switch's line: said at the queue's front with
+   * the recorder muted for it (lib/voiceDesktop Confirmer). */
+  const confirmer = useRef<Confirmer | null>(null);
+  confirmer.current ||= new Confirmer({
+    queue,
+    on: () => prefsRef.current.confirm !== false,
+    mic: () => rec.current,
+    server: () => ttsEngine(cfgNow) === "server",
+    local: () => localVoice(cfgNow),
+    speaker: serverSp,
+  });
   /** The dictation under way (null when not listening). */
   const live = useRef<LiveDictation | null>(null);
   const pressedField = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
@@ -471,7 +495,12 @@ export function TopBarMic() {
       const want = sayAllMismatch(prefsRef.current.replies, c.say_all);
       if (want !== null) void syncSayAll(want);
     });
-    const l = (on: boolean) => setSpeaking(on);
+    const l = (on: boolean) => {
+      setSpeaking(on);
+      // A line while listening goes on: not the person — its audio is dropped
+      // (and 150 ms after), the phrase under way is not ended.
+      if (gated.current) rec.current?.mute?.(on);
+    };
     speakingListeners.add(l);
     // Where speech runs moves with Settings (another window, an engine just
     // installed): re-read it when the window comes back, and after a settings
@@ -581,13 +610,42 @@ export function TopBarMic() {
   const sttNow = recEngine(cfg || cfgNow);
   const supported = sttNow !== "none";
 
+  /** The dictation under way stops after DICT_IDLE_MS of silence — only a
+   * hands-free listen or "Hold to talk"; a click (or the wake word) listens
+   * until "over and out". */
+  const idles = useRef(true);
   const armIdle = () => {
     clearTimeout(idleTimer.current);
-    idleTimer.current = setTimeout(() => void live.current?.expire(), DICT_IDLE_MS);
+    if (idles.current) idleTimer.current = setTimeout(() => void live.current?.expire(), DICT_IDLE_MS);
   };
 
   /** The recognizer down, nothing reported; the queue may talk again. */
+  /** A dictation that chimed its start: its end chimes too. */
+  const chimed = useRef(false);
+  /** Continuous listening: the replies play in the person's pauses (the
+   * queue's gate, not its hold), the recorder muted while a line plays. */
+  const gated = useRef(false);
+  /** The mic's chime (Settings → Voice "Sounds"): never over a line being
+   * said — it waits for that line's end. */
+  const sound = (kind: "start" | "stop") => {
+    if (prefsRef.current.sounds === false) return;
+    if (!queue.busy) return chime(voiceAudioCtx(), kind);
+    const after = (on: boolean) => {
+      if (on) return;
+      speakingListeners.delete(after);
+      chime(voiceAudioCtx(), kind);
+    };
+    speakingListeners.add(after);
+  };
+
   const halt = () => {
+    gated.current = false;
+    queue.setGate(null);
+    if (chimed.current) {
+      chimed.current = false;
+      // Before the queue lets the replies go: the stop comes first.
+      sound("stop");
+    }
     clearTimeout(idleTimer.current);
     deciding.current = null;
     live.current = null;
@@ -617,10 +675,21 @@ export function TopBarMic() {
   };
 
   /** Start listening into `into` (a text box), else `opts.title` (hands-free:
-   * the session read out), else the focused session. Null: it didn't start. */
+   * the session read out), else the focused session. Null: it didn't start.
+   * `continuous` (the default): "over" sends and listening goes on until
+   * "over and out" — false for a hands-free answer (one message). `idle`:
+   * DICT_IDLE_MS of silence stops it (default: in "Hold to talk", or when
+   * not continuous). */
   const start = (
     into: HTMLInputElement | HTMLTextAreaElement | null,
-    opts: { title?: string; hint?: string; skipMs?: number; done?: (how: DictEnd) => void } = {}
+    opts: {
+      title?: string;
+      hint?: string;
+      skipMs?: number;
+      done?: (how: DictEnd) => void;
+      continuous?: boolean;
+      idle?: boolean;
+    } = {}
   ): LiveDictation | null => {
     if (live.current) return null;
     // The ask pop-up is up: the mic answers THAT session — unless a box other
@@ -642,10 +711,16 @@ export function TopBarMic() {
     // Inside the gesture: a context made here runs (server playback, the
     // server recognizer's recording and the browser one's level need it).
     const ctx = voiceAudioCtx();
+    // The confirmations' audio, made ahead for a local voice (once).
+    confirmer.current?.prime();
     // Barge-in: the app stops talking BEFORE the mic opens — answering the
     // ask being read drops the rest of its read-out — and the first moment
     // of audio (its voice dying away) is skipped.
     const skipMs = Math.max(bargeIn(queue, ask && opts.title === ask.title ? ask.title : ""), opts.skipMs || 0);
+    // The start chime is not the person: skipped like the app's own voice.
+    const chimeSkip = prefsRef.current.sounds !== false ? CHIME_MS + 30 : 0;
+    const continuous = opts.continuous !== false;
+    idles.current = opts.idle ?? (!continuous || prefsRef.current.ptt === "hold");
     const d = new LiveDictation(
       target(into, opts.title),
       {
@@ -660,15 +735,25 @@ export function TopBarMic() {
           const ask = askVoice();
           if (ask && ask.title === session && ask.phrase?.(text)) {
             setTimeout(() => {
-              if (!live.current && askVoice()?.field()) start(null);
+              if (!live.current && askVoice()?.field()) start(null, { continuous });
             }, 150);
-            return true;
+            return "end";
           }
           const reply = await routePhrase(text, session);
           if (reply.kind === "prompt") return false;
           if (reply.kind === "hush") return "hush";
           await routed(reply, text, session);
-          return true;
+          return reply.kind === "stop" || reply.kind === "off" || reply.kind === "cancel" ? "end" : true;
+        },
+        // The next message: the text box still, else the ask pop-up's field
+        // while it asks the same session, else the focused session.
+        retarget: () => {
+          if (into) return null;
+          const ask = askVoice();
+          const title = ask && ask.title === opts.title ? ask.title : "";
+          opts = { ...opts, title: title || undefined };
+          publishMicState({ listening: true, title: title || useUi.getState().focused || "" });
+          return { target: target(null, title), hint: title ? ask?.hint() : undefined };
         },
         hush: () => {
           queue.cancel();
@@ -682,8 +767,19 @@ export function TopBarMic() {
         },
         pending: (title) => liveActivity(title) === "clarify" || questions.has(title),
         done: (how) => opts.done?.(how),
+        confirm: (kind) => void confirmer.current?.say(kind),
+        // A control word at the end of the guess acts after a moment's quiet
+        // (lib/voiceDesktop CONTROL_TAIL_MS), the phrase ended at once.
+        quietMs: () => {
+          const at = lastLoudAt();
+          return at ? Date.now() - at : Infinity;
+        },
+        endPhrase: () => {
+          if (live.current === d) rec.current?.endPhrase?.();
+        },
+        sentIn: (ms) => void (lastSentMs = ms),
       },
-      { hint: opts.hint }
+      { hint: opts.hint, continuous }
     );
     live.current = d;
     rec.current = r;
@@ -758,7 +854,7 @@ export function TopBarMic() {
           void d.expire();
         },
       },
-      { skipMs }
+      { skipMs: Math.max(skipMs, chimeSkip) }
     );
     // Settings may have moved the engines since: the next round knows.
     void refreshCfg();
@@ -766,6 +862,17 @@ export function TopBarMic() {
       halt();
       say("Speech recognition did not start");
       return null;
+    }
+    // Every start chimes (a click, the hotkey, the wake word, the ask card's mic).
+    sound("start");
+    chimed.current = true;
+    // Continuous: what is said (replies, read-outs, the router's lines) plays
+    // as soon as the person pauses, the recorder muted for it — never held
+    // until "over and out".
+    if (continuous) {
+      gated.current = true;
+      queue.setGate(() => !d.midSentence());
+      queue.release();
     }
     // Web Speech listens from here, and reports no level: tap one.
     if (r === browserRec) {
@@ -794,6 +901,7 @@ export function TopBarMic() {
       const d = start(null, {
         title,
         hint,
+        continuous: false,
         done: (how) => {
           clearTimeout(timer);
           resolve(how);
@@ -806,13 +914,19 @@ export function TopBarMic() {
       }, ms);
     });
 
-  /** The toggle's second click / the hold's release: "over" — once the
+  /** The toggle's second click / the hold's release: stop — once the
    * recognizer has delivered the phrase in flight (up to HOLD_FINAL_WAIT_MS;
    * a server clip until its transcript is back), which is typed like the rest. */
   const finish = () => {
     const r = rec.current;
     const d = live.current;
     if (!r || !d || deciding.current) return;
+    // Continuous, click to talk, a line being said: the press cuts the line
+    // (barge-in) and listening goes on; the next press stops.
+    if (gated.current && queue.busy && prefsRef.current.ptt !== "hold") {
+      queue.skip();
+      return;
+    }
     let done = false;
     const decide = () => {
       if (done) return;
@@ -891,7 +1005,15 @@ export function TopBarMic() {
           if (r.kind === "new") void refreshInstances().then(() => selectSession(title, { noKeyboard: true }));
           else selectSession(title, { noKeyboard: true });
         }
-        announce(r.say || (r.kind === "new" ? "Started " : "Now talking to ") + (r.name || r.title || "") + ".");
+        {
+          const line = r.say || (r.kind === "new" ? "Started " : "Now talking to ") + (r.name || r.title || "") + ".";
+          // Your own action: a confirmation (said now, the mic muted for it),
+          // with replies off too; with confirmations off, as before.
+          if (prefsRef.current.confirm !== false) {
+            say(line);
+            void confirmer.current?.say({ line });
+          } else announce(line);
+        }
         return;
       case "cancel":
         say("Dropped");
@@ -998,14 +1120,13 @@ export function TopBarMic() {
   // --- the wake word: standby, and a wake starting listening -------------- //
   /** A lone "MindFlock": listening at once, as a click starts it (a text box
    * with the keyboard gets the words) — the microphone is already open, so
-   * the recognizer's stream opens now — and the chime in the same moment
-   * (its sound skipped from the recording). Nothing heard within
+   * the recognizer's stream opens now — and start()'s chime in the same
+   * moment (its sound skipped from the recording). Nothing heard within
    * WAKE_LISTEN_MS is a quiet miss. `soundEnd`: the word's end (latency). */
   const woken = (soundEnd: number) => {
     if (live.current) return;
-    const d = start(textField(document.activeElement), { hint: WAKE_HINT, skipMs: CHIME_MS + 30 });
+    const d = start(textField(document.activeElement), { hint: WAKE_HINT, idle: false });
     if (!d) return;
-    chime(voiceAudioCtx());
     wakeFrom = { d, at: soundEnd };
     setTimeout(() => {
       if (live.current === d && !d.heardAnything) d.drop();

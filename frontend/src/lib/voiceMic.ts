@@ -353,6 +353,12 @@ export function meterFeed(rms: number, now = Date.now()): void {
   }
 }
 
+/** When the meter last heard the voice (ms; 0 before it has): a control
+ * word at the end of the guess acts once it has been quiet a moment. */
+export function lastLoudAt(): number {
+  return lastLoud;
+}
+
 /** Read the level from `read` instead (an AnalyserNode, for the browser
  * recognizer), every {@link POLL_MS}; null stops. */
 export function meterPoll(read: (() => number) | null): void {
@@ -396,6 +402,8 @@ declare global {
     __mfVoicePasses?: number[];
     /** The last wake's latency (ms): the word's end → listening. */
     __mfVoiceWake?: number;
+    /** The last "over" → Enter (ms): the word's end → the send. */
+    __mfVoiceSent?: number;
   }
 }
 
@@ -430,6 +438,13 @@ export function voiceMark(m: VoiceMoment): void {
 export function voiceWake(ms: number): void {
   if (typeof window !== "undefined") window.__mfVoiceWake = Math.round(ms);
   if (debugOn()) console.debug("[voice] wake " + Math.round(ms) + " ms (sound end → listening)");
+}
+
+/** "Over" took `ms` from the word's end to Enter (the debug trace's "over →
+ * sent N s"; the mic's diagnostics show the last). */
+export function voiceSent(ms: number): void {
+  if (typeof window !== "undefined") window.__mfVoiceSent = Math.round(ms);
+  if (debugOn()) console.debug("[voice] over → sent " + (ms / 1000).toFixed(1) + " s");
 }
 
 /** A streaming pass took `ms` on the server (its chunk answer's `ms`). */
