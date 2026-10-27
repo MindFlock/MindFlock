@@ -35,10 +35,12 @@ const {
   WAKE_MIN_MS,
   WAKE_NO_RECOGNIZER_LINE,
   WAKE_QUIET_MS,
+  WAKE_TAIL_MS,
   WakeStandby,
   chime,
   postWake,
   wakeGate,
+  wakeLine,
   wakeStatus,
 } = await import("../lib/wakeWord");
 type WakeVerdict = import("../lib/wakeWord").WakeVerdict;
@@ -66,11 +68,11 @@ function detect(levels: number[], blockMs = BLOCK): Array<WakeCandidate & { at: 
 }
 
 describe("the thresholds", () => {
-  it("are a word's: 350 ms of quiet around 250 ms–1.6 s of speech, 150 ms lead-in, 1.5 s between checks, 500 ms after talking", () => {
-    expect([WAKE_QUIET_MS, WAKE_MIN_MS, WAKE_MAX_MS, WAKE_LEAD_MS]).toEqual([350, 250, 1600, 150]);
+  it("are a word's: 350 ms of quiet before and 200 ms after 250 ms–1.6 s of speech, 100 ms lead-in, 1.5 s between checks, 500 ms after talking", () => {
+    expect([WAKE_QUIET_MS, WAKE_TAIL_MS, WAKE_MIN_MS, WAKE_MAX_MS, WAKE_LEAD_MS]).toEqual([350, 200, 250, 1600, 100]);
     expect([WAKE_CHECK_GAP_MS, WAKE_AFTER_SPEECH_MS]).toEqual([1500, 500]);
     // The rolling window holds the longest clip there can be.
-    expect(WAKE_KEEP_S * 1000).toBeGreaterThan(WAKE_LEAD_MS + WAKE_MAX_MS + WAKE_QUIET_MS + 2 * 100);
+    expect(WAKE_KEEP_S * 1000).toBeGreaterThan(WAKE_LEAD_MS + WAKE_MAX_MS + WAKE_TAIL_MS + 2 * 100);
   });
 });
 
@@ -79,15 +81,19 @@ describe("LoneUtterance: level sequence → candidate windows", () => {
     const seq = [...quiet(1000), ...loud(600), ...quiet(1000)];
     const got = detect(seq);
     expect(got).toHaveLength(1);
-    // The tail: 350 ms of quiet after the last loud block (the 7th quiet block).
-    expect(got[0].at).toBe(20 + 12 + 7 - 1);
+    // The tail: 200 ms of quiet after the last loud block (the 4th quiet
+    // block) — the candidate comes in that very block, no later.
+    expect(got[0].at).toBe(20 + 12 + 4 - 1);
     expect(got[0].loudMs).toBe(600);
     // The clip: the lead-in, the word and its quiet tail — ending now.
-    expect(got[0].clipMs).toBe(WAKE_LEAD_MS + 600 + 350);
+    expect(got[0].clipMs).toBe(WAKE_LEAD_MS + 600 + 200);
+    // The sound ended 200 ms before (the wake latency's start).
+    expect(got[0].tailMs).toBe(200);
   });
 
   it("nothing before the quiet tail is complete", () => {
-    expect(detect([...quiet(1000), ...loud(600), ...quiet(300)])).toEqual([]);
+    expect(detect([...quiet(1000), ...loud(600), ...quiet(150)])).toEqual([]);
+    expect(detect([...quiet(1000), ...loud(600), ...quiet(200)])).toHaveLength(1);
   });
 
   it("too short (a click, a cough) is not a candidate", () => {
@@ -134,8 +140,8 @@ describe("LoneUtterance: level sequence → candidate windows", () => {
     const seq = [...Array(n(1000)).fill(QUIET), ...Array(n(600)).fill(LOUD), ...Array(n(1000)).fill(QUIET)];
     const got = detect(seq, ms);
     expect(got).toHaveLength(1);
-    expect(got[0].clipMs).toBeGreaterThan(WAKE_LEAD_MS + 600 + 350 - 1);
-    expect(got[0].clipMs).toBeLessThan(WAKE_LEAD_MS + 600 + 350 + 2 * ms);
+    expect(got[0].clipMs).toBeGreaterThan(WAKE_LEAD_MS + 600 + WAKE_TAIL_MS - 1);
+    expect(got[0].clipMs).toBeLessThan(WAKE_LEAD_MS + 600 + WAKE_TAIL_MS + 2 * ms);
   });
 });
 
@@ -267,7 +273,7 @@ describe("WakeStandby", () => {
     r.word();
     await flush();
     expect(r.recs[0].last).toHaveBeenCalledTimes(1);
-    expect(r.recs[0].last.mock.calls[0][0]).toBeCloseTo((WAKE_LEAD_MS + 600 + 350) / 1000, 6);
+    expect(r.recs[0].last.mock.calls[0][0]).toBeCloseTo((WAKE_LEAD_MS + 600 + WAKE_TAIL_MS) / 1000, 6);
     expect(r.check).toHaveBeenCalledWith(WAV);
     expect(r.onWake).toHaveBeenCalledTimes(1);
     // Off: the recorder cancelled, the mic given back to the keeper's grace.
@@ -275,6 +281,23 @@ describe("WakeStandby", () => {
     expect(r.recs[0].cancel).toHaveBeenCalled();
     expect(r.mic.done).toHaveBeenCalledTimes(1);
     expect(r.statuses.at(-1)).toEqual({ on: false, line: "" });
+  });
+
+  it("snappier: the clip goes in the block the 200 ms tail is reached, and the wake carries when the word ended", async () => {
+    const r = rig();
+    r.sb.set(true, true);
+    await flush();
+    r.feed([...quiet(500), ...loud(600), ...quiet(150)]);
+    await flush();
+    expect(r.recs[0].last).not.toHaveBeenCalled(); // the tail isn't over yet
+    r.feed(quiet(50)); // 200 ms after the word: this very block
+    expect(r.recs[0].last).toHaveBeenCalledTimes(1); // synchronously — no frame wait
+    expect(r.recs[0].last.mock.calls[0][0]).toBeCloseTo((100 + 600 + 200) / 1000, 6);
+    await flush();
+    // The word ended 1100 ms after standby began (500 quiet + 600 loud).
+    expect(r.onWake).toHaveBeenCalledWith(1_000_000 + 1100);
+    expect(wakeLine(612)).toBe("wake 0.6 s");
+    expect(wakeLine(null)).toBe("");
   });
 
   it("wake: false does nothing; a sentence never even asks", async () => {
@@ -483,10 +506,14 @@ describe("the chime", () => {
 describe("the mic's wiring (components/TopBarMic.tsx)", () => {
   const MIC = code("components/TopBarMic.tsx");
 
-  it("a wake starts listening as a click does: the chime, \"Yes?\", the chime skipped, a quiet miss after WAKE_LISTEN_MS", () => {
+  it("a wake starts listening at once, as a click does, the chime in the same moment (skipped), a quiet miss after WAKE_LISTEN_MS", () => {
+    // start() first — no delay before it — then the chime, synchronously.
     expect(MIC).toMatch(
-      /const woken = \(\) => \{\s*if \(live\.current\) return;\s*chime\(voiceAudioCtx\(\)\);\s*const d = start\(textField\(document\.activeElement\), \{ hint: WAKE_HINT, skipMs: CHIME_MS \+ 30 \}\);/
+      /const woken = \(soundEnd: number\) => \{\s*if \(live\.current\) return;\s*const d = start\(textField\(document\.activeElement\), \{ hint: WAKE_HINT, skipMs: CHIME_MS \+ 30 \}\);\s*if \(!d\) return;\s*chime\(voiceAudioCtx\(\)\);\s*wakeFrom = \{ d, at: soundEnd \};/
     );
+    const woken = MIC.slice(MIC.indexOf("const woken = "), MIC.indexOf("const latestWake"));
+    expect(woken.indexOf("setTimeout")).toBeGreaterThan(woken.indexOf("chime(")); // only the miss timer
+    expect(MIC).toContain("onWake: (soundEnd) => latestWake.current(soundEnd),");
     expect(MIC).toMatch(/if \(live\.current === d && !d\.heardAnything\) d\.drop\(\);\s*\}, WAKE_LISTEN_MS\);/);
     // start() honours the extra skip next to the barge-in's.
     expect(MIC).toMatch(/const skipMs = Math\.max\(bargeIn\([^;]*\), opts\.skipMs \|\| 0\);/);
@@ -507,11 +534,16 @@ describe("the mic's wiring (components/TopBarMic.tsx)", () => {
   it("the popover has the switch and its hint; the button shows standby, quietly", () => {
     const tsx = src("components/TopBarMic.tsx");
     expect(tsx).toMatch(/id="mic-wake"\s*checked=\{!!prefs\.wake\}\s*onChange=\{\(e\) => setWakePref\(e\.target\.checked\)\}/);
-    expect(tsx).toContain("<span>Listen for “MindFlock”</span>");
-    expect(tsx).toContain("{WAKE_SWITCH_HINT}");
+    expect(tsx).toContain('<span className="mic-pop-label">Listen for “MindFlock”</span>');
+    // The hint lives in Settings → Voice; why standby stopped is the row's tooltip.
+    expect(src("components/settings/screens/Voice.tsx")).toContain("{WAKE_SWITCH_HINT}");
+    expect(tsx).toContain('title={(prefs.wake && wake.line) || ""}');
     expect(MIC).toContain('wake.on && !listening && "standby"');
-    expect(cssRule(src("components/TopBarMic.css"), ".mic-ring.standby::after")).toMatch(/opacity: max\(0\.3, var\(--mic-level, 0\)\)/);
-    expect(cssRule(src("components/TopBarMic.css"), "#mic-btn.standby::before")).toMatch(/border-radius: 50%/);
+    // Standby: a small still grey dot — no ring, no animation.
+    const css = src("components/TopBarMic.css");
+    expect(css).not.toContain(".mic-ring.standby");
+    expect(cssRule(css, "#mic-btn.speaking::before")).toContain("var(--accent)");
+    expect(css).toMatch(/#mic-btn\.standby::before,\s*#mic-btn\.speaking::before \{[^}]*border-radius: 50%;[^}]*background: var\(--muted\);/);
   });
 
   it("Settings search finds Voice for the wake word", async () => {

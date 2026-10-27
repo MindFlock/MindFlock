@@ -361,7 +361,6 @@ describe("the level and the pickup line (pure)", () => {
     const unsure = liveUnsure(long);
     expect(unsure.startsWith("…word")).toBe(true);
     expect(unsure.length).toBeLessThanOrEqual(61);
-    expect(code("components/TopBarMic.tsx")).toContain("liveTail(caption, liveUnsure(unsure))");
   });
 
   it("each streaming pass's server time is kept (the last 20) for the debug console", () => {
@@ -461,19 +460,22 @@ describe("wiring: warm, measured, and off React's render path", () => {
     expect(ASK).toContain('"ask-mic tb-item mic-ring"');
     expect(ASK).toContain("ref={meterRef}");
     const css = src("components/TopBarMic.css");
-    expect(cssRule(css, ".mic-ring.listening::after")).toContain("var(--mic-level, 0)");
-    expect(cssRule(css, ".mic-pop .mic-level-bar")).toContain("scaleX(var(--mic-level, 0))");
-    // The ring adds to the pulse, it does not replace it.
-    expect(cssRule(css, "#topbar #mic-btn.listening")).toContain("mic-pulse");
+    // Still: the ring's opacity is the level's step, eased; never a size.
+    expect(cssRule(css, ".mic-ring.listening::after")).toContain("opacity: var(--mic-step, 0.45)");
+    expect(cssRule(css, ".mic-ring::after")).toContain("transition: opacity 400ms ease");
+    expect(css).not.toMatch(/scale\(/);
+    expect(css).not.toMatch(/animation:/);
     const lib = code("lib/voiceMic.ts");
-    expect(lib).toContain('el.style.setProperty("--mic-level", v)');
+    expect(lib).toContain('el.style.setProperty("--mic-step", v)');
+    expect(lib).not.toContain('"--mic-level"');
     expect(lib).toContain("requestAnimationFrame(f)");
   });
 
-  it("the options show the level and the live words; the caption stays out from under them", () => {
-    expect(MIC).toMatch(/<div className="mic-level" ref=\{meterRef\}>/);
-    expect(MIC).toContain('id="mic-live"');
-    expect(MIC).toContain("const showCaption = !!(caption || unsure) && !menuOpen;");
+  it("no live words or level bar anywhere on the page: the words are in the terminal", () => {
+    expect(MIC).not.toContain("mic-level");
+    expect(MIC).not.toContain('id="mic-live"');
+    expect(MIC).not.toContain("mic-caption");
+    expect(MIC).not.toContain("showCaption");
   });
 
   it("the timing marks, from the press to the first commit", () => {

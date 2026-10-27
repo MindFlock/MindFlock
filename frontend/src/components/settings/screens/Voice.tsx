@@ -32,7 +32,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, apiRaw } from "../../../api/client";
 import { toast } from "../../../lib/toast";
 import { startWavRecording } from "../../../lib/wavRecorder";
-import { loadVoicePrefs, onVoicePrefs, saveVoicePrefs, REPLIES_CHOICES, voiceAudioCtx, type VoicePrefs } from "../../../lib/voiceDesktop";
+import { DICT_HINT, loadVoicePrefs, onVoicePrefs, saveVoicePrefs, REPLIES_CHOICES, voiceAudioCtx, type VoicePrefs } from "../../../lib/voiceDesktop";
+import { micDiagnostics, talkHotkey } from "../../TopBarMic";
 import { WAKE_SWITCH_HINT, onWakeStatus, wakeStatus } from "../../../lib/wakeWord";
 import type { ScreenProps } from "../SettingsDialog";
 import { SECRET_MASK, SettingField, useSettings, type SettingsModel } from "../useSettings";
@@ -514,6 +515,23 @@ export function MicPrefs() {
           />
           <span className="ca-slider" />
         </label>
+      </div>
+      {/* What the top-bar mic's options no longer explain (they are controls
+          only): how dictation and hands-free answers work, and its diagnostics. */}
+      <div className="set-row" id="voice-mic-howto">
+        <p className="set-hint" id="voice-mic-typing">
+          The words are typed into the session as you speak, and corrected when the accurate pass hears a
+          phrase otherwise. {DICT_HINT}; Esc takes them back. Say “stop recording” to stop, “focus 3” or
+          “next session” to switch, and “yes”, “no”, “always” or a number to answer a dialog. Hotkey:{" "}
+          {talkHotkey() || "the Talk shortcut in Keyboard shortcuts"}.
+        </p>
+        <p className="set-hint" id="voice-mic-handsfree">
+          With Read replies aloud on, a dialog on the focused session — or a question in a reply to what you
+          sent — is read out and the mic listens 12 s for your answer.
+        </p>
+        <p className="set-hint" id="voice-mic-diag">
+          {micDiagnostics()}
+        </p>
       </div>
     </>
   );

@@ -1,6 +1,6 @@
 /* --- The mic beside the bell (TopBarMic.tsx) ---
    Its box is .tb-item's (TopBar.css), like the bell's; this sheet only adds
-   its states, the caption under it and the options popover. */
+   its states, the state pill under it and the options popover. */
 #mic-btn {
   color: var(--muted);
 }
@@ -14,19 +14,18 @@
   display: block;
 }
 
-/* Listening: the one red thing on the bar, pulsing — a live mic must never be
-   mistaken for an idle one. */
+/* Listening: the one red thing on the bar — and still. Nothing on the mic
+   moves or changes size (the owner: a bouncing mic is distracting): a red
+   icon inside a constant thin red ring (.mic-ring below). */
 #topbar #mic-btn.listening {
-  border-color: var(--red);
-  color: #fff;
-  background: var(--red);
-  animation: mic-pulse 1.4s ease-in-out infinite;
+  color: var(--red);
 }
 
-/* The level ring (this mic and the ask pop-up's, both .mic-ring): a halo
-   that follows what the mic hears. lib/voiceMic writes --mic-level (0..1,
-   floor-relative: room noise sits at zero) on the button once a frame — a
-   style write, never a render. Drawn only while listening. */
+/* The ring (this mic and the ask pop-up's, both .mic-ring): constant and
+   thin while listening. The only thing the sound changes is its opacity, in
+   three steps — quiet / hearing / loud — that lib/voiceMic writes as
+   --mic-step only when the step changes (the level smoothed over ~400 ms
+   first), eased here over 400 ms. Never a scale, never a halo. */
 .mic-ring {
   position: relative;
 }
@@ -34,28 +33,23 @@
 .mic-ring::after {
   content: "";
   position: absolute;
-  inset: -3px;
-  border-radius: 8px;
-  border: 2px solid var(--red);
+  inset: -2px;
+  border-radius: 7px;
+  border: 1.5px solid var(--red);
   opacity: 0;
   pointer-events: none;
+  transition: opacity 400ms ease;
 }
 
 .mic-ring.listening::after {
-  opacity: var(--mic-level, 0);
-  transform: scale(calc(1 + var(--mic-level, 0) * 0.22));
+  opacity: var(--mic-step, 0.45);
 }
 
-/* Standby (the wake word, lib/wakeWord): the mic is open, so it shows — a
-   faint ring that still follows the level, and a small dot in the corner —
-   but quiet next to listening's red. */
-.mic-ring.standby::after {
-  border-color: var(--muted);
-  opacity: max(0.3, var(--mic-level, 0));
-  transform: scale(calc(1 + var(--mic-level, 0) * 0.22));
-}
-
-#mic-btn.standby::before {
+/* Standby (the wake word, lib/wakeWord) and speaking: a small still dot in
+   the corner — grey while the mic waits for "MindFlock", the accent while a
+   line is read. No ring, no animation. */
+#mic-btn.standby::before,
+#mic-btn.speaking::before {
   content: "";
   position: absolute;
   top: 2px;
@@ -63,14 +57,12 @@
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--red);
-  opacity: 0.8;
+  background: var(--muted);
   pointer-events: none;
 }
 
-/* A reply being read aloud: the accent, still. */
-#mic-btn.speaking {
-  color: var(--accent);
+#mic-btn.speaking::before {
+  background: var(--accent);
 }
 
 /* No recognizer in this browser (and no server one): muted, still clickable
@@ -79,94 +71,52 @@
   opacity: 0.4;
 }
 
-@keyframes mic-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(222, 97, 62, 0.5);
-  }
-
-  50% {
-    box-shadow: 0 0 0 5px rgba(222, 97, 62, 0);
-  }
+/* The pill: the bar's only voice words — "Listening…", "Speaking…",
+   "Quiet." (lib/voiceDesktop micPill) — hung just under the mic so the bar's
+   layout never moves (the fold measures .tb-left as one fixed width). Never
+   a transcript; empty, it is not seen (but stays in the accessibility tree,
+   so the live region announces its next word). */
+.mic-wrap {
+  position: relative;
+  display: inline-flex;
 }
 
-/* What was heard, anchored under the mic (TopBarMic sets top/left from the
-   button; it clamps left with the same 340px + 8px margin). Rendered only
-   while it has words. */
-#mic-caption {
-  position: fixed;
-  z-index: 3000;
-  max-width: min(340px, calc(100vw - 16px));
-  padding: 7px 11px;
-  border-radius: 8px;
+#mic-pill {
+  opacity: 0;
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 61;
+  padding: 1px 7px;
+  border-radius: 9px;
   background: var(--panel);
   border: 1px solid var(--border);
-  color: var(--text);
-  font-size: 12px;
-  line-height: 1.4;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-  white-space: pre-wrap;
-  word-break: break-word;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
   pointer-events: none;
 }
 
-/* Streamed words the recognizer may still change: shown, never typed. */
-#mic-caption .mic-unsure {
-  color: var(--muted);
-  font-style: italic;
+#mic-pill.on {
+  opacity: 1;
 }
 
-/* While listening: the live transcript (TopBarMic keeps only its end). */
-#mic-caption.live {
-  font-size: 13px;
-}
-
-/* The options while listening: a slim level bar (the phone's #voice-level)
-   and the live words, the unsure ones greyed. */
-.mic-pop .mic-live {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 4px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.mic-pop .mic-level {
-  height: 4px;
-  border-radius: 2px;
-  background: var(--border);
-  overflow: hidden;
-}
-
-.mic-pop .mic-level-bar {
-  height: 100%;
-  background: var(--red);
-  transform: scaleX(var(--mic-level, 0));
-  transform-origin: left;
-}
-
-.mic-pop .mic-live-text {
-  font-size: 12px;
-  line-height: 1.4;
-  word-break: break-word;
-}
-
-.mic-pop .mic-live .mic-unsure {
-  color: var(--muted);
-  font-style: italic;
-}
-
-/* Right-click / Shift+click: replies on or off, click or hold, diagnostics.
-   Same surface as .notif-pop; TopBarMic clamps `left` with 280px + 8px. */
+/* Right-click / Shift+click: the options — controls only, five rows at
+   most (replies, push to talk, the wake switch, Stop talking while a line
+   plays). TopBarMic places it with lib/menuPlace placeUnder: under the mic,
+   flipped to end at its right edge near the window's, 8 px from every edge,
+   its width and max-height set inline; it scrolls inside a short window. */
 .mic-pop {
   position: fixed;
   z-index: 3000;
   width: 280px;
-  max-width: calc(100vw - 16px);
+  max-width: min(360px, calc(100vw - 32px));
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
   padding: 10px 12px;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -176,38 +126,71 @@
   font-size: 12px;
 }
 
-.mic-pop .mic-row {
+.mic-pop .mic-pop-row {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 0;
-  cursor: pointer;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.mic-pop .mic-sub {
-  margin-top: 6px;
+.mic-pop .mic-pop-label {
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
 }
 
-.mic-pop .mic-hint,
-.mic-pop .mic-diag {
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.4;
+/* The hotkey, small, beside "Push to talk". */
+.mic-pop .mic-pop-key {
+  font-weight: 400;
+  opacity: 0.8;
 }
 
-/* Why standby stopped (no recognizer, a refused mic). */
-.mic-pop .mic-wake-line {
-  color: var(--text);
+/* A segmented control: the radios hidden, their labels the segments. */
+.mic-pop .mic-seg {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
 }
 
-.mic-pop .mic-link {
-  align-self: flex-start;
-  margin-top: 4px;
-  font-size: 11px;
+.mic-pop .mic-seg-opt {
+  flex: 1;
+  position: relative;
+  cursor: pointer;
+}
+
+.mic-pop .mic-seg-opt + .mic-seg-opt {
+  border-left: 1px solid var(--border);
+}
+
+.mic-pop .mic-seg-opt input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mic-pop .mic-seg-opt span {
+  display: block;
+  padding: 4px 6px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.mic-pop .mic-seg-opt input:checked + span {
+  background: var(--accent);
+  color: #fff;
+}
+
+.mic-pop .mic-seg-opt input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The wake switch: the words, then the box at the end of the row. */
+.mic-pop .mic-switch-row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
 }
 
 /* The options' header: a title and a plain close button (Esc, a click on the
@@ -235,4 +218,19 @@
 .mic-pop-close:hover {
   color: var(--text);
   background: var(--panel-2);
+}
+
+/* While a line is read: one plain button that stops all of it (Esc too). */
+.mic-pop .mic-stop-talking {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.mic-pop .mic-stop-talking:hover {
+  border-color: var(--accent);
 }
