@@ -6461,12 +6461,21 @@ mode on for the selected session (`POST /api/instances/<title>/voice
 then for as long as you keep talking (Android buzzes 30 ms). With **Hold to
 talk** (the ⚙ sheet's *Push to talk*) that first tap only turns voice on;
 you then press and hold the mic to talk. A **voice
-strip** appears above the composer with the state word
-(*Your turn* · *Listening…* · *Sending…* · *Working…* · *Speaking…* ·
-*Waiting on you*), a caption (what it hears, the line being spoken, the
-dialog question, the radio words — *Say "over" to keep it, "submit" to
-send, "disregard" to start over* / *Release to keep it; say "submit" to
-send*), **Cancel** and **⚙**. Voice follows the
+strip** appears above the composer. It says **one word and nothing else**:
+*Listening…* while the mic listens, *Speaking…* while a line is said (the
+whole line, every sentence of it), *Quiet.* for a moment after a hush, and
+otherwise nothing — never the words it hears (they are in the box already,
+as you speak), never the line being said, no hints; one line, so nothing
+on the strip pops up or grows as words are typed or a line plays. Beside
+it, **Cancel** and **⚙** (and **Stop talking** while a line plays). The
+hints and the words so far still reach the ask sheet's voice line, which is
+unchanged. **The mic is still:** while it records, a constant thin red ring
+round the 🎙 (and the ask sheet's) whose opacity alone eases (400 ms) between
+three steps — quiet, hearing you, loud — from the voice's level smoothed
+over ~400 ms; no scale, no pulse, no halo that bounces with the voice. The
+wake word's standby is a small grey dot, a line being said a still accent
+dot. The level meter (a thin bar along the strip's top edge, never a row of
+its own) shows only while the ⚙ sheet is open. Voice follows the
 **selected** session: picking another session in the Sessions sheet (or
 saying "switch to <name>", "session two", "next session") moves the
 conversation there; the flag of the session you left stays on. The Sessions
@@ -6550,7 +6559,17 @@ fed small chunks often, a slow one no slivers. Only a first chunk is padded
 (with silence before it, where the quiet was). The phrase ends as a clip
 does (silence, the tap, the cap — 30 s here); the unsent rest goes out,
 `POST …/end` → `{committed}` flushes the last words, and the next phrase
-opens a new stream; Cancel or voice off `DELETE`s it. A 409 on the open
+opens a new stream; Cancel or voice off `DELETE`s it. **The accurate
+final:** a server with a slower, more accurate model besides the fast
+streaming one also answers `/end` with `final` (the whole phrase
+transcribed again by it), `final_ms` and `same` (true: no different). When
+`final` is there and `same` is not true, the **whole phrase typed so far**
+(its committed words and the guess — never the words before it) is
+replaced in the box by `final`, the caret at the end, **before** the phrase
+is decided: *over*, *submit*, *disregard*, a command, a dialog's answer all
+read the accurate words. Without `final` (an older server, one model) the
+fast words stand. Diagnostics' *Last transcribe* line says *final 1.2 s*
+(and *(corrected)* when it changed the words). A 409 on the open
 (the server does not stream after all: a clip per phrase until `GET
 /api/voice` says otherwise) or any failed request turns the phrase into a
 clip — the words so far stay, the audio the stream had not answered is
@@ -6570,11 +6589,9 @@ hidden: a tap in that time starts listening at once, with no
 voice off gives the mic back at once. While you speak, a **ring round the
 mic** (and the ask sheet's mic) grows and firms with your voice — its level
 relative to the room's noise, so a quiet room sits at zero, rising in 30 ms
-and falling over ~150 ms — and the meter under the strip follows it; the
-caption says ***Hearing you…*** while your voice is coming in and nothing
-has come back yet, *Listening… n s* when it is quiet. The streamed words
-replace it as soon as the first chunk answers: the committed ones in the
-text colour, the still-settling guess **greyed**. Android ticks (12 ms) at
+and falling over ~150 ms — and the ⚙ sheet's meter follows it. The
+strip says *Listening…* throughout — no *Hearing you…*, no greyed partial:
+the streamed words are typed into the box as they come. Android ticks (12 ms) at
 each phrase's first word — but not when the 30 ms listening buzz has just
 gone. Diagnostics shows *Microphone: warm / not held* and *Last start: mic
 … ms, stream open … ms, speech … ms, words … ms, typed … ms, settled … ms
@@ -6689,14 +6706,23 @@ anything while the phone is listening, recording, sending a clip, or
 speaking (and for half a second after it stops). How it works: while voice
 mode is on and the page is in front, the phone keeps the microphone open
 and watches the sound level itself — **nothing goes to the server** until a
-short sound bounded by quiet ends; then just that clip (16 kHz WAV, with
-~150 ms before it) goes to `POST /api/voice/wake`, which recognises it with
-*MindFlock* as the hint and answers whether it was the word alone
-(`backend/web/core/wake.py`). At most one check is on its way and one goes
+short sound bounded by quiet ends — 350 ms of quiet before it, and only
+**200 ms after** — and then, in that very audio block (the page's own
+synchronous resampler, no render to wait for), just that clip (16 kHz WAV,
+with ~100 ms before it) goes to `POST /api/voice/wake`, which recognises it
+with *MindFlock* as the hint and answers whether it was the word alone
+(`backend/web/core/wake.py`). A sound less than 350 ms after a clip is
+never a new wake (the first was the start of something longer). On
+`wake: true` listening starts **at once** — the mic is already open, so the
+dictation's stream opens right away — with the chime in the same moment;
+the recorder skips the chime's ~230 ms (its length and the audio engine's
+latency), so it is never transcribed. The word's end → listening is about
+the 200 ms tail + the server's check + the round trip; Diagnostics'
+*Wake word* line says *wake 0.6 s*, and so does *Last start* (and the
+console with `cs_voice_debug`). At most one check is on its way and one goes
 per 1.5 s; a "no" does nothing at all. **The mic indicator:** because the
 mic stays open, the phone shows its mic-in-use indicator the whole time,
-and the 🎙 button shows a faint ring and a dot (the ring still moves with
-the room); the warm-mic grace never gives the mic back while the wake word
+and the 🎙 button shows a small grey dot (still); the warm-mic grace never gives the mic back while the wake word
 is on. It needs a server recognizer (Settings → Voice): if the server has
 none ready (409), or is too old for the wake word, or the microphone is
 refused, the switch turns itself off and the strip says why. With the
@@ -6922,7 +6948,20 @@ set to the server for recognition or speech, the page uses the server's
 engines (`POST /api/voice/transcribe`, `POST /api/voice/speak`, audio played
 through one `AudioContext`) whenever `GET /api/voice` reports that backend
 ready, and the phone's own otherwise; a server that is asked for but not
-ready is said once in the strip.
+ready is said once in the strip. **The server's voice speaks sentence by
+sentence**, so a slow voice (the owner's own Voice Lab voices take ~8 s to
+make a 5 s line on a CPU) starts after its first sentence, not the whole
+line: a line is split at `.` `?` `!` `;` (never inside *3.5* or
+*note.txt*, never after *e.g.*, *i.e.*, *U.S.*, *Dr.*, *etc.*; a sentence
+under 12 characters joins the next, the last one the one before);
+`/api/voice/speak` is asked for sentence 1 at once and it plays when it
+arrives; sentence 2 is asked for as 1 starts playing (one ahead — a busy
+server makes one at a time) and plays the moment 1 ends, and so on, back to
+back. *Speaking…* spans the whole line. Cancel, a hush or a barge-in stops
+the sentence playing, drops the rest and aborts the request on its way. A
+sentence the server cannot say is said by the phone's voice. The phone's
+own voice (speechSynthesis) is unchanged. Diagnostics' *Last speak* line
+says *first sound 0.9 s (3 sentences)*.
 
 The page remembers, per browser (`localStorage`): the voice session and
 whether voice was on (the next visit offers **Tap to resume voice**), the
