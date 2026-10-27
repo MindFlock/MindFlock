@@ -115,9 +115,11 @@ describe("openSettings", () => {
     openSettings("devices");
     expect(useUi.getState().openDialog).toBe("settings");
     expect(useUi.getState().dialogTarget).toBe("devices");
-    // No screen named: Connections, the first-hour status page (r5 settings #4).
+    // No screen named: no deep link — the dialog itself opens on the screen
+    // you last had open this page life, else Connections, the first-hour
+    // status page (r5 settings #4; lib/settingsLastScreen openingScreen).
     openSettings();
-    expect(useUi.getState().dialogTarget).toBe("connections");
+    expect(useUi.getState().dialogTarget).toBeNull();
     useUi.getState().closeDialog();
   });
 
